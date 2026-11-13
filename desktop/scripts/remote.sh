@@ -160,7 +160,11 @@ fi
 # guard files first: the worktree copy may not exist yet, or be queued for
 # eviction. No build or capture starts until the final whole-command turn.
 boot="$base/run-$tag-tools"
-"${SSH[@]}" "$host" "mkdir -p $boot"
+# The helpers are written here and then run, so every folder down to them must
+# be this account's own and closed to others, or the run stops: a group with
+# write on the cache could otherwise swap one in between (Codex's review of
+# Daybreak 114/116, 13 Nov). A fresh boot folder each run, never one found there.
+"${SSH[@]}" "$host" "umask 077 && mkdir -p ${base%/*} $base && for d in ${base%/*} $base; do [ -d \$d ] && [ ! -L \$d ] && [ -O \$d ] && chmod go-w \$d || { echo \"remote.sh: ~/\$d on $host isn't a folder of this account's own\" >&2; exit 1; }; done && rm -rf $boot && mkdir -m 700 $boot"
 for helper in perf-lock.pl perf-children.pl hangup-guard.sh; do
   "${SSH[@]}" "$host" "cat > $boot/$helper" <"$root/scripts/$helper"
 done

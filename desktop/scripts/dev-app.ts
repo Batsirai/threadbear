@@ -92,7 +92,8 @@ export function stateRoot(tmp: string = process.env.TMPDIR ?? os.tmpdir()): stri
   const shared = (up.mode & 0o022) !== 0;
   // Writable by others without the sticky bit, anyone could rename our folder away and put theirs in its place.
   if (shared && !(up.mode & 0o1000)) throw new Error(`${parent} (TMPDIR) can be changed by other accounts and isn't sticky: set TMPDIR to a folder of your own`);
-  if (!shared && up.uid !== uid && up.uid !== 0) throw new Error(`${parent} (TMPDIR) belongs to someone else: set TMPDIR to a folder of your own`);
+  // A sticky folder's owner can still rename anyone's folder in it, so it has to be root's or ours.
+  if (up.uid !== uid && up.uid !== 0) throw new Error(`${parent} (TMPDIR) belongs to someone else: set TMPDIR to a folder of your own`);
   const dir = path.join(parent, shared ? `threadbear-gpui-dev-app-${uid}` : 'threadbear-gpui-dev-app');
   try {
     fs.mkdirSync(dir, { mode: 0o700 });
@@ -280,7 +281,7 @@ function build(opts: { noBuild: boolean; here: boolean; logName: string }): stri
   let ok: boolean;
   if (host) {
     const fd = fs.openSync(log, 'w');
-    console.error(`Building on ${host} (an updateBuildHosts Mac), so the M5 stays free; the binaries come back here. Log: ${log}`);
+    console.error(`Building on ${host} (an updateBuildHosts Mac), so this Mac stays free; the binaries come back here. Log: ${log}`);
     let r;
     try {
       // Write both streams straight to the advertised file, as the local

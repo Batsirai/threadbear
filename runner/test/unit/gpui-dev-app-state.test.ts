@@ -15,8 +15,8 @@ import { readInstance, stateRoot, validInstance } from '../../../desktop/scripts
 const DEV_APP = path.join(import.meta.dirname, '..', '..', '..', 'desktop', 'scripts', 'dev-app.sh');
 const POSIX = process.platform !== 'win32';
 
-function status(tmp: string) {
-  const r = spawnSync('bash', [DEV_APP, 'status'], {
+function status(tmp: string, ...args: string[]) {
+  const r = spawnSync('bash', [DEV_APP, ...(args.length ? args : ['status'])], {
     env: { ...process.env, TMPDIR: tmp, THREADBEAR_THREAD_ID: 'victim-thread' },
     encoding: 'utf8',
     timeout: 60_000,
@@ -44,6 +44,10 @@ test('a stale instance whose instance.json names a path outside is never followe
   // And one that's "mine" (this thread and checkout), which the reap removes at once.
   fs.mkdirSync(path.join(root, 'seed2'), { mode: 0o700 });
   fs.writeFileSync(path.join(root, 'seed2', 'instance.json'), JSON.stringify({ ...forged(rel), thread: 'victim-thread', checkout: fs.realpathSync(path.join(import.meta.dirname, '..', '..', '..')) }));
+  // start reaps too, before anything else: these arguments are refused just after it, so no build.
+  const s = status(temp, 'start', '--mock', '--home', path.join(tmp, 'nowhere'));
+  assert.match(s.out, /--mock or --home, not both/);
+  assert.equal(fs.readFileSync(path.join(victim, 'sentinel'), 'utf8'), 'keep');
   const r = status(temp);
   assert.equal(r.status, 0, r.out);
   assert.equal(fs.readFileSync(path.join(victim, 'sentinel'), 'utf8'), 'keep');
