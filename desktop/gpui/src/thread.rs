@@ -1558,7 +1558,12 @@ impl ThreadPane {
                 out
             })
             .collect();
-        json!({ "threadId": self.summary.id, "state": self.load_state(), "error": self.error, "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "spinner": !self.loaded && self.error.is_none() && self.load_failed.is_none(), "timing": self.timing_json(), "rows": rows })
+        // The done card's loose ends as the summary has them and as the
+        // transcript took them, by the card's seq and count: which of the
+        // two lost them, when a card shows none (the nightly parity run).
+        let ends = |c: Option<&threadbear_core::reducer::LooseEnds>| c.map(|c| json!({ "seq": c.seq, "count": c.ends.len() }));
+        let loose_ends = json!({ "summary": ends(self.summary.loose_ends_check().as_ref()), "transcript": ends(self.feed.model().loose_ends()) });
+        json!({ "threadId": self.summary.id, "state": self.load_state(), "error": self.error, "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "spinner": !self.loaded && self.error.is_none() && self.load_failed.is_none(), "timing": self.timing_json(), "looseEnds": loose_ends, "rows": rows })
     }
 
     /// The Swift dump's names, a failure with its message.

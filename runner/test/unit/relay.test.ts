@@ -908,6 +908,26 @@ test("a thread's loose ends go on its row in the list, for its own turn's card o
   }
 });
 
+// The app opens the thread with threads.subscribe and reads the done
+// card's loose ends off the thread.updated that follows: nothing else
+// comes once the thread has settled. The nightly parity run (14 Nov) found
+// the GPUI app's done card without them.
+test("opening a thread tells the app its done card's loose ends", async () => {
+  const ends = [{ kind: 'scheduled', text: 'Look at how the experiment went', at: '2026-11-15T01:30:00.000Z' }];
+  const doneRows: RelayRow[] = [
+    { seq: 3, role: 'user', text: 'Check it in', turn: 'aaaa1111', at: at(0) },
+    { seq: 6, role: 'assistant', text: 'Checked it in.', turn: 'aaaa1111', at: at(2) },
+  ];
+  const h = harness({ rows: doneRows, row: () => ({ ...idle, looseEnds: ends, cardTurn: 'aaaa1111' }) });
+  h.subscribed.add(T);
+  const reply = (await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 0 })) as { events: { seq: number; type: string }[] };
+  await new Promise((r) => setTimeout(r, 10));
+  const end = reply.events.filter((e) => e.type === 'turn.completed').at(-1);
+  assert.ok(end, JSON.stringify(reply.events.map((e) => e.type)));
+  const told = (h.published as { method: string; params: { thread?: { looseEnds?: unknown } } }[]).filter((n) => n.method === 'thread.updated').map((n) => n.params.thread?.looseEnds).filter(Boolean);
+  assert.deepEqual(told.at(-1), { seq: end.seq, ends });
+});
+
 // A plan answered while this Mac wasn't looking, with more than a tail's
 // rows since: its decision is on a row the tail doesn't cover, so it's read
 // again (Codex's review, 12 Nov).
