@@ -133,6 +133,42 @@ pub fn decode_remote_threads(value: &Value) -> RemoteThreads {
     }
 }
 
+/// The newest `thread.updated` for each of the other runners' threads, in
+/// the order they came, so a `remoteThreads.list` reply asked for before
+/// some of them, and answered after (replies and notifications come by
+/// separate paths), doesn't put back what they changed: a done card's loose
+/// ends went again on a reconnect that way (Codex's review, 15 Nov 2026).
+#[derive(Default, Debug)]
+pub struct RecentUpdates {
+    count: u64,
+    newest: std::collections::HashMap<String, (u64, ThreadSummary)>,
+}
+
+impl RecentUpdates {
+    /// Where the count is now: what a list asked for now has seen.
+    pub fn mark(&self) -> u64 {
+        self.count
+    }
+
+    pub fn note(&mut self, t: &ThreadSummary) {
+        self.count += 1;
+        self.newest.insert(t.id.clone(), (self.count, t.clone()));
+    }
+
+    pub fn forget(&mut self, id: &str) {
+        self.newest.remove(id);
+    }
+
+    /// Takes into `list` every update that came after `mark`.
+    pub fn reapply(&self, list: &mut RemoteThreads, mark: u64) {
+        let mut later: Vec<&(u64, ThreadSummary)> = self.newest.values().filter(|(n, _)| *n > mark).collect();
+        later.sort_by_key(|(n, _)| *n);
+        for (_, t) in later {
+            list.take_update(t);
+        }
+    }
+}
+
 impl RemoteThreads {
     pub fn can_remove_missing(&self) -> bool { self.complete }
 
@@ -331,6 +367,30 @@ mod tests {
         // One it doesn't list isn't added: the list says which threads there are.
         list.take_update(&ThreadSummary { id: "t9".into(), ..updated });
         assert_eq!(list.threads.len(), 1);
+    }
+
+    /// A list asked for before an update and answered after it keeps the
+    /// update; one asked for after it is taken as it is.
+    #[test]
+    fn a_list_asked_for_before_an_update_keeps_it() {
+        let rows = json!({
+            "runners": [{ "id": "r", "name": "bruce" }],
+            "threads": [{ "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
+        });
+        let updated: ThreadSummary = crate::wire::read(json!({
+            "id": "t1", "title": "Start", "status": "idle",
+            "looseEnds": { "seq": 39, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went" }] },
+        })).expect("a summary");
+        let mut recent = RecentUpdates::default();
+        let asked = recent.mark();
+        recent.note(&updated);
+        let mut late = decode_remote_threads(&rows);
+        recent.reapply(&mut late, asked);
+        assert_eq!(late.threads[0].loose_ends_check().map(|c| c.seq), Some(39));
+        assert_eq!(late.threads[0].runner_id.as_deref(), Some("r"));
+        let mut fresh = decode_remote_threads(&rows);
+        recent.reapply(&mut fresh, recent.mark());
+        assert!(fresh.threads[0].loose_ends_check().is_none());
     }
 
     #[test]

@@ -913,7 +913,10 @@ impl Threadbear {
                         // Into the other runners' list as well, which is
                         // put back over these whenever this Mac's own list
                         // comes in (RemoteThreads::take_update).
-                        if t.is_remote() { self.remote.index.take_update(&t); }
+                        if t.is_remote() {
+                            self.remote.index.take_update(&t);
+                            self.remote.recent.note(&t);
+                        }
                         let before = self.threads.insert(t.id.clone(), Arc::new(t.clone()));
                         self.note_failed_account(before.as_deref(), &t);
                         self.thread_changed_outside(before.as_deref(), &t, cx);
@@ -938,6 +941,7 @@ impl Threadbear {
                         self.close_thread_panel(id, cx);
                         self.threads.remove(id);
                         self.failed_on_account.remove(id);
+                        self.remote.recent.forget(id);
                         self.refresh_dock_badge();
                     } else {
                         self.apply_remote_index(cx);
