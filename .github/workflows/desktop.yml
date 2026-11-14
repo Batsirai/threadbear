@@ -53,7 +53,8 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Windows needs time for its release build after the behaviour specs.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
