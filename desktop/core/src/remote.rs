@@ -159,6 +159,14 @@ impl RecentUpdates {
         self.newest.remove(id);
     }
 
+    /// A whole list came by the notifications' own path, after every update
+    /// noted so far: it's newer than all of them, so none is put back over
+    /// a list from then on (Codex's review: an archive the list said after
+    /// an update was undone by it). Keeps the cache to what's still in flight.
+    pub fn superseded(&mut self) {
+        self.newest.clear();
+    }
+
     /// Takes into `list` every update that came after `mark`.
     pub fn reapply(&self, list: &mut RemoteThreads, mark: u64) {
         let mut later: Vec<&(u64, ThreadSummary)> = self.newest.values().filter(|(n, _)| *n > mark).collect();
@@ -179,8 +187,10 @@ impl RemoteThreads {
     /// it put back the row from before the thread was opened: the done
     /// card's loose ends, which only come once it's watched, went from the
     /// card a moment after they came (the nightly parity run, 14 Nov 2026).
+    /// Not onto a row another runner now lists: the update was about the
+    /// thread where it was (Codex's review, 15 Nov).
     pub fn take_update(&mut self, t: &ThreadSummary) {
-        if let Some(row) = self.threads.iter_mut().find(|row| row.id == t.id) {
+        if let Some(row) = self.threads.iter_mut().find(|row| row.id == t.id && (t.runner_id.is_none() || row.runner_id == t.runner_id)) {
             let runner = row.runner_id.clone();
             *row = t.clone();
             row.runner_id = runner;
@@ -391,6 +401,32 @@ mod tests {
         let mut fresh = decode_remote_threads(&rows);
         recent.reapply(&mut fresh, recent.mark());
         assert!(fresh.threads[0].loose_ends_check().is_none());
+    }
+
+    /// A list that came by the notifications after an update is newer than
+    /// it, and so is anything after; an update for the thread on another
+    /// runner doesn't go onto the row of the runner that lists it now.
+    #[test]
+    fn a_newer_list_and_another_runner_win_over_an_update() {
+        let rows = |runner: &str| json!({
+            "runners": [{ "id": runner, "name": runner }],
+            "threads": [{ "runnerId": runner, "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
+        });
+        let mut updated: ThreadSummary = crate::wire::read(json!({
+            "id": "t1", "title": "Start", "status": "idle",
+            "looseEnds": { "seq": 39, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went" }] },
+        })).expect("a summary");
+        updated.runner_id = Some("r".into());
+        let mut recent = RecentUpdates::default();
+        let asked = recent.mark();
+        recent.note(&updated);
+        let mut moved = decode_remote_threads(&rows("s"));
+        recent.reapply(&mut moved, asked);
+        assert!(moved.threads[0].loose_ends_check().is_none(), "not onto another runner's row");
+        recent.superseded();
+        let mut late = decode_remote_threads(&rows("r"));
+        recent.reapply(&mut late, asked);
+        assert!(late.threads[0].loose_ends_check().is_none(), "a newer list said otherwise");
     }
 
     #[test]

@@ -152,7 +152,11 @@ impl Threadbear {
             return;
         }
         let mut remote = remote::decode_remote_threads(value);
-        if let Some(asked) = asked { self.remote.recent.reapply(&mut remote, asked); }
+        match asked {
+            Some(asked) => self.remote.recent.reapply(&mut remote, asked),
+            // A notification: newer than every thread.updated before it.
+            None => self.remote.recent.superseded(),
+        }
         self.remote.runners = remote.runners.clone();
         self.remote.index = remote;
         self.remote.heard = true;
