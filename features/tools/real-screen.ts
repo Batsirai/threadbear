@@ -24,7 +24,7 @@ export interface WindowRow {
   pid: number;
   layer: number;
   alpha: number;
-  /** x, y, width and height in screen points from the top left. */
+  /** x, y, width and height in screen points from the top left, as listed (they can be fractional). */
   frame: number[];
   owner: string;
   /** Notification Centre's whole-screen sentinel, only when it's really its. */
@@ -61,7 +61,7 @@ export function parseWindows(text: string): WindowRow[] {
     const [id, pid, layer, alpha, x, y, w, h, sentinel, ...owner] = line.split('\t');
     return {
       id: Number(id), pid: Number(pid), layer: Number(layer), alpha: Number(alpha),
-      frame: [x, y, w, h].map((n) => Math.trunc(Number(n))), owner: owner.join('\t'), notificationSentinel: sentinel === '1',
+      frame: [x, y, w, h].map(Number), owner: owner.join('\t'), notificationSentinel: sentinel === '1',
     };
   });
 }
@@ -73,36 +73,41 @@ export interface WindowPick {
   windows?: () => WindowRow[];
 }
 
+/** How big a window must be to count as an app's main window rather than a tooltip, menu or popup. */
+export const MAIN_MIN = 300;
+
 /**
- * The process's main window: with `windowId`, that one; otherwise its biggest
- * ordinary (layer 0) visible window, the frontmost of equals. Not merely its
- * first: a tooltip or popup is its own layer 0 window and can be in front,
- * and the first one listed was a 66 x 20 tooltip on 15 Nov, which a
- * scroll's guard took for the app (thread 879afc1e). Throws when it has none.
+ * The process's main window: with `windowId`, that one; otherwise its one
+ * visible ordinary (layer 0) window at least MAIN_MIN points each way, or its
+ * only visible one. Not merely the first listed: a tooltip or popup is a
+ * layer 0 window of its own and can be in front, and on 15 Nov a 66 x 20
+ * tooltip came first, which a scroll's guard took for the app (thread
+ * 879afc1e). Not the biggest either: with two big windows (a rear one, or a
+ * see-through overlay that lets clicks through) a guard would check the
+ * wrong one, so two of that size throw and ask for `windowId`, as does none.
  */
 export function mainWindow(pid: number, pick: WindowPick = {}): WindowRow {
   const rows = (pick.windows ?? screenWindows)();
-  const own = rows.filter((w) => w.pid === pid && w.layer === 0);
+  const own = rows.filter((w) => w.pid === pid && w.layer === 0 && w.alpha > 0);
   if (pick.windowId !== undefined) {
     const it = own.find((w) => w.id === pick.windowId);
-    if (!it) throw new Error(`Window ${pick.windowId} isn't one of ${pid}'s ordinary windows on screen. No events were posted.`);
+    if (!it) throw new Error(`Window ${pick.windowId} isn't one of ${pid}'s visible ordinary windows on screen. No events were posted.`);
     return it;
   }
-  let best: WindowRow | undefined;
-  for (const w of own) {
-    if (w.alpha <= 0) continue;
-    if (!best || w.frame[2] * w.frame[3] > best.frame[2] * best.frame[3]) best = w;
-  }
-  if (!best) throw new Error(`${pid} has no window on screen. No events were posted.`);
-  return best;
+  if (!own.length) throw new Error(`${pid} has no window on screen. No events were posted.`);
+  if (own.length === 1) return own[0];
+  const big = own.filter((w) => w.frame[2] >= MAIN_MIN && w.frame[3] >= MAIN_MIN);
+  if (big.length === 1) return big[0];
+  const ids = (big.length ? big : own).map((w) => `${w.id} (${w.frame.slice(2).map(Math.trunc).join(' x ')})`).join(', ');
+  throw new Error(`Can't tell which of ${pid}'s windows is its main one: ${ids}. Pass its windowId. No events were posted.`);
 }
 
 /**
- * The process's main window (mainWindow): x, y, width and height in screen
- * points from the top left. Pass `windowId` when you know which window it is.
+ * The process's main window (mainWindow): x, y, width and height in whole
+ * screen points from the top left. Pass `windowId` when you know which it is.
  */
 export function windowFrame(pid: number, pick: WindowPick = {}): number[] {
-  return mainWindow(pid, pick).frame;
+  return mainWindow(pid, pick).frame.map(Math.trunc);
 }
 
 const finder = path.join(work, 'window-at');
@@ -227,7 +232,9 @@ export function windowsAbove(pid: number, x: number, y: number, pick: WindowPick
   let main: WindowRow;
   try {
     main = mainWindow(pid, { ...pick, windows: () => rows });
-  } catch {
+  } catch (e) {
+    // Gone is null, as before; two windows it can't tell apart still throw.
+    if (/Can't tell which/.test(String(e))) throw e;
     return null;
   }
   const above: string[] = [];
@@ -295,9 +302,9 @@ export function guardInput(pid: number, points: Point[], screen: Screen = realSc
  * the window now still the window's (so an alert over it stops it), and the
  * window wholly on a display once moved, so the next grip is on screen too.
  */
-export function guardWindowMove(pid: number, from: Point, to: Point, screen: Screen = realScreen): void {
+export function guardWindowMove(pid: number, from: Point, to: Point, screen: Screen = realScreen, pick: Omit<WindowPick, 'windows'> = {}): void {
   guardInput(pid, [from], screen);
-  const [x, y, w, h] = screen.windowFrame(pid);
+  const [x, y, w, h] = screen.windowFrame(pid, pick);
   if (!inside(from, [x, y, w, h])) throw new Error(`The grip (${from[0]}, ${from[1]}) isn't on the window. No events were posted.`);
   const shown = screen.displays();
   if (!shown.some((d) => inside(to, d, EDGE))) throw new Error(`The drop (${to[0]}, ${to[1]}) is off screen or within ${EDGE} points of its edge. No events were posted.`);
@@ -312,8 +319,8 @@ export function guardWindowMove(pid: number, from: Point, to: Point, screen: Scr
   // alert, a panel, another app brought forward) but what's also over the
   // grip, which window-at has just let through there (the Dock's
   // see-through overlay, which covers the whole screen).
-  const atDrop = screen.windowsAbove(pid, to[0], to[1]);
-  const atGrip = screen.windowsAbove(pid, from[0], from[1]);
+  const atDrop = screen.windowsAbove(pid, to[0], to[1], pick);
+  const atGrip = screen.windowsAbove(pid, from[0], from[1], pick);
   if (!atDrop || !atGrip) throw new Error(`The window has gone from the screen. No events were posted.`);
   const over = atDrop.filter((wn) => !atGrip.includes(wn));
   if (over.length) throw new Error(`Something is over the window's place at (${to[0]}, ${to[1]}): ${over[0].replace(/^\S+ /, '')}. No events were posted.`);
@@ -369,9 +376,9 @@ export function realDrag(tool: string, from: Point, to: Point, hold: number, opt
  * after its hover, at each step, and at the drop before letting go, by then
  * under the window, which moved there with the pointer.
  */
-export function realGripDrag(tool: string, from: Point, to: Point, hold: number, opts: { pid: number; env?: Record<string, string>; screen?: Screen; post?: Post }): void {
+export function realGripDrag(tool: string, from: Point, to: Point, hold: number, opts: { pid: number; windowId?: number; env?: Record<string, string>; screen?: Screen; post?: Post }): void {
   const { pid, screen = realScreen, post = execPost } = opts;
-  guardWindowMove(pid, from, to, screen);
+  guardWindowMove(pid, from, to, screen, opts.windowId === undefined ? {} : { windowId: opts.windowId });
   post(tool, [String(from[0]), String(from[1]), String(to[0]), String(to[1]), String(hold), ''], {
     ...opts.env,
     RD_GUARD: screen === realScreen ? windowAtTool() : 'window-at',

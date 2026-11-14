@@ -220,8 +220,22 @@ test('the main window is the app\'s, not a tooltip of its listed first', () => {
   assert.equal(mainWindow(APP, pick).id, 2918);
   // A menu bar item or a see-through window of its own doesn't count either.
   assert.equal(mainWindow(APP, list(row(1, APP, [0, 0, 1920, 30], { layer: 25 }), row(2, APP, [0, 0, 1920, 1080], { alpha: 0 }), main)).id, 2918);
-  // The frontmost of equals.
-  assert.equal(mainWindow(APP, list(row(7, APP, [0, 0, 800, 600]), row(8, APP, [10, 10, 800, 600]))).id, 7);
+  // An app with one small window still has a main window.
+  assert.equal(mainWindow(APP, list(row(6, APP, [10, 10, 200, 100]))).id, 6);
+});
+
+test('two windows that could each be the main one are refused, not guessed', () => {
+  // A see-through overlay bigger than the window that lets clicks through to
+  // whatever is behind: taking the biggest would check the overlay.
+  const main = row(1, APP, [100, 100, 800, 600]);
+  const overlay = row(2, APP, [300, 100, 1200, 800]);
+  assert.throws(() => mainWindow(APP, list(main, overlay)), /Can't tell which of 100's windows is its main one: 1 \(800 x 600\), 2 \(1200 x 800\)\. Pass its windowId/);
+  // Nor a bigger window of its own behind the front one, nor two small ones.
+  assert.throws(() => mainWindow(APP, list(main, row(3, APP, [0, 0, 1600, 900]))), /Pass its windowId/);
+  assert.throws(() => mainWindow(APP, list(row(4, APP, [0, 0, 60, 20]), row(5, APP, [0, 0, 200, 100]))), /4 \(60 x 20\), 5 \(200 x 100\)/);
+  // With the id it's that one.
+  assert.equal(mainWindow(APP, { ...list(main, overlay), windowId: 1 }).id, 1);
+  assert.throws(() => windowsAbove(APP, 400, 300, list(main, overlay)), /Pass its windowId/);
 });
 
 test('a window id picks that window, and only one of the app\'s own', () => {
@@ -232,6 +246,8 @@ test('a window id picks that window, and only one of the app\'s own', () => {
   assert.deepEqual(windowFrame(APP, { ...list(tooltip, main), windowId: 3001 }), [376, 146, 66, 20]);
   assert.throws(() => windowFrame(APP, { ...list(tooltip, other, main), windowId: 4000 }), /Window 4000 isn't one of 100's/);
   assert.throws(() => windowFrame(APP, { ...list(tooltip), windowId: 2918 }), /Window 2918 isn't/);
+  // Nor an invisible one of its own.
+  assert.throws(() => windowFrame(APP, { ...list(row(2918, APP, [200, 100, 1180, 800], { alpha: 0 })), windowId: 2918 }), /Window 2918 isn't/);
 });
 
 test('no window on screen is an error, not a made-up frame', () => {
@@ -253,6 +269,9 @@ test('what is above the window is measured from the main window, past a tooltip 
   const sentinel = row(9, OTHER, [0, 0, 1920, 1080], { notificationSentinel: true });
   const clear = row(10, OTHER, [0, 0, 1920, 1080], { alpha: 0 });
   assert.deepEqual(windowsAbove(APP, 1000, 600, list(sentinel, clear, main)), []);
+  // A window over part of a point counts, however little of a point it is.
+  const sliver = row(11, ALERT, [300.5, 100, 24.75, 60], { owner: 'Crash Reporter' });
+  assert.deepEqual(windowsAbove(APP, 325, 114, list(sliver, main)), ['11 Crash Reporter']);
   // A window id that isn't on screen finds nothing to measure from.
   assert.equal(windowsAbove(APP, 400, 150, { ...pick, windowId: 1 }), null);
 });
@@ -261,6 +280,31 @@ test('the window list reader keeps owners with spaces and tabs in their names', 
   const rows = parseWindows('2918\t100\t0\t1.0\t200.0\t100.0\t1180.0\t800.0\t0\tThread bear\textra\n9\t50\t0\t0.5\t-10.5\t0.0\t5.0\t5.0\t1\tNotification Center\n');
   assert.deepEqual(rows, [
     { id: 2918, pid: 100, layer: 0, alpha: 1, frame: [200, 100, 1180, 800], owner: 'Thread bear\textra', notificationSentinel: false },
-    { id: 9, pid: 50, layer: 0, alpha: 0.5, frame: [-10, 0, 5, 5], owner: 'Notification Center', notificationSentinel: true },
+    { id: 9, pid: 50, layer: 0, alpha: 0.5, frame: [-10.5, 0, 5, 5], owner: 'Notification Center', notificationSentinel: true },
   ]);
+});
+
+test('a grip drag checks the window it was given, with what is over it', () => {
+  // Two big windows of the app's: the grip drag needs the id, and checks
+  // that window's place, not the other's.
+  const front = row(1, APP, [300, 100, 1240, 820]);
+  const rear = row(2, APP, [0, 0, 1600, 1000]);
+  const rows = [front, rear];
+  const s: Screen = {
+    windowAt: (x, y) => { const w = rows.find((w) => covers({ pid: w.pid, owner: w.owner, frame: w.frame }, x, y)); return w ? { pid: w.pid, owner: w.owner } : null; },
+    windowFrame: (pid, pick) => windowFrame(pid, { ...pick, windows: () => rows }),
+    windowsAbove: (pid, x, y, pick) => windowsAbove(pid, x, y, { ...pick, windows: () => rows }),
+    displays: () => [[0, 0, 1920, 1080]],
+    recording: () => '',
+  };
+  const { post, sent } = sink();
+  assert.throws(() => realGripDrag('realdrag', [324, 114], [394, 164], 0.2, { pid: APP, screen: s, post }), /Pass its windowId/);
+  realGripDrag('realdrag', [324, 114], [394, 164], 0.2, { pid: APP, windowId: 1, screen: s, post });
+  assert.equal(sent.length, 1);
+  // Right by 350 keeps the front one on its display but takes the rear one
+  // off it: which is refused depends on the id, not on which is bigger.
+  realGripDrag('realdrag', [324, 114], [674, 114], 0.2, { pid: APP, windowId: 1, screen: s, post });
+  assert.equal(sent.length, 2);
+  assert.throws(() => realGripDrag('realdrag', [324, 114], [674, 114], 0.2, { pid: APP, windowId: 2, screen: s, post }), /off its display/);
+  assert.equal(sent.length, 2);
 });
