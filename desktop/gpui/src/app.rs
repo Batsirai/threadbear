@@ -910,6 +910,10 @@ impl Threadbear {
                         if let Some(pane) = self.kept.get(&t.id, cx) {
                             pane.update(cx, |p, cx| p.summary_changed(&t, cx));
                         }
+                        // Into the other runners' list as well, which is
+                        // put back over these whenever this Mac's own list
+                        // comes in (RemoteThreads::take_update).
+                        if t.is_remote() { self.remote.index.take_update(&t); }
                         let before = self.threads.insert(t.id.clone(), Arc::new(t.clone()));
                         self.note_failed_account(before.as_deref(), &t);
                         self.thread_changed_outside(before.as_deref(), &t, cx);

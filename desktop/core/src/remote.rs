@@ -136,6 +136,21 @@ pub fn decode_remote_threads(value: &Value) -> RemoteThreads {
 impl RemoteThreads {
     pub fn can_remove_missing(&self) -> bool { self.complete }
 
+    /// A `thread.updated` for one of its threads, from this Mac's runner
+    /// (relay.ts `summary`), taken into its row here, on the runner it's
+    /// listed for. The list is put back over the app's threads whenever
+    /// this Mac's own list comes in (`apply_remote_index`), and without this
+    /// it put back the row from before the thread was opened: the done
+    /// card's loose ends, which only come once it's watched, went from the
+    /// card a moment after they came (the nightly parity run, 14 Nov 2026).
+    pub fn take_update(&mut self, t: &ThreadSummary) {
+        if let Some(row) = self.threads.iter_mut().find(|row| row.id == t.id) {
+            let runner = row.runner_id.clone();
+            *row = t.clone();
+            row.runner_id = runner;
+        }
+    }
+
     pub fn runner(&self, id: &str) -> Option<&RemoteRunner> {
         self.runners.iter().find(|r| r.id == id)
     }
@@ -297,6 +312,25 @@ mod tests {
         assert_eq!(check.seq, 47);
         assert_eq!(check.ends[0].text, "Look at how the experiment went");
         assert!(list.threads[1].loose_ends.is_none(), "one that isn't an object is left off");
+    }
+
+    #[test]
+    fn a_thread_updated_stays_when_the_list_is_put_back() {
+        let mut list = decode_remote_threads(&json!({
+            "runners": [{ "id": "r", "name": "bruce" }],
+            "threads": [{ "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
+        }));
+        assert!(list.threads[0].loose_ends_check().is_none());
+        let updated: ThreadSummary = crate::wire::read(json!({
+            "id": "t1", "title": "Start", "status": "idle", "runnerId": "r",
+            "looseEnds": { "seq": 39, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went", "at": "2026-11-15T01:30:00.000Z" }] },
+        })).expect("a summary");
+        list.take_update(&updated);
+        assert_eq!(list.threads[0].loose_ends_check().map(|c| c.seq), Some(39));
+        assert_eq!(list.threads[0].runner_id.as_deref(), Some("r"));
+        // One it doesn't list isn't added: the list says which threads there are.
+        list.take_update(&ThreadSummary { id: "t9".into(), ..updated });
+        assert_eq!(list.threads.len(), 1);
     }
 
     #[test]
