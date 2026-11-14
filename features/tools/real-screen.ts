@@ -18,24 +18,91 @@ export function swiftTool(name: string): string {
   return out;
 }
 
-const framer = path.join(work, 'frame');
+/** One on-screen window, as CGWindowListCopyWindowInfo lists them, front to back. */
+export interface WindowRow {
+  id: number;
+  pid: number;
+  layer: number;
+  alpha: number;
+  /** x, y, width and height in screen points from the top left. */
+  frame: number[];
+  owner: string;
+  /** Notification Centre's whole-screen sentinel, only when it's really its. */
+  notificationSentinel: boolean;
+}
 
-/** The process's main window: x, y, width and height in screen points from the top left. */
-export function windowFrame(pid: number): number[] {
-  if (!fs.existsSync(framer)) {
-    fs.writeFileSync(`${framer}.swift`, `import CoreGraphics
-import Foundation
-let pid = Int32(CommandLine.arguments[1])!
+const lister = path.join(work, 'windows');
+
+/** Every on-screen window, front to back. */
+export function screenWindows(): WindowRow[] {
+  if (!fs.existsSync(lister)) {
+    // Tab-separated, owner last, as an owner's name can have spaces in it.
+    fs.writeFileSync(`${lister}.swift`, `import AppKit
+import CoreGraphics
 let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
-for w in list where (w[kCGWindowOwnerPID as String] as? Int32) == pid && (w[kCGWindowLayer as String] as? Int) == 0 {
-  let b = w[kCGWindowBounds as String] as! [String: Double]
-  print(Int(b["X"]!), Int(b["Y"]!), Int(b["Width"]!), Int(b["Height"]!))
-  break
+let notificationPIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui")
+  .filter { $0.bundleURL?.path == "/System/Library/CoreServices/NotificationCenter.app" }.map(\\.processIdentifier))
+for w in list {
+  guard let b = w[kCGWindowBounds as String] as? [String: Double], let pid = w[kCGWindowOwnerPID as String] as? Int32 else { continue }
+  let sentinel = (w[kCGWindowName as String] as? String) == "Notification Center" && notificationPIDs.contains(pid)
+  let owner = (w[kCGWindowOwnerName as String] as? String ?? "?").replacingOccurrences(of: "\\t", with: " ").replacingOccurrences(of: "\\n", with: " ")
+  print([w[kCGWindowNumber as String] as? Int ?? -1, Int(pid), w[kCGWindowLayer as String] as? Int ?? -1].map(String.init).joined(separator: "\\t"),
+        w[kCGWindowAlpha as String] as? Double ?? 1, b["X"]!, b["Y"]!, b["Width"]!, b["Height"]!, sentinel ? 1 : 0, owner, separator: "\\t")
 }
 `);
-    execFileSync('swiftc', ['-O', `${framer}.swift`, '-o', framer]);
+    execFileSync('swiftc', ['-O', `${lister}.swift`, '-o', lister]);
   }
-  return execFileSync(framer, [String(pid)]).toString().trim().split(' ').map(Number);
+  return parseWindows(execFileSync(lister).toString());
+}
+
+/** screenWindows' output, for it and for tests. */
+export function parseWindows(text: string): WindowRow[] {
+  return text.split('\n').filter(Boolean).map((line) => {
+    const [id, pid, layer, alpha, x, y, w, h, sentinel, ...owner] = line.split('\t');
+    return {
+      id: Number(id), pid: Number(pid), layer: Number(layer), alpha: Number(alpha),
+      frame: [x, y, w, h].map((n) => Math.trunc(Number(n))), owner: owner.join('\t'), notificationSentinel: sentinel === '1',
+    };
+  });
+}
+
+/** Which window of a process to look at, and a made-up screen for tests. */
+export interface WindowPick {
+  /** That exact CGWindowID, which must be one of the process's ordinary windows on screen. */
+  windowId?: number;
+  windows?: () => WindowRow[];
+}
+
+/**
+ * The process's main window: with `windowId`, that one; otherwise its biggest
+ * ordinary (layer 0) visible window, the frontmost of equals. Not merely its
+ * first: a tooltip or popup is its own layer 0 window and can be in front,
+ * and the first one listed was a 66 x 20 tooltip on 15 Nov, which a
+ * scroll's guard took for the app (thread 879afc1e). Throws when it has none.
+ */
+export function mainWindow(pid: number, pick: WindowPick = {}): WindowRow {
+  const rows = (pick.windows ?? screenWindows)();
+  const own = rows.filter((w) => w.pid === pid && w.layer === 0);
+  if (pick.windowId !== undefined) {
+    const it = own.find((w) => w.id === pick.windowId);
+    if (!it) throw new Error(`Window ${pick.windowId} isn't one of ${pid}'s ordinary windows on screen. No events were posted.`);
+    return it;
+  }
+  let best: WindowRow | undefined;
+  for (const w of own) {
+    if (w.alpha <= 0) continue;
+    if (!best || w.frame[2] * w.frame[3] > best.frame[2] * best.frame[3]) best = w;
+  }
+  if (!best) throw new Error(`${pid} has no window on screen. No events were posted.`);
+  return best;
+}
+
+/**
+ * The process's main window (mainWindow): x, y, width and height in screen
+ * points from the top left. Pass `windowId` when you know which window it is.
+ */
+export function windowFrame(pid: number, pick: WindowPick = {}): number[] {
+  return mainWindow(pid, pick).frame;
 }
 
 const finder = path.join(work, 'window-at');
@@ -148,43 +215,29 @@ export function recording(read = executableProcesses): string {
   return [...found].map(([pid, name]) => `${pid} ${name}`).join('\n');
 }
 
-const stacker = path.join(work, 'windows-above');
-
 /**
- * The windows over `pid`'s own window at a point, front to back, as
- * `<window number> <owner>`: those a click there would reach first. Null if
- * `pid` has no ordinary window on screen. The same filter as window-at.
+ * The windows over `pid`'s main window (mainWindow, so `windowId` picks it)
+ * at a point, front to back, as `<window number> <owner>`: those a click there
+ * would reach first. The process's own other windows (a tooltip, a popup)
+ * count too. Null if `pid` has no ordinary window on screen. The same filter
+ * as window-at.
  */
-export function windowsAbove(pid: number, x: number, y: number): string[] | null {
-  if (!fs.existsSync(stacker)) {
-    fs.writeFileSync(`${stacker}.swift`, `import AppKit
-import CoreGraphics
-let a = CommandLine.arguments
-let pid = Int32(a[1])!, x = Double(a[2])!, y = Double(a[3])!
-let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
-let notificationPIDs = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui")
-  .filter { $0.bundleURL?.path == "/System/Library/CoreServices/NotificationCenter.app" }.map(\\.processIdentifier))
-var above: [String] = []
-for w in list {
-  if (w[kCGWindowOwnerPID as String] as? Int32) == pid && (w[kCGWindowLayer as String] as? Int) == 0 {
-    for line in above { print(line) }
-    print("ok")
-    exit(0)
+export function windowsAbove(pid: number, x: number, y: number, pick: WindowPick = {}): string[] | null {
+  const rows = (pick.windows ?? screenWindows)();
+  let main: WindowRow;
+  try {
+    main = mainWindow(pid, { ...pick, windows: () => rows });
+  } catch {
+    return null;
   }
-  guard let b = w[kCGWindowBounds as String] as? [String: Double], (w[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { continue }
-  // Notification Centre's whole-screen sentinel, only when it's really its.
-  if (w[kCGWindowName as String] as? String) == "Notification Center", let owner = w[kCGWindowOwnerPID as String] as? Int32, notificationPIDs.contains(owner) { continue }
-  if x >= b["X"]! && x < b["X"]! + b["Width"]! && y >= b["Y"]! && y < b["Y"]! + b["Height"]! {
-    above.append("\\(w[kCGWindowNumber as String] as? Int ?? -1) \\(w[kCGWindowOwnerName as String] as? String ?? "?")")
+  const above: string[] = [];
+  for (const w of rows) {
+    if (w === main) return above;
+    if (w.alpha <= 0 || w.notificationSentinel) continue;
+    const [bx, by, bw, bh] = w.frame;
+    if (x >= bx && x < bx + bw && y >= by && y < by + bh) above.push(`${w.id} ${w.owner}`);
   }
-}
-print("missing")
-`);
-    execFileSync('swiftc', ['-O', `${stacker}.swift`, '-o', stacker]);
-  }
-  const lines = execFileSync(stacker, [String(pid), String(x), String(y)]).toString().trim().split('\n').filter(Boolean);
-  if (lines.at(-1) !== 'ok') return null;
-  return lines.slice(0, -1);
+  return null;
 }
 
 /** The compiled window-at, for the helpers to look again just before they press (realdrag's RD_GUARD). */
@@ -197,8 +250,8 @@ export type Point = [number, number];
 /** What the guards read from the screen, so tests can hand them a made-up one. */
 export interface Screen {
   windowAt(x: number, y: number): { pid: number; owner: string } | null;
-  windowFrame(pid: number): number[];
-  windowsAbove(pid: number, x: number, y: number): string[] | null;
+  windowFrame(pid: number, pick?: WindowPick): number[];
+  windowsAbove(pid: number, x: number, y: number, pick?: WindowPick): string[] | null;
   displays(): number[][];
   recording(): string;
 }

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EDGE, guardInput, guardPath, guardWindowMove, realDrag, realGripDrag, type Post, type Screen } from '../../../features/tools/real-screen.ts';
+import { EDGE, guardInput, guardPath, guardWindowMove, mainWindow, parseWindows, realDrag, realGripDrag, windowFrame, windowsAbove, type Post, type Screen, type WindowRow } from '../../../features/tools/real-screen.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const APP = 100, ALERT = 200, OTHER = 300;
@@ -203,4 +203,64 @@ test('post-gesture looks again before it touches and before every event', () => 
   assert.match(gesture, /timedOut/, 'the guard program has a deadline');
   assert.match(gesture, /terminationStatus == 0/, 'and must exit cleanly');
   assert.match(gesture, /over\[\.\.<mine\]\.allSatisfy\(\{ \$0\.overlay \}\)/, 'only the Dock overlay may be over the app at the start');
+});
+
+// The window lists below are front to back, as CGWindowListCopyWindowInfo gives them.
+const row = (id: number, pid: number, frame: number[], more: Partial<WindowRow> = {}): WindowRow =>
+  ({ id, pid, layer: 0, alpha: 1, frame, owner: pid === APP ? 'Threadbear' : 'Other', notificationSentinel: false, ...more });
+const list = (...rows: WindowRow[]) => ({ windows: () => rows });
+
+test('the main window is the app\'s, not a tooltip of its listed first', () => {
+  // 15 Nov: a 66 x 20 tooltip came first and was taken for the window, so
+  // the guard looked in the wrong place (thread 879afc1e).
+  const tooltip = row(3001, APP, [376, 146, 66, 20]);
+  const main = row(2918, APP, [200, 100, 1180, 800]);
+  const pick = list(tooltip, row(5, OTHER, [0, 0, 400, 400]), main);
+  assert.deepEqual(windowFrame(APP, pick), [200, 100, 1180, 800]);
+  assert.equal(mainWindow(APP, pick).id, 2918);
+  // A menu bar item or a see-through window of its own doesn't count either.
+  assert.equal(mainWindow(APP, list(row(1, APP, [0, 0, 1920, 30], { layer: 25 }), row(2, APP, [0, 0, 1920, 1080], { alpha: 0 }), main)).id, 2918);
+  // The frontmost of equals.
+  assert.equal(mainWindow(APP, list(row(7, APP, [0, 0, 800, 600]), row(8, APP, [10, 10, 800, 600]))).id, 7);
+});
+
+test('a window id picks that window, and only one of the app\'s own', () => {
+  const tooltip = row(3001, APP, [376, 146, 66, 20]);
+  const main = row(2918, APP, [200, 100, 1180, 800]);
+  const other = row(4000, OTHER, [0, 0, 1920, 1080]);
+  assert.deepEqual(windowFrame(APP, { ...list(tooltip, other, main), windowId: 2918 }), [200, 100, 1180, 800]);
+  assert.deepEqual(windowFrame(APP, { ...list(tooltip, main), windowId: 3001 }), [376, 146, 66, 20]);
+  assert.throws(() => windowFrame(APP, { ...list(tooltip, other, main), windowId: 4000 }), /Window 4000 isn't one of 100's/);
+  assert.throws(() => windowFrame(APP, { ...list(tooltip), windowId: 2918 }), /Window 2918 isn't/);
+});
+
+test('no window on screen is an error, not a made-up frame', () => {
+  assert.throws(() => windowFrame(APP, list(row(5, OTHER, [0, 0, 400, 400]))), /100 has no window on screen/);
+  assert.throws(() => windowFrame(APP, list(row(5, APP, [0, 0, 400, 400], { alpha: 0 }))), /no window on screen/);
+  assert.equal(windowsAbove(APP, 10, 10, list(row(5, OTHER, [0, 0, 400, 400]))), null);
+});
+
+test('what is above the window is measured from the main window, past a tooltip of its own', () => {
+  // Before, the search stopped at the first window of the app's, so an alert
+  // between its tooltip and its main window went unseen.
+  const tooltip = row(3001, APP, [376, 146, 66, 20]);
+  const alert = row(4000, ALERT, [300, 120, 200, 200], { owner: 'Crash Reporter' });
+  const main = row(2918, APP, [200, 100, 1180, 800]);
+  const pick = list(tooltip, alert, main);
+  assert.deepEqual(windowsAbove(APP, 400, 150, pick), ['3001 Threadbear', '4000 Crash Reporter']);
+  assert.deepEqual(windowsAbove(APP, 1000, 600, pick), []);
+  // Notification Centre's sentinel and see-through windows aren't over it.
+  const sentinel = row(9, OTHER, [0, 0, 1920, 1080], { notificationSentinel: true });
+  const clear = row(10, OTHER, [0, 0, 1920, 1080], { alpha: 0 });
+  assert.deepEqual(windowsAbove(APP, 1000, 600, list(sentinel, clear, main)), []);
+  // A window id that isn't on screen finds nothing to measure from.
+  assert.equal(windowsAbove(APP, 400, 150, { ...pick, windowId: 1 }), null);
+});
+
+test('the window list reader keeps owners with spaces and tabs in their names', () => {
+  const rows = parseWindows('2918\t100\t0\t1.0\t200.0\t100.0\t1180.0\t800.0\t0\tThread bear\textra\n9\t50\t0\t0.5\t-10.5\t0.0\t5.0\t5.0\t1\tNotification Center\n');
+  assert.deepEqual(rows, [
+    { id: 2918, pid: 100, layer: 0, alpha: 1, frame: [200, 100, 1180, 800], owner: 'Thread bear\textra', notificationSentinel: false },
+    { id: 9, pid: 50, layer: 0, alpha: 0.5, frame: [-10, 0, 5, 5], owner: 'Notification Center', notificationSentinel: true },
+  ]);
 });
