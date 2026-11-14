@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EDGE, guardInput, guardPath, guardWindowMove, mainWindow, parseWindows, realDrag, realGripDrag, windowFrame, windowsAbove, type Post, type Screen, type WindowRow } from '../../../features/tools/real-screen.ts';
+import { EDGE, guardInput, guardPath, guardWindowMove, mainWindow, parseWindows, realDrag, realGripDrag, windowFrame, windowsAbove, windowUnder, type Post, type Screen, type WindowRow } from '../../../features/tools/real-screen.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const APP = 100, ALERT = 200, OTHER = 300;
@@ -23,8 +23,12 @@ function screen(windows: Win[], opts: { recording?: string; displays?: number[][
       return w ? { pid: w.pid, owner: w.owner } : null;
     },
     windowFrame: (pid) => windows.find((w) => w.pid === pid)!.frame,
-    windowsAbove: (pid, x, y) => {
-      const at = windows.findIndex((w) => w.pid === pid);
+    windowUnder: (pid, x, y) => {
+      const w = windows.find((w) => w.pid === pid && covers(w, x, y));
+      return w ? { id: w.id ?? windows.indexOf(w), pid, layer: 0, alpha: 1, frame: w.frame, owner: w.owner, notificationSentinel: false } : null;
+    },
+    windowsAbove: (pid, x, y, pick) => {
+      const at = windows.findIndex((w) => w.pid === pid && (pick?.windowId === undefined || (w.id ?? windows.indexOf(w)) === pick.windowId));
       if (at < 0) return null;
       return windows.slice(0, at).filter((w) => covers(w, x, y)).map((w) => `${w.id ?? windows.indexOf(w)} ${w.owner}`);
     },
@@ -294,17 +298,40 @@ test('a grip drag checks the window it was given, with what is over it', () => {
     windowAt: (x, y) => { const w = rows.find((w) => covers({ pid: w.pid, owner: w.owner, frame: w.frame }, x, y)); return w ? { pid: w.pid, owner: w.owner } : null; },
     windowFrame: (pid, pick) => windowFrame(pid, { ...pick, windows: () => rows }),
     windowsAbove: (pid, x, y, pick) => windowsAbove(pid, x, y, { ...pick, windows: () => rows }),
+    windowUnder: (pid, x, y) => windowUnder(pid, x, y, { windows: () => rows }),
     displays: () => [[0, 0, 1920, 1080]],
     recording: () => '',
   };
   const { post, sent } = sink();
-  assert.throws(() => realGripDrag('realdrag', [324, 114], [394, 164], 0.2, { pid: APP, screen: s, post }), /Pass its windowId/);
+  realGripDrag('realdrag', [324, 114], [394, 164], 0.2, { pid: APP, screen: s, post });
   realGripDrag('realdrag', [324, 114], [394, 164], 0.2, { pid: APP, windowId: 1, screen: s, post });
-  assert.equal(sent.length, 1);
-  // Right by 350 keeps the front one on its display but takes the rear one
-  // off it: which is refused depends on the id, not on which is bigger.
-  realGripDrag('realdrag', [324, 114], [674, 114], 0.2, { pid: APP, windowId: 1, screen: s, post });
   assert.equal(sent.length, 2);
-  assert.throws(() => realGripDrag('realdrag', [324, 114], [674, 114], 0.2, { pid: APP, windowId: 2, screen: s, post }), /off its display/);
-  assert.equal(sent.length, 2);
+  // An id that isn't the window under the grip is refused.
+  assert.throws(() => realGripDrag('realdrag', [324, 114], [394, 164], 0.2, { pid: APP, windowId: 2, screen: s, post }), /on window 1, not 2/);
+  // Right by 350 keeps the front one on its display; the rear one, under
+  // the grip at (124, 114), moved by 350, isn't.
+  realGripDrag('realdrag', [324, 114], [674, 114], 0.2, { pid: APP, screen: s, post });
+  assert.equal(sent.length, 3);
+  assert.throws(() => realGripDrag('realdrag', [124, 114], [474, 114], 0.2, { pid: APP, screen: s, post }), /off its display/);
+  assert.equal(sent.length, 3);
+});
+
+test('a grip drag moves the small window in front, not the bigger one behind', () => {
+  // Codex's second review: the bigger rear window's move fitted, while the
+  // front one, which the grip really moves, went off the display.
+  const front = row(1, APP, [300, 100, 1400, 250]);
+  const rear = row(2, APP, [100, 100, 600, 600]);
+  const rows = [front, rear];
+  const s: Screen = {
+    windowAt: (x, y) => (windowUnder(APP, x, y, { windows: () => rows }) ? { pid: APP, owner: 'Threadbear' } : null),
+    windowFrame: (pid, pick) => windowFrame(pid, { ...pick, windows: () => rows }),
+    windowsAbove: (pid, x, y, pick) => windowsAbove(pid, x, y, { ...pick, windows: () => rows }),
+    windowUnder: (pid, x, y) => windowUnder(pid, x, y, { windows: () => rows }),
+    displays: () => [[0, 0, 1920, 1080]],
+    recording: () => '',
+  };
+  const { post, sent } = sink();
+  assert.throws(() => realGripDrag('realdrag', [324, 114], [674, 114], 0.2, { pid: APP, screen: s, post }), /off its display/);
+  assert.throws(() => realGripDrag('realdrag', [324, 114], [674, 114], 0.2, { pid: APP, windowId: 2, screen: s, post }), /on window 1, not 2/);
+  assert.equal(sent.length, 0);
 });

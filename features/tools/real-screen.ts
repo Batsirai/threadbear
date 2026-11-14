@@ -110,6 +110,17 @@ export function windowFrame(pid: number, pick: WindowPick = {}): number[] {
   return mainWindow(pid, pick).frame.map(Math.trunc);
 }
 
+/**
+ * Which of the process's visible ordinary windows is frontmost at a point,
+ * or null: the one a press there lands on, if it's the app's at all, and so
+ * the one a grip drag there moves, whichever is its main window.
+ */
+export function windowUnder(pid: number, x: number, y: number, pick: Pick<WindowPick, 'windows'> = {}): WindowRow | null {
+  const rows = (pick.windows ?? screenWindows)();
+  return rows.find((w) => w.pid === pid && w.layer === 0 && w.alpha > 0
+    && x >= w.frame[0] && x < w.frame[0] + w.frame[2] && y >= w.frame[1] && y < w.frame[1] + w.frame[3]) ?? null;
+}
+
 const finder = path.join(work, 'window-at');
 
 /** The app whose window is on top at a screen point: what a real click there reaches. */
@@ -259,10 +270,11 @@ export interface Screen {
   windowAt(x: number, y: number): { pid: number; owner: string } | null;
   windowFrame(pid: number, pick?: WindowPick): number[];
   windowsAbove(pid: number, x: number, y: number, pick?: WindowPick): string[] | null;
+  windowUnder(pid: number, x: number, y: number): WindowRow | null;
   displays(): number[][];
   recording(): string;
 }
-export const realScreen: Screen = { windowAt, windowFrame, windowsAbove, displays, recording };
+export const realScreen: Screen = { windowAt, windowFrame, windowsAbove, windowUnder: (pid, x, y) => windowUnder(pid, x, y), displays, recording };
 
 /**
  * How far in from a display's edge a point an event lands on must be: the
@@ -304,8 +316,13 @@ export function guardInput(pid: number, points: Point[], screen: Screen = realSc
  */
 export function guardWindowMove(pid: number, from: Point, to: Point, screen: Screen = realScreen, pick: Omit<WindowPick, 'windows'> = {}): void {
   guardInput(pid, [from], screen);
-  const [x, y, w, h] = screen.windowFrame(pid, pick);
-  if (!inside(from, [x, y, w, h])) throw new Error(`The grip (${from[0]}, ${from[1]}) isn't on the window. No events were posted.`);
+  // The window that moves is the app's one under the grip, which needn't be
+  // its main one (a smaller window in front of a bigger one, Codex's review).
+  const grip = screen.windowUnder(pid, from[0], from[1]);
+  if (!grip) throw new Error(`The grip (${from[0]}, ${from[1]}) isn't on the window. No events were posted.`);
+  if (pick.windowId !== undefined && grip.id !== pick.windowId) throw new Error(`The grip (${from[0]}, ${from[1]}) is on window ${grip.id}, not ${pick.windowId}. No events were posted.`);
+  pick = { windowId: grip.id };
+  const [x, y, w, h] = grip.frame.map(Math.trunc);
   const shown = screen.displays();
   if (!shown.some((d) => inside(to, d, EDGE))) throw new Error(`The drop (${to[0]}, ${to[1]}) is off screen or within ${EDGE} points of its edge. No events were posted.`);
   const moved = [x + to[0] - from[0], y + to[1] - from[1], w, h];
