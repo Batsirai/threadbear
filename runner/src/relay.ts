@@ -816,7 +816,10 @@ export class Relay {
         }
       })(),
     ]);
-    this.noteRow(w, row as RelayThreadRow | null);
+    // As fresh as a live update, so a stop seen here waits SETTLE_MS too: a
+    // reader that polls (the daily canary, 16 Nov) read the Pixel's turn as
+    // ended before its last reply and its card had come.
+    this.noteRow(w, row as RelayThreadRow | null, true);
     w.readAt = this.deps.clock.now();
   }
 

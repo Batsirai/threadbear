@@ -365,6 +365,22 @@ test("a turn ends a moment after the row says it stopped, so its last messages c
   assert.deepEqual(kinds().slice(-2), ['185:assistant.text', '191:turn.completed']);
 });
 
+// The daily canary (16 Nov) polls threads.events without subscribing, and
+// read the Pixel's turn as ended before its last reply and its card came.
+test('a reader that polls also waits a moment after the row says it stopped', async () => {
+  let row: RelayThreadRow = { runnerId: 'mac-mini', status: 'running' };
+  let held = rows;
+  const h = harness({ row: () => row, readMessages: (args) => ({ messages: held.filter((r) => r.seq > Number(args.afterSeq ?? 0)), hasMore: false }) });
+  const ends = async () => ((await h.relay.call(T, 'threads.events', { threadId: T })) as { events: { seq: number; type: string; asks?: unknown }[] }).events.filter((e) => e.type === 'turn.completed').map((e) => e.seq);
+  assert.deepEqual(await ends(), [79]);
+  row = { runnerId: 'mac-mini', status: 'idle', needs: 'nothing' };
+  h.clock.advance(3000);
+  assert.deepEqual(await ends(), [79], 'not ended the moment the row says so');
+  held = [...rows, { seq: 18, role: 'assistant', text: 'All green', turn: 'bbbb2222', at: at(25) }];
+  h.clock.advance(4000);
+  assert.deepEqual(await ends(), [79, 151]);
+});
+
 test('a thread made from here opens before the sidebar lists it', async () => {
   const h = harness();
   const made = h.relay.create('mac-mini', { text: 'Start', permissionMode: 'ask' });
