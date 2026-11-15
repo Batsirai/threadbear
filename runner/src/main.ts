@@ -700,8 +700,8 @@ async function main(): Promise<void> {
       publishUpdates();
     },
   });
-  // The LaunchAgent reinstalling itself when it's behind main (reinstall.ts):
-  // the Updates panel's Reinstall now, or by itself with selfReinstall on.
+  // The LaunchAgent updating itself when it's behind main (reinstall.ts):
+  // the Updates panel's Update it, or by itself with selfReinstall on.
   const reinstaller = new Reinstaller({
     home: cfg.home,
     checkout: updateRelease?.checkout,
@@ -711,9 +711,6 @@ async function main(): Promise<void> {
       const u = updater.status();
       return u.launcherChanged && u.launcherReason && u.launcherKey ? { reason: u.launcherReason, key: u.launcherKey } : undefined;
     },
-    // As a restart would wait: no busy thread, no old runner still finishing
-    // turns, and no restart of its own on the way (it would race the reinstall).
-    idle: () => !draining && restarter.busyThreads().length === 0 && peers.status().length === 0 && !restarter.status().pendingRestart,
     auto: () => experimentOn(cfg.home, 'selfReinstall'),
     onChange: () => publishUpdates(),
   });
@@ -881,7 +878,7 @@ async function main(): Promise<void> {
   };
   // tb updates (docs/protocol.md, "Mike's releases").
   methods['upstream.status'] = () => ({ upstream: upstream.status() });
-  // The Updates panel's Reinstall now (docs/protocol.md, "Runner updates").
+  // The Updates panel's Update it (docs/protocol.md, "Runner updates").
   methods['runner.reinstall'] = () => ({ reinstall: reinstaller.request() ?? null });
   // Other runners' threads, for the Mac app's sidebar (step 6 part 2).
   // `forTools`: a draining runner's agent tools (handover.ts primaryRemote),

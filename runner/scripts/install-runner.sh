@@ -8,6 +8,11 @@
 #   scripts/install-runner.sh              install (or reinstall) and start it
 #   scripts/install-runner.sh --print      print the plist and change nothing
 #   scripts/install-runner.sh --uninstall  stop it and remove the plist
+#   scripts/install-runner.sh --stage      put the new app, launch.mjs and
+#                                          plist in place without stopping
+#                                          anything; they take over the next
+#                                          time the LaunchAgent starts (the
+#                                          Mac restarting, logging in again)
 #
 # The runner runs from a release, never from this checkout: the plist
 # starts <home>/runner/launch.mjs, which starts the release
@@ -34,6 +39,15 @@
 # Options:
 #   --from-source  run src/main.ts straight from this checkout instead, as
 #                  before releases (for debugging the runner itself)
+#   --stage        the runner's own reinstall (src/reinstall.ts): no busy
+#                  check, no release built (the runner's updater keeps those
+#                  up to date), and nothing stopped or loaded. Threadbear
+#                  Runner.app is rebuilt in place (the running one goes on
+#                  from the file it started from), launch.mjs copied in and
+#                  the plist rewritten; launchd reads them next time it
+#                  starts the job. On a Mac that's never idle that's the
+#                  only time one can go in without cutting threads short
+#                  (14 Nov 2026).
 #   --force        replace the running copy even if threads are busy
 #   --allow-branch install from a HEAD that isn't main's tip (its launch.mjs
 #                  and release)
@@ -78,6 +92,7 @@ PORT=""
 AGENT_PATH=""
 RUNNER_APP="${THREADBEAR_RUNNER_APP_DIR:-}"
 FROM_SOURCE=0
+STAGE=0
 FORCE=0
 ALLOW_BRANCH=0
 HOME_GIVEN=0
@@ -89,6 +104,7 @@ while [ $# -gt 0 ]; do
     --print) MODE="print" ;;
     --uninstall) MODE="uninstall" ;;
     --from-source) FROM_SOURCE=1 ;;
+    --stage) STAGE=1 ;;
     --force) FORCE=1 ;;
     --allow-branch) ALLOW_BRANCH=1 ;;
     --home) DATA_HOME="${2:?--home needs a folder}"; HOME_GIVEN=1; shift ;;
@@ -480,6 +496,10 @@ point_current() {
 }
 
 RDIR="$DATA_HOME/runner"
+if [ "$STAGE" = 1 ] && { [ "$MODE" != "install" ] || [ "$FROM_SOURCE" = 1 ]; }; then
+  echo "--stage only goes with a plain install (not --print, --uninstall or --from-source)." >&2
+  exit 1
+fi
 # The exit for "threads are busy, nothing changed": EX_TEMPFAIL, so the
 # runner reinstalling itself (src/reinstall.ts) tells it from a failure and
 # tries again once they've finished.
@@ -500,7 +520,13 @@ if [ "$FROM_SOURCE" = 0 ] && [ "$ALLOW_BRANCH" = 0 ] && ! deploy --check-branch;
 fi
 # Replacing a running copy stops its CLIs, and every turn and background
 # job with them, so only when nothing is busy.
-if [ "$LOADED" = 1 ] && [ "$FORCE" = 0 ]; then
+# Staging something that isn't installed would leave a plist launchd never
+# loaded, or a launch.mjs with no release to start.
+if [ "$STAGE" = 1 ] && { [ "$LOADED" = 0 ] || [ ! -f "$RDIR/launch.mjs" ] || [ ! -L "$RDIR/current" ]; }; then
+  echo "$LABEL isn't installed and running releases, so there's nothing to stage over. Run this without --stage." >&2
+  exit 1
+fi
+if [ "$LOADED" = 1 ] && [ "$FORCE" = 0 ] && [ "$STAGE" = 0 ]; then
   if [ "$LAUNCH_OK" = 0 ]; then
     echo "$RUNNER_DIR/launch.mjs doesn't load (above), so this can't check whether threads are busy. Fix it, or add --force." >&2
     exit 1
@@ -566,7 +592,9 @@ else
   # when it was built from HEAD.
   [ ! -L "$RDIR/current" ] || OLD_CURRENT="$(basename "$(readlink "$RDIR/current")")"
   HEAD_COMMIT="$(git -C "$RUNNER_DIR" rev-parse HEAD 2>/dev/null || true)"
-  if [ -n "$OLD_CURRENT" ] && [ -n "$HEAD_COMMIT" ] && [ "$(release_commit "$RDIR/current/release.json")" = "$HEAD_COMMIT" ]; then
+  if [ "$STAGE" = 1 ]; then
+    echo "Leaving release ${OLD_CURRENT:-?} as it is; the runner's updater keeps releases up to date."
+  elif [ -n "$OLD_CURRENT" ] && [ -n "$HEAD_COMMIT" ] && [ "$(release_commit "$RDIR/current/release.json")" = "$HEAD_COMMIT" ]; then
     echo "Keeping release $OLD_CURRENT, which was built from HEAD."
   else
     [ -z "$OLD_CURRENT" ] || echo "Release $OLD_CURRENT wasn't built from HEAD, so building one that is."
@@ -634,6 +662,27 @@ fail_back() {
   [ -z "$NEW_LAUNCH" ] || rm -f "$NEW_LAUNCH"
   exit 1
 }
+
+if [ "$STAGE" = 1 ]; then
+  # Each file goes in whole (a temp file and a rename), and nothing is
+  # stopped or loaded, so nothing needs putting back if a step fails: the
+  # running job carries on as it was, and the next run of this stages
+  # again. The app was rebuilt in place above; the running launcher goes
+  # on from the file it started from.
+  mv -f "$NEW_LAUNCH" "$RDIR/launch.mjs"
+  TMP="$(mktemp "$PLIST.XXXXXX")"
+  job_file > "$TMP"
+  [ "$LINUX" = 1 ] || plutil -lint "$TMP" >/dev/null
+  mv "$TMP" "$PLIST"
+  # systemd keeps a unit's old text until told; this rereads it without
+  # restarting anything.
+  [ "$LINUX" = 0 ] || "$SYSTEMCTL" --user daemon-reload 2>/dev/null || true
+  [ "$LINUX" = 1 ] || rm -rf "$OLD_APP"
+  if [ "$SANDBOX" = 0 ]; then bash "$RUNNER_DIR/scripts/link-tb.sh" "$DATA_HOME" "$NODE" "$RUNNER_DIR" || true; fi
+  echo "Staged $LABEL: the new app, launch.mjs and plist are in place, and nothing was stopped."
+  echo "They take over the next time the LaunchAgent starts (the Mac restarting, or logging in again)."
+  exit 0
+fi
 
 # Building the app and a release can take minutes, and a thread may have
 # started meanwhile (the runner reinstalling itself starts this unattended),

@@ -757,8 +757,8 @@ async function dispatch(client, method, p) {
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
       return { thread: summary };
     }
-    // Reinstall now (protocol "Runner updates"): running at once, and up
-    // to date about 2 s later, as a reinstall with nothing busy goes.
+    // Update it (protocol "Runner updates"): running at once, and up to
+    // date about 2 s later, as staging goes.
     case 'runner.reinstall': {
       if (!updates.launcherChanged) return { reinstall: null };
       updates.reinstall = { state: 'running', logFile: path.join(dataDir, 'runner', 'reinstall.log') };
