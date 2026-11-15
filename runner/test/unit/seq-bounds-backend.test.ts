@@ -66,3 +66,19 @@ test("rows stored under a bad seq before it was checked are left out of the rela
     assert.deepEqual(tail.messages.map((m: { seq: number }) => m.seq), [1, 2, 3]);
   }
 });
+
+test("a long run of rows stored before seqs were checked (Grok's review) doesn't leave the relay's pages empty", async () => {
+  const s = await setup();
+  for (const seq of [1, 2, 3]) await s.ctx.db.insert('messages', { threadId: 'T', seq, role: 'assistant', text: `m${seq}`, at: 'now', runnerId: MINI });
+  for (const seq of [Infinity, -1, 2 ** 53]) for (let i = 0; i < 600; i++) await s.ctx.db.insert('messages', { threadId: 'T', seq: seq === -1 ? -1 - i : seq, role: 'assistant', text: 'x', at: 'now', runnerId: MINI });
+  const tail = await call(s.ctx, relay.remoteTail, { key: OWNER, threadId: 'T' });
+  assert.deepEqual(tail.messages.map((m: { seq: number }) => m.seq), [1, 2, 3]);
+  assert.equal(tail.hasMore, false);
+  const first = await call(s.ctx, relay.remoteMessages, { key: OWNER, threadId: 'T' });
+  assert.deepEqual(first.messages.map((m: { seq: number }) => m.seq), [1, 2, 3]);
+  const after = await call(s.ctx, relay.remoteMessages, { key: OWNER, threadId: 'T', afterSeq: 2 });
+  assert.deepEqual(after.messages.map((m: { seq: number }) => m.seq), [3]);
+  assert.equal(after.hasMore, false);
+  const before = await call(s.ctx, relay.remoteMessages, { key: OWNER, threadId: 'T', beforeSeq: 3 });
+  assert.deepEqual(before.messages.map((m: { seq: number }) => m.seq), [1, 2]);
+});

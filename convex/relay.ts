@@ -13,7 +13,7 @@ import { ConvexError, v } from 'convex/values';
 import type { OrderedQuery } from 'convex/server';
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { DataModel, Doc, Id } from './_generated/dataModel';
-import { checkRunnerId, forbidden, isSeq, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
+import { checkRunnerId, forbidden, isSeq, MAX_SEQ, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
 import { docBytes, isThreadId } from './runnerAccess';
 import { messageButton } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
@@ -82,7 +82,10 @@ async function pageOf(q: OrderedQuery<DataModel['messages']>, want: number, note
   for await (const m of q) {
     if (++read > want + 1 + NOTES_SKIPPED) return { rows, hasMore: true };
     // A row from before seqs were checked (lib.ts isSeq) is left out, not
-    // let break the rest of the thread on the main Mac.
+    // let break the rest of the thread on the main Mac. The pages read only
+    // 0 to MAX_SEQ of the index, so the infinities, negatives and huge ones
+    // are never read at all (a run of them would use up NOTES_SKIPPED and
+    // leave the page empty, Grok's review); fractions and NaN are skipped here.
     if ((!notes && m.role === 'note') || !isSeq(m.seq)) continue;
     if (rows.length >= want) return { rows, hasMore: true };
     rows.push(m);
@@ -97,7 +100,7 @@ export const remoteTail = query({
   handler: async (ctx, { key, threadId, limit, notes }) => {
     await runnerAuth(ctx, key, 'remoteTail');
     const want = pageLimit(limit, TAIL_MAX, TAIL_MAX);
-    const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).order('desc'), want, notes);
+    const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gte('seq', 0).lte('seq', MAX_SEQ)).order('desc'), want, notes);
     return { messages: rows.reverse().map(toRow), hasMore };
   },
 });
@@ -113,13 +116,14 @@ export const remoteMessages = query({
     await runnerAuth(ctx, key, 'remoteMessages');
     const want = pageLimit(limit, PAGE_DEFAULT, PAGE_MAX);
     if (afterSeq !== undefined) {
-      const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gt('seq', afterSeq)).order('asc'), want, notes);
+      const after = Number.isFinite(afterSeq) ? afterSeq : -1;
+      const { rows, hasMore } = await pageOf(ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gt('seq', after).lte('seq', MAX_SEQ)).order('asc'), want, notes);
       return { messages: rows.map(toRow), hasMore };
     }
     const { rows, hasMore } = await pageOf(
       ctx.db
         .query('messages')
-        .withIndex('by_thread_seq', (q) => (beforeSeq === undefined ? q.eq('threadId', threadId) : q.eq('threadId', threadId).lt('seq', beforeSeq)))
+        .withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).gte('seq', 0).lt('seq', beforeSeq !== undefined && Number.isFinite(beforeSeq) ? Math.min(beforeSeq, MAX_SEQ + 1) : MAX_SEQ + 1))
         .order('desc'),
       want,
       notes,
