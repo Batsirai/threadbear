@@ -393,21 +393,78 @@ fn clicked(url: &str, event: &ClickEvent, origin: Origin, base: &str, cx: &mut A
 /// absolute.
 pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
     match policy::decide_file(path, origin, &app_for) {
-        FileVerdict::Open { url, .. } => system_open(&url, cx),
+        FileVerdict::Open { url, look, with, .. } => open_checked(path, &look, &with, &url, cx),
         FileVerdict::Refuse(why) => refuse(why, cx),
-        FileVerdict::Ask { question, url, look } => {
+        FileVerdict::Ask { question, url, look, with } => {
             let path = path.to_owned();
-            ask(question, cx, move |cx| {
-                // What was said yes to, still: not a file swapped in while
-                // the question was up.
-                if policy::still_same(&path, &look, &app_for) {
-                    system_open(&url, cx);
-                } else {
-                    refuse(format!("{} changed while Threadbear was asking, so it didn't open it.", threadbear_core::highlights::last_component(&path)), cx);
-                }
-            });
+            // What was said yes to, still: not a file swapped in while the
+            // question was up (`open_checked` looks again).
+            ask(question, cx, move |cx| open_checked(&path, &look, &with, &url, cx));
         }
     }
+}
+
+/// Opens a file `decide_file` checked: only if it's still the same file (its
+/// path, its identity on disk, its kind and its app), and then through the
+/// opener that was checked rather than whichever the system picks for what's
+/// at the path by then (Daybreak 125, 15 Nov 2026).
+fn open_checked(path: &str, look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) {
+    if !policy::still_same(path, look, &app_for) {
+        refuse(format!("{} changed while Threadbear was opening it, so it didn't open it.", threadbear_core::highlights::last_component(path)), cx);
+        return;
+    }
+    match with {
+        policy::Opener::System => system_open(url, cx),
+        policy::Opener::App(app) => open_with_app(url, app, cx),
+        policy::Opener::FileViewer => open_in_file_viewer(&look.resolved, url, cx),
+    }
+}
+
+/// The file at `url` given to `app` as a document (NSWorkspace's
+/// openURLs:withApplicationAtURL:), so whatever is at the path when the app
+/// reads it, it's that app that opens it, never one the swapped-in file names.
+#[cfg(target_os = "macos")]
+fn open_with_app(url: &str, app: &Path, cx: &mut App) {
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceOpenConfiguration};
+    use objc2_foundation::{NSArray, NSString, NSURL};
+    // Kept as the URL alone, as every other file open is, for the specs.
+    if scripted_opens(url) {
+        return;
+    }
+    let _ = cx;
+    let Some(file) = NSURL::URLWithString(&NSString::from_str(url)) else { return };
+    let app = NSURL::fileURLWithPath(&NSString::from_str(&app.to_string_lossy()));
+    let config = NSWorkspaceOpenConfiguration::configuration();
+    // Not the app it'd suggest for the swapped-in file, and not a newer
+    // copy of it somewhere else: the one asked about.
+    NSWorkspace::sharedWorkspace().openURLs_withApplicationAtURL_configuration_completionHandler(&NSArray::from_retained_slice(&[file]), &app, &config, None);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_with_app(url: &str, _app: &Path, cx: &mut App) {
+    system_open(url, cx);
+}
+
+/// A plain folder shown in Finder, selected in the folder it's in
+/// (activateFileViewerSelectingURLs). Not a window rooted at it, nor Finder
+/// handed it to open: tried on a Mac (15 Nov 2026), both of those launched an
+/// app swapped in at the folder's path, and revealing it didn't.
+#[cfg(target_os = "macos")]
+fn open_in_file_viewer(folder: &Path, url: &str, cx: &mut App) {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSArray, NSString, NSURL};
+    // Kept as the URL alone, as every other file open is, for the specs.
+    if scripted_opens(url) {
+        return;
+    }
+    let _ = cx;
+    let folder = NSURL::fileURLWithPath(&NSString::from_str(&folder.to_string_lossy()));
+    NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[folder]));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_in_file_viewer(_folder: &Path, url: &str, cx: &mut App) {
+    system_open(url, cx);
 }
 
 /// A small, read-only raster for a local PDF or video hover card. Called on

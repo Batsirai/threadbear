@@ -5075,3 +5075,22 @@ Fixes from Codex's review of the slice before:
 - Rules and their tests: `desktop/core/src/nested.rs`, `inbox::sections_nested`.
   Drawing: `desktop/gpui/src/{sidebar,projects_list,thread,app,shell}.rs`.
   The mock's `TB_MOCK_NESTED` demo set, `features/nested-threads.feature`.
+
+### 2026-11-15 Files open with the app that was checked (`file.open`)
+
+- Daybreak 125: the open gate looked at a file by its path, then handed the
+  path to the system, which looked it up again; whatever writes the project
+  could swap the document (or a folder above it) for an app in between, and
+  it launched with no question. Now each open looks again right before
+  (same real path, same file on disk by device and inode, same kind, same
+  app), and on a Mac a document goes to the app that was checked
+  (NSWorkspace's openURLs:withApplicationAtURL:), so a swap that slips in
+  after that is opened by that app as a document, never run. A plain
+  folder is shown selected in Finder rather than opened in a window of its
+  own: tried on a Mac, a Finder window rooted at a path, or Finder asked to
+  open it, launched an app swapped in there; revealing it didn't. The
+  Swift app (frozen) still opens by path.
+- Windows and Linux get the look right before the open; nothing there can
+  name the app, so the system still picks it.
+- Rules and their tests: `desktop/core/src/open_policy.rs` (`Opener`,
+  `still_same`), the gate: `desktop/gpui/src/open_gate.rs` (`open_checked`).

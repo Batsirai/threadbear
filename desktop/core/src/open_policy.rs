@@ -405,6 +405,67 @@ pub struct Look {
     pub runs: Option<String>,
     /// The path given was a symlink, or went through one.
     pub linked: bool,
+    /// The real file's identity (device and inode) where the system says,
+    /// so a swap that keeps its path is still a different file.
+    pub id: Option<FileId>,
+    /// The app that would open it, as `app_for` said when it was looked at.
+    pub app: Option<OpeningApp>,
+    /// It's a folder (or a bundle).
+    pub is_dir: bool,
+}
+
+/// A file's identity on its disk: the same object, whatever its path names
+/// now (Daybreak 125, 15 Nov 2026).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileId {
+    pub device: u64,
+    pub inode: u64,
+}
+
+#[cfg(unix)]
+fn file_id(meta: &std::fs::Metadata) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    Some(FileId { device: meta.dev(), inode: meta.ino() })
+}
+
+/// Windows' file index isn't in stable std; the path checks stand alone there.
+#[cfg(not(unix))]
+fn file_id(_meta: &std::fs::Metadata) -> Option<FileId> {
+    None
+}
+
+/// How a checked file is handed to the system (Daybreak 125, 15 Nov 2026).
+/// The system opener looks the path up again when it opens it, after every
+/// check here, so whatever writes the project could swap a document (or a
+/// folder above it) for an app or a script in between, and the system would
+/// then pick that one's opener: run it. Handing the file to the app that was
+/// checked instead means a swap can only ever be shown, never run, as a
+/// document app opens what it's given as a document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Opener {
+    /// Give the file to this app (its bundle path), whatever is there then.
+    App(PathBuf),
+    /// A plain folder: shown in the file browser, selected where it is,
+    /// which never launches a bundle swapped in (a window rooted at it, or
+    /// Finder asked to open it, does).
+    FileViewer,
+    /// The system's own choice: an app that was said yes to opening as
+    /// itself, or where the system can't say which app opens a file (off a
+    /// Mac). The identity is checked again right before.
+    System,
+}
+
+/// How `look`'s file is to be opened.
+pub fn opener(look: &Look) -> Opener {
+    match &look.app {
+        // An app opening as itself is launched, so the system does it.
+        Some(app) if app.path == look.resolved => Opener::System,
+        // A plain folder goes to a file browser window, never to the app
+        // Launch Services has for it.
+        _ if look.runs.is_none() && look.is_dir => Opener::FileViewer,
+        Some(app) => Opener::App(app.path.clone()),
+        None => Opener::System,
+    }
 }
 
 /// Looks at the file at `path` (absolute) after following its symlinks.
@@ -425,12 +486,13 @@ pub fn look(path: &Path, app_for: &dyn Fn(&Path) -> Option<OpeningApp>) -> Optio
     let linked = std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false) || resolved.file_name() != path.file_name();
     #[cfg(windows)]
     let linked = _local.linked;
-    let runs = runs(&resolved, &meta, app_for);
-    Some(Look { resolved, runs, linked })
+    let app = app_for(&resolved);
+    let runs = runs(&resolved, &meta, app.clone());
+    Some(Look { resolved, runs, linked, id: file_id(&meta), app, is_dir: meta.is_dir() })
 }
 
 /// Why opening `file` would or might run something (`OpenGate.runs`).
-fn runs(file: &Path, meta: &std::fs::Metadata, app_for: &dyn Fn(&Path) -> Option<OpeningApp>) -> Option<String> {
+fn runs(file: &Path, meta: &std::fs::Metadata, app: Option<OpeningApp>) -> Option<String> {
     let name = file.to_string_lossy();
     if runs_code(&name) {
         return Some(format!("It's a .{} file, which runs when it's opened.", extension(file)));
@@ -441,7 +503,6 @@ fn runs(file: &Path, meta: &std::fs::Metadata, app_for: &dyn Fn(&Path) -> Option
             return Some("It's an app or a bundle, which runs when it's opened.".to_owned());
         }
     }
-    let app = app_for(file);
     if let Some(app) = &app {
         // An app opens as itself: Launch Services names a bundle with no
         // known extension that way too.
@@ -480,11 +541,12 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// What to do with a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileVerdict {
-    /// Open it: the URL is the real file's, built by `file_url`.
-    Open { url: String, resolved: PathBuf },
+    /// Open it: the URL is the real file's, built by `file_url`, handed to
+    /// `with`, once `still_same` says it's still what `look` saw.
+    Open { url: String, resolved: PathBuf, look: Look, with: Opener },
     /// Ask first, then open `url` only on a yes (and only if the file is
     /// still what was asked about: `still_same`).
-    Ask { question: Question, url: String, look: Look },
+    Ask { question: Question, url: String, look: Look, with: Opener },
     /// Don't, and say why.
     Refuse(String),
 }
@@ -522,7 +584,7 @@ pub fn decide_file(path: &str, origin: Origin, app_for: &dyn Fn(&Path) -> Option
     }
     let url = file_url(&look.resolved.to_string_lossy());
     match &look.runs {
-        None => FileVerdict::Open { url, resolved: look.resolved },
+        None => FileVerdict::Open { url, resolved: look.resolved.clone(), with: opener(&look), look },
         Some(why) => {
             let real = look.resolved.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let link = if look.linked { format!("\n\n{name} is a link to {real}.") } else { String::new() };
@@ -531,16 +593,19 @@ pub fn decide_file(path: &str, origin: Origin, app_for: &dyn Fn(&Path) -> Option
                 detail: format!("{why} It's from a thread, so Threadbear asks before running it.{link}\n\n{}", look.resolved.to_string_lossy()),
                 yes: "Open".to_owned(),
             };
-            FileVerdict::Ask { question, url, look }
+            FileVerdict::Ask { question, url, with: opener(&look), look }
         }
     }
 }
 
-/// After a yes: the file at `path` still resolves to what was asked about,
-/// and is still the same kind, so a swap while the question was up doesn't
-/// open something else.
+/// Right before anything opens (after a yes, and for a document straight
+/// after it was looked at): the file at `path` still resolves to what was
+/// looked at, is the same file on its disk, the same kind and goes to the
+/// same app, so a swap since doesn't open something else. What's left after
+/// this, the moment between it and the system's own lookup, is why the file
+/// goes to the app that was checked (`Opener`).
 pub fn still_same(path: &str, asked: &Look, app_for: &dyn Fn(&Path) -> Option<OpeningApp>) -> bool {
-    look(Path::new(path), app_for).is_some_and(|now| now.resolved == asked.resolved && now.runs == asked.runs)
+    look(Path::new(path), app_for).is_some_and(|now| now.resolved == asked.resolved && now.runs == asked.runs && now.id == asked.id && now.app == asked.app && now.is_dir == asked.is_dir)
 }
 
 // ---------------------------------------------------------------- shown in the app
@@ -970,7 +1035,7 @@ mod tests {
         assert!(url.ends_with("/Inspect.app%23help/SKILL.md"), "{url}");
         assert!(!url.contains('#'));
         match decide_file(&skill.to_string_lossy(), Origin::ThisMac, &none) {
-            FileVerdict::Open { url: opened, resolved } => {
+            FileVerdict::Open { url: opened, resolved, .. } => {
                 assert_eq!(resolved, skill);
                 assert_eq!(opened, url);
             }
@@ -1049,7 +1114,7 @@ mod tests {
     fn a_file_on_windows_opens_by_its_drive_path() {
         let s = Scratch::new("drive");
         let doc = s.file("notes.md", "x");
-        let FileVerdict::Open { url, resolved } = decide_file(&doc.to_string_lossy(), Origin::ThisMac, &none) else { panic!() };
+        let FileVerdict::Open { url, resolved, .. } = decide_file(&doc.to_string_lossy(), Origin::ThisMac, &none) else { panic!() };
         let text = resolved.to_string_lossy().into_owned();
         assert!(!text.starts_with(r"\\"), "{text}");
         assert!(url.starts_with(&["file:///", &text[..1], ":/"].concat()), "{url}");
@@ -1271,7 +1336,7 @@ mod tests {
         let s = Scratch::new("links");
         let app = app_bundle(&s, "Payload.app");
         std::os::unix::fs::symlink(&app, s.path("README.md")).unwrap();
-        let FileVerdict::Ask { question, url, look } = decide_file(&s.path("README.md").to_string_lossy(), Origin::ThisMac, &none) else { panic!() };
+        let FileVerdict::Ask { question, url, look, .. } = decide_file(&s.path("README.md").to_string_lossy(), Origin::ThisMac, &none) else { panic!() };
         assert!(look.linked);
         assert_eq!(look.resolved, app);
         assert!(url.ends_with("/Payload.app"));
@@ -1294,6 +1359,102 @@ mod tests {
         let other = app_bundle(&s, "Other.app");
         std::os::unix::fs::symlink(&other, &p).unwrap();
         assert!(!still_same(&p.to_string_lossy(), &look, &none));
+    }
+
+    /// What a Mac's Launch Services would say: .md opens in TextEdit, an app
+    /// opens as itself, a .command in Terminal.
+    #[cfg(unix)]
+    fn mac_apps(file: &Path) -> Option<OpeningApp> {
+        let text = PathBuf::from("/System/Applications/TextEdit.app");
+        match extension(file).as_str() {
+            "md" => Some(OpeningApp { path: text, bundle_id: Some("com.apple.TextEdit".into()), name: "TextEdit".into() }),
+            "app" => Some(OpeningApp { path: file.to_path_buf(), bundle_id: Some("com.evil.app".into()), name: "Evil".into() }),
+            "command" => Some(OpeningApp { path: "/System/Applications/Utilities/Terminal.app".into(), bundle_id: Some("com.apple.Terminal".into()), name: "Terminal".into() }),
+            _ => None,
+        }
+    }
+
+    /// Daybreak 125: a document was looked at, then handed to the system by
+    /// its path, which the system looked up again, so a swap in between
+    /// (of the file or a folder above it) opened an app in its place with
+    /// no question. The document goes to the app that was checked, and is
+    /// looked at again right before; each swap fails that.
+    #[cfg(unix)]
+    #[test]
+    fn a_document_swapped_for_an_app_after_its_look_never_launches() {
+        let s = Scratch::new("doc-swap");
+        let doc = s.file("notes/readme.md", "# hi");
+        let given = doc.to_string_lossy().into_owned();
+        let FileVerdict::Open { look, with, .. } = decide_file(&given, Origin::ThisMac, &mac_apps) else { panic!() };
+        // Handed to TextEdit, not to whatever the path names when it opens.
+        assert_eq!(with, Opener::App("/System/Applications/TextEdit.app".into()));
+        assert!(still_same(&given, &look, &mac_apps));
+
+        // The file itself swapped for a link to an app bundle.
+        let evil = app_bundle(&s, "Evil.app");
+        fs::rename(&doc, s.path("notes/readme.old")).unwrap();
+        std::os::unix::fs::symlink(&evil, &doc).unwrap();
+        assert!(!still_same(&given, &look, &mac_apps), "a link to an app passed as the document");
+        fs::remove_file(&doc).unwrap();
+
+        // Replaced by another file of the same name and kind: a different
+        // file on disk, which the old check (path and kind) let through.
+        fs::write(&doc, "#!/bin/sh\n").unwrap();
+        assert!(!still_same(&given, &look, &mac_apps), "a file swapped in at the same path passed");
+        fs::remove_file(&doc).unwrap();
+        fs::rename(s.path("notes/readme.old"), &doc).unwrap();
+        assert!(still_same(&given, &look, &mac_apps), "the untouched document stopped passing");
+
+        // A folder above it swapped for a link to one where that name is a program.
+        let other = s.path("other");
+        fs::create_dir_all(&other).unwrap();
+        fs::rename(other.join("..").join("Evil.app"), other.join("readme.md")).unwrap();
+        fs::rename(s.path("notes"), s.path("notes.old")).unwrap();
+        std::os::unix::fs::symlink(&other, s.path("notes")).unwrap();
+        assert!(!still_same(&given, &look, &mac_apps), "an ancestor swapped for a folder with an app in it passed");
+    }
+
+    /// A plain folder opens in a file browser window, never through the app
+    /// the system has for whatever is at its path then.
+    #[cfg(unix)]
+    #[test]
+    fn a_plain_folder_opens_in_a_file_viewer() {
+        let s = Scratch::new("folder");
+        fs::create_dir_all(s.path("docs")).unwrap();
+        let given = s.path("docs").to_string_lossy().into_owned();
+        let FileVerdict::Open { look, with, .. } = decide_file(&given, Origin::ThisMac, &mac_apps) else { panic!() };
+        assert_eq!(with, Opener::FileViewer);
+        // Turned into a bundle afterwards: no longer what was looked at.
+        fs::create_dir_all(s.path("docs/Contents/MacOS")).unwrap();
+        assert!(!still_same(&given, &look, &mac_apps));
+    }
+
+    /// After a yes, a script goes to the app that was named in the question,
+    /// and an app said yes to is launched as itself; both looked at again
+    /// first, so a file swapped in after the yes is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_confirmed_target_opens_with_what_was_asked_about() {
+        let s = Scratch::new("confirmed");
+        let script = s.file("go.command", "#!/bin/sh\n");
+        let given = script.to_string_lossy().into_owned();
+        let FileVerdict::Ask { look, with, .. } = decide_file(&given, Origin::ThisMac, &mac_apps) else { panic!() };
+        assert_eq!(with, Opener::App("/System/Applications/Utilities/Terminal.app".into()));
+        // Swapped after the yes (a new file at the same path): refused. The
+        // old one is kept, so the new one can't get its inode back.
+        fs::rename(&script, s.path("go.old")).unwrap();
+        fs::write(&script, "#!/bin/sh\nrm -rf ~\n").unwrap();
+        assert!(!still_same(&given, &look, &mac_apps));
+
+        let app = app_bundle(&s, "Tool.app");
+        let given = app.to_string_lossy().into_owned();
+        let FileVerdict::Ask { look, with, .. } = decide_file(&given, Origin::ThisMac, &mac_apps) else { panic!() };
+        assert_eq!(with, Opener::System);
+        assert!(still_same(&given, &look, &mac_apps));
+        let other = app_bundle(&s, "Other.app");
+        fs::rename(&app, s.path("Tool.old")).unwrap();
+        fs::rename(&other, &app).unwrap();
+        assert!(!still_same(&given, &look, &mac_apps), "another bundle moved into the app's place passed");
     }
 
     #[test]
@@ -1344,7 +1505,7 @@ mod tests {
         fs::create_dir_all(&plain).unwrap();
         let LinkKind::File(path) = link_kind(&[&s.0.to_string_lossy(), "/Payload.app%5C"].concat()) else { panic!() };
         match decide_file(&path, Origin::ThisMac, &none) {
-            FileVerdict::Open { url, resolved } => {
+            FileVerdict::Open { url, resolved, .. } => {
                 assert_eq!(resolved, plain);
                 assert!(url.ends_with("/Payload.app%5C"), "{url}");
             }
