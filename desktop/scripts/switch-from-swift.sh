@@ -50,37 +50,61 @@ from_main() {
   chmod +x "$work/$1"
 }
 
-# Free space on the home folder's disk, in KB. THREADBEAR_SWITCH_FREE_KB
-# stands in for it in the tests (switch-from-swift.test.ts).
+# Free space on the home folder's disk, in KB, or nothing if df couldn't
+# say. Past its reserve macOS's df shows a negative figure, which is none.
+# THREADBEAR_SWITCH_FREE_KB stands in for df in the tests
+# (switch-from-swift.test.ts).
 free_kb() {
-  if [[ -n "${THREADBEAR_SWITCH_FREE_KB:-}" ]]; then echo "$THREADBEAR_SWITCH_FREE_KB"; return; fi
-  df -Pk "$HOME" | awk 'END { print $4 }'
+  local kb
+  if [[ -n "${THREADBEAR_SWITCH_FREE_KB:-}" ]]; then kb="$THREADBEAR_SWITCH_FREE_KB"
+  else kb="$(df -Pk "$HOME" 2>/dev/null | awk 'END { print $4 }')" || kb=""
+  fi
+  if [[ "$kb" =~ ^-[0-9]+$ ]]; then echo 0; elif [[ "$kb" =~ ^[0-9]+$ ]]; then echo "$kb"; fi
 }
 
-# The update build hosts runner.json names, if any, where the build goes
-# instead of here (stage-update.sh says why).
-build_hosts() {
+# Whether stage-update.sh will build somewhere else or not at all: runner.json
+# names an update build host it would use, or a check host (it then builds
+# nothing and exits 5). The same reading as stage-update.sh's hosts_in, so the
+# two agree on a name it would refuse.
+builds_elsewhere() {
   /usr/bin/python3 -I -c 'import json,sys
-try: h = json.load(open(sys.argv[1])).get("updateBuildHosts") or []
-except Exception: h = []
-print("yes" if h else "")' "${THREADBEAR_HOME:-$HOME/Library/Application Support/Threadbear}/runner.json" 2>/dev/null || true
+try: c = json.load(open(sys.argv[1]))
+except Exception: c = {}
+if not isinstance(c, dict): c = {}
+def hosts(key):
+    h = c.get(key) or []
+    if isinstance(h, str): h = [h]
+    if not isinstance(h, list): h = []
+    return [x for x in h if isinstance(x, str) and x and not x.startswith("-") and x.strip() == x and " " not in x]
+print("yes" if hosts("updateBuildHosts") or hosts("checkHosts") or hosts("checkHost") else "")' "${THREADBEAR_HOME:-$HOME/Library/Application Support/Threadbear}/runner.json" 2>/dev/null || true
 }
 
 # Room for it before any of it starts, rather than a full disk half an hour
-# into the build: Rust about 1 GB, a first build here about 3 (with room
-# for the bundle and to spare), one with an earlier try's files about 1.
+# into the build (a 2.6 GB disk filled up 16 minutes in on Tinker Desk, 15
+# Nov). Rust about 1 GB. A build here about 4 all told (2.3 measured, with
+# the bundle and room to spare), less whatever an earlier try already left
+# in the cache (measured, not guessed from a folder cargo makes at once),
+# never under 1. Built elsewhere, or not at all, 1 for the clone and bundle.
 room_for_it() {
-  local need=0
-  command -v cargo >/dev/null || need=1
-  if [[ -z "$(build_hosts)" ]]; then
-    if [[ -d "$HOME/Library/Caches/Threadbear/update-desktop/target/release" ]]; then need=$((need + 1)); else need=$((need + 4)); fi
+  local need_kb=0 gib=$((1024 * 1024)) cache="$HOME/Library/Caches/Threadbear/update-desktop"
+  command -v cargo >/dev/null || need_kb=$gib
+  if [[ -n "$(builds_elsewhere)" ]]; then
+    need_kb=$((need_kb + gib))
+  else
+    local cached=0 build=$((4 * gib))
+    [[ -d "$cache" ]] && cached="$(du -sk "$cache" 2>/dev/null | awk '{ print $1 }')" || true
+    [[ "$cached" =~ ^[0-9]+$ ]] || cached=0
+    build=$((build - cached))
+    (( build >= gib )) || build=$gib
+    need_kb=$((need_kb + build))
   fi
-  [[ "$need" -gt 0 ]] || return 0
   local have
   have="$(free_kb)"
-  [[ "$have" =~ ^[0-9]+$ ]] || return 0
-  if (( have < need * 1024 * 1024 )); then
-    echo "Installing the new app needs about $need GB free on this Mac's disk (Rust and the build's files), and it has $(awk -v k="$have" 'BEGIN { printf "%.1f", k / 1048576 }') GB. Free some space and run this again." >&2
+  # df couldn't say: the build finds out for itself.
+  [[ -n "$have" ]] || return 0
+  if (( have < need_kb )); then
+    gb() { awk -v k="$1" 'BEGIN { printf "%.1f", k / 1048576 }'; }
+    echo "Installing the new app needs about $(gb "$need_kb") GB free on this Mac's disk (Rust and the build's files), and it has $(gb "$have") GB. Free some space and run this again." >&2
     exit 6
   fi
 }
@@ -90,14 +114,18 @@ room_for_it() {
 build_failed() {
   case "$1" in
     3) echo "Another build of the new app is running. Wait for it to finish, then run this again." >&2 ;;
-    4) echo "None of runner.json's updateBuildHosts could build it just now (above says why). Run this again in a while, or take updateBuildHosts out of runner.json to build on this Mac." >&2 ;;
-    5) echo "runner.json has checkHosts but no updateBuildHosts, so nothing built it. Name a Mac to build it in updateBuildHosts, or take checkHosts out to build on this Mac." >&2 ;;
+    4) echo "None of runner.json's updateBuildHosts could build it just now (above says why). Run this again in a while, or take updateBuildHosts, checkHosts and checkHost out of runner.json to build on this Mac." >&2 ;;
+    5) echo "runner.json has check hosts (checkHosts or checkHost) but no updateBuildHosts, so nothing built it. Name a Mac to build it in updateBuildHosts, or take the check hosts out to build on this Mac." >&2 ;;
     *) echo "The build failed (exit $1); its output is above, and in ~/Library/Caches/Threadbear/update-desktop." >&2 ;;
   esac
   exit "$1"
 }
 
-if [[ ! -d "$TARGET" ]]; then
+# Installed means the app's binary is there: a folder left by a copy that
+# was stopped partway isn't, and is replaced.
+installed() { [[ -x "$TARGET/Contents/MacOS/threadbear-gpui" ]]; }
+
+if ! installed; then
   room_for_it
   if ! command -v cargo >/dev/null; then
     echo "STEP Installing Rust"
@@ -114,7 +142,14 @@ if [[ ! -d "$TARGET" ]]; then
 
   mkdir -p "$HOME/Applications"
   # Not over one that turned up while it built (installed from a terminal).
-  [[ -d "$TARGET" ]] || ditto "$work/Threadbear GPUI.app" "$TARGET"
+  # Copied beside it and moved in whole, so a copy stopped partway never
+  # looks installed.
+  if ! installed; then
+    rm -rf "$TARGET.installing"
+    ditto "$work/Threadbear GPUI.app" "$TARGET.installing"
+    rm -rf "$TARGET"
+    mv "$TARGET.installing" "$TARGET"
+  fi
   echo "Installed $TARGET"
 fi
 
