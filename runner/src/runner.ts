@@ -162,6 +162,7 @@ import { newThreadsPart, type NewThreadsPart } from './runner/new-threads.ts';
 import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, ledgerCard, openFindings, parseVerdict, type LabReviewPart } from './runner/lab-review.ts';
 import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
+import { nestedPart, type NestedPart } from './runner/nested.ts';
 import { CONFINED_NO_SANDBOX, sandboxFor } from './sandbox.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
 
@@ -683,7 +684,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, NestedPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -1595,7 +1596,7 @@ export class Runner {
     return this.send(threadId, logged?.text ?? text, logged?.images ?? [], { origin: 'schedule', scheduleId, queue: true, ...(messageId ? { messageId, scheduledSince: since } : {}) });
   }
 
-  send(threadId: string, text: string, images: ImageRef[] = [], opts: SendOptions = {}): { turnId: string } {
+  send(threadId: string, text: string, images: ImageRef[] = [], opts: SendOptions = {}): { turnId: string; held?: true } {
     const st = this.mustGet(threadId);
     this.checkAccepting();
     // A thread a draining runner is letting go of is about to be the new
@@ -1607,6 +1608,11 @@ export class Runner {
     // Its turn was made up; a real agent picking it up would only be lost.
     if (st.rec.sample) throw new RpcError(ErrorCode.badParams, "This is one of the tour's sample threads, so nothing can be sent to it. Start a new thread to try it for real.");
     checkImages(images);
+    // A report to the thread that started the sender, kept until its other
+    // threads finish (runner/nested.ts).
+    if (this.holdReport(st, text, images, opts)) return { turnId: crypto.randomUUID(), held: true };
+    // Mike writing: anything held goes in first, so he and it see the same.
+    if (fromMike(text, opts) && st.rec.heldReports?.length) this.deliverHeld(st);
     return { turnId: this.sendTo(st, text, images, opts) };
   }
 
@@ -2669,6 +2675,10 @@ export class Runner {
     // lists this one while it's working.
     if (outcome === 'completed' && said?.needs === 'nothing' && !archive) void this.checkLooseEnds(st);
     this.recheckStarter(st);
+    // Reports its starter is holding may go now; at once if this one failed
+    // or was stopped (one moving login or waiting for the network carries
+    // on by itself). runner/nested.ts.
+    if (rec.startedBy?.kind === 'thread' && !rec.detached) this.settleHeldSoon(rec.startedBy.threadId, outcome !== 'completed' && !limitHit && !netLost);
     // A code change gets another lab's review before it counts as done
     // (runner/lab-review.ts, unless Settings turns it off): the thread waits on
     // the review, so anything waiting on it hears once it's been fixed.
@@ -3040,6 +3050,9 @@ export class Runner {
     archivedBy?: ArchivedBy;
     verdict?: ArchiveVerdict;
     starred?: boolean;
+    // Out from under the thread that started it in the sidebar, or back
+    // (docs/protocol.md, "Nested threads").
+    detached?: boolean;
     // Whether a turn that hits its login's limit waits for room and
     // carries on by itself (the limit box's menu). false also ends a wait
     // under way; true starts one if the thread is stuck at its limit now.
@@ -3318,9 +3331,16 @@ export class Runner {
     if (archiving) {
       this.reconcileWaits();
       this.recheckStarter(st);
+      this.settleHeldSoon(rec.startedBy?.threadId);
     }
     if (params.starred === true) rec.starredAt ??= this.isoNow();
     else if (params.starred === false) delete rec.starredAt;
+    if (params.detached !== undefined && rec.startedBy?.kind === 'thread' && rec.startedBy.threadId) {
+      if (params.detached) rec.detached = true;
+      else delete rec.detached;
+      // Its starter may have been holding reports for it (runner/nested.ts).
+      this.settleHeldSoon(rec.startedBy.threadId);
+    }
     if (params.carryOnAtReset !== undefined) this.setCarryOnAtReset(st, params.carryOnAtReset);
     if (accountChanged && rt.turn && rt.session && !stop) {
       // The turn carries on where it started; say so, or the picker reads
@@ -3392,6 +3412,7 @@ export class Runner {
     rt.trashed = true;
     this.threads.delete(threadId);
     this.waitedOnDeleted(threadId);
+    this.settleHeldSoon(rec.startedBy?.threadId);
     this.dirty.delete(threadId);
     rt.idleTimer?.cancel();
     rt.deltaTimer?.cancel();
@@ -3887,6 +3908,7 @@ export class Runner {
     }
     if (rec.schedule) s.schedule = { ...rec.schedule };
     if (rec.startedBy) s.startedBy = { ...rec.startedBy };
+    if (rec.detached) s.detached = true;
     if (rec.asked) s.asked = rec.asked;
     if (rec.keywords) s.keywords = rec.keywords;
     if (rec.panelRequest) s.panelRequest = { ...rec.panelRequest };
@@ -4216,7 +4238,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
+for (const part of [looseEndsPart, quietInboxPart, nestedPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }
