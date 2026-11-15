@@ -199,6 +199,9 @@ export type RunnerUpdates = {
   // being done about launcherChanged (reinstall.ts).
   checkout?: string;
   reinstall?: ReinstallStatus;
+  // Its reinstall stages for the next login rather than stopping everything
+  // (from 15 Nov 2026).
+  launcherStages?: true;
   // Mike's releases, for a fork (upstream.ts); left out while off.
   upstream?: UpstreamStatus;
   // This machine isn't following GitHub's main properly (follow-origin.ts).

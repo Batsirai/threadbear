@@ -1133,9 +1133,27 @@ test('--stage puts the new launch.mjs and plist in place with threads busy, stop
   assert.equal(current(), before, 'no release built or switched');
   assert.deepEqual(launchctlCalls().slice(calls).filter((c) => c[0] !== 'print'), [], 'no bootout, bootstrap or kickstart');
   assert.equal(launchctl('print', TARGET), 0, 'still loaded, still running');
-  // Only over an install that's there.
+  // Only with a plain install: never quietly printing or uninstalling instead.
   r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--stage', '--print']);
   assert.equal(r.status, 1, out(r));
+  r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--stage', '--uninstall']);
+  assert.equal(r.status, 1, out(r));
+  assert.match(r.stderr, /only goes with a plain install/);
+  assert.equal(launchctl('print', TARGET), 0, 'still installed');
+  // A LaunchAgents folder it can't write to: refused before the app or
+  // launch.mjs change, so the runner's check still sees it behind.
+  fs.writeFileSync(launchSrc, pristine + '\n// unwritable\n');
+  commit({ v: 'unwritable' }, 'launch.mjs change for an unwritable folder');
+  fs.chmodSync(agents, 0o555);
+  try {
+    r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--stage']);
+  } finally {
+    fs.chmodSync(agents, 0o755);
+  }
+  assert.equal(r.status, 1, out(r));
+  assert.match(r.stderr, /nothing was changed/);
+  assert.equal(fs.readFileSync(installed, 'utf8'), pristine + '\n// staged\n', 'launch.mjs left as it was');
+  assert.deepEqual(fs.readdirSync(agents).filter((f) => f.includes('.plist.')), [], 'no temp plist left behind');
   // Back as it was for the tests below.
   setBusy([]);
   fs.writeFileSync(launchSrc, pristine);

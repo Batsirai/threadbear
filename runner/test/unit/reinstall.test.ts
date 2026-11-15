@@ -9,7 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { RUNNING_LIMIT_MS, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
+import { RUNNING_LIMIT_MS, RUNS_NODE_REASON, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
 
 type Setup = { behind?: { reason: string; key: string }; auto?: boolean; spawnError?: string; alive?: boolean | undefined };
 
@@ -80,12 +80,25 @@ test('staged: when what it checks is up to date the line goes; when the running 
   assert.equal(saved.finished.code, 0);
   // Something only launchd starting the job again fixes (a plist that
   // still runs node): staged, not failed, and not tried again.
-  t.state.behind = { reason: 'The LaunchAgent still runs node, not Threadbear Runner.app.', key: 'k1' };
+  t.state.behind = { reason: RUNS_NODE_REASON, key: 'k1' };
   r.consider();
   assert.deepEqual(r.status(), { state: 'staged', logFile: reinstallLogPath(t.home) });
   t.clock.advance(60 * 60_000);
   r.consider();
   assert.equal(t.jobs.length, 1);
+});
+
+test("finished, but the files on disk are still behind (it staged from a checkout that isn't at main): a failure, not staged", () => {
+  const t = setup({ auto: true });
+  const r = t.make();
+  r.consider();
+  t.finish(0);
+  t.clock.advance(5_000);
+  const s = r.status();
+  assert.equal(s?.state, 'failed');
+  assert.match(s?.reason ?? '', /^It finished, but this is still so: Threadbear Runner\.app was built/);
+  r.consider();
+  assert.equal(t.jobs.length, 1, 'not tried over and over');
 });
 
 test('a failure shows why, is not retried by itself for the same main, and Try again runs it once more', () => {

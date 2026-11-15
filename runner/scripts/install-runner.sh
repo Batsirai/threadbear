@@ -118,6 +118,10 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+if [ "$STAGE" = 1 ] && { [ "$MODE" != "install" ] || [ "$FROM_SOURCE" = 1 ]; }; then
+  echo "--stage only goes with a plain install (not --print, --uninstall or --from-source)." >&2
+  exit 1
+fi
 
 # Only once the arguments are read, so --node wins. Uninstalling needs no
 # Node, so a missing one is said where installing needs it, below.
@@ -496,10 +500,6 @@ point_current() {
 }
 
 RDIR="$DATA_HOME/runner"
-if [ "$STAGE" = 1 ] && { [ "$MODE" != "install" ] || [ "$FROM_SOURCE" = 1 ]; }; then
-  echo "--stage only goes with a plain install (not --print, --uninstall or --from-source)." >&2
-  exit 1
-fi
 # The exit for "threads are busy, nothing changed": EX_TEMPFAIL, so the
 # runner reinstalling itself (src/reinstall.ts) tells it from a failure and
 # tries again once they've finished.
@@ -555,6 +555,22 @@ rm -f "$PREV" "$PREV_LAUNCH"
 # fewer rebuilds the better; a rebuild signs it the same way regardless).
 # build-launcher.sh leaves the old app next to the new one as
 # .Threadbear Runner.app.old, so a failed install can put it back.
+# Staging writes the plist first, to a temp file beside it, so a
+# LaunchAgents folder it can't write to fails before the app or launch.mjs
+# change: one of those going in alone would make the runner's check see main
+# and stop saying anything was wrong, with the old plist still there.
+STAGED_PLIST=""
+if [ "$STAGE" = 1 ]; then
+  STAGED_PLIST="$(mktemp "$PLIST.XXXXXX")" || { echo "Couldn't write to $AGENTS_DIR, so nothing was changed." >&2; exit 1; }
+  # Not left in LaunchAgents if a step below stops this (once it's moved
+  # into place there's nothing at this name to remove).
+  trap 'rm -f "$STAGED_PLIST"' EXIT
+  if ! job_file > "$STAGED_PLIST" || { [ "$LINUX" = 0 ] && ! plutil -lint "$STAGED_PLIST" >/dev/null; }; then
+    rm -f "$STAGED_PLIST"
+    echo "Couldn't write the new plist, so nothing was changed." >&2
+    exit 1
+  fi
+fi
 OLD_APP="$(dirname "$RUNNER_APP")/.$(basename "$RUNNER_APP").old"
 APP_BUILT=0
 [ "$LINUX" = 1 ] || rm -rf "$OLD_APP"
@@ -669,11 +685,8 @@ if [ "$STAGE" = 1 ]; then
   # running job carries on as it was, and the next run of this stages
   # again. The app was rebuilt in place above; the running launcher goes
   # on from the file it started from.
+  mv "$STAGED_PLIST" "$PLIST"
   mv -f "$NEW_LAUNCH" "$RDIR/launch.mjs"
-  TMP="$(mktemp "$PLIST.XXXXXX")"
-  job_file > "$TMP"
-  [ "$LINUX" = 1 ] || plutil -lint "$TMP" >/dev/null
-  mv "$TMP" "$PLIST"
   # systemd keeps a unit's old text until told; this rereads it without
   # restarting anything.
   [ "$LINUX" = 0 ] || "$SYSTEMCTL" --user daemon-reload 2>/dev/null || true

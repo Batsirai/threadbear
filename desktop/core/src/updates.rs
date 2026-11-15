@@ -38,6 +38,10 @@ pub struct RunnerUpdates {
     /// What the runner is doing about it (runner.reinstall); None while
     /// it's waiting for Reinstall now, and from runners before 14 Nov 2026.
     pub reinstall: Option<Reinstall>,
+    /// The runner's update of it stages for the next login, stopping
+    /// nothing (protocol `launcherStages`, from 15 Nov 2026). The runner of
+    /// 14 Nov reinstalled once idle instead, so its panel offers no button.
+    pub launcher_stages: bool,
     /// Left out by runners before 30 Oct 2026, and while it's off.
     pub upstream: Option<Upstream>,
     /// This machine can't follow GitHub's main properly. None while it's fine.
@@ -198,6 +202,7 @@ impl RunnerUpdates {
             launcher_changed: v["launcherChanged"].as_bool().unwrap_or(false),
             launcher_reason: text(v, "launcherReason"),
             reinstall: Reinstall::decode(&v["reinstall"]),
+            launcher_stages: v["launcherStages"].as_bool().unwrap_or(false),
             upstream: Upstream::decode(&v["upstream"]),
             follow_problem: text(v, "followProblem"),
             web_runtime_problem: text(v, "webRuntimeProblem"),
@@ -620,6 +625,12 @@ pub fn launcher_line(u: &RunnerUpdates) -> Option<String> {
         return None;
     }
     let why = u.launcher_reason.as_deref().unwrap_or("launch.mjs has changed on main.");
+    if !u.launcher_stages {
+        return Some(match u.reinstall.as_ref() {
+            Some(r) if r.state == "failed" => format!("The runner's update didn't work: {}", r.reason.as_deref().unwrap_or("it didn't say why.")),
+            _ => format!("{why} It's updated once the runner itself is, a few minutes after main."),
+        });
+    }
     // It's staged, not reinstalled (runner/src/reinstall.ts): nothing
     // stops, and the new one takes over when launchd next starts the job.
     Some(match u.reinstall.as_ref().map(|r| (r.state.as_str(), r)) {
@@ -634,7 +645,9 @@ pub fn launcher_line(u: &RunnerUpdates) -> Option<String> {
 /// spins (taking no clicks) because the reinstall is already on its way.
 /// None while the runner will do it by itself anyway.
 pub fn launcher_button(u: &RunnerUpdates) -> Option<(&'static str, &'static str, bool)> {
-    if !u.launcher_changed {
+    // An older runner's runner.reinstall stops everything once idle, which
+    // the button's words don't promise.
+    if !u.launcher_changed || !u.launcher_stages {
         return None;
     }
     match u.reinstall.as_ref().map(|r| r.state.as_str()) {
@@ -991,7 +1004,7 @@ mod tests {
         let failed = RunnerUpdates::decode(&json!({ "state": "failed", "commit": "abc1234", "reason": "npm ci failed" })).unwrap();
         assert_eq!(tooltip(&app, Some(&failed)), "The runner's update failed");
         assert_eq!(runner_lines(Some(&failed)), ["The runner couldn't update to main at abc1234: npm ci failed"]);
-        let launcher = RunnerUpdates::decode(&json!({ "state": "idle", "launcherChanged": true })).unwrap();
+        let launcher = RunnerUpdates::decode(&json!({ "state": "idle", "launcherChanged": true, "launcherStages": true })).unwrap();
         assert!(needs_you(&app, Some(&launcher)));
         assert_eq!(icon_tooltip(&app, Some(&launcher), &[]), "Updates\nThe runner needs updating");
         let both = RunnerUpdates::decode(&json!({ "state": "building", "commit": "abc1234", "launcherChanged": true })).unwrap();
@@ -999,7 +1012,11 @@ mod tests {
         assert_eq!(runner_lines(Some(&launcher)), ["launch.mjs has changed on main. Updating it stops nothing; the new one starts next time your Mac restarts."]);
         assert_eq!(launcher_button(&launcher).map(|b| (b.0, b.2)), Some(("Update it", false)));
         // What the runner is doing about it (runner.reinstall): only a failure is Mike's.
-        let reinstall = |r: Value| RunnerUpdates::decode(&json!({ "state": "idle", "launcherChanged": true, "launcherReason": "Threadbear Runner.app was built from older launcher sources than main's.", "reinstall": r })).unwrap();
+        let reinstall = |r: Value| RunnerUpdates::decode(&json!({ "state": "idle", "launcherChanged": true, "launcherStages": true, "launcherReason": "Threadbear Runner.app was built from older launcher sources than main's.", "reinstall": r })).unwrap();
+        // A runner from 14 Nov reinstalls once idle: no button, no promise that nothing stops.
+        let older = RunnerUpdates::decode(&json!({ "state": "idle", "launcherChanged": true, "launcherReason": "Threadbear Runner.app was built from older launcher sources than main's.", "reinstall": { "state": "waiting" } })).unwrap();
+        assert_eq!(launcher_button(&older), None);
+        assert_eq!(runner_lines(Some(&older)), ["Threadbear Runner.app was built from older launcher sources than main's. It's updated once the runner itself is, a few minutes after main."]);
         let auto = reinstall(json!({ "state": "waiting", "auto": true }));
         assert!(!needs_you(&app, Some(&auto)), "it sorts itself out");
         assert!(shown(&app, Some(&auto)));

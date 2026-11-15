@@ -1336,6 +1336,10 @@ type RunnerUpdates = {
   // failed: it stopped, `reason` says why and `logFile` has its output.
   // A failure is Mike's to look at (Try again); the rest sort themselves out.
   reinstall?: { state: "waiting" | "running" | "staged" | "failed"; reason?: string; logFile?: string; auto?: true }
+  // Set with launcherChanged by runners whose runner.reinstall stages (from
+  // 15 Nov 2026). Without it the app offers no button and says nothing
+  // about it stopping nothing: the runner of 14 Nov reinstalled once idle.
+  launcherStages?: true
   // This machine can't follow GitHub's main properly (followOrigin), and the
   // other runners saying that of themselves, on the main Mac's runner.
   followProblem?: string

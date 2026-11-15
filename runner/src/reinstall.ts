@@ -26,6 +26,12 @@ import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 
 export const DEFAULT_LABEL = 'com.mikerosoft.threadbear.runner';
+// launchAgentBehind's one reason about what's running rather than what's on
+// disk: only launchd starting the job again fixes it, so after staging it's
+// `staged`. Every other reason is about files, and still being behind on
+// those after a stage that said it worked is a failure (it staged from a
+// checkout that isn't at main, say).
+export const RUNS_NODE_REASON = 'The LaunchAgent still runs node, not Threadbear Runner.app, so privacy prompts say "node".';
 // How long a reinstall with no result yet counts as running when whether
 // its job is still going can't be asked (jobAlive). Otherwise it runs as
 // long as it runs: a check host can take hours, and a Mac asleep halfway
@@ -382,8 +388,9 @@ export class Reinstaller {
     if (s.finished && s.key === behind.key && !s.requested) {
       // It ran for what main has now. Staged and still behind: what's
       // running is the old job, until launchd next starts it.
-      if (s.finished.code === 0) return { state: 'staged', logFile };
-      return { state: 'failed', reason: s.finished.reason, logFile };
+      if (s.finished.code === 0 && behind.reason === RUNS_NODE_REASON) return { state: 'staged', logFile };
+      const reason = s.finished.code === 0 ? `It finished, but this is still so: ${behind.reason}` : s.finished.reason;
+      return { state: 'failed', reason, logFile };
     }
     if (s.requested) return { state: 'waiting' };
     if (this.deps.auto()) return { state: 'waiting', auto: true };

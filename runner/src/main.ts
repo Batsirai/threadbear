@@ -842,6 +842,9 @@ async function main(): Promise<void> {
     if (u.launcherChanged) out.launcherChanged = true;
     if (u.launcherReason) out.launcherReason = u.launcherReason;
     if (u.checkout) out.checkout = u.checkout;
+    // This runner's reinstall stages (stops nothing), so the app can say so;
+    // one from 14 Nov waited for idle and reinstalled.
+    if (u.launcherChanged) out.launcherStages = true;
     const reinstall = reinstaller.status();
     if (reinstall) out.reinstall = reinstall;
     if (u.followProblem) out.followProblem = u.followProblem;

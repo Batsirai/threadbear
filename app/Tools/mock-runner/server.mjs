@@ -767,6 +767,7 @@ async function dispatch(client, method, p) {
         delete updates.reinstall;
         delete updates.launcherChanged;
         delete updates.launcherReason;
+        delete updates.launcherStages;
         broadcast('runner.updates', { updates });
       }, 2000);
       return { reinstall: updates.reinstall };
@@ -1772,6 +1773,8 @@ async function dispatch(client, method, p) {
       updates = { state: p.state ?? 'idle', oldRunners: Array.isArray(p.oldRunners) ? p.oldRunners : [] };
       for (const k of ['commit', 'subject', 'reason', 'launcherReason', 'webRuntimeProblem']) if (typeof p[k] === 'string') updates[k] = p[k];
       if (p.launcherChanged) updates.launcherChanged = true;
+      // Like the real runner since 15 Nov: its update of the launcher stages.
+      if (p.launcherChanged && p.launcherStages !== false) updates.launcherStages = true;
       if (p.reinstall && typeof p.reinstall === 'object') updates.reinstall = p.reinstall;
       // Mike's releases (protocol "Mike's releases"), as given.
       if (p.upstream && typeof p.upstream === 'object') updates.upstream = p.upstream;

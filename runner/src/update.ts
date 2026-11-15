@@ -19,7 +19,7 @@ import type { Logger } from './log.ts';
 import { currentLink, readRelease, readState, type ReleaseJson } from './release.ts';
 import type { RestartResult } from './restart.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
-import { launcherKey } from './reinstall.ts';
+import { launcherKey, RUNS_NODE_REASON } from './reinstall.ts';
 import { inBackground } from './background.ts';
 import type { UpdateFailure } from './fix-update.ts';
 import { machineTrouble } from './machine-trouble.ts';
@@ -969,7 +969,7 @@ export function launchAgentBehind(
   if (onMain && env.THREADBEAR_SUPERVISED === '1' && platform === 'darwin') {
     const app = env.THREADBEAR_RUNNER_APP || findApp();
     if (!app) {
-      why.push('The LaunchAgent still runs node, not Threadbear Runner.app, so privacy prompts say "node".');
+      why.push(RUNS_NODE_REASON);
     } else {
       let built: unknown;
       try {
