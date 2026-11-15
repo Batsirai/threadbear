@@ -41,7 +41,7 @@ Feature: The Usage panel and its honey pot
   Scenario: The honey pot is filled to the room the next thread would get, and follows it
     Then the honey pot is 78% full, for "claude-main"
     And the honey pot's tooltip says "Claude: 78% left"
-    And the honey pot's tooltip says "Convex: 95% left"
+    And the honey pot's tooltip says "Work: 95% left"
     When "claude-main" is down to 40% of its week
     Then the honey pot is 40% full, for "claude-main"
     And the honey pot's tooltip says "Claude: 40% left"

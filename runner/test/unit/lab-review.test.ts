@@ -29,7 +29,7 @@ function codeDiff(file = 'src/app.ts', lines = 10) {
   return { type: 'edit.diff', itemId: `d-${file}`, path: file, hunks: [{ oldStart: 1, oldLines: lines / 2, newStart: 1, newLines: lines / 2, lines: [...Array(lines / 2)].flatMap((_, i) => [`-old ${i}`, `+new ${i}`]) }] };
 }
 
-// A turn in a thread: Mike's message (or none), the edits, end_turn and a reply.
+// A turn in a thread: Alex's message (or none), the edits, end_turn and a reply.
 function turn(h: ReturnType<typeof setup>, id: string, o: { text?: string; diffs?: object[]; reply?: string; input?: Record<string, unknown>; session?: any } = {}) {
   if (o.text !== undefined) h.runner.send(id, o.text);
   const s = o.session ?? [...h.adapter.sessions, ...h.codex.sessions].filter((x) => x.opts.threadId === id).at(-1)!;
@@ -98,7 +98,7 @@ test('labReview: a Claude code change is reviewed on Codex, then the thread wake
   assert.equal(after.archivedBy, 'threadbear');
 });
 
-test('labReview: docs-only or tiny changes, and turns that need Mike, are not reviewed', () => {
+test('labReview: docs-only or tiny changes, and turns that need Alex, are not reviewed', () => {
   const h = setup();
   const id = start(h);
   turn(h, id, { diffs: [codeDiff('README.md', 40)] });
@@ -110,7 +110,7 @@ test('labReview: docs-only or tiny changes, and turns that need Mike, are not re
   assert.equal(h.codex.sessions.length, 0);
 });
 
-test('labReview: at most LAB_REVIEW_ROUNDS reviews until Mike writes again', () => {
+test('labReview: at most LAB_REVIEW_ROUNDS reviews until Alex writes again', () => {
   const h = setup();
   const id = start(h);
   const review = () => {
@@ -130,7 +130,7 @@ test('labReview: at most LAB_REVIEW_ROUNDS reviews until Mike writes again', () 
     assert.ok(rounds <= LAB_REVIEW_ROUNDS);
   }
   assert.equal(rounds, LAB_REVIEW_ROUNDS);
-  // A new ask from Mike can be reviewed again.
+  // A new ask from Alex can be reviewed again.
   turn(h, id, { text: 'Now the logout bug', diffs: [codeDiff()] });
   assert.ok(h.runner.get(id).waitingOn?.length);
 });
@@ -148,7 +148,7 @@ test("labReview: a folder kept for a pool is reviewed only on that pool's logins
   const kept = tmpDir('tb-kept-');
   const h = setup({ cfg: { pools: [
     { id: 'claude', title: 'Claude', accountIds: ['claude-main'] },
-    { id: 'convex', title: 'Convex', accountIds: ['claude-3'], folders: [kept] },
+    { id: 'work', title: 'Work', accountIds: ['claude-3'], folders: [kept] },
     { id: 'codex', title: 'Codex', accountIds: ['codex-main'] },
   ] } });
   const { thread } = h.runner.create({ text: 'Fix it', cwd: kept, accountId: 'claude-3' });
@@ -414,9 +414,9 @@ test('labReview: a thread adopted while the new runner is still starting gets it
 });
 
 // From Codex's third review: the debt is the next completed turn's to
-// settle, so it never outlives a turn that needs Mike (a later restart
+// settle, so it never outlives a turn that needs Alex (a later restart
 // would review the old turn and put his question to sleep).
-test('labReview: an owed review is dropped by a next turn that needs Mike', async () => {
+test('labReview: an owed review is dropped by a next turn that needs Alex', async () => {
   const h = setup();
   const id = start(h);
   await h.runner.beginDrain([id], { onHandedOver: () => {} });
@@ -517,7 +517,7 @@ test('labReview: a scheduled run that woke an archived thread goes back once its
   const rs = h.codex.sessions.find((x) => x.opts.threadId === reviewId)!;
   rs.init();
   turn(h, reviewId, { session: rs, reply: 'Nothing wrong with it.' });
-  // It wakes with the findings, deals with them and has nothing for Mike.
+  // It wakes with the findings, deals with them and has nothing for Alex.
   turn(h, id, { reply: 'The review found nothing.' });
   t = h.runner.get(id);
   assert.ok(t.archivedAt, 'back in the archive once the run is really over');
@@ -637,14 +637,14 @@ test('labReview: the answering turn puts the ledger on its card, and a fix of an
   assert.equal(h.runner.get(id).snoozedUntil, undefined, 'done, no third round');
 });
 
-test('labReview: findings only disputed or left get no further round, and Mike writing starts a fresh ledger', () => {
+test('labReview: findings only disputed or left get no further round, and Alex writing starts a fresh ledger', () => {
   const h = setup();
   const id = start(h);
   turn(h, id, { diffs: [codeDiff()] });
   finishReview(h, id, { needs: 'nothing', findings: FINDINGS.slice(0, 1) });
   turn(h, id, { input: { needs: 'you', asks: [{ question: 'Keep sessions across refresh?' }], findings: [{ id: 1, outcome: 'left', note: 'Whether refresh should keep the session.' }] } });
   assert.equal(lastCard(h, id).review.findings[0].outcome, 'left');
-  assert.ok(!h.runner.threads.get(id)!.rec.waitingOn?.some((w) => !w.done), 'no review of a turn that needs Mike');
+  assert.ok(!h.runner.threads.get(id)!.rec.waitingOn?.some((w) => !w.done), 'no review of a turn that needs Alex');
   turn(h, id, { text: 'Yes keep them', diffs: [codeDiff()] });
   const t = h.runner.threads.get(id)!.rec;
   assert.equal(t.labReview?.rounds, 1);
@@ -735,7 +735,7 @@ test('labReview: end_turn is refused while findings have no answer, twice at mos
 });
 
 // Codex's review of the ledger (11 Nov 2026): each of these broke it.
-test("labReview: another thread's message doesn't clear findings still waiting for answers; Mike's does", () => {
+test("labReview: another thread's message doesn't clear findings still waiting for answers; Alex's does", () => {
   const h = setup();
   const id = start(h);
   turn(h, id, { diffs: [codeDiff()] });

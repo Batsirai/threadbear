@@ -673,7 +673,7 @@ test('a runner too old for runner.restart: waits until idle, then kickstarts', {
   const fifth = current();
   await runsOn(fifth);
 
-  // Inside a thread it can't wait for itself, so it hands Mike the command.
+  // Inside a thread it can't wait for itself, so it hands Alex the command.
   commit({ v: 6 }, 'sixth');
   r = deploy(['--skip-checks'], { THREADBEAR_THREAD_ID: 'thread-1', THREADBEAR_HOME: home });
   assert.equal(r.status, 0, out(r));
@@ -1030,7 +1030,7 @@ test('no deploy to a LaunchAgent that runs a checkout, or to none', () => {
     assert.equal(r.status, 1, out(r));
     assert.match(r.stderr, /runs from a checkout/);
     assert.match(r.stderr, /Install it with scripts\/install-runner\.sh --home/);
-    // From a thread of that runner it's Mike's to do, not the agent's.
+    // From a thread of that runner it's Alex's to do, not the agent's.
     r = sh('deploy-runner.sh', ['--home', home3, '--label', label, '--dry-run'], { THREADBEAR_THREAD_ID: 't', THREADBEAR_RUNNER_HOME: home3 });
     assert.equal(r.status, 1, out(r));
     assert.match(r.stderr, /the user has to switch it to releases once, from a terminal/);

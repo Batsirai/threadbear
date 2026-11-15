@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn settings_read_leniently() {
         let s = RunnerSettings::decode(&json!({
-            "defaultCwd": "/Users/m/dev/me/misc", "labReview": false, "keepAwake": true, "fullSync": false, "bringIn": "important",
+            "defaultCwd": "/Users/alex/code/misc", "labReview": false, "keepAwake": true, "fullSync": false, "bringIn": "important",
             "models": { "pool": "claude", "privateFolders": ["~/private"] },
             "experiments": [{ "id": "gpuiApp", "name": "GPUI app", "does": "The `GPUI`  app.", "on": true }, { "id": "bare" }],
         }));

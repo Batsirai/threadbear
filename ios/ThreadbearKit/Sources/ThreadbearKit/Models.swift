@@ -788,7 +788,7 @@ public enum ThreadItem: Identifiable, Hashable, Sendable {
     /// "6 min later · Mine the repo finished" before a turn the agent
     /// started by itself (Turns.fold).
     case gap(TurnGap)
-    /// "Moved to mike@example.org: mike@example.net hit its 5-hour limit":
+    /// "Moved to alex@example.org: mike@example.net hit its 5-hour limit":
     /// the runner's line when a thread's login ran out (Turns.fold).
     case note(PhoneMessage)
 

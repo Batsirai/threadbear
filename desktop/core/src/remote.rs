@@ -318,9 +318,9 @@ mod tests {
     #[test]
     fn rows_become_summaries_marked_with_their_runner() {
         let list = decode_remote_threads(&json!({
-            "runners": [{ "id": "r", "name": "bruce", "icon": "macmini", "online": true }, { "id": "r2" }],
+            "runners": [{ "id": "r", "name": "mac-mini", "icon": "macmini", "online": true }, { "id": "r2" }],
             "threads": [
-                { "runnerId": "r", "threadId": "t1", "title": "Backup", "cwd": "/Users/bruce/misc", "accountId": "claude-main", "provider": "claude",
+                { "runnerId": "r", "threadId": "t1", "title": "Backup", "cwd": "/Users/alex/misc", "accountId": "claude-main", "provider": "claude",
                   "model": "claude-opus-5-5", "status": "idle", "needsYou": true, "unread": true, "preview": "done", "createdAt": "2026-11-09T01:00:00.000Z", "lastActivityAt": "2026-11-09T02:00:00.000Z" },
                 { "runnerId": "r", "threadId": "t2", "status": "running", "createdAt": "2026-11-09T01:00:00.000Z" },
                 { "threadId": "no-runner" },
@@ -328,7 +328,7 @@ mod tests {
             "order": ["runner_mock", "r"],
         }));
         assert_eq!(list.runners.len(), 2);
-        assert_eq!(list.runner("r").unwrap().name, "bruce");
+        assert_eq!(list.runner("r").unwrap().name, "mac-mini");
         assert_eq!(list.runner("r2").unwrap().name, "r2");
         assert_eq!(list.threads.len(), 2);
         let t = &list.threads[0];
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn a_rows_loose_ends_reach_the_summary() {
         let list = decode_remote_threads(&json!({
-            "runners": [{ "id": "r", "name": "bruce" }],
+            "runners": [{ "id": "r", "name": "mac-mini" }],
             "threads": [
                 { "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z",
                   "looseEnds": { "seq": 47, "ends": [{ "kind": "scheduled", "text": "Look at how the experiment went", "at": "2026-11-15T01:30:00.000Z" }] } },
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn a_thread_updated_stays_when_the_list_is_put_back() {
         let mut list = decode_remote_threads(&json!({
-            "runners": [{ "id": "r", "name": "bruce" }],
+            "runners": [{ "id": "r", "name": "mac-mini" }],
             "threads": [{ "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
         }));
         assert!(list.threads[0].loose_ends_check().is_none());
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn a_list_asked_for_before_an_update_keeps_it() {
         let rows = json!({
-            "runners": [{ "id": "r", "name": "bruce" }],
+            "runners": [{ "id": "r", "name": "mac-mini" }],
             "threads": [{ "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" }],
         });
         let updated: ThreadSummary = crate::wire::read(json!({
@@ -431,14 +431,14 @@ mod tests {
 
     #[test]
     fn a_move_keeps_the_thread_as_its_old_runners_until_the_destination_lists_it() {
-        let mut thread = ThreadSummary { id: "t".into(), runner_id: Some("bruce".into()), moving: Some(json!({ "to": "m5", "toName": "m5", "state": "copying" })), ..Default::default() };
+        let mut thread = ThreadSummary { id: "t".into(), runner_id: Some("mac-mini".into()), moving: Some(json!({ "to": "laptop", "toName": "laptop", "state": "copying" })), ..Default::default() };
         let kept = moved_away(&thread).unwrap();
         // Daybreak 113: never this Mac's (or the destination's) on the old
         // runner's word alone, and still locked with its move.
-        assert_eq!(kept.runner_id.as_deref(), Some("bruce"), "still the old runner's");
+        assert_eq!(kept.runner_id.as_deref(), Some("mac-mini"), "still the old runner's");
         assert!(kept.moving_line().is_some(), "its box stays locked");
-        assert_eq!(moving_to(&kept), Some("m5"));
-        let local = ThreadSummary { id: "u".into(), moving: Some(json!({ "to": "bruce", "state": "claimed" })), ..Default::default() };
+        assert_eq!(moving_to(&kept), Some("laptop"));
+        let local = ThreadSummary { id: "u".into(), moving: Some(json!({ "to": "mac-mini", "state": "claimed" })), ..Default::default() };
         assert!(moved_away(&local).unwrap().runner_id.is_none(), "one moving off this Mac stays this Mac's");
         thread.moving.as_mut().unwrap()["state"] = json!("failed");
         assert!(moved_away(&thread).is_none());
@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn a_preview_with_nothing_to_say_can_just_go() {
-        let answer = json!({ "cwd": "/Users/bruce/x", "accountId": "claude-main", "accounts": [{ "id": "claude-main", "title": "Claude", "email": "a@b" }], "leftBehind": [], "problems": [], "sourceChecked": true });
+        let answer = json!({ "cwd": "/Users/alex/x", "accountId": "claude-main", "accounts": [{ "id": "claude-main", "title": "Claude", "email": "a@b" }], "leftBehind": [], "problems": [], "sourceChecked": true });
         assert!(MovePreview::decode(&answer).can_go_as_is());
         let left = json!({ "cwd": "/x", "accountId": "a", "leftBehind": ["a job"], "sourceChecked": true });
         assert!(!MovePreview::decode(&left).can_go_as_is());
@@ -460,8 +460,8 @@ mod tests {
     #[test]
     fn runners_list_decodes_itself_and_the_others() {
         let list = decode_runners(&json!({ "runners": [
-            { "id": "m", "name": "m5", "icon": "laptopcomputer", "self": true, "version": "0.1.0+20261105T064853Z-c4d90ca", "release": "20261105T064853Z-c4d90ca", "startedAt": "2026-11-11T01:00:00.000Z" },
-            { "id": "b", "name": "bruce", "online": false, "lastSeenAt": "2026-11-09T01:00:00.000Z", "draining": true },
+            { "id": "m", "name": "laptop", "icon": "laptopcomputer", "self": true, "version": "0.1.0+20261105T064853Z-c4d90ca", "release": "20261105T064853Z-c4d90ca", "startedAt": "2026-11-11T01:00:00.000Z" },
+            { "id": "b", "name": "mac-mini", "online": false, "lastSeenAt": "2026-11-09T01:00:00.000Z", "draining": true },
             { "id": "c", "name": "" },
         ] }));
         assert_eq!(list.len(), 3);

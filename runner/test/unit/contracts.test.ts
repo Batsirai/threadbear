@@ -31,7 +31,7 @@ test('config: the step 4 settings default safely', () => {
   assert.ok(cfg.codexMainDir.endsWith('/.codex'));
   assert.ok(cfg.tokenStatsLimitsFile.endsWith('/Token Stats/limits.json'));
   assert.deepEqual(cfg.cliUpdates, { claude: 'auto', codex: 'auto', checkMinutes: 60, keepCodexVersions: 2, extra: [] });
-  // Nobody's notes or pool folders by default: Mike's are in his runner.json.
+  // Nobody's notes or pool folders by default: Alex's are in his runner.json.
   assert.deepEqual(cfg.accountNotes, {});
   assert.deepEqual(cfg.poolFolders, {});
   assert.notEqual(cfg.accountNotes, DEFAULT_ACCOUNT_NOTES, 'a copy, so nobody edits the default');
@@ -132,7 +132,7 @@ test('protocol check: accounts with usage, notes and Codex models', () => {
     },
   };
   assert.deepEqual(checkAccount(account), []);
-  assert.deepEqual(checkAccount({ id: 'claude-2', provider: 'claude', title: 'x', configDir: '/x', note: 'Convex work only' }), []);
+  assert.deepEqual(checkAccount({ id: 'claude-2', provider: 'claude', title: 'x', configDir: '/x', note: 'Work only' }), []);
   assert.deepEqual(checkAccount({ ...account, defaultEffort: 'extreme' }), ['defaultEffort']);
   assert.deepEqual(checkAccount({ ...account, usage: { ...account.usage, source: 'guess' } }), ['usage.source']);
   assert.deepEqual(
