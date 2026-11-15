@@ -467,7 +467,7 @@ test("refusals don't tell a key whether another runner's thread, schedule or car
 
 test('tokens say which key issued them, and the audit lists what a key could have planted', async () => {
   const s = await setup();
-  const made = await call(s.ctx, sync.issueToken, { key: OWNER, kind: 'phone', name: "Alex's iPhone" });
+  const made = await call(s.ctx, sync.issueToken, { key: OWNER, kind: 'browser', name: "Alex's iPhone" });
   const row = s.rows('tokens').find((t) => t._id === made.id)!;
   assert.equal(row.issuedBy, 'owner');
   assert.match(row.ownerKeyPrint, /^[0-9a-f]{8}$/);
@@ -811,7 +811,7 @@ test('den threads and pushes have per-key budgets, and old thread tombstones go'
 test('the audit pages through live credentials directly, section by section, with exact rows and versions', async () => {
   const s = await setup();
   for (let i = 0; i < 400; i++) await s.ctx.db.insert('tokens', { hash: `h${i}`, name: `junk${i}`, createdAt: 1, expiresAt: Date.now() + 1e9, revokedAt: 1 });
-  const live = await call(s.ctx, sync.issueToken, { key: OWNER, kind: 'phone', name: 'live one' });
+  const live = await call(s.ctx, sync.issueToken, { key: OWNER, kind: 'browser', name: 'live one' });
   const page = await call(s.ctx, sync.audit, { key: OWNER, section: 'tokens' });
   assert.deepEqual(page.rows.map((r: { id: string }) => r.id), [live.id]);
   assert.ok(typeof page.rows[0].version === 'string');

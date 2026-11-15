@@ -1188,7 +1188,7 @@ the summary and then the reply.
 | `instructions.get` | `{}` | `{ instructions: StandingInstructions }` (see Standing instructions). `-32601` with the experiment off, and from an older runner: the app then shows no box |
 | `instructions.set` | `{ text: string }` | `{ instructions: StandingInstructions }`. Saves and signs the text, trimmed; an empty one clears them and removes both files. `-32602` for a `text` that isn't a string or is over 20,000 characters, `-32601` as for `instructions.get`. Every client gets `instructions.updated` |
 | `devices.list` | `{}` | `{ devices: Device[], site?: string, reason?: string }` (see Devices). `site` is the website's root while sync is on; `reason` says why nothing can pair when it's off |
-| `devices.pair` | `{ kind: "phone" \| "browser", name?: string, days?: number }` | `{ device: Device, pairingLink?: string, signInLink?: string }`. Issues a phone token for a new phone or browser (see Devices) and returns the link that carries it: a `threadbear://pair?url=…&token=…&key=<runnerId>:<key>` link for a phone, for the app to draw as a QR code (the `key` item is this runner's secret-box public key, see Secrets, "Trusting the key"; absent when the runner has none), or the website's sign-in link (`<site>/#token=…`) for a browser, for the app to open. `days` is 1 to 365 (default 90). `-32000` while sync is off, or while the backend is older than this |
+| `devices.pair` | `{ kind: "phone" \| "browser", name?: string, days?: number }` | `{ device: Device, pairingLink?: string, signInLink?: string }`. For a phone, a one-use pairing code (see Devices) in the text the app draws as a QR code, `TBPAIR1_<base64url of url=…&code=…&key=<runnerId>:<key>>` (the `key` item is this runner's secret-box public key, see Secrets, "Trusting the key"; absent when the runner has none); no token. For a browser, a phone token and the website's sign-in link (`<site>/#token=…`), for the app to open. `days` is 1 to 365 (default 90). `-32000` while sync is off, or while the backend is older than this |
 | `devices.revoke` | `{ deviceId }` | `{ devices: Device[] }`. The phone or browser is signed out at its next request. `-32602` for an id that isn't there |
 | `models.run` | `{ job: "classify" \| "extract" \| "summarize" \| "generate", text: string, labels?: string[], fields?: Record<string, string>, maxWords?: number, system?: string, cwd?: string, maxTokens?: number }` | `{ ok: true, value, model }` or `{ ok: false, reason: "no-pool" \| "off" \| "private" \| "no-room" \| "timeout" \| "provider", message }`. One model call by hand (`tb models try`), on the pool like any other, with `feature: "tb"`. `maxTokens` (generate only, 1 to 8000, default 500) caps the answer, reasoning included; `classify` needs 2 or more `labels` and answers one of them; `extract` needs `fields` (name to a plain description) and answers an object of them, `null` where the text doesn't say |
 | `runner.status` | `{}` | `{ version, release?, branch?, pid, startedAt, home, logFile, liveClis, running: string[], background: { threadId, tasks: string[] }[], busy?: string[], pendingRestart?: { when, reason?, release?, resumeThreadId?, requestedAt, backgroundUntil?, waitingFor: string[] }, rolledBack?: { from, at }, draining?: { pid, version, release?, since, threads: string[] }[], update?: { state, checkout?, reason?, checkedAt?, commit?, release?, logFile?, launcherChanged?, launcherReason?, followsOrigin?, followProblem? }, behindRunners?: { name, problem }[], macScreen?: { fullDiskAccess?, dialogs, dialogsSince? }, clis?: CliStatus[] }`. `running` lists the threads that are starting, running or waiting on an approval or a question; `background` the threads whose CLI is still running background shells or subagents (`tasks` describes each). A restart waits for both. `busy` is every thread a restart would wait for: those, plus a turn-end hook still running or a thread between turns (deploy.mjs `--check-idle` reads it). `branch` is the branch the release was built from. `rolledBack` is set when this release is running because `launch.mjs` went back to it from `from`, which kept crashing at startup (and nobody has activated it on purpose since). `update` is the runner following main by itself (docs/dev-tools.md): `state` is `off` (`reason` says why), `idle`, `checking`, `building`, `waiting` (`release` is built and starts on the pending restart) or `failed` (`reason` is the error; `logFile` has the build's output); `commit` is main's tip at the last check (`checkedAt`). `followsOrigin` is set while `followOrigin` is on in `runner.json` (docs/dev-tools.md); `followProblem` says what's wrong with following GitHub's main, when something is. `behindRunners` is the other runners saying that of themselves, on the main Mac's runner |
@@ -6564,16 +6564,32 @@ type Device = {
 }
 ```
 
-- `devices.pair` asks the backend (`sync:issueToken`, with the runner
-  key) for a token of that kind and name, good for `days`, and hands the
-  app the one link that carries it: the pairing link for a phone (the
-  app draws it as a QR code for the iPhone app to scan; `url` is
-  `sync.url`), or the website's sign-in link for a browser (the token in
-  the `#fragment`, which never reaches a server; the app opens it in the
-  default browser). The token is in that reply and nowhere else: the
-  runner never logs it, never writes it to disk, and no `tb` command
-  prints it, since a thread's transcript can command agents. The app
-  shows the QR code or opens the link, then forgets it.
+- `devices.pair` for a browser asks the backend (`sync:issueToken`,
+  with the runner key) for a token of that kind and name, good for
+  `days`, and hands the app the website's sign-in link (the token in the
+  `#fragment`, which never reaches a server; the app opens it in the
+  default browser). For a phone it asks for a pairing code instead
+  (`sync:issuePairingCode`, API 80): one use, good for ten minutes, with
+  only its SHA-256 kept. `pairingLink` is then the text the app draws as
+  a QR code: `TBPAIR1_` and the base64url (no padding) of
+  `url=<sync.url>&code=<tbp_…>&key=<runnerId>:<key>`. It's no link, so
+  no app on the phone can claim it and the Camera opens nothing with it;
+  the phone app's own scanner reads it and trades the code for the
+  phone's token with `tokens:claim({ code })`, once (Daybreak finding
+  127, 15 Nov 2026: the code used to be a `threadbear://pair` link with
+  the 90-day token in it, and any app can register that scheme). The
+  phone's token is made at the trade, so it shows in `devices.list` from
+  then; the reply's `device` stands for it until then, with the code's
+  id. A backend older than 80 has no pairing codes, and a phone doesn't
+  pair (`-32000`, the backend deploys with the runner's next update)
+  rather than getting a token in its QR code. The token and the code are
+  in that reply and nowhere else: the runner never logs them, never
+  writes them to disk, and no `tb` command prints them, since a thread's
+  transcript can command agents. The app shows the QR code or opens the
+  link, then forgets it. The phone apps no longer take an older runner's
+  `threadbear://pair?url=…&token=…` from anywhere (that token may already
+  have reached another app), and the backend's `sync:issueToken` refuses
+  `kind: "phone"`, so an older runner can't make one: it says to update.
 - A backend on this Mac only (`sync.url` on loopback: `setup
   --self-hosted --local`, docs/self-hosting.md) can't pair a phone:
   `devices.pair` with `kind: "phone"` is `-32000` saying why, before any
@@ -7009,6 +7025,7 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `otherRunnersThreads` | owner only | other runners' sidebars |
 | `threadIndexSince` | owner only | other runners' sidebars |
 | `issueToken` | owner only | a phone token reads everything and queues commands for every runner |
+| `issuePairingCode` | owner only | a pairing code is traded for a phone token |
 | `listTokens` | owner only | |
 | `revokeToken` | owner only | |
 | `addRunnerKey` | owner only | never for `"any"` or the asking Mac's own id (recorded, for the audit); over a live key only with `replace`; at most three live |

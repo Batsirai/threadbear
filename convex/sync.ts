@@ -16,7 +16,7 @@ import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdTh
 import { dropWake, seedWakes, syncWake } from './wakes';
 import { pushFailing, pushOff } from './pushHealth';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
-import { issueToken as makeToken, listTokens as allTokens, revokeToken as revokeOne, tokenInfo, tokenKind, MAX_DAYS } from './tokens';
+import { issueToken as makeToken, issuePairingCode as makePairingCode, listTokens as allTokens, revokeToken as revokeOne, tokenInfo, tokenKind, MAX_DAYS } from './tokens';
 
 // The second pass on anything a runner sends (docs/convex-backend.md, "Secret
 // scrubbing"): a runner scrubs first, but one on an older release doesn't, and
@@ -1352,11 +1352,29 @@ export const issueToken = mutation({
   returns: v.object({ id: v.string(), token: v.string(), expiresAt: v.string() }),
   handler: async (ctx, { key, kind, name, days }) => {
     await runnerAuth(ctx, key, 'issueToken');
+    // A phone's token is only ever traded for a pairing code (tokens:claim,
+    // API 80): a runner from before put it in a threadbear://pair link, which
+    // any app on the phone can claim (Daybreak 127). Browsers still get theirs.
+    if (kind === 'phone') throw new ConvexError({ kind: 'badArgs', message: "This runner is too old to pair a phone safely. Update Threadbear on this Mac, then show the code again." });
     const trimmed = clean(name.trim().slice(0, 80));
     if (!trimmed) throw new ConvexError({ kind: 'badArgs', message: 'name must not be blank' });
     if (days !== undefined && (!Number.isFinite(days) || days < 1 || days > MAX_DAYS)) throw new ConvexError({ kind: 'badArgs', message: `days must be 1 to ${MAX_DAYS}` });
     // Which main key made it, so an audit after a rotation can tell (tb runner audit).
     return makeToken(ctx, { kind, name: trimmed, days, issuedBy: 'owner', ownerKeyPrint: (await sha256(key)).slice(0, 8) });
+  },
+});
+
+// A one-use code for the Mac's pairing QR (API 80, tokens.ts): the phone
+// trades it for a token with tokens:claim. The token never goes in the QR.
+export const issuePairingCode = mutation({
+  args: { key: v.string(), name: v.string(), days: v.optional(v.number()) },
+  returns: v.object({ id: v.string(), code: v.string(), expiresAt: v.string() }),
+  handler: async (ctx, { key, name, days }) => {
+    await runnerAuth(ctx, key, 'issuePairingCode');
+    const trimmed = clean(name.trim().slice(0, 80));
+    if (!trimmed) throw new ConvexError({ kind: 'badArgs', message: 'name must not be blank' });
+    if (days !== undefined && (!Number.isFinite(days) || days < 1 || days > MAX_DAYS)) throw new ConvexError({ kind: 'badArgs', message: `days must be 1 to ${MAX_DAYS}` });
+    return makePairingCode(ctx, { kind: 'phone', name: trimmed, days, issuedBy: 'owner', ownerKeyPrint: (await sha256(key)).slice(0, 8) });
   },
 });
 

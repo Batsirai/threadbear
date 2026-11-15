@@ -1589,7 +1589,8 @@ async function dispatch(client, method, p) {
       devices.unshift(device);
       const token = 'tb_demo' + deviceSeq.toString().padStart(4, '0');
       return p.kind === 'phone'
-        ? { device, pairingLink: `threadbear://pair?url=${encodeURIComponent(DEMO_DEPLOYMENT)}&token=${token}` }
+        // As runner/src/devices.ts pairingText: a one-use code, never the token.
+        ? { device, pairingLink: 'TBPAIR1_' + Buffer.from(`url=${encodeURIComponent(DEMO_DEPLOYMENT)}&code=tbp_demo${deviceSeq.toString().padStart(4, '0')}`).toString('base64url') }
         : { device, signInLink: `${DEMO_SITE}/#token=${token}` };
     }
     case 'devices.revoke': {

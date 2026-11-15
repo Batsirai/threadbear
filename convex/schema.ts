@@ -698,6 +698,23 @@ export default defineSchema({
     // The audit's live tokens, without reading revoked ones.
     .index('by_revokedAt', ['revokedAt']),
 
+  // One-use pairing codes (API 80, tokens.ts): what the Mac's QR code
+  // carries in place of a token. Only the code's SHA-256; the phone trades
+  // the code for a token with tokens:claim within ten minutes, once.
+  pairingCodes: defineTable({
+    hash: v.string(),
+    name: v.string(),
+    kind: v.union(v.literal('phone'), v.literal('browser')),
+    days: v.optional(v.number()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    issuedBy: v.optional(v.string()),
+    ownerKeyPrint: v.optional(v.string()),
+  })
+    .index('by_hash', ['hash'])
+    .index('by_expiresAt', ['expiresAt']),
+
   // The runner's projects, schedules and accounts (docs/protocol.md), one
   // row each, replaced as a whole when the runner's list changes.
   projects: defineTable({

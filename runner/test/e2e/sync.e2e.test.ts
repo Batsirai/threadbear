@@ -452,7 +452,7 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
   test('scrubbing: the backend checks what an old runner sends, and scrub-stored rewrites old rows', async () => {
     const secret = `sk-${'e2e1'.repeat(12)}`;
     const threadId = `scrub-${crypto.randomBytes(4).toString('hex')}`;
-    const { token } = (await api('mutation', 'sync:issueToken', { key, kind: 'phone', name: 'scrub-e2e' })) as { token: string };
+    const { token } = (await api('mutation', 'sync:issueToken', { key, kind: 'browser', name: 'scrub-e2e' })) as { token: string };
     const runnerId = readRunnerJson(home).sync?.runnerId;
     const at = new Date().toISOString();
     await api('mutation', 'sync:upsertThreads', {
