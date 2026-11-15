@@ -164,6 +164,9 @@ pub struct Upstream {
 pub struct Release {
     /// "release/2026-10-30".
     pub tag: String,
+    /// When it was tagged (ISO), for its day where the reader is
+    /// (`release_day`). Absent from older runners.
+    pub date: Option<String>,
     /// The commit the verified tag names: what Bring Them In merges, rather
     /// than a ref name a later fetch could move.
     pub commit: Option<String>,
@@ -177,6 +180,8 @@ pub struct Release {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Notes {
     pub tag: String,
+    /// When that release was tagged (ISO), as on `Release`.
+    pub date: Option<String>,
     pub lines: Vec<String>,
 }
 
@@ -258,6 +263,7 @@ impl Release {
         }
         Some(Release {
             tag: v["tag"].as_str().unwrap_or("?").to_owned(),
+            date: text(v, "date"),
             commit: text(v, "commit"),
             changes: v["changes"].as_i64().or_else(|| v["changes"].as_f64().filter(|n| n.fract() == 0.).map(|n| n as i64)).unwrap_or(0),
             subjects: strings(&v["subjects"]),
@@ -265,7 +271,7 @@ impl Release {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|n| Some(Notes { tag: n["tag"].as_str()?.to_owned(), lines: n["lines"].as_array().map(|_| strings(&n["lines"]))? }))
+                .filter_map(|n| Some(Notes { tag: n["tag"].as_str()?.to_owned(), date: text(n, "date"), lines: n["lines"].as_array().map(|_| strings(&n["lines"]))? }))
                 .filter(|n| !n.lines.is_empty())
                 .collect(),
         })
@@ -432,9 +438,9 @@ pub fn upstream_line(u: Option<&Upstream>) -> Option<String> {
     match u.state.as_str() {
         "available" => {
             let r = u.release.as_ref()?;
-            Some(format!("Mike's release {} has {}.", release_date(&r.tag), changes_words(r.changes, "")))
+            Some(format!("Mike's release of {} has {}.", release_day(&r.tag, r.date.as_deref()), changes_words(r.changes, "")))
         }
-        "idle" => Some(u.release.as_ref().map_or_else(|| "Mike hasn't made a release yet.".to_owned(), |r| format!("You're up to date with Mike's release {}.", release_date(&r.tag)))),
+        "idle" => Some(u.release.as_ref().map_or_else(|| "Mike hasn't made a release yet.".to_owned(), |r| format!("You're up to date with Mike's release of {}.", release_day(&r.tag, r.date.as_deref())))),
         "checking" => Some("Checking for Mike's releases.".to_owned()),
         "failed" => Some(format!("Couldn't check for Mike's releases{}", u.reason.as_ref().map_or_else(|| ".".to_owned(), |r| format!(": {r}")))),
         _ => None,
@@ -455,10 +461,7 @@ pub fn release_lines(r: &Release) -> Vec<(Option<String>, Vec<String>)> {
     let mut groups: Vec<(Option<String>, Vec<String>)> = r
         .notes
         .iter()
-        .map(|note| {
-            let date = release_date(&note.tag);
-            (Some(date.strip_prefix("of ").map_or(date.clone(), str::to_owned)), note.lines.clone())
-        })
+        .map(|note| (Some(release_day(&note.tag, note.date.as_deref())), note.lines.clone()))
         .collect();
     // An older runner may supply notes only for older tags. Keep those
     // dated, and show the subjects so the newest changes remain visible.
@@ -470,12 +473,26 @@ pub fn release_lines(r: &Release) -> Vec<(Option<String>, Vec<String>)> {
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/// "release/2026-10-30" as "of 30 Oct".
-pub fn release_date(tag: &str) -> String {
-    let date = tag.strip_prefix("release/").unwrap_or(tag);
-    let parts: Vec<i64> = date.split('-').filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect();
+/// A release's day where the reader is, "30 Oct": from when it was tagged.
+/// The tag's name is the day on Mike's runner, in Perth, so a release he
+/// made on his morning was "tomorrow" all afternoon in California (Wayne,
+/// 14 Nov 2026). The name is only the fallback, for an older runner that
+/// sends no date.
+pub fn release_day(tag: &str, date: Option<&str>) -> String {
+    release_day_in(tag, date, &chrono::Local)
+}
+
+fn release_day_in<Tz: TimeZone>(tag: &str, date: Option<&str>, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    if let Some(at) = date.and_then(|d| DateTime::parse_from_rfc3339(d).ok()) {
+        return at.with_timezone(tz).format("%-d %b").to_string();
+    }
+    let name = tag.strip_prefix("release/").unwrap_or(tag);
+    let parts: Vec<i64> = name.split('-').filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect();
     match parts.as_slice() {
-        [_, month @ 1..=12, day] => format!("of {day} {}", MONTHS[(*month - 1) as usize]),
+        [_, month @ 1..=12, day] => format!("{day} {}", MONTHS[(*month - 1) as usize]),
         _ => tag.to_owned(),
     }
 }
@@ -525,7 +542,7 @@ pub fn discuss_prompt(r: &Release) -> String {
 
 /// The thread's title: "Bring in Mike's release of 6 Nov", or "Discuss ...".
 pub fn bring_in_title(r: &Release, discuss: bool) -> String {
-    format!("{} Mike's release {}", if discuss { "Discuss" } else { "Bring in" }, release_date(&r.tag))
+    format!("{} Mike's release of {}", if discuss { "Discuss" } else { "Bring in" }, release_day(&r.tag, r.date.as_deref()))
 }
 
 /// The icon's tooltip line about the app and the runner. A failure is said,
@@ -1103,7 +1120,7 @@ mod tests {
         let unsigned = Release { commit: Some("main".into()), ..release.clone() };
         assert!(bring_in_prompt(&unsigned).contains("Threadbear. Follow"), "a commit that isn't one is left out");
         // Notes for older tags only: dated, and the subjects after.
-        let older = Release { notes: vec![Notes { tag: "release/2026-11-08".into(), lines: vec!["x".into()] }], ..release.clone() };
+        let older = Release { notes: vec![Notes { tag: "release/2026-11-08".into(), date: None, lines: vec!["x".into()] }], ..release.clone() };
         assert_eq!(release_lines(&older), [(Some("8 Nov".to_string()), vec!["x".to_string()]), (Some("Every change".to_string()), vec!["a".to_string(), "b".to_string(), "c".to_string()])]);
         let idle = Upstream { state: "idle".into(), release: Some(release.clone()), ..Default::default() };
         assert_eq!(upstream_line(Some(&idle)).as_deref(), Some("You're up to date with Mike's release of 10 Nov."));
@@ -1111,6 +1128,25 @@ mod tests {
         assert_eq!(upstream_line(Some(&mine)).as_deref(), Some("Your last release for everyone else is release/2026-11-11."));
         let failed = Upstream { state: "failed".into(), reason: Some("no network".into()), ..Default::default() };
         assert_eq!(upstream_line(Some(&failed)).as_deref(), Some("Couldn't check for Mike's releases: no network"));
-        assert_eq!(release_date("release/2026-13-01"), "release/2026-13-01");
+        assert_eq!(release_day("release/2026-13-01", None), "release/2026-13-01");
+    }
+
+    #[test]
+    fn a_release_is_dated_where_the_reader_is() {
+        // release/2026-11-15 was tagged at 8:26 am on 14 Nov in California
+        // (00:26 on the 15th in Perth): Wayne saw "15 Nov" on the 14th.
+        let tag = "release/2026-11-15";
+        let at = Some("2026-11-14T16:26:37.000Z");
+        let california = chrono::FixedOffset::west_opt(8 * 3600).unwrap();
+        let perth = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        assert_eq!(release_day_in(tag, at, &california), "14 Nov");
+        assert_eq!(release_day_in(tag, at, &perth), "15 Nov");
+        assert_eq!(release_day_in(tag, None, &california), "15 Nov", "an older runner sends no date: the tag's own");
+        assert_eq!(release_day_in(tag, Some("soon"), &california), "15 Nov", "a date that doesn't parse is the same");
+        let r = RunnerUpdates::decode(&json!({ "state": "idle", "upstream": { "state": "available",
+            "release": { "tag": tag, "date": at, "changes": 1, "subjects": ["a"], "notes": [{ "tag": tag, "date": at, "lines": ["x"] }] } } })).unwrap();
+        let release = r.upstream.unwrap().release.unwrap();
+        assert_eq!(release.date.as_deref(), at);
+        assert_eq!(release.notes[0].date.as_deref(), at);
     }
 }

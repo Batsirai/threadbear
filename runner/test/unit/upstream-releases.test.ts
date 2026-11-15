@@ -179,6 +179,9 @@ test("Mike's runner tags main once a day, signed, once it has settled", async ()
   assert.equal(await up.publishOnce(), undefined);
 });
 
+// Notes without their dates, which come from the tags' own times.
+const plain = (notes?: { tag: string; date?: string; lines: string[] }[]) => notes?.map(({ tag, lines }) => ({ tag, lines }));
+
 test("release notes: Mike's runner writes them into the tag, and a fork reads each release's", async () => {
   const w = world();
   const prompts: string[] = [];
@@ -215,10 +218,14 @@ test("release notes: Mike's runner writes them into the tag, and a fork reads ea
   // A fork behind both sees the first's notes (the second has none).
   const s = await upstreamFor(w.theirs, w.home, clock).check();
   assert.equal(s.release?.tag, second);
-  assert.deepEqual(s.release?.notes, [{ tag: second, lines: ['Tidy the tests'] }, { tag: first, lines: ['Threads can be pinned', 'Search is quicker'] }]);
+  assert.deepEqual(plain(s.release?.notes), [{ tag: second, lines: ['Tidy the tests'] }, { tag: first, lines: ['Threads can be pinned', 'Search is quicker'] }]);
+  // Each note carries its own release's time, for the app to head it with
+  // the reader's own day rather than the name's (Mike's).
+  assert.equal(s.release?.notes?.[0]?.date, s.release?.date);
+  assert.ok(s.release?.notes?.every((n) => n.date && !Number.isNaN(Date.parse(n.date))), JSON.stringify(s.release?.notes));
   // Once main has the first, only what's newer counts.
   git(w.theirs, 'merge', '-q', '--no-edit', git(w.mike, 'rev-parse', `${first}^{commit}`));
-  assert.deepEqual((await upstreamFor(w.theirs, w.home, clock).check()).release?.notes, [{ tag: second, lines: ['Tidy the tests'] }]);
+  assert.deepEqual(plain((await upstreamFor(w.theirs, w.home, clock).check()).release?.notes), [{ tag: second, lines: ['Tidy the tests'] }]);
 });
 
 test('release notes exclude signed tags outside the offered history and unsigned notes', async () => {
@@ -233,7 +240,7 @@ test('release notes exclude signed tags outside the offered history and unsigned
   git(w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${w.mikeKey.priv}`, 'tag', '-s', '-m', "What's new:\n- Main work", 'release/2026-11-03', newest);
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   const s = await upstreamFor(w.theirs, w.home).check();
-  assert.deepEqual(s.release?.notes, [{ tag: 'release/2026-11-03', lines: ['Main work'] }]);
+  assert.deepEqual(plain(s.release?.notes), [{ tag: 'release/2026-11-03', lines: ['Main work'] }]);
 });
 
 test('parseNotes and cleanNotes', () => {

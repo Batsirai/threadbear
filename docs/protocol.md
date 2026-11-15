@@ -1471,15 +1471,18 @@ type UpstreamStatus = {
   release?: {              // the newest signed release, kept through a failed check
     tag: string            // "release/2026-10-30"
     commit: string
-    date?: string          // the tag's, ISO
+    date?: string          // the tag's, ISO. Clients show a release's day from
+                           // this, in their own timezone: the name is the day on
+                           // Mike's runner, a day ahead of America's afternoons
     changes: number        // commits in it main doesn't have, merges left out
     subjects: string[]     // their subject lines, newest first, at most 50
     // Commits in it with an `Important:` trailer (a security or data fix),
     // and the trailer's text; covered by the tag's signature.
     important?: { commit: string; why: string }[]
     // Each signed release main does not have, newest first: plain-words
-    // notes, or its commit subjects when it was tagged without notes
-    notes?: { tag: string; lines: string[] }[]
+    // notes, or its commit subjects when it was tagged without notes.
+    // `date` is that tag's, as the release's own
+    notes?: { tag: string; date?: string; lines: string[] }[]
   }
   // Mike's runner (runner.json releases.publish): the last tag it made.
   published?: { tag: string; at: string }

@@ -102,7 +102,7 @@ export type UpstreamRelease = {
   // Plain-words notes for people, from each release main doesn't have yet,
   // newest first. Each verified tag's commit subjects fill in when its
   // message has no plain-words notes.
-  notes?: { tag: string; lines: string[] }[];
+  notes?: { tag: string; date?: string; lines: string[] }[];
 };
 
 // runner.status's `upstream`, and RunnerUpdates' (docs/protocol.md).
@@ -812,20 +812,22 @@ export class Upstream {
   // same way, and the text comes from the verified bytes, never from a ref
   // git could move. Their history is only in `staged` (whose objects fall
   // back on the checkout's), so that's where it's compared with main's.
-  private async notesSince(checkout: string, newest: SignedTag & { name: string }, signers: string, staged: string | undefined): Promise<{ tag: string; lines: string[] }[]> {
+  private async notesSince(checkout: string, newest: SignedTag & { name: string }, signers: string, staged: string | undefined): Promise<{ tag: string; date?: string; lines: string[] }[]> {
     const main = await this.git(checkout, ['rev-parse', 'refs/heads/main']);
     const older = [...(staged ? await this.refs(staged, STAGED_NS) : [])]
       .filter(([name]) => RELEASE_NAME.test(name) && name < newest.name)
       .sort(([x], [y]) => (x < y ? 1 : -1))
       .slice(0, 9);
-    const out: { tag: string; lines: string[] }[] = [];
+    const out: { tag: string; date?: string; lines: string[] }[] = [];
     const add = (name: string, signed: SignedTag) => {
       const message = signed.payload.toString('utf8');
       const notes = parseNotes(message);
       // A failed model call, or a tag from before notes existed, still
       // describes that release instead of disappearing behind older notes.
       const lines = notes.length ? notes : message.split('\n').filter((l) => l.startsWith('- ')).slice(0, 5).map((l) => l.slice(2).trim().slice(0, 200)).filter(Boolean);
-      if (lines.length) out.push({ tag: TAG_PREFIX + name, lines });
+      // The date too, so the app can head each one with its day where the
+      // reader is, not Mike's (the name is his day).
+      if (lines.length) out.push({ tag: TAG_PREFIX + name, ...(signed.date ? { date: signed.date } : {}), lines });
     };
     add(newest.name, newest);
     for (const [name, ref] of older) {
