@@ -61,6 +61,42 @@ for (const peer of [false, true]) test(`${peer ? 'another thread' : 'Mike'} can 
   assert.deepEqual(h.runner.mustGet(thread.id).rec.queue.map(q => q.text), ['Old reminder']);
 });
 
+for (const queued of [false, true]) test(`a peer stop ${queued ? 'queues' : 'steers'} ahead of continuations with distinct schedule ids`, () => {
+  const { h, thread, turnId, s } = running();
+  for (let i = 0; i < 4; i++) h.runner.sendScheduled(thread.id, `Continue phase ${i}`, `schedule-${i}`, 'slot');
+  const st = h.runner.mustGet(thread.id);
+  assert.equal(st.rec.queue.length, 4, 'separate schedules are not coalesced');
+  const text = '[Sent by the agent in the thread "Coordinator" (12345678)]\n\nStop the benchmark.';
+  const sent = h.runner.send(thread.id, text, [], { queue: queued });
+  if (queued) {
+    assert.deepEqual(st.rec.queue.map(q => q.text), [text, ...Array.from({ length: 4 }, (_, i) => `Continue phase ${i}`)]);
+    s.result();
+  } else {
+    assert.equal(sent.turnId, turnId);
+    assert.equal(s.interrupts, 0);
+  }
+  assert.equal(s.sent.at(-1)!.text, text);
+  assert.ok(h.events(thread.id).some(e => e.type === 'user.message' && e.text === text));
+  assert.equal(st.rec.queue.length, 4);
+});
+
+for (const mode of ['snooze', 'archive'] as const) test(`external ${mode} holds already queued continuations with distinct schedule ids`, async () => {
+  const { h, thread, s } = running();
+  for (let i = 0; i < 4; i++) h.runner.sendScheduled(thread.id, `Continue phase ${i}`, `schedule-${i}`, 'slot');
+  const st = h.runner.mustGet(thread.id);
+  h.runner.update({ threadId: thread.id, ...(mode === 'snooze' ? { snoozedUntil: new Date(h.clock.now() + 86_400_000).toISOString() } : { archived: true }) });
+  assert.equal(s.interrupts, 1);
+  s.result('interrupted');
+  await tick(8);
+  h.clock.advance(60_000);
+  await tick(8);
+  assert.equal(st.rt.turn, undefined);
+  assert.equal(s.sent.length, 1, 'no queued continuation starts');
+  assert.equal(s.ended, true);
+  assert.ok(mode === 'snooze' ? st.rec.snoozedUntil : st.rec.archivedAt);
+  assert.deepEqual(st.rec.queue.map(q => q.text), Array.from({ length: 4 }, (_, i) => `Continue phase ${i}`));
+});
+
 test('legacy reminder piles keep only the newest per schedule and put other messages first', () => {
   const { h, thread, s } = running();
   const st = h.runner.mustGet(thread.id);
@@ -126,14 +162,15 @@ test('compaction cannot discard a reminder before its receipt is durable', () =>
   assert.deepEqual(st.rec.queue.map(q => q.text), ['New']);
 });
 
-test('a scheduled message wakes an archived thread even when it retained a queue', async () => {
+for (const mode of ['snooze', 'archive'] as const) test(`a new scheduled delivery wakes a thread in ${mode} even when it retained a queue`, async () => {
   const { h, thread, s } = running();
   s.result();
-  h.runner.update({ threadId: thread.id, archived: true });
+  h.runner.update({ threadId: thread.id, ...(mode === 'snooze' ? { snoozedUntil: new Date(h.clock.now() + 86_400_000).toISOString() } : { archived: true }) });
   h.runner.mustGet(thread.id).rec.queue.push({ turnId: 'peer', text: 'Peer message', images: [] });
   h.runner.sendScheduled(thread.id, 'Wake and check', 's1', 'slot');
   await tick(8);
   assert.equal(h.runner.get(thread.id).archivedAt, undefined);
+  assert.equal(h.runner.get(thread.id).snoozedUntil, undefined);
   assert.equal(h.adapter.last.sent[0].text, 'Peer message');
   assert.deepEqual(h.runner.mustGet(thread.id).rec.queue.map(q => q.text), ['Wake and check']);
 });
