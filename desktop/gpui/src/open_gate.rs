@@ -410,8 +410,8 @@ pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
 /// (Daybreak 125, 15 Nov 2026). On a Mac that's a file reference URL, which
 /// names the file by its inode, handed to the app that was checked; tried on
 /// Tinker Desk, an app or script moved into the path after the reference was
-/// made never ran, and the one asked about did. Elsewhere a document opens
-/// from a private copy of the checked file.
+/// made never ran, and the one asked about did. Elsewhere a file opens from
+/// a private copy of the checked file.
 fn open_checked(path: &str, look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) {
     if !policy::still_same(path, look, &app_for) {
         refuse(format!("{} changed while Threadbear was opening it, so it didn't open it.", threadbear_core::highlights::last_component(path)), cx);
@@ -464,19 +464,24 @@ const COPY_LIMIT: u64 = 512 * 1024 * 1024;
 
 #[cfg(not(target_os = "macos"))]
 fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) -> Result<(), String> {
-    // A document opens from a private copy of the file that was checked.
-    // A folder, or a program said yes to, still goes by its path: nothing
-    // here can hold one through the system's opener.
-    if look.runs.is_none() && !look.is_dir && *with == policy::Opener::System {
-        let folder = opened_folder().ok_or_else(|| "couldn't be copied to open it.".to_owned())?;
-        let copy = policy::checked_copy(look, &folder, COPY_LIMIT).map_err(|e| match e.kind() {
-            std::io::ErrorKind::FileTooLarge => "is too big to open from Threadbear. Open it from your file manager.".to_owned(),
-            _ => "changed while Threadbear was opening it, so it didn't open it.".to_owned(),
-        })?;
-        system_open(&policy::file_url(&copy.to_string_lossy()), cx);
+    let _ = with;
+    // A plain folder goes to the file browser by its path, after the look:
+    // nothing here can hold one through the system's opener.
+    if look.is_dir {
+        if look.runs.is_some() {
+            return Err("is a bundle, which Threadbear can't open safely here. Open it from your file manager.".to_owned());
+        }
+        system_open(url, cx);
         return Ok(());
     }
-    system_open(url, cx);
+    // A file (a document, or a program said yes to) opens from a private
+    // copy of the file that was checked.
+    let folder = opened_folder().ok_or_else(|| "couldn't be copied to open it.".to_owned())?;
+    let copy = policy::checked_copy(look, &folder, COPY_LIMIT).map_err(|e| match e.kind() {
+        std::io::ErrorKind::FileTooLarge => "is too big to open from Threadbear. Open it from your file manager.".to_owned(),
+        _ => "changed while Threadbear was opening it, so it didn't open it.".to_owned(),
+    })?;
+    system_open(&policy::file_url(&copy.to_string_lossy()), cx);
     Ok(())
 }
 

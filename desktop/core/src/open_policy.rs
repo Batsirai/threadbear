@@ -418,19 +418,36 @@ pub struct Look {
 /// now (Daybreak 125, 15 Nov 2026).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileId {
+    /// The device, or on Windows the volume's serial number.
     pub device: u64,
+    /// The inode, or on Windows the low half of the file's 128-bit ID.
     pub inode: u64,
+    /// On Windows the high half of that ID; 0 elsewhere.
+    pub high: u64,
 }
 
+/// A file's identity from its metadata, where that has it (Mac and Linux).
 #[cfg(unix)]
-fn file_id(meta: &std::fs::Metadata) -> Option<FileId> {
+fn meta_id(meta: &std::fs::Metadata) -> Option<FileId> {
     use std::os::unix::fs::MetadataExt;
-    Some(FileId { device: meta.dev(), inode: meta.ino() })
+    Some(FileId { device: meta.dev(), inode: meta.ino(), high: 0 })
 }
 
-/// Windows' file index isn't in stable std; the path checks stand alone there.
-#[cfg(not(unix))]
-fn file_id(_meta: &std::fs::Metadata) -> Option<FileId> {
+/// The identity of the open file `file` (its metadata `meta`).
+#[cfg(unix)]
+fn handle_id(_file: &std::fs::File, meta: &std::fs::Metadata) -> Option<FileId> {
+    meta_id(meta)
+}
+
+/// On Windows, FILE_ID_INFO from the handle itself.
+#[cfg(windows)]
+fn handle_id(file: &std::fs::File, _meta: &std::fs::Metadata) -> Option<FileId> {
+    let [device, inode, high] = crate::local_path::identity_of(file).ok()?;
+    Some(FileId { device, inode, high })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn handle_id(_file: &std::fs::File, _meta: &std::fs::Metadata) -> Option<FileId> {
     None
 }
 
@@ -486,9 +503,15 @@ pub fn look(path: &Path, app_for: &dyn Fn(&Path) -> Option<OpeningApp>) -> Optio
     let linked = std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false) || resolved.file_name() != path.file_name();
     #[cfg(windows)]
     let linked = _local.linked;
+    #[cfg(windows)]
+    let id = _local.file().ok().and_then(|f| handle_id(f, &meta));
+    #[cfg(unix)]
+    let id = meta_id(&meta);
+    #[cfg(not(any(unix, windows)))]
+    let id = None;
     let app = app_for(&resolved);
     let runs = runs(&resolved, &meta, app.clone());
-    Some(Look { resolved, runs, linked, id: file_id(&meta), app, is_dir: meta.is_dir() })
+    Some(Look { resolved, runs, linked, id, app, is_dir: meta.is_dir() })
 }
 
 /// Why opening `file` would or might run something (`OpenGate.runs`).
@@ -610,22 +633,33 @@ pub fn still_same(path: &str, asked: &Look, app_for: &dyn Fn(&Path) -> Option<Op
 
 /// Where the system can't be handed the checked file itself (Windows and
 /// Linux: no app can be named there, and no reference that follows the file
-/// rather than its path), a document opens from a private copy of the file
-/// that was checked: read from a handle opened under the path guard, which
+/// rather than its path), a file opens from a private copy of the file that
+/// was checked (a document, or a program once it's been said yes to): read from a handle opened under the path guard, which
 /// must be the file `look` saw (same identity, a plain file), into a new
 /// folder of this user's own under `folder`. What the project writes after
 /// that never reaches what opens (Daybreak 125, 15 Nov 2026).
 pub fn checked_copy(look: &Look, folder: &Path, limit: u64) -> std::io::Result<PathBuf> {
     let file = local_open(&look.resolved)?;
     let meta = file.metadata()?;
-    if !meta.is_file() || look.is_dir || file_id(&meta) != look.id {
+    // Fails closed where there's no identity to compare.
+    if !meta.is_file() || look.is_dir || look.id.is_none() || handle_id(&file, &meta) != look.id {
         return Err(std::io::Error::other("It changed since Threadbear looked at it"));
     }
     if meta.len() > limit {
         return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, "too big to copy"));
     }
     let name = look.resolved.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    crate::private_file::snapshot(&file, folder, &name, limit)
+    let copy = crate::private_file::snapshot(&file, folder, &name, limit)?;
+    // A program said yes to runs from its copy, so the copy keeps its
+    // owner's execute bit (and only that: read-only, this user's alone).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 != 0 {
+            std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o500))?;
+        }
+    }
+    Ok(copy)
 }
 
 /// The inode a macOS file reference URL (`file:///.file/id=<volume>.<inode>`)
@@ -1508,6 +1542,27 @@ mod tests {
         fs::remove_file(&doc).unwrap();
         fs::write(&doc, "# another").unwrap();
         assert!(checked_copy(&look, &s.path("opened"), 1024).is_err());
+    }
+
+    /// Off a Mac a program said yes to runs from a copy of the one asked
+    /// about, which keeps its execute bit; one swapped in after the yes is
+    /// never copied.
+    #[cfg(unix)]
+    #[test]
+    fn a_confirmed_programs_copy_is_of_the_program_asked_about() {
+        use std::os::unix::fs::PermissionsExt;
+        let s = Scratch::new("copy-program");
+        let program = s.file("tool.sh", "#!/bin/sh\necho asked\n");
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let given = program.to_string_lossy().into_owned();
+        let FileVerdict::Ask { look, .. } = decide_file(&given, Origin::ThisMac, &none) else { panic!() };
+        let copy = checked_copy(&look, &s.path("opened"), 1024).unwrap();
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "#!/bin/sh\necho asked\n");
+        assert_eq!(fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o500);
+        fs::rename(&program, s.path("tool.old")).unwrap();
+        fs::write(&program, "#!/bin/sh\necho swapped\n").unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(checked_copy(&look, &s.path("opened"), 1024).is_err(), "a program swapped in after the yes was copied");
     }
 
     #[test]

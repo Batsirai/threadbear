@@ -5094,10 +5094,13 @@ Fixes from Codex's review of the slice before:
   swapped in there; revealing it didn't. The Swift app (frozen) still opens
   by path.
 - Windows and Linux can't name the app or hold a file through the system's
-  opener, so a document opens from a private, read-only copy of the checked
-  file (in `~/.cache/threadbear/opened`, `%LOCALAPPDATA%\Threadbear\opened`;
-  cleared after a day), and edits made there don't reach the original. A
-  folder or a program said yes to still goes by its path, after the look.
+  opener, so a file (a document, or a program once said yes to) opens from a
+  private, read-only copy of the checked file, taken from a handle that must
+  be the file looked at (its inode, or on Windows its volume and file ID),
+  in `~/.cache/threadbear/opened` or `%LOCALAPPDATA%\Threadbear\opened`,
+  cleared after a day. Edits made there don't reach the original. A plain
+  folder still goes to the file manager by its path, after the look; a
+  bundle folder there isn't opened.
 - Rules and their tests: `desktop/core/src/open_policy.rs` (`Opener`,
   `still_same`, `checked_copy`), the gate: `desktop/gpui/src/open_gate.rs`
   (`open_checked`), `desktop/core/tests/open_gate_source.rs`.
