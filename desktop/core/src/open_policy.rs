@@ -608,6 +608,36 @@ pub fn still_same(path: &str, asked: &Look, app_for: &dyn Fn(&Path) -> Option<Op
     look(Path::new(path), app_for).is_some_and(|now| now.resolved == asked.resolved && now.runs == asked.runs && now.id == asked.id && now.app == asked.app && now.is_dir == asked.is_dir)
 }
 
+/// Where the system can't be handed the checked file itself (Windows and
+/// Linux: no app can be named there, and no reference that follows the file
+/// rather than its path), a document opens from a private copy of the file
+/// that was checked: read from a handle opened under the path guard, which
+/// must be the file `look` saw (same identity, a plain file), into a new
+/// folder of this user's own under `folder`. What the project writes after
+/// that never reaches what opens (Daybreak 125, 15 Nov 2026).
+pub fn checked_copy(look: &Look, folder: &Path, limit: u64) -> std::io::Result<PathBuf> {
+    let file = local_open(&look.resolved)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || look.is_dir || file_id(&meta) != look.id {
+        return Err(std::io::Error::other("It changed since Threadbear looked at it"));
+    }
+    if meta.len() > limit {
+        return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, "too big to copy"));
+    }
+    let name = look.resolved.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    crate::private_file::snapshot(&file, folder, &name, limit)
+}
+
+/// The inode a macOS file reference URL (`file:///.file/id=<volume>.<inode>`)
+/// names, so the gate can check the reference it made is to the file it
+/// looked at.
+pub fn reference_inode(url: &str) -> Option<u64> {
+    let rest = url.strip_prefix("file:///.file/id=")?.trim_end_matches('/');
+    let (volume, inode) = rest.split_once('.')?;
+    volume.parse::<u64>().ok()?;
+    inode.parse().ok()
+}
+
 // ---------------------------------------------------------------- shown in the app
 
 /// What the app shows in a view of its own rather than handing to another
@@ -1455,6 +1485,37 @@ mod tests {
         fs::rename(&app, s.path("Tool.old")).unwrap();
         fs::rename(&other, &app).unwrap();
         assert!(!still_same(&given, &look, &mac_apps), "another bundle moved into the app's place passed");
+    }
+
+    /// Off a Mac a document opens from a copy of the file that was looked at;
+    /// one swapped in since is never copied.
+    #[cfg(unix)]
+    #[test]
+    fn a_documents_copy_is_of_the_file_that_was_looked_at() {
+        let s = Scratch::new("copy");
+        let doc = s.file("notes/readme.md", "# the real one");
+        let given = doc.to_string_lossy().into_owned();
+        let FileVerdict::Open { look, .. } = decide_file(&given, Origin::ThisMac, &none) else { panic!() };
+        let copy = checked_copy(&look, &s.path("opened"), 1024).unwrap();
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "# the real one");
+        assert!(copy.ends_with("readme.md") && !copy.starts_with(s.path("notes")));
+        // Swapped for a link to a script after the look: no copy, nothing opens.
+        let evil = s.file("evil.desktop", "[Desktop Entry]\nExec=sh -c id\n");
+        fs::rename(&doc, s.path("notes/readme.old")).unwrap();
+        std::os::unix::fs::symlink(&evil, &doc).unwrap();
+        assert!(checked_copy(&look, &s.path("opened"), 1024).is_err());
+        // And a file put at the same path in its place.
+        fs::remove_file(&doc).unwrap();
+        fs::write(&doc, "# another").unwrap();
+        assert!(checked_copy(&look, &s.path("opened"), 1024).is_err());
+    }
+
+    #[test]
+    fn a_reference_urls_inode_is_read() {
+        assert_eq!(reference_inode("file:///.file/id=6571367.368739028/"), Some(368739028));
+        assert_eq!(reference_inode("file:///.file/id=6571367.368739028"), Some(368739028));
+        assert_eq!(reference_inode("file:///private/tmp/Tool.app/"), None);
+        assert_eq!(reference_inode("file:///.file/id=x.1/"), None);
     }
 
     #[test]

@@ -5083,14 +5083,21 @@ Fixes from Codex's review of the slice before:
   could swap the document (or a folder above it) for an app in between, and
   it launched with no question. Now each open looks again right before
   (same real path, same file on disk by device and inode, same kind, same
-  app), and on a Mac a document goes to the app that was checked
-  (NSWorkspace's openURLs:withApplicationAtURL:), so a swap that slips in
-  after that is opened by that app as a document, never run. A plain
-  folder is shown selected in Finder rather than opened in a window of its
-  own: tried on a Mac, a Finder window rooted at a path, or Finder asked to
-  open it, launched an app swapped in there; revealing it didn't. The
-  Swift app (frozen) still opens by path.
-- Windows and Linux get the look right before the open; nothing there can
-  name the app, so the system still picks it.
+  app), and then opens the file it looked at rather than its path. On a Mac
+  that's a file reference URL (`file:///.file/id=...`, which names the
+  inode, checked against the look) handed to the app that was checked
+  (NSWorkspace's openURLs:withApplicationAtURL:); tried on Tinker Desk, an
+  app or script moved into the path after the reference was made never ran,
+  and a confirmed script ran the one asked about. A plain folder is shown
+  selected in Finder rather than opened in a window of its own: a Finder
+  window rooted at a path, or Finder asked to open it, launched an app
+  swapped in there; revealing it didn't. The Swift app (frozen) still opens
+  by path.
+- Windows and Linux can't name the app or hold a file through the system's
+  opener, so a document opens from a private, read-only copy of the checked
+  file (in `~/.cache/threadbear/opened`, `%LOCALAPPDATA%\Threadbear\opened`;
+  cleared after a day), and edits made there don't reach the original. A
+  folder or a program said yes to still goes by its path, after the look.
 - Rules and their tests: `desktop/core/src/open_policy.rs` (`Opener`,
-  `still_same`), the gate: `desktop/gpui/src/open_gate.rs` (`open_checked`).
+  `still_same`, `checked_copy`), the gate: `desktop/gpui/src/open_gate.rs`
+  (`open_checked`), `desktop/core/tests/open_gate_source.rs`.
