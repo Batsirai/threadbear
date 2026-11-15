@@ -13,7 +13,8 @@ export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok'>;
 
 // What a process is started for: the runner's data dir (where Grok's hook
 // lives), and whether it's a small job that may use no tools at all.
-export type AgentRun = { dataDir?: string; noTools?: boolean };
+// trusted: the folder was one the agent trusts when this process started.
+export type AgentRun = { dataDir?: string; noTools?: boolean; trusted?: boolean };
 
 export type AcpAgent = {
   provider: AcpProvider;
@@ -47,8 +48,11 @@ export type AcpAgent = {
   // The plugin a process started with these args must report running before
   // the model does anything each turn, or the turn is stopped (AcpSession).
   guardName?(args: string[]): string | undefined;
-  // Why a thread in this folder and mode can't start, if it can't.
-  refuses?(o: { cwd: string; mode: PermissionMode }): string | undefined;
+  // Whether the agent trusts this folder, read once as a process starts.
+  trusts?(cwd: string): boolean;
+  // Why a thread in this folder and mode can't run, if it can't. trusted: what
+  // trusts said when its process started, which outlasts the trust file.
+  refuses?(o: { cwd: string; mode: PermissionMode; trusted?: boolean }): string | undefined;
 };
 
 function isExecutableFile(file: string): boolean {
@@ -186,8 +190,9 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
     guardName: guardPluginName,
     // A folder Grok trusts runs its own hooks before anything can ask, and
     // can rewrite what a call does after the guard has looked.
-    refuses: ({ cwd, mode }) =>
-      mode !== 'full' && grokTrusts(cwd)
+    trusts: (cwd) => grokTrusts(cwd),
+    refuses: ({ cwd, mode, trusted }) =>
+      mode !== 'full' && (trusted || grokTrusts(cwd))
         ? "Grok trusts this folder, so its own hooks would run before anything could ask you. Use Full access, or take the folder out of Grok's trusted folders (`/hooks-untrust` in Grok there), then send this again."
         : undefined,
     updateArgs: ['update'],

@@ -31,6 +31,16 @@
 // a folder the hook asks for every call, reads too, and a thread that has to
 // ask doesn't start there at all (agents.ts, refuses).
 //
+// Whether a folder was trusted is settled when a process starts and kept for
+// its life: its hooks loaded then, and a repo's own SessionStart hook could
+// take the folder out of the trust file afterwards. So that start's plugin
+// says so in its hook's arguments, and its thread can't leave Full.
+// Grok also counts your home folder and a disk's root as trusted, so they are
+// here too.
+//
+// A Full access thread could rewrite guard-ask.mjs, shared by every start, but
+// it could as well rewrite the runner itself, so that adds nothing.
+//
 // The hook asks for every tool except a read inside the thread's folder,
 // which goes ahead as Grok's own read-only tools do anywhere. For a small job
 // (noTools) it denies everything, reads too, from a script of its own. Each
@@ -82,11 +92,13 @@ function onDisk(p: string): string | undefined {
   }
 }
 
-// Whether Grok trusts this folder, or a folder above it.
-export function grokTrusts(cwd: string, grokHome: string = process.env.GROK_HOME || path.join(os.homedir(), '.grok')): boolean {
+// Whether Grok trusts this folder, or a folder above it. Grok counts the home
+// folder and a disk's root as trusted whatever the file says.
+export function grokTrusts(cwd: string, grokHome: string = process.env.GROK_HOME || path.join(os.homedir(), '.grok'), home: string = os.homedir()): boolean {
+  const here = onDisk(cwd) ?? cwd;
+  if (here === path.parse(here).root || here === (onDisk(home) ?? home)) return true;
   const folders = grokTrustedFolders(grokHome);
   if (!folders) return true;
-  const here = onDisk(cwd) ?? cwd;
   return folders.some((f) => {
     const t = onDisk(f) ?? f;
     return here === t || here.startsWith(t.endsWith(path.sep) ? t : t + path.sep);
@@ -166,6 +178,10 @@ function decide(e) {
   if (!root) return 'ask';
   // A folder Grok trusts runs its own hooks, and one of those can rewrite
   // what this call reads after this has looked: everything asks there.
+  // Trusted when this process started stays so (its hooks loaded then), and
+  // Grok trusts the home folder and a disk's root as well.
+  if (process.argv[2] === 'trusted') return 'ask';
+  if (root === path.parse(root).root || root === (onDisk(os.homedir()) ?? os.homedir())) return 'ask';
   const trusted = trustedFolders();
   if (!trusted || trusted.some((f) => inside(root, onDisk(f) ?? f))) return 'ask';
   const input = e.toolInput ?? e.tool_input ?? {};
@@ -276,17 +292,17 @@ function sweep(root: string, now: number): void {
 // random, so a folder's config can't name it to turn it off. Under the
 // runner's data dir; with none (a test), a private temp folder of this
 // process's own.
-export function grokGuardDir(o: { dataDir?: string; noTools?: boolean } = {}): string {
+export function grokGuardDir(o: { dataDir?: string; noTools?: boolean; trusted?: boolean } = {}): string {
   const root = guardRoot(o.dataDir);
   for (const [name, text] of Object.entries(SCRIPTS)) writeFresh(path.join(root, name), text);
   sweep(root, Date.now());
   const plugin = path.join(root, `threadbear-${crypto.randomBytes(8).toString('hex')}`);
   fs.mkdirSync(path.join(plugin, 'hooks'), { recursive: true, mode: 0o700 });
   // The runner's own node, by its whole path: a thread's PATH can't swap it.
-  const run = (script: string, failClosed: boolean) => ({ type: 'command', command: process.execPath, args: [path.join(root, script)], timeout: 30, failClosed });
+  const run = (script: string, failClosed: boolean, args: string[] = []) => ({ type: 'command', command: process.execPath, args: [path.join(root, script), ...args], timeout: 30, failClosed });
   const hooks = {
     hooks: {
-      PreToolUse: [{ hooks: [run(o.noTools ? 'guard-deny.mjs' : 'guard-ask.mjs', true)] }],
+      PreToolUse: [{ hooks: [o.noTools ? run('guard-deny.mjs', true) : run('guard-ask.mjs', true, o.trusted ? ['trusted'] : [])] }],
       UserPromptSubmit: [{ hooks: [run('seen.mjs', false)] }],
     },
   };

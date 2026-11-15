@@ -1228,7 +1228,8 @@ whatever those say; reading files inside the thread's folder goes ahead,
 and reading outside it asks. If Grok didn't load that hook (a folder's
 `.grok/config.toml` can turn plugins off), the thread stops before Grok can
 do anything. A folder you've trusted in Grok runs its own Grok hooks, which
-could act before anything asks you, so there Grok threads need Full access;
+could act before anything asks you, so there (and in your home folder, which
+Grok always trusts) Grok threads need Full access;
 take the folder out of Grok's trusted folders (`/hooks-untrust`) to use Ask
 or Auto. Denying a card ends Grok's turn, as it does in Grok's own app. Grok's models each list their effort levels (low to extra
 high), and the effort you pick is the one it runs at. Small jobs (titles

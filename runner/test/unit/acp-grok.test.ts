@@ -170,14 +170,14 @@ test('a thread can only make it stricter: its environment comes before the row',
 
 // ---- The guard itself
 
-function guard(dir: string, mode: 'ask' | 'deny', event: unknown): string | undefined {
+function guard(dir: string, mode: 'ask' | 'deny', event: unknown, env: Record<string, string> = {}): string | undefined {
   const all = JSON.parse(fs.readFileSync(path.join(dir, 'hooks', 'hooks.json'), 'utf8')).hooks;
   const hooks = all.PreToolUse[0].hooks[0];
   assert.equal(hooks.failClosed, true);
   assert.equal(hooks.command, process.execPath, "the runner's own node, by its whole path");
   assert.equal(path.basename(hooks.args[0]), `guard-${mode}.mjs`, 'a script of its own for each, so a deny never hangs on an argument');
   assert.ok(all.UserPromptSubmit[0].hooks[0], 'and one that shows it loaded as each prompt goes in');
-  const r = spawnSync(hooks.command, hooks.args, { input: typeof event === 'string' ? event : JSON.stringify(event), encoding: 'utf8', env: { ...process.env, GROK_HOME: grokHome } });
+  const r = spawnSync(hooks.command, hooks.args, { input: typeof event === 'string' ? event : JSON.stringify(event), encoding: 'utf8', env: { ...process.env, GROK_HOME: grokHome, ...env } });
   return JSON.parse(r.stdout).decision;
 }
 
@@ -228,6 +228,37 @@ test('the guard: reads inside the folder go ahead, everything else asks, and a s
   assert.equal(guard(ask, 'ask', ev('read_file', { target_file: 'src/a.ts' })), 'ask');
   fs.writeFileSync(path.join(grokHome, 'trusted_folders.toml'), 'trusted = true but not as expected');
   assert.equal(guard(ask, 'ask', ev('read_file', { target_file: 'src/a.ts' })), 'ask', "a trust file it can't read counts as trusting everything");
+});
+
+test('trusted when a process started stays trusted for its life, whatever the file says later', async () => {
+  const data = tmp();
+  const cwd = path.join(data, 'work');
+  fs.mkdirSync(cwd);
+  const dir = grokGuardDir({ dataDir: data, trusted: true });
+  const ev = { hookEventName: 'pre_tool_use', cwd, toolName: 'read_file', toolInput: { target_file: 'a.txt' }, toolInputTruncated: false };
+  assert.equal(guard(dir, 'ask', ev), 'ask', 'no trust file now, but its hooks loaded when it started');
+  assert.equal(guard(grokGuardDir({ dataDir: data }), 'ask', ev), 'allow');
+  // A repo's SessionStart hook takes the folder out of the file mid-session.
+  const r = rig({ mode: 'full', before: (c) => trust(c) });
+  await r.turn('hello');
+  fs.rmSync(path.join(grokHome, 'trusted_folders.toml'));
+  await r.s.setPermissionMode('ask');
+  assert.equal((r.s as unknown as { state: string }).state, 'closed', 'leaving Full still stops it');
+});
+
+test('Grok counts the home folder and a disk root as trusted', () => {
+  const home = tmp();
+  const empty = tmp();
+  assert.equal(grokTrusts(home, empty, home), true);
+  assert.equal(grokTrusts('/', empty, home), true);
+  assert.equal(grokTrusts(path.join(home, 'project'), empty, home), false, 'only the folder itself');
+  assert.match(String(grok.refuses?.({ cwd: os.homedir(), mode: 'ask' })), /Grok trusts this folder/);
+  const dir = grokGuardDir({ dataDir: tmp() });
+  const ev = (cwd: string) => ({ hookEventName: 'pre_tool_use', cwd, toolName: 'read_file', toolInput: { target_file: 'a.txt' }, toolInputTruncated: false });
+  assert.equal(guard(dir, 'ask', ev(home), { HOME: home }), 'ask');
+  assert.equal(guard(dir, 'ask', ev('/'), { HOME: home }), 'ask');
+  fs.mkdirSync(path.join(home, 'project'));
+  assert.equal(guard(dir, 'ask', ev(path.join(home, 'project')), { HOME: home }), 'allow');
 });
 
 test("Grok's trusted folders are read as Grok writes them", () => {

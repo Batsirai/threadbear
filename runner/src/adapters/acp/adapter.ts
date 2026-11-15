@@ -209,6 +209,8 @@ export class AcpSession implements AgentSession {
   // anything in a turn (Grok's guard), and whether it has been this turn.
   private guard?: string;
   private guardSeen = false;
+  // Whether the agent trusted the folder when this process started (Grok).
+  private trusted = false;
   private currentMode?: string;
   private cliCommands: SlashCommand[] = [];
   // Said once, before the first message of a new session.
@@ -230,7 +232,8 @@ export class AcpSession implements AgentSession {
     this.exitPromise = new Promise((r) => (this.resolveExit = r));
     this.ctx = fileContext(opts.cwd, opts.mediaDir, opts.blobsDir);
     this.normalizer = new AcpNormalizer(this.ctx);
-    const args = deps.agent.args({ dataDir: deps.dataDir });
+    this.trusted = deps.agent.trusts?.(opts.cwd) ?? false;
+    const args = deps.agent.args({ dataDir: deps.dataDir, trusted: this.trusted });
     this.guard = deps.agent.guardName?.(args);
     this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
     this.proc.onNotification = (method, params) => this.notification(method, params);
@@ -765,7 +768,7 @@ export class AcpSession implements AgentSession {
     this.mode = mode;
     // A mode this folder can't run in (Grok's trusted folders): the process
     // goes, and the next message starts one, which says why it can't.
-    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode });
+    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode, trusted: this.trusted });
     if (refused && this.state !== 'closed' && this.state !== 'closing') {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: refused } });
       this.kill();

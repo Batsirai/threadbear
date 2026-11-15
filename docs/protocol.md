@@ -1296,10 +1296,12 @@ where it installs.
   model says anything before that report names the plugin, or a
   `user_prompt_submit` or `pre_tool_use` report without it, ends the process
   there with an error (small jobs fail the same way). A folder Grok trusts
-  (`~/.grok/trusted_folders.toml`, or one above it) runs its own hooks, which
-  can act at session start and rewrite a call after the guard has looked: a
-  Grok thread there starts only on Full, leaving Full stops its process, and
-  the guard asks for everything there. Grok has no session modes, so nothing else changes with the
+  (`~/.grok/trusted_folders.toml`, or one above it, and always the home folder
+  and a disk's root) runs its own hooks, which can act at session start and
+  rewrite a call after the guard has looked: a Grok thread there starts only
+  on Full, and the guard asks for everything there. Trusted when the process
+  started stays so for its life (the start's plugin passes `trusted` to the
+  guard), so leaving Full stops it even if the folder has left the file since. Grok has no session modes, so nothing else changes with the
   thread's mode; in its auto mode its classifier still looks first and may
   refuse a call. Grok adds the hook to a request's title (`— hook '...'
   asks: ...`), which the card leaves off, and its MCP calls go through
