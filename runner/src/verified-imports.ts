@@ -159,15 +159,25 @@ function ownPackage(file: string): string | undefined {
   }
 }
 
-// The package.json of the package a file under node_modules is in:
-// node_modules/<name>/package.json, or node_modules/@scope/<name>/.
-function packageJsonOf(file: string): string | undefined {
-  const segs = file.split(path.sep);
-  const at = segs.lastIndexOf('node_modules');
-  if (at < 0 || at + 1 >= segs.length - 1) return undefined;
-  const depth = segs[at + 1]!.startsWith('@') ? 3 : 2;
-  if (at + depth >= segs.length) return undefined;
-  return [...segs.slice(0, at + depth), 'package.json'].join(path.sep);
+// Why the package.json files Node resolved a committed package's file by
+// aren't this graph's, or undefined when each is: every one in a folder
+// under a node_modules between the file and the repo's top, as it is on
+// disk now, must be one the graph has, byte for byte.
+function packageJsonsDiffer(file: string, top: string, mine: (f: string) => Buffer | undefined): string | undefined {
+  for (let d = path.dirname(file); d.startsWith(top) && d !== top; d = path.dirname(d)) {
+    if (!path.relative(top, d).split(path.sep).includes('node_modules')) break;
+    const pj = path.join(d, 'package.json');
+    let now: Buffer;
+    try {
+      now = fs.readFileSync(pj);
+    } catch {
+      if (fs.existsSync(pj)) return `${pj} can't be read`;
+      continue;
+    }
+    const kept = mine(pj);
+    if (!kept || !kept.equals(now)) return `${pj} isn't the package.json patch trust hashed`;
+  }
+  return undefined;
 }
 
 function describe(url: string): string {
@@ -205,15 +215,12 @@ function install(): void {
             // this version's import to a file this version never loaded as
             // that (Grok's review of Daybreak 131). So the package.json it
             // went by must be this graph's, byte for byte.
-            const pkg = packageJsonOf(file);
-            const mine = pkg ? served(inGraph(pkg, g)) : undefined;
-            let now: Buffer | undefined;
-            try {
-              now = pkg ? fs.readFileSync(pkg) : undefined;
-            } catch {
-              now = undefined;
-            }
-            if (!pkg || !mine || !now || !mine.equals(now)) throw new Error(`${fileURLToPath(plain(parent))} imports ${specifier}, and its package.json isn't the one patch trust hashed: not loaded.`);
+            // Every package.json under node_modules on the way up from the
+            // file counts, a nested package's and the one above it: an
+            // `exports` can name ./node_modules/helper/index.js (Grok's
+            // second review).
+            const why = packageJsonsDiffer(file, top, (f) => served(inGraph(f, g)));
+            if (why) throw new Error(`${fileURLToPath(plain(parent))} imports ${specifier}, and ${why}: not loaded.`);
             return { url: inGraph(file, g), format: out.format, shortCircuit: true };
           }
         }

