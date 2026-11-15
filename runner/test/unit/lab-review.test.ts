@@ -14,7 +14,7 @@ import { nullLogger } from '../../src/log.ts';
 import { FINDINGS_REFUSED, LAB_REVIEW_ROUNDS, findingsProblem, parseAnswers, parseVerdict } from '../../src/runner/lab-review.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { loadConfig } from '../../src/config.ts';
-import { SettingsService } from '../../src/settings.ts';
+import { SettingsService, settingsMethods } from '../../src/settings.ts';
 
 const END_TURN = 'mcp__threadbear__end_turn';
 
@@ -778,4 +778,78 @@ test('labReview: a review thread is only asked for a verdict while the reviewed 
   assert.deepEqual(h.runner.reviewOwes(reviewId), { verdict: true });
   finishReview(h, id, { needs: 'nothing', findings: [] });
   assert.equal(h.runner.reviewOwes(reviewId), undefined, 'done with: reopened later, it is asked nothing');
+});
+
+// ------------------------------------------------- Mike's order of reviewers
+
+const OPENCODE = { id: 'opencode-main', provider: 'opencode' as const, title: 'OpenCode', configDir: '/tmp/opencode' };
+
+// A login counts only on a provider this runner has an adapter for; the
+// harness has Claude's and Codex's, so OpenCode borrows Codex's fake.
+function withOpenCode(h: ReturnType<typeof setup>) {
+  (h.runner.adapters as Record<string, unknown>).opencode = h.codex;
+  return h;
+}
+
+test('labReview: reviewers go in the order Settings gives, on their model and effort', () => {
+  const h = withOpenCode(setup({ accounts: [...withCodex(), OPENCODE], cfg: { labReviewers: [{ provider: 'opencode' }, { provider: 'codex', model: 'gpt-6-luna', effort: 'medium' }] } }));
+  const rec = { ...h.runner.threads.get(start(h))!.rec };
+  assert.equal(h.runner.reviewLogin(rec)?.account.id, 'opencode-main', 'the first of another lab with a login');
+  // Codex first: a real review starts on it, with its model and effort.
+  h.runner.cfg.labReviewers = [{ provider: 'codex', model: 'gpt-6-luna', effort: 'medium' }, { provider: 'opencode' }];
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const review = h.runner.get(h.runner.get(id).waitingOn![0].threadId);
+  assert.equal(review.provider, 'codex');
+  assert.equal(review.model, 'gpt-6-luna');
+  assert.equal(review.effort, 'medium');
+});
+
+test("labReview: a reviewer whose login is out of room is passed over for the next in Mike's order", () => {
+  const blocked = { ...withCodex()[2], usage: { blocked: true, windows: [], readAt: new Date(0).toISOString(), source: 'live' } } as unknown as (typeof ACCOUNTS)[number];
+  const h = withOpenCode(setup({ accounts: [...ACCOUNTS, blocked, OPENCODE], cfg: { labReviewers: [{ provider: 'codex' }, { provider: 'opencode' }] } }));
+  const rec = h.runner.threads.get(start(h))!.rec;
+  const login = h.runner.reviewLogin(rec);
+  assert.equal(login?.account.id, 'opencode-main');
+  assert.equal(login?.independent, true);
+  // None of the others has room: a fresh session of its own provider, on
+  // its listed model if it has one.
+  h.runner.cfg.labReviewers = [{ provider: 'codex' }, { provider: 'claude', effort: 'max' }];
+  const own = h.runner.reviewLogin(rec);
+  assert.equal(own?.account.provider, 'claude');
+  assert.equal(own?.independent, false);
+  assert.equal(own?.reviewer.effort, 'max');
+});
+
+test("labReview: the thread's own provider is never taken for another lab, wherever it is in the order", () => {
+  const h = setup({ cfg: { labReviewers: [{ provider: 'claude' }, { provider: 'codex' }] } });
+  const rec = h.runner.threads.get(start(h))!.rec;
+  assert.equal(h.runner.reviewLogin(rec)?.account.provider, 'codex');
+  assert.equal(h.runner.reviewLogin(rec)?.independent, true);
+});
+
+test('labReview: Settings shows the default order, saves a new one, and refuses what is not a reviewer', () => {
+  const home = tmpDir();
+  fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ labReviewers: [{ provider: 'codex' }, { provider: 'nope' }, 7, { provider: 'codex', model: 'x' }, { provider: 'claude', effort: 'high' }] }));
+  assert.deepEqual(loadConfig({ THREADBEAR_HOME: home }).labReviewers, [{ provider: 'codex' }, { provider: 'claude', effort: 'high' }], 'hand-edited: the bad and repeated left out');
+
+  const h = setup();
+  const settings = new SettingsService({ config: h.runner.cfg, publish: () => {} });
+  assert.deepEqual(settings.get().labReviewers, [{ provider: 'codex' }, { provider: 'claude' }], 'the default, which is what it did before');
+  const order = [{ provider: 'claude' as const, model: 'claude-opus-5-5', effort: 'xhigh' as const }, { provider: 'codex' as const }];
+  assert.deepEqual(settings.update({ labReviewers: order }).labReviewers, order);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.home, 'runner.json'), 'utf8')).labReviewers, order, 'saved');
+  assert.deepEqual(h.runner.cfg.labReviewers, order, 'used at once');
+});
+
+test('labReview: settings.update says which reviewer entry is wrong', () => {
+  const h = setup();
+  const update = settingsMethods(new SettingsService({ config: h.runner.cfg, publish: () => {} }))['settings.update'];
+  assert.throws(() => update({ labReviewers: 'codex' }), /labReviewers must be a list/);
+  assert.throws(() => update({ labReviewers: [{ provider: 'gemini' }] }), /labReviewers provider must be one of/);
+  assert.throws(() => update({ labReviewers: [{ provider: 'codex', effort: 'huge' }] }), /labReviewers effort/);
+  assert.throws(() => update({ labReviewers: [{ provider: 'codex', model: '' }] }), /labReviewers model/);
+  assert.equal(h.runner.cfg.labReviewers, undefined, 'nothing saved');
+  update({ labReviewers: [] });
+  assert.deepEqual(h.runner.cfg.labReviewers, [], 'an empty list: only a fresh session of its own provider reviews');
 });

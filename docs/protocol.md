@@ -753,6 +753,12 @@ type Settings = {
                         // lab); on unless runner.json has labReview: false.
                         // Absent from an older runner, where it was an
                         // experiment, so a client shows no switch
+  labReviewers?: { provider: Provider, model?: string, effort?: EffortLevel }[]
+                        // who reviews, in order (Settings > General > Code review): the
+                        // first of another lab with a login that has room,
+                        // on its model and effort when it names them.
+                        // runner.json's labReviewers, else Codex then Claude.
+                        // Absent from an older runner: no list to show
   keepAwake?: boolean   // keep the Mac out of idle sleep while threads
                         // work (keep-awake.ts); on by default, sent only by
                         // a runner on a Mac, so clients show no switch
@@ -1175,7 +1181,7 @@ the summary and then the reply.
 | `pools.list` | `{}` | `{ pools: Pool[] }` (see Pools) |
 | `pools.save` | `{ pools: Pool[] }` | `{ pools: Pool[] }`. Replaces the whole list in `runner.json` (`builtIn` is dropped; an empty list goes back to the built-in ones). `-32602` for a duplicate id, a blank id or title, an empty `accountIds`, or an account id the runner doesn't know. A blank or non-string `icon` is dropped. Every client gets `pools.updated` |
 | `settings.get` | `{}` | `{ settings: Settings }` |
-| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, keepAwake?, bringIn?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id; otherwise `-32602` saying which. Every client gets `settings.updated` |
+| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, labReviewers?, keepAwake?, bringIn?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id, `labReviewers` a list of `{ provider, model?, effort? }` with known providers and efforts (a provider listed twice counts once); otherwise `-32602` saying which. Every client gets `settings.updated` |
 | `instructions.get` | `{}` | `{ instructions: StandingInstructions }` (see Standing instructions). `-32601` with the experiment off, and from an older runner: the app then shows no box |
 | `instructions.set` | `{ text: string }` | `{ instructions: StandingInstructions }`. Saves and signs the text, trimmed; an empty one clears them and removes both files. `-32602` for a `text` that isn't a string or is over 20,000 characters, `-32601` as for `instructions.get`. Every client gets `instructions.updated` |
 | `devices.list` | `{}` | `{ devices: Device[], site?: string, reason?: string }` (see Devices). `site` is the website's root while sync is on; `reason` says why nothing can pair when it's off |
@@ -3223,14 +3229,17 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   it), isn't marked finished. Instead the runner creates a thread in the
   same folder (no worktree of its own), with the first thread's
   `permissionMode` (never more access than it has: Full stays Full, Ask
-  and Auto stay as they are) and effort high,
+  and Auto stay as they are) and the reviewer's model and effort (its
+  provider's default model and high when it names none),
   with `startedBy: { kind: "thread", label: "Review" }`, `reviewOf` set
   to the first thread in thread.json, and a brief: the latest user
   message, the reply, the files and the diff (up to 40,000 characters),
   each in a fence one backtick longer than any run in it, so nothing in
   them can close it, and marked as data to review, not instructions.
-  Its login is the other provider's (`pickInPool` over the pools with no
-  folders), else a fresh session of the same provider. For a folder a
+  Its login is the first reviewer's in `Settings.labReviewers` whose
+  provider isn't the thread's and that has a login with room
+  (`pickInPool` over the pools with no folders, then a login no pool
+  holds), else a fresh session of the thread's own provider. For a folder a
   pool is kept for, only that pool's logins are used, and a kept pool's
   logins never review anything outside it. The first thread gets a
   `system.note` saying who reviews and whether it's another lab, then

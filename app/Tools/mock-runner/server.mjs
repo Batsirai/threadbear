@@ -327,7 +327,7 @@ const devicesRefusal = () => {
 
 let mockInstructions = { text: '' };
 const settings = {
-  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, keepAwake: true, fullSync: false,
+  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, labReviewers: [{ provider: 'codex', model: 'gpt-6.1-sol' }, { provider: 'claude', effort: 'xhigh' }], keepAwake: true, fullSync: false,
   models: {
     pool: 'claude',
     privateFolders: ['~/dev/clients/acme'],
@@ -1540,6 +1540,10 @@ async function dispatch(client, method, p) {
       if (p.followMain !== undefined) settings.followMain = Boolean(p.followMain);
       if (p.bulletReplies !== undefined) settings.bulletReplies = Boolean(p.bulletReplies);
       if (p.labReview !== undefined) settings.labReview = Boolean(p.labReview);
+      if (p.labReviewers !== undefined) {
+        if (!Array.isArray(p.labReviewers)) throw rpcError(-32602, 'labReviewers must be a list');
+        settings.labReviewers = p.labReviewers;
+      }
       if (p.keepAwake !== undefined) settings.keepAwake = Boolean(p.keepAwake);
       if (p.fullSync !== undefined) settings.fullSync = Boolean(p.fullSync);
       const m = p.models ?? {};
