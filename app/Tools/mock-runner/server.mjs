@@ -32,6 +32,10 @@ import { authProof, isNonce, newNonce } from '../../../runner/src/rpc-auth.ts';
 const waitingPatchGives = new Map();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// What ps and Activity Monitor call it, so anyone finding it running sees
+// it's the test stand-in, not their own runner. Its arguments stay, as the
+// dev-app scripts know their mock by its --data-dir.
+process.title = ['threadbear-test-mock-runner', ...process.argv.slice(2)].join(' ');
 const args = parseArgs(process.argv.slice(2));
 const dataDir = args['data-dir'];
 if (!dataDir) {
@@ -747,7 +751,7 @@ async function dispatch(client, method, p) {
       // `fresh`: started this session, so the librarian files it after its first turn
       // (librarianFiles). The demo fixtures never are, so nothing they show changes.
       threads.set(threadId, { summary, events: [], inProgress: new Map(), timers: [], fresh: true, ...(client.as ? { runnerId: client.as } : {}) });
-      for (const project of startIn) join(summary, project, 'alex', true);
+      for (const project of startIn) join(summary, project, 'mike', true);
       broadcastSummary(threadId);
       if (startIn.length) broadcastProjects();
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
@@ -2993,10 +2997,10 @@ function projectRequest(method, p) {
       if (!title) throw rpcError(-32602, 'title is required');
       const project = {
         id: 'p_' + crypto.randomBytes(4).toString('hex'), title, folders: p.folders ?? [], goals: p.goals ?? '', state: p.state ?? '',
-        notes: p.notes ?? '', links: p.links ?? [], createdBy: 'alex', createdAt: iso(), updatedAt: iso(),
+        notes: p.notes ?? '', links: p.links ?? [], createdBy: 'mike', createdAt: iso(), updatedAt: iso(),
       };
       projects.push(project);
-      for (const threadId of p.threadIds ?? []) join(need(threadId).summary, project, 'alex', true);
+      for (const threadId of p.threadIds ?? []) join(need(threadId).summary, project, 'mike', true);
       broadcastProjects();
       return { project: projectView(project) };
     }
@@ -3025,8 +3029,8 @@ function projectRequest(method, p) {
     }
     case 'projects.setIcon': {
       const project = needProject(p.projectId);
-      if (p.path) project.icon = { image: { path: p.path, mediaType: 'image/png' }, from: p.path, by: 'alex', updatedAt: iso() };
-      else if (p.symbol) project.icon = { symbol: p.symbol, by: 'alex', updatedAt: iso() };
+      if (p.path) project.icon = { image: { path: p.path, mediaType: 'image/png' }, from: p.path, by: 'mike', updatedAt: iso() };
+      else if (p.symbol) project.icon = { symbol: p.symbol, by: 'mike', updatedAt: iso() };
       else delete project.icon;
       broadcastProjects();
       return { project: projectView(project) };
@@ -3067,7 +3071,7 @@ function projectRequest(method, p) {
         const already = s.projects?.find((x) => x.id === id);
         // Added by hand: pinned, and Mike's from then on.
         if (already) Object.assign(already, { pinned: true });
-        else join(s, project, 'alex', true);
+        else join(s, project, 'mike', true);
       }
       for (const id of p.remove ?? []) {
         needProject(id);
@@ -3319,7 +3323,7 @@ function addDemoProjects() {
     id: 'p_c9e8d102', title: 'Walkies', folders: ['/Users/alex/dev/walkies', '/Users/alex/dev/walkies-backend'],
     goals: 'The dog walking app: iOS client and Convex backend. Next milestone is sharing a walk with a friend.',
     state: 'Share button colour being picked; dark mode for the dashboard done and waiting for review.',
-    notes: '', createdBy: 'alex', createdAt: ago(60 * 24 * 20), updatedAt: ago(60 * 2),
+    notes: '', createdBy: 'mike', createdAt: ago(60 * 24 * 20), updatedAt: ago(60 * 2),
     // Shown at the top of its threads' Highlights.
     links: [
       { title: 'Live site', url: 'https://walkies.example.app/' },
@@ -3338,14 +3342,14 @@ function addDemoProjects() {
   };
   put('demo_settings_tabs', tb, 'librarian', false, 3, 'Renames the Settings tabs in the Mac app');
   put('demo_sqlite_vs_files', tb, 'agent', true, 60 * 30);
-  put('demo_release_notes', tb, 'alex', true, 60 * 24 * 9);
+  put('demo_release_notes', tb, 'mike', true, 60 * 24 * 9);
   put('demo_quick_ask_readme', tb, 'librarian', false, 60 * 24 * 6);
   put('demo_ci_slow', photo, 'agent', true, 60 * 3);
   put('demo_ci_slow', tb, 'librarian', false, 60 * 2, 'Mentions the runner\'s check script');
   put('demo_upload_resume', photo, 'librarian', true, 60 * 24 * 4, 'Makes uploads resume after a crash');
   put('demo_build_scripts', photo, 'librarian', false, 60 * 24 * 3);
   put('demo_button_colour', walkies, 'librarian', false, 18, 'Picks the share button colour for Walkies');
-  put('demo_dark_mode', walkies, 'alex', true, 60 * 24 * 2);
+  put('demo_dark_mode', walkies, 'mike', true, 60 * 24 * 2);
 
   // Walkies' backend folder gives the dark mode thread (which is in misc)
   // its Convex panel, and a patch of its own.
