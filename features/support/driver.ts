@@ -46,7 +46,7 @@ export type Thread = {
   background?: string | null;
   waiting?: string | null;
   subagents?: { id: string; depth: number; status: string; title: string; detail: string; selected: boolean }[];
-  /** "On bruce" for another runner's thread ("On bruce, offline"). */
+  /** "On mac-mini" for another runner's thread ("On mac-mini, offline"). */
   runner?: string | null;
   /** The row is laid out within the part of the list that's showing (GPUI only; null when it isn't drawn). */
   inView?: boolean | null;

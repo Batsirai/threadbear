@@ -800,9 +800,9 @@ mod tests {
 
     #[test]
     fn a_thread_on_its_way_to_another_machine_says_so_in_its_box() {
-        let moving = |state: &str| thread(1, json!({ "moving": { "moveId": "m1", "to": "r2", "toName": "bruce", "state": state } }));
-        assert_eq!(moving("copying").moving_line().as_deref(), Some("Moving to bruce…"));
-        assert_eq!(moving("ready").moving_line().as_deref(), Some("Moving to bruce once this turn ends…"));
+        let moving = |state: &str| thread(1, json!({ "moving": { "moveId": "m1", "to": "r2", "toName": "mac-mini", "state": state } }));
+        assert_eq!(moving("copying").moving_line().as_deref(), Some("Moving to mac-mini…"));
+        assert_eq!(moving("ready").moving_line().as_deref(), Some("Moving to mac-mini once this turn ends…"));
         assert_eq!(moving("failed").moving_line(), None, "a failed move gives the box back");
         assert_eq!(moving("cancelled").moving_line(), None);
         assert_eq!(thread(2, json!({})).moving_line(), None);
@@ -810,7 +810,7 @@ mod tests {
 
     fn thread(n: u32, over: Value) -> ThreadSummary {
         let mut v = json!({
-            "id": format!("t{n}"), "title": format!("Thread {n}"), "cwd": "/home/mike/dev/x",
+            "id": format!("t{n}"), "title": format!("Thread {n}"), "cwd": "/home/alex/dev/x",
             "provider": "claude", "status": "idle", "needsYou": false,
             "lastActivityAt": format!("2026-11-06T10:{n:02}:00Z"), "preview": "", "lastSeq": 10, "lastSeenSeq": 10
         });
@@ -943,8 +943,8 @@ mod tests {
         assert_eq!(parse_ms("1970-01-01T00:00:01.123456Z"), Some(1123));
         assert_eq!(parse_ms("1970-01-01T00:00:01.Z"), Some(1000));
         assert_eq!(parse_ms("2026-11-06T12:00:00Z").unwrap() - parse_ms("2026-11-06T11:00:00Z").unwrap(), 3_600_000);
-        assert_eq!(folder_name("/home/mike/dev/x/"), "x");
-        assert_eq!(folder_name(r"C:\Users\mike\dev\y"), "y");
+        assert_eq!(folder_name("/home/alex/dev/x/"), "x");
+        assert_eq!(folder_name(r"C:\Users\alex\dev\y"), "y");
         assert_eq!(ago(now() - 5 * 60_000, now()), "5m");
     }
 

@@ -103,7 +103,7 @@ test('editing during a turn stops it first; messages queued behind it go, ones s
   assert.deepEqual(after, ['Edited', 'sent during the edit']);
 });
 
-test('only Mike\'s own messages that started a turn can be edited', async () => {
+test('only Alex\'s own messages that started a turn can be edited', async () => {
   const h = makeHarness();
   const { thread, s, seq } = await twoTurns(h);
   const bad = async (seqToEdit: number, re: RegExp) => {

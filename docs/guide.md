@@ -2043,8 +2043,10 @@ to the new Threadbear app", in your checkout, and the window closes once it's
 made. The card then shows that thread, what it's doing and Open the thread.
 The thread builds the new app on your Mac from your checkout's `main` with
 `desktop/scripts/switch-from-swift.sh`, at background priority, which takes
-about 10 minutes the first time and installs Rust first if there's no
-`cargo` (docs/on-your-mac.md says what that puts where). If something stops
+20 to 40 minutes the first time and installs Rust first if there's no
+`cargo` (docs/on-your-mac.md says what that puts where). It needs about 5 GB
+free with Rust to install, 4 without, and says so before it starts if
+there isn't that much. If something stops
 it (Xcode's command line tools, Rust, disk space, a build error) the thread
 works out why and fixes it, or asks you. When the app's installed it asks
 whether to switch now, with Switch now and Later, and only switches when you

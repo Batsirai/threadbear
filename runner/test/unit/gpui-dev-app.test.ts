@@ -1,5 +1,5 @@
 // desktop/scripts/dev-app.sh, the GPUI app's dev-app: what keeps an agent's
-// app off Mike's own things and off other threads' apps. Its refusals, whose
+// app off Alex's own things and off other threads' apps. Its refusals, whose
 // instance a command means, and a whole start, do, stop and idle quit with a
 // stand-in for the app (a small node script that speaks the automation
 // socket and writes down what it was started with), on the real mock runner,
@@ -196,12 +196,15 @@ test('start, do, dump, stop, and the idle quit, with a stand-in app on the mock'
     assert.equal(started.out, 'mine1');
     const dir = path.join(fs.realpathSync(env.TMPDIR), 'threadbear-gpui-dev-app', 'mine1');
     const seen = JSON.parse(fs.readFileSync(path.join(dir, 'fake-env.json'), 'utf8'));
-    // Behind Mike's windows, with its own pasteboard, on the mock's data folder.
+    // Behind Alex's windows, with its own pasteboard, on the mock's data folder.
     assert.equal(seen.THREADBEAR_KEEP_BEHIND, '1');
+    // Unseen, and named for what it is in ps and Activity Monitor.
+    assert.equal(seen.THREADBEAR_SHOW_WINDOW, undefined);
+    assert.ok(fs.existsSync(path.join(dir, 'bin', 'Threadbear Headless Tester')), 'runs as a named copy of the build');
     assert.equal(seen.THREADBEAR_PASTEBOARD, 'com.mikerosoft.threadbear.automation.gpui-mine1');
     assert.equal(seen.THREADBEAR_HOME, path.join(dir, 'home'));
     assert.equal(seen.THREADBEAR_AUTOMATION_LIVE, undefined);
-    // Never the machine's web runtime, with Mike's Chromium profile.
+    // Never the machine's web runtime, with Alex's Chromium profile.
     assert.equal(seen.THREADBEAR_WEB_RUNTIME_DIR, path.join(fs.realpathSync(env.TMPDIR), 'threadbear-gpui-dev-app', 'web-runtime'));
     assert.ok(fs.existsSync(path.join(dir, 'home', 'secrets', 'runner-token')), "the mock's own token");
 

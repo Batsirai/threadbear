@@ -477,8 +477,10 @@ if `tb` isn't found (an older runner, or outside a thread), use
 ## Seeing and driving the app
 
 `desktop/scripts/dev-app.sh` runs a debug GPUI build with the scripted
-control, against the mock runner or a dev runner, its window behind Mike's
-and out of the Dock (`--help` for the rest). It builds on an
+control, against the mock runner or a dev runner, headless: out of the Dock,
+its windows transparent and letting clicks through, still drawing for `dump`
+and `shot`, and named "Threadbear Headless Tester" in ps (`--visible` puts
+it on screen, labelled, for a test that needs that; `--help` for the rest). It builds on an
 `updateBuildHosts` Mac and brings the binary back, or here through
 one-build.sh if none answers. The app refuses the real data folder and live
 runner (`--live` only if Mike says), and copies to a pasteboard of its own.

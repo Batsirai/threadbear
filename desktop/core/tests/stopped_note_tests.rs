@@ -42,11 +42,11 @@ fn the_note_a_stopped_message_was_saved_stays_on_show() {
 }
 
 /// Another runner's failed turn: the app draws "Failed after 0 ms: The last
-/// turn failed on bruce. ..." on its footer, so the row's text (what the
+/// turn failed on mac-mini. ..." on its footer, so the row's text (what the
 /// scripted app's dump and the parity run read) says the error too.
 #[test]
 fn a_failed_turns_footer_says_its_error() {
-    let error = "The last turn failed on bruce. Open it there to see why, or send a message to try again.";
+    let error = "The last turn failed on mac-mini. Open it there to see why, or send a message to try again.";
     let model = from_events(vec![
         event_turn(1, "user.message", json!({"text": "Start", "images": []}), Some("t1")),
         event_turn(2, "turn.completed", json!({"turnId": "t1", "outcome": "failed", "error": error, "durationMs": 0}), Some("t1")),

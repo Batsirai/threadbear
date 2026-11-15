@@ -176,7 +176,7 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
-    name: 'Mike sends two pictures placed in his words',
+    name: 'Alex sends two pictures placed in his words',
     shows: ['should look like', 'They differ in colour.'],
     play: (p) => {
       p.say('Ready.');

@@ -16,12 +16,12 @@ class PairingTest {
     }
 
     @Test fun pairsWithATailnetBackend() {
-        val p = assertNotNull(Pairing.parse("threadbear://pair?url=https%3A%2F%2FMac.tail9ef766.ts.net%3A3210&token=tb_abc"))
-        assertEquals("https://mac.tail9ef766.ts.net:3210", p.deploymentUrl)
-        assertEquals("mac.tail9ef766.ts.net:3210", p.serverName)
+        val p = assertNotNull(Pairing.parse("threadbear://pair?url=https%3A%2F%2FMac.tail1234.ts.net%3A3210&token=tb_abc"))
+        assertEquals("https://mac.tail1234.ts.net:3210", p.deploymentUrl)
+        assertEquals("mac.tail1234.ts.net:3210", p.serverName)
         assertEquals(p, Pairing.parse(p.link))
-        for (bad in listOf("http://mac.tail9ef766.ts.net:3210", "https://user@mac.tail9ef766.ts.net:3210", "https://mac.tail9ef766.ts.net:3210/api",
-            "https://mac.tail9ef766.ts.net:3210?x=1")) {
+        for (bad in listOf("http://mac.tail1234.ts.net:3210", "https://user@mac.tail1234.ts.net:3210", "https://mac.tail1234.ts.net:3210/api",
+            "https://mac.tail1234.ts.net:3210?x=1")) {
             assertNull(Pairing.parse("threadbear://pair?url=${java.net.URLEncoder.encode(bad, "UTF-8")}&token=t"), bad)
         }
     }

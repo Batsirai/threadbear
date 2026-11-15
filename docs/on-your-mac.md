@@ -65,11 +65,13 @@ File references are where to look.
   own login, so it uses your Claude or Codex tokens like any other thread):
   the new app is built on your Mac from your checkout's `main`, so if there's no `cargo`
   it installs Rust first, with rustup's own installer from
-  `https://sh.rustup.rs` (the minimal profile, about 850 MB with the crates
+  `https://sh.rustup.rs` (the minimal profile, about 1 GB with the crates
   the build fetches, in `~/.rustup` and `~/.cargo`; it doesn't touch your
   shell's startup files). The build runs at background priority, takes
-  about 10 minutes the first time, and keeps about 1.6 GB in
-  `~/Library/Caches/Threadbear/update-desktop`, which its updates reuse. Its
+  20 to 40 minutes the first time (31 on a test Mac with no Rust, 15 Nov
+  2026), and keeps about 2.3 GB in
+  `~/Library/Caches/Threadbear/update-desktop`, which its updates reuse. It
+  checks there's room for all that before it starts. Its
   output is in that thread. `rustup self uninstall` takes Rust off again.
 - **The GPUI app's web runtime, only if you install it** (its Install web
   runtime button, or Settings > General > Web runtime; nothing is fetched

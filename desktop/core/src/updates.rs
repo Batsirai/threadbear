@@ -1015,10 +1015,10 @@ mod tests {
         assert_eq!(runner_lines(Some(&failed)), ["The runner's reinstall didn't work: Back as it was."]);
         assert_eq!(failed.reinstall.as_ref().and_then(|r| r.log_file.as_deref()), Some("/x/reinstall.log"));
         assert_eq!(launcher_button(&failed).map(|b| (b.0, b.2)), Some(("Try again", false)));
-        let behind = RunnerUpdates::decode(&json!({ "state": "idle", "behindRunners": [{ "name": "bruce", "problem": "3 days behind" }] })).unwrap();
+        let behind = RunnerUpdates::decode(&json!({ "state": "idle", "behindRunners": [{ "name": "mac-mini", "problem": "3 days behind" }] })).unwrap();
         assert!(needs_you(&app, Some(&behind)));
         assert_eq!(icon_tooltip(&app, Some(&behind), &[]), "Updates\nA runner isn't following GitHub's main");
-        assert_eq!(runner_lines(Some(&behind)), ["bruce isn't following GitHub's main properly: 3 days behind"]);
+        assert_eq!(runner_lines(Some(&behind)), ["mac-mini isn't following GitHub's main properly: 3 days behind"]);
         let draining = RunnerUpdates::decode(&json!({ "state": "idle", "oldRunners": [{ "version": "0.1.0", "threads": ["t1", "t2"] }] })).unwrap();
         assert_eq!(runner_lines(Some(&draining)), ["2 threads are finishing their turns on the previous version. Each moves to the new one when its turn ends."]);
         assert_eq!(runner_lines(Some(&idle)), ["The runner is up to date."]);
