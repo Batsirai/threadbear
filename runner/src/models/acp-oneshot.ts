@@ -4,8 +4,9 @@
 //
 // The prompt goes over stdin, never in the program's arguments, so a thread's
 // text isn't on show to `ps` or anything that reads the process list. The
-// agent gets no tools it can use: its permissions say deny where it has them,
-// it runs in its read-only mode, and every request it makes is refused. The
+// agent gets no tools it can use: its permissions say deny where it has them
+// (Grok: a hook that denies every call), it runs in its read-only mode where
+// it has one, and every request it makes is refused. The
 // text can be from anywhere (a thread, a web page it quoted), so nothing in it
 // gets to run anything. Never throws; models/index.ts decides what's next.
 import fs from 'node:fs';
@@ -38,6 +39,7 @@ export type AcpAskerDeps = {
   log: Logger;
   env?: NodeJS.ProcessEnv;
   timings?: Partial<AcpTimings>;
+  dataDir?: string; // the runner's (AcpAdapterDeps.dataDir)
 };
 
 type Option = { id?: string; category?: string; currentValue?: unknown };
@@ -67,7 +69,7 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     const env = cliEnv(req.account, deps.env ?? process.env);
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CLAUDE_AGENT_SDK_CLIENT_APP;
-    const proc = new AcpProcess({ binary, args: deps.agent.args, env: { ...env, ...deps.agent.env({ noTools: true }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
+    const proc = new AcpProcess({ binary, args: deps.agent.args({ dataDir: deps.dataDir, noTools: true }), env: { ...env, ...deps.agent.env({ noTools: true }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
     let text = '';
     proc.onNotification = (method, params) => {
       if (method !== 'session/update' || !isPlainObject(params) || !isPlainObject(params.update)) return;

@@ -1210,20 +1210,28 @@ to continue, with the conversation carried across. It pins the thread to
 that Codex login. Anything you've typed in the message field stays there.
 The switch happens only when you click.
 
-OpenCode and Cursor, and other agent CLIs that speak the Agent Client
+OpenCode, Cursor and Grok, and other agent CLIs that speak the Agent Client
 Protocol, get threads of their own too. If one is installed and logged in
 it turns up as a login and a pool, with its models in the picker. OpenCode's
-free models work with no login; Cursor needs `agent login` first.
+free models work with no login; Cursor needs `agent login` first, and Grok
+`grok login`.
 Everything the agent wants to do comes through Threadbear first: on Ask and
 Plan first you get the usual cards, Auto behaves like Ask, and Full access
 goes ahead without them. A folder's own OpenCode config and plugins aren't
 read in these threads. Cursor can't be told to always ask, so its Ask, Auto
 and Plan first threads run in its read-only modes and can't change
-anything; to let Cursor change files, use Full access. Small jobs (titles
-and summaries) stay on Claude unless you pick a pool of only OpenCode
-logins for them in Settings. There are no usage readings, sandbox or going
-back to an earlier message for these yet, and Threadbear only updates their
-CLIs when you press Update in the Updates panel.
+anything; to let Cursor change files, use Full access. Grok's own settings
+(including your `~/.claude/settings.json`, which it reads) can tell it to
+go ahead by itself, so Threadbear starts it with a hook of its own that
+sends every write, command, web search and MCP tool call to you first,
+whatever those say; reading files inside the thread's folder goes ahead,
+and reading outside it asks. Denying a card ends Grok's turn, as it does in
+Grok's own app. Grok's models each list their effort levels (low to extra
+high), and the effort you pick is the one it runs at. Small jobs (titles
+and summaries) stay on Claude unless you pick a pool of only OpenCode or
+Grok logins for them in Settings. There are no usage readings, sandbox or
+going back to an earlier message for these yet, and Threadbear only updates
+their CLIs when you press Update in the Updates panel.
 
 Titles, the librarian and Wake when… run on a Claude login, so with only
 Codex they don't happen: threads keep the first line of their first message
