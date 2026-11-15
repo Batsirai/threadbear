@@ -12,7 +12,6 @@ use crate::style::{self, size};
 use crate::thread::ThreadPane;
 use crate::tips::Tip as _;
 use gpui_kit::base::text::{InlineElement, InlineRenderContext, MarkdownNode, MarkdownParseContext, MarkdownPlugin};
-use gpui_kit::base::SelectableText;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -311,7 +310,7 @@ impl ThreadPane {
     /// The bubble's words with its chips among them, laid out line by line,
     /// and how wide its widest line is; None for a message with no chips,
     /// which stays one piece of selectable text.
-    pub(crate) fn chip_lines(&mut self, ix: usize, message: &UserMessage, max: Pixels, window: &Window, cx: &mut Context<Self>) -> Option<(Pixels, AnyElement)> {
+    pub(crate) fn chip_lines(&mut self, ix: usize, row_id: &str, message: &UserMessage, max: Pixels, window: &Window, cx: &mut Context<Self>) -> Option<(Pixels, AnyElement)> {
         let pieces = found::message_pieces(&message.text, message.images.len());
         if pieces.iter().all(|p| matches!(p, Piece::Words(_))) {
             return None;
@@ -321,28 +320,29 @@ impl ThreadPane {
         let mut body = v_flex();
         for (n, tokens) in lines.into_iter().enumerate() {
             let mut line = h_flex().min_h(px(size::BODY_LINE)).items_center();
-            // Words between chips as one run of selectable text each.
+            // Words between chips as one run of selectable text each, its
+            // web addresses links (`bubble_words`).
             let mut words = String::new();
             let (mut runs, mut chips) = (0, 0);
-            let flush = |line: Div, words: &mut String, runs: &mut usize| -> Div {
+            let flush = |this: &Self, line: Div, words: &mut String, runs: &mut usize, cx: &mut Context<Self>| -> Div {
                 if words.is_empty() {
                     return line;
                 }
                 *runs += 1;
                 let id = ("user-chip-text", ix * 100_000 + n * 100 + *runs);
-                line.child(div().flex_none().child(SelectableText::new(id, std::mem::take(words))))
+                line.child(div().flex_none().child(this.bubble_words(id, std::mem::take(words), row_id, cx)))
             };
             for token in tokens {
                 match token {
                     Token::Words(text) => words.push_str(&text),
                     Token::Chip(kind) => {
-                        line = flush(line, &mut words, &mut runs);
+                        line = flush(self, line, &mut words, &mut runs, cx);
                         chips += 1;
                         line = line.child(self.bubble_chip(ix, n, chips, kind, &message.images, window.scale_factor() >= 2., cx));
                     }
                 }
             }
-            line = flush(line, &mut words, &mut runs);
+            line = flush(self, line, &mut words, &mut runs, cx);
             body = body.child(line);
         }
         Some((widest, body.into_any_element()))
@@ -443,6 +443,20 @@ fn page_title(words: &str, url: &str) -> String {
 }
 
 // ---------------------------------------------------------------- scripts
+
+/// The web addresses among a bubble's words, which it draws as links: the
+/// words between its chips, as `chip_lines` hands them to `bubble_words`.
+#[cfg(feature = "automation")]
+pub(crate) fn bubble_links(message: &UserMessage) -> Vec<String> {
+    found::message_pieces(&message.text, message.images.len())
+        .into_iter()
+        .filter_map(|p| match p {
+            Piece::Words(words) => Some(found::web_links(&words).into_iter().map(|r| words[r].to_owned()).collect::<Vec<_>>()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
 
 /// `peek`, as the Swift app's: `{"row": id}` lists a message's chips with a
 /// card ("Picture 1=/path | Fix the button=https://…"); with `words` (a

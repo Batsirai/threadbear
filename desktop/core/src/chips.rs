@@ -299,6 +299,59 @@ pub fn thread_detail(folder: &str, account: Option<&str>, status: &str) -> Strin
     parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" · ")
 }
 
+// ---------------------------------------------------------------- web addresses
+
+/// The web addresses typed or pasted bare into a message, as byte ranges,
+/// so Mike's bubble draws them as links (16 Nov: a GitHub issue's address
+/// sat in his bubble as plain words). One starts with `http://` or
+/// `https://` where a word starts and runs to the next space. Punctuation
+/// ending a sentence is left off its end, and so is a `)` or `]` it didn't
+/// open, so "(see https://x.com/a)." links just the address, as macOS's link
+/// detector does.
+pub fn web_links(text: &str) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = text[from..].find("http") {
+        let start = from + at;
+        from = start + 4;
+        let rest = &text[start..];
+        let scheme = if rest.starts_with("https://") {
+            8
+        } else if rest.starts_with("http://") {
+            7
+        } else {
+            continue;
+        };
+        // Not the middle of a word ("xhttps://"), or of another address.
+        if text[..start].chars().next_back().is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '/' | '.' | '-' | '@')) {
+            continue;
+        }
+        let len = rest.find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`')).unwrap_or(rest.len());
+        let mut end = start + len;
+        loop {
+            let Some(last) = text[start..end].chars().next_back() else { break };
+            let unopened = |open: char| text[start..end].matches(open).count() < text[start..end].matches(last).count();
+            let trim = match last {
+                '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '*' | '_' => true,
+                ')' => unopened('('),
+                ']' => unopened('['),
+                '}' => unopened('{'),
+                _ => false,
+            };
+            if !trim {
+                break;
+            }
+            end -= last.len_utf8();
+        }
+        // An address with somewhere to go: more than the scheme.
+        if text[start + scheme..end].chars().next().is_some_and(|c| c.is_alphanumeric()) {
+            found.push(start..end);
+            from = end;
+        }
+    }
+    found
+}
+
 // ---------------------------------------------------------------- a message's pieces
 
 /// A message's words cut where its chips go, in order: Mike's bubble draws
@@ -350,6 +403,36 @@ pub fn has_chips(text: &str, image_count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn links(text: &str) -> Vec<&str> {
+        web_links(text).into_iter().map(|r| &text[r]).collect()
+    }
+
+    #[test]
+    fn finds_bare_web_addresses() {
+        assert_eq!(links("https://github.com/mikecann/fluent-convex/issues/8"), ["https://github.com/mikecann/fluent-convex/issues/8"]);
+        assert_eq!(links("see http://a.io/x and https://b.dev/y?z=1#top"), ["http://a.io/x", "https://b.dev/y?z=1#top"]);
+        assert_eq!(links("one\nhttps://c.com\ntwo"), ["https://c.com"]);
+    }
+
+    #[test]
+    fn leaves_sentence_punctuation_off_an_address() {
+        assert_eq!(links("Look at https://x.com/a."), ["https://x.com/a"]);
+        assert_eq!(links("(see https://x.com/a), then"), ["https://x.com/a"]);
+        assert_eq!(links("https://en.wikipedia.org/wiki/Rust_(language)!"), ["https://en.wikipedia.org/wiki/Rust_(language)"]);
+        assert_eq!(links("[title](https://x.com/a)"), ["https://x.com/a"]);
+        assert_eq!(links("<https://x.com/a>"), ["https://x.com/a"]);
+        assert_eq!(links("'https://x.com/a'"), ["https://x.com/a"]);
+    }
+
+    #[test]
+    fn needs_a_word_start_and_somewhere_to_go() {
+        assert!(links("xhttps://x.com http https:// https://. httpsfoo").is_empty());
+        assert!(links("ftp://x.com mailto:me@x.com").is_empty());
+        // Not a byte-boundary panic on words round it.
+        assert_eq!(links("café→https://ü.example/ä ✓"), ["https://ü.example/ä"]);
+    }
+
 
     fn words(text: &str) -> Vec<&str> {
         thread_ref_candidates(text).into_iter().map(|r| &text[r]).collect()

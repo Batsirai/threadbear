@@ -1597,6 +1597,13 @@ impl ThreadPane {
                 if let Some(chips) = crate::chips::row_chips(self, row, cx) {
                     out["chips"] = json!(chips);
                 }
+                // The web addresses Mike's bubble draws as links (`bubble_words`).
+                if let RowContent::User(message) = &row.content {
+                    let links = crate::chips::bubble_links(message);
+                    if !links.is_empty() {
+                        out["links"] = json!(links);
+                    }
+                }
                 out
             })
             .collect();

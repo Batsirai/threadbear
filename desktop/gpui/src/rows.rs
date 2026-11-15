@@ -290,8 +290,9 @@ impl ThreadPane {
             let max_text = gpui_kit::px((column * BUBBLE_SHARE).floor()) - px(BUBBLE_PAD_H * 2.);
             // Pictures, cards and threads among the words are chips, the
             // lines laid out round them (chips.rs); the rest is one text.
-            let chips = if answered { None } else { self.chip_lines(ix, message, max_text, window, cx) };
+            let chips = if answered { None } else { self.chip_lines(ix, &row.id, message, max_text, window, cx) };
             let fit = (!answered && chips.is_none()).then(|| widest_line(&text, max_text, window));
+            let words = fit.is_some().then(|| self.bubble_words(("user-text", ix), text, &row.id, cx));
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
                 .when_some(fit, |d, (ink, _)| d.w(ink + px(BUBBLE_PAD_H * 2.)))
@@ -306,7 +307,7 @@ impl ThreadPane {
                 .when(faded, |d| d.opacity(0.5))
                 // A point over, as the layout rounds widths and a line that
                 // fits exactly would wrap.
-                .when_some(fit, |d, (ink, span)| d.child(div().w(span + px(1.)).mr(ink - span - px(1.)).child(SelectableText::new(("user-text", ix), text))))
+                .when_some(fit.zip(words), |d, ((ink, span), words)| d.child(div().w(span + px(1.)).mr(ink - span - px(1.)).child(words)))
                 .when_some(chips.map(|c| c.1), |d, lines| d.child(lines))
                 .when_some(answered_words, |d, words| d.child(answers_body(ix, &words, cx)));
             // The pencil, left of the bubble and level with its last line, on
@@ -351,6 +352,24 @@ impl ThreadPane {
             None => col.into_any_element(),
         };
         row_wrap(row, col)
+    }
+
+    /// Mike's words as selectable text, any web address in them a link in
+    /// the reply's link colour that a click follows as a reply's link does
+    /// (`follow_link`: the open gate, the browser Default, ⌘ for the
+    /// browser). Its colour alone marks it, so the bubble's width is
+    /// measured the same.
+    pub(crate) fn bubble_words(&self, id: impl Into<ElementId>, text: String, row_id: &str, cx: &mut Context<Self>) -> SelectableText {
+        let links = threadbear_core::chips::web_links(&text);
+        let words = SelectableText::new(id, text);
+        if links.is_empty() {
+            return words;
+        }
+        let (weak, row_id) = (cx.weak_entity(), row_id.to_owned());
+        words.links(links, style::link_text(cx), move |url, event, window, cx| {
+            let command = event.modifiers.secondary(cx);
+            let _ = weak.update(cx, |this, cx| this.follow_link(&url, &row_id, command, window, cx));
+        })
     }
 
     /// A message just sent lifting off the composer into the thread: Return
