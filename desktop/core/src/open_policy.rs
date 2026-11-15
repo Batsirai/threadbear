@@ -462,16 +462,11 @@ impl Eq for Held {}
 /// metadata was read. None for anything else (a pipe, a device).
 #[cfg(unix)]
 fn hold(real: &Path, meta: &std::fs::Metadata) -> Result<Held, ()> {
-    use std::os::unix::fs::OpenOptionsExt;
     if !meta.is_file() && !meta.is_dir() {
         return Ok(Held(None));
     }
-    let file = if meta.is_dir() {
-        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC).open(real)
-    } else {
-        open_without_waiting(real)
-    }
-    .map_err(|_| ())?;
+    // A folder opens read-only the same way; what it is is checked below.
+    let file = open_without_waiting(real).map_err(|_| ())?;
     let now = file.metadata().map_err(|_| ())?;
     if meta_id(&now) != meta_id(meta) || now.is_dir() != meta.is_dir() {
         return Err(());
@@ -767,7 +762,7 @@ pub fn checked_copy(look: &Look, folder: &Path, limit: u64) -> std::io::Result<P
     {
         use std::os::unix::fs::PermissionsExt;
         if meta.permissions().mode() & 0o111 != 0 {
-            std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o500))?;
+            crate::private_file::make_runnable(&copy)?;
         }
     }
     Ok(copy)
