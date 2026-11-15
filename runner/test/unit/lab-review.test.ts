@@ -853,3 +853,18 @@ test('labReview: settings.update says which reviewer entry is wrong', () => {
   update({ labReviewers: [] });
   assert.deepEqual(h.runner.cfg.labReviewers, [], 'an empty list: only a fresh session of its own provider reviews');
 });
+
+test("labReview: a thread of a kept pool working in a worktree outside its folder is still reviewed only on that pool's logins", () => {
+  const kept = tmpDir('tb-kept-');
+  const worktree = tmpDir('tb-kept-threads-');
+  const h = withOpenCode(setup({ accounts: [...withCodex(), OPENCODE], cfg: { labReviewers: [{ provider: 'opencode' }, { provider: 'codex' }], pools: [
+    { id: 'claude', title: 'Claude', accountIds: ['claude-main'] },
+    { id: 'convex', title: 'Convex', accountIds: ['claude-3'], folders: [kept] },
+    { id: 'codex', title: 'Codex', accountIds: ['codex-main'] },
+  ] } }));
+  const { thread } = h.runner.create({ text: 'Fix it', cwd: kept, accountId: 'claude-3' });
+  const rec = { ...h.runner.threads.get(thread.id)!.rec, cwd: worktree, poolId: 'convex' };
+  const login = h.runner.reviewLogin(rec);
+  assert.equal(login?.account.id, 'claude-3', 'not OpenCode, which no pool holds, nor the Codex pool');
+  assert.equal(login?.independent, false);
+});

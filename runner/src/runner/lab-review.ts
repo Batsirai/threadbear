@@ -279,7 +279,12 @@ export const labReviewPart = {
   reviewLogin(this: Runner, rec: ThreadRecord, o: { confined?: boolean } = {}): ReviewLogin | undefined {
     const accounts = this.usableAccounts();
     const pools = this.pools();
-    const kept = poolForFolder(pools, rec.cwd);
+    // Kept for its folder, or for the folder it came from: a thread's
+    // worktree sits beside the repo (<repo>-threads/slot-n), outside the
+    // kept folder, but it's still that pool's work (Grok's review, 15 Nov
+    // 2026: a Convex thread in a worktree was reviewed off the Convex pool).
+    const ownPool = rec.poolId ? pools.find((p) => p.id === rec.poolId && p.folders?.length) : undefined;
+    const kept = poolForFolder(pools, rec.cwd) ?? ownPool;
     // Logins kept for certain folders never review anything else.
     const keptIds = new Set(pools.filter((p) => p.folders?.length).flatMap((p) => p.accountIds));
     const others = kept ? [kept] : pools.filter((p) => !p.folders?.length);

@@ -133,12 +133,24 @@ impl SettingsWindow {
         let mut controls = h_flex().gap(px(6.)).items_center().flex_none();
         if here && !models.is_empty() {
             let shown = r.model.as_deref().map(|m| choice_for(m, &models).map_or_else(|| model_title(Some(m)), |c| if c.title.is_empty() { model_title(Some(m)) } else { c.title.clone() }));
-            let mut choices: Vec<(String, bool, Value)> = vec![("Default".into(), r.model.is_none(), with(list, i, |x| x.model = None))];
+            // A new model keeps the effort only if it offers it; otherwise the
+            // row would show a level the review never runs at (Grok's
+            // review, 15 Nov 2026), as create drops it (checkSettings).
+            let keeps = |model: Option<&str>| r.effort.as_ref().filter(|e| logins.effort_levels(model, &models, &provider).contains(e)).cloned();
+            let default_effort = keeps(None);
+            let mut choices: Vec<(String, bool, Value)> = vec![("Default".into(), r.model.is_none(), with(list, i, |x| {
+                x.model = None;
+                x.effort = default_effort;
+            }))];
             for m in &models {
                 let id = if m.model.is_empty() { m.id.clone() } else { m.model.clone() };
                 let title = if m.title.is_empty() { model_title(Some(&id)) } else { m.title.clone() };
                 let picked = r.model.as_deref() == Some(id.as_str()) || r.model.as_deref() == Some(m.id.as_str());
-                choices.push((title, picked, with(list, i, |x| x.model = Some(id.clone()))));
+                let effort = keeps(Some(&id));
+                choices.push((title, picked, with(list, i, |x| {
+                    x.model = Some(id.clone());
+                    x.effort = effort;
+                })));
             }
             controls = controls.child(self.menu_owned(format!("settings-reviewer-model-{provider}"), shown.unwrap_or_else(|| "Default".into()), None, format!("The model {name} reviews on"), choices, cx));
         }
