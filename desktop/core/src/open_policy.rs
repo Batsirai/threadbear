@@ -223,17 +223,27 @@ const CODE_RUNNER_APPS: &[&str] = &[
 ];
 
 /// Where an app the gate hands a file to may be: the Mac's own folders for
-/// apps, and the user's own Applications folder, which a thread confined to
-/// a project can't write. Followed through its links first; an app path
-/// the system gave that isn't there to follow is taken as it is.
+/// apps, an app directly in /Applications or ~/Applications (or their
+/// Utilities), and ~/Library/Application Support (JetBrains Toolbox and
+/// Setapp keep their apps there), none of which a thread confined to its
+/// project can write. Directly, so a repo cloned into ~/Applications isn't
+/// a place apps are installed. `app` is the real path, links followed.
 pub fn installed_where_apps_are(app: &Path) -> bool {
-    let real = real_path(app).unwrap_or_else(|_| app.to_path_buf());
-    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join("Applications"));
-    ["/Applications/", "/System/Applications/", "/System/Library/CoreServices/", "/System/Volumes/Preboot/Cryptexes/", "/Library/", "/System/Library/"]
-        .iter()
-        .map(PathBuf::from)
-        .chain(home)
-        .any(|root| real.starts_with(&root))
+    if app.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir)) {
+        return false;
+    }
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+    let is_app = |c: Option<std::path::Component>| c.is_some_and(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase().ends_with(".app"));
+    // /Applications/X.app, /Applications/Utilities/X.app, and anything inside one.
+    let in_applications = |root: &Path| {
+        app.strip_prefix(root).is_ok_and(|rest| {
+            let mut parts = rest.components();
+            let first = parts.next();
+            is_app(first) || (first.is_some_and(|c| c.as_os_str() == "Utilities") && is_app(parts.next()))
+        })
+    };
+    let system = ["/System/Applications/", "/System/Library/", "/System/Volumes/Preboot/Cryptexes/", "/Library/"].iter().any(|root| app.starts_with(root));
+    system || in_applications(Path::new("/Applications")) || home.as_ref().is_some_and(|h| in_applications(&h.join("Applications")) || app.starts_with(h.join("Library/Application Support")))
 }
 
 pub fn is_code_runner(bundle_id: &str) -> bool {
@@ -429,6 +439,44 @@ pub struct Look {
     /// Where the volume it's on is mounted (a Mac), so the gate can check a
     /// reference to it names this volume as well as this inode.
     pub volume: Option<PathBuf>,
+    /// The file itself, held open from the look (Mac and Linux): its inode
+    /// can't be given to another file while it's held, and a copy is read
+    /// from it, never from the path again (Grok's second review).
+    pub held: Held,
+}
+
+/// A looked-at file held open. Two looks compare equal whatever they hold;
+/// what they found (the identity among it) is what's compared.
+#[derive(Clone, Debug, Default)]
+pub struct Held(pub Option<std::sync::Arc<std::fs::File>>);
+
+impl PartialEq for Held {
+    fn eq(&self, _: &Held) -> bool {
+        true
+    }
+}
+impl Eq for Held {}
+
+/// Opens the real file (a plain file or a folder) without following a link
+/// swapped in and without waiting on a pipe, and checks it's the one whose
+/// metadata was read. None for anything else (a pipe, a device).
+#[cfg(unix)]
+fn hold(real: &Path, meta: &std::fs::Metadata) -> Result<Held, ()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if !meta.is_file() && !meta.is_dir() {
+        return Ok(Held(None));
+    }
+    let file = if meta.is_dir() {
+        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC).open(real)
+    } else {
+        open_without_waiting(real)
+    }
+    .map_err(|_| ())?;
+    let now = file.metadata().map_err(|_| ())?;
+    if meta_id(&now) != meta_id(meta) || now.is_dir() != meta.is_dir() {
+        return Err(());
+    }
+    Ok(Held(Some(std::sync::Arc::new(file))))
 }
 
 /// The mount point of the volume `path` is on.
@@ -546,10 +594,18 @@ pub fn look(path: &Path, app_for: &dyn Fn(&Path) -> Option<OpeningApp>) -> Optio
     let id = meta_id(&meta);
     #[cfg(not(any(unix, windows)))]
     let id = None;
-    let app = app_for(&resolved);
+    // Changed between reading it and opening it: nothing to trust.
+    #[cfg(unix)]
+    let held = hold(&resolved, &meta).ok()?;
+    #[cfg(not(unix))]
+    let held = Held(None);
+    // The app as it really is, links followed: what's checked is what's
+    // handed the file (Grok's second review: a link in the project to
+    // TextEdit, retargeted after the check, launched what it named then).
+    let app = app_for(&resolved).map(|a| OpeningApp { path: real_path(&a.path).unwrap_or(a.path), ..a });
     let runs = runs(&resolved, &meta, app.clone());
     let volume = volume_of(&resolved);
-    Some(Look { resolved, runs, linked, id, app, is_dir: meta.is_dir(), volume })
+    Some(Look { resolved, runs, linked, id, app, is_dir: meta.is_dir(), volume, held })
 }
 
 /// Why opening `file` would or might run something (`OpenGate.runs`).
@@ -685,17 +741,26 @@ pub fn still_same(path: &str, asked: &Look, app_for: &dyn Fn(&Path) -> Option<Op
 /// folder of this user's own under `folder`. What the project writes after
 /// that never reaches what opens (Daybreak 125, 15 Nov 2026).
 pub fn checked_copy(look: &Look, folder: &Path, limit: u64) -> std::io::Result<PathBuf> {
-    let file = local_open(&look.resolved)?;
+    // The file held since the look, else (Windows) opened under the path
+    // guard, which must then be the same file.
+    let opened;
+    let file: &std::fs::File = match &look.held.0 {
+        Some(held) => held,
+        None => {
+            opened = local_open(&look.resolved)?;
+            &opened
+        }
+    };
     let meta = file.metadata()?;
     // Fails closed where there's no identity to compare.
-    if !meta.is_file() || look.is_dir || look.id.is_none() || handle_id(&file, &meta) != look.id {
+    if !meta.is_file() || look.is_dir || look.id.is_none() || handle_id(file, &meta) != look.id {
         return Err(std::io::Error::other("It changed since Threadbear looked at it"));
     }
     if meta.len() > limit {
         return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, "too big to copy"));
     }
     let name = look.resolved.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let copy = crate::private_file::snapshot(&file, folder, &name, limit)?;
+    let copy = crate::private_file::snapshot(file, folder, &name, limit)?;
     // A program said yes to runs from its copy, so the copy keeps its
     // owner's execute bit (and only that: read-only, this user's alone).
     #[cfg(unix)]
@@ -1582,15 +1647,20 @@ mod tests {
         let copy = checked_copy(&look, &s.path("opened"), 1024).unwrap();
         assert_eq!(fs::read_to_string(&copy).unwrap(), "# the real one");
         assert!(copy.ends_with("readme.md") && !copy.starts_with(s.path("notes")));
-        // Swapped for a link to a script after the look: no copy, nothing opens.
+        // Swapped for a link to a script after the look: the copy is still
+        // of the file looked at, held open since.
         let evil = s.file("evil.desktop", "[Desktop Entry]\nExec=sh -c id\n");
         fs::rename(&doc, s.path("notes/readme.old")).unwrap();
         std::os::unix::fs::symlink(&evil, &doc).unwrap();
-        assert!(checked_copy(&look, &s.path("opened"), 1024).is_err());
+        assert_eq!(fs::read_to_string(checked_copy(&look, &s.path("opened"), 1024).unwrap()).unwrap(), "# the real one");
         // And a file put at the same path in its place.
         fs::remove_file(&doc).unwrap();
         fs::write(&doc, "# another").unwrap();
-        assert!(checked_copy(&look, &s.path("opened"), 1024).is_err());
+        assert_eq!(fs::read_to_string(checked_copy(&look, &s.path("opened"), 1024).unwrap()).unwrap(), "# the real one");
+        // Without the held file (Windows), the path is opened again, and must
+        // be the file looked at.
+        let unheld = Look { held: Held(None), ..look };
+        assert!(checked_copy(&unheld, &s.path("opened"), 1024).is_err());
     }
 
     /// Off a Mac a program said yes to runs from a copy of the one asked
@@ -1611,7 +1681,10 @@ mod tests {
         fs::rename(&program, s.path("tool.old")).unwrap();
         fs::write(&program, "#!/bin/sh\necho swapped\n").unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(checked_copy(&look, &s.path("opened"), 1024).is_err(), "a program swapped in after the yes was copied");
+        let copy = checked_copy(&look, &s.path("opened"), 1024).unwrap();
+        assert_eq!(fs::read_to_string(copy).unwrap(), "#!/bin/sh\necho asked\n", "a program swapped in after the yes was copied");
+        let unheld = Look { held: Held(None), ..look };
+        assert!(checked_copy(&unheld, &s.path("opened"), 1024).is_err(), "a program swapped in after the yes was copied");
     }
 
     /// Grok's review: an app in the project made a document's opener (the
@@ -1649,6 +1722,54 @@ mod tests {
         assert_eq!(with, Opener::App("/System/Applications/TextEdit.app".into()));
         let FileVerdict::Open { with, .. } = decide_file(&s.path("plain").to_string_lossy(), Origin::ThisMac, &apps) else { panic!() };
         assert_eq!(with, Opener::FileViewer);
+    }
+
+    /// Grok's second review: the app was checked by its real path but
+    /// handed the file by the link to it, which the project could point
+    /// elsewhere by then. The opener is always the real app.
+    #[cfg(unix)]
+    #[test]
+    fn the_opener_is_the_real_app_not_a_link_to_it() {
+        let s = Scratch::new("app-link");
+        fs::create_dir_all(s.path("tools")).unwrap();
+        let link = s.path("tools/TextEdit.app");
+        std::os::unix::fs::symlink("/System/Applications/TextEdit.app", &link).unwrap();
+        let doc = s.file("notes.md", "# hi");
+        let by_link = |_: &Path| Some(OpeningApp { path: link.clone(), bundle_id: Some("com.apple.TextEdit".into()), name: "TextEdit".into() });
+        match decide_file(&doc.to_string_lossy(), Origin::ThisMac, &by_link) {
+            // On a Mac, TextEdit itself; never the link.
+            FileVerdict::Open { with, .. } => assert_eq!(with, Opener::App("/System/Applications/TextEdit.app".into())),
+            // Where TextEdit isn't there to follow, the link is a project's
+            // app: asked about, naming it.
+            FileVerdict::Ask { question, .. } => assert!(question.detail.contains("TextEdit"), "{}", question.detail),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn apps_count_as_installed_only_where_apps_go() {
+        for yes in ["/System/Applications/TextEdit.app", "/Applications/Xcode.app", "/Applications/Utilities/Terminal.app", "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app", "/System/Library/CoreServices/Finder.app"] {
+            assert!(installed_where_apps_are(Path::new(yes)), "{yes}");
+        }
+        for no in ["/Applications/some-repo/Evil.app", "/Applications/Utilities/repo/Evil.app", "/Users/m/dev/proj/Evil.app", "/Applications/../Users/m/Evil.app", "/tmp/Evil.app"] {
+            assert!(!installed_where_apps_are(Path::new(no)), "{no}");
+        }
+    }
+
+    /// The looked-at file is held open, so its inode isn't handed to a file
+    /// made in its place, and a copy is of the file that was looked at.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_is_of_the_held_file_even_after_it_is_deleted() {
+        let s = Scratch::new("held");
+        let doc = s.file("tool.sh", "#!/bin/sh\necho asked\n");
+        let given = doc.to_string_lossy().into_owned();
+        let FileVerdict::Ask { look, .. } = decide_file(&given, Origin::ThisMac, &none) else { panic!() };
+        fs::remove_file(&doc).unwrap();
+        fs::write(&doc, "#!/bin/sh\necho swapped\n").unwrap();
+        assert!(!still_same(&given, &look, &none), "a file made in its place got the held file's inode");
+        let copy = checked_copy(&look, &s.path("opened"), 1024).unwrap();
+        assert_eq!(fs::read_to_string(copy).unwrap(), "#!/bin/sh\necho asked\n");
     }
 
     #[test]

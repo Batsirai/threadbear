@@ -426,11 +426,33 @@ fn open_checked(path: &str, look: &policy::Look, with: &policy::Opener, url: &st
 fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) -> Result<(), String> {
     use objc2_app_kit::{NSWorkspace, NSWorkspaceOpenConfiguration};
     use objc2_foundation::{NSArray, NSString, NSURL};
-    let _ = cx;
     let changed = "changed while Threadbear was opening it, so it didn't open it.".to_owned();
     // The reference names the inode at the path now; it must be the one
     // looked at, or a swap got in between the look and here.
-    let file = NSURL::fileURLWithPath(&NSString::from_str(&look.resolved.to_string_lossy())).fileReferenceURL().ok_or_else(|| changed.clone())?;
+    let Some(file) = NSURL::fileURLWithPath(&NSString::from_str(&look.resolved.to_string_lossy())).fileReferenceURL() else {
+        // A disk with no file references (ExFAT, a network share): a file
+        // opens from a private copy of the one held since the look, as off
+        // a Mac; a folder there isn't opened.
+        if look.is_dir {
+            return Err("is on a disk Threadbear can't open folders on safely. Open it from Finder.".to_owned());
+        }
+        let copy = policy::checked_copy(look, &opened_folder().ok_or_else(|| changed.clone())?, COPY_LIMIT).map_err(|e| copy_error(&e))?;
+        let copy_url = policy::file_url(&copy.to_string_lossy());
+        if scripted_opens(url) {
+            return Ok(());
+        }
+        let copy = NSURL::fileURLWithPath(&NSString::from_str(&copy.to_string_lossy()));
+        let files = NSArray::from_retained_slice(&[copy]);
+        let ws = NSWorkspace::sharedWorkspace();
+        match with {
+            policy::Opener::App(app) => {
+                let app = NSURL::fileURLWithPath(&NSString::from_str(&app.to_string_lossy())).fileReferenceURL().ok_or_else(|| changed.clone())?;
+                ws.openURLs_withApplicationAtURL_configuration_completionHandler(&files, &app, &NSWorkspaceOpenConfiguration::configuration(), None);
+            }
+            _ => system_open(&copy_url, cx),
+        }
+        return Ok(());
+    };
     let reference = |url: &NSURL| url.absoluteString().map(|s| policy::reference_id(&s.to_string())).unwrap_or_default();
     // An inode number names a file only on its own volume, so the volume
     // too (verify-fix's read of the Daybreak 125 fix): the one a reference
@@ -448,8 +470,10 @@ fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut
     let files = NSArray::from_retained_slice(&[file]);
     match with {
         // The app that was checked opens it as a document, whatever it is.
+        // The app by a reference too: the real app that was checked, not
+        // whatever a path to it names by the time it launches.
         policy::Opener::App(app) => {
-            let app = NSURL::fileURLWithPath(&NSString::from_str(&app.to_string_lossy()));
+            let app = NSURL::fileURLWithPath(&NSString::from_str(&app.to_string_lossy())).fileReferenceURL().ok_or_else(|| changed.clone())?;
             ws.openURLs_withApplicationAtURL_configuration_completionHandler(&files, &app, &NSWorkspaceOpenConfiguration::configuration(), None);
         }
         // Shown selected in Finder: a window rooted at it, or Finder asked
@@ -463,8 +487,8 @@ fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut
     Ok(())
 }
 
-/// The longest document copied to open it off a Mac.
-#[cfg(not(target_os = "macos"))]
+/// The longest file copied to open it (off a Mac, or a Mac disk with no
+/// file references).
 const COPY_LIMIT: u64 = 512 * 1024 * 1024;
 
 #[cfg(not(target_os = "macos"))]
@@ -484,18 +508,27 @@ fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut
     // A file (a document, or a program said yes to) opens from a private
     // copy of the file that was checked.
     let folder = opened_folder().ok_or_else(|| "couldn't be copied to open it.".to_owned())?;
-    let copy = policy::checked_copy(look, &folder, COPY_LIMIT).map_err(|e| match e.kind() {
-        std::io::ErrorKind::FileTooLarge => "is too big to open from Threadbear. Open it from your file manager.".to_owned(),
-        _ => "changed while Threadbear was opening it, so it didn't open it.".to_owned(),
-    })?;
+    let copy = policy::checked_copy(look, &folder, COPY_LIMIT).map_err(|e| copy_error(&e))?;
     system_open(&policy::file_url(&copy.to_string_lossy()), cx);
     Ok(())
 }
 
-/// Where documents are copied to open them off a Mac: the app's own folder,
-/// which an agent working in a project doesn't write to.
-#[cfg(not(target_os = "macos"))]
+/// What's said when a checked file couldn't be copied to open it.
+fn copy_error(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::FileTooLarge => "is too big to open from Threadbear. Open it from your file manager.".to_owned(),
+        _ => "changed while Threadbear was opening it, so it didn't open it.".to_owned(),
+    }
+}
+
+/// Where files are copied to open them (off a Mac, or from a Mac disk with
+/// no file references): the app's own folder, which an agent working in a
+/// project doesn't write to.
 fn opened_folder() -> Option<std::path::PathBuf> {
+    if cfg!(target_os = "macos") {
+        let home = std::env::var_os("HOME").filter(|d| !d.is_empty())?;
+        return Some(std::path::PathBuf::from(home).join("Library/Caches/Threadbear/opened"));
+    }
     if cfg!(windows) {
         let local = std::env::var_os("LOCALAPPDATA").filter(|d| !d.is_empty())?;
         return Some(std::path::PathBuf::from(local).join("Threadbear").join("opened"));

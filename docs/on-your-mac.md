@@ -189,9 +189,10 @@ File references are where to look.
   Office and iWork documents and PDF link hovers, so Quick Look reads the file the open gate
   checked; removed after the thumbnail is made, with interrupted copies
   cleared after a day when another preview is made);
-  on Windows and Linux, `%LOCALAPPDATA%\Threadbear\opened` and
-  `~/.cache/threadbear/opened` (private, read-only copies of documents and
-  programs you open from a thread, so the app that opens one gets the file the open gate
+  `~/Library/Caches/Threadbear/opened` (only for a file on a disk with no
+  file references, like ExFAT or a network share), and on Windows and Linux
+  `%LOCALAPPDATA%\Threadbear\opened` and `~/.cache/threadbear/opened`
+  (private, read-only copies of documents and programs you open from a thread, so the app that opens one gets the file the open gate
   checked; cleared after a day when another is opened);
   `~/Library/Caches/Threadbear/rich` (pictures of the ```` ```mermaid ```` and
   ```` ```html ```` blocks in replies, and each one's page for the side pane,

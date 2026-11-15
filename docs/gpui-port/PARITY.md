@@ -5092,15 +5092,22 @@ Fixes from Codex's review of the slice before:
   selected in Finder rather than opened in a window of its own: a Finder
   window rooted at a path, or Finder asked to open it, launched an app
   swapped in there; revealing it didn't. A document package (`.rtfd`,
-  `.xcodeproj`) still opens in its app. An app outside where apps are
-  installed (`/Applications`, `~/Applications`, the system's) that the
-  system names as a file's opener (a file's own "open with" setting can
-  name an app in the project) means a question first, as a program does.
+  `.xcodeproj`) still opens in its app. The opener is the real app (links
+  followed), handed over by a reference too; one that isn't installed where
+  apps go (directly in `/Applications` or `~/Applications` or their
+  Utilities, the system's folders, `~/Library/Application Support`), as an
+  app in the project made a file's opener by its own "open with" setting
+  would be, means a question first, as a program does. The looked-at file
+  is held open until it opens, so its inode can't pass to a file made in
+  its place. A disk with no file references (ExFAT, a network share) opens
+  a file from a private copy in `~/Library/Caches/Threadbear/opened`, and
+  doesn't open a folder.
   The Swift app (frozen) still opens by path.
 - Windows and Linux can't name the app or hold a file through the system's
   opener, so a file (a document, or a program once said yes to) opens from a
-  private, read-only copy of the checked file, taken from a handle that must
-  be the file looked at (its inode, or on Windows its volume and file ID),
+  private, read-only copy of the checked file, read from the handle held
+  since the look (Linux), or one that must be the file looked at (Windows:
+  its volume and file ID),
   in `~/.cache/threadbear/opened` or `%LOCALAPPDATA%\Threadbear\opened`,
   cleared after a day. Edits made there don't reach the original. A plain
   folder still goes to the file manager by its path with a slash on the
