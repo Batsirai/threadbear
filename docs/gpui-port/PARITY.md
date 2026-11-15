@@ -5054,3 +5054,24 @@ Fixes from Codex's review of the slice before:
   readers accept numeric strings. Unreadable event payloads log their shape
   without including the payload's private text.
 - Status-word blur and the Activity badge's entrance remain undecided.
+
+### 2026-11-15 Nested threads (`sidebar.nested`, `thread.startedby`)
+
+- Experiment `nestedThreads` (docs/protocol.md, "Nested threads"), GPUI app
+  only; the frozen Swift app shows these threads as before, so both specs are
+  `@swift-pending` there. A thread another thread started sits indented under
+  it in the sidebar, like a sub-agent, one level deep, in the section of the
+  group's most urgent member. The group opens by itself while one of its
+  threads waits on Mike and folds otherwise; the count on the starter's row
+  opens or folds it, remembered while the app runs. Folded, the starter carries
+  the group's needs-you dot. A nested row's second line is its question in
+  orange, else its byline or last reply. Archived ones are one "N finished"
+  line, which opens the starter with Highlights ("Threads it started"). The row
+  menu has Move Out From Under and Put Back Under (`threads.update`'s
+  `detached`, optimistic with rollback). The Projects view nests the same way
+  within a project. A thread a thread started opens with "Started by
+  <starter> · why" above its transcript. Dragging rows in or out waits for a
+  motion mockup (AGENTS.md).
+- Rules and their tests: `desktop/core/src/nested.rs`, `inbox::sections_nested`.
+  Drawing: `desktop/gpui/src/{sidebar,projects_list,thread,app,shell}.rs`.
+  The mock's `TB_MOCK_NESTED` demo set, `features/nested-threads.feature`.
