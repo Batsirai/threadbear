@@ -46,6 +46,8 @@ const child = (h: H, parent: string, detached = false) =>
 // What send_message sends: the sender's line, then the report.
 const report = (h: H, from: string, to: string, words: string) =>
   h.runner.send(to, `[Sent by the agent in the thread "${h.runner.get(from).title}" (${from.slice(0, 8)})]\n\n${words}`);
+// The thread's record, which keeps what the summary doesn't show.
+const record = (h: H, id: string) => (h.runner as unknown as { threads: Map<string, { rec: { heldReports?: unknown[] } }> }).threads.get(id)!.rec;
 const said = (h: H, id: string) => h.events(id).filter((e) => e.type === 'user.message').map((e) => String(e.text));
 
 // A starter that has finished its own turn, with two threads working.
@@ -121,7 +123,7 @@ test("nestedThreads: Mike writing to the starter takes the held reports in first
   const reportAt = texts.findIndex((t) => /Halfway there\./.test(t));
   const mikeAt = texts.findIndex((t) => t === 'How is it going?');
   assert.ok(reportAt >= 0 && mikeAt > reportAt, 'the reports, then his message');
-  assert.equal(h.runner.get(parent).heldReports, undefined);
+  assert.equal(record(h, parent).heldReports, undefined, 'nothing left held');
 });
 
 test('nestedThreads: off, detached, or a starter in a turn: sent as before', async () => {
@@ -176,7 +178,7 @@ test('nestedThreads: reports held across a restart go once the threads have fini
   await settle();
   // As a runner coming back finds it: a report on the record, held when it
   // went down, and the threads it waited on finished since.
-  const rec = (h.runner as unknown as { threads: Map<string, { rec: { heldReports?: unknown[] } }> }).threads.get(parent)!.rec;
+  const rec = record(h, parent);
   rec.heldReports = [{ from: a, text: `[Sent by the agent in the thread "x" (${a.slice(0, 8)})]\n\nKept over a restart.`, at: new Date().toISOString() }];
   const before = said(h, parent).length;
   h.runner.settleAllHeld();
