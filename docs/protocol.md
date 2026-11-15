@@ -2172,10 +2172,14 @@ a thread in a folder `sandbox.folders` still names, or one whose record
 says it ran shut in one (`confined`), isn't started (`threads.create`
 refuses, and a message to an old one gets a note saying why) rather than
 running on the machine instead; taking `sandbox` out of runner.json says
-that's fine. `threads.create` with `confined: true` (an older runner
+that's fine. Such a thread counts as the least access there is, below
+even Ask, so its title and words reach no other thread without a card
+(same-work notes, waits), and it gets no lab review (which would run its
+tests on the machine). `threads.create` with `confined: true` (an older runner
 handing over a sandboxed agent's call) is refused. A thread's move still
 says `unconfine: false` for an agent's to an older runner across a
-handover, and the runner reads `unconfine: false` from one as `byAgent`.
+handover (the phone's path too), and the runner reads `unconfine: false`
+from one as `byAgent`.
 
 ## Pools
 

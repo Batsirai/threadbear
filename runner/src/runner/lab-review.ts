@@ -92,6 +92,10 @@ export const labReviewPart = {
       this.log.info('lab review owed to the next runner', { threadId: rec.id });
       return undefined;
     }
+    // One an older release ran shut in the sandbox isn't reviewed: its
+    // review would run its tests on this machine (Grok's review of the
+    // sandbox's removal, 16 Nov 2026).
+    if (rec.confined) return undefined;
     const login = this.reviewLogin(rec);
     if (!login) {
       this.emit(st, { type: 'system.note', text: 'Not reviewed: there is no other login on this runner to review the change with.' });

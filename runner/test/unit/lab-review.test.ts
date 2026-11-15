@@ -524,6 +524,18 @@ test('labReview: a scheduled run that woke an archived thread goes back once its
   assert.equal(t.archivedBy, 'mike');
 });
 
+// Grok's review of the sandbox's removal (16 Nov 2026): a thread an older
+// release ran shut in the sandbox isn't reviewed, as its review would run
+// its tests on this machine with the same access.
+test('labReview: a thread an older release ran in the sandbox is not reviewed', () => {
+  const h = setup();
+  const id = start(h);
+  h.runner.threads.get(id)!.rec.confined = true;
+  turn(h, id, { diffs: [codeDiff()] });
+  assert.equal(h.runner.get(id).waitingOn, undefined);
+  assert.equal(h.runner.list().filter((t) => t.title.startsWith('Review:')).length, 0);
+});
+
 // ------------------------------------------------------- the findings ledger
 
 // The review thread the reviewed one waits on finishes its turn with

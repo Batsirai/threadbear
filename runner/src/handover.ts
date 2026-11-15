@@ -913,7 +913,9 @@ export function phoneCommands(runner: Runner, remote?: Pick<Peers, 'owns' | 'cal
     // Opened by sync.ts already; a thread still on a draining runner gets
     // it over the local link, both runners sharing the one data dir.
     answerSecret: (p) => at(p.threadId, 'secrets.answer', { ...p }, () => runner.answerSecret(p)),
-    update: (p) => at(p.threadId, 'threads.update', { ...p }, () => runner.update(p)),
+    // An older runner reads a change without `unconfine: false` as the
+    // user's (the sandbox experiment's flag), so an agent's says so.
+    update: (p) => at(p.threadId, 'threads.update', { ...p, ...(p.byAgent ? { unconfine: false } : {}) }, () => runner.update(p)),
     hibernateWhen: (p) => at(p.threadId, 'threads.hibernateWhen', { ...p }, () => runner.hibernateWhen(p)),
     // Up to whatever it has: markSeen keeps it within the thread's events.
     markSeen: (id) => at(id, 'threads.markSeen', { seq: Number.MAX_SAFE_INTEGER }, () => runner.markSeen(id, runner.get(id).lastSeq)),

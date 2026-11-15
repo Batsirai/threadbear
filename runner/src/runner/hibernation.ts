@@ -15,16 +15,13 @@ import path from 'node:path';
 import { providerName } from '../providers.ts';
 import { LAB_REVIEW_REPLY_CHARS, addVerdict, findingLine } from './lab-review.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
-import { above, raises, type Authority } from '../threadbear-mcp.ts';
+import { above, LEAST, raises, type Authority } from '../threadbear-mcp.ts';
 
-// A thread that isn't here (on another runner of this Mac's) counts as the
-// least access, so what it said is never passed up on a guess: below even
-// Ask and Plan (mayTellOf goes by this very object).
-const LEAST: Authority = Object.freeze({ mode: 'ask' as const });
 
-// The less of two: the lower mode.
+// The less of two: the lower mode, or LEAST if either is.
 export function leastAuthority(a: Authority | undefined, b: Authority): Authority {
   if (!a) return b;
+  if (a === LEAST || b === LEAST) return LEAST;
   return { mode: raises(a.mode, b.mode) ? b.mode : a.mode };
 }
 
@@ -287,7 +284,8 @@ export const hibernationPart = {
 
   // What a thread's agent can do now (threadbear-mcp.ts, Authority).
   authorityNow(this: Runner, threadId: string): Authority {
-    if (!this.threads.has(threadId)) return LEAST;
+    const st = this.threads.get(threadId);
+    if (!st || st.rec.confined) return LEAST;
     return { mode: this.accessOf(threadId) };
   },
 
@@ -306,7 +304,7 @@ export const hibernationPart = {
   // Daybreak finding 111). One not here counts as the least.
   authoritySaved(this: Runner, threadId: string): Authority {
     const st = this.threads.get(threadId);
-    if (!st) return LEAST;
+    if (!st || st.rec.confined) return LEAST;
     return { mode: st.rec.permissionMode ?? 'ask' };
   },
 

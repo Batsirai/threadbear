@@ -129,8 +129,13 @@ export const MODE_NAMES: Record<PermissionMode, string> = { full: 'Full access',
 export const raises = (to: PermissionMode, from: PermissionMode): boolean => ACCESS[to] > ACCESS[from];
 // What a thread's agent can do: its mode.
 export type Authority = { mode: PermissionMode };
-// More than the caller has: a higher mode.
-export const above = (t: Authority, caller: Authority): boolean => raises(t.mode, caller.mode);
+// The least there is, below even Ask and Plan, by this very object: a
+// thread that isn't here (on another runner of this Mac's), or one an older
+// release ran shut in the sandbox (ThreadRecord.confined), whose words are
+// never passed up on a guess (hibernation.ts).
+export const LEAST: Authority = Object.freeze({ mode: 'ask' as const });
+// More than the caller has: a higher mode, or anything at all over LEAST.
+export const above = (t: Authority, caller: Authority): boolean => (caller === LEAST && t !== LEAST) || raises(t.mode, caller.mode);
 // A new_thread schedule's mode for the access checks: its own, or what it
 // inherits (Schedule.defaultMode). One whose inherited mode isn't known here
 // (another runner's default) counts as the least for raising it and the most

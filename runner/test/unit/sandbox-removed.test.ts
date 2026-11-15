@@ -145,3 +145,38 @@ test('renaming a thread with more access asks first; its own title, or one no hi
   assert.equal(fine.error, false, fine.text);
   assert.equal(rec(host.id).title, 'Renamed');
 });
+
+// Grok's review of the removal: `confined` had also put a sandboxed
+// thread below everyone, so with it gone a leftover sandboxed Full thread
+// counted as Full, and its title and words could reach an Ask thread (its
+// same-work note, a quiet-inbox wait).
+test("a thread an older release ran in the sandbox counts as the least, below even Ask, for what it says", async () => {
+  const { above, LEAST } = await import('../../src/threadbear-mcp.ts');
+  const { outside } = folders();
+  const h = makeHarness();
+  const boxed = h.runner.create({ text: 'Selecting text in the transcript', accountId: 'claude-3', cwd: outside, permissionMode: 'full' }).thread;
+  h.adapter.last.init();
+  h.adapter.last.result('completed');
+  const ask = h.runner.create({ text: 'Plan', accountId: 'claude-3', cwd: outside, permissionMode: 'ask' }).thread;
+  h.adapter.last.init();
+  await tick();
+  h.runner.threads.get(boxed.id)!.rec.confined = true;
+  assert.equal(h.runner.authoritySaved(boxed.id), LEAST);
+  assert.equal(h.runner.authorityNow(boxed.id), LEAST);
+  assert.equal(h.runner.mayTellOf({ mode: 'ask' }, boxed.id), false);
+  assert.equal(h.runner.mayTellOf({ mode: 'plan' }, boxed.id), false);
+  assert.equal(above({ mode: 'ask' }, LEAST), true, 'an Ask thread is above it');
+  assert.equal(above(LEAST, LEAST), false);
+  assert.equal(h.runner.mayTellOf(h.runner.authorityNow(ask.id), ask.id), true, 'ordinary threads as before');
+});
+
+test("an agent's change from the phone path tells an older runner it isn't the user's", async () => {
+  const { phoneCommands } = await import('../../src/handover.ts');
+  const h = makeHarness();
+  const sent: Record<string, unknown>[] = [];
+  const host = phoneCommands(h.runner, { owns: () => true, call: async (_id: string, _m: string, p: Record<string, unknown>) => (sent.push(p), {}) } as never);
+  await host.update({ threadId: 'elsewhere', accountId: 'codex-main', byAgent: true } as never);
+  await host.update({ threadId: 'elsewhere', accountId: 'codex-main' } as never);
+  assert.equal(sent[0]!.unconfine, false);
+  assert.equal('unconfine' in sent[1]!, false, "the user's own, as before");
+});
