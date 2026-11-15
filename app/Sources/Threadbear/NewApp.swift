@@ -175,7 +175,7 @@ private enum NewAppCopy {
         return retirementDate.map { "\(base), and this one stops being updated on \($0)." } ?? "\(base)."
     }
     static let windowCarry = "It opens with your threads, settings and drafts, and this app stays installed so you can come back to it any time."
-    static let windowBuild = "Starting it begins a thread that builds it on this Mac (about half an hour, installing Rust first if you need it), fixes anything that gets in the way, and asks you before it switches."
+    static let windowBuild = "Starting it begins a thread that builds it on this Mac (20 to 40 minutes, installing Rust first if you need it), fixes anything that gets in the way, and asks you before it switches."
     static let windowGaps = "A few things still only work here."
     static let cardTitle = "A new Threadbear app"
     static let cardBody = "It looks and works like this one, and runs on Windows and Linux too. This one no longer gets new features."
