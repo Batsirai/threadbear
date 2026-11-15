@@ -286,6 +286,9 @@ export type ThreadSummary = {
   // Who started it, when that wasn't Mike (docs/protocol.md, "Who started
   // a thread"). Absent for his own threads.
   startedBy?: ThreadStartedBy;
+  // Started by another thread but kept out from under it in the sidebar
+  // (docs/protocol.md, "Nested threads").
+  detached?: true;
   // Mike's last message to it, one line, for the sidebar's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Absent until he's sent one.
   asked?: string;

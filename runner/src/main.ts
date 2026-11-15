@@ -1245,6 +1245,8 @@ async function main(): Promise<void> {
   // now: waking one starts its CLI, whose tools need what's set up above.
   runner.holdWaits = false;
   step('reconcile waits', () => runner.reconcileWaits());
+  // Reports held for a thread whose threads finished while it was down.
+  step('held reports', () => runner.settleAllHeld());
   // Reviews a runner that went away owed (runner/lab-review.ts).
   step('owed reviews', () => runner.startOwedReviews());
 

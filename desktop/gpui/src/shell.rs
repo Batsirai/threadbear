@@ -827,6 +827,8 @@ impl Threadbear {
                 self.sidebar_settings_changed(cx);
             }
         }
+        // A nested thread's group opens so its row is there to see.
+        self.open_group_of(id, cx);
         self.mode = SidebarMode::Inbox;
         // Its row in view, wherever the list was scrolled to.
         self.reveal_row(id, cx);

@@ -407,15 +407,25 @@ let connectors = {
 addDemoProjects();
 // The experiments the mock's hello says are on: Open Anything (⌘K) unless
 // TB_MOCK_OPEN_ANYTHING_OFF, for the spec that it's gone while off, and
-// Decisions on the Projects page with TB_MOCK_DECISIONS.
+// Decisions on the Projects page with TB_MOCK_DECISIONS, and nested threads
+// with TB_MOCK_NESTED.
 function mockExperiments() {
-  return [...(process.env.TB_MOCK_OPEN_ANYTHING_OFF ? [] : ['openAnything']), ...(process.env.TB_MOCK_DECISIONS ? ['projectDecisions'] : [])];
+  return [
+    ...(process.env.TB_MOCK_OPEN_ANYTHING_OFF ? [] : ['openAnything']),
+    ...(process.env.TB_MOCK_DECISIONS ? ['projectDecisions'] : []),
+    // TB_MOCK_NESTED_OFF keeps its demo threads with the experiment off.
+    ...(process.env.TB_MOCK_NESTED && !process.env.TB_MOCK_NESTED_OFF ? ['nestedThreads'] : []),
+  ];
 }
 
 // Decisions on the Projects page (the projectDecisions experiment): three of
 // Threadbear's threads waiting on a card of asks, with what they're for. Only
 // when asked, as it changes those threads' rows and the Projects page.
 if (process.env.TB_MOCK_DECISIONS) addDemoDecisions();
+// Nested threads (the nestedThreads experiment): a coordinator thread and the
+// threads it started, as in mockup sub-A. Only when asked, as it adds rows
+// other specs count.
+if (process.env.TB_MOCK_NESTED) addDemoNested();
 // Parts of a project (docs/protocol.md, Projects, "Parts"): Photo sync as a
 // part of Threadbear, for features/projects.feature.
 if (process.env.TB_MOCK_PARTS) {
@@ -876,6 +886,9 @@ async function dispatch(client, method, p) {
         }
       }
       if (s.poolId) delete s.waitingForRoom;
+      // Nested threads: out from under its starter in the sidebar, or back.
+      if (p.detached === true) s.detached = true;
+      if (p.detached === false) delete s.detached;
       if (p.model !== undefined) s.model = p.model ?? undefined;
       if (p.effort !== undefined) s.effort = p.effort ?? undefined;
       if (p.snoozedUntil !== undefined) {
@@ -3218,6 +3231,68 @@ function addPerfProjects(count) {
  * each with a headline, for the projectDecisions experiment's
  * Decisions section (features/projects.feature, its screenshots).
  */
+/**
+ * TB_MOCK_NESTED: "GPUI Port Coordinator" and the threads it started
+ * (docs/protocol.md, "Nested threads"): one waiting on Mike with a question,
+ * four working, one idle, two archived, one moved out from under it
+ * (`detached`), and one started by a nested thread, which nests under the
+ * coordinator too. All in the Threadbear project when it's there.
+ */
+function addDemoNested() {
+  const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const tb = projects.find((p) => p.title === 'Threadbear');
+  const cwd = '/Users/mike/dev/me/threadbear';
+  const make = (id, title, minutes, status, { answer, needs, ask, startedBy, archived, detached, unread } = {}) => {
+    const summary = {
+      id, title, cwd, accountId: 'claude-main', provider: 'claude', model: 'claude-opus-5-5', permissionMode: 'full',
+      status, live: status !== 'idle', needsYou: needs === 'you', createdAt: ago(minutes + 60), updatedAt: ago(minutes), lastActivityAt: ago(minutes),
+      preview: answer ? answer.replace(/\s+/g, ' ').slice(0, 140) : '', lastSeq: 0, lastSeenSeq: 0,
+      ...(needs ? { needs } : {}), ...(startedBy ? { startedBy } : {}), ...(archived ? { archivedAt: ago(archived), archivedBy: 'agent' } : {}),
+      ...(detached ? { detached: true } : {}),
+    };
+    if (needs === 'you' && ask) summary.asks = [{ action: ask }];
+    const events = [];
+    const push = (fields, turnId) => events.push({ seq: events.length + 1, ts: ago(minutes), threadId: id, ...(turnId ? { turnId } : {}), ...fields });
+    const turnId = `${id}_t0`;
+    push({ type: 'user.message', text: `Take this on: ${title}.`, images: [] }, turnId);
+    push({ type: 'turn.started' }, turnId);
+    if (answer) {
+      push({ type: 'assistant.text', itemId: `${id}_m0`, text: answer }, turnId);
+      push({ type: 'turn.completed', outcome: 'completed', durationMs: 42_000, ...(needs ? { needs } : {}), ...(summary.asks ? { asks: summary.asks } : {}) }, turnId);
+    }
+    summary.lastSeq = events.length;
+    summary.lastSeenSeq = unread ? Math.max(0, events.length - 2) : events.length;
+    if (tb) join(summary, tb, 'agent', false, ago(minutes));
+    threads.set(id, { summary, events, inProgress: new Map(), timers: [] });
+    return summary;
+  };
+  const boss = make('nest_coordinator', 'GPUI Port Coordinator', 1, 'idle', {
+    answer: 'Six threads are on the port. The Browser pane has a question for you; the rest are landing in turn.', needs: 'nothing',
+  });
+  const by = (why) => ({ kind: 'thread', label: 'Agent', threadId: boss.id, threadTitle: boss.title, why });
+  make('nest_browser', 'GPUI: the Browser pane and sign-in handoff', 2, 'idle', {
+    answer: 'The pane works. One thing to decide before I land it.\n\nShould the sign-in window come in front of yours?',
+    needs: 'you', ask: 'Should the sign-in window come in front of yours?', startedBy: by('building the Browser pane'), unread: true,
+  });
+  make('nest_swift_point', 'Swift app: point people to the GPUI app', 4, 'running', { startedBy: by('Landing, 4th in the queue') });
+  make('nest_open_anything', 'GPUI: land Open Anything (\u2318K)', 9, 'running', { startedBy: by('Landing, 6th in the queue') });
+  make('nest_carry_swift', "Carry people's own Swift changes over", 3, 'running', { startedBy: by('Landing, 7th in the queue') });
+  make('nest_pane_sections', 'GPUI: two pane sections side by side', 12, 'running', { startedBy: by('Landing, 9th in the queue') });
+  make('nest_heic', 'GPUI: pictures from screenshots and HEIC', 40, 'idle', {
+    answer: 'Screenshots and HEIC pictures now paste as pictures. Landed as 4c1e2a9.', needs: 'nothing', startedBy: by('landed, pictures paste from HEIC'),
+  });
+  // Started by one of the coordinator's threads: under the coordinator too.
+  make('nest_heic_tests', 'HEIC: a test picture for each phone', 15, 'running', {
+    startedBy: { kind: 'thread', label: 'Agent', threadId: 'nest_heic', threadTitle: 'GPUI: pictures from screenshots and HEIC', why: 'making test pictures' },
+  });
+  make('nest_done_menus', 'GPUI: window menu shortcuts', 60 * 5, 'idle', { answer: 'Landed.', needs: 'nothing', startedBy: by('landed'), archived: 60 * 4 });
+  make('nest_done_tips', 'GPUI: tooltips on every control', 60 * 7, 'idle', { answer: 'Landed.', needs: 'nothing', startedBy: by('landed'), archived: 60 * 6 });
+  // Moved out from under it: a row of its own, and Put Back Under in its menu.
+  make('nest_detached', 'Fix the BrowserBear focus bug', 25, 'idle', {
+    answer: 'Fixed in BrowserBear: the handoff window now takes focus.', needs: 'nothing', startedBy: by('a tooling fix'), detached: true, unread: true,
+  });
+}
+
 function addDemoDecisions() {
   const cards = {
     demo_settings_tabs: {
