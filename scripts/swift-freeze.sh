@@ -43,6 +43,12 @@ set -f
 # only these doesn't build and test the Swift app. They move out of app/
 # before it goes at the cutover.
 GPUI_SHARED='^app/Tools/mock-runner/|^app/Tools/(droptarget|post-gesture|realdrag)\.swift$|^app/Tests/Fixtures/|^app/Sources/Threadbear/Resources/(Art|Rich)/'
+# The Swift tests of what's shared above: the mock runner's own tests, the
+# login check that starts it, and the golden transcripts of its fixtures. A
+# change to the mock (its demo data renamed, 15 Nov) has to update them, so
+# they're open too. They aren't in GPUI_SHARED: changing one still builds
+# and tests the Swift app in check.sh, which is the only thing that runs them.
+SHARED_TESTS='^app/Tests/ThreadbearCoreTests/(MockRunner|RunnerAuth|GoldenTranscript)Tests\.swift$'
 
 mode="${1:-}"
 if [ "$mode" = --gpui-shared ]; then
@@ -85,6 +91,7 @@ done < <(find "$top_real/ios" -type l -not -path '*/.build/*' 2>/dev/null)
 
 shared() {
   [[ "$1" =~ $GPUI_SHARED ]] && return 0
+  [[ "$1" =~ $SHARED_TESTS ]] && return 0
   local s
   for s in "${IPHONE_SHARED[@]}"; do
     case "$s" in
