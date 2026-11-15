@@ -75,10 +75,21 @@ data class ThreadPictures(val images: List<MessageImage> = emptyList()) {
             return src.substring(8).toIntOrNull()?.takeIf { it > 0 }
         }
 
-        /** A web picture needs nothing uploaded (https only). Anything else unmatched is on the Mac. */
-        fun webUrl(src: String): String? {
-            if (!src.lowercase().startsWith("https://")) return null
-            return runCatching { URI(src) }.getOrNull()?.let { src }
+        /**
+         * A web address written as a picture that isn't one of the thread's
+         * own: shown as a link to open, never fetched by the app. Only
+         * pictures Threadbear stored (`image`, URLs into the backend's file
+         * storage) load by themselves; an agent's or another Mac's address
+         * could be anyone's server or one on Mike's own network, and loading
+         * it would tell them he's reading (Daybreak findings 129 and 133,
+         * 15 Nov 2026; SECURITY.md, "Pictures in replies"). Anything else
+         * unmatched is on the Mac.
+         */
+        fun webLink(src: String): String? {
+            val lower = src.lowercase()
+            if (!lower.startsWith("https://") && !lower.startsWith("http://")) return null
+            val host = runCatching { URI(src).host }.getOrNull()
+            return src.takeIf { !host.isNullOrEmpty() }
         }
     }
 }

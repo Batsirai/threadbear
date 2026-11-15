@@ -1676,6 +1676,11 @@ page and on the shared page while you're signed in.
 
 The Mac app also draws a picture an agent writes into its reply with a path
 on your Mac (`![a chart](/path/to/chart.png)`), rather than showing a link.
+A picture written as a web address (`![a chart](https://example.com/c.png)`)
+is a link everywhere, on the Mac, the phone and the website: tap or click
+it to open it in your browser. Threadbear never fetches one by itself, so
+whoever runs that site can't tell you're reading. On the phone a reply
+draws its first 10 pictures; any past that show as their names.
 
 ## Self-hosting your backend
 <!-- slug: self-hosting -->

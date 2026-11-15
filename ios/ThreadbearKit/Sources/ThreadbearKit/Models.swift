@@ -750,11 +750,18 @@ public struct ThreadPictures: Sendable, Hashable {
         return n
     }
 
-    /// A web picture needs nothing uploaded. Anything else unmatched is on
-    /// the Mac.
-    public static func webURL(_ src: String) -> URL? {
-        guard src.lowercased().hasPrefix("https://") else { return nil }
-        return URL(string: src)
+    /// A web address written as a picture that isn't one of the thread's
+    /// own: shown as a link to open, never fetched by the app. Only pictures
+    /// Threadbear stored (`image(src:seq:)`, URLs into the backend's file
+    /// storage) load by themselves; an agent's or another Mac's address
+    /// could be anyone's server or one on Mike's own network, and loading it
+    /// would tell them he's reading (Daybreak findings 129 and 133, 15 Nov
+    /// 2026; SECURITY.md, "Pictures in replies"). Anything else unmatched is
+    /// on the Mac.
+    public static func webLink(_ src: String) -> URL? {
+        let lower = src.lowercased()
+        guard lower.hasPrefix("https://") || lower.hasPrefix("http://"), let url = URL(string: src), url.host?.isEmpty == false else { return nil }
+        return url
     }
 
     /// Pinned pictures by the message they go under: the turn's reply, the

@@ -292,10 +292,37 @@ import Testing
         #expect(pictures.image(src: "/missing.png", seq: 9) == nil)
     }
 
-    @Test func onlyAWebPictureNeedsNoUpload() {
-        #expect(ThreadPictures.webURL("https://x.io/a.png")?.host() == "x.io")
-        #expect(ThreadPictures.webURL("/Users/m/a.png") == nil)
-        #expect(ThreadPictures.webURL("http://x.io/a.png") == nil)
+    // Daybreak findings 129 and 133: a web address written as a picture is a
+    // link to open, never a picture the app fetches. Only the thread's own
+    // stored pictures (image(src:seq:)) are drawn.
+    @Test func aWebPictureIsOnlyALink() {
+        #expect(ThreadPictures.webLink("https://x.io/a.png")?.host() == "x.io")
+        #expect(ThreadPictures.webLink("http://192.168.1.1/admin?x=1")?.host() == "192.168.1.1")
+        #expect(ThreadPictures.webLink("/Users/m/a.png") == nil)
+        #expect(ThreadPictures.webLink("file:///etc/passwd") == nil)
+        #expect(ThreadPictures.webLink("https://") == nil)
+        let pictures = ThreadPictures([MessageImage(seq: 3, src: "/a.png", url: "https://store/a")])
+        #expect(pictures.image(src: "https://127.0.0.1/a.png", seq: 3) == nil)
+        #expect(pictures.image(src: "https://attacker.example/a.png", seq: 3) == nil)
+    }
+
+    // Daybreak finding 130: one reply can't ask for hundreds of downloads.
+    @Test func aMessageDrawsTenPicturesAtMost() {
+        let text = (1...300).map { "![p\($0)](https://x\($0).example/a.png)" }.joined(separator: "\n\n")
+        let start = ContinuousClock.now
+        let blocks = MarkdownBlock.parse(text)
+        #expect(ContinuousClock.now - start < .milliseconds(100))
+        let images = blocks.filter { if case .image = $0 { true } else { false } }
+        #expect(images.count == MarkdownBlock.maxPictures)
+        #expect(blocks[MarkdownBlock.maxPictures] == .paragraph("[p11]"))
+        #expect(blocks.count == 300)
+    }
+
+    @Test func picturesInQuotesCountTowardTheSameTen() {
+        let text = (1...8).map { "![a\($0)](/a\($0).png)" }.joined(separator: "\n\n") + "\n\n> ![q1](/q1.png)\n>\n> ![q2](/q2.png)\n>\n> ![q3](/q3.png)\n\n![](/last.png)"
+        let blocks = MarkdownBlock.parse(text)
+        #expect(blocks[8] == .quote([.image(alt: "q1", src: "/q1.png"), .image(alt: "q2", src: "/q2.png"), .paragraph("[q3]")]))
+        #expect(blocks[9] == .paragraph("[picture]"))
     }
 
     @Test func aPinGoesUnderTheNextReplyOnShow() {
