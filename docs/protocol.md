@@ -4700,7 +4700,8 @@ script it names, one it names that isn't there yet), `.claude/settings*.json`
 name, the runner's own data dir (`patch-trust.json` is the trust itself),
 every file a schedule's check on this runner reaches from its folder (the
 check's scripts, what they run in turn, absolute and linked ones, one it
-names that isn't there yet; paused and finished schedules too, as Resume and
+names that isn't there yet; a check still running though its schedule was changed or deleted since,
+paused and finished schedules too, as Resume and
 Run now run them again unasked; read afresh at each edit, so a new or changed
 check counts at once, and a check that runs something it can't follow makes
 every edit in its repo ask): its approval is a digest taken just before the

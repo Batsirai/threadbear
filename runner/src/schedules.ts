@@ -188,6 +188,8 @@ export class Scheduler {
   private log: Logger;
   private zone: () => string;
   private items = new Map<string, ScheduleRecord>();
+  // Checks under way in this process, with where they run (localChecks).
+  private runningChecks = new Map<string, { command: string; cwd: string }>();
   private timer?: TimerHandle;
   private saveRetry?: TimerHandle;
   private saveFailed = false;
@@ -565,7 +567,10 @@ export class Scheduler {
   // now run them again without a new approval. One whose thread is on
   // another runner isn't ours to run.
   localChecks(): { command: string; cwd: string }[] {
-    const out: { command: string; cwd: string }[] = [];
+    // And every check still running, though its schedule was changed or
+    // deleted since it started: its shell can still open a script, and a
+    // delete mid-run doesn't stop it (verify-fix on Daybreak 126).
+    const out: { command: string; cwd: string }[] = [...this.runningChecks.values()];
     for (const rec of this.items.values()) {
       if (!rec.check || !this.mine(rec)) continue;
       const cwd = this.checkFolder(rec);
@@ -1213,6 +1218,8 @@ export class Scheduler {
     // says what to run but only this runner's own store says it was approved.
     const hold = this.heldCheck(command, cwd, id);
     if (hold) return hold;
+    const runKey = `${id}\n${this.clock.now()}\n${Math.random()}`;
+    this.runningChecks.set(runKey, { command, cwd });
     try {
       markCheckRunning(this.home, id, this.clock.now(), timeoutMs);
     } catch {
@@ -1244,6 +1251,7 @@ export class Scheduler {
         return res;
       })
       .finally(() => {
+        this.runningChecks.delete(runKey);
         try {
           clearCheckRunning(this.home, id);
         } catch {

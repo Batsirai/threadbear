@@ -22,7 +22,7 @@ function put(file: string, text: string, mode = 0o644): void {
   fs.writeFileSync(file, text, { mode });
 }
 
-async function setup() {
+async function setup(runCheck: () => Promise<{ ok: true; output: string }> = async () => ({ ok: true, output: '' })) {
   const root = fs.realpathSync(tmpDir());
   const cwd = path.join(root, 'repo');
   fs.mkdirSync(path.join(cwd, '.git'), { recursive: true });
@@ -37,7 +37,7 @@ async function setup() {
   fs.symlinkSync(path.join(root, 'real', 'linked.sh'), path.join(cwd, 'linked.sh'));
   const data = tmpDir();
   const h = makeHarness(data, {}, { panelsRoot: root, patchTrust: new PatchTrust({ file: path.join(data, 'patch-trust.json'), claudeHome: root }) });
-  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC', runCheck: async () => ({ ok: true, output: '' }) });
+  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC', runCheck });
   sched.start();
   h.runner.scheduleChecks = () => sched.localChecks();
   const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd, permissionMode: 'auto' });
@@ -140,4 +140,23 @@ test("an outside script that looks binary to the follow can't be followed, so a 
   put(p, '/* \u0000 */ console.log(1);\n');
   put(path.join(cwd, 'check.sh'), `#!/bin/sh\nnode ${p}\n`, 0o755);
   assert.throws(() => h.runner.patchTrust.approveCheck('./check.sh', cwd, { hash: 'x', folder: cwd }), /can't read as a script/);
+});
+
+// verify-fix's read of the fix: deleting (or changing) the schedule while
+// its check ran took the guard away while the shell could still open the
+// script, as a delete doesn't stop a check under way.
+for (const how of ['deleted', 'changed'] as const) test(`a check under way stays guarded until it ends, though its schedule is ${how} meanwhile`, async () => {
+  let finish!: (r: { ok: true; output: string }) => void;
+  const { h, sched, cwd, runsAsCode } = await setup(() => new Promise((r) => (finish = r)));
+  const sc = await sched.create({ text: 'Look', cron: '*/5 * * * *', cwd, check: 'sleep 30; ./check.sh' });
+  h.clock.advance(5 * 60_000);
+  await tick(6);
+  assert.ok(finish, 'the check is under way');
+  if (how === 'deleted') await sched.delete(sc.id);
+  else await sched.update({ scheduleId: sc.id, check: 'true' });
+  assert.equal(runsAsCode(path.join(cwd, 'check.sh')), true, 'its shell can still open check.sh');
+  finish({ ok: true, output: '' });
+  await tick(6);
+  assert.equal(runsAsCode(path.join(cwd, 'check.sh')), false, 'over, and nothing runs it now');
+  sched.stop();
 });
