@@ -40,6 +40,7 @@ export type CliUpdatesConfig = {
   // The ACP agents: absent is off, as they have no version feed to notify from.
   cursor?: CliPolicy;
   opencode?: CliPolicy;
+  grok?: CliPolicy;
   checkMinutes: number;
   keepCodexVersions: number; // Codex copies kept under <home>/tools/codex
   // Other CLIs' update commands, run daily (updates/extra.ts). None by default.
@@ -98,6 +99,7 @@ export type Config = {
   // each is installed.
   cursorPath?: string;
   opencodePath?: string;
+  grokPath?: string;
   codexArgs: string[]; // extra `codex app-server` arguments
   codexMainDir: string; // codex-main's CODEX_HOME
   tokenStatsLimitsFile: string; // Token Stats' limits.json, read only
@@ -187,6 +189,7 @@ export type RunnerJson = {
   codexPath?: string;
   cursorPath?: string;
   opencodePath?: string;
+  grokPath?: string;
   codexArgs?: string[];
   cliUpdates?: Partial<CliUpdatesConfig>;
   accountNotes?: Record<string, string>;
@@ -465,6 +468,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     ...(codexPath ? { codexPath: expand(codexPath) } : {}),
     ...(nonEmpty(json.cursorPath) ? { cursorPath: expand(nonEmpty(json.cursorPath)!) } : {}),
     ...(nonEmpty(json.opencodePath) ? { opencodePath: expand(nonEmpty(json.opencodePath)!) } : {}),
+    ...(nonEmpty(json.grokPath) ? { grokPath: expand(nonEmpty(json.grokPath)!) } : {}),
     codexArgs: Array.isArray(json.codexArgs) ? json.codexArgs.filter((a): a is string => typeof a === 'string') : [],
     codexMainDir: expand(env.THREADBEAR_CODEX_MAIN_DIR || '~/.codex'),
     tokenStatsLimitsFile: expand(

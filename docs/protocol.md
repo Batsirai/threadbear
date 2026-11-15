@@ -156,9 +156,9 @@ upgrade with an `Authorization` header that's wrong is turned away with HTTP
 ## Types
 
 ```ts
-// cursor and opencode: ACP agents, only from a runner with the acpAgents
-// experiment on (see "ACP agents")
-type Provider = "claude" | "codex" | "cursor" | "opencode"
+// cursor, opencode and grok: ACP agents, where their CLIs are installed and
+// logged in (see "ACP agents")
+type Provider = "claude" | "codex" | "cursor" | "opencode" | "grok"
 
 // What a provider is called and can do, from `hello`. A client asks this
 // rather than comparing provider names, so a provider it has never heard of
@@ -170,6 +170,7 @@ type ProviderInfo = {
   loginCommand: string  // run in a Terminal to sign a login in ("claude auth login")
   effort: "claude" | "codex" | "none" // which effort levels it offers: Claude's,
                         // those plus Codex's ultra, or none of Threadbear's own
+                        // (Grok: "codex", each model's effortLevels narrowing it)
   autoMode: "classifier" | "asks"     // Auto: a classifier judges each action, or
                         // it behaves like Ask (Codex)
   sandbox: boolean      // can run a sandboxed thread
@@ -1232,22 +1233,29 @@ still `-32602`.)
 - An effort the model doesn't list in `effortLevels` (when known) is dropped
   with a note. `ultra` on a Claude thread always is.
 - An ACP agent's model counts only if that account's `models` lists it, never
-  by its name, and a Claude or Codex id goes to them first. These have no
-  effort levels (`ProviderInfo.effort` is `"none"`): an `effort` is dropped.
+  by its name, and a Claude or Codex id goes to them first. OpenCode and
+  Cursor have no effort levels (`ProviderInfo.effort` is `"none"`): an
+  `effort` is dropped. Grok's models list theirs (`effortLevels`, from
+  `_meta.reasoningEfforts` in its `session/new`), and a thread's effort is set
+  as the session's `thought_level` config option, the model's own default for
+  none.
 
 ## ACP agents
 
-An experiment (`acpAgents`, runner/src/adapters/acp/), off by default. Agents
-that speak the [Agent Client Protocol](https://agentclientprotocol.com) run as
-one process per live thread, over stdio. With it off no account, pool or
-`hello.providers` row of theirs appears. `runner.json`'s `cursorPath` and
-`opencodePath` set a binary by hand; otherwise each is found where it installs.
+Agents that speak the [Agent Client Protocol](https://agentclientprotocol.com)
+(runner/src/adapters/acp/) run as one process per live thread, over stdio.
+Where one's CLI isn't installed and logged in, no account or pool of its
+appears. `runner.json`'s `cursorPath`,
+`opencodePath` and `grokPath` set a binary by hand; otherwise each is found
+where it installs.
 
-- **One login each**, per machine, ids `opencode-main` and `cursor-main`. No
+- **One login each**, per machine, ids `opencode-main`, `cursor-main` and
+  `grok-main` (signed in: `~/.grok/auth.json` exists, never opened). No
   usage readings, so a pool can't move a thread by room.
 - **Which program.** The process must say it's that agent in `initialize`, or
   the thread doesn't start. `agent` is a generic name: a file only counts as
-  Cursor's by where it really lives (`~/.local/share/cursor-agent/...`).
+  Cursor's by where it really lives (`~/.local/share/cursor-agent/...`), and
+  only as Grok's when that's named `grok` or `grok-<version>...`.
 - **Asking.** Every tool comes to the runner first. OpenCode gets `*: ask` as
   inline config, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure`: a
   folder's `opencode.json` outranks inline config, and its plugins run when a
@@ -1270,18 +1278,50 @@ one process per live thread, over stdio. With it off no account, pool or
 - **Cursor** can't be told to always ask (its allow-list and a folder's
   `.cursor/cli.json` can approve things), so Ask, Auto and Plan first run in its
   read-only `ask` and `plan` modes; a thread that can't be put in one doesn't start.
+- **Grok** has no setting a client can force: its mode comes from its config
+  and from `~/.claude/settings.json` (`defaultMode: "auto"` there made 1.0.77
+  run a write and a command with no request, 15 Nov 2026). So it runs as
+  `grok agent --no-leader --plugin-dir <data dir>/grok-guard/threadbear-<16 hex>
+  stdio`, a plugin made for that start: its PreToolUse hook (`guard-ask.mjs`,
+  run by the runner's node, `failClosed`) answers `ask` for every call but a
+  read (`read_file`, `list_dir`, `grep`, its tool search, its to-do list, a
+  command's output) naming nothing outside the thread's folder, links
+  followed, with no `..` anywhere. A hook's `ask` reaches
+  `session/request_permission` whatever Grok's mode, saved grants, read-only
+  commands or a folder's rules say. Leader mode ignores `--plugin-dir`, hence
+  `--no-leader`. A folder can turn a plugin off by name (`[plugins] disabled`
+  in its `.grok/config.toml`, untrusted too), hence the random name, and the
+  plugin's UserPromptSubmit hook: Grok reports each hook it ran
+  (`_x.ai/session_notification`, `hook_execution`), and a turn where the
+  model says anything before that report names the plugin, or a
+  `user_prompt_submit` or `pre_tool_use` report without it, ends the process
+  there with an error (small jobs fail the same way). A folder Grok trusts
+  (`~/.grok/trusted_folders.toml`, or one above it, and always the home folder
+  and a disk's root) runs its own hooks, which can act at session start and
+  rewrite a call after the guard has looked: a Grok thread there starts only
+  on Full, and the guard asks for everything there. Trusted when the process
+  started stays so for its life (the start's plugin passes `trusted` to the
+  guard), so leaving Full stops it even if the folder has left the file since. Grok has no session modes, so nothing else changes with the
+  thread's mode; in its auto mode its classifier still looks first and may
+  refuse a call. Grok adds the hook to a request's title (`— hook '...'
+  asks: ...`), which the card leaves off, and its MCP calls go through
+  `use_tool` naming `<server>__<tool>`: one of the session's own
+  `threadbear__` tools is allowed as it comes, as the MCP server gates it. A
+  rejected call ends Grok's turn (`stopReason: "cancelled"`).
 - **Plan first** uses the agent's plan mode, and the last reply of a turn is
   proposed as the plan.
 - **The threadbear tools** reach the agent as an MCP server over HTTP on
   `127.0.0.1` (a port per live session), with a random bearer token in a
   header; loopback `Host` and no `Origin` required. They go through the same
   gate as a Codex thread's, so `delete_thread` always asks.
-- **Small jobs** (titles, summaries; `models.run`) run on OpenCode only when
+- **Small jobs** (titles, summaries; `models.run`) run on OpenCode or Grok only when
   Settings picks a pool with no Claude login in it (never on Cursor, whose read
   tools can't be turned off), so the built-in `claude`
   pool never becomes another agent. The agent starts in an empty folder with no
-  MCP servers and every tool denied, in its read-only mode; every request it
-  makes is refused, and the prompt goes over stdin, never in its arguments.
+  MCP servers and every tool denied (Grok: the `threadbear-deny` plugin, whose
+  hook denies every call, reads too), in its read-only mode where it has one;
+  every request it makes is refused, and the prompt goes over stdin, never in
+  its arguments.
 - **Updates.** Threadbear never updates these CLIs by itself, as they have no
   version feed to compare with: `clis.list` has a row for each, and
   `clis.update` runs the agent's own updater when asked. `clis.setPolicy` does

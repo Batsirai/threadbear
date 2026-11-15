@@ -261,12 +261,20 @@ File references are where to look.
   Highlights request fails, the app retries after 1 second, then 2, then 4,
   up to 5 seconds between tries while you're looking at that thread. It
   stops retrying when you leave or the request goes away.
-- **When OpenCode or Cursor's CLI is installed and logged in** it also starts the
-  `opencode acp` and Cursor's `agent acp` CLIs for threads on them, runs each
+- **When OpenCode, Cursor or Grok's CLI is installed and logged in** it also starts the
+  `opencode acp`, Cursor's `agent acp` and `grok agent --no-leader stdio` CLIs for threads on them, runs each
   with `--version` when the runner starts, and runs its own updater
-  (`opencode upgrade`, `agent update`) only when you press Update in the app, and each
+  (`opencode upgrade`, `agent update`, `grok update`) only when you press Update in the app, and each
   live thread on one has a listener on `127.0.0.1` on a port the system picks,
   serving that thread's Threadbear tools, needing a random token made for it.
+  Grok is started with `--plugin-dir <data dir>/grok-guard/threadbear-<random>`:
+  a folder the runner makes for each start (and removes after a week),
+  holding a PreToolUse hook that runs `guard-ask.mjs` (`guard-deny.mjs` for a
+  small job) from `grok-guard` with the runner's own node before each of
+  Grok's tool calls, so they come to you first, and a UserPromptSubmit hook
+  (`seen.mjs`, which does nothing) whose running Grok reports, so a thread
+  whose plugin didn't load is stopped. The guard reads
+  `~/.grok/trusted_folders.toml` (`runner/src/adapters/acp/grok-guard.ts`).
 - **New installs start threads on Auto.** On Auto, Claude runs with its
   safety check approving or blocking each action, and Codex asks before
   edits. An install set up before 9 Nov 2026 keeps starting threads on
@@ -542,6 +550,11 @@ File references are where to look.
   `~/.cursor/cli-config.json` exists (never opened). OpenCode itself reads
   `~/.config/opencode` and, as it does anywhere, your `~/.claude/skills`; a
   folder's own OpenCode config and plugins are turned off.
+- Whether `~/.local/bin/grok`, `~/.grok/bin/grok` or a `grok` on your PATH
+  exists and where it really leads, and whether `~/.grok/auth.json` exists
+  (never opened). Grok itself reads `~/.grok`, and as it does anywhere your
+  `~/.claude` settings, hooks, skills and `CLAUDE.md`; its threads run your
+  own Grok and Claude hooks.
 - Token Stats' files, if you have that app, and any logins you've added
   under `accounts` in its data folder (`claude-1`, `codex-1`...).
 - Your first name, from your Mac account's full name (`id -F`), so its
@@ -581,6 +594,7 @@ File references are where to look.
 | Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `cardReviewer` experiment on (off by default), an approval card in a thread on Auto, with the thread's first and latest messages, goes to Opus through the same CLI so it can decide in your place. Unless you turn off Settings > General > Code review (`"labReview": false`), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one (or a fresh session of the same provider, with no other login). After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
 | OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with a thread on OpenCode: that thread's prompts and tool output, through the official CLI, and small jobs' text when a pool of only OpenCode logins is picked for them in Settings |
 | Cursor (api2.cursor.sh) | theirs | Only with a thread on Cursor: the same, on your own login |
+| xAI (cli-chat-proxy.grok.com and Grok's other services) | theirs | Only with a thread on Grok: the same, on your own login, and small jobs' text when a pool of only Grok logins is picked for them in Settings. After a Grok turn fails because the API couldn't be reached, the runner opens (and closes) a connection to cli-chat-proxy.grok.com as it does for the others |
 | Mike's push relay | Mike's | Only when a paired iPhone or Android phone gets a notification (an Android phone's goes on to Google's Firebase Cloud Messaging, from the relay). It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |
 | Sentry | Mike's | Nothing from your copy. Only a copy whose `origin` is Mike's own repo reports errors or uploads the app's debug symbols (`runner/src/sentry.ts`, `app/Sources/Threadbear/CrashReporting.swift`, `app/build-app.sh`). The installed GPUI app of Mike's repo, on the real data folder, sends its panics, crashes and freezes of 15 seconds or more, each as one POST to Sentry's endpoint with the function names and nothing typed or opened (`desktop/core/src/crash_report.rs`, `desktop/gpui/src/crash_reporting.rs`); it uploads no symbols. The App Store iPhone app sends anonymous crash reports. |
