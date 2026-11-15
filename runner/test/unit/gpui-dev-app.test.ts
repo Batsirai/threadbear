@@ -110,6 +110,8 @@ test('remote builds expose the full live log and still find the built binaries',
   const home = path.join(tmp, 'home');
   const temp = path.join(tmp, 'tmp');
   for (const dir of [scripts, bin, home, temp]) fs.mkdirSync(dir, { recursive: true });
+  // dev-app refuses a group-writable TMPDIR, and a umask of 0002 (some Linux boxes) makes one.
+  fs.chmodSync(temp, 0o700);
   fs.copyFileSync(path.join(path.dirname(DEV_APP), 'dev-app.ts'), path.join(scripts, 'dev-app.ts'));
   fs.writeFileSync(path.join(checkout, 'package.json'), '{"type":"module"}');
   const config = path.join(home, 'Library', 'Application Support', 'Threadbear');
@@ -180,7 +182,9 @@ test('start, do, dump, stop, and the idle quit, with a stand-in app on the mock'
   const tmp = tmpDir('gpui-dev-app-');
   const app = path.join(tmp, 'fake-app');
   fs.writeFileSync(app, FAKE_APP, { mode: 0o755 });
+  // 0700 whatever the umask: dev-app refuses a group-writable TMPDIR.
   fs.mkdirSync(path.join(tmp, 'tmp'));
+  fs.chmodSync(path.join(tmp, 'tmp'), 0o700);
   fs.mkdirSync(path.join(tmp, 'home'));
   const env = { TMPDIR: path.join(tmp, 'tmp'), HOME: path.join(tmp, 'home'), TB_GPUI_BIN: app, THREADBEAR_THREAD_ID: 'thread-one', DEV_APP_IDLE_QUIT_SECONDS: '4' };
   const realHome = path.join(tmp, 'home', 'Library', 'Application Support', 'Threadbear');
