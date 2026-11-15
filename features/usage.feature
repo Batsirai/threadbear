@@ -48,6 +48,20 @@ Feature: The Usage panel and its honey pot
     When "claude-main"'s week resets
     Then the honey pot is 100% full, for "claude-main"
 
+  # From Claude Code 2.1.325 a sign-in ends 28 days after it was made, and
+  # claude-1's ended unnoticed on 14 Nov 2026. The frozen Swift app has none of it.
+  @usage.sign-in @swift-pending
+  Scenario: A login that's signed out, or whose sign-in ends in days, says so with a dot on the honey pot
+    Then the honey pot has no dot
+    When "claude-3"'s sign-in ends in 50 hours
+    And I click the honey pot in the activity bar
+    Then in the "Claude" card, "alex+3@example.com" warns its sign-in ends
+    And the honey pot has a dot
+    And a line of the honey pot's tooltip starts "claude-3 (alex+3@example.com): sign-in ends"
+    When "claude-4" is signed out
+    Then in the "Claude" card, "alex+4@example.com" says "Signed out"
+    And the honey pot's tooltip says "claude-4 (alex+4@example.com) is signed out"
+
   # Swift's scripted form switch waits for an actual mouse-up.
   @usage.pools @swift-pending
   Scenario: Clicking the model limit switch changes the card

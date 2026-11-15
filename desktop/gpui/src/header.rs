@@ -1002,13 +1002,13 @@ impl Threadbear {
         };
         let login = if who.is_empty() { name.clone() } else { format!("{name} login {who}") };
         let (text, tip) = match (&account, &remote) {
-            (Some(_), _) => (format!("{login} needs you to sign in again."), format!("{login} was refused: signed out, or its sign-in ended. Sign in… opens its own sign-in")),
+            (Some(_), _) => (format!("{login} is signed out."), format!("{login} was refused: signed out, or its sign-in ended. Sign in… opens its own sign-in")),
             (None, Some(runner)) => {
                 let command = logins.login_command(provider);
                 let tip = if command.is_empty() { format!("Sign in on {runner} itself") } else { format!("Sign in on {runner} itself: {command} in its Terminal") };
-                (format!("{login} on {runner} needs you to sign in again."), tip)
+                (format!("{login} on {runner} is signed out."), tip)
             }
-            (None, None) => (format!("{login} needs you to sign in again."), "Sign in using that login's CLI, then send your last message again".into()),
+            (None, None) => (format!("{login} is signed out."), "Sign in using that login's CLI, then send your last message again".into()),
         };
         h_flex()
             .flex_none()

@@ -2293,9 +2293,10 @@ thread to another login when the one it's on runs out of room.
   Keychain) at start, every 10 minutes and after a refused turn. A login is
   `signedOut` when the CLI says `loggedIn: false`, when its
   `loginExpiresAt` has passed (the CLI goes on saying `loggedIn` for a few
-  hours after, on an access token it can't renew), or when a turn on it was
-  refused and no new sign-in (another `loginExpiresAt`) or working turn has
-  been seen since. `loginEndsAt` is that `loginExpiresAt`. Pools and
+  hours after, on an access token it can't renew), or for an hour after a
+  turn on it was refused, unless a new sign-in (another `loginExpiresAt`)
+  or a working turn is seen first. The hour is so a one-off refusal
+  doesn't keep a good login out until its end date. `loginEndsAt` is that `loginExpiresAt`. Pools and
   new threads skip a signed-out login whatever its room. A pool thread
   whose turn is refused moves like one at its limit, with the
   runner-origin message "Your last login was signed out, so this thread

@@ -24,6 +24,11 @@ export const CHECK_MS = 10 * 60_000;
 // die overnight on it.
 export const ENDING_SOON_MS = 3 * 24 * 3600_000;
 const TIMEOUT_MS = 15_000;
+// A refused turn on a login the CLI still calls signed in, with an end
+// still ahead, holds it out of the pools this long and no longer: a
+// one-off 401 mustn't keep a good login out until its end date. An ended
+// sign-in needs no refusal to count (viewOf).
+export const REFUSAL_HOLD_MS = 60 * 60_000;
 
 export type AuthStatus = { loggedIn: boolean; endsAt?: number };
 type Reading = AuthStatus & { checkedAt: number };
@@ -49,8 +54,8 @@ export function parseAuthStatus(stdout: string): AuthStatus | undefined {
 
 // A login is signed out when the CLI says so, when its sign-in has ended
 // (the CLI still says loggedIn for a few hours after, on an access token
-// that can't be renewed), or when a turn on it was refused and no new
-// sign-in has been seen since.
+// that can't be renewed), or when a turn on it was refused lately
+// (REFUSAL_HOLD_MS) and no new sign-in has been seen since.
 export function viewOf(r: Reading | undefined, refused: boolean, now: number): SignInView {
   const ended = !!r && (!r.loggedIn || (r.endsAt !== undefined && r.endsAt <= now));
   const out: SignInView = {};
@@ -80,7 +85,7 @@ export class SignInState {
   private readings = new Map<string, Reading>();
   // A refused turn, with the sign-in's end as it was then: a reading with
   // another end is a new sign-in, and takes the refusal back.
-  private refused = new Map<string, number | undefined>();
+  private refused = new Map<string, { endsAt?: number; at: number }>();
   private listeners = new Set<() => void>();
   private timer?: TimerHandle;
   private running?: Promise<void>;
@@ -107,16 +112,19 @@ export class SignInState {
 
   view(account: Account): SignInView {
     if (account.provider !== 'claude') return {};
-    return viewOf(this.readings.get(account.id), this.refused.has(account.id), this.o.clock.now());
+    const now = this.o.clock.now();
+    const refusal = this.refused.get(account.id);
+    return viewOf(this.readings.get(account.id), !!refusal && now - refusal.at < REFUSAL_HOLD_MS, now);
   }
 
   // A turn on this login failed with its login refused: it counts as signed
   // out now, and the CLI is asked again for its end date.
   noteRefused(accountId: string): void {
-    const had = this.refused.has(accountId);
-    this.refused.set(accountId, this.readings.get(accountId)?.endsAt);
-    if (!had) this.changed();
     const account = this.o.accounts().find((a) => a.id === accountId);
+    const before = account ? JSON.stringify(this.view(account)) : '';
+    this.refused.set(accountId, { endsAt: this.readings.get(accountId)?.endsAt, at: this.o.clock.now() });
+    // The sweep every CHECK_MS tells listeners when the hold runs out.
+    if (account && JSON.stringify(this.view(account)) !== before) this.changed();
     if (account?.provider === 'claude') void this.queue(() => this.check(account));
   }
 
@@ -164,7 +172,7 @@ export class SignInState {
     if (!status) return;
     const before = JSON.stringify(this.view(account));
     this.readings.set(account.id, { ...status, checkedAt: this.o.clock.now() });
-    if (this.refused.has(account.id) && status.loggedIn && status.endsAt !== undefined && status.endsAt > this.o.clock.now() && status.endsAt !== this.refused.get(account.id)) {
+    if (this.refused.has(account.id) && status.loggedIn && status.endsAt !== undefined && status.endsAt > this.o.clock.now() && status.endsAt !== this.refused.get(account.id)?.endsAt) {
       this.refused.delete(account.id);
     }
     if (tell && JSON.stringify(this.view(account)) !== before) this.changed();

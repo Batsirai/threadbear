@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { ENDING_SOON_MS, SignInState, parseAuthStatus, signInWords, viewOf } from '../../src/sign-in-state.ts';
+import { ENDING_SOON_MS, REFUSAL_HOLD_MS, SignInState, parseAuthStatus, signInWords, viewOf } from '../../src/sign-in-state.ts';
 import { loginOk, pickInPool, roomWord } from '../../src/pools.ts';
 import { pickAccount } from '../../src/usage.ts';
 import type { Account } from '../../src/protocol.ts';
@@ -93,6 +93,13 @@ test('a refusal holds until a new sign-in (another end date) or a turn that work
   assert.equal(state.view(accounts[0]).signedOut, undefined, 'a new sign-in');
   state.noteRefused('claude-1');
   state.noteWorked('claude-1');
+  assert.equal(state.view(accounts[0]).signedOut, undefined);
+  // A one-off refusal on a login the CLI still calls signed in, with its
+  // end ahead, holds it out for an hour, not until that end.
+  state.noteRefused('claude-1');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(state.view(accounts[0]).signedOut, true);
+  clock.advance(REFUSAL_HOLD_MS);
   assert.equal(state.view(accounts[0]).signedOut, undefined);
   state.stop();
 });

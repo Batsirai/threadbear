@@ -303,7 +303,8 @@ impl Threadbear {
             "icon": {
                 "percent": (level * 100.).round() as i64,
                 "login": login,
-                "tip": rules::icon_tooltip(&rules::groups(&self.logins.pools, accounts), now, &zone),
+                "tip": rules::icon_tooltip_with_sign_ins(&rules::groups(&self.logins.pools, accounts), accounts, now, &zone),
+                "dot": rules::sign_in_needed(accounts, now),
             },
             "tiles": stats.map(|s| rules::tiles(s, accounts, now, &zone).iter().map(|t| json!({ "title": t.title, "value": t.value, "detail": t.detail })).collect::<Vec<_>>()).unwrap_or_default(),
             "chart": stats.map(|s| {
@@ -319,6 +320,7 @@ impl Threadbear {
                     "note": l.note,
                     "today": l.today.as_ref().map(|t| &t.0),
                     "status": l.status.map(LoginStatus::words),
+                    "signInEnds": l.sign_in_ends,
                     "meters": l.meters.iter().map(|m| json!({ "title": m.title, "left": m.left, "verdict": m.verdict.as_ref().map(|v| &v.text) })).collect::<Vec<_>>(),
                     "more": l.more,
                 }))).collect::<Vec<_>>(),

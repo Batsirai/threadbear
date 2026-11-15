@@ -745,6 +745,7 @@ impl Draft<'_> {
                 let usage = usage_of(account);
                 let tight = usage.as_ref().and_then(tightest);
                 let look = match tight {
+                    _ if account.signed_out => RoomLook::Blocked,
                     Some(t) if usage.as_ref().is_some_and(|u| u.blocked) || t.remaining_percent < 1. => RoomLook::Blocked,
                     Some(t) if t.remaining_percent < CHIP_WARNING => RoomLook::Low,
                     _ => RoomLook::Ample,
@@ -753,7 +754,7 @@ impl Draft<'_> {
                     id: account.id.clone(),
                     label: account_label(&account.id, &self.logins.accounts),
                     note: account.note.clone().filter(|n| !n.is_empty()),
-                    line: room_line(usage.as_ref()).unwrap_or_else(|| "Nothing known yet".to_owned()),
+                    line: if account.signed_out { "Signed out".to_owned() } else { room_line(usage.as_ref()).unwrap_or_else(|| "Nothing known yet".to_owned()) },
                     tooltip: room_tooltip(account, now),
                     selected: pool.is_none() && account.id == selected,
                     fraction: tight.map(|t| (t.remaining_percent / 100.).clamp(0., 1.)),
