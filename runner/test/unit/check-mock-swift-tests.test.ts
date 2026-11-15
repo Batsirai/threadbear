@@ -51,7 +51,7 @@ function checkout() {
   return { root, log };
 }
 
-function run(c: { root: string; log: string }, flags: string[], changed: string[]) {
+function run(c: { root: string; log: string }, flags: string[], changed: string[], extra: NodeJS.ProcessEnv = {}) {
   fs.rmSync(c.log, { force: true });
   const list = path.join(c.root, '.changed');
   fs.writeFileSync(list, changed.join('\n') + (changed.length ? '\n' : ''));
@@ -63,6 +63,7 @@ function run(c: { root: string; log: string }, flags: string[], changed: string[
     TMPDIR: c.root,
     // As if Xcode is there, so the swift test steps run rather than skip.
     DEVELOPER_DIR: '/Applications/Xcode.app/Contents/Developer',
+    ...extra,
   };
   for (const k of Object.keys(env)) if (/^THREAD(BEAR|BARE)_CHECK_HOST$/.test(k)) delete env[k];
   const r = spawnSync('bash', [path.join(c.root, 'check.sh'), ...flags, '--local'], { env, encoding: 'utf8', timeout: 120_000 });
@@ -113,6 +114,16 @@ test('--runner never does, and the full check runs the whole suite instead when 
     const both = run(c, ['--app'], ['app/Tools/mock-runner/server.mjs', 'app/Sources/Threadbear/X.swift']);
     assert.ok(both.swift.includes('swift test --disable-keychain'), both.out);
     assert.ok(!both.swift.includes(FILTERED), both.out);
+  } finally {
+    fs.rmSync(c.root, { recursive: true, force: true });
+  }
+});
+
+test('with no check host to take it (the fallback on this Mac) they still run, rather than land unchecked', () => {
+  const c = checkout();
+  try {
+    const r = run(c, ['--quick'], ['app/Tools/mock-runner/server.mjs'], { THREADBEAR_CHECK_FALLBACK: '1' });
+    assert.ok(r.swift.includes(FILTERED), r.out);
   } finally {
     fs.rmSync(c.root, { recursive: true, force: true });
   }
