@@ -222,6 +222,20 @@ const CODE_RUNNER_APPS: &[&str] = &[
     "net.kovidgoyal.kitty", "dev.warp.warp-stable", "com.mitchellh.ghostty", "io.alacritty", "co.zeit.hyper", "com.github.wez.wezterm", "com.panic.prompt3",
 ];
 
+/// Where an app the gate hands a file to may be: the Mac's own folders for
+/// apps, and the user's own Applications folder, which a thread confined to
+/// a project can't write. Followed through its links first; an app path
+/// the system gave that isn't there to follow is taken as it is.
+pub fn installed_where_apps_are(app: &Path) -> bool {
+    let real = real_path(app).unwrap_or_else(|_| app.to_path_buf());
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join("Applications"));
+    ["/Applications/", "/System/Applications/", "/System/Library/CoreServices/", "/System/Volumes/Preboot/Cryptexes/", "/Library/", "/System/Library/"]
+        .iter()
+        .map(PathBuf::from)
+        .chain(home)
+        .any(|root| real.starts_with(&root))
+}
+
 pub fn is_code_runner(bundle_id: &str) -> bool {
     CODE_RUNNER_APPS.contains(&bundle_id.to_ascii_lowercase().as_str())
 }
@@ -412,6 +426,27 @@ pub struct Look {
     pub app: Option<OpeningApp>,
     /// It's a folder (or a bundle).
     pub is_dir: bool,
+    /// Where the volume it's on is mounted (a Mac), so the gate can check a
+    /// reference to it names this volume as well as this inode.
+    pub volume: Option<PathBuf>,
+}
+
+/// The mount point of the volume `path` is on.
+#[cfg(target_os = "macos")]
+fn volume_of(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut fs: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(name.as_ptr(), &mut fs) } != 0 {
+        return None;
+    }
+    let mount = unsafe { std::ffi::CStr::from_ptr(fs.f_mntonname.as_ptr()) };
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(mount.to_bytes())))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn volume_of(_path: &Path) -> Option<PathBuf> {
+    None
 }
 
 /// A file's identity on its disk: the same object, whatever its path names
@@ -477,9 +512,11 @@ pub fn opener(look: &Look) -> Opener {
     match &look.app {
         // An app opening as itself is launched, so the system does it.
         Some(app) if app.path == look.resolved => Opener::System,
-        // A plain folder goes to a file browser window, never to the app
-        // Launch Services has for it.
-        _ if look.runs.is_none() && look.is_dir => Opener::FileViewer,
+        // A plain folder is shown in the file browser. A document package
+        // (`.rtfd`, `.xcodeproj`) goes to its app like a document, by
+        // reference; Finder is never handed one to open, as it launches a
+        // bundle moved in there.
+        _ if look.runs.is_none() && look.is_dir && look.app.as_ref().is_none_or(|a| a.bundle_id.as_deref().is_some_and(|id| id.eq_ignore_ascii_case("com.apple.finder"))) => Opener::FileViewer,
         Some(app) => Opener::App(app.path.clone()),
         None => Opener::System,
     }
@@ -511,7 +548,8 @@ pub fn look(path: &Path, app_for: &dyn Fn(&Path) -> Option<OpeningApp>) -> Optio
     let id = None;
     let app = app_for(&resolved);
     let runs = runs(&resolved, &meta, app.clone());
-    Some(Look { resolved, runs, linked, id, app, is_dir: meta.is_dir() })
+    let volume = volume_of(&resolved);
+    Some(Look { resolved, runs, linked, id, app, is_dir: meta.is_dir(), volume })
 }
 
 /// Why opening `file` would or might run something (`OpenGate.runs`).
@@ -534,6 +572,14 @@ fn runs(file: &Path, meta: &std::fs::Metadata, app: Option<OpeningApp>) -> Optio
         }
         if app.bundle_id.as_deref().is_some_and(is_code_runner) {
             return Some(format!("It opens in {}, which runs it.", app.name));
+        }
+        // An app in a project folder (or anywhere else a thread can write)
+        // can be made a file's opener, with Launch Services' per-file "open
+        // with" setting on the file itself, and opening the file would
+        // start it (Grok's review of the Daybreak 125 fix).
+        if !installed_where_apps_are(&app.path) {
+            let folder = app.path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            return Some(format!("It opens in {}, an app in {folder}, not one installed where apps go, so opening it would run that app.", app.name));
         }
     }
     // A plain folder goes to the file browser.
@@ -628,7 +674,7 @@ pub fn decide_file(path: &str, origin: Origin, app_for: &dyn Fn(&Path) -> Option
 /// this, the moment between it and the system's own lookup, is why the file
 /// goes to the app that was checked (`Opener`).
 pub fn still_same(path: &str, asked: &Look, app_for: &dyn Fn(&Path) -> Option<OpeningApp>) -> bool {
-    look(Path::new(path), app_for).is_some_and(|now| now.resolved == asked.resolved && now.runs == asked.runs && now.id == asked.id && now.app == asked.app && now.is_dir == asked.is_dir)
+    look(Path::new(path), app_for).is_some_and(|now| now.resolved == asked.resolved && now.runs == asked.runs && now.id == asked.id && now.app == asked.app && now.is_dir == asked.is_dir && now.volume == asked.volume)
 }
 
 /// Where the system can't be handed the checked file itself (Windows and
@@ -662,14 +708,17 @@ pub fn checked_copy(look: &Look, folder: &Path, limit: u64) -> std::io::Result<P
     Ok(copy)
 }
 
-/// The inode a macOS file reference URL (`file:///.file/id=<volume>.<inode>`)
-/// names, so the gate can check the reference it made is to the file it
-/// looked at.
-pub fn reference_inode(url: &str) -> Option<u64> {
+/// The volume and inode a macOS file reference URL
+/// (`file:///.file/id=<volume>.<inode>`) names, so the gate can check the
+/// reference it made is to the file it looked at. The volume number is one
+/// per APFS volume group (System and Data share it, and their inodes don't
+/// overlap), so the gate compares it with the number a reference to the
+/// looked-at file's mount point carries: tried on Tinker Desk for the Data
+/// volume, the system volume, Preboot and a mounted disk image.
+pub fn reference_id(url: &str) -> Option<(u64, u64)> {
     let rest = url.strip_prefix("file:///.file/id=")?.trim_end_matches('/');
     let (volume, inode) = rest.split_once('.')?;
-    volume.parse::<u64>().ok()?;
-    inode.parse().ok()
+    Some((volume.parse().ok()?, inode.parse().ok()?))
 }
 
 // ---------------------------------------------------------------- shown in the app
@@ -1565,12 +1614,50 @@ mod tests {
         assert!(checked_copy(&look, &s.path("opened"), 1024).is_err(), "a program swapped in after the yes was copied");
     }
 
+    /// Grok's review: an app in the project made a document's opener (the
+    /// file's own "open with" setting) would have been started with no
+    /// question. An opener that isn't installed where apps go asks.
+    #[cfg(unix)]
+    #[test]
+    fn a_document_whose_app_is_in_the_project_asks() {
+        let s = Scratch::new("project-app");
+        let evil = app_bundle(&s, "tools/Evil.app");
+        let doc = s.file("readme.md", "# hi");
+        let in_project = |_: &Path| Some(OpeningApp { path: evil.clone(), bundle_id: Some("com.evil.preview".into()), name: "Evil".into() });
+        let FileVerdict::Ask { question, .. } = decide_file(&doc.to_string_lossy(), Origin::ThisMac, &in_project) else { panic!("a document opening in a project's app didn't ask") };
+        assert!(question.detail.contains("Evil"), "{}", question.detail);
+        assert!(installed_where_apps_are(Path::new("/System/Applications/TextEdit.app")));
+        assert!(!installed_where_apps_are(&evil));
+    }
+
+    /// A document package goes to its app (by reference), a plain folder to
+    /// the file browser, and Finder is never the app handed one.
+    #[cfg(unix)]
+    #[test]
+    fn a_document_package_opens_in_its_app() {
+        let s = Scratch::new("package");
+        fs::create_dir_all(s.path("notes.rtfd")).unwrap();
+        fs::create_dir_all(s.path("plain")).unwrap();
+        let apps = |p: &Path| -> Option<OpeningApp> {
+            if extension(p) == "rtfd" {
+                Some(OpeningApp { path: "/System/Applications/TextEdit.app".into(), bundle_id: Some("com.apple.TextEdit".into()), name: "TextEdit".into() })
+            } else {
+                Some(OpeningApp { path: "/System/Library/CoreServices/Finder.app".into(), bundle_id: Some("com.apple.finder".into()), name: "Finder".into() })
+            }
+        };
+        let FileVerdict::Open { with, .. } = decide_file(&s.path("notes.rtfd").to_string_lossy(), Origin::ThisMac, &apps) else { panic!() };
+        assert_eq!(with, Opener::App("/System/Applications/TextEdit.app".into()));
+        let FileVerdict::Open { with, .. } = decide_file(&s.path("plain").to_string_lossy(), Origin::ThisMac, &apps) else { panic!() };
+        assert_eq!(with, Opener::FileViewer);
+    }
+
     #[test]
     fn a_reference_urls_inode_is_read() {
-        assert_eq!(reference_inode("file:///.file/id=6571367.368739028/"), Some(368739028));
-        assert_eq!(reference_inode("file:///.file/id=6571367.368739028"), Some(368739028));
-        assert_eq!(reference_inode("file:///private/tmp/Tool.app/"), None);
-        assert_eq!(reference_inode("file:///.file/id=x.1/"), None);
+        assert_eq!(reference_id("file:///.file/id=6571367.368739028/"), Some((6571367, 368739028)));
+        assert_eq!(reference_id("file:///.file/id=7873307.16"), Some((7873307, 16)));
+        assert_eq!(reference_id("file:///private/tmp/Tool.app/"), None);
+        assert_eq!(reference_id("file:///.file/id=x.1/"), None);
+        assert_eq!(reference_id("file:///.file/id=1.x/"), None);
     }
 
     #[test]

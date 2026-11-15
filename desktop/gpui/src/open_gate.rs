@@ -431,9 +431,14 @@ fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut
     // The reference names the inode at the path now; it must be the one
     // looked at, or a swap got in between the look and here.
     let file = NSURL::fileURLWithPath(&NSString::from_str(&look.resolved.to_string_lossy())).fileReferenceURL().ok_or_else(|| changed.clone())?;
-    let reference = file.absoluteString().map(|s| s.to_string()).unwrap_or_default();
-    if look.id.is_none() || policy::reference_inode(&reference) != look.id.map(|id| id.inode) {
-        return Err(changed);
+    let reference = |url: &NSURL| url.absoluteString().map(|s| policy::reference_id(&s.to_string())).unwrap_or_default();
+    // An inode number names a file only on its own volume, so the volume
+    // too (verify-fix's read of the Daybreak 125 fix): the one a reference
+    // to the mount point found at the look carries.
+    let volume = look.volume.as_ref().and_then(|v| NSURL::fileURLWithPath(&NSString::from_str(&v.to_string_lossy())).fileReferenceURL()).and_then(|v| reference(&v)).map(|(volume, _)| volume);
+    match (reference(&file), look.id, volume) {
+        (Some((v, inode)), Some(id), Some(want)) if v == want && inode == id.inode => {}
+        _ => return Err(changed),
     }
     // A script's run keeps the URL alone, as every open is kept, for the specs.
     if scripted_opens(url) {
@@ -471,7 +476,9 @@ fn open_the_file(look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut
         if look.runs.is_some() {
             return Err("is a bundle, which Threadbear can't open safely here. Open it from your file manager.".to_owned());
         }
-        system_open(url, cx);
+        // With a slash on the end, the path only resolves to a folder: a
+        // file or a link to one swapped in after the look isn't found.
+        system_open(&format!("{}/", url.trim_end_matches('/')), cx);
         return Ok(());
     }
     // A file (a document, or a program said yes to) opens from a private

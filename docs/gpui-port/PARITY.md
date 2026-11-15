@@ -5084,23 +5084,28 @@ Fixes from Codex's review of the slice before:
   it launched with no question. Now each open looks again right before
   (same real path, same file on disk by device and inode, same kind, same
   app), and then opens the file it looked at rather than its path. On a Mac
-  that's a file reference URL (`file:///.file/id=...`, which names the
-  inode, checked against the look) handed to the app that was checked
+  that's a file reference URL (`file:///.file/id=<volume>.<inode>`, both
+  checked against the look) handed to the app that was checked
   (NSWorkspace's openURLs:withApplicationAtURL:); tried on Tinker Desk, an
   app or script moved into the path after the reference was made never ran,
   and a confirmed script ran the one asked about. A plain folder is shown
   selected in Finder rather than opened in a window of its own: a Finder
   window rooted at a path, or Finder asked to open it, launched an app
-  swapped in there; revealing it didn't. The Swift app (frozen) still opens
-  by path.
+  swapped in there; revealing it didn't. A document package (`.rtfd`,
+  `.xcodeproj`) still opens in its app. An app outside where apps are
+  installed (`/Applications`, `~/Applications`, the system's) that the
+  system names as a file's opener (a file's own "open with" setting can
+  name an app in the project) means a question first, as a program does.
+  The Swift app (frozen) still opens by path.
 - Windows and Linux can't name the app or hold a file through the system's
   opener, so a file (a document, or a program once said yes to) opens from a
   private, read-only copy of the checked file, taken from a handle that must
   be the file looked at (its inode, or on Windows its volume and file ID),
   in `~/.cache/threadbear/opened` or `%LOCALAPPDATA%\Threadbear\opened`,
   cleared after a day. Edits made there don't reach the original. A plain
-  folder still goes to the file manager by its path, after the look; a
-  bundle folder there isn't opened.
+  folder still goes to the file manager by its path with a slash on the
+  end, after the look, so only a folder is found there; a bundle folder
+  isn't opened.
 - Rules and their tests: `desktop/core/src/open_policy.rs` (`Opener`,
   `still_same`, `checked_copy`), the gate: `desktop/gpui/src/open_gate.rs`
   (`open_checked`), `desktop/core/tests/open_gate_source.rs`.

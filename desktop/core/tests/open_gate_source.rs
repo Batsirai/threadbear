@@ -341,6 +341,6 @@ fn checked_files_open_by_reference_not_by_path() {
     assert!(checked.contains("still_same("), "open_checked doesn't look again");
     let mac = gate.split("#[cfg(target_os = \"macos\")]\nfn open_the_file(").nth(1).expect("the Mac's open_the_file");
     let mac = fn_body(&format!("fn open_the_file({mac}"), "fn open_the_file(");
-    assert!(mac.contains("fileReferenceURL()") && mac.contains("reference_inode("), "the Mac opens the path, not the checked inode");
+    assert!(mac.contains("fileReferenceURL()") && mac.contains("reference_id("), "the Mac opens the path, not the checked inode");
     assert!(!mac.contains("system_open(") && !mac.contains("fileURLWithPath(&NSString::from_str(url"), "the Mac hands a path to the system:\n{mac}");
 }
