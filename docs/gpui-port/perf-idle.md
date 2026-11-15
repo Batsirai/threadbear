@@ -345,6 +345,10 @@ itself still shows a one-frame blank on the switch, including in a small
 AppKit, Metal and Core Animation app with no GPUI in it, so it's a difference
 between ways of recording, not proof either way of what the screen shows.
 
+Open risks: native layers covering GPUI overlays, clipping and opacity while
+rows move, window lifetime and recovery from a failed draw, and what it costs
+in scrolling and in WindowServer.
+
 Not done: the paired scroll CPU and input-to-handoff comparison on the last
 version (an earlier one held the main thread in `nextDrawable` while
 scrolling, 21 to 34 ms p90 from invalidation to handoff), the matched Swift
@@ -503,23 +507,6 @@ Any Swift comparison is labelled debug/direct and covers app-process CPU and
 wakeups. It excludes animation work in the render server; GPUI's process
 counters also exclude Chromium helper processes. Swift's loading dump has no
 spinner field, so the reference covers settled and working-thread phases.
-
-## Native working arc (parked)
-
-The Core Animation prototype is preserved on
-[`perf3-native-arc`](https://github.com/mikecann/threadbear/tree/perf3-native-arc).
-It remains automation-only, off by default, and unshipped. Early paired runs
-with visible working threads reduced idle app CPU from about 24% to 2.6% of
-one core, and interrupt wakeups from about 92 to 9.5 per second. These numbers
-are from an earlier prototype; the final current-main comparison was not run.
-
-The v11 menu visual gate passed. Later v14 captures passed both menu handoff
-and scroll alignment with eight working rows under seven-core load. The scroll
-CPU/latency matrix was not completed. Open risks include native layers covering
-GPUI overlays, clipping and opacity during movement, window lifetime and failure
-recovery, and possible scrolling or WindowServer cost. The display-filter
-captures establish visual evidence for that capture path, not physical-display
-parity. Work stopped on 15 November at Mike's request.
 
 ## Checks
 
