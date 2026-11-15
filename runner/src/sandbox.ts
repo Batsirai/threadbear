@@ -67,7 +67,8 @@ export function sandboxFor(sb: SandboxConfig | undefined, cwd: string): SandboxC
 // the container's network (Daybreak 124, 15 Nov 2026). So only what Claude
 // Code itself needs to run its session goes in: its config folder (its
 // login, read from there, as the CLI in a Linux container keeps it in a
-// file, not the Keychain), the settings Threadbear and the SDK set for it,
+// file, not the Keychain), the settings Threadbear and the SDK set for it
+// (each by name),
 // which model, the thread's id, and the terminal's locale. Nothing named
 // like a credential goes in, even under an allowed prefix, so a token the
 // runner's environment hands the CLI (CLAUDE_CODE_OAUTH_TOKEN,
@@ -82,6 +83,22 @@ export function sandboxFor(sb: SandboxConfig | undefined, cwd: string): SandboxC
 const SANDBOX_ENV = new Set([
   'CLAUDE_CONFIG_DIR',
   'CLAUDE_SECURESTORAGE_CONFIG_DIR',
+  // What the runner sets for the CLI (adapter.ts), and what the Agent SDK
+  // adds as it spawns it (sdk.mjs), by name: a prefix let through
+  // CLAUDE_CODE_REMOTE_MCP_CONFIG (a remote MCP server's tokens),
+  // CLAUDE_CODE_EXTRA_BODY and the like whenever the runner's environment
+  // had them (Grok's review, 15 Nov 2026).
+  'CLAUDE_AGENT_SDK_CLIENT_APP',
+  'CLAUDE_AGENT_SDK_VERSION',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_TERMINAL_MCP_TOOLS',
+  'CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD',
+  'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
+  'CLAUDE_CODE_SDK_READS_SESSION_STATE',
+  'CLAUDE_CODE_SDK_READS_STARTUP_MARKS',
+  'CLAUDE_CODE_QUESTION_PREVIEW_FORMAT',
+  'CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH',
+  'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH',
   'ANTHROPIC_MODEL',
   'ANTHROPIC_SMALL_FAST_MODEL',
   'THREADBEAR_THREAD_ID',
@@ -95,14 +112,11 @@ const SANDBOX_ENV = new Set([
   'NO_COLOR',
   'FORCE_COLOR',
 ]);
-// The Claude Code and Agent SDK settings (CLAUDE_CODE_ENTRYPOINT,
-// CLAUDE_CODE_TERMINAL_MCP_TOOLS, CLAUDE_AGENT_SDK_VERSION...), the
-// model defaults, and the locale's categories.
-const SANDBOX_ENV_PREFIX = /^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_|ANTHROPIC_DEFAULT_[A-Z0-9_]*_MODEL$|LC_)/;
+// The model defaults, and the locale's categories.
+const SANDBOX_ENV_PREFIX = /^(ANTHROPIC_DEFAULT_[A-Z0-9_]*_MODEL$|LC_[A-Z]+$)/;
 // Anything that looks like it carries a secret or reaches elsewhere stays
 // out, whatever its prefix. Matched on the name's words, upper-cased.
-const SANDBOX_ENV_DENY = /(^|_)(TOKEN|TOKENS|KEY|KEYS|SECRET|SECRETS|PASSWORD|PASSWD|PASS|PWD|CREDENTIAL|CREDENTIALS|AUTH|AUTHORIZATION|COOKIE|PRIVATE|CERT|SOCK|SOCKET|PROXY|HEADERS|URL)($|_)/;
-
+const SANDBOX_ENV_DENY = /(^|_)(TOKEN|TOKENS|KEY|KEYS|SECRET|SECRETS|PASSWORD|PASSWD|PASS|PWD|CREDENTIAL|CREDENTIALS|CREDS|AUTH|OAUTH|AUTHORIZATION|COOKIE|PRIVATE|CERT|SOCK|SOCKET|PROXY|HEADERS|URL)($|_)/;
 // Flags the SDK sets that only say what it can do ("1"), whose names
 // happen to say AUTH.
 const SANDBOX_ENV_FLAGS = new Set(['CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH', 'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH']);

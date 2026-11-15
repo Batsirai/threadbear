@@ -2179,12 +2179,14 @@ outside the sandbox read it: give sandboxed threads a login of their own.
 
 Its environment is an allowlist, not the runner's (`sandboxEnvAllowed`):
 the login's config folder, the Claude Code and Agent SDK settings the
-runner and the SDK set (`CLAUDE_CODE_*`, `CLAUDE_AGENT_SDK_*`), the model
+runner and the SDK set, each by name (`CLAUDE_CODE_ENTRYPOINT`,
+`CLAUDE_CODE_TERMINAL_MCP_TOOLS`, `CLAUDE_AGENT_SDK_VERSION`...; never a
+whole prefix, as some `CLAUDE_CODE_*` settings carry secrets), the model
 (`ANTHROPIC_MODEL` and its defaults), the thread's id and the runner's
 version, and the locale and terminal (`LANG`, `LC_*`, `TERM`, `TZ`).
 A name that reads like a credential, a socket, a proxy or an address
 (`TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `AUTH`, `CERT`, `SOCK`, `PROXY`,
-`URL`...) stays out even under those prefixes, so the CLI in the sandbox
+`URL`...) stays out even if listed, so the CLI in the sandbox
 signs in from its login's folder, never from `ANTHROPIC_API_KEY` or
 `CLAUDE_CODE_OAUTH_TOKEN`, and `THREADBEAR_THREAD_KEY` never goes in.
 Cloud, GitHub, signing and API keys, `SSH_AUTH_SOCK` and proxies in the
@@ -4136,9 +4138,18 @@ patch it trusted is asked about again (`"changed"`), once: nothing is
 carried over, as an old hash can't tell apart the file sets it was
 fooled by. (An old helper-less hash is the file's own SHA-256, so an old
 patch whose text was a version 3 hash's JSON would otherwise match the
-patch that JSON names.) A changed helper is only imported again when the runner restarts
-(Node loads a module once per process); the patch file itself loads again
-when it changes.
+patch that JSON names.) Each trusted version of a patch is a module graph
+of its own: the patch, its helpers and the packages its repo commits are
+imported at their own paths with that version's id as the query
+(`?tb=<id>`, from the patch's path and hash), with their import edges kept
+under those URLs, so a new version loads its own helpers at once and no
+version is ever handed another's helper or follows another's edges, a
+late `import()` included (Daybreak 131, 15 Nov 2026). Node keeps CommonJS
+by path whatever the query, so a trusted patch's graph refuses a CommonJS
+file (a `.cjs`, or a `.js` with `require` and `module.exports`); one
+written with `import` and `export` (`.ts`, `.js`, `.mjs`) loads, and a
+bare import of a package the repo commits loads only while the
+`package.json` Node resolved it by is this version's, byte for byte.
 
 What's imported is what was hashed. The hash is made from one read of
 each file, and a trusted patch and its helpers are imported from those

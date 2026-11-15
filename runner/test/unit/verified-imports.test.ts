@@ -90,3 +90,47 @@ test('an import the version never followed is still refused', async () => {
   const m = await load(v);
   await assert.rejects((m.later as () => Promise<unknown>)(), /didn't hash/);
 });
+
+// Grok's review: Node keeps CommonJS by path whatever the query, so two
+// versions of a .cjs helper (or a .js one in a repo without "type":
+// "module") shared whichever ran first. A trusted graph refuses it.
+for (const name of ['h.cjs', 'h.js'] as const) test(`a CommonJS helper (${name}) is refused, so no version can get another's`, async () => {
+  const dir = fs.realpathSync(tmpDir());
+  const v = (hash: string, which: string) => graph(dir, hash, { 'p.mjs': `import h from './${name}'; export const which = h.which;`, [name]: `module.exports = { which: '${which}' };` }, { 'p.mjs': { [`./${name}`]: name } });
+  fs.writeFileSync(path.join(dir, name), 'module.exports = { which: "disk" };');
+  await assert.rejects(load(v('5'.repeat(64), 'v1')), /CommonJS/);
+  await assert.rejects(load(v('6'.repeat(64), 'v2')), /CommonJS/);
+});
+
+test('a .ts helper written with import and export still loads', async () => {
+  const dir = fs.realpathSync(tmpDir());
+  const v = graph(dir, '7'.repeat(64), { 'p.mjs': "export { which } from './h.ts';", 'h.ts': "export const which: string = 'ts';" }, { 'p.mjs': { './h.ts': 'h.ts' } });
+  fs.writeFileSync(path.join(dir, 'h.ts'), "export const which: string = 'disk';");
+  assert.equal((await load(v)).which, 'ts');
+});
+
+// Grok's review: a bare import of a package the repo commits was resolved
+// by the package.json on disk, which can be a newer trusted version's, and
+// then served this version's bytes of whatever file that one's `exports`
+// named: a composition neither version had.
+test("a committed package resolves only through this version's own package.json", async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.realpathSync(tmpDir());
+  execFileSync('git', ['init', '-q', dir]);
+  const pj = (entry: string) => JSON.stringify({ name: 'pkg', type: 'module', exports: entry });
+  const files = (entry: string, tag: string) => ({
+    'p.mjs': "export { which } from 'pkg';",
+    'node_modules/pkg/package.json': pj(entry),
+    'node_modules/pkg/a.mjs': `export const which = 'a-${tag}';`,
+    'node_modules/pkg/b.mjs': `export const which = 'b-${tag}';`,
+  });
+  fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true });
+  // What's on disk (and committed) is v2: its exports name b.mjs.
+  for (const [n, t] of Object.entries(files('./b.mjs', 'v2'))) fs.writeFileSync(path.join(dir, n), t);
+  execFileSync('git', ['-C', dir, 'add', '-A', '-f']);
+  execFileSync('git', ['-C', dir, '-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-qm', 'x']);
+  const v1 = graph(dir, '8'.repeat(64), files('./a.mjs', 'v1'), {});
+  const v2 = graph(dir, '9'.repeat(64), files('./b.mjs', 'v2'), {});
+  assert.equal((await load(v2)).which, 'b-v2');
+  await assert.rejects(load(v1), /package\.json isn't the one patch trust hashed/, "v1 never gets v1's b.mjs through v2's exports");
+});

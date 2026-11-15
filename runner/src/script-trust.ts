@@ -1579,7 +1579,26 @@ class Reach {
     // scan, 6 Nov).
     if (tries.some(readsInput)) return this.fail(ctx, line, `runs ${file}, which reads what to run from its input, which patch trust can't follow.`);
     const inRepo = tries.filter((t) => this.inRepo(t));
-    if (!inRepo.length) return; // a program outside the repo
+    if (!inRepo.length) {
+      // A script outside the repo, handed to sh or node by its path. Where
+      // outside scripts are followed (a schedule's check, writeRunsAsCode),
+      // it's one, whatever its mode or name says: `sh /opt/x` runs x though
+      // it has no shebang, no +x and no .sh, and returning here hashed
+      // none of it and guarded none of it, there or not yet (Grok's review
+      // of Daybreak 126, 15 Nov 2026). Elsewhere it's a program, as before.
+      if (!this.o.outside) return;
+      // One not there yet is noted as missing (so an edit that writes it
+      // asks), not refused: a digest is taken again at each run, and once
+      // it's there it's followed and hashed, so the check is held. A
+      // patch naming a script in another of its owner's repos (Threadbear's
+      // App Store chip) would otherwise make every edit ask in a copy
+      // without that repo.
+      for (const t of tries) {
+        if (isFile(t)) this.noteOutside(t, 'run', ctx, line);
+        else if (this.missing.size < 500) this.missing.add(t);
+      }
+      return;
+    }
     const found = inRepo.filter(isFile);
     for (const t of inRepo) if (!isFile(t) && this.missing.size < 500) this.missing.add(t);
     if (!found.length) return this.fail(ctx, line, `runs ${file}, which isn't a file in the repo now, so patch trust can't see what it'll be.`);

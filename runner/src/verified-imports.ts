@@ -41,8 +41,10 @@
 // followed the newer one's edges: code that was in neither version anyone
 // trusted (Daybreak 131, 15 Nov 2026). Now nothing is shared between
 // graphs, and nothing a graph noted is changed by another. The query
-// doesn't change the path, so `import.meta.url` (and `.filename`,
-// `.dirname`, `new URL('./x', import.meta.url)`) mean what they did.
+// doesn't change the path, so `import.meta.filename`, `.dirname` and
+// `new URL('./x', import.meta.url)` mean what they did (`import.meta.url`
+// itself carries the query). CommonJS has no graph of its own in Node's
+// cache, so a trusted patch's graph refuses it (load, below).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -157,6 +159,17 @@ function ownPackage(file: string): string | undefined {
   }
 }
 
+// The package.json of the package a file under node_modules is in:
+// node_modules/<name>/package.json, or node_modules/@scope/<name>/.
+function packageJsonOf(file: string): string | undefined {
+  const segs = file.split(path.sep);
+  const at = segs.lastIndexOf('node_modules');
+  if (at < 0 || at + 1 >= segs.length - 1) return undefined;
+  const depth = segs[at + 1]!.startsWith('@') ? 3 : 2;
+  if (at + depth >= segs.length) return undefined;
+  return [...segs.slice(0, at + depth), 'package.json'].join(path.sep);
+}
+
 function describe(url: string): string {
   try {
     return url.startsWith('file:') ? fileURLToPath(plain(url)) : url;
@@ -186,7 +199,23 @@ function install(): void {
           const file = fileURLToPath(plain(out.url));
           const why = unhashedPackageFile(file, top, (f) => !!served(inGraph(f, g)));
           if (why) throw new Error(`${fileURLToPath(plain(parent))} imports ${specifier}, and ${why}: not loaded.`);
-          if (served(inGraph(file, g))) return { url: inGraph(file, g), format: out.format, shortCircuit: true };
+          if (served(inGraph(file, g))) {
+            // Node picked the file by the package.json on disk now, which
+            // may be another trusted version's: its `exports` could send
+            // this version's import to a file this version never loaded as
+            // that (Grok's review of Daybreak 131). So the package.json it
+            // went by must be this graph's, byte for byte.
+            const pkg = packageJsonOf(file);
+            const mine = pkg ? served(inGraph(pkg, g)) : undefined;
+            let now: Buffer | undefined;
+            try {
+              now = pkg ? fs.readFileSync(pkg) : undefined;
+            } catch {
+              now = undefined;
+            }
+            if (!pkg || !mine || !now || !mine.equals(now)) throw new Error(`${fileURLToPath(plain(parent))} imports ${specifier}, and its package.json isn't the one patch trust hashed: not loaded.`);
+            return { url: inGraph(file, g), format: out.format, shortCircuit: true };
+          }
         }
         return out;
       }
@@ -205,6 +234,12 @@ function install(): void {
       // there would hang).
       if (!fs.statSync(fileURLToPath(plain(url))).isFile()) throw new Error(`${fileURLToPath(plain(url))} isn't a file now: not loaded.`);
       const out = nextLoad(url, context);
+      // CommonJS is kept by Node once per process by its path, query or
+      // not, so two trusted versions of one would share whichever ran
+      // first: a graph of its own can only be ES modules (Grok's review of
+      // Daybreak 131, 15 Nov 2026). A `.ts` or `.js` written with
+      // import/export is one, as Node detects it.
+      if (typeof out.format === 'string' && out.format.includes('commonjs')) throw new Error(`${fileURLToPath(plain(url))} is CommonJS, which Node loads once per process whichever version of it was trusted, so a trusted patch can't load it: not loaded. Make it an ES module (import and export, or .mjs).`);
       return { ...out, source: bytes, shortCircuit: true };
     },
   });

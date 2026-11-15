@@ -96,7 +96,9 @@ test('a sandboxed agent sees only what Claude needs, never the runner\'s credent
     CONVEX_DEPLOY_KEY: 'prod:x', SENTRY_AUTH_TOKEN: 'st', STRIPE_SECRET_KEY: 'sk_live', DATABASE_URL: 'postgres://u:p@h/db', APPLE_ID_PASSWORD: 'pw', MATCH_PASSWORD: 'pw', CODESIGN_IDENTITY: 'Developer ID',
     GOOGLE_APPLICATION_CREDENTIALS: '/home/alex/gcp.json', AZURE_CLIENT_SECRET: 'az', DOCKER_AUTH_CONFIG: '{}',
     SSH_AUTH_SOCK: '/tmp/ssh-agent.sock', GPG_AGENT_INFO: '/tmp/gpg', HTTP_PROXY: 'http://u:p@proxy:3128', HTTPS_PROXY: 'http://u:p@proxy:3128', ALL_PROXY: 'socks5://proxy', http_proxy: 'http://u:p@proxy', NO_PROXY: 'localhost',
-    THREADBEAR_THREAD_KEY: 'should-never-go', CLAUDE_CODE_MESSAGING_TOKEN: 'parent', CLAUDE_CODE_TERMINAL_MCP_TOOLS: 'x',
+    THREADBEAR_THREAD_KEY: 'should-never-go',
+    // Grok's review: secrets the SDK reads under CLAUDE_CODE_, which a prefix let through.
+    CLAUDE_CODE_REMOTE_MCP_CONFIG: '{"headers":{"Authorization":"Bearer x"}}', CLAUDE_CODE_HOST_CREDS_FILE: '/home/alex/creds.json', CLAUDE_CODE_EXTRA_BODY: '{"k":"s"}', CLAUDE_CODE_SHELL_PREFIX: 'with-token abc', CLAUDE_CODE_SESSION_ACCESS_TOKEN: 't', CLAUDE_AGENT_SDK_ANYTHING: 'x', CLAUDE_CODE_MESSAGING_TOKEN: 'parent', CLAUDE_CODE_TERMINAL_MCP_TOOLS: 'x',
   };
   const account = { id: 'claude-1', provider: 'claude', title: 'Claude', configDir: '/home/alex/tb/accounts/claude-1' } as const;
   const base = cliEnv(account as never, runnerEnv);
@@ -136,7 +138,7 @@ test('a sandboxed agent sees only what Claude needs, never the runner\'s credent
 
 test('names that look like credentials stay out even under an allowed prefix', async () => {
   const { sandboxEnvAllowed } = await import('../../src/sandbox.ts');
-  for (const n of ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_API_KEY_HELPER', 'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_PROXY_URL', 'CLAUDE_CODE_SECRET', 'LC_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS', 'THREADBEAR_THREAD_KEY', 'THREADBEAR_HOME', 'SSH_AUTH_SOCK', 'https_proxy', 'claude_code_x'])
+  for (const n of ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_API_KEY_HELPER', 'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_PROXY_URL', 'CLAUDE_CODE_SECRET', 'LC_TOKEN', 'CLAUDE_CODE_REMOTE_MCP_CONFIG', 'CLAUDE_CODE_HOST_CREDS_FILE', 'CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_SHELL_PREFIX', 'CLAUDE_CODE_NEW_THING', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS', 'THREADBEAR_THREAD_KEY', 'THREADBEAR_HOME', 'SSH_AUTH_SOCK', 'https_proxy', 'claude_code_x'])
     assert.equal(sandboxEnvAllowed(n), false, n);
   for (const n of ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'LC_CTYPE', 'THREADBEAR_THREAD_ID'])
     assert.equal(sandboxEnvAllowed(n), true, n);
