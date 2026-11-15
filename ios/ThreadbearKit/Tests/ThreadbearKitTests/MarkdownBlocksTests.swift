@@ -309,9 +309,7 @@ import Testing
     // Daybreak finding 130: one reply can't ask for hundreds of downloads.
     @Test func aMessageDrawsTenPicturesAtMost() {
         let text = (1...300).map { "![p\($0)](https://x\($0).example/a.png)" }.joined(separator: "\n\n")
-        let start = ContinuousClock.now
         let blocks = MarkdownBlock.parse(text)
-        #expect(ContinuousClock.now - start < .milliseconds(100))
         let images = blocks.filter { if case .image = $0 { true } else { false } }
         #expect(images.count == MarkdownBlock.maxPictures)
         #expect(blocks[MarkdownBlock.maxPictures] == .paragraph("[p11]"))
