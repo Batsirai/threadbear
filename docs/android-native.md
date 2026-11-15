@@ -140,6 +140,13 @@ the job doesn't run (no secrets there). The same workflow builds and tests
 the app on every push to main and on PRs that touch it, so each commit has
 an Android verdict for the daily tag to wait on.
 
+- The release is two jobs, so the key never meets the build (Daybreak 123,
+  15 Nov 2026): `apk` builds an unsigned APK (Gradle, with the Firebase
+  config and a read-only token) and hands it on with its SHA-256;
+  `release` checks those exact bytes, signs them with `apksigner` and
+  publishes, with nothing checked out and no Gradle. Every action in every
+  workflow is pinned to a full commit SHA, with its tag in a comment;
+  `runner/test/unit/workflow-pins.test.ts` fails on a tag or branch.
 - The version is the tag's date (`versionName` 2026-11-12, `versionCode`
   20261112), so each release installs over the last. A local build is
   `dev`, version code 1, and never offers itself an update.
