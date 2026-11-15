@@ -60,18 +60,40 @@ const grokModels = () => ({
   ],
 });
 
+// The plugin from --plugin-dir and its hooks, unless the folder's
+// .grok/config.toml turns it off by name, as Grok lets any folder do.
+function grokPlugin(cwd) {
+  const at = process.argv.indexOf('--plugin-dir');
+  if (at < 0) return undefined;
+  const plugin = process.argv[at + 1];
+  const name = path.basename(plugin);
+  try {
+    if (fs.readFileSync(path.join(cwd, '.grok', 'config.toml'), 'utf8').includes(`"${name}"`)) return undefined;
+  } catch {
+    // no folder config
+  }
+  try {
+    return { name, hooks: JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8')).hooks ?? {} };
+  } catch {
+    return undefined;
+  }
+}
+
+// Grok reports the hooks it ran for an event, by name.
+function reportHooks(sessionId, event, plugin) {
+  const runs = [{ name: 'global/settings:x[0].hooks[0]', status: { status: 'success' } }];
+  const key = event === 'user_prompt_submit' ? 'UserPromptSubmit' : 'PreToolUse';
+  if (plugin?.hooks[key]?.length) runs.push({ name: `plugin/${plugin.name}/hooks:${event}[0].hooks[0]`, status: { status: 'success' } });
+  send({ method: '_x.ai/session_notification', params: { sessionId, update: { sessionUpdate: 'hook_execution', event_name: event, runs } } });
+}
+
 // Grok's PreToolUse hooks from --plugin-dir: the first deny wins, then ask.
 // A hook that can't run, with failClosed, denies.
-function grokHook(cwd, toolName, toolInput) {
-  const at = process.argv.indexOf('--plugin-dir');
-  if (at < 0) return { decision: 'none' };
-  const plugin = process.argv[at + 1];
-  let conf;
-  try {
-    conf = JSON.parse(fs.readFileSync(path.join(plugin, 'hooks', 'hooks.json'), 'utf8'));
-  } catch {
-    return { decision: 'none' };
-  }
+function grokHook(sessionId, cwd, toolName, toolInput) {
+  const plugin = grokPlugin(cwd);
+  reportHooks(sessionId, 'pre_tool_use', plugin);
+  if (!plugin) return { decision: 'none' };
+  const conf = { hooks: plugin.hooks };
   let out = { decision: 'none' };
   for (const group of conf.hooks?.PreToolUse ?? []) {
     for (const h of group.hooks ?? []) {
@@ -87,7 +109,7 @@ function grokHook(cwd, toolName, toolInput) {
         continue;
       }
       if (reply.decision === 'deny') return { decision: 'deny', reason: reply.reason };
-      if (reply.decision === 'ask') out = { decision: 'ask', reason: reply.reason, hookName: `plugin/${path.basename(plugin)}/hooks:pre_tool_use[0].hooks[0]` };
+      if (reply.decision === 'ask') out = { decision: 'ask', reason: reply.reason, hookName: `plugin/${plugin.name}/hooks:pre_tool_use[0].hooks[0]` };
     }
   }
   return out;
@@ -96,7 +118,7 @@ function grokHook(cwd, toolName, toolInput) {
 async function grokTool(sessionId, cwd, kind, title, toolName, input, run) {
   const toolCallId = `call-${Math.random().toString(36).slice(2)}`;
   update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: toolName, rawInput: input });
-  const hook = grokHook(cwd, toolName, input);
+  const hook = grokHook(sessionId, cwd, toolName, input);
   log({ hook: { toolName, decision: hook.decision } });
   if (hook.decision === 'deny') {
     update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'failed', content: [{ type: 'content', content: { type: 'text', text: `Hook denied: ${hook.reason}` } }] });
@@ -124,6 +146,10 @@ async function grokTool(sessionId, cwd, kind, title, toolName, input, run) {
 }
 
 async function grokPrompt(id, p, s, word, rest) {
+  reportHooks(p.sessionId, 'user_prompt_submit', grokPlugin(s.cwd));
+  // A model starts with a thought, and a stopped process stops here.
+  update(p.sessionId, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } });
+  await new Promise((r) => setTimeout(r, 50));
   let rejected;
   if (word === 'write') rejected = await grokTool(p.sessionId, s.cwd, 'edit', `Write \`${rest[0]}\``, 'write', { file_path: rest[0], content: rest.slice(1).join(' ') }, () => fs.writeFileSync(rest[0], rest.slice(1).join(' ')));
   else if (word === 'exec') rejected = await grokTool(p.sessionId, s.cwd, 'execute', `Execute \`${rest.join(' ')}\``, 'run_terminal_command', { command: rest.join(' ') }, () => log({ ran: rest.join(' ') }));

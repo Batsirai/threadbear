@@ -13,28 +13,95 @@
 // approves it instead (its docs, hooks "Output", and tried the same day with a
 // folder whose .claude/settings.json said bypassPermissions and whose
 // .grok/config.toml allowed everything). So every Grok process starts with
-// `--plugin-dir` naming a plugin of Threadbear's whose only hook is this one.
-// A plugin dir given that way is trusted, and is ignored in Grok's leader
-// mode, hence `--no-leader` (agents.ts).
+// `--plugin-dir` naming a plugin of Threadbear's holding that hook. A plugin
+// dir given that way is trusted, and is ignored in Grok's leader mode, hence
+// `--no-leader` (agents.ts).
+//
+// A folder can turn a plugin off by name (`[plugins] disabled` in its
+// .grok/config.toml, which Grok reads untrusted, with no wildcards: tried the
+// same day, and a write then ran unasked). So each start gets a plugin of its
+// own, named at random, and the plugin also has a UserPromptSubmit hook: Grok
+// reports every hook it ran, and a turn in which Threadbear's didn't run is
+// stopped before the model's first word (AcpSession, guardSeen).
+//
+// A folder Grok trusts (~/.grok/trusted_folders.toml) runs its own hooks
+// before anything asks: a SessionStart hook runs as the session opens, and a
+// PreToolUse hook's rewritten input wins over what this hook saw (tried: a
+// read of note.txt read a file outside the folder, with no card). So in such
+// a folder the hook asks for every call, reads too, and a thread that has to
+// ask doesn't start there at all (agents.ts, refuses).
 //
 // The hook asks for every tool except a read inside the thread's folder,
 // which goes ahead as Grok's own read-only tools do anywhere. For a small job
-// (noTools) it denies everything, reads too. It fails closed: if it can't run
-// or answers nonsense, the call is denied.
+// (noTools) it denies everything, reads too, from a script of its own. Each
+// fails closed: if it can't run or answers nonsense, the call is denied.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// The folders ~/.grok/trusted_folders.toml trusts, as `[folders."<path>"]`
+// tables with `trusted = true`. Undefined when the file is there but can't be
+// read, which counts as trusting everything. Kept the same as the copy in
+// ASK_SCRIPT below.
+export function grokTrustedFolders(grokHome: string): string[] | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(grokHome, 'trusted_folders.toml'), 'utf8');
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? [] : undefined;
+  }
+  const out: string[] = [];
+  let at: string | undefined;
+  for (const line of text.split('\n')) {
+    const head = /^\s*\[folders\."((?:[^"\\]|\\.)*)"\]\s*$/.exec(line);
+    if (head) {
+      at = head[1].replace(/\\(.)/g, '$1');
+      continue;
+    }
+    if (/^\s*\[/.test(line)) at = undefined;
+    else if (at !== undefined && /^\s*trusted\s*=\s*true\s*(#.*)?$/.test(line)) out.push(at);
+  }
+  // Something says trusted that wasn't understood: assume the worst.
+  if (/trusted\s*=\s*true/.test(text) && !out.length) return undefined;
+  return out;
+}
+
+function onDisk(p: string): string | undefined {
+  let rest = '';
+  let at = p;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(at), rest);
+    } catch {
+      const up = path.dirname(at);
+      if (up === at) return undefined;
+      rest = path.join(path.basename(at), rest);
+      at = up;
+    }
+  }
+}
+
+// Whether Grok trusts this folder, or a folder above it.
+export function grokTrusts(cwd: string, grokHome: string = process.env.GROK_HOME || path.join(os.homedir(), '.grok')): boolean {
+  const folders = grokTrustedFolders(grokHome);
+  if (!folders) return true;
+  const here = onDisk(cwd) ?? cwd;
+  return folders.some((f) => {
+    const t = onDisk(f) ?? f;
+    return here === t || here.startsWith(t.endsWith(path.sep) ? t : t + path.sep);
+  });
+}
+
 // Run by the runner's own node, never by anything a thread's folder supplies.
 // Kept free of imports beyond node's, as it's written out and run on its own.
-export const GUARD_SCRIPT = `// Threadbear's guard for Grok, written by runner/src/adapters/acp/grok-guard.ts.
+export const ASK_SCRIPT = `// Threadbear's guard for Grok, written by runner/src/adapters/acp/grok-guard.ts.
 // Grok runs it before every tool call. "ask" sends the call to Threadbear,
 // whatever Grok's own mode and rules would have done.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
-const mode = process.argv[2];
 // Grok's tools that only look, which may go ahead when all they name is
 // inside the thread's folder: its file reads and searches, the search of its
 // own tool list (how it finds an MCP tool), its to-do list, and the output of
@@ -68,11 +135,39 @@ function inside(p, root) {
   return p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
 }
 
+// The same as grokTrustedFolders in grok-guard.ts.
+function trustedFolders() {
+  const home = process.env.GROK_HOME || path.join(os.homedir(), '.grok');
+  let text;
+  try {
+    text = fs.readFileSync(path.join(home, 'trusted_folders.toml'), 'utf8');
+  } catch (e) {
+    return e && e.code === 'ENOENT' ? [] : undefined;
+  }
+  const out = [];
+  let at;
+  for (const line of text.split('\\n')) {
+    const head = /^\\s*\\[folders\\."((?:[^"\\\\]|\\\\.)*)"\\]\\s*$/.exec(line);
+    if (head) {
+      at = head[1].replace(/\\\\(.)/g, '$1');
+      continue;
+    }
+    if (/^\\s*\\[/.test(line)) at = undefined;
+    else if (at !== undefined && /^\\s*trusted\\s*=\\s*true\\s*(#.*)?$/.test(line)) out.push(at);
+  }
+  if (/trusted\\s*=\\s*true/.test(text) && !out.length) return undefined;
+  return out;
+}
+
 function decide(e) {
   const name = e.toolName ?? e.tool_name;
   if (!READS.has(name) || e.toolInputTruncated === true) return 'ask';
   const root = typeof e.cwd === 'string' && path.isAbsolute(e.cwd) ? onDisk(e.cwd) : undefined;
   if (!root) return 'ask';
+  // A folder Grok trusts runs its own hooks, and one of those can rewrite
+  // what this call reads after this has looked: everything asks there.
+  const trusted = trustedFolders();
+  if (!trusted || trusted.some((f) => inside(root, onDisk(f) ?? f))) return 'ask';
   const input = e.toolInput ?? e.tool_input ?? {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return 'ask';
   for (const [k, v] of Object.entries(input)) {
@@ -80,12 +175,15 @@ function decide(e) {
     const values = Array.isArray(v) ? v : [v];
     for (const s of values) {
       if (typeof s !== 'string') return 'ask';
-      // A named place, or anything that reads like one leaving the folder
-      // (a pattern starting at /, a ~, a ..): checked as a path.
-      const looks = PATH_KEYS.has(k) || s.startsWith('/') || s.startsWith('~') || s.split(/[\\\\/]/).includes('..');
+      // A .. anywhere asks: the system follows a link before it goes up, so
+      // link/.. can be anywhere, while a path tidied first can't tell.
+      if (s.split(/[\\\\/]/).includes('..')) return 'ask';
+      // A named place, or anything that reads like one (a pattern starting
+      // at / or ~): checked as a path.
+      const looks = PATH_KEYS.has(k) || s.startsWith('/') || s.startsWith('~');
       if (!looks || s === '') continue;
       if (s.startsWith('~')) return 'ask';
-      const where = onDisk(path.resolve(root, s));
+      const where = onDisk(path.isAbsolute(s) ? s : root + path.sep + s);
       if (!where || !inside(where, root)) return 'ask';
     }
   }
@@ -98,7 +196,6 @@ process.stdin.on('data', (d) => {
   raw += d;
 });
 process.stdin.on('end', () => {
-  if (mode !== 'ask') return say('deny', 'Tools are off for this job.');
   let decision = 'ask';
   try {
     decision = decide(JSON.parse(raw));
@@ -110,48 +207,96 @@ process.stdin.on('end', () => {
 });
 `;
 
-export type GuardMode = 'ask' | 'deny';
+// A small job's: every call is denied, whatever it is.
+export const DENY_SCRIPT = `// Threadbear's guard for Grok's small jobs (runner/src/adapters/acp/grok-guard.ts).
+process.stdin.resume();
+process.stdin.on('end', () => process.stdout.write(JSON.stringify({ decision: 'deny', reason: 'Tools are off for this job.' })));
+`;
 
-// A plugin folder's name is in the hook's name, which Grok adds to the title
-// of every request it asks about ("— hook 'plugin/threadbear-ask/...'").
-export const PLUGIN_NAMES: Record<GuardMode, string> = { ask: 'threadbear-ask', deny: 'threadbear-deny' };
+// Run as each prompt goes in, so Grok reports that Threadbear's plugin is
+// loaded before the model can do anything.
+export const SEEN_SCRIPT = `// Threadbear's sign that its Grok plugin loaded (runner/src/adapters/acp/grok-guard.ts).
+process.stdin.resume();
+`;
+
+const SCRIPTS = { 'guard-ask.mjs': ASK_SCRIPT, 'guard-deny.mjs': DENY_SCRIPT, 'seen.mjs': SEEN_SCRIPT };
+
+// How long an old start's plugin is kept. A Grok process reads its plugin
+// while it runs; one that outlives this has its turns stopped (guardSeen).
+const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 let fallbackRoot: string | undefined;
 
-function writeIfChanged(file: string, text: string, mode: number): void {
-  let now: string | undefined;
-  try {
-    now = fs.readFileSync(file, 'utf8');
-  } catch {
-    now = undefined;
+// The folder all of it lives in: a real folder of this user's, 0700, never a
+// link to somewhere else (one is removed and the folder made afresh).
+function guardRoot(dataDir: string | undefined): string {
+  if (!dataDir) {
+    fallbackRoot ??= fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-grok-guard-'));
+    return fallbackRoot;
   }
-  if (now === text) return;
-  // Written beside and renamed, so a Grok starting meanwhile never reads half.
-  const tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fs.writeFileSync(tmp, text, { mode });
+  fs.mkdirSync(dataDir, { recursive: true });
+  const root = path.join(dataDir, 'grok-guard');
+  let st: fs.Stats | undefined;
+  try {
+    st = fs.lstatSync(root);
+  } catch {
+    st = undefined;
+  }
+  const uid = process.getuid?.();
+  if (st && (!st.isDirectory() || (uid !== undefined && st.uid !== uid))) {
+    fs.rmSync(root, { recursive: true, force: true });
+    st = undefined;
+  }
+  if (!st) fs.mkdirSync(root, { mode: 0o700 });
+  fs.chmodSync(root, 0o700);
+  return root;
+}
+
+// Always written beside and renamed over: a rename replaces a link itself,
+// never what it points at, and a Grok starting meanwhile never reads half.
+function writeFresh(file: string, text: string): void {
+  const tmp = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' });
   fs.renameSync(tmp, file);
 }
 
-// The plugin folder for a Grok process, made (or put right) before every
-// start: a hook that's missing means Grok's own modes decide, so this never
-// trusts what was there before. Under the runner's data dir; with none (a
-// test), a private temp folder of this process's own.
-export function grokGuardDir(o: { dataDir?: string; noTools?: boolean } = {}): string {
-  let root: string;
-  if (o.dataDir) {
-    root = path.join(o.dataDir, 'grok-guard');
-  } else {
-    fallbackRoot ??= fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-grok-guard-'));
-    root = fallbackRoot;
+function sweep(root: string, now: number): void {
+  for (const name of fs.readdirSync(root)) {
+    if (!/^threadbear-[0-9a-f]{16}$/.test(name)) continue;
+    const p = path.join(root, name);
+    try {
+      if (now - fs.lstatSync(p).mtimeMs > KEEP_MS) fs.rmSync(p, { recursive: true, force: true });
+    } catch {
+      // gone already
+    }
   }
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  const script = path.join(root, 'guard.mjs');
-  writeIfChanged(script, GUARD_SCRIPT, 0o600);
-  const mode: GuardMode = o.noTools ? 'deny' : 'ask';
-  const plugin = path.join(root, PLUGIN_NAMES[mode]);
+}
+
+// A plugin folder for one Grok process, made before it starts and named at
+// random, so a folder's config can't name it to turn it off. Under the
+// runner's data dir; with none (a test), a private temp folder of this
+// process's own.
+export function grokGuardDir(o: { dataDir?: string; noTools?: boolean } = {}): string {
+  const root = guardRoot(o.dataDir);
+  for (const [name, text] of Object.entries(SCRIPTS)) writeFresh(path.join(root, name), text);
+  sweep(root, Date.now());
+  const plugin = path.join(root, `threadbear-${crypto.randomBytes(8).toString('hex')}`);
   fs.mkdirSync(path.join(plugin, 'hooks'), { recursive: true, mode: 0o700 });
   // The runner's own node, by its whole path: a thread's PATH can't swap it.
-  const hooks = { hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: process.execPath, args: [script, mode], timeout: 30, failClosed: true }] }] } };
-  writeIfChanged(path.join(plugin, 'hooks', 'hooks.json'), `${JSON.stringify(hooks, null, 2)}\n`, 0o600);
+  const run = (script: string, failClosed: boolean) => ({ type: 'command', command: process.execPath, args: [path.join(root, script)], timeout: 30, failClosed });
+  const hooks = {
+    hooks: {
+      PreToolUse: [{ hooks: [run(o.noTools ? 'guard-deny.mjs' : 'guard-ask.mjs', true)] }],
+      UserPromptSubmit: [{ hooks: [run('seen.mjs', false)] }],
+    },
+  };
+  writeFresh(path.join(plugin, 'hooks', 'hooks.json'), `${JSON.stringify(hooks, null, 2)}\n`);
   return plugin;
+}
+
+// The name Grok gives this plugin's hooks in what it reports
+// ("plugin/<name>/hooks:pre_tool_use[0].hooks[0]"), from a process's args.
+export function guardPluginName(args: string[]): string | undefined {
+  const at = args.indexOf('--plugin-dir');
+  return at >= 0 && args[at + 1] ? path.basename(args[at + 1]) : undefined;
 }

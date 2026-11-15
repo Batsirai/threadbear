@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { Account, PermissionMode, Provider } from '../../protocol.ts';
 import type { AcpToolCall } from './normalize.ts';
 import type { InitializeResult } from './connection.ts';
-import { grokGuardDir } from './grok-guard.ts';
+import { grokGuardDir, grokTrusts, guardPluginName } from './grok-guard.ts';
 
 export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok'>;
 
@@ -44,6 +44,11 @@ export type AcpAgent = {
   // the agent says. A threadbear tool's request is allowed as it comes: the
   // runner's own MCP server gates those (tool-gate.ts).
   mcpToolName?(call: AcpToolCall): string | undefined;
+  // The plugin a process started with these args must report running before
+  // the model does anything each turn, or the turn is stopped (AcpSession).
+  guardName?(args: string[]): string | undefined;
+  // Why a thread in this folder and mode can't start, if it can't.
+  refuses?(o: { cwd: string; mode: PermissionMode }): string | undefined;
 };
 
 function isExecutableFile(file: string): boolean {
@@ -174,9 +179,17 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
       return candidates.find((f): f is string => Boolean(f) && isExecutableFile(f!) && isGrokBinary(f!));
     },
     // Threadbear's hook as a plugin (grok-guard.ts), which is what makes
-    // every tool ask. Grok ignores --plugin-dir in its leader mode, so never
-    // that, whatever its config says.
+    // every tool ask: a new one, named at random, for every start. Grok
+    // ignores --plugin-dir in its leader mode, so never that, whatever its
+    // config says.
     args: (run = {}) => ['agent', '--no-leader', '--plugin-dir', grokGuardDir(run), 'stdio'],
+    guardName: guardPluginName,
+    // A folder Grok trusts runs its own hooks before anything can ask, and
+    // can rewrite what a call does after the guard has looked.
+    refuses: ({ cwd, mode }) =>
+      mode !== 'full' && grokTrusts(cwd)
+        ? "Grok trusts this folder, so its own hooks would run before anything could ask you. Use Full access, or take the folder out of Grok's trusted folders (`/hooks-untrust` in Grok there), then send this again."
+        : undefined,
     updateArgs: ['update'],
     // A thread's own variables come before these (AcpAdapter.env), so it
     // can't turn Grok's folder trust off (which would load a folder's hooks

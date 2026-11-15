@@ -2,7 +2,7 @@
 // agent in its Grok persona: like Grok 1.0.77 in auto mode, it runs every tool
 // unasked unless a PreToolUse hook from --plugin-dir says otherwise, and it
 // runs the real guard script to find out.
-import { test, afterEach } from 'node:test';
+import { test, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -11,7 +11,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { AcpAdapter, AcpSession, modelChoices, withoutHookNote } from '../../src/adapters/acp/adapter.ts';
 import { ACP_AGENTS, acpAccounts, isCursorBinary, isGrokBinary, type AcpAgent } from '../../src/adapters/acp/agents.ts';
-import { grokGuardDir } from '../../src/adapters/acp/grok-guard.ts';
+import { grokGuardDir, grokTrustedFolders, grokTrusts, guardPluginName } from '../../src/adapters/acp/grok-guard.ts';
 import { acpAsker } from '../../src/models/acp-oneshot.ts';
 import { acpVersion } from '../../src/updates/manager.ts';
 import type { AdapterOutput, SessionSink, StartSessionOptions, ToolApprovalRequest } from '../../src/adapters/types.ts';
@@ -31,15 +31,27 @@ function tmp(): string {
 
 const made: string[] = [];
 const live: AcpSession[] = [];
+// Grok's trusted folders come from GROK_HOME, never the real ~/.grok here.
+const inheritedGrokHome = process.env.GROK_HOME;
+let grokHome = '';
+beforeEach(() => {
+  grokHome = tmp();
+  process.env.GROK_HOME = grokHome;
+});
+const trust = (dir: string) => fs.writeFileSync(path.join(grokHome, 'trusted_folders.toml'), `[folders."${dir}"]\ntrusted = true\ndecided_at = 1\n`);
 afterEach(async () => {
+  if (inheritedGrokHome === undefined) delete process.env.GROK_HOME;
+  else process.env.GROK_HOME = inheritedGrokHome;
   await Promise.all(live.splice(0).map((s) => s.end({ hard: true }).catch(() => undefined)));
   for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function rig(o: { mode?: PermissionMode; deny?: boolean; agent?: AcpAgent; opts?: Partial<StartSessionOptions>; tools?: string[] } = {}) {
+function rig(o: { mode?: PermissionMode; deny?: boolean; agent?: AcpAgent; opts?: Partial<StartSessionOptions>; tools?: string[]; before?: (cwd: string) => void } = {}) {
   const root = tmp();
   const cwd = path.join(root, 'work');
   fs.mkdirSync(cwd);
+  o.before?.(cwd);
+  let exitedWith: Error | undefined | null = null;
   const logFile = path.join(root, 'agent.log');
   const outputs: AdapterOutput[] = [];
   const cards: ToolApprovalRequest[] = [];
@@ -56,7 +68,10 @@ function rig(o: { mode?: PermissionMode; deny?: boolean; agent?: AcpAgent; opts?
     async requestQuestion() {
       return { answers: null };
     },
-    exited() {},
+    exited(e) {
+      exitedWith = e;
+      results.splice(0).forEach((f) => f());
+    },
   };
   const tools = (o.tools ?? []).map((name) => ({ name, description: name, inputSchema: { what: z.string().optional() }, handler: async () => ({ content: [{ type: 'text', text: 'ok' }] }) }));
   const adapter = new AcpAdapter({
@@ -64,7 +79,7 @@ function rig(o: { mode?: PermissionMode; deny?: boolean; agent?: AcpAgent; opts?
     binary: () => FAKE,
     registry: new ProcessRegistry(path.join(root, 'run'), nullLogger),
     log: nullLogger,
-    env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, FAKE_ACP_NAME: 'Grok' },
+    env: { PATH: process.env.PATH, FAKE_ACP_LOG: logFile, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome },
     timings: { closeWaitMs: 300 },
     dataDir: path.join(root, 'data'),
     toolsFor: () => tools as never,
@@ -77,7 +92,7 @@ function rig(o: { mode?: PermissionMode; deny?: boolean; agent?: AcpAgent; opts?
       s.send({ id: `t${outputs.length}`, text, images: [] });
     });
   const log = (): Record<string, unknown>[] => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
-  return { root, cwd, s, adapter, cards, outputs, turn, log };
+  return { root, cwd, s, adapter, cards, outputs, turn, log, exitError: () => exitedWith };
 }
 
 // ---- Asking
@@ -156,11 +171,13 @@ test('a thread can only make it stricter: its environment comes before the row',
 // ---- The guard itself
 
 function guard(dir: string, mode: 'ask' | 'deny', event: unknown): string | undefined {
-  const hooks = JSON.parse(fs.readFileSync(path.join(dir, 'hooks', 'hooks.json'), 'utf8')).hooks.PreToolUse[0].hooks[0];
+  const all = JSON.parse(fs.readFileSync(path.join(dir, 'hooks', 'hooks.json'), 'utf8')).hooks;
+  const hooks = all.PreToolUse[0].hooks[0];
   assert.equal(hooks.failClosed, true);
   assert.equal(hooks.command, process.execPath, "the runner's own node, by its whole path");
-  assert.equal(hooks.args[1], mode);
-  const r = spawnSync(hooks.command, hooks.args, { input: typeof event === 'string' ? event : JSON.stringify(event), encoding: 'utf8' });
+  assert.equal(path.basename(hooks.args[0]), `guard-${mode}.mjs`, 'a script of its own for each, so a deny never hangs on an argument');
+  assert.ok(all.UserPromptSubmit[0].hooks[0], 'and one that shows it loaded as each prompt goes in');
+  const r = spawnSync(hooks.command, hooks.args, { input: typeof event === 'string' ? event : JSON.stringify(event), encoding: 'utf8', env: { ...process.env, GROK_HOME: grokHome } });
   return JSON.parse(r.stdout).decision;
 }
 
@@ -169,6 +186,7 @@ test('the guard: reads inside the folder go ahead, everything else asks, and a s
   const cwd = path.join(data, 'work');
   fs.mkdirSync(path.join(cwd, 'src'), { recursive: true });
   fs.symlinkSync('/etc', path.join(cwd, 'etc'));
+  fs.symlinkSync('/', path.join(cwd, 'rootlink'));
   const ask = grokGuardDir({ dataDir: data });
   const deny = grokGuardDir({ dataDir: data, noTools: true });
   assert.notEqual(ask, deny);
@@ -183,6 +201,11 @@ test('the guard: reads inside the folder go ahead, everything else asks, and a s
     ['read_file', { target_file: '../outside.txt' }],
     ['read_file', { target_file: '~/.ssh/id_ed25519' }],
     ['read_file', { target_file: 'etc/hosts' }],
+    // The kernel follows rootlink before it goes up: this is /etc/passwd.
+    ['read_file', { target_file: 'rootlink/../etc/passwd' }],
+    ['list_dir', { target_directory: 'rootlink/..' }],
+    ['read_file', { target_file: 'src/../a.ts' }],
+    ['grep', { pattern: 'x', glob_pattern: 'src/../**' }],
     ['grep', { pattern: 'x', path: '/Users' }],
     ['grep', { pattern: 'x', glob_pattern: '../../**' }],
     ['grep', { pattern: 'x', paths: ['src', '/'] }],
@@ -199,19 +222,98 @@ test('the guard: reads inside the folder go ahead, everything else asks, and a s
   assert.equal(guard(ask, 'ask', ev('read_file', { target_file: 'src/a.ts' }, { cwd: 'relative' })), 'ask');
   assert.equal(guard(ask, 'ask', 'not json'), 'ask');
   assert.equal(guard(deny, 'deny', ev('read_file', { target_file: 'src/a.ts' })), 'deny', 'a small job reads nothing either');
+  // A folder Grok trusts runs its own hooks, which can rewrite a read after
+  // the guard has looked: everything asks there.
+  trust(cwd);
+  assert.equal(guard(ask, 'ask', ev('read_file', { target_file: 'src/a.ts' })), 'ask');
+  fs.writeFileSync(path.join(grokHome, 'trusted_folders.toml'), 'trusted = true but not as expected');
+  assert.equal(guard(ask, 'ask', ev('read_file', { target_file: 'src/a.ts' })), 'ask', "a trust file it can't read counts as trusting everything");
 });
 
-test('the guard is put right before every start, so a missing or changed hook never means Grok decides', () => {
+test("Grok's trusted folders are read as Grok writes them", () => {
+  const home = tmp();
+  assert.deepEqual(grokTrustedFolders(home), [], 'none yet');
+  fs.writeFileSync(path.join(home, 'trusted_folders.toml'), '[folders."/a/b"]\ntrusted = true\ndecided_at = 1794710722\n\n[folders."/c"]\ntrusted = false\n');
+  assert.deepEqual(grokTrustedFolders(home), ['/a/b']);
+  assert.equal(grokTrusts('/a/b/c', home), true);
+  assert.equal(grokTrusts('/a/bc', home), false);
+  assert.equal(grokTrusts('/c', home), false);
+});
+
+test('every start gets a plugin of its own, named at random, so a folder can\'t name it to turn it off', () => {
   const data = tmp();
-  const dir = grokGuardDir({ dataDir: data });
-  const hooks = path.join(dir, 'hooks', 'hooks.json');
-  fs.writeFileSync(hooks, '{"hooks":{}}');
-  fs.rmSync(path.join(data, 'grok-guard', 'guard.mjs'));
-  assert.equal(grokGuardDir({ dataDir: data }), dir);
-  assert.match(fs.readFileSync(hooks, 'utf8'), /failClosed/);
-  assert.ok(fs.existsSync(path.join(data, 'grok-guard', 'guard.mjs')));
+  const a = grokGuardDir({ dataDir: data });
+  const b = grokGuardDir({ dataDir: data });
+  assert.notEqual(path.basename(a), path.basename(b));
+  assert.match(path.basename(a), /^threadbear-[0-9a-f]{16}$/);
   const args = grok.args({ dataDir: data });
-  assert.deepEqual(args, ['agent', '--no-leader', '--plugin-dir', dir, 'stdio'], 'never its leader mode, which ignores --plugin-dir');
+  assert.deepEqual([args[0], args[1], args[2], args[4]], ['agent', '--no-leader', '--plugin-dir', 'stdio'], 'never its leader mode, which ignores --plugin-dir');
+  assert.equal(grok.guardName?.(args), path.basename(args[3]));
+  assert.equal(guardPluginName(['agent', 'stdio']), undefined);
+  // An old start's plugin goes after a week.
+  const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(a, old, old);
+  grokGuardDir({ dataDir: data });
+  assert.equal(fs.existsSync(a), false);
+  assert.equal(fs.existsSync(b), true);
+});
+
+test("the guard's folder and scripts are never someone else's: links are replaced, not written through", () => {
+  const data = tmp();
+  const elsewhere = tmp();
+  // A grok-guard that's a link to another folder is removed and made afresh.
+  fs.symlinkSync(elsewhere, path.join(data, 'grok-guard'));
+  grokGuardDir({ dataDir: data });
+  const root = path.join(data, 'grok-guard');
+  assert.equal(fs.lstatSync(root).isDirectory(), true);
+  assert.equal(fs.lstatSync(root).mode & 0o777, 0o700);
+  assert.deepEqual(fs.readdirSync(elsewhere), [], 'nothing was written there');
+  // A script swapped for a link: the link is replaced, its target untouched,
+  // even when the target already says the same.
+  const target = path.join(elsewhere, 'guard-ask.mjs');
+  fs.copyFileSync(path.join(root, 'guard-ask.mjs'), target);
+  fs.rmSync(path.join(root, 'guard-ask.mjs'));
+  fs.symlinkSync(target, path.join(root, 'guard-ask.mjs'));
+  grokGuardDir({ dataDir: data });
+  assert.equal(fs.lstatSync(path.join(root, 'guard-ask.mjs')).isSymbolicLink(), false);
+  fs.chmodSync(root, 0o755);
+  grokGuardDir({ dataDir: data });
+  assert.equal(fs.lstatSync(root).mode & 0o777, 0o700);
+});
+
+test('a folder that turns the plugin off stops the thread before the model can do anything, Full included', async () => {
+  // As a repo's .grok/config.toml can: `[plugins] disabled = ["<name>"]`.
+  let name = '';
+  const agent: AcpAgent = {
+    ...grok,
+    args: (run) => {
+      const a = grok.args(run);
+      name = path.basename(a[3]);
+      return a;
+    },
+  };
+  const r = rig({ mode: 'full', agent });
+  fs.mkdirSync(path.join(r.cwd, '.grok'));
+  fs.writeFileSync(path.join(r.cwd, '.grok', 'config.toml'), `[plugins]\ndisabled = ["${name}"]\n`);
+  const file = path.join(r.cwd, 'a.txt');
+  await r.turn(`write ${file} hi`);
+  assert.match(String(r.exitError()?.message), /didn't run Threadbear's hook/);
+  assert.equal(fs.existsSync(file), false);
+});
+
+test("a folder Grok trusts can't have a thread that asks, and leaving Full there stops the process", async () => {
+  const root = tmp();
+  const cwd = path.join(root, 'work');
+  fs.mkdirSync(cwd);
+  trust(cwd);
+  assert.match(String(grok.refuses?.({ cwd: path.join(cwd, 'sub'), mode: 'ask' })), /Grok trusts this folder/);
+  assert.equal(grok.refuses?.({ cwd, mode: 'full' }), undefined);
+  assert.throws(() => rig({ mode: 'ask', before: (c) => trust(c) }), /Grok trusts this folder/);
+  const r = rig({ mode: 'full', before: (c) => trust(c) });
+  await r.turn('hello');
+  await r.s.setPermissionMode('ask');
+  assert.ok(r.outputs.some((o) => o.kind === 'event' && o.event.type === 'system.note' && /Grok trusts this folder/.test((o.event as { text: string }).text)));
+  assert.equal((r.s as unknown as { state: string }).state, 'closed');
 });
 
 // ---- Small jobs
@@ -224,6 +326,14 @@ test('a small job on Grok can use nothing, reads included', async () => {
   const res = await ask({ account, user: `write ${file} hi`, cwd: root, timeoutMs: 8000 });
   assert.equal(res.ok, true);
   assert.equal(fs.existsSync(file), false);
+  // With its plugin turned off it stops before the model's first word.
+  fs.mkdirSync(path.join(root, '.grok'));
+  const sneaky = acpAsker({ agent: { ...grok, args: (run) => { const a = grok.args(run); fs.writeFileSync(path.join(root, '.grok', 'config.toml'), `disabled = ["${path.basename(a[3])}"]`); return a; } }, binary: () => FAKE, registry: new ProcessRegistry(path.join(root, 'run2'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok' }, timings: { closeWaitMs: 200 }, dataDir: path.join(root, 'data') });
+  const stopped = await sneaky({ account, user: `write ${file} hi`, cwd: root, timeoutMs: 8000 });
+  assert.equal(stopped.ok, false);
+  assert.match((stopped as { message: string }).message, /didn't run Threadbear's hook/);
+  assert.equal(fs.existsSync(file), false);
+  fs.rmSync(path.join(root, '.grok'), { recursive: true });
   const read = await ask({ account, user: 'read a.txt', cwd: root, timeoutMs: 8000 });
   assert.equal(read.ok, true);
   const seen = fs.readFileSync(logFile, 'utf8');

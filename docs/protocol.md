@@ -1281,15 +1281,25 @@ where it installs.
 - **Grok** has no setting a client can force: its mode comes from its config
   and from `~/.claude/settings.json` (`defaultMode: "auto"` there made 1.0.77
   run a write and a command with no request, 15 Nov 2026). So it runs as
-  `grok agent --no-leader --plugin-dir <data dir>/grok-guard/threadbear-ask
-  stdio`: the plugin's one PreToolUse hook (`guard.mjs`, run by the runner's
-  node, `failClosed`) answers `ask` for every call but a read (`read_file`,
-  `list_dir`, `grep`, its tool search, its to-do list, a command's output)
-  naming nothing outside the thread's folder, links followed. A hook's `ask`
-  reaches `session/request_permission` whatever Grok's mode, saved grants,
-  read-only commands or a folder's rules say. Leader mode ignores
-  `--plugin-dir`, hence `--no-leader`, and the folder is written again before
-  every start. Grok has no session modes, so nothing else changes with the
+  `grok agent --no-leader --plugin-dir <data dir>/grok-guard/threadbear-<16 hex>
+  stdio`, a plugin made for that start: its PreToolUse hook (`guard-ask.mjs`,
+  run by the runner's node, `failClosed`) answers `ask` for every call but a
+  read (`read_file`, `list_dir`, `grep`, its tool search, its to-do list, a
+  command's output) naming nothing outside the thread's folder, links
+  followed, with no `..` anywhere. A hook's `ask` reaches
+  `session/request_permission` whatever Grok's mode, saved grants, read-only
+  commands or a folder's rules say. Leader mode ignores `--plugin-dir`, hence
+  `--no-leader`. A folder can turn a plugin off by name (`[plugins] disabled`
+  in its `.grok/config.toml`, untrusted too), hence the random name, and the
+  plugin's UserPromptSubmit hook: Grok reports each hook it ran
+  (`_x.ai/session_notification`, `hook_execution`), and a turn where the
+  model says anything before that report names the plugin, or a
+  `user_prompt_submit` or `pre_tool_use` report without it, ends the process
+  there with an error (small jobs fail the same way). A folder Grok trusts
+  (`~/.grok/trusted_folders.toml`, or one above it) runs its own hooks, which
+  can act at session start and rewrite a call after the guard has looked: a
+  Grok thread there starts only on Full, leaving Full stops its process, and
+  the guard asks for everything there. Grok has no session modes, so nothing else changes with the
   thread's mode; in its auto mode its classifier still looks first and may
   refuse a call. Grok adds the hook to a request's title (`— hook '...'
   asks: ...`), which the card leaves off, and its MCP calls go through

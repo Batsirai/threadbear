@@ -267,11 +267,14 @@ File references are where to look.
   (`opencode upgrade`, `agent update`, `grok update`) only when you press Update in the app, and each
   live thread on one has a listener on `127.0.0.1` on a port the system picks,
   serving that thread's Threadbear tools, needing a random token made for it.
-  Grok is started with `--plugin-dir <data dir>/grok-guard/threadbear-ask` (or
-  `threadbear-deny` for a small job): a folder the runner writes before each
-  start, holding one PreToolUse hook that runs `guard.mjs` beside it with the
-  runner's own node before each of Grok's tool calls, so they come to you
-  first (`runner/src/adapters/acp/grok-guard.ts`).
+  Grok is started with `--plugin-dir <data dir>/grok-guard/threadbear-<random>`:
+  a folder the runner makes for each start (and removes after a week),
+  holding a PreToolUse hook that runs `guard-ask.mjs` (`guard-deny.mjs` for a
+  small job) from `grok-guard` with the runner's own node before each of
+  Grok's tool calls, so they come to you first, and a UserPromptSubmit hook
+  (`seen.mjs`, which does nothing) whose running Grok reports, so a thread
+  whose plugin didn't load is stopped. The guard reads
+  `~/.grok/trusted_folders.toml` (`runner/src/adapters/acp/grok-guard.ts`).
 - **New installs start threads on Auto.** On Auto, Claude runs with its
   safety check approving or blocking each action, and Codex asks before
   edits. An install set up before 9 Nov 2026 keeps starting threads on

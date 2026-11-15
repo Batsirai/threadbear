@@ -148,6 +148,8 @@ export class AcpAdapter implements AgentAdapter {
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession {
     // None of these run in the sandbox (sandbox.ts).
     if (opts.confined) throw new Error(`This thread runs in a sandbox, and ${providerName(this.provider)} can't, so it wasn't started. Move it to a Claude login.`);
+    const refused = this.deps.agent.refuses?.({ cwd: opts.cwd, mode: opts.permissionMode });
+    if (refused) throw new Error(refused);
     const s = new AcpSession(opts, sink, this.deps, this.binary(), this.env(opts.account, opts.env));
     s.start();
     return s;
@@ -203,6 +205,10 @@ export class AcpSession implements AgentSession {
   // The threadbear tools this session's MCP server offers, as the agent names them.
   private ownTools = new Set<string>();
   private configOptions: ConfigOption[] = [];
+  // The plugin whose hook must be reported running before the model does
+  // anything in a turn (Grok's guard), and whether it has been this turn.
+  private guard?: string;
+  private guardSeen = false;
   private currentMode?: string;
   private cliCommands: SlashCommand[] = [];
   // Said once, before the first message of a new session.
@@ -224,7 +230,9 @@ export class AcpSession implements AgentSession {
     this.exitPromise = new Promise((r) => (this.resolveExit = r));
     this.ctx = fileContext(opts.cwd, opts.mediaDir, opts.blobsDir);
     this.normalizer = new AcpNormalizer(this.ctx);
-    this.proc = new AcpProcess({ binary, args: deps.agent.args({ dataDir: deps.dataDir }), env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
+    const args = deps.agent.args({ dataDir: deps.dataDir });
+    this.guard = deps.agent.guardName?.(args);
+    this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
     this.proc.onNotification = (method, params) => this.notification(method, params);
     this.proc.onRequest = (id, method, params) => this.request(id, method, params);
     this.proc.onExit = (err) => this.exited(err);
@@ -414,6 +422,7 @@ export class AcpSession implements AgentSession {
   // ---- From the agent
 
   private notification(method: string, params: unknown): void {
+    if (this.guard && !this.replaying && this.checkGuard(method, params)) return;
     if (this.replaying || method !== 'session/update' || !isPlainObject(params)) return;
     if (this.sessionId && params.sessionId !== undefined && params.sessionId !== this.sessionId) return;
     const update = params.update;
@@ -423,6 +432,37 @@ export class AcpSession implements AgentSession {
       if (update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) this.noteCommands(update.availableCommands);
     }
     this.emit(this.normalizer.handle(update));
+  }
+
+  // Grok reports each hook it ran (hook_execution) as a prompt goes in and
+  // before each tool. Threadbear's must be among them: a folder's config can
+  // turn a plugin off, and then nothing would ask. Anything from the model in
+  // a turn before that report, or a report without it, stops the thread
+  // there, before any tool runs. True when it stopped it.
+  private checkGuard(method: string, params: unknown): boolean {
+    if (!isPlainObject(params) || !isPlainObject(params.update)) return false;
+    const u = params.update;
+    if (method.endsWith('x.ai/session_notification') && u.sessionUpdate === 'hook_execution' && (u.event_name === 'user_prompt_submit' || u.event_name === 'pre_tool_use')) {
+      const ran = Array.isArray(u.runs) && u.runs.some((r) => isPlainObject(r) && typeof r.name === 'string' && r.name.startsWith(`plugin/${this.guard}/`));
+      if (ran) {
+        if (u.event_name === 'user_prompt_submit') this.guardSeen = true;
+        return false;
+      }
+      return this.guardMissing();
+    }
+    const fromModel = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan']);
+    if (method === 'session/update' && this.turn && !this.guardSeen && fromModel.has(String(u.sessionUpdate))) return this.guardMissing();
+    return false;
+  }
+
+  private guardMissing(): boolean {
+    if (this.state === 'closed') return true;
+    const name = providerName(this.deps.agent.provider);
+    this.deps.log.error('acp guard hook did not run', { threadId: this.opts.threadId, guard: this.guard });
+    this.state = 'closing';
+    this.proc.kill();
+    this.exited(new Error(`${name} didn't run Threadbear's hook that makes it ask before using tools (a folder's .grok/config.toml can turn plugins off), so this thread was stopped before it could use any.`));
+    return true;
   }
 
   private noteCommands(raw: unknown[]): void {
@@ -644,6 +684,7 @@ export class AcpSession implements AgentSession {
       }
       // Stop pressed during the setup above: nothing has reached the model.
       if (turn.interrupted) throw new Error('Stopped');
+      this.guardSeen = false;
       dispatched = true;
       const r = await this.proc.request<{ stopReason?: string }>('session/prompt', { sessionId: this.sessionId, prompt: this.promptBlocks(input) }, null);
       this.emit(this.normalizer.closeOpen('Stopped'));
@@ -722,6 +763,14 @@ export class AcpSession implements AgentSession {
   // send a request to stop at. One that can't be made safe doesn't go on.
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.mode = mode;
+    // A mode this folder can't run in (Grok's trusted folders): the process
+    // goes, and the next message starts one, which says why it can't.
+    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode });
+    if (refused && this.state !== 'closed' && this.state !== 'closing') {
+      this.sink.output({ kind: 'event', event: { type: 'system.note', text: refused } });
+      this.kill();
+      return;
+    }
     if (!this.sessionId || (this.state !== 'ready' && this.state !== 'turn')) return;
     try {
       await this.applyMode();
