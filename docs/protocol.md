@@ -753,6 +753,12 @@ type Settings = {
                         // lab); on unless runner.json has labReview: false.
                         // Absent from an older runner, where it was an
                         // experiment, so a client shows no switch
+  labReviewers?: { provider: Provider, model?: string, effort?: EffortLevel }[]
+                        // who reviews, in order (Settings > General > Code review): the
+                        // first of another lab with a login that has room,
+                        // on its model and effort when it names them.
+                        // runner.json's labReviewers, else Codex then Claude.
+                        // Absent from an older runner: no list to show
   keepAwake?: boolean   // keep the Mac out of idle sleep while threads
                         // work (keep-awake.ts); on by default, sent only by
                         // a runner on a Mac, so clients show no switch
@@ -1175,7 +1181,7 @@ the summary and then the reply.
 | `pools.list` | `{}` | `{ pools: Pool[] }` (see Pools) |
 | `pools.save` | `{ pools: Pool[] }` | `{ pools: Pool[] }`. Replaces the whole list in `runner.json` (`builtIn` is dropped; an empty list goes back to the built-in ones). `-32602` for a duplicate id, a blank id or title, an empty `accountIds`, or an account id the runner doesn't know. A blank or non-string `icon` is dropped. Every client gets `pools.updated` |
 | `settings.get` | `{}` | `{ settings: Settings }` |
-| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, keepAwake?, bringIn?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id; otherwise `-32602` saying which. Every client gets `settings.updated` |
+| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, labReviewers?, keepAwake?, bringIn?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id, `labReviewers` a list of `{ provider, model?, effort? }` with known providers and efforts (a provider listed twice counts once); otherwise `-32602` saying which. Every client gets `settings.updated` |
 | `instructions.get` | `{}` | `{ instructions: StandingInstructions }` (see Standing instructions). `-32601` with the experiment off, and from an older runner: the app then shows no box |
 | `instructions.set` | `{ text: string }` | `{ instructions: StandingInstructions }`. Saves and signs the text, trimmed; an empty one clears them and removes both files. `-32602` for a `text` that isn't a string or is over 20,000 characters, `-32601` as for `instructions.get`. Every client gets `instructions.updated` |
 | `devices.list` | `{}` | `{ devices: Device[], site?: string, reason?: string }` (see Devices). `site` is the website's root while sync is on; `reason` says why nothing can pair when it's off |
@@ -1184,7 +1190,7 @@ the summary and then the reply.
 | `models.run` | `{ job: "classify" \| "extract" \| "summarize" \| "generate", text: string, labels?: string[], fields?: Record<string, string>, maxWords?: number, system?: string, cwd?: string, maxTokens?: number }` | `{ ok: true, value, model }` or `{ ok: false, reason: "no-pool" \| "off" \| "private" \| "no-room" \| "timeout" \| "provider", message }`. One model call by hand (`tb models try`), on the pool like any other, with `feature: "tb"`. `maxTokens` (generate only, 1 to 8000, default 500) caps the answer, reasoning included; `classify` needs 2 or more `labels` and answers one of them; `extract` needs `fields` (name to a plain description) and answers an object of them, `null` where the text doesn't say |
 | `runner.status` | `{}` | `{ version, release?, branch?, pid, startedAt, home, logFile, liveClis, running: string[], background: { threadId, tasks: string[] }[], busy?: string[], pendingRestart?: { when, reason?, release?, resumeThreadId?, requestedAt, backgroundUntil?, waitingFor: string[] }, rolledBack?: { from, at }, draining?: { pid, version, release?, since, threads: string[] }[], update?: { state, checkout?, reason?, checkedAt?, commit?, release?, logFile?, launcherChanged?, launcherReason?, followsOrigin?, followProblem? }, behindRunners?: { name, problem }[], macScreen?: { fullDiskAccess?, dialogs, dialogsSince? }, clis?: CliStatus[] }`. `running` lists the threads that are starting, running or waiting on an approval or a question; `background` the threads whose CLI is still running background shells or subagents (`tasks` describes each). A restart waits for both. `busy` is every thread a restart would wait for: those, plus a turn-end hook still running or a thread between turns (deploy.mjs `--check-idle` reads it). `branch` is the branch the release was built from. `rolledBack` is set when this release is running because `launch.mjs` went back to it from `from`, which kept crashing at startup (and nobody has activated it on purpose since). `update` is the runner following main by itself (docs/dev-tools.md): `state` is `off` (`reason` says why), `idle`, `checking`, `building`, `waiting` (`release` is built and starts on the pending restart) or `failed` (`reason` is the error; `logFile` has the build's output); `commit` is main's tip at the last check (`checkedAt`). `followsOrigin` is set while `followOrigin` is on in `runner.json` (docs/dev-tools.md); `followProblem` says what's wrong with following GitHub's main, when something is. `behindRunners` is the other runners saying that of themselves, on the main Mac's runner |
 | `runner.restart` | `{ when?: "idle" \| "now", resume?: { threadId, text }, reason?: string, release?: string, backgroundWaitMs?: number, cancel?: boolean }` | `{ scheduled: boolean, waitingFor: string[], background?: { threadId, tasks: string[] }[], note?: string, noResume?: string, handover?: { keeps: string[] } }`. See Restarts below; `handover` under Handovers. `scheduled` is true once the restart is saved; an empty `waitingFor` means it is happening now. `background` is the background work among `waitingFor`. `release` is the release the restart should come back on (the deploy script sets it). `backgroundWaitMs` limits how long background shells and subagents hold the restart. `cancel: true` withdraws a pending restart that hasn't begun and returns `scheduled: false` (`-32020` once it has begun), with a `note` when it also put `current` back. `noResume` says why the `resume` won't be sent as things stand (the thread has already been resumed 3 times in the last hour), so whoever asked can say so rather than wait for it. A runner older than this answers `-32601` |
-| `runner.reinstall` | `{}` | `{ reinstall: RunnerUpdates["reinstall"] \| null }`. The Updates panel's Reinstall now and Try again: the runner runs `install-runner.sh` as a launchd job of its own (runner/src/reinstall.ts) once no thread is busy, and says how it's going in `runner.updates`. `null` when the LaunchAgent isn't behind main. Refused to a thread's own key (rpc-gate.ts). A runner older than 14 Nov 2026 answers `-32601` |
+| `runner.reinstall` | `{}` | `{ reinstall: RunnerUpdates["reinstall"] \| null }`. The Updates panel's Update it and Try again: the runner runs `install-runner.sh --stage` as a launchd job of its own (runner/src/reinstall.ts) straight away, stopping nothing, and says how it's going in `runner.updates`. `null` when the LaunchAgent isn't behind main. Refused to a thread's own key (rpc-gate.ts). A runner older than 14 Nov 2026 answers `-32601` |
 | `clis.list` | `{}` | `{ clis: CliStatus[] }` |
 | `clis.check` | `{ provider?: Provider }` | `{ clis: CliStatus[] }`. Starts a version check (both CLIs when `provider` is absent) and returns at once, with the state as it was when the call arrived; the result comes through `clis.updated` |
 | `clis.update` | `{ provider: Provider, version?: string, force?: boolean }` | `{ clis: CliStatus[] }`. Starts an update and returns at once, with `update.state` `running` or `waiting`; progress comes through `clis.updated`. `version` picks a kept Codex version (how "Go back" works). `force: true` installs a held version anyway |
@@ -1326,13 +1332,20 @@ type RunnerUpdates = {
   // The checkout this runner follows, whose install-runner.sh a reinstall runs.
   checkout?: string
   // What's being done about launcherChanged (runner/src/reinstall.ts). Left
-  // out while nothing is: the app offers Reinstall now (runner.reinstall).
-  // waiting: for busy threads to finish (auto: the runner does it by itself,
-  // the selfReinstall experiment, rather than because it was asked);
-  // running: install-runner.sh is going, as a launchd job of its own;
+  // out while nothing is: the app offers Update it (runner.reinstall).
+  // waiting: about to start (auto: the runner does it by itself, the
+  // selfReinstall experiment, rather than because it was asked; from a
+  // runner of 14 Nov, waiting for busy threads);
+  // running: install-runner.sh --stage is going, as a launchd job of its own;
+  // staged: in place, but what's running is still behind until launchd next
+  // starts the job (the Mac restarting); nothing more to do until then;
   // failed: it stopped, `reason` says why and `logFile` has its output.
   // A failure is Mike's to look at (Try again); the rest sort themselves out.
-  reinstall?: { state: "waiting" | "running" | "failed"; reason?: string; logFile?: string; auto?: true }
+  reinstall?: { state: "waiting" | "running" | "staged" | "failed"; reason?: string; logFile?: string; auto?: true }
+  // Set with launcherChanged by runners whose runner.reinstall stages (from
+  // 15 Nov 2026). Without it the app offers no button and says nothing
+  // about it stopping nothing: the runner of 14 Nov reinstalled once idle.
+  launcherStages?: true
   // This machine can't follow GitHub's main properly (followOrigin), and the
   // other runners saying that of themselves, on the main Mac's runner.
   followProblem?: string
@@ -3216,14 +3229,17 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   it), isn't marked finished. Instead the runner creates a thread in the
   same folder (no worktree of its own), with the first thread's
   `permissionMode` (never more access than it has: Full stays Full, Ask
-  and Auto stay as they are) and effort high,
+  and Auto stay as they are) and the reviewer's model and effort (its
+  provider's default model and high when it names none),
   with `startedBy: { kind: "thread", label: "Review" }`, `reviewOf` set
   to the first thread in thread.json, and a brief: the latest user
   message, the reply, the files and the diff (up to 40,000 characters),
   each in a fence one backtick longer than any run in it, so nothing in
   them can close it, and marked as data to review, not instructions.
-  Its login is the other provider's (`pickInPool` over the pools with no
-  folders), else a fresh session of the same provider. For a folder a
+  Its login is the first reviewer's in `Settings.labReviewers` whose
+  provider isn't the thread's and that has a login with room
+  (`pickInPool` over the pools with no folders, then a login no pool
+  holds), else a fresh session of the thread's own provider. For a folder a
   pool is kept for, only that pool's logins are used, and a kept pool's
   logins never review anything outside it. The first thread gets a
   `system.note` saying who reviews and whether it's another lab, then

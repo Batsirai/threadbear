@@ -1303,9 +1303,14 @@ turn it off under Settings at the foot of the panel.
 ### Review by another lab
 
 When a thread changes code (five lines or more, not counting docs) and
-finishes with nothing for you to do, Threadbear has your other provider try
-to break the change: Codex reviews a Claude thread's change, and Claude a
-Codex one's. The review runs in a thread of its own in the same folder, with
+finishes with nothing for you to do, Threadbear has another lab try to
+break the change: Codex reviews a Claude thread's change, and Claude a
+Codex one's, to begin with. Settings › General › Code review lists who
+reviews, in order: drag them into the order you want, add any other
+provider you have a login for (Grok, say), and pick each one's model and
+effort. The first that isn't the thread's own provider and has a login
+with room does the review, so when one runs out for the week, the next
+takes over. The review runs in a thread of its own in the same folder, with
 the same permissions as the thread it reviews, and is told not to edit
 anything. Your thread says who is reviewing and waits. The reviewer gives a
 verdict: a list of concrete findings, or nothing that holds up. Then your
@@ -1994,11 +1999,10 @@ you. Right-click it for a quick Restart to Update.
 
 A few parts of the runner (the program that keeps it going, and the small
 Threadbear Runner app macOS names in its privacy prompts) don't come with
-its updates, only with reinstalling it. When one of them is behind, the
-Updates panel says which and has a Reinstall now button. Reinstalling
-restarts the runner, so it waits until no thread is busy, then runs on its
-own and is back in a minute or so. If the new runner doesn't come up, the
-old one is put back and the panel says why, with Try again and the log.
+its updates. When one of them is behind, the Updates panel says which and
+has an Update it button. Updating them stops nothing: the new ones are put
+in place and take over the next time your Mac restarts or you log in
+again. If it doesn't work, the panel says why, with Try again and the log.
 
 ### Mike's updates
 

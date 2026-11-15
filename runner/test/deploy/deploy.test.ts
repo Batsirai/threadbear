@@ -1112,6 +1112,65 @@ test('install-runner.sh guards: sandbox labels, and not from inside its own thre
   assert.equal(launchctl('print', TARGET), 0, 'still installed');
 });
 
+test('--stage puts the new launch.mjs and plist in place with threads busy, stopping and loading nothing', { timeout: 120_000 }, async () => {
+  const installed = path.join(runnerDir(), 'launch.mjs');
+  const launchSrc = path.join(rdir, 'launch.mjs');
+  const plistFile = path.join(agents, `${LABEL}.plist`);
+  const pristine = fs.readFileSync(launchSrc, 'utf8');
+  const before = current();
+  const calls = launchctlCalls().length;
+  fs.writeFileSync(launchSrc, pristine + '\n// staged\n');
+  commit({ v: 'staged launch' }, 'launch.mjs change to stage');
+  // Busy doesn't matter: nothing is stopped.
+  setBusy(['t-9']);
+  fs.rmSync(plistFile);
+  let r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--stage']);
+  assert.equal(r.status, 0, out(r));
+  assert.match(r.stdout, /nothing was stopped/);
+  assert.equal(fs.readFileSync(installed, 'utf8'), pristine + '\n// staged\n', 'launch.mjs staged');
+  assert.ok(fs.existsSync(plistFile), 'plist written');
+  assert.equal(spawnSync('plutil', ['-lint', plistFile]).status, 0);
+  assert.equal(current(), before, 'no release built or switched');
+  assert.deepEqual(launchctlCalls().slice(calls).filter((c) => c[0] !== 'print'), [], 'no bootout, bootstrap or kickstart');
+  assert.equal(launchctl('print', TARGET), 0, 'still loaded, still running');
+  // Only with a plain install: never quietly printing or uninstalling instead.
+  r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--stage', '--print']);
+  assert.equal(r.status, 1, out(r));
+  r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--stage', '--uninstall']);
+  assert.equal(r.status, 1, out(r));
+  assert.match(r.stderr, /only goes with a plain install/);
+  assert.equal(launchctl('print', TARGET), 0, 'still installed');
+  // Another Node: a full reinstall's job, as the running supervisor would
+  // go on starting releases on the old one until the next login.
+  const otherNode = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-other-node-'));
+  fs.symlinkSync(NODE, path.join(otherNode, 'node'));
+  r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--stage', '--node', path.join(otherNode, 'node')]);
+  fs.rmSync(otherNode, { recursive: true, force: true });
+  assert.equal(r.status, 1, out(r));
+  assert.match(r.stderr, /Changing the Node needs a full reinstall/);
+  // A LaunchAgents folder it can't write to: refused before the app or
+  // launch.mjs change, so the runner's check still sees it behind.
+  fs.writeFileSync(launchSrc, pristine + '\n// unwritable\n');
+  commit({ v: 'unwritable' }, 'launch.mjs change for an unwritable folder');
+  fs.chmodSync(agents, 0o555);
+  try {
+    r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--stage']);
+  } finally {
+    fs.chmodSync(agents, 0o755);
+  }
+  assert.equal(r.status, 1, out(r));
+  assert.match(r.stderr, /nothing was changed/);
+  assert.equal(fs.readFileSync(installed, 'utf8'), pristine + '\n// staged\n', 'launch.mjs left as it was');
+  assert.deepEqual(fs.readdirSync(agents).filter((f) => f.includes('.plist.')), [], 'no temp plist left behind');
+  // Back as it was for the tests below.
+  setBusy([]);
+  fs.writeFileSync(launchSrc, pristine);
+  commit({ v: 'unstaged' }, 'launch.mjs back');
+  r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--stage']);
+  assert.equal(r.status, 0, out(r));
+  assert.equal(fs.readFileSync(installed, 'utf8'), pristine);
+});
+
 test('reinstalling checks everything first, builds from HEAD, and puts the old setup back if the new one fails', { timeout: 240_000 }, async () => {
   const installed = path.join(runnerDir(), 'launch.mjs');
   const plistFile = path.join(agents, `${LABEL}.plist`);

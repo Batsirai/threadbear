@@ -327,7 +327,7 @@ const devicesRefusal = () => {
 
 let mockInstructions = { text: '' };
 const settings = {
-  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, keepAwake: true, fullSync: false,
+  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, labReviewers: [{ provider: 'codex', model: 'gpt-6.1-sol' }, { provider: 'claude', effort: 'xhigh' }], keepAwake: true, fullSync: false,
   models: {
     pool: 'claude',
     privateFolders: ['~/dev/clients/acme'],
@@ -757,8 +757,8 @@ async function dispatch(client, method, p) {
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
       return { thread: summary };
     }
-    // Reinstall now (protocol "Runner updates"): running at once, and up
-    // to date about 2 s later, as a reinstall with nothing busy goes.
+    // Update it (protocol "Runner updates"): running at once, and up to
+    // date about 2 s later, as staging goes.
     case 'runner.reinstall': {
       if (!updates.launcherChanged) return { reinstall: null };
       updates.reinstall = { state: 'running', logFile: path.join(dataDir, 'runner', 'reinstall.log') };
@@ -767,6 +767,7 @@ async function dispatch(client, method, p) {
         delete updates.reinstall;
         delete updates.launcherChanged;
         delete updates.launcherReason;
+        delete updates.launcherStages;
         broadcast('runner.updates', { updates });
       }, 2000);
       return { reinstall: updates.reinstall };
@@ -1539,6 +1540,10 @@ async function dispatch(client, method, p) {
       if (p.followMain !== undefined) settings.followMain = Boolean(p.followMain);
       if (p.bulletReplies !== undefined) settings.bulletReplies = Boolean(p.bulletReplies);
       if (p.labReview !== undefined) settings.labReview = Boolean(p.labReview);
+      if (p.labReviewers !== undefined) {
+        if (!Array.isArray(p.labReviewers)) throw rpcError(-32602, 'labReviewers must be a list');
+        settings.labReviewers = p.labReviewers;
+      }
       if (p.keepAwake !== undefined) settings.keepAwake = Boolean(p.keepAwake);
       if (p.fullSync !== undefined) settings.fullSync = Boolean(p.fullSync);
       const m = p.models ?? {};
@@ -1772,6 +1777,8 @@ async function dispatch(client, method, p) {
       updates = { state: p.state ?? 'idle', oldRunners: Array.isArray(p.oldRunners) ? p.oldRunners : [] };
       for (const k of ['commit', 'subject', 'reason', 'launcherReason', 'webRuntimeProblem']) if (typeof p[k] === 'string') updates[k] = p[k];
       if (p.launcherChanged) updates.launcherChanged = true;
+      // Like the real runner since 15 Nov: its update of the launcher stages.
+      if (p.launcherChanged && p.launcherStages !== false) updates.launcherStages = true;
       if (p.reinstall && typeof p.reinstall === 'object') updates.reinstall = p.reinstall;
       // Mike's releases (protocol "Mike's releases"), as given.
       if (p.upstream && typeof p.upstream === 'object') updates.upstream = p.upstream;
