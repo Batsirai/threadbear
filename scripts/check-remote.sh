@@ -426,7 +426,8 @@ changed="$(mktemp)"
 # website's checks, so --quick, nothing changed under ios/ (ThreadbearKit's
 # tests), app/ or dock/ (the Mac app's release build) beyond what the GPUI
 # app shares (scripts/swift-freeze.sh --gpui-shared: the mock runner,
-# fixtures, art, which the Swift app's build no longer runs for), and
+# fixtures, art, which the Swift app's build no longer runs for, but not
+# the mock runner, whose Swift tests still run), and
 # something changed (with nothing, check.sh itself or --all, it runs
 # everything), no shots.
 linux_ok=0
@@ -434,8 +435,13 @@ GPUI_SHARED="$("$ROOT/scripts/swift-freeze.sh" --gpui-shared 2>/dev/null)"
 # Without it, nothing counts as shared: an empty pattern would match every
 # line, and every change would look like none.
 [ -n "$GPUI_SHARED" ] || GPUI_SHARED='^$'
+# The mock runner, though shared, has Swift tests check.sh runs whenever it
+# or they change (swift-freeze.sh --mock-tests), and those need a Mac.
+MOCK_TESTS="$("$ROOT/scripts/swift-freeze.sh" --mock-tests 2>/dev/null | head -1)"
+[ -n "$MOCK_TESTS" ] || MOCK_TESTS='^$'
 if [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -z "$SHOTS" ] && [ -s "$changed" ] \
-  && ! grep -qE '^ios/|^check\.sh$' "$changed" && ! grep -vE "$GPUI_SHARED" "$changed" | grep -E '^(app|dock)/' >/dev/null; then linux_ok=1; fi
+  && ! grep -qE '^ios/|^check\.sh$' "$changed" && ! grep -vE "$GPUI_SHARED" "$changed" | grep -E '^(app|dock)/' >/dev/null \
+  && ! grep -E "$MOCK_TESTS" "$changed" >/dev/null; then linux_ok=1; fi
 # (grep to /dev/null, not -q: -q closing the pipe early fails grep -v under
 # pipefail, and a big change would have looked like none.)
 # --runner is only Node, whatever changed: the runner's self-update sends
@@ -448,7 +454,7 @@ if [ "$QUICK" = 1 ]; then
   if [ -n "$SHOTS" ]; then MAC_WHY="--shots"
   elif [ "$ALL" = 1 ]; then MAC_WHY="--all"
   elif [ ! -s "$changed" ]; then MAC_WHY="nothing changed from main, so it runs everything"
-  else MAC_WHY="it changes ios/, app/, dock/ or check.sh"; fi
+  else MAC_WHY="it changes ios/, app/ (the mock runner included), dock/ or check.sh"; fi
 fi
 
 # The disk a run wants free on its host. On 7 Nov Tinker Desk fell under 1 GiB

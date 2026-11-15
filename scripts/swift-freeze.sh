@@ -13,6 +13,9 @@
 #   swift-freeze.sh --gpui-shared
 #                              prints which of app/ the GPUI app uses, as a
 #                              regex, for check.sh
+#   swift-freeze.sh --mock-tests
+#                              prints the paths that need the Swift tests
+#                              of the mock runner, and their filter
 #
 # In Mike's own copy (origin is mikecann/threadbear) it refuses. Only when
 # Mike asks for a change to the Swift app itself, in that thread (the last
@@ -47,12 +50,20 @@ GPUI_SHARED='^app/Tools/mock-runner/|^app/Tools/(droptarget|post-gesture|realdra
 # login check that starts it, and the golden transcripts of its fixtures. A
 # change to the mock (its demo data renamed, 15 Nov) has to update them, so
 # they're open too. They aren't in GPUI_SHARED: changing one still builds
-# and tests the Swift app in check.sh, which is the only thing that runs them.
-SHARED_TESTS='^app/Tests/ThreadbearCoreTests/(MockRunner|RunnerAuth|GoldenTranscript)Tests\.swift$'
+# and tests the Swift app in check.sh's full run. --mock-tests prints what
+# check.sh needs to run just these, --quick included, when the mock or they
+# change (the mock's renamed demo data broke them on main unseen, 15 Nov):
+# the paths, as a regex, then the swift test --filter.
+SHARED_TESTS_FILTER='MockRunnerTests|RunnerAuthTests|GoldenTranscriptTests'
+SHARED_TESTS="^app/Tests/ThreadbearCoreTests/(${SHARED_TESTS_FILTER})\\.swift\$"
 
 mode="${1:-}"
 if [ "$mode" = --gpui-shared ]; then
   printf '%s\n' "$GPUI_SHARED"
+  exit 0
+fi
+if [ "$mode" = --mock-tests ]; then
+  printf '%s\n' "^app/Tools/mock-runner/|$SHARED_TESTS" "$SHARED_TESTS_FILTER"
   exit 0
 fi
 # The checkout: for a commit, git's own, never CLAUDE_PROJECT_DIR, which can
@@ -175,7 +186,7 @@ case "$mode" in
     frozen "$f" && hits+=("$f")
     ;;
   *)
-    echo "usage: swift-freeze.sh --commit | --tool | --gpui-shared" >&2
+    echo "usage: swift-freeze.sh --commit | --tool | --gpui-shared | --mock-tests" >&2
     exit 64
     ;;
 esac
