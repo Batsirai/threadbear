@@ -1,7 +1,8 @@
 // node --test web/src/picture-src.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { imageSourcePolicy, pictureSrc } from './picture-src.ts';
+import { readFileSync } from 'node:fs';
+import { imageSourcePolicy, pictureSrc, withImagePolicy } from './picture-src.ts';
 
 // Daybreak finding 133: a web address written as a picture is never an
 // <img> the browser fetches by itself, public, loopback, private or
@@ -30,4 +31,12 @@ test('the page only loads pictures from itself and its own Convex deployment', (
   );
   assert.equal(imageSourcePolicy('https://convex.example.com', 'https://site.example.com/'), "img-src 'self' data: blob: https://convex.example.com https://site.example.com");
   assert.equal(imageSourcePolicy(undefined, 'not a url'), "img-src 'self' data: blob:");
+});
+
+test('the built page carries the policy in its head, ahead of every picture', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const out = withImagePolicy(html, imageSourcePolicy('https://a-b-1.convex.cloud'));
+  const meta = out.indexOf('<meta http-equiv="Content-Security-Policy" content="img-src \'self\' data: blob: https://a-b-1.convex.cloud https://a-b-1.convex.site" />');
+  assert.ok(meta > 0 && meta < out.indexOf('</head>') && meta < out.indexOf('<link rel="icon"'));
+  assert.throws(() => withImagePolicy('<html><head></head><body><meta name="referrer"></body></html>', 'img-src none'));
 });

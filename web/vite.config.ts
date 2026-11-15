@@ -1,6 +1,6 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { imageSourcePolicy } from './src/picture-src.ts';
+import { imageSourcePolicy, withImagePolicy } from './src/picture-src.ts';
 
 // Pictures load only from the site itself and its own Convex deployment's
 // file storage (Daybreak finding 133, SECURITY.md "Pictures in replies"):
@@ -14,7 +14,7 @@ function imagePolicy(): Plugin {
       handler(html, ctx) {
         const env = { ...loadEnv(ctx.server?.config.mode ?? 'production', new URL('..', import.meta.url).pathname, 'VITE_'), ...process.env };
         const policy = imageSourcePolicy(env.VITE_CONVEX_URL, env.VITE_CONVEX_SITE_URL);
-        return html.replace('<meta name="referrer"', `<meta http-equiv="Content-Security-Policy" content="${policy}" />\n    <meta name="referrer"`);
+        return withImagePolicy(html, policy);
       },
     },
   };

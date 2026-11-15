@@ -40,3 +40,11 @@ export function hostOf(url: string): string {
     return 'the web';
   }
 }
+
+// index.html with the policy in its <head>, before anything that loads a
+// picture. Throws rather than ship a page without it.
+export function withImagePolicy(html: string, policy: string): string {
+  const at = html.indexOf('<meta name="referrer"');
+  if (at < 0 || at > html.indexOf('</head>')) throw new Error('index.html has no referrer meta in its <head> to put the image policy before');
+  return `${html.slice(0, at)}<meta http-equiv="Content-Security-Policy" content="${policy.replace(/"/g, '&quot;')}" />\n    ${html.slice(at)}`;
+}

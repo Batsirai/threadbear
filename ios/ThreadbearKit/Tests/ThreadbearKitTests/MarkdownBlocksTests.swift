@@ -341,6 +341,20 @@ import Testing
         #expect(placed.trailing == [notYet])
     }
 
+    // Daybreak finding 130, by pins and pasted photos rather than Markdown: a
+    // runner key can attach hundreds of stored pictures to one message.
+    @Test func oneMessageShowsTenPinnedOrPastedPicturesAtMost() {
+        let pins = (0..<300).map { MessageImage(seq: 1, pinned: true, url: "https://store/pin-\($0)") }
+        let late = (0..<300).map { MessageImage(seq: 9, pinned: true, url: "https://store/late-\($0)") }
+        let pasted = (1...300).map { MessageImage(seq: 2, src: "picture:\($0)", url: "https://store/p-\($0)") }
+        let pictures = ThreadPictures(pins + late + pasted)
+        let placed = pictures.pinned(in: [reply(1)])
+        #expect(placed.under[1]?.count == MarkdownBlock.maxPictures)
+        #expect(placed.under[1]?.first?.url == "https://store/pin-0")
+        #expect(placed.trailing.count == MarkdownBlock.maxPictures)
+        #expect(pictures.pasted(seq: 2).map(\.url) == (1...MarkdownBlock.maxPictures).map { "https://store/p-\($0)" })
+    }
+
     @Test func aPageFromAnOlderBackendHasNoPictures() throws {
         let json = #"{"messages":[],"hasMore":false}"#
         #expect(try JSONDecoder().decode(MessagePage.self, from: Data(json.utf8)).images == [])

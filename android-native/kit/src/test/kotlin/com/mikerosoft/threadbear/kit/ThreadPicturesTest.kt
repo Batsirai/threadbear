@@ -38,6 +38,20 @@ class ThreadPicturesTest {
         assertNull(pictures.image("https://attacker.example/a.png", 3))
     }
 
+    // Daybreak finding 130, by pins and pasted photos rather than Markdown: a
+    // runner key can attach hundreds of stored pictures to one message.
+    @Test fun oneMessageShowsTenPinnedOrPastedPicturesAtMost() {
+        val pins = (0 until 300).map { MessageImage(seq = 1, pinned = true, url = "https://store/pin-$it") }
+        val late = (0 until 300).map { MessageImage(seq = 9, pinned = true, url = "https://store/late-$it") }
+        val pasted = (1..300).map { MessageImage(seq = 2, src = "picture:$it", url = "https://store/p-$it") }
+        val pictures = ThreadPictures(pins + late + pasted)
+        val placed = pictures.pinned(listOf(reply(1)))
+        assertEquals(MarkdownBlock.MAX_PICTURES, placed.under[1]?.size)
+        assertEquals("https://store/pin-0", placed.under[1]?.first()?.url)
+        assertEquals(MarkdownBlock.MAX_PICTURES, placed.trailing.size)
+        assertEquals((1..MarkdownBlock.MAX_PICTURES).map { "https://store/p-$it" }, pictures.pasted(2).map { it.url })
+    }
+
     @Test fun aPinGoesUnderTheNextReplyOnShow() {
         val first = MessageImage(seq = 3, pinned = true, url = "https://x/first")
         val second = MessageImage(seq = 8, pinned = true, url = "https://x/second")

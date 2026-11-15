@@ -29,6 +29,9 @@ data class ThreadPictures(val images: List<MessageImage> = emptyList()) {
         images.mapNotNull { image -> if (image.seq != seq) null else pictureNumber(image.src)?.let { it to image } }
             .sortedBy { it.first }
             .map { it.second }
+            // Each is a download and a bitmap: one message's are held to the
+            // same count as its Markdown pictures (Daybreak finding 130).
+            .take(MarkdownBlock.MAX_PICTURES)
 
     /**
      * His message's words for the bubble, with the runner's "[2 pictures]"
@@ -62,7 +65,11 @@ data class ThreadPictures(val images: List<MessageImage> = emptyList()) {
         for (image in images) {
             if (image.pinned != true) continue
             val reply = replies.firstOrNull { it >= image.seq }
-            if (reply != null) under.getOrPut(reply) { mutableListOf() } += image else trailing += image
+            // At most MAX_PICTURES under one reply, or trailing: a runner key
+            // can pin hundreds of stored pictures to one message, and each is
+            // a download and a bitmap (Daybreak finding 130).
+            val list = if (reply != null) under.getOrPut(reply) { mutableListOf() } else trailing
+            if (list.size < MarkdownBlock.MAX_PICTURES) list += image
         }
         return Pinned(under, trailing)
     }

@@ -728,6 +728,10 @@ public struct ThreadPictures: Sendable, Hashable {
             }
             .sorted { $0.0 < $1.0 }
             .map(\.1)
+            // Each is a download and a bitmap: one message's are held to the
+            // same count as its Markdown pictures (Daybreak finding 130).
+            .prefix(MarkdownBlock.maxPictures)
+            .map { $0 }
     }
 
     /// His message's words for the bubble, with the runner's "[2 pictures]"
@@ -773,10 +777,13 @@ public struct ThreadPictures: Sendable, Hashable {
         }
         var under: [Int: [MessageImage]] = [:]
         var trailing: [MessageImage] = []
+        // At most maxPictures under one reply, or trailing: a runner key can
+        // pin hundreds of stored pictures to one message, and each is a
+        // download and a bitmap (Daybreak finding 130).
         for image in images where image.pinned == true {
             if let reply = replies.first(where: { $0 >= image.seq }) {
-                under[reply, default: []].append(image)
-            } else {
+                if under[reply, default: []].count < MarkdownBlock.maxPictures { under[reply, default: []].append(image) }
+            } else if trailing.count < MarkdownBlock.maxPictures {
                 trailing.append(image)
             }
         }
