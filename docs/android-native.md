@@ -144,7 +144,8 @@ an Android verdict for the daily tag to wait on.
   15 Nov 2026): `apk` builds an unsigned APK (Gradle, with the Firebase
   config and a read-only token) and hands it on with its SHA-256;
   `release` checks those exact bytes, signs them with `apksigner` and
-  publishes, with nothing checked out and no Gradle. Every action in every
+  publishes, with no actions, nothing checked out and no Gradle (the Gradle
+  wrapper's download is pinned by its SHA-256 too). Every action in every
   workflow is pinned to a full commit SHA, with its tag in a comment;
   `runner/test/unit/workflow-pins.test.ts` fails on a tag or branch.
 - The version is the tag's date (`versionName` 2026-11-12, `versionCode`

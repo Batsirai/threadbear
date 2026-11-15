@@ -81,21 +81,41 @@ test('every action in every workflow is pinned to a full commit SHA', () => {
   assert.deepEqual(bad, [], 'Pin these to a commit SHA, with the tag in a comment');
 });
 
-test('the Android signing key only meets a job with no checkout and no Gradle', () => {
-  const text = fs.readFileSync(path.join(workflowsDir, 'android.yml'), 'utf8');
-  const jobs = jobsOf(text);
-  const keyed = [...jobs].filter(([, body]) => /secrets\.ANDROID_KEYSTORE/.test(body));
-  assert.deepEqual(keyed.map(([name]) => name), ['release'], 'only the release job names the key or its password');
-  const [, release] = keyed[0];
-  assert.doesNotMatch(release, /actions\/checkout|gradlew|setup-java|\buses:\s*\.\//, 'the signing job runs no repo code');
-  // Its only action is GitHub's artifact download, and it signs only the
-  // bytes the build job hashed.
-  assert.deepEqual(usesOf(release).map((u) => u.ref.split('@')[0]), ['actions/download-artifact']);
-  assert.match(release, /needs\.apk\.outputs\.sha256/);
-  assert.match(release, /sha256sum/);
+test('the Android signing key only meets a job that runs no actions, no checkout and no Gradle', () => {
+  // In any workflow, not only android.yml.
+  const keyed: string[] = [];
+  for (const [file, text] of workflows()) {
+    for (const [name, body] of jobsOf(text)) if (/secrets\.ANDROID_KEYSTORE/.test(body)) keyed.push(`${file}:${name}`);
+  }
+  assert.deepEqual(keyed, ['android.yml:release'], 'only the release job names the key or its password');
+  const jobs = jobsOf(fs.readFileSync(path.join(workflowsDir, 'android.yml'), 'utf8'));
+  const release = jobs.get('release')!;
+  assert.deepEqual(usesOf(release), [], 'the signing job runs no actions at all');
+  assert.doesNotMatch(release, /checkout|gradlew|sdkmanager|setup-java/, 'the signing job runs no repo code and downloads no tools');
+  // Only on Mike's repo's release tags, as the build is.
+  for (const job of [release, jobs.get('apk')!]) {
+    assert.match(job, /^ {4}if: github\.repository == 'mikecann\/threadbear' && startsWith\(github\.ref, 'refs\/tags\/release\/'\)/m);
+  }
+  // The step that signs compares the APK with the build's digest first, in
+  // the same step, so nothing runs between the check and the signing.
+  const steps = release.split(/\n {6}- /);
+  const signing = steps.filter((st) => /apksigner" sign/.test(st));
+  assert.equal(signing.length, 1);
+  const sign = signing[0];
+  assert.match(sign, /WANT: \$\{\{ needs\.apk\.outputs\.sha256 \}\}/);
+  const check = sign.search(/\[ "\$got" = "\$WANT" \] \|\| \{[^}]*exit 1; \}/);
+  const signs = sign.indexOf('apksigner" sign');
+  assert.ok(check > 0 && check < signs, 'the digest is checked before apksigner signs');
+  assert.match(sign, /got=\$\(sha256sum "\$unsigned"/);
+  assert.match(sign, /--out "\$RUNNER_TEMP\/threadbear-android\.apk" "\$unsigned"/, 'it signs the file it checked');
   // The build job has the Firebase config and a read-only token, never the key.
   const build = jobs.get('apk')!;
   assert.match(build, /contents: read/);
   assert.doesNotMatch(build, /contents: write|KEYSTORE/);
   assert.match(build, /persist-credentials: false/);
+});
+
+test("the Gradle wrapper's download is pinned by its digest", () => {
+  const props = fs.readFileSync(path.join(repoRoot, 'android-native/gradle/wrapper/gradle-wrapper.properties'), 'utf8');
+  assert.match(props, /^distributionSha256Sum=[0-9a-f]{64}$/m);
 });

@@ -68,9 +68,10 @@ jobs:
   # plugins and the repo's own build scripts run there, with no key and a
   # read-only token, and it hands on the APK with its SHA-256. `release`
   # checks the APK is those exact bytes, signs it with apksigner and
-  # publishes it; it checks nothing out and runs no Gradle, so the only code
-  # that sees the key is the Android SDK's apksigner and GitHub's own
-  # artifact download. Every `uses:` in every workflow is a full commit SHA
+  # publishes it; it runs no actions, checks nothing out and runs no Gradle,
+  # so the only code that sees the key is GitHub's CLI and the runner
+  # image's Android build tools. The Gradle wrapper's download is pinned by
+  # its SHA-256 too (gradle-wrapper.properties). Every `uses:` in every workflow is a full commit SHA
   # (workflow-pins.test.ts fails on anything else), so a moved tag can't
   # put new code in either job.
   apk:
@@ -154,7 +155,7 @@ jobs:
 
   release:
     needs: apk
-    if: needs.apk.outputs.todo && needs.apk.outputs.sha256
+    if: github.repository == 'mikecann/threadbear' && startsWith(github.ref, 'refs/tags/release/') && needs.apk.outputs.todo && needs.apk.outputs.sha256
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # The key's only way in: this environment gives its secrets to release/* tags alone.
@@ -168,6 +169,8 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write
+      # gh run download: this run's own artifact.
+      actions: read
     env:
       TAG: ${{ github.ref_name }}
       GH_REPO: ${{ github.repository }}
@@ -175,34 +178,29 @@ jobs:
       # no installed copy would take (Android wants the same key for an update).
       CERT_SHA256: 185d962a979b9015485c6ea8450cbc52e31153b058922e3eb80823848609c358
     steps:
-      # Nothing checked out: no repo code runs where the key is.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: unsigned-apk
-          path: ${{ runner.temp }}/unsigned
+      # No actions and nothing checked out: the only code that runs where the
+      # key is is GitHub's own CLI and the runner image's Android build tools.
+      - name: Fetch the build's unsigned APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --name unsigned-apk --dir "$RUNNER_TEMP/unsigned"
 
-      - name: The APK the build job made, byte for byte
+      - name: Sign the APK the build job made, byte for byte
         env:
           WANT: ${{ needs.apk.outputs.sha256 }}
-        run: |
-          got=$(sha256sum "$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk" | cut -d' ' -f1)
-          [ "$got" = "$WANT" ] || { echo "The APK's digest is $got, not the build's $WANT."; exit 1; }
-
-      - name: Android build tools
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;37.0.0" >/dev/null
-
-      - name: Sign it with the release key
-        env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           THREADBEAR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          tools="$ANDROID_HOME/build-tools/37.0.0"
+          # The image's own build tools, nothing downloaded here.
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          unsigned="$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk"
+          # Checked here, right before signing, with nothing run in between.
+          got=$(sha256sum "$unsigned" | cut -d' ' -f1)
+          [ "$got" = "$WANT" ] || { echo "The APK's digest is $got, not the build's $WANT."; exit 1; }
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           "$tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias threadbear \
             --ks-pass env:THREADBEAR_KEYSTORE_PASSWORD --key-pass env:THREADBEAR_KEYSTORE_PASSWORD \
-            --out "$RUNNER_TEMP/threadbear-android.apk" "$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk"
+            --out "$RUNNER_TEMP/threadbear-android.apk" "$unsigned"
           rm -f "$RUNNER_TEMP/release.jks"
           # Signed with the release key itself, by its certificate's digest.
           "$tools/apksigner" verify --print-certs "$RUNNER_TEMP/threadbear-android.apk" \
