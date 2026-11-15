@@ -504,6 +504,23 @@ wakeups. It excludes animation work in the render server; GPUI's process
 counters also exclude Chromium helper processes. Swift's loading dump has no
 spinner field, so the reference covers settled and working-thread phases.
 
+## Native working arc (parked)
+
+The Core Animation prototype is preserved on
+[`perf3-native-arc`](https://github.com/mikecann/threadbear/tree/perf3-native-arc).
+It remains automation-only, off by default, and unshipped. Early paired runs
+with visible working threads reduced idle app CPU from about 24% to 2.6% of
+one core, and interrupt wakeups from about 92 to 9.5 per second. These numbers
+are from an earlier prototype; the final current-main comparison was not run.
+
+The v11 menu visual gate passed. Later v14 captures passed both menu handoff
+and scroll alignment with eight working rows under seven-core load. The scroll
+CPU/latency matrix was not completed. Open risks include native layers covering
+GPUI overlays, clipping and opacity during movement, window lifetime and failure
+recovery, and possible scrolling or WindowServer cost. The display-filter
+captures establish visual evidence for that capture path, not physical-display
+parity. Work stopped on 15 November at Mike's request.
+
 ## Checks
 
 Nine renderer tests and the existing arc-fade test cover timed repaints through cached parents, a loader
