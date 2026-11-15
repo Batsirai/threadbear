@@ -160,3 +160,31 @@ for (const how of ['deleted', 'changed'] as const) test(`a check under way stays
   assert.equal(runsAsCode(path.join(cwd, 'check.sh')), false, 'over, and nothing runs it now');
   sched.stop();
 });
+
+// verify-fix again: in a handover the old runner goes on running its
+// check while the new one takes the schedules, so a change or delete made
+// on the new one took the guard away there. The running marker now says
+// what's running and where, and one that doesn't (an older release's)
+// makes edits ask until it ends.
+test("a check the runner handing over is still running stays guarded on the new one, and an older release's marker fails closed", async () => {
+  const { markCheckRunning, runningCheckFile } = await import('../../src/schedule-check.ts');
+  const { h, cwd, runsAsCode } = await setup();
+  // The old runner's process: our parent, which is alive and not us.
+  const write = (body: object) => {
+    fs.mkdirSync(path.dirname(runningCheckFile(h.home, 'gone')), { recursive: true });
+    fs.writeFileSync(runningCheckFile(h.home, 'gone'), JSON.stringify({ pid: process.ppid, at: h.clock.now(), limitMs: 60_000, ...body }));
+  };
+  write({ command: 'sleep 30; ./check.sh', cwd });
+  assert.equal(runsAsCode(path.join(cwd, 'check.sh')), true, "its schedule isn't here at all, but the old runner's shell can open it");
+  assert.equal(runsAsCode(path.join(cwd, 'README.md')), false);
+  write({});
+  assert.equal(runsAsCode(path.join(cwd, 'README.md')), 'unsure', "an older release's marker doesn't say what it runs");
+  h.clock.advance(10 * 60_000);
+  assert.equal(runsAsCode(path.join(cwd, 'README.md')), false, 'stale, so over');
+  // And this runner's own markers say what they run.
+  markCheckRunning(h.home, 'mine', h.clock.now(), 60_000, { command: 'x', cwd });
+  const mine = JSON.parse(fs.readFileSync(runningCheckFile(h.home, 'mine'), 'utf8'));
+  assert.equal(mine.command, 'x');
+  assert.equal(mine.cwd, cwd);
+  assert.equal(fs.statSync(runningCheckFile(h.home, 'mine')).mode & 0o777, 0o600);
+});

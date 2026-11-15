@@ -593,8 +593,10 @@ export const patchesPart = {
       // check added or changed counts at once. One that runs something
       // that can't be followed makes every edit in its repo ask: what it
       // runs there isn't known.
-      let checkUnsure = false;
-      for (const c of this.scheduleChecks?.() ?? []) {
+      const checks = this.scheduleChecks?.() ?? [];
+      // A check the runner handing over is running, that doesn't say what.
+      let checkUnsure = (checks as { unknown?: boolean }).unknown === true;
+      for (const c of checks) {
         const reach = checkReach(c.command, c.cwd);
         if (reach.files.some(same)) return true;
         if (reach.problem && isInside(real, canonicalPath(reach.top).toLowerCase())) checkUnsure = true;

@@ -4701,6 +4701,8 @@ name, the runner's own data dir (`patch-trust.json` is the trust itself),
 every file a schedule's check on this runner reaches from its folder (the
 check's scripts, what they run in turn, absolute and linked ones, one it
 names that isn't there yet; a check still running though its schedule was changed or deleted since,
+here or in the runner handing over (its running marker says what and where;
+an older release's that doesn't makes every edit ask until it ends),
 paused and finished schedules too, as Resume and
 Run now run them again unasked; read afresh at each edit, so a new or changed
 check counts at once, and a check that runs something it can't follow makes

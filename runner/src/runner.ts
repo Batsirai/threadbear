@@ -698,7 +698,7 @@ export class Runner {
   schedulesFor?: (threadId: string) => Schedule[];
   // The schedule checks this runner runs by itself, and where (main.ts sets
   // it from the Scheduler), for writeRunsAsCode.
-  scheduleChecks?: () => { command: string; cwd: string }[];
+  scheduleChecks?: () => { command: string; cwd: string }[] & { unknown?: boolean };
   // The release this runner runs (none from a source checkout), for
   // threads hibernating until a new one (snoozedUntil "release"). Tests set it.
   release: string | undefined = RELEASE.release;

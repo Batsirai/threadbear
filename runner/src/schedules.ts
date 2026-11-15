@@ -12,7 +12,7 @@
 // disk for when the backend can't be reached), and sends only its own,
 // each run taken with a claim first so it's sent once.
 import type { CheckCard } from './patch-trust.ts';
-import { type KeptCheck, CHECK_TIMEOUT_MS, checkLimitMs, checkOutcome, checkRunningElsewhere, clearCheckRunning, dropKeptCheck, HELD_EXTRA, HELD_SKIP, heldToldAbout, keepCheck, markCheckRunning, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_SECS, noteHeldTold, readKeptCheck, runCheck, type CheckResult } from './schedule-check.ts';
+import { type KeptCheck, CHECK_TIMEOUT_MS, checkLimitMs, checkOutcome, checkRunningElsewhere, checksRunningElsewhere, clearCheckRunning, dropKeptCheck, HELD_EXTRA, HELD_SKIP, heldToldAbout, keepCheck, markCheckRunning, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_SECS, noteHeldTold, readKeptCheck, runCheck, type CheckResult } from './schedule-check.ts';
 import { forbiddenText } from './sync.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -566,11 +566,16 @@ export class Scheduler {
   // access (Daybreak 126). Paused and finished ones too, as Resume and Run
   // now run them again without a new approval. One whose thread is on
   // another runner isn't ours to run.
-  localChecks(): { command: string; cwd: string }[] {
+  // `unknown`: another runner process is running a check whose marker
+  // doesn't say what (an older release's, in a handover).
+  localChecks(): { command: string; cwd: string }[] & { unknown?: boolean } {
     // And every check still running, though its schedule was changed or
-    // deleted since it started: its shell can still open a script, and a
-    // delete mid-run doesn't stop it (verify-fix on Daybreak 126).
-    const out: { command: string; cwd: string }[] = [...this.runningChecks.values()];
+    // deleted since it started, here or in the runner handing over: its
+    // shell can still open a script, and a delete mid-run doesn't stop it
+    // (verify-fix on Daybreak 126).
+    const elsewhere = checksRunningElsewhere(this.home, this.clock.now());
+    const out: { command: string; cwd: string }[] & { unknown?: boolean } = [...this.runningChecks.values(), ...elsewhere.checks];
+    if (elsewhere.unknown) out.unknown = true;
     for (const rec of this.items.values()) {
       if (!rec.check || !this.mine(rec)) continue;
       const cwd = this.checkFolder(rec);
@@ -1221,7 +1226,7 @@ export class Scheduler {
     const runKey = `${id}\n${this.clock.now()}\n${Math.random()}`;
     this.runningChecks.set(runKey, { command, cwd });
     try {
-      markCheckRunning(this.home, id, this.clock.now(), timeoutMs);
+      markCheckRunning(this.home, id, this.clock.now(), timeoutMs, { command, cwd });
     } catch {
       // It still runs; another process just can't see it is.
     }
