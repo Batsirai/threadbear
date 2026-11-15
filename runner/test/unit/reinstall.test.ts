@@ -19,6 +19,7 @@ function setup(s: Setup = {}) {
   const state = { behind: s.behind ?? { reason: "Threadbear Runner.app was built from older launcher sources than main's.", key: 'k1' } as { reason: string; key: string } | undefined, auto: s.auto ?? false, alive: ('alive' in s ? s.alive : true) as boolean | undefined };
   const jobs: JobSpec[] = [];
   let changes = 0;
+  let rechecks = 0;
   const make = () =>
     new Reinstaller({
       home,
@@ -28,6 +29,7 @@ function setup(s: Setup = {}) {
       behind: () => state.behind,
       auto: () => state.auto,
       onChange: () => changes++,
+      recheck: () => rechecks++,
       env: { HOME: '/Users/me', PATH: '/usr/bin:/bin', XPC_SERVICE_NAME: 'com.mikerosoft.threadbear.runner', THREADBEAR_THREAD_ID: 'nope', THREADBEAR_HOME: '/elsewhere' },
       platform: 'darwin',
       // The job is going until it writes its result (finish below).
@@ -42,7 +44,7 @@ function setup(s: Setup = {}) {
     fs.appendFileSync(reinstallLogPath(home), `${said}\n`);
     fs.writeFileSync(path.join(reinstallDir(home), 'result'), `${code}\n`);
   };
-  return { home, clock, state, jobs, make, finish, changes: () => changes };
+  return { home, clock, state, jobs, make, finish, changes: () => changes, rechecks: () => rechecks };
 }
 
 test('without the experiment, nothing starts until Update it; then it stages straight away, busy threads or not', () => {
@@ -72,9 +74,11 @@ test('staged: when what it checks is up to date the line goes; when the running 
   const r = t.make();
   r.consider();
   t.finish(0, 'Staged com.mikerosoft.threadbear.runner');
-  // The app rebuilt in place: main's launcher matches it now.
+  // The app rebuilt in place: main's launcher matches it now, which the
+  // updater is asked to look at straight away rather than at its next check.
   t.state.behind = undefined;
   t.clock.advance(5_000);
+  assert.equal(t.rechecks(), 1);
   assert.equal(r.status(), undefined);
   const saved = JSON.parse(fs.readFileSync(path.join(reinstallDir(t.home), 'state.json'), 'utf8'));
   assert.equal(saved.finished.code, 0);

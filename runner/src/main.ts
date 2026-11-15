@@ -712,6 +712,7 @@ async function main(): Promise<void> {
       return u.launcherChanged && u.launcherReason && u.launcherKey ? { reason: u.launcherReason, key: u.launcherKey } : undefined;
     },
     auto: () => experimentOn(cfg.home, 'selfReinstall'),
+    recheck: () => updater.recheckLauncher(),
     onChange: () => publishUpdates(),
   });
   // Mike's releases for a fork, and on Mike's own runner the tagging of

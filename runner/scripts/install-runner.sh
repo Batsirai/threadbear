@@ -560,6 +560,21 @@ rm -f "$PREV" "$PREV_LAUNCH"
 # change: one of those going in alone would make the runner's check see main
 # and stop saying anything was wrong, with the old plist still there.
 STAGED_PLIST=""
+# The Node the job runs on now. Staging a different one would leave
+# deploy-runner.sh checking releases on the staged Node (it reads the plist)
+# while the running supervisor starts them on its own until the next login,
+# so a Node change goes in by a full reinstall instead.
+if [ "$STAGE" = 1 ] && [ -f "$PLIST" ]; then
+  if [ "$LINUX" = 1 ]; then
+    PINNED="$(sed -n 's/^ExecStart="\([^"]*\)".*/\1/p' "$PLIST" | head -n 1)"
+  else
+    PINNED="$(plutil -extract ProgramArguments.1 raw -o - "$PLIST" 2>/dev/null || true)"
+  fi
+  if [ -n "$PINNED" ] && [ "$PINNED" != "$NODE" ]; then
+    echo "The LaunchAgent runs on $PINNED, and this would stage $NODE. Changing the Node needs a full reinstall: run this without --stage once no thread is busy." >&2
+    exit 1
+  fi
+fi
 if [ "$STAGE" = 1 ]; then
   STAGED_PLIST="$(mktemp "$PLIST.XXXXXX")" || { echo "Couldn't write to $AGENTS_DIR, so nothing was changed." >&2; exit 1; }
   # Not left in LaunchAgents if a step below stops this (once it's moved

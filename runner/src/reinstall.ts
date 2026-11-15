@@ -100,6 +100,9 @@ export type ReinstallDeps = {
   platform?: NodeJS.Platform;
   // Starts the job; an error message when it couldn't.
   spawnJob?: (job: JobSpec) => string | undefined;
+  // Compares the installed launcher with main again (updater.recheckLauncher),
+  // so a stage's result is judged on the files as they are now.
+  recheck?: () => void;
   // Whether the job is still going; undefined when it can't be told.
   jobAlive?: (label: string) => boolean | undefined;
 };
@@ -376,6 +379,7 @@ export class Reinstaller {
     // launcher changing) rather than going round again.
     if (s.finished) s.requested = false;
     this.write();
+    if (s.finished?.code === 0) this.deps.recheck?.();
     this.changed();
   }
 

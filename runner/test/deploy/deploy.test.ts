@@ -1140,6 +1140,14 @@ test('--stage puts the new launch.mjs and plist in place with threads busy, stop
   assert.equal(r.status, 1, out(r));
   assert.match(r.stderr, /only goes with a plain install/);
   assert.equal(launchctl('print', TARGET), 0, 'still installed');
+  // Another Node: a full reinstall's job, as the running supervisor would
+  // go on starting releases on the old one until the next login.
+  const otherNode = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-other-node-'));
+  fs.symlinkSync(NODE, path.join(otherNode, 'node'));
+  r = sh('install-runner.sh', ['--home', home, '--label', LABEL, '--port', '0', '--path', '/usr/bin:/bin', '--stage', '--node', path.join(otherNode, 'node')]);
+  fs.rmSync(otherNode, { recursive: true, force: true });
+  assert.equal(r.status, 1, out(r));
+  assert.match(r.stderr, /Changing the Node needs a full reinstall/);
   // A LaunchAgents folder it can't write to: refused before the app or
   // launch.mjs change, so the runner's check still sees it behind.
   fs.writeFileSync(launchSrc, pristine + '\n// unwritable\n');
