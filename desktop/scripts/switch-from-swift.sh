@@ -24,8 +24,14 @@
 # main (git show), never the working tree, like the apps' own updates.
 # The other scripts it runs come from main the same way.
 #
-# Exit 0 with the app open, 3 if an update build is already running, 5 if
-# runner.json has check hosts but no update build host, 1 otherwise.
+# Exit 0 with the app open, 3 if an update build is already running, 4 if
+# none of runner.json's update build hosts could build it, 5 if runner.json
+# has check hosts but no update build host, 6 if the disk hasn't room for
+# it, 1 otherwise.
+#
+# Tried as a stranger's copy on Tinker Desk (15 Nov 2026): with no Rust and
+# nothing built before, Rust and the build took 31 minutes at background
+# priority and about 4 GB (Rust 1, the build's clone and target 2.3).
 set -euo pipefail
 
 CHECKOUT="${1:-}"
@@ -44,7 +50,55 @@ from_main() {
   chmod +x "$work/$1"
 }
 
+# Free space on the home folder's disk, in KB. THREADBEAR_SWITCH_FREE_KB
+# stands in for it in the tests (switch-from-swift.test.ts).
+free_kb() {
+  if [[ -n "${THREADBEAR_SWITCH_FREE_KB:-}" ]]; then echo "$THREADBEAR_SWITCH_FREE_KB"; return; fi
+  df -Pk "$HOME" | awk 'END { print $4 }'
+}
+
+# The update build hosts runner.json names, if any, where the build goes
+# instead of here (stage-update.sh says why).
+build_hosts() {
+  /usr/bin/python3 -I -c 'import json,sys
+try: h = json.load(open(sys.argv[1])).get("updateBuildHosts") or []
+except Exception: h = []
+print("yes" if h else "")' "${THREADBEAR_HOME:-$HOME/Library/Application Support/Threadbear}/runner.json" 2>/dev/null || true
+}
+
+# Room for it before any of it starts, rather than a full disk half an hour
+# into the build: Rust about 1 GB, a first build here about 3 (with room
+# for the bundle and to spare), one with an earlier try's files about 1.
+room_for_it() {
+  local need=0
+  command -v cargo >/dev/null || need=1
+  if [[ -z "$(build_hosts)" ]]; then
+    if [[ -d "$HOME/Library/Caches/Threadbear/update-desktop/target/release" ]]; then need=$((need + 1)); else need=$((need + 4)); fi
+  fi
+  [[ "$need" -gt 0 ]] || return 0
+  local have
+  have="$(free_kb)"
+  [[ "$have" =~ ^[0-9]+$ ]] || return 0
+  if (( have < need * 1024 * 1024 )); then
+    echo "Installing the new app needs about $need GB free on this Mac's disk (Rust and the build's files), and it has $(awk -v k="$have" 'BEGIN { printf "%.1f", k / 1048576 }') GB. Free some space and run this again." >&2
+    exit 6
+  fi
+}
+
+# What stage-update.sh's exit means here, where no app is installed yet to
+# try again by itself.
+build_failed() {
+  case "$1" in
+    3) echo "Another build of the new app is running. Wait for it to finish, then run this again." >&2 ;;
+    4) echo "None of runner.json's updateBuildHosts could build it just now (above says why). Run this again in a while, or take updateBuildHosts out of runner.json to build on this Mac." >&2 ;;
+    5) echo "runner.json has checkHosts but no updateBuildHosts, so nothing built it. Name a Mac to build it in updateBuildHosts, or take checkHosts out to build on this Mac." >&2 ;;
+    *) echo "The build failed (exit $1); its output is above, and in ~/Library/Caches/Threadbear/update-desktop." >&2 ;;
+  esac
+  exit "$1"
+}
+
 if [[ ! -d "$TARGET" ]]; then
+  room_for_it
   if ! command -v cargo >/dev/null; then
     echo "STEP Installing Rust"
     # rustup.rs's own script, over https only, as its site says to run it.
@@ -54,9 +108,9 @@ if [[ ! -d "$TARGET" ]]; then
     command -v cargo >/dev/null || { echo "Rust installed, but cargo isn't in ~/.cargo/bin." >&2; exit 1; }
   fi
 
-  echo "STEP Building the new app"
+  echo "STEP Building the new app (a first build takes 20 to 40 minutes, its later updates far less)"
   from_main stage-update.sh
-  "$work/stage-update.sh" "$CHECKOUT" --next "$work/Threadbear GPUI.app"
+  "$work/stage-update.sh" "$CHECKOUT" --next "$work/Threadbear GPUI.app" || build_failed "$?"
 
   mkdir -p "$HOME/Applications"
   # Not over one that turned up while it built (installed from a terminal).
