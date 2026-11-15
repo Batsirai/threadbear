@@ -53,11 +53,13 @@ export type Play = {
   /** The agent writes text. */
   say(text: string): void;
   /** The agent calls end_turn with these args, and the turn ends. */
-  endTurn(input: Record<string, unknown>): void;
+  endTurn(input: Record<string, unknown>, answerAll?: true): void;
   /** Mike sends a message, with pictures (paths of real files) if any. */
   send(text: string, images?: ImageRef[]): void;
   /** Mike sends from his phone, so every surface can mark where it came from. */
   sendFromPhone(text: string): void;
+  /** A reminder left in a busy thread's queue by an older runner. */
+  queuedReminder(text: string, scheduleId: string): void;
   /** Mike presses Go ahead on the last plan (plans.approve). */
   approvePlan(): void;
   /** The agent puts a Plan first plan to Mike (plan.proposed). */
@@ -174,11 +176,12 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
         h.runner.approvePlan({ threadId: thread.id, itemId: lastPlan });
         h.adapter.last.init();
       },
-      endTurn: (input) => {
+      endTurn: (input, answerAll) => {
         const id = `e${++n}`;
         s.out({ kind: 'event', event: { type: 'tool.call', itemId: id, name: END_TURN, kind: 'mcp', title: 'threadbear: end_turn', input } });
         s.out({ kind: 'event', event: { type: 'tool.result', itemId: id, ok: true, text: 'ok', truncated: false, images: [] } });
-        s.result('completed');
+        const answered = [...(h.runner.mustGet(thread.id).rt.turn?.messages ?? [])];
+        s.result('completed', undefined, undefined, answerAll ? { answered } : {});
       },
       fail: (error) => s.result('failed', undefined, error),
       earlyStop: () => {
@@ -196,6 +199,9 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
       sendFromPhone: (text) => {
         h.runner.send(thread.id, text, [], { origin: 'phone' });
         h.adapter.last.init();
+      },
+      queuedReminder: (text, scheduleId) => {
+        h.runner.send(thread.id, text, [], { origin: 'schedule', scheduleId, queue: true });
       },
       reviewed: (ledger) => {
         h.runner.threads.get(thread.id)!.rec.labReview = { ...ledger, delivered: ledger.rounds };

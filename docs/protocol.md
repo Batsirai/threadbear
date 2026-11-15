@@ -5328,7 +5328,34 @@ kept in `schedules.json` in the data dir.
   it, `[Scheduled: "<title>", <whenText>]`, so the agent knows Mike didn't
   just type it, and its `user.message` has `origin: "schedule"` and
   `scheduleId`. A message for a thread that's busy waits for the running
-  turn to end (it doesn't go into it), then starts its own turn. A
+  turn to end (it doesn't go into it), then starts its own turn. While it
+  waits, only the newest queued reminder per schedule is kept,
+  so rebooking a long-running job's check-in cannot build a pile. Messages
+  from Mike and other threads can still join the active turn. If a message
+  has to wait for a fresh CLI, it goes before scheduled reminders; other
+  messages keep their order. Queued runner notifications also yield to
+  ordinary messages. When an ordinary message reaches the agent, pending
+  automatic inputs are marked `beforeMessage: true` in `QueuedSend`.
+  If the agent then ends with archive, snooze or waitFor, those older
+  inputs are held through that wait instead of overriding it; inputs
+  arriving later still prevent putting the thread away. An older reminder
+  delivered later tells the agent that newer instructions take precedence.
+  An interrupted, unread peer message is queued again ahead of automatic
+  inputs; saved interrupted user messages hold automatic inputs until the
+  user writes again. A fresh ordinary peer message is told to keep stopped
+  work paused; it never carries or settles the unread user request. Retried peer inputs carry `retryAfterInterrupt: true`
+  and count as automatic redelivery, so a saved user cancellation holds them
+  too. Held queues release idle CLIs and survive crash recovery. Old queues are compacted to the latest reminder
+  per schedule, with a durable local note for each superseded delivery so
+  retrying a lost reply cannot bring it back. Reminders carrying check output
+  are preserved separately: that output may contain items no longer in the
+  check's storage. New queued sends carry `preserveSchedule: boolean` from
+  the scheduler, so a quoted check report in the reminder's own text does
+  not disable coalescing. Legacy queues infer this from the check suffix,
+  conservatively retaining held-check notices too. Repeated Run now requests
+  also replace a pending reminder
+  from the same schedule; they cannot hold up ordinary messages. Pausing or
+  deleting a schedule does not retract its already accepted message. A
   thread kept by a draining runner receives it there through
   `drain.sendScheduled { threadId, text, scheduleId }` → `{ turnId }`,
   with `origin: "schedule"` and `queue: true`, once its turn ends and
@@ -5340,8 +5367,14 @@ kept in `schedules.json` in the data dir.
   so recurring check-ins can't keep resetting its quiet spell.
   A draining release that
   doesn't know this method leaves the run due until its thread comes across.
+  Supersession receipts are `system.note` events with
+  `supersededReminder: <messageId>`. Their `turnId` is the active turn, or
+  absent between turns: the discarded reminder never owned a running turn.
+  Clients ignore the optional receipt metadata and fold the note normally.
   New primaries use `drain.sendScheduledOnce { threadId, text, scheduleId,
-  run, since? }` instead. `run` identifies the cron slot, one-off slot and
+  run, since?, preserve? }` instead. Optional `preserve` carries that same
+  check-data flag across handovers; older runners may omit it. `run` identifies
+  the cron slot, one-off slot and
   accepted run count, or backend Run now request; rearming a consumed
   one-off time gets a new id, while manual cron runs leave its due id alone.
   `since` is its earliest possible delivery time, bounding the log lookup.

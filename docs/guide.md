@@ -1012,9 +1012,19 @@ runs. If the run ends with nothing for you, the thread goes back into the
 archive, so a watcher you've put away only lands in your inbox when it has
 something you need to act on.
 
-If a scheduled message has already entered a busy thread's queue, pausing,
-deleting or editing its schedule doesn't take it back. It keeps the words
-it had when sent.
+A reminder due while an agent is working waits until that turn ends. A
+newer run from the same schedule replaces its older queued reminder, so
+repeated check-ins don't pile up. Your messages and other threads' messages
+can still reach the agent while the reminder waits.
+Repeated Run now requests also replace a pending reminder from that schedule.
+Runner notifications also wait behind your messages and other threads' messages.
+If the agent answers a later message by archiving or hibernating the thread,
+older queued reminders wait with it. They don't start another turn immediately.
+New inputs arriving after the agent receives that later message still need handling.
+
+Pausing, deleting or editing a schedule doesn't take back a reminder already
+queued. Ordinary messages go ahead of reminders. Reminders carrying check
+output are kept separately so new items found by a check aren't lost.
 
 If an update leaves a thread on the old runner while a command finishes,
 its scheduled messages can still start turns there. An old runner from before

@@ -216,7 +216,7 @@ export class Scheduler {
   // they're real threads, just not loaded here yet.
   private elsewhere: (threadId: string) => boolean;
   private folderElsewhere?: (threadId: string) => string | undefined;
-  private sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number) => Promise<{ turnId: string }>;
+  private sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number, preserve?: boolean) => Promise<{ turnId: string }>;
   // Schedule checks (schedule-check.ts).
   private home: string;
   private check: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -260,7 +260,7 @@ export class Scheduler {
     zone?: () => string;
     elsewhere?: (threadId: string) => boolean;
     folderElsewhere?: (threadId: string) => string | undefined;
-    sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number) => Promise<{ turnId: string }>;
+    sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number, preserve?: boolean) => Promise<{ turnId: string }>;
     self?: SelfRunner;
     syncOn?: boolean;
     runCheck?: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -1327,6 +1327,9 @@ export class Scheduler {
     const run = rec.at && !rec.finishedAt ? `due:${rec.at}#${rec.runs}` : requestedRun ?? (manual ? `manual:${crypto.randomUUID()}` : `due:${rec.nextRunAt}`);
     const since = rec.at ? Date.parse(rec.createdAt) : requestedRun ? Date.parse(requestedRun.slice('request:'.length)) : manual ? this.clock.now() : Date.parse(rec.nextRunAt!);
     const at = this.iso();
+    // Only the generated suffix carries new check data, never quoted text
+    // in the reminder body. Held notices are delivered only once as well.
+    const preserve = Boolean(checked && 'extra' in checked && (checked.held || checked.extra.endsWith('\n```')));
     const text = `[Scheduled: "${rec.title}", ${this.whenText(rec)}]\n\n${rec.text}${checked && 'extra' in checked ? checked.extra : ''}`;
     const record = (outcome: 'sent' | 'skipped' | 'failed', threadId?: string, note?: string) => {
       rec.lastRun = { at, outcome, ...(threadId ? { threadId } : {}), ...(note ? { note } : {}) };
@@ -1361,12 +1364,12 @@ export class Scheduler {
           if (!this.sendElsewhere) throw new RpcError(ErrorCode.busy, 'That thread is finishing on the old runner.');
           this.sending.add(rec.id);
           try {
-            ({ turnId } = await this.sendElsewhere(rec.threadId, text, rec.id, run, since));
+            ({ turnId } = await this.sendElsewhere(rec.threadId, text, rec.id, run, since, preserve));
           } finally {
             this.sending.delete(rec.id);
           }
         } else {
-          ({ turnId } = this.runner.sendScheduled(rec.threadId, text, rec.id, run, since));
+          ({ turnId } = this.runner.sendScheduled(rec.threadId, text, rec.id, run, since, preserve));
         }
         record('sent', rec.threadId);
         return { outcome: 'sent', threadId: rec.threadId, turnId };
