@@ -696,6 +696,9 @@ export class Runner {
   // The schedules that send to a thread (main.ts sets it from the
   // Scheduler), for the done card's loose ends.
   schedulesFor?: (threadId: string) => Schedule[];
+  // The schedule checks this runner runs by itself, and where (main.ts sets
+  // it from the Scheduler), for writeRunsAsCode.
+  scheduleChecks?: () => { command: string; cwd: string }[];
   // The release this runner runs (none from a source checkout), for
   // threads hibernating until a new one (snoozedUntil "release"). Tests set it.
   release: string | undefined = RELEASE.release;

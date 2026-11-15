@@ -2177,6 +2177,22 @@ always. Model and command probes, and Codex threads, run as before. The
 login's config folder is mounted read-write, and the same login's threads
 outside the sandbox read it: give sandboxed threads a login of their own.
 
+Its environment is an allowlist, not the runner's (`sandboxEnvAllowed`):
+the login's config folder, the Claude Code and Agent SDK settings the
+runner and the SDK set (`CLAUDE_CODE_*`, `CLAUDE_AGENT_SDK_*`), the model
+(`ANTHROPIC_MODEL` and its defaults), the thread's id and the runner's
+version, and the locale and terminal (`LANG`, `LC_*`, `TERM`, `TZ`).
+A name that reads like a credential, a socket, a proxy or an address
+(`TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `AUTH`, `CERT`, `SOCK`, `PROXY`,
+`URL`...) stays out even under those prefixes, so the CLI in the sandbox
+signs in from its login's folder, never from `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN`, and `THREADBEAR_THREAD_KEY` never goes in.
+Cloud, GitHub, signing and API keys, `SSH_AUTH_SOCK` and proxies in the
+runner's environment aren't there. `PATH`, `HOME`, `TMPDIR` and the
+user are the container's own. The container's network is Docker's
+default: open, as Claude itself needs to reach its API. Confinement
+covers the machine's files and secrets, not what the agent sends out.
+
 A thread that starts in a sandbox folder, or that a sandboxed thread's
 agent starts in one, is shut in it (`confined` on its record): it never
 starts outside a sandbox again, so a link put in its folder's place, a
@@ -4671,6 +4687,13 @@ home's included, which is trusted whatever it holds), anything under
 script it names, one it names that isn't there yet), `.claude/settings*.json`
 (home's too), an `.mcp.json`, a script the thread folder's Claude settings
 name, the runner's own data dir (`patch-trust.json` is the trust itself),
+every file a schedule's check on this runner reaches from its folder (the
+check's scripts, what they run in turn, absolute and linked ones, one it
+names that isn't there yet; paused and finished schedules too, as Resume and
+Run now run them again unasked; read afresh at each edit, so a new or changed
+check counts at once, and a check that runs something it can't follow makes
+every edit in its repo ask): its approval is a digest taken just before the
+shell opens them, so an edit after that would run unattended (Daybreak 126),
 every Claude login's user settings (`settings*.json` and `.claude.json` in
 its config folder, and `~/.claude.json`, by their names whether they're
 there yet or not, and what a link from them points at) and the paths their commands and the thread folder's

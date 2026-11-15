@@ -559,6 +559,21 @@ export class Scheduler {
 
   // ---------------------------------------------------------------- reads
 
+  // Every check this runner may run by itself, with the folder it runs in,
+  // for writeRunsAsCode: an edit of what one reaches asks outside Full
+  // access (Daybreak 126). Paused and finished ones too, as Resume and Run
+  // now run them again without a new approval. One whose thread is on
+  // another runner isn't ours to run.
+  localChecks(): { command: string; cwd: string }[] {
+    const out: { command: string; cwd: string }[] = [];
+    for (const rec of this.items.values()) {
+      if (!rec.check || !this.mine(rec)) continue;
+      const cwd = this.checkFolder(rec);
+      if (cwd) out.push({ command: rec.check, cwd });
+    }
+    return out;
+  }
+
   list(threadId?: string): Schedule[] {
     return this.listRecords(threadId).map((s) => this.view(s));
   }
