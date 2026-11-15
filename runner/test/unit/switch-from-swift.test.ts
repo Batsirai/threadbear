@@ -50,7 +50,7 @@ function world(o: { noRust?: boolean; warm?: boolean; cachedMb?: number; stageEx
   fs.mkdirSync(scripts, { recursive: true });
   const stage = o.stageExit
     ? `#!/bin/bash\necho "stub failed" >&2\nexit ${o.stageExit}\n`
-    : '#!/bin/bash\n[ "$2" = --next ] || exit 9\nmkdir -p "$3/Contents/MacOS"\nprintf "#!/bin/sh\\n" > "$3/Contents/MacOS/threadbear-gpui"\nchmod +x "$3/Contents/MacOS/threadbear-gpui"\necho staged\n';
+    : '#!/bin/bash\n[ "$2" = --next ] || exit 9\nmkdir -p "$3/Contents/MacOS"\nfor b in threadbear-gpui threadbear-web-helper; do printf "#!/bin/sh\\n" > "$3/Contents/MacOS/$b"; chmod +x "$3/Contents/MacOS/$b"; done\necho staged\n';
   fs.writeFileSync(path.join(scripts, 'stage-update.sh'), stage);
   git(root, 'init', '-q', '-b', 'main', checkout);
   git(checkout, 'add', '-A');
@@ -96,7 +96,23 @@ test('a build host it would use, or a check host, needs room only for the clone 
   // stage-update.sh exits 5 with a check host and no update build host.
   const r = run(world({ runnerJson: { checkHost: 'checker' }, stageExit: 5 }), 1.5 * GiB);
   assert.equal(r.status, 5, r.stdout + r.stderr);
-  assert.match(r.stderr, /check hosts \(checkHosts or checkHost\)/);
+  assert.match(r.stderr, /check hosts \(checkHosts or checkHost\).*Ask which Mac/);
+});
+
+test("with no Rust and another Mac (or none) doing the build, Rust isn't installed", mac, () => {
+  // Grok's second look: rustup ran, and its gigabyte, for a build that never happens here.
+  const w = world({ noRust: true, runnerJson: { checkHost: 'checker' }, stageExit: 5 });
+  const r = run(w, 1.5 * GiB);
+  assert.equal(r.status, 5, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /STEP Installing Rust/);
+});
+
+test('free space comes from the disk itself when nothing stands in for it', mac, () => {
+  const w = world();
+  const r = spawnSync('/bin/bash', [SCRIPT, w.checkout, '--no-open'], { encoding: 'utf8', env: { HOME: w.home, TMPDIR: path.join(w.home, 'tmp'), PATH: '/usr/bin:/bin' } });
+  // This Mac's temp disk has room for a stub build, or the message says what it read.
+  if (r.status === 6) assert.match(r.stderr, /it has \d+\.\d GB/);
+  else assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
 test("host names stage-update.sh would refuse don't count, so it still wants room to build here", mac, () => {
@@ -123,7 +139,10 @@ test('with room it builds, installs into ~/Applications and says a first build t
 
 test("a folder left by a copy stopped partway isn't taken for the app: it's built and replaced", mac, () => {
   const w = world();
-  fs.mkdirSync(path.join(w.home, 'Applications', 'Threadbear GPUI.app', 'Contents'), { recursive: true });
+  // As an older script's ditto left it, killed after the main binary.
+  const macos = path.join(w.home, 'Applications', 'Threadbear GPUI.app', 'Contents', 'MacOS');
+  fs.mkdirSync(macos, { recursive: true });
+  fs.writeFileSync(path.join(macos, 'threadbear-gpui'), '#!/bin/sh\n', { mode: 0o755 });
   const r = run(w, 50 * GiB);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /STEP Building/);

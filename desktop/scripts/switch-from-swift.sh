@@ -50,14 +50,15 @@ from_main() {
   chmod +x "$work/$1"
 }
 
-# Free space on the home folder's disk, in KB, or nothing if df couldn't
-# say. Past its reserve macOS's df shows a negative figure, which is none.
-# THREADBEAR_SWITCH_FREE_KB stands in for df in the tests
+# Free space on the home folder's disk, in KB, or nothing if it couldn't be
+# read. From statvfs, not df's columns, which a file system name with a
+# space in it (an SMB home) shifts. A negative figure (df's, past the disk's
+# reserve) is none. THREADBEAR_SWITCH_FREE_KB stands in for it in the tests
 # (switch-from-swift.test.ts).
 free_kb() {
   local kb
   if [[ -n "${THREADBEAR_SWITCH_FREE_KB:-}" ]]; then kb="$THREADBEAR_SWITCH_FREE_KB"
-  else kb="$(df -Pk "$HOME" 2>/dev/null | awk 'END { print $4 }')" || kb=""
+  else kb="$(/usr/bin/python3 -I -c 'import os,sys; s = os.statvfs(sys.argv[1]); print(s.f_bavail * s.f_frsize // 1024)' "$HOME" 2>/dev/null)" || kb=""
   fi
   if [[ "$kb" =~ ^-[0-9]+$ ]]; then echo 0; elif [[ "$kb" =~ ^[0-9]+$ ]]; then echo "$kb"; fi
 }
@@ -84,13 +85,14 @@ print("yes" if hosts("updateBuildHosts") or hosts("checkHosts") or hosts("checkH
 # Nov). Rust about 1 GB. A build here about 4 all told (2.3 measured, with
 # the bundle and room to spare), less whatever an earlier try already left
 # in the cache (measured, not guessed from a folder cargo makes at once),
-# never under 1. Built elsewhere, or not at all, 1 for the clone and bundle.
+# never under 1. Built elsewhere, or not at all, 1 for the clone and bundle
+# and no Rust.
 room_for_it() {
   local need_kb=0 gib=$((1024 * 1024)) cache="$HOME/Library/Caches/Threadbear/update-desktop"
-  command -v cargo >/dev/null || need_kb=$gib
-  if [[ -n "$(builds_elsewhere)" ]]; then
-    need_kb=$((need_kb + gib))
+  if [[ -n "$elsewhere" ]]; then
+    need_kb=$gib
   else
+    command -v cargo >/dev/null || need_kb=$gib
     local cached=0 build=$((4 * gib))
     [[ -d "$cache" ]] && cached="$(du -sk "$cache" 2>/dev/null | awk '{ print $1 }')" || true
     [[ "$cached" =~ ^[0-9]+$ ]] || cached=0
@@ -100,7 +102,7 @@ room_for_it() {
   fi
   local have
   have="$(free_kb)"
-  # df couldn't say: the build finds out for itself.
+  # Unreadable: the build finds out for itself.
   [[ -n "$have" ]] || return 0
   if (( have < need_kb )); then
     gb() { awk -v k="$1" 'BEGIN { printf "%.1f", k / 1048576 }'; }
@@ -115,19 +117,26 @@ build_failed() {
   case "$1" in
     3) echo "Another build of the new app is running. Wait for it to finish, then run this again." >&2 ;;
     4) echo "None of runner.json's updateBuildHosts could build it just now (above says why). Run this again in a while, or take updateBuildHosts, checkHosts and checkHost out of runner.json to build on this Mac." >&2 ;;
-    5) echo "runner.json has check hosts (checkHosts or checkHost) but no updateBuildHosts, so nothing built it. Name a Mac to build it in updateBuildHosts, or take the check hosts out to build on this Mac." >&2 ;;
+    5) echo "runner.json has check hosts (checkHosts or checkHost) but no updateBuildHosts, so nothing built it: this Mac is kept free of heavy builds. Ask which Mac should build it, and name it in updateBuildHosts." >&2 ;;
     *) echo "The build failed (exit $1); its output is above, and in ~/Library/Caches/Threadbear/update-desktop." >&2 ;;
   esac
   exit "$1"
 }
 
-# Installed means the app's binary is there: a folder left by a copy that
-# was stopped partway isn't, and is replaced.
-installed() { [[ -x "$TARGET/Contents/MacOS/threadbear-gpui" ]]; }
+# Installed means both its binaries are there and not empty: a folder left
+# by a copy that was stopped partway isn't, and is replaced.
+installed() {
+  local bin
+  for bin in threadbear-gpui threadbear-web-helper; do
+    [[ -x "$TARGET/Contents/MacOS/$bin" && -s "$TARGET/Contents/MacOS/$bin" ]] || return 1
+  done
+}
 
 if ! installed; then
+  elsewhere="$(builds_elsewhere)"
   room_for_it
-  if ! command -v cargo >/dev/null; then
+  # Rust only for a build here: another Mac builds it, or none does (exit 5).
+  if [[ -z "$elsewhere" ]] && ! command -v cargo >/dev/null; then
     echo "STEP Installing Rust"
     # rustup.rs's own script, over https only, as its site says to run it.
     # --no-modify-path: the build finds it in ~/.cargo/bin by itself.
