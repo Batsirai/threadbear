@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { call, load, memoryBackend, THREAD_BASICS } from '../helpers/convex-memory.ts';
+import { call, claimAndFinish, load, memoryBackend, THREAD_BASICS } from '../helpers/convex-memory.ts';
 import { Moves, type MoveRow, type MovesBackend, type MovesHost, type MovePlan, type ThreadMoving } from '../../src/moves.ts';
 import type { PackEntry } from '../../src/move-pack.ts';
 import { SecretStore } from '../../src/secrets.ts';
@@ -68,7 +68,7 @@ async function world() {
         const id = `file${++n}`;
         b.file(id);
         stored.set(id, Buffer.from(bytes));
-        if (url.includes('ticket=')) assert.equal(await call(b.ctx, sync.redeemUpload, { ticket: new URL(url).searchParams.get('ticket'), storageId: id, bytes: bytes.length }), true);
+        if (url.includes('ticket=')) assert.equal(await claimAndFinish(b.ctx, sync.claimUpload, sync.finishUpload, { ticket: new URL(url).searchParams.get('ticket'), storageId: id, bytes: bytes.length }), true);
         return id;
       },
       async download(url) {

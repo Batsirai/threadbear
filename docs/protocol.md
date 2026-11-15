@@ -6006,7 +6006,7 @@ ended in the last day) and acts on the state:
 | `ready` | S waits for the thread's turn and sub-agents to end, then freezes it: `moves:moveFrozen` | `packing` |
 | `packing` | S packs, seals, uploads: `moves:movePacked { moveId, chunks, sha256, bytes }` | `unpacking` |
 | `unpacking` | T downloads (`moves:moveChunks`, T only, the chunks' URLs), checks, opens and unpacks into staging, then `moves:moveClaim` | `claimed` |
-| `claimed` | T adopts the thread and mirrors it: `moves:moveDone` | `done` |
+| `claimed` | T adopts the thread and mirrors it: `moves:moveDone`. The move ends once the thread's mirrored rows have all gone to T too (`moves:rehomeRows`, a page at a time); until then it stays `claimed`, so the thread can't start another move | `done` |
 | `done` | S puts its copy away (`<home>/moved/<id>`, kept 7 days), unless a later move has brought the thread back | |
 
 Any state before `claimed` can go to `failed` (`moves:moveFailed { moveId,
@@ -6683,7 +6683,12 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   records it as that runner's (`storageOwners`); the URL dies with the key
   that asked for it, a file is at most 10 MB, a runner at most 300 URLs
   and 200 MB an hour, and one not attached within a day is deleted
-  (`pruneFiles`). A
+  (`pruneFiles`). Each upload route (`/runner/upload`, `/phone/upload`,
+  `/relay/upload`; `convex/uploads.ts`) claims its one-use ticket in a
+  mutation before it reads a byte of the body, so of several requests with
+  one ticket only the first reads or stores anything; it reads the body no
+  further than the cap, whatever `Content-Length` says, and a claimed
+  ticket is spent even if the body is too big or breaks off (413, 400). A
   runner key may attach or delete only files it uploaded: the owner's and
   the phone's are nobody's to take, named or not. A runner key's file goes
   on one row (a picture, held picture or icon), never several, so one
@@ -6806,7 +6811,7 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
     was 2,286 bytes), Pocket cards 50 (title 60, text 2,000), accounts 20 at
     8 KB, pushes 10 a minute.
   - Pictures (reply, share and held): a type the runner sends (PNG, JPEG,
-    GIF, WebP, MP4, QuickTime), whole numbers for seq, index (0 to 100) and
+    GIF, WebP, MP4, QuickTime), whole numbers for seq (0 to 2^49), index (0 to 100) and
     size, `path` and `src` 2 KB each; refused otherwise. A page of messages
     reads at most 300 of each kind of picture (the newest), an older page
     only its own, and at most 8 MB of messages (then `hasMore`; a client
@@ -6919,7 +6924,7 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `prune` | its own | `runnerId`; each pruned thread's messages and pictures go too, and it gets a tombstone |
 | `sharedThreads` | its own | `runnerId`: the ids of its rows shared by link (API 60) |
 | `threadsOf` | its own | `runnerId` |
-| `appendMessages` | its own | each message's thread row is the key's runner's; one for an id with no row is dropped |
+| `appendMessages` | its own | each message's thread row is the key's runner's; one for an id with no row is dropped, and so is one whose seq isn't a whole number from 0 to 2^49 (any key, `appendBodies` too: the main Mac's relay makes event ids of seq times 8) |
 | `messageHeads` | its own | `runnerId` |
 | `replyImages` | its own | the thread's row is its runner's; none: empty |
 | `addReplyImage` | its own | the thread's row is its runner's, and the file no other runner's row uses; none: dropped, and the upload deleted if nothing uses it |
@@ -7005,8 +7010,10 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `moveFailed` | its own | either of the move's runners, before the switch |
 | `moveDropChunks` | owner only | the main Mac's own chunks for a move that ended before it was packed: deletes those no going move names and nothing else uses |
 
-`sync:uploadTicketOk` and `sync:redeemUpload` are internal, for
-`/runner/upload`; `moves:rehomeRows` (a moved thread's rows to its new
+`sync:claimUpload` and `sync:finishUpload` are internal, for
+`/runner/upload` (`phone:claimPhoneUpload`/`finishPhoneUpload` and
+`relay:claimRelayUpload`/`finishRelayUpload` the same for the other two
+routes), and `share:shareImageFile` for `/share/image/`; `moves:rehomeRows` (a moved thread's rows to its new
 runner) and `moves:expireMoves` (the cron) are internal too.
 
 ## Sharing
@@ -7040,6 +7047,11 @@ type ThreadShare = {
   When the thread is shared the runner looks through its whole history,
   then sends new ones as they come; each file goes once (`sync:shareImages`
   says what's up), at most 10 MB. Stopping sharing drops them all.
+  Anyone but Mike gets them as `<site>/share/image/<slug>/<id>`, which
+  answers only while the thread is shared under that link (checked at
+  every request, `no-store`), so stopping sharing or Share again with a
+  new link stops the old URLs at once, before the runner has dropped the
+  files. Mike's own token gets the files' storage URLs.
 - As the page is public and a path is only what the agent wrote, a file
   goes up only if it's really a PNG, JPEG, GIF or WebP by its bytes (the
   type sent is the one its bytes say, not its name's), isn't itself a

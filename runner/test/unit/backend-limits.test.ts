@@ -5,7 +5,7 @@
 // (test/helpers/convex-memory.ts), which counts the bytes a call reads.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
+import { call, claimAndFinish, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const MINI_KEY = 'tbr_mac-mini';
@@ -49,7 +49,7 @@ const thread = (threadId: string, runnerId: string) => ({ threadId, runnerId, ..
 // A file uploaded the way a runner key's runner does (/runner/upload).
 async function runnerUpload(s: S, id: string, bytes = 1): Promise<string> {
   const ticket = new URL(await call(s.ctx, sync.iconUploadUrl, { key: MINI_KEY })).searchParams.get('ticket')!;
-  assert.equal(await call(s.ctx, sync.redeemUpload, { ticket, storageId: s.file(id), bytes }), true);
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: s.file(id), bytes }), true);
   return id;
 }
 
@@ -57,7 +57,7 @@ async function runnerUpload(s: S, id: string, bytes = 1): Promise<string> {
 async function phoneUpload(s: S, id: string, token = TOKEN, bytes = 1): Promise<string> {
   const url = new URL(await call(s.ctx, phone.imageUploadUrl, { token }));
   assert.equal(url.origin + url.pathname, 'https://site.example/phone/upload');
-  assert.equal(await call(s.ctx, phone.redeemPhoneUpload, { ticket: url.searchParams.get('ticket'), storageId: s.file(id), bytes }), true);
+  assert.equal(await claimAndFinish(s.ctx, phone.claimPhoneUpload, phone.finishPhoneUpload, { ticket: url.searchParams.get('ticket'), storageId: s.file(id), bytes }), true);
   return id;
 }
 
@@ -225,10 +225,9 @@ test('phone uploads go through a ticket of its own, with an hourly and daily all
   const url = new URL(await call(s.ctx, phone.imageUploadUrl, { token: TOKEN }));
   assert.equal(url.pathname, '/phone/upload', 'not a raw Convex upload URL');
   const ticket = url.searchParams.get('ticket')!;
-  assert.equal(await call(s.ctx, phone.phoneTicketOk, { ticket }), true);
   // Too big; then spent.
-  assert.equal(await call(s.ctx, phone.redeemPhoneUpload, { ticket, storageId: s.file('huge'), bytes: 11 * 1024 * 1024 }), false);
-  assert.equal(await call(s.ctx, phone.phoneTicketOk, { ticket }), false);
+  assert.equal(await claimAndFinish(s.ctx, phone.claimPhoneUpload, phone.finishPhoneUpload, { ticket, storageId: s.file('huge'), bytes: 11 * 1024 * 1024 }), false);
+  assert.equal(await call(s.ctx, phone.claimPhoneUpload, { ticket }), false);
   // An hour's worth, then no more URLs.
   let refused = 'ok';
   let n = 1;
@@ -240,7 +239,7 @@ test('phone uploads go through a ticket of its own, with an hourly and daily all
   let later429 = false;
   for (let i = 0; i < 40 && !later429; i++) {
     const t = new URL(await later(i * 60 * 60_000 / 2, () => call(s2.ctx, phone.imageUploadUrl, { token: OTHER_TOKEN }))).searchParams.get('ticket');
-    later429 = (await later(i * 60 * 60_000 / 2, () => call(s2.ctx, phone.redeemPhoneUpload, { ticket: t, storageId: s2.file(`p${i}`), bytes: 9 * 1024 * 1024 }))) === 'later';
+    later429 = (await later(i * 60 * 60_000 / 2, () => claimAndFinish(s2.ctx, phone.claimPhoneUpload, phone.finishPhoneUpload, { ticket: t, storageId: s2.file(`p${i}`), bytes: 9 * 1024 * 1024 }))) === 'later';
   }
   assert.ok(later429, 'over the day it answers later');
 });
@@ -249,8 +248,8 @@ test("a revoked phone's ticket stores nothing", async () => {
   const s = await setup();
   const ticket = new URL(await call(s.ctx, phone.imageUploadUrl, { token: TOKEN })).searchParams.get('ticket');
   await call(s.ctx, sync.revokeToken, { key: OWNER, id: s.tokenId });
-  assert.equal(await call(s.ctx, phone.phoneTicketOk, { ticket }), false);
-  assert.equal(await call(s.ctx, phone.redeemPhoneUpload, { ticket, storageId: s.file('late'), bytes: 1 }), false);
+  assert.equal(await call(s.ctx, phone.claimPhoneUpload, { ticket }), false);
+  assert.equal(await claimAndFinish(s.ctx, phone.claimPhoneUpload, phone.finishPhoneUpload, { ticket, storageId: s.file('late'), bytes: 1 }), false);
 });
 
 test("a photo picked and never sent goes after a day; one in a waiting message stays until it's taken", async () => {

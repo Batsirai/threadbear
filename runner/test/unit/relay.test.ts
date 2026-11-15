@@ -4,7 +4,7 @@
 // runner's own listeners (sync would mirror them as this runner's).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_CARDS, MAX_HELD, Relay, SCALE, mergeTail, relayEvents, type RelayRow, type RelayThreadRow } from '../../src/relay.ts';
+import { MAX_CARDS, MAX_HELD, MAX_RELAY_SEQ, Relay, SCALE, isRelaySeq, mergeTail, relayEvents, type RelayRow, type RelayThreadRow } from '../../src/relay.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { RemoteThreads } from '../../src/thread-index.ts';
@@ -1079,4 +1079,40 @@ test('ownerOf names the runner a request goes to, following a move', async () =>
   assert.equal(h.calls.find((c) => c.fn === 'relay:queueCommand')?.args.runnerId, 'cloud');
   h.remote.threads.length = 0;
   assert.equal(h.relay.ownerOf(T), undefined);
+});
+
+// Daybreak finding 134 (15 Nov 2026): a runner key could store a message
+// under a seq that's NaN, an infinity, a fraction, negative or past 2^53,
+// which the relay sorted, keyed and multiplied into event ids.
+const BAD_SEQS = [NaN, Infinity, -Infinity, 1.5, -1, 2 ** 53, MAX_RELAY_SEQ + 1];
+
+test('a seq is a whole number from 0 to MAX_RELAY_SEQ, and the greatest still makes distinct exact event ids', () => {
+  for (const bad of BAD_SEQS) assert.equal(isRelaySeq(bad), false, String(bad));
+  for (const good of [0, 1, 119, MAX_RELAY_SEQ]) assert.equal(isRelaySeq(good), true);
+  const top = MAX_RELAY_SEQ * SCALE;
+  const ids = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => top + k);
+  assert.ok(ids.every((n) => Number.isSafeInteger(n)));
+  assert.deepEqual(JSON.parse(JSON.stringify(ids)), ids);
+  assert.equal(new Set(ids).size, 8);
+  const below = (MAX_RELAY_SEQ - 1) * SCALE + 7;
+  assert.ok(below < top, "the row before's ids stay below");
+});
+
+test('rows with a bad seq are left out of a page, a tail and the events, and the rest of the thread shows', async () => {
+  const bad = BAD_SEQS.map((seq, i) => ({ seq, role: 'assistant', text: `bad ${i}`, at: at(1) }) as RelayRow);
+  // relayEvents on its own.
+  const events = relayEvents(T, [...bad, ...rows], idle, [], false, 'mac-mini');
+  assert.deepEqual(events, relayEvents(T, rows, idle, [], false, 'mac-mini'));
+  // Through a page read from the backend, and a tail.
+  const h = harness({ rows: [bad[0]!, ...rows, ...bad.slice(1)] });
+  const page = (await h.relay.call(T, 'threads.events', { threadId: T, limit: 200 })) as { events: { seq: number; text?: string }[] };
+  assert.ok(page.events.length > 0);
+  assert.ok(page.events.every((e) => Number.isSafeInteger(e.seq) && e.seq >= 0), JSON.stringify(page.events.map((e) => e.seq)));
+  assert.ok(!page.events.some((e) => String(e.text ?? '').startsWith('bad ')));
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 119 });
+  h.subs.get('relay:remoteThread')![0]!.onUpdate({ runnerId: 'mac-mini', status: 'running' });
+  h.subs.get('relay:remoteTail')![0]!.onUpdate({ messages: [...bad, { seq: 20, role: 'user', text: 'More', turn: 'cccc3333', at: at(30) }], hasMore: true });
+  await new Promise((r) => setImmediate(r));
+  const published = h.published.map((n) => (n as { params: { event: { seq: number; type: string; text?: string } } }).params.event);
+  assert.deepEqual(published.map((e) => `${e.seq}:${e.type}`), ['160:turn.started', '161:user.message']);
 });

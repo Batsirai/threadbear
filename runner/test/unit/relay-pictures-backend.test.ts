@@ -11,7 +11,7 @@
 // between uploading and queueing left it in storage for good).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
+import { call, claimAndFinish, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const MINI_KEY = 'tbr_mac-mini';
@@ -48,7 +48,7 @@ type S = Awaited<ReturnType<typeof setup>>;
 async function ownerUpload(s: S, id: string, bytes = 1): Promise<string> {
   const url = new URL(await call(s.ctx, relay.pictureUploadUrl, { key: OWNER }));
   assert.equal(url.origin + url.pathname, 'https://site.example/relay/upload');
-  assert.equal(await call(s.ctx, relay.redeemRelayUpload, { ticket: url.searchParams.get('ticket'), storageId: s.file(id), bytes }), true);
+  assert.equal(await claimAndFinish(s.ctx, relay.claimRelayUpload, relay.finishRelayUpload, { ticket: url.searchParams.get('ticket'), storageId: s.file(id), bytes }), true);
   return id;
 }
 
@@ -93,7 +93,7 @@ test("a command can't name a file that's gone, in use, a runner key's or a phone
   // Mac mini's share picture: finishing would otherwise hand it to the command's runner.
   const ticket = new URL(await call(s.ctx, sync.iconUploadUrl, { key: MINI_KEY })).searchParams.get('ticket')!;
   const share = s.file('share');
-  assert.equal(await call(s.ctx, sync.redeemUpload, { ticket, storageId: share, bytes: 1 }), true);
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: share, bytes: 1 }), true);
   assert.equal(await queue([share]), 'forbidden', "a runner key's upload");
   await call(s.ctx, sync.addShareImage, { key: MINI_KEY, threadId: 'B', seq: 1, path: 'a.png', storageId: share, mediaType: 'image/png' });
   assert.equal(await queue([share]), 'forbidden');
@@ -105,7 +105,7 @@ test("a command can't name a file that's gone, in use, a runner key's or a phone
   // A phone's photo.
   const url = new URL(await call(s.ctx, phone.imageUploadUrl, { token: TOKEN }));
   const photo = s.file('photo');
-  assert.equal(await call(s.ctx, phone.redeemPhoneUpload, { ticket: url.searchParams.get('ticket'), storageId: photo, bytes: 1 }), true);
+  assert.equal(await claimAndFinish(s.ctx, phone.claimPhoneUpload, phone.finishPhoneUpload, { ticket: url.searchParams.get('ticket'), storageId: photo, bytes: 1 }), true);
   assert.equal(await queue([photo]), 'forbidden');
   // Not ids, or more than a message takes.
   assert.equal(await queue('pic'), 'badArgs');
@@ -134,7 +134,7 @@ test("discarding a queue that failed deletes only the owner's loose uploads", as
   await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: MINI, threadId: 'B', kind: 'send', args: { text: 'x', images: [queued] } });
   const ticket = new URL(await call(s.ctx, sync.iconUploadUrl, { key: MINI_KEY })).searchParams.get('ticket')!;
   const minis = s.file('minis');
-  assert.equal(await call(s.ctx, sync.redeemUpload, { ticket, storageId: minis, bytes: 1 }), true);
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: minis, bytes: 1 }), true);
   const bare = s.file('bare');
   await call(s.ctx, relay.discardPictures, { key: OWNER, storageIds: [loose, queued, minis, bare, 'gone'] });
   assert.equal(s.hasFile(bare), true, 'not uploaded for this');
@@ -149,13 +149,12 @@ test('the upload URL is the owner\'s, one use, and capped at 10 MB', async () =>
   const s = await setup();
   assert.equal(await outcome(call(s.ctx, relay.pictureUploadUrl, { key: MINI_KEY })), 'forbidden');
   const ticket = new URL(await call(s.ctx, relay.pictureUploadUrl, { key: OWNER })).searchParams.get('ticket');
-  assert.equal(await call(s.ctx, relay.relayTicketOk, { ticket }), true);
-  assert.equal(await call(s.ctx, relay.redeemRelayUpload, { ticket, storageId: s.file('a'), bytes: 1 }), true);
-  assert.equal(await call(s.ctx, relay.relayTicketOk, { ticket }), false, 'used');
-  assert.equal(await call(s.ctx, relay.redeemRelayUpload, { ticket, storageId: s.file('b'), bytes: 1 }), false);
+  assert.equal(await claimAndFinish(s.ctx, relay.claimRelayUpload, relay.finishRelayUpload, { ticket, storageId: s.file('a'), bytes: 1 }), true);
+  assert.equal(await call(s.ctx, relay.claimRelayUpload, { ticket }), false, 'used');
+  assert.equal(await claimAndFinish(s.ctx, relay.claimRelayUpload, relay.finishRelayUpload, { ticket, storageId: s.file('b'), bytes: 1 }), false);
   const big = new URL(await call(s.ctx, relay.pictureUploadUrl, { key: OWNER })).searchParams.get('ticket');
-  assert.equal(await call(s.ctx, relay.redeemRelayUpload, { ticket: big, storageId: s.file('big'), bytes: 10 * 1024 * 1024 + 1 }), false);
-  assert.equal(await call(s.ctx, relay.relayTicketOk, { ticket: 'nope' }), false);
+  assert.equal(await claimAndFinish(s.ctx, relay.claimRelayUpload, relay.finishRelayUpload, { ticket: big, storageId: s.file('big'), bytes: 10 * 1024 * 1024 + 1 }), false);
+  assert.equal(await call(s.ctx, relay.claimRelayUpload, { ticket: 'nope' }), false);
 });
 
 test('an upload that never went out goes after a day; one in a waiting command stays until that is over', async () => {

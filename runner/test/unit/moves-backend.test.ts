@@ -4,7 +4,7 @@
 // thread and everything under it to the new runner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
+import { call, claimAndFinish, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const MINI_KEY = 'tbr_mac-mini';
@@ -64,7 +64,7 @@ async function setup() {
   const uploadChunk = async (url: string, id: string) => {
     const ticket = new URL(url).searchParams.get('ticket')!;
     b.file(id);
-    return fn(sync.redeemUpload, { ticket, storageId: id, bytes: 9 * 1024 * 1024 });
+    return claimAndFinish(b.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: id, bytes: 9 * 1024 * 1024 });
   };
   return { ...b, rehome, uploadChunk, owner: as(OWNER), mini: as(MINI_KEY), cloud: as(CLOUD_KEY) };
 }
@@ -223,9 +223,9 @@ test('a move’s uploads are charged, and all of them go when it fails, listed o
   assert.equal(s.rows('runnerStorage').find((r) => r.runnerId === MINI)!.bytes, 0);
   // The last ticket, from before it failed, stores nothing now.
   const ticket = new URL(urls[23]!).searchParams.get('ticket')!;
-  assert.equal(await call(s.ctx, sync.uploadTicketOk as never, { ticket }), false);
+  assert.equal(await call(s.ctx, sync.claimUpload, { ticket }), false);
   s.file('late');
-  assert.equal(await call(s.ctx, sync.redeemUpload as never, { ticket, storageId: 'late', bytes: 1024 }), false);
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: 'late', bytes: 1024 }), false);
   assert.equal(s.rows('storageOwners').some((o) => o.storageId === 'late'), false);
 });
 

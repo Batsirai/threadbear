@@ -3,7 +3,7 @@
 // attacks a review reproduced with Mac mini's runner key, each shut.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
+import { call, claimAndFinish, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const MINI_KEY = 'tbr_mac-mini';
@@ -149,7 +149,7 @@ test("Mac mini's key can't put another runner's thread in its sidebar rows", asy
 async function upload(s: Awaited<ReturnType<typeof setup>>, key: string, id: string): Promise<string> {
   const url = new URL(await call(s.ctx, sync.iconUploadUrl, { key }));
   const ticket = url.searchParams.get('ticket');
-  if (ticket) assert.equal(await call(s.ctx, sync.redeemUpload, { ticket, storageId: s.file(id), bytes: 1 }), true);
+  if (ticket) assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: s.file(id), bytes: 1 }), true);
   else s.file(id);
   return id;
 }
@@ -382,15 +382,15 @@ test('an upload URL dies with the key that asked for it, and uploads are capped 
   const url = new URL(await call(s.ctx, sync.iconUploadUrl, { key: MINI_KEY }));
   const ticket = url.searchParams.get('ticket')!;
   await call(s.ctx, sync.revokeRunnerKey, { key: OWNER, runnerId: MINI });
-  assert.equal(await call(s.ctx, sync.uploadTicketOk, { ticket }), false);
-  assert.equal(await call(s.ctx, sync.redeemUpload, { ticket, storageId: s.file('late'), bytes: 10 }), false);
+  assert.equal(await call(s.ctx, sync.claimUpload, { ticket }), false);
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: s.file('late'), bytes: 10 }), false);
   const s2 = await setup();
   const big = new URL(await call(s2.ctx, sync.iconUploadUrl, { key: MINI_KEY })).searchParams.get('ticket')!;
-  assert.equal(await call(s2.ctx, sync.redeemUpload, { ticket: big, storageId: s2.file('big'), bytes: 11 * 1024 * 1024 }), false);
+  assert.equal(await claimAndFinish(s2.ctx, sync.claimUpload, sync.finishUpload, { ticket: big, storageId: s2.file('big'), bytes: 11 * 1024 * 1024 }), false);
   let ok = 0;
   for (let i = 0; i < 40; i++) {
     const t = new URL(await call(s2.ctx, sync.iconUploadUrl, { key: MINI_KEY })).searchParams.get('ticket')!;
-    if ((await call(s2.ctx, sync.redeemUpload, { ticket: t, storageId: s2.file(`f${i}`), bytes: 9 * 1024 * 1024 })) === true) ok++;
+    if ((await claimAndFinish(s2.ctx, sync.claimUpload, sync.finishUpload, { ticket: t, storageId: s2.file(`f${i}`), bytes: 9 * 1024 * 1024 })) === true) ok++;
   }
   assert.ok(ok > 0 && ok < 40, `some but not all of 360 MB in an hour: ${ok}`);
 });
@@ -609,7 +609,7 @@ test('upload bytes count from used tickets for the whole hour, refused tickets a
   for (let i = 0; i < 30; i++) {
     const t = await ticket();
     const id = s.file(`f${i}`);
-    if ((await call(s.ctx, sync.redeemUpload, { ticket: t, storageId: id, bytes: 9 * 1024 * 1024 })) === true) {
+    if ((await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket: t, storageId: id, bytes: 9 * 1024 * 1024 })) === true) {
       ok++;
       await s.mini.replyImage('NOROW', id);
       assert.equal(s.hasFile(id), false);
@@ -618,8 +618,8 @@ test('upload bytes count from used tickets for the whole hour, refused tickets a
   assert.ok(ok <= 22, `${ok} x 9 MB in an hour`);
   // Over the hour's allowance is "later", not a refusal for good; the ticket's spent either way.
   const t = await ticket();
-  assert.equal(await call(s.ctx, sync.redeemUpload, { ticket: t, storageId: s.file('over'), bytes: 9 * 1024 * 1024 }), 'later');
-  assert.equal(await call(s.ctx, sync.uploadTicketOk, { ticket: t }), false);
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket: t, storageId: s.file('over'), bytes: 9 * 1024 * 1024 }), 'later');
+  assert.equal(await call(s.ctx, sync.claimUpload, { ticket: t }), false);
 });
 
 test('pruneOld works in batches, so a flood of old rows never makes it fail for good', async () => {
