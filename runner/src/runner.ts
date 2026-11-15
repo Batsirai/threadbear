@@ -87,6 +87,7 @@ import type { Logger } from './log.ts';
 import { BIN_DIR, threadEnv } from './restart.ts';
 import { cleanUpWorktree, makeWorktree, sameSubfolder, worktreeInstructions } from './worktrees.ts';
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
+import type { SignInState } from './sign-in-state.ts';
 import { pickAccount as pickByRoom, resetTime, type UsageReading } from './usage.ts';
 import { DEFAULT_POOL_FOLDERS, RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
 import { WAIT_SLACK_MS, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from './pools.ts';
@@ -263,6 +264,7 @@ export type AccountPicker = (accounts: Account[], lastUsedId: string | undefined
 // AccountRegistry, plus the onChange D adds (fired when a rescan finds a
 // different list).
 export type AccountSource = Pick<AccountRegistry, 'list' | 'get' | 'learn'> & { onChange?(fn: () => void): () => void };
+export type SignInSink = Pick<SignInState, 'noteRefused' | 'noteWorked' | 'onChange'>;
 
 // The Codex adapter reports the binaries its live processes run, so E only
 // deletes version folders nothing uses. Not on AgentAdapter, since only
@@ -583,6 +585,9 @@ export type RunnerDeps = {
   accounts: AccountSource;
   // D's UsageStore: live readings go to it, and its changes reach clients.
   usage?: UsageSink;
+  // Which logins are signed out (sign-in-state.ts): told of refused and
+  // working turns, and its changes reach clients.
+  signIn?: SignInSink;
   // Which account a thread made without one starts on; usage.ts's
   // pickAccount (the most room) unless a test swaps it.
   pickAccount?: AccountPicker;
@@ -706,6 +711,7 @@ export class Runner {
   adapters: Record<string, AgentAdapter>;
   accounts: AccountSource;
   usage?: UsageSink;
+  signIn?: SignInSink;
   // Each login and folder's slash commands, for the picker (runner/commands.ts).
   commandCache = new Map<string, { at: number; commands: SlashCommand[] }>();
   // threads.contextUsage asks in flight, by thread, so two at once share one.
@@ -827,6 +833,7 @@ export class Runner {
     this.adapters = deps.adapters;
     this.accounts = deps.accounts;
     this.usage = deps.usage;
+    this.signIn = deps.signIn;
     this.pickAccount = deps.pickAccount ?? pickByRoom;
     this.clock = deps.clock;
     this.folderCache = new FolderCache(FOLDER_CACHE_MS, () => this.clock.now());
@@ -924,6 +931,11 @@ export class Runner {
     // clients through the same throttle as what the probes learn.
     if (this.usage?.onChange) this.unsubs.push(this.usage.onChange(() => this.accountsChanged()));
     if (this.accounts.onChange) this.unsubs.push(this.accounts.onChange(() => this.accountsChanged()));
+    if (this.signIn) this.unsubs.push(this.signIn.onChange(() => {
+      this.accountsChanged();
+      // A login signed back in can carry on threads waiting for room.
+      this.armRoomTimer();
+    }));
     this.armRescan();
   }
 
@@ -2664,6 +2676,11 @@ export class Runner {
     const limitHit = outcome === 'failed' && r.errorKind === 'usageLimit' ? turn.turnId : undefined;
     // One that couldn't reach the API carries on once it's back (afterTurn).
     const netLost = outcome === 'failed' && r.errorKind === 'network' ? turn.turnId : undefined;
+    // A refused login counts as signed out, and a pool thread moves off it
+    // (afterTurn); a turn that went through says it's signed in.
+    const signedOut = outcome === 'failed' && r.errorKind === 'auth' ? turn.turnId : undefined;
+    if (signedOut) this.signIn?.noteRefused(rec.accountId);
+    else if (outcome === 'completed') this.signIn?.noteWorked(rec.accountId);
     // A turn the CLI opened by itself during a wait (a background job
     // ended) that got through ends the wait: the agent has carried on.
     if (!netLost && rec.waitingForNetwork) delete rec.waitingForNetwork;
@@ -2694,7 +2711,7 @@ export class Runner {
       // A job that ended mid-turn: the CLI's turn reading its result is next.
       !rt.taskEndedInTurn && !rt.finished.length;
     const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor));
-    this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue);
+    this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue, signedOut);
     // The done card's loose ends (experiment looseEnds), unless it's going
     // away now; and the card of the thread that started this one, which
     // lists this one while it's working.
@@ -2794,7 +2811,7 @@ export class Runner {
     this.update({ threadId: rec.id, snoozedUntil: until });
   }
 
-  endTurn(st: ThreadState, completedSeq: number, status: ThreadStatus, outcome?: TurnOutcome, limitHit?: string, netLost?: string, holdQueue = false): void {
+  endTurn(st: ThreadState, completedSeq: number, status: ThreadStatus, outcome?: TurnOutcome, limitHit?: string, netLost?: string, holdQueue = false, signedOut?: string): void {
     const { rec, rt } = st;
     const finished = rt.turn;
     rt.turn?.interruptTimer?.cancel();
@@ -2830,7 +2847,7 @@ export class Runner {
     for (const w of waiters) w();
     // completeTurn applies the requested wait before older queued inputs
     // can start another turn. The inputs remain durable for a later wake.
-    if (!holdQueue) this.afterTurn(st, limitHit, netLost);
+    if (!holdQueue) this.afterTurn(st, limitHit, netLost, signedOut);
   }
 
   // A turn that ended without a result from the CLI (spawn failure, crash).
@@ -2859,13 +2876,20 @@ export class Runner {
     this.endTurn(st, ev.seq, interrupted ? 'idle' : 'error');
   }
 
-  afterTurn(st: ThreadState, limitHit?: string, netLost?: string): void {
+  afterTurn(st: ThreadState, limitHit?: string, netLost?: string, signedOut?: string): void {
     if (this.stopping) return;
     if (limitHit) {
       try {
         this.onUsageLimit(st, limitHit);
       } catch (e) {
         this.log.error('could not move a thread off a login at its limit', { threadId: st.rec.id, error: String(e) });
+      }
+    }
+    if (signedOut) {
+      try {
+        this.onSignedOut(st);
+      } catch (e) {
+        this.log.error('could not move a thread off a signed-out login', { threadId: st.rec.id, error: String(e) });
       }
     }
     if (netLost) this.onNetworkLost(st, netLost);
@@ -2891,7 +2915,7 @@ export class Runner {
     const now = this.clock.now();
     const next = nextLogin(pool, accounts, rec, now);
     if ('waitUntil' in next) return;
-    const why = !current ? `${rec.accountId} isn't on this Mac` : inPool ? `${current.title} ${limitWhy(current, now)}` : `${current.title} isn't in ${pool.title}`;
+    const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, why);
   }
 
@@ -4405,6 +4429,7 @@ export const WROTE_INSTEAD = "The user didn't answer this; they wrote you a mess
 
 // What a pool thread is told when it carries on by itself after its login
 // ran dry (docs/protocol.md, "Pools").
+export const CARRY_ON_SIGNED_OUT = 'Your last login was signed out, so this thread has moved to another one. Carry on from where you left off.';
 export const CARRY_ON_MOVED = 'Your last login hit its usage limit partway through that turn, so this thread has moved to another one. Carry on from where you left off.';
 export const CARRY_ON_RESTART = 'The runner stopped partway through that turn (Threadbear or the Mac restarted) and is back now. Carry on from where you left off.';
 // Past this, a cut-off turn is left for Mike: the Mac was off for a while,

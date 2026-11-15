@@ -564,7 +564,7 @@ export function accountRoom(account: Account): number | undefined {
 
 // Which account a new thread starts on when none is named: the one with the
 // most room, among the last-used account's provider so a Claude habit stays
-// on Claude. Skips blocked accounts, ones under MIN_ROOM_PERCENT, and ones with a note
+// on Claude. Skips blocked and signed-out accounts, ones under MIN_ROOM_PERCENT, and ones with a note
 // (a login noted "Work only" is kept for that work).
 // A tie, or a last-used account with no usage known, stays on the last-used
 // one; so does a list where every candidate is skipped. The app's
@@ -573,7 +573,7 @@ export function accountRoom(account: Account): number | undefined {
 export function pickAccount(accounts: Account[], lastUsedId: string | undefined): string | undefined {
   const last = accounts.find((a) => a.id === lastUsedId);
   const provider = last?.provider ?? accounts[0]?.provider;
-  const eligible = accounts.filter((a) => a.provider === provider && !a.note && !a.usage?.blocked);
+  const eligible = accounts.filter((a) => a.provider === provider && !a.note && !a.usage?.blocked && !a.signedOut);
   // Nothing is known about the last-used account, so nothing says another
   // has more room.
   if (last && eligible.includes(last) && accountRoom(last) === undefined) return last.id;

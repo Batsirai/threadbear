@@ -262,6 +262,12 @@ File references are where to look.
   connects, the runner runs `lsof` and `ps` on that one connection to see
   which process it is and whether it's under a thread's CLI
   (`runner/src/peer.ts`, docs/protocol.md "Who's really calling").
+- **Whether each Claude login is signed in** (`runner/src/sign-in-state.ts`):
+  when the runner starts, every 10 minutes, and after a turn the login
+  refused, it runs `claude auth status --json` once per Claude login, in
+  that login's own config folder. It reads only whether the login is signed
+  in and when its sign-in ends. The CLI answers from its own files without
+  going online, and the runner never reads the Keychain or the tokens.
 - **A pinned file being shown** (`desktop/gpui/src/highlights.rs`): if its
   Highlights request fails, the app retries after 1 second, then 2, then 4,
   up to 5 seconds between tries while you're looking at that thread. It

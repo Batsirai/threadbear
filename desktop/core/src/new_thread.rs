@@ -31,6 +31,11 @@ pub struct AccountUsage {
 
 /// The account's usage, if the runner sent any.
 pub fn usage_of(account: &Account) -> Option<AccountUsage> {
+    // A signed-out login has no room for anything, as the runner's pools
+    // have it (docs/protocol.md, Pools, "Signed out").
+    if account.signed_out && account.usage.is_none() {
+        return Some(AccountUsage { windows: Vec::new(), blocked: true });
+    }
     let v = account.usage.as_ref()?;
     Some(AccountUsage {
         windows: v["windows"]
@@ -48,7 +53,7 @@ pub fn usage_of(account: &Account) -> Option<AccountUsage> {
                     .collect()
             })
             .unwrap_or_default(),
-        blocked: v["blocked"].as_bool().unwrap_or(false),
+        blocked: v["blocked"].as_bool().unwrap_or(false) || account.signed_out,
     })
 }
 

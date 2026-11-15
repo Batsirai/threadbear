@@ -380,6 +380,9 @@ impl Threadbear {
         let mut button = RailButton::new("rail-usage", "gauge.with.dots.needle.33percent", "Usage", usage_shown);
         button.face = Some(pot);
         button.tip = tip;
+        // A login signed out, or whose sign-in ends within days: its row in
+        // the panel says which, with Sign in… (usage.rs).
+        button.dot = threadbear_core::usage::sign_in_needed(&self.logins.accounts, crate::now_ms());
         let usage = rail_button(button, |this, _, cx| this.toggle_under_threads(shell::USAGE, cx), cx);
         let mut button = RailButton::new("rail-settings", "gearshape", "Settings", false);
         button.tip = self.shortcut_tip("Settings", ShortcutCommand::Settings);

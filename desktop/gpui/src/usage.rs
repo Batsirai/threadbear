@@ -194,7 +194,7 @@ impl Threadbear {
     pub(crate) fn honey_pot(&mut self) -> (AnyElement, String) {
         let (level, login) = self.next_thread_room();
         self.usage.pot.see(level, login);
-        let tip = rules::icon_tooltip(&rules::groups(&self.logins.pools, &self.logins.accounts), now_ms(), &Local);
+        let tip = rules::icon_tooltip_with_sign_ins(&rules::groups(&self.logins.pools, &self.logins.accounts), &self.logins.accounts, now_ms(), &Local);
         (self.usage.pot.element(), tip)
     }
 
@@ -241,7 +241,7 @@ impl Threadbear {
         }
         let dark = cx.theme().is_dark();
         for card in rules::cards_named(&self.logins.pools, accounts, stats, self.usage.show_model_weeks, now, &zone, |p| self.logins.provider_title(p)) {
-            column = column.child(pool_card(&card, accounts, content, dark, now, &p));
+            column = column.child(pool_card(&card, accounts, content, dark, now, &p, cx));
         }
         // Only when some login has a model's own week, or the switch would
         // do nothing.
@@ -688,7 +688,7 @@ fn hover_note(chart: &Chart, slot: i64, accounts: &[Account], dark: bool, now: i
 /// `PoolCard`: the pool's icon, name and what it's spent today, then each
 /// login in it. A pool of more than one provider names each provider over
 /// its logins, as a Claude and a Codex login have different windows.
-fn pool_card(card: &Card, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette) -> AnyElement {
+fn pool_card(card: &Card, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
     let mut column = card_box(v_flex(), p).child(
         h_flex()
             .gap(px(7.))
@@ -704,7 +704,7 @@ fn pool_card(card: &Card, accounts: &[Account], content: f32, dark: bool, now: i
             column = column.child(div().px(px(12.)).pt(px(6.)).text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(p.tertiary).child(title.clone()));
         }
         for login in &section.logins {
-            column = column.child(div().w_full().h(gpui_kit::px(1.)).bg(p.divider)).child(login_row(&format!("{}-{s}", card.id), login, accounts, content, dark, now, p));
+            column = column.child(div().w_full().h(gpui_kit::px(1.)).bg(p.divider)).child(login_row(&format!("{}-{s}", card.id), login, accounts, content, dark, now, p, cx));
         }
     }
     column.into_any_element()
@@ -751,7 +751,7 @@ fn today_words(id: SharedString, words: &str, tip: &str, p: &Palette) -> AnyElem
 /// `LoginRow`: its colour's dot, its name and note and what it's spent
 /// today, its windows' meters side by side (two a row, or one over the other,
 /// in a narrower panel), then only the extras that decide something.
-fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette) -> AnyElement {
+fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
     let colour = login_colour(&login.id, accounts, dark);
     let id = |part: &str| SharedString::from(format!("usage-{key}-{}-{part}", login.id));
     let name_row = crate::highlights::tipped_as(h_flex().id(id("name")).gap(px(7.)).items_center(), login.tip.clone(), gpui_kit::Role::GenericContainer)
@@ -761,9 +761,30 @@ fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, da
         .child(div().flex_1().min_w(px(8.)))
         .children(login.today.as_ref().map(|(words, tip)| today_words(id("today"), words, tip, p)));
     let status = login.status.map(|s| {
-        let limit = s == LoginStatus::LimitReached;
+        let limit = s.is_stop();
         div().text_size(px(11.)).line_height(px(14.)).when(limit, |d| d.font_weight(FontWeight::MEDIUM)).text_color(if limit { p.red } else { p.tertiary }).child(s.words())
     });
+    // Signed out, or its sign-in ending within days: say so, with the same
+    // Sign in… as the thread's signed-out line (header.rs), so a scheduled
+    // job on it doesn't fail overnight (14 Nov).
+    let ending = login.sign_in_ends.as_ref().map(|words| div().text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(p.orange).child(words.clone()));
+    let signed_out = login.status == Some(LoginStatus::SignedOut);
+    let status = match (status, ending) {
+        (Some(s), _) if signed_out => Some(s),
+        (_, Some(e)) => Some(e),
+        (s, None) => s,
+    };
+    let sign_in = (signed_out || login.sign_in_ends.is_some()).then(|| {
+        let account = login.id.clone();
+        crate::highlights::tipped(div().id(id("sign-in")).flex_none().px(px(7.)).py(px(2.)).rounded(px(5.)).text_size(px(11.)).line_height(px(14.)).text_color(p.fg).bg(p.divider), "Opens Terminal on this login's own sign-in")
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.sign_in_login(&account, cx)))
+            .child("Sign in…")
+    });
+    let status = match (status, sign_in) {
+        (Some(s), Some(b)) => Some(h_flex().gap(px(8.)).items_center().child(s).child(div().flex_1()).child(b).into_any_element()),
+        (Some(s), None) => Some(s.into_any_element()),
+        (None, _) => None,
+    };
     let meters = (!login.meters.is_empty()).then(|| meters_layout(&id(""), &login.meters, colour, content - style::zoomed(24.), now, p));
     let more = (!login.more.is_empty()).then(|| v_flex().gap(px(2.)).text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).children(login.more.iter().map(|line| div().child(line.clone()))));
     v_flex().w_full().gap(px(8.)).px(px(12.)).py(px(10.)).child(name_row).children(status).children(meters).children(more).into_any_element()

@@ -1189,10 +1189,21 @@ CLAUDE_CONFIG_DIR=~/Library/Application\ Support/Threadbear/accounts/claude-1 cl
 then type `/login` (for Codex, `CODEX_HOME=<the folder> codex login`). It
 shows up in the account menu within a few seconds.
 
-If a login stops working (you signed out, or its session ran out and
-couldn't be refreshed), the thread's turn fails and a line above its
-messages says so. Sign in… opens Terminal on that login's own sign-in, and
-Send again sends your last message again once you're done. For a thread on
+If a login stops working (you signed out, or its sign-in ended), the
+thread's turn fails and a line above its messages says so, naming the login
+and its email ("Claude login claude-1 (you@example.com) needs you to sign in
+again."). Sign in… opens Terminal on that login's own sign-in, and Send
+again sends your last message again once you're done. A thread in a pool
+doesn't wait for you: it moves to another login in the pool and carries on,
+and the pool leaves the signed-out login alone until you sign it back in.
+
+From Claude Code 2.1.325 a Claude sign-in only lasts 28 days and can't be
+renewed by itself. Three days before one ends, its row in the Usage panel
+says "Sign-in ends" with the day, the Usage button gets a dot, and its
+tooltip names the login; a signed-out login shows "Signed out" there.
+Either way the row has Sign in…, so a scheduled job on that login doesn't
+fail overnight. Threadbear learns this from each login's own
+`claude auth status`. For a thread on
 another Mac the line says which Mac to sign in on, as Terminal here would
 only sign in this Mac.
 

@@ -12,7 +12,7 @@ import { DEFAULT_POOL_FOLDERS, peekRunnerJson, readRunnerJson, writeRunnerJson }
 import { UNKNOWN_WAIT_MS, WAIT_SLACK_MS, backAt, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from '../pools.ts';
 import { historyItems, selectHistory } from '../handoff-history.ts';
 import type { ThreadState } from '../runner.ts';
-import { CARRY_ON_BACK, CARRY_ON_MOVED, isClaudeModel, modelRow, modelTitle } from '../runner.ts';
+import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_SIGNED_OUT, isClaudeModel, modelRow, modelTitle } from '../runner.ts';
 import { providerName } from '../providers.ts';
 
 export const poolsPart = {
@@ -201,6 +201,26 @@ export const poolsPart = {
     }
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, `${title} ${was ? limitWhy(was, now, true) : 'hit its usage limit'}`);
     this.carryOn(st, CARRY_ON_MOVED);
+  },
+
+  // A turn ended failed with its login refused (errorKind auth). The login
+  // already counts as signed out (SignInState.noteRefused). A pool thread
+  // moves to the next login with room and carries on; with none, or pinned
+  // to that login, it stays put with the sign-in banner naming the login,
+  // as only Mike can sign it in (claude.ai's captcha). Signing back in
+  // makes it a new sign-in, which takes the refusal back.
+  onSignedOut(this: Runner, st: ThreadState): void {
+    const { rec } = st;
+    const pool = this.poolById(rec.poolId);
+    if (!pool || this.bucket(rec) !== 'inbox' || rec.queue.length) return;
+    const accounts = this.usableAccounts();
+    const was = accounts.find((a) => a.id === rec.accountId);
+    // The refusal may not have reached the list (no SignInState: tests, or
+    // a fork's): never move back onto it.
+    const next = nextLogin(pool, accounts.map((a) => (a.id === rec.accountId ? { ...a, signedOut: true } : a)), rec, this.clock.now());
+    if ('waitUntil' in next) return;
+    this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, `${was?.title ?? rec.accountId} is signed out`);
+    this.carryOn(st, CARRY_ON_SIGNED_OUT);
   },
 
   // A login a turn found at its limit counts as blocked until its window

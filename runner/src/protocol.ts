@@ -119,6 +119,12 @@ export type Account = {
   plan?: string;
   note?: string; // from runner.json's accountNotes ("Convex work only")
   usage?: AccountUsage;
+  // Claude: the CLI says it's signed out, its sign-in has ended, or a turn
+  // on it was refused since (sign-in-state.ts). Pools skip it.
+  signedOut?: boolean;
+  // Claude: when this sign-in ends and the CLI can't renew it (28 days
+  // after signing in, from Claude Code 2.1.325).
+  loginEndsAt?: string;
 };
 
 export type CliPolicy = 'auto' | 'notify' | 'off';

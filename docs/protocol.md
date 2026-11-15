@@ -200,6 +200,11 @@ type Account = {
   plan?: string         // "Max", "Team", "Pro Lite"
   note?: string         // Mike's own note for the account ("Convex work only")
   usage?: AccountUsage  // absent when nothing is known (and from older runners)
+  signedOut?: boolean   // Claude: no turn can run on it until someone signs it
+                        // in again (see "Signed out" under Pools). Pools skip it
+  loginEndsAt?: string  // Claude: when this sign-in ends and can't be renewed
+                        // (28 days after signing in, from Claude Code 2.1.325).
+                        // Clients warn a few days ahead
 }
 
 // "ultra" is Codex's multi-agent level. Claude never offers it.
@@ -2257,9 +2262,9 @@ thread to another login when the one it's on runs out of room.
   in it then is lost; the most room breaks a tie. Logins with no weekly
   reset known (or one already past) come after those with one, and a
   login with room unknown after those with room known.
-- **OK to run on.** A login is OK when it isn't blocked and its room (the
-  tighter of the 5-hour and weekly windows) is at least 1%, or its usage
-  isn't known.
+- **OK to run on.** A login is OK when it isn't blocked or signed out and
+  its room (the tighter of the 5-hour and weekly windows) is at least 1%,
+  or its usage isn't known.
 - **Before a turn** (a send, a queued message, a schedule): if the thread's
   login isn't OK, or isn't in its pool any more, it moves first. A thread
   stays on one login as long as it can, since every move costs a cold
@@ -2280,6 +2285,24 @@ thread to another login when the one it's on runs out of room.
   too, it moves on again while another login has room (since 12 Nov 2026;
   it used to wait after one move). It can't loop: each login that runs dry
   stays blocked until its window resets.
+- **Signed out** (since 16 Nov 2026). From Claude Code 2.1.325 a Claude
+  sign-in ends 28 days after it was made, and the CLI can't renew it: every
+  turn fails with `errorKind: "auth"` until someone signs in again through
+  claude.ai's captcha. The runner asks each Claude login's CLI
+  `claude auth status --json` (in that login's environment, never the
+  Keychain) at start, every 10 minutes and after a refused turn. A login is
+  `signedOut` when the CLI says `loggedIn: false`, when its
+  `loginExpiresAt` has passed (the CLI goes on saying `loggedIn` for a few
+  hours after, on an access token it can't renew), or when a turn on it was
+  refused and no new sign-in (another `loginExpiresAt`) or working turn has
+  been seen since. `loginEndsAt` is that `loginExpiresAt`. Pools and
+  new threads skip a signed-out login whatever its room. A pool thread
+  whose turn is refused moves like one at its limit, with the
+  runner-origin message "Your last login was signed out, so this thread
+  has moved to another one. Carry on from where you left off." and the
+  note "Moved to <login>: <login> is signed out."; with nowhere to go, or
+  pinned, it stays put with the app's sign-in line, which names the login.
+  A signed-out login brings no wait: nothing says when it's back.
 - **Waiting.** When nothing in the pool has room the thread gets
   `waitingForRoom: { until, accountId? }`: the earliest time one of the
   pool's logins is back, plus a minute (30 minutes from now if no reset

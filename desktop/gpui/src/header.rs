@@ -993,14 +993,22 @@ impl Threadbear {
             None => &self.logins,
         };
         let name = logins.provider_title(provider);
+        // Which login, by id and email: Mike has several of each provider,
+        // and "Claude needs you to sign in again" left him guessing which
+        // (claude-1, 14 Nov).
+        let who = match logins.account(&thread.account_id) {
+            Some(a) => threadbear_core::usage::sign_in_label(a),
+            None => thread.account_id.clone(),
+        };
+        let login = if who.is_empty() { name.clone() } else { format!("{name} login {who}") };
         let (text, tip) = match (&account, &remote) {
-            (Some(a), _) => (format!("{name} needs you to sign in again."), format!("The login {} was refused: signed out, or its session ran out", a.title)),
+            (Some(_), _) => (format!("{login} needs you to sign in again."), format!("{login} was refused: signed out, or its sign-in ended. Sign in… opens its own sign-in")),
             (None, Some(runner)) => {
                 let command = logins.login_command(provider);
                 let tip = if command.is_empty() { format!("Sign in on {runner} itself") } else { format!("Sign in on {runner} itself: {command} in its Terminal") };
-                (format!("{name} on {runner} needs you to sign in again."), tip)
+                (format!("{login} on {runner} needs you to sign in again."), tip)
             }
-            (None, None) => (format!("{name} needs you to sign in again."), "Sign in using that login's CLI, then send your last message again".into()),
+            (None, None) => (format!("{login} needs you to sign in again."), "Sign in using that login's CLI, then send your last message again".into()),
         };
         h_flex()
             .flex_none()
@@ -1029,6 +1037,16 @@ impl Threadbear {
                     .child("Send again"),
             )
             .into_any_element()
+    }
+
+    /// Sign in… on a login's row in the Usage panel: this Mac's login by id.
+    pub(crate) fn sign_in_login(&mut self, id: &str, cx: &mut Context<Self>) {
+        let known = self.logins.account(id).map(|a| SignInAccount { id: a.id.clone(), provider: a.provider_id().to_owned(), title: a.title.clone(), config_dir: a.config_dir.clone() });
+        let provider = known.as_ref().map(|a| a.provider.clone()).unwrap_or_default();
+        match sign_in::account_for(id, &provider, false, known) {
+            Some(account) if !self.logins.login_command(&account.provider).is_empty() => self.sign_in(account, cx),
+            _ => self.show_error(format!("Threadbear can't sign {id} in from here: run its CLI's sign-in in Terminal."), cx),
+        }
     }
 
     /// Sign in…: Terminal on the CLI's own sign-in for that login, as the

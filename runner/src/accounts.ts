@@ -161,10 +161,14 @@ function settingsModel(account: Account): string | undefined {
 
 // What the registry needs from the UsageStore (usage.ts).
 export type AccountUsageSource = Pick<UsageStore, 'usageFor' | 'identityFor'>;
+// What the registry needs from SignInState (sign-in-state.ts).
+export type AccountSignInSource = { view(account: Account): { signedOut?: true; loginEndsAt?: string } };
 
 export class AccountRegistry {
   private cfg: DiscoveryConfig;
   private usage?: AccountUsageSource;
+  // Set once made (main.ts): it needs this registry's list itself.
+  signIn?: AccountSignInSource;
   private cache: Account[] = [];
   private scanned = '';
   private at = 0;
@@ -229,8 +233,11 @@ export class AccountRegistry {
   // Email, plan and title from Token Stats or the account's last reading
   // (they beat .claude.json, which once held a stale address), and usage.
   private withUsage(account: Account): Account {
-    if (!this.usage) return account;
     const out: Account = { ...account };
+    const signIn = this.signIn?.view(account);
+    if (signIn?.signedOut) out.signedOut = true;
+    if (signIn?.loginEndsAt) out.loginEndsAt = signIn.loginEndsAt;
+    if (!this.usage) return out;
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;

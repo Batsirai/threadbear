@@ -54,6 +54,14 @@ pub struct Account {
     /// Where the login's CLI keeps its sign-in, for Sign in… (sign_in.rs).
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub config_dir: String,
+    /// Claude: no turn can run on it until someone signs it in again
+    /// (docs/protocol.md, Pools, "Signed out"). Pools skip it.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub signed_out: bool,
+    /// Claude: when this sign-in ends and can't be renewed (28 days after
+    /// signing in, from Claude Code 2.1.325). The Usage panel warns ahead.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub login_ends_at: Option<String>,
 }
 
 impl Account {

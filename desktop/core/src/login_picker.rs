@@ -47,7 +47,8 @@ pub fn menu_line<Tz: TimeZone>(usage: &AccountUsage, now: &DateTime<Tz>) -> Opti
 /// A login's line under its name (AccountUsageText.subtitle): its note,
 /// then the room left.
 pub fn subtitle<Tz: TimeZone>(account: &Account, now: &DateTime<Tz>) -> Option<String> {
-    let parts: Vec<String> = [account.note.clone(), usage_of(account).and_then(|u| menu_line(&u, now))].into_iter().flatten().filter(|p| !p.is_empty()).collect();
+    let line = if account.signed_out { Some("Signed out".to_owned()) } else { usage_of(account).and_then(|u| menu_line(&u, now)) };
+    let parts: Vec<String> = [account.note.clone(), line].into_iter().flatten().filter(|p| !p.is_empty()).collect();
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 

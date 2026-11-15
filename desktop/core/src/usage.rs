@@ -864,8 +864,19 @@ pub fn icon_tooltip<Tz: TimeZone>(groups: &[Group], now: i64, zone: &Tz) -> Stri
     std::iter::once("Usage".to_owned()).chain(groups.iter().filter_map(|g| tooltip_line(g, now, zone))).collect::<Vec<_>>().join("\n")
 }
 
+/// The tooltip with any sign-ins that need Mike under the pools' lines.
+pub fn icon_tooltip_with_sign_ins<Tz: TimeZone>(groups: &[Group], accounts: &[Account], now: i64, zone: &Tz) -> String {
+    let mut tip = icon_tooltip(groups, now, zone);
+    for line in sign_in_lines(accounts, now, zone) {
+        tip.push('\n');
+        tip.push_str(&line);
+    }
+    tip
+}
+
 fn tooltip_line<Tz: TimeZone>(group: &Group, now: i64, zone: &Tz) -> Option<String> {
-    let known: Vec<Usage> = group.accounts().into_iter().filter_map(usage).filter(|u| room(u).is_some() || u.blocked).collect();
+    // A signed-out login's room is no use to anyone.
+    let known: Vec<Usage> = group.accounts().into_iter().filter(|a| !a.signed_out).filter_map(usage).filter(|u| room(u).is_some() || u.blocked).collect();
     if known.is_empty() {
         return None;
     }
@@ -1212,6 +1223,8 @@ pub struct LoginRow {
     pub tip: String,
     /// "Nothing known yet", or "Limit reached" in red.
     pub status: Option<LoginStatus>,
+    /// "Sign-in ends Tue 6 pm", in the last SIGN_IN_WARN_MS of a sign-in.
+    pub sign_in_ends: Option<String>,
     pub meters: Vec<Meter>,
     /// Old numbers' "Numbers from 6:02 am", then the extra lines.
     pub more: Vec<String>,
@@ -1221,6 +1234,8 @@ pub struct LoginRow {
 pub enum LoginStatus {
     NothingKnown,
     LimitReached,
+    /// No turn can run on it until someone signs it in again.
+    SignedOut,
 }
 
 impl LoginStatus {
@@ -1228,7 +1243,72 @@ impl LoginStatus {
         match self {
             LoginStatus::NothingKnown => "Nothing known yet",
             LoginStatus::LimitReached => "Limit reached",
+            LoginStatus::SignedOut => "Signed out",
         }
+    }
+
+    /// Red: nothing runs on it until something changes.
+    pub fn is_stop(self) -> bool {
+        matches!(self, LoginStatus::LimitReached | LoginStatus::SignedOut)
+    }
+}
+
+// ---- Sign-ins that end (docs/protocol.md, Pools, "Signed out") ----
+
+/// How long before a Claude sign-in ends its row and the Usage button say
+/// so: from Claude Code 2.1.325 a sign-in lasts 28 days and can't be
+/// renewed, and a scheduled job on it fails overnight once it's gone (the
+/// nightly retro, 14 and 15 Nov). Not a notification: Mike finds those
+/// annoying for something that can wait a day.
+pub const SIGN_IN_WARN_MS: i64 = 3 * DAY;
+
+/// When a login's sign-in ends, while that's within SIGN_IN_WARN_MS and it
+/// isn't already signed out.
+pub fn sign_in_ends(account: &Account, now: i64) -> Option<i64> {
+    if account.signed_out {
+        return None;
+    }
+    let at = account.login_ends_at.as_deref().and_then(parse_ms)?;
+    (at - now < SIGN_IN_WARN_MS).then_some(at)
+}
+
+/// Whether any login is signed out or ending soon: the Usage button's dot.
+pub fn sign_in_needed(accounts: &[Account], now: i64) -> bool {
+    accounts.iter().any(|a| a.signed_out || sign_in_ends(a, now).is_some())
+}
+
+/// "Sign-in ends Tue 6 pm", "Sign-in ends 3:40 pm" today.
+pub fn sign_in_ends_words<Tz: TimeZone>(at: i64, now: i64, zone: &Tz) -> String {
+    if at <= now {
+        return "Sign-in has ended".to_owned();
+    }
+    format!("Sign-in ends {}", reset_words(at, now, zone))
+}
+
+/// The Usage button's tooltip lines for them: "claude-1 (a@b.com) is signed
+/// out", "claude-3 (c@d.com): sign-in ends Tue 6 pm".
+pub fn sign_in_lines<Tz: TimeZone>(accounts: &[Account], now: i64, zone: &Tz) -> Vec<String> {
+    accounts
+        .iter()
+        .filter_map(|a| {
+            let who = sign_in_label(a);
+            if a.signed_out {
+                Some(format!("{who} is signed out"))
+            } else {
+                sign_in_ends(a, now).map(|at| format!("{who}: sign-in ends {}", reset_words(at, now, zone)))
+            }
+        })
+        .collect()
+}
+
+/// "claude-1 (mike@example.com)": both, so Mike knows which login and which
+/// account to sign in as. Just the id when the name is the id.
+pub fn sign_in_label(account: &Account) -> String {
+    let name = account.name();
+    if name == account.id || name.is_empty() {
+        account.id.clone()
+    } else {
+        format!("{} ({name})", account.id)
     }
 }
 
@@ -1290,6 +1370,7 @@ pub fn cards_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Op
 fn login_row<Tz: TimeZone>(account: &Account, notice: Option<&str>, stats: Option<&Stats>, show_model_weeks: bool, now: i64, zone: &Tz) -> LoginRow {
     let usage = usage(account);
     let status = match &usage {
+        _ if account.signed_out => Some(LoginStatus::SignedOut),
         None => Some(LoginStatus::NothingKnown),
         Some(u) if u.blocked => Some(LoginStatus::LimitReached),
         _ => None,
@@ -1317,6 +1398,7 @@ fn login_row<Tz: TimeZone>(account: &Account, notice: Option<&str>, stats: Optio
         today: spent_today(stats, &[account.id.as_str()], now, zone),
         dot: stats.is_some(),
         status,
+        sign_in_ends: sign_in_ends(account, now).map(|at| sign_in_ends_words(at, now, zone)),
         meters,
         more,
     }
@@ -2072,5 +2154,43 @@ mod tests {
         assert!(lines.contains(&"new@example.com: nothing known".to_string()));
         assert!(lines.contains(&"alex+4@example.com, limit reached: 5-hour 0%, Weekly 31%".to_string()));
         assert_eq!(lines.last().map(String::as_str), Some("Usage from Token Stats at 11:15 am"));
+    }
+
+    // From Claude Code 2.1.325 a sign-in ends 28 days after it was made, and
+    // claude-1's ended unnoticed on 14 Nov: its row says so, with Sign in…,
+    // a few days ahead and once it's out, and the Usage button gets a dot.
+    #[test]
+    fn sign_ins_ending_or_ended_show_on_the_row_and_the_button() {
+        let now = at(10, 0);
+        let login = |id: &str, ends: Option<i64>, out: bool| Account {
+            id: id.into(),
+            provider: "claude".into(),
+            title: format!("{id}@example.com"),
+            email: Some(format!("{id}@example.com")),
+            signed_out: out,
+            login_ends_at: ends.map(iso_time),
+            usage: Some(json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 71.0 }] })),
+            ..Default::default()
+        };
+        let fine = login("claude-4", Some(now + 20 * DAY), false);
+        let ending = login("claude-3", Some(at_on(31, 18, 0)), false);
+        let out = login("claude-1", None, true);
+        assert_eq!(sign_in_ends(&fine, now), None);
+        assert_eq!(sign_in_ends(&ending, now), Some(at_on(31, 18, 0)));
+        assert_eq!(sign_in_ends(&out, now), None, "already out says signed out instead");
+        assert!(!sign_in_needed(&[fine.clone()], now));
+        assert!(sign_in_needed(&[fine.clone(), ending.clone()], now));
+        assert!(sign_in_needed(&[out.clone()], now));
+        let pools = vec![Pool { id: "claude".into(), title: "Claude".into(), account_ids: vec!["claude-4".into(), "claude-3".into(), "claude-1".into()], ..Default::default() }];
+        let accounts = vec![fine, ending, out];
+        let cards = cards(&pools, &accounts, None, false, now, &zone());
+        let rows = &cards[0].sections[0].logins;
+        assert_eq!((rows[0].status, rows[0].sign_in_ends.as_deref()), (None, None));
+        assert_eq!((rows[1].status, rows[1].sign_in_ends.as_deref()), (None, Some("Sign-in ends Sat 6 pm")));
+        assert_eq!((rows[2].status, rows[2].sign_in_ends.as_deref()), (Some(LoginStatus::SignedOut), None));
+        assert_eq!(rows[2].meters.len(), 1, "its numbers stay");
+        let tip = icon_tooltip_with_sign_ins(&groups(&pools, &accounts), &accounts, now, &zone());
+        assert!(tip.ends_with("claude-3 (claude-3@example.com): sign-in ends Sat 6 pm\nclaude-1 (claude-1@example.com) is signed out"), "{tip}");
+        assert_eq!(sign_in_label(&Account { id: "claude-main".into(), ..Default::default() }), "claude-main");
     }
 }

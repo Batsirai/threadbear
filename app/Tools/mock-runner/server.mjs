@@ -153,6 +153,12 @@ let accounts = [
     }),
   },
 ];
+// TB_MOCK_SIGN_INS: claude-3 signed out and claude-2's sign-in ending in two
+// days, for pictures of the Usage panel's sign-in lines (docs/protocol.md,
+// Pools, "Signed out"). Off by default so the design set stays as it was.
+if (process.env.TB_MOCK_SIGN_INS) {
+  accounts = accounts.map((a) => (a.id === 'claude-3' ? { ...a, signedOut: true } : a.id === 'claude-2' ? { ...a, loginEndsAt: hoursFromNow(50) } : a.provider === 'claude' ? { ...a, loginEndsAt: hoursFromNow(24 * 20) } : a));
+}
 // usage.stats (docs/protocol.md, "Usage history"), made up but steady: the
 // same seed every time, so screenshots only change when the code does.
 // Each login works the hours of a day (busier in the afternoon, quiet at

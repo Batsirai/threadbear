@@ -39,7 +39,8 @@ import { createLogger } from './log.ts';
 import { hidIdleMs, isAtMac } from './presence.ts';
 import { ThreadStore } from './store.ts';
 import { AccountRegistry } from './accounts.ts';
-import { ClaudeAdapter } from './adapters/claude/adapter.ts';
+import { ClaudeAdapter, cliEnv } from './adapters/claude/adapter.ts';
+import { SignInState } from './sign-in-state.ts';
 import { ProcessRegistry } from './proc.ts';
 import { Runner } from './runner.ts';
 import { startOwnThread } from './own-threads.ts';
@@ -163,6 +164,11 @@ async function main(): Promise<void> {
   const usage = new UsageStore({ limitsFile: cfg.tokenStatsLimitsFile, dataDir: cfg.home, clock: realClock, log, history: usageHistory });
   usage.start();
   const accounts = new AccountRegistry(cfg, usage);
+  // Which Claude logins are signed out or ending soon, from the CLI's own
+  // `auth status` (sign-in-state.ts); the registry puts it on every account.
+  const signIn = new SignInState({ claudePath: cfg.claudePath, accounts: () => accounts.list(), env: (a) => cliEnv(a), clock: realClock, log });
+  accounts.signIn = signIn;
+  signIn.start();
   const tally = new TokenTally({ dataDir: cfg.home, clock: realClock, log, accounts: () => accounts.list() });
   if (cfg.tokenTally !== false) tally.start();
   // Every session gets tools for driving Threadbear itself, bound to its
@@ -341,6 +347,7 @@ async function main(): Promise<void> {
       record: (accountId, reading) => (draining ? runner.publish({ method: 'drain.usage', params: { accountId, reading } }) : usage.record(accountId, reading)),
       onChange: (fn) => usage.onChange(fn),
     },
+    signIn,
     clock: realClock,
     log,
     models,
@@ -1283,6 +1290,7 @@ async function main(): Promise<void> {
     connectors.stop();
     projects.stop();
     usage.stop();
+    signIn.stop();
     tally.stop();
     webRuntimeUpdates.stop();
     updates.stop();
