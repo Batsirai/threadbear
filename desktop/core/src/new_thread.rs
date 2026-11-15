@@ -356,10 +356,22 @@ pub fn pool_providers(pool: &Pool, accounts: &[Account]) -> Vec<String> {
 pub enum ChipBadge {
     Low(String),
     Blocked,
+    /// "Signed out" in red: no turn runs on it until it's signed in again.
+    SignedOut,
+}
+
+impl ChipBadge {
+    /// Red: nothing runs on it now.
+    pub fn is_stop(&self) -> bool {
+        matches!(self, ChipBadge::Blocked | ChipBadge::SignedOut)
+    }
 }
 
 /// `AccountUsageText.chipBadge`, for one login.
 pub fn chip_badge(account: Option<&Account>) -> Option<ChipBadge> {
+    if account.is_some_and(|a| a.signed_out) {
+        return Some(ChipBadge::SignedOut);
+    }
     let usage = usage_of(account?)?;
     if usage.blocked {
         return Some(ChipBadge::Blocked);
@@ -993,6 +1005,18 @@ mod tests {
         let now = FixedOffset::east_opt(0).unwrap().timestamp_millis_opt(0).unwrap();
         let cards = draft(&l, &picks, &mem).room_cards(&now);
         assert_eq!(cards.iter().filter(|c| c.selected).map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["claude-3"]);
+    }
+
+    // A signed-out login has no room for a new thread, and its chip says
+    // why rather than "Limit reached" (Grok's review, 16 Nov).
+    #[test]
+    fn signed_out_logins_have_no_room_and_say_so() {
+        let out = Account { id: "s".into(), provider: "claude".into(), signed_out: true, usage: Some(json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 71.0 }] })), ..Default::default() };
+        assert!(usage_of(&out).unwrap().blocked);
+        assert_eq!(chip_badge(Some(&out)), Some(ChipBadge::SignedOut));
+        assert!(ChipBadge::SignedOut.is_stop());
+        let bare = Account { id: "t".into(), signed_out: true, ..Default::default() };
+        assert!(usage_of(&bare).unwrap().blocked, "no usage known still has no room");
     }
 
     #[test]

@@ -650,7 +650,7 @@ impl RenderOnce for ChipTrigger {
                 // Text with lineLimit(1) does.
                 .when(!self.title.is_empty(), |s| s.child(div().min_w_0().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).truncate().child(self.title.clone())))
                 .when_some(self.badge.clone(), |s, badge| {
-                    let color = if badge == ChipBadge::Blocked { cx.theme().danger } else { style::needs_you(cx) };
+                    let color = if badge.is_stop() { cx.theme().danger } else { style::needs_you(cx) };
                     s.child(div().flex_none().text_size(px(size::CHIP)).text_color(color).whitespace_nowrap().child(badge_words(&badge)))
                 })
                 .when(!self.title.is_empty(), |s| s.child(div().flex_none().flex().child(Icon::from(IconName::ChevronDown).with_size(px(9.)).text_color(style::faint_icon(cx)))))
@@ -1036,7 +1036,7 @@ impl ModelPickerView {
 /// the room left, orange under a quarter and red at its limit.
 fn pool_login_row(row: threadbear_core::login_picker::PoolLoginRow, cx: &App, action: impl Fn(&mut Window, &mut App) + 'static) -> impl IntoElement {
     let color = match row.badge {
-        Some(ChipBadge::Blocked) => cx.theme().danger,
+        Some(ChipBadge::Blocked | ChipBadge::SignedOut) => cx.theme().danger,
         Some(ChipBadge::Low(_)) => style::needs_you(cx),
         None => style::secondary_label(cx),
     };
@@ -1315,6 +1315,7 @@ pub(crate) fn badge_words(badge: &ChipBadge) -> String {
     match badge {
         ChipBadge::Low(percent) => format!("\u{00B7} {percent}"),
         ChipBadge::Blocked => "Limit reached".to_owned(),
+        ChipBadge::SignedOut => "Signed out".to_owned(),
     }
 }
 

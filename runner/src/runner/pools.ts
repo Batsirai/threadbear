@@ -203,8 +203,8 @@ export const poolsPart = {
     this.carryOn(st, CARRY_ON_MOVED);
   },
 
-  // A turn ended failed with its login refused (errorKind auth). The login
-  // already counts as signed out (SignInState.noteRefused). A pool thread
+  // A turn ended failed with its Claude login refused (errorKind auth). The
+  // login already counts as signed out (SignInState.noteRefused). A pool thread
   // moves to the next login with room and carries on; with none, or pinned
   // to that login, it stays put with the sign-in banner naming the login,
   // as only Mike can sign it in (claude.ai's captcha). Signing back in
@@ -215,6 +215,10 @@ export const poolsPart = {
     if (!pool || this.bucket(rec) !== 'inbox' || rec.queue.length) return;
     const accounts = this.usableAccounts();
     const was = accounts.find((a) => a.id === rec.accountId);
+    // Only Claude logins are tracked as signed out (sign-in-state.ts). A
+    // Codex refusal isn't remembered, so moving on it could bounce a thread
+    // between two refused logins for ever (Grok's review, 16 Nov).
+    if (was?.provider !== 'claude') return;
     // The refusal may not have reached the list (no SignInState: tests, or
     // a fork's): never move back onto it.
     const next = nextLogin(pool, accounts.map((a) => (a.id === rec.accountId ? { ...a, signedOut: true } : a)), rec, this.clock.now());

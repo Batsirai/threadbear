@@ -133,3 +133,13 @@ test("list_accounts' words: signed out, ending within three days, or nothing", (
   assert.equal(signInWords({ loginEndsAt: iso(NOW + ENDING_SOON_MS + 1) }, NOW, when), '');
   assert.equal(signInWords({}, NOW, when), '');
 });
+
+test('a refusal with no reading yet holds its hour even when the first reading says signed in', async () => {
+  const clock = new FakeClock(NOW);
+  const accounts = [account('claude-1')];
+  const state = new SignInState({ claudePath: 'c', accounts: () => accounts, env: () => ({}), clock, log: nullLogger, exec: async () => JSON.stringify({ loggedIn: true, loginExpiresAt: iso(NOW + 5 * DAY) }) });
+  state.noteRefused('claude-1');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(state.view(accounts[0]).signedOut, true);
+  state.stop();
+});

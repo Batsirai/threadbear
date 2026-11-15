@@ -2298,7 +2298,9 @@ thread to another login when the one it's on runs out of room.
   or a working turn is seen first. The hour is so a one-off refusal
   doesn't keep a good login out until its end date. `loginEndsAt` is that `loginExpiresAt`. Pools and
   new threads skip a signed-out login whatever its room. A pool thread
-  whose turn is refused moves like one at its limit, with the
+  whose turn on a Claude login is refused moves like one at its limit
+  (only Claude: a Codex refusal isn't remembered, so moving on it could
+  bounce a thread between two refused logins), with the
   runner-origin message "Your last login was signed out, so this thread
   has moved to another one. Carry on from where you left off." and the
   note "Moved to <login>: <login> is signed out."; with nowhere to go, or

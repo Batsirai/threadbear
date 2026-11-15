@@ -172,7 +172,11 @@ export class SignInState {
     if (!status) return;
     const before = JSON.stringify(this.view(account));
     this.readings.set(account.id, { ...status, checkedAt: this.o.clock.now() });
-    if (this.refused.has(account.id) && status.loggedIn && status.endsAt !== undefined && status.endsAt > this.o.clock.now() && status.endsAt !== this.refused.get(account.id)?.endsAt) {
+    // A new sign-in takes a refusal back: another end than the one known
+    // when it was refused. With none known then, nothing says it's new, so
+    // the refusal holds its hour (else a pool thread bounces back onto it).
+    const was = this.refused.get(account.id)?.endsAt;
+    if (was !== undefined && status.loggedIn && status.endsAt !== undefined && status.endsAt > this.o.clock.now() && status.endsAt !== was) {
       this.refused.delete(account.id);
     }
     if (tell && JSON.stringify(this.view(account)) !== before) this.changed();

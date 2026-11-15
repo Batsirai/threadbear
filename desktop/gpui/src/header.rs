@@ -876,7 +876,10 @@ impl Threadbear {
             }
         }
         let usage = logins.account(&thread.account_id).and_then(usage_of);
-        let blocked = usage.as_ref().is_some_and(|u| u.blocked);
+        // A signed-out login isn't at a limit that resets: the sign-in line
+        // and its row in Usage say what to do instead.
+        let signed_out = logins.account(&thread.account_id).is_some_and(|a| a.signed_out);
+        let blocked = usage.as_ref().is_some_and(|u| u.blocked) && !signed_out;
         // Only while the thread is still on the login the turn failed on:
         // after "Switch to ..." the status stays error until the next turn,
         // and the line would blame the new login.
