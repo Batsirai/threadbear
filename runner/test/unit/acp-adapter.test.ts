@@ -265,11 +265,6 @@ test('a plain command can be always allowed, exactly', async () => {
 
 // ---- Refusals
 
-test('a thread in the sandbox is refused', () => {
-  const r = rig({ opts: { confined: true } });
-  assert.throws(() => r.start(), /runs in a sandbox, and OpenCode can't/);
-});
-
 test("the wrong program under the agent's name is refused", async () => {
   const r = rig({ env: { FAKE_ACP_NAME: 'Grok' }, agent: ACP_AGENTS.cursor });
   r.start();

@@ -105,7 +105,8 @@ export function normaliseRecord(rec: Record<string, unknown>): boolean {
     const waits = rec.waitingOn.filter((w) => typeof w.threadId === 'string' && typeof (w.title ?? '') === 'string' && (w.done === undefined || (isObject(w.done) && typeof (w.done.reply ?? '') === 'string' && typeof (w.done.why ?? '') === 'string')));
     rec.waitingOn = waits;
     // A `by` that isn't one is dropped, and the wait counts as from the least (hibernation.ts, mayHear).
-    for (const w of waits) if (w.by !== undefined && !(isObject(w.by) && ['ask', 'plan', 'auto', 'full'].includes(w.by.mode) && typeof w.by.confined === 'boolean')) delete w.by;
+    // One saved by a thread in the old sandbox (`confined: true`) counts as the least too.
+    for (const w of waits) if (w.by !== undefined && !(isObject(w.by) && ['ask', 'plan', 'auto', 'full'].includes(w.by.mode) && (w.by as { confined?: unknown }).confined !== true)) delete w.by;
   }
   // What it said last, which a wait on it carries.
   if (isObject(rec.finished) && rec.finished.reply !== undefined && typeof rec.finished.reply !== 'string') delete rec.finished.reply;
@@ -162,12 +163,9 @@ export type ThreadRecord = {
   modelInUse?: string; // full id the CLI ran the last turn on
   effortInUse?: EffortLevel; // the level the CLI reported for the last turn
   permissionMode: PermissionMode;
-  // Its CLI runs in a sandbox (sandbox.ts) and must stay in one: set when it
-  // starts in a sandbox folder or a sandboxed thread's agent starts it
-  // there, and taken off only by a move Mike made or allowed. A thread with
-  // it never starts outside a sandbox, whatever its folder has become
-  // (Daybreak, 7 Nov 2026), and its agent counts as restricted
-  // (threadbear-mcp.ts, "Raising access").
+  // It ran in the sandboxed-threads experiment, taken out 16 Nov 2026. Never
+  // set now: one that has it won't start (Runner.retiredSandbox), as its
+  // owner expected it to stay shut in a container.
   confined?: true;
   // "Plan first": the mode approving the plan goes back to, and the plan
   // waiting for Mike (its plan.proposed itemId).
@@ -194,7 +192,7 @@ export type ThreadRecord = {
   // `review`: the thread is a review of this one's change (runner/lab-review.ts).
   // `by`: the waiting thread's access when it said to wait (hibernation.ts,
   // mayHear): what it asked to hear isn't passed on once it has more.
-  waitingOn?: { threadId: string; title: string; until?: string; review?: true; quiet?: true; by?: { mode: PermissionMode; confined: boolean }; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string } }[];
+  waitingOn?: { threadId: string; title: string; until?: string; review?: true; quiet?: true; by?: { mode: PermissionMode }; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string } }[];
   // Its last finished turn (nothing needed, nothing left running) and that
   // turn's reply, for threads waiting on it, including on a runner it
   // moves to (runner/hibernation.ts, reconcileWaits). Cleared by any new

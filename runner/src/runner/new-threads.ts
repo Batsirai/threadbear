@@ -42,14 +42,6 @@ export const newThreadsPart = {
     // Not to sit under the thread in startedBy in the sidebar
     // (docs/protocol.md, "Nested threads").
     detached?: boolean;
-    // Started by a sandboxed thread's agent in a sandbox folder: shut in
-    // one too (ThreadRecord.confined).
-    confined?: boolean;
-    // The user has said this thread may run outside the sandbox the thread
-    // in startedBy is shut in (a create_thread card they allowed, their
-    // press of a button they allowed). Without it, a thread started from a
-    // sandboxed one is shut in too (makeThread).
-    unconfine?: boolean;
     // Projects it starts in (New Thread on a project's page), joined
     // before its first turn, so that turn already has the project's brief.
     projectIds?: string[];
@@ -180,7 +172,7 @@ export const newThreadsPart = {
         // it's doing), another run of the same schedule, or a sample.
         if (o.id === rec.id || o.archivedAt || o.sample || o.id === rec.startedBy?.threadId) continue;
         if (rec.schedule && o.schedule?.id === rec.schedule.id) continue;
-        // Nor one with less access (mode or sandbox) than this one: its
+        // Nor one with less access (its mode) than this one: its
         // title and words are its agent's own (update_thread), and handing
         // them to this agent is a message upward that send_message would
         // ask Mike about first (Daybreak, 12 Nov 2026, finding 111).
@@ -228,8 +220,6 @@ export const newThreadsPart = {
     worktree?: boolean;
     startedBy?: ThreadStartedBy;
     detached?: boolean;
-    confined?: boolean;
-    unconfine?: boolean;
   }): { st: ThreadState; notes: string[] } {
     this.checkAccepting();
     // New threads belong on the new release.
@@ -250,20 +240,9 @@ export const newThreadsPart = {
     if (!account) throw new RpcError(ErrorCode.accountNotFound, `No account called ${accountId}`);
     this.checkProvider(account);
     if (!isDirectory(cwd)) throw new RpcError(ErrorCode.badParams, `Folder not found: ${cwd}`);
-    // In a sandbox folder a Claude thread is shut in it from the start. One
-    // asked for that which can't be (a Codex login, a folder outside) is
-    // refused rather than started outside (sandbox.ts).
-    const canSandbox = providerInfo(account.provider).sandbox;
-    const sandboxed = canSandbox && this.sandboxed(cwd);
-    // Started from a thread that's shut in a sandbox: shut in too, unless
-    // the user said otherwise. A caller that forgets `confined` (a lab
-    // review did, Daybreak 10 Nov 2026) gets a refusal, not a thread
-    // outside the sandbox with the same access.
-    const parent = params.startedBy?.threadId ? this.threads.get(params.startedBy.threadId) : undefined;
-    const confined = Boolean(params.confined) || (Boolean(parent?.rec.confined) && params.unconfine !== true);
-    if (confined && !sandboxed) {
-      throw new RpcError(ErrorCode.badParams, canSandbox ? `${cwd} isn't in a sandbox folder, and a sandboxed thread can only start threads in one without asking.` : `A sandboxed thread can only start Claude threads, as ${providerName(account.provider)} doesn't run in the sandbox.`);
-    }
+    // A folder the old sandbox experiment shut threads in (config.ts).
+    const retired = this.retiredSandbox(cwd);
+    if (retired) throw new RpcError(ErrorCode.badParams, retired);
     const now = this.isoNow();
     const id = crypto.randomUUID();
     const rec: ThreadRecord = {
@@ -276,7 +255,6 @@ export const newThreadsPart = {
       provider: account.provider,
       // None named: runner.json's default (a new install's is auto), else full.
       permissionMode: params.permissionMode ?? this.cfg.defaults.permissionMode ?? 'full',
-      ...(sandboxed ? { confined: true as const } : {}),
       status: 'idle',
       createdAt: now,
       updatedAt: now,

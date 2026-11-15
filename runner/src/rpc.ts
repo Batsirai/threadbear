@@ -654,6 +654,10 @@ export class RpcServer {
           });
         }
         if (p.worktree !== undefined && typeof p.worktree !== 'boolean') throw bad('worktree must be a boolean');
+        // An older runner handing over passes on a sandboxed agent's
+        // create_thread this way: there's no sandbox to start it in now
+        // (taken out 16 Nov 2026), and it mustn't start outside one.
+        if (p.confined === true) throw bad("This asks for a thread shut in a sandbox, which Threadbear no longer has, so it wasn't started.");
         const res = r.create({
           text: optString(p, 'text') ?? '',
           images: optImages(p),
@@ -665,14 +669,6 @@ export class RpcServer {
           permissionMode: optMode(p),
           title: optString(p, 'title'),
           ...(p.worktree === false ? { worktree: false } : {}),
-          // Only ever narrows (a draining runner passing on a sandboxed
-          // agent's create_thread), so any client may ask for it.
-          ...(p.confined === true ? { confined: true } : {}),
-          // A thread named in startedBy that's shut in a sandbox shuts this
-          // one in too unless this says the user allowed otherwise (a
-          // draining runner passing on a create_thread card's yes). The
-          // caller gate takes it out of any thread's own call.
-          ...(p.unconfine === true ? { unconfine: true } : {}),
           ...optStartedBy(p),
           // Not to nest under the thread in startedBy (Nested threads).
           ...(p.detached === true ? { detached: true } : {}),
@@ -714,13 +710,11 @@ export class RpcServer {
         }
         if (p.cwd !== undefined) upd.cwd = reqString(p, 'cwd');
         if (p.accountId !== undefined) upd.accountId = reqString(p, 'accountId');
-        // From a client with the runner's token (the app, tb): its move may
-        // take a thread out of a sandbox, unless it says it mayn't (a
-        // draining runner passing on an agent's move: unconfine false).
-        if (p.cwd !== undefined || p.accountId !== undefined || p.poolId !== undefined) upd.unconfine = p.unconfine !== false;
         if (p.poolId !== undefined) upd.poolId = p.poolId === null ? null : reqString(p, 'poolId');
-        // Passed on from a thread's key (rpc-gate) or a draining runner.
-        if (p.byAgent === true) upd.byAgent = true;
+        // Passed on from a thread's key (rpc-gate) or a draining runner. An
+        // older one says an agent's move as `unconfine: false` (the sandbox
+        // experiment's, taken out 16 Nov 2026), which still counts.
+        if (p.byAgent === true || p.unconfine === false) upd.byAgent = true;
         if (p.provider !== undefined && p.poolId !== undefined) {
           if (!isProvider(p.provider)) throw bad(`provider must be one of ${PROVIDERS.join(', ')}`);
           upd.provider = p.provider as Provider;

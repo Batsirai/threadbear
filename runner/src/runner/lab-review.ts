@@ -26,11 +26,6 @@
 // lab's login in it, the review runs on a fresh session of the same
 // provider, and the note says it isn't independent.
 //
-// A thread shut in a sandbox (ThreadRecord.confined) is reviewed in the
-// sandbox too, on a login that can run there (Claude; Codex can't), or
-// not at all, with a note saying why. Its review would otherwise run its
-// tests on the host with the same access (Daybreak, 10 Nov 2026).
-//
 // Part of the Runner (runner.ts); each method's `this` is the Runner.
 import path from 'node:path';
 import type { Runner, ThreadState } from '../runner.ts';
@@ -38,7 +33,7 @@ import type { RunnerPart } from './part.ts';
 import type { Account, Hunk, LabReviewLedger, PermissionMode, Provider, ReviewFinding, ReviewOutcome, ReviewSeverity } from '../protocol.ts';
 import type { LabLedger, ReviewVerdict, ThreadRecord } from '../store.ts';
 import { loginOk, pickInPool, poolAccounts, poolForFolder } from '../pools.ts';
-import { providerInfo, providerName } from '../providers.ts';
+import { providerName } from '../providers.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
 import { DEFAULT_LAB_REVIEWERS, type LabReviewer } from '../lab-reviewers.ts';
 
@@ -66,9 +61,8 @@ const TEXT_FILE = /\.(md|mdx|markdown|txt|rst)$/i;
 const LOOK_BACK = 4000;
 
 export type TurnChange = { files: { path: string; added: number; removed: number }[]; codeLines: number; diff: string; clipped: boolean };
-// boxed: the other lab was passed over because it can't run in the sandbox.
 // reviewer: the entry of Mike's list it came from, for its model and effort.
-export type ReviewLogin = { account: Account; independent: boolean; reviewer: LabReviewer; boxed?: boolean };
+export type ReviewLogin = { account: Account; independent: boolean; reviewer: LabReviewer };
 
 export const labReviewPart = {
   // Called once a turn has finished with nothing needed and nothing left
@@ -98,14 +92,9 @@ export const labReviewPart = {
       this.log.info('lab review owed to the next runner', { threadId: rec.id });
       return undefined;
     }
-    // Shut in a sandbox, or would be if it started now: the review is too.
-    const confined = Boolean(rec.confined) || (providerInfo(rec.provider).sandbox && this.sandboxed(rec.cwd));
-    const login = this.reviewLogin(rec, { confined });
+    const login = this.reviewLogin(rec);
     if (!login) {
-      const text = confined
-        ? 'Not reviewed: this thread runs in a sandbox, and there is no other login on this runner that can review it there.'
-        : 'Not reviewed: there is no other login on this runner to review the change with.';
-      this.emit(st, { type: 'system.note', text });
+      this.emit(st, { type: 'system.note', text: 'Not reviewed: there is no other login on this runner to review the change with.' });
       // Said once, until the next message from Mike.
       rec.labReviews = LAB_REVIEW_ROUNDS;
       this.markDirty(st);
@@ -130,10 +119,6 @@ export const labReviewPart = {
         // Full, as before; an Ask or Auto one asks or checks the same way.
         // Anything else (a record from before modes) gets Ask.
         permissionMode: reviewMode(rec.permissionMode),
-        // And never outside a sandbox the reviewed thread is shut in: the
-        // same mode on the host is far more than it has. Said both ways,
-        // so makeThread neither guesses nor lets it out.
-        ...(confined ? { confined: true } : {}),
         title: cutSafely(`Review: ${rec.title}`, 120),
         // The same checkout, as it is now, not a worktree of its own.
         worktree: false,
@@ -156,9 +141,7 @@ export const labReviewPart = {
     this.markDirty(st);
     const text = login.independent
       ? `Another lab is reviewing this change before it's done: ${who}, in thread ${threadId.slice(0, 8)}.`
-      : login.boxed
-        ? `A fresh ${who} session is reviewing this change before it's done, in thread ${threadId.slice(0, 8)}, in the sandbox. It isn't another lab: this thread runs in a sandbox, and the other lab's logins can't.`
-        : `A fresh ${who} session is reviewing this change before it's done, in thread ${threadId.slice(0, 8)}. It isn't another lab: none of this folder's logins are.`;
+      : `A fresh ${who} session is reviewing this change before it's done, in thread ${threadId.slice(0, 8)}. It isn't another lab: none of this folder's logins are.`;
     this.emit(st, { type: 'system.note', text });
     this.log.info('lab review started', { threadId: rec.id, reviewer: threadId, account: login.account.id, round });
     return threadId;
@@ -274,9 +257,8 @@ export const labReviewPart = {
   // The login a review of this thread runs on: the first reviewer in Mike's
   // order (Settings > General > Code review, lab-reviewers.ts) that's another lab and has
   // a login with room the folder allows, else a fresh session of the
-  // thread's own provider. For a thread in a sandbox, only a provider that
-  // runs in one. The reviewer's model and effort come with it.
-  reviewLogin(this: Runner, rec: ThreadRecord, o: { confined?: boolean } = {}): ReviewLogin | undefined {
+  // thread's own provider. The reviewer's model and effort come with it.
+  reviewLogin(this: Runner, rec: ThreadRecord): ReviewLogin | undefined {
     const accounts = this.usableAccounts();
     const pools = this.pools();
     // Kept for its folder, or for the folder it came from: a thread's
@@ -301,20 +283,17 @@ export const labReviewPart = {
       if (kept) return undefined;
       return accounts.find((a) => a.provider === provider && !keptIds.has(a.id) && !pools.some((p) => poolAccounts(p, accounts).includes(a)) && loginOk(a));
     };
-    const fits = (provider: Provider) => !o.confined || providerInfo(provider).sandbox;
     const order = this.cfg.labReviewers ?? DEFAULT_LAB_REVIEWERS;
     const labs = order.filter((r) => r.provider !== rec.provider);
     for (const r of labs) {
-      if (!fits(r.provider)) continue;
       const account = pick(r.provider);
       if (account) return { account, independent: true, reviewer: r };
     }
     // Its own provider, as listed if it is (for its model and effort).
     const own = order.find((r) => r.provider === rec.provider) ?? { provider: rec.provider };
-    const same = fits(rec.provider) ? pick(rec.provider) : undefined;
+    const same = pick(rec.provider);
     if (!same) return undefined;
-    const boxed = labs.some((r) => !fits(r.provider) && pick(r.provider));
-    return { account: same, independent: false, reviewer: own, ...(boxed ? { boxed: true } : {}) };
+    return { account: same, independent: false, reviewer: own };
   },
 };
 

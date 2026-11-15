@@ -1355,8 +1355,8 @@ export class Relay {
             if (change.accountId === undefined) throw new RpcError(ErrorCode.badParams, 'carryOn goes with accountId');
             change.carryOn = true;
           }
-          // An agent's (rpc.ts: byAgent, or unconfine false from a draining
-          // runner): that runner keeps a sandboxed thread in, and starts no turn.
+          // An agent's (rpc.ts: byAgent, or unconfine false from an older
+          // draining runner): that runner starts no turn for it.
           if (p.byAgent === true || p.unconfine === false) change.by = 'agent';
           const done = await this.command(w.runnerId, threadId, 'update', change, { done: true });
           // What that runner applied (sync.ts apply), not what was asked:

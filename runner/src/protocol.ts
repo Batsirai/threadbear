@@ -18,7 +18,6 @@ export type ProviderInfo = {
   loginCommand: string;
   effort: 'claude' | 'codex' | 'none';
   autoMode: 'classifier' | 'asks';
-  sandbox: boolean;
   rewind: boolean;
   smallJobs: boolean;
   usageReadings: boolean;

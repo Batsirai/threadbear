@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { readSandbox, type SandboxConfig } from './sandbox.ts';
 import os from 'node:os';
 import path from 'node:path';
 import { extraUpdatesFrom, type ExtraUpdate } from './updates/extra.ts';
@@ -110,8 +109,12 @@ export type Config = {
   tokenTally?: boolean;
   accountNotes: Record<string, string>;
   poolFolders?: Record<string, string[]>;
-  // Folders whose threads run their CLI in a container (sandbox.ts).
-  sandbox?: SandboxConfig;
+  // The folders runner.json's `sandbox` named, from the sandboxed-threads
+  // experiment Threadbear no longer has (taken out 16 Nov 2026). A thread
+  // in one won't start, rather than run on the machine unconfined without
+  // its owner knowing (Runner.retiredSandbox): taking the key out of
+  // runner.json is the owner saying that's fine.
+  retiredSandboxFolders?: string[];
   // runner.json's pools as written (pools.ts readPools checks each);
   // absent means the built-in ones. pools.save replaces it.
   pools?: unknown[];
@@ -478,7 +481,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     tokenTally: env.THREADBEAR_TOKEN_TALLY !== 'off',
     accountNotes: stringMap(json.accountNotes) ?? { ...DEFAULT_ACCOUNT_NOTES },
     poolFolders: folderMap(json.poolFolders) ?? { ...DEFAULT_POOL_FOLDERS },
-    ...((sb) => (sb ? { sandbox: sb } : {}))(readSandbox(json.sandbox, expand)),
+    ...((f) => (f.length ? { retiredSandboxFolders: f } : {}))(retiredSandboxFolders(json.sandbox, expand)),
     ...(Array.isArray(json.pools) && json.pools.length ? { pools: json.pools } : {}),
     sync: syncConfig(json.sync, env),
     secretCheck: json.secretCheck?.enabled === true,
@@ -633,4 +636,11 @@ export function ensureHome(home: string): void {
 
 export function readToken(home: string): string {
   return fs.readFileSync(paths.token(home), 'utf8').trim();
+}
+
+// runner.json's old `sandbox: { folders: [...] }`, each folder absolute.
+function retiredSandboxFolders(raw: unknown, expand: (p: string) => string): string[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const folders = (raw as { folders?: unknown }).folders;
+  return Array.isArray(folders) ? folders.filter((f): f is string => typeof f === 'string' && !!f.trim()).map((f) => path.resolve(expand(f.trim()))) : [];
 }

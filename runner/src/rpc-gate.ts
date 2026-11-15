@@ -59,7 +59,6 @@ export type CallerGateDeps = {
     has(threadId: string): boolean;
     get(threadId: string): ThreadLike;
     accessOf(threadId: string): PermissionMode;
-    confinedOf(threadId: string): boolean;
   };
   // Threads a draining runner still has (rpc.ts's RemoteThreads).
   remote?: { owns(threadId: string): boolean; summaries(include: ('inbox' | 'snoozed' | 'archived')[]): (ThreadLike & { id: string })[] };
@@ -81,25 +80,26 @@ export class CallerGate {
     this.deps = deps;
   }
 
-  // The caller's authority at this moment. A thread the runner can't place
-  // (deleted, say) is as low as it gets: confined counts everything as above.
-  private authority(threadId: string): Authority {
+  // The caller's authority at this moment, or undefined for a thread the
+  // runner can't place (deleted, say): that's as low as it gets, and
+  // anything but a read is refused (check).
+  private authority(threadId: string): Authority | undefined {
     const { runner, remote } = this.deps;
-    if (runner.has(threadId)) return { mode: runner.get(threadId).permissionMode ?? 'ask', confined: runner.confinedOf(threadId) };
+    if (runner.has(threadId)) return { mode: runner.get(threadId).permissionMode ?? 'ask' };
     const t = remote?.owns(threadId) ? remote.summaries([...ALL]).find((x) => x.id === threadId) : undefined;
-    return t ? { mode: t.permissionMode ?? 'ask', confined: false } : { mode: 'ask', confined: true };
+    return t ? { mode: t.permissionMode ?? 'ask' } : undefined;
   }
 
   // What another thread's agent has, for anything that reaches it. One this
   // runner can't read counts as full, as threadbear-mcp.ts's accessOf does.
   private targetAccess(threadId: string): Authority {
     const { runner, remote } = this.deps;
-    if (runner.has(threadId)) return { mode: runner.accessOf(threadId), confined: runner.confinedOf(threadId) };
+    if (runner.has(threadId)) return { mode: runner.accessOf(threadId) };
     const t = remote?.owns(threadId) ? remote.summaries([...ALL]).find((x) => x.id === threadId) : undefined;
     // A busy thread on a draining runner may be running a turn that started
     // with more than its saved mode; a summary doesn't say, so assume it did.
     const busy = t?.status === 'running' || t?.status === 'starting' || t?.status === 'waiting';
-    return { mode: busy ? 'full' : (t?.permissionMode ?? 'full'), confined: false };
+    return { mode: busy ? 'full' : (t?.permissionMode ?? 'full') };
   }
 
   private title(threadId: string): string {
@@ -111,22 +111,24 @@ export class CallerGate {
 
   whoami(threadId: string): { threadId: string; mode: PermissionMode; limited: boolean } {
     const a = this.authority(threadId);
-    return { threadId, mode: a.mode, limited: a.confined || a.mode !== 'full' };
+    return { threadId, mode: a?.mode ?? 'ask', limited: a?.mode !== 'full' };
   }
 
   // Throws a refusal, or returns the params to run with (the caller's own
   // mode filled in, what only a client with the token may say taken out).
   check(threadId: string, method: string, p: Params): Params {
-    const caller = this.authority(threadId);
+    const known = this.authority(threadId);
     // Any agent's move, Full's too: it never starts a turn by itself
     // (Runner.update's carry-on after a limit is Mike's pick from the menu).
     if (method === 'threads.update' && (p.cwd !== undefined || p.accountId !== undefined || p.poolId !== undefined)) p = { ...p, byAgent: true };
     // Reinstalling stops every thread's runner; an agent hands that to the
     // user (install-runner.sh refuses from a thread too), Full access or not.
     if (method === 'runner.reinstall') throw new RpcError(ErrorCode.notAllowed, "Reinstalling the runner stops every thread's turn, so it's the user's to do: Reinstall now in the app's Updates panel.");
-    if (caller.mode === 'full' && !caller.confined) return p;
+    if (known?.mode === 'full') return p;
     if (GATED_READS.has(method)) return p;
-    const who = caller.confined ? 'This thread runs in a sandbox' : `This thread is on ${MODE_NAMES[caller.mode]}`;
+    if (!known) throw new RpcError(ErrorCode.notAllowed, "This thread isn't one the runner knows now, so it can only read. Ask the user to do it in the app.");
+    const caller = known;
+    const who = `This thread is on ${MODE_NAMES[caller.mode]}`;
     const needs = (what: string, tool?: string) =>
       new RpcError(ErrorCode.notAllowed, `${who}, so ${what} needs the user's OK. ${tool ? `Use the ${tool} tool, which asks them on a card.` : 'Ask them to do it in the app.'}`);
     switch (method) {
@@ -134,9 +136,10 @@ export class CallerGate {
         // Left out, a tool's new thread takes the caller's mode, not the
         // runner's default (which may be full).
         const mode = (p.permissionMode ?? caller.mode) as PermissionMode;
-        if (above({ mode, confined: false }, caller)) throw needs(`starting a thread with ${MODE_NAMES[mode] ?? mode}`, 'create_thread');
+        if (above({ mode }, caller)) throw needs(`starting a thread with ${MODE_NAMES[mode] ?? mode}`, 'create_thread');
         const given = p.startedBy && typeof p.startedBy === 'object' ? (p.startedBy as Params) : {};
-        // Never out of a sandbox from here.
+        // `unconfine` is only ever the user's: an older runner across a
+        // handover still reads it (the sandbox taken out 16 Nov 2026).
         const { unconfine: _u, ...rest } = p;
         return { ...rest, permissionMode: mode, startedBy: { ...given, kind: 'thread', threadId, label: typeof given.label === 'string' && given.label ? given.label : 'Agent' } };
       }
@@ -213,7 +216,8 @@ export class CallerGate {
       if (!self && above(this.targetAccess(id), caller)) throw needs(`moving ${this.title(id)}`, 'move_thread');
       // A schedule's check runs in its thread's folder, as the user.
       if (this.deps.schedules?.list(id).some((sc) => sc.threadId === id && sc.check?.trim())) throw needs(`moving ${self ? 'this thread' : this.title(id)}, whose folder a schedule's check runs in`, 'move_thread');
-      // Never out of a sandbox from here.
+      // Said to an older runner across a handover, which still reads it as
+      // "not the user's move" (the sandbox taken out 16 Nov 2026).
       out.unconfine = false;
       // Nor starting a turn by itself (Runner.update's carry-on).
       out.byAgent = true;
@@ -235,7 +239,7 @@ export class CallerGate {
       return { ...p, createdBy: threadId };
     }
     const mode = (p.permissionMode ?? caller.mode) as PermissionMode;
-    if (above({ mode, confined: false }, caller)) throw needs(`scheduling new threads with ${MODE_NAMES[mode] ?? mode}`, 'schedule_message');
+    if (above({ mode }, caller)) throw needs(`scheduling new threads with ${MODE_NAMES[mode] ?? mode}`, 'schedule_message');
     return { ...p, permissionMode: mode, createdBy: threadId };
   }
 
@@ -243,7 +247,7 @@ export class CallerGate {
     const out: Params = { ...p };
     const sc = this.findSchedule(p, needs);
     const modes = scheduleModes(sc);
-    const was: Authority = sc.threadId ? this.targetAccess(sc.threadId) : { mode: modes.ceiling, confined: false };
+    const was: Authority = sc.threadId ? this.targetAccess(sc.threadId) : { mode: modes.ceiling };
     const raised = !sc.threadId && typeof p.permissionMode === 'string' && raises(p.permissionMode as PermissionMode, modes.floor);
     if (raised) throw needs(`switching the schedule "${sc.title}" to ${MODE_NAMES[p.permissionMode as PermissionMode] ?? p.permissionMode}`, 'update_schedule');
     if (typeof p.check === 'string' && p.check.trim()) throw needs('adding a check to a schedule (a shell command that runs by itself)', 'update_schedule');
@@ -258,7 +262,7 @@ export class CallerGate {
 
   private scheduleRun(caller: Authority, p: Params, needs: (what: string, tool?: string) => RpcError): Params {
     const sc = this.findSchedule(p, needs);
-    const will: Authority = sc.threadId ? this.targetAccess(sc.threadId) : { mode: scheduleModes(sc).ceiling, confined: false };
+    const will: Authority = sc.threadId ? this.targetAccess(sc.threadId) : { mode: scheduleModes(sc).ceiling };
     if (above(will, caller) || sc.check) throw needs(`running the schedule "${sc.title}" now`, 'update_schedule');
     return p;
   }

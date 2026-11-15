@@ -595,7 +595,6 @@ export type CommandHost = {
     accountId?: string;
     model?: string | null;
     carryOn?: boolean;
-    unconfine?: boolean;
     byAgent?: boolean;
   }): unknown;
   // Hibernate in Mike's words (threads.hibernateWhen): a `snooze: { said }` update from the main Mac.
@@ -4470,10 +4469,8 @@ export class ConvexSync {
         else if (typeof a.accountId === 'string' || a.model !== undefined) {
           // The main Mac's login or model pickers, or its limit box's
           // Continue now on (API 77), only ever from the main Mac:
-          // convex/relay.ts queues it, the phone has no way to. Mike's own
-          // pick may take a sandboxed thread out of its sandbox, as the
-          // app's does here; an agent's (by: "agent") may not, and starts
-          // no turn by itself.
+          // convex/relay.ts queues it, the phone has no way to. An agent's
+          // (by: "agent") starts no turn by itself.
           if (a.from !== 'mac') throw new Error('Only the main Mac changes a login from another device.');
           const byAgent = a.by === 'agent';
           const done = (await host.update({
@@ -4481,7 +4478,6 @@ export class ConvexSync {
             ...(typeof a.accountId === 'string' ? { accountId: a.accountId } : {}),
             ...(a.model === null || typeof a.model === 'string' ? { model: a.model } : {}),
             ...(a.carryOn === true && typeof a.accountId === 'string' ? { carryOn: true } : {}),
-            unconfine: !byAgent,
             ...(byAgent ? { byAgent: true } : {}),
           })) as { thread?: { accountId?: unknown; model?: unknown } } | undefined;
           // What it became, which the Mac shows: this runner may have put

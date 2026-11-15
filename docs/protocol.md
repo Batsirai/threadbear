@@ -99,18 +99,19 @@ in a thread answers the challenge with the key in place of the token, and adds
 `"threadId"` to `auth.prove`'s params. The runner works the key out from the
 id, so it keeps nothing per thread and a key only ever names its own thread.
 `tb` falls back to the token only when it's pointed at another runner's data
-dir (a dev runner) or when it has no key. A sandboxed thread gets no key. A
+dir (a dev runner) or when it has no key. A
 thread that started before this (an older runner's CLI still finishing a turn)
 has none either, and its older `tb` carries on as before until its next start.
 
 The connection then belongs to that thread: every request is checked against
 what the thread can do at that moment (`runner/src/rpc-gate.ts`), by the same
 rules as its threadbear tools ("Raising access"). A thread on Full access
-outside a sandbox isn't limited. Any other gets the reads, and the writes that
+isn't limited. Any other gets the reads, and the writes that
 don't reach past it: a thread or schedule at most as high as its own
 (`permissionMode` is filled in with the caller's when left out), a message to
 a thread no higher, lowering a mode, renaming, snoozing or archiving another
-thread, moving a thread no higher (`unconfine` is forced false). Anything else
+thread, moving a thread no higher (`unconfine` is forced false, which an
+older runner across a handover reads as an agent's move). Anything else
 is refused with `-32060`, whose message says which tool to use instead. Unknown
 methods are refused too. In particular it can't answer a card
 (`approvals.respond`, `plans.approve`, `secrets.answer`), press a button, run
@@ -173,7 +174,6 @@ type ProviderInfo = {
                         // (Grok: "codex", each model's effortLevels narrowing it)
   autoMode: "classifier" | "asks"     // Auto: a classifier judges each action, or
                         // it behaves like Ask (Codex)
-  sandbox: boolean      // can run a sandboxed thread
   rewind: boolean       // can go back to an earlier message
   smallJobs: boolean    // can run small jobs (titles, summaries)
   usageReadings: boolean // reports how much room a login has
@@ -1119,7 +1119,7 @@ the summary and then the reply.
 | `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac apps' own builds, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], providers?: ProviderInfo[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel }, permissionMode?: "full" \| "ask" \| "auto" }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `providers` is what each provider this runner knows is called and can do, in its own order (`ProviderInfo` above; absent from older runners, when a client uses what it knows of Claude and Codex). `experiments` is the ids of the experiments on for this runner (docs/experiments.md), read at each `hello`, so the app shows what belongs to one (the Projects page's decisions for `projectDecisions`) from its next connect. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 1% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `defaults.permissionMode` is the mode a `threads.create` with none starts on, and the one the app's new-thread composer starts on and goes back to after each send (`runner.json`'s `defaults.permissionMode`, read at startup; `"plan"` or anything else there is ignored). Absent means `"full"`: setup writes `"auto"` into the `runner.json` it makes for a new install, and an install from before has none. A client that doesn't know the runner's (an older runner, or another runner reached through the backend) starts on `"full"`. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` `client` is `threadbear-mac` for the Swift app and `threadbear-desktop` for the GPUI one; either counts as the app being open (the GPUI one not for a browser panel, which only the Swift app has) |
 | `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; a value the runner doesn't know is left out; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
 | `threads.search` | `{ query: string, limit?: number }` | `{ threads: ThreadSummary[] }` matches title, preview and `keywords` across all threads, archived included (Search) |
-| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, detached?: true, projectIds?: string[], confined?: true, unconfine?: true }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `confined` and `unconfine`: see Sandboxed threads (a thread started from a confined one is confined unless `unconfine` says Mike allowed it). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" |
+| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, detached?: true, projectIds?: string[] }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `confined: true` is refused (see Sandboxed threads (taken out)). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" |
 | `threads.samples` | `{ cwd: string, remove?: boolean }` | `{ threads: ThreadSummary[] }`. The app's first-run tour's sample threads (`runner/src/samples.ts`): made up exchanges written as finished turns with no CLI, in `cwd` (the app's `~/ThreadbearThreads/Welcome`, where it writes an example patch), with `sample: true`; the first needs you, with a card of asks, and one is left unread. Asking again deletes any there are and makes them afresh (writing the patch again if it's gone, and trusting it as written). `remove: true` deletes them all, archived and hibernating ones too, and returns none. `threads.send` to a sample is `-32602` |
 | `threads.send` | `{ threadId, text, images?: ImageRef[], answers?: AskAnswer[], origin?: "phone", runnerId?: string \| null }` | `{ turnId }`. `runnerId` is the runner the client shows the thread on (`null` for this Mac's own): given, the primary refuses the message with `-32031` when it would reach any other runner (a thread still on the runner it's moving from, say), rather than passing it on; absent, it's routed as before, except that a message for another runner's thread is refused the same way while this runner knows of a move of it under way (an older app may have shown it as already moved). `text` can place the `images` among its words with `[Picture N]` markers (Pictures in a message). `origin: "phone"` is only for a phone command the primary passes on to a draining runner (Sync, "Commands"), so the message keeps its origin there; any other `origin` is `-32602`. If a turn is running and its CLI is live, the message goes into that turn straight away (a `user.message` under the running `turnId`, which is returned): the agent takes it at its next step, or right after its reply if that was already finishing, and the turn doesn't complete until it has been answered. If the thread was moved to another login (usually another provider) during the running turn, a message from Mike (or the phone) doesn't steer into the old CLI: the turn is stopped (`system.note` "Stopped here so <model> can take over.") and the message starts the next turn on the new login, with the handoff, as T3 Code does. If the agent is waiting on a card for its own tool call (an approval or a question, with an `itemId`), a message from Mike declines that card first (`approval.resolved` with `deny` and a `message` telling the agent he wrote instead), as the CLI reads nothing else until the card is answered; a background subagent's card is left open. Otherwise (the CLI is still starting or leaving, messages are already waiting, a move or fresh CLI is due on the next turn, Stop has been pressed, or the turn was opened only for a card) the message is queued and starts its own turn when the running one ends |
 | `threads.interrupt` | `{ threadId }` | `{}`. Stop ends the turn. Claude reports which user inputs it queued, started and cancelled. An input it never started is saved, including pictures, with a `system.note`; one it started is a deliberate cancel, even at zero tokens. With no receipt support, the fallback saves only a turn with no model output and zero input/output tokens, or one whose CLI never became ready. Saved inputs persist across restarts and precede the next ordinary user message in one model input, with pictures renumbered. Stop alone never retries them. `/clear` discards them; other slash commands and scheduled messages leave them saved. Editing a message discards saved rows in the cut history, and restores earlier saved rows when the edit cuts the input that carried them. A move to another runner drops automatic replay state (the original messages stay in its history). Missing pictures are marked unavailable; recovery only reads pictures inside this thread's own media folder |
@@ -1326,7 +1326,7 @@ where it installs.
   version feed to compare with: `clis.list` has a row for each, and
   `clis.update` runs the agent's own updater when asked. `clis.setPolicy` does
   nothing for them, and `THREADBEAR_CLI_UPDATES=off` turns updating off.
-- **Not offered:** the sandbox (a confined thread is refused), rewind, steering
+- **Not offered:** rewind, steering
   (a message sent during a turn runs next).
 
 ## Notifications (runner to app)
@@ -2162,69 +2162,20 @@ type UsageStats = {
 - A draining runner (Handovers) keeps neither file: both are the new
   runner's to write.
 
-## Sandboxed threads
+## Sandboxed threads (taken out)
 
-An experiment (6 Nov 2026, runner/src/sandbox.ts), off unless a runner's
-`runner.json` has `sandbox: { folders: ["~/sandboxed"], image: "threadbear-sandbox",
-docker?: "docker" }`. A Claude thread whose folder is under one of `folders`
-runs its CLI inside `docker run -i --rm --init` from `image`, as the runner's
-own user, with only these mounted in, each at the same path as on the
-machine: the thread's folder and the login's config folder (plus
-`~/.claude.json` for the default login), read-write; the CLI's real file and
-any other path it's handed as an argument, read-only. Nothing else of the
-machine is there (the runner, its data folder and secrets, other repos), so
-an agent with full access can change only its own folder. The runner, its
-transcripts, Convex sync, pools and schedules don't change, and the
-threadbear tools and hooks reach the CLI over its stdin and stdout as
-always. Model and command probes, and Codex threads, run as before. The
-login's config folder is mounted read-write, and the same login's threads
-outside the sandbox read it: give sandboxed threads a login of their own.
-
-Its environment is an allowlist, not the runner's (`sandboxEnvAllowed`):
-the login's config folder, the Claude Code and Agent SDK settings the
-runner and the SDK set, each by name (`CLAUDE_CODE_ENTRYPOINT`,
-`CLAUDE_CODE_TERMINAL_MCP_TOOLS`, `CLAUDE_AGENT_SDK_VERSION`...; never a
-whole prefix, as some `CLAUDE_CODE_*` settings carry secrets), the model
-(`ANTHROPIC_MODEL` and its defaults), the thread's id and the runner's
-version, and the locale and terminal (`LANG`, `LC_*`, `TERM`, `TZ`).
-A name that reads like a credential, a socket, a proxy or an address
-(`TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `AUTH`, `CERT`, `SOCK`, `PROXY`,
-`URL`...) stays out even if listed, so the CLI in the sandbox
-signs in from its login's folder, never from `ANTHROPIC_API_KEY` or
-`CLAUDE_CODE_OAUTH_TOKEN`, and `THREADBEAR_THREAD_KEY` never goes in.
-Cloud, GitHub, signing and API keys, `SSH_AUTH_SOCK` and proxies in the
-runner's environment aren't there. `PATH`, `HOME`, `TMPDIR` and the
-user are the container's own. The container's network is Docker's
-default: open, as Claude itself needs to reach its API. Confinement
-covers the machine's files and secrets, not what the agent sends out.
-
-A thread that starts in a sandbox folder, or that a sandboxed thread's
-agent starts in one, is shut in it (`confined` on its record): it never
-starts outside a sandbox again, so a link put in its folder's place, a
-worktree outside, or a Codex login (Codex doesn't run in it) stop it with a
-note rather than run it on the machine; the `docker run` checks the folder
-it mounts once more. Only a move Mike makes (`threads.update` from the app
-or `tb`) or allows on a card takes it out. A thread started from a confined
-one (its `startedBy.threadId`) is confined too, whoever starts it, unless
-Mike allowed otherwise: a create_thread card he said yes to, or his press of
-a button he allowed (the runner passes `unconfine: true` on
-`threads.create` then; the caller gate takes it out of a thread's own call).
-So it can't start where it couldn't be shut in: a folder outside a sandbox
-or a Codex login is refused. A review by another lab of a confined thread
-runs confined, on a login that can (Claude), or isn't done, with a note
-saying why. Its agent counts as restricted
-for the threadbear tools however its mode is set ("Tools for agents",
-"Raising access"), and what it writes in its folder is never trusted as
-written: its patches and Claude settings wait for Mike in Patches, as the
-runner and the Mac app would run them outside the sandbox.
-
-The container lasts as long as the CLI: when the runner stops a thread's
-CLI (idle, a restart, interrupt), the container is killed with it, and the
-next message starts a new one that resumes the session from the login's
-config folder. Anything outside the mounts doesn't survive that, like an
-installed package or a running server. The image needs the tools agents
-run (git, ripgrep, Node, Python); a worktree whose git folder is elsewhere
-isn't mounted yet.
+An experiment from 6 Nov 2026 ran a thread's Claude Code in a Docker
+container when its folder was under one of `runner.json`'s `sandbox:
+{ folders }`. It was taken out on 16 Nov 2026, unfinished and before
+anyone relied on it. What's left fails closed for a copy that had it on:
+a thread in a folder `sandbox.folders` still names, or one whose record
+says it ran shut in one (`confined`), isn't started (`threads.create`
+refuses, and a message to an old one gets a note saying why) rather than
+running on the machine instead; taking `sandbox` out of runner.json says
+that's fine. `threads.create` with `confined: true` (an older runner
+handing over a sandboxed agent's call) is refused. A thread's move still
+says `unconfine: false` for an agent's to an older runner across a
+handover, and the runner reads `unconfine: false` from one as `byAgent`.
 
 ## Pools
 
@@ -3408,11 +3359,11 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   2,000 characters of the reply it finished with. That message (the
   replies, the librarian's reasons and the titles, all the waited-on
   threads' words, and a lab review's findings too) goes only where
-  `send_message` would go without a card: each waited-on thread has no less access (mode, or sandbox) than
+  `send_message` would go without a card: each waited-on thread has no less access (its mode) than
   the waiting thread has now, or the waiting thread's agent asked for the
   wait itself and hasn't been raised since (each entry keeps `by`, the
   waiting thread's access when it said to wait; one with none counts as
-  from Ask in a sandbox). Otherwise it wakes with a `system.note` saying
+  from the least access, below even Ask). Otherwise it wakes with a `system.note` saying
   which had less access and that what they said wasn't passed on, and no
   turn starts: Mike reads them and says what next (Daybreak, 12 Nov
   2026). A message, a wake or
@@ -5830,7 +5781,7 @@ only way the app opens another runner's thread.
   `snoozedUntil`; or, from backend API 77 and on their own, `accountId`
   and `model`, with `carryOn` beside `accountId`, which go as one `update`
   command that runner applies through its own `threads.update`, with
-  `unconfine` unless `by: "agent"` (an agent's change, `byAgent`), and
+  `byAgent` when `by: "agent"` (an agent's change, which starts no turn), and
   finishes with the login and model it applied as the command's `result`,
   which the answer's `{ thread }` shows; only the main Mac's commands,
   `from: "mac"`, can carry them; an older backend's runner says it works
@@ -7185,8 +7136,7 @@ commands), and the ones that only read or end the turn
 or archive the thread that's calling it; `tb` inside a thread refuses the
 same.
 
-Raising access. From a thread whose mode isn't `full`, or whose CLI runs in a
-sandbox (see "Sandboxed threads"), a call that would let
+Raising access. From a thread whose mode isn't `full`, a call that would let
 something run with more access than the caller has puts up its own
 `approval.requested` (options `["allow", "deny"]`, the title saying what it
 would do) and waits for it, whatever the CLI's rules or Auto's classifier
@@ -7206,13 +7156,7 @@ has now (`Runner.accessOf`): its mode, or more while a turn that had more is
 still running, as a Codex turn keeps the mode it started with. Setting the
 mode a thread or schedule already has is left out of the write, so it can't
 raise it back if it lands after the mode was lowered. Without a `permissionMode`, a thread such a
-caller starts or schedules gets the caller's mode, not `full`. For a
-sandboxed caller, outside its sandbox is more access whatever the mode: a
-thread in a folder that isn't in one, on a Codex login or on another
-runner, a message to such a thread, a new-thread schedule (the runner
-starts those), a check, moving a thread out of a sandbox, and `pin`,
-`show_options` and `show_panel` (the Mac app opens what they name). The
-card's title says "outside the sandbox". A folder on a card is where it
+caller starts or schedules gets the caller's mode, not `full`. A folder on a card is where it
 really leads, links followed, and that's the folder used; one that leads
 elsewhere by the time Mike answers is refused (full access callers keep
 the path as written). `join_project`'s card shows the project's whole
@@ -7221,9 +7165,7 @@ that changed while the card was up is refused; `update_project` asks for
 the Notion board and links too. A project with a folder that's a link can't
 be joined to such a thread this way at all, as the link can be pointed
 elsewhere after the card; Mike can do it himself. A message's sender line is
-on its card, one line, and goes as shown. From a sandboxed caller, changing the
-login or pool of a thread or schedule outside its sandbox asks as well
-(the login's config folder is mounted in the sandbox). A card shows every argument of the call whole, never a
+on its card, one line, and goes as shown. A card shows every argument of the call whole, never a
 first part of one: a string longer than an event takes (16 KB) is refused
 with no card. Denied or
 expired, nothing changes and the tool says so; a message from Mike declines

@@ -146,8 +146,6 @@ export class AcpAdapter implements AgentAdapter {
   }
 
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession {
-    // None of these run in the sandbox (sandbox.ts).
-    if (opts.confined) throw new Error(`This thread runs in a sandbox, and ${providerName(this.provider)} can't, so it wasn't started. Move it to a Claude login.`);
     const refused = this.deps.agent.refuses?.({ cwd: opts.cwd, mode: opts.permissionMode });
     if (refused) throw new Error(refused);
     const s = new AcpSession(opts, sink, this.deps, this.binary(), this.env(opts.account, opts.env));

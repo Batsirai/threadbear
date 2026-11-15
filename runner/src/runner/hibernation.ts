@@ -18,13 +18,14 @@ import { cutSafely, safeEnd } from '../safe-cut.ts';
 import { above, raises, type Authority } from '../threadbear-mcp.ts';
 
 // A thread that isn't here (on another runner of this Mac's) counts as the
-// least access, so what it said is never passed up on a guess.
-const LEAST: Authority = { mode: 'ask', confined: true };
+// least access, so what it said is never passed up on a guess: below even
+// Ask and Plan (mayTellOf goes by this very object).
+const LEAST: Authority = Object.freeze({ mode: 'ask' as const });
 
-// The less of two: the lower mode, and in a sandbox if either is.
+// The less of two: the lower mode.
 export function leastAuthority(a: Authority | undefined, b: Authority): Authority {
   if (!a) return b;
-  return { mode: raises(a.mode, b.mode) ? b.mode : a.mode, confined: a.confined || b.confined };
+  return { mode: raises(a.mode, b.mode) ? b.mode : a.mode };
 }
 
 // How long a thread waiting on others sleeps at most when end_turn gave no
@@ -287,14 +288,16 @@ export const hibernationPart = {
   // What a thread's agent can do now (threadbear-mcp.ts, Authority).
   authorityNow(this: Runner, threadId: string): Authority {
     if (!this.threads.has(threadId)) return LEAST;
-    return { mode: this.accessOf(threadId), confined: this.confinedOf(threadId) };
+    return { mode: this.accessOf(threadId) };
   },
 
   // Whether a thread with access `me` may be handed another thread's words
-  // without a card: the other has no less access (mode or sandbox), as
+  // without a card: the other has no less access (its mode), as
   // send_message goes by. One not here counts as the least.
   mayTellOf(this: Runner, me: Authority, threadId: string): boolean {
-    return !above(me, this.authoritySaved(threadId));
+    const them = this.authoritySaved(threadId);
+    if (them === LEAST) return false;
+    return !above(me, them);
   },
 
   // What a thread's agent is held to as a sender: its saved mode, as
@@ -304,7 +307,7 @@ export const hibernationPart = {
   authoritySaved(this: Runner, threadId: string): Authority {
     const st = this.threads.get(threadId);
     if (!st) return LEAST;
-    return { mode: st.rec.permissionMode ?? 'ask', confined: Boolean(st.rec.confined) };
+    return { mode: st.rec.permissionMode ?? 'ask' };
   },
 
   // Whether what a waited-on thread said may go to the waiting thread's

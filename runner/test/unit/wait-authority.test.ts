@@ -105,16 +105,6 @@ test('quietInbox: a helper that lowers itself while it is waited on has its repl
   assert.equal(heard(parent), false);
 });
 
-test('quietInbox: a helper shut in a sandbox counts as less than a Full thread outside one', async () => {
-  const { h, make, finish } = setup();
-  const parent = make('Plan the port', 'full');
-  const child = make('Fix the panel reload', 'full', parent);
-  h.runner.threads.get(child)!.rec.confined = true;
-  finish(parent);
-  await settle();
-  assert.equal(h.runner.get(parent).waitingOn, undefined);
-});
-
 test("waitFor: a Full thread's own wait on an Ask thread still hears it, as it asked", async () => {
   const { h, make, finish, heard } = setup(false);
   const waiter = make('Write the plan', 'full');
@@ -154,11 +144,22 @@ test('a wait with no record of who asked (from before) counts as asked from the 
 
 test("a wait's `by` that isn't an access is dropped as the record loads", async () => {
   const { normaliseRecord } = await import('../../src/store.ts');
-  const rec: Record<string, unknown> = { waitingOn: [{ threadId: 'a', title: 'A', by: { mode: 'root', confined: false } }, { threadId: 'b', title: 'B', by: { mode: 'full', confined: false } }] };
+  const rec: Record<string, unknown> = {
+    waitingOn: [
+      { threadId: 'a', title: 'A', by: { mode: 'root' } },
+      { threadId: 'b', title: 'B', by: { mode: 'full' } },
+      // An older release's, from outside its sandbox, still counts.
+      { threadId: 'c', title: 'C', by: { mode: 'full', confined: false } },
+      // One from inside the sandbox (taken out 16 Nov 2026) counts as the least.
+      { threadId: 'd', title: 'D', by: { mode: 'full', confined: true } },
+    ],
+  };
   normaliseRecord(rec);
   const waits = rec.waitingOn as { by?: unknown }[];
   assert.equal(waits[0]!.by, undefined);
-  assert.deepEqual(waits[1]!.by, { mode: 'full', confined: false });
+  assert.deepEqual(waits[1]!.by, { mode: 'full' });
+  assert.deepEqual(waits[2]!.by, { mode: 'full', confined: false });
+  assert.equal(waits[3]!.by, undefined);
 });
 
 // Codex's review and verify-fix: a helper's title is its own words too, and

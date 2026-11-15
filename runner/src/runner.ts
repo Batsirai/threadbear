@@ -57,7 +57,7 @@ import type {
   TurnOutcome,
 } from './protocol.ts';
 import { agentsStillWorking, ErrorCode, LIMITS, PROTOCOL_VERSION, RpcError, sentByAgent } from './protocol.ts';
-import { cliName, providerInfo, providerName, providersForHello } from './providers.ts';
+import { cliName, providerName, providersForHello } from './providers.ts';
 import type { ArchivedBy, ArchiveVerdict, LibrarianStatus, LooseEnd, Project, Schedule } from './protocol.ts';
 import { Projects } from './projects.ts';
 import type { Settings } from './settings.ts';
@@ -164,7 +164,6 @@ import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, le
 import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
-import { CONFINED_NO_SANDBOX, sandboxFor } from './sandbox.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
 
 export type Notification =
@@ -344,7 +343,7 @@ export type Turn = {
   // waitFor's `by` (hibernation.ts, mayHear): raised between the call and
   // the turn's end, it still asked with what it had (Codex's review of the
   // Daybreak fix, 12 Nov 2026).
-  endTurnBy?: { mode: PermissionMode; confined: boolean };
+  endTurnBy?: { mode: PermissionMode };
   // What endTurn was before the latest call, until that call's result says
   // whether it replaced it (a repeat doesn't).
   endTurnBefore?: Record<string, unknown>;
@@ -2135,12 +2134,9 @@ export class Runner {
     rt.startVersion = this.cliList()?.find((c) => c.provider === rec.provider)?.installedVersion;
     // Read now, not from the patch list's cache: a pull just before this
     // message may have brought hooks.
-    // A thread shut in a sandbox starts in one or not at all (the adapters
-    // check too); one that starts in one is shut in it from now on.
-    const canSandbox = providerInfo(rec.provider).sandbox;
-    const inSandbox = canSandbox && this.sandboxed(rec.cwd);
-    if (rec.confined && !inSandbox) throw new Error(canSandbox ? CONFINED_NO_SANDBOX(rec.cwd) : `This thread runs in a sandbox, and ${providerName(rec.provider)} can't, so it wasn't started. Move it to a Claude login.`);
-    if (inSandbox) rec.confined = true;
+    // One the old sandbox experiment shut in, or in a folder it named.
+    const retired = this.retiredSandbox(rec.cwd, rec);
+    if (retired) throw new Error(retired);
     const claude = rec.provider === 'claude' ? this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec)) : undefined;
     rt.claudeSkipped = claude && !claude.trusted ? claude.hash : undefined;
     rt.claudeHeldGrants = Boolean(claude?.trusted && rec.permissionMode === 'full' && !this.patchTrust.checkClaude(rec.cwd, { grants: true }).trusted);
@@ -2152,7 +2148,6 @@ export class Runner {
         model: rec.model,
         effort: rec.effort,
         permissionMode: rec.permissionMode,
-        ...(rec.confined ? { confined: true } : {}),
         sessionId: rec.nativeSessionId,
         resume,
         ...(resume && rec.resumeAt ? { resumeAt: rec.resumeAt } : {}),
@@ -2160,9 +2155,7 @@ export class Runner {
         blobsDir: this.store.blobsDir(rec.id),
         tmpDir: path.join(paths.run(this.cfg.home), 'tmp'),
         allowRules: rec.allowRules ?? [],
-        // A sandboxed thread gets no key: nothing in the sandbox should
-        // reach the runner's RPC at all.
-        env: threadEnv(rec.id, this.cfg.home, undefined, rec.confined ? undefined : this.threadKey?.(rec.id)),
+        env: threadEnv(rec.id, this.cfg.home, undefined, this.threadKey?.(rec.id)),
         ...this.briefFor(rec, resume),
         ...(rt.claudeSkipped ? { untrustedProjectSettings: claudeSettingsWithoutCommands(rec.cwd) } : {}),
         // Read at each call, from the thread's folder then.
@@ -2462,9 +2455,7 @@ export class Runner {
         // permission to edit a file isn't permission to run it, so what it
         // wrote waits for Mike in Patches (code-writes.ts, Gautam's scan
         // F1 and F4). Only inside the thread's own folder.
-        // A sandboxed thread's are its container's, not this machine's: the
-        // runner and the Mac app would run them outside it.
-        if (o.mode !== 'full' || rec.confined) break;
+        if (o.mode !== 'full') break;
         this.trustAgentPatches(
           o.files.map((f) => ({ ...f, path: path.resolve(rec.cwd, f.path) })),
           rec.cwd,
@@ -3099,10 +3090,6 @@ export class Runner {
     // limit: carry on there now, rather than wait for a message (the limit
     // box's Continue now on).
     carryOn?: boolean;
-    // A move Mike made (the app, tb) or allowed on a card: a thread shut in
-    // a sandbox may leave it. Without it, a move or login change that would
-    // take it out is refused (ThreadRecord.confined).
-    unconfine?: boolean;
     // An agent's call (update_thread, move_thread, tb from a thread): a
     // move it makes never starts a turn by itself, as the thread may have
     // more access than the agent (send_message asks for that).
@@ -3160,11 +3147,6 @@ export class Runner {
       throw new RpcError(ErrorCode.accountNotFound, `No account called ${toAccountId}`);
     }
     if (newAccount && toAccountId !== rec.accountId) this.checkProvider(newAccount);
-    // Checked before anything changes: where it would run after this.
-    const stillIn = providerInfo(newAccount?.provider ?? rec.provider).sandbox && this.sandboxed(newCwd ?? rec.cwd);
-    if (rec.confined && (newCwd !== undefined || toAccountId !== undefined) && !stillIn && !params.unconfine) {
-      throw new RpcError(ErrorCode.badParams, `"${rec.title}" runs in a sandbox, and this would take it out of it (a folder that isn't in one, or a login that can't run in one). Only the user can do that.`);
-    }
     // Pinned (an account named, or poolId null), or into a pool.
     if (params.accountId !== undefined || params.poolId === null) {
       delete rec.poolId;
@@ -3211,11 +3193,6 @@ export class Runner {
       release = true;
     }
     if (cwdChanged) this.tellActivity({ kind: 'moved', threadId: rec.id, from: fromCwd, to: rec.cwd });
-    // Out of the sandbox, as allowed; into one, shut in it from now.
-    if (cwdChanged || accountChanged) {
-      if (stillIn) rec.confined = true;
-      else delete rec.confined;
-    }
     // The account the settings are checked against, after any change.
     const account = newAccount ?? this.accounts.get(rec.accountId);
     let model = rec.model;
@@ -4058,15 +4035,33 @@ export class Runner {
     return moreAccess(rt.turn?.access, rec.permissionMode);
   }
 
-  // Whether a thread's CLI is shut in a sandbox (ThreadRecord.confined).
-  confinedOf(threadId: string): boolean {
-    return Boolean(this.mustGet(threadId).rec.confined);
+  // Why a thread can't start, from the sandboxed-threads experiment taken
+  // out on 16 Nov 2026, or undefined. One that ran shut in a container
+  // (ThreadRecord.confined), or one in a folder runner.json's old
+  // `sandbox` still names, would now run on the machine itself, which its
+  // owner didn't choose: it waits for them to say so, by moving it or
+  // taking the key out of runner.json.
+  retiredSandbox(cwd: string, rec?: ThreadRecord): string | undefined {
+    if (rec?.confined) return `This thread ran in a sandbox, which Threadbear no longer has, so it wasn't started. To run it on this machine, start a new thread in ${cwd}${this.inRetiredSandbox(cwd) ? " after taking `sandbox` out of runner.json" : ''}.`;
+    if (this.inRetiredSandbox(cwd)) return `${cwd} is in a folder runner.json's \`sandbox\` names, and Threadbear no longer has a sandbox, so it wasn't started here. Take \`sandbox\` out of runner.json to run threads there on this machine.`;
+    return undefined;
   }
 
-  // Whether a Claude thread in `cwd` would run in a sandbox (sandbox.ts),
-  // by where the folder really is.
-  sandboxed(cwd: string): boolean {
-    return Boolean(sandboxFor(this.cfg.sandbox, cwd));
+  private inRetiredSandbox(cwd: string): boolean {
+    const folders = this.cfg.retiredSandboxFolders;
+    if (!folders?.length) return false;
+    const real = (p: string) => {
+      try {
+        return fs.realpathSync(p);
+      } catch {
+        return path.resolve(p);
+      }
+    };
+    const at = real(cwd);
+    return folders.some((f) => {
+      const rel = path.relative(real(f), at);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    });
   }
 
   mustGet(threadId: string): ThreadState {

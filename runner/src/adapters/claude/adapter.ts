@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import { denySecrets } from '../../secrets-guard.ts';
-import { CONFINED_NO_SANDBOX, sandboxSpawner, type SandboxConfig } from '../../sandbox.ts';
 import os from 'node:os';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { HookInput, McpServerConfig, ModelInfo, Options, PermissionResult, Query, SDKControlGetContextUsageResponse, SDKUserMessage, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
@@ -128,10 +127,6 @@ export type ClaudeAdapterDeps = {
   neverAsk?: Set<string>;
   // One reply (needs.ts), read when a session starts, as its end_turn is.
   oneReply?: () => boolean;
-  // The container a thread in this folder runs its CLI in, if any
-  // (sandbox.ts). Only a thread's own session; the model and command
-  // probes run as before.
-  sandboxFor?: (cwd: string) => SandboxConfig | undefined;
 };
 
 export class ClaudeAdapter implements AgentAdapter {
@@ -143,9 +138,6 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession {
-    // A thread shut in a sandbox never starts outside one, even if its
-    // folder has stopped being in one since (a link put in its place).
-    if (opts.confined && !this.deps.sandboxFor?.(opts.cwd)) throw new Error(CONFINED_NO_SANDBOX(opts.cwd));
     const s = new ClaudeSession(opts, sink, this.deps);
     s.start();
     return s;
@@ -506,10 +498,7 @@ class ClaudeSession implements AgentSession {
         SessionStart: [{ hooks: [async (input) => this.onCompact(input)] }],
       },
       abortController: this.abort,
-      spawnClaudeCodeProcess: ((spawn, sb) => (sb ? sandboxSpawner(spawn, sb, opts.threadId) : opts.confined ? () => { throw new Error(CONFINED_NO_SANDBOX(opts.cwd)); } : spawn))(
-        groupSpawner(deps.registry, deps.log, (line) => this.stderr(line), opts.threadId),
-        deps.sandboxFor?.(opts.cwd),
-      ),
+      spawnClaudeCodeProcess: groupSpawner(deps.registry, deps.log, (line) => this.stderr(line), opts.threadId),
     };
     const servers = deps.mcpServersFor?.(opts.threadId);
     if (servers && Object.keys(servers).length) options.mcpServers = servers;

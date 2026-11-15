@@ -80,7 +80,6 @@ import { useScrubForCuts } from './safe-cut.ts';
 import { redactSecrets } from './redaction.ts';
 import { SecretCheck } from './secret-check.ts';
 import { SharedPools } from './shared-pools.ts';
-import { sandboxFor } from './sandbox.ts';
 import { readPools } from './pools.ts';
 import { machineSampler } from './runner-stats.ts';
 import { machineIcon } from './machine.ts';
@@ -269,7 +268,6 @@ async function main(): Promise<void> {
     log,
     mcpServersFor: (threadId) => ({ [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, remoteControl) }),
     oneReply: () => cfg.oneReply,
-    sandboxFor: (cwd) => sandboxFor(cfg.sandbox, cwd),
     alwaysAsk: ALWAYS_ASK_TOOLS,
     neverAsk: NEVER_ASK_TOOLS,
   });

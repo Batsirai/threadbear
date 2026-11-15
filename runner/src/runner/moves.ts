@@ -681,7 +681,8 @@ export const movesPart = {
       const recFile = path.join(stage, 'thread', 'thread.json');
       const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
       if (rec.id !== row.threadId) throw new Error("The moved thread's record is for another thread.");
-      if (rec.confined) throw new Error("A thread in a sandbox can't move yet.");
+      // From an older runner, a thread it ran in the sandbox experiment.
+      if (rec.confined) throw new Error("A thread that ran in a sandbox can't move here: Threadbear no longer has one to run it in.");
       const manifest = entries.find((e) => e.path === 'move.json');
       if (manifest) {
         const m = JSON.parse(manifest.data.toString('utf8')) as { leftBehind?: string[]; fromName?: unknown };
