@@ -1191,7 +1191,7 @@ shows up in the account menu within a few seconds.
 
 If a login stops working (you signed out, or its sign-in ended), the
 thread's turn fails and a line above its messages says so, naming the login
-and its email ("Claude login claude-1 (you@example.com) is signed out."). Sign in… opens Terminal on that login's own sign-in, and Send
+and its email ("claude-1 (you@example.com) is signed out."). Sign in… opens Terminal on that login's own sign-in, and Send
 again sends your last message again once you're done. A thread in a pool
 doesn't wait for you: it moves to another login in the pool and carries on,
 and the pool leaves the signed-out login alone until you sign it back in.

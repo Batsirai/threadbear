@@ -1003,7 +1003,9 @@ impl Threadbear {
             Some(a) => threadbear_core::usage::sign_in_label(a),
             None => thread.account_id.clone(),
         };
-        let login = if who.is_empty() { name.clone() } else { format!("{name} login {who}") };
+        // The id already names the provider (claude-1, codex-main), and the
+        // line has to fit beside the Highlights pane.
+        let login = if who.is_empty() { name.clone() } else { who };
         let (text, tip) = match (&account, &remote) {
             (Some(_), _) => (format!("{login} is signed out."), format!("{login} was refused: signed out, or its sign-in ended. Sign in… opens its own sign-in")),
             (None, Some(runner)) => {
