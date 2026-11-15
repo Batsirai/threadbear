@@ -1157,6 +1157,7 @@ impl SettingsWindow {
             "keepAwake": settings.as_ref().and_then(|s| s.keep_awake),
             "fullSync": settings.as_ref().and_then(|s| s.full_sync),
             "labReview": settings.as_ref().map(|s| s.lab_review),
+            "labReviewers": settings.as_ref().and_then(|s| s.lab_reviewers.as_ref()).map(|l| l.iter().map(|r| r.provider.clone()).collect::<Vec<_>>()),
             "privateFolders": settings.as_ref().map(|s| s.private_folders.clone()),
             "smallJobsPool": settings.as_ref().and_then(|s| s.pool.clone()),
             // General's Web runtime row, as it reads.
