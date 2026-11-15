@@ -454,7 +454,7 @@ if [ "$QUICK" = 1 ]; then
   if [ -n "$SHOTS" ]; then MAC_WHY="--shots"
   elif [ "$ALL" = 1 ]; then MAC_WHY="--all"
   elif [ ! -s "$changed" ]; then MAC_WHY="nothing changed from main, so it runs everything"
-  else MAC_WHY="it changes ios/, app/ (the mock runner included), dock/ or check.sh"; fi
+  else MAC_WHY="it changes ios/, app/, dock/ or check.sh"; fi
 fi
 
 # The disk a run wants free on its host. On 7 Nov Tinker Desk fell under 1 GiB
