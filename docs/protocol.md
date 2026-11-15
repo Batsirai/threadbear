@@ -5353,7 +5353,9 @@ kept in `schedules.json` in the data dir.
   ordinary messages. When an ordinary message reaches the agent, pending
   automatic inputs are marked `beforeMessage: true` in `QueuedSend`.
   If the agent then ends with archive, snooze or waitFor, those older
-  inputs are held through that wait instead of overriding it; inputs
+  inputs are held through that wait instead of overriding it. This also
+  applies when ordinary input joins a background-opened CLI turn; automatic
+  notifications alone do not grant that parking path. Inputs
   arriving later still prevent putting the thread away. An older reminder
   delivered later tells the agent that newer instructions take precedence.
   An interrupted, unread peer message is queued again ahead of automatic

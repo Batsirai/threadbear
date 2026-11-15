@@ -446,3 +446,29 @@ test('a peer joining the user recovery turn cannot tell it to pause the request 
   h.runner.send(thread.id, peer);
   assert.equal(s.sent.at(-1)!.text, peer);
 });
+
+for (const mode of ['archive', 'snooze', 'waitFor'] as const) test(`an ordinary stop joining a background-opened turn can ${mode} ahead of older reminders`, () => {
+  const { h, thread, s } = running();
+  s.result();
+  s.out({ kind: 'cliTurn' });
+  h.runner.sendScheduled(thread.id, 'Old reminder', 's1', 'old');
+  h.runner.send(thread.id, 'Stop and park this thread');
+  const st = h.runner.mustGet(thread.id);
+  const input = mode === 'archive' ? { archive: true } : mode === 'snooze' ? { snooze: '1d' } : { waitFor: [h.runner.create({ text: 'Unfinished helper', accountId: 'claude-3' }).thread.id] };
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'park', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing', ...input } } });
+  s.result('completed', undefined, undefined, { answered: [...st.rt.turn!.messages] });
+  assert.equal(st.rt.turn, undefined);
+  assert.ok(st.rec.archivedAt || st.rec.snoozedUntil);
+  assert.equal(st.rec.queue.length, 1);
+});
+
+test('a runner notification alone cannot enable archive from a background-opened turn', () => {
+  const { h, thread, s } = running();
+  s.result();
+  s.out({ kind: 'cliTurn' });
+  h.runner.send(thread.id, 'Automatic notification', [], { origin: 'runner' });
+  const st = h.runner.mustGet(thread.id);
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'park', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing', archive: true } } });
+  s.result('completed', undefined, undefined, { answered: [...st.rt.turn!.messages] });
+  assert.equal(st.rec.archivedAt, undefined);
+});

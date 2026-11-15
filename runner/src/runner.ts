@@ -308,6 +308,7 @@ export type Turn = {
   // shell or async subagent finished, or a background subagent asked for
   // approval). There's no user.message.
   auto?: boolean;
+  ordinaryInput?: true; // A user or peer joined a background-opened turn.
   cliStarted?: boolean; // the CLI is running a turn for it (not just an approval)
   interruptTimer?: TimerHandle;
   // Ids of the messages the CLI has yet to answer for this turn: the one
@@ -1819,6 +1820,7 @@ export class Runner {
     turn.dispatched = true;
     if (!turn.deliveryKnown) turn.foreignOutput = false;
     this.sendWithInstructionsNews(st, this.withInterruptedMessages(st, msg, this.forAgent(msg)));
+    if (!isAutomaticInput(msg)) turn.ordinaryInput = true;
   }
 
   // A turn that had its end_turn, opened again once the agent has read a
@@ -2674,7 +2676,7 @@ export class Runner {
     // turn): archiving or snoozing would hide it and stop the work behind it.
     // More likely now the runner's own threads run on the install's mode
     // (own-threads.ts; Codex review, 9 Nov 2026).
-    const away = outcome === 'completed' && !turn.auto && said?.needs === 'nothing' && rec.queue.every(q => isAutomaticInput(q) && q.beforeMessage) && !rt.approvals.size;
+    const away = outcome === 'completed' && (!turn.auto || turn.ordinaryInput === true) && said?.needs === 'nothing' && rec.queue.every(q => isAutomaticInput(q) && q.beforeMessage) && !rt.approvals.size;
     const archive = away && archiveFromTool(turn.endTurn);
     // Hibernating likewise (end_turn's snooze). Archive wins if it asked for both.
     const snooze = away && !archive ? snoozeFromTool(turn.endTurn) : undefined;
