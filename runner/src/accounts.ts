@@ -6,14 +6,26 @@ import type { UsageStore } from './usage.ts';
 import type { Config } from './config.ts';
 import { isDirectory } from './fsutil.ts';
 
-// Reads only oauthAccount.emailAddress from a .claude.json. Tokens live in
-// the Keychain and are never read; this file only names the login.
-export function readLoginEmail(claudeJsonPath: string): string | undefined {
+// What a .claude.json says about its login: oauthAccount's emailAddress and
+// organizationType. Tokens live in the Keychain and are never read; this
+// file only names the login and caches its claude.ai profile, which the CLI
+// fetches again at most once a day while it runs on that login.
+export type LoginProfile = { email?: string; planEnded?: true };
+
+// organizationType "claude_free": the login's paid plan has lapsed and the
+// free plan has no Claude Code, so every turn would fail. claude-main's
+// cancelled Max ran out on 16 Nov 2026 while the Usage panel still offered
+// Sign in… and a weekly reset. Only that value counts: an older CLI's file
+// without the field, or a plan type this doesn't know, is left usable.
+export function readLoginProfile(claudeJsonPath: string): LoginProfile | undefined {
   try {
     const raw = fs.readFileSync(claudeJsonPath, 'utf8');
-    const parsed = JSON.parse(raw) as { oauthAccount?: { emailAddress?: unknown } };
-    const email = parsed.oauthAccount?.emailAddress;
-    return typeof email === 'string' && email ? email : undefined;
+    const parsed = JSON.parse(raw) as { oauthAccount?: { emailAddress?: unknown; organizationType?: unknown } };
+    const o = parsed.oauthAccount;
+    const out: LoginProfile = {};
+    if (typeof o?.emailAddress === 'string' && o.emailAddress) out.email = o.emailAddress;
+    if (o?.organizationType === 'claude_free') out.planEnded = true;
+    return out;
   } catch {
     return undefined;
   }
@@ -94,7 +106,8 @@ export type DiscoveryConfig = Pick<Config, 'claudeMainDir' | 'claudeMainJson' | 
 export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
   const out: Account[] = [];
   if (isDirectory(cfg.claudeMainDir)) {
-    out.push(claudeAccount('claude-main', cfg.claudeMainDir, readLoginEmail(cfg.claudeMainJson) ?? readLoginEmail(path.join(cfg.claudeMainDir, '.claude.json'))));
+    const own = readLoginProfile(cfg.claudeMainJson);
+    out.push(claudeAccount('claude-main', cfg.claudeMainDir, own?.email ? own : readLoginProfile(path.join(cfg.claudeMainDir, '.claude.json'))));
   }
   // Token Stats' folder (Mike's app), then the data dir's own accounts
   // folder, which is how anyone else adds a login; the first with an id wins.
@@ -116,7 +129,7 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
       .sort((a, b) => Number(a[1]) - Number(b[1]))
       .map((m) => ({ id: m[0], dir: dirOf.get(m[0])! }));
   for (const { id, dir } of numbered('claude')) {
-    if (isDirectory(dir)) out.push(claudeAccount(id, dir, readLoginEmail(path.join(dir, '.claude.json'))));
+    if (isDirectory(dir)) out.push(claudeAccount(id, dir, readLoginProfile(path.join(dir, '.claude.json'))));
   }
   const codex = cfg.codexMainDir ? [{ id: 'codex-main', dir: cfg.codexMainDir }] : [];
   for (const { id, dir } of [...codex, ...numbered('codex')]) {
@@ -131,9 +144,11 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
   return hidden.size ? out.filter((a) => !hidden.has(a.id)) : out;
 }
 
-function claudeAccount(id: string, configDir: string, email: string | undefined): Account {
+function claudeAccount(id: string, configDir: string, profile: LoginProfile | undefined): Account {
+  const email = profile?.email;
   const account: Account = { id, provider: 'claude', title: email ?? id, configDir };
   if (email) account.email = email;
+  if (profile?.planEnded) account.planEnded = true;
   const model = resolveDefaultModel(readSettingsModel(path.join(configDir, 'settings.json')), undefined);
   if (model) account.defaultModel = model;
   return account;

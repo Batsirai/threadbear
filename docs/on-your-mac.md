@@ -553,7 +553,8 @@ File references are where to look.
   Apple signature and bundle-id requirement before opening it. This runs
   off the main thread and does not launch an app with a copied bundle id.
 - From your Claude and Codex logins: which account each is (the email in
-  `~/.claude.json`), a few settings, and the token counts in your session
+  `~/.claude.json`, and whether the plan the CLI last saw there is the
+  free one), a few settings, and the token counts in your session
   transcripts, so it can show how much room each login has
   (`runner/src/accounts.ts`, `runner/src/token-tally.ts`;
   `THREADBEAR_TOKEN_TALLY=off` stops the counting). It never reads or

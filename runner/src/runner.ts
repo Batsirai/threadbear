@@ -3017,7 +3017,7 @@ export class Runner {
     const now = this.clock.now();
     const next = nextLogin(pool, accounts, rec, now);
     if ('waitUntil' in next) return;
-    const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
+    const why = !current ? `${rec.accountId} isn't on this Mac` : !inPool ? `${current.title} isn't in ${pool.title}` : current.planEnded ? `${current.title}'s plan has ended` : current.signedOut ? `${current.title} is signed out` : `${current.title} ${limitWhy(current, now)}`;
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, why);
   }
 

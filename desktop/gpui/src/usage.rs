@@ -789,7 +789,10 @@ fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, da
     };
     let meters = (!login.meters.is_empty()).then(|| meters_layout(&id(""), &login.meters, colour, content - style::zoomed(24.), now, p));
     let more = (!login.more.is_empty()).then(|| v_flex().gap(px(2.)).text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).children(login.more.iter().map(|line| div().child(line.clone()))));
-    v_flex().w_full().gap(px(8.)).px(px(12.)).py(px(10.)).child(name_row).children(status).children(meters).children(more).into_any_element()
+    // A lapsed plan stays listed, so Mike can see it's still there, but
+    // faded: it isn't one to act on.
+    let ended = login.status == Some(LoginStatus::PlanEnded);
+    v_flex().w_full().gap(px(8.)).px(px(12.)).py(px(10.)).when(ended, |d| d.opacity(0.5)).child(name_row).children(status).children(meters).children(more).into_any_element()
 }
 
 /// SwiftUI's ViewThatFits over the meters: a row of them when they fit at

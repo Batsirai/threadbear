@@ -8,7 +8,11 @@ import assert from 'node:assert/strict';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { ENDING_SOON_MS, REFUSAL_HOLD_MS, SignInState, parseAuthStatus, signInWords, viewOf } from '../../src/sign-in-state.ts';
-import { loginOk, pickInPool, roomWord } from '../../src/pools.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { backAt, loginOk, pickInPool, roomWord } from '../../src/pools.ts';
+import { readLoginProfile } from '../../src/accounts.ts';
 import { pickAccount } from '../../src/usage.ts';
 import type { Account } from '../../src/protocol.ts';
 
@@ -124,6 +128,33 @@ test('pools and new threads skip a signed-out login, whatever its room', () => {
   assert.equal(pickInPool(pool, [out, ok], { provider: 'claude', current: 'claude-1' }), 'claude-3');
   assert.equal(pickInPool({ ...pool, accountIds: ['claude-1'] }, [out], { provider: 'claude' }), undefined);
   assert.equal(pickAccount([out, ok], undefined), 'claude-3');
+});
+
+test('pools and new threads skip a login whose paid plan has ended, and nothing promises it back', () => {
+  const usage: Account['usage'] = { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 71, resetsAt: iso(NOW + DAY) }], readAt: iso(NOW), source: 'live' };
+  const ended = account('claude-main', { usage, planEnded: true });
+  const ok = account('claude-3', { usage: { ...usage, windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 20 }] } });
+  assert.equal(loginOk(ended), false);
+  assert.equal(roomWord(ended, NOW), 'plan ended');
+  assert.equal(backAt(ended, NOW), undefined);
+  const pool = { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-3'] };
+  assert.equal(pickInPool(pool, [ended, ok], { provider: 'claude', prefer: 'claude-main' }), 'claude-3');
+  assert.equal(pickAccount([ended, ok], 'claude-main'), 'claude-3');
+  assert.match(signInWords({ planEnded: true, signedOut: true, loginEndsAt: iso(NOW + DAY) }, NOW, (s) => s), /^its paid plan has ended/);
+});
+
+test('a login is plan-ended only when its cached profile says the free plan', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-'));
+  const file = path.join(dir, '.claude.json');
+  const write = (o: object) => fs.writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: 'a@example.com', ...o } }));
+  write({ organizationType: 'claude_free', billingType: 'none' });
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com', planEnded: true });
+  write({ organizationType: 'claude_max' });
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com' });
+  write({});
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com' });
+  assert.equal(readLoginProfile(path.join(dir, 'none.json')), undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("list_accounts' words: signed out, ending within three days, or nothing", () => {

@@ -47,7 +47,7 @@ pub fn menu_line<Tz: TimeZone>(usage: &AccountUsage, now: &DateTime<Tz>) -> Opti
 /// A login's line under its name (AccountUsageText.subtitle): its note,
 /// then the room left.
 pub fn subtitle<Tz: TimeZone>(account: &Account, now: &DateTime<Tz>) -> Option<String> {
-    let line = if account.signed_out { Some("Signed out".to_owned()) } else { usage_of(account).and_then(|u| menu_line(&u, now)) };
+    let line = if account.plan_ended { Some("Plan ended".to_owned()) } else if account.signed_out { Some("Signed out".to_owned()) } else { usage_of(account).and_then(|u| menu_line(&u, now)) };
     let parts: Vec<String> = [account.note.clone(), line].into_iter().flatten().filter(|p| !p.is_empty()).collect();
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -186,6 +186,7 @@ impl PoolLoginRow {
         match self.badge {
             Some(ChipBadge::Blocked) => return Some("limit".to_owned()),
             Some(ChipBadge::SignedOut) => return Some("signed out".to_owned()),
+            Some(ChipBadge::PlanEnded) => return Some("plan ended".to_owned()),
             _ => {}
         }
         self.room.map(percent)
@@ -215,7 +216,7 @@ pub fn pool_login_rows<Tz: TimeZone>(pool: &Pool, accounts: &[Account], thread_p
             title: login_name(&account.id, accounts),
             subtitle: subtitle(account, now),
             room: if blocked { Some(0.) } else { left },
-            badge: if account.signed_out { Some(ChipBadge::SignedOut) } else if blocked { Some(ChipBadge::Blocked) } else { chip_badge(Some(account)) },
+            badge: if account.plan_ended { Some(ChipBadge::PlanEnded) } else if account.signed_out { Some(ChipBadge::SignedOut) } else if blocked { Some(ChipBadge::Blocked) } else { chip_badge(Some(account)) },
             is_selected: thread_pool.is_none() && pinned_login == Some(account.id.as_str()),
         });
     }

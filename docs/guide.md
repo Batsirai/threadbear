@@ -1249,6 +1249,12 @@ only sign in this Mac.
 The sign-in command comes from the runner's provider list, so Cursor opens
 `agent login`, for example. Sign in… is offered only when the login's own
 details can be read.
+
+A Claude login whose paid plan has run out (it's back on the free plan,
+which has no Claude Code) shows faded with "Plan ended" in the Usage panel,
+with no numbers, reset or Sign in…, and pools pass it over. Threadbear
+learns this from the plan the CLI last saw for that login, which it checks
+about once a day while it runs there.
 If a runner sends an unreadable thread field or
 row, readable threads still appear. An empty or partly unreadable local list
 keeps the previous rows and their Terminal shells until a complete list arrives.

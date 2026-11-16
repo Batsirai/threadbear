@@ -62,6 +62,10 @@ pub struct Account {
     /// signing in, from Claude Code 2.1.325). The Usage panel warns ahead.
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub login_ends_at: Option<String>,
+    /// Claude: its paid plan has lapsed to the free one, which has no Claude
+    /// Code. Pools skip it; nothing offers Sign in… or a reset for it.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub plan_ended: bool,
 }
 
 impl Account {

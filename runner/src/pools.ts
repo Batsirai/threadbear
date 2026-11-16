@@ -115,10 +115,10 @@ function expand(p: string, home: string): string {
   return p;
 }
 
-// A login no turn can start on whatever its room: at its limit, or signed
-// out (a turn on it would only fail: sign-in-state.ts).
+// A login no turn can start on whatever its room: at its limit, signed
+// out (a turn on it would only fail: sign-in-state.ts), or its plan ended.
 export function loginOut(account: Account): boolean {
-  return !!account.usage?.blocked || !!account.signedOut;
+  return !!account.usage?.blocked || !!account.signedOut || !!account.planEnded;
 }
 
 // A login a turn can start on: not blocked or signed out, and at or above
@@ -250,8 +250,9 @@ function limitWindow(a: Account): UsageWindow | undefined {
 // back have all reset. Blocked with no window at its limit: the tightest
 // window's reset. undefined when no reset time is known.
 export function backAt(a: Account, now: number): number | undefined {
-  // Only signing in again brings it back, and nothing says when.
-  if (a.signedOut) return undefined;
+  // Only signing in again (or paying again) brings it back, and nothing
+  // says when.
+  if (a.signedOut || a.planEnded) return undefined;
   const main = mainWindows(a);
   let holding = main.filter((w) => w.remainingPercent < MIN_ROOM_PERCENT);
   if (!holding.length && a.usage?.blocked) holding = [limitWindow(a)].filter((w): w is UsageWindow => !!w);
@@ -281,6 +282,7 @@ export function limitWhy(a: Account, now: number, hit = false): string {
 // One login's room in a word, for list_accounts and tb pools: "61%",
 // "out until 5 am", "room unknown".
 export function roomWord(a: Account, now: number): string {
+  if (a.planEnded) return 'plan ended';
   if (a.signedOut) return 'signed out';
   if (!loginOk(a)) {
     const at = backAt(a, now);

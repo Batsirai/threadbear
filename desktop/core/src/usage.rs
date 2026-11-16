@@ -88,8 +88,13 @@ impl Usage {
     }
 }
 
-/// A login's usage, if the runner sent any it can read.
+/// A login's usage, if the runner sent any it can read. None once its plan
+/// has ended: its last numbers and resets would only mislead (claude-main,
+/// 16 Nov: "Used up, back Wed 5 am" on a plan that had lapsed).
 pub fn usage(account: &Account) -> Option<Usage> {
+    if account.plan_ended {
+        return None;
+    }
     account.usage.as_ref().and_then(Usage::decode)
 }
 
@@ -1236,6 +1241,8 @@ pub enum LoginStatus {
     LimitReached,
     /// No turn can run on it until someone signs it in again.
     SignedOut,
+    /// Its paid plan lapsed: the row fades, with no meters, reset or Sign in….
+    PlanEnded,
 }
 
 impl LoginStatus {
@@ -1244,6 +1251,7 @@ impl LoginStatus {
             LoginStatus::NothingKnown => "Nothing known yet",
             LoginStatus::LimitReached => "Limit reached",
             LoginStatus::SignedOut => "Signed out",
+            LoginStatus::PlanEnded => "Plan ended",
         }
     }
 
@@ -1265,7 +1273,8 @@ pub const SIGN_IN_WARN_MS: i64 = 3 * DAY;
 /// When a login's sign-in ends, while that's within SIGN_IN_WARN_MS and it
 /// isn't already signed out.
 pub fn sign_in_ends(account: &Account, now: i64) -> Option<i64> {
-    if account.signed_out {
+    // A lapsed plan: signing in again wouldn't bring it back.
+    if account.signed_out || account.plan_ended {
         return None;
     }
     let at = account.login_ends_at.as_deref().and_then(parse_ms)?;
@@ -1274,7 +1283,7 @@ pub fn sign_in_ends(account: &Account, now: i64) -> Option<i64> {
 
 /// Whether any login is signed out or ending soon: the Usage button's dot.
 pub fn sign_in_needed(accounts: &[Account], now: i64) -> bool {
-    accounts.iter().any(|a| a.signed_out || sign_in_ends(a, now).is_some())
+    accounts.iter().any(|a| (a.signed_out && !a.plan_ended) || sign_in_ends(a, now).is_some())
 }
 
 /// "Sign-in ends Tue 6 pm", "Sign-in ends 3:40 pm" today.
@@ -1292,7 +1301,9 @@ pub fn sign_in_lines<Tz: TimeZone>(accounts: &[Account], now: i64, zone: &Tz) ->
         .iter()
         .filter_map(|a| {
             let who = sign_in_label(a);
-            if a.signed_out {
+            if a.plan_ended {
+                None
+            } else if a.signed_out {
                 Some(format!("{who} is signed out"))
             } else {
                 sign_in_ends(a, now).map(|at| format!("{who}: sign-in ends {}", reset_words(at, now, zone)))
@@ -1370,6 +1381,7 @@ pub fn cards_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Op
 fn login_row<Tz: TimeZone>(account: &Account, notice: Option<&str>, stats: Option<&Stats>, show_model_weeks: bool, now: i64, zone: &Tz) -> LoginRow {
     let usage = usage(account);
     let status = match &usage {
+        _ if account.plan_ended => Some(LoginStatus::PlanEnded),
         _ if account.signed_out => Some(LoginStatus::SignedOut),
         None => Some(LoginStatus::NothingKnown),
         Some(u) if u.blocked => Some(LoginStatus::LimitReached),
@@ -1392,7 +1404,7 @@ fn login_row<Tz: TimeZone>(account: &Account, notice: Option<&str>, stats: Optio
     let name = account.name();
     LoginRow {
         id: account.id.clone(),
-        tip: [Some(name.clone()), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(", "),
+        tip: [Some(name.clone()), account.plan.clone().filter(|_| !account.plan_ended)].into_iter().flatten().collect::<Vec<_>>().join(", "),
         name,
         note: account.note.clone().filter(|n| !n.is_empty()),
         today: spent_today(stats, &[account.id.as_str()], now, zone),
@@ -1491,6 +1503,7 @@ pub fn lines_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Op
                             line.push_str(&format!(" [{notice}]"));
                         }
                     }
+                    None if account.plan_ended => line.push_str(": plan ended"),
                     None => line.push_str(": nothing known"),
                 }
                 out.push(line);
@@ -2192,5 +2205,34 @@ mod tests {
         let tip = icon_tooltip_with_sign_ins(&groups(&pools, &accounts), &accounts, now, &zone());
         assert!(tip.ends_with("claude-3 (claude-3@example.com): sign-in ends Sat 6 pm\nclaude-1 (claude-1@example.com) is signed out"), "{tip}");
         assert_eq!(sign_in_label(&Account { id: "claude-main".into(), ..Default::default() }), "claude-main");
+    }
+
+    /// claude-main, 16 Nov: its Max lapsed to the free plan, and its row
+    /// still said "Sign-in ends Wed", offered Sign in… and "Used up, back Wed".
+    #[test]
+    fn a_login_whose_plan_ended_says_so_and_nothing_else() {
+        let now = at(10, 0);
+        let ended = Account {
+            id: "claude-main".into(),
+            provider: "claude".into(),
+            email: Some("a@example.com".into()),
+            plan: Some("Max".into()),
+            plan_ended: true,
+            login_ends_at: Some(iso_time(now + DAY)),
+            usage: Some(json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 0.0, "resetsAt": iso_time(now + DAY) }], "blocked": true })),
+            ..Default::default()
+        };
+        assert_eq!(sign_in_ends(&ended, now), None);
+        assert!(!sign_in_needed(&[ended.clone()], now));
+        assert!(!sign_in_needed(&[Account { signed_out: true, ..ended.clone() }], now), "signing in wouldn't help");
+        assert!(sign_in_lines(&[ended.clone()], now, &zone()).is_empty());
+        let accounts = vec![ended];
+        let cards = cards(&[], &accounts, None, false, now, &zone());
+        let row = &cards[0].sections[0].logins[0];
+        assert_eq!((row.status, row.sign_in_ends.as_deref()), (Some(LoginStatus::PlanEnded), None));
+        assert!(row.meters.is_empty() && row.more.is_empty(), "no reset promised");
+        assert_eq!(row.tip, "a@example.com", "not still called Max");
+        assert_eq!(LoginStatus::PlanEnded.words(), "Plan ended");
+        assert!(!LoginStatus::PlanEnded.is_stop());
     }
 }

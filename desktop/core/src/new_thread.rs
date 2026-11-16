@@ -33,7 +33,7 @@ pub struct AccountUsage {
 pub fn usage_of(account: &Account) -> Option<AccountUsage> {
     // A signed-out login has no room for anything, as the runner's pools
     // have it (docs/protocol.md, Pools, "Signed out").
-    if account.signed_out && account.usage.is_none() {
+    if (account.signed_out || account.plan_ended) && account.usage.is_none() {
         return Some(AccountUsage { windows: Vec::new(), blocked: true });
     }
     let v = account.usage.as_ref()?;
@@ -53,7 +53,7 @@ pub fn usage_of(account: &Account) -> Option<AccountUsage> {
                     .collect()
             })
             .unwrap_or_default(),
-        blocked: v["blocked"].as_bool().unwrap_or(false) || account.signed_out,
+        blocked: v["blocked"].as_bool().unwrap_or(false) || account.signed_out || account.plan_ended,
     })
 }
 
@@ -358,17 +358,22 @@ pub enum ChipBadge {
     Blocked,
     /// "Signed out" in red: no turn runs on it until it's signed in again.
     SignedOut,
+    /// "Plan ended" in red: its paid plan lapsed, so no turn runs on it.
+    PlanEnded,
 }
 
 impl ChipBadge {
     /// Red: nothing runs on it now.
     pub fn is_stop(&self) -> bool {
-        matches!(self, ChipBadge::Blocked | ChipBadge::SignedOut)
+        matches!(self, ChipBadge::Blocked | ChipBadge::SignedOut | ChipBadge::PlanEnded)
     }
 }
 
 /// `AccountUsageText.chipBadge`, for one login.
 pub fn chip_badge(account: Option<&Account>) -> Option<ChipBadge> {
+    if account.is_some_and(|a| a.plan_ended) {
+        return Some(ChipBadge::PlanEnded);
+    }
     if account.is_some_and(|a| a.signed_out) {
         return Some(ChipBadge::SignedOut);
     }
@@ -791,7 +796,7 @@ impl Draft<'_> {
                 let usage = usage_of(account);
                 let tight = usage.as_ref().and_then(tightest);
                 let look = match tight {
-                    _ if account.signed_out => RoomLook::Blocked,
+                    _ if account.signed_out || account.plan_ended => RoomLook::Blocked,
                     Some(t) if usage.as_ref().is_some_and(|u| u.blocked) || t.remaining_percent < 1. => RoomLook::Blocked,
                     Some(t) if t.remaining_percent < CHIP_WARNING => RoomLook::Low,
                     _ => RoomLook::Ample,
@@ -800,7 +805,7 @@ impl Draft<'_> {
                     id: account.id.clone(),
                     label: account_label(&account.id, &self.logins.accounts),
                     note: account.note.clone().filter(|n| !n.is_empty()),
-                    line: if account.signed_out { "Signed out".to_owned() } else { room_line(usage.as_ref()).unwrap_or_else(|| "Nothing known yet".to_owned()) },
+                    line: if account.plan_ended { "Plan ended".to_owned() } else if account.signed_out { "Signed out".to_owned() } else { room_line(usage.as_ref()).unwrap_or_else(|| "Nothing known yet".to_owned()) },
                     tooltip: room_tooltip(account, now),
                     selected: pool.is_none() && account.id == selected,
                     fraction: tight.map(|t| (t.remaining_percent / 100.).clamp(0., 1.)),
@@ -1074,6 +1079,9 @@ mod tests {
         assert!(usage_of(&out).unwrap().blocked);
         assert_eq!(chip_badge(Some(&out)), Some(ChipBadge::SignedOut));
         assert!(ChipBadge::SignedOut.is_stop());
+        let ended = Account { id: "e".into(), provider: "claude".into(), plan_ended: true, usage: out.usage.clone(), ..Default::default() };
+        assert_eq!(chip_badge(Some(&ended)), Some(ChipBadge::PlanEnded));
+        assert!(usage_of(&ended).is_some_and(|u| u.blocked), "its old room is no room");
         let bare = Account { id: "t".into(), signed_out: true, ..Default::default() };
         assert!(usage_of(&bare).unwrap().blocked, "no usage known still has no room");
     }

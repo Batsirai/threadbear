@@ -62,6 +62,16 @@ Feature: The Usage panel and its honey pot
     Then in the "Claude" card, "alex+4@example.com" says "Signed out"
     And the honey pot's tooltip says "claude-4 (alex+4@example.com) is signed out"
 
+  # claude-main's cancelled Max ran out on 16 Nov 2026 while its row still
+  # offered Sign in… and a weekly reset. The frozen Swift app has none of it.
+  @usage.sign-in @swift-pending
+  Scenario: A login whose paid plan has ended says so, with no sign-in warning
+    When "claude-3"'s sign-in ends in 50 hours
+    And "claude-3"'s plan has ended
+    And I click the honey pot in the activity bar
+    Then in the "Claude" card, "alex+3@example.com" says "Plan ended"
+    And the honey pot has no dot
+
   # Swift's scripted form switch waits for an actual mouse-up.
   @usage.pools @swift-pending
   Scenario: Clicking the model limit switch changes the card

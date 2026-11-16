@@ -117,7 +117,7 @@ When("{string}'s week resets", async function (this: ThreadbearWorld, account: s
 });
 
 /** Marks a login on the mock as the runner's sign-in check would (docs/protocol.md, Pools, "Signed out"). */
-async function setSignIn(world: ThreadbearWorld, account: string, change: { signedOut?: boolean; loginEndsAt?: string }) {
+async function setSignIn(world: ThreadbearWorld, account: string, change: { signedOut?: boolean; loginEndsAt?: string; planEnded?: boolean }) {
   const { accounts } = answer(await world.app.do({ cmd: 'mock', method: 'accounts', params: {} })) as { accounts: { id: string; signedOut?: boolean; loginEndsAt?: string }[] };
   const a = accounts.find((x) => x.id === account);
   assert.ok(a, `no ${account} on the mock`);
@@ -127,6 +127,10 @@ async function setSignIn(world: ThreadbearWorld, account: string, change: { sign
 
 When('{string} is signed out', async function (this: ThreadbearWorld, account: string) {
   await setSignIn(this, account, { signedOut: true });
+});
+
+When("{string}'s plan has ended", async function (this: ThreadbearWorld, account: string) {
+  await setSignIn(this, account, { planEnded: true });
 });
 
 When("{string}'s sign-in ends in {int} hours", async function (this: ThreadbearWorld, account: string, hours: number) {

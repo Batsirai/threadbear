@@ -1036,7 +1036,7 @@ impl ModelPickerView {
 /// the room left, orange under a quarter and red at its limit.
 fn pool_login_row(row: threadbear_core::login_picker::PoolLoginRow, cx: &App, action: impl Fn(&mut Window, &mut App) + 'static) -> impl IntoElement {
     let color = match row.badge {
-        Some(ChipBadge::Blocked | ChipBadge::SignedOut) => cx.theme().danger,
+        Some(ChipBadge::Blocked | ChipBadge::SignedOut | ChipBadge::PlanEnded) => cx.theme().danger,
         Some(ChipBadge::Low(_)) => style::needs_you(cx),
         None => style::secondary_label(cx),
     };
@@ -1316,6 +1316,7 @@ pub(crate) fn badge_words(badge: &ChipBadge) -> String {
         ChipBadge::Low(percent) => format!("\u{00B7} {percent}"),
         ChipBadge::Blocked => "Limit reached".to_owned(),
         ChipBadge::SignedOut => "Signed out".to_owned(),
+        ChipBadge::PlanEnded => "Plan ended".to_owned(),
     }
 }
 

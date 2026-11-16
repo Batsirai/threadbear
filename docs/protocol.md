@@ -205,6 +205,13 @@ type Account = {
   loginEndsAt?: string  // Claude: when this sign-in ends and can't be renewed
                         // (28 days after signing in, from Claude Code 2.1.325).
                         // Clients warn a few days ahead
+  planEnded?: boolean   // Claude: its paid plan has lapsed. The CLI's cached
+                        // claude.ai profile (oauthAccount.organizationType in
+                        // the login's .claude.json, fetched again at most
+                        // daily while the CLI runs on it) says claude_free,
+                        // which has no Claude Code. Pools and the default
+                        // account skip it; clients say "Plan ended" in place
+                        // of its usage, and offer no sign-in or reset for it
 }
 
 // "ultra" is Codex's multi-agent level. Claude never offers it.

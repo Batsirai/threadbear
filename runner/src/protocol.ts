@@ -132,6 +132,10 @@ export type Account = {
   // Claude: when this sign-in ends and the CLI can't renew it (28 days
   // after signing in, from Claude Code 2.1.325).
   loginEndsAt?: string;
+  // Claude: its paid plan has lapsed (the CLI's cached profile says the free
+  // plan, which has no Claude Code: accounts.ts). Pools skip it, and nothing
+  // offers to sign it in or promises a reset.
+  planEnded?: boolean;
 };
 
 export type CliPolicy = 'auto' | 'notify' | 'off';

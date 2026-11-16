@@ -1811,7 +1811,7 @@ export function buildThreadbearTools(
       handle(async () => {
         const h = control.hello();
         const rows = h.accounts.map((a) => {
-          const bits = [providerName(a.provider), a.note ?? '', signInWords(a, now(), resetTime), usageLine(a.usage, now()), a.id === h.defaults.accountId ? 'default for new threads' : ''].filter(Boolean);
+          const bits = [providerName(a.provider), a.note ?? '', signInWords(a, now(), resetTime), a.planEnded ? '' : usageLine(a.usage, now()), a.id === h.defaults.accountId ? 'default for new threads' : ''].filter(Boolean);
           const head = `${a.id}  ${a.title}  [${bits.join('; ')}]`;
           const models = a.models?.length ? `\n    models: ${a.models.map((m) => (m.model === a.defaultModel || m.id === a.defaultModel ? `${m.id} (default)` : m.id)).join(', ')}` : '';
           return head + models;

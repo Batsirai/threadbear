@@ -196,7 +196,9 @@ export class SignInState {
 // A login's sign-in in a few words, for list_accounts: "signed out, only
 // Mike can sign it in again", "sign-in ends Tue 6 pm", or '' when there's
 // nothing to say (more than ENDING_SOON_MS left).
-export function signInWords(a: Pick<Account, 'signedOut' | 'loginEndsAt'>, now: number, when: (iso: string, now: number) => string): string {
+export function signInWords(a: Pick<Account, 'signedOut' | 'loginEndsAt' | 'planEnded'>, now: number, when: (iso: string, now: number) => string): string {
+  // Signing in again wouldn't help: the plan has no Claude Code.
+  if (a.planEnded) return 'its paid plan has ended (free plan, no Claude Code), so pools skip it';
   if (a.signedOut) return 'signed out: only the user can sign it in again, and pools skip it';
   const t = a.loginEndsAt ? Date.parse(a.loginEndsAt) : NaN;
   if (Number.isFinite(t) && t - now < ENDING_SOON_MS) return `sign-in ends ${when(a.loginEndsAt!, now)}, then it needs the user to sign in again`;
