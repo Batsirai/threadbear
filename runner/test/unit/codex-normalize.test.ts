@@ -364,6 +364,23 @@ test('rate-limits: the codex bucket, credits, plan and a blocked reading', () =>
   assert.equal(both.plan, 'Pro');
   assert.equal(limitsFromRateLimits({ rateLimits: { limitId: 'codex', primary: null, secondary: null, rateLimitReachedType: 'rate_limit_reached' } })!.blocked, true);
   assert.equal(limitsFromAccount({ account: { type: 'chatgpt', email: 'someone@example.com', planType: 'prolite' } })!.email, 'someone@example.com');
+  // The read's usage-limit resets: the count, and the soonest to expire of
+  // those still available.
+  const withResets = limitsFromRateLimits({
+    rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1795403254 }, secondary: null, rateLimitReachedType: 'rate_limit_reached' },
+    rateLimitResetCredits: {
+      availableCount: 2,
+      credits: [
+        { id: 'b', resetType: 'codexRateLimits', status: 'available', grantedAt: 1794522765, expiresAt: 1797114765, title: 'Full reset' },
+        { id: 'a', resetType: 'codexRateLimits', status: 'available', grantedAt: 1793572660, expiresAt: 1796164660, title: 'Full reset' },
+        { id: 'c', resetType: 'codexRateLimits', status: 'redeemed', grantedAt: 1793000000, expiresAt: 1795000000 },
+      ],
+    },
+  })!;
+  assert.deepEqual(withResets.resets, { available: 2, nextExpiresAt: new Date(1796164660 * 1000).toISOString() });
+  assert.deepEqual(limitsFromRateLimits({ rateLimits: { limitId: 'codex', primary: null, secondary: null }, rateLimitResetCredits: { availableCount: 0, credits: [] } })!.resets, { available: 0 });
+  assert.deepEqual(limitsFromRateLimits({ rateLimits: { limitId: 'codex', primary: null, secondary: null }, rateLimitResetCredits: { availableCount: 3, credits: null } })!.resets, { available: 3 }, 'only the count known');
+  assert.equal(limitsFromRateLimits({ rateLimits: { limitId: 'codex', primary: null, secondary: null } })!.resets, undefined, 'an older Codex says nothing');
 });
 
 test('reasoning: deltas build the summary with no leading blank line; an empty item gives nothing', () => {

@@ -654,3 +654,26 @@ test('registry: titles, email and plan from limits.json, usage on every account,
     mock.timers.reset();
   }
 });
+
+test("a Codex login's usage resets: kept from its reading, dropped once one has expired, and a change is news", () => {
+  const s = setup();
+  const store = s.make();
+  const codex = s.acct('codex-2', '/nowhere-codex', 'codex');
+  const told: string[][] = [];
+  store.onChange((ids) => told.push(ids));
+  const expires = new Date(s.clock.now() + 60 * 60_000).toISOString();
+  store.record('codex-2', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0 }], blocked: true, resets: { available: 2, nextExpiresAt: expires } });
+  assert.deepEqual(store.usageFor(codex)?.resets, { available: 2, nextExpiresAt: expires });
+  // A reading without a count (an update, not a read) keeps it.
+  store.record('codex-2', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0 }] });
+  assert.equal(store.usageFor(codex)?.resets?.available, 2);
+  // One used: the count goes down and clients hear of it.
+  told.length = 0;
+  store.record('codex-2', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }], blocked: false, resets: { available: 1, nextExpiresAt: expires } });
+  assert.equal(store.usageFor(codex)?.resets?.available, 1);
+  assert.ok(told.some((ids) => ids.includes('codex-2')), 'the new count is news');
+  assert.equal(store.usageFor(codex)?.blocked, undefined, 'the reading after a reset lifts the block');
+  // Past the soonest expiry the count can't be trusted until the next read.
+  s.clock.advance(61 * 60_000);
+  assert.equal(store.usageFor(codex)?.resets, undefined);
+});

@@ -629,6 +629,9 @@ export class RateLimitTracker {
     rateLimits: null,
     rateLimitsByLimitId: {},
   };
+  // The read's usage-limit resets. Only a read carries them, so each
+  // reading after it repeats the read's count.
+  private resetCredits: GetAccountRateLimitsResponse['rateLimitResetCredits'];
 
   // Where the updates stand now, for a read about to be requested.
   mark(): number {
@@ -638,6 +641,7 @@ export class RateLimitTracker {
   read(r: GetAccountRateLimitsResponse, since = this.seq): GetAccountRateLimitsResponse {
     if (r && typeof r === 'object') {
       if (typeof r.ordinaryUsageAllowed === 'boolean') this.snapshot.ordinaryUsageAllowed = r.ordinaryUsageAllowed;
+      if (r.rateLimitResetCredits && typeof r.rateLimitResetCredits === 'object') this.resetCredits = r.rateLimitResetCredits;
       for (const [id, snap] of Object.entries(r.rateLimitsByLimitId ?? {})) if (snap) this.merge(snap, id);
       if (r.rateLimits) this.merge(r.rateLimits);
       // Newer than the reading: put back on top.
@@ -688,6 +692,7 @@ export class RateLimitTracker {
       ordinaryUsageAllowed: s.ordinaryUsageAllowed,
       rateLimits: main as RateLimitSnapshot,
       rateLimitsByLimitId: { ...s.rateLimitsByLimitId },
+      ...(this.resetCredits ? { rateLimitResetCredits: this.resetCredits } : {}),
     };
   }
 }

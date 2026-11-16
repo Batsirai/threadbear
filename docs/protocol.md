@@ -236,6 +236,9 @@ type AccountUsage = {
                         // there's no live reading since
   blocked?: boolean     // the provider says this login is at its limit
   notice?: string       // Token Stats' own note ("64,390 credits · 2 limit resets available")
+  resets?: { available: number, nextExpiresAt?: string } // Codex: the usage
+                        // resets it has left, from its last read (Pools,
+                        // "Usage resets"); left out once the soonest has expired
 }
 
 type CliStatus = {
@@ -1201,6 +1204,7 @@ the summary and then the reply.
 | `runner.reinstall` | `{}` | `{ reinstall: RunnerUpdates["reinstall"] \| null }`. The Updates panel's Update it and Try again: the runner runs `install-runner.sh --stage` as a launchd job of its own (runner/src/reinstall.ts) straight away, stopping nothing, and says how it's going in `runner.updates`. `null` when the LaunchAgent isn't behind main. Refused to a thread's own key (rpc-gate.ts). A runner older than 14 Nov 2026 answers `-32601` |
 | `clis.list` | `{}` | `{ clis: CliStatus[] }` |
 | `clis.check` | `{ provider?: Provider }` | `{ clis: CliStatus[] }`. Starts a version check (both CLIs when `provider` is absent) and returns at once, with the state as it was when the call arrived; the result comes through `clis.updated` |
+| `accounts.useReset` | `{ accountId }` | `{ outcome: "reset" \| "nothingToReset" \| "noCredit" \| "alreadyRedeemed", account?: Account }`. Spends one of a Codex login's usage resets (Pools, "Usage resets"): Mike's click on the limit box, never a thread's (the thread-key gate refuses it). `account` is the login after the reading taken straight after. `-32010` for an unknown login, `-32602` for one whose provider has no resets, `-32020` while a reset for the same login is still on its way, `-32000` with Codex's words when it fails. A runner older than this answers `-32601` |
 | `clis.update` | `{ provider: Provider, version?: string, force?: boolean }` | `{ clis: CliStatus[] }`. Starts an update and returns at once, with `update.state` `running` or `waiting`; progress comes through `clis.updated`. `version` picks a kept Codex version (how "Go back" works). `force: true` installs a held version anyway |
 | `clis.setPolicy` | `{ provider: Provider, policy: "auto" \| "notify" \| "off" }` | `{ clis: CliStatus[] }` |
 | `usage.stats` | `{ days?: number }` | `UsageStats` (see Usage history): each login's tokens by the hour and its limit readings over time, for the Usage panel's charts. `days` is 1 to 14 (default 8). A runner older than this answers `-32601` |
@@ -2326,6 +2330,19 @@ thread to another login when the one it's on runs out of room.
   `system.note`. At `until` it carries on with the "has room again"
   message if its login has room, and waits again if not. Its login isn't
   marked blocked by this.
+- **Usage resets** (since 16 Nov 2026). Codex hands out free "Full reset"
+  credits (two at a time on Mike's Pro Lite, each expiring a month after
+  it's granted) that restore a login's 5-hour and weekly limits at once.
+  Each Codex read of a login's limits (`account/rateLimits/read`, at every
+  app-server start) brings the count, which goes into `usage.resets`.
+  Threadbear never spends one by itself, as Codex's own setting for its
+  assistant promises for its resets: when a thread's limit box is up (a
+  pool that's all out, or a pinned login at its limit) and a Codex login it
+  would carry on with has resets left, the box offers Use a reset, and
+  `accounts.useReset` spends the one that expires soonest
+  (`account/rateLimitResetCredit/consume`, one idempotency key per click),
+  then reads the login's limits again. That reading lifts the block like
+  any other, so a thread waiting for room carries on by itself.
 - **Carrying on by itself is Mike's to turn off**, per thread:
   `threads.update { carryOnAtReset: false }` ends any wait for room (with
   a note) and stops later limits starting one; pool moves to a login with

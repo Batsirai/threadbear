@@ -21,6 +21,7 @@ import type {
   SubagentStatus,
   TurnErrorKind,
   TurnOutcome,
+  UsageResets,
   UsageWindow,
 } from '../protocol.ts';
 
@@ -112,7 +113,7 @@ export type AdapterOutput =
   | { kind: 'context'; contextTokens: number; contextWindow?: number }
   // A rate-limit reading for the session's account (D's UsageStore keeps
   // it). email and plan come with it when the CLI reports them.
-  | { kind: 'limits'; windows: UsageWindow[]; blocked?: boolean; email?: string; plan?: string }
+  | { kind: 'limits'; windows: UsageWindow[]; blocked?: boolean; email?: string; plan?: string; resets?: UsageResets }
   // The version of the CLI process actually running this session (not the
   // one that created it).
   | { kind: 'cliVersion'; version: string }
@@ -312,12 +313,22 @@ export class RewindRefusedError extends Error {
   }
 }
 
+// What spending a reset came to (accounts.useReset), in Codex's words:
+// "reset", "nothingToReset" (no window is at a point a reset helps),
+// "noCredit" (none left) or "alreadyRedeemed". `limits` is the login's
+// reading taken straight after, when there was one.
+export type UseResetOutcome = 'reset' | 'nothingToReset' | 'noCredit' | 'alreadyRedeemed';
+export type UseResetResult = { outcome: UseResetOutcome; limits?: Extract<AdapterOutput, { kind: 'limits' }> };
+
 export interface AgentAdapter {
   readonly provider: Provider;
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession;
   // What the account's CLI offers as models, without starting a turn.
   // Optional: a provider without a picker leaves it out.
   models?(account: Account): Promise<ModelChoice[]>;
+  // Codex: spends one of the login's usage-limit resets (Mike's click on
+  // the limit box, never by itself) and reads its limits after.
+  useReset?(account: Account): Promise<UseResetResult>;
   // The slash commands the account's CLI offers in a folder (skills
   // included), without starting a turn, for the composer's picker.
   commands?(account: Account, cwd: string, untrusted?: Record<string, unknown>): Promise<SlashCommand[]>;

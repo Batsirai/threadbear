@@ -223,6 +223,16 @@ impl RunnerLogins {
         self.accounts = accounts_from(accounts);
     }
 
+    /// One login as the runner has it now (`accounts.useReset`'s answer),
+    /// in its place; a login not in the list is left out.
+    pub fn replace_account(&mut self, account: &Value) {
+        for a in accounts_from(&Value::Array(vec![account.clone()])) {
+            if let Some(slot) = self.accounts.iter_mut().find(|x| x.id == a.id) {
+                *slot = a;
+            }
+        }
+    }
+
     /// `pools.updated`: the pools, which replace the ones from `hello`.
     pub fn set_pools(&mut self, pools: &Value) {
         self.pools = pools_from(pools);

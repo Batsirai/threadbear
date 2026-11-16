@@ -5,13 +5,14 @@
 // tools.ts) and hands every notification to the normaliser (section B,
 // normalize.ts), which turns it into events.
 import os from 'node:os';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Account, EffortLevel, ModelChoice, PermissionMode } from '../../protocol.ts';
 import { isEffortLevel } from '../../protocol.ts';
 import type { Logger } from '../../log.ts';
 import type { ProcessRegistry } from '../../proc.ts';
-import type { AdapterOutput, AgentAdapter, AgentSession, RewindRequest, RewindResult, SessionSink, StartSessionOptions, TurnResult, UserInput } from '../types.ts';
+import type { AdapterOutput, AgentAdapter, AgentSession, RewindRequest, RewindResult, SessionSink, StartSessionOptions, TurnResult, UseResetResult, UserInput } from '../types.ts';
 import { RewindRefusedError, SessionNotFoundError } from '../types.ts';
 import { fileContext, type NormalizerContext } from '../context.ts';
 import {
@@ -28,11 +29,12 @@ import {
 import { runsAsCodeByName } from '../../code-writes.ts';
 import { CodexApprovals } from './approvals.ts';
 import { CodexTools, dynamicToolSpecs, toolGuidance, type ToolDefinition } from './tools.ts';
-import { CodexNormalizer, limitsFromAccount } from './normalize.ts';
+import { CodexNormalizer, limitsFromAccount, limitsFromRateLimits } from './normalize.ts';
 import { placePictures } from '../../pictures.ts';
 import { parseCommand, type SlashCommand } from '../../slash-commands.ts';
 import type {
   CodexNormalizerLike,
+  ConsumeAccountRateLimitResetCreditResponse,
   GetAccountRateLimitsResponse,
   GetAccountResponse,
   ModelListResponse,
@@ -178,6 +180,27 @@ export class CodexAdapter implements AgentAdapter {
           if (!cursor) break;
         }
         return out;
+      },
+      (p, live) => this.track(p, live),
+    );
+  }
+
+  // Spends one of the login's usage-limit resets, Codex's next to expire
+  // (no creditId), then reads its limits so the block lifts at once and the
+  // count goes down. Only ever on Mike's click (accounts.useReset): Codex's
+  // own setting for its assistant says resets are never used by themselves.
+  // One idempotency key per click, so Codex's retry of the same call can't
+  // spend a second one.
+  async useReset(account: Account): Promise<UseResetResult> {
+    return withShortLivedProcess(
+      this.shortLived(account, `reset:${account.id}`),
+      async (p) => {
+        const r = await p.request<ConsumeAccountRateLimitResetCreditResponse>('account/rateLimitResetCredit/consume', { idempotencyKey: crypto.randomUUID() });
+        const outcome = r?.outcome;
+        if (outcome !== 'reset' && outcome !== 'nothingToReset' && outcome !== 'noCredit' && outcome !== 'alreadyRedeemed') throw new Error(`Codex answered the reset with ${JSON.stringify(outcome)}`);
+        const read = await p.request<GetAccountRateLimitsResponse>('account/rateLimits/read', null).catch(() => null);
+        const limits = limitsFromRateLimits(read as never);
+        return limits ? { outcome, limits } : { outcome };
       },
       (p, live) => this.track(p, live),
     );

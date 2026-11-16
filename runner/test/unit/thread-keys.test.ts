@@ -180,6 +180,7 @@ for (const mode of MODES) {
         ['pools.save', { pools: [] }],
         ['devices.pair', {}],
         ['clis.update', { provider: 'claude' }],
+        ['accounts.useReset', { accountId: 'codex-main' }],
         ['panels.convexKey', { threadId: me.id, panelId: 'x' }],
         ['no.such.method', {}],
       ];

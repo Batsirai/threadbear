@@ -1297,6 +1297,11 @@ reset. A thread pinned to one login does the same on that login. Either
 way, the box at the top of the message field says what happened and offers
 Switch to another login now; set its Carry on by itself to No and the
 thread waits for your next message instead.
+When a Codex login it would carry on with has a usage reset left (Codex
+gives out free ones, listed under Usage limit resets in its settings), the
+box also offers Use a reset: it restores that login's 5-hour and weekly
+limits at once, spending the reset that expires soonest, and the thread
+carries on. Threadbear never uses one by itself.
 Picking a model on another login from the model menu after a limit stop
 (a Codex one when Claude is out, say) carries on straight away too, on
 the model you picked. When the thread is idle otherwise, it says the new

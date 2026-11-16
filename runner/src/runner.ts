@@ -75,7 +75,7 @@ import type {
   TurnResult,
 } from './adapters/types.ts';
 import { SessionNotFoundError } from './adapters/types.ts';
-import type { RewindResult } from './adapters/types.ts';
+import type { RewindResult, UseResetOutcome } from './adapters/types.ts';
 import type { EventLog, ThreadRecord, ThreadStore, QueuedSend, SubagentRecord } from './store.ts';
 import { cutOut } from './store.ts';
 
@@ -971,6 +971,43 @@ export class Runner {
   learnAccount(accountId: string, info: LearnedAccountInfo): void {
     if (!this.accounts.learn(accountId, info)) return;
     this.accountsChanged();
+  }
+
+  // accounts.useReset (docs/protocol.md, "Usage resets"): spends one of a
+  // Codex login's usage-limit resets, on Mike's click in the limit box. The
+  // reading taken after it goes into the usage store like a turn's, so the
+  // block lifts and any thread waiting for room on that login carries on by
+  // itself (sendAccounts arms the room timer).
+  private resetting = new Set<string>();
+  async useReset(accountId: string): Promise<{ outcome: UseResetOutcome; account?: Account }> {
+    const account = this.safeAccounts().find((a) => a.id === accountId);
+    if (!account) throw new RpcError(ErrorCode.accountNotFound, `No login ${accountId} on this runner.`);
+    const adapter = this.adapters[account.provider];
+    if (!adapter?.useReset) throw new RpcError(ErrorCode.badParams, 'Only Codex logins have usage resets.');
+    // A second click while the first is out would spend a second reset.
+    if (this.resetting.has(accountId)) throw new RpcError(ErrorCode.busy, 'A reset for this login is already on its way.');
+    this.resetting.add(accountId);
+    try {
+      const r = await adapter.useReset(account);
+      this.log.info('used a usage reset', { accountId, outcome: r.outcome });
+      if (r.limits) {
+        const l = r.limits;
+        this.usage?.record(accountId, {
+          windows: l.windows,
+          ...(l.blocked !== undefined ? { blocked: l.blocked } : {}),
+          ...(l.plan ? { plan: l.plan } : {}),
+          ...(l.resets ? { resets: l.resets } : {}),
+        });
+      }
+      const after = this.safeAccounts().find((a) => a.id === accountId);
+      return after ? { outcome: r.outcome, account: after } : { outcome: r.outcome };
+    } catch (e) {
+      if (e instanceof RpcError) throw e;
+      this.log.warn('could not use a usage reset', { accountId, error: String(e) });
+      throw new RpcError(ErrorCode.other, `Codex couldn't use the reset: ${String((e as Error)?.message ?? e)}`);
+    } finally {
+      this.resetting.delete(accountId);
+    }
   }
 
   safeAccounts(): Account[] {
@@ -2423,6 +2460,7 @@ export class Runner {
             ...(o.blocked !== undefined ? { blocked: o.blocked } : {}),
             ...(o.email ? { email: o.email } : {}),
             ...(o.plan ? { plan: o.plan } : {}),
+            ...(o.resets ? { resets: o.resets } : {}),
           });
         } catch (e) {
           this.log.warn('could not record a usage reading', { accountId: rec.accountId, error: String(e) });

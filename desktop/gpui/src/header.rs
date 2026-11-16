@@ -104,6 +104,12 @@ pub(crate) struct LimitAdvice {
     pub(crate) carry_on: bool,
     /// It's waiting, and carries on by itself at this time.
     pub(crate) carries_on_at: Option<i64>,
+    /// A Codex login it would carry on with that's out of room but has a
+    /// usage reset left: its id and the Use a reset button's tip (Mike, 16
+    /// Nov: he found two resets unused in Codex's settings after a pool
+    /// had sat out of room). Only this Mac's threads: the reset is spent
+    /// through this runner, with that login's own Codex.
+    pub(crate) reset: Option<(String, String)>,
 }
 
 impl Threadbear {
@@ -847,7 +853,7 @@ impl Threadbear {
     /// `limitAdvice`: when a thread can't go on where it is, says so, and
     /// where it could go instead.
     pub(crate) fn limit_advice(&self, thread: &ThreadSummary, cx: &App) -> Option<LimitAdvice> {
-        use threadbear_core::new_thread::{continue_title, has_room, pool_logins, switch_targets, usage_of};
+        use threadbear_core::new_thread::{continue_title, has_room, pool_logins, reset_target, reset_tip, switch_targets, usage_of};
         // Another runner's thread is judged by that runner's own logins and
         // offered them, never this Mac's: a login id like "claude-main" is
         // that runner's, and one of the same id here is a different login
@@ -861,6 +867,15 @@ impl Threadbear {
         let accounts = &logins.accounts;
         let targets: Vec<(String, String)> = switch_targets(accounts, &thread.account_id).into_iter().map(|a| (a.id.clone(), continue_title(a, accounts))).collect();
         let local = thread.runner_id.is_none();
+        // The thread's own login first, then the rest of its pool.
+        let pool_of = thread.pool_id.as_deref().filter(|_| logins.uses_pools()).and_then(|id| logins.pool(id));
+        let reset = if local {
+            let own = logins.account(&thread.account_id);
+            let pooled = pool_of.map(|p| pool_logins(p, accounts, None)).unwrap_or_default();
+            reset_target(own.into_iter().chain(pooled)).map(|a| (a.id.clone(), reset_tip(a, accounts, &threadbear_core::sidebar::local_now())))
+        } else {
+            None
+        };
         // A pool thread is the runner's to move: nothing while its pool has a
         // login with room, and when it carries on once it's waiting. Once
         // the whole pool is out it asks: Continue now on a login outside
@@ -868,7 +883,7 @@ impl Threadbear {
         if logins.uses_pools() {
             if let Some(pool) = thread.pool_id.as_deref().and_then(|id| logins.pool(id)) {
                 if let Some(until) = thread.waiting_for_room_until_ms() {
-                    return Some(LimitAdvice { text: format!("Every login in {} is out of room.", pool.title), targets, stopped: local, carry_on: true, carries_on_at: Some(until) });
+                    return Some(LimitAdvice { text: format!("Every login in {} is out of room.", pool.title), targets, stopped: local, carry_on: true, carries_on_at: Some(until), reset });
                 }
                 if pool_logins(pool, accounts, None).into_iter().any(has_room) {
                     return None;
@@ -908,7 +923,7 @@ impl Threadbear {
         // (runner.ts update, limitHitTurn), so asking is safe (Codex's
         // second review, 13 Nov).
         let carry_on = failed_on_limit || waiting.is_some() || !local;
-        Some(LimitAdvice { text, targets, stopped: local && carry_on, carry_on, carries_on_at: waiting })
+        Some(LimitAdvice { text, targets, stopped: local && carry_on, carry_on, carries_on_at: waiting, reset })
     }
 
     /// The limit box's Carry on by itself (`setCarryOnAtReset`): shown at
@@ -929,7 +944,47 @@ impl Threadbear {
         let picked = self.limit_pick.get(&thread.id).filter(|id| advice.targets.iter().any(|(t, _)| t == *id)).cloned();
         let button = picked.as_deref().and_then(|id| advice.targets.iter().find(|(t, _)| t == id)).or(advice.targets.first()).map(|(_, title)| format!("Continue now on {title}"));
         let menu: Vec<&String> = advice.targets.iter().map(|(_, title)| title).collect();
-        json!({ "text": advice.text, "button": button, "logins": menu, "carryOn": carry_on })
+        json!({ "text": advice.text, "button": button, "logins": menu, "carryOn": carry_on, "reset": advice.reset.as_ref().map(|(id, tip)| json!({ "accountId": id, "tip": tip, "busy": self.resetting.contains(id) })) })
+    }
+
+    /// The limit box's Use a reset (`accounts.useReset`): spends one of the
+    /// Codex login's usage resets. The button spins and can't be pressed
+    /// again until the runner answers; the runner's reading after the reset
+    /// lifts the block, and a thread waiting for room carries on by itself.
+    pub(crate) fn use_reset(&mut self, account: String, cx: &mut Context<Self>) {
+        if !self.resetting.insert(account.clone()) {
+            return;
+        }
+        cx.notify();
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "accounts.useReset", json!({ "accountId": account })).await;
+            this.update(cx, |t, cx| {
+                t.resetting.remove(&account);
+                let name = threadbear_core::logins::short_account_name(&account, &t.logins.accounts);
+                match res {
+                    Ok(v) => {
+                        // The login as the runner has it after the reset, so
+                        // the box goes now rather than with the next
+                        // accounts.updated (up to 5 s later).
+                        if v["account"].is_object() {
+                            t.logins.replace_account(&v["account"]);
+                        }
+                        match v["outcome"].as_str() {
+                            Some("reset") | Some("alreadyRedeemed") => t.flash_done(&format!("Reset {name}'s limits"), cx),
+                            Some("nothingToReset") => t.show_error(format!("Codex says {name} has nothing to reset yet."), cx),
+                            Some("noCredit") => t.show_error(format!("{name} has no resets left."), cx),
+                            _ => {}
+                        }
+                    }
+                    Err(e) if e.code == -32601 => t.show_error("This Mac's runner is too old to use a reset. It updates by itself.".into(), cx),
+                    Err(e) => t.show_error(e.message, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn switch_account(&mut self, thread: &str, account: String, cx: &mut Context<Self>) {

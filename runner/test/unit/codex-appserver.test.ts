@@ -110,6 +110,10 @@ test('rate-limit updates are merged into the snapshot read at start', () => {
     },
   });
   assert.equal(read.rateLimits.primary?.usedPercent, 5);
+  // Only a read carries the resets; every reading after it repeats them.
+  const counted = new RateLimitTracker();
+  counted.read({ ordinaryUsageAllowed: true, rateLimits: { limitId: 'codex', limitName: null, primary: null, secondary: null, credits: null, planType: null, rateLimitReachedType: null }, rateLimitsByLimitId: null, rateLimitResetCredits: { availableCount: 2, credits: null } });
+  assert.equal(counted.update({ rateLimits: { limitId: 'codex', primary: { usedPercent: 9, windowDurationMins: 10080, resetsAt: 1 } } }).rateLimitResetCredits?.availableCount, 2);
   // An update for one bucket, with nulls for what it doesn't know.
   const u = t.update({ rateLimits: { limitId: 'codex', limitName: null, primary: { usedPercent: 7, windowDurationMins: 10080, resetsAt: 100 }, secondary: null, credits: null, planType: 'prolite', rateLimitReachedType: null, spendControlReached: null } });
   assert.equal(u.rateLimits.primary?.usedPercent, 7);

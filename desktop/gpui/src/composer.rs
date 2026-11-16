@@ -335,7 +335,7 @@ impl Composer {
             .text_size(px(style::size::LABEL))
             .line_height(px(16.))
             .child(h_flex().items_start().gap(px(8.)).child(div().flex_none().pt(px(1.)).child(mark)).child(crate::highlights::tipped_as(div().id("limit-text").flex_1().min_w_0(), text.clone(), gpui_kit::Role::GenericContainer).child(text)));
-        if !advice.targets.is_empty() || advice.stopped {
+        if !advice.targets.is_empty() || advice.stopped || advice.reset.is_some() {
             // Wraps in a narrow window rather than running past the box's edge.
             let mut row = h_flex().flex_wrap().gap(px(10.)).items_center();
             if let Some(first) = advice.targets.first() {
@@ -369,6 +369,19 @@ impl Composer {
                     menu
                 });
                 row = row.child(div().id("limit-login").test_support().child(menu));
+            }
+            if let Some((account, tip)) = advice.reset.clone() {
+                // A Codex login out of room with a usage reset left (16 Nov).
+                // Only on Mike's click; it spins until the runner answers.
+                let busy = app.read(cx).resetting.contains(&account);
+                let app_r = self.app.clone();
+                row = row.child(
+                    div().id("limit-reset").test_support().a11y_role(Role::GenericContainer).aria_label(tip.clone()).child(
+                        Button::new("limit-reset-button").label("Use a reset").small().secondary().loading(busy).disabled(busy).tooltip(tip).on_click(move |_, _, cx| {
+                            app_r.update(cx, |a, cx| a.use_reset(account.clone(), cx)).ok();
+                        }),
+                    ),
+                );
             }
             if advice.stopped {
                 let on = thread.carry_on_at_reset;

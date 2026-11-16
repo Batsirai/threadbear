@@ -897,6 +897,9 @@ export class RpcServer {
       }
       case 'actions.run':
         return r.runAction(reqString(p, 'threadId'), reqString(p, 'actionId'));
+      // Mike's click on the limit box; never a thread's (rpc-gate refuses it).
+      case 'accounts.useReset':
+        return r.useReset(reqString(p, 'accountId'));
       // Each starts its work and answers at once; progress comes through
       // clis.updated.
       case 'clis.list':

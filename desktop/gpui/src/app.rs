@@ -98,6 +98,8 @@ pub struct Threadbear {
     /// The login each thread's limit box has picked in its Continue now on
     /// menu, when it isn't the first.
     pub(crate) limit_pick: HashMap<String, String>,
+    /// Logins a Use a reset is on its way for (`use_reset`).
+    pub(crate) resetting: std::collections::HashSet<String>,
     /// The Threads button's badge, kept until the app next changes (the same
     /// observer clears it), as working it out sorts every thread.
     pub(crate) inbox_count_cache: std::cell::Cell<Option<usize>>,
@@ -504,6 +506,7 @@ impl Threadbear {
             menus_stale: true,
             failed_on_account: HashMap::new(),
             limit_pick: HashMap::new(),
+            resetting: Default::default(),
             inbox_count_cache: Default::default(),
             sections_cache: Default::default(),
             last_window_title: String::new(),

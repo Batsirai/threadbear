@@ -463,6 +463,40 @@ pub fn has_room(account: &Account) -> bool {
     !usage.blocked && !room(&usage).is_some_and(|r| r < PICK_FLOOR)
 }
 
+/// `usage.resets`: a Codex login's usage resets left (docs/protocol.md,
+/// Pools, "Usage resets"), and when the soonest expires (ms).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageResets {
+    pub available: u64,
+    pub next_expires_at: Option<i64>,
+}
+
+pub fn resets_of(account: &Account) -> Option<UsageResets> {
+    let r = account.usage.as_ref()?.get("resets")?;
+    Some(UsageResets { available: r["available"].as_u64()?, next_expires_at: r["nextExpiresAt"].as_str().and_then(parse_ms) })
+}
+
+/// The login the limit box offers to spend a usage reset on: the first of
+/// `candidates` (the thread's own login, then its pool's) that is a Codex
+/// login out of room with a reset left. Never by itself: Mike clicks it.
+pub fn reset_target<'a>(candidates: impl IntoIterator<Item = &'a Account>) -> Option<&'a Account> {
+    candidates.into_iter().find(|a| a.provider_id() == "codex" && !a.signed_out && !has_room(a) && resets_of(a).is_some_and(|r| r.available > 0))
+}
+
+/// The Use a reset button's tip: "Restores sam@example.com's 5-hour and
+/// weekly limits now. 2 left, the next expires 2 Dec."
+pub fn reset_tip<Tz: TimeZone>(target: &Account, accounts: &[Account], now: &DateTime<Tz>) -> String {
+    let mut tip = format!("Restores {}'s 5-hour and weekly limits now.", short_account_name(&target.id, accounts));
+    if let Some(r) = resets_of(target) {
+        tip.push_str(&format!(" {} left", r.available));
+        if let Some(at) = r.next_expires_at.and_then(|ms| now.timezone().timestamp_millis_opt(ms).single()) {
+            tip.push_str(&format!(", the next expires {}", reset_time(&at, now)));
+        }
+        tip.push('.');
+    }
+    tip
+}
+
 fn weekly_reset(account: &Account, now_ms: i64) -> f64 {
     let reset = usage_of(account).and_then(|u| u.windows.iter().find(|w| w.kind == "weekly").and_then(|w| w.resets_at));
     match reset {
@@ -891,6 +925,31 @@ mod tests {
         l.accounts.iter_mut().find(|a| a.id == "codex-main").unwrap().usage = Some(usage(90., 95.));
         let ids: Vec<&str> = switch_targets(&l.accounts, "claude-3").into_iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, vec!["claude-main", "codex-main"]);
+    }
+
+    #[test]
+    fn a_codex_login_out_of_room_with_resets_left_is_offered_one() {
+        let mut l = with_pools();
+        let out = json!({ "blocked": true, "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 0 }], "resets": { "available": 2, "nextExpiresAt": "2026-12-01T22:37:40.000Z" } });
+        // No count known: nothing to offer.
+        assert!(reset_target(l.accounts.iter()).is_none());
+        l.accounts.iter_mut().find(|a| a.id == "codex-main").unwrap().usage = Some(out.clone());
+        let target = reset_target(l.accounts.iter()).expect("codex-main is out with resets left");
+        assert_eq!(target.id, "codex-main");
+        assert_eq!(resets_of(target), Some(UsageResets { available: 2, next_expires_at: parse_ms("2026-12-01T22:37:40.000Z") }));
+        let tz = FixedOffset::east_opt(8 * 3600).unwrap();
+        let now = tz.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap();
+        assert_eq!(reset_tip(target, &l.accounts, &now), "Restores sam@example.com's 5-hour and weekly limits now. 2 left, the next expires 2 Dec.");
+        // A Claude login out of room never is, nor a Codex one with room,
+        // none left, or signed out.
+        l.accounts.iter_mut().find(|a| a.id == "claude-main").unwrap().usage = Some(out.clone());
+        assert_eq!(reset_target(l.accounts.iter().filter(|a| a.id == "claude-main")).map(|a| a.id.as_str()), None);
+        let codex = l.accounts.iter_mut().find(|a| a.id == "codex-main").unwrap();
+        codex.usage = Some(json!({ "blocked": false, "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 40 }], "resets": { "available": 2 } }));
+        assert!(reset_target(l.accounts.iter()).is_none(), "room left");
+        let codex = l.accounts.iter_mut().find(|a| a.id == "codex-main").unwrap();
+        codex.usage = Some(json!({ "blocked": true, "windows": [], "resets": { "available": 0 } }));
+        assert!(reset_target(l.accounts.iter()).is_none(), "none left");
     }
 
     #[test]

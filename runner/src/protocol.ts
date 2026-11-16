@@ -101,7 +101,14 @@ export type AccountUsage = {
   stale?: boolean; // Token Stats has gone quiet and there's no live reading since
   blocked?: boolean; // the provider says this login is at its limit
   notice?: string; // Token Stats' own note
+  // Codex: the usage-limit resets the login has left (docs/protocol.md,
+  // "Usage resets"), from its last account/rateLimits/read.
+  resets?: UsageResets;
 };
+
+// A Codex login's free "Full reset" credits, each of which restores its
+// 5-hour and weekly limits at once. nextExpiresAt: the soonest one to expire.
+export type UsageResets = { available: number; nextExpiresAt?: string };
 
 export type Account = {
   id: string;

@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Account, AccountUsage, Provider, UsageWindow, UsageWindowKind } from './protocol.ts';
+import type { Account, AccountUsage, Provider, UsageResets, UsageWindow, UsageWindowKind } from './protocol.ts';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
@@ -15,7 +15,7 @@ import type { UsageHistory } from './usage-history.ts';
 // blockedUntil (ms) says when a block ends when no window does: the runner
 // marks a login blocked when a turn hits its limit (pools, runner.ts) and
 // the reading didn't already say so.
-export type UsageReading = { windows: UsageWindow[]; blocked?: boolean; blockedUntil?: number; email?: string; plan?: string };
+export type UsageReading = { windows: UsageWindow[]; blocked?: boolean; blockedUntil?: number; email?: string; plan?: string; resets?: UsageResets };
 
 // Another runner's reading of one of its logins, from the backend's
 // accounts table (sync.ts). A subscription is one limit wherever it's
@@ -150,6 +150,7 @@ type LiveAccount = {
   blockedUntil?: number; // a block ends when the windows that caused it reset
   email?: string;
   plan?: string;
+  resets?: UsageResets; // Codex: the resets its latest read said were left
 };
 type UsageFile = { version: 1; accounts: Record<string, LiveAccount> };
 
@@ -255,6 +256,7 @@ export class UsageStore {
     }
     if (reading.email) next.email = reading.email;
     if (reading.plan) next.plan = reading.plan;
+    if (reading.resets) next.resets = reading.resets;
     this.live.set(accountId, next);
     this.persist();
     this.changed(false, [accountId]);
@@ -355,6 +357,10 @@ export class UsageStore {
     if (base && this.baseline && now - this.baseline.generatedAt > STALE_MS && !(live && now - live.at <= STALE_MS) && !(shared && now - shared.at <= STALE_MS)) usage.stale = true;
     if (blocked) usage.blocked = true;
     if (base?.notice) usage.notice = base.notice;
+    // A reset that has expired since the read can't be counted on: the
+    // count is left out until the next read rather than offered wrongly.
+    const resets = live?.resets;
+    if (resets && !(resets.nextExpiresAt && Date.parse(resets.nextExpiresAt) <= now)) usage.resets = resets;
     return usage;
   }
 
@@ -491,6 +497,7 @@ function afterReset(w: UsageWindow, now: number): UsageWindow {
 function sameUsage(a: AccountUsage | undefined, b: AccountUsage | undefined, exact: boolean): boolean {
   if (!a || !b) return a === b;
   if (!!a.blocked !== !!b.blocked || !!a.stale !== !!b.stale || a.notice !== b.notice) return false;
+  if (a.resets?.available !== b.resets?.available || a.resets?.nextExpiresAt !== b.resets?.nextExpiresAt) return false;
   if (a.windows.length !== b.windows.length) return false;
   return a.windows.every((w, i) => {
     const v = b.windows[i];

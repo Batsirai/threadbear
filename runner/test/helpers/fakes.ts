@@ -113,6 +113,8 @@ export class FakeAdapter implements AgentAdapter {
   // Set by a test of editing a message; `rewound` keeps what it was asked.
   rewind?: (req: RewindRequest) => Promise<RewindResult>;
   rewound: RewindRequest[] = [];
+  // Set by a test of the limit box's Use a reset (Codex).
+  useReset?: (account: Account) => Promise<import('../../src/adapters/types.ts').UseResetResult>;
   binaries: string[] = [];
   constructor(provider: Provider = 'claude', flags: { movesFolders?: boolean; settingsApplyNextTurn?: boolean; wakesAfterTasks?: boolean; archives?: boolean } = {}) {
     this.provider = provider;
