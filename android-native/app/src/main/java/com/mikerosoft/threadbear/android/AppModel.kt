@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -71,6 +73,19 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
     // Above init, which may connect: an initializer after it would set this
     // back to null once askIdentity had started.
     private var identityJob: Job? = null
+
+    /** The API version as a flow, 0 until phone:me has answered (backendAnd). */
+    val apiVersions: StateFlow<Int> = _identity.map { it?.apiVersion ?: 0 }.stateIn(scope, SharingStarted.Eagerly, 0)
+
+    /**
+     * The backend with what `gate` makes of the API version, again whenever
+     * either changes: a subscription that picks its query by version picks
+     * again once phone:me answers late, rather than retrying the one it
+     * chose at 0 for good (Codex's review, 16 Nov). Only a change in what
+     * `gate` says starts it over, not the version arriving as such.
+     */
+    fun <K> backendAnd(gate: (Int) -> K): Flow<Pair<PhoneBackend?, K>> =
+        combine(_backend, apiVersions.map(gate).distinctUntilChanged()) { b, k -> b to k }
 
     private fun setIdentity(me: PhoneIdentity?) {
         _identity.value = me
@@ -131,6 +146,7 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
                     if (_backend.value !== b) return@launch
                     setIdentity(me)
                     registerPush()
+                    sendNotifyMode(b)
                     return@launch
                 } catch (e: CancellationException) {
                     throw e
@@ -146,23 +162,26 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
     }
 
     /** Every list follows the backend, and starts again after a dropped connection. */
-    private fun <T> follow(initial: T, read: (PhoneBackend) -> Flow<T>): StateFlow<T> =
-        _backend.flatMapLatest { b ->
-            if (b == null) flowOf(initial) else read(b).retryWhen { cause, _ ->
+    private fun <T> follow(initial: T, read: (PhoneBackend) -> Flow<T>): StateFlow<T> = follow(initial, { }) { b, _ -> read(b) }
+
+    /** One whose query depends on the API version: `gate` says which (backendAnd). */
+    private fun <T, K> follow(initial: T, gate: (Int) -> K, read: (PhoneBackend, K) -> Flow<T>): StateFlow<T> =
+        backendAnd(gate).flatMapLatest { (b, k) ->
+            if (b == null) flowOf(initial) else read(b, k).retryWhen { cause, _ ->
                 if (cause is TransportError.Unauthorized) { report(cause); false } else { delay(2000); true }
             }.catch { }
         }.stateIn(scope, SharingStarted.WhileSubscribed(5000), initial)
 
-    val inbox: StateFlow<List<PhoneThread>?> = follow(null) { b ->
-        if (apiVersion in 1 until BackendApi.THREAD_CHANGES) b.threads(ThreadsView.INBOX) else b.inboxChanges()
+    val inbox: StateFlow<List<PhoneThread>?> = follow(null, { it in 1 until BackendApi.THREAD_CHANGES }) { b, older ->
+        if (older) b.threads(ThreadsView.INBOX) else b.inboxChanges()
     }
     val runners: StateFlow<List<PhoneRunner>> = follow(emptyList()) { it.runners() }
     val projects: StateFlow<List<PhoneProject>> = follow(emptyList()) { it.projects() }
     val counts: StateFlow<PhoneCounts?> = follow(null) { it.counts() }
     val wakes: StateFlow<List<ScheduleWake>> = follow(emptyList()) { it.wakes() }
     /** Every runner's logins and their models (backend API 20), for the new thread pickers. */
-    val accounts: StateFlow<List<PhoneAccount>> = follow(emptyList()) { b ->
-        if (apiVersion in 1 until BackendApi.MODELS) flowOf(emptyList()) else b.accounts()
+    val accounts: StateFlow<List<PhoneAccount>> = follow(emptyList(), { it in 1 until BackendApi.MODELS }) { b, older ->
+        if (older) flowOf(emptyList()) else b.accounts()
     }
     val connected: StateFlow<Boolean> = _backend.flatMapLatest { it?.connected ?: flowOf(false) }
         .stateIn(scope, SharingStarted.Eagerly, false)
@@ -303,6 +322,24 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
     }
 
     private val pushLock = kotlinx.coroutines.sync.Mutex() // fair: queued work runs in order
+
+    /**
+     * The phone's Notify me choice, once phone:me has answered: a
+     * registration made before it had (an offline launch, a new Firebase
+     * token) couldn't tell whether the backend takes it, so it went without
+     * (Codex's review, 16 Nov). Sent again on each reconnect; it's one row.
+     */
+    private fun sendNotifyMode(b: PhoneBackend) {
+        if (apiVersion < BackendApi.NOTIFICATION_SETTING) return
+        val epoch = pairingEpoch
+        scope.launch {
+            pushLock.withLock {
+                val token = _pushToken.value ?: return@withLock
+                if (epoch != pairingEpoch || _backend.value !== b) return@withLock
+                runCatching { b.setNotifications(token, shell.notifyMode.value) }
+            }
+        }
+    }
     @Volatile private var pairingEpoch = 0
 
     /**

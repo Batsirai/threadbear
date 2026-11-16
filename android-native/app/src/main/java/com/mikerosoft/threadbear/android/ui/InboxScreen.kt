@@ -299,7 +299,8 @@ private fun SearchResults(
     query: String, sections: InboxSections, wakes: Map<String, ScheduleWake>, rows: RowContext,
     padding: PaddingValues, back: Set<String>,
 ) {
-    val shell = LocalModel.current.shell
+    val model = LocalModel.current
+    val shell = model.shell
     // Only while a search is on: it looks in the put-away lists too.
     val asleep by shell.searchHibernating.collectAsStateWithLifecycle()
     val archived by shell.searchArchived.collectAsStateWithLifecycle()
@@ -307,7 +308,9 @@ private fun SearchResults(
     // The phone has only the newest 100 archived threads, so Convex looks
     // through the rest, once typing pauses.
     var older by remember { mutableStateOf<List<PhoneThread>>(emptyList()) }
-    LaunchedEffect(text) {
+    // Again once the backend's version is known: before, it can't tell
+    // whether Convex can look (Codex's review, 16 Nov).
+    LaunchedEffect(text, model.apiVersion) {
         older = emptyList()
         delay(300)
         older = shell.searchOlderArchived(text)
