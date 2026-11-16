@@ -247,9 +247,11 @@ export function ciVerdict(runs: CiRun[]): string | undefined {
   return undefined;
 }
 
-// A run that says nothing about the commit it ran on (skipped). A cancelled
-// one says nothing either when a newer run of it superseded it (each push
-// cancels the run before it); one nothing superseded holds.
+// A run that says nothing about the commit it ran on (skipped). Not a
+// cancelled one: a push that cancels the run before it has a run of its
+// own, newer and on a commit the tip has, so one reached here was cancelled
+// by hand, or by a push this Mac's main hasn't got, and its changes were
+// never checked (Codex's reviews, 16 Nov).
 const NO_VERDICT = new Set(['skipped', 'neutral', 'stale']);
 
 // How many of a workflow's runs on main earlierVerdict is given.
@@ -264,22 +266,12 @@ export const HISTORY_PAGE = 100;
 // or it has never run on main. A full page with none of its runs on a
 // commit the tip has can't say, so that holds too (Codex's review, 16 Nov).
 export function earlierVerdict(history: CiRun[], has: ReadonlySet<string>): string | undefined {
-  let newer = false;
   for (const r of history) {
-    const passedOver = () => {
-      newer = true;
-    };
-    if (!r.sha || !has.has(r.sha)) {
-      passedOver();
-      continue;
-    }
+    if (!r.sha || !has.has(r.sha)) continue;
     const on = r.sha.slice(0, 8);
     if (r.status !== 'completed') return `"${r.name}" is still running on ${on}`;
-    if (r.conclusion === 'cancelled' && !newer) return `"${r.name}" was cancelled on ${on}, the last commit it ran on`;
-    if (r.conclusion === 'cancelled' || NO_VERDICT.has(r.conclusion ?? '')) {
-      passedOver();
-      continue;
-    }
+    if (r.conclusion === 'cancelled') return `"${r.name}" was cancelled on ${on}, the last commit it ran on`;
+    if (NO_VERDICT.has(r.conclusion ?? '')) continue;
     return r.conclusion === 'success' ? undefined : `"${r.name}" didn't pass on ${on}, the last commit it ran on`;
   }
   const name = history[0]?.name;

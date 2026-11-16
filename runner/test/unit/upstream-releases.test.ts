@@ -269,12 +269,13 @@ test("earlierVerdict: a workflow that didn't run on the tip counts by its last f
   assert.equal(earlierVerdict([], has), undefined, 'never ran: nothing to go on');
   assert.equal(earlierVerdict([run('c2', 'completed', 'success'), run('c1', 'completed', 'failure')], has), undefined, 'fixed since');
   assert.equal(earlierVerdict([run('c2', 'completed', 'failure'), run('c1', 'completed', 'success')], has), '"Runner" didn\'t pass on c2, the last commit it ran on');
-  // Cancelled by a newer run (a push the tip doesn't have yet, here), or
-  // skipped, says nothing: the one before decides.
-  assert.match(earlierVerdict([run('x9', 'completed', 'success'), run('c3', 'completed', 'cancelled'), run('c2', 'completed', 'failure')], has)!, /didn't pass on c2/);
+  // Skipped says nothing: the one before decides.
   assert.equal(earlierVerdict([run('c3', 'completed', 'skipped'), run('c2', 'completed', 'success')], has), undefined);
-  // Cancelled with nothing newer (by hand): its changes were never checked.
+  assert.match(earlierVerdict([run('c3', 'completed', 'skipped'), run('c2', 'completed', 'failure')], has)!, /didn't pass on c2/);
+  // Cancelled, by hand or by a push GitHub has and this main hasn't: its
+  // changes were never checked, whatever passed before or since elsewhere.
   assert.equal(earlierVerdict([run('c3', 'completed', 'cancelled'), run('c2', 'completed', 'success')], has), '"Runner" was cancelled on c3, the last commit it ran on');
+  assert.match(earlierVerdict([run('x9', 'completed', 'success'), run('c3', 'completed', 'cancelled'), run('c2', 'completed', 'success')], has)!, /cancelled on c3/);
   assert.match(earlierVerdict([run('c3', 'in_progress', null), run('c2', 'completed', 'success')], has)!, /still running on c3/);
   // A push the tip doesn't have (main rewound, or another branch's) isn't evidence.
   assert.equal(earlierVerdict([run('x9', 'completed', 'failure'), run('c1', 'completed', 'success')], has), undefined);
