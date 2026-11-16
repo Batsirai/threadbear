@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FakeClock } from '../../src/clock.ts';
-import { type CiRun, bareRepoArgs, ciVerdict, earlierVerdict, FETCH_INTERVAL_MS, FIRST_LOOK_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
+import { type CiRun, bareRepoArgs, ciVerdict, earlierVerdict, HISTORY_PAGE, FETCH_INTERVAL_MS, FIRST_LOOK_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
 import { LATER, asGitHub, commit, fakeGpg, git, kept, key, release, signedTag, upstreamFor, waitFor, withVictimGpg, world } from '../helpers/upstream-harness.ts';
 
 test('repoKey: the same repo however its URL is written', () => {
@@ -269,11 +269,19 @@ test("earlierVerdict: a workflow that didn't run on the tip counts by its last f
   assert.equal(earlierVerdict([], has), undefined, 'never ran: nothing to go on');
   assert.equal(earlierVerdict([run('c2', 'completed', 'success'), run('c1', 'completed', 'failure')], has), undefined, 'fixed since');
   assert.equal(earlierVerdict([run('c2', 'completed', 'failure'), run('c1', 'completed', 'success')], has), '"Runner" didn\'t pass on c2, the last commit it ran on');
-  // Cancelled for a newer push, or skipped, says nothing: the one before decides.
-  assert.match(earlierVerdict([run('c3', 'completed', 'cancelled'), run('c2', 'completed', 'failure')], has)!, /didn't pass on c2/);
+  // Cancelled by a newer run (a push the tip doesn't have yet, here), or
+  // skipped, says nothing: the one before decides.
+  assert.match(earlierVerdict([run('x9', 'completed', 'success'), run('c3', 'completed', 'cancelled'), run('c2', 'completed', 'failure')], has)!, /didn't pass on c2/);
+  assert.equal(earlierVerdict([run('c3', 'completed', 'skipped'), run('c2', 'completed', 'success')], has), undefined);
+  // Cancelled with nothing newer (by hand): its changes were never checked.
+  assert.equal(earlierVerdict([run('c3', 'completed', 'cancelled'), run('c2', 'completed', 'success')], has), '"Runner" was cancelled on c3, the last commit it ran on');
   assert.match(earlierVerdict([run('c3', 'in_progress', null), run('c2', 'completed', 'success')], has)!, /still running on c3/);
   // A push the tip doesn't have (main rewound, or another branch's) isn't evidence.
   assert.equal(earlierVerdict([run('x9', 'completed', 'failure'), run('c1', 'completed', 'success')], has), undefined);
+  // A full page with nothing the tip has can't say, so it holds.
+  const full = Array.from({ length: HISTORY_PAGE }, (_, i) => run(`y${i}`, 'completed', 'success'));
+  assert.match(earlierVerdict(full, has)!, /none of "Runner"'s last 100 runs/);
+  assert.equal(earlierVerdict(full.slice(1), has), undefined, 'a short page is all there is');
 });
 
 test("Mike's runner holds a release when a workflow that didn't run on the tip was red on the last commit it ran on", async () => {

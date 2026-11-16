@@ -206,7 +206,7 @@ export async function githubRuns(repo: string, commit: string): Promise<CiRun[]>
 // or two of a busy main, and a workflow quiet for longer than that has
 // nothing on main since to have broken.
 export async function githubWorkflowRuns(repo: string, file: string): Promise<CiRun[]> {
-  const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(path.basename(file))}/runs?branch=main&event=push&per_page=100`, {
+  const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(path.basename(file))}/runs?branch=main&event=push&per_page=${HISTORY_PAGE}`, {
     headers: { accept: 'application/vnd.github+json', 'user-agent': 'threadbear-runner' },
     signal: AbortSignal.timeout(30_000),
   });
@@ -247,9 +247,13 @@ export function ciVerdict(runs: CiRun[]): string | undefined {
   return undefined;
 }
 
-// A run that says nothing about the commit it ran on: stopped for a newer
-// push, or skipped.
-const NO_VERDICT = new Set(['cancelled', 'skipped', 'neutral', 'stale']);
+// A run that says nothing about the commit it ran on (skipped). A cancelled
+// one says nothing either when a newer run of it superseded it (each push
+// cancels the run before it); one nothing superseded holds.
+const NO_VERDICT = new Set(['skipped', 'neutral', 'stale']);
+
+// How many of a workflow's runs on main earlierVerdict is given.
+export const HISTORY_PAGE = 100;
 
 // A workflow that didn't run on the tip, as its paths didn't change: what
 // its last finished run on a commit the tip has says, from `history`
@@ -257,20 +261,30 @@ const NO_VERDICT = new Set(['cancelled', 'skipped', 'neutral', 'stale']);
 // is passed over by the next push that doesn't touch its paths, and that
 // tip goes out with the break: release/2026-11-15 was tagged on a commit
 // only Android and the desktop app had run on. Undefined when it passed,
-// or there's nothing to go on.
+// or it has never run on main. A full page with none of its runs on a
+// commit the tip has can't say, so that holds too (Codex's review, 16 Nov).
 export function earlierVerdict(history: CiRun[], has: ReadonlySet<string>): string | undefined {
+  let newer = false;
   for (const r of history) {
-    if (!r.sha || !has.has(r.sha)) continue;
+    const passedOver = () => {
+      newer = true;
+    };
+    if (!r.sha || !has.has(r.sha)) {
+      passedOver();
+      continue;
+    }
     const on = r.sha.slice(0, 8);
     if (r.status !== 'completed') return `"${r.name}" is still running on ${on}`;
-    if (NO_VERDICT.has(r.conclusion ?? '')) continue;
+    if (r.conclusion === 'cancelled' && !newer) return `"${r.name}" was cancelled on ${on}, the last commit it ran on`;
+    if (r.conclusion === 'cancelled' || NO_VERDICT.has(r.conclusion ?? '')) {
+      passedOver();
+      continue;
+    }
     return r.conclusion === 'success' ? undefined : `"${r.name}" didn't pass on ${on}, the last commit it ran on`;
   }
-  return undefined;
+  const name = history[0]?.name;
+  return history.length >= HISTORY_PAGE ? `none of "${name}"'s last ${HISTORY_PAGE} runs on GitHub were on a commit main has here` : undefined;
 }
-
-// How far back a workflow's last run is looked for among the tip's commits.
-const HISTORY_COMMITS = 1000;
 
 export function signersPath(home: string): string {
   return path.join(home, 'upstream-signers');
@@ -1076,7 +1090,10 @@ export class Upstream {
       const ran = new Set(runs.map((r) => r.file));
       const quiet = workflows.filter((f) => !ran.has(f));
       if (!quiet.length) return undefined;
-      const has = new Set((await this.git(checkout, ['rev-list', `--max-count=${HISTORY_COMMITS}`, tip])).split('\n').filter(Boolean));
+      // Every commit the tip has, however far back: a workflow whose paths
+      // nothing touches (the frozen Swift app's) can go thousands of
+      // commits without a run.
+      const has = new Set((await this.git(checkout, ['rev-list', tip])).split('\n').filter(Boolean));
       const held: string[] = [];
       for (const file of quiet) {
         const why = earlierVerdict(await (this.deps.ciHistory ?? githubWorkflowRuns)(repo, file), has);
