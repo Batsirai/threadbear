@@ -455,8 +455,8 @@ pub(crate) fn link_aware(text: impl IntoElement, ix: usize, row: &Row, thread: &
 /// of replies in the Swift app and found the GPUI one selecting the words
 /// instead (16 Nov).
 struct LinkPress {
-    /// The file the link names, found as it was pressed.
-    path: PathBuf,
+    /// The file the link names, found and noted as it was pressed.
+    file: crate::file_drag::DraggedFile,
     at: Point<Pixels>,
 }
 
@@ -486,12 +486,14 @@ fn link_pressed(pane: &WeakEntity<ThreadPane>, event: &MouseDownEvent, cx: &mut 
         return;
     }
     gpui_kit::base::GlobalState::suppress_text_selection(cx);
-    LINK_PRESS.with(|p| *p.borrow_mut() = Some(LinkPress { path: PathBuf::from(file.path), at: event.position }));
+    let file = crate::file_drag::grab(PathBuf::from(file.path));
+    LINK_PRESS.with(|p| *p.borrow_mut() = Some(LinkPress { file, at: event.position }));
 }
 
 /// The pointer moving with a file link pressed, anywhere in the window
 /// (`watch`): far enough, and the file goes with it. Gone or swapped since
-/// the press, the drag hands nothing on (`DraggedFile::still_grabbed`).
+/// the press, the drag hands nothing on (`DraggedFile::still_grabbed`; Codex's
+/// review, 16 Nov).
 fn drag_moved(event: &MouseMoveEvent, window: &mut Window, cx: &mut App) {
     let press = LINK_PRESS.with(|p| {
         let mut p = p.borrow_mut();
@@ -502,7 +504,7 @@ fn drag_moved(event: &MouseMoveEvent, window: &mut Window, cx: &mut App) {
         if far { p.take() } else { None }
     });
     if let Some(press) = press {
-        crate::file_drag::start(press.path, window, cx);
+        crate::file_drag::start(press.file, window, cx);
     }
 }
 
@@ -1127,6 +1129,7 @@ pub(crate) fn peek_command(app: &Entity<crate::app::Threadbear>, cmd: &serde_jso
 /// first, as a person would see it (`file-drag` with `link`).
 #[cfg(feature = "automation")]
 pub(crate) fn link_point(app: &Entity<crate::app::Threadbear>, prefix: &str, words: &str, window: &mut Window, cx: &mut App) -> Result<Point<Pixels>, String> {
+    use gpui_kit::test::TestWindowExt as _;
     let pane = app.read(cx).pane.clone().ok_or("no thread open")?;
     let thread = pane.read(cx).summary.id.clone();
     let found = pane.read(cx).feed.model().rows().iter().enumerate().rev().find_map(|(ix, row)| {

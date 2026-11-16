@@ -124,13 +124,19 @@ fn outside(file: &DraggedFile) -> Option<ExternalDragPayload> {
     Some(ExternalDragPayload::Files(FileDragPaths::new([(real, is_dir)])))
 }
 
-/// Starts dragging `path` out with no element to hang `file_drag` on: a file
-/// link in a reply, which is a run of the text view's words
-/// (`reply_links::link_drag`). The same drag as `file_drag`'s, its picture
-/// under the pointer.
-pub(crate) fn start(path: PathBuf, window: &mut Window, cx: &mut App) {
+/// `path` grabbed now, for a drag that starts later with no element to hang
+/// `file_drag` on: a file link in a reply, which is a run of the text view's
+/// words (`reply_links::link_pressed`). The file is noted as it's pressed,
+/// so one swapped in before the pointer has moved far enough goes nowhere.
+pub(crate) fn grab(path: PathBuf) -> DraggedFile {
     let file = DraggedFile::new(path);
     file.note_grabbed();
+    file
+}
+
+/// Starts dragging a `grab`bed file out: the same drag as `file_drag`'s, its
+/// picture under the pointer.
+pub(crate) fn start(file: DraggedFile, window: &mut Window, cx: &mut App) {
     // GPUI draws the drag this far up and left of the pointer; DragPicture
     // moves its picture back under it from there, as it does a grabbed
     // element's corner.
