@@ -204,6 +204,15 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
         cx.update_window(window, |_, window, cx| window.render_frame(cx)).map_err(|e| e.to_string())?;
         return crate::web_panels::send_keys(window, text(cmd, "text"), cx).map(|()| json!("ok"));
     }
+    // A click at (`x`, `y`) in the window as AppKit hands a person's one on,
+    // so a page's view under it gets it as it would a real click: DevTools'
+    // clicks (`webPanel` `click`) skip AppKit's hit-testing and first-click
+    // rules, where the missed clicks in a panel were (16 Nov).
+    if cmd["cmd"] == "native-click" {
+        cx.update_window(window, |_, window, cx| window.render_frame(cx)).map_err(|e| e.to_string())?;
+        let (x, y) = (cmd["x"].as_f64().ok_or("native-click needs x")?, cmd["y"].as_f64().ok_or("native-click needs y")?);
+        return crate::web_panels::send_click(window, x as f32, y as f32, cx).map(|said| json!(said));
+    }
     // The activity log (activity.rs), as the Swift app's `activity`: a press
     // or a key, then what today's file has, a moment later.
     if cmd["cmd"] == "activity" {

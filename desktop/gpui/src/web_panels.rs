@@ -258,6 +258,14 @@ pub(crate) fn send_keys(window: AnyWindowHandle, text: &str, cx: &mut AsyncApp) 
     Ok(())
 }
 
+/// The automation's `native-click`: a click at (`x`, `y`) in the window,
+/// through AppKit.
+/// Says what AppKit hit, and where the pages' views are in the window.
+pub(crate) fn send_click(window: AnyWindowHandle, x: f32, y: f32, cx: &mut AsyncApp) -> Result<String, String> {
+    let view = cx.update_window(window, |_, window, _| native_view(window).map(|v| v as usize)).map_err(|e| e.to_string())?.ok_or("the window has no view")?;
+    Ok(threadbear_web::send_click(view as *mut c_void, x, y))
+}
+
 /// Who has the main window's keyboard, for the dump: "app" (GPUI's own
 /// view), "page", "hidden page", "window" (nobody) or "other".
 pub(crate) fn keyboard_dump(window: &Window) -> Value {
@@ -1126,6 +1134,7 @@ fn page_dump(key: &str, kept: Option<&Kept>, frame: u64) -> Value {
                 "placedThisFrame": stamp == frame,
                 "slot": [f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height)],
                 "frame": [x, y, w, h],
+                "picture": k.page.picture_size().map(|(w, h)| json!([w, h])),
             })
         }
     }

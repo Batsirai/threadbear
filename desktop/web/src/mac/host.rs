@@ -30,10 +30,14 @@ unsafe extern "C" {
     pub(crate) fn tb_view_input_count(view: *mut c_void) -> u64;
     pub(crate) fn tb_view_note_input(view: *mut c_void);
     pub(crate) fn tb_view_has_keyboard(view: *mut c_void) -> bool;
+    // The layer Chromium shows a page's picture in, which should be the view's size (panel.rs).
+    pub(crate) fn tb_view_picture_size(view: *mut c_void, width: *mut f64, height: *mut f64) -> bool;
     // Who has a window's keyboard, and giving it back to GPUI's view.
     fn tb_view_keyboard_holder(view: *mut c_void) -> i32;
     fn tb_view_take_keyboard(view: *mut c_void) -> bool;
     fn tb_view_send_keys(view: *mut c_void, text: *const c_char);
+    fn tb_view_send_click(view: *mut c_void, x: f64, y: f64) -> *mut c_char;
+    fn free(ptr: *mut c_void);
     fn tb_popup_menu(view: *mut c_void, x: f64, y: f64, titles: *const *const c_char, symbols: *const *const c_char, tips: *const *const c_char, checked: *const bool, count: i32) -> i32;
     fn tb_main_bundle_identifier() -> *const c_char;
 }
@@ -93,6 +97,25 @@ pub fn send_keys(view: *mut c_void, text: &str) {
     let Ok(text) = CString::new(text) else { return };
     if !view.is_null() {
         unsafe { tb_view_send_keys(view, text.as_ptr()) };
+    }
+}
+
+/// A scripted app's click at (`x`, `y`) in the window GPUI's view `view`
+/// fills (GPUI's coordinates), through AppKit as a person's click goes, so a
+/// page's view under it gets it the way it gets a real one.
+/// Says what AppKit hit there and where each page view is in the window.
+pub fn send_click(view: *mut c_void, x: f32, y: f32) -> String {
+    if view.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let said = tb_view_send_click(view, f64::from(x), f64::from(y));
+        if said.is_null() {
+            return String::new();
+        }
+        let text = CStr::from_ptr(said).to_string_lossy().into_owned();
+        free(said.cast());
+        text
     }
 }
 

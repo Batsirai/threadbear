@@ -41,6 +41,20 @@ Feature: Web pages in a thread's panels
     When I press Escape
     Then the panel shows the page "Panel home"
 
+  # Chromium sizes the layer it draws a page in by adding each change of the
+  # view's size to what it had, so half points left over built up: on 16 Nov
+  # Mike's YouTube panel was drawn 12 points or more above where its clicks
+  # went, after a morning of panels moving.
+  @panel.web @web-runtime @swift-pending
+  Scenario: A panel's page is drawn where its clicks land, however often its panel moves
+    Given the web runtime is installed
+    When I open the thread "Add dark mode to the dashboard"
+    And the thread's url panel shows the page server
+    And I show the "mock.page" section of the pane
+    Then the panel shows the page "Panel home"
+    When the panel is moved across the top of the window and the window resized 25 times
+    Then the panel's page is drawn the size of its view
+
   @panel.web @panel.bar @web-runtime @swift-pending
   Scenario: A link to another site opens in the browser, and the panel keeps its page
     Given the web runtime is installed

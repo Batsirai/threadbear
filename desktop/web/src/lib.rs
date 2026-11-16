@@ -28,7 +28,7 @@ pub use mac::page::Page;
 /// A web panel's page: a patch's site or the Convex dashboard (mac/panel.rs),
 /// and the native menu for controls over one.
 #[cfg(target_os = "macos")]
-pub use mac::host::{keyboard_holder, popup_menu, send_keys, take_keyboard, MenuItem};
+pub use mac::host::{keyboard_holder, popup_menu, send_click, send_keys, take_keyboard, MenuItem};
 #[cfg(target_os = "macos")]
 pub use mac::panel::PanelPage;
 pub use panel_rules::{site, Event as PanelEvent, Kind as PanelKind};
@@ -147,6 +147,9 @@ mod elsewhere {
     }
 
     pub fn send_keys(_view: *mut std::ffi::c_void, _text: &str) {}
+    pub fn send_click(_view: *mut std::ffi::c_void, _x: f32, _y: f32) -> String {
+        String::new()
+    }
 
     /// A web panel's page (mac/panel.rs has the real one). There's no
     /// runtime here to make one, so none is ever made.
@@ -192,6 +195,9 @@ mod elsewhere {
             false
         }
         pub fn edit(&self, _command: &str) {}
+        pub fn picture_size(&self) -> Option<(f64, f64)> {
+            None
+        }
         pub fn has_keyboard(&self) -> bool {
             false
         }

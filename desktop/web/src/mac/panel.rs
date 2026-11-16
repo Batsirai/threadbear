@@ -23,7 +23,7 @@
 // - Nothing downloads; Chromium's View Source isn't offered; what a page
 //   logs to its console stays out of Chromium's log.
 // - The app hears when it can go back, and when it's loading.
-use super::host::{tb_view_has_keyboard, tb_view_input_count, tb_view_note_input, tb_view_remove, tb_view_set_frame, tb_view_set_hidden, tb_view_set_parent, tb_view_watch_input};
+use super::host::{tb_view_has_keyboard, tb_view_input_count, tb_view_picture_size, tb_view_note_input, tb_view_remove, tb_view_set_frame, tb_view_set_hidden, tb_view_set_parent, tb_view_watch_input};
 use crate::panel_rules::{browse, popup, site, Browse, Event, Kind, LeaveGate, Popup};
 use cef::*;
 use futures::channel::{mpsc, oneshot};
@@ -446,6 +446,13 @@ impl PanelPage {
             "redo" => frame.redo(),
             _ => {}
         }
+    }
+
+    /// The size Chromium draws the page's picture at, in points: the view's
+    /// own, unless its layer has drifted (appkit_hooks.m, `tb_pin_page_layers`).
+    pub fn picture_size(&self) -> Option<(f64, f64)> {
+        let (mut width, mut height) = (0., 0.);
+        unsafe { tb_view_picture_size(self.view, &mut width, &mut height) }.then_some((width, height))
     }
 
     /// Whether the page's view, or one inside it, has the keyboard.

@@ -6,11 +6,11 @@
 // expects the same here (`foundation.firstclick`). A script's own clicks go
 // straight into GPUI, so only real ones through the window server show it.
 // Takes over the pointer, so only on a machine nobody's using (AGENTS.md,
-// "Tests that need the real screen"), holding the perf lock, with the web
+// "Tests that need the real screen"; --desk holds the perf lock), with the web
 // runtime's archive:
 //
 //   desktop/scripts/remote.sh tinker-desk -- bash -c 'cd desktop && cargo build -p threadbear-gpui --features automation'
-//   desktop/scripts/remote.sh tinker-desk --desk -- lockf ~/.cache/threadbear-perf.lock \
+//   desktop/scripts/remote.sh tinker-desk --desk -- \
 //     env TB_WEB_RUNTIME_ARCHIVE=<the pinned archive> node features/tools/first-click.ts
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
