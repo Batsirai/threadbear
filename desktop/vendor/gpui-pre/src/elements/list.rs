@@ -789,6 +789,19 @@ impl ListState {
 
         let logical_scroll_top = state.logical_scroll_top();
 
+        // Anchored past the last item: following the tail, or just scrolled
+        // or dragged to the end, before the next layout moves the anchor onto
+        // the row at the top of the view. That's the end of the scroll range,
+        // not the whole content's height above the view, which overshoots
+        // `max_offset_for_scrollbar` by a viewport. Callers that scroll by
+        // offset (gpui-base's ScrollBounce, the scrollbar) read the overshoot
+        // as a jump of a viewport's height: a second trackpad packet in the
+        // same frame, after a first that reached the end, threw the
+        // transcript past its bottom edge and left it stretched.
+        if logical_scroll_top.item_ix >= state.items.summary().count {
+            return Point::new(px(0.), -state.max_scroll_offset());
+        }
+
         let mut cursor = state.items.cursor::<ListItemSummary>(());
         let summary: ListItemSummary =
             cursor.summary(&Count(logical_scroll_top.item_ix), Bias::Right);
@@ -1846,6 +1859,50 @@ mod test {
         // Scroll position should stay at the top of the list
         assert_eq!(state.logical_scroll_top().item_ix, 0);
         assert_eq!(state.logical_scroll_top().offset_in_item, px(0.));
+    }
+
+    #[gpui::test]
+    fn test_scrollbar_offset_at_the_end_before_layout(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+
+        // Ten 20px items in a 100px viewport: 100px of scroll range.
+        let state = ListState::new(10, crate::ListAlignment::Top, px(10.));
+        state.set_follow_mode(FollowMode::Tail);
+
+        struct TestView(ListState);
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                list(self.0.clone(), |_, _, _| {
+                    div().h(px(20.)).w_full().into_any()
+                })
+                .w_full()
+                .h_full()
+            }
+        }
+
+        cx.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, cx| {
+            cx.new(|_| TestView(state.clone())).into_any_element()
+        });
+        assert_eq!(state.max_offset_for_scrollbar().y, px(100.));
+        assert_eq!(state.scroll_px_offset_for_scrollbar().y, px(-100.));
+
+        // Half a pixel from the end counts as the end: following resumes and
+        // the anchor goes past the last item until the next layout.
+        state.set_offset_from_scrollbar(point(px(0.), px(-99.5)));
+        assert!(state.is_following_tail());
+        assert_eq!(
+            state.scroll_px_offset_for_scrollbar().y,
+            px(-100.),
+            "an offset read before the next layout is still inside the range"
+        );
+
+        // The same from scroll_to_end.
+        state.scroll_to(ListOffset {
+            item_ix: 2,
+            offset_in_item: px(0.),
+        });
+        state.scroll_to_end();
+        assert_eq!(state.scroll_px_offset_for_scrollbar().y, px(-100.));
     }
 
     #[gpui::test]
