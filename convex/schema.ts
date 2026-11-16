@@ -811,7 +811,11 @@ export default defineSchema({
     lastActivityMs: v.optional(v.number()),
   })
     // Newest joined first, by _creationTime, which every index ends with.
-    .index('by_project', ['projectId'])
+    // A project is (runnerId, projectId), as `projects` is keyed: ids are
+    // only each runner's own, and a link a runner key writes always carries
+    // its own runnerId, so one runner's threads can't turn up in another
+    // runner's project by taking its id (Daybreak finding 141, 16 Nov 2026).
+    .index('by_runner_project', ['runnerId', 'projectId'])
     .index('by_threadId', ['threadId']),
 
   // A thread row gone in the last day, so a client following phone:threadsSince

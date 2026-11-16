@@ -398,7 +398,7 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
       createdAt: 'x', lastActivityAt: 'x', lastActivityMs: n, view, projects: projects.map((id) => ({ id, title: id })),
     });
     const titles = async (projectId: string, limit?: number) =>
-      ((await api('query', 'phone:projectThreads', { token, projectId, ...(limit ? { limit } : {}) })) as { title: string; view: string }[]).map((t) => `${t.title}:${t.view}`);
+      ((await api('query', 'phone:projectThreads', { token, runnerId, projectId, ...(limit ? { limit } : {}) })) as { title: string; view: string }[]).map((t) => `${t.title}:${t.view}`);
     await api('mutation', 'sync:upsertThreads', { key, threads: [doc(1, 'den', [pid]), doc(2, 'inbox', [pid, other]), doc(3, 'hibernating', [pid]), doc(4, 'inbox', [])] });
     assert.deepEqual(await titles(pid), ['T3:hibernating', 'T2:inbox', 'T1:den']);
     assert.deepEqual(await titles(other), ['T2:inbox']);
@@ -414,7 +414,7 @@ describe('convex mirror e2e', { skip: LOCAL ? false : 'no local Convex deploymen
     await api('mutation', 'sync:heartbeat', { key, runner: { runnerId, name: runnerId, version: 'x', startedAt: 'x', draining: false, threadCount: 0 } });
     await new Promise((r) => setTimeout(r, 1000));
     assert.deepEqual(await titles(pid), ['T1:inbox']);
-    await assert.rejects(api('query', 'phone:projectThreads', { token: 'tb_wrong', projectId: pid }), /auth|token/);
+    await assert.rejects(api('query', 'phone:projectThreads', { token: 'tb_wrong', runnerId, projectId: pid }), /auth|token/);
     await api('mutation', 'sync:removeThreads', { key, threadIds: [`${runnerId}-t1`, `${runnerId}-t4`] });
     await api('mutation', 'sync:bye', { key, runnerId });
   });

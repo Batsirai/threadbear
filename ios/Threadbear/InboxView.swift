@@ -548,7 +548,7 @@ private struct StartingRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            ProjectTiles(projects: [])
+            ProjectTiles(projects: [], runnerId: "")
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.body)
@@ -614,7 +614,7 @@ struct ThreadRow: View {
     var body: some View {
         let kind = RowStatus.kind(thread)
         HStack(alignment: .center, spacing: 10) {
-            ProjectTiles(projects: thread.projects ?? [])
+            ProjectTiles(projects: thread.projects ?? [], runnerId: thread.runnerId)
                 .overlay(alignment: .leading) {
                     if model.landing.contains(thread.threadId) {
                         // On its way to a new heading: the mark pops in as it lands.

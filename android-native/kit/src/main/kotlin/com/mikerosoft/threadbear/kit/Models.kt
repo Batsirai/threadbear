@@ -138,6 +138,20 @@ data class PhoneProject(
     }
 }
 
+/**
+ * The projects by runner and id. A project id is only its runner's own, and
+ * another runner can use the same one, so a thread's project is looked up
+ * under the thread's own runner (Daybreak finding 141), never by id alone.
+ */
+class ProjectsByRunner(projects: List<PhoneProject>) {
+    private val byKey = projects.associateBy { key(it.runnerId ?: "", it.id) }
+
+    /** The project `id` on the runner `runnerId`, if that runner has it. */
+    fun find(runnerId: String, id: String): PhoneProject? = byKey[key(runnerId, id)]
+
+    private fun key(runnerId: String, id: String) = "$runnerId\n$id"
+}
+
 /** "C" for "Convex docs", "7" for "7 day plan", "?" for neither. */
 object ProjectMark {
     fun letter(title: String): String {

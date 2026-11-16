@@ -11,7 +11,10 @@ final class AppModel {
     private(set) var pairing: Pairing?
     private(set) var backend: (any Backend)?
     private(set) var runners: [PhoneRunner] = []
-    /// The projects by id, for the rows' icons (backend API 5 carries them).
+    /// The projects by runner and id (projectKey), for the rows' icons
+    /// (backend API 5 carries them). A project id is only its runner's own:
+    /// another runner can use the same one, so a thread's project is looked
+    /// up under the thread's own runner (Daybreak finding 141).
     private(set) var projects: [String: PhoneProject] = [:]
     /// The logins and their models (backend API 20), for the new thread pickers.
     private(set) var accounts: [PhoneAccount] = []
@@ -799,7 +802,10 @@ final class AppModel {
         return "\(name) offline since \(RelativeTime.clock(newest.lastSeenAt, now: now))"
     }
 
-    func project(_ id: String) -> PhoneProject? { projects[id] }
+    /// A thread's project: the one with that id on the thread's own runner.
+    func project(_ id: String, runnerId: String) -> PhoneProject? { projects[Self.projectKey(runnerId: runnerId, id: id)] }
+
+    static func projectKey(runnerId: String, id: String) -> String { "\(runnerId)\n\(id)" }
 
     func runnerName(_ runnerId: String) -> String? {
         runners.count > 1 ? runners.first { $0.runnerId == runnerId }?.name : nil
@@ -1004,8 +1010,7 @@ final class AppModel {
         if !isFake { pocket = PocketStore.standard.load() }
         tasks.append(follow(backend.runners()) { $0.receiveRunners($1) })
         tasks.append(follow(backend.projects()) { model, list in
-            // Two runners could use the same id; the first one wins.
-            model.projects = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            model.projects = Dictionary(list.map { (AppModel.projectKey(runnerId: $0.runnerId ?? "", id: $0.id), $0) }, uniquingKeysWith: { first, _ in first })
         })
         loaded = []
         followLists()

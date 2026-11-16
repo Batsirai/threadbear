@@ -380,4 +380,11 @@
 //    place of a browser token, which it trades with tokens:claim.
 //    sync:issueToken refuses browsers too, so no reusable token goes into a
 //    link again. A runner signs browsers in only from 81.
-export const API_VERSION = 81;
+// 82: phone:projectThreads takes `runnerId` and reads that runner's project
+//    alone (projectThreads' by_runner_project index): a project is (runnerId,
+//    projectId), and without runnerId it gives nothing rather than every
+//    runner's threads under that id (Daybreak 141). upsertThreads keeps only
+//    web links (http or https with a host) on a thread's asks and links, from
+//    every runner, dropping the rest (Daybreak 139). Runners send only those
+//    already, so nothing changes for them.
+export const API_VERSION = 82;

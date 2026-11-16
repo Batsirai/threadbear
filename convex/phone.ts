@@ -563,15 +563,19 @@ export const project = query({
 // activity (links don't carry it; schema.ts). The website asks for more by
 // raising limit, as phone:messages.
 const PROJECT_THREADS_MAX = 1000;
+// A project is its runner's: (runnerId, projectId), never the bare id, which
+// another runner could use for its own (Daybreak finding 141). A page from
+// before API 82 asks without runnerId and gets nothing, not every runner's.
 export const projectThreads = query({
-  args: { token: v.string(), projectId: v.string(), limit: v.optional(v.number()) },
+  args: { token: v.string(), runnerId: v.optional(v.string()), projectId: v.string(), limit: v.optional(v.number()) },
   returns: v.array(row),
-  handler: async (ctx, { token, projectId, limit }) => {
+  handler: async (ctx, { token, runnerId, projectId, limit }) => {
     await checkPhoneToken(ctx, token);
     const n = pageLimit(limit, PAGE_DEFAULT, PROJECT_THREADS_MAX);
+    if (runnerId === undefined) return [];
     const links = await ctx.db
       .query('projectThreads')
-      .withIndex('by_project', (q) => q.eq('projectId', projectId))
+      .withIndex('by_runner_project', (q) => q.eq('runnerId', runnerId).eq('projectId', projectId))
       .order('desc')
       .take(n);
     const out = [];

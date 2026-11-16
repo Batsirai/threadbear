@@ -193,7 +193,7 @@ private fun ThreadBar(thread: PhoneThread?, back: () -> Unit) {
         title = {
             if (thread != null) Row(verticalAlignment = Alignment.CenterVertically) {
                 val ref = thread.projects?.firstOrNull()
-                ProjectTile(ref?.let { r -> projects.firstOrNull { it.id == r.id } }, ref?.title ?: thread.folderName, 26.dp)
+                ProjectTile(ref?.let { r -> projects.firstOrNull { it.runnerId == thread.runnerId && it.id == r.id } }, ref?.title ?: thread.folderName, 26.dp)
                 Spacer(Modifier.width(10.dp))
                 Text(model.title(thread, renamed), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }

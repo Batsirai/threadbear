@@ -347,6 +347,42 @@ const WIDE_ISO_TIME = /^[+-]\d{6}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|
 export function isReadableTime(value: unknown): value is string {
   return isIsoTime(value) || (typeof value === 'string' && WIDE_ISO_TIME.test(value) && Number.isFinite(Date.parse(value)));
 }
+// A link a thread row carries (an ask's links, its patches' url actions) is
+// a web page or nothing: http or https with a host, short enough to show
+// whole. A runner sends only those (runner/src/sync.ts), so anything else
+// came from a runner that isn't honest or isn't this release, and it's
+// dropped here rather than handed to a phone or a browser to dispatch to
+// another app (Daybreak finding 139, 16 Nov 2026). The website and phones
+// check again as they draw it.
+export const MAX_LINK_CHARS = 2048;
+export function isWebLink(url: unknown): boolean {
+  if (typeof url !== 'string' || url.length > MAX_LINK_CHARS || !/^https?:\/\//i.test(url)) return false;
+  try {
+    const u = new URL(url);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && !!u.hostname;
+  } catch {
+    return false;
+  }
+}
+
+/** A thread row with every link that isn't a web page taken out. */
+export function webLinksOnly<T extends Record<string, any>>(t: T): T {
+  const out: Record<string, any> = { ...t };
+  if (Array.isArray(out.links)) {
+    out.links = out.links.filter((l: any) => isWebLink(l?.url));
+    if (!out.links.length) delete out.links;
+  }
+  if (Array.isArray(out.asks)) {
+    out.asks = out.asks.map((a: any) => {
+      if (!Array.isArray(a?.links)) return a;
+      const links = a.links.filter((l: any) => isWebLink(l?.url));
+      const { links: _links, ...rest } = a;
+      return links.length ? { ...rest, links } : rest;
+    });
+  }
+  return out as T;
+}
+
 export function holdThreadTimes(t: Record<string, any>, ok: (value: unknown) => boolean = isIsoTime): void {
   if (!ok(t.lastActivityAt)) {
     const ms = t.lastActivityMs;

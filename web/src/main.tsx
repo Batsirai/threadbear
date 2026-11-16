@@ -4,7 +4,9 @@ import { ConvexProvider, ConvexReactClient } from 'convex/react';
 import { ConvexError } from 'convex/values';
 import { App } from './App';
 import { api } from '../../convex/_generated/api';
-import { claimSignIn, takeSignInCodeFromHash } from './token';
+import { startSignIn, takeSignInCodeFromHash } from './token';
+import { LinkConfirm } from './link-confirm';
+import { ReplaceSignIn } from './replace-sign-in';
 import { applyTheme } from './theme';
 import './styles.css';
 
@@ -16,12 +18,15 @@ const signInCode = takeSignInCodeFromHash();
 applyTheme();
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
-if (signInCode) void claimSignIn((code) => convex.mutation(api.tokens.claim, { code }), signInCode, (e) => e instanceof ConvexError);
+// A browser that's already signed in asks before swapping (token.ts, startSignIn).
+if (signInCode) startSignIn((code) => convex.mutation(api.tokens.claim, { code }), signInCode, (e) => e instanceof ConvexError);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ConvexProvider client={convex}>
       <App />
+      <LinkConfirm />
+      <ReplaceSignIn />
     </ConvexProvider>
   </StrictMode>,
 );

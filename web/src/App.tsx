@@ -14,6 +14,7 @@ import { go, threadPath, useRoute } from './route';
 import { useSignInNote, useSigningIn, useToken } from './token';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
+import { OutLink } from './link-confirm';
 import { CommandState } from './command-state';
 import { previewOf, ShareControl, SharePage } from './share';
 import { busy, Lists, ResizeHandle, type Row, useSidebarWidth } from './sidebar';
@@ -123,7 +124,7 @@ function Shell({ token, route }: { token: string; route: ReturnType<typeof useRo
         {route.page === 'scheduled' ? (
           <ScheduledList token={token} selected={id} />
         ) : route.page === 'projects' ? (
-          <ProjectsList token={token} selected={id} />
+          <ProjectsList token={token} selected={route.page === 'projects' && id && route.runnerId ? { runnerId: route.runnerId, id } : undefined} />
         ) : route.page === 'runners' ? (
           <RunnersList token={token} selected={id} />
         ) : route.page === 'usage' ? (
@@ -141,7 +142,7 @@ function Shell({ token, route }: { token: string; route: ReturnType<typeof useRo
         ) : route.page === 'scheduled' && id ? (
           <SchedulePage key={id} token={token} id={id} />
         ) : route.page === 'projects' && id ? (
-          <ProjectPage key={id} token={token} id={id} />
+          <ProjectPage key={`${route.runnerId ?? ''}/${id}`} token={token} runnerId={route.runnerId} id={id} />
         ) : route.page === 'runners' && id ? (
           <RunnerPage key={id} token={token} id={id} />
         ) : route.page === 'usage' && id ? (
@@ -422,9 +423,9 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
           {a.links?.length ? (
             <div className="ask-links">
               {a.links.map((l) => (
-                <a key={l.url} className="btn primary" href={l.url} target="_blank" rel="noreferrer">
+                <OutLink key={l.url} className="btn primary" href={l.url}>
                   {l.title} ↗
-                </a>
+                </OutLink>
               ))}
             </div>
           ) : null}

@@ -95,7 +95,7 @@ struct ThreadView: View {
                 // The Mac's header: the project's icon (or a folder) before the title.
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 6) {
-                        ProjectIconView(project: thread.projects?.first.flatMap { model.project($0.id) }, title: thread.projects?.first?.title, size: 20)
+                        ProjectIconView(project: thread.projects?.first.flatMap { model.project($0.id, runnerId: thread.runnerId) }, title: thread.projects?.first?.title, size: 20)
                         Text(model.title(of: thread))
                             .font(.headline)
                             .lineLimit(1)

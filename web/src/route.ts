@@ -41,6 +41,11 @@ export function threadPath(threadId: string): string {
   return `/t/${encodeURIComponent(threadId)}`;
 }
 
+/** A project's page: its runner and its id, as a project is only its runner's. */
+export function projectPath(runnerId: string, id: string): string {
+  return `/projects/${encodeURIComponent(runnerId)}/${encodeURIComponent(id)}`;
+}
+
 export function viewPath(view: RailView, id?: string): string {
   return id ? `/${view}/${encodeURIComponent(id)}` : `/${view}`;
 }

@@ -12,7 +12,7 @@ import { actAs, checkRunnerId, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_RE
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
-import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdThreadTimes, impossibleUsage, isIsoTime, LOGIN_EMAIL, LOGIN_PROVIDER, loginKey, isThreadId, mayClaim, NAME_CHARS, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, nameSkeleton, normalName, ownsCard, SCHEDULE_ID, utf8Bytes, wholeIn, type Caller, type UsageDoc } from './runnerAccess';
+import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdThreadTimes, impossibleUsage, isIsoTime, LOGIN_EMAIL, LOGIN_PROVIDER, loginKey, isThreadId, mayClaim, NAME_CHARS, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, nameSkeleton, webLinksOnly, normalName, ownsCard, SCHEDULE_ID, utf8Bytes, wholeIn, type Caller, type UsageDoc } from './runnerAccess';
 import { dropWake, seedWakes, syncWake } from './wakes';
 import { pushFailing, pushOff } from './pushHealth';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
@@ -717,7 +717,8 @@ export const upsertThreads = mutation({
     const skipped: string[] = [];
     for (const given of threads) {
       checkRunnerId(given.runnerId);
-      const t = caller.owner ? given : fitThread(given);
+      // Every runner's links are held to web pages, the main Mac's too (webLinksOnly).
+      const t = caller.owner ? webLinksOnly(given) : fitThread(webLinksOnly(given));
       if (!t) {
         skipped.push(given.threadId);
         continue;

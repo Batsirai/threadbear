@@ -38,6 +38,62 @@ export function takeSignInCodeFromHash(): string | undefined {
   return code;
 }
 
+// A sign-in link opened in a browser that's already signed in: held here,
+// in memory only, until you say whether to swap (ReplaceSignIn). A thread's
+// words can link to this site with a #code= of their own, and one click
+// mustn't quietly sign this browser in as someone else's, or out of yours
+// (Daybreak finding 145, 16 Nov 2026). Nothing is claimed or kept first.
+type Claim = (code: string) => Promise<{ token: string }>;
+let pending: { code: string; claim: Claim; refused: (e: unknown) => boolean; failed?: string } | undefined;
+
+/**
+ * Starts a sign-in link's sign-in: straight away in a browser that isn't
+ * signed in, and only once you say so in one that is.
+ */
+export function startSignIn(claim: Claim, code: string, refused: (e: unknown) => boolean): void {
+  if (localStorage.getItem(KEY)) {
+    pending = { code, claim, refused };
+    listeners.forEach((l) => l());
+    return;
+  }
+  void claimSignIn(claim, code, refused);
+}
+
+/** The sign-in link waiting for a yes, if any, and why its claim failed. */
+export function usePendingSignIn(): { failed?: string } | undefined {
+  return useSyncExternalStore(subscribe, () => (pending ? pendingView(pending) : undefined));
+}
+
+// A stable object per state, as useSyncExternalStore compares snapshots.
+let lastView: { from: typeof pending; failed?: string; view: { failed?: string } } | undefined;
+function pendingView(p: NonNullable<typeof pending>): { failed?: string } {
+  if (lastView?.from !== p || lastView.failed !== p.failed) lastView = { from: p, failed: p.failed, view: p.failed ? { failed: p.failed } : {} };
+  return lastView.view;
+}
+
+/** Your answer to a held sign-in link: swap this browser's sign-in for it, or not. */
+export async function answerPendingSignIn(swap: boolean): Promise<void> {
+  const p = pending;
+  if (!p) return;
+  if (!swap) {
+    pending = undefined;
+    listeners.forEach((l) => l());
+    return;
+  }
+  claiming = true;
+  listeners.forEach((l) => l());
+  try {
+    const { token } = await p.claim(p.code);
+    localStorage.setItem(KEY, token);
+    pending = undefined;
+  } catch (e) {
+    // The browser's own sign-in is untouched; the code's gone either way.
+    pending = { ...p, failed: p.refused(e) ? 'That sign-in link has expired or was already used. This browser is still signed in as before.' : 'Threadbear couldn’t be reached. This browser is still signed in as before.' };
+  }
+  claiming = false;
+  listeners.forEach((l) => l());
+}
+
 /** Trades the code for this browser's token (tokens:claim), and keeps it. */
 export async function claimSignIn(claim: (code: string) => Promise<{ token: string }>, code: string, refused: (e: unknown) => boolean): Promise<void> {
   claiming = true;

@@ -367,7 +367,7 @@ test('non-finite page sizes are refused, and a page reads only its own rows', as
   for (const limit of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     assert.equal(await outcome(call(s.ctx, share.view, { slug: 'link1', limit })), 'invalid', `share ${limit}`);
     assert.equal(await outcome(call(s.ctx, phone.messages, { token: TOKEN, threadId: 'T', limit, tools: true })), 'invalid', `phone ${limit}`);
-    assert.equal(await outcome(call(s.ctx, phone.projectThreads, { token: TOKEN, projectId: 'p', limit })), 'invalid', `projects ${limit}`);
+    assert.equal(await outcome(call(s.ctx, phone.projectThreads, { token: TOKEN, runnerId: LAPTOP, projectId: 'p', limit })), 'invalid', `projects ${limit}`);
     assert.equal(await outcome(call(s.ctx, relay.remoteTail, { key: OWNER, threadId: 'T', limit })), 'invalid', `tail ${limit}`);
     assert.equal(await outcome(call(s.ctx, relay.remoteMessages, { key: OWNER, threadId: 'T', limit })), 'invalid', `remote ${limit}`);
   }
