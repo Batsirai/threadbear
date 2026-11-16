@@ -386,8 +386,8 @@ if `tb` isn't found (an older runner, or outside a thread), use
   change it. To try a runner change, start `runner/scripts/dev-runner.sh` in
   the background and use the `<dev home>/tb` it prints (a bare `tb` reaches
   the live runner unless `THREADBEAR_HOME` is set in that same command).
-  Its threads start in `<dev home>/work` on claude-main (or
-  `TB_E2E_ACCOUNT`) and claude-haiku-5-5 (its `runner.json` defaults), from `tb` or a debug app's composer alike.
+  Its threads start in `<dev home>/work` on the first Claude login that
+  works (`TB_E2E_ACCOUNT` picks one) and claude-haiku-5-5 (its `runner.json` defaults), from `tb` or a debug app's composer alike.
   For real-sized data use `--clone-real`, never `--home` on a copy of the
   real data dir: a copy's threads are Mike's real sessions and folders
   (docs/dev-tools.md, section 4).

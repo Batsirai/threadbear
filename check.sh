@@ -62,7 +62,8 @@
 # (a new worktree), as SwiftPM's cache only works where it was made. Run
 # it in the background rather than waiting on it.
 #   --e2e         also the runner's end-to-end tests: the real claude CLI on
-#                 claude-haiku-5-5 and login claude-main (TB_E2E_ACCOUNT), then Codex on
+#                 claude-haiku-5-5 and the first Claude login that works (TB_E2E_ACCOUNT,
+#                 else runner/src/test-login.ts's pick), then Codex on
 #                 gpt-6-luna at low effort and a Codex install into a temp
 #                 folder, all in temp folders (several minutes, a few cents;
 #                 TB_E2E_SKIP_CODEX=1 leaves the Codex ones out)
@@ -554,6 +555,10 @@ fi
 if [ "$E2E" = 1 ]; then
   # Claude's first, then Codex's (codex*.e2e.test.ts: the conversation
   # tests and the install test), which TB_E2E_SKIP_CODEX=1 leaves out.
+  # One login for every e2e file, named here so a failure says which.
+  TB_E2E_ACCOUNT="$("$NODE" "$ROOT/runner/src/test-login.ts")"
+  export TB_E2E_ACCOUNT
+  echo "e2e login: $TB_E2E_ACCOUNT"
   E2E_RUN=(node --test --test-reporter=spec --test-concurrency=1 --test-timeout=600000)
   CLAUDE_E2E=()
   CODEX_E2E=()

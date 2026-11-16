@@ -2268,7 +2268,8 @@ thread to another login when the one it's on runs out of room.
   login in that pool (and no `poolId` was given), the first pool that has
   one. The thread's provider is its model's, or the pool's first provider;
   its login is the pool's pick of that provider (below, "Which login"). A dev
-  runner's `keepAccount` pins new threads to its account instead.
+  runner's `keepAccount` pins new threads to its account instead, unless
+  that login's plan has ended (`planEnded`).
   `defaults.poolId` in `hello` is folder-blind: the app applies folders
   itself (`poolForFolder`, with the shared cases in
   `runner/test/fixtures/pool-folder-cases.json`).

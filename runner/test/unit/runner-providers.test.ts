@@ -596,6 +596,11 @@ test('the default account is the one with the most room, worked out again as usa
   // A dev runner's keepAccount stays put.
   writeRunnerJson(h.home, { defaults: { accountId: 'claude-main', keepAccount: true } });
   assert.equal(h.runner.hello().defaults.accountId, 'claude-main');
+  // ...unless its plan has ended: every turn there would fail (a kept dev
+  // home on claude-main after its Max lapsed, 16 Nov 2026).
+  h.fake.base = h.fake.base.map((a) => (a.id === 'claude-main' ? { ...a, planEnded: true } : a));
+  assert.equal(h.runner.hello().defaults.accountId, 'claude-3');
+  assert.equal(h.runner.create({ text: 'y' }).thread.accountId, 'claude-3');
   // A test can swap the picker.
   const seen: (string | undefined)[] = [];
   const h2 = codexHarness({}, { pickAccount: (_a, last) => (seen.push(last), 'codex-main') });

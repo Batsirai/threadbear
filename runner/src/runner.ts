@@ -1430,7 +1430,9 @@ export class Runner {
     const json = peekRunnerJson(this.cfg.home).defaults;
     const saved = json?.accountId ?? this.cfg.defaults.accountId;
     const last = saved && accounts.some((a) => a.id === saved) ? saved : (accounts.find((a) => a.id === 'claude-main')?.id ?? accounts[0]?.id);
-    if (json?.keepAccount && last) return last;
+    // A dev runner's keepAccount pins its login, unless that login's plan
+    // has ended: every turn there fails, so the usual pick moves off it.
+    if (json?.keepAccount && last && !accounts.find((a) => a.id === last)?.planEnded) return last;
     let picked: string | undefined;
     try {
       picked = this.pickAccount(accounts, last);
