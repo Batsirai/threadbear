@@ -246,7 +246,8 @@ export const newThreadsPart = {
       const stand = standInFor(this.pools(), accounts, accountId, cwd);
       if (stand) {
         const title = (id: string) => accounts.find((a) => a.id === id)?.title ?? id;
-        loginNote = `Moved to ${title(stand.accountId)}: ${title(accountId)} is signed out.`;
+        const ended = accounts.find((a) => a.id === accountId)?.planEnded;
+        loginNote = `Moved to ${title(stand.accountId)}: ${title(accountId)}${ended ? "'s plan has ended" : ' is signed out'}.`;
         ({ poolId, accountId } = stand);
       }
     }

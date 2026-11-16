@@ -590,5 +590,9 @@ export function pickAccount(accounts: Account[], lastUsedId: string | undefined)
     if (room === undefined || room < MIN_ROOM_PERCENT) continue;
     if (!best || room > best.room || (room === best.room && a.id === last?.id)) best = { id: a.id, room };
   }
-  return best?.id ?? last?.id;
+  if (best) return best.id;
+  // A last-used login whose plan has ended never comes back by waiting, so
+  // any other candidate beats it (Grok's review, 16 Nov).
+  if (last?.planEnded) return eligible[0]?.id ?? last.id;
+  return last?.id;
 }

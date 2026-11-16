@@ -11,7 +11,7 @@ import { ENDING_SOON_MS, REFUSAL_HOLD_MS, SignInState, parseAuthStatus, signInWo
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { backAt, loginOk, pickInPool, roomWord } from '../../src/pools.ts';
+import { backAt, loginOk, pickInPool, roomWord, standInFor } from '../../src/pools.ts';
 import { readLoginProfile } from '../../src/accounts.ts';
 import { pickAccount } from '../../src/usage.ts';
 import type { Account } from '../../src/protocol.ts';
@@ -140,6 +140,11 @@ test('pools and new threads skip a login whose paid plan has ended, and nothing 
   const pool = { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-3'] };
   assert.equal(pickInPool(pool, [ended, ok], { provider: 'claude', prefer: 'claude-main' }), 'claude-3');
   assert.equal(pickAccount([ended, ok], 'claude-main'), 'claude-3');
+  // With no reading anywhere, the last-used login used to win by default.
+  const unread = account('claude-3', {});
+  assert.equal(pickAccount([account('claude-main', { planEnded: true }), unread], 'claude-main'), 'claude-3');
+  // A schedule pinned to it stands in on the pool, as for a signed-out one.
+  assert.deepEqual(standInFor([pool], [ended, ok], 'claude-main', '/tmp'), { poolId: 'claude', accountId: 'claude-3' });
   assert.match(signInWords({ planEnded: true, signedOut: true, loginEndsAt: iso(NOW + DAY) }, NOW, (s) => s), /^its paid plan has ended/);
 });
 

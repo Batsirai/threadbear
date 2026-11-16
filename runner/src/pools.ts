@@ -201,7 +201,8 @@ export function nextLogin(pool: Pool, accounts: Account[], thread: { accountId: 
   return roomWait(pool, accounts, now);
 }
 
-// Where a scheduled run pinned to a signed-out Claude login runs instead:
+// Where a scheduled run pinned to a signed-out or plan-ended Claude login
+// runs instead:
 // a pool holding that login with another Claude login that can run it, the
 // folder's pool first. Only Claude logins are tracked as signed out, and
 // only another Claude login keeps the schedule's model. A login alone in
@@ -210,7 +211,7 @@ export function nextLogin(pool: Pool, accounts: Account[], thread: { accountId: 
 // failed two nights after its sign-in ended (14 Nov).
 export function standInFor(pools: Pool[], accounts: Account[], pinnedId: string, cwd: string, home?: string): { poolId: string; accountId: string } | undefined {
   const pinned = accounts.find((a) => a.id === pinnedId);
-  if (pinned?.provider !== 'claude' || !pinned.signedOut) return undefined;
+  if (pinned?.provider !== 'claude' || !(pinned.signedOut || pinned.planEnded)) return undefined;
   const holding = pools.filter((p) => p.accountIds.includes(pinnedId));
   const own = poolForFolder(holding, cwd, home);
   for (const pool of own ? [own, ...holding.filter((p) => p !== own)] : holding) {
