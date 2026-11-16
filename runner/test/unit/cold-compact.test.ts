@@ -124,3 +124,64 @@ test('coldWake: only a resumed Claude session past both thresholds', () => {
   assert.equal(coldWake(rec, { text: 'hi', editOf: 3 }, 0, now), undefined);
   assert.equal(coldWake({ ...rec, provider: 'codex' }, { text: 'hi' }, 0, now), undefined);
 });
+
+test('only the result that answers the compaction lets the message go', async () => {
+  const { h, id, s } = setup();
+  finish(s, 500_000);
+  h.clock.advance(2 * HOUR);
+  h.runner.send(id, 'Carry on');
+  await tick(8);
+  const cli = last(h);
+  const compactId = cli.sent.at(-1)!.id!;
+  assert.match(compactId, /^[0-9a-f-]{36}$/, 'a real uuid, which the SDK keeps');
+  // A turn the CLI ran by itself, and one answering something else.
+  cli.result('completed', undefined, undefined, { own: true });
+  cli.result('completed', undefined, undefined, { answered: ['someone-else'] });
+  await tick(8);
+  assert.ok(!cli.sent.some((m) => m.text.includes('Carry on')));
+  cli.result('completed', undefined, undefined, { answered: [compactId] });
+  await tick(8);
+  assert.ok(cli.sent.at(-1)!.text.includes('Carry on'));
+});
+
+test("Stop while compacting a turn another thread opened queues its message again", async () => {
+  const { h, id, s } = setup();
+  finish(s, 500_000);
+  h.clock.advance(2 * HOUR);
+  const text = '[Sent by the agent in the thread "Helper" (12345678)]\n\nThe build passed.';
+  h.runner.send(id, text);
+  await tick(8);
+  const cli = last(h);
+  assert.match(cli.sent.at(-1)!.text, /^\/compact /);
+  await h.runner.interrupt(id);
+  cli.result('interrupted');
+  await tick(8);
+  const st = h.runner.mustGet(id);
+  assert.ok(!cli.sent.some((m) => m.text === text));
+  // Queued again, as a stopped message from another thread is, so it
+  // starts the next turn (which, still cold, compacts first).
+  assert.ok(st.rec.queue.some((q) => q.text === text) || st.rt.turn?.precompact?.msg.text === text, 'queued again, not lost');
+});
+
+test('the CLI dying while it compacts keeps the message', async () => {
+  const { h, id, s } = setup();
+  finish(s, 500_000);
+  h.clock.advance(2 * HOUR);
+  h.runner.send(id, 'Carry on');
+  await tick(8);
+  last(h).kill();
+  await tick(8);
+  const st = h.runner.mustGet(id);
+  assert.equal(st.rt.turn, undefined);
+  assert.equal(st.rec.interruptedMessages?.length, 1);
+});
+
+test("the held message can't be edited until the compaction is done", async () => {
+  const { h, id, s } = setup();
+  finish(s, 500_000);
+  h.clock.advance(2 * HOUR);
+  h.runner.send(id, 'Carry on');
+  await tick(8);
+  const seq = h.events(id).filter((e) => e.type === 'user.message').at(-1).seq;
+  await assert.rejects(h.runner.editMessage(id, seq, 'Carry on, carefully'), /waiting while the conversation compacts/);
+});

@@ -16,7 +16,9 @@
 // onOutput), which says so in the transcript and sends the message. Both
 // are one turn, so the thread shows one turn with a quiet line in it.
 // Each method's `this` is the Runner; runner.ts puts them on its prototype.
+import crypto from 'node:crypto';
 import type { Runner, ThreadState } from '../runner.ts';
+import { fromMike, isAutomaticInput } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { QueuedSend } from '../store.ts';
 import type { TurnResult } from '../adapters/types.ts';
@@ -64,13 +66,23 @@ export const COLD_COMPACT_INSTRUCTIONS =
   'the files, branches, commits, PRs and links involved; and every correction or preference the user gave about how to do the work here.';
 
 export type Precompact = {
+  id: string; // the /compact's uuid, which the CLI's result names
   gen: number; // the CLI it was sent to; a fresh one never ran it
+  msg: QueuedSend; // the message it holds
   tokens: number;
   idleMs: number;
   costBefore?: number; // sessionCostTotal when it was sent
   noted?: boolean; // the CLI's own "Compacted" line was reworded
   send: () => void; // the turn's message, held until the compaction is done
 };
+
+// Whether a result the CLI sent while a compaction was pending is the
+// compaction's. The CLI names the messages a turn answered (lifecycle
+// frames); one naming others, or a turn it ran by itself, isn't it.
+export function compactionResult(pre: Pick<Precompact, 'id'>, r: Pick<TurnResult, 'own' | 'answers' | 'answered'>): boolean {
+  if (r.answered?.length || r.answers !== undefined) return Boolean(r.answered?.includes(pre.id) || r.answers === pre.id);
+  return !r.own;
+}
 
 // Why this message should compact first, or undefined. Pure, for the tests.
 export function coldWake(
@@ -123,13 +135,44 @@ export const coldCompactPart = {
     if (!turn || !rt.session || turn.precompact || turn.command) return false;
     const cold = coldWake(rec, msg, this.lastModelMs(st), this.clock.now());
     if (!cold || !experimentOn(this.cfg.home, COLD_COMPACT)) return false;
-    turn.precompact = { gen: rt.generation, ...cold, costBefore: rec.sessionCostTotal, send };
+    // A real uuid: the SDK drops one that isn't, and with it the frames
+    // that say which result is the compaction's (Grok's review).
+    const id = crypto.randomUUID();
+    turn.precompact = { id, gen: rt.generation, msg, ...cold, costBefore: rec.sessionCostTotal, send };
     // Nothing goes into the CLI while it compacts: a message sent meanwhile
     // waits for the next turn, as for a /compact typed by hand.
     turn.noSteer = true;
     this.log.info('compacting a cold thread first', { threadId: rec.id, tokens: cold.tokens, idleMin: Math.round(cold.idleMs / 60_000) });
-    rt.session.send({ id: `${msg.turnId}:compact`, text: `/compact ${COLD_COMPACT_INSTRUCTIONS}`, images: [] });
+    rt.session.send({ id, text: `/compact ${COLD_COMPACT_INSTRUCTIONS}`, images: [] });
     return true;
+  },
+
+  // The turn is ending (Stop, the CLI gone, the runner stopping) with its
+  // message still held: it never reached the CLI, so it's kept as a
+  // stopped message is. Mike's goes with his next message; another
+  // thread's is queued again, once; a schedule's or the runner's own goes,
+  // as when Stop catches them in the CLI (saveInterruptedMessages, which
+  // passes over the message that opened the turn, so can't do this).
+  keepHeldMessage(this: Runner, st: ThreadState): void {
+    const { rec, rt } = st;
+    const turn = rt.turn;
+    const pre = turn?.precompact;
+    if (!turn || !pre) return;
+    turn.precompact = undefined;
+    turn.noSteer = false;
+    // Going back to an earlier message: what came after it goes.
+    if (rt.editing) return;
+    const msg = pre.msg;
+    const seq = turn.inputs?.get(msg.turnId);
+    if (fromMike(msg.text, msg)) {
+      if (seq === undefined || rec.interruptedMessages?.includes(seq)) return;
+      rec.interruptedMessages = [...(rec.interruptedMessages ?? []), seq];
+      this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, turn.turnId);
+    } else if (!isAutomaticInput(msg)) {
+      rec.queue.unshift({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: msg.text, images: msg.images, ...(msg.origin ? { origin: msg.origin } : {}) });
+      this.emit(st, { type: 'system.note', text: 'Queued an unread message again after the CLI interrupted its delivery.' }, turn.turnId);
+    }
+    this.markDirty(st);
   },
 
   // What the transcript says once it has compacted (the CLI's own
@@ -149,9 +192,8 @@ export const coldCompactPart = {
     const cost = r.totalCostUsd !== undefined && pre.costBefore !== undefined && r.totalCostUsd >= pre.costBefore ? r.totalCostUsd - pre.costBefore : undefined;
     this.log.info('cold compaction done', { threadId: rec.id, outcome: r.outcome, tokens: pre.tokens, ...(cost !== undefined ? { costUsd: Math.round(cost * 1e4) / 1e4 } : {}), ...(r.error ? { error: r.error } : {}) });
     if (turn.interruptRequested) {
-      // The message never reached the CLI: kept for the next one as any
-      // stopped message is.
-      this.saveInterruptedMessages(st, { ...r, unreceived: [turn.turnId] });
+      turn.precompact = pre;
+      this.keepHeldMessage(st);
       turn.messages = [];
       this.completeTurn(st, { ...r, outcome: 'interrupted' });
       return;

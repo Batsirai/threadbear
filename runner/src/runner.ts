@@ -165,7 +165,7 @@ import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, le
 import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
-import { coldCompactPart, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
+import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
 
 export type Notification =
@@ -1294,6 +1294,7 @@ export class Runner {
   stopTurn(st: ThreadState): void {
     const { rec, rt } = st;
     const turn = rt.turn!;
+    this.keepHeldMessage(st);
     this.persistInProgress(st, turn.turnId);
     this.expireApprovals(st, 'The runner stopped.');
     const ev = this.emit(
@@ -2592,7 +2593,7 @@ export class Runner {
         // The compaction sent ahead of the message (runner/cold-compact.ts).
         // A turn the CLI ran by itself meanwhile isn't it: keep waiting.
         if (turn.precompact?.gen === rt.generation) {
-          if (!r.own) this.compactDone(st, r);
+          if (compactionResult(turn.precompact, r)) this.compactDone(st, r);
           break;
         }
         // A folded-in message may have no started frame of its own. The
@@ -2954,6 +2955,8 @@ export class Runner {
     const { rec, rt } = st;
     const turn = rt.turn;
     if (!turn) return;
+    // A message held for a compaction never reached the CLI (runner/cold-compact.ts).
+    this.keepHeldMessage(st);
     this.saveInterruptedMessages(st);
     this.settleInstructionsNews(st, false);
     this.persistInProgress(st, turn.turnId);
@@ -4497,7 +4500,7 @@ type ScheduledDelivery = { seq: number; started: boolean; text: string; images: 
 
 const SUPERSEDED_REMINDER = 'Skipped an older queued reminder because a newer reminder from the same schedule is waiting.';
 
-function isAutomaticInput(q: Pick<QueuedSend, 'origin' | 'retryAfterInterrupt'>): boolean {
+export function isAutomaticInput(q: Pick<QueuedSend, 'origin' | 'retryAfterInterrupt'>): boolean {
   return q.origin === 'schedule' || q.origin === 'runner' || q.retryAfterInterrupt === true;
 }
 
