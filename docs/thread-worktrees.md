@@ -402,11 +402,16 @@ With `keep`:
   real folders inside it, never through a link; each is renamed aside right
   after that check, then deleted.
 - The record keeps `keep`, and `spare: true` once it's set aside. A
-  spare's thread, unarchived, moves to the main checkout even though the
-  folder is still there: it's another thread's now. So does any thread
-  whose worktree was removed, whatever is at that path now: on 8 Nov a
-  removed slot-10 was made again by `borrow-worktree.sh`, and the thread
-  brought back carried on in it beside the borrower's work.
+  spare's thread, unarchived, never goes back into that folder even though
+  it's still there: it's another thread's now. Nor does any thread whose
+  worktree was removed, whatever is at that path now: on 8 Nov a removed
+  slot-10 was made again by `borrow-worktree.sh`, and the thread brought
+  back carried on in it beside the borrower's work. Its next message gives
+  it a fresh worktree from main instead, as a new thread gets (a spare, if
+  there is one), and only if that fails does it carry on in the main
+  checkout. Until 16 Nov it always went to the main checkout; with helper
+  threads archiving themselves and their starters writing to them again,
+  24 came back there in four days and each had to borrow a worktree.
 
 A thread started outside the repo borrows one by hand with
 `./borrow-worktree.sh` and gives it back with `--give-back <dir>`. The

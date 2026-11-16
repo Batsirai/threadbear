@@ -2000,8 +2000,25 @@ export class Runner {
       await preparing;
       if (gone()) return; // interrupted or deleted during setup
     }
-    if (!rt.session) {
-      const left = this.leaveRemovedWorktree(st, msg.turnId) ?? this.tellTornDown(st, msg.turnId);
+    if (!rt.session && this.leavesRemovedWorktree(rec)) {
+      // Held as a new thread's worktree is, so an archive that comes
+      // meanwhile waits for it rather than cleaning up under it.
+      const leaving = this.leaveRemovedWorktree(st, msg.turnId);
+      const held: Promise<void> = leaving
+        .then(() => undefined, () => undefined)
+        .finally(() => {
+          if (rt.preparing !== held) return;
+          rt.preparing = undefined;
+          this.archiveWhenGone(st);
+          if (this.draining) this.queueHandoverCheck();
+          this.markDirty(st);
+        });
+      rt.preparing = held;
+      const left = await leaving;
+      if (gone()) return;
+      if (left) text = `${left}\n\n${text}`;
+    } else if (!rt.session) {
+      const left = this.tellTornDown(st, msg.turnId);
       if (left) text = `${left}\n\n${text}`;
     }
     if (!rt.session) {

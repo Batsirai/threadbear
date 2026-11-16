@@ -4980,7 +4980,10 @@ link to somewhere else. Then a
 worktree whose branch is on main
 (or has nothing of its own) is removed with its branch; otherwise both stay,
 with a `system.note` saying how to land or drop them. A thread whose
-worktree was removed carries on in the main checkout, with a note. One whose
+worktree was removed gets a fresh one with its next message, made from main
+as a new thread's is (same branch name, the patch's setup run), with a note;
+only if none can be made (no patch asks for one, or making it fails, which
+is said) does it carry on in the main checkout. One whose
 worktree stayed carries on in it, and its next turn says (to Mike and the
 agent) that the teardown ran, so what setup made may be gone.
 

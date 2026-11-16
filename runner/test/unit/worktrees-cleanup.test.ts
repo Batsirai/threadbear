@@ -11,7 +11,7 @@ import { cleanUpWorktree, git, gitLimits, land } from '../../src/worktrees.ts';
 import { PatchTrust } from '../../src/patch-trust.ts';
 import { HUNG_GIT_LIMIT_MS, PATCH, TEARDOWN, capture, commit, harness, lines, makeBranch, makeRepo, notes, sh, swapDuringGit, teardowns, threadWithWorktree, trustedTeardownRepo, until, wrapGit, write } from '../helpers/worktrees-harness.ts';
 
-test('archiving a thread whose branch is all on main removes its worktree and branch; it comes back in the main checkout', async () => {
+test('archiving a thread whose branch is all on main removes its worktree and branch; it comes back in a fresh one', async () => {
   const { root, main } = makeRepo();
   const h = harness();
   const { id, w } = await threadWithWorktree(h, main);
@@ -29,17 +29,25 @@ test('archiving a thread whose branch is all on main removes its worktree and br
   assert.ok(!summary.actions?.some((a) => a.id === 'worktree.land'));
   assert.deepEqual(checkSummary(summary), []);
 
-  // Sent a message: unarchived, and on in the main checkout's runner/.
+  // Main has moved on since (another thread's landing).
+  commit(main, { 'README.md': 'moved on\n' }, 'Another landing');
+  // Sent a message: unarchived, and on in a fresh worktree's runner/, made
+  // from main as it is now, not the main checkout other threads share.
   h.runner.send(id, 'More please');
   await until(() => h.adapter.sessions.length === 2, 'a new CLI');
-  assert.equal(h.adapter.last.opts.cwd, path.join(main, 'runner'));
-  assert.equal(h.runner.get(id).cwd, path.join(main, 'runner'));
-  assert.ok(notes(h, id).includes(`This thread's worktree was removed when it was archived, so it carries on in the main checkout, ${path.join(main, 'runner')}.`));
+  const fresh = h.runner.get(id).worktree!;
+  assert.ok(fresh, 'a Land chip again');
+  assert.equal(fresh.branch, w.branch, "the thread's own branch name, made again");
+  assert.equal(h.adapter.last.opts.cwd, path.join(fresh.path, 'runner'));
+  assert.equal(h.runner.get(id).cwd, path.join(fresh.path, 'runner'));
+  assert.equal(sh(fresh.path, 'git rev-parse HEAD'), sh(main, 'git rev-parse main'), 'from main as it is now');
+  assert.ok(fs.existsSync(path.join(fresh.path, '.setup-ran')), 'its setup ran');
+  assert.ok(notes(h, id).includes(`This thread's worktree was removed when it was archived, so it carries on in a fresh one at ${fresh.path}, on the branch ${fresh.branch}, made from main. tb land puts it on main.`));
   const sent = h.adapter.last.sent.at(-1)!.text;
   // After the handoff note (the test harness can't carry the transcript).
-  assert.match(sent, new RegExp(`\n\n\\[Threadbear\\] Your worktree at ${w.path} was removed after its work landed on main\\. You're now in the main checkout`));
+  assert.match(sent, new RegExp(`\n\n\\[Threadbear\\] Your worktree at ${w.path} was removed after its work landed on main\\. You're now in a fresh worktree of your own at ${fresh.path}`));
   assert.match(sent, /More please$/);
-  assert.doesNotMatch(h.adapter.last.opts.instructions ?? '', /own git worktree/, 'a fresh session is no longer told about it');
+  assert.match(h.adapter.last.opts.instructions ?? '', /own git worktree/, 'a fresh session is told about the new one');
 });
 
 test("archiving a thread with work that isn't on main keeps the worktree and branch, and says how to land or drop them", async () => {

@@ -967,7 +967,7 @@ export const patchesPart = {
     while (st.rt.cleaning) await st.rt.cleaning;
     const gone = st.rec.worktree;
     if (gone?.removedAt && isInside(action.folder ?? st.rec.cwd, gone.path)) {
-      throw new RpcError(ErrorCode.other, `Didn't run ${action.title}: this thread's worktree at ${gone.path} was removed when it was archived, and the folder may be another thread's now. Send the thread a message first, and it carries on in the main checkout.`);
+      throw new RpcError(ErrorCode.other, `Didn't run ${action.title}: this thread's worktree at ${gone.path} was removed when it was archived, and the folder may be another thread's now. Send the thread a message first, and it carries on in a fresh worktree.`);
     }
     const running = (st.rt.runningActions ??= new Set());
     if (running.has(actionId)) throw new RpcError(ErrorCode.busy, `${action.title} is already running.`);
