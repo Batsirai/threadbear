@@ -6,25 +6,31 @@ import type { UsageStore } from './usage.ts';
 import type { Config } from './config.ts';
 import { isDirectory } from './fsutil.ts';
 
-// What a .claude.json says about its login: oauthAccount's emailAddress and
-// organizationType. Tokens live in the Keychain and are never read; this
+// What a .claude.json says about its login: oauthAccount's emailAddress,
+// organizationType and billingType. Tokens live in the Keychain and are never read; this
 // file only names the login and caches its claude.ai profile, which the CLI
 // fetches again at most once a day while it runs on that login.
 export type LoginProfile = { email?: string; planEnded?: true };
 
-// organizationType "claude_free": the login's paid plan has lapsed and the
-// free plan has no Claude Code, so every turn would fail. claude-main's
-// cancelled Max ran out on 16 Nov 2026 while the Usage panel still offered
-// Sign in… and a weekly reset. Only that value counts: an older CLI's file
-// without the field, or a plan type this doesn't know, is left usable.
+// A lapsed paid plan: the free plan has no Claude Code, so every turn would
+// fail. claude-main's cancelled Max ran out on 16 Nov 2026 while the Usage
+// panel still offered Sign in… and a weekly reset. The CLI's profile fetch
+// that evening still cached organizationType "claude_max" (the API's own
+// profile said claude_free); what changed was billingType, "none" where every
+// paying login has "stripe_subscription" (Apple and Google in-app plans have
+// their own values). So either says it: organizationType "claude_free", or a
+// Pro or Max plan with billingType "none". Team and enterprise orgs, an older
+// CLI's file without the fields, or values this doesn't know are left usable.
+const PERSONAL_PAID = new Set(['claude_pro', 'claude_max']);
 export function readLoginProfile(claudeJsonPath: string): LoginProfile | undefined {
   try {
     const raw = fs.readFileSync(claudeJsonPath, 'utf8');
-    const parsed = JSON.parse(raw) as { oauthAccount?: { emailAddress?: unknown; organizationType?: unknown } };
+    const parsed = JSON.parse(raw) as { oauthAccount?: { emailAddress?: unknown; organizationType?: unknown; billingType?: unknown } };
     const o = parsed.oauthAccount;
     const out: LoginProfile = {};
     if (typeof o?.emailAddress === 'string' && o.emailAddress) out.email = o.emailAddress;
-    if (o?.organizationType === 'claude_free') out.planEnded = true;
+    const org = o?.organizationType;
+    if (org === 'claude_free' || (typeof org === 'string' && PERSONAL_PAID.has(org) && o?.billingType === 'none')) out.planEnded = true;
     return out;
   } catch {
     return undefined;

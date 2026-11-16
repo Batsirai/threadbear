@@ -143,13 +143,24 @@ test('pools and new threads skip a login whose paid plan has ended, and nothing 
   assert.match(signInWords({ planEnded: true, signedOut: true, loginEndsAt: iso(NOW + DAY) }, NOW, (s) => s), /^its paid plan has ended/);
 });
 
-test('a login is plan-ended only when its cached profile says the free plan', () => {
+test('a login is plan-ended when its cached profile says the free plan, or a personal plan with no billing', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-'));
   const file = path.join(dir, '.claude.json');
   const write = (o: object) => fs.writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: 'a@example.com', ...o } }));
   write({ organizationType: 'claude_free', billingType: 'none' });
   assert.deepEqual(readLoginProfile(file), { email: 'a@example.com', planEnded: true });
   write({ organizationType: 'claude_max' });
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com' });
+  // claude-main on 16 Nov 2026: refetched after the lapse, still claude_max.
+  write({ organizationType: 'claude_max', billingType: 'none' });
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com', planEnded: true });
+  write({ organizationType: 'claude_pro', billingType: 'none' });
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com', planEnded: true });
+  write({ organizationType: 'claude_max', billingType: 'stripe_subscription' });
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com' });
+  write({ organizationType: 'claude_max', billingType: 'apple_subscription' });
+  assert.deepEqual(readLoginProfile(file), { email: 'a@example.com' });
+  write({ organizationType: 'claude_team', billingType: 'none' });
   assert.deepEqual(readLoginProfile(file), { email: 'a@example.com' });
   write({});
   assert.deepEqual(readLoginProfile(file), { email: 'a@example.com' });

@@ -206,10 +206,12 @@ type Account = {
                         // (28 days after signing in, from Claude Code 2.1.325).
                         // Clients warn a few days ahead
   planEnded?: boolean   // Claude: its paid plan has lapsed. The CLI's cached
-                        // claude.ai profile (oauthAccount.organizationType in
-                        // the login's .claude.json, fetched again at most
-                        // daily while the CLI runs on it) says claude_free,
-                        // which has no Claude Code. Its plan and usage are
+                        // claude.ai profile (oauthAccount in the login's
+                        // .claude.json, fetched again at most daily while the
+                        // CLI runs on it) says organizationType claude_free,
+                        // or a Pro or Max plan with billingType none (a lapsed
+                        // Max still cached as claude_max). The free plan has
+                        // no Claude Code. Its plan and usage are
                         // left out (a stale reset would promise room that
                         // isn't coming). Pools and the default account skip
                         // it; clients say "Plan ended", and offer no sign-in
