@@ -122,6 +122,9 @@ pub struct Saved {
     pub extra: Map<String, Value>,
 }
 
+/// The fields that record a step done once (swift_import.rs).
+const ONCE_ONLY: [&str; 3] = ["swiftImport", "swiftImportParts", "swiftTourImport"];
+
 impl Saved {
     fn after_a_broken_file() -> Self {
         let now = threadbear_core::inbox::iso_time(crate::now_ms());
@@ -130,19 +133,21 @@ impl Saved {
 }
 
 /// A JSON object read field by field: a field `T` can't take is left out
-/// (and logged by name, never its value), so the rest still count. None
-/// when it isn't a JSON object at all. `T` must take any one of its fields
-/// alone (`#[serde(default)]`).
-pub(crate) fn tolerant<T: DeserializeOwned>(data: &[u8], file: &str) -> Option<T> {
+/// (and logged by name, never its value), so the rest still count, and
+/// the names of those left out. None when it isn't a JSON object at all.
+/// `T` must take any one of its fields alone (`#[serde(default)]`).
+pub(crate) fn tolerant<T: DeserializeOwned>(data: &[u8], file: &str) -> Option<(T, Vec<String>)> {
     let Ok(Value::Object(mut fields)) = serde_json::from_slice::<Value>(data) else { return None };
+    let mut dropped = Vec::new();
     fields.retain(|key, value| {
         let fits = serde_json::from_value::<T>(Value::Object(Map::from_iter([(key.clone(), value.clone())]))).is_ok();
         if !fits {
             threadbear_client::log::write("settings", &format!("{file}: left out {key}, which isn't the type this build reads"));
+            dropped.push(key.clone());
         }
         fits
     });
-    serde_json::from_value(Value::Object(fields)).ok()
+    serde_json::from_value(Value::Object(fields)).ok().map(|t| (t, dropped))
 }
 
 /// The settings file: where it is and what's in it. Reading is at launch only;
@@ -182,7 +187,18 @@ impl Settings {
         let saved = match std::fs::read(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Saved::default(),
             read => match read.ok().and_then(|data| tolerant::<Saved>(&data, Self::file_name())) {
-                Some(saved) => saved,
+                // A record of a step done once that can't be read counts as
+                // done, as a broken file does: else a mangled swiftImport
+                // reads as none and the drafts come across again (Codex's
+                // review, 16 Nov).
+                Some((mut saved, dropped)) => {
+                    if dropped.iter().any(|k| ONCE_ONLY.contains(&k.as_str())) {
+                        let done = Saved::after_a_broken_file();
+                        saved.swift_import = saved.swift_import.or(done.swift_import);
+                        saved.swift_tour_import = saved.swift_tour_import.or(done.swift_tour_import);
+                    }
+                    saved
+                }
                 None => {
                     let aside = path.with_file_name(format!("{}.broken", Self::file_name()));
                     let kept = std::fs::copy(&path, &aside).is_ok();
@@ -303,6 +319,17 @@ mod tests {
         assert_eq!(s.saved.swift_import_parts, Vec::<String>::new());
         assert_eq!(s.saved.inbox_order, None);
         assert_eq!(s.saved.tour_seen, Some(true));
+    }
+
+    #[test]
+    fn a_mangled_record_of_the_swift_import_counts_as_done() {
+        let path = temp_file("mangled-marker");
+        std::fs::write(&path, r#"{"swiftImport": true, "swiftImportParts": [], "textZoomPercent": 120}"#).unwrap();
+        let s = Settings::load_from(path);
+        assert!(s.saved.swift_import.is_some(), "not imported again");
+        assert!(s.saved.swift_tour_import.is_some());
+        assert_eq!(s.zoom_percent(), 120);
+        assert_eq!(s.saved.tour_seen, None, "only the records, not the tour itself");
     }
 
     #[test]
