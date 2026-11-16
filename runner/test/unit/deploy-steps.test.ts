@@ -291,3 +291,15 @@ test('networkDropped: connection drops and DNS misses, not a failing step', () =
   for (const s of ['fetch failed', 'Error: connect ECONNREFUSED 127.0.0.1:3210', 'read ECONNRESET', 'getaddrinfo ENOTFOUND api.convex.dev', 'getaddrinfo EAI_AGAIN x', 'connect ETIMEDOUT 1.2.3.4:443', 'socket hang up', "code: 'UND_ERR_SOCKET'"]) assert.ok(steps.networkDropped(s), s);
   for (const s of ['Type error: x is not assignable', 'npm ERR! code E404', '']) assert.ok(!steps.networkDropped(s), s);
 });
+
+// npm ci cut off partway (the runner restarting under it) leaves
+// node_modules with packages but not finished: no .bin, so the typecheck
+// failed with "tsc: command not found" on every deploy after (a fork, 11 Nov).
+test('packagesInstalled: only a finished npm install counts', () => {
+  const dir = tmpDir('tb-deploy-pkgs-');
+  assert.equal(steps.packagesInstalled(dir), false, 'no node_modules');
+  fs.mkdirSync(path.join(dir, 'node_modules', 'typescript'), { recursive: true });
+  assert.equal(steps.packagesInstalled(dir), false, 'packages but npm never finished');
+  fs.writeFileSync(path.join(dir, 'node_modules', '.package-lock.json'), '{}\n');
+  assert.equal(steps.packagesInstalled(dir), true);
+});
