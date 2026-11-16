@@ -137,6 +137,17 @@ test('account discovery reads only the login email', () => {
   assert.ok(!JSON.stringify(found).includes('SHOULD-NOT-APPEAR'));
 });
 
+test('runner.json hiddenLogins leaves a login out, even claude-main', () => {
+  const root = tmpDir();
+  const main = path.join(root, 'dot-claude');
+  fs.mkdirSync(main);
+  const accts = path.join(root, 'Accounts');
+  fs.mkdirSync(path.join(accts, 'claude-1'), { recursive: true });
+  const cfg = { userHome: root, pathEnv: '', claudeMainDir: main, claudeMainJson: path.join(root, 'claude.json'), tokenStatsAccountsDir: accts };
+  assert.deepEqual(discoverAccounts({ ...cfg, hiddenLogins: ['claude-main'] }).map((a) => a.id), ['claude-1']);
+  assert.deepEqual(discoverAccounts(cfg).map((a) => a.id), ['claude-main', 'claude-1']);
+});
+
 test("without Token Stats, logins come from the data dir's accounts folder", () => {
   const root = tmpDir();
   const own = path.join(root, 'data', 'accounts');

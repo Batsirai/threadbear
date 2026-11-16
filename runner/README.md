@@ -440,6 +440,8 @@ through the deploy script (Releases and deploys, above).
   else is read from it. Tokens stay in the Keychain. The CLI gets
   `CLAUDE_CONFIG_DIR` for `claude-N` logins and has it removed for
   `claude-main`.
+  runner.json `hiddenLogins` (e.g. `["claude-main"]`) leaves logins out
+  altogether: no Usage row, no sign-in warning, not offered for threads.
 - **One runner per data dir.** `run/runner.pid` is taken with an exclusive
   create before anything else happens. A second runner (say `npm start`
   while the LaunchAgent runs) exits with "Another runner (pid N) is already

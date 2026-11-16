@@ -108,6 +108,11 @@ export type Config = {
   // would read every login's last 14 days (gigabytes) for nothing.
   tokenTally?: boolean;
   accountNotes: Record<string, string>;
+  // Logins left out of the list altogether (runner.json hiddenLogins, e.g.
+  // ["claude-main"]): ~/.claude is always found as claude-main, so this is
+  // the only way to drop it once its plan has lapsed, rather than have its
+  // Usage row (and its sign-in warning dot) sit there for good.
+  hiddenLogins?: string[];
   poolFolders?: Record<string, string[]>;
   // The folders runner.json's `sandbox` named, from the sandboxed-threads
   // experiment Threadbear no longer has (taken out 16 Nov 2026). A thread
@@ -196,6 +201,7 @@ export type RunnerJson = {
   codexArgs?: string[];
   cliUpdates?: Partial<CliUpdatesConfig>;
   accountNotes?: Record<string, string>;
+  hiddenLogins?: string[];
   poolFolders?: Record<string, string[]>;
   sandbox?: unknown;
   pools?: unknown[];
@@ -479,6 +485,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     cliUpdates: cliUpdatesConfig(json.cliUpdates, env.THREADBEAR_CLI_UPDATES),
     tokenTally: env.THREADBEAR_TOKEN_TALLY !== 'off',
     accountNotes: stringMap(json.accountNotes) ?? { ...DEFAULT_ACCOUNT_NOTES },
+    ...((h) => (h.length ? { hiddenLogins: h } : {}))(
+      Array.isArray(json.hiddenLogins) ? json.hiddenLogins.filter((x): x is string => typeof x === 'string' && x !== '') : [],
+    ),
     poolFolders: folderMap(json.poolFolders) ?? { ...DEFAULT_POOL_FOLDERS },
     ...((f) => (f.length ? { retiredSandboxFolders: f } : {}))(retiredSandboxFolders(json.sandbox, expand)),
     ...(Array.isArray(json.pools) && json.pools.length ? { pools: json.pools } : {}),
