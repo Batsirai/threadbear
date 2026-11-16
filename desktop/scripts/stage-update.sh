@@ -165,7 +165,25 @@ elif [[ -n "$CHECK_HOSTS" ]]; then
 else
   echo "No update build hosts or check hosts in $CONFIG: building here."
   BUILT_ON=""
-  (cd "$SRC/desktop" && CARGO_TARGET_DIR="$CACHE/target" CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10 cargo build --release -p threadbear-gpui --features "$FEATURES")
+  # The newest stable Rust, which is what desktop.yml builds and tests with:
+  # code that needs a recent Rust passes there and then fails partway
+  # through a 20-minute build on an older one (the vendored crates alone
+  # need 1.85). Through rustup when there is one, whatever its default
+  # toolchain is; an update that fails (offline) builds with the stable
+  # that's there. Without rustup (Homebrew's rust), the cargo on PATH.
+  cargo=(cargo)
+  if command -v rustup >/dev/null; then
+    if rustup toolchain install stable --profile minimal --no-self-update >/dev/null 2>&1 || rustup run stable cargo --version >/dev/null 2>&1; then
+      cargo=(rustup run stable cargo)
+    else
+      echo "Couldn't get Rust's stable toolchain (rustup toolchain install stable), so building with rustup's default." >&2
+    fi
+  fi
+  (cd "$SRC/desktop" && CARGO_TARGET_DIR="$CACHE/target" CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10 "${cargo[@]}" build --release -p threadbear-gpui --features "$FEATURES") || {
+    rc=$?
+    [[ "${cargo[0]}" == rustup ]] || echo "The build failed with $(cargo --version 2>/dev/null || echo "this Mac's cargo"). Threadbear is built and tested on the newest stable Rust: rustup (https://rustup.rs) keeps one, and this build uses it when it's there." >&2
+    exit "$rc"
+  }
   cp "$CACHE/target/release/threadbear-gpui" "$CACHE/target/release/threadbear-web-helper" "$BINS/"
 fi
 

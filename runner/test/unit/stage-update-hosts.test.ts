@@ -23,7 +23,10 @@ function write(file: string, text: string, mode = 0o644) {
   fs.writeFileSync(file, text, { mode });
 }
 
-function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy') {
+// rust: 'rustup' has a stand-in rustup beside cargo, whose `run stable`
+// runs that cargo; 'none' is a Mac with only a cargo (Homebrew's rust).
+// cargoFails: the build fails.
+function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy', rust: 'rustup' | 'none' = 'rustup', cargoFails = false) {
   const root = tmpDir();
   const home = path.join(root, 'home');
   const marks = path.join(root, 'marks');
@@ -39,7 +42,8 @@ echo BUILT_IN=/mock-target
 `, 0o755);
   write(path.join(checkout, 'desktop', 'scripts', 'make-bundle.sh'), `${note('bundle')}echo "builtOn=\${THREADBEAR_BUILT_ON-unset}" >> '${marks}/bundle'\nmkdir -p "$2"\n`, 0o755);
   // cargo, for a build here: it notes it ran and leaves the two binaries.
-  write(path.join(home, '.cargo', 'bin', 'cargo'), `${note('cargo')}mkdir -p "$CARGO_TARGET_DIR/release"\ntouch "$CARGO_TARGET_DIR/release/threadbear-gpui" "$CARGO_TARGET_DIR/release/threadbear-web-helper"\n`, 0o755);
+  write(path.join(home, '.cargo', 'bin', 'cargo'), `${note('cargo')}[ "$1" = build ] || exit 0\n${cargoFails ? 'exit 101\n' : ''}mkdir -p "$CARGO_TARGET_DIR/release"\ntouch "$CARGO_TARGET_DIR/release/threadbear-gpui" "$CARGO_TARGET_DIR/release/threadbear-web-helper"\n`, 0o755);
+  if (rust === 'rustup') write(path.join(home, '.cargo', 'bin', 'rustup'), `${note('rustup')}[ "$1" = run ] || exit 0\nshift 2\nexec "$@"\n`, 0o755);
   const git = (...args: string[]) => {
     const r = spawnSync('git', ['-C', checkout, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
     assert.equal(r.status, 0, r.stderr);
@@ -54,7 +58,9 @@ echo BUILT_IN=/mock-target
     const r = spawnSync('bash', [SCRIPT, checkout, '--next', path.join(root, 'next.app')], {
       encoding: 'utf8',
       timeout: 60_000,
-      env: { ...process.env, HOME: home, THREADBEAR_HOME: data,
+      // Only the system's tools beside the stand-ins: a real rustup on the
+      // test machine's PATH would really install Rust.
+      env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, THREADBEAR_HOME: data,
         // Bash imports this stand-in even though stage-update sets a system PATH.
         ...(remote ? { 'BASH_FUNC_ssh%%': '() { cat >/dev/null; echo Darwin; }', 'BASH_FUNC_ioreg%%': '() { :; }', 'BASH_FUNC_scp%%': '() { touch "${@: -1}"; }' } : {}),
       },
@@ -131,6 +137,26 @@ test("someone else's copy with neither builds here, and the bundle says so", () 
     assert.equal(r.marked('remote'), '');
     assert.match(r.marked('bundle'), /^builtOn=$/m, 'built on this Mac, said as ""');
   }
+});
+
+test('a build here uses the newest stable Rust through rustup, whatever its default, as GitHub builds with', () => {
+  const r = setup(null)();
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.marked('rustup'), /^toolchain install stable --profile minimal --no-self-update$/m);
+  assert.match(r.marked('rustup'), /^run stable cargo build --release -p threadbear-gpui /m);
+  assert.match(r.marked('cargo'), /^build --release/m);
+});
+
+test("with only a cargo (Homebrew's rust) it builds with that, and a failed build says where the tested Rust comes from", () => {
+  const ok = setup(null, undefined, 'none')();
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.marked('cargo'), /^build --release/m);
+  const failed = setup(null, undefined, 'none', true)();
+  assert.equal(failed.status, 101, failed.out);
+  assert.match(failed.out, /newest stable Rust: rustup \(https:\/\/rustup\.rs\)/);
+  const viaRustup = setup(null, undefined, 'rustup', true)();
+  assert.equal(viaRustup.status, 101);
+  assert.doesNotMatch(viaRustup.out, /rustup\.rs/, 'already on the stable it tests with');
 });
 
 // An installed app's older stage-update.sh runs from its own bundle but takes
