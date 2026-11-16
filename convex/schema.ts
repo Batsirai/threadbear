@@ -739,7 +739,9 @@ export default defineSchema({
   })
     .index('by_runnerId', ['runnerId'])
     // sync:upsertProjects (API 30) finds the one project it changes.
-    .index('by_runner_id', ['runnerId', 'id']),
+    .index('by_runner_id', ['runnerId', 'id'])
+    // Whether another runner has a project with an id (sync.ts heldElsewhere).
+    .index('by_project_id', ['id']),
 
   // A project's notes, apart from its row (API 50, projectNotes.ts). Notes
   // are most of a project's bytes (16 KB of the Threadbear project's 17.7),

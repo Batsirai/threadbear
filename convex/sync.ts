@@ -676,6 +676,26 @@ async function linkThread(ctx: MutationCtx, threadId: string, t: { runnerId: str
   for (const projectId of want) await ctx.db.insert('projectThreads', { runnerId: t!.runnerId, projectId, threadId });
 }
 
+// A project id is one runner's. Runners make their own random ones, so two
+// never share one by chance (none did across Mike's 86 on 17 Nov 2026), and
+// apps from before API 82 (the iPhone and Android ones already out there, an
+// open old page) still find a thread's project by its id alone. So a runner
+// key may neither make a project with an id another runner has, nor put its
+// own thread under one: either would dress its thread as one of the main
+// Mac's projects there (Daybreak 141, cross-lab review, 17 Nov 2026). The
+// main key's own writes are trusted as they always were.
+async function heldElsewhere(ctx: QueryCtx, runnerId: string, id: string): Promise<boolean> {
+  for await (const p of ctx.db.query('projects').withIndex('by_project_id', (q) => q.eq('id', id))) if (p.runnerId !== runnerId) return true;
+  return false;
+}
+
+async function ownProjectsOnly<P extends { id: string }>(ctx: QueryCtx, caller: { owner: boolean }, runnerId: string, projects: P[]): Promise<P[]> {
+  if (caller.owner) return projects;
+  const out: P[] = [];
+  for (const p of projects) if (!(await heldElsewhere(ctx, runnerId, p.id))) out.push(p);
+  return out;
+}
+
 // The project ids on a thread row, in a fixed order, so upsertThreads can
 // tell whether its links need touching without reading them.
 const projectKey = (t: { projects?: { id: string }[] } | null | undefined) => (t?.projects ?? []).map((p) => p.id).sort().join(' ');
@@ -718,7 +738,7 @@ export const upsertThreads = mutation({
     for (const given of threads) {
       checkRunnerId(given.runnerId);
       // Every runner's links are held to web pages, the main Mac's too (webLinksOnly).
-      const t = caller.owner ? webLinksOnly(given) : fitThread(webLinksOnly(given));
+      let t = caller.owner ? webLinksOnly(given) : fitThread(webLinksOnly(given));
       if (!t) {
         skipped.push(given.threadId);
         continue;
@@ -728,6 +748,11 @@ export const upsertThreads = mutation({
       // another runner's: the row says where the phone's commands for it go
       // and carries its secret card's key (docs/protocol.md, "Runner keys").
       if (!mayWrite(caller, t.runnerId, existing?.runnerId)) throw forbidden(`write thread ${t.threadId}`);
+      // Only its own runner's projects (heldElsewhere).
+      if (t.projects?.length && !caller.owner) {
+        const projects = await ownProjectsOnly(ctx, caller, t.runnerId, t.projects);
+        if (projects.length !== t.projects.length) t = { ...t, projects: projects.length ? projects : undefined };
+      }
       // Nor the main key as a runner that has a key of its own (lib.ts actAs).
       if (caller.owner && (await hasLiveKey(ctx, t.runnerId))) throw forbidden(`write threads as runner ${t.runnerId} with the main key, as that runner has a key of its own`);
       // A new row: not under an id another runner has had, or with
@@ -1753,7 +1778,7 @@ export const setProjects = mutation({
     const caller = await runnerAuth(ctx, key, 'setProjects');
     given = clean(given);
     await actAs(ctx, caller, runnerId);
-    const projects = fitProjects(caller, given);
+    const projects = await ownProjectsOnly(ctx, caller, runnerId, fitProjects(caller, given));
     // Notes in projectNotes (API 50), the rows without them.
     await replaceRows(ctx, 'projects', runnerId, projects.map((p) => ({ ...p, notes: '' })));
     await syncNotes(ctx, runnerId, projects);
@@ -1796,7 +1821,7 @@ export const upsertProjects = mutation({
       await ctx.db.delete(icon._id);
       await freeStorage(ctx, caller, icon.storageId);
     };
-    let projects = fitProjects(caller, given);
+    let projects = await ownProjectsOnly(ctx, caller, runnerId, fitProjects(caller, given));
     if (!caller.owner) {
       // New ones past the cap are left out, as setProjects would.
       const ids = new Set((await ctx.db.query('projects').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).take(CAP.projects + 1)).map((p) => p.id));

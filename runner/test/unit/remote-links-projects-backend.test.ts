@@ -82,17 +82,42 @@ test('a row stored before API 82 with non-web links reaches the phone and websit
 test("a runner's thread with another runner's project id isn't in that runner's project (141)", async () => {
   const s = await setup();
   await call(s.ctx, sync.setProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')] });
-  await call(s.ctx, sync.setProjects, { key: MINI_KEY, runnerId: MINI, projects: [project('p_shared', 'Mini project')] });
+  await call(s.ctx, sync.setProjects, { key: MINI_KEY, runnerId: MINI, projects: [project('p_mini', 'Mini project')] });
   await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread('MAIN', LAPTOP, { projects: [{ id: 'p_shared', title: 'Main project' }] })] });
   // The other runner claims the main runner's project id for its own thread,
   // with that project's title, and an id it has no project for.
-  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('EVIL', MINI, { projects: [{ id: 'p_shared', title: 'Main project' }, { id: 'p_main_only', title: 'x' }] })] });
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('EVIL', MINI, { projects: [{ id: 'p_shared', title: 'Main project' }, { id: 'p_main_only', title: 'x' }, { id: 'p_mini', title: 'Mini project' }] })] });
   const ids = async (runnerId: string | undefined, projectId: string) => ((await call(s.ctx, phone.projectThreads, { token: s.token, ...(runnerId ? { runnerId } : {}), projectId })) as { threadId: string }[]).map((t) => t.threadId);
   assert.deepEqual(await ids(LAPTOP, 'p_shared'), ['MAIN']);
-  assert.deepEqual(await ids(MINI, 'p_shared'), ['EVIL']);
+  assert.deepEqual(await ids(MINI, 'p_shared'), []);
   assert.deepEqual(await ids(LAPTOP, 'p_main_only'), []);
+  assert.deepEqual(await ids(MINI, 'p_mini'), ['EVIL'], 'its own project is kept');
   // A page from before API 82 asks by the id alone: nothing, not both runners'.
   assert.deepEqual(await ids(undefined, 'p_shared'), []);
   // Every link is under its own thread's runner.
   for (const l of s.rows('projectThreads')) assert.equal(l.runnerId, s.rows('threads').find((t) => t.threadId === l.threadId)!.runnerId);
+});
+
+// Apps from before API 82 (the iPhone and Android apps already out there, an
+// open old page) find a thread's project by its id alone, in the whole list.
+// So a runner key can't put its thread under another runner's project id, nor
+// make a project with that id for an old app to find instead (cross-lab
+// review, 17 Nov 2026).
+test("a runner key can't give its thread or a project of its own another runner's project id (141, old apps)", async () => {
+  const s = await setup();
+  await call(s.ctx, sync.setProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')] });
+  // Its own copy of the id, by both ways a runner writes projects, beside one of its own.
+  await call(s.ctx, sync.setProjects, { key: MINI_KEY, runnerId: MINI, projects: [project('p_shared', 'Trusted project'), project('p_mini', 'Mini project')] });
+  await call(s.ctx, sync.upsertProjects, { key: MINI_KEY, runnerId: MINI, projects: [{ ...project('p_shared', 'Trusted project'), lastActivityAt: '9999' }], removed: [] });
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('EVIL', MINI, { projects: [{ id: 'p_shared', title: 'Trusted project' }] })] });
+  const list = (await call(s.ctx, phone.projects, { token: s.token })) as { runnerId: string; id: string; title: string }[];
+  // What an old app reads: one project with the id, the main runner's.
+  assert.deepEqual(list.filter((p) => p.id === 'p_shared').map((p) => [p.runnerId, p.title]), [[LAPTOP, 'Main project']]);
+  assert.ok(list.some((p) => p.runnerId === MINI && p.id === 'p_mini'), "the runner's own project is still there");
+  const { thread: read } = (await call(s.ctx, phone.thread, { token: s.token, threadId: 'EVIL' })) as { thread: { projects?: unknown[] } };
+  assert.equal(read.projects, undefined, "the thread isn't under the id at all");
+  // The main key's own writes are as they were.
+  await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread('MAIN', LAPTOP, { projects: [{ id: 'p_shared', title: 'Main project' }] })] });
+  const { thread: main } = (await call(s.ctx, phone.thread, { token: s.token, threadId: 'MAIN' })) as { thread: { projects?: { id: string }[] } };
+  assert.deepEqual(main.projects?.map((p) => p.id), ['p_shared']);
 });

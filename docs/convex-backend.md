@@ -951,7 +951,9 @@ Backend changes (these deploy prod when they land on main; Mike said yes to
    projects), `removeThreads` and `prune`, with `phone:projectThreads`
    taking the ones that joined last by an index on `runnerId` and
    `projectId` (since API 82: a project id is only its runner's own, so
-   another runner's thread can't join a project by using its id) and sorting
+   another runner's thread can't join a project by using its id; and a
+   runner key's project or thread can't take an id another runner has, as
+   older apps look a project up by its id alone) and sorting
    that page by activity. The first version kept each link's
    `lastActivityMs` current, a patch on every turn, which took
    `upsertThreads` from about 4.1 KB to 7 KB a call (35 MB a day). A thread's projects are an array on

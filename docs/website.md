@@ -139,6 +139,10 @@ middle click to take past the question; and `javascript:`, `data:`,
 `file:` and the like, or an address over 2,048 characters, are just
 words. The backend also keeps only web links on a thread's asks and links
 (API 82).
+Every page the backend serves, the shared ones (`/s/`) too, says no
+other site may frame it (`X-Frame-Options: DENY`, `frame-ancestors
+'none'`; `NO_FRAMES` in `convex/http.ts`), so that question can't be
+clicked through from a page laid over a hidden frame.
 
 From a terminal, by someone logged in to the Convex team:
 
