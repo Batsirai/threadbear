@@ -208,6 +208,11 @@ export class CallerGate {
       const to = p.permissionMode as PermissionMode;
       const t = this.savedMode(id);
       if (raises(to, t)) throw needs(`switching ${self ? 'this thread' : this.title(id)} to ${MODE_NAMES[to] ?? to}`, 'update_thread');
+      // Lowering another thread with more access than the caller takes away
+      // what Mike set up, and would make that thread's schedules look no
+      // higher than the caller, so schedules.delete let them through (Daybreak
+      // finding 138, OpenCode's review of the fix).
+      if (!self && to !== t && above(this.targetAccess(id), caller)) throw needs(`switching ${this.title(id)} to ${MODE_NAMES[to] ?? to}`, 'update_thread');
       // The mode it already has is left out, so this write can't raise it
       // back if it lands after someone else lowers it.
       if (to === t) delete out.permissionMode;
@@ -252,9 +257,12 @@ export class CallerGate {
     if (raised) throw needs(`switching the schedule "${sc.title}" to ${MODE_NAMES[p.permissionMode as PermissionMode] ?? p.permissionMode}`, 'update_schedule');
     if (typeof p.check === 'string' && p.check.trim()) throw needs('adding a check to a schedule (a shell command that runs by itself)', 'update_schedule');
     if (p.checkTimeoutSecs !== undefined && p.check === undefined && sc.check) throw needs(`changing how long the schedule "${sc.title}"'s shell command may run`, 'update_schedule');
-    // Pausing and renaming-free fields never ask; what it sends, where, or
-    // that it runs again do, if its runs are above the caller or it has a check.
-    const changes = ['text', 'title', 'at', 'cron', 'cwd'].some((k) => p[k] !== undefined) || (p.paused === false && sc.paused);
+    // Pausing never asks; what it sends, where, when, on which login or
+    // model, or that it runs again do, if its runs are above the caller or it
+    // has a check. A login another runner doesn't have is saved as given and
+    // stops the schedule quietly, like a delete (OpenCode's review of the
+    // Daybreak finding 138 fix).
+    const changes = ['text', 'title', 'at', 'cron', 'cwd', 'timezone', 'accountId', 'poolId', 'model', 'effort'].some((k) => p[k] !== undefined) || (p.paused === false && sc.paused);
     if (changes && (above(was, caller) || sc.check)) throw needs(`changing the schedule "${sc.title}"`, 'update_schedule');
     // Lowering one above the caller, or taking its check off, is free for a
     // schedule the caller could have made, but on Mike's it takes away what he

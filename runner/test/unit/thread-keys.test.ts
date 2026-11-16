@@ -369,6 +369,20 @@ for (const mode of MODES) {
         assert.equal(scheduler.find(checked.id).check, 'true');
       }
       await assert.rejects(c.call('schedules.delete', { scheduleId: checked.id }), refused);
+      // Nor by moving it to a login, pool, model, effort or zone it doesn't
+      // run on: a login another runner lacks stops it quietly (OpenCode's
+      // review of the 138 fix).
+      for (const sc of [fullSc, checked]) {
+        for (const change of [{ model: 'haiku' }, { effort: 'low' }, { timezone: 'Pacific/Kiritimati' }, { poolId: 'nope' }, { accountId: 'nonexistent-login' }]) {
+          await assert.rejects(c.call('schedules.update', { scheduleId: sc.id, ...change }), refused, `${sc.title}: ${JSON.stringify(change)}`);
+        }
+        assert.equal(scheduler.find(sc.id).accountId, 'claude-3');
+      }
+      // Nor by lowering the Full thread a schedule sends to, so it no
+      // longer looks above this one (OpenCode's review of the 138 fix).
+      await assert.rejects(c.call('threads.update', { threadId: full.id, permissionMode: mode }), refused);
+      assert.equal(h.runner.get(full.id).permissionMode, 'full');
+      await assert.rejects(c.call('schedules.delete', { scheduleId: toFull.id }), refused);
       // Pausing one is still free.
       await c.call('schedules.update', { scheduleId: fullSc.id, paused: true });
       // One no higher than this thread, with no check, it may delete.

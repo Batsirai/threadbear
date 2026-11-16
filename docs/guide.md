@@ -450,7 +450,8 @@ An agent in Ask before edits or Auto can't give itself more room, with its tools
 any thread or schedule to more access, starting a thread with more access
 than its own (the threads it starts get its mode), messaging or moving a
 thread that has more, changing the brief of a project such a thread is in,
-adding a schedule check, or deleting, lowering or taking the check off a
+lowering a thread that has more access, adding a schedule check, or deleting,
+lowering, moving to another login, model or time zone, or taking the check off a
 schedule that has one or whose runs have more access all show a card for that one call, with
 no Always allow. The card shows the whole message or brief, and the
 folder where it really is. On a Codex thread, Always allow on a command allows that

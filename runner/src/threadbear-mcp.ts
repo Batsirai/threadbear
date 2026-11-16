@@ -957,9 +957,11 @@ export function buildThreadbearTools(
           const was: Authority = current.threadId ? await accessOf(current.threadId) : { mode: modes.ceiling };
           const raised = !current.threadId && permissionMode !== undefined && raises(permissionMode, modes.floor);
           const will: Authority = raised ? { mode: permissionMode! } : was;
-          // What it sends (its title goes into the message too), where, or
-          // that it runs again; not its login, model or zone, and not pausing it.
-          const changes = [text, title, when, cron, f].some((x) => x !== undefined) || (paused === false && current.paused);
+          // What it sends (its title goes into the message too), where, when,
+          // on which login or model, or that it runs again; not pausing it. A
+          // login another runner doesn't have stops it quietly, like a delete
+          // (OpenCode's review of the Daybreak finding 138 fix).
+          const changes = [text, title, when, cron, f, timezone, acc, pl, model, effort].some((x) => x !== undefined) || (paused === false && current.paused);
           const reasons = [
             ...(raised ? [`Switch the schedule "${current.title}" to ${MODE_NAMES[permissionMode!]}`] : changes && above(will, caller) ? [`Change the schedule "${current.title}", whose runs have ${accessName(will)}${newFolder ? `, to run in ${newFolder}` : ''}`] : []),
             ...(changes && current.check && check === undefined ? [`Change the schedule "${current.title}", which runs a shell command as you first`] : []),
@@ -2018,6 +2020,11 @@ export function buildThreadbearTools(
           // The mode it has already is left out, so this write landing after
           // someone else lowers it (a handover's round trip) can't raise it back.
           else if (permissionMode === t.mode) delete upd.permissionMode;
+          // Lowering another thread with more access than this one takes away
+          // what the user set up, and would let delete_schedule through on
+          // that thread's schedules (OpenCode's review of the Daybreak
+          // finding 138 fix).
+          else if (id !== selfId && above(await accessOf(id), by)) await confirm('update_thread', [`Switch ${threadName(id, t.title)} to ${MODE_NAMES[permissionMode]}`], { threadId: id, permissionMode, ...(title !== undefined ? { title } : {}) }, extra?.signal);
         }
         return describe((await control.update(upd)).thread);
       }),
