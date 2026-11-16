@@ -53,8 +53,9 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # Windows needs time for its release build after the behaviour specs.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 45 }}
+    # Windows needs time for its release build after the behaviour specs, and
+    # the Mac for its web runtime specs (about 40 minutes without them).
+    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04' && 45 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -107,6 +108,23 @@ jobs:
           count=$(awk '/^frame_stats::loader_probe_tests::.*: test$/ { n++ } END { print n+0 }' loader-probe-tests.txt)
           test "$count" -ge 1
           cargo test --locked --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation,frame-stats --bin threadbear-gpui frame_stats::loader_probe_tests::
+      # The web runtime's pinned archive, for the @web-runtime specs (web
+      # panels, diagrams and pages in replies, file previews, installing the
+      # runtime): without it all 30 were skipped, and cucumber counts a skip
+      # as a pass (16 Nov). Kept in the Actions cache by its name and hash,
+      # and checked against the pinned SHA-256 every run.
+      - name: Web runtime archive key
+        if: runner.os == 'macOS'
+        id: web-runtime
+        run: echo "key=$(desktop/scripts/web-runtime-archive.sh --key)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.os == 'macOS'
+        with:
+          path: ~/web-runtime-archive
+          key: web-runtime-${{ steps.web-runtime.outputs.key }}
+      - name: Web runtime archive
+        if: runner.os == 'macOS'
+        run: echo "TB_WEB_RUNTIME_ARCHIVE=$(desktop/scripts/web-runtime-archive.sh ~/web-runtime-archive)" >> "$GITHUB_ENV"
       - name: Behaviour specs
         run: |
           cargo build --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation

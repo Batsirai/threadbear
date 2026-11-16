@@ -9,7 +9,8 @@ Feature: Web pages in a thread's panels
   # from a script, and its dump doesn't read a page's title or the Convex
   # panel's state yet, so these run on the GPUI app (@swift-pending). The
   # GPUI app needs its web runtime for them: @web-runtime scenarios are
-  # skipped without TB_WEB_RUNTIME_ARCHIVE (support/web-runtime.ts).
+  # skipped without TB_WEB_RUNTIME_ARCHIVE (support/web-runtime.ts), which
+  # GitHub's Mac has (desktop.yml).
 
   Background:
     Given the app is connected to a runner with the demo threads

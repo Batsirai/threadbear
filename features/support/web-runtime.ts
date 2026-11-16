@@ -7,8 +7,11 @@
 // 135 MB per scenario), unless it's @web-runtime-fresh too.
 //
 // Only the Mac has a runtime so far: @web-prompt and @web-runtime scenarios
-// are skipped elsewhere, and @web-runtime ones on a Mac without the archive
-// (CI), rather than downloading it on every run.
+// are skipped elsewhere, and @web-runtime ones on a Mac without the archive,
+// rather than downloading it on every run. Not on GitHub's Mac, which has it
+// (desktop.yml, desktop/scripts/web-runtime-archive.sh): there a missing one
+// fails, as cucumber counts a skip as a pass and all 30 went unrun until
+// 16 Nov.
 //
 // The web panel scenarios also get the little sites they show
 // (support/web-pages.ts).
@@ -38,6 +41,9 @@ export async function webRuntimeSetup(tags: string[]): Promise<'skipped' | undef
     delete process.env.THREADBEAR_CONVEX_EMBEDDED;
   }
   if (gpui && tags.includes('@web-runtime')) {
+    if (mac && !process.env.TB_WEB_RUNTIME_ARCHIVE && process.env.GITHUB_ACTIONS === 'true') {
+      throw new Error('TB_WEB_RUNTIME_ARCHIVE is unset on GitHub\'s Mac, so the @web-runtime specs would be skipped (desktop.yml sets it)');
+    }
     if (!mac || !process.env.TB_WEB_RUNTIME_ARCHIVE) return 'skipped';
     if (!tags.includes('@web-runtime-fresh')) {
       const shared = process.env.TB_WEB_RUNTIME_DIR ?? path.join(os.tmpdir(), 'tb-spec-web-runtime');
