@@ -686,7 +686,8 @@ impl Client {
 
         let me = self.clone();
         let url_owned = url.to_string();
-        let hello = tokio::spawn(async move {
+        // Its error, if it failed: the session ends on that, below.
+        let mut hello = tokio::spawn(async move {
             let mut params = json!({ "client": CLIENT_NAME, "version": env!("CARGO_PKG_VERSION") });
             // The Browser pane and BrowserBear's handoff (docs/protocol.md,
             // "Showing panels"): BrowserBear is a Mac thing.
@@ -706,15 +707,35 @@ impl Client {
                     let session = me.sessions.fetch_add(1, Ordering::SeqCst) + 1;
                     me.set_status(Status::Connected { url: url_owned, hello });
                     me.session.send_replace(session);
+                    None
                 }
-                Err(e) => log::write("connection", &format!("hello failed: {}", e.message)),
+                Err(e) => {
+                    log::write("connection", &format!("hello failed: {}", e.message));
+                    Some(e.message)
+                }
             }
         });
 
-        while let Some(msg) = read.next().await {
+        // A hello that fails (an error, or its timeout) ends the session, as
+        // the Swift app's connect loop does: else the window sat on
+        // "Connecting" with no threads for as long as the socket stayed open,
+        // and "Try again" only cuts short a wait between sessions.
+        let mut hello_done = false;
+        let hello_failed = loop {
+            let msg = tokio::select! {
+                msg = read.next() => msg,
+                done = &mut hello, if !hello_done => {
+                    hello_done = true;
+                    match done {
+                        Ok(Some(e)) => break Some(e),
+                        _ => continue,
+                    }
+                }
+            };
+            let Some(msg) = msg else { break None };
             let text = match msg {
                 Ok(Message::Text(t)) => t,
-                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(Message::Close(_)) | Err(_) => break None,
                 Ok(_) => continue,
             };
             let v = match serde_json::from_str::<Value>(text.as_str()) {
@@ -730,11 +751,14 @@ impl Client {
                 }
             };
             self.dispatch(v);
-        }
+        };
         hello.abort();
         self.out.lock().unwrap().take();
         let _ = writer.await;
-        Ok(())
+        match hello_failed {
+            Some(e) => Err(format!("The runner didn't answer hello: {e}")),
+            None => Ok(()),
+        }
     }
 
     fn dispatch(&self, v: Value) {

@@ -36,6 +36,8 @@ struct Runner {
     down: bool,
     connection: u64,
     conns: Vec<mpsc::UnboundedSender<Message>>,
+    /// How many more `hello`s it answers with an error.
+    hello_errors: u32,
     /// The thread `threads.list` answers with, and the events after a send.
     summary: Value,
     events: Vec<Value>,
@@ -144,6 +146,10 @@ async fn serve(stream: tokio::net::TcpStream, state: Arc<Mutex<Runner>>, port: u
             let mut s = state.lock().unwrap();
             s.seen.push((method.clone(), params.clone(), connection));
             match method.as_str() {
+                "hello" if s.hello_errors > 0 => {
+                    s.hello_errors -= 1;
+                    Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32603, "message": "hello broke" } }).to_string())
+                }
                 "hello" => Some(answer(json!({ "protocol": 1, "runnerVersion": format!("fake-{connection}") }))),
                 "threads.send" | "threads.update" => match if s.replies.is_empty() { Reply::Ok } else { s.replies.remove(0) } {
                     Reply::Ok => {
@@ -243,6 +249,22 @@ fn resend(text: &str, after_seq: i64, was_idle: bool) -> Resend {
 /// Lets the client hear what's just been sent to it.
 async fn settle() {
     tokio::time::sleep(Duration::from_millis(150)).await;
+}
+
+// A hello that fails ends that session and the next one tries again, as
+// the Swift app's connect loop does: it used to sit on "Connecting" with
+// no threads for as long as the socket stayed open.
+#[tokio::test]
+async fn a_failed_hello_connects_again() {
+    let fake = Fake::start().await;
+    fake.state.lock().unwrap().hello_errors = 1;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let client = Client::new(fake.config.clone(), Statuses(tx));
+    tokio::spawn(client.clone().run());
+    until_disconnected(&mut rx).await;
+    until_connected(&mut rx).await;
+    let hellos: Vec<u64> = fake.state.lock().unwrap().seen.iter().filter(|(m, _, _)| m == "hello").map(|(_, _, c)| *c).collect();
+    assert_eq!(hellos, vec![1, 2], "the second connection's hello");
 }
 
 #[tokio::test]
