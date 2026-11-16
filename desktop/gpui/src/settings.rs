@@ -324,11 +324,11 @@ mod tests {
     #[test]
     fn a_mangled_record_of_the_swift_import_counts_as_done() {
         let path = temp_file("mangled-marker");
-        std::fs::write(&path, r#"{"swiftImport": true, "swiftImportParts": [], "textZoomPercent": 120}"#).unwrap();
+        std::fs::write(&path, r#"{"swiftImport": true, "swiftImportParts": [], "textZoomPercent": 125}"#).unwrap();
         let s = Settings::load_from(path);
         assert!(s.saved.swift_import.is_some(), "not imported again");
         assert!(s.saved.swift_tour_import.is_some());
-        assert_eq!(s.zoom_percent(), 120);
+        assert_eq!(s.zoom_percent(), 125);
         assert_eq!(s.saved.tour_seen, None, "only the records, not the tour itself");
     }
 
