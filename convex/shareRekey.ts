@@ -6,7 +6,8 @@
 // every request (share.ts shareImageFile), so no storage URL of a shared
 // picture reaches anyone else; this ends the ones handed out before, as a
 // storage URL names its file. Started by the first heartbeat after the
-// deploy (sync.ts), a page at a time. A picture's row goes on naming the
+// deploy (sync.ts), a page at a time, and started again by a later one if
+// it stopped partway, until a run gets to the end (rekeyDone). A picture's row goes on naming the
 // new file, with its runner key's upload record (storageOwners) moved
 // across, so nothing else changes: its page, its count, its cleanup.
 //
@@ -18,6 +19,7 @@ import { v } from 'convex/values';
 import { internalAction, internalMutation, internalQuery } from './_generated/server';
 import { internal } from './_generated/api';
 import { storageInUse } from './sync';
+import { SHARE_REKEY_DONE } from './lib';
 
 const PAGE = 25;
 
@@ -49,6 +51,16 @@ export const rekeySwap = internalMutation({
   },
 });
 
+// Every shared picture is on a file of its own made since: the run is over.
+export const rekeyDone = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    if (!(await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', SHARE_REKEY_DONE)).first())) await ctx.db.insert('backendMarks', { name: SHARE_REKEY_DONE });
+    return null;
+  },
+});
+
 export const rekeyShareImages = internalAction({
   args: { cursor: v.union(v.string(), v.null()) },
   returns: v.null(),
@@ -61,12 +73,14 @@ export const rekeyShareImages = internalAction({
       try {
         await ctx.runMutation(internal.shareRekey.rekeySwap, { id: r.id, old: r.storageId, fresh });
       } catch (e) {
-        // That one stays as it was; the rest go on.
+        // The run ends here, unfinished: the next heartbeat after
+        // SHARE_REKEY_STALE_MS starts it again (sync.ts).
         await ctx.storage.delete(fresh);
-        console.error('share picture not rekeyed', (e as Error)?.name);
+        throw e;
       }
     }
     if (page.next) await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: page.next });
+    else await ctx.runMutation(internal.shareRekey.rekeyDone, {});
     return null;
   },
 });

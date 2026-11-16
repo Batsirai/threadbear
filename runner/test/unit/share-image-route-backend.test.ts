@@ -82,7 +82,7 @@ test("a link reaches only its own thread's pictures, and a stored type the page 
 // the old one (convex/shareRekey.ts), so every URL from before is dead,
 // shared or not, and the pages go on as they were.
 async function runRekey(s: Awaited<ReturnType<typeof setup>>) {
-  const fns: Record<string, any> = { rekeyPage: rekey.rekeyPage, rekeySwap: rekey.rekeySwap, rekeyShareImages: rekey.rekeyShareImages };
+  const fns: Record<string, any> = { rekeyPage: rekey.rekeyPage, rekeySwap: rekey.rekeySwap, rekeyDone: rekey.rekeyDone, rekeyShareImages: rekey.rekeyShareImages };
   const byRef = (ref: unknown) => fns[String(ref).split('.').pop()!];
   let next: Record<string, unknown> | undefined = { cursor: null };
   const ctx = {
@@ -114,6 +114,10 @@ test("the first heartbeat after the deploy ends every shared picture's storage U
   await beat();
   assert.equal(s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length, 1, 'once');
   await runRekey(s);
+  assert.ok(s.rows('backendMarks').some((m) => m.name === 'share-rekey-2026-11-16-done'));
+  s.scheduled.length = 0;
+  await later(3 * 60 * 60_000, beat);
+  assert.equal(s.scheduled.length, 0, 'finished, so never again');
   // The old files have gone, so the URLs handed out for them are dead,
   // the shared thread's and the one no longer shared alike.
   for (const id of ['pic', 'other', 'p0', 'p29']) assert.equal(await s.ctx.storage.getUrl(id), null, id);
@@ -141,3 +145,29 @@ test('a file the owner also put on a reply row stays for that row; a row gone me
   assert.equal(await call(s.ctx, rekey.rekeySwap, { id: 'shareImages:999999', old: 'pic', fresh }), false);
   assert.equal(s.hasFile('copy'), false);
 });
+
+test('a run that stops partway is started again by a heartbeat once it has sat two hours, and goes on until one finishes', async () => {
+  const s = await setup();
+  const beat = () => call(s.ctx, sync.heartbeat, { key: OWNER, runner: { runnerId: LAPTOP, name: 'laptop', version: 'v', startedAt: 'x', draining: false, threadCount: 1 } });
+  const runs = () => s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length;
+  s.scheduled.length = 0;
+  await beat();
+  assert.equal(runs(), 1);
+  // It died (nothing finished it). An hour on: still left to run.
+  await later(60 * 60_000, beat);
+  assert.equal(runs(), 1);
+  await later(3 * 60 * 60_000, beat);
+  assert.equal(runs(), 2, 'started again');
+  await runRekey(s);
+  assert.equal(s.hasFile('pic'), false);
+});
+
+async function later<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  Date.now = () => realNow() + ms;
+  try {
+    return await fn();
+  } finally {
+    Date.now = realNow;
+  }
+}

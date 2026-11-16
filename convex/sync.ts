@@ -8,7 +8,7 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { messageButton, threadFields, views } from './schema';
 import { API_VERSION } from './version';
-import { actAs, checkRunnerId, forbidden, hasLiveKey, isSeq, pageLimit, PRESENCE_FRESH_MS, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
+import { actAs, checkRunnerId, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
@@ -1163,9 +1163,16 @@ export const heartbeat = mutation({
     await startLimitsMigration(ctx);
     // 16 Nov 2026: shared pictures' storage URLs from before /share/image
     // ended, once (shareRekey.ts).
-    if (!(await markSet(ctx, SHARE_REKEY_STARTED))) {
-      await ctx.db.insert('backendMarks', { name: SHARE_REKEY_STARTED });
-      await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: null });
+    // A run that stopped partway (a failure ends it) starts again, from the
+    // top, once its start is SHARE_REKEY_STALE_MS old; it goes on until one
+    // gets to the end.
+    if (!(await markSet(ctx, SHARE_REKEY_DONE))) {
+      const started = await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', SHARE_REKEY_STARTED)).first();
+      if (!started || (started.at ?? 0) < Date.now() - SHARE_REKEY_STALE_MS) {
+        if (started) await ctx.db.delete(started._id);
+        await ctx.db.insert('backendMarks', { name: SHARE_REKEY_STARTED, at: Date.now() });
+        await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: null });
+      }
     }
     // 8 Nov 2026: a runner key's message bytes counted again, once
     // (recountMessageBytes). Marked before it runs, like linkProjects.
@@ -3209,7 +3216,6 @@ export const pruneFiles = internalMutation({
 // rows for commands already on their way, so a delete elsewhere still sees
 // them. pruneFiles waits for it. Started by the first heartbeat (any key).
 const LIMITS_STARTED = 'limits-2026-11-07';
-const SHARE_REKEY_STARTED = 'share-rekey-2026-11-16';
 const LIMITS_DONE = 'limits-2026-11-07-done';
 const MIGRATE_PAGE = 8;
 const APNS_TOKEN = /^[0-9a-fA-F]{16,200}$/;

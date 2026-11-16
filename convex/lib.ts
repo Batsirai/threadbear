@@ -97,6 +97,13 @@ export function isSeq(n: unknown): n is number {
   return Number.isSafeInteger(n) && (n as number) >= 0 && (n as number) <= MAX_SEQ;
 }
 
+// shareRekey.ts's run (16 Nov 2026): started, and finished. A run whose
+// start is older than SHARE_REKEY_STALE_MS and not finished is started
+// again by the next heartbeat (sync.ts).
+export const SHARE_REKEY_STARTED = 'share-rekey-2026-11-16';
+export const SHARE_REKEY_DONE = 'share-rekey-2026-11-16-done';
+export const SHARE_REKEY_STALE_MS = 2 * 60 * 60_000;
+
 export async function sha256(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest('SHA-256', data);
