@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { call, load, memoryBackend, outcome, RELAY } from '../helpers/convex-memory.ts';
 
 const relay = load('relay', RELAY);
-const { NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS, NEW_INSTALL_SENDS_PER_HOUR, SENDS_PER_HOUR, BAD_TOKEN_SENDS_PER_HOUR, IDLE_INSTALL_MS, EXPIRE_BATCH } = relay;
+const { ALL_SENDS_PER_HOUR, RESERVED_SENDS_PER_HOUR, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS, NEW_INSTALL_SENDS_PER_HOUR, SENDS_PER_HOUR, BAD_TOKEN_SENDS_PER_HOUR, IDLE_INSTALL_MS, EXPIRE_BATCH } = relay;
 
 const T0 = Date.parse('2026-11-16T01:00:00Z');
 let clock = T0;
@@ -56,6 +56,28 @@ test('young installs share one hourly pool; an established one keeps its own all
   // The pool fills again the next hour.
   clock += 3_600_000;
   assert.equal(await admit(b.ctx, young[0]!), 'ok');
+});
+
+test('installs a week old or more share a relay-wide ceiling, and past it each keeps a reserved few', async () => {
+  const b = memoryBackend(RELAY);
+  const mine = await register(b.ctx, 'https://real-backend-1.convex.site');
+  const aged = [];
+  const needed = Math.ceil(ALL_SENDS_PER_HOUR / SENDS_PER_HOUR) + 3;
+  for (let n = 0; n < needed; n++) {
+    clock = T0 + n * 86_400_000;
+    aged.push(await register(b.ctx, site(n)));
+  }
+  clock = T0 + needed * 86_400_000 + NEW_INSTALL_MS;
+  let admitted = 0;
+  for (const i of aged) for (let k = 0; k < SENDS_PER_HOUR; k++) if ((await admit(b.ctx, i)) === 'ok') admitted++;
+  // Up to the ceiling, then each one left gets its reserved few.
+  assert.ok(admitted <= ALL_SENDS_PER_HOUR + needed * RESERVED_SENDS_PER_HOUR, `${admitted}`);
+  assert.ok(admitted < needed * SENDS_PER_HOUR, 'not one full allowance each');
+  // A real backend that hadn't sent yet this hour still gets its reserved few.
+  for (let k = 0; k < RESERVED_SENDS_PER_HOUR; k++) assert.equal(await admit(b.ctx, mine), 'ok', `reserved send ${k}`);
+  assert.equal(await admit(b.ctx, mine), 'limited');
+  clock += 3_600_000;
+  assert.equal(await admit(b.ctx, mine), 'ok');
 });
 
 test('an install sending to made-up device tokens is stopped after a few an hour', async () => {

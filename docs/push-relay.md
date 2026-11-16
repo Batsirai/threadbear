@@ -109,7 +109,10 @@ install's own limits there are relay-wide ones (Daybreak, 16 Nov 2026),
 sized well above real use and never touching an install that's already
 here: at most 100 deployments the relay hasn't seen before register in a
 UTC day (a deployment it knows can always register again); installs
-under a week old share one allowance of 600 sends an hour; and an
+under a week old share one allowance of 600 sends an hour; all
+installs together get 6,000 sends an hour, past which each keeps 10 an
+hour of its own, so no pile of installs can take the relay from a real
+backend; and an
 install whose sends fail on bad device tokens (Apple's 400 and 410,
 Firebase's 400 and 404) gets 20 of those an hour. The relay's own
 failures (a revoked key, a timeout) don't count against anyone. A fork

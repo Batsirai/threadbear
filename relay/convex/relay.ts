@@ -28,6 +28,12 @@ export const NEW_INSTALLS_PER_DAY = 100;
 // An install this young shares one hourly pool with every other young one.
 export const NEW_INSTALL_MS = 7 * 86_400_000;
 export const NEW_INSTALL_SENDS_PER_HOUR = 600;
+// All sends in an hour, relay-wide (about 200 times a busy hour on 16 Nov).
+// Past it, every install still gets RESERVED_SENDS_PER_HOUR of its own, so
+// a pile of installs a week old or more can't take the relay from real
+// backends, nor push the bill past this plus that floor each.
+export const ALL_SENDS_PER_HOUR = 6_000;
+export const RESERVED_SENDS_PER_HOUR = 10;
 // Sends a device token was to blame for (tokenFault) an install may make in
 // an hour. A real backend drops a token Apple or Firebase calls gone, so it
 // makes a few; made-up tokens make nothing else.
@@ -127,18 +133,20 @@ export const admit = internalMutation({
     const sends = fresh ? 0 : row.hourSends;
     const bad = fresh ? 0 : (row.hourBad ?? 0);
     if (sends >= SENDS_PER_HOUR || bad >= BAD_TOKEN_SENDS_PER_HOUR) return 'limited';
+    const hour = hourOf(now);
+    const pool = await ctx.db
+      .query('hours')
+      .withIndex('by_hour', (q) => q.eq('hour', hour))
+      .unique();
+    // Past the relay-wide ceiling, only each install's reserved few.
+    if ((pool?.sends ?? 0) >= ALL_SENDS_PER_HOUR && sends >= RESERVED_SENDS_PER_HOUR) return 'limited';
     // Young installs share one pool, so a batch of new deployments can't
     // each take a full allowance (the limits above say why).
-    if (now - row.createdAt < NEW_INSTALL_MS) {
-      const hour = hourOf(now);
-      const pool = await ctx.db
-        .query('hours')
-        .withIndex('by_hour', (q) => q.eq('hour', hour))
-        .unique();
-      if ((pool?.newSends ?? 0) >= NEW_INSTALL_SENDS_PER_HOUR) return 'limited';
-      if (pool) await ctx.db.patch(pool._id, { newSends: pool.newSends + 1 });
-      else await ctx.db.insert('hours', { hour, newSends: 1 });
-    }
+    const young = now - row.createdAt < NEW_INSTALL_MS;
+    if (young && (pool?.newSends ?? 0) >= NEW_INSTALL_SENDS_PER_HOUR) return 'limited';
+    const counts = { sends: (pool?.sends ?? 0) + 1, newSends: (pool?.newSends ?? 0) + (young ? 1 : 0) };
+    if (pool) await ctx.db.patch(pool._id, counts);
+    else await ctx.db.insert('hours', { hour, ...counts });
     await ctx.db.patch(row._id, { lastSeenAt: now, hourStart: fresh ? now : row.hourStart, hourSends: sends + 1, hourBad: bad, ...(version !== undefined ? { version: storedVersion(version) } : {}) });
     return 'ok';
   },

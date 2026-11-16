@@ -51,11 +51,13 @@ export default defineSchema({
     reasons: v.optional(v.record(v.string(), v.number())),
   }).index('by_day', ['day']),
 
-  // Sends this UTC hour ("2026-11-16T09") by installs under a week old,
-  // which share one allowance (relay.ts NEW_INSTALL_SENDS_PER_HOUR).
-  // Removed after two days (relay.ts expire).
+  // Sends this UTC hour ("2026-11-16T09") relay-wide, and of those by
+  // installs under a week old, which share one allowance (relay.ts
+  // ALL_SENDS_PER_HOUR, NEW_INSTALL_SENDS_PER_HOUR). Removed after two
+  // days (relay.ts expire).
   hours: defineTable({
     hour: v.string(),
+    sends: v.number(),
     newSends: v.number(),
   }).index('by_hour', ['hour']),
 });
