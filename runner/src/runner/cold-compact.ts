@@ -25,22 +25,28 @@ import { experimentOn } from '../experiments.ts';
 export const COLD_COMPACT = 'coldCompact';
 
 // The thread's context (its last model call's, rec.contextTokens) from
-// which a cold wake compacts. Below it, a cold turn costs about what a warm
-// one does (the step back's table: $1.67 against $1.18), so there's little
-// to win and a summary to lose.
+// which a cold wake compacts. Measured on 402 cold wakes of Opus threads
+// past 200k (16 Nov 2026, priced from the CLI's own usage: cache write $8,
+// read $0.20 a million): compacting would have saved about $1,100 net,
+// with 70% of wakes saving and the rest losing about $20 in all, whatever
+// woke the thread. It breaks even after about 9 more calls at 200k, 4 at
+// 400k and 2 at 800k. 150k added only $28 for 88 more compactions.
 // THREADBEAR_COLD_COMPACT_MIN_TOKENS overrides it, for trying it on a dev
 // runner with a small thread.
 export const COLD_COMPACT_MIN_TOKENS = envNumber('THREADBEAR_COLD_COMPACT_MIN_TOKENS') ?? 200_000;
 
 // How long since the thread's last model call before its cache counts as
-// gone. Claude Code on a subscription login asks for the hour-long cache;
-// the step back's numbers agree (a turn 5 to 60 minutes after the last
-// wrote about 24k tokens back, one after an hour about 464k). The margin
-// keeps a thread that is maybe still warm out: compacting a warm one costs
-// money and memory for nothing, which is the one thing this mustn't do.
+// gone. Claude Code asks for the hour-long cache on a subscription login
+// within its plan (code.claude.com/docs/en/prompt-caching; the five-minute
+// one past it, which this then underrates: safe). Two weeks of this Mac's
+// Opus calls agree (16 Nov 2026): a turn's first call after 0 to 55 idle
+// minutes rewrote about 0.3% of its context, after 55 to 65 about half of
+// them rewrote most of it, after 65 every one rewrote 95%. The margin keeps
+// a thread that may still be warm out: compacting a warm one costs money
+// and memory for nothing, which is the one thing this mustn't do.
 // THREADBEAR_COLD_COMPACT_IDLE_MS overrides the two together (dev runners).
 export const CACHE_LIFETIME_MS = envNumber('THREADBEAR_COLD_COMPACT_IDLE_MS') ?? 60 * 60_000;
-export const COLD_MARGIN_MS = envNumber('THREADBEAR_COLD_COMPACT_IDLE_MS') !== undefined ? 0 : 10 * 60_000;
+export const COLD_MARGIN_MS = envNumber('THREADBEAR_COLD_COMPACT_IDLE_MS') !== undefined ? 0 : 5 * 60_000;
 
 function envNumber(name: string): number | undefined {
   const n = Number(process.env[name]);
