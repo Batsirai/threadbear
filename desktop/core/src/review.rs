@@ -729,7 +729,24 @@ impl ReviewSession {
         let advanced = latest.revision > self.review.revision;
         self.review = latest;
         if !self.dirty {
-            self.draft = self.review.response.clone().unwrap_or_else(|| self.review.draft.clone());
+            // The runner keeps the draft trimmed, so our own save comes back
+            // without the space Voice Type leaves after the words. Taking that
+            // copy would refill the box, which puts its cursor back at the
+            // start, and the next dictation lands there (Mike, 16 Nov). So a
+            // reply or note that only differs by that trimming stays as typed,
+            // even when a pick changed elsewhere in the same copy.
+            let mut next = self.review.response.clone().unwrap_or_else(|| self.review.draft.clone());
+            if next.reply.as_deref().unwrap_or("") == self.draft.reply.as_deref().unwrap_or("").trim() {
+                next.reply = self.draft.reply.clone();
+            }
+            for (id, note) in &self.draft.notes {
+                if next.notes.get(id).map_or("", String::as_str) == note.trim() {
+                    next.notes.insert(id.clone(), note.clone());
+                }
+            }
+            if next != self.draft {
+                self.draft = next;
+            }
         } else if advanced && !self.saving && !self.submitting {
             self.conflict = true;
             self.error = Some(if self.review.is_pending() { CHANGED_ELSEWHERE } else { CLOSED_ELSEWHERE }.to_owned());
@@ -1828,6 +1845,34 @@ mod tests {
         s.save_done(saved(s.review().clone(), &call.draft));
         assert!(!s.dirty());
         assert!(!s.save_again());
+    }
+
+    #[test]
+    fn our_own_save_coming_back_trimmed_keeps_the_reply_as_typed() {
+        let mut s = session(two());
+        // Voice Type leaves a space after what it pastes.
+        s.set_reply("I prefer this ");
+        let call = s.begin_save().unwrap();
+        let back = saved(s.review().clone(), &call.draft);
+        s.save_done(back.clone());
+        // The save's own event, then a poll, bring the trimmed copy.
+        s.receive(back.clone());
+        s.receive(back);
+        assert_eq!(s.draft().reply.as_deref(), Some("I prefer this "));
+        assert_eq!(s.shown_draft().reply.as_deref(), Some("I prefer this "));
+        // A pick from another window keeps the reply as typed too.
+        let mut picked = s.review().clone();
+        picked.revision += 1;
+        picked.draft.picked_ids = vec!["B".into()];
+        s.receive(picked);
+        assert_eq!(s.draft().picked_ids, vec!["B".to_owned()]);
+        assert_eq!(s.draft().reply.as_deref(), Some("I prefer this "));
+        // A copy that really changed elsewhere still comes in.
+        let mut other = s.review().clone();
+        other.revision += 1;
+        other.draft.reply = Some("From the phone".into());
+        s.receive(other);
+        assert_eq!(s.draft().reply.as_deref(), Some("From the phone"));
     }
 
     #[test]
