@@ -1655,10 +1655,12 @@ answer from an archive server of your own, one that knows your past
 threads. Mike's is Agent Archive, which isn't public yet: he'll be talking
 about it soon and releasing it then. Until then, any server that speaks
 [Ask's small protocol](https://github.com/mikecann/threadbear/blob/main/docs/ask-server.md)
-works. Set it up in the iPhone's Settings > Ask (the server's address and
-a token from it; the phone has to be able to reach it, over Tailscale for
-one on your own Mac), then set the Action button to Threadbear's Ask
-shortcut. The waveform button in the inbox does the same.
+works. Set it up in the iPhone's Settings > Ask: Scan the code reads a
+setup code your server shows (Agent Archive's
+`npm run phone-token -- issue --bruce --qr`), or type in the server's
+address and a token from it. The phone has to be able to reach the server,
+over Tailscale for one on your own Mac. Then set the Action button to
+Threadbear's Ask shortcut. The waveform button in the inbox does the same.
 Each answer is kept as a thread in your default folder, with the question,
 the answer and a note that Ask answered it. It shows as done and already
 read. Once it's kept, the phone opens that thread with a big mic at the
