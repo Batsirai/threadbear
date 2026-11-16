@@ -171,7 +171,7 @@ fn log_line(log_file: &std::path::Path, line: &str) {
     use std::io::Write as _;
     eprintln!("threadbear-web: {line}");
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_file) {
+    if let Ok(mut f) = threadbear_core::private_file::append(log_file) {
         let _ = writeln!(f, "[{secs} threadbear] {line}");
     }
 }

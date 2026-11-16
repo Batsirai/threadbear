@@ -670,12 +670,13 @@ mod tests {
         let profile = temp("profile-holder");
         assert_eq!(profile_holder(&profile), None, "no lock");
         let lock = profile.join("SingletonLock");
-        // A live process that isn't this one: a child that's still running.
-        let mut child = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        std::os::unix::fs::symlink(format!("some-host-{}", child.id()), &lock).unwrap();
-        assert_eq!(profile_holder(&profile), Some(child.id()));
-        let _ = child.kill();
-        let _ = child.wait();
+        // A live process that isn't this one: whatever started the tests.
+        let parent = std::os::unix::process::parent_id();
+        std::os::unix::fs::symlink(format!("some-host-{parent}"), &lock).unwrap();
+        assert_eq!(profile_holder(&profile), Some(parent));
+        // One that's gone: past any pid the system hands out.
+        std::fs::remove_file(&lock).unwrap();
+        std::os::unix::fs::symlink("some-host-2147483000", &lock).unwrap();
         assert_eq!(profile_holder(&profile), None, "its holder has gone");
         std::fs::remove_file(&lock).unwrap();
         std::os::unix::fs::symlink(format!("some-host-{}", std::process::id()), &lock).unwrap();
