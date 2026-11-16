@@ -332,16 +332,40 @@ export const worktreesPart = {
 
   async leaveRemovedWorktree(this: Runner, st: ThreadState, turnId: string): Promise<string | undefined> {
     const { rec, rt } = st;
+    try {
+      return await this.leaveRemovedWorktreeNow(st, turnId);
+    } finally {
+      // Deleted meanwhile: delete() left the fresh worktree to this (it's
+      // held under rt.preparing, as a new thread's is), so it goes now.
+      if (rt.trashed && rec.worktree && !rec.worktree.removedAt) {
+        await this.cleanUpWorktree(st, true).catch((e: unknown) => this.log.error('worktree cleanup failed', { threadId: rec.id, error: String(e) }));
+      }
+    }
+  },
+
+  async leaveRemovedWorktreeNow(this: Runner, st: ThreadState, turnId: string): Promise<string | undefined> {
+    const { rec, rt } = st;
     const w = rec.worktree;
     if (!w || !this.leavesRemovedWorktree(rec)) return undefined;
     const from = rec.cwd;
     const main = sameSubfolder(from, w.path, w.mainCheckout);
     const went = w.spare ? 'was handed on to other threads' : 'was removed';
     const fresh = await this.freshWorktree(st, main, turnId);
-    // Deleted meanwhile, or another start already moved it.
-    if (rt.deleted || rec.cwd !== from) return undefined;
+    if (rt.deleted || rec.cwd !== from) {
+      // Deleted meanwhile (the finally above removes it), or another start
+      // already moved it: the fresh one is nobody's, so it goes.
+      if (fresh) {
+        rec.worktree = fresh.made.worktree;
+        if (!rt.deleted) await this.cleanUpWorktree(st).catch((e: unknown) => this.log.error('worktree cleanup failed', { threadId: rec.id, error: String(e) }));
+      }
+      return undefined;
+    }
     const to = fresh ? fresh.made.cwd : main;
-    if (rec.sessionUsed) {
+    // A fresh worktree at the very same path (one without `keep` is named
+    // for the thread) keeps the session where it was: a handoff to the same
+    // folder and login would start a new session with only a summary of the
+    // conversation (carryTranscript), where the CLI can resume it whole.
+    if (rec.sessionUsed && to !== from) {
       if (this.adapters[rec.provider]?.movesFolders) rec.moved ??= { fromCwd: from };
       else rec.handoff ??= { fromCwd: from, fromAccountId: rec.accountId };
     }
@@ -357,7 +381,12 @@ export const worktreesPart = {
     const nw = fresh.made.worktree;
     this.log.info('made a fresh worktree for a thread brought back', { threadId: rec.id, path: nw.path, branch: nw.branch });
     this.emit(st, { type: 'system.note', text: `This thread's worktree ${went} when it was archived, so it carries on in a fresh one at ${nw.path}, on the branch ${nw.branch}, made from main. tb land puts it on main.` }, turnId);
-    await this.setUpWorktree(st, fresh.made, fresh.patch, turnId);
+    // Archived again while it was being made: that archive saw the old,
+    // removed worktree, so this one's cleanup is owed (archiveWhenGone runs
+    // it once this is done, or settleLostCleanups after a restart), and
+    // there's no point setting it up. As prepareWorktreeNow does.
+    if (rec.archivedAt) nw.cleanupOwed = true;
+    else await this.setUpWorktree(st, fresh.made, fresh.patch, turnId);
     return `[Threadbear] Your worktree at ${w.path} ${went} after its work landed on main. You're now in a fresh worktree of your own at ${nw.path}, on the branch ${nw.branch}, made from main as it is now. Commit there and run tb land when it's done, as before.`;
   },
 
@@ -378,11 +407,6 @@ export const worktreesPart = {
     if (!made.ok) {
       this.log.warn('could not make a fresh worktree', { threadId: rec.id, reason: made.reason });
       this.emit(st, { type: 'system.note', text: `Couldn't make a fresh worktree for this thread: ${made.reason}.` }, turnId);
-      return undefined;
-    }
-    if (rt.deleted) {
-      // Its cleanup is owed, as for a thread deleted while one was made.
-      rec.worktree = made.worktree;
       return undefined;
     }
     this.patchTrust.vouch?.(made.worktree.path);

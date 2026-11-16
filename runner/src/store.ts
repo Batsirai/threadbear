@@ -228,6 +228,11 @@ export type ThreadRecord = {
   // helper thread that would archive itself when it finishes stays in the
   // inbox instead (runner/quiet-inbox.ts).
   keptOut?: boolean;
+  // What the agent is to be told before its next message, held over from a
+  // turn stopped after the thread moved into a fresh worktree but before
+  // the CLI started (runner.ts deliver, runner/worktrees.ts
+  // leaveRemovedWorktree): a resumed session keeps its old instructions.
+  agentNotice?: string;
   // Started by another thread but not part of its work, so it doesn't
   // nest under it in the sidebar (docs/protocol.md, "Nested threads").
   detached?: boolean;

@@ -2015,11 +2015,20 @@ export class Runner {
         });
       rt.preparing = held;
       const left = await leaving;
+      if (left) {
+        rec.agentNotice = left;
+        this.markDirty(st);
+      }
+      // Stopped meanwhile: the notice waits for its next message.
       if (gone()) return;
-      if (left) text = `${left}\n\n${text}`;
     } else if (!rt.session) {
       const left = this.tellTornDown(st, msg.turnId);
       if (left) text = `${left}\n\n${text}`;
+    }
+    if (!rt.session && typeof rec.agentNotice === 'string') {
+      text = `${rec.agentNotice}\n\n${text}`;
+      delete rec.agentNotice;
+      this.markDirty(st);
     }
     if (!rt.session) {
       const account = this.accounts.get(rec.accountId);
