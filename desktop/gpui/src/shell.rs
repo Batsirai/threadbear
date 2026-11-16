@@ -191,6 +191,11 @@ impl DockContent for Panels {
         Some(app.update(cx, |t, cx| t.render_header_title(window, cx)))
     }
 
+    fn header_fills(&self, panel: &str, cx: &App) -> bool {
+        let Some(app) = self.app.upgrade() else { return false };
+        app.read(cx).header_is_renaming(panel)
+    }
+
     fn accessory(&self, panel: &str, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         let app = self.app.upgrade()?;
         // A thread in a panel of its own: its Share and ... menu (thread_panels.rs).

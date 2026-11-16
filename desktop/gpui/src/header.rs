@@ -291,6 +291,17 @@ impl Threadbear {
             .into_any_element()
     }
 
+    /// Whether this panel's bar shows the rename field now: the main panel
+    /// on the open thread, or a thread's own panel (thread_panels.rs). The
+    /// dock then lets the field take the bar's free width.
+    pub(crate) fn header_is_renaming(&self, panel: &str) -> bool {
+        let Some(renaming) = self.renaming.as_deref() else { return false };
+        match crate::thread_panels::pinned_thread(panel) {
+            Some(id) => id == renaming,
+            None => panel == crate::shell::MAIN && self.home_page().is_none() && self.projects.open.is_none() && self.open_thread().is_some_and(|t| t.id == renaming),
+        }
+    }
+
     /// Makes the title a field, as a click on it does (`startRenaming`).
     pub(crate) fn start_renaming(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(title) = self.threads.get(&id).map(|t| t.title.clone()) else { return };
