@@ -47,6 +47,9 @@ thread_local! {
     /// Where the box is across the window (its left and width), last drawn,
     /// so a wide palette is kept inside the window.
     static BOX: Cell<(f32, f32)> = const { Cell::new((0., 0.)) };
+    /// The palette's top edge in the window's pixels, last drawn (the dump's
+    /// `palette.top`, in points), to check it stays inside the window.
+    static TOP: Cell<Option<f32>> = const { Cell::new(None) };
     /// The band the pointer's over, lit in the accent.
     static LIT: Cell<bool> = const { Cell::new(false) };
     /// The palette as last drawn, in points: its width and height, and its
@@ -63,6 +66,12 @@ pub(crate) fn drawn_as(size: (f64, f64), columns: (f64, f64)) {
 #[cfg(feature = "automation")]
 pub(crate) fn drawn() -> Option<[f64; 4]> {
     DRAWN.get()
+}
+
+/// The palette's top edge as last drawn, in the window's points.
+#[cfg(feature = "automation")]
+pub(crate) fn drawn_top() -> Option<f64> {
+    TOP.get().map(|top| f64::from(top / style::zoom_scale()))
 }
 
 /// What's kept, from the app's prefs.
@@ -82,14 +91,15 @@ fn keep(composer: &Composer, layout: PaletteLayout, save: bool, cx: &mut App) {
 }
 
 /// The palette's size in points (zoom aside): what a drag has got to, else
-/// what's kept within the window, else as wide as the box and about half the
-/// window tall (SlashPaletteCoordinator.place).
+/// what's kept within the window, else as wide as the box (or a dragged one's
+/// least, where the box is narrower) and about half the window tall
+/// (SlashPaletteCoordinator.place).
 pub(crate) fn size(layout: PaletteLayout, box_width: f64, window: Size<Pixels>, auto_height: f64) -> (f64, f64) {
     if let Some(live) = LIVE.get() {
         let (w, h) = live;
         return (PaletteLayout::width_in(w, f64::from(window.width)), PaletteLayout::height_in(h, f64::from(window.height)));
     }
-    let width = layout.width.map_or(box_width, |w| PaletteLayout::width_in(w, f64::from(window.width)));
+    let width = layout.width.map_or_else(|| PaletteLayout::auto_width(box_width, f64::from(window.width)), |w| PaletteLayout::width_in(w, f64::from(window.width)));
     let height = layout.height.map_or(auto_height, |h| PaletteLayout::height_in(h, f64::from(window.height)));
     (width, height)
 }
@@ -108,9 +118,21 @@ pub(crate) fn left_offset(width: f32, window_width: f32) -> f32 {
     }
 }
 
-/// A canvas that keeps where the box is across the window.
+/// A canvas that keeps where the box is across the window, and where the
+/// palette's top is.
 pub(crate) fn measure_box() -> impl IntoElement {
-    canvas(|bounds, _, _| BOX.set((f32::from(bounds.origin.x), f32::from(bounds.size.width))), |_, _, _, _| {}).absolute().size_full()
+    canvas(
+        |bounds, _, _| {
+            BOX.set((f32::from(bounds.origin.x), f32::from(bounds.size.width)));
+            TOP.set(Some(f32::from(bounds.top())));
+        },
+        |_, _, _, _| {},
+    )
+    // Pinned, not left where the flow would put it (the box's canvas in
+    // composer.rs).
+    .absolute()
+    .inset_0()
+    .size_full()
 }
 
 /// While a drag goes on: the window's pointer moves resize, and letting go
@@ -156,7 +178,7 @@ pub(crate) fn drag_watch(composer: WeakEntity<Composer>) -> Option<AnyElement> {
 fn dragged_to(composer: &Composer, at: Point<Pixels>, cx: &mut App) {
     let Some(drag) = DRAG.with_borrow(|d| *d) else { return };
     // Points, as the sizes are kept at 100%.
-    let scale = f64::from(style::zoomed(1.));
+    let scale = f64::from(style::zoom_scale());
     match drag {
         Drag::Edge { edge, from, start } => {
             let (dx, dy) = (f64::from(at.x - from.x) / scale, f64::from(at.y - from.y) / scale);
@@ -320,7 +342,7 @@ pub(crate) fn drag_command(cmd: &serde_json::Value, window: &mut Window, cx: &mu
     window.render_frame(cx);
     let Some(handle) = window.find_all_by_label(name).into_iter().find(|e| e.visible()) else { return Err("the palette isn't open".into()) };
     let from = handle.visible_bounds().center();
-    let scale = style::zoomed(1.);
+    let scale = style::zoom_scale();
     let to = point(from.x + gpui_kit::px(cmd["dx"].as_f64().unwrap_or(0.) as f32 * scale), from.y + gpui_kit::px(cmd["dy"].as_f64().unwrap_or(0.) as f32 * scale));
     window.pointer_move(from, None, cx);
     window.pointer_down(from, MouseButton::Left, cx);

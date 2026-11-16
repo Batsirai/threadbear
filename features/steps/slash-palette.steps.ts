@@ -157,3 +157,21 @@ Then('the list is {int} points wider than it was', async function (this: Threadb
     return columns && near(columns[1], before.columns[1] + points);
   });
 });
+
+// The palette's top edge as drawn, in window points (the GPUI dump's
+// `palette.top`), with the window's own top at 0.
+Then('the palette\'s top is inside the window', async function (this: ThreadbearWorld) {
+  const top = await this.until('the palette drawn', (d) => {
+    const p = (d as unknown as { palette?: { top?: number } }).palette;
+    return typeof p?.top === 'number' ? p.top : undefined;
+  });
+  assert.ok(top >= 0, `the palette's top is ${top} points, above the window's`);
+});
+
+// The detail is what's left after the categories and the list.
+Then('the palette is at least {int} points wide, with {int} for its details', async function (this: ThreadbearWorld, width: number, detail: number) {
+  const { size, columns } = await geometry(this);
+  assert.ok(size[0] >= width - 0.5, `the palette is ${size[0]} points wide`);
+  const left = size[0] - columns[0] - columns[1];
+  assert.ok(left >= detail - 0.5, `the details have ${left} points (palette ${size[0]}, categories ${columns[0]}, list ${columns[1]})`);
+});

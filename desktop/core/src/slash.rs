@@ -360,6 +360,15 @@ impl PaletteLayout {
         w.max(480.).min((window - 80.).max(480.))
     }
 
+    /// The width with none dragged: the box's, but never under the 480 a
+    /// dragged one keeps, so a narrow box (a narrow window, or panels open
+    /// beside the thread) doesn't leave the details a few letters wide. That
+    /// least gives way to the window less 8 a side, and never goes under the
+    /// box.
+    pub fn auto_width(box_width: f64, window: f64) -> f64 {
+        box_width.max(480_f64.min(window - 16.))
+    }
+
     /// A dragged column: at least its least, and leaving the others theirs
     /// in a palette `total` wide.
     pub fn column(w: f64, least: f64, others: f64, total: f64) -> f64 {
@@ -615,6 +624,16 @@ mod tests {
         let (cats, list) = column_widths(420., 160., 300., false, 200., 120., 110.);
         assert_eq!(list, 120.);
         assert_eq!(cats, 110.);
+    }
+
+    #[test]
+    fn the_palette_is_as_wide_as_the_box_but_480_at_least() {
+        assert_eq!(PaletteLayout::auto_width(700., 1200.), 700.);
+        assert_eq!(PaletteLayout::auto_width(165., 560.), 480.);
+        // A window too narrow for 480 still leaves 8 a side...
+        assert_eq!(PaletteLayout::auto_width(300., 420.), 404.);
+        // ...but never makes it narrower than the box.
+        assert_eq!(PaletteLayout::auto_width(300., 250.), 300.);
     }
 
     #[test]

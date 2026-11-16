@@ -149,3 +149,29 @@ Feature: The slash command palette
     When I note the palette's size
     And I drag the list's edge 40 points right
     Then the list is 40 points wider than it was
+
+  # The palette is held to the room over the box, which on the new-thread page
+  # sits well down the window. It ran off the window's top there, at 100%
+  # because the box was measured from its bottom edge, and at other zooms
+  # because the window's size was turned into points with the zoom rounded to
+  # a whole point (1 from 80% to 140%). The Swift dump has no palette top.
+  @composer.slash @swift-pending
+  Scenario Outline: On the new-thread page the palette stays inside the window at <zoom>%
+    When I set the zoom to <zoom> percent
+    And I start a new thread
+    And I type "/" in the composer
+    Then the palette's top is inside the window
+
+    Examples:
+      | zoom |
+      | 100  |
+      | 125  |
+
+  # A palette as wide as a narrow box (a narrow window, or panels open beside
+  # the thread) left its details a few letters wide: it's as wide as a dragged
+  # one can be made at least, room allowing. The Swift dump has no size.
+  @composer.slash @swift-pending
+  Scenario: In a narrow box the palette still has room for its details
+    When the window is 560 points wide
+    And I type "/" in the composer
+    Then the palette is at least 480 points wide, with 200 for its details

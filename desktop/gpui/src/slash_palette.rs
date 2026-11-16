@@ -305,9 +305,13 @@ impl Composer {
         let list = self.render_palette_list(&view, &matches, picked.as_ref(), cx);
         let detail = self.render_palette_detail(&view, picked.as_ref(), cx);
         // Its size: what it was dragged to, kept within the window, else as
-        // wide as the box and about half the window tall (slash_resize.rs).
-        // In points, as kept; the window's are zoomed.
-        let zoom = style::zoomed(1.);
+        // wide as the box (480 at least) and about half the window tall
+        // (slash_resize.rs).
+        // In points, as kept; the window's are zoomed. The plain scale, not
+        // `zoomed(1.)`: that rounds to 1 from 80% to 140%, so at 125% the
+        // window counted as a quarter taller than it is and the palette ran
+        // off its top.
+        let zoom = style::zoom_scale();
         let viewport = window.viewport_size();
         let layout = crate::slash_resize::kept(self, cx);
         let auto_height = slash::palette_height(f64::from(viewport.height / zoom), 300., 560.);
@@ -572,6 +576,8 @@ impl Composer {
             // height, and its categories' and list's widths.
             "size": crate::slash_resize::drawn().map(|d| [d[0], d[1]]),
             "columns": crate::slash_resize::drawn().map(|d| [d[2], d[3]]),
+            // Its top edge in the window, in points: under 0 is off the top.
+            "top": crate::slash_resize::drawn_top(),
         })
     }
 }
