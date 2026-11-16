@@ -304,6 +304,7 @@ impl Composer {
         use gpui_kit::base::TestSupportExt as _;
         use gpui_kit::component::button::{Button, ButtonVariants as _};
         use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+        use gpui_kit::component::Disableable as _;
         let thread_id = self.thread_id.clone()?;
         let app = self.app.upgrade()?;
         let (thread, advice) = {

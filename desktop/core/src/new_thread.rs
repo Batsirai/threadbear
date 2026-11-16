@@ -939,7 +939,7 @@ mod tests {
         assert_eq!(resets_of(target), Some(UsageResets { available: 2, next_expires_at: parse_ms("2026-12-01T22:37:40.000Z") }));
         let tz = FixedOffset::east_opt(8 * 3600).unwrap();
         let now = tz.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap();
-        assert_eq!(reset_tip(target, &l.accounts, &now), "Restores sam@example.com's 5-hour and weekly limits now. 2 left, the next expires 2 Dec.");
+        assert_eq!(reset_tip(target, &l.accounts, &now), "Restores Codex's 5-hour and weekly limits now. 2 left, the next expires 2 Dec.");
         // A Claude login out of room never is, nor a Codex one with room,
         // none left, or signed out.
         l.accounts.iter_mut().find(|a| a.id == "claude-main").unwrap().usage = Some(out.clone());

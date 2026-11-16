@@ -869,7 +869,7 @@ impl Threadbear {
         let local = thread.runner_id.is_none();
         // The thread's own login first, then the rest of its pool.
         let pool_of = thread.pool_id.as_deref().filter(|_| logins.uses_pools()).and_then(|id| logins.pool(id));
-        let reset = if local {
+        let reset_offer = if local {
             let own = logins.account(&thread.account_id);
             let pooled = pool_of.map(|p| pool_logins(p, accounts, None)).unwrap_or_default();
             reset_target(own.into_iter().chain(pooled)).map(|a| (a.id.clone(), reset_tip(a, accounts, &threadbear_core::sidebar::local_now())))
@@ -883,7 +883,7 @@ impl Threadbear {
         if logins.uses_pools() {
             if let Some(pool) = thread.pool_id.as_deref().and_then(|id| logins.pool(id)) {
                 if let Some(until) = thread.waiting_for_room_until_ms() {
-                    return Some(LimitAdvice { text: format!("Every login in {} is out of room.", pool.title), targets, stopped: local, carry_on: true, carries_on_at: Some(until), reset });
+                    return Some(LimitAdvice { text: format!("Every login in {} is out of room.", pool.title), targets, stopped: local, carry_on: true, carries_on_at: Some(until), reset: reset_offer });
                 }
                 if pool_logins(pool, accounts, None).into_iter().any(has_room) {
                     return None;
@@ -923,7 +923,7 @@ impl Threadbear {
         // (runner.ts update, limitHitTurn), so asking is safe (Codex's
         // second review, 13 Nov).
         let carry_on = failed_on_limit || waiting.is_some() || !local;
-        Some(LimitAdvice { text, targets, stopped: local && carry_on, carry_on, carries_on_at: waiting, reset })
+        Some(LimitAdvice { text, targets, stopped: local && carry_on, carry_on, carries_on_at: waiting, reset: reset_offer })
     }
 
     /// The limit box's Carry on by itself (`setCarryOnAtReset`): shown at
