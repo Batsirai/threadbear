@@ -13,6 +13,7 @@ import type { Id } from './_generated/dataModel';
 import { MAX_RUNNER_UPLOAD_BYTES } from './sync';
 import { PHONE_UPLOADS } from './phone';
 import { takeUpload } from './uploads';
+import { safeDecode, withCard } from './shareCard';
 
 const http = httpRouter();
 
@@ -21,7 +22,7 @@ http.route({
   method: 'GET',
   handler: httpAction(async (ctx, request) => {
     const url = new URL(request.url);
-    const slug = decodeURIComponent(url.pathname.slice('/s/'.length).replace(/\/$/, ''));
+    const slug = safeDecode(url.pathname.slice('/s/'.length).replace(/\/$/, ''));
     const asset = await ctx.runQuery(components.staticHosting.lib.resolveAssetForHttp, { path: '/index.html' });
     // The page is in one of the three places the component keeps files
     // (registerStaticRoutes reads them the same way).
@@ -141,31 +142,7 @@ registerStaticRoutes(http, components.staticHosting);
 
 export default http;
 
-// index.html with the thread's title and Open Graph and Twitter card tags.
-export function withCard(html: string, card: { title: string; description: string; image?: string }, url: URL): string {
-  const e = escapeHtml;
-  const tags = [
-    `<meta property="og:type" content="article" />`,
-    `<meta property="og:site_name" content="Threadbear" />`,
-    `<meta property="og:title" content="${e(card.title)}" />`,
-    `<meta property="og:url" content="${e(url.origin + url.pathname)}" />`,
-    card.description ? `<meta property="og:description" content="${e(card.description)}" />` : '',
-    card.description ? `<meta name="description" content="${e(card.description)}" />` : '',
-    `<meta property="og:image" content="${e(card.image ?? `${url.origin}/icon.png`)}" />`,
-    `<meta name="twitter:card" content="${card.image ? 'summary_large_image' : 'summary'}" />`,
-    `<meta name="twitter:title" content="${e(card.title)}" />`,
-    card.description ? `<meta name="twitter:description" content="${e(card.description)}" />` : '',
-  ]
-    .filter(Boolean)
-    .join('\n    ');
-  return html.replace(/<title>[^<]*<\/title>/, `<title>${e(card.title)} · Threadbear</title>\n    ${tags}`);
-}
-
 async function text(response: Promise<Response>): Promise<string | null> {
   const r = await response;
   return r.ok ? r.text() : null;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
