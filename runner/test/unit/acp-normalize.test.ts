@@ -142,3 +142,12 @@ test("another tool's arguments can't pass for a call through use_tool, Grok's va
   const res = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 'g3', status: 'completed', rawOutput: { output: 'x' } });
   assert.deepEqual(kinds(res), ['tool.result']);
 });
+
+test("a use_tool call whose arguments stream in after it starts is still the tool it names", () => {
+  const n = new AcpNormalizer(ctx);
+  assert.deepEqual(n.handle({ sessionUpdate: 'tool_call', toolCallId: 'g4', title: 'use_tool', status: 'in_progress', rawInput: {} }), []);
+  const out = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 'g4', rawInput: { tool_name: 'threadbear__end_turn', tool_input: { needs: 'nothing' } } });
+  const ev = (out[0] as { event: { name: string; input: unknown } }).event;
+  assert.equal(ev.name, 'mcp__threadbear__end_turn');
+  assert.deepEqual(ev.input, { needs: 'nothing' });
+});

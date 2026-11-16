@@ -172,11 +172,13 @@ export const labReviewPart = {
 
   // A review that failed: the thread it reviews wakes with that and
   // whatever it had said, not a pass it gave in an earlier turn, and the
-  // review is put away (deliverReview). Not while this runner is going:
-  // the next one has the thread.
+  // review is put away (deliverReview). On a runner handing over too: the
+  // finish is kept in the record, and the runner that adopts either thread
+  // reconciles the wait. Not one stopping, whose next start resumes the
+  // turn it cut short.
   releaseFailedReview(this: Runner, st: ThreadState, error: string | undefined, lastText: string | undefined): void {
     const { rec, rt } = st;
-    if (rt.turn || rt.deleted || rec.archivedAt || this.stopping || this.draining || !this.awaitedReview(rec)) return;
+    if (rt.turn || rt.deleted || rec.archivedAt || this.stopping || !this.awaitedReview(rec)) return;
     delete rec.reviewVerdict;
     const stopped = `The review stopped with an error before it gave a verdict: ${error?.trim() || 'no reason given'}.`;
     this.markFinished(st, [stopped, lastText?.trim()].filter(Boolean).join('\n\n'));

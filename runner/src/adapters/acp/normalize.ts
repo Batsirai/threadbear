@@ -37,8 +37,10 @@ type Tool = {
   output: AcpToolContent[];
   rawOutput?: unknown;
   diffed: Set<string>;
-  // A call through Grok's use_tool (useToolCall).
+  // A call through Grok's use_tool (useToolCall), and once it names the
+  // tool it calls.
   wrapped?: boolean;
+  resolved?: boolean;
 };
 
 function toolKind(acp: string | undefined): ToolKind {
@@ -133,6 +135,7 @@ function useToolCall(u: AcpToolCall, t: Tool): { name: string; input: Record<str
   const raw = u.rawInput;
   if (!isPlainObject(raw) || typeof raw.tool_name !== 'string' || !raw.tool_name || !isPlainObject(raw.tool_input)) return undefined;
   if (!t.wrapped) return undefined;
+  t.resolved = true;
   return { name: raw.tool_name, input: raw.tool_input };
 }
 
@@ -269,8 +272,12 @@ export class AcpNormalizer {
     this.merge(t, u);
     // Agents can open a call with nothing filled in yet (OpenCode: title
     // "write", rawInput {}), so the row waits for its input or its start.
-    const under = u.status === 'in_progress' || u.status === 'completed' || u.status === 'failed';
-    if (Object.keys(t.input).length || under) this.emitCall(t, out);
+    const over = u.status === 'completed' || u.status === 'failed';
+    const under = u.status === 'in_progress' || over;
+    // A use_tool call's row waits for the tool it names (its arguments can
+    // stream in after it starts), or its row would be use_tool for good.
+    const unnamed = t.wrapped && !t.resolved && !over;
+    if (!unnamed && (Object.keys(t.input).length || under)) this.emitCall(t, out);
     if (t.emitted) this.emitDiffs(t, out);
     if ((u.status === 'completed' || u.status === 'failed') && !t.done) this.emitResult(t, u.status === 'completed', out);
   }

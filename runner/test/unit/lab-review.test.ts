@@ -929,3 +929,25 @@ test('labReview: a review Mike stops is left for him', () => {
   assert.ok(h.runner.get(id).snoozedUntil);
   assert.equal(h.runner.get(reviewId).archivedAt, undefined);
 });
+
+test('labReview: a review that hibernates for something it asked for is not finished yet', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const { reviewId, rs } = reviewSession(h, id);
+  turn(h, reviewId, { session: rs, input: { needs: 'nothing', snooze: '2h' }, reply: 'Waiting on CI.' });
+  assert.ok(h.runner.get(id).snoozedUntil, 'the reviewed thread still waits');
+  assert.equal(h.runner.get(reviewId).archivedAt, undefined);
+});
+
+test('labReview: a review that fails on a runner handing over still releases the thread it reviews', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const { reviewId, rs } = reviewSession(h, id);
+  // Handing over: only that it's set matters here, so every method of the
+  // drain is a no-op.
+  (h.runner as unknown as { draining: object }).draining = new Proxy({}, { get: () => () => {} });
+  rs.kill();
+  assert.ok(h.runner.threads.get(reviewId)!.rec.finished, 'the finish is in the record for whoever adopts it');
+});

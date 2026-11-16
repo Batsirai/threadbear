@@ -2808,9 +2808,11 @@ export class Runner {
     // review is put away (deliverReview), as a review is never Mike's to
     // answer. Grok's end_turn went unseen and the thread it reviewed, and
     // the one waiting on that, slept for hours (16 Nov 2026, 53cd067b).
-    // Not one waiting on threads of its own: it finishes when they have.
-    // One that failed is released after endTurn (releaseFailedReview).
-    const reviewEnded = !turn.local && outcome === 'completed' && this.awaitedReview(rec) && !waitForFromTool(turn.endTurn);
+    // Not one waiting on threads of its own, or hibernating for something,
+    // as it asked: it finishes when its next turn does. One that failed is
+    // released after endTurn (releaseFailedReview).
+    const reviewEnded = !turn.local && outcome === 'completed' && this.awaitedReview(rec) &&
+      !waitForFromTool(turn.endTurn) && !snoozeFromTool(turn.endTurn);
     const finished = (reviewEnded || (outcome === 'completed' && said?.needs === 'nothing' && !archive &&
       !snoozeFromTool(turn.endTurn) && !waitForFromTool(turn.endTurn))) && !rec.queue.length &&
       !rec.subagents?.some((a) => a.status === 'running') && !rt.tasks.length && !rt.approvals.size &&
