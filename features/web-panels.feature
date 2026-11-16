@@ -44,7 +44,9 @@ Feature: Web pages in a thread's panels
   # Chromium sizes the layer it draws a page in by adding each change of the
   # view's size to what it had, so half points left over built up: on 16 Nov
   # Mike's YouTube panel was drawn 12 points or more above where its clicks
-  # went, after a morning of panels moving.
+  # went, after a morning of panels moving. It shows on a Retina screen, where
+  # half points are pixels: there, 25 resizes left it 9.5 points out before
+  # the fix. On a 1x screen (Tinker Desk's) it passes either way.
   @panel.web @web-runtime @swift-pending
   Scenario: A panel's page is drawn where its clicks land, however often its panel moves
     Given the web runtime is installed

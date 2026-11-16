@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Given, Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
-import { okValue, type Dump } from '../support/driver.ts';
+import { okValue, sleep, type Dump } from '../support/driver.ts';
 import { pane } from '../support/pane.ts';
 import { sites } from '../support/web-runtime.ts';
 
@@ -60,6 +60,8 @@ When("the panel is moved across the top of the window and the window resized {in
   await this.app.do({ cmd: 'dock-move', panel: 'mock.page', edge: 'top' });
   for (let i = 0; i < times; i += 1) {
     await this.app.do({ cmd: 'resize', w: 1240, h: 700 + ((i * 37) % 121) });
+    // Each its own frame, as a person's resize is.
+    await sleep(120);
   }
   await this.app.do({ cmd: 'resize', w: 1240, h: 800 });
 });
