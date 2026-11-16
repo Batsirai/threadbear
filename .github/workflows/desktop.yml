@@ -9,6 +9,12 @@
 # main failed (runner/src/land-gate.ts, docs/thread-worktrees.md): it was red
 # for two days of GPUI landings (10 to 12 Nov) over what only GitHub's Macs,
 # Linux and Windows see, which tb land's quick check on Tinker Desk can't.
+#
+# The paths are everything the app builds and tests from, the files outside
+# desktop/ included (the Swift app's pictures and pele.js, the shared inbox
+# fixture, the runner files the mock runner imports):
+# runner/test/unit/desktop-ci-paths.test.ts finds those in the code and fails
+# when one's missing here, as a change to only them ran no desktop CI.
 # tb land: hold while red
 name: Desktop app
 
@@ -19,9 +25,16 @@ on:
       - desktop/**
       - runner/src/protocol.ts
       - runner/src/rpc-auth.ts
+      - runner/src/reviews.ts
+      - runner/src/samples.ts
       - web/src/sections.ts
       - web/src/format.ts
       - app/Tools/mock-runner/**
+      - app/Sources/Threadbear/Resources/Art/**
+      - app/Sources/Threadbear/Resources/Rich/**
+      - app/Sources/Threadbear/Views/Tour.swift
+      - app/Tests/Fixtures/**
+      - site/app-doc-slugs.json
       - features/**
       - .github/workflows/desktop.yml
   pull_request:
@@ -29,9 +42,16 @@ on:
       - desktop/**
       - runner/src/protocol.ts
       - runner/src/rpc-auth.ts
+      - runner/src/reviews.ts
+      - runner/src/samples.ts
       - web/src/sections.ts
       - web/src/format.ts
       - app/Tools/mock-runner/**
+      - app/Sources/Threadbear/Resources/Art/**
+      - app/Sources/Threadbear/Resources/Rich/**
+      - app/Sources/Threadbear/Views/Tour.swift
+      - app/Tests/Fixtures/**
+      - site/app-doc-slugs.json
       - features/**
       - .github/workflows/desktop.yml
   workflow_dispatch:
