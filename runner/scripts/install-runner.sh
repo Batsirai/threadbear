@@ -628,10 +628,15 @@ fi
 # only once nothing runs from the old one any more (or is about to stop).
 take_staged_app() {
   [ "$APP_STAGED" = 1 ] || return 0
-  rm -rf "$OLD_APP"
-  if [ -e "$RUNNER_APP" ]; then mv "$RUNNER_APP" "$OLD_APP"; fi
-  mv "$STAGED_APP" "$RUNNER_APP"
   APP_STAGED=0
+  # Gone already when the job restarted while this was building a release:
+  # launch.mjs took it in then, so the app in place is the new one.
+  [ -d "$STAGED_APP" ] || return 0
+  rm -rf "$OLD_APP"
+  # APP_BUILT as soon as the old one is aside, so fail_back puts it back
+  # even if the second rename fails.
+  if [ -e "$RUNNER_APP" ]; then mv "$RUNNER_APP" "$OLD_APP"; APP_BUILT=1; fi
+  mv "$STAGED_APP" "$RUNNER_APP"
   APP_BUILT=1
 }
 
