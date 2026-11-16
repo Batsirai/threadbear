@@ -2742,8 +2742,9 @@ export class Runner {
     if (outcome === 'completed' && !turn.local) {
       // The latest turn's say: one that ended without a verdict (a later
       // report on tests it left running) doesn't stand on an earlier pass.
-      if (rec.reviewOf && turn.endTurn) {
-        const verdict = parseVerdict(turn.endTurn);
+      // One with no end_turn at all (Grok's, unseen) gave none either.
+      if (rec.reviewOf && (turn.endTurn || this.awaitedReview(rec))) {
+        const verdict = turn.endTurn ? parseVerdict(turn.endTurn) : undefined;
         if (verdict) rec.reviewVerdict = verdict;
         else delete rec.reviewVerdict;
         this.markDirty(st);
@@ -2802,15 +2803,14 @@ export class Runner {
     // often where the report is), so this reads end_turn itself, not `away`.
     // Judged before endTurn, which starts any queued message.
     // A review the reviewed thread is waiting on (runner/lab-review.ts) is
-    // finished however its turn ended: with no end_turn the runner saw, a
-    // question for Mike or an error. Its reply goes back as the findings and
-    // the review is put away (deliverReview), as a review is never Mike's
-    // to answer. Grok's end_turn went unseen and the thread it reviewed,
-    // and the one waiting on that, slept for hours (16 Nov 2026, 53cd067b).
-    // Not one that carries on by itself (a lost network, a limit, a login
-    // moved), nor one Mike stopped.
-    const reviewEnded = !turn.local && this.awaitedReview(rec) &&
-      (outcome === 'completed' || (outcome === 'failed' && !limitHit && !netLost && !signedOut));
+    // finished however its turn completed: with no end_turn the runner saw,
+    // or a question for Mike. Its reply goes back as the findings and the
+    // review is put away (deliverReview), as a review is never Mike's to
+    // answer. Grok's end_turn went unseen and the thread it reviewed, and
+    // the one waiting on that, slept for hours (16 Nov 2026, 53cd067b).
+    // Not one waiting on threads of its own: it finishes when they have.
+    // One that failed is released after endTurn (releaseFailedReview).
+    const reviewEnded = !turn.local && outcome === 'completed' && this.awaitedReview(rec) && !waitForFromTool(turn.endTurn);
     const finished = (reviewEnded || (outcome === 'completed' && said?.needs === 'nothing' && !archive &&
       !snoozeFromTool(turn.endTurn) && !waitForFromTool(turn.endTurn))) && !rec.queue.length &&
       !rec.subagents?.some((a) => a.status === 'running') && !rt.tasks.length && !rt.approvals.size &&
@@ -2850,10 +2850,11 @@ export class Runner {
     if (!review && owed && finished && !rt.turn && !rec.labReviewOwed) review = this.startLabReview(st, owed.turnId, owed.reply, owed.seq);
     if (review) this.waitOnReview(st, review);
     // Owed to the next runner (a handover): finished once it's reviewed.
-    else if (finished && !rec.labReviewOwed) {
-      const stopped = outcome === 'failed' ? `The review stopped with an error before it gave a verdict: ${r.error || 'no reason given'}.` : '';
-      this.markFinished(st, stopped ? [stopped, turn.lastText?.trim()].filter(Boolean).join('\n\n') : turn.lastText);
-    }
+    else if (finished && !rec.labReviewOwed) this.markFinished(st, turn.lastText);
+    // A failed review that won't carry on by itself on another login (a
+    // pool move) or once the network is back: a pinned login at its limit
+    // would sleep until it resets, and a refused one until Mike signs in.
+    if (outcome === 'failed' && !turn.local && !netLost && rec.accountId === loginBefore) this.releaseFailedReview(st, r.error, turn.lastText);
     if (outcome === 'completed' && this.waitedOnFor(rec.id).length) this.tellActivity({ kind: 'waited-on', threadId: rec.id });
     // A schedule's message brought this thread out of the archive (sendTo).
     // A run that finishes with nothing for Mike puts it back, so a watcher he
@@ -2989,6 +2990,9 @@ export class Runner {
     if (!interrupted) body.error = message;
     const ev = this.emit(st, body, turn.turnId);
     this.endTurn(st, ev.seq, interrupted ? 'idle' : 'error');
+    // A review whose CLI died or wouldn't start: the thread it reviews
+    // hears, rather than sleeping a day. Not one Mike stopped.
+    if (!interrupted) this.releaseFailedReview(st, message, turn.lastText);
   }
 
   afterTurn(st: ThreadState, limitHit?: string, netLost?: string, signedOut?: string): void {

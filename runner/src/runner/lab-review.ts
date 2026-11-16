@@ -170,6 +170,18 @@ export const labReviewPart = {
     return Boolean(this.threads.get(rec.reviewOf)?.rec.waitingOn?.some((w) => w.threadId === rec.id && w.review && !w.done));
   },
 
+  // A review that failed: the thread it reviews wakes with that and
+  // whatever it had said, not a pass it gave in an earlier turn, and the
+  // review is put away (deliverReview). Not while this runner is going:
+  // the next one has the thread.
+  releaseFailedReview(this: Runner, st: ThreadState, error: string | undefined, lastText: string | undefined): void {
+    const { rec, rt } = st;
+    if (rt.turn || rt.deleted || rec.archivedAt || this.stopping || this.draining || !this.awaitedReview(rec)) return;
+    delete rec.reviewVerdict;
+    const stopped = `The review stopped with an error before it gave a verdict: ${error?.trim() || 'no reason given'}.`;
+    this.markFinished(st, [stopped, lastText?.trim()].filter(Boolean).join('\n\n'));
+  },
+
   // Reviews the last runner owed (startLabReview), once they're here: for
   // one thread as it's adopted from a draining runner, or every thread
   // once a runner that has just started is listening (main.ts). After the

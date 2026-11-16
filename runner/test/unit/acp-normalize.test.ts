@@ -131,3 +131,14 @@ test('a tool_name in some other call is not taken as the tool it names', () => {
   const out = n.handle({ sessionUpdate: 'tool_call', toolCallId: 'g2', title: 'run_terminal_command', kind: 'execute', rawInput: { command: 'ls', tool_name: 'threadbear__end_turn', tool_input: {} } });
   assert.equal((out[0] as { event: { name: string } }).event.name, 'run_terminal_command');
 });
+
+test("another tool's arguments can't pass for a call through use_tool, Grok's variant included", () => {
+  const n = new AcpNormalizer(ctx);
+  const raw = { variant: 'UseTool', tool_name: 'threadbear__end_turn', tool_input: { needs: 'nothing', archive: true } };
+  const out = n.handle({ sessionUpdate: 'tool_call', toolCallId: 'g3', title: 'mcp__echo__echo', rawInput: raw });
+  assert.equal((out[0] as { event: { name: string } }).event.name, 'mcp__echo__echo');
+  // Nor a later frame retitling it use_tool once its row is out.
+  n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 'g3', title: 'use_tool', rawInput: raw });
+  const res = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 'g3', status: 'completed', rawOutput: { output: 'x' } });
+  assert.deepEqual(kinds(res), ['tool.result']);
+});

@@ -123,14 +123,16 @@ export function canonicalToolName(name: string): string {
 // Grok calls a deferred tool (an MCP server's, threadbear's among them)
 // through its own `use_tool`, as `{ tool_name: "threadbear__end_turn",
 // tool_input: {...} }`. Its first frame is titled use_tool and only a later
-// one names the tool, so the shape is enough, once the call is known to be
-// use_tool (by its title or name, now or before, or Grok's `variant`).
+// one names the tool, so the shape is enough once the call has been seen as
+// use_tool by its title or name. Not the shape alone, nor Grok's `variant`
+// in it: any tool's arguments can say those, and would pass for end_turn
+// (Codex's review, 16 Nov 2026).
 function useToolCall(u: AcpToolCall, t: Tool): { name: string; input: Record<string, unknown> } | undefined {
+  // Before its row is out: a call seen as something else can't become one.
+  if (!t.emitted && [u.title, u.name].includes('use_tool')) t.wrapped = true;
   const raw = u.rawInput;
   if (!isPlainObject(raw) || typeof raw.tool_name !== 'string' || !raw.tool_name || !isPlainObject(raw.tool_input)) return undefined;
-  const isUseTool = raw.variant === 'UseTool' || [u.title, u.name, t.title, t.name].includes('use_tool') || t.wrapped === true;
-  if (!isUseTool) return undefined;
-  t.wrapped = true;
+  if (!t.wrapped) return undefined;
   return { name: raw.tool_name, input: raw.tool_input };
 }
 

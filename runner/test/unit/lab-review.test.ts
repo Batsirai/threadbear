@@ -875,3 +875,57 @@ test('labReview: a review that fails still wakes the agent, saying it gave no ve
   assert.match(msg, /stopped with an error before it gave a verdict: the model returned an error/);
   assert.ok(h.runner.get(reviewId).archivedAt);
 });
+
+// From Codex's review of the fix (16 Nov 2026).
+test('labReview: a pass given earlier does not stand for a review turn that ends without end_turn, or fails', () => {
+  for (const end of ['no end_turn', 'failed'] as const) {
+    const h = setup();
+    const id = start(h);
+    turn(h, id, { diffs: [codeDiff()] });
+    const { reviewId, rs } = reviewSession(h, id);
+    // Its first turn passes, but waits on tests it left running.
+    h.runner.threads.get(reviewId)!.rec.reviewVerdict = { findings: [] };
+    rs.text('r1', 'The tests failed: src/app.ts:3 drops the session.');
+    if (end === 'failed') rs.result('failed', undefined, 'the model returned an error');
+    else rs.result();
+    const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+    assert.doesNotMatch(msg, /found nothing that holds up/, end);
+    assert.match(msg, /drops the session/, end);
+  }
+});
+
+test('labReview: a review waiting on threads of its own finishes when they have, not before', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const { reviewId, rs } = reviewSession(h, id);
+  const { thread: helper } = h.runner.create({ text: 'run the e2e suite', accountId: 'claude-main' });
+  turn(h, reviewId, { session: rs, input: { needs: 'nothing', waitFor: [helper.id] }, reply: 'Waiting on the e2e run.' });
+  assert.ok(h.runner.get(id).snoozedUntil, 'the reviewed thread still waits');
+  assert.equal(h.runner.get(reviewId).archivedAt, undefined);
+});
+
+test('labReview: a review whose CLI dies, or whose pinned login is refused, still releases the thread it reviews', () => {
+  for (const how of ['crash', 'auth'] as const) {
+    const h = setup();
+    const id = start(h);
+    turn(h, id, { diffs: [codeDiff()] });
+    const { reviewId, rs } = reviewSession(h, id);
+    if (how === 'crash') rs.kill();
+    else rs.result('failed', undefined, 'Not logged in', { errorKind: 'auth' });
+    assert.equal(h.runner.get(id).snoozedUntil, undefined, how);
+    const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+    assert.match(msg, /stopped with an error before it gave a verdict/, how);
+    assert.ok(h.runner.get(reviewId).archivedAt, how);
+  }
+});
+
+test('labReview: a review Mike stops is left for him', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const { reviewId, rs } = reviewSession(h, id);
+  rs.result('interrupted');
+  assert.ok(h.runner.get(id).snoozedUntil);
+  assert.equal(h.runner.get(reviewId).archivedAt, undefined);
+});
