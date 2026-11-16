@@ -16,7 +16,7 @@ pub mod preview_rules;
 pub use download::Progress;
 
 #[cfg(target_os = "macos")]
-pub use mac::host::{bundle_identifier, start, status, Launch, Status};
+pub use mac::host::{bundle_identifier, initialize_called, retry, start, status, Launch, Status};
 #[cfg(target_os = "macos")]
 pub use mac::offscreen::{picture, png_size, Offscreen, Options, Reply};
 /// The transcript's diagrams and pages, drawn into pictures (mac/rich.rs).
@@ -102,6 +102,14 @@ mod elsewhere {
 
     pub fn bundle_identifier() -> Option<String> {
         None
+    }
+
+    pub fn retry() -> bool {
+        false
+    }
+
+    pub fn initialize_called() -> bool {
+        false
     }
 
     /// What a drawing gives back (mac/rich.rs has the real one).

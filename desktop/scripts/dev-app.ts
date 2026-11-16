@@ -474,6 +474,10 @@ async function supervise(id: string): Promise<void> {
         // app runs (Codex's review). One for every instance, so the 135 MB
         // download happens once.
         THREADBEAR_WEB_RUNTIME_DIR: process.env.THREADBEAR_WEB_RUNTIME_DIR || path.join(stateRoot(), 'web-runtime'),
+        // Chromium's profile, though, is the instance's own: two processes
+        // can't share one, so a second thread's app found its web panels
+        // dead while another's held it (16 Nov).
+        THREADBEAR_WEB_PROFILE_DIR: process.env.THREADBEAR_WEB_PROFILE_DIR || path.join(dir, 'web-profile'),
         ...(current.live ? { THREADBEAR_AUTOMATION_LIVE: '1' } : {}),
       },
     });

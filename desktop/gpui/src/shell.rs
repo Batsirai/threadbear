@@ -307,6 +307,7 @@ actions!(
         ToggleFrameRate,
         AboutApp,
         RestartToUpdate,
+        RestartApp,
         TakeTheTour,
         FinishSettingUp,
         HibernateHour,
@@ -395,6 +396,8 @@ commands!(
     (ToggleFrameRate, ToggleFrameRate, None),
     (About, AboutApp, None),
     (RestartToUpdate, RestartToUpdate, None),
+    // No menu item: a web panel's Try again after Chromium failed to start.
+    (RestartApp, RestartApp, None),
     (TakeTheTour, TakeTheTour, None),
     (FinishSettingUp, FinishSettingUp, None),
     (HibernateHour, HibernateHour, None),
@@ -767,6 +770,7 @@ impl Threadbear {
             Command::ToggleFrameRate => self.toggle_frame_rate(window, cx),
             Command::About => self.show_about(window, cx),
             Command::RestartToUpdate => self.restart_to_update(cx),
+            Command::RestartApp => self.restart_app(cx),
             // Help's replay of the tour can be skipped (tour.rs).
             Command::TakeTheTour => self.tour_start(true, window, cx),
             Command::FinishSettingUp => self.show_setup(cx),

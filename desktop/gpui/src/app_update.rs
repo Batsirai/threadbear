@@ -704,6 +704,46 @@ impl Threadbear {
         }
     }
 
+    /// Restart the app as it is, onto the staged build if there is one: a
+    /// web runtime whose Chromium failed to start can only be tried again in
+    /// a new process (web_runtime.rs, `try_again`). Like Restart to Update,
+    /// it hands over when the window's on screen, so the window stays and
+    /// drafts go across. Only the installed app: any other would open the
+    /// installed one in its place.
+    pub(crate) fn restart_app(&mut self, cx: &mut Context<Self>) {
+        if self.updater.restarting || self.updater.preview || !installed::launch().installed {
+            note("a restart was asked for, but this isn't the installed app, so it's left to you");
+            return;
+        }
+        if self.updater.staged.is_some() {
+            note("restarting onto the staged build, for the web runtime");
+            self.restart_for_update(false, cx);
+            return;
+        }
+        note("restarting, for the web runtime");
+        self.updater.restarting = true;
+        self.settings.saved.update_restore = Some(self.restore_state(true, cx));
+        self.settings.save();
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |t, cx| {
+                let spot = t.main_window.update(cx, |_, window, _| crate::handover::outgoing_spot(window)).ok().flatten();
+                match spot {
+                    // The same bundle as a second copy, which takes over.
+                    Some(spot) => t.hand_over(install_dir(), spot, |_, cx| {
+                        relaunch_after_exit(&install_dir(), false);
+                        cx.quit();
+                    }, cx),
+                    None => {
+                        relaunch_after_exit(&install_dir(), false);
+                        cx.quit();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn restart_for_update(&mut self, in_background: bool, cx: &mut Context<Self>) {
         self.updater.restarting = true;
         // Where it was, put back once the threads have loaded: the list,

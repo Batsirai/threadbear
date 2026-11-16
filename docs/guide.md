@@ -155,7 +155,11 @@ them with Chromium, which it downloads the first time one needs it: the box
 asks "Show this diagram? It needs the web runtime, a 135 MB download, once."
 with Install web runtime and Not now, and shows the code until then (or
 after Not now, until the app restarts). Settings > General > Web runtime
-says where it's got to and installs it too.
+says where it's got to and installs it too. If Chromium doesn't start, a
+web panel and that row say why, with Try again, or Restart Threadbear when
+only a new run of the app can try again (Chromium starts once per run);
+the window and what you've typed stay. Its own log is `web-runtime.log` in
+the `web-runtime` folder of Threadbear's data folder.
 
 The installed Mac runner checks the web runtime's CEF pin daily while a
 runtime is installed. Updates and

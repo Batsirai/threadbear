@@ -575,7 +575,7 @@ fn running(id: &str, wants: &str, main: bool, open: Option<Opener>, window: &mut
             return native_view(window).ok_or_else(|| away("The window has no view to show the page in.", open, cx));
         }
         return Err(match &runtime.read(cx).engine {
-            Engine::Failed(why) => away(&format!("The web runtime didn't start: {why}"), open, cx),
+            Engine::Failed(why) => away_with(&format!("The web runtime didn't start: {why}"), web_runtime::try_again_button("web-panel-try-again", cx), open, cx),
             _ => starting(cx),
         });
     }
@@ -609,6 +609,11 @@ fn note(text: &str, cx: &App) -> AnyElement {
 
 /// A line saying why the page isn't here, and Open in browser.
 fn away(text: &str, open: Option<Opener>, cx: &App) -> AnyElement {
+    away_with(text, None, open, cx)
+}
+
+/// `away` with a button of its own beside Open in browser.
+fn away_with(text: &str, button: Option<AnyElement>, open: Option<Opener>, cx: &App) -> AnyElement {
     let p = palette(cx);
     v_flex()
         .size_full()
@@ -617,7 +622,7 @@ fn away(text: &str, open: Option<Opener>, cx: &App) -> AnyElement {
         .gap(px(12.))
         .p(px(24.))
         .child(div().max_w(px(320.)).text_center().text_size(px(style::size::LABEL)).line_height(px(18.)).text_color(p.secondary).child(text.to_owned()))
-        .children(open.map(|o| open_button(&o, p, cx)))
+        .child(h_flex().gap(px(8.)).children(button).children(open.map(|o| open_button(&o, p, cx))))
         .into_any_element()
 }
 
