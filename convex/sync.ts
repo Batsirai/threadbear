@@ -8,7 +8,7 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { messageButton, threadFields, views } from './schema';
 import { API_VERSION } from './version';
-import { actAs, checkRunnerId, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
+import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
@@ -32,6 +32,20 @@ function clean<T>(value: T): T {
 function cleanResult(result: string): string | undefined {
   try {
     return JSON.stringify(scrubEveryString(JSON.parse(result), clean));
+  } catch {
+    return undefined;
+  }
+}
+
+function withoutOriginCredentials(result: string): string | undefined {
+  try {
+    const o = JSON.parse(result) as unknown;
+    if (o && typeof o === 'object' && typeof (o as { origin?: unknown }).origin === 'string') {
+      const kept = withoutCredentials((o as { origin: string }).origin);
+      if (kept) (o as { origin: string }).origin = kept;
+      else delete (o as { origin?: string }).origin;
+    }
+    return JSON.stringify(o);
   } catch {
     return undefined;
   }
@@ -2801,7 +2815,12 @@ export const finishCommand = mutation({
     // And (API 77) a login or model change's: the login and model that
     // runner applied, which may not be the model asked for.
     const settings = c.kind === 'update' && (c.args?.accountId !== undefined || c.args?.model !== undefined);
-    const kept = ok && (c.kind === 'call' || c.kind === 'slashCommands' || settings) && result !== undefined && utf8Bytes(result) <= RESULT_MAX_BYTES ? cleanResult(result) : undefined;
+    let kept = ok && (c.kind === 'call' || c.kind === 'slashCommands' || settings) && result !== undefined && utf8Bytes(result) <= RESULT_MAX_BYTES ? cleanResult(result) : undefined;
+    // A thread's description for the Move sheet carries its repo's address:
+    // stored without whatever an older runner's scrubber left in its
+    // userinfo (an ssh user that's a token), as moves:moveInfo stores it
+    // (Daybreak 143, security review 17 Nov 2026).
+    if (kept !== undefined && c.kind === 'call' && c.args?.method === 'moves.describe') kept = withoutOriginCredentials(kept);
     // The thread a create made is the command's runner's (it writes the row
     // before finishing): never another runner's id, which the main Mac would
     // then open as this runner's new thread.

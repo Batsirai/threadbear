@@ -580,6 +580,8 @@ export default defineSchema({
     state: v.union(...moveStates.map((x) => v.literal(x))),
     cwd: v.optional(v.string()), // what Mike picked; absent, T chooses
     accountId: v.optional(v.string()),
+    // What the Move sheet's preview showed, as a digest T checks (moveBinding).
+    expect: v.optional(v.string()),
     info: v.optional(v.any()), // S's description of the thread (moveInfo), JSON at most 16 KB
     plan: v.optional(v.any()), // T's answer (moveReady), JSON at most 16 KB
     key: v.optional(v.string()), // T's sealing key, raw X25519 base64

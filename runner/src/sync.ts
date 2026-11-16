@@ -141,7 +141,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 82;
+export const BACKEND_API_VERSION = 83;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -1858,7 +1858,7 @@ export class ConvexSync {
   }
 
   // Starting and cancelling a move: the main Mac's runner only.
-  async startMove(p: { threadId: string; to: string; cwd?: string; accountId?: string }): Promise<string> {
+  async startMove(p: { threadId: string; to: string; cwd?: string; accountId?: string; expect?: string }): Promise<string> {
     const r = (await this.backend('mutation', 'moves:startMove', { key: this.deps.key, ...p })) as { moveId: string };
     return r.moveId;
   }

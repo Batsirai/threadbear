@@ -44,6 +44,51 @@ Given('a move would leave nothing behind', async function (this: ThreadbearWorld
   await this.app.do({ cmd: 'mock', method: 'moveLeftBehind', params: { lines: [] } });
 });
 
+Given('a move would clone its repo from {string} to {string}', async function (this: ThreadbearWorld, from: string, to: string) {
+  await this.app.do({ cmd: 'mock', method: 'moveLeftBehind', params: { lines: [] } });
+  await this.app.do({ cmd: 'mock', method: 'moveClone', params: { from, to } });
+});
+
+Then('the move sheet says it clones from {string} to {string}', async function (this: ThreadbearWorld, from: string, to: string) {
+  await this.until(`the clone from ${from} to ${to}`, (d) => d.moveSheet?.clone === to && d.moveSheet?.cloneFrom === from);
+});
+
+// Daybreak 142: the move names the look it was shown, so it does that or nothing.
+Then('the move was started with the preview it showed', async function (this: ThreadbearWorld) {
+  // The row says it's going at once; the call reaches the runner after.
+  let said = '';
+  for (let tries = 0; tries < 50 && !said; tries += 1) {
+    const text = await this.app.do({ cmd: 'mock', method: 'lastMove', params: {} });
+    const r = (typeof text === 'string' ? JSON.parse(text) : text) as { params?: { previewId?: unknown } | null };
+    said = String(r?.params?.previewId ?? '');
+    if (!said) await sleep(100);
+  }
+  assert.match(said, /^mock-preview-/);
+});
+
+Then('the move was started with the preview it showed, for the folder {string}', async function (this: ThreadbearWorld, folder: string) {
+  let params: { previewId?: unknown; cwd?: unknown } | null = null;
+  for (let tries = 0; tries < 50 && !params; tries += 1) {
+    const text = await this.app.do({ cmd: 'mock', method: 'lastMove', params: {} });
+    params = ((typeof text === 'string' ? JSON.parse(text) : text) as { params?: typeof params }).params ?? null;
+    if (!params) await sleep(100);
+  }
+  assert.match(String(params?.previewId ?? ''), /^mock-preview-/);
+  assert.equal(params?.cwd, folder);
+});
+
+Then('no move has started', async function (this: ThreadbearWorld) {
+  await sleep(500);
+  const text = await this.app.do({ cmd: 'mock', method: 'lastMove', params: {} });
+  const r = (typeof text === 'string' ? JSON.parse(text) : text) as { params?: unknown };
+  assert.equal(r?.params ?? null, null);
+});
+
+When("I type {string} as the move sheet's folder", async function (this: ThreadbearWorld, folder: string) {
+  await this.until('the sheet looked', (d) => d.moveSheet?.canMove === true);
+  await this.app.do({ cmd: 'move', folder });
+});
+
 // `move` asks like Move to ▸ that runner does, once the runner list has come.
 When('I ask to move the thread {string} to {string}', async function (this: ThreadbearWorld, title: string, runner: string) {
   const t = await this.until(`a thread called "${title}"`, (d) => this.thread(d, title));

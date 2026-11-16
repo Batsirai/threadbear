@@ -376,6 +376,10 @@ const BRUCE = 'runner_mini';
 // a look at Settings > Runners: the usual demo stays at two).
 // What threads.movePreview says won't come; empty and Move to skips the sheet.
 let moveLeftBehind = ['1 background job, which gets stopped'];
+// Where threads.movePreview says the repo is cloned first ({ from, to }), and
+// the last threads.move's params, for the specs (mock.moveClone, mock.lastMove).
+let moveClone;
+let lastMove;
 const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
   { id: 'runner_cloud', name: 'Cloud box', icon: 'cloud', online: true, lastSeenAt: new Date().toISOString() },
   { id: 'runner_pixel', name: 'Phone', icon: 'smartphone', online: true, lastSeenAt: new Date().toISOString() },
@@ -592,17 +596,22 @@ async function dispatch(client, method, p) {
       await sleep(500);
       const runner = runners.concat(MORE_RUNNERS).find((r) => r.id === p.runnerId);
       const home = runner?.name === 'mac-mini' ? '/Users/alex' : '/home/alex';
+      const problems = p.cwd && !String(p.cwd).startsWith(home) ? [`There's no folder ${p.cwd} on ${runner?.name ?? 'it'}.`] : [];
       return {
         cwd: p.cwd || `${home}/code/threadbear-threads/slot-4`,
         accountId: p.accountId || 'claude-main',
         accounts: [{ id: 'claude-main', provider: 'claude', title: 'Claude', email: 'alex@example.com' }, { id: 'claude-1', provider: 'claude', title: 'Claude', email: 'alex@work.example.com' }],
         leftBehind: moveLeftBehind,
         sourceChecked: true,
-        problems: p.cwd && !String(p.cwd).startsWith(home) ? [`There's no folder ${p.cwd} on ${runner?.name ?? 'it'}.`] : [],
+        problems,
         worktree: true,
+        // The real runner's one-use id for a look that can go (Preview binding).
+        ...(problems.length ? {} : { previewId: `mock-preview-${Date.now()}` }),
+        ...(moveClone ? { clone: moveClone.to, cloneFrom: moveClone.from } : {}),
       };
     }
     case 'threads.move': {
+      lastMove = p;
       const t = threads.get(p.threadId);
       const runner = runners.concat(MORE_RUNNERS).find((r) => r.id === p.runnerId);
       if (t) {
@@ -1756,6 +1765,11 @@ async function dispatch(client, method, p) {
     case 'mock.moveLeftBehind':
       moveLeftBehind = p.lines ?? [];
       return { lines: moveLeftBehind };
+    case 'mock.moveClone':
+      moveClone = p.to ? { from: p.from, to: p.to } : undefined;
+      return { clone: moveClone ?? null };
+    case 'mock.lastMove':
+      return { params: lastMove ?? null };
     case 'mock.slow': {
       slow = { ms: Math.max(0, Number(p.ms ?? 0)), queueMs: Math.max(0, Number(p.queueMs ?? 0)) };
       return slow;

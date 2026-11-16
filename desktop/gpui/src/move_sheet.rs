@@ -66,8 +66,8 @@ impl Threadbear {
             let answer = call(client, "threads.movePreview", params).await;
             this.update_in(cx, |this, window, cx| {
                 let preview = answer.as_ref().ok().map(MovePreview::decode);
-                if preview.as_ref().is_some_and(MovePreview::can_go_as_is) {
-                    this.start_move(request.clone(), None, None, cx);
+                if let Some(preview_id) = preview.as_ref().filter(|p| p.can_go_as_is()).and_then(|p| p.preview_id.clone()) {
+                    this.start_move(request.clone(), None, None, Some(preview_id), cx);
                 } else {
                     // The sheet comes up instead; the guess goes back until
                     // Move is pressed there.
@@ -86,8 +86,10 @@ impl Threadbear {
     }
 
     /// `threads.move`, as Move in the sheet does; the row says it's going
-    /// at once and goes back if the runner turns it down.
-    pub(crate) fn start_move(&mut self, request: MoveRequest, cwd: Option<String>, account: Option<String>, cx: &mut Context<Self>) {
+    /// at once and goes back if the runner turns it down. `preview_id` is
+    /// the look Mike was shown (or the clean one that went by itself): the
+    /// move does what it showed or nothing (Daybreak 142).
+    pub(crate) fn start_move(&mut self, request: MoveRequest, cwd: Option<String>, account: Option<String>, preview_id: Option<String>, cx: &mut Context<Self>) {
         let before = self.threads.get(&request.thread_id).cloned();
         if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
             if t.moving.is_none() {
@@ -102,6 +104,9 @@ impl Threadbear {
         }
         if let Some(account) = account {
             params["accountId"] = json!(account);
+        }
+        if let Some(preview_id) = preview_id {
+            params["previewId"] = json!(preview_id);
         }
         let thread_id = request.thread_id.clone();
         cx.spawn(async move |this, cx| {
@@ -195,6 +200,9 @@ pub(crate) struct MoveSheet {
     filled: bool,
     /// The newest check; an answer to an older one is ignored.
     asks: u64,
+    /// The folder and login `preview` was asked with, so Move passes its
+    /// `previewId` only for those same picks.
+    previewed_with: (Option<String>, Option<String>),
     _subs: Vec<Subscription>,
 }
 
@@ -207,7 +215,7 @@ impl MoveSheet {
                 this.ask(window, cx);
             }
         });
-        let mut sheet = MoveSheet { app, client, request, title, busy, preview: None, asking: false, folder, login: String::new(), guessed_folder: String::new(), guessed_login: String::new(), filled: false, asks: 0, _subs: vec![sub] };
+        let mut sheet = MoveSheet { app, client, request, title, busy, preview: None, asking: false, folder, login: String::new(), guessed_folder: String::new(), guessed_login: String::new(), filled: false, asks: 0, previewed_with: (None, None), _subs: vec![sub] };
         match answer {
             // Opened with the runner's answer in hand (`request.answer`).
             Some(known) => sheet.apply(known, None, None, window, cx),
@@ -276,6 +284,7 @@ impl MoveSheet {
                 self.guessed_login = guess;
             }
         }
+        self.previewed_with = (cwd, account);
         self.preview = Some(answer);
         self.filled = true;
         cx.notify();
@@ -313,9 +322,18 @@ impl MoveSheet {
         }
         let folder = self.folder.read(cx).value().to_string();
         let (cwd, account) = ((folder != self.guessed_folder).then_some(folder), (self.login != self.guessed_login).then(|| self.login.clone()));
+        // Move starts only the look the sheet shows, which the runner binds
+        // the move to. A folder typed since (without Return) is looked at
+        // first, and shown, rather than moving without a look the sheet
+        // never showed (security review, 17 Nov 2026).
+        if self.previewed_with != (cwd.clone(), account.clone()) {
+            self.ask(window, cx);
+            return;
+        }
         let request = self.request.clone();
+        let preview_id = self.preview.as_ref().and_then(|p| p.preview_id.clone());
         if let Some(app) = self.app.upgrade() {
-            app.update(cx, |app, cx| app.start_move(request, cwd, account, cx));
+            app.update(cx, |app, cx| app.start_move(request, cwd, account, preview_id, cx));
         }
         self.close(window, cx);
     }
@@ -334,6 +352,7 @@ impl MoveSheet {
             "problems": preview.problems,
             "leftBehind": preview.left_behind,
             "clone": preview.clone,
+            "cloneFrom": preview.clone_from,
             "asking": self.asking,
             "canMove": self.can_move(cx),
         })
@@ -425,7 +444,7 @@ impl Render for MoveSheet {
         let can_move = self.can_move(cx);
         let connected = self.connected(cx);
         let waiting = self.asking || !connected;
-        let (problems, left_behind, clone, worktree) = preview.map_or((vec![], vec![], None, false), |p| (p.problems, p.left_behind, p.clone, p.worktree));
+        let (problems, left_behind, clone, clone_from, worktree) = preview.map_or((vec![], vec![], None, None, false), |p| (p.problems, p.left_behind, p.clone, p.clone_from, p.worktree));
         let folder_tip = if worktree { format!("The repo on {name} it gets a new worktree of its own in. Press Return to check another folder.") } else { format!("Where it runs on {name}. Press Return to check another folder.") };
         let login_picker = self.render_login_picker(cx);
         let label = |text: &'static str| div().w(px(52.)).flex_none().text_right().text_size(px(size::LABEL)).text_color(style::secondary_text(cx)).child(text);
@@ -450,7 +469,13 @@ impl Render for MoveSheet {
                     .child(h_flex().gap(px(10.)).items_center().child(label("Login")).child(div().flex_1().min_w_0().child(login_picker))),
             )
             .children(problems.into_iter().map(|line| h_flex().gap(px(6.)).items_start().text_size(px(size::LABEL)).text_color(style::failed(cx)).child(Icon::from(gpui_kit::assets::IconName::OctagonX).with_size(px(13.))).child(div().flex_1().child(line))))
-            .when_some(clone, |s, clone| s.child(div().text_size(px(size::LABEL)).text_color(style::secondary_text(cx)).child(format!("{name} has no copy of its repo, so it's cloned to {clone} first."))))
+            .when_some(clone, |s, clone| {
+                let line = match &clone_from {
+                    Some(from) => format!("{name} has no copy of its repo, so it's cloned from {from} to {clone} first."),
+                    None => format!("{name} has no copy of its repo, so it's cloned to {clone} first."),
+                };
+                s.child(div().text_size(px(size::LABEL)).text_color(style::secondary_text(cx)).child(line))
+            })
             .children(left_behind.into_iter().map(|line| div().text_size(px(size::LABEL)).text_color(style::needs_you_text(cx)).child(format!("Won't come: {line}"))))
             .child(
                 h_flex()
@@ -484,6 +509,13 @@ impl Render for MoveSheet {
 /// The `move` script command: as Move to ▸ a runner, by its name or id.
 #[cfg(feature = "automation")]
 pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App) -> Result<Value, String> {
+    // `folder`: typed into the open sheet's folder field, without Return.
+    if let Some(folder) = cmd["folder"].as_str() {
+        let sheet = app.read(cx).move_sheet.clone().ok_or("no move sheet open")?;
+        let folder = folder.to_owned();
+        sheet.update(cx, |s, cx| s.folder.update(cx, |f, cx| f.set_value(folder, window, cx)));
+        return Ok(json!("ok"));
+    }
     let thread_id = match cmd["id"].as_str() {
         Some(id) => app.read(cx).thread_id_from(id)?,
         None => app.read(cx).selected.clone().ok_or("no thread open")?,

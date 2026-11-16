@@ -389,4 +389,10 @@
 //    already, so nothing changes for them.
 //    phone:thread and the lists hold rows written before to the same rule
 //    as they read them.
-export const API_VERSION = 82;
+// 83: a move is bound to its preview (Daybreak 142). moves:startMove takes
+//    `expect`, the digest of what the Move sheet showed, and the move's row
+//    carries it; the runner it goes to takes a move only with one that
+//    matches its own plan. moves:moveInfo keeps only a description's own
+//    fields, typed and bounded. A runner starts moves with it from 83, and
+//    an older backend refuses its startMove, so moves wait for the backend.
+export const API_VERSION = 83;

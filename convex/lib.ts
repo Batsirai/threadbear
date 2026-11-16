@@ -154,11 +154,31 @@ export async function saveRunnerOrder(ctx: MutationCtx, runnerIds: string[]): Pr
 // stores about a thread's repo is for knowing which repo it is, and the
 // runner it goes to can read it. An older runner may still send one whole.
 export function withoutCredentials(url: string): string {
-  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)?([^?#]*)(?:[?#].*)?$/i.exec(url.trim());
-  if (!m) return url.trim();
-  const [, scheme, userinfo, rest] = m;
-  if (!userinfo) return `${scheme}${rest}`;
-  if (/^(https?|ftps?):\/\//i.test(scheme!)) return `${scheme}${rest}`;
-  const user = userinfo.slice(0, -1).split(':')[0];
-  return `${scheme}${user ? `${user}@` : ''}${rest}`;
+  const s = url.trim();
+  // scheme://[userinfo@]host/path: the whole user part goes, whatever the
+  // scheme, and so do the query and fragment. Only ssh's conventional
+  // `git` user stays (GitHub needs it to clone), never anything else in
+  // that place, which may be a token (Daybreak 143, 16 Nov 2026).
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)?([^?#]*)(?:[?#].*)?$/i.exec(s);
+  if (m) {
+    const [, scheme, userinfo, rest] = m;
+    const sshy = /^(?:ssh|git\+ssh|ssh\+git):\/\/$/i.test(scheme!);
+    const user = userinfo?.slice(0, -1).split(':')[0];
+    return `${scheme}${sshy && user === 'git' ? 'git@' : ''}${rest}`;
+  }
+  // user@host:path, git's scp form: as git reads it, the host ends at the
+  // first `:` ahead of any slash, and everything before the last `@` ahead
+  // of that goes, unless it's `git`. So an `@` in the path (`team@work/repo`,
+  // `@scope/repo`) is the path's and can't hide the user. One with an `@`
+  // and then a `:` after that first `:` (`user:token@host:path`, or a path
+  // like `team@b:repo`) can't be told apart from a login, so the address
+  // goes altogether rather than be guessed at (security review, 17 Nov 2026).
+  const slash = s.indexOf('/');
+  const before = slash < 0 ? s : s.slice(0, slash);
+  const first = before.indexOf(':');
+  if (first >= 0 && /@[^:]*:/.test(before.slice(first + 1))) return '';
+  const at = first < 0 ? -1 : before.slice(0, first).lastIndexOf('@');
+  if (at >= 0) return `${s.slice(0, at) === 'git' ? 'git@' : ''}${s.slice(at + 1)}`;
+  // host:path with no user, or a folder: nothing in it is a login.
+  return s;
 }

@@ -6106,31 +6106,109 @@ thread if it froze it and T throws away its staging; the chunks are deleted
 when a move ends, whichever way. A runner that restarts reads its moves
 again and carries on from the state.
 
-- **Starting.** `moves:startMove { threadId, to, cwd?, accountId? }` (owner
-  only): the thread's row must be another runner's or this one's, `to` a
+- **Starting.** `moves:startMove { threadId, to, cwd?, accountId?, expect? }` (owner
+  only; `expect` from API 83, the preview's binding below): the thread's row must be another runner's or this one's, `to` a
   different runner heard from in the last 3 minutes, and the thread in no
   other move still going. Answers `{ moveId }`.
 - **S's info.** `{ title, cwd, home, provider, accountId, email?, model?,
   effort?, permissionMode, origin?, repoTop?, subdir?, worktree: boolean,
   sessionId?, schedules: number }`: what T needs to choose a folder and a
   login (`home` is S's home folder, for swapping). `origin` never carries
-  a password or token (`withoutCredentials` in move-git.ts: an http(s)
-  address loses its user part, ssh:// its password, the query goes), and
+  a password or token (`withoutCredentials` in move-git.ts: any address
+  loses its whole user part, in the URL and `user@host:path` forms alike
+  (the host ending at the first `:` before any `/`, as git reads it, so an
+  `@` in the path can't hide the user; one with an `@` and then a `:`
+  after that, like `user:token@host:path`, can't be told from a login and
+  is left out altogether), but for ssh's own `git`, and the query and
+  fragment go; `host:path` with no user still clones, ssh's own config
+  giving the user), and
   the backend strips one an older runner sends (`moveInfo`, and a
-  `moves.preview` call's description). The preview sends T only what it
+  `moves.preview` call's description). It's S's word, and S may be an
+  extra Mac: from API 83 the backend's `moveInfo` keeps only these fields,
+  each of its type, strings at most 4096 characters with no control
+  characters (it refuses one that isn't), and T reads it through
+  `moveInfoFrom` again, which also refuses a `subdir` that isn't plain
+  names joined by `/` (no `.`, `..`, empty or %-encoded part, no
+  backslash, never absolute). The preview sends T only what it
   plans from (`previewInfo` in moves.ts: no title, model, session or
   schedule count), scrubbed as sync scrubs, as a relay command isn't
   scrubbed on its way.
 - **T's plan.** `{ cwd, accountId, model?, effort?, worktree?: { repo,
-  subdir }, clone?: string, leftBehind: string[] }`. The folder is Mike's
+  subdir }, clone?: { url, to }, within?: string, leftBehind: string[] }`.
+  The folder is Mike's
   pick if he made one; else, for a thread with a worktree, a new one of
   T's own in its copy of the same repo (found by `origin` URL among the
   folders T knows, or cloned from `origin` to the path S has it at, with
   S's home swapped for T's: `clone` says where); else the same repo by
   `origin` URL at the same subfolder; else the same path with the home
-  swapped. The login is Mike's pick, else T's login with the same email,
+  swapped. T picks the place, never S (Daybreak 136): a path of S's names
+  a place on T only if it's under S's `home` and, swapped, still under
+  T's once normalised, and never a place that isn't plain (`plainPlace`):
+  T's home itself, or a folder with any folder on the way to it hidden or
+  one tools load from (`~/Library`, `node_modules`, `vendor`, `bin`,
+  `site-packages` and the like), as written and links followed. Mike can
+  pick one. The same goes for a repo T finds by `origin`, even one of its
+  own threads' (a dotfiles repo at the home, a checkout inside a
+  `node_modules`), and one found from S's path must be inside T's home,
+  links followed, unless one of T's own threads works in it. A `subdir`
+  in the repo that's a hidden or installed packages' folder (`.git`,
+  `node_modules/x`, as written or through a link) runs the thread at the
+  repo's top instead, with a note in `leftBehind`; in a fresh clone or
+  worktree that's checked as made. A worktree thread's repo needs a
+  worktree patch of its own: one found in a repo around it (a nested
+  checkout) would make the worktree in that other repo, so the preview
+  says so and placing refuses it. A clone is named for the
+  repo (from `origin`, never S's folder name), goes only
+  to a new folder in a plain place beside a repo one of T's own threads
+  works in (its main checkout's folder, links followed), so never
+  somewhere a tool loads from, and isn't
+  made for a worktree thread (clone it by hand first: a worktree patch
+  in a folder above a fresh clone would set it up); and the thread's
+  folder must be inside its repo, Mike's pick, or T's home, links
+  followed (`within`). T doesn't trust the plan the row
+  gives back: placing plans again with the same checks, just before it
+  clones or makes anything, refuses a plan that differs from the row's,
+  and checks the folder as made (after the clone, the new worktree and
+  its git work) before the thread takes it; a folder the git work didn't
+  make runs at the worktree's top, with a note. The login is Mike's pick, else T's login with the same email,
   else T's default. `leftBehind` is what T already knows won't come. T
   answers `moveFailed` when there's no folder or login for it.
+- **Preview binding.** A move does what its preview showed or nothing
+  (Daybreak 142). The main Mac's runner, answering `threads.movePreview`
+  with nothing in `problems` and a folder and login, works out a digest of
+  the thread, `to`, Mike's picks, the planning half of S's description
+  (`cwd`, `home`, `provider`, `email`, `origin` without credentials,
+  `repoTop`, `subdir`, `worktree`, as T will have it: through
+  `previewInfo` and the runner's scrubber) and T's answer (`cwd`,
+  `accountId`, `worktree`, `clone` and where from) (`moveBinding` in
+  moves.ts), keeps it for ten minutes under a random `previewId` it
+  returns, and
+  `threads.move` with that `previewId` (once only, for the same thread,
+  runner and picks) starts the move with it as `expect`. Without one (the
+  Swift app, an older `tb`, `move_thread`) `threads.move` looks itself and
+  binds to that, refusing a move with a problem, or one that would clone
+  (a clone is shown first, in the Move sheet). T works the digest out
+  again from the description on the row and its own plan, at `asking`
+  and again before it downloads anything, and fails the move ("changed
+  since the Move sheet looked") if they differ or the row has none. T
+  says it does this with `checksPreview: true` in its preview answer, and
+  the main Mac's runner gives no `previewId` for a T without it (a runner
+  from before this, which would do what the row says): a problem asks it
+  to update first. The row's `expect` is the backend's word, so on the
+  main Mac's runner, which starts every move, T also takes a move only
+  with a binding its own `threads.move` used in the last day, for that one
+  move (`MovePreviews.vouches`: the move `startMove` answered with, or the
+  first to carry it), so a cancelled move's binding on a new move's row
+  takes nothing; a restart between starting a move and taking it in fails
+  it. Any runner leaves alone a move it has seen end (done, failed,
+  cancelled) whose row comes back in an earlier state. Moves between two other runners are checked against the row alone.
+  The main Mac's runner reads another runner's description through the
+  relay, which scrubs anything shaped like a key, while the move's row
+  keeps folder paths whole, so a thread whose folder name looks like a key
+  fails its move as changed: it fails safe, and is left so. The GPUI app's Move to goes straight away only on a
+  look with a `previewId` and no clone, and its Move sheet's Move with a
+  folder or login changed since the look asks again and shows that
+  first.
 - **Freezing.** From S's first step (`asking`) until the move ends S starts
   no new turn on the thread: messages (the app's, the phone's, agents',
   schedules') go in its queue, which moves with it. A running turn goes on;
@@ -6184,7 +6262,7 @@ again and carries on from the state.
   can't carry (one with `=`) fails the step rather than running git.
   Files cross as the disk has them, so a git-lfs file goes as its content.
   T clones only from an `https`, `ssh` or `user@host:path` origin, into a
-  path named in full.
+  new folder it picks (T's plan above).
 - **The switch.** `moves:moveClaim` is the one mutation where the thread
   changes hands. It sets the thread row's `runnerId` to T (clearing any
   card on it), hands T its Pocket cards on the thread and its share link,
@@ -6267,8 +6345,8 @@ runner:
 
 | method | params | result |
 |---|---|---|
-| `threads.movePreview` | `{ threadId, runnerId, cwd?, accountId? }` | `{ cwd?, accountId?, accounts: { id, provider, title, email? }[], leftBehind, problems, worktree?: true, clone?: string }`: T's guess for the folder and login (or for Mike's `cwd` and `accountId`, to check them), its logins of the thread's provider to pick from, what won't come at either end (`moves.describe` adds the thread's own runner's, and `sourceChecked: true` says it did: without that, an empty `leftBehind` means nothing), and what stops it (empty when it can move: no folder or login for it, the experiment off on a T from before 12 Nov, a worktree thread's repo there with no worktree patch, T not answering). `worktree`: a new worktree of its own in `cwd`'s repo; `clone`: that repo is cloned there first. Nothing is made or started. The thread is described by the runner that has it (here, or a `moves.describe` call to it), then planned by T (here, or a `moves.preview` call with that description). Both calls are on the relay's allow-list from backend API 65, owner only, and checked again on the runner. Failures come back in `problems`, not as an error |
-| `threads.move` | `{ threadId, runnerId, cwd?, accountId? }` | `{ moveId }`. `-32602` with the reason when it can't start (the runner offline, a move already going) |
+| `threads.movePreview` | `{ threadId, runnerId, cwd?, accountId? }` | `{ cwd?, accountId?, accounts: { id, provider, title, email? }[], leftBehind, problems, worktree?: true, clone?: string, cloneFrom?: string, previewId?: string, checksPreview?: true }`: T's guess for the folder and login (or for Mike's `cwd` and `accountId`, to check them), its logins of the thread's provider to pick from, what won't come at either end (`moves.describe` adds the thread's own runner's, and `sourceChecked: true` says it did: without that, an empty `leftBehind` means nothing), and what stops it (empty when it can move: no folder or login for it, the experiment off on a T from before 12 Nov, a worktree thread's repo there with no worktree patch, T not answering). `worktree`: a new worktree of its own in `cwd`'s repo; `clone`: that repo is cloned there first, from `cloneFrom`. `previewId`: the main Mac's runner's one-use id for this look, when nothing stops the move (Preview binding). Nothing is made or started. The thread is described by the runner that has it (here, or a `moves.describe` call to it), then planned by T (here, or a `moves.preview` call with that description). Both calls are on the relay's allow-list from backend API 65, owner only, and checked again on the runner. Failures come back in `problems`, not as an error |
+| `threads.move` | `{ threadId, runnerId, cwd?, accountId?, previewId? }` | `{ moveId }`. `previewId` is a `threads.movePreview` answer's, asked with the same `cwd` and `accountId`: the move does what it showed or nothing. Without one the runner looks itself first (Preview binding). `-32602` with the reason when it can't start (the runner offline, a move already going, a used or stale `previewId`, a problem, or a clone without one) |
 | `threads.moveCancel` | `{ threadId }` | `{}`. `-32602` once the move is past `packing` |
 
 What a tampered runner key can do: as T, it only ever gets threads Mike

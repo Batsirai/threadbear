@@ -121,6 +121,7 @@ const listedMove = v.object({
   state: v.string(),
   cwd: v.optional(v.string()),
   accountId: v.optional(v.string()),
+  expect: v.optional(v.string()),
   info: v.optional(v.any()),
   plan: v.optional(v.any()),
   key: v.optional(v.string()),
@@ -140,11 +141,15 @@ function listed(m: Move) {
 
 /** Starts a move: the main Mac's runner, for Mike or one of its agents. */
 export const startMove = mutation({
-  args: { key: v.string(), threadId: v.string(), to: v.string(), cwd: v.optional(v.string()), accountId: v.optional(v.string()) },
+  // `expect`: the digest of what the Move sheet's preview showed
+  // (runner/src/moves.ts moveBinding), which the runner it goes to checks
+  // its plan against before it takes anything (Daybreak 142, 16 Nov 2026).
+  args: { key: v.string(), threadId: v.string(), to: v.string(), cwd: v.optional(v.string()), accountId: v.optional(v.string()), expect: v.optional(v.string()) },
   returns: v.object({ moveId: v.string() }),
   handler: async (ctx, { key, ...a }) => {
     await runnerAuth(ctx, key, 'startMove');
     checkRunnerId(a.to);
+    if (a.expect !== undefined && !/^[0-9a-f]{64}$/.test(a.expect)) throw bad('expect must be 64 hex characters');
     const cwd = cleanPick(a.cwd, 'cwd');
     const accountId = cleanPick(a.accountId, 'accountId');
     const t = await ctx.db
@@ -164,7 +169,7 @@ export const startMove = mutation({
       if (GOING.includes(m.state)) throw conflict('This thread is already moving.');
     }
     const moveId = randomId();
-    await ctx.db.insert('threadMoves', { moveId, threadId: a.threadId, from: t.runnerId, to: a.to, state: 'asking', ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}), createdAt: now, updatedAt: now });
+    await ctx.db.insert('threadMoves', { moveId, threadId: a.threadId, from: t.runnerId, to: a.to, state: 'asking', ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}), ...(a.expect ? { expect: a.expect } : {}), createdAt: now, updatedAt: now });
     return { moveId };
   },
 });
@@ -212,6 +217,36 @@ function smallObject(x: unknown, what: string): void {
   if (x === null || typeof x !== 'object' || Array.isArray(x) || docBytes(x) > PLAN_MAX_BYTES) throw bad(`${what} must be an object of at most ${PLAN_MAX_BYTES} bytes`);
 }
 
+// S's description as stored for T: only a MoveInfo's own fields, each
+// of its type, a string at most INFO_CHARS with no control characters,
+// and the repo's address without a password or token (an older runner
+// sends it whole). Anything else isn't kept; a field of the wrong shape
+// refuses the whole description. T checks it again (runner/src/moves.ts
+// moveInfoFrom), and the runner's own subdir and path rules are its
+// (Daybreak 136, 16 Nov 2026).
+const INFO_CHARS = 4096;
+const INFO_STRINGS = ['title', 'cwd', 'home', 'provider', 'accountId', 'email', 'model', 'effort', 'permissionMode', 'origin', 'repoTop', 'subdir', 'sessionId'] as const;
+function describedThread(o: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of INFO_STRINGS) {
+    const x = o[k];
+    if (x === undefined) continue;
+    if (typeof x !== 'string' || x.length > INFO_CHARS || /[\u0000-\u001f\u007f]/.test(x)) throw bad(`info.${k} must be a string of at most ${INFO_CHARS} characters, with no control characters`);
+    const kept = k === 'origin' ? withoutCredentials(x) : x;
+    // An address that can't be told from a login is left out.
+    if (kept) out[k] = kept;
+  }
+  if (o.worktree !== undefined) {
+    if (typeof o.worktree !== 'boolean') throw bad('info.worktree must be true or false');
+    out.worktree = o.worktree;
+  }
+  if (o.schedules !== undefined) {
+    if (typeof o.schedules !== 'number' || !Number.isFinite(o.schedules)) throw bad('info.schedules must be a number');
+    out.schedules = o.schedules;
+  }
+  return out;
+}
+
 /** S describes the thread (its folder, repo, login), for T to plan from. */
 export const moveInfo = mutation({
   args: { key: v.string(), moveId: v.string(), info: v.any() },
@@ -223,11 +258,7 @@ export const moveInfo = mutation({
     mustBeIn(m, ['asking'], 'be described');
     if (m.info !== undefined) return null;
     smallObject(info, 'info');
-    // Which repo, never a password or token in its address: T reads this
-    // (an older runner sends it whole).
-    const o = info as Record<string, unknown>;
-    const safe = typeof o.origin === 'string' ? { ...o, origin: withoutCredentials(o.origin) } : info;
-    await ctx.db.patch(m._id, { info: safe, updatedAt: Date.now() });
+    await ctx.db.patch(m._id, { info: describedThread(info as Record<string, unknown>), updatedAt: Date.now() });
     return null;
   },
 });

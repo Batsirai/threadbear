@@ -195,6 +195,33 @@ Feature: Other runners' threads
     When I ask to move the thread "Morning brief" to "mac-mini"
     Then the row "Morning brief" says "Moving to mac-mini" on the right
     And the move sheet stayed closed
+    And the move was started with the preview it showed
+
+  # Daybreak 142 (16 Nov 2026): a clone is shown first, where from and to,
+  # and Move then starts exactly the look that showed it.
+  @sidebar.move @remote-threads
+  Scenario: A move that would clone the repo shows where from and to first
+    Given a move would clone its repo from "git@github.com:alex-example/foo.git" to "/Users/alex/code/foo"
+    When I ask to move the thread "Morning brief" to "mac-mini"
+    Then the move sheet says it clones from "git@github.com:alex-example/foo.git" to "/Users/alex/code/foo"
+    When I press Move in the move sheet for "mac-mini"
+    Then the move sheet is closed
+    And the move was started with the preview it showed
+
+  # Security review, 17 Nov 2026: a folder typed and not yet looked at went
+  # without the look, so the runner's own (never shown) decided the move.
+  # Move looks at it first and shows that; Move again starts it.
+  @sidebar.move @remote-threads
+  Scenario: A folder typed in the move sheet is looked at before the move starts
+    When I ask to move the thread "Morning brief" to "mac-mini"
+    Then the move sheet says "Move “Morning brief” to mac-mini"
+    When I type "/Users/alex/dev/other" as the move sheet's folder
+    And I press Move in the move sheet for "mac-mini"
+    Then the move sheet offers the folder "/Users/alex/dev/other"
+    And no move has started
+    When I press Move in the move sheet for "mac-mini"
+    Then the move sheet is closed
+    And the move was started with the preview it showed, for the folder "/Users/alex/dev/other"
 
   @sidebar.move @remote-threads
   Scenario: A moving row offers Cancel Move instead

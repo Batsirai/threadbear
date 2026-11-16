@@ -170,6 +170,7 @@ function moveInfoArg(raw: unknown): Record<string, unknown> {
   // Which repo, never a password or token in its address: the runner the
   // preview asks reads this row (an older main Mac's runner sends it whole).
   if (typeof out.origin === 'string') out.origin = withoutCredentials(out.origin);
+  if (out.origin === '') delete out.origin;
   // Nor what no target plans from: an older main Mac's runner sends the
   // thread's title (made from its first message) and session whole.
   if ('title' in out) out.title = '';

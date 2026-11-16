@@ -279,8 +279,13 @@ pub struct MovePreview {
     pub worktree: bool,
     /// That repo is cloned there first.
     pub clone: Option<String>,
+    /// The address it's cloned from, shown with `clone`.
+    pub clone_from: Option<String>,
     /// The thread's own runner said what it would leave behind.
     pub source_checked: bool,
+    /// The runner's one-use id for this look: `threads.move` takes it, so
+    /// the move does what this showed or nothing (Daybreak 142).
+    pub preview_id: Option<String>,
 }
 
 impl MovePreview {
@@ -300,13 +305,17 @@ impl MovePreview {
             problems: lines("problems"),
             worktree: value["worktree"].as_bool().unwrap_or(false),
             clone: text("clone"),
+            clone_from: text("cloneFrom"),
             source_checked: value["sourceChecked"].as_bool().unwrap_or(false),
+            preview_id: text("previewId"),
         }
     }
 
     /// Nothing to decide or be told: Move to goes without showing the sheet.
+    /// A clone is always shown first (where from, and to), and only a look
+    /// the runner gave an id to can go.
     pub fn can_go_as_is(&self) -> bool {
-        self.source_checked && self.problems.is_empty() && self.left_behind.is_empty() && self.cwd.is_some() && self.account_id.is_some()
+        self.source_checked && self.problems.is_empty() && self.left_behind.is_empty() && self.cwd.is_some() && self.account_id.is_some() && self.clone.is_none() && self.preview_id.is_some()
     }
 }
 
@@ -448,12 +457,17 @@ mod tests {
 
     #[test]
     fn a_preview_with_nothing_to_say_can_just_go() {
-        let answer = json!({ "cwd": "/Users/alex/x", "accountId": "claude-main", "accounts": [{ "id": "claude-main", "title": "Claude", "email": "a@b" }], "leftBehind": [], "problems": [], "sourceChecked": true });
+        let answer = json!({ "cwd": "/Users/alex/x", "accountId": "claude-main", "accounts": [{ "id": "claude-main", "title": "Claude", "email": "a@b" }], "leftBehind": [], "problems": [], "sourceChecked": true, "previewId": "p1" });
         assert!(MovePreview::decode(&answer).can_go_as_is());
         let left = json!({ "cwd": "/x", "accountId": "a", "leftBehind": ["a job"], "sourceChecked": true });
         assert!(!MovePreview::decode(&left).can_go_as_is());
-        let unchecked = json!({ "cwd": "/x", "accountId": "a", "sourceChecked": false });
+        let unchecked = json!({ "cwd": "/x", "accountId": "a", "sourceChecked": false, "previewId": "p1" });
         assert!(!MovePreview::decode(&unchecked).can_go_as_is());
+        let cloning = json!({ "cwd": "/x", "accountId": "a", "sourceChecked": true, "previewId": "p1", "clone": "/x", "cloneFrom": "git@github.com:o/r.git" });
+        assert!(!MovePreview::decode(&cloning).can_go_as_is(), "a clone is shown first");
+        assert_eq!(MovePreview::decode(&cloning).clone_from.as_deref(), Some("git@github.com:o/r.git"));
+        let unbound = json!({ "cwd": "/x", "accountId": "a", "sourceChecked": true });
+        assert!(!MovePreview::decode(&unbound).can_go_as_is(), "no previewId, nothing to bind the move to");
         assert_eq!(MovePreview::decode(&answer).accounts[0].label(), "Claude (a@b)");
     }
 

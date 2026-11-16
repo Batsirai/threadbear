@@ -82,7 +82,7 @@ import { devicesMethods } from './devices.ts';
 import { flushSentry, reportException, reportLoggedError, reportLoggedWarning, startSentry } from './sentry.ts';
 import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
 import { CrossRunner } from './cross-runner.ts';
-import { FAILED_SHOWN_MS, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
+import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
 import type { RemoteThreads } from './thread-index.ts';
 import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel, type PermissionMode } from './protocol.ts';
 
@@ -932,10 +932,17 @@ async function main(): Promise<void> {
   runner.runnerNames = (id) => runnerNames.get(id);
   // The main Mac takes moved threads in at most Ask (runner/moves.ts).
   runner.movedInAtMostAsk = () => Boolean(sync.ownerKey());
+  // Previews shown (the Move sheet, tb move, move_thread), by the one-use
+  // id threads.move takes (moves.ts MovePreviews; docs/protocol.md,
+  // "Preview binding").
+  const previews = new MovePreviews();
   const moves = (movesRef = new Moves({
     self: () => syncRunnerId,
     backend: () => sync.movesBackend(),
     log,
+    // The main Mac's runner starts every move (moveOn), so one coming here
+    // must carry a binding it handed out itself.
+    vouches: (expect, moveId) => !sync.ownerKey() || previews.vouches(expect, moveId),
     // A move coming here of a thread still on its old runner: its row in
     // the sidebar shows it, as S's own row shows a move going.
     seen: (row) => {
@@ -993,13 +1000,83 @@ async function main(): Promise<void> {
   const moveOn = () => {
     if (!sync.ownerKey()) throw new RpcError(ErrorCode.badParams, "Only the main Mac's runner can move a thread.");
   };
+  // The thread described by the runner that has it, then planned by the
+  // one it would go to, each here or through a relay `call`; with a
+  // previewId when nothing stops it.
+  const previewMove = async (threadId: string, to: string, cwd: string | undefined, accountId: string | undefined): Promise<Record<string, unknown>> => {
+    const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    const here = runner.threads.has(threadId);
+    if (here && to === syncRunnerId) throw new RpcError(ErrorCode.badParams, 'The thread is on that runner already.');
+    let info: unknown;
+    try {
+      if (here) info = await describeMovePreview(threadId);
+      else if (relay.owns(threadId)) info = await relay.describeForMove(threadId);
+      else throw new Error('No such thread.');
+    } catch (e) {
+      const older = /can't be asked of this runner/.test(said(e));
+      return { accounts: [], leftBehind: [], problems: [older ? "The thread's runner runs a Threadbear from before moves. It updates itself within a few minutes of a new release." : said(e)] };
+    }
+    // The target only knows its own end of what won't come.
+    const lines = (v: unknown) => (Array.isArray(v) ? v.filter((l): l is string => typeof l === 'string') : []);
+    // As the target will have it: scrubbed, as the old runner's description
+    // reaches the move's row through its own scrubber (sync.ts post) and the
+    // preview reaches another runner through this one's, so a binding made
+    // from it matches the one the target works out (security review,
+    // 17 Nov 2026).
+    const described = moveInfoFrom(info);
+    const scrubbed = described && previewInfo(described, (v) => scrubber.doc(v));
+    const parsed = scrubbed && moveInfoFrom(scrubbed);
+    const withThisEnd = (answer: unknown): Record<string, unknown> => {
+      const a = (answer && typeof answer === 'object' ? answer : {}) as Record<string, unknown>;
+      const thisEnd = (info as { leftBehind?: unknown } | undefined)?.leftBehind;
+      const out: Record<string, unknown> = { ...a, leftBehind: [...lines(a.leftBehind), ...lines(thisEnd)], ...(Array.isArray(thisEnd) ? { sourceChecked: true } : {}) };
+      // A target from before moves were checked against their preview would
+      // do whatever the move's row says: none to it until it updates.
+      const problems = lines(a.problems);
+      if (!problems.length && a.checksPreview !== true) out.problems = [`${runnerNames.get(to) ?? 'That runner'} runs a Threadbear from before moves were checked against what Move to showed. It updates itself within a few minutes of a new release.`];
+      return previews.remember({ threadId, to, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) }, parsed, out);
+    };
+    try {
+      if (!parsed || !scrubbed) throw new Error("The thread's runner didn't say enough about it.");
+      if (to === syncRunnerId) return withThisEnd(await runner.previewMove({ info: parsed, self: syncRunnerId, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) }));
+      // Through the relay: only what the target needs, scrubbed (moves.ts previewInfo).
+      return withThisEnd(await relay.previewMove(to, { info: scrubbed, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) }));
+    } catch (e) {
+      // A runner from before moves turns the call down by name.
+      const older = /can't be asked of this runner/.test(said(e));
+      return { accounts: [], leftBehind: [], problems: [older ? `${runnerNames.get(to) ?? 'That runner'} runs a Threadbear from before moves. It updates itself within a few minutes of a new release.` : said(e)] };
+    }
+  };
   methods['threads.move'] = async (p) => {
     moveOn();
     const threadId = String(p.threadId ?? '');
     const to = String(p.runnerId ?? '');
     if (!threadId || !to) throw new RpcError(ErrorCode.badParams, 'threadId and runnerId are needed');
+    const cwd = typeof p.cwd === 'string' && p.cwd ? p.cwd : undefined;
+    const accountId = typeof p.accountId === 'string' && p.accountId ? p.accountId : undefined;
+    let expect: string;
+    const picks = { threadId, to, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) };
+    if (typeof p.previewId === 'string' && p.previewId) {
+      // Once only, for the same thread, runner and picks it was asked with.
+      try {
+        expect = previews.take(p.previewId, picks);
+      } catch (e) {
+        throw new RpcError(ErrorCode.badParams, e instanceof Error ? e.message : String(e));
+      }
+    } else {
+      // No preview named (the Swift app, an older tb, move_thread): one
+      // now, bound the same way. A clone is shown first, so one that would
+      // clone goes through the Move sheet.
+      const look = await previewMove(threadId, to, cwd, accountId);
+      const problems = Array.isArray(look.problems) ? (look.problems as string[]) : [];
+      if (problems.length) throw new RpcError(ErrorCode.badParams, problems.join(' '));
+      if (typeof look.clone === 'string') throw new RpcError(ErrorCode.badParams, `It would clone ${String(look.cloneFrom ?? 'its repo')} to ${look.clone} first: move it from the app's Move to, which shows that, or pick a folder.`);
+      if (typeof look.previewId !== 'string') throw new RpcError(ErrorCode.badParams, "Couldn't see where the thread would go, so it stays where it is.");
+      expect = previews.take(look.previewId, picks);
+    }
     try {
-      const moveId = await sync.startMove({ threadId, to, ...(typeof p.cwd === 'string' && p.cwd ? { cwd: p.cwd } : {}), ...(typeof p.accountId === 'string' && p.accountId ? { accountId: p.accountId } : {}) });
+      const moveId = await sync.startMove({ threadId, to, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}), expect });
+      previews.startedAs(expect, moveId);
       startedMoves.set(threadId, moveId);
       // Another runner's thread: its row says so at once, before either
       // runner has taken a step (cleared once it's listed elsewhere).
@@ -1015,50 +1092,15 @@ async function main(): Promise<void> {
     }
   };
   // The Move sheet's guess (docs/protocol.md, "Moving a thread to another
-  // runner"): the thread described by the runner that has it, then planned
-  // by the one it would go to, each here or through a relay `call`.
+  // runner").
   methods['threads.movePreview'] = async (p) => {
     moveOn();
     const threadId = String(p.threadId ?? '');
     const to = String(p.runnerId ?? '');
     if (!threadId || !to) throw new RpcError(ErrorCode.badParams, 'threadId and runnerId are needed');
-    const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
-    const here = runner.threads.has(threadId);
-    if (here && to === syncRunnerId) throw new RpcError(ErrorCode.badParams, 'The thread is on that runner already.');
-    let info: unknown;
-    try {
-      if (here) info = await describeMovePreview(threadId);
-      else if (relay.owns(threadId)) info = await relay.describeForMove(threadId);
-      else throw new Error('No such thread.');
-    } catch (e) {
-      const older = /can't be asked of this runner/.test(said(e));
-      return { accounts: [], leftBehind: [], problems: [older ? "The thread's runner runs a Threadbear from before moves. It updates itself within a few minutes of a new release." : said(e)] };
-    }
     const cwd = typeof p.cwd === 'string' && p.cwd ? p.cwd : undefined;
     const accountId = typeof p.accountId === 'string' && p.accountId ? p.accountId : undefined;
-    // The target only knows its own end of what won't come.
-    const lines = (v: unknown) => (Array.isArray(v) ? v.filter((l): l is string => typeof l === 'string') : []);
-    const withThisEnd = (answer: unknown) => {
-      const a = answer as { leftBehind?: unknown };
-      const thisEnd = (info as { leftBehind?: unknown } | undefined)?.leftBehind;
-      // A runner from before this says nothing, which isn't "nothing's left".
-      return { ...a, leftBehind: [...lines(a.leftBehind), ...lines(thisEnd)], ...(Array.isArray(thisEnd) ? { sourceChecked: true } : {}) };
-    };
-    try {
-      if (to === syncRunnerId) {
-        const parsed = moveInfoFrom(info);
-        if (!parsed) throw new Error("The thread's runner didn't say enough about it.");
-        return withThisEnd(await runner.previewMove({ info: parsed, self: syncRunnerId, ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) }));
-      }
-      // Through the relay: only what the target needs, scrubbed (moves.ts previewInfo).
-      const parsed = moveInfoFrom(info);
-      if (!parsed) throw new Error("The thread's runner didn't say enough about it.");
-      return withThisEnd(await relay.previewMove(to, { info: previewInfo(parsed, (v) => scrubber.doc(v)), ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}) }));
-    } catch (e) {
-      // A runner from before moves turns the call down by name.
-      const older = /can't be asked of this runner/.test(said(e));
-      return { accounts: [], leftBehind: [], problems: [older ? `${runnerNames.get(to) ?? 'That runner'} runs a Threadbear from before moves. It updates itself within a few minutes of a new release.` : said(e)] };
-    }
+    return previewMove(threadId, to, cwd, accountId);
   };
   methods['threads.moveCancel'] = async (p) => {
     moveOn();

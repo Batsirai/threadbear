@@ -1171,10 +1171,20 @@ its own worktree (commits and uncommitted changes alike). Right-click it
 ones are greyed. It waits for the turn it's on to end, and its message box
 and any open card are locked until it lands or you cancel; a message sent
 from your phone meanwhile goes with it. It goes straight away, to the
-folder and login that machine guesses. If it can't go, or something won't
-come (background jobs, changes in a checkout other threads share), a small
-window shows the folder and login with why; change either and it checks
-again, then press **Move**. The row says "Moving to" with a spinner, and the
+folder and login that machine guesses. If it can't go, something won't
+come (background jobs, changes in a checkout other threads share), or that
+machine has no copy of the repo and would clone it (it says from where and
+to where), a small window shows the folder and login with why; change
+either and press Return to check again (pressing **Move** after a change
+checks it too, and shows what it found), then press **Move**. The machine it
+goes to picks the folder: its own copy of the repo, a new clone beside one
+of its repos, or the same folder in its home, never anywhere else, and
+never its home itself, a hidden folder or one tools load from, such as
+`~/Library` or a `node_modules`, unless you type it in. A machine whose
+Threadbear is from before moves were checked this way says so and takes no
+move until it updates. If the
+thread or where it would go changes between that look and the move, it
+stays where it is and says so: move it again. The row says "Moving to" with a spinner, and the
 message box stays locked, until the other machine has it (a moment after it
 leaves the first), then the thread is listed under the other machine, in the same
 place and still open, and its next message carries on in the same Claude

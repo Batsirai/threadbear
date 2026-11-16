@@ -74,9 +74,10 @@ export async function originUrl(cwd: string): Promise<string | undefined> {
 }
 
 /**
- * `url` with nothing in it that could be a password or token: an http(s)
+ * `url` with nothing in it that could be a password or token: any
  * address loses its whole user part (GitHub takes a token as the user
- * alone), ssh:// its password, and the query and fragment go. What a move
+ * alone), but for ssh's own `git`, in the URL and scp forms alike, and
+ * the query and fragment go. What a move
  * says about a thread's repo goes to the other runner and through the
  * backend, which only need to know which repo it is (security review,
  * 10 Nov 2026: `https://user:github_pat_...@github.com/...` went whole to
@@ -84,13 +85,33 @@ export async function originUrl(cwd: string): Promise<string | undefined> {
  * credentials.
  */
 export function withoutCredentials(url: string): string {
-  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)?([^?#]*)(?:[?#].*)?$/i.exec(url.trim());
-  if (!m) return url.trim();
-  const [, scheme, userinfo, rest] = m;
-  if (!userinfo) return `${scheme}${rest}`;
-  if (/^(https?|ftps?):\/\//i.test(scheme!)) return `${scheme}${rest}`;
-  const user = userinfo.slice(0, -1).split(':')[0];
-  return `${scheme}${user ? `${user}@` : ''}${rest}`;
+  const s = url.trim();
+  // scheme://[userinfo@]host/path: the whole user part goes, whatever the
+  // scheme, and so do the query and fragment. Only ssh's conventional
+  // `git` user stays (GitHub needs it to clone), never anything else in
+  // that place, which may be a token (Daybreak 143, 16 Nov 2026).
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)?([^?#]*)(?:[?#].*)?$/i.exec(s);
+  if (m) {
+    const [, scheme, userinfo, rest] = m;
+    const sshy = /^(?:ssh|git\+ssh|ssh\+git):\/\/$/i.test(scheme!);
+    const user = userinfo?.slice(0, -1).split(':')[0];
+    return `${scheme}${sshy && user === 'git' ? 'git@' : ''}${rest}`;
+  }
+  // user@host:path, git's scp form: as git reads it, the host ends at the
+  // first `:` ahead of any slash, and everything before the last `@` ahead
+  // of that goes, unless it's `git`. So an `@` in the path (`team@work/repo`,
+  // `@scope/repo`) is the path's and can't hide the user. One with an `@`
+  // and then a `:` after that first `:` (`user:token@host:path`, or a path
+  // like `team@b:repo`) can't be told apart from a login, so the address
+  // goes altogether rather than be guessed at (security review, 17 Nov 2026).
+  const slash = s.indexOf('/');
+  const before = slash < 0 ? s : s.slice(0, slash);
+  const first = before.indexOf(':');
+  if (first >= 0 && /@[^:]*:/.test(before.slice(first + 1))) return '';
+  const at = first < 0 ? -1 : before.slice(0, first).lastIndexOf('@');
+  if (at >= 0) return `${s.slice(0, at) === 'git' ? 'git@' : ''}${s.slice(at + 1)}`;
+  // host:path with no user, or a folder: nothing in it is a login.
+  return s;
 }
 
 // A repo T may clone for a moving thread: the URL is the old runner's
@@ -102,9 +123,11 @@ export function cloneableUrl(url: string): boolean {
   // scheme://[user@]host[:port]/path, each part plain, none starting with -.
   const full = /^(https|ssh):\/\/(?:([A-Za-z0-9._~%+-]+)@)?([A-Za-z0-9._-]+)(?::(\d{1,5}))?\/[^/].*$/i.exec(url);
   if (full) return !full[2]?.startsWith('-') && !full[3]!.startsWith('-') && !full[3]!.startsWith('.');
-  // user@host:path, as GitHub gives ssh ones.
-  const scp = /^([A-Za-z0-9._~+][A-Za-z0-9._~+-]*)@([A-Za-z0-9][A-Za-z0-9._-]*):([^:-][^:]*)$/.exec(url);
-  return !!scp;
+  // [user@]host:path, as GitHub gives ssh ones; without the user once a
+  // move has taken it off (withoutCredentials), for ssh's config to supply.
+  // Never one git reads as a URL (`file:///…`, which `://` makes).
+  const scp = /^(?:([A-Za-z0-9._~+][A-Za-z0-9._~+-]*)@)?([A-Za-z0-9][A-Za-z0-9._-]*):([^:-][^:]*)$/.exec(url);
+  return !!scp && !url.includes('://');
 }
 
 /** Clones `url` to `to` (a folder that isn't there yet), as untrustedGit does. */
@@ -121,7 +144,8 @@ export async function cloneRepo(url: string, to: string): Promise<{ ok: true } |
  */
 export function repoKey(url: string): string {
   let s = url.trim().replace(/\/+$/, '').replace(/\.git$/, '');
-  const scp = /^[^/@]+@([^:/]+):(.+)$/.exec(s);
+  // The scp form with or without its user: withoutCredentials keeps only `git`.
+  const scp = /^(?![a-z][a-z0-9+.-]*:\/\/)(?:[^/@]+@)?([^:/@]+):(.+)$/i.exec(s);
   if (scp) s = `${scp[1]}/${scp[2]}`;
   else s = s.replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]+@/, '');
   return s.toLowerCase();
@@ -185,7 +209,7 @@ export async function packGit(worktree: string, cwd: string, bundleFile: string)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
-  const meta: GitMeta = { branch, head, ...(wip ? { wip } : {}), ...(base ? { base } : {}), ...(origin ? { origin: withoutCredentials(origin) } : {}), subdir };
+  const meta: GitMeta = { branch, head, ...(wip ? { wip } : {}), ...(base ? { base } : {}), ...(origin && withoutCredentials(origin) ? { origin: withoutCredentials(origin) } : {}), subdir };
   if (base === head && !wip) return { ok: true, meta };
 
   // A bundle names refs, so the tips get ones of their own for as long as

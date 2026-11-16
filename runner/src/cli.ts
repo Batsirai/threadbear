@@ -939,10 +939,10 @@ async function moveToRunner(client: RunnerClient, threadId: string, f: Flags): P
   if (typeof f.cwd === 'string') params.cwd = f.cwd;
   if (typeof f.account === 'string') params.accountId = f.account;
   if (f.preview) {
-    const p = await client.call<{ cwd?: string; accountId?: string; leftBehind: string[]; problems: string[]; worktree?: boolean; clone?: string }>('threads.movePreview', params);
+    const p = await client.call<{ cwd?: string; accountId?: string; leftBehind: string[]; problems: string[]; worktree?: boolean; clone?: string; cloneFrom?: string }>('threads.movePreview', params);
     if (f.json) console.log(JSON.stringify(p, null, 2));
     else {
-      if (p.cwd) console.log(`${p.worktree ? 'A new worktree in' : 'In'} ${p.cwd}${p.clone ? ` (cloned to ${p.clone} first)` : ''}, on ${p.accountId}`);
+      if (p.cwd) console.log(`${p.worktree ? 'A new worktree in' : 'In'} ${p.cwd}${p.clone ? ` (cloned${p.cloneFrom ? ` from ${p.cloneFrom}` : ''} to ${p.clone} first)` : ''}, on ${p.accountId}`);
       for (const l of p.leftBehind) console.log(`Won't come: ${l}`);
       for (const l of p.problems) console.log(`Can't move: ${l}`);
     }
