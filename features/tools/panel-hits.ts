@@ -53,7 +53,7 @@ function check(name: string, ok: boolean, detail = ''): void {
   results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
   if (!ok) failed += 1;
 }
-type Page = { key: string; title?: string; loading?: boolean; hidden?: boolean; slot?: number[] };
+type Page = { key: string; title?: string; loading?: boolean; hidden?: boolean; slot?: number[]; frame?: number[]; picture?: number[] | null };
 const pages = (d: Dump) => ((d as { webPanels?: { pages: Page[] } }).webPanels?.pages ?? []);
 const showing = async () => pages(await app.dump()).find((p) => p.title === 'Hits' && p.hidden === false && p.loading === false);
 async function until<T>(what: () => Promise<T | undefined>, ms = 3000): Promise<T | undefined> {
@@ -71,11 +71,17 @@ async function evalIn(js: string): Promise<unknown> {
 }
 
 /** Presses at a button's top and bottom edges (2 points in) and its middle, each checked against where the page says it landed. */
-async function pressAround(when: string): Promise<void> {
+async function pressAround(when: string, buttons = ['b1', 'b2']): Promise<void> {
   const page = await until(showing, 10_000);
   if (!page?.slot) throw new Error(`the Hits page isn't showing ${when}`);
   const [sx, sy] = page.slot;
-  for (const id of ['b1', 'b2']) {
+  // The page's own coordinates can't see a drawing that's drifted (the
+  // presses below aim where the page says its buttons are), so the size
+  // Chromium draws it at is checked against the view's as well.
+  const [, , fw, fh] = page.frame ?? [];
+  const [pw, ph] = page.picture ?? [];
+  check(`${when}: the page is drawn the size of its view`, pw !== undefined && Math.abs(pw - fw) <= 1 && Math.abs(ph - fh) <= 1, `view ${fw} x ${fh}, picture ${pw} x ${ph}`);
+  for (const id of buttons) {
     const [left, top, , height] = (await evalIn(`(() => { const r = document.getElementById('${id}').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()`)) as number[];
     for (const [where, y] of [['top edge', top + 2], ['middle', top + height / 2], ['bottom edge', top + height - 2]] as const) {
       await evalIn('hits.length = 0');
@@ -122,6 +128,14 @@ try {
   await app.do({ cmd: 'open', id: first.id });
   await sleep(800);
   await pressAround('after another thread, a resize and back');
+
+  // Across the top its height comes in half points, which is what drifted.
+  await app.do({ cmd: 'dock-move', panel: 'mock.page', edge: 'top' });
+  for (let i = 0; i < 25; i += 1) await app.do({ cmd: 'resize', w: 1240, h: 700 + ((i * 37) % 121) });
+  await app.do({ cmd: 'resize', w: 1240, h: 820 });
+  await sleep(800);
+  // Button Two is below the bottom of a panel this short.
+  await pressAround('across the top, after 25 resizes', ['b1']);
 } catch (error) {
   console.error(error instanceof Error ? error.stack : error);
   process.exitCode = 1;

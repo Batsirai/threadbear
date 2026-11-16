@@ -437,6 +437,11 @@ char *tb_view_send_click(void *nativeView, double x, double y) {
   }
   NSPoint inView = NSMakePoint(x, view.isFlipped ? y : NSHeight(view.bounds) - y);
   NSPoint inWindow = [view convertPoint:inView toView:nil];
+  NSView *frame = window.contentView.superview ?: window.contentView;
+  NSView *hit = [window.contentView hitTest:[frame convertPoint:inWindow fromView:nil]];
+  // Counted as a person's click, as the input monitor counts one: events
+  // handed straight to the window never pass it (LeaveGate, panel_rules.rs).
+  tb_note_input(hit);
   for (int down = 1; down >= 0; down--) {
     NSEvent *event = [NSEvent mouseEventWithType:(down ? NSEventTypeLeftMouseDown : NSEventTypeLeftMouseUp)
                                         location:inWindow
@@ -449,8 +454,6 @@ char *tb_view_send_click(void *nativeView, double x, double y) {
                                         pressure:(down ? 1.0 : 0.0)];
     [window sendEvent:event];
   }
-  NSView *frame = window.contentView.superview ?: window.contentView;
-  NSView *hit = [window.contentView hitTest:[frame convertPoint:inWindow fromView:nil]];
   NSMutableString *out = [NSMutableString stringWithFormat:@"at window (%.1f, %.1f), key %d, hit %@\n", inWindow.x, inWindow.y, window.isKeyWindow, NSStringFromClass([hit class])];
   for (NSView *sub in view.subviews) {
     tb_describe(sub, out, 0);
