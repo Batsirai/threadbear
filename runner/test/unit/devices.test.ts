@@ -154,6 +154,11 @@ test('a backend without the token functions is said in words, and other failures
   const old = setup({ fail: (fn) => (fn.startsWith('sync:') ? new Error(`Could not find public function for '${fn}'. Did you forget to run \`npx convex dev\` or \`npx convex deploy\`?`) : undefined) });
   await assert.rejects(old.methods['devices.pair']({ kind: 'phone' }) as Promise<unknown>, (e: RpcError) => e.code === -32000 && /older than this runner/.test(e.message) && !/npx convex/.test(e.message));
   await assert.rejects(old.methods['devices.list']({}) as Promise<unknown>, (e: RpcError) => e.code === -32000 && /older than this runner/.test(e.message));
+  // A backend from before API 81 doesn't know a browser's sign-in code: said
+  // in words, and never a token in a link instead (Grok's review).
+  const older = setup({ fail: (fn) => (fn === 'sync:issuePairingCode' ? new Error("ArgumentValidationError: Object contains extra field `kind` that is not in the validator.") : undefined) });
+  await assert.rejects(older.methods['devices.pair']({ kind: 'browser' }) as Promise<unknown>, (e: RpcError) => e.code === -32000 && /older than this runner/.test(e.message));
+  assert.equal(older.calls.filter((c) => c.fn === 'sync:issueToken').length, 0);
   const down = setup({ fail: () => new Error('fetch failed') });
   await assert.rejects(down.methods['devices.pair']({ kind: 'browser' }) as Promise<unknown>, (e: RpcError) => e.code === -32000 && e.message === 'fetch failed');
 });

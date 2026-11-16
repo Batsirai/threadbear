@@ -179,8 +179,11 @@ const secretRules: SecretRule[] = [
     ),
     replace: () => "[REDACTED PRIVATE KEY]",
   },
-  // Threadbear's own phone and browser tokens (convex/tokens.ts).
-  /(?<![A-Za-z0-9_])tbr?_[0-9a-f]{32,}(?![0-9a-f])/g,
+  // Threadbear's own phone and browser tokens, runner keys and one-use
+  // pairing and sign-in codes (convex/tokens.ts), and the pairing text the
+  // Mac's QR code holds, which has a code inside.
+  /(?<![A-Za-z0-9_])tb[rp]?_[0-9a-f]{32,}(?![0-9a-f])/g,
+  /(?<![A-Za-z0-9_])TB(?:PAIR|ASK)1_[A-Za-z0-9_-]{16,}/g,
   // Agent Archive device tokens.
   /(?<![A-Za-z0-9_])aa_[a-f0-9]{16}_[A-Za-z0-9_-]{32,}/g,
   // Convex deploy keys such as prod:name|token or preview:team:project|token.
@@ -280,7 +283,7 @@ const CUT_SHORT = new RegExp(
       String.raw`dop_v1_[a-f0-9]{8,}`,
       String.raw`shp(?:at|ss|ca|pa)_[a-fA-F0-9]{8,}`,
       String.raw`pypi-[A-Za-z0-9_-]{8,}`,
-      String.raw`tbr?_[0-9a-f]{8,}`,
+      String.raw`tb[rp]?_[0-9a-f]{8,}`,
       String.raw`aa_[a-f0-9]{8,}(?:_[A-Za-z0-9_-]*)?`,
       String.raw`\d{8,10}:AA[A-Za-z0-9_-]{4,}`,
       String.raw`eyJ[A-Za-z0-9_.-]{8,}`,

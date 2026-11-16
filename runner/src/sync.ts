@@ -1899,7 +1899,9 @@ export class ConvexSync {
       return await this.post(kind, fn, args);
     } catch (e) {
       const message = (e as Error)?.message ?? String(e);
-      if (/could not find (public )?function/i.test(message)) {
+      // An argument it doesn't know yet (a browser's sign-in code before API
+      // 81 sends `kind`): the same, rather than Convex's validator message.
+      if (/could not find (public )?function/i.test(message) || /ArgumentValidationError|extra field/i.test(message)) {
         throw new Error('The Convex backend is older than this runner. It deploys with the runner\'s next update; try again in a few minutes.');
       }
       // A runner key asking for something only the main Mac's key can do

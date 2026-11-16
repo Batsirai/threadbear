@@ -371,6 +371,13 @@ test("Threadbear's own tokens are redacted", () => {
   const runnerKey = "tbr_" + "ab12".repeat(16);
   assert.equal(redactSecrets(`runner key ${runnerKey} saved`).text.includes(runnerKey), false);
   assert.equal(redactSecrets("tbr_short is a name").redacted, false);
+  // A one-use pairing or sign-in code, and the pairing text with one inside
+  // (Grok's review of the sign-in fix: tokens:issueCode's output was kept).
+  const code = "tbp_" + "ab12".repeat(12);
+  assert.equal(redactSecrets(`{ code: '${code}' }`).text.includes(code), false);
+  const pairing = "TBPAIR1_" + Buffer.from(`url=x&code=${code}`).toString("base64url");
+  assert.equal(redactSecrets(`scan ${pairing}`).text.includes(pairing), false);
+  assert.equal(redactSecrets("tbp_short is a name").redacted, false);
 });
 
 test("scrubbing twice changes nothing more", () => {

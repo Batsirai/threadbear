@@ -65,7 +65,7 @@ const SECRET_COMMAND = new RegExp(
     String.raw`\b(?:openssl\s+(?:genrsa|genpkey|rsa|ec|pkcs8|pkcs12)|ssh-keygen\s+[^|;&\n]*-y)\b`,
     String.raw`\b(?:npm\s+token|docker\s+login\b[^|;&\n]*--password|pass\s+show)\b`,
     String.raw`\bgit\s+credential\s+fill\b`,
-    String.raw`\btb\s+(?:phone-token|pair)\b|\btokens:issue\b|\bdeployment\s+token\s+create\b`,
+    String.raw`\btb\s+(?:phone-token|pair)\b|\btokens:issue(?:Code)?\b|\bdeployment\s+token\s+create\b`,
   ].join('|'),
   'i',
 );

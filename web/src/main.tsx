@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ConvexProvider, ConvexReactClient } from 'convex/react';
+import { ConvexError } from 'convex/values';
 import { App } from './App';
 import { api } from '../../convex/_generated/api';
 import { claimSignIn, takeSignInCodeFromHash } from './token';
@@ -15,7 +16,7 @@ const signInCode = takeSignInCodeFromHash();
 applyTheme();
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
-if (signInCode) void claimSignIn((code) => convex.mutation(api.tokens.claim, { code }), signInCode);
+if (signInCode) void claimSignIn((code) => convex.mutation(api.tokens.claim, { code }), signInCode, (e) => e instanceof ConvexError);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

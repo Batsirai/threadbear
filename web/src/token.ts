@@ -39,15 +39,16 @@ export function takeSignInCodeFromHash(): string | undefined {
 }
 
 /** Trades the code for this browser's token (tokens:claim), and keeps it. */
-export async function claimSignIn(claim: (code: string) => Promise<{ token: string }>, code: string): Promise<void> {
+export async function claimSignIn(claim: (code: string) => Promise<{ token: string }>, code: string, refused: (e: unknown) => boolean): Promise<void> {
   claiming = true;
   listeners.forEach((l) => l());
   try {
     const { token } = await claim(code);
     localStorage.setItem(KEY, token);
     setNote(undefined);
-  } catch {
-    setNote('That sign-in link has expired or was already used. On the Mac, open the website signed in again.');
+  } catch (e) {
+    // The backend saying no (used, expired) is different from not reaching it.
+    setNote(refused(e) ? 'That sign-in link has expired or was already used. On the Mac, open the website signed in again.' : 'Threadbear couldn’t be reached to sign this browser in. Check the connection, then on the Mac open the website signed in again.');
   }
   claiming = false;
   listeners.forEach((l) => l());
@@ -71,6 +72,7 @@ export function useSigningIn(): boolean {
 
 export function signOut(): void {
   localStorage.removeItem(KEY);
+  sessionStorage.removeItem(NOTE);
   listeners.forEach((l) => l());
 }
 
