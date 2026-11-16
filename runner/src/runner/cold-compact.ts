@@ -88,7 +88,8 @@ export function compactionResult(pre: Pick<Precompact, 'id'>, r: Pick<TurnResult
 export function coldWake(
   rec: { provider: string; contextTokens?: number; sessionUsed?: boolean; resumeAt?: unknown; handoff?: unknown },
   msg: Pick<QueuedSend, 'text' | 'editOf' | 'retryAfterInterrupt'>,
-  lastModelMs: number | undefined,
+  // Asked last: for a thread without lastModelAt it reads the log.
+  lastModel: number | undefined | (() => number | undefined),
   nowMs: number,
 ): { tokens: number; idleMs: number } | undefined {
   // Codex records no cost for most turns, so there's nothing to judge it
@@ -103,6 +104,7 @@ export function coldWake(
   if (!rec.sessionUsed || rec.resumeAt || rec.handoff || msg.editOf !== undefined || msg.retryAfterInterrupt || msg.text.trimStart().startsWith('/')) return undefined;
   const tokens = rec.contextTokens ?? 0;
   if (tokens < COLD_COMPACT_MIN_TOKENS) return undefined;
+  const lastModelMs = typeof lastModel === 'function' ? lastModel() : lastModel;
   // Not knowing when it last ran means not knowing it's cold.
   if (lastModelMs === undefined || !Number.isFinite(lastModelMs)) return undefined;
   const idleMs = nowMs - lastModelMs;
@@ -136,8 +138,9 @@ export const coldCompactPart = {
     const { rec, rt } = st;
     const turn = rt.turn;
     if (!turn || !rt.session || turn.precompact || turn.command) return false;
-    const cold = coldWake(rec, msg, this.lastModelMs(st), this.clock.now());
-    if (!cold || !experimentOn(this.cfg.home, COLD_COMPACT)) return false;
+    if (rec.provider !== 'claude' || !experimentOn(this.cfg.home, COLD_COMPACT)) return false;
+    const cold = coldWake(rec, msg, () => this.lastModelMs(st), this.clock.now());
+    if (!cold) return false;
     // A real uuid: the SDK drops one that isn't, and with it the frames
     // that say which result is the compaction's (Grok's review).
     const id = crypto.randomUUID();
