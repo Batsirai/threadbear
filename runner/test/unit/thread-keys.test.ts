@@ -3,6 +3,7 @@
 // server and the real tb, as an agent's shell would.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { PATIENCE_MS } from '../helpers/patience.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -378,10 +379,13 @@ test('the process lookup finds a real connection through lsof and ps', async () 
   try {
     const port = await peer;
     const registry = { threadOfPid: (p: number) => (p === child.pid ? 'th9' : undefined) };
-    assert.equal(await threadOfPort(port, { registry, known: () => true, log: nullLogger }), 'th9');
+    // The runner's 3 s limit is for live connections; on a loaded Mac lsof
+    // alone took longer, so this real lookup gets the suite's patience.
+    const lookupMs = PATIENCE_MS;
+    assert.equal(await threadOfPort(port, { registry, known: () => true, log: nullLogger, lookupMs }), 'th9');
     // Under another process: its parent (this test) is the CLI.
     const up = { threadOfPid: (p: number) => (p === process.pid ? 'th8' : undefined) };
-    assert.equal(await threadOfPort(port, { registry: up, known: () => true, log: nullLogger }), 'th8');
+    assert.equal(await threadOfPort(port, { registry: up, known: () => true, log: nullLogger, lookupMs }), 'th8');
   } finally {
     child.kill();
     server.close();

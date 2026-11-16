@@ -4,17 +4,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { PATIENCE_MS } from '../helpers/patience.ts';
 import { test, type TestContext } from 'node:test';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 const helper = path.join(root, 'scripts/perf-lock.pl');
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// By the clock, with the suite's patience, not 500 polls (about 20 s): at a
+// load of 100 a perl child took longer than that to start (a fork, 15 Nov).
 async function until(check: () => boolean, message: string) {
-  for (let i = 0; i < 500; i++) {
+  const end = Date.now() + PATIENCE_MS;
+  while (Date.now() < end) {
     if (check()) return;
     await pause(40);
   }
-  assert.fail(message);
+  if (!check()) assert.fail(message);
 }
 function host(t: TestContext) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-perf-lock-'));

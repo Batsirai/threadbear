@@ -5,13 +5,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { PATIENCE_MS } from '../helpers/patience.ts';
 import { test, type TestContext } from 'node:test';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// By the clock, with the suite's patience, not 500 polls (about 20 s): at a
+// load of 100 the worker wasn't ready in time (a fork, 15 Nov).
 async function until(check: () => boolean, message: string) {
-  for (let i = 0; i < 500; i++) { if (check()) return; await pause(40); }
-  assert.fail(message);
+  const end = Date.now() + PATIENCE_MS;
+  while (Date.now() < end) { if (check()) return; await pause(40); }
+  if (!check()) assert.fail(message);
 }
 function alive(pid: number) {
   const ps = spawnSync('ps', ['-p', String(pid), '-o', 'stat='], { encoding: 'utf8' });
