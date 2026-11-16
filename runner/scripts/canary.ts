@@ -53,7 +53,11 @@ const say = (ok: boolean, line: string) => {
 };
 
 const cfg = loadConfig(process.env, { readOnly: true });
-const client = await RunnerClient.connect(runnerUrl(cfg), readToken(cfg.home));
+// This Mac's runner answers the sign-in within 5 s when it's well, but at
+// 7:00 several schedules fire at once and on 17 Nov it missed that, so the
+// canary failed before checking anything. It gets longer here and a couple
+// more tries; a runner that's really down or wrong still fails all three.
+const client = await connectPatiently();
 try {
   await client.call('hello', { client: 'tb-canary', version: '1' });
   const status = (await read('runner.status', {})) as { sync?: { backend?: { apiVersion: number; expected: number } }; behindRunners?: { name: string; problem: string }[] };
@@ -124,6 +128,17 @@ async function read<T>(method: string, params: Record<string, unknown>): Promise
     } catch (e) {
       if (i >= 4 || !BLIP.test(String((e as Error)?.message))) throw e;
       await new Promise((res) => setTimeout(res, 5000 * i));
+    }
+  }
+}
+
+async function connectPatiently(): Promise<RunnerClient> {
+  for (let i = 1; ; i++) {
+    try {
+      return await RunnerClient.connect(runnerUrl(cfg), readToken(cfg.home), { authTimeoutMs: 15_000 });
+    } catch (e) {
+      if (i >= 3 || !(e as { notProved?: boolean })?.notProved) throw e;
+      await new Promise((res) => setTimeout(res, 10_000));
     }
   }
 }
