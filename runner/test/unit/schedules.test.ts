@@ -770,6 +770,9 @@ test('a cron pinned to a signed-out login alone in its pool: one failed thread, 
   h.clock.advance(30 * MIN);
   await tick();
   assert.equal(runs().length, 1, 'still the one, after a skip');
+  h.clock.advance(30 * MIN);
+  await tick();
+  assert.equal(runs().length, 1, 'and after two skips in a row');
 
   // Signed back in: it runs again.
   signOut(false);

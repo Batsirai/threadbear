@@ -120,7 +120,7 @@ const ONLINE_MS = 3 * 60_000;
 // offered in runners.list: an old install, or a test's.
 const FORGET_MS = 30 * 86_400_000;
 
-export type ScheduleRunner = Pick<Runner, 'create' | 'send' | 'sendScheduled' | 'get' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'> & { cfg?: Pick<Runner['cfg'], 'defaults'> };
+export type ScheduleRunner = Pick<Runner, 'create' | 'send' | 'sendScheduled' | 'get' | 'list' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'> & { cfg?: Pick<Runner['cfg'], 'defaults'> };
 
 export type CreateScheduleParams = {
   // A card's approval of `check` (patch-trust.ts, approveCheck). Not from a client.
@@ -1410,10 +1410,10 @@ export class Scheduler {
         record('skipped', last, note);
         return { outcome: 'skipped', note };
       }
-      const out = this.signedOutAgain(rec, rec.lastRun?.threadId);
-      if (out && !manual) {
-        record('skipped', last, out);
-        return { outcome: 'skipped', note: out };
+      const out = manual ? undefined : this.signedOutAgain(rec);
+      if (out) {
+        record('skipped', out.threadId, out.note);
+        return { outcome: 'skipped', note: out.note };
       }
       const r = this.runner.create({
         text,
@@ -1443,23 +1443,23 @@ export class Scheduler {
   }
 
   // A run pinned to a signed-out login with nowhere to stand in
-  // (pools.ts, standInFor) whose last run's thread is still out, on that
-  // login, its turn failed: that thread's banner offers the sign-in, so this run
-  // skips rather than adding another failed thread to the inbox each day
-  // (Mike clears his inbox; one thing needing him, not a stream).
-  private signedOutAgain(rec: ScheduleRecord, last: string | undefined): string | undefined {
-    if (!rec.accountId || rec.poolId || !last) return undefined;
+  // (pools.ts, standInFor) whose newest thread is still out, on that
+  // login, its turn failed: that thread's banner offers the sign-in, so
+  // this run skips rather than adding another failed thread to the inbox
+  // each day (Mike clears his inbox; one thing needing him, not a stream).
+  // The schedule's newest thread, not lastRun's: a skip or a quiet check
+  // in between leaves lastRun without it (Codex's review, 16 Nov).
+  private signedOutAgain(rec: ScheduleRecord): { note: string; threadId: string } | undefined {
+    if (!rec.accountId || rec.poolId || rec.threadId) return undefined;
     const hello = this.runner.hello();
     const login = hello.accounts.find((a) => a.id === rec.accountId);
     if (!login?.signedOut || standInFor(hello.pools, hello.accounts, login.id, rec.cwd ? path.resolve(expandHome(rec.cwd)) : '')) return undefined;
-    let t;
-    try {
-      t = this.runner.get(last);
-    } catch {
-      return undefined;
+    let newest: ReturnType<ScheduleRunner['get']> | undefined;
+    for (const t of this.runner.list(['inbox', 'snoozed', 'archived'])) {
+      if (t.schedule?.id === rec.id && (!newest || t.createdAt > newest.createdAt)) newest = t;
     }
-    if (t.archivedAt || t.accountId !== login.id || t.status !== 'error') return undefined;
-    return `${login.title} is signed out. The last run's thread says so and offers the sign-in.`;
+    if (!newest || newest.archivedAt || newest.accountId !== login.id || newest.status !== 'error') return undefined;
+    return { note: `${login.title} is signed out. The last run's thread says so and offers the sign-in.`, threadId: newest.id };
   }
 
   private isBusy(threadId: string): boolean {
