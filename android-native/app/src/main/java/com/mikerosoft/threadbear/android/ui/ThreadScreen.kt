@@ -126,7 +126,7 @@ fun ThreadScreen(threadId: String, back: () -> Unit, open: (String) -> Unit) {
                         else -> "Reply"
                     },
                     running = thread.isBusy,
-                    canStop = model.apiVersion == 0 || model.apiVersion >= BackendApi.STOP,
+                    canStop = model.apiVersion >= BackendApi.STOP,
                     stopping = threadId in stopping,
                     onSend = { message, photos ->
                         // Cleared at once, as the message shows below as it goes;
@@ -210,7 +210,7 @@ private fun ThreadBar(thread: PhoneThread?, back: () -> Unit) {
                         }
                         MenuItem("Archive", Line.Archive) { menu = false; model.change(thread.threadId, ThreadChange.Archive); back() }
                         val starred = thread.starredAt != null
-                        if (model.apiVersion == 0 || model.apiVersion >= BackendApi.STARS) {
+                        if (model.apiVersion >= BackendApi.STARS) {
                             MenuItem(if (starred) "Remove Star" else "Star", if (starred) Line.StarFilled else Line.Star) {
                                 menu = false; model.change(thread.threadId, ThreadChange.Star(!starred))
                             }

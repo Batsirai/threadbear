@@ -1,6 +1,9 @@
 package com.mikerosoft.threadbear.android
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import com.mikerosoft.threadbear.kit.BackendApi
 import com.mikerosoft.threadbear.kit.InboxSections
 import com.mikerosoft.threadbear.kit.Pairing
@@ -21,8 +24,10 @@ import com.mikerosoft.threadbear.kit.ThreadsView
 import com.mikerosoft.threadbear.kit.TransportError
 import com.mikerosoft.threadbear.kit.WaitingSends
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -59,6 +64,18 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
     val pairing: StateFlow<Pairing?> = _pairing
     private val _identity = MutableStateFlow<PhoneIdentity?>(null)
     val identity: StateFlow<PhoneIdentity?> = _identity
+    // Compose state as well as the flow, so a menu or button gated on
+    // apiVersion redraws when phone:me answers late (an offline launch):
+    // reading it while drawing is enough to be told.
+    private var knownApi by mutableIntStateOf(0)
+    // Above init, which may connect: an initializer after it would set this
+    // back to null once askIdentity had started.
+    private var identityJob: Job? = null
+
+    private fun setIdentity(me: PhoneIdentity?) {
+        _identity.value = me
+        knownApi = me?.apiVersion ?: 0
+    }
 
     /** A pairing link waiting for a yes. */
     val pendingPair = MutableStateFlow<PairingRequest?>(null)
@@ -83,22 +100,47 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
         store.load()?.let { connect(it) }
     }
 
-    val apiVersion: Int get() = _identity.value?.apiVersion ?: 0
+    /** The backend's API version, 0 until phone:me has answered. */
+    val apiVersion: Int get() = knownApi
 
     private fun connect(pairing: Pairing) {
         transport?.close()
         val t = ConvexFfiTransport(pairing.deploymentUrl)
         transport = t
         _pairing.value = pairing
-        _backend.value = PhoneBackend(t, pairing.token)
-        scope.launch {
-            try {
-                _identity.value = _backend.value?.me()
-                registerPush()
-            } catch (e: TransportError.Unauthorized) {
-                report(e)
-            } catch (_: Exception) {
-                // Offline: the lists say so; me is asked again on the next launch.
+        val b = PhoneBackend(t, pairing.token)
+        _backend.value = b
+        askIdentity(b)
+    }
+
+    /**
+     * phone:me, on connecting and again on every reconnect, as the iPhone's
+     * AppModel asks on each fresh connection. It used to be asked once per
+     * process, so an offline launch (or one a push started) or a call that
+     * failed during a deploy left the API version at 0 until Android killed
+     * the app, hiding Stars, photos, slash commands and older search. One
+     * that fails tries again, backing off, while `b` is still the backend.
+     */
+    private fun askIdentity(b: PhoneBackend) {
+        identityJob?.cancel()
+        identityJob = scope.launch {
+            var wait = 2_000L
+            while (_backend.value === b) {
+                try {
+                    val me = b.me()
+                    if (_backend.value !== b) return@launch
+                    setIdentity(me)
+                    registerPush()
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: TransportError.Unauthorized) {
+                    report(e)
+                    return@launch
+                } catch (_: Exception) {
+                    delay(wait)
+                    wait = (wait * 2).coerceAtMost(60_000L)
+                }
             }
         }
     }
@@ -124,6 +166,17 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
     }
     val connected: StateFlow<Boolean> = _backend.flatMapLatest { it?.connected ?: flowOf(false) }
         .stateIn(scope, SharingStarted.Eagerly, false)
+
+    init {
+        // Back online, or the socket came back: ask phone:me again (askIdentity).
+        scope.launch {
+            var was = false
+            connected.collect { up ->
+                if (up && !was) _backend.value?.let { askIdentity(it) }
+                was = up
+            }
+        }
+    }
 
     /** A put-away list, only while its heading is open. */
     fun putAway(section: PhoneSection): StateFlow<List<PhoneThread>?> = sectionLists.getOrPut(section) {
@@ -191,7 +244,7 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
                 store.save(pairing)
                 trial.close()
                 connect(pairing)
-                _identity.value = me
+                setIdentity(me)
                 note("Paired with ${shown.host}")
                 registerPush()
             } catch (e: Exception) {
@@ -277,7 +330,8 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
         transport = null
         _backend.value = null
         _pairing.value = null
-        _identity.value = null
+        identityJob?.cancel()
+        setIdentity(null)
     }
 
     // Changes, each showing at once
