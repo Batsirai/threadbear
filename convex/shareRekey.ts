@@ -6,28 +6,34 @@
 // every request (share.ts shareImageFile), so no storage URL of a shared
 // picture reaches anyone else; this ends the ones handed out before, as a
 // storage URL names its file. Started by the first heartbeat after the
-// deploy (sync.ts), a page at a time, and started again by a later one if
-// it stopped partway, until a run gets to the end (rekeyDone). A picture's row goes on naming the
+// deploy once limitsMigration is done (sync.ts), a page at a time, and if
+// it stops partway a later heartbeat has it go on from where it got to,
+// until a run gets to the end (rekeyDone). A picture's row goes on naming the
 // new file, with its runner key's upload record (storageOwners) moved
 // across, so nothing else changes: its page, its count, its cleanup.
 //
-// A file the old row shared with another row (only the owner key can
-// attach one file twice, sync.ts mustBeUnnamed) stays for that row, so a
-// storage URL of it lives on as long as that row: only Mike's own phone and
-// page are ever given those.
+// A file the old row shared with another picture row (only the owner key
+// can attach one file twice, sync.ts mustBeUnnamed) moves to the copy with
+// it, so the old file goes too; one a waiting command still names (on its
+// way to a runner, a day at most) stays for it.
 import { v } from 'convex/values';
 import { internalAction, internalMutation, internalQuery } from './_generated/server';
 import { internal } from './_generated/api';
-import { storageInUse } from './sync';
-import { SHARE_REKEY_DONE } from './lib';
+import { PICTURE_TABLES, storageInUse } from './sync';
+import { SHARE_REKEY_DONE, SHARE_REKEY_STARTED } from './lib';
 
-const PAGE = 25;
+// Small: each picture is up to 10 MB read and written again.
+const PAGE = 5;
 
 export const rekeyPage = internalQuery({
   args: { cursor: v.union(v.string(), v.null()) },
   returns: v.object({ rows: v.array(v.object({ id: v.id('shareImages'), storageId: v.id('_storage') })), next: v.union(v.string(), v.null()) }),
   handler: async (ctx, { cursor }) => {
     const page = await ctx.db.query('shareImages').paginate({ numItems: PAGE, cursor });
+    // A page Convex couldn't read whole would skip rows if its cursor were
+    // followed: the run ends here instead, and starts again from this page
+    // (sync.ts). Rows are a few KB since limitsMigration, so it doesn't.
+    if ((page as { pageStatus?: string }).pageStatus === 'SplitRequired') throw new Error('share rekey page too big to read whole');
     return { rows: page.page.map((r) => ({ id: r._id, storageId: r.storageId })), next: page.isDone ? null : page.continueCursor };
   },
 });
@@ -44,10 +50,24 @@ export const rekeySwap = internalMutation({
       await ctx.storage.delete(fresh);
       return false;
     }
-    await ctx.db.patch(id, { storageId: fresh });
+    // Every picture row naming the old file goes to the copy, and its upload record.
+    for (const table of PICTURE_TABLES) {
+      for (const r of await ctx.db.query(table).withIndex('by_storageId', (q) => q.eq('storageId', old)).collect()) await ctx.db.patch(r._id, { storageId: fresh });
+    }
     for (const o of await ctx.db.query('storageOwners').withIndex('by_storageId', (q) => q.eq('storageId', old)).collect()) await ctx.db.patch(o._id, { storageId: fresh });
     if (!(await storageInUse(ctx, old)) && (await ctx.db.system.get(old))) await ctx.storage.delete(old);
     return true;
+  },
+});
+
+// A page done: how far the run has got, for one started again (sync.ts).
+export const rekeyProgress = internalMutation({
+  args: { cursor: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { cursor }) => {
+    const m = await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', SHARE_REKEY_STARTED)).first();
+    if (m) await ctx.db.patch(m._id, { cursor, at: Date.now() });
+    return null;
   },
 });
 
@@ -79,7 +99,10 @@ export const rekeyShareImages = internalAction({
         throw e;
       }
     }
-    if (page.next) await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: page.next });
+    if (page.next) {
+      await ctx.runMutation(internal.shareRekey.rekeyProgress, { cursor: page.next });
+      await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: page.next });
+    }
     else await ctx.runMutation(internal.shareRekey.rekeyDone, {});
     return null;
   },

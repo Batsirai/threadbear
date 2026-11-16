@@ -82,7 +82,7 @@ test("a link reaches only its own thread's pictures, and a stored type the page 
 // the old one (convex/shareRekey.ts), so every URL from before is dead,
 // shared or not, and the pages go on as they were.
 async function runRekey(s: Awaited<ReturnType<typeof setup>>) {
-  const fns: Record<string, any> = { rekeyPage: rekey.rekeyPage, rekeySwap: rekey.rekeySwap, rekeyDone: rekey.rekeyDone, rekeyShareImages: rekey.rekeyShareImages };
+  const fns: Record<string, any> = { rekeyPage: rekey.rekeyPage, rekeySwap: rekey.rekeySwap, rekeyDone: rekey.rekeyDone, rekeyProgress: rekey.rekeyProgress, rekeyShareImages: rekey.rekeyShareImages };
   const byRef = (ref: unknown) => fns[String(ref).split('.').pop()!];
   let next: Record<string, unknown> | undefined = { cursor: null };
   const ctx = {
@@ -99,8 +99,14 @@ async function runRekey(s: Awaited<ReturnType<typeof setup>>) {
   assert.equal(next, undefined, 'it finished');
 }
 
+// The limits migration has run (the rekey waits for it).
+const limitsDone = async (s: Awaited<ReturnType<typeof setup>>) => {
+  for (const name of ['limits-2026-11-07', 'limits-2026-11-07-done']) await s.ctx.db.insert('backendMarks', { name });
+};
+
 test("the first heartbeat after the deploy ends every shared picture's storage URL from before, once, and the pages go on as before", async () => {
   const s = await setup();
+  await limitsDone(s);
   // Thirty more on T, past one page of the job.
   for (let i = 0; i < 30; i++) await call(s.ctx, sync.addShareImage, { key: OWNER, threadId: 'T', seq: 2 + i, path: `/p${i}.png`, storageId: s.file(`p${i}`), mediaType: 'image/png' });
   // A runner key's upload record moves with its file.
@@ -111,6 +117,11 @@ test("the first heartbeat after the deploy ends every shared picture's storage U
   const beat = () => call(s.ctx, sync.heartbeat, { key: OWNER, runner: { runnerId: LAPTOP, name: 'laptop', version: 'v', startedAt: 'x', draining: false, threadCount: 1 } });
   await beat();
   assert.equal(s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length, 1);
+  // Not before the limits migration has finished.
+  const s2 = await setup();
+  s2.scheduled.length = 0;
+  await call(s2.ctx, sync.heartbeat, { key: OWNER, runner: { runnerId: LAPTOP, name: 'laptop', version: 'v', startedAt: 'x', draining: false, threadCount: 1 } });
+  assert.equal(s2.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length, 0);
   await beat();
   assert.equal(s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length, 1, 'once');
   await runRekey(s);
@@ -134,30 +145,38 @@ test("the first heartbeat after the deploy ends every shared picture's storage U
   assert.equal(s.rows('shareImages').length, 32);
 });
 
-test('a file the owner also put on a reply row stays for that row; a row gone meanwhile leaves no copy', async () => {
+test("a file the owner also put on a reply row moves to the copy with it, so the old one goes; a row gone meanwhile leaves no copy", async () => {
   const s = await setup();
   await call(s.ctx, sync.addReplyImage, { key: OWNER, threadId: 'T', seq: 1, path: '/a.png', storageId: 'pic', mediaType: 'image/png' });
   await runRekey(s);
-  assert.equal(s.hasFile('pic'), true, 'the reply row still names it');
-  assert.notEqual(s.rows('shareImages').find((r) => r._id === s.id)!.storageId, 'pic');
+  assert.equal(s.hasFile('pic'), false, 'the old URL is dead');
+  const fresh = s.rows('shareImages').find((r) => r._id === s.id)!.storageId;
+  assert.equal(s.rows('replyImages').find((r) => r.threadId === 'T')!.storageId, fresh, 'the reply row names the copy');
+  // Stopping sharing then leaves the copy for the reply row.
+  assert.equal(await call(s.ctx, sync.dropShareImages, { key: OWNER, threadId: 'T' }), 1);
+  assert.equal(s.hasFile(fresh), true);
   // A swap for a row that's gone deletes its copy.
-  const fresh = s.file('copy');
-  assert.equal(await call(s.ctx, rekey.rekeySwap, { id: 'shareImages:999999', old: 'pic', fresh }), false);
+  const copy = s.file('copy');
+  assert.equal(await call(s.ctx, rekey.rekeySwap, { id: 'shareImages:999999', old: 'other', fresh: copy }), false);
   assert.equal(s.hasFile('copy'), false);
 });
 
-test('a run that stops partway is started again by a heartbeat once it has sat two hours, and goes on until one finishes', async () => {
+test('a run that stops partway goes on from where it got to, once it has got no further for two hours', async () => {
   const s = await setup();
+  await limitsDone(s);
+  for (let i = 0; i < 12; i++) await call(s.ctx, sync.addShareImage, { key: OWNER, threadId: 'T', seq: 2 + i, path: `/p${i}.png`, storageId: s.file(`p${i}`), mediaType: 'image/png' });
   const beat = () => call(s.ctx, sync.heartbeat, { key: OWNER, runner: { runnerId: LAPTOP, name: 'laptop', version: 'v', startedAt: 'x', draining: false, threadCount: 1 } });
-  const runs = () => s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length;
+  const runs = () => (s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')) as { args: Record<string, unknown> }[]);
   s.scheduled.length = 0;
   await beat();
-  assert.equal(runs(), 1);
-  // It died (nothing finished it). An hour on: still left to run.
+  assert.deepEqual(runs().map((j) => j.args), [{ cursor: null }]);
+  // One page goes, then the run dies (a storage failure on the next).
+  await call(s.ctx, rekey.rekeyProgress, { cursor: 'page-2' });
+  s.scheduled.length = 0;
   await later(60 * 60_000, beat);
-  assert.equal(runs(), 1);
+  assert.equal(runs().length, 0, 'an hour on: still its turn');
   await later(3 * 60 * 60_000, beat);
-  assert.equal(runs(), 2, 'started again');
+  assert.deepEqual(runs().map((j) => j.args), [{ cursor: 'page-2' }], 'goes on from where it got to');
   await runRekey(s);
   assert.equal(s.hasFile('pic'), false);
 });

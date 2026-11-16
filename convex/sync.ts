@@ -127,7 +127,7 @@ async function retireSlug(ctx: MutationCtx, threadId: string, runnerId: string, 
 // file (or a few big ones) can't make a delete read more than a handful of
 // documents, and a command is found through commandFiles rather than by
 // reading every waiting command.
-const PICTURE_TABLES = ['shareImages', 'replyImages', 'projectIcons', 'heldPictures'] as const;
+export const PICTURE_TABLES = ['shareImages', 'replyImages', 'projectIcons', 'heldPictures'] as const;
 // A commandFiles row lasts only while its command waits or is taken (it goes
 // in endCommandFiles), so one is enough, and no command is read.
 export async function storageInUse(ctx: QueryCtx | MutationCtx, storageId: Id<'_storage'>): Promise<boolean> {
@@ -1163,15 +1163,16 @@ export const heartbeat = mutation({
     await startLimitsMigration(ctx);
     // 16 Nov 2026: shared pictures' storage URLs from before /share/image
     // ended, once (shareRekey.ts).
-    // A run that stopped partway (a failure ends it) starts again, from the
-    // top, once its start is SHARE_REKEY_STALE_MS old; it goes on until one
-    // gets to the end.
-    if (!(await markSet(ctx, SHARE_REKEY_DONE))) {
+    // Only once limitsMigration is done: before, a file's check can say in
+    // use when it isn't, and a page of old rows can be too big to read whole.
+    // A run that has got no further for SHARE_REKEY_STALE_MS (a failure ends
+    // it) goes on from where it got to; it goes on until one gets to the end.
+    if ((await markSet(ctx, LIMITS_DONE)) && !(await markSet(ctx, SHARE_REKEY_DONE))) {
       const started = await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', SHARE_REKEY_STARTED)).first();
       if (!started || (started.at ?? 0) < Date.now() - SHARE_REKEY_STALE_MS) {
-        if (started) await ctx.db.delete(started._id);
-        await ctx.db.insert('backendMarks', { name: SHARE_REKEY_STARTED, at: Date.now() });
-        await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: null });
+        if (started) await ctx.db.patch(started._id, { at: Date.now() });
+        else await ctx.db.insert('backendMarks', { name: SHARE_REKEY_STARTED, at: Date.now() });
+        await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: started?.cursor ?? null });
       }
     }
     // 8 Nov 2026: a runner key's message bytes counted again, once

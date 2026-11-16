@@ -7089,7 +7089,10 @@ type ThreadShare = {
   files. Mike's own token gets the files' storage URLs. The storage URLs
   pages handed out before (until 15 Nov 2026) were ended once, by copying
   every shared picture to a new file and deleting the old one
-  (`shareRekey:rekeyShareImages`, from the first heartbeat after the deploy).
+  (`shareRekey:rekeyShareImages`, from the first heartbeat after the deploy
+  once the 7 Nov limits migration is done; a run that stops goes on from
+  where it got to). A reply, icon or held picture on the same file moves
+  to the copy with it.
 - As the page is public and a path is only what the agent wrote, a file
   goes up only if it's really a PNG, JPEG, GIF or WebP by its bytes (the
   type sent is the one its bytes say, not its name's), isn't itself a

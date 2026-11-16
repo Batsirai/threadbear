@@ -762,8 +762,8 @@ export default defineSchema({
   // phone:project. Only written when one of these fields changes.
   // Marks that a one-off copy of old rows has been done for the whole
   // deployment, so readers know the new table is complete.
-  // A one-off job's marks; `at`: when it was set, for a run that may need starting again (sync.ts, shareRekey).
-  backendMarks: defineTable({ name: v.string(), at: v.optional(v.number()) }).index('by_name', ['name']),
+  // A one-off job's marks; `at`: when it last got on, and `cursor`: how far, for a run that may need starting again (sync.ts, shareRekey).
+  backendMarks: defineTable({ name: v.string(), at: v.optional(v.number()), cursor: v.optional(v.string()) }).index('by_name', ['name']),
 
   projectHeads: defineTable({
     runnerId: v.string(),
