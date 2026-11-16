@@ -111,9 +111,11 @@ File references are where to look.
   writes `<data folder>/runner/reinstall/<label>.reinstall.plist` and
   loads it with `launchctl bootstrap` (it isn't in `~/Library/LaunchAgents`,
   so it never starts at login). It runs `runner/scripts/install-runner.sh
-  --stage` from your clone once, which rebuilds Threadbear Runner.app and
+  --stage` from your clone once, which builds a new Threadbear Runner.app
+  beside the old one (`~/Applications/.Threadbear Runner.app.staged`) and
   rewrites the runner's own plist and launch.mjs without stopping
-  anything (they take over at your next login), logging to
+  anything (they take over at your next login, when launch.mjs moves the
+  new app in), logging to
   `<data folder>/runner/reinstall.log`, and is left loaded but stopped
   until the next one replaces it. On Linux
   it's a transient `systemd-run --user` unit instead (`runner/src/reinstall.ts`).

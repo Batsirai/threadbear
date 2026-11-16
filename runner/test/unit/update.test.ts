@@ -8,6 +8,7 @@ import { FakeClock } from '../../src/clock.ts';
 import type { UpdateFailure } from '../../src/fix-update.ts';
 import { nullLogger } from '../../src/log.ts';
 import { CHECK_INTERVAL_MS, FIRST_CHECK_MS, MACHINE_WAIT_MS, MAX_MACHINE_TRIES, MAX_SLEPT_TRIES, SOON_MS, RunnerUpdater, runDeploy, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, buildTreeAt, landChecked, passedLandCheck, LAND_CHECK_COMMANDS, LAND_CHECK_STEPS, type UpdateDeps } from '../../src/update.ts';
+import { APP_STAGED_REASON } from '../../src/reinstall.ts';
 import { LAND_TIMES_FILE } from '../../src/land-queue.ts';
 import type { ReleaseJson } from '../../src/release.ts';
 import { noFileWatches, patiently } from '../helpers/patience.ts';
@@ -468,6 +469,15 @@ test('launchAgentBehind: launch.mjs, a plist that runs node, and an app built fr
   // The app is from older launcher sources, or its build.json is gone.
   built('old');
   assert.equal(launchAgentBehind(main, home, sup, undefined, 'darwin'), "Threadbear Runner.app was built from older launcher sources than main's.");
+  // A new one staged beside it, built from main's: it waits for the job's next start.
+  const staged = path.join(home, '.Threadbear Runner.app.staged');
+  fs.mkdirSync(path.join(staged, 'Contents', 'Resources'), { recursive: true });
+  fs.writeFileSync(path.join(staged, 'Contents', 'Resources', 'build.json'), JSON.stringify({ sources: launcherSourcesHash(path.join(main, 'launcher')) }));
+  assert.equal(launchAgentBehind(main, home, sup, undefined, 'darwin'), APP_STAGED_REASON);
+  // A staged one that's older than main's too doesn't count.
+  fs.writeFileSync(path.join(staged, 'Contents', 'Resources', 'build.json'), JSON.stringify({ sources: 'older' }));
+  assert.match(launchAgentBehind(main, home, sup, undefined, 'darwin')!, /older launcher sources/);
+  fs.rmSync(staged, { recursive: true });
   fs.rmSync(path.join(app, 'Contents', 'Resources', 'build.json'));
   assert.match(launchAgentBehind(main, home, sup, undefined, 'darwin')!, /older launcher sources/);
   // Both at once, a sentence each.

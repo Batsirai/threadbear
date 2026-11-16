@@ -137,7 +137,12 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   `src/update.ts`). The Updates panel's Update it (`runner.reinstall`)
   has the runner run `install-runner.sh --stage` itself, or it does so by
   itself with the `selfReinstall` experiment (`src/reinstall.ts`).
-  `--stage` rebuilds the app in place and puts launch.mjs and the plist in
+  `--stage` builds a new app beside the running one
+  (`.Threadbear Runner.app.staged`, never over it: macOS refuses every
+  privacy grant under a launcher whose bundle was replaced while it runs,
+  which took Screen Recording from agents' shells on 15 Nov; launch.mjs
+  moves it in when the job next starts, then exits so launchd starts the
+  new one) and puts launch.mjs and the plist in
   place without stopping or loading anything, so it never waits for an
   idle moment; launchd picks them up the next time it starts the job (the
   Mac restarting, logging in again). A full reinstall stops every runner

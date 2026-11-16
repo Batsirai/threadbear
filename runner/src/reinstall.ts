@@ -32,6 +32,18 @@ export const DEFAULT_LABEL = 'com.mikerosoft.threadbear.runner';
 // those after a stage that said it worked is a failure (it staged from a
 // checkout that isn't at main, say).
 export const RUNS_NODE_REASON = 'The LaunchAgent still runs node, not Threadbear Runner.app, so privacy prompts say "node".';
+// The other: a new Threadbear Runner.app is staged beside the one the job
+// runs, and launch.mjs moves it in when launchd next starts the job. It's
+// never built over the running one, as macOS then fails every privacy grant
+// (Screen Recording in agents' shells) until the job restarts (16 Nov 2026).
+export const APP_STAGED_REASON = 'A new Threadbear Runner.app is staged and goes in when the runner next starts (logging in again, or the Mac restarting).';
+const WAITS_FOR_RESTART = new Set([RUNS_NODE_REASON, APP_STAGED_REASON]);
+
+// Where install-runner.sh --stage builds the new app (launch.mjs's
+// stagedAppPath, which this must match).
+export function stagedAppPath(app: string): string {
+  return path.join(path.dirname(app), `.${path.basename(app)}.staged`);
+}
 // How long a reinstall with no result yet counts as running when whether
 // its job is still going can't be asked (jobAlive). Otherwise it runs as
 // long as it runs: a check host can take hours, and a Mac asleep halfway
@@ -392,7 +404,7 @@ export class Reinstaller {
     if (s.finished && s.key === behind.key && !s.requested) {
       // It ran for what main has now. Staged and still behind: what's
       // running is the old job, until launchd next starts it.
-      if (s.finished.code === 0 && behind.reason === RUNS_NODE_REASON) return { state: 'staged', logFile };
+      if (s.finished.code === 0 && WAITS_FOR_RESTART.has(behind.reason)) return { state: 'staged', logFile };
       const reason = s.finished.code === 0 ? `It finished, but this is still so: ${behind.reason}` : s.finished.reason;
       return { state: 'failed', reason, logFile };
     }

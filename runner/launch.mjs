@@ -16,7 +16,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 // THREADBARE_* was the old name for these variables (config.ts, adoptOldNames).
 for (const [k, v] of Object.entries(process.env)) {
@@ -189,6 +189,60 @@ function msEnv(name, fallback) {
   return Number.isFinite(v) && v >= 0 ? v : fallback;
 }
 
+// Where install-runner.sh --stage builds a new Threadbear Runner.app: beside
+// the one the job runs, never over it. macOS checks the job's program
+// against its bundle on disk for every privacy grant (Screen Recording,
+// folders) asked for by anything under it, so replacing the bundle under a
+// running launcher, as staging did on 15 Nov 2026, makes every one of them
+// fail until the job restarts: "The user declined TCCs" from
+// ScreenCaptureKit in an agent's shell, with the grant still on in Settings.
+export function stagedAppPath(app) {
+  return path.join(path.dirname(app), `.${path.basename(app)}.staged`);
+}
+
+// At the job's start, before any runner: a staged app is moved into place
+// and true returned, so the supervisor exits and launchd starts the job
+// again on the new app (KeepAlive, 5 s later). The launcher running this
+// is the old one, but it's about to exit, with nothing started under it
+// yet. Anything wrong (no app in the env, a staged app that doesn't verify,
+// a rename that fails) leaves the old app running and returns false; a
+// failed swap puts the old app back.
+export function takeStagedApp(app, verify, logFn = log) {
+  if (!app || process.platform !== 'darwin') return false;
+  const staged = stagedAppPath(app);
+  if (!fs.existsSync(staged)) return false;
+  if (!verify(staged)) {
+    logFn('WARN', "a staged Threadbear Runner.app doesn't verify, so it's left out", { staged });
+    return false;
+  }
+  const old = path.join(path.dirname(app), `.${path.basename(app)}.old`);
+  try {
+    fs.rmSync(old, { recursive: true, force: true });
+    fs.renameSync(app, old);
+  } catch (e) {
+    logFn('WARN', "couldn't move the old Threadbear Runner.app aside for the staged one", { error: String(e) });
+    return false;
+  }
+  try {
+    fs.renameSync(staged, app);
+  } catch (e) {
+    logFn('WARN', "couldn't move the staged Threadbear Runner.app in", { error: String(e) });
+    try {
+      fs.renameSync(old, app);
+    } catch {
+      // nothing more to try; launchd's next start says so
+    }
+    return false;
+  }
+  fs.rmSync(old, { recursive: true, force: true });
+  logFn('INFO', 'took in the staged Threadbear Runner.app; launchd starts it next', { app });
+  return true;
+}
+
+function codesignVerifies(app) {
+  return spawnSync('codesign', ['--verify', app], { stdio: 'ignore' }).status === 0;
+}
+
 // The supervisor: launchd's program. Each runner is a child process
 // (`node <release>/src/main.ts`, THREADBEAR_SUPERVISED=1, an IPC channel),
 // so a new release can start while an older one finishes the turns it
@@ -201,6 +255,8 @@ function msEnv(name, fallback) {
 // (code 1) and launchd starts it again, as before handovers; with a
 // draining child still running it tries again itself after CRASH_RETRY_MS.
 async function main() {
+  // Exit code 0 isn't a failed start to launchd; KeepAlive starts it again.
+  if (takeStagedApp(process.env.THREADBEAR_RUNNER_APP, codesignVerifies)) process.exit(0);
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const children = new Set();
   let newest = null;

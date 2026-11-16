@@ -19,7 +19,7 @@ import type { Logger } from './log.ts';
 import { currentLink, readRelease, readState, type ReleaseJson } from './release.ts';
 import type { RestartResult } from './restart.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
-import { launcherKey, RUNS_NODE_REASON } from './reinstall.ts';
+import { APP_STAGED_REASON, launcherKey, RUNS_NODE_REASON, stagedAppPath } from './reinstall.ts';
 import { inBackground } from './background.ts';
 import type { UpdateFailure } from './fix-update.ts';
 import { machineTrouble } from './machine-trouble.ts';
@@ -987,13 +987,18 @@ export function launchAgentBehind(
     if (!app) {
       why.push(RUNS_NODE_REASON);
     } else {
-      let built: unknown;
-      try {
-        built = JSON.parse(fs.readFileSync(path.join(app, 'Contents', 'Resources', 'build.json'), 'utf8')).sources;
-      } catch {
-        // missing or unreadable: rebuilt by the same command
-      }
-      if (built !== onMain) why.push('Threadbear Runner.app was built from older launcher sources than main\'s.');
+      // missing or unreadable: rebuilt by the same command
+      const builtFrom = (a: string): unknown => {
+        try {
+          return JSON.parse(fs.readFileSync(path.join(a, 'Contents', 'Resources', 'build.json'), 'utf8')).sources;
+        } catch {
+          return undefined;
+        }
+      };
+      // A new app staged beside it (install-runner.sh --stage) goes in only
+      // when launchd next starts the job (launch.mjs takeStagedApp), like a
+      // runner still on node.
+      if (builtFrom(app) !== onMain) why.push(builtFrom(stagedAppPath(app)) === onMain ? APP_STAGED_REASON : "Threadbear Runner.app was built from older launcher sources than main's.");
     }
   }
   return why.length ? why.join(' ') : undefined;

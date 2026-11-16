@@ -9,7 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { RUNNING_LIMIT_MS, RUNS_NODE_REASON, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
+import { APP_STAGED_REASON, RUNNING_LIMIT_MS, RUNS_NODE_REASON, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
 
 type Setup = { behind?: { reason: string; key: string }; auto?: boolean; spawnError?: string; alive?: boolean | undefined };
 
@@ -89,6 +89,11 @@ test('staged: when what it checks is up to date the line goes; when the running 
   assert.deepEqual(r.status(), { state: 'staged', logFile: reinstallLogPath(t.home) });
   t.clock.advance(60 * 60_000);
   r.consider();
+  assert.equal(t.jobs.length, 1);
+  // So is a new app staged beside the running one.
+  t.state.behind = { reason: APP_STAGED_REASON, key: 'k1' };
+  r.consider();
+  assert.deepEqual(r.status(), { state: 'staged', logFile: reinstallLogPath(t.home) });
   assert.equal(t.jobs.length, 1);
 });
 
