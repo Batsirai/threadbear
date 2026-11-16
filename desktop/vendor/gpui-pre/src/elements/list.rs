@@ -789,25 +789,21 @@ impl ListState {
 
         let logical_scroll_top = state.logical_scroll_top();
 
-        // Anchored past the last item: following the tail, or just scrolled
-        // or dragged to the end, before the next layout moves the anchor onto
-        // the row at the top of the view. That's the end of the scroll range,
-        // not the whole content's height above the view, which overshoots
-        // `max_offset_for_scrollbar` by a viewport. Callers that scroll by
-        // offset (gpui-base's ScrollBounce, the scrollbar) read the overshoot
-        // as a jump of a viewport's height: a second trackpad packet in the
-        // same frame, after a first that reached the end, threw the
-        // transcript past its bottom edge and left it stretched.
-        if logical_scroll_top.item_ix >= state.items.summary().count {
-            return Point::new(px(0.), -state.max_scroll_offset());
-        }
-
         let mut cursor = state.items.cursor::<ListItemSummary>(());
         let summary: ListItemSummary =
             cursor.summary(&Count(logical_scroll_top.item_ix), Bias::Right);
         let offset = summary.height + logical_scroll_top.offset_in_item;
 
-        Point::new(px(0.), -offset)
+        // Never past the end of the range. Between a change and the next
+        // layout the anchor can sit beyond it: past the last item once the
+        // view reaches the end (following the tail, scroll_to_end, a drag to
+        // the end), which read as the whole content's height, a viewport too
+        // far; or on a row that rows removed below it have left too low.
+        // Callers that scroll by offset (gpui-base's ScrollBounce, the
+        // scrollbar) took the gap for a jump: a second trackpad packet in the
+        // same frame threw the transcript past its bottom edge and left a
+        // viewport of finger travel to unwind (Threadbear, 17 Nov 2026).
+        Point::new(px(0.), -offset.min(state.max_scroll_offset()))
     }
 
     /// Return the bounds of the viewport in pixels.
@@ -862,7 +858,10 @@ impl StateInner {
         let height = self
             .scrollbar_drag_start_height
             .unwrap_or_else(|| self.items.summary().height);
-        (height - bounds.size.height).max(px(0.))
+        // With the list's padding, as set_offset_from_scrollbar and layout
+        // count it, so the range the scrollbar reports is the one they use.
+        let padding = self.last_padding.unwrap_or_default();
+        (height + padding.top + padding.bottom - bounds.size.height).max(px(0.))
     }
 
     fn visible_range(
@@ -1866,7 +1865,7 @@ mod test {
         let cx = cx.add_empty_window();
 
         // Ten 20px items in a 100px viewport: 100px of scroll range.
-        let state = ListState::new(10, crate::ListAlignment::Top, px(10.));
+        let state = ListState::new(10, crate::ListAlignment::Top, px(10.)).measure_all();
         state.set_follow_mode(FollowMode::Tail);
 
         struct TestView(ListState);
@@ -1903,6 +1902,19 @@ mod test {
         });
         state.scroll_to_end();
         assert_eq!(state.scroll_px_offset_for_scrollbar().y, px(-100.));
+
+        // Rows removed below a view at the end, before the next layout: the
+        // anchor's row hasn't moved but the range is shorter.
+        cx.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, cx| {
+            cx.new(|_| TestView(state.clone())).into_any_element()
+        });
+        state.set_offset_from_scrollbar(point(px(0.), px(-60.)));
+        assert_eq!(state.scroll_px_offset_for_scrollbar().y, px(-60.));
+        state.splice(8..10, 0);
+        assert_eq!(state.max_offset_for_scrollbar().y, px(60.));
+        assert_eq!(state.scroll_px_offset_for_scrollbar().y, px(-60.));
+        state.splice(7..8, 0);
+        assert_eq!(state.scroll_px_offset_for_scrollbar().y, px(-40.));
     }
 
     #[gpui::test]
