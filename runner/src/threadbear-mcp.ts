@@ -66,6 +66,8 @@ export type ThreadControl = {
   // The Stop hook sent the turn back for a card its reply asked for, after an
   // end_turn it took (needs.ts, REPLY_ASKS): the next one isn't a repeat.
   cardReopened?: (threadId: string) => boolean;
+  // ...for dead file links in its reply: the reply written doesn't stand.
+  replyRewrite?: (threadId: string) => boolean;
   // A message the agent can't have read when it wrote this end_turn
   // (needs.ts, UNREAD_MESSAGE). Asking counts as a refusal for it.
   unreadMessage?: (threadId: string) => boolean;
@@ -1491,7 +1493,8 @@ export function buildThreadbearTools(
         // said to write it first (endTurn below). Not if it wrote nothing
         // since its last step, or only a narration block, which is just a
         // paraphrase of what it wrote.
-        if (!codex && (control.endTurnNudged?.(selfId) || endTurnForm(input) === 'bullets')) {
+        // Not one sent back to fix its reply's links: that reply doesn't stand.
+        if (!codex && !control.replyRewrite?.(selfId) && (control.endTurnNudged?.(selfId) || endTurnForm(input) === 'bullets')) {
           const reply = await replied();
           if (reply.replied && !reply.narrationOnly) return oneReplyAlreadyWritten(needs === 'you', restart);
         }

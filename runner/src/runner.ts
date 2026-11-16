@@ -396,6 +396,10 @@ export type Turn = {
   // under it (onOutput).
   finalTexts?: Map<string, string>;
   restateReply?: string;
+  // ...for a reply that links files that aren't there (needs.ts,
+  // missingLinksNudge): that end_turn asks for a whole new reply, which the
+  // apps show in the first one's place, as they do after any later card.
+  replyRewrite?: boolean;
   // Whether the agent has read a background task's notification that came
   // into the turn (needs.ts, WakeRead).
   wake?: WakeRead;
@@ -1449,6 +1453,11 @@ export class Runner {
   cardReopened(threadId: string): boolean {
     return this.threads.get(threadId)?.rt.turn?.cardReopened === true;
   }
+  // For end_turn's handler: whether the running turn was sent back to fix
+  // dead file links in its reply, so it's asked for a new one whole.
+  replyRewrite(threadId: string): boolean {
+    return this.threads.get(threadId)?.rt.turn?.replyRewrite === true;
+  }
 
   // For end_turn's handler: whether a message sent into the running turn is
   // one the agent can't have read when it wrote the call (needs.ts,
@@ -1835,6 +1844,7 @@ export class Runner {
     // this message's own: the reply written before it isn't its answer, so
     // it isn't written again under that card (from Codex's review).
     turn.cardReopened = false;
+    turn.replyRewrite = false;
     // ...and an archive it asked for before reading this is off: "wait, one
     // more thing" shouldn't send the thread away. It can ask again.
     if (turn.endTurn) turn.endTurn = { ...turn.endTurn, archive: false, snooze: undefined, waitFor: undefined };
@@ -2309,6 +2319,7 @@ export class Runner {
               // question of a reply written as two (from Codex's review).
               rt.turn.restateReply = rt.turn.cardReopened && endTurnMessageStands(ev) && rt.turn.finalTexts?.size ? [...rt.turn.finalTexts.values()].join('\n\n') : undefined;
               rt.turn.cardReopened = false;
+              rt.turn.replyRewrite = false;
               // A reply asked for now is a new one.
               if (endTurnWantsReply(ev)) rt.turn.finalTexts = undefined;
               // Every taken one, Codex's older "Noted." too: one that isn't
@@ -2451,6 +2462,7 @@ export class Runner {
         if (rt.turn && o.reopen && rt.turn.ended) {
           rt.turn.cardReopened = true;
           rt.turn.replyAfter = false;
+          rt.turn.replyRewrite = o.rewrite === true;
         }
         break;
       case 'tasks': {

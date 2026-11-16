@@ -143,6 +143,126 @@ fn collect_images(node: &markdown::mdast::Node, found: &mut impl FnMut(&markdown
     }
 }
 
+/// `[words](/a/path)` (or `<file:///a/path>`, or a path in backticks that
+/// `prepare` linked) to a file that isn't on this Mac, as its words alone,
+/// so a link that can only say "Couldn't find" doesn't look like one. On 16
+/// Nov 2026 an agent linked the finished clip at a path that left out its
+/// project folder (thread 4e8b6ac9); the runner's Stop hook now sends a reply
+/// like that back once (adapter.ts, missingFileLinks), and this is for any
+/// that get past it. Only an absolute, `~/` or `file://` path, as the runner
+/// checks: a relative one is looked for from the thread's folder and what
+/// its tools touched when it's clicked (`find_file`). Another Mac's thread
+/// keeps its links, as its files are there.
+pub(crate) fn dead_file_links(text: &str, local: bool) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if !local || cfg!(windows) || !(text.contains("](") || text.contains("<file:")) {
+        return Cow::Borrowed(text);
+    }
+    // Rows ask on every frame: the answer is kept a couple of seconds by the
+    // text, so a file that turns up is seen soon without parsing each frame.
+    use std::hash::{Hash, Hasher};
+    use std::sync::{LazyLock, Mutex};
+    static SEEN: LazyLock<Mutex<std::collections::HashMap<u64, (std::time::Instant, Option<String>)>>> = LazyLock::new(Default::default);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let key = hasher.finish();
+    if let Some((when, known)) = SEEN.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        if when.elapsed() < std::time::Duration::from_secs(2) {
+            return known.clone().map_or(Cow::Borrowed(text), Cow::Owned);
+        }
+    }
+    let found = unlink_dead_files(text);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.len() > 500 {
+        seen.clear();
+    }
+    seen.insert(key, (std::time::Instant::now(), found.clone()));
+    found.map_or(Cow::Borrowed(text), Cow::Owned)
+}
+
+/// `dead_file_links`'s work: the text with those links as their words, or
+/// None when it has none.
+fn unlink_dead_files(text: &str) -> Option<String> {
+    let tree = markdown::to_mdast(text, &markdown::ParseOptions::gfm()).ok()?;
+    let mut swaps: Vec<(usize, usize, usize, usize)> = Vec::new();
+    collect_links(&tree, &mut |link| {
+        let (Some(at), Some(first), Some(last)) = (&link.position, link.children.first().and_then(|c| c.position()), link.children.last().and_then(|c| c.position())) else { return };
+        if dead_file_url(&link.url) {
+            swaps.push((at.start.offset, at.end.offset, first.start.offset, last.end.offset));
+        }
+    });
+    if swaps.is_empty() {
+        return None;
+    }
+    swaps.sort_by_key(|s| s.0);
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (start, end, words_start, words_end) in swaps {
+        let bounds = [start, end, words_start, words_end];
+        if start < at || end > text.len() || words_start < start || words_end > end || bounds.iter().any(|&b| !text.is_char_boundary(b)) {
+            continue;
+        }
+        out.push_str(&text[at..start]);
+        out.push_str(&text[words_start..words_end]);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    Some(out)
+}
+
+fn collect_links(node: &markdown::mdast::Node, found: &mut impl FnMut(&markdown::mdast::Link)) {
+    if let markdown::mdast::Node::Link(link) = node {
+        found(link);
+    }
+    for child in node.children().into_iter().flatten() {
+        collect_links(child, found);
+    }
+}
+
+/// Whether a link's address is a path on this Mac that isn't there. Only
+/// when no reading of it is: as written and decoded, whole and without a
+/// `?query` or `#heading`, less a `:12` line, as the click's own lookup
+/// tries them (`find_file`). A path on a network share counts as there, as
+/// a look can hang the frame on a share that's gone away.
+fn dead_file_url(url: &str) -> bool {
+    // A path in backticks that `prepare` linked (`link_code_paths`): the
+    // code's own text, encoded once.
+    let texts = match url.strip_prefix("tbpath:") {
+        Some(rest) => vec![percent_decode(rest.strip_prefix("?p=").unwrap_or(rest))],
+        None => {
+            let path = url.strip_prefix("file://").map_or(url, |rest| rest.strip_prefix("localhost").unwrap_or(rest));
+            // Cut before decoding too: an encoded %23 is part of the name.
+            let cut = path.split(['?', '#']).next().unwrap_or("");
+            vec![path.to_owned(), percent_decode(path), percent_decode(cut)]
+        }
+    };
+    let home = threadbear_core::reducer::text::home_directory();
+    let mut looked = false;
+    for text in &texts {
+        let cut = text.split(['?', '#']).next().unwrap_or("");
+        for candidate in [text.as_str(), cut] {
+            let path = strip_line(candidate);
+            let full = if let Some(rest) = path.strip_prefix("~/") {
+                format!("{home}/{rest}")
+            } else if path.starts_with('/') && !path.starts_with("//") {
+                path.to_owned()
+            } else {
+                continue;
+            };
+            if ["/Volumes/", "/Network/", "/net/"].iter().any(|share| full.starts_with(share)) {
+                return false;
+            }
+            looked = true;
+            if threadbear_core::open_policy::local_metadata(std::path::Path::new(&full)).is_ok() {
+                return false;
+            }
+        }
+    }
+    // Nothing absolute or ~/ to look at: a relative path is looked for
+    // from the thread's folder when it's clicked.
+    looked
+}
+
 /// The file a picture's address names on this Mac, if it's a file.
 pub(crate) fn picture_path(url: &str) -> Option<std::path::PathBuf> {
     #[cfg(windows)]
@@ -628,7 +748,7 @@ const DOCUMENTS_KEPT: usize = 600;
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_path, pictures, prepare};
+    use super::{dead_file_links, looks_like_path, pictures, prepare};
 
     #[test]
     fn windows_pictures_name_a_drive_file_before_any_file_access() {
@@ -663,6 +783,47 @@ mod tests {
         ] {
             assert_eq!(super::windows_picture_path(url), None, "{url}");
         }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_link_to_a_file_that_isnt_there_is_its_words() {
+        let dir = std::env::temp_dir().join(format!("tb-dead-links-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let here = dir.join("clip.mp4");
+        std::fs::write(&here, b"x").unwrap();
+        let here = here.to_string_lossy().into_owned();
+        let gone = dir.join("gone.mp4").to_string_lossy().into_owned();
+        let reply = format!("**Attach:** [`clip.mp4`]({gone}:3). Kept: [clip]({here}), [web](https://x.dev/a), [rel](docs/nope.md), [mail](mailto:a@b.c), [home](~/no-such-threadbear-file.md#top).\n\n```\n[block]({gone})\n```");
+        assert_eq!(
+            dead_file_links(&reply, true),
+            format!("**Attach:** `clip.mp4`. Kept: [clip]({here}), [web](https://x.dev/a), [rel](docs/nope.md), [mail](mailto:a@b.c), home.\n\n```\n[block]({gone})\n```"),
+        );
+        assert_eq!(dead_file_links(&reply, false), reply, "another Mac's thread keeps its links");
+        // A path in backticks `prepare` linked, a link whose words are that
+        // path in backticks (which `prepare` would link again if it ran
+        // after), and an autolink.
+        let code = format!("Gone: `{gone}`, kept: `{here}`, and [`{gone}`]({gone}), <file://{gone}>.");
+        assert_eq!(
+            dead_file_links(&prepare(&code, "t"), true),
+            prepare(&format!("Gone: `{gone}`, kept: `{here}`, and `{gone}`, file://{gone}."), "t").replace(&format!("[`{gone}`](tbpath:?p={})", super::encode_component(&gone)), &format!("`{gone}`")),
+        );
+        // Kept: a query or heading after a real file, a literal %20 in its
+        // name, a share that could hang the frame. Gone: spaces round it.
+        let literal = dir.join("a%20b.mp4");
+        std::fs::write(&literal, b"x").unwrap();
+        let literal = literal.to_string_lossy().into_owned();
+        let kept = format!("`{here}?view=full` [h]({here}#top) [l]({literal}) [s](/Volumes/no-such-share/x.mp4)");
+        assert_eq!(dead_file_links(&prepare(&kept, "t"), true), prepare(&kept, "t"));
+        assert_eq!(dead_file_links(&format!("[clip]( {gone} )"), true), "clip");
+        assert_eq!(dead_file_links(&format!("[clip](\t{gone})"), true), "clip");
+        let hashed = dir.join("report#final.md");
+        std::fs::write(&hashed, b"x").unwrap();
+        let hashed = format!("[r](file://{}#section)", hashed.to_string_lossy().replace('#', "%23"));
+        assert_eq!(dead_file_links(&hashed, true), hashed);
+        let plain = "No links to files here, [web](https://x.dev).";
+        assert!(matches!(dead_file_links(plain, true), std::borrow::Cow::Borrowed(_)));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

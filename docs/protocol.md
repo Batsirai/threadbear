@@ -3450,6 +3450,22 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   A repeat that only adds archive or snooze leaves the check on. An agent
   that needs no answer just stops. Mike chose this over widening the card
   to every offer (13 Nov 2026).
+- **Links to files that aren't there.** With one reply, the same hook sends
+  a turn back once when any block of the reply after `end_turn` has a
+  Markdown link to an absolute, `~/` or `file://` path that isn't on the
+  runner's Mac (`missingFileLinks`; what Markdown draws as code, relative
+  links, addresses with `(` or `<`, and paths on network shares don't
+  count). This comes before the asking
+  check, as only one nudge is sent, and says to put a question on the new
+  card. The `endTurnNudge` output carries `reopen: true` and `rewrite: true`:
+  the next `end_turn` is taken, and asks for a whole new reply even if
+  nothing ran in between (`replyRewrite`), which the apps show in the first
+  one's place as after any later card. Text on the way is dropped; a
+  message sent meanwhile takes the rewrite off. The Mac app draws any such
+  link that gets through, and a path in backticks it would link, as its
+  words alone (`dead_file_links`, after `prepare`). On 16 Nov 2026 a
+  finished clip went out linked at a path missing its project folder, and
+  the click only said "Couldn't find" (thread 4e8b6ac9).
 - **A subagent's card.** A background subagent's approval or question is
   between it and Mike, so it isn't tied to a turn. It opens none (a turn
   would hold Mike's messages back, and ending it would clear the parent's

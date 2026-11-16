@@ -123,7 +123,10 @@ export type AdapterOutput =
   // With `reopen`, the turn had its end_turn and reply, and is sent back for
   // a card the reply asked for (needs.ts, REPLY_ASKS): the next end_turn is
   // taken, not refused as a repeat, and the reply written stands.
-  | { kind: 'endTurnNudge'; reopen?: true }
+  // With `rewrite` too, it was sent back because its reply links files that
+  // aren't there (needs.ts, missingLinksNudge): the next end_turn asks for a
+  // whole new reply rather than saying the one written stands.
+  | { kind: 'endTurnNudge'; reopen?: true; rewrite?: true }
   // Background work the CLI is running (shells, async subagents). Replaces
   // the previous list.
   | { kind: 'tasks'; tasks: BackgroundTask[] }

@@ -798,6 +798,20 @@ export function replyAsksNudge(sentence: string): string {
   );
 }
 
+// A reply linking files that aren't there (highlights.ts, missingFileLinks),
+// sent back once by the Stop hook (adapter.ts, onStop) to find them and end
+// again. The end_turn that follows is taken and asks for a whole new reply
+// (runner.ts, replyRewrite), which the apps show in this one's place.
+export function missingLinksNudge(paths: string[], asking = false): string {
+  const listed = paths.slice(0, 5).map((p) => `\`${p}\``).join(', ');
+  return (
+    `Your reply links ${paths.length === 1 ? "a file that isn't" : "files that aren't"} on this Mac: ${listed}. ` +
+    "Find where each one really is (or take the link off if it doesn't exist), then call end_turn again with the card you meant" +
+    (asking ? ' (your reply asks the user something, so make that its ask, with needs "you")' : '') +
+    ', and write your reply after it with the paths fixed. That reply takes the place of the one above.'
+  );
+}
+
 // What a compaction between an accepted one-reply end_turn and its reply
 // adds after the summary (adapter.ts, onCompact), with the card's
 // questions, as the summary may not have them.

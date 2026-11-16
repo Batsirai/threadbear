@@ -798,8 +798,9 @@ impl ThreadPane {
         // The text as the row draws it (rows.rs).
         match &row.content {
             RowContent::Assistant(item) => {
-                use crate::rows::markdown::{pictures, prepare};
-                link_thread_ids(&prepare(&pictures(&item.text, self.summary.runner_id.is_none()), &self.summary.id), &resolve).1
+                use crate::rows::markdown::{dead_file_links, pictures, prepare};
+                let local = self.summary.runner_id.is_none();
+                link_thread_ids(&dead_file_links(&prepare(&pictures(&item.text, local), &self.summary.id), local), &resolve).1
             }
             RowContent::User(message) => match message.agent_header() {
                 Some(header) => {

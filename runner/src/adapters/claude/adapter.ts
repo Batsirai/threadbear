@@ -21,7 +21,8 @@ import { codeWriteNote, codeWriteReason, runsAsCodeByName, type CodeWrite } from
 import path from 'node:path';
 import { RUNNER_VERSION } from '../../config.ts';
 import { stripModelSuffix } from '../../accounts.ts';
-import { END_TURN_FULL_NAME, END_TURN_NUDGE, endTurnMessageStands, endTurnWantsReply, needsFromTool, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, owedReplyAfterCompact, replyAsks, replyAsksNudge, WakeRead } from '../../needs.ts';
+import { END_TURN_FULL_NAME, END_TURN_NUDGE, endTurnMessageStands, endTurnWantsReply, needsFromTool, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, missingLinksNudge, owedReplyAfterCompact, replyAsks, replyAsksNudge, WakeRead } from '../../needs.ts';
+import { missingFileLinks } from '../../highlights.ts';
 
 // Variables a parent Claude Code session sets for its own children. If the
 // runner was started from inside one (tests, a terminal in T3), they would
@@ -414,6 +415,9 @@ class ClaudeSession implements AgentSession {
   private endTurnInputs = new Map<string, unknown>();
   private doneCard = false;
   private replyAfterEnd = '';
+  // Every block of that reply, by item: a dead file link can be in any
+  // (onStop; needs.ts, missingLinksNudge).
+  private replyBlocks = new Map<string, string>();
   // Whether the agent has read a background task's notification that came
   // into the turn: from then its end_turn is behind it, so the Stop hook
   // asks for another (needs.ts, WakeRead).
@@ -528,6 +532,7 @@ class ClaudeSession implements AgentSession {
     const ended = this.endTurnTaken;
     const wrote = this.wroteAfterEnd || this.messageStands;
     const asks = this.doneCard && this.wroteAfterEnd ? replyAsks(this.replyAfterEnd) : undefined;
+    const missing = !stop.stop_hook_active && this.oneReply && this.wroteAfterEnd ? missingFileLinks([...this.replyBlocks.values()].join('\n\n'), { cwd: this.opts.cwd, home: os.homedir(), exists: (p) => fs.existsSync(p) }) : [];
     this.forgetEndTurn();
     // A turn that ended in plain text leaves the runner reading the card
     // from the prose (needs.ts, needsFromText), which drops what end_turn
@@ -541,6 +546,15 @@ class ClaudeSession implements AgentSession {
     // One reply: end_turn without words after it leaves no reply, so the
     // agent is asked for it, once (the hook's own guard, stop_hook_active).
     if (ended && this.oneReply && !wrote) return { decision: 'block', reason: ONE_REPLY_WRITE_NUDGE };
+    // ...and one whose reply links a file that isn't there is sent back,
+    // once, to find it and end again: the next end_turn asks for a whole new
+    // reply (rewrite), which the apps show in this one's place as after any
+    // later card. Before the asking check, as only one nudge is sent: this
+    // one's new end_turn can carry the question's card too.
+    if (ended && missing.length) {
+      this.sink.output({ kind: 'endTurnNudge', reopen: true, rewrite: true });
+      return { decision: 'block', reason: missingLinksNudge(missing, Boolean(asks)) };
+    }
     // ...and one whose reply closes by asking for an answer, over a card that
     // said nothing was needed, is asked for the card, once. The runner is told
     // first, so the end_turn it brings isn't refused as a repeat.
@@ -575,6 +589,7 @@ class ClaudeSession implements AgentSession {
     this.endTurnCall = undefined;
     this.doneCard = false;
     this.replyAfterEnd = '';
+    this.replyBlocks.clear();
   }
 
   private onEndTurn(input: HookInput): Record<string, never> {
@@ -783,6 +798,7 @@ class ClaudeSession implements AgentSession {
               if (endTurnWantsReply(ev)) {
                 this.doneCard = (needsFromTool(this.endTurnInputs.get(ev.itemId))?.needs ?? 'nothing') === 'nothing';
                 this.replyAfterEnd = '';
+                this.replyBlocks.clear();
               } else if (this.messageStands) this.doneCard = false;
               // Only an accepted call's own card: a refused repeat's result
               // isn't ok, and its questions never showed.
@@ -792,6 +808,7 @@ class ClaudeSession implements AgentSession {
               if (this.pastEndTurn) {
                 this.wroteAfterEnd = true;
                 this.replyAfterEnd = ev.text;
+                this.replyBlocks.set(ev.itemId, ev.text);
               }
               this.owedReply = undefined;
             }

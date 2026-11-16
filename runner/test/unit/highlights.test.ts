@@ -7,7 +7,7 @@ import { PANEL_ACK_WAIT_MS } from '../../src/panel-requests.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import type { PersistedEvent } from '../../src/protocol.ts';
-import { commitsIn, emptyHighlights, linksIn, observe, openTargets, pinItem, pushedBranches, remove, unpin, upsert, view, HIGHLIGHTS_KEPT } from '../../src/highlights.ts';
+import { commitsIn, emptyHighlights, linksIn, missingFileLinks, observe, openTargets, pinItem, pushedBranches, remove, unpin, upsert, view, HIGHLIGHTS_KEPT } from '../../src/highlights.ts';
 
 const HOME = '/Users/alex';
 const CWD = '/Users/alex/dev/app';
@@ -45,6 +45,52 @@ test('links, PRs and existing files in a reply are found; code blocks and missin
   assert.equal(found[0]!.title, 'alex-example/pantry#19');
   assert.equal(found[1]!.title, 'the mockup');
   assert.equal(found[2]!.title, 'plan.md');
+});
+
+test('missing file links: only links to absolute or ~/ paths that are not there', () => {
+  const files = new Set([...FILES, '/Users/alex/report#final.md', '/Users/alex/a%20b.mp4']);
+  const missing = missingFileLinks(
+    [
+      'The clip: [clip.mp4](~/misc/clip.mp4), the plan [plan](~/dev/app/docs/plan.md#steps), [line](/Users/alex/notes/todo.md:12).',
+      'Encoded: [mock](file:///Users/alex/dev/app/mock.html) and [gone](/Users/alex/a%20b.png). Twice: [again](~/misc/clip.mp4).',
+      'Kept: [hash](/Users/alex/report%23final.md), [literal](file:///Users/alex/a%2520b.mp4), [parens](/Users/alex/clip(final).mp4).',
+      '`/Users/alex/old.md` is gone, [relative](docs/nope.md), [web](https://example.com/x), [protocol-relative](//cdn.x/y).',
+      'An example: `[clip](/Users/alex/example.mp4)`, and [code words `x`](/Users/alex/gone-too.md).',
+      '```',
+      '[in a block](/Users/alex/block.md)',
+      '```',
+      '~~~md',
+      '[in a tilde block](/Users/alex/tilde.md)',
+      '~~~',
+    ].join('\n'),
+    { cwd: CWD, home: HOME, exists: (p) => files.has(p) },
+  );
+  assert.deepEqual(missing, ['~/misc/clip.mp4', '/Users/alex/a%20b.png', '/Users/alex/gone-too.md']);
+  // What Markdown draws as code or plain text isn't a link; spaces and a
+  // title around the address, and a file autolink, are.
+  const more = missingFileLinks(
+    [
+      'Indented:',
+      '',
+      '    [clip](/Users/alex/indented.mp4)',
+      '> ~~~md',
+      '> [clip](/Users/alex/quoted-block.mp4)',
+      '> ~~~',
+      'Escaped \\[clip](/Users/alex/escaped.mp4), ``a `[x](/Users/alex/double.md)` b``.',
+      'Spaced [clip]( /Users/alex/spaced.mp4 ), titled [clip](/Users/alex/titled.mp4 "Video"), <file:///Users/alex/auto.mp4>, network [n](/Volumes/share/x.mp4).',
+      '> Quoted [clip](/Users/alex/quoted.mp4)',
+      '- ```md',
+      '  [clip](/Users/alex/list-fence.mp4)',
+      '  ```',
+      'Escaped tick \\` then `[clip](/Users/alex/in-code.mp4)`.',
+    ].join('\n'),
+    { cwd: CWD, home: HOME, exists: (p) => files.has(p) },
+  );
+  assert.deepEqual(more, ['/Users/alex/spaced.mp4', '/Users/alex/titled.mp4', '/Users/alex/quoted.mp4', 'file:///Users/alex/auto.mp4']);
+  // A long run of unclosed backticks reads in one pass.
+  const started = performance.now();
+  missingFileLinks('Example: ' + '`'.repeat(100_000) + 'a ' + '` x '.repeat(20_000), { cwd: CWD, home: HOME, exists: () => true });
+  assert.ok(performance.now() - started < 500, 'linear');
 });
 
 test('open targets skip flags and the app after -a', () => {

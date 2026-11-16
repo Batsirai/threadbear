@@ -707,6 +707,50 @@ test('one reply: a turn sent back for a card its reply asked for takes one more 
   assert.equal(t.preview, 'Release the examples page?');
 });
 
+// The Stop hook found the reply linking a file that isn't there and sent the
+// turn back (adapter.ts, onStop; needs.ts, missingLinksNudge). The end_turn
+// that follows is taken and asks for a whole new reply, even with no work in
+// between (it isn't told the reply above stands), and what it says on the way
+// is dropped. A message sent meanwhile takes the rewrite off.
+test('one reply: a turn sent back for a dead file link ends again and writes a new reply', async () => {
+  for (const work of [true, false]) {
+    const h = makeHarness();
+    const { thread, s } = start(h);
+    const { call } = tools(h, thread.id, undefined, () => true);
+    const send = async (itemId: string, input: Record<string, unknown>) => {
+      toolCall(s, itemId, END_TURN, input);
+      const r = await call('end_turn', input);
+      s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.error, text: r.text, truncated: false, images: [] } });
+      return r;
+    };
+    await send('e1', { headline: 'Clip ready', needs: 'nothing' });
+    s.text('m1', 'Here it is: [clip.mp4](~/misc/clip.mp4).');
+    s.out({ kind: 'endTurnNudge', reopen: true, rewrite: true });
+    assert.equal(h.runner.replyRewrite(thread.id), true);
+    s.text('m2', 'Looking for it.');
+    if (work) toolCall(s, 'b1', 'Bash', { command: 'ls ~/misc/video' });
+    const again = await send('e2', { headline: 'Clip ready', needs: 'nothing' });
+    assert.equal(again.error, false, again.text);
+    assert.match(again.text, /Now write your reply/, `work in between: ${work}`);
+    assert.equal(h.runner.replyRewrite(thread.id), false, 'used up by the end_turn it was for');
+    s.text('m3', 'Here it is: [clip.mp4](~/misc/video/clip.mp4).');
+    s.result('completed');
+    await tick();
+    const finals = h.events(thread.id).filter((e) => e.type === 'assistant.text' && e.final).map((e) => e.type === 'assistant.text' && e.text);
+    assert.deepEqual(finals, ['Here it is: [clip.mp4](~/misc/clip.mp4).', 'Here it is: [clip.mp4](~/misc/video/clip.mp4).'], 'the new reply under the new card; nothing said on the way');
+  }
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  toolCall(s, 'e1', END_TURN, { needs: 'nothing' });
+  const r = await call('end_turn', { needs: 'nothing' });
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: true, text: r.text, truncated: false, images: [] } });
+  s.text('m1', 'Here it is: [clip.mp4](~/misc/clip.mp4).');
+  s.out({ kind: 'endTurnNudge', reopen: true, rewrite: true });
+  h.runner.send(thread.id, 'Actually, never mind the clip', [], {});
+  assert.equal(h.runner.replyRewrite(thread.id), false, 'a new message takes it off');
+});
+
 // From Codex's review: the card's first try is refused, the agent does the
 // step itself, and by its next try the reply is behind that work. It's asked
 // for a whole reply, which takes the first one's place.

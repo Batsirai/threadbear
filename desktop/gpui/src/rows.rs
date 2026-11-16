@@ -490,7 +490,11 @@ impl ThreadPane {
     /// go. `row.rs`'s `TextItem::text` is the whole reply so far; `prepare`
     /// escapes work links and `set_text` appends what's new.
     fn assistant_row(&mut self, ix: usize, row: &Row, item: &TextItem, cx: &mut Context<Self>) -> AnyElement {
-        let source = markdown::prepare(&markdown::pictures(&item.text, self.summary.runner_id.is_none()), &self.summary.id);
+        let local = self.summary.runner_id.is_none();
+        // A link to a file that isn't here as its words (`dead_file_links`).
+        // After `prepare`, which links paths in backticks: a dead one of those
+        // goes back to plain code too.
+        let source = markdown::dead_file_links(&markdown::prepare(&markdown::pictures(&item.text, local), &self.summary.id), local).into_owned();
         // Thread ids as chips (chips.rs).
         let source = self.with_thread_chips(source, cx);
         let doc = self.markdown_state(&item.item_id, &source, cx);

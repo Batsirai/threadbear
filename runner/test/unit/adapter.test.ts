@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -357,6 +358,39 @@ test('Stop hook: a reply that closes by asking, under a done card, is sent back 
     assert.deepEqual([quiet.first, quiet.reopens], [{}, 0], JSON.stringify(input));
     quiet.state.close!();
   }
+});
+
+// Thread 4e8b6ac9 (16 Nov 2026): the finished clip linked at a path that
+// left out its project folder, so the click only said "Couldn't find".
+test('Stop hook: a reply linking a file that is not there is sent back once to fix it', async () => {
+  const run = async (...blocks: string[]) => {
+    const { state, outputs } = start([], {}, { mcpServersFor: () => ({ threadbear: { type: 'sdk', name: 'threadbear' } }), oneReply: () => true });
+    const stop = state.options.hooks.Stop[0].hooks[0];
+    await state.frame!({ type: 'assistant', session_id: 's', message: { id: 'a', role: 'assistant', content: [{ type: 'tool_use', id: 'e1', name: END_TURN_FULL_NAME, input: { needs: 'nothing' } }] } });
+    await state.options.hooks.PostToolUse[0].hooks[0]({ hook_event_name: 'PostToolUse', tool_name: END_TURN_FULL_NAME });
+    await state.frame!({ type: 'user', session_id: 's', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'e1', content: oneReplyAccepted(false) }] } });
+    for (const [i, text] of blocks.entries()) await state.frame!({ type: 'assistant', session_id: 's', message: { id: `b${i}`, role: 'assistant', content: [{ type: 'text', text }] } });
+    const first = await stop({ hook_event_name: 'Stop', stop_hook_active: false });
+    const redos = outputs.filter((o: AdapterOutput) => o.kind === 'endTurnNudge' && o.reopen && o.rewrite).length;
+    return { first, redos, stop, state };
+  };
+  const here = fileURLToPath(import.meta.url);
+  const dead = await run(`The clip is [clip.mp4](/nonexistent-threadbear/clip.mp4), the test [here](${here}:12).`);
+  assert.equal(dead.first.decision, 'block');
+  assert.match(dead.first.reason, /links a file that isn't on this Mac: `\/nonexistent-threadbear\/clip\.mp4`\./);
+  assert.equal(dead.redos, 1, 'the runner is told, so the next reply takes its place');
+  assert.deepEqual(await dead.stop({ hook_event_name: 'Stop', stop_hook_active: true }), {}, 'once');
+  dead.state.close!();
+  // In the first of two blocks, and over a closing question: one nudge, for
+  // the links, which says to put the question on the new card.
+  const both = await run('The clip is [clip.mp4](/nonexistent-threadbear/clip.mp4).', 'Which version do you want?');
+  assert.equal(both.first.decision, 'block');
+  assert.match(both.first.reason, /make that its ask/);
+  assert.equal(both.redos, 1);
+  both.state.close!();
+  const fine = await run(`The test is [here](${here}), and \`/nonexistent-threadbear/old.md\` is gone.`);
+  assert.deepEqual([fine.first, fine.redos], [{}, 0]);
+  fine.state.close!();
 });
 
 // From Codex's review: a repeat that only adds archive ("Added: ...") is a
