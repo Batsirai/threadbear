@@ -87,7 +87,7 @@ export function compactionResult(pre: Pick<Precompact, 'id'>, r: Pick<TurnResult
 // Why this message should compact first, or undefined. Pure, for the tests.
 export function coldWake(
   rec: { provider: string; contextTokens?: number; sessionUsed?: boolean; resumeAt?: unknown; handoff?: unknown },
-  msg: Pick<QueuedSend, 'text' | 'editOf'>,
+  msg: Pick<QueuedSend, 'text' | 'editOf' | 'retryAfterInterrupt'>,
   lastModelMs: number | undefined,
   nowMs: number,
 ): { tokens: number; idleMs: number } | undefined {
@@ -97,7 +97,10 @@ export function coldWake(
   // A new session (a handoff) has no conversation to compact, an edit
   // rewinds it, and a slash command is the user's own (deliver's caller
   // already sends those bare).
-  if (!rec.sessionUsed || rec.resumeAt || rec.handoff || msg.editOf !== undefined || msg.text.trimStart().startsWith('/')) return undefined;
+  // A message going again after a Stop or a crash caught it in a
+  // compaction goes straight in, the second time: a second compaction
+  // stopped too would drop it (Grok's second look).
+  if (!rec.sessionUsed || rec.resumeAt || rec.handoff || msg.editOf !== undefined || msg.retryAfterInterrupt || msg.text.trimStart().startsWith('/')) return undefined;
   const tokens = rec.contextTokens ?? 0;
   if (tokens < COLD_COMPACT_MIN_TOKENS) return undefined;
   // Not knowing when it last ran means not knowing it's cold.
@@ -203,7 +206,14 @@ export const coldCompactPart = {
     } else {
       this.emit(st, { type: 'system.note', text: `Couldn't compact the conversation first, so this turn reads all of it${r.error ? `: ${r.error}` : '.'}` }, turn.turnId);
     }
-    pre.send();
+    try {
+      pre.send();
+    } catch (e) {
+      // A picture gone while it compacted, say: the turn fails as a send
+      // that failed in deliver does, and the message is kept.
+      turn.precompact = pre;
+      this.failTurn(st, e instanceof Error ? e.message : String(e));
+    }
   },
 };
 

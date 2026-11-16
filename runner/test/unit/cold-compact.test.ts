@@ -159,8 +159,9 @@ test("Stop while compacting a turn another thread opened queues its message agai
   const st = h.runner.mustGet(id);
   assert.ok(!cli.sent.some((m) => m.text === text));
   // Queued again, as a stopped message from another thread is, so it
-  // starts the next turn (which, still cold, compacts first).
-  assert.ok(st.rec.queue.some((q) => q.text === text) || st.rt.turn?.precompact?.msg.text === text, 'queued again, not lost');
+  // starts the next turn, going straight in this time.
+  assert.ok(st.rec.queue.some((q) => q.text === text) || h.adapter.sessions.some((x) => x.sent.some((m) => m.text.includes('The build passed.'))), 'queued again, not lost');
+  assert.ok(!st.rt.turn?.precompact, 'no second compaction');
 });
 
 test('the CLI dying while it compacts keeps the message', async () => {
@@ -184,4 +185,22 @@ test("the held message can't be edited until the compaction is done", async () =
   await tick(8);
   const seq = h.events(id).filter((e) => e.type === 'user.message').at(-1).seq;
   await assert.rejects(h.runner.editMessage(id, seq, 'Carry on, carefully'), /waiting while the conversation compacts/);
+});
+
+test('a message queued again after a Stop goes straight in, without a second compaction', () => {
+  assert.equal(coldWake({ provider: 'claude', contextTokens: 500_000, sessionUsed: true }, { text: 'The build passed.', retryAfterInterrupt: true }, 0, 10 * HOUR), undefined);
+});
+
+test('a stopped message the agent never read is not offered for editing', async () => {
+  const { h, id, s } = setup();
+  finish(s, 500_000);
+  h.clock.advance(2 * HOUR);
+  h.runner.send(id, 'Carry on');
+  await tick(8);
+  const cli = last(h);
+  await h.runner.interrupt(id);
+  cli.result('interrupted');
+  await tick(8);
+  const seq = h.events(id).filter((e) => e.type === 'user.message').at(-1).seq;
+  await assert.rejects(h.runner.editMessage(id, seq, 'Carry on, carefully'), /never read this message/);
 });

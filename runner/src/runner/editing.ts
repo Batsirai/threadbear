@@ -162,6 +162,10 @@ export const editingPart = {
     if (!ev || ev.type !== 'user.message') throw no(`There's no message at ${seq} to edit.`);
     if (cutOut(rec, seq)) throw no('That message was already taken out by an earlier edit.');
     if ((ev.origin && ev.origin !== 'phone') || sentByAgent(ev.text)) throw no('Only your own messages can be edited.');
+    // Stopped before the agent read it (a Stop, or held for a compaction):
+    // it isn't in the CLI's session, so there's nothing to go back to, and
+    // trying cleared the messages waiting behind it before failing.
+    if (rec.interruptedMessages?.includes(seq)) throw no('The agent never read this message, which is saved for your next one: send that instead of editing this.');
     // It started a turn: its turn.started comes straight after it. One sent
     // into a running turn went into that turn and can't be cut out alone.
     const next = log.read(seq + 1, seq + 3).find((e) => e.type === 'turn.started');
