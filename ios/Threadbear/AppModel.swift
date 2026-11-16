@@ -39,6 +39,9 @@ final class AppModel {
     @ObservationIgnored var threadOpen = false
     /// Rows sinking towards the Hibernating heading on their way out (`hibernate`).
     private(set) var sinking: Set<String> = []
+    /// Renamed from this phone: the new title shows at once, and goes back
+    /// if the runner refuses it (`rename`).
+    private(set) var renamed: [String: String] = [:]
     /// Hibernated from this phone, kept out of the lists and on the heading's
     /// count until Convex catches up.
     private(set) var tucks = Tucks()
@@ -1213,6 +1216,36 @@ final class AppModel {
 
     /// The thread's turn is over: its Stop is done.
     func stopped(_ threadId: String) { stopping.remove(threadId) }
+
+    /// A thread's title as shown here: one just typed on this phone until
+    /// Convex has it, else the thread's own.
+    func title(of thread: PhoneThread) -> String {
+        let title = renamed[thread.threadId] ?? thread.title
+        return title.isEmpty ? "Untitled" : title
+    }
+
+    /// Renames a thread, showing the new title straight away. The runner
+    /// applies it as the Mac's rename does; a refusal puts the old one back
+    /// with the error.
+    func rename(_ threadId: String, to title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let backend, !title.isEmpty else { return }
+        renamed[threadId] = title
+        Task {
+            do {
+                let command = try await Deadline.run(seconds: 20) { try await backend.update(threadId: threadId, change: .rename(title)) }
+                if let status = await commandOutcome(command), status.state == .failed {
+                    throw TransportError.server(status.note ?? "The runner couldn't rename that thread.")
+                }
+                // Done: the live thread carries the new title within a moment.
+                try? await Task.sleep(for: .seconds(3))
+            } catch {
+                report(error)
+            }
+            // A later rename may have replaced this one meanwhile.
+            if renamed[threadId] == title { renamed[threadId] = nil }
+        }
+    }
 
     func clearError() { lastError = nil }
 

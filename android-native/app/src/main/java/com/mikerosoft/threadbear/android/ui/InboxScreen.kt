@@ -683,6 +683,7 @@ fun ThreadRow(
 ) {
     val signals = LocalSignals.current
     val kind = RowStatus.kind(t)
+    val renamed by LocalModel.current.renamed.collectAsStateWithLifecycle()
     Row(
         modifier.fillMaxWidth().animateContentSize().padding(start = 6.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -704,7 +705,7 @@ fun ThreadRow(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    t.title.ifEmpty { "Untitled" },
+                    LocalModel.current.title(t, renamed),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = if (t.needsYou || kind == RowStatus.Kind.NEEDS_YOU || done) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),

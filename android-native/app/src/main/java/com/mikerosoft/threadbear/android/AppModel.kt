@@ -105,6 +105,8 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
 
     /** Archived (or hibernated) from here, hidden until the list agrees. */
     val puttingAway = MutableStateFlow<Set<String>>(emptySet())
+    /** Renamed from here: the new title shows at once, until the list has it (or it fails). */
+    val renamed = MutableStateFlow<Map<String, String>>(emptyMap())
     /** Stop pressed, until the turn ends. */
     val stopping = MutableStateFlow<Set<String>>(emptySet())
 
@@ -381,6 +383,7 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
             else -> {}
         }
         val b = _backend.value ?: return
+        if (change is ThreadChange.Rename) return rename(b, threadId, change)
         val hides = change is ThreadChange.Archive || change is ThreadChange.ArchiveWithVerdict || change is ThreadChange.Snooze
         if (hides) puttingAway.update { it + threadId }
         scope.launch {
@@ -392,6 +395,28 @@ class AppModel(context: Context, private val scope: CoroutineScope) {
                 report(e)
             } finally {
                 if (hides) puttingAway.update { it - threadId }
+            }
+        }
+    }
+
+    /** A thread's title as shown here: one just typed on this phone, else its own. */
+    fun title(thread: PhoneThread, renamed: Map<String, String>) =
+        (renamed[thread.threadId] ?: thread.title).ifEmpty { "Untitled" }
+
+    private fun rename(b: PhoneBackend, threadId: String, change: ThreadChange.Rename) {
+        val title = change.title.trim()
+        if (title.isEmpty()) return
+        renamed.update { it + (threadId to title) }
+        scope.launch {
+            try {
+                b.update(threadId, ThreadChange.Rename(title))
+                // The live thread carries the new title within a moment.
+                delay(3000)
+            } catch (e: Exception) {
+                report(e)
+            } finally {
+                // A later rename may have replaced this one meanwhile.
+                renamed.update { if (it[threadId] == title) it - threadId else it }
             }
         }
     }

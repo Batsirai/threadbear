@@ -184,7 +184,10 @@ private fun ThreadBar(thread: PhoneThread?, back: () -> Unit) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
     var hibernate by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    val renamed by model.renamed.collectAsStateWithLifecycle()
     val projects by model.projects.collectAsStateWithLifecycle()
+    if (renaming && thread != null) RenameDialog(thread) { renaming = false }
     TopAppBar(
         navigationIcon = { IconButton(onClick = back) { Icon(Line.Back, "Back", Modifier.size(22.dp)) } },
         title = {
@@ -192,7 +195,7 @@ private fun ThreadBar(thread: PhoneThread?, back: () -> Unit) {
                 val ref = thread.projects?.firstOrNull()
                 ProjectTile(ref?.let { r -> projects.firstOrNull { it.id == r.id } }, ref?.title ?: thread.folderName, 26.dp)
                 Spacer(Modifier.width(10.dp))
-                Text(thread.title.ifEmpty { "Untitled" }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(model.title(thread, renamed), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         },
         actions = {
@@ -217,6 +220,7 @@ private fun ThreadBar(thread: PhoneThread?, back: () -> Unit) {
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    MenuItem("Rename…", Line.Pencil) { menu = false; renaming = true }
                     // To point another thread at this one: pasted into a message
                     // here or on the Mac, it goes in as a link to it.
                     MenuItem("Copy Thread ID", Line.Copy) {

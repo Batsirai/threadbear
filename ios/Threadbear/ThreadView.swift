@@ -23,6 +23,7 @@ struct ThreadView: View {
     /// can come a moment later, or until settle() finds they failed.
     @State private var gone: [WaitingSend] = []
     @State private var hibernateTarget: PhoneThread?
+    @State private var renameTarget: PhoneThread?
     @State private var markedSeen = false
     /// The oldest seq when "Load earlier" was tapped, until older messages
     /// arrive (the oldest seq changes) or the runner says it couldn't.
@@ -87,7 +88,7 @@ struct ThreadView: View {
                 ProgressView()
             }
         }
-        .navigationTitle(detail?.thread.title ?? "")
+        .navigationTitle(detail.map { model.title(of: $0.thread) } ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let thread = detail?.thread {
@@ -95,7 +96,7 @@ struct ThreadView: View {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 6) {
                         ProjectIconView(project: thread.projects?.first.flatMap { model.project($0.id) }, title: thread.projects?.first?.title, size: 20)
-                        Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                        Text(model.title(of: thread))
                             .font(.headline)
                             .lineLimit(1)
                     }
@@ -105,6 +106,7 @@ struct ThreadView: View {
             }
         }
         .hibernateDialog(for: $hibernateTarget, leaving: { dismiss() })
+        .renameDialog(for: $renameTarget)
         // model.connection in each id: a fresh Convex client after the app
         // comes back from the background, so these follow it, not the old one.
         .task(id: "\(threadId):\(model.connection)") { await follow() }
@@ -470,6 +472,7 @@ struct ThreadView: View {
                     }
                 }
                 Section {
+                    Button { renameTarget = thread } label: { Label("Rename…", systemImage: "pencil") }
                     // To point another thread at this one: pasted into a
                     // message here or on the Mac, it goes in as a link to it.
                     Button { UIPasteboard.general.string = thread.threadId } label: { Label("Copy Thread ID", systemImage: "number") }

@@ -31,6 +31,7 @@ struct InboxView: View {
     @State private var composing = false
     @State private var composeText = ""
     @State private var hibernateTarget: PhoneThread?
+    @State private var renameTarget: PhoneThread?
     @State private var query = ""
     @State private var olderArchived: [PhoneThread] = []
     @State private var pocketOpen = false
@@ -220,6 +221,7 @@ struct InboxView: View {
                     model.composeText = nil
                 }
                 .hibernateDialog(for: $hibernateTarget)
+                .renameDialog(for: $renameTarget)
                 // Its own pull to refresh rather than .refreshable, whose spinner
                 // holds back until the list's been pulled about 190 pt: the bear
                 // blinks at 80, as in the mockup Mike picked, and letting go there
@@ -484,6 +486,7 @@ struct InboxView: View {
                 Button { hibernateTarget = thread } label: { Label("Hibernate…", systemImage: "moon.zzz") }
             }
             Button { model.archive(thread.threadId) } label: { Label("Archive", systemImage: "archivebox") }
+            Button { renameTarget = thread } label: { Label("Rename…", systemImage: "pencil") }
             if thread.unread || thread.needsYou {
                 Button { Task { await perform(thread, .markSeen) } } label: { Label("Mark as read", systemImage: "envelope.open") }
             }
@@ -635,7 +638,7 @@ struct ThreadRow: View {
                     }
                 }
             VStack(alignment: .leading, spacing: 3) {
-                Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                Text(model.title(of: thread))
                     .font(.body.weight(emphasised ? .semibold : .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -900,6 +903,33 @@ private struct HibernateDialog: ViewModifier {
     private func change(_ thread: PhoneThread, _ change: ThreadChange) {
         model.hibernate(thread.threadId, change, leavingThread: leaving != nil)
         leaving?()
+    }
+}
+
+extension View {
+    /// Asks for a thread's new title, filled in with its current one.
+    func renameDialog(for target: Binding<PhoneThread?>) -> some View {
+        modifier(RenameDialog(target: target))
+    }
+}
+
+private struct RenameDialog: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Binding var target: PhoneThread?
+    @State private var text = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Rename thread", isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } }), presenting: target) { thread in
+                TextField("Title", text: $text)
+                    .submitLabel(.done)
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") { model.rename(thread.threadId, to: text) }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .onChange(of: target?.threadId) {
+                if let thread = target { text = model.renamed[thread.threadId] ?? thread.title }
+            }
     }
 }
 
