@@ -64,4 +64,14 @@ export default defineSchema({
     sends: v.number(),
     newSends: v.number(),
   }).index('by_hour', ['hour']),
+
+  // How often /register called a deployment back today (relay.ts
+  // startCheck), whether it said yes or not. Removed the next day.
+  checks: defineTable({
+    deployment: v.string(),
+    day: v.string(),
+    count: v.number(),
+  })
+    .index('by_deployment', ['deployment', 'day'])
+    .index('by_day', ['day']),
 });

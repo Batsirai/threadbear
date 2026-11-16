@@ -11,6 +11,10 @@ export const SENDS_PER_HOUR = 120;
 // when it lost its install, so this only stops a backend stuck in a loop;
 // nobody else can use it up, as only the deployment passes the check.
 export const REGISTRATIONS_PER_DEPLOYMENT_PER_DAY = 20;
+// Times a day /register may call one deployment back, whether or not it
+// says yes, so a deployment that answers slowly (or no) can't keep the
+// relay making calls for it.
+export const CHECKS_PER_DEPLOYMENT_PER_DAY = 40;
 
 // Relay-wide limits (Daybreak 144, 16 Nov 2026). The check in verify.ts
 // proves a caller runs the deployment it names, not that it runs
@@ -108,10 +112,11 @@ export const registerVerified = internalMutation({
   },
 });
 
-// Whether a registration for this deployment could succeed now, asked by
-// /register before it calls the deployment back, so a caller over a limit
-// doesn't get the relay making calls for it (registerVerified still checks).
-export const mayRegister = internalQuery({
+// Asked by /register before it calls a deployment back: whether a
+// registration for it could succeed now, counting the call-back against
+// the deployment's daily allowance of them (registerVerified still checks
+// its own limits). In a mutation, so requests at once are counted too.
+export const startCheck = internalMutation({
   args: { deployment: v.string() },
   returns: v.boolean(),
   handler: async (ctx, { deployment }) => {
@@ -120,12 +125,22 @@ export const mayRegister = internalQuery({
       .query('installs')
       .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
       .first();
-    if (existing) return (existing.registeredDay === today ? (existing.registeredToday ?? 0) : 0) < REGISTRATIONS_PER_DEPLOYMENT_PER_DAY;
-    const counts = await ctx.db
-      .query('days')
-      .withIndex('by_day', (q) => q.eq('day', today))
+    if (existing && (existing.registeredDay === today ? (existing.registeredToday ?? 0) : 0) >= REGISTRATIONS_PER_DEPLOYMENT_PER_DAY) return false;
+    if (!existing) {
+      const counts = await ctx.db
+        .query('days')
+        .withIndex('by_day', (q) => q.eq('day', today))
+        .unique();
+      if ((counts?.newInstalls ?? 0) >= NEW_INSTALLS_PER_DAY) return false;
+    }
+    const checks = await ctx.db
+      .query('checks')
+      .withIndex('by_deployment', (q) => q.eq('deployment', deployment).eq('day', today))
       .unique();
-    return (counts?.newInstalls ?? 0) < NEW_INSTALLS_PER_DAY;
+    if ((checks?.count ?? 0) >= CHECKS_PER_DEPLOYMENT_PER_DAY) return false;
+    if (checks) await ctx.db.patch(checks._id, { count: checks.count + 1 });
+    else await ctx.db.insert('checks', { deployment, day: today, count: 1 });
+    return true;
   },
 });
 
@@ -152,7 +167,10 @@ async function countRegistration(ctx: MutationCtx, today: string): Promise<void>
 // Checks the install's key and rate limit, and counts the send.
 export const admit = internalMutation({
   args: { installId: v.string(), installKey: v.string(), version: v.optional(v.string()) },
-  returns: v.union(v.literal('ok'), v.literal('auth'), v.literal('limited')),
+  // An admitted send's UTC hour, which /send hands back to counted, so a
+  // result arriving after the hour turns gives back to the hour it was
+  // charged to (only that one).
+  returns: v.union(v.object({ hour: v.string() }), v.literal('auth'), v.literal('limited')),
   handler: async (ctx, { installId, installKey, version }) => {
     const row = await ctx.db
       .query('installs')
@@ -185,24 +203,24 @@ export const admit = internalMutation({
     if (pool) await ctx.db.patch(pool._id, counts);
     else await ctx.db.insert('hours', { hour, ...counts });
     await ctx.db.patch(row._id, { lastSeenAt: now, hourStart: fresh ? now : row.hourStart, hourSends: sends + 1, hourBad: bad + 1, ...(version !== undefined ? { version: storedVersion(version) } : {}) });
-    return 'ok';
+    return { hour };
   },
 });
 
 export const counted = internalMutation({
-  args: { ok: v.boolean(), status: v.optional(v.number()), reason: v.optional(v.string()), installId: v.optional(v.string()) },
+  args: { ok: v.boolean(), status: v.optional(v.number()), reason: v.optional(v.string()), installId: v.optional(v.string()), hour: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { ok, status, reason, installId }) => {
+  handler: async (ctx, { ok, status, reason, installId, hour }) => {
     const today = day();
     // admit charged this send to the install's bad-token allowance; give
     // it back unless the token was to blame, and only in the hour it was
     // charged (a later hour started from nothing).
-    if (installId !== undefined && (ok || !tokenFault(status, reason))) {
+    if (installId !== undefined && hour !== undefined && (ok || !tokenFault(status, reason))) {
       const row = await ctx.db
         .query('installs')
         .withIndex('by_installId', (q) => q.eq('installId', installId))
         .unique();
-      if (row && hourOf(row.hourStart) === hourOf(Date.now()) && (row.hourBad ?? 0) > 0) await ctx.db.patch(row._id, { hourBad: row.hourBad! - 1 });
+      if (row && hourOf(row.hourStart) === hour && (row.hourBad ?? 0) > 0) await ctx.db.patch(row._id, { hourBad: row.hourBad! - 1 });
     }
     const counts = await ctx.db
       .query('days')
@@ -269,16 +287,16 @@ export const expire = internalMutation({
   returns: v.object({ installs: v.number(), removed: v.number(), hours: v.number() }),
   handler: async (ctx) => {
     const now = Date.now();
-    const idle = await ctx.db
-      .query('installs')
-      .withIndex('by_expired', (q) => q.eq('expiredAt', undefined).lt('lastSeenAt', now - IDLE_INSTALL_MS))
-      .take(EXPIRE_BATCH);
-    // A row from before the deployment check can't register again, so
-    // there's nothing to keep it for.
-    for (const row of idle) {
-      if (row.deployment === undefined) await ctx.db.delete(row._id);
-      else await ctx.db.patch(row._id, { keyHash: '', expiredAt: now, version: undefined });
+    // Rows from before the deployment check (5 Nov 2026; no more can be
+    // made) never expire: their backend couldn't come back as the same
+    // install, and there are only a handful.
+    const idle = [];
+    for await (const row of ctx.db.query('installs').withIndex('by_expired', (q) => q.eq('expiredAt', undefined).lt('lastSeenAt', now - IDLE_INSTALL_MS))) {
+      if (row.deployment === undefined) continue;
+      idle.push(row);
+      if (idle.length === EXPIRE_BATCH) break;
     }
+    for (const row of idle) await ctx.db.patch(row._id, { keyHash: '', expiredAt: now, version: undefined });
     const gone = await ctx.db
       .query('installs')
       .withIndex('by_expired', (q) => q.gt('expiredAt', 0).lt('expiredAt', now - EXPIRED_KEEP_MS))
@@ -289,7 +307,12 @@ export const expire = internalMutation({
       .withIndex('by_hour', (q) => q.lt('hour', hourOf(now - 2 * 86_400_000)))
       .take(EXPIRE_BATCH);
     for (const row of old) await ctx.db.delete(row._id);
-    if ([idle, gone, old].some((b) => b.length === EXPIRE_BATCH)) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
+    const checks = await ctx.db
+      .query('checks')
+      .withIndex('by_day', (q) => q.lt('day', day(now)))
+      .take(EXPIRE_BATCH);
+    for (const row of checks) await ctx.db.delete(row._id);
+    if ([idle, gone, old, checks].some((b) => b.length === EXPIRE_BATCH)) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
     return { installs: idle.length, removed: gone.length, hours: old.length };
   },
 });

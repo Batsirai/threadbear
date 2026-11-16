@@ -113,7 +113,9 @@ sized well above real use:
   day. One it knows can always register again, including one whose
   install expired, so made-up deployments using up a day's new installs
   can't keep a real backend out. `/register` checks a deployment is under
-  its limits before calling it back.
+  its limits before calling it back, and calls one deployment back at
+  most 40 times a day, yes or no. Installs from before 5 Nov 2026, which
+  couldn't register again, never expire.
 - Installs under a week old share 600 sends an hour, and all installs
   together get 6,000. Past either, each install still gets the first 10
   sends of its hour, so no pile of installs can stop a real backend's
@@ -121,7 +123,10 @@ sized well above real use:
 - An install gets 20 sends an hour that fail on a bad device token
   (Apple's BadDeviceToken, DeviceTokenNotForTopic or Unregistered,
   Firebase's UNREGISTERED, INVALID_ARGUMENT or SENDER_ID_MISMATCH),
-  counting sends still out, so a burst at once is held to it too. The
+  counting sends still out, so a burst at once is held to it too. An
+  Android notification's sealed text is capped at 3,000 characters so it
+  always fits Firebase's 4 KB, and INVALID_ARGUMENT can only mean the
+  token. The
   relay's own failures (a revoked key, Google refusing its sign-in, a
   timeout) don't count against anyone.
 - Every hourly count goes by the UTC hour.

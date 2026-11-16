@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { call, load, memoryBackend, outcome, RELAY } from '../helpers/convex-memory.ts';
 
 const relay = load('relay', RELAY);
-const { ALL_SENDS_PER_HOUR, RESERVED_SENDS_PER_HOUR, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS, NEW_INSTALL_SENDS_PER_HOUR, SENDS_PER_HOUR, BAD_TOKEN_SENDS_PER_HOUR, IDLE_INSTALL_MS, EXPIRED_KEEP_MS, EXPIRE_BATCH } = relay;
+const { ALL_SENDS_PER_HOUR, RESERVED_SENDS_PER_HOUR, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS, NEW_INSTALL_SENDS_PER_HOUR, SENDS_PER_HOUR, BAD_TOKEN_SENDS_PER_HOUR, IDLE_INSTALL_MS, EXPIRED_KEEP_MS, EXPIRE_BATCH, CHECKS_PER_DEPLOYMENT_PER_DAY } = relay;
 
 const T0 = Date.parse('2026-11-16T01:00:00Z');
 let clock = T0;
@@ -18,11 +18,19 @@ afterEach(() => (clock = T0));
 
 const site = (n: number) => `https://made-up-${n}.convex.site`;
 const register = (ctx: unknown, deployment: string) => call(ctx, relay.registerVerified, { deployment });
-const admit = (ctx: unknown, i: { installId: string; installKey: string }) => call(ctx, relay.admit, { installId: i.installId, installKey: i.installKey });
+// 'ok' for an admitted send, whose hour counted then gets (as /send does).
+const lastHour = new Map<string, string>();
+async function admit(ctx: unknown, i: { installId: string; installKey: string }): Promise<string> {
+  const r = await call(ctx, relay.admit, { installId: i.installId, installKey: i.installKey });
+  if (typeof r !== 'object') return r;
+  lastHour.set(i.installId, r.hour);
+  return 'ok';
+}
+const count = (ctx: unknown, a: { ok: boolean; status?: number; reason?: string; installId: string; hour?: string }) => call(ctx, relay.counted, { ...a, hour: a.hour ?? lastHour.get(a.installId) });
 // A send that Apple or Firebase took: admitted, then its outcome counted.
 async function send(ctx: unknown, i: { installId: string; installKey: string }): Promise<string> {
   const a = await admit(ctx, i);
-  if (a === 'ok') await call(ctx, relay.counted, { ok: true, status: 200, installId: i.installId });
+  if (a === 'ok') await count(ctx, { ok: true, status: 200, installId: i.installId });
   return a;
 }
 
@@ -94,7 +102,7 @@ test('an install sending to made-up device tokens is stopped after a few an hour
   clock = T0 + NEW_INSTALL_MS + 1;
   for (let k = 0; k < BAD_TOKEN_SENDS_PER_HOUR; k++) {
     assert.equal(await admit(b.ctx, i), 'ok');
-    await call(b.ctx, relay.counted, { ok: false, status: k % 2 ? 400 : 410, reason: 'BadDeviceToken', installId: i.installId });
+    await count(b.ctx, { ok: false, status: k % 2 ? 400 : 410, reason: 'BadDeviceToken', installId: i.installId });
   }
   assert.equal(await admit(b.ctx, i), 'limited', 'no more calls to Apple or Firebase this hour');
   clock += 3_600_000;
@@ -107,7 +115,7 @@ test("the relay's own trouble (a revoked key, a timeout) doesn't use up a real b
   clock = T0 + NEW_INSTALL_MS + 1;
   for (let k = 0; k < BAD_TOKEN_SENDS_PER_HOUR * 2; k++) {
     assert.equal(await admit(b.ctx, i), 'ok');
-    await call(b.ctx, relay.counted, { ok: false, status: k % 2 ? 403 : 0, reason: 'InvalidProviderToken', installId: i.installId });
+    await count(b.ctx, { ok: false, status: k % 2 ? 403 : 0, reason: 'InvalidProviderToken', installId: i.installId });
   }
   assert.equal(await admit(b.ctx, i), 'ok');
 });
@@ -127,10 +135,10 @@ test('an install idle for 90 days is removed, its key stops working, and its bac
   assert.equal((await call(b.ctx, relay.stats, {})).installs, 1, 'stats leaves the keyless row out');
   // Made-up deployments use up the day's new installs...
   for (let n = 100; n < 100 + NEW_INSTALLS_PER_DAY; n++) await register(b.ctx, site(n));
-  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(999) }), false);
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: site(999) }), false);
   // ...but the expired backend is still known, so what convex/push.ts does
   // on that 401 (register again) works, as the same install, not a young one.
-  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(1) }), true);
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: site(1) }), true);
   const back = await register(b.ctx, site(1));
   assert.equal(back.installId, idle.installId);
   assert.equal(await admit(b.ctx, back), 'ok');
@@ -163,7 +171,9 @@ test('sends still out count against the bad-token allowance, so a burst at once 
   const b = memoryBackend(RELAY);
   const i = await register(b.ctx, site(1));
   clock = T0 + NEW_INSTALL_MS + 1;
-  const results = await Promise.all(Array.from({ length: 60 }, () => admit(b.ctx, i)));
+  // 60 admitted before any has an answer (in turn: see checkMany).
+  const results = [];
+  for (let k = 0; k < 60; k++) results.push(await admit(b.ctx, i));
   assert.equal(results.filter((r) => r === 'ok').length, BAD_TOKEN_SENDS_PER_HOUR);
 });
 
@@ -174,7 +184,7 @@ test('a send that went through, or failed for the relay\'s own reasons, gives it
   const outcomes = [{ ok: true, status: 200 }, { ok: false, status: 400, reason: 'UNAUTHENTICATED' }, { ok: false, status: 403, reason: 'InvalidProviderToken' }, { ok: false, status: 0, reason: 'timeout' }];
   for (let k = 0; k < SENDS_PER_HOUR; k++) {
     assert.equal(await admit(b.ctx, i), 'ok', `send ${k}`);
-    await call(b.ctx, relay.counted, { ...outcomes[k % outcomes.length]!, installId: i.installId });
+    await count(b.ctx, { ...outcomes[k % outcomes.length]!, installId: i.installId });
   }
 });
 
@@ -184,7 +194,7 @@ test('a token from a Firebase project the relay doesn\'t serve counts as a bad t
   clock = T0 + NEW_INSTALL_MS + 1;
   for (let k = 0; k < BAD_TOKEN_SENDS_PER_HOUR; k++) {
     assert.equal(await admit(b.ctx, i), 'ok');
-    await call(b.ctx, relay.counted, { ok: false, status: 403, reason: 'SENDER_ID_MISMATCH', installId: i.installId });
+    await count(b.ctx, { ok: false, status: 403, reason: 'SENDER_ID_MISMATCH', installId: i.installId });
   }
   assert.equal(await admit(b.ctx, i), 'limited');
 });
@@ -201,9 +211,58 @@ test("an install's hour is the relay's UTC hour, so the reserve can't be taken t
 
 test('/register asks before calling back: over the per-deployment or relay-wide cap is a no', async () => {
   const b = memoryBackend(RELAY);
-  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(1) }), true);
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: site(1) }), true);
   for (let k = 0; k < 20; k++) await register(b.ctx, site(1));
-  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(1) }), false);
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: site(1) }), false);
+});
+
+// Counted in a mutation before the call-back, so requests at once are held
+// to it too (Convex runs mutations one after another; the in-memory fake
+// can't play overlapping ones, so these go in turn).
+const checkMany = async (ctx: unknown, deployment: string, n: number) => {
+  const out: boolean[] = [];
+  for (let k = 0; k < n; k++) out.push(await call(ctx, relay.startCheck, { deployment }));
+  return out;
+};
+
+test('a deployment that keeps saying no (or answering slowly) is only called back so often a day', async () => {
+  const b = memoryBackend(RELAY);
+  await register(b.ctx, site(1)); // known, so the new-install cap doesn't apply
+  const asked = await checkMany(b.ctx, site(1), 100);
+  assert.equal(asked.filter(Boolean).length, CHECKS_PER_DEPLOYMENT_PER_DAY);
+  const fresh = await checkMany(b.ctx, site(2), 100);
+  assert.equal(fresh.filter(Boolean).length, CHECKS_PER_DEPLOYMENT_PER_DAY, 'one it has never seen too');
+  clock = T0 + 86_400_000;
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: site(1) }), true, 'a new day');
+  await call(b.ctx, relay.expire, {});
+  assert.equal(b.rows('checks').length, 1, "yesterday's counts are gone");
+});
+
+test("a send that was still out when the hour turned gives back to its own hour, not the new one", async () => {
+  const b = memoryBackend(RELAY);
+  const i = await register(b.ctx, site(1));
+  clock = T0 + NEW_INSTALL_MS + 59 * 60_000; // hh:59
+  const old = [];
+  for (let k = 0; k < BAD_TOKEN_SENDS_PER_HOUR; k++) {
+    assert.equal(await admit(b.ctx, i), 'ok');
+    old.push(lastHour.get(i.installId)!);
+  }
+  clock += 2 * 60_000; // the next hour
+  for (let k = 0; k < BAD_TOKEN_SENDS_PER_HOUR; k++) {
+    assert.equal(await admit(b.ctx, i), 'ok');
+    await count(b.ctx, { ok: false, status: 400, reason: 'BadDeviceToken', installId: i.installId });
+  }
+  // The last hour's sends come back fine now: nothing to give this hour.
+  for (const hour of old) await count(b.ctx, { ok: true, status: 200, installId: i.installId, hour });
+  assert.equal(await admit(b.ctx, i), 'limited');
+});
+
+test('rows from before the deployment check never expire', async () => {
+  const b = memoryBackend(RELAY);
+  await b.ctx.db.insert('installs', { installId: 'i_legacy', keyHash: 'x', createdAt: 0, lastSeenAt: 0, hourStart: 0, hourSends: 0 });
+  clock = T0 + IDLE_INSTALL_MS * 3;
+  assert.equal((await call(b.ctx, relay.expire, {})).installs, 0);
+  assert.equal(b.rows('installs')[0]!.keyHash, 'x');
 });
 
 test('expiring a big backlog goes a batch at a time and schedules the rest', async () => {
