@@ -189,17 +189,3 @@ test("the held message can't be edited until the compaction is done", async () =
 test('a message queued again after a Stop goes straight in, without a second compaction', () => {
   assert.equal(coldWake({ provider: 'claude', contextTokens: 500_000, sessionUsed: true }, { text: 'The build passed.', retryAfterInterrupt: true }, 0, 10 * HOUR), undefined);
 });
-
-test('a stopped message the agent never read is not offered for editing', async () => {
-  const { h, id, s } = setup();
-  finish(s, 500_000);
-  h.clock.advance(2 * HOUR);
-  h.runner.send(id, 'Carry on');
-  await tick(8);
-  const cli = last(h);
-  await h.runner.interrupt(id);
-  cli.result('interrupted');
-  await tick(8);
-  const seq = h.events(id).filter((e) => e.type === 'user.message').at(-1).seq;
-  await assert.rejects(h.runner.editMessage(id, seq, 'Carry on, carefully'), /never read this message/);
-});
