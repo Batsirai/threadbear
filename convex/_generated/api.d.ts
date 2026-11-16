@@ -25,6 +25,7 @@ import type * as redaction from "../redaction.js";
 import type * as relay from "../relay.js";
 import type * as runnerAccess from "../runnerAccess.js";
 import type * as share from "../share.js";
+import type * as shareRekey from "../shareRekey.js";
 import type * as sync from "../sync.js";
 import type * as tokens from "../tokens.js";
 import type * as uploads from "../uploads.js";
@@ -55,6 +56,7 @@ declare const fullApi: ApiFromModules<{
   relay: typeof relay;
   runnerAccess: typeof runnerAccess;
   share: typeof share;
+  shareRekey: typeof shareRekey;
   sync: typeof sync;
   tokens: typeof tokens;
   uploads: typeof uploads;

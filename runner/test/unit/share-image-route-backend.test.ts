@@ -16,6 +16,7 @@ const DAY = 24 * 60 * 60_000;
 const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
 const sync = load('sync');
 const share = load('share');
+const rekey = load('shareRekey');
 
 async function setup() {
   process.env.RUNNER_KEY = OWNER;
@@ -73,4 +74,70 @@ test("a link reaches only its own thread's pictures, and a stored type the page 
   assert.equal(await fetchAs(s, 'slug-one', 'nonsense'), null);
   assert.equal(await fetchAs(s, 'nope', s.id), null);
   assert.deepEqual(await fetchAs(s, 'slug-other', s.otherId), { storageId: 'other', mediaType: 'application/octet-stream' });
+});
+
+// The storage URLs a shared page handed out before /share/image (15 Nov)
+// kept working after sharing stopped until the runner's cleanup deleted the
+// file. A one-off job copies each shared picture to a new file and deletes
+// the old one (convex/shareRekey.ts), so every URL from before is dead,
+// shared or not, and the pages go on as they were.
+async function runRekey(s: Awaited<ReturnType<typeof setup>>) {
+  const fns: Record<string, any> = { rekeyPage: rekey.rekeyPage, rekeySwap: rekey.rekeySwap, rekeyShareImages: rekey.rekeyShareImages };
+  const byRef = (ref: unknown) => fns[String(ref).split('.').pop()!];
+  let next: Record<string, unknown> | undefined = { cursor: null };
+  const ctx = {
+    runQuery: (ref: unknown, args: Record<string, unknown>) => call(s.ctx, byRef(ref), args),
+    runMutation: (ref: unknown, args: Record<string, unknown>) => call(s.ctx, byRef(ref), args),
+    storage: { get: async (id: string) => (s.hasFile(id) ? new Blob([`bytes of ${id}`]) : null), store: (b: Blob) => (s.ctx as any).storage.store(b), delete: (id: string) => (s.ctx as any).storage.delete(id) },
+    scheduler: { runAfter: async (_ms: number, _fn: unknown, args: Record<string, unknown>) => void (next = args) },
+  };
+  for (let runs = 0; next && runs < 100; runs++) {
+    const args = next;
+    next = undefined;
+    await call(ctx, rekey.rekeyShareImages, args);
+  }
+  assert.equal(next, undefined, 'it finished');
+}
+
+test("the first heartbeat after the deploy ends every shared picture's storage URL from before, once, and the pages go on as before", async () => {
+  const s = await setup();
+  // Thirty more on T, past one page of the job.
+  for (let i = 0; i < 30; i++) await call(s.ctx, sync.addShareImage, { key: OWNER, threadId: 'T', seq: 2 + i, path: `/p${i}.png`, storageId: s.file(`p${i}`), mediaType: 'image/png' });
+  // A runner key's upload record moves with its file.
+  await s.ctx.db.insert('storageOwners', { storageId: 'p0', runnerId: 'cb921b2447ea', at: 1, bytes: 65536, attachedAt: 1 });
+  const before = { pic: await s.ctx.storage.getUrl('pic'), other: await s.ctx.storage.getUrl('other') };
+  assert.ok(before.pic && before.other);
+  s.scheduled.length = 0;
+  const beat = () => call(s.ctx, sync.heartbeat, { key: OWNER, runner: { runnerId: LAPTOP, name: 'laptop', version: 'v', startedAt: 'x', draining: false, threadCount: 1 } });
+  await beat();
+  assert.equal(s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length, 1);
+  await beat();
+  assert.equal(s.scheduled.filter((j) => String((j as { fn: string }).fn).endsWith('rekeyShareImages')).length, 1, 'once');
+  await runRekey(s);
+  // The old files have gone, so the URLs handed out for them are dead,
+  // the shared thread's and the one no longer shared alike.
+  for (const id of ['pic', 'other', 'p0', 'p29']) assert.equal(await s.ctx.storage.getUrl(id), null, id);
+  // Each row names a new file of the same bytes; the route and Mike's page still show them.
+  const row = s.rows('shareImages').find((r) => r._id === s.id)!;
+  assert.notEqual(row.storageId, 'pic');
+  assert.equal(s.hasFile(row.storageId), true);
+  assert.deepEqual(await fetchAs(s, 'slug-one', s.id), { storageId: row.storageId, mediaType: 'image/png' });
+  const mikes = await call(s.ctx, share.view, { slug: 'slug-one', token: TOKEN });
+  assert.equal(mikes.images.length, 31);
+  assert.ok(mikes.images.every((i: { url: string }) => !/files\.example\/(pic|p\d+)$/.test(i.url)));
+  const p0row = s.rows('shareImages').find((r) => r.path === '/p0.png')!;
+  assert.deepEqual(s.rows('storageOwners').filter((o) => o.runnerId === 'cb921b2447ea').map((o) => o.storageId), [p0row.storageId]);
+  assert.equal(s.rows('shareImages').length, 32);
+});
+
+test('a file the owner also put on a reply row stays for that row; a row gone meanwhile leaves no copy', async () => {
+  const s = await setup();
+  await call(s.ctx, sync.addReplyImage, { key: OWNER, threadId: 'T', seq: 1, path: '/a.png', storageId: 'pic', mediaType: 'image/png' });
+  await runRekey(s);
+  assert.equal(s.hasFile('pic'), true, 'the reply row still names it');
+  assert.notEqual(s.rows('shareImages').find((r) => r._id === s.id)!.storageId, 'pic');
+  // A swap for a row that's gone deletes its copy.
+  const fresh = s.file('copy');
+  assert.equal(await call(s.ctx, rekey.rekeySwap, { id: 'shareImages:999999', old: 'pic', fresh }), false);
+  assert.equal(s.hasFile('copy'), false);
 });

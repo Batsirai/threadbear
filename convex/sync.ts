@@ -1161,6 +1161,12 @@ export const heartbeat = mutation({
     await seedHeads(ctx);
     // 7 Nov 2026: rows from before the backend's limits, once (limitsMigration).
     await startLimitsMigration(ctx);
+    // 16 Nov 2026: shared pictures' storage URLs from before /share/image
+    // ended, once (shareRekey.ts).
+    if (!(await markSet(ctx, SHARE_REKEY_STARTED))) {
+      await ctx.db.insert('backendMarks', { name: SHARE_REKEY_STARTED });
+      await ctx.scheduler.runAfter(0, internal.shareRekey.rekeyShareImages, { cursor: null });
+    }
     // 8 Nov 2026: a runner key's message bytes counted again, once
     // (recountMessageBytes). Marked before it runs, like linkProjects.
     if (!caller.owner) {
@@ -3203,6 +3209,7 @@ export const pruneFiles = internalMutation({
 // rows for commands already on their way, so a delete elsewhere still sees
 // them. pruneFiles waits for it. Started by the first heartbeat (any key).
 const LIMITS_STARTED = 'limits-2026-11-07';
+const SHARE_REKEY_STARTED = 'share-rekey-2026-11-16';
 const LIMITS_DONE = 'limits-2026-11-07-done';
 const MIGRATE_PAGE = 8;
 const APNS_TOKEN = /^[0-9a-fA-F]{16,200}$/;
