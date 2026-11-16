@@ -151,12 +151,15 @@ pub(crate) fn watch() -> impl IntoElement {
             window.on_mouse_event(|event: &MouseUpEvent, phase, _, _| {
                 if phase.capture() && event.button == MouseButton::Left {
                     LEFT_HELD.with(|held| held.set(false));
+                    LINK_PRESS.with(|p| p.borrow_mut().take());
                 }
             });
             // A release outside the window is still told by the next move.
-            window.on_mouse_event(|event: &MouseMoveEvent, phase, _, _| {
+            window.on_mouse_event(|event: &MouseMoveEvent, phase, window, cx| {
                 if phase.capture() {
                     LEFT_HELD.with(|held| held.set(event.pressed_button == Some(MouseButton::Left)));
+                } else {
+                    drag_moved(event, window, cx);
                 }
             });
         },
@@ -221,29 +224,47 @@ enum LinkTarget {
     File(Option<FileLink>),
 }
 
+/// What a link's words say it names, before any file's looked for.
+enum Named {
+    Web(String),
+    /// A file by its whole path.
+    File(String),
+    /// A path to look for from the thread's folder (`find_file`).
+    Path(String),
+}
+
+/// What `url` names: a web page, a file, or neither (`work:`, `thread:` and
+/// Threadbear's other links). Cheap: no file's looked at or for.
+fn link_names(url: &str) -> Option<Named> {
+    let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')));
+    match scheme.as_deref() {
+        Some("tbpath") => {
+            let rest = &url["tbpath:".len()..];
+            Some(Named::Path(crate::rows::markdown::percent_decode(rest.strip_prefix("?p=").unwrap_or(rest))))
+        }
+        Some("work" | "thread" | "review" | "tbchip" | "button") => None,
+        // `Foo.swift:12` reads as a scheme, but it's a file and a line.
+        Some(s) if s.contains('.') && file_refs::strip_line(url) != url => Some(Named::Path(url.to_owned())),
+        _ => match policy::link_kind(url) {
+            LinkKind::Web(web) => Some(Named::Web(web)),
+            // A link with no scheme is looked for from the thread's folder
+            // like a path in inline code; a `file:` URL is the file.
+            LinkKind::File(path) if path.starts_with('/') || threadbear_core::reducer::text::is_windows_path(&path) => Some(Named::File(path)),
+            LinkKind::File(path) => Some(Named::Path(path)),
+            _ => None,
+        },
+    }
+}
+
 impl ThreadPane {
     /// What `url` names, for a click, a menu or a card. `work:`, `thread:`
     /// and Threadbear's other links name neither.
     fn link_target(&self, url: &str) -> Option<LinkTarget> {
-        let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')));
-        match scheme.as_deref() {
-            Some("tbpath") => {
-                let rest = &url["tbpath:".len()..];
-                let text = crate::rows::markdown::percent_decode(rest.strip_prefix("?p=").unwrap_or(rest));
-                Some(LinkTarget::File(self.find_file(&text)))
-            }
-            Some("work" | "thread" | "review" | "tbchip" | "button") => None,
-            // `Foo.swift:12` reads as a scheme, but it's a file and a line.
-            Some(s) if s.contains('.') && file_refs::strip_line(url) != url => Some(LinkTarget::File(self.find_file(url))),
-            _ => match policy::link_kind(url) {
-                LinkKind::Web(web) => Some(LinkTarget::Web(web)),
-                // A link with no scheme is looked for from the thread's folder
-                // like a path in inline code; a `file:` URL is the file.
-                LinkKind::File(path) if path.starts_with('/') || threadbear_core::reducer::text::is_windows_path(&path) => Some(LinkTarget::File(Some(FileLink { path, query: None, fragment: None }))),
-                LinkKind::File(path) => Some(LinkTarget::File(self.find_file(&path))),
-                _ => None,
-            },
-        }
+        Some(match link_names(url)? {
+            Named::Web(web) => LinkTarget::Web(web),
+            Named::File(path) => LinkTarget::File(Some(FileLink { path, query: None, fragment: None })),
+            Named::Path(text) => LinkTarget::File(self.find_file(&text)),
+        })
     }
 
     /// The file a path in a reply names: from the thread's folder and what
@@ -414,6 +435,7 @@ pub(crate) fn link_aware(text: impl IntoElement, ix: usize, row: &Row, thread: &
     let row_id = row.id.clone();
     let (moved_pane, moved_thread, moved_row) = (weak.clone(), thread.clone(), row_id.clone());
     let (left_thread, left_row) = (thread.clone(), row_id.clone());
+    let pressed_pane = weak.clone();
     let menu_row = row.clone();
     div()
         .id(("reply-links", ix))
@@ -424,11 +446,76 @@ pub(crate) fn link_aware(text: impl IntoElement, ix: usize, row: &Row, thread: &
             }
         })
         .on_scroll(|_, _, cx| hide_peek(cx))
-        // A press is the start of a click or a selection, never a rest.
-        .on_mouse_down(MouseButton::Left, |_, _, cx| hide_peek(cx))
+        // A press is the start of a click, a selection or a drag, never a rest.
+        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _, cx| {
+            hide_peek(cx);
+            link_pressed(&pressed_pane, event, cx);
+        })
         .context_menu(move |menu, window, cx| link_menu(menu, &weak, &menu_row, window, cx))
         .child(text)
         .into_any_element()
+}
+
+// ---------------------------------------------------------------- dragging a file link out
+
+/// A left press on a file link in a reply, which becomes a drag of the file
+/// once the pointer moves `DRAG_AFTER` (TextKit's mouseDown and
+/// `FileDrag.isDrag`): onto the Finder, X's upload box, the message box.
+/// Let go first and it's the link's click, as before. Mike dragged clips out
+/// of replies in the Swift app and found the GPUI one selecting the words
+/// instead (16 Nov).
+struct LinkPress {
+    pane: WeakEntity<ThreadPane>,
+    url: String,
+    at: Point<Pixels>,
+}
+
+thread_local! {
+    static LINK_PRESS: RefCell<Option<LinkPress>> = const { RefCell::new(None) };
+}
+
+/// About what the Finder waits for, as the Swift drag did.
+const DRAG_AFTER: f64 = 4.;
+
+/// A press in a reply: on a link to a file in this Mac's thread, it's kept
+/// for a drag and the words aren't selected from it, as in the Swift app.
+/// The text view says which link it went down on (`take_pressed_link`); a
+/// web page's link, or one in another Mac's thread, selects as ever.
+fn link_pressed(pane: &WeakEntity<ThreadPane>, event: &MouseDownEvent, cx: &mut App) {
+    LINK_PRESS.with(|p| p.borrow_mut().take());
+    let Some(url) = gpui_kit::base::GlobalState::take_pressed_link(cx) else { return };
+    // Another Mac's paths are that Mac's: never a file here to hand out
+    // (file_drag.rs).
+    if event.click_count != 1 || event.modifiers.modified() || pane.upgrade().is_none_or(|p| p.read(cx).summary.is_remote()) {
+        return;
+    }
+    if !matches!(link_names(&url), Some(Named::File(_) | Named::Path(_))) {
+        return;
+    }
+    gpui_kit::base::GlobalState::suppress_text_selection(cx);
+    LINK_PRESS.with(|p| *p.borrow_mut() = Some(LinkPress { pane: pane.clone(), url: url.to_string(), at: event.position }));
+}
+
+/// The pointer moving with a file link pressed, anywhere in the window
+/// (`watch`): far enough, and the file it names goes with it. Which file is
+/// only worked out now, as it can mean a look through folders that a plain
+/// click shouldn't wait on twice. A link to nothing here drags nothing.
+fn drag_moved(event: &MouseMoveEvent, window: &mut Window, cx: &mut App) {
+    let press = LINK_PRESS.with(|p| {
+        let mut p = p.borrow_mut();
+        if event.pressed_button != Some(MouseButton::Left) {
+            p.take();
+        }
+        let far = p.as_ref().is_some_and(|press| (event.position - press.at).magnitude() >= DRAG_AFTER);
+        if far { p.take() } else { None }
+    });
+    let Some(press) = press else { return };
+    let Some(pane) = press.pane.upgrade() else { return };
+    let Some(LinkTarget::File(Some(file))) = pane.read(cx).link_target(&press.url) else { return };
+    if policy::local_metadata(Path::new(&file.path)).is_err() {
+        return;
+    }
+    crate::file_drag::start(PathBuf::from(file.path), window, cx);
 }
 
 /// The menu for a right-click on a reply: the link's, if the press is on a
@@ -1045,6 +1132,27 @@ pub(crate) fn peek_command(app: &Entity<crate::app::Threadbear>, cmd: &serde_jso
         None => "ok thumbnail loading".to_owned(),
     });
     Some(Ok(json!(picture.unwrap_or_else(|| "ok window 0".to_owned()))))
+}
+
+/// Where the link with `words` is drawn in a reply: the row whose id starts
+/// with `prefix`, or the last reply with such a link. Scrolled on screen
+/// first, as a person would see it (`file-drag` with `link`).
+#[cfg(feature = "automation")]
+pub(crate) fn link_point(app: &Entity<crate::app::Threadbear>, prefix: &str, words: &str, window: &mut Window, cx: &mut App) -> Result<Point<Pixels>, String> {
+    let pane = app.read(cx).pane.clone().ok_or("no thread open")?;
+    let thread = pane.read(cx).summary.id.clone();
+    let found = pane.read(cx).feed.model().rows().iter().enumerate().rev().find_map(|(ix, row)| {
+        let RowContent::Assistant(item) = &row.content else { return None };
+        if !row.id.starts_with(prefix) {
+            return None;
+        }
+        let links = reply_links_in(&crate::rows::markdown::prepare(&item.text, &thread));
+        links.into_iter().find(|(w, _)| w.contains(words)).map(|(_, url)| (ix, row.id.clone(), url))
+    });
+    let (ix, row, url) = found.ok_or_else(|| format!("no reply with a link saying {words}"))?;
+    pane.update(cx, |p, cx| p.scroll_command(None, Some(&row), 120., cx))?;
+    window.render_frame(cx);
+    find_link(&url, ix, words, window, cx).ok_or_else(|| format!("the link {words} isn't on screen"))
 }
 
 /// `peek` with `menu`, `click` or `default`: the right-click (`peek_command`),

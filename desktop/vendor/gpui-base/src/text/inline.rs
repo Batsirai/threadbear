@@ -1423,6 +1423,32 @@ impl Element for Inline {
             });
         }
 
+        if !is_selection && !self.links.is_empty() {
+            // Threadbear's: a plain left press on a link says which link it
+            // went down on, for a handler further out that may drag the link
+            // out (`GlobalState::take_pressed_link`). Bubble phase, so it's
+            // noted before the handlers around this text see the press.
+            window.on_mouse_event({
+                let links = self.links.clone();
+                let text_layout = text_layout.clone();
+                let hitbox = hitbox.clone();
+                move |event: &MouseDownEvent, phase, window, cx| {
+                    if !phase.bubble()
+                        || event.button != MouseButton::Left
+                        || event.click_count != 1
+                        || !hitbox.is_hovered(window)
+                    {
+                        return;
+                    }
+                    if let Some(link) =
+                        Self::link_for_position(&text_layout, &links, event.position)
+                    {
+                        GlobalState::note_pressed_link(link.url, cx);
+                    }
+                }
+            });
+        }
+
         if !is_selection {
             // click to open link
             window.on_mouse_event({
@@ -1433,7 +1459,9 @@ impl Element for Inline {
                 let link_click_handler = self.link_click_handler.clone();
 
                 move |event: &MouseUpEvent, phase, window, cx| {
-                    if !phase.bubble() || !hitbox.is_hovered(window) {
+                    // Threadbear's: a press that became a drag (a file link
+                    // dragged out, `start_drag`) ends here, and isn't a click.
+                    if !phase.bubble() || !hitbox.is_hovered(window) || cx.has_active_drag() {
                         return;
                     }
                     if text_view_state

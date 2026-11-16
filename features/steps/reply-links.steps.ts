@@ -21,6 +21,12 @@ Given('a file {string} saying {string} in a folder of its own', function (this: 
   fs.writeFileSync(this.file, text.replaceAll('\\n', '\n'));
 });
 
+Given('a picture {string} in a folder of its own', function (this: LinkWorld, name: string) {
+  const dir = tempFolder('tb-links-');
+  this.file = path.join(dir, name);
+  fs.copyFileSync(new URL('../../app/Tools/mock-runner/fixtures/demo-upload-resume/media/progress-before.png', import.meta.url), this.file);
+});
+
 const file = (world: LinkWorld): string => {
   assert.ok(world.file, 'no file made for this scenario');
   return world.file;
