@@ -165,6 +165,7 @@ import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, le
 import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
+import { coldCompactPart, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
 
 export type Notification =
@@ -306,6 +307,9 @@ export type Turn = {
   // A compaction, review or clear: the CLI can't take words into it, so
   // they wait for the next turn. A skill's turn is an ordinary one.
   noSteer?: boolean;
+  // A compaction sent ahead of the turn's message, which waits for it
+  // (runner/cold-compact.ts).
+  precompact?: Precompact;
   // Opened by the runner for work the CLI started itself (a background
   // shell or async subagent finished, or a background subagent asked for
   // approval). There's no user.message.
@@ -699,7 +703,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, NestedPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, NestedPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -2120,7 +2124,7 @@ export class Runner {
     // Kept for the next message when this one is a command, as the news is.
     if (rt.turn) rt.turn.dispatched = true;
     if (command) rt.session!.send({ ...input, text });
-    else this.sendWithInstructionsNews(st, { ...input, text });
+    else if (!this.compactFirst(st, msg, () => this.sendWithInstructionsNews(st, { ...input, text }))) this.sendWithInstructionsNews(st, { ...input, text });
     if (msg.reviewId && !rec.reviewDeliveries?.includes(msg.reviewId)) {
       (rec.reviewDeliveries ??= []).push(msg.reviewId);
       // A persisted transcript row is not proof of dispatch: both initial
@@ -2276,6 +2280,12 @@ export class Runner {
       case 'event': {
         let ev = o.event;
         if (rt.turn) this.seeWake(rt.turn, ev);
+        // The CLI's own line for a compaction this runner asked for ahead of
+        // the turn says why (runner/cold-compact.ts).
+        if (ev.type === 'system.note' && ev.text === 'Compacted the conversation' && rt.turn?.precompact && !rt.turn.precompact.noted) {
+          rt.turn.precompact.noted = true;
+          ev = { ...ev, text: this.coldNote(rt.turn.precompact) };
+        }
         // Text after an accepted end_turn (see Turn.ended), dropped before
         // it can become the preview or a second message. Unless the reply
         // was a narration block's summary: then this is the reply, in the
@@ -2448,6 +2458,8 @@ export class Runner {
         break;
       case 'context':
         rec.contextTokens = o.contextTokens;
+        // When the cache was last used (runner/cold-compact.ts).
+        rec.lastModelAt = this.isoNow();
         if (o.contextWindow !== undefined) rec.contextWindow = o.contextWindow;
         this.markDirty(st);
         break;
@@ -2577,6 +2589,12 @@ export class Runner {
         const r = o.result;
         const turn = rt.turn;
         if (!turn) break;
+        // The compaction sent ahead of the message (runner/cold-compact.ts).
+        // A turn the CLI ran by itself meanwhile isn't it: keep waiting.
+        if (turn.precompact?.gen === rt.generation) {
+          if (!r.own) this.compactDone(st, r);
+          break;
+        }
         // A folded-in message may have no started frame of its own. The
         // result's explicit receipts still mean the CLI took that input.
         if (!r.own && turn.deliveryKnown) {
@@ -3075,6 +3093,12 @@ export class Runner {
             turn.deliveryKnown = false;
             turn.startedMessages = undefined;
             turn.foreignOutput = false;
+            // A compaction sent to the CLI that's gone didn't happen; the
+            // message goes as it is (runner/cold-compact.ts).
+            if (turn.precompact) {
+              turn.precompact = undefined;
+              turn.noSteer = false;
+            }
             const input = this.withInterruptedMessages(st, { turnId: turn.turnId, text: first.text, images: first.images, origin: first.origin }, this.forAgent(first));
             const command = this.commandPlan(st, first.text);
             let text = command ? first.text : input.text;
@@ -4440,7 +4464,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, nestedPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
+for (const part of [looseEndsPart, quietInboxPart, nestedPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }

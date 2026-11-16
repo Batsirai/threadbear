@@ -245,6 +245,9 @@ export type ThreadRecord = {
   lastSeenSeq: number;
   nativeSessionId?: string;
   contextTokens?: number;
+  // When the CLI last reported a model call's usage: how long the prompt
+  // cache has sat unused (runner/cold-compact.ts).
+  lastModelAt?: string;
   contextWindow?: number; // the model's window, when the CLI reports it
   // Claude's last breakdown of the context (threads.contextUsage), for when
   // its CLI has gone: only for the native session it was asked of.
