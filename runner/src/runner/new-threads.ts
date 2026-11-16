@@ -11,6 +11,7 @@ import type { Schedule } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import { expandHome, peekRunnerJson } from '../config.ts';
 import { isDirectory } from '../fsutil.ts';
+import { standInFor } from '../pools.ts';
 import { ASK_CODEX_MODEL, HAIKU } from '../models/index.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -55,13 +56,15 @@ export const newThreadsPart = {
       // Every one checked before the thread exists: a bad id makes nothing.
       for (const p of projectIds) projects.get(p);
     }
-    const { st, notes } = this.makeThread(params);
+    const { st, notes, loginNote } = this.makeThread(params);
     if (projectIds.length) this.projects!.changeMembership(st.rec.id, { add: projectIds, by: 'mike' });
     const sameWork = params.text?.trim() && experimentOn(this.cfg.home, 'sameWork') ? this.findSameWork(st, params.text) : undefined;
     if (sameWork) notes.push(sameWork);
     const turnId = this.sendTo(st, params.text ?? '', params.images ?? [], { origin: params.origin, scheduleId: params.scheduleId });
     // Under the first turn, so they read as part of starting it.
     for (const text of notes) this.emit(st, { type: 'system.note', text }, st.rt.turn?.turnId ?? turnId);
+    // Kept on show by its shape, as moveLogin's is (is_login_note).
+    if (loginNote) this.emit(st, { type: 'system.note', text: loginNote, login: true }, st.rt.turn?.turnId ?? turnId);
     if (!st.rec.titleSet && params.text?.trim()) void this.titleFromModel(st, params.text);
     return { thread: this.summary(st), turnId };
   },
@@ -220,7 +223,7 @@ export const newThreadsPart = {
     worktree?: boolean;
     startedBy?: ThreadStartedBy;
     detached?: boolean;
-  }): { st: ThreadState; notes: string[] } {
+  }): { st: ThreadState; notes: string[]; loginNote?: string } {
     this.checkAccepting();
     // New threads belong on the new release.
     if (this.draining) throw new RpcError(ErrorCode.busy, 'This runner is handing over to a new one; start the thread there.');
@@ -234,6 +237,18 @@ export const newThreadsPart = {
     if (accountId === undefined && (params.poolId !== undefined || !peekRunnerJson(this.cfg.home).defaults?.keepAccount)) {
       const picked = this.pickForNew({ poolId: params.poolId, cwd, model: params.model });
       if (picked) ({ poolId, accountId } = picked);
+    }
+    // A schedule pinned to a signed-out login runs this time on a pool
+    // holding it (pools.ts, standInFor), saying so as a pool move would.
+    let loginNote: string | undefined;
+    if (params.origin === 'schedule' && accountId !== undefined && params.poolId === undefined) {
+      const accounts = this.usableAccounts();
+      const stand = standInFor(this.pools(), accounts, accountId, cwd);
+      if (stand) {
+        const title = (id: string) => accounts.find((a) => a.id === id)?.title ?? id;
+        loginNote = `Moved to ${title(stand.accountId)}: ${title(accountId)} is signed out.`;
+        ({ poolId, accountId } = stand);
+      }
     }
     accountId ??= this.defaultAccountId();
     const account = this.accounts.get(accountId);
@@ -294,7 +309,7 @@ export const newThreadsPart = {
       /* keep the last pick */
     } else if (!poolId) this.rememberAccount(accountId);
     else if (params.poolId !== undefined) this.rememberPool(poolId);
-    return { st, notes: checked.notes };
+    return { st, notes: checked.notes, loginNote };
   },
 
   // An account whose CLI this runner can't drive (a Codex login found

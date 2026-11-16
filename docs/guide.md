@@ -1224,6 +1224,11 @@ and its email ("claude-1 (you@example.com) is signed out."). Sign in… opens Te
 again sends your last message again once you're done. A thread in a pool
 doesn't wait for you: it moves to another login in the pool and carries on,
 and the pool leaves the signed-out login alone until you sign it back in.
+A schedule pinned to a signed-out login runs on another login in a pool
+that login is in, and its thread says which. If no pool has another login
+for it (a login kept apart for work, say), the run fails once with the
+sign-in line, and later runs wait, rather than adding a failed thread each
+day, until you sign it in or archive that thread.
 
 From Claude Code 2.1.325 a Claude sign-in only lasts 28 days and can't be
 renewed by itself. Three days before one ends, its row in the Usage panel

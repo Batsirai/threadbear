@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
+import { FakeAccounts, makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { describeAt, describeCron, nextRuns, parseCron } from '../../src/cron.ts';
 import { SAVE_RETRY_MS, Scheduler, scheduleMethods, type ScheduleBackend, type StoredSchedule } from '../../src/schedules.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
@@ -740,6 +740,42 @@ test('a cron starts a new thread each time, and skips a run while the last threa
   await tick();
   assert.equal(h.runner.list().filter((t) => t.schedule?.id === sc.id).length, 2);
   assert.equal(sched.find(sc.id).runs, 2);
+  sched.stop();
+});
+
+test('a cron pinned to a signed-out login alone in its pool: one failed thread, then skips until it is cleared or signed in (16 Nov)', async () => {
+  const fake = new FakeAccounts();
+  const pools = [
+    { id: 'claude', title: 'Claude', accountIds: ['claude-main'] },
+    { id: 'work', title: 'Work', accountIds: ['claude-3'] },
+  ];
+  const { h, sched } = setup(makeHarness(undefined, { pools }, { accounts: fake }));
+  const signOut = (out: boolean) => (fake.base = fake.base.map((a) => (a.id === 'claude-3' ? { ...a, signedOut: out || undefined } : a)));
+  signOut(true);
+  const sc = await sched.create({ text: 'Daily brief', title: 'Daily brief', cron: '*/30 * * * *', accountId: 'claude-3' });
+  const runs = () => h.runner.list().filter((t) => t.schedule?.id === sc.id);
+  h.clock.advance(30 * MIN);
+  await tick();
+  assert.equal(runs().length, 1, 'the first run still makes its thread, whose banner offers the sign-in');
+  assert.equal(runs()[0].accountId, 'claude-3');
+  h.adapter.last.init();
+  h.adapter.last.result('failed', undefined, 'Not logged in', { errorKind: 'auth' });
+  await tick();
+  assert.equal(h.runner.get(runs()[0].id).status, 'error');
+
+  h.clock.advance(30 * MIN);
+  await tick();
+  assert.equal(runs().length, 1, 'no second failed thread');
+  assert.match(sched.find(sc.id).lastRun?.note ?? '', /three@example\.com is signed out/);
+  h.clock.advance(30 * MIN);
+  await tick();
+  assert.equal(runs().length, 1, 'still the one, after a skip');
+
+  // Signed back in: it runs again.
+  signOut(false);
+  h.clock.advance(30 * MIN);
+  await tick();
+  assert.equal(runs().length, 2);
   sched.stop();
 });
 

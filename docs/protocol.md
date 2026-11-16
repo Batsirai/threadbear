@@ -2310,6 +2310,14 @@ thread to another login when the one it's on runs out of room.
   note "Moved to <login>: <login> is signed out."; with nowhere to go, or
   pinned, it stays put with the app's sign-in line, which names the login.
   A signed-out login brings no wait: nothing says when it's back.
+  A schedule's new thread pinned to a signed-out Claude login starts on a
+  pool holding that login instead (the folder's pool first), on another
+  Claude login there that's OK, with the same note marked `login`. A
+  login alone in its pools has nowhere to go: its run makes its thread as
+  usual, and while that thread is still out, failed, on the same login,
+  later runs skip with the note "<login> is signed out. The last run's
+  thread says so and offers the sign-in." A pinned thread Mike starts
+  himself never stands in.
 - **Waiting.** When nothing in the pool has room the thread gets
   `waitingForRoom: { until, accountId? }`: the earliest time one of the
   pool's logins is back, plus a minute (30 minutes from now if no reset

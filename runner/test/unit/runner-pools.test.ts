@@ -415,6 +415,35 @@ test("a nested thread moved off a signed-out login doesn't hand its starter the 
   assert.equal(userMessages(h, parent).length, before, 'still held: a is still working');
 });
 
+test('a schedule pinned to a signed-out login runs on a pool holding it, and says so (16 Nov)', () => {
+  const two: Account = { id: 'claude-2', provider: 'claude', title: 'work@example.com', configDir: '/tmp/two' };
+  const pools: Pool[] = [
+    { id: 'claude', title: 'Claude', accountIds: ['claude-main', 'claude-3'] },
+    { id: 'work', title: 'Work', accountIds: ['claude-2'] },
+  ];
+  const h = poolHarness({ accounts: [...withCodex(), two], pools });
+  h.setUsage('claude-main', room(80));
+  h.setUsage('claude-3', room(60));
+  h.fake.base = h.fake.base.map((a) => (a.id === 'claude-main' || a.id === 'claude-2' ? { ...a, signedOut: true } : a));
+  const { thread } = h.runner.create({ text: 'Nightly retro', accountId: 'claude-main', model: 'opus', origin: 'schedule', scheduleId: 's1' });
+  assert.equal(thread.accountId, 'claude-3');
+  assert.equal(thread.poolId, 'claude');
+  assert.equal(h.adapter.last.opts.account.id, 'claude-3');
+  const note = h.events(thread.id).find((e) => e.type === 'system.note' && e.login);
+  assert.equal(note?.text, 'Moved to three@example.com: main@example.com is signed out.');
+  // Alone in its pool (Convex work only): nowhere else to go, so it stays
+  // pinned and its banner offers the sign-in.
+  const alone = h.runner.create({ text: 'Daily brief', accountId: 'claude-2', origin: 'schedule', scheduleId: 's2' }).thread;
+  assert.equal(alone.accountId, 'claude-2');
+  assert.equal(alone.poolId, undefined);
+  // Mike pinning a thread himself is his call: no stand-in.
+  const mine = h.runner.create({ text: 'x', accountId: 'claude-main' }).thread;
+  assert.equal(mine.accountId, 'claude-main');
+  // Signed in: the schedule's own login, as pinned.
+  h.fake.base = h.fake.base.map((a) => (a.id === 'claude-main' ? { ...a, signedOut: undefined } : a));
+  assert.equal(h.runner.create({ text: 'y', accountId: 'claude-main', origin: 'schedule', scheduleId: 's1' }).thread.accountId, 'claude-main');
+});
+
 test('before a turn: a pool thread on a signed-out login moves first', async () => {
   const h = poolHarness();
   h.setUsage('claude-main', room(80));

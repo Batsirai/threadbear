@@ -24,6 +24,7 @@ import type { EffortLevel, PermissionMode, Schedule } from './protocol.ts';
 import { EFFORT_LEVELS, ErrorCode, RpcError, isEffortLevel } from './protocol.ts';
 import { atomicWriteFileSync, isDirectory, readJsonSync } from './fsutil.ts';
 import { expandHome } from './config.ts';
+import { standInFor } from './pools.ts';
 import { CronError, checkZone, describeAt, describeCron, localZone, nextRun, nextRuns, parseCron } from './cron.ts';
 import { cutSafely, firstLineSafely } from './safe-cut.ts';
 
@@ -1409,6 +1410,11 @@ export class Scheduler {
         record('skipped', last, note);
         return { outcome: 'skipped', note };
       }
+      const out = this.signedOutAgain(rec, rec.lastRun?.threadId);
+      if (out && !manual) {
+        record('skipped', last, out);
+        return { outcome: 'skipped', note: out };
+      }
       const r = this.runner.create({
         text,
         title: rec.title,
@@ -1434,6 +1440,26 @@ export class Scheduler {
       this.log.warn('schedule could not run', { scheduleId: rec.id, error: note });
       return { outcome: 'failed', note };
     }
+  }
+
+  // A run pinned to a signed-out login with nowhere to stand in
+  // (pools.ts, standInFor) whose last run's thread is still out, on that
+  // login, its turn failed: that thread's banner offers the sign-in, so this run
+  // skips rather than adding another failed thread to the inbox each day
+  // (Mike clears his inbox; one thing needing him, not a stream).
+  private signedOutAgain(rec: ScheduleRecord, last: string | undefined): string | undefined {
+    if (!rec.accountId || rec.poolId || !last) return undefined;
+    const hello = this.runner.hello();
+    const login = hello.accounts.find((a) => a.id === rec.accountId);
+    if (!login?.signedOut || standInFor(hello.pools, hello.accounts, login.id, rec.cwd ? path.resolve(expandHome(rec.cwd)) : '')) return undefined;
+    let t;
+    try {
+      t = this.runner.get(last);
+    } catch {
+      return undefined;
+    }
+    if (t.archivedAt || t.accountId !== login.id || t.status !== 'error') return undefined;
+    return `${login.title} is signed out. The last run's thread says so and offers the sign-in.`;
   }
 
   private isBusy(threadId: string): boolean {

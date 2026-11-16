@@ -201,6 +201,25 @@ export function nextLogin(pool: Pool, accounts: Account[], thread: { accountId: 
   return roomWait(pool, accounts, now);
 }
 
+// Where a scheduled run pinned to a signed-out Claude login runs instead:
+// a pool holding that login with another Claude login that can run it, the
+// folder's pool first. Only Claude logins are tracked as signed out, and
+// only another Claude login keeps the schedule's model. A login alone in
+// its pool (claude-2, Convex work only) has nowhere to go, which keeps
+// work off logins Mike kept apart. The Nightly retro, pinned to claude-1,
+// failed two nights after its sign-in ended (14 Nov).
+export function standInFor(pools: Pool[], accounts: Account[], pinnedId: string, cwd: string, home?: string): { poolId: string; accountId: string } | undefined {
+  const pinned = accounts.find((a) => a.id === pinnedId);
+  if (pinned?.provider !== 'claude' || !pinned.signedOut) return undefined;
+  const holding = pools.filter((p) => p.accountIds.includes(pinnedId));
+  const own = poolForFolder(holding, cwd, home);
+  for (const pool of own ? [own, ...holding.filter((p) => p !== own)] : holding) {
+    const accountId = pickInPool(pool, accounts, { provider: 'claude', exclude: [pinnedId] });
+    if (accountId) return { poolId: pool.id, accountId };
+  }
+  return undefined;
+}
+
 // When to look again with nothing in the pool to run on: the earliest time
 // one of its logins that isn't OK is back, plus a minute; 30 minutes from
 // now when none says.
