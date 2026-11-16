@@ -57,6 +57,8 @@ http.route({
     const site = convexSite(str(b.deployment, 200));
     const nonce = str(b.nonce, 100);
     if (!site || !nonce) return json({ error: 'update Threadbear: this relay only registers Convex cloud deployments that confirm the registration (docs/push-relay.md)' }, 403);
+    // Over a limit already: say so without calling anyone back.
+    if (!(await ctx.runQuery(internal.relay.mayRegister, { deployment: site }))) return json({ error: 'too many new installs today' }, 429);
     if (!(await deploymentVouches(site, nonce))) return json({ error: "the deployment didn't confirm this registration" }, 403);
     try {
       return json(await ctx.runMutation(internal.relay.registerVerified, { deployment: site, ...(version ? { version } : {}) }));

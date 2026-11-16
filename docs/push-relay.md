@@ -23,9 +23,10 @@ each person's own Mac and their own Convex deployment.
   registered for) and daily totals (notifications sent and failed, why
   the failed ones failed as Apple's status and reason word, new
   installs). No device tokens, no thread ids, nothing per notification.
-  An install nobody has used for 90 days is removed (a daily cron,
-  `relay:expire`); its backend registers again by itself if it ever
-  sends another (since 16 Nov 2026).
+  An install nobody has used for 90 days loses its key (a daily cron,
+  `relay:expire`); its backend registers again by itself, as the same
+  install, if it ever sends another. The keyless row (just the deployment
+  and dates) goes a year after that (since 16 Nov 2026).
 - **Opting out:** `npx convex env set PUSH_RELAY off` on your deployment. Then
   nothing goes to the relay, and the phone gets no notifications (they'd have
   to come from somewhere). Mike can forget an install:
@@ -106,17 +107,28 @@ on to a host of its choosing (Daybreak, 16 Nov 2026).
 The check proves a caller runs the deployment, not that it runs
 Threadbear, and anyone can make Convex deployments. So on top of each
 install's own limits there are relay-wide ones (Daybreak, 16 Nov 2026),
-sized well above real use and never touching an install that's already
-here: at most 100 deployments the relay hasn't seen before register in a
-UTC day (a deployment it knows can always register again); installs
-under a week old share one allowance of 600 sends an hour; all
-installs together get 6,000 sends an hour, past which each keeps 10 an
-hour of its own, so no pile of installs can take the relay from a real
-backend; and an
-install whose sends fail on bad device tokens (Apple's 400 and 410,
-Firebase's 400 and 404) gets 20 of those an hour. The relay's own
-failures (a revoked key, a timeout) don't count against anyone. A fork
-running its own relay gets the same limits, which a single person won't
+sized well above real use:
+
+- At most 100 deployments the relay hasn't seen before register in a UTC
+  day. One it knows can always register again, including one whose
+  install expired, so made-up deployments using up a day's new installs
+  can't keep a real backend out. `/register` checks a deployment is under
+  its limits before calling it back.
+- Installs under a week old share 600 sends an hour, and all installs
+  together get 6,000. Past either, each install still gets the first 10
+  sends of its hour, so no pile of installs can stop a real backend's
+  notifications altogether.
+- An install gets 20 sends an hour that fail on a bad device token
+  (Apple's BadDeviceToken, DeviceTokenNotForTopic or Unregistered,
+  Firebase's UNREGISTERED, INVALID_ARGUMENT or SENDER_ID_MISMATCH),
+  counting sends still out, so a burst at once is held to it too. The
+  relay's own failures (a revoked key, Google refusing its sign-in, a
+  timeout) don't count against anyone.
+- Every hourly count goes by the UTC hour.
+
+This slows made-up deployments down rather than stopping them: someone
+making 100 a day and keeping each busy still adds a little each day. A
+fork running its own relay gets the same limits, which one person won't
 come near.
 
 There's no unchecked way in. Backends from before 5 Nov 2026 used one,

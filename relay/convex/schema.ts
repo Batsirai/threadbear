@@ -15,7 +15,8 @@ export default defineSchema({
     // Sends in the current hour, for the rate limit.
     hourStart: v.number(),
     hourSends: v.number(),
-    // Of those, the ones a bad device token failed (relay.ts tokenFault).
+    // Of those, the ones a bad device token failed or still out (relay.ts
+    // admit, counted).
     hourBad: v.optional(v.number()),
     // The deployment it registered for, checked by calling it back
     // (verify.ts), and how often that deployment registered on that UTC
@@ -23,11 +24,14 @@ export default defineSchema({
     deployment: v.optional(v.string()),
     registeredDay: v.optional(v.string()),
     registeredToday: v.optional(v.number()),
+    // When its key was taken for being idle (relay.ts expire): keyHash is
+    // then empty, which no key hashes to, until it registers again.
+    expiredAt: v.optional(v.number()),
   })
     .index('by_installId', ['installId'])
     .index('by_deployment', ['deployment'])
-    // For removing installs nobody has used in a long while (relay.ts expire).
-    .index('by_lastSeenAt', ['lastSeenAt']),
+    // For expiring installs nobody has used in a long while (relay.ts expire).
+    .index('by_expired', ['expiredAt', 'lastSeenAt']),
 
   // Anonymous totals per UTC day: notifications forwarded and installs that
   // sent one. What Mike looks at; nothing per install.

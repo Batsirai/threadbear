@@ -38,17 +38,26 @@ export const RESERVED_SENDS_PER_HOUR = 10;
 // an hour. A real backend drops a token Apple or Firebase calls gone, so it
 // makes a few; made-up tokens make nothing else.
 export const BAD_TOKEN_SENDS_PER_HOUR = 20;
-// An install not seen (no send, no registration) for this long is removed
-// (crons.ts). A backend from 5 Nov 2026 just registers again when /send
-// answers 401 (convex/push.ts), so only an abandoned one loses anything.
+// An install not seen (no send, no registration) for this long loses its
+// key (crons.ts). A backend from 5 Nov 2026 just registers again when
+// /send answers 401 (convex/push.ts), so only an abandoned one loses
+// anything. Its row stays, keyless, for EXPIRED_KEEP_MS, so that backend
+// still counts as known when it comes back: made-up deployments using up
+// the day's new installs can't keep it out, and it isn't young again.
 export const IDLE_INSTALL_MS = 90 * 86_400_000;
+export const EXPIRED_KEEP_MS = 365 * 86_400_000;
 
-// A failed send the device token was to blame for: a bad, wrong-app or
-// unregistered token (Apple's 400 and 410, Firebase's 400 and 404). Not
-// the relay's own trouble (a revoked key's 403, a timeout's 0), which
-// mustn't use up a real backend's allowance.
-export const tokenFault = (status: number | undefined) => status === 400 || status === 404 || status === 410;
+// A failed send the device token was to blame for, by Apple's or
+// Firebase's reason word: a bad, wrong-app, other-project or unregistered
+// token. Not the relay's own trouble (a revoked key, Google refusing the
+// relay's sign-in, a timeout), which mustn't use up a real backend's
+// allowance. By reason, as a status alone mixes the two (Google answers a
+// bad sign-in with 400 too).
+const TOKEN_REASONS = new Set(['BadDeviceToken', 'DeviceTokenNotForTopic', 'Unregistered', 'ExpiredToken', 'UNREGISTERED', 'INVALID_ARGUMENT', 'SENDER_ID_MISMATCH']);
+export const tokenFault = (status: number | undefined, reason: string | undefined) => (reason !== undefined ? TOKEN_REASONS.has(reason) : status === 410);
 
+// The UTC hour, "2026-11-16T09": every hourly count (an install's and the
+// relay's) uses the same windows.
 const hourOf = (ms: number) => new Date(ms).toISOString().slice(0, 13);
 
 export const day = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 10);
@@ -88,13 +97,35 @@ export const registerVerified = internalMutation({
     let installId: string;
     if (existing) {
       installId = existing.installId;
-      await ctx.db.patch(existing._id, fields);
+      // An expired one (crons.ts) gets its key back, as the same install.
+      await ctx.db.patch(existing._id, { ...fields, expiredAt: undefined });
     } else {
       installId = 'i_' + randomHex(12);
       await ctx.db.insert('installs', { installId, createdAt: now, hourStart: now, hourSends: 0, ...fields });
     }
     await countRegistration(ctx, today);
     return { installId, installKey };
+  },
+});
+
+// Whether a registration for this deployment could succeed now, asked by
+// /register before it calls the deployment back, so a caller over a limit
+// doesn't get the relay making calls for it (registerVerified still checks).
+export const mayRegister = internalQuery({
+  args: { deployment: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, { deployment }) => {
+    const today = day();
+    const existing = await ctx.db
+      .query('installs')
+      .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
+      .first();
+    if (existing) return (existing.registeredDay === today ? (existing.registeredToday ?? 0) : 0) < REGISTRATIONS_PER_DEPLOYMENT_PER_DAY;
+    const counts = await ctx.db
+      .query('days')
+      .withIndex('by_day', (q) => q.eq('day', today))
+      .unique();
+    return (counts?.newInstalls ?? 0) < NEW_INSTALLS_PER_DAY;
   },
 });
 
@@ -129,25 +160,31 @@ export const admit = internalMutation({
       .unique();
     if (!row || row.keyHash !== (await sha256(installKey))) return 'auth';
     const now = Date.now();
-    const fresh = now - row.hourStart >= 3_600_000;
+    const hour = hourOf(now);
+    const fresh = hourOf(row.hourStart) !== hour;
     const sends = fresh ? 0 : row.hourSends;
+    // hourBad is charged here, for every send still out, and given back by
+    // counted when it turns out the token wasn't to blame, so a burst of
+    // sends at once can't all get past it before the first one fails.
     const bad = fresh ? 0 : (row.hourBad ?? 0);
     if (sends >= SENDS_PER_HOUR || bad >= BAD_TOKEN_SENDS_PER_HOUR) return 'limited';
-    const hour = hourOf(now);
     const pool = await ctx.db
       .query('hours')
       .withIndex('by_hour', (q) => q.eq('hour', hour))
       .unique();
-    // Past the relay-wide ceiling, only each install's reserved few.
-    if ((pool?.sends ?? 0) >= ALL_SENDS_PER_HOUR && sends >= RESERVED_SENDS_PER_HOUR) return 'limited';
+    // Past the relay-wide ceiling, or the young installs' pool for a young
+    // one, only each install's reserved few: a pool someone else filled
+    // never stops an install's first sends of the hour.
+    const reserved = sends < RESERVED_SENDS_PER_HOUR;
+    if ((pool?.sends ?? 0) >= ALL_SENDS_PER_HOUR && !reserved) return 'limited';
     // Young installs share one pool, so a batch of new deployments can't
     // each take a full allowance (the limits above say why).
     const young = now - row.createdAt < NEW_INSTALL_MS;
-    if (young && (pool?.newSends ?? 0) >= NEW_INSTALL_SENDS_PER_HOUR) return 'limited';
+    if (young && (pool?.newSends ?? 0) >= NEW_INSTALL_SENDS_PER_HOUR && !reserved) return 'limited';
     const counts = { sends: (pool?.sends ?? 0) + 1, newSends: (pool?.newSends ?? 0) + (young ? 1 : 0) };
     if (pool) await ctx.db.patch(pool._id, counts);
     else await ctx.db.insert('hours', { hour, ...counts });
-    await ctx.db.patch(row._id, { lastSeenAt: now, hourStart: fresh ? now : row.hourStart, hourSends: sends + 1, hourBad: bad, ...(version !== undefined ? { version: storedVersion(version) } : {}) });
+    await ctx.db.patch(row._id, { lastSeenAt: now, hourStart: fresh ? now : row.hourStart, hourSends: sends + 1, hourBad: bad + 1, ...(version !== undefined ? { version: storedVersion(version) } : {}) });
     return 'ok';
   },
 });
@@ -157,13 +194,15 @@ export const counted = internalMutation({
   returns: v.null(),
   handler: async (ctx, { ok, status, reason, installId }) => {
     const today = day();
-    // Against the install's hourly allowance of bad tokens (admit).
-    if (!ok && installId !== undefined && tokenFault(status)) {
+    // admit charged this send to the install's bad-token allowance; give
+    // it back unless the token was to blame, and only in the hour it was
+    // charged (a later hour started from nothing).
+    if (installId !== undefined && (ok || !tokenFault(status, reason))) {
       const row = await ctx.db
         .query('installs')
         .withIndex('by_installId', (q) => q.eq('installId', installId))
         .unique();
-      if (row) await ctx.db.patch(row._id, { hourBad: (row.hourBad ?? 0) + 1 });
+      if (row && hourOf(row.hourStart) === hourOf(Date.now()) && (row.hourBad ?? 0) > 0) await ctx.db.patch(row._id, { hourBad: row.hourBad! - 1 });
     }
     const counts = await ctx.db
       .query('days')
@@ -193,6 +232,7 @@ export const stats = internalQuery({
     let active = 0;
     const seen: (string | undefined)[] = [];
     for await (const i of ctx.db.query('installs')) {
+      if (i.expiredAt !== undefined) continue;
       installs++;
       if (i.lastSeenAt >= weekAgo) active++;
       seen.push(i.version);
@@ -219,27 +259,38 @@ export const forget = internalMutation({
   },
 });
 
-// Daily (crons.ts): removes installs idle for IDLE_INSTALL_MS, whose keys
-// then get 401 (a live backend registers again), and the hourly pools of
-// days gone. A batch at a time, then again until none are left.
+// Daily (crons.ts): takes the key from installs idle for IDLE_INSTALL_MS,
+// which then get 401 (a live backend registers again, as the same
+// install), removes the keyless rows after EXPIRED_KEEP_MS more, and the
+// hourly pools of days gone. A batch at a time, then again until done.
 export const EXPIRE_BATCH = 200;
 export const expire = internalMutation({
   args: {},
-  returns: v.object({ installs: v.number(), hours: v.number() }),
+  returns: v.object({ installs: v.number(), removed: v.number(), hours: v.number() }),
   handler: async (ctx) => {
     const now = Date.now();
     const idle = await ctx.db
       .query('installs')
-      .withIndex('by_lastSeenAt', (q) => q.lt('lastSeenAt', now - IDLE_INSTALL_MS))
+      .withIndex('by_expired', (q) => q.eq('expiredAt', undefined).lt('lastSeenAt', now - IDLE_INSTALL_MS))
       .take(EXPIRE_BATCH);
-    for (const row of idle) await ctx.db.delete(row._id);
+    // A row from before the deployment check can't register again, so
+    // there's nothing to keep it for.
+    for (const row of idle) {
+      if (row.deployment === undefined) await ctx.db.delete(row._id);
+      else await ctx.db.patch(row._id, { keyHash: '', expiredAt: now, version: undefined });
+    }
+    const gone = await ctx.db
+      .query('installs')
+      .withIndex('by_expired', (q) => q.gt('expiredAt', 0).lt('expiredAt', now - EXPIRED_KEEP_MS))
+      .take(EXPIRE_BATCH);
+    for (const row of gone) await ctx.db.delete(row._id);
     const old = await ctx.db
       .query('hours')
       .withIndex('by_hour', (q) => q.lt('hour', hourOf(now - 2 * 86_400_000)))
       .take(EXPIRE_BATCH);
     for (const row of old) await ctx.db.delete(row._id);
-    if (idle.length === EXPIRE_BATCH || old.length === EXPIRE_BATCH) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
-    return { installs: idle.length, hours: old.length };
+    if ([idle, gone, old].some((b) => b.length === EXPIRE_BATCH)) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
+    return { installs: idle.length, removed: gone.length, hours: old.length };
   },
 });
 

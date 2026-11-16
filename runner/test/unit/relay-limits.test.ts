@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { call, load, memoryBackend, outcome, RELAY } from '../helpers/convex-memory.ts';
 
 const relay = load('relay', RELAY);
-const { ALL_SENDS_PER_HOUR, RESERVED_SENDS_PER_HOUR, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS, NEW_INSTALL_SENDS_PER_HOUR, SENDS_PER_HOUR, BAD_TOKEN_SENDS_PER_HOUR, IDLE_INSTALL_MS, EXPIRE_BATCH } = relay;
+const { ALL_SENDS_PER_HOUR, RESERVED_SENDS_PER_HOUR, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS, NEW_INSTALL_SENDS_PER_HOUR, SENDS_PER_HOUR, BAD_TOKEN_SENDS_PER_HOUR, IDLE_INSTALL_MS, EXPIRED_KEEP_MS, EXPIRE_BATCH } = relay;
 
 const T0 = Date.parse('2026-11-16T01:00:00Z');
 let clock = T0;
@@ -19,6 +19,12 @@ afterEach(() => (clock = T0));
 const site = (n: number) => `https://made-up-${n}.convex.site`;
 const register = (ctx: unknown, deployment: string) => call(ctx, relay.registerVerified, { deployment });
 const admit = (ctx: unknown, i: { installId: string; installKey: string }) => call(ctx, relay.admit, { installId: i.installId, installKey: i.installKey });
+// A send that Apple or Firebase took: admitted, then its outcome counted.
+async function send(ctx: unknown, i: { installId: string; installKey: string }): Promise<string> {
+  const a = await admit(ctx, i);
+  if (a === 'ok') await call(ctx, relay.counted, { ok: true, status: 200, installId: i.installId });
+  return a;
+}
 
 test('made-up deployments get only so many new installs a day, relay-wide', async () => {
   const b = memoryBackend(RELAY);
@@ -49,13 +55,15 @@ test('young installs share one hourly pool; an established one keeps its own all
   const needed = Math.ceil(NEW_INSTALL_SENDS_PER_HOUR / SENDS_PER_HOUR) + 2;
   for (let n = 0; n < needed; n++) young.push(await register(b.ctx, site(n)));
   let admitted = 0;
-  for (const i of young) for (let k = 0; k < SENDS_PER_HOUR; k++) if ((await admit(b.ctx, i)) === 'ok') admitted++;
-  assert.equal(admitted, NEW_INSTALL_SENDS_PER_HOUR, 'many young installs together get one pool, not one allowance each');
-  for (let k = 0; k < SENDS_PER_HOUR; k++) assert.equal(await admit(b.ctx, old), 'ok', `established send ${k}`);
-  assert.equal(await admit(b.ctx, old), 'limited');
+  for (const i of young) for (let k = 0; k < SENDS_PER_HOUR; k++) if ((await send(b.ctx, i)) === 'ok') admitted++;
+  // The pool, then only the reserved few of each install that hadn't had them.
+  assert.ok(admitted >= NEW_INSTALL_SENDS_PER_HOUR && admitted <= NEW_INSTALL_SENDS_PER_HOUR + needed * RESERVED_SENDS_PER_HOUR, `${admitted}`);
+  assert.ok(admitted < needed * SENDS_PER_HOUR, 'many young installs together get one pool, not one allowance each');
+  for (let k = 0; k < SENDS_PER_HOUR; k++) assert.equal(await send(b.ctx, old), 'ok', `established send ${k}`);
+  assert.equal(await send(b.ctx, old), 'limited');
   // The pool fills again the next hour.
   clock += 3_600_000;
-  assert.equal(await admit(b.ctx, young[0]!), 'ok');
+  assert.equal(await send(b.ctx, young[0]!), 'ok');
 });
 
 test('installs a week old or more share a relay-wide ceiling, and past it each keeps a reserved few', async () => {
@@ -69,15 +77,15 @@ test('installs a week old or more share a relay-wide ceiling, and past it each k
   }
   clock = T0 + needed * 86_400_000 + NEW_INSTALL_MS;
   let admitted = 0;
-  for (const i of aged) for (let k = 0; k < SENDS_PER_HOUR; k++) if ((await admit(b.ctx, i)) === 'ok') admitted++;
+  for (const i of aged) for (let k = 0; k < SENDS_PER_HOUR; k++) if ((await send(b.ctx, i)) === 'ok') admitted++;
   // Up to the ceiling, then each one left gets its reserved few.
   assert.ok(admitted <= ALL_SENDS_PER_HOUR + needed * RESERVED_SENDS_PER_HOUR, `${admitted}`);
   assert.ok(admitted < needed * SENDS_PER_HOUR, 'not one full allowance each');
   // A real backend that hadn't sent yet this hour still gets its reserved few.
-  for (let k = 0; k < RESERVED_SENDS_PER_HOUR; k++) assert.equal(await admit(b.ctx, mine), 'ok', `reserved send ${k}`);
-  assert.equal(await admit(b.ctx, mine), 'limited');
+  for (let k = 0; k < RESERVED_SENDS_PER_HOUR; k++) assert.equal(await send(b.ctx, mine), 'ok', `reserved send ${k}`);
+  assert.equal(await send(b.ctx, mine), 'limited');
   clock += 3_600_000;
-  assert.equal(await admit(b.ctx, mine), 'ok');
+  assert.equal(await send(b.ctx, mine), 'ok');
 });
 
 test('an install sending to made-up device tokens is stopped after a few an hour', async () => {
@@ -113,17 +121,95 @@ test('an install idle for 90 days is removed, its key stops working, and its bac
   clock = T0 + IDLE_INSTALL_MS - 86_400_000;
   assert.equal(await admit(b.ctx, busy), 'ok');
   clock = T0 + IDLE_INSTALL_MS + 1;
-  assert.deepEqual(await call(b.ctx, relay.expire, {}), { installs: 1, hours: 1 });
+  assert.deepEqual(await call(b.ctx, relay.expire, {}), { installs: 1, removed: 0, hours: 1 });
   assert.equal(await admit(b.ctx, idle), 'auth');
   assert.equal(await admit(b.ctx, busy), 'ok');
-  // What convex/push.ts does on that 401: registers again, as a new install.
+  assert.equal((await call(b.ctx, relay.stats, {})).installs, 1, 'stats leaves the keyless row out');
+  // Made-up deployments use up the day's new installs...
+  for (let n = 100; n < 100 + NEW_INSTALLS_PER_DAY; n++) await register(b.ctx, site(n));
+  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(999) }), false);
+  // ...but the expired backend is still known, so what convex/push.ts does
+  // on that 401 (register again) works, as the same install, not a young one.
+  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(1) }), true);
   const back = await register(b.ctx, site(1));
+  assert.equal(back.installId, idle.installId);
   assert.equal(await admit(b.ctx, back), 'ok');
+  assert.equal(b.rows('installs').find((r) => r.installId === idle.installId)!.expiredAt, undefined);
+});
+
+test('a keyless expired row goes for good a year later', async () => {
+  const b = memoryBackend(RELAY);
+  const i = await register(b.ctx, site(1));
+  clock = T0 + IDLE_INSTALL_MS + 1;
+  await call(b.ctx, relay.expire, {});
+  assert.equal(b.rows('installs').length, 1);
+  clock += EXPIRED_KEEP_MS + 1;
+  assert.equal((await call(b.ctx, relay.expire, {})).removed, 1);
+  assert.equal(b.rows('installs').length, 0);
+  assert.equal(await admit(b.ctx, i), 'auth');
+});
+
+test('a real install under a week old still gets its reserved few when made-up ones filled the young pool', async () => {
+  const b = memoryBackend(RELAY);
+  const mine = await register(b.ctx, 'https://real-backend-1.convex.site');
+  const young = [];
+  for (let n = 0; n < Math.ceil(NEW_INSTALL_SENDS_PER_HOUR / SENDS_PER_HOUR) + 1; n++) young.push(await register(b.ctx, site(n)));
+  for (const i of young) for (let k = 0; k < SENDS_PER_HOUR; k++) await send(b.ctx, i);
+  for (let k = 0; k < RESERVED_SENDS_PER_HOUR; k++) assert.equal(await send(b.ctx, mine), 'ok', `reserved send ${k}`);
+  assert.equal(await send(b.ctx, mine), 'limited');
+});
+
+test('sends still out count against the bad-token allowance, so a burst at once is held to it', async () => {
+  const b = memoryBackend(RELAY);
+  const i = await register(b.ctx, site(1));
+  clock = T0 + NEW_INSTALL_MS + 1;
+  const results = await Promise.all(Array.from({ length: 60 }, () => admit(b.ctx, i)));
+  assert.equal(results.filter((r) => r === 'ok').length, BAD_TOKEN_SENDS_PER_HOUR);
+});
+
+test('a send that went through, or failed for the relay\'s own reasons, gives its charge back', async () => {
+  const b = memoryBackend(RELAY);
+  const i = await register(b.ctx, site(1));
+  clock = T0 + NEW_INSTALL_MS + 1;
+  const outcomes = [{ ok: true, status: 200 }, { ok: false, status: 400, reason: 'UNAUTHENTICATED' }, { ok: false, status: 403, reason: 'InvalidProviderToken' }, { ok: false, status: 0, reason: 'timeout' }];
+  for (let k = 0; k < SENDS_PER_HOUR; k++) {
+    assert.equal(await admit(b.ctx, i), 'ok', `send ${k}`);
+    await call(b.ctx, relay.counted, { ...outcomes[k % outcomes.length]!, installId: i.installId });
+  }
+});
+
+test('a token from a Firebase project the relay doesn\'t serve counts as a bad token', async () => {
+  const b = memoryBackend(RELAY);
+  const i = await register(b.ctx, site(1));
+  clock = T0 + NEW_INSTALL_MS + 1;
+  for (let k = 0; k < BAD_TOKEN_SENDS_PER_HOUR; k++) {
+    assert.equal(await admit(b.ctx, i), 'ok');
+    await call(b.ctx, relay.counted, { ok: false, status: 403, reason: 'SENDER_ID_MISMATCH', installId: i.installId });
+  }
+  assert.equal(await admit(b.ctx, i), 'limited');
+});
+
+test("an install's hour is the relay's UTC hour, so the reserve can't be taken twice across two windows", async () => {
+  const b = memoryBackend(RELAY);
+  const i = await register(b.ctx, site(1));
+  clock = T0 + NEW_INSTALL_MS + 30 * 60_000; // hh:30
+  for (let k = 0; k < SENDS_PER_HOUR; k++) assert.equal(await send(b.ctx, i), 'ok');
+  assert.equal(await send(b.ctx, i), 'limited');
+  clock += 30 * 60_000; // the next UTC hour, though not 60 minutes since the first send
+  assert.equal(await send(b.ctx, i), 'ok');
+});
+
+test('/register asks before calling back: over the per-deployment or relay-wide cap is a no', async () => {
+  const b = memoryBackend(RELAY);
+  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(1) }), true);
+  for (let k = 0; k < 20; k++) await register(b.ctx, site(1));
+  assert.equal(await call(b.ctx, relay.mayRegister, { deployment: site(1) }), false);
 });
 
 test('expiring a big backlog goes a batch at a time and schedules the rest', async () => {
   const b = memoryBackend(RELAY);
   for (let n = 0; n < EXPIRE_BATCH + 5; n++) await b.ctx.db.insert('installs', { installId: `i_${n}`, keyHash: 'x', createdAt: 0, lastSeenAt: 0, hourStart: 0, hourSends: 0 });
+  for (let n = 0; n < EXPIRE_BATCH + 5; n++) b.rows('installs')[n]!.deployment = site(n);
   assert.equal((await call(b.ctx, relay.expire, {})).installs, EXPIRE_BATCH);
   assert.equal(b.scheduled.length, 1);
   assert.equal((await call(b.ctx, relay.expire, {})).installs, 5);
