@@ -2738,7 +2738,13 @@ export class Runner {
       // A job that ended mid-turn: the CLI's turn reading its result is next.
       !rt.taskEndedInTurn && !rt.finished.length;
     const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor));
+    const loginBefore = rec.accountId;
     this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue, signedOut);
+    // A pool thread refused as signed out that endTurn moved to another
+    // login (afterTurn, onSignedOut) carries on there, like a limit or a
+    // lost network. One that stayed put (pinned, a Codex login, nowhere to
+    // go) waits on Mike's sign-in, so it counts as failed.
+    const movedOff = !!signedOut && rec.accountId !== loginBefore;
     // The done card's loose ends, unless it's going
     // away now; and the card of the thread that started this one, which
     // lists this one while it's working.
@@ -2747,7 +2753,7 @@ export class Runner {
     // Reports its starter is holding may go now; at once if this one failed
     // or was stopped (one moving login or waiting for the network carries
     // on by itself). runner/nested.ts.
-    if (rec.startedBy?.kind === 'thread' && !rec.detached) this.settleHeldSoon(rec.startedBy.threadId, outcome !== 'completed' && !limitHit && !netLost);
+    if (rec.startedBy?.kind === 'thread' && !rec.detached) this.settleHeldSoon(rec.startedBy.threadId, outcome !== 'completed' && !limitHit && !netLost && !movedOff);
     // A code change gets another lab's review before it counts as done
     // (runner/lab-review.ts, unless Settings turns it off): the thread waits on
     // the review, so anything waiting on it hears once it's been fixed.
@@ -2780,7 +2786,7 @@ export class Runner {
     // finds nothing can't archive a question this one left for Mike.
     if (rec.unarchivedBySchedule) {
       const by = rec.unarchivedBySchedule.by;
-      const goingOn = !!limitHit || !!netLost || (outcome === 'completed' && said?.needs === 'nothing');
+      const goingOn = !!limitHit || !!netLost || movedOff || (outcome === 'completed' && said?.needs === 'nothing');
       if (!goingOn || rec.archivedAt) delete rec.unarchivedBySchedule;
       else if (!rec.queue.length && !rt.turn && finished && !review && !rec.labReviewOwed && !this.stopping) {
         delete rec.unarchivedBySchedule;

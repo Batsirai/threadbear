@@ -31,7 +31,7 @@ function room(pct: number, resetsIn?: number, blocked = false): Account['usage']
   };
 }
 
-function poolHarness(o: { accounts?: Account[]; pools?: Pool[]; copy?: boolean } = {}) {
+function poolHarness(o: { accounts?: Account[]; pools?: Pool[]; copy?: boolean; experiments?: Record<string, boolean> } = {}) {
   const fake = new FakeAccounts(o.accounts ?? withCodex());
   const records: [string, UsageReading][] = [];
   const usage: UsageSink = { record: (id, r) => void records.push([id, r]) };
@@ -47,7 +47,9 @@ function poolHarness(o: { accounts?: Account[]; pools?: Pool[]; copy?: boolean }
     onChange: () => () => {},
   };
   const copies: string[][] = [];
-  const h = makeHarness(undefined, o.pools ? { pools: o.pools } : {}, {
+  const home = tmpDir();
+  if (o.experiments) fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: o.experiments }));
+  const h = makeHarness(home, o.pools ? { pools: o.pools } : {}, {
     accounts: fake,
     usage,
     signIn,
@@ -342,6 +344,75 @@ test('a turn refused as signed out marks the login, moves the pool thread and ca
   assert.equal(h.adapter.last, p);
   assert.equal(h.runner.get(pinned.id).accountId, 'claude-main');
   assert.equal(h.runner.get(pinned.id).status, 'error');
+});
+
+test('a refused Codex login leaves its pool thread where it is: only Claude refusals are remembered, so a move could bounce for ever', async () => {
+  const two: Account = { id: 'codex-2', provider: 'codex', title: 'codex-two@example.com', configDir: '/tmp/codex-two' };
+  const pools: Pool[] = [{ id: 'codex', title: 'Codex', accountIds: ['codex-main', 'codex-2'] }];
+  const h = poolHarness({ accounts: [...withCodex(), two], pools });
+  h.setUsage('codex-main', room(80, 300));
+  h.setUsage('codex-2', room(60, 300));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'codex' });
+  const was = h.runner.get(thread.id).accountId;
+  const s = h.codex.last;
+  s.init();
+  s.result('failed', undefined, 'Not logged in', { errorKind: 'auth' });
+  await tick();
+  assert.equal(h.codex.last, s, 'no carry-on');
+  assert.equal(h.runner.get(thread.id).accountId, was);
+  assert.equal(h.runner.get(thread.id).status, 'error');
+  assert.deepEqual(notes(h, thread.id), []);
+});
+
+test('a scheduled run moved off a signed-out login keeps its way back to the archive', async () => {
+  const h = poolHarness();
+  h.setUsage('claude-main', room(80, 300));
+  h.setUsage('claude-3', room(40, 120));
+  const { thread } = h.runner.create({ text: 'Check for a reply' });
+  let s = h.adapter.last;
+  s.init();
+  s.result();
+  await tick();
+  h.runner.update({ threadId: thread.id, archived: true });
+  h.runner.send(thread.id, 'Check for a reply', [], { origin: 'schedule', scheduleId: 'sch_1' });
+  assert.equal(h.runner.get(thread.id).archivedAt, undefined, 'out for the run');
+  s = h.adapter.last;
+  s.init();
+  s.result('failed', undefined, 'Not logged in', { errorKind: 'auth' });
+  await tick();
+  const s2 = h.adapter.last;
+  assert.notEqual(s2, s);
+  assert.equal(s2.opts.account.id, 'claude-3');
+  s2.init();
+  s2.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  s2.text('m1', 'Nothing new.');
+  s2.result();
+  await tick();
+  assert.ok(h.runner.get(thread.id).archivedAt, 'the carried-on run found nothing, so back it goes');
+});
+
+test("a nested thread moved off a signed-out login doesn't hand its starter the held reports early", async () => {
+  const h = poolHarness({ experiments: { nestedThreads: true } });
+  h.setUsage('claude-main', room(80, 300));
+  h.setUsage('claude-3', room(40, 120));
+  const parent = h.runner.create({ text: 'Port the app', accountId: 'claude-3' }).thread.id;
+  h.adapter.last.init();
+  h.adapter.last.result();
+  await tick();
+  const started = { kind: 'thread' as const, label: 'Agent', threadId: parent };
+  const a = h.runner.create({ text: 'Build the pane', startedBy: started }).thread.id;
+  const sa = h.adapter.last;
+  sa.init();
+  const b = h.runner.create({ text: 'Wire sign-in', accountId: 'claude-3', startedBy: started }).thread.id;
+  h.adapter.last.init();
+  const before = userMessages(h, parent).length;
+  assert.equal(h.runner.send(parent, `[Sent by the agent in the thread "${h.runner.get(b).title}" (${b.slice(0, 8)})]\n\nHalfway there.`).held, true);
+  assert.equal(h.runner.get(a).accountId, 'claude-main');
+  sa.result('failed', undefined, 'Not logged in', { errorKind: 'auth' });
+  await tick();
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(h.adapter.last.opts.account.id, 'claude-3', 'a carried on on the other login');
+  assert.equal(userMessages(h, parent).length, before, 'still held: a is still working');
 });
 
 test('before a turn: a pool thread on a signed-out login moves first', async () => {
