@@ -134,9 +134,12 @@ a thread, so a lookup naming a different thread (a key lifted from another
 thread's environment with `ps eww`) closes the connection with 4403 before
 any request runs, as does one whose socket is held by processes under two
 threads. So the token in a thread's shell is worth no more than the thread's
-own mode, and another thread's key is worth nothing. A client that isn't under
+own mode, and another thread's key used from under a thread is worth nothing.
+A key used from a process the lookup can't place (one that started a new
+session, or a lookup that failed or took over 3 seconds) is taken at its word,
+like the token below. A client that isn't under
 a CLI (the app, a terminal, a patch's action, the runner's own jobs) is what it
-says it is. If the lookup fails (no `lsof`), the runner goes by the credential.
+says it is. If the lookup fails (no `lsof`, or it times out), the runner goes by the credential.
 A process that has lost its parents (a `nohup`, a backgrounded subshell) still
 counts if it's in a process group a thread's tool command ran in, as the
 registry has noted them. One that deliberately starts a new session and reads
