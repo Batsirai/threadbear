@@ -123,10 +123,18 @@ for: `{}` for its owner, or `{"threadId", "mode", "limited"}`.
 **Who's really calling.** A key can be got round by wiping it from the
 environment and reading the token file, so the runner doesn't only go by what's
 presented. After auth it finds the process at the other end of the connection
-(`lsof` on the client's port) and walks up its parents; if one is a thread's
-CLI, the connection is that thread, whatever it authenticated with. So the token
-in a thread's shell, or a key lifted from another thread's environment with
-`ps eww`, is worth no more than the thread's own mode. A client that isn't under
+and walks up its parents; if one is a thread's CLI, the connection is that
+thread. The process is the one `lsof` shows holding a socket named exactly
+client address and port `->` the runner's address and port: never one that
+only shares the client's port number (another loopback address, or a socket
+whose far end uses that number), which could be another thread's (Daybreak
+finding 137). The lookup can only lower what a credential gets: the owner
+token from under a thread's CLI is that thread, but a thread's key is already
+a thread, so a lookup naming a different thread (a key lifted from another
+thread's environment with `ps eww`) closes the connection with 4403 before
+any request runs, as does one whose socket is held by processes under two
+threads. So the token in a thread's shell is worth no more than the thread's
+own mode, and another thread's key is worth nothing. A client that isn't under
 a CLI (the app, a terminal, a patch's action, the runner's own jobs) is what it
 says it is. If the lookup fails (no `lsof`), the runner goes by the credential.
 A process that has lost its parents (a `nohup`, a backgrounded subshell) still
@@ -140,6 +148,12 @@ uses this Mac's keys from disk, so the runner never sees them: from a thread the
 need the real runner to say it isn't limited. A CLI started by a runner older
 than this has no key and isn't recorded with its thread, so it keeps the old
 `tb` until its next start.
+
+**No browsers.** An upgrade with an `Origin` header is turned away with HTTP
+403 before anything else is looked at. Browsers always send one on a
+WebSocket and the runner's own clients (`tb`, the apps, another runner)
+never do, so a web page that can reach `127.0.0.1` can't take the slots
+below and keep them out (Daybreak finding 146).
 
 **Limits before auth.** Until a connection has authenticated, a frame is at
 most 64 KiB (more closes it with 1009), there are 3 seconds to finish, and
@@ -1176,7 +1190,7 @@ the summary and then the reply.
 | `schedules.list` | `{ threadId?: string }` | `{ schedules: Schedule[] }`, soonest `nextRunAt` first, then the paused and finished ones. With `threadId`, only the ones that send to that thread or were made by it |
 | `schedules.create` | `{ text: string, title?: string, at?: string, cron?: string, timezone?: string, threadId?: string, cwd?, accountId?, poolId?, model?, effort?, permissionMode?, check?: string, checkTimeoutSecs?: number, paused?: boolean, createdBy?: string, runnerId?: string }` | `{ schedule: Schedule }`. Exactly one of `at` and `cron`. `check` (at most 2,000 characters) and `checkTimeoutSecs` (1 to 300; 60 without): see "Schedule checks" below. `accountId` and `poolId` together, or a `poolId` this runner doesn't have, is `-32602`. An `at` in the past runs straight away. With `threadId` it sends there, otherwise it starts a new thread each time (`cwd` defaults like `threads.create`'s, checked now). A bad cron or zone is `-32602` with a message saying what's wrong. `runnerId` (an id or a name from `runners.list`) puts a new-thread schedule on another runner: its folder and account are checked there when it runs, and an absent `cwd` means that runner's default. Absent, it's this runner. Needs schedules in the backend (see Schedules, "Runners"); otherwise `-32602` |
 | `schedules.update` | `{ scheduleId, title?, text?, at?: string, cron?: string, timezone?: string \| null, paused?: boolean, cwd?, accountId?, poolId?: string \| null, model?: string \| null, effort?: EffortLevel \| null, permissionMode?, check?: string \| null, checkTimeoutSecs?: number \| null }` | `{ schedule: Schedule }`. `check: null` or `""` takes the check off (its `checkTimeoutSecs` stays); `checkTimeoutSecs: null` puts it back to 60. Setting `at` drops `cron` and the other way round; setting `accountId` drops `poolId` and the other way round (`poolId: null` leaves neither). The folder, login and model are only for one that starts a new thread: on one that sends to a thread they're `-32602`. A new time works out `nextRunAt` again; so does unpausing. Setting `at` on a finished one-off makes it run again then. The target thread can't be changed (make a new schedule) |
-| `schedules.delete` | `{ scheduleId }` | `{}` |
+| `schedules.delete` | `{ scheduleId }` | `{}`. From a thread's key not on Full access, refused (`-32060`, pointing at `delete_schedule`, which asks on a card) when the schedule's runs have more access than the thread, it has a check, or it isn't this runner's |
 | `schedules.run` | `{ scheduleId }` | `{ schedule: Schedule, threadId?: string, turnId?: string, queued?: boolean }` runs it now, as if it were due, even when paused. A repeating schedule keeps its `nextRunAt`; a one-off is finished. For a schedule on another runner it answers at once with `queued: true` and no thread: that runner runs it when it next hears (`runRequestedAt` is set until then) |
 | `runners.list` | `{}` | `{ runners: RunnerInfo[] }`, this runner first, then the rest by name. Without a backend, just this runner |
 | `requests.get` | `{ threadId, approvalId }` | `{ request, target?, runners, fingerprint, missingFolder? }`: another runner's request for a new thread (Asking another runner), exactly as it was filed (`relay:runnerRequest`) but for a folder starting on this Mac, which is the folder it would start in here ("The folder" there), the runner it names if this runner can find it (`{ id, name, self }`), and every runner to pick from instead. `missingFolder` is the folder as filed when it would start here and isn't a folder on this Mac. Main Mac's runner only; `-32602` for no such request on that thread |

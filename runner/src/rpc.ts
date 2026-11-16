@@ -13,6 +13,7 @@ import { MAX_BYLINE } from './needs.ts';
 import { isMoved, mergeSummaries, type Bucket } from './handover.ts';
 import { AUTH_VERSION, authProof, isNonce, isThreadId, newNonce, proofMatches, threadKey, type AuthChannel } from './rpc-auth.ts';
 import type { CallerGate } from './rpc-gate.ts';
+import type { PeerSocket } from './peer.ts';
 import { cutSafely } from './safe-cut.ts';
 import { wellFormedJson } from './well-formed-json.ts';
 
@@ -30,8 +31,10 @@ type Conn = {
   authTimer?: AwakeTimer;
   // This connection's auth.challenge nonce (docs/protocol.md, "Auth").
   challenge?: string;
-  // The client's TCP port, to find its process (callerOfPort).
-  remotePort?: number;
+  // Both ends of the client's TCP connection, to find its process (callerOf).
+  peer?: PeerSocket;
+  // Refused after auth (its process didn't match its key): frames are dropped.
+  dropped?: boolean;
   // The thread this connection acts for (docs/protocol.md, "A thread's own
   // key"): undefined for the owner. Set once the process lookup is done.
   caller?: string;
@@ -164,9 +167,10 @@ export type RpcServerOptions = {
   desktopHello?: () => void;
   // What a connection that belongs to a thread may do (rpc-gate.ts).
   gate?: CallerGate;
-  // The thread whose CLI a client port's process runs under, if any
-  // (peer.ts, docs/protocol.md "Who's really calling").
-  callerOfPort?: (port: number) => Promise<string | undefined>;
+  // The thread whose CLI the process at the client's end of this exact
+  // connection runs under, if any (peer.ts, docs/protocol.md "Who's really
+  // calling"). Rejects when it can't say which one (AmbiguousPeer).
+  callerOf?: (sock: PeerSocket) => Promise<string | undefined>;
   // Tests shorten these.
   authTimeoutMs?: number;
   maxPendingAuth?: number;
@@ -289,6 +293,12 @@ export class RpcServer {
       socket.destroy();
     };
     if ((req.url ?? '').split('?')[0] !== '/rpc') return refuse(400, 'Bad Request');
+    // A browser always says where the page that opened a WebSocket came
+    // from; the runner's own clients (tb, the apps, another runner) never
+    // do. So a page on any site that reaches 127.0.0.1 is turned away here,
+    // before it can take one of the slots below and keep the apps and tb
+    // out (Daybreak finding 146).
+    if (req.headers.origin !== undefined) return refuse(403, 'Forbidden');
     // An old client's bearer header (docs/protocol.md, "Before the
     // challenge"): right, it's in; wrong, it's refused here. No header means
     // the challenge.
@@ -301,23 +311,41 @@ export class RpcServer {
     } else if (this.pendingAuth() >= (this.opts.maxPendingAuth ?? MAX_PENDING_AUTH)) {
       return refuse(503, 'Service Unavailable');
     }
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, authed, req.socket.remotePort));
+    const { remoteAddress, remotePort, localAddress, localPort } = req.socket;
+    const peer = remoteAddress && remotePort && localAddress && localPort ? { remoteAddress, remotePort, localAddress, localPort } : undefined;
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, authed, peer));
   }
 
   // Raises an authenticated socket's frame limit. ws has no public way to
   // change maxPayload on a live socket, so this sets its receiver's
   // (ws 8.x; rpc.test.ts fails if a ws update moves it).
+  //
+  // The process lookup can only ever lower what a credential gets: the owner
+  // token from under a thread's CLI becomes that thread. A thread's key is
+  // already a thread, so the lookup may only agree with it; naming another
+  // thread (a key lifted from another thread's environment, or a lookup
+  // fooled into naming someone else's process) closes the connection
+  // instead of picking either (Daybreak finding 137). So does a lookup that
+  // can't say which thread (AmbiguousPeer).
   private unlock(conn: Conn, keyThread?: string): void {
     conn.caller = keyThread;
-    const find = this.opts.callerOfPort;
-    if (find && conn.remotePort !== undefined) {
-      conn.identifying = find(conn.remotePort)
+    const find = this.opts.callerOf;
+    if (find && conn.peer !== undefined) {
+      conn.identifying = find(conn.peer)
         .then((t) => {
+          if (keyThread !== undefined && t !== undefined && t !== keyThread) {
+            this.opts.log.warn("an RPC client's key and its process name different threads; closing it", { conn: conn.id, key: keyThread, process: t });
+            return this.dropConn(conn);
+          }
           if (t) conn.caller = t;
         })
-        .catch((e) => this.opts.log.warn('could not identify an RPC client', { error: String(e) }))
+        .catch((e) => {
+          this.opts.log.warn('could not tell which thread an RPC client is; closing it', { conn: conn.id, error: String(e) });
+          this.dropConn(conn);
+        })
         .finally(() => {
           conn.identifying = undefined;
+          if (conn.dropped) return;
           for (const raw of conn.queue.splice(0)) this.onMessage(conn, raw);
         });
     }
@@ -327,6 +355,15 @@ export class RpcServer {
     const receiver = (conn.ws as unknown as { _receiver?: { _maxPayload?: unknown } })._receiver;
     if (receiver && typeof receiver._maxPayload === 'number') receiver._maxPayload = MAX_PAYLOAD;
     else this.opts.log.warn('could not raise the frame limit for an authenticated client', { conn: conn.id });
+  }
+
+  // Closes an authenticated connection whose caller can't be trusted, before
+  // any of its requests run.
+  private dropConn(conn: Conn): void {
+    conn.dropped = true;
+    conn.queue.length = 0;
+    conn.ws.close(4403, 'caller does not match its process');
+    setTimeout(() => conn.ws.terminate(), 1000).unref();
   }
 
   // Closes an unauthenticated connection with 4401, and cuts it off if it
@@ -346,8 +383,8 @@ export class RpcServer {
     return { server: this.opts.onlyOwn ? 'drain' : 'primary', port: typeof addr === 'object' && addr ? addr.port : this.opts.port };
   }
 
-  private onConnection(ws: WebSocket, headerAuthed: boolean, remotePort?: number): void {
-    const conn: Conn = { id: this.nextId++, ws, authed: false, subs: new Set(), since: Date.now(), remotePort, queue: [] };
+  private onConnection(ws: WebSocket, headerAuthed: boolean, peer?: PeerSocket): void {
+    const conn: Conn = { id: this.nextId++, ws, authed: false, subs: new Set(), since: Date.now(), peer, queue: [] };
     this.conns.add(conn);
     if (headerAuthed) {
       this.unlock(conn);
@@ -447,6 +484,7 @@ export class RpcServer {
   }
 
   private onMessage(conn: Conn, raw: string): void {
+    if (conn.dropped) return;
     if (!conn.authed) return this.onAuthMessage(conn, raw);
     if (conn.identifying) {
       if (conn.queue.length >= MAX_QUEUED_FRAMES) {

@@ -177,7 +177,7 @@ export class CallerGate {
       case 'schedules.run':
         return this.scheduleRun(caller, p, needs);
       case 'schedules.delete':
-        return p;
+        return this.scheduleDelete(caller, p, needs);
       default:
         throw needs(`calling ${method}`);
     }
@@ -267,15 +267,27 @@ export class CallerGate {
     return p;
   }
 
-  private findSchedule(p: Params, needs: (what: string, tool?: string) => RpcError) {
+  // Deleting takes away what Mike set up and, with a check, the approval he
+  // gave its command; so like changing one, it asks when its runs have more
+  // access than the caller or it has a check (Daybreak finding 138). One at
+  // or below the caller, with no check, it could have made itself.
+  private scheduleDelete(caller: Authority, p: Params, needs: (what: string, tool?: string) => RpcError): Params {
+    const sc = this.findSchedule(p, needs, 'delete_schedule');
+    const was: Authority = sc.threadId ? this.targetAccess(sc.threadId) : { mode: scheduleModes(sc).ceiling };
+    if (above(was, caller) || sc.check) throw needs(`deleting the schedule "${sc.title}"`, 'delete_schedule');
+    // The one compared, not a prefix that could be read again differently.
+    return { ...p, scheduleId: sc.id };
+  }
+
+  private findSchedule(p: Params, needs: (what: string, tool?: string) => RpcError, tool = 'update_schedule') {
     const id = str(p, 'scheduleId');
     const s = this.deps.schedules;
-    if (!id || !s) throw needs('changing a schedule', 'update_schedule');
+    if (!id || !s) throw needs('changing a schedule', tool);
     try {
       return s.find(id);
     } catch {
       // Unknown here (another runner's): the tools can see further.
-      throw needs('changing that schedule', 'update_schedule');
+      throw needs('changing that schedule', tool);
     }
   }
 }

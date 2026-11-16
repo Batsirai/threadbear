@@ -1026,9 +1026,21 @@ export function buildThreadbearTools(
       'delete_schedule',
       'Deletes a schedule so it never sends again.',
       { scheduleId: z.string().describe('Schedule id or a unique prefix.') },
-      handle(async ({ scheduleId }) => {
+      handle(async ({ scheduleId }, extra) => {
         const s = mustSchedules();
         const sc = await s.find(scheduleId);
+        // From a thread not in full mode, deleting one whose runs have more
+        // access than this thread, or that runs a shell command Mike
+        // approved, asks first (Daybreak finding 138; rpc-gate.ts asks the same).
+        const caller = await restricted();
+        if (caller) {
+          const was: Authority = sc.threadId ? await accessOf(sc.threadId) : { mode: scheduleModes(sc).ceiling };
+          const reasons = [
+            ...(above(was, caller) ? [`Delete the schedule "${sc.title}", whose runs have ${accessName(was)}`] : []),
+            ...(sc.check ? [`Delete the schedule "${sc.title}", which runs a shell command as you first`] : []),
+          ];
+          await confirm('delete_schedule', reasons, { scheduleId: sc.id, title: sc.title }, extra?.signal);
+        }
         await s.delete(sc.id);
         return `Deleted the schedule "${sc.title}" (${sc.id.slice(0, 8)}).`;
       }),

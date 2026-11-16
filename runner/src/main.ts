@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { readShareImage } from './share-images.ts';
 import { CallerGate } from './rpc-gate.ts';
-import { threadOfPort } from './peer.ts';
+import { threadOfSocket } from './peer.ts';
 import { threadKey as makeThreadKey } from './rpc-auth.ts';
 import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, writeRunnerJson } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
@@ -1092,7 +1092,7 @@ async function main(): Promise<void> {
     remote: peers,
     relay,
     gate: new CallerGate({ runner, remote: peers, schedules: scheduler }),
-    callerOfPort: (port) => threadOfPort(port, { registry, known: (id) => runner.has(id) || peers.owns(id), log }),
+    callerOf: (sock) => threadOfSocket(sock, { registry, known: (id) => runner.has(id) || peers.owns(id), log }),
     updates: () => (draining ? undefined : runnerUpdates()),
     appHello: (build, app) => appRestarts.appHello(build, app),
     desktopHello: () => void swiftChanges.desktopHello().catch((e) => log.warn('swift changes: first look failed', { error: String(e) })),
@@ -1300,7 +1300,7 @@ async function main(): Promise<void> {
         // Its port is on disk too (drain-<pid>.json), so a thread's shell can
         // reach this one as well as the primary.
         gate: new CallerGate({ runner, schedules: scheduler }),
-        callerOfPort: (port) => threadOfPort(port, { registry, known: (id) => runner.has(id), log }),
+        callerOf: (sock) => threadOfSocket(sock, { registry, known: (id) => runner.has(id), log }),
         methods: {
           ...scheduledSendMethods(runner),
           'drain.hello': () => {

@@ -172,6 +172,34 @@ for (const mode of ['ask', 'auto'] as const) {
     s.sched.stop();
   });
 
+  // Daybreak finding 138: deleting one of Mike's Full schedules, or one with
+  // a check he approved, takes it away for good, so it asks too.
+  test(`${mode}: delete_schedule asks before deleting a schedule above this thread or with a check`, async () => {
+    const s = setup(mode);
+    const alexs = await s.sched.create({ text: 'Tidy my inbox', cron: '0 9 * * *', title: 'Alexs' });
+    const denied = await withCard(s, 'deny', 'delete_schedule', { scheduleId: alexs.id });
+    assert.equal(denied.error, true);
+    assert.equal(denied.card.title, 'Delete the schedule "Alexs", whose runs have Full access');
+    assert.ok(s.sched.find(alexs.id), 'still there');
+    // To a Full thread: its runs reach that thread.
+    const toOther = await s.sched.create({ text: 'Ping', cron: '0 9 * * *', threadId: s.other.id, title: 'To other' });
+    assert.equal((await withCard(s, 'deny', 'delete_schedule', { scheduleId: toOther.id })).error, true);
+    assert.ok(s.sched.find(toOther.id));
+    const watch = await s.sched.create({ text: 'Read Slack', cron: '0 * * * *', title: 'Watch', check: 'slack-read', permissionMode: mode });
+    const checked = await withCard(s, 'deny', 'delete_schedule', { scheduleId: watch.id });
+    assert.equal(checked.card.title, 'Delete the schedule "Watch", which runs a shell command as you first');
+    assert.ok(s.sched.find(watch.id));
+    // Said yes: it goes.
+    assert.equal((await withCard(s, 'allow', 'delete_schedule', { scheduleId: alexs.id })).error, false);
+    assert.throws(() => s.sched.find(alexs.id));
+    // Its own, no higher and no check: no card.
+    const mine = await withCard(s, null, 'schedule_message', { text: 'later', when: '1h' });
+    assert.equal(mine.error, false, mine.text);
+    const mineSc = s.sched.list().find((x) => x.text === 'later')!;
+    assert.equal((await withCard(s, null, 'delete_schedule', { scheduleId: mineSc.id })).error, false);
+    s.sched.stop();
+  });
+
   // F14: the Codex path. A whole-tool rule from "Always allow" on a rename
   // skips the tool-level card; the raise still asks.
   test(`${mode}: on Codex, an "Always allow" rule for update_thread doesn't cover a raise`, async () => {

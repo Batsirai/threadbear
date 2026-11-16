@@ -320,6 +320,26 @@ test('before auth: frames over 64 KiB are refused, and only so many sockets may 
   await server.close();
 });
 
+// Daybreak finding 146: a web page can open WebSockets to 127.0.0.1, and a
+// browser always says where the page came from. The runner's own clients
+// never send an Origin, so any one is turned away before it takes a slot.
+test('an upgrade with an Origin is refused before it counts against the clients waiting to authenticate', async () => {
+  const { server, url } = await serve({ maxPendingAuth: 2 });
+  for (const origin of ['https://attacker.example', 'null', 'http://127.0.0.1:8797', 'file://']) {
+    assert.equal((await rawConnect(url, { Origin: origin })).status, 403, origin);
+  }
+  // With the bearer too: browsers can't send one, but nothing with an Origin gets in.
+  assert.equal((await rawConnect(url, { Origin: 'https://attacker.example', Authorization: `Bearer ${TOKEN}` })).status, 403);
+  assert.equal((server as any).pendingAuth(), 0);
+  // A page hammering away can't keep a native client out.
+  const flood = await Promise.all(Array.from({ length: 20 }, () => rawConnect(url, { Origin: 'https://attacker.example' })));
+  assert.ok(flood.every((f) => f.status === 403));
+  const c = await RunnerClient.connect(url, TOKEN);
+  assert.deepEqual(await c.call('auth.whoami'), {});
+  c.close();
+  await server.close();
+});
+
 test('once authenticated, a client can send big frames and gets big transcript pages', async () => {
   const { server, url } = await serve();
   const pad = 'y'.repeat(2 * 1024 * 1024);
