@@ -15,7 +15,7 @@
 // A file the old row shared with another picture row (only the owner key
 // can attach one file twice, sync.ts mustBeUnnamed) moves to the copy with
 // it, so the old file goes too; one a waiting command still names (on its
-// way to a runner, a day at most) stays for it.
+// way to a runner) stays for it until the command is over.
 import { v } from 'convex/values';
 import { internalAction, internalMutation, internalQuery } from './_generated/server';
 import { internal } from './_generated/api';
