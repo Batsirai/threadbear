@@ -11,7 +11,7 @@ import { ConvexError } from 'convex/values';
 import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import { go, threadPath, useRoute } from './route';
-import { useToken } from './token';
+import { useSignInNote, useSigningIn, useToken } from './token';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { CommandState } from './command-state';
@@ -49,10 +49,22 @@ export function App() {
 // ------------------------------------------------------------ sign-in
 
 function SignIn({ expired }: { expired?: boolean }) {
+  const signingIn = useSigningIn();
+  const note = useSignInNote();
+  if (signingIn) {
+    return (
+      <main className="signin">
+        <img src="/icon.png" alt="" width={72} height={72} />
+        <h1>Threadbear</h1>
+        <p>Signing in…</p>
+      </main>
+    );
+  }
   return (
     <main className="signin">
       <img src="/icon.png" alt="" width={72} height={72} />
       <h1>Threadbear</h1>
+      {note ? <p>{note}</p> : null}
       <p>{expired ? 'This browser’s sign-in has expired or been revoked.' : 'This browser isn’t signed in yet.'}</p>
       <p>On the Mac, open Threadbear, then Settings › Phone &amp; browser › Open signed in.</p>
       <p className="muted small">

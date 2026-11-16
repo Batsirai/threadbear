@@ -141,7 +141,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 80;
+export const BACKEND_API_VERSION = 81;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -1793,7 +1793,7 @@ export class ConvexSync {
    * said as "older than this runner", and no token is ever put in a QR code
    * instead (Daybreak 127).
    */
-  async issuePairingCode(args: { name: string; days?: number }): Promise<{ id: string; code: string; expiresAt: string }> {
+  async issuePairingCode(args: { name: string; days?: number; kind?: DeviceKind }): Promise<{ id: string; code: string; expiresAt: string }> {
     this.mustBeOn();
     const r = (await this.backend('mutation', 'sync:issuePairingCode', { key: this.deps.key, ...args })) as { id?: unknown; code?: unknown; expiresAt?: unknown } | null;
     if (!r || typeof r.id !== 'string' || typeof r.code !== 'string' || typeof r.expiresAt !== 'string') throw new Error('The backend gave no pairing code back.');

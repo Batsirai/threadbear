@@ -19,5 +19,7 @@ const runnerId = 'parityrun001';
 const post = convexPoster(url);
 const { sync, ids } = await playInto(post, { key, runnerId, name: 'Parity runner' }, SCENARIOS.map((s) => s.play));
 await sync.stop();
-const { token } = (await post('mutation', 'sync:issueToken', { key, kind: 'browser', name: 'parity run' })) as { token: string };
+// A browser's token, made the only way one is since API 81: a one-use code, traded.
+const { code } = (await post('mutation', 'sync:issuePairingCode', { key, kind: 'browser', name: 'parity run' })) as { code: string };
+const { token } = (await post('mutation', 'tokens:claim', { code })) as { token: string };
 console.log(JSON.stringify({ token, runnerId, threads: SCENARIOS.map((s, i) => ({ name: s.name, shows: s.shows, threadId: ids[i] })) }, null, 2));

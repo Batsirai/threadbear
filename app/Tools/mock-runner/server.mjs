@@ -1593,11 +1593,11 @@ async function dispatch(client, method, p) {
       const days = p.days ?? 90;
       const device = { id: `tok${++deviceSeq}`, kind: p.kind, name, createdAt: iso(), expiresAt: new Date(Date.now() + days * 86_400_000).toISOString(), expired: false };
       devices.unshift(device);
-      const token = 'tb_demo' + deviceSeq.toString().padStart(4, '0');
+      const code = 'tbp_demo' + deviceSeq.toString().padStart(4, '0');
+      // As runner/src/devices.ts: a one-use code, never the token, for both.
       return p.kind === 'phone'
-        // As runner/src/devices.ts pairingText: a one-use code, never the token.
-        ? { device, pairingLink: 'TBPAIR1_' + Buffer.from(`url=${encodeURIComponent(DEMO_DEPLOYMENT)}&code=tbp_demo${deviceSeq.toString().padStart(4, '0')}`).toString('base64url') }
-        : { device, signInLink: `${DEMO_SITE}/#token=${token}` };
+        ? { device, pairingLink: 'TBPAIR1_' + Buffer.from(`url=${encodeURIComponent(DEMO_DEPLOYMENT)}&code=${code}`).toString('base64url') }
+        : { device, signInLink: `${DEMO_SITE}/#code=${code}` };
     }
     case 'devices.revoke': {
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);

@@ -1366,10 +1366,13 @@ export const issueToken = mutation({
   returns: v.object({ id: v.string(), token: v.string(), expiresAt: v.string() }),
   handler: async (ctx, { key, kind, name, days }) => {
     await runnerAuth(ctx, key, 'issueToken');
-    // A phone's token is only ever traded for a pairing code (tokens:claim,
-    // API 80): a runner from before put it in a threadbear://pair link, which
-    // any app on the phone can claim (Daybreak 127). Browsers still get theirs.
+    // A phone's or browser's token is only ever traded for a one-use code
+    // (tokens:claim): a runner from before put a phone's in a
+    // threadbear://pair link, which any app on the phone can claim (Daybreak
+    // 127, API 80), and a browser's in the website's sign-in link, which
+    // anything that sees the link could keep using for its whole life (API 81).
     if (kind === 'phone') throw new ConvexError({ kind: 'badArgs', message: "This runner is too old to pair a phone safely. Update Threadbear on this Mac, then show the code again." });
+    if (kind === 'browser') throw new ConvexError({ kind: 'badArgs', message: "This runner is too old to sign a browser in safely. Update Threadbear on this Mac, then open the website signed in again." });
     const trimmed = clean(name.trim().slice(0, 80));
     if (!trimmed) throw new ConvexError({ kind: 'badArgs', message: 'name must not be blank' });
     if (days !== undefined && (!Number.isFinite(days) || days < 1 || days > MAX_DAYS)) throw new ConvexError({ kind: 'badArgs', message: `days must be 1 to ${MAX_DAYS}` });
@@ -1381,14 +1384,16 @@ export const issueToken = mutation({
 // A one-use code for the Mac's pairing QR (API 80, tokens.ts): the phone
 // trades it for a token with tokens:claim. The token never goes in the QR.
 export const issuePairingCode = mutation({
-  args: { key: v.string(), name: v.string(), days: v.optional(v.number()) },
+  // `kind` (API 81): a browser's sign-in code, for the website's link. A
+  // phone's when left out, as runners from API 80 send it.
+  args: { key: v.string(), name: v.string(), days: v.optional(v.number()), kind: v.optional(tokenKind) },
   returns: v.object({ id: v.string(), code: v.string(), expiresAt: v.string() }),
-  handler: async (ctx, { key, name, days }) => {
+  handler: async (ctx, { key, name, days, kind }) => {
     await runnerAuth(ctx, key, 'issuePairingCode');
     const trimmed = clean(name.trim().slice(0, 80));
     if (!trimmed) throw new ConvexError({ kind: 'badArgs', message: 'name must not be blank' });
     if (days !== undefined && (!Number.isFinite(days) || days < 1 || days > MAX_DAYS)) throw new ConvexError({ kind: 'badArgs', message: `days must be 1 to ${MAX_DAYS}` });
-    return makePairingCode(ctx, { kind: 'phone', name: trimmed, days, issuedBy: 'owner', ownerKeyPrint: (await sha256(key)).slice(0, 8) });
+    return makePairingCode(ctx, { kind: kind ?? 'phone', name: trimmed, days, issuedBy: 'owner', ownerKeyPrint: (await sha256(key)).slice(0, 8) });
   },
 });
 

@@ -113,11 +113,16 @@ else for now, and it needed a Resend key Threadbear doesn't have.
 
 ## Signing in
 
-The browser holds a phone token (`convex/tokens.ts`) in localStorage. The
-Mac app issues one through the runner (docs/protocol.md "Devices"):
+The browser holds a browser token (`convex/tokens.ts`) in localStorage. The
+Mac app gets one for it through the runner (docs/protocol.md "Devices"):
 Settings › Phone & browser › "Open signed in" opens the site in the default
-browser with the token in the link's `#fragment`, and the same tab lists
-the signed-in browsers with Revoke. Since 28 Oct that's the usual way.
+browser with a one-use sign-in code in the link's `#fragment`, which the
+page trades for the token (`tokens:claim`) and wipes from the address bar,
+and the same tab lists the signed-in browsers with Revoke. Since 28 Oct
+that's the usual way. The code works once, for ten minutes; the link
+never holds the token (since 16 Nov: a token in a link stayed good for 90
+days wherever the link was seen), and the page doesn't keep one from an
+old link's `#token=`.
 
 From a terminal, by someone logged in to the Convex team:
 
@@ -126,9 +131,10 @@ From a terminal, by someone logged in to the Convex team:
     npm run web:sign-in -- --dev         # the dev deployment's site
     npm run web:sign-in -- --local       # Vite on localhost:5181, dev data
 
-`web/scripts/sign-in.swift` puts the token in the link's `#fragment`, which
-browsers never send to a server; the page keeps it and wipes it from the
-address bar. The token is never printed. Revoke a browser from Settings ›
+`web/scripts/sign-in.swift` puts a one-use sign-in code
+(`tokens:issueCode` with `kind: "browser"`) in the link's `#fragment`,
+which browsers never send to a server; the page trades it for the token
+and wipes it from the address bar. Neither is ever printed. Revoke a browser from Settings ›
 Phone & browser, or with `npx convex run tokens:revoke '{"name":"web-mac"}'
 --prod`; it then shows the sign-in page. The page is `noindex` and sends no referrer.
 
