@@ -387,4 +387,6 @@
 //    web links (http or https with a host) on a thread's asks and links, from
 //    every runner, dropping the rest (Daybreak 139). Runners send only those
 //    already, so nothing changes for them.
+//    phone:thread and the lists hold rows written before to the same rule
+//    as they read them.
 export const API_VERSION = 82;

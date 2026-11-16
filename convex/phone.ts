@@ -12,7 +12,7 @@ import { API_VERSION } from './version';
 import { pushOff } from './pushHealth';
 import { imagesFrom, phoneImage, replyImagesFrom } from './share';
 import { deleteIfUnused, endCommandFiles, eventBodyAnswer, finishedArgs, readEventBody, runnerName } from './sync';
-import { docBytes, holdReviewNumbers, holdThreadTimes, isReadableTime } from './runnerAccess';
+import { webLinksOnly, docBytes, holdReviewNumbers, holdThreadTimes, isReadableTime } from './runnerAccess';
 import { HEADS_MARK } from './projectHeads';
 import { notesOf } from './projectNotes';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
@@ -78,7 +78,9 @@ function stripThread(doc: Doc<'threads'>): PhoneThread {
   holdThreadTimes(out, isReadableTime);
   // Counts a phone turns into an Int, however old the row (Daybreak 109).
   holdReviewNumbers(out);
-  return out as PhoneThread;
+  // Web links only, for a row written before upsertThreads dropped the rest
+  // (API 82, Daybreak 139), so an older app or an open old page gets none.
+  return webLinksOnly(out) as PhoneThread;
 }
 
 // apiVersion is the backend's (version.ts), so the app can say "update

@@ -260,6 +260,14 @@ export function MessageText({
             if (!link && href && !/^[#/]/.test(href) && !/^[a-z][a-z0-9+.-]*:/i.test(href)) {
               return <span title="This file is on the Mac">{children}</span>;
             }
+            // A #… link (a footnote) is a place on this page, followed here.
+            if (!link && href?.startsWith('#') && !/[\s\u0000-\u001f]/.test(href)) {
+              return (
+                <a href={href} title={p.title}>
+                  {children}
+                </a>
+              );
+            }
             if (!link) {
               return href ? <OutLink href={href} title={p.title}>{children}</OutLink> : <>{children}</>;
             }

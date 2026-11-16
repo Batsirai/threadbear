@@ -74,7 +74,9 @@ function pendingView(p: NonNullable<typeof pending>): { failed?: string } {
 /** Your answer to a held sign-in link: swap this browser's sign-in for it, or not. */
 export async function answerPendingSignIn(swap: boolean): Promise<void> {
   const p = pending;
-  if (!p) return;
+  // Nothing waiting, or a press while a claim is going (the buttons are
+  // disabled then, but a key repeat can still get here).
+  if (!p || claiming) return;
   if (!swap) {
     pending = undefined;
     listeners.forEach((l) => l());
@@ -87,6 +89,8 @@ export async function answerPendingSignIn(swap: boolean): Promise<void> {
     localStorage.setItem(KEY, token);
     pending = undefined;
   } catch (e) {
+    // A second press while the first was claiming: the first has settled it.
+    if (pending !== p) return;
     // The browser's own sign-in is untouched; the code's gone either way.
     pending = { ...p, failed: p.refused(e) ? 'That sign-in link has expired or was already used. This browser is still signed in as before.' : 'Threadbear couldn’t be reached. This browser is still signed in as before.' };
   }

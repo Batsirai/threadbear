@@ -68,6 +68,17 @@ for (const [who, key, runnerId] of [['a runner key', MINI_KEY, MINI], ['the main
   });
 }
 
+test('a row stored before API 82 with non-web links reaches the phone and website without them (139)', async () => {
+  const s = await setup();
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('OLD', MINI)] });
+  const row = s.rows('threads').find((t) => t.threadId === 'OLD')!;
+  // As an older backend kept it: written straight in, past today's filter.
+  await s.ctx.db.patch(row._id, { asks: [{ action: 'Click', links: [{ title: 'x', url: 'slack://open?team=T0' }, { title: 'ok', url: 'https://ok.example/' }] }], links: [{ title: 'm', url: 'mailto:a@b.example' }] });
+  const { thread: read } = (await call(s.ctx, phone.thread, { token: s.token, threadId: 'OLD' })) as { thread: { asks?: { links?: { url: string }[] }[]; links?: unknown } };
+  assert.deepEqual(read.asks?.[0].links?.map((l) => l.url), ['https://ok.example/']);
+  assert.equal(read.links, undefined);
+});
+
 test("a runner's thread with another runner's project id isn't in that runner's project (141)", async () => {
   const s = await setup();
   await call(s.ctx, sync.setProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')] });

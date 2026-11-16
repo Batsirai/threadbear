@@ -11,6 +11,8 @@ export type InboxOrder = 'needsYou' | 'newest' | 'oldest';
 // The fields of a phone:threads row that decide where it goes.
 export type ThreadRow = {
   threadId: string;
+  // Whose thread it is: a project is only its runner's (placeKeysOf).
+  runnerId?: string;
   title: string;
   preview: string;
   cwd: string;
@@ -144,6 +146,13 @@ export function placesOf(r: ThreadRow): string[] {
   return r.projects?.length ? r.projects.map((p) => p.title) : [folderName(r.cwd)];
 }
 
+// What a project filter picks by: a project as its runner's (runnerId and id),
+// never its title, which any runner can give its own thread (Daybreak 141),
+// or a folder by name. Kept apart from placesOf, which is only words.
+export function placeKeysOf(r: ThreadRow): { key: string; label: string }[] {
+  return r.projects?.length ? r.projects.map((p) => ({ key: `project\n${r.runnerId ?? ''}\n${p.id}`, label: p.title })) : [{ key: `folder\n${folderName(r.cwd)}`, label: folderName(r.cwd) }];
+}
+
 // Part of the title or last reply, as on the Mac, or the place, as on the
 // phone. Case and accent insensitive.
 export function matches(r: ThreadRow, query: string): boolean {
@@ -151,12 +160,13 @@ export function matches(r: ThreadRow, query: string): boolean {
   return !q || [r.title, r.preview, ...placesOf(r)].some((s) => folded(s).includes(q));
 }
 
-export type Filter = { show: 'all' | 'needsYou' | 'unread' | 'shared'; place?: string };
+// `place` is a placeKeysOf key, `placeLabel` its words for the menu.
+export type Filter = { show: 'all' | 'needsYou' | 'unread' | 'shared'; place?: string; placeLabel?: string };
 export const NO_FILTER: Filter = { show: 'all' };
 export const isFiltering = (f: Filter) => f.show !== 'all' || f.place !== undefined;
 
 export function passes(r: ThreadRow, f: Filter, now = Date.now()): boolean {
-  if (f.place !== undefined && !placesOf(r).includes(f.place)) return false;
+  if (f.place !== undefined && !placeKeysOf(r).some((p) => p.key === f.place)) return false;
   // A thread put away isn't waiting on Mike, whatever its last turn said: the
   // Mac's badge leaves those out too. Real archived threads keep a stale
   // `needs` and `unread` for good, which filled these with old work.
@@ -176,15 +186,20 @@ export function shows(r: ThreadRow, query: string, f: Filter, selected?: string)
 }
 
 // The places to filter by, most threads first, from whatever's loaded.
-export function placeChoices(rows: ThreadRow[]): { place: string; count: number }[] {
+// Two runners' projects with the same title are two choices.
+export function placeChoices(rows: ThreadRow[]): { place: string; label: string; count: number }[] {
   const seen = new Set<string>();
-  const counts = new Map<string, number>();
+  const counts = new Map<string, { label: string; count: number }>();
   for (const r of rows) {
     if (seen.has(r.threadId)) continue;
     seen.add(r.threadId);
-    for (const p of placesOf(r)) counts.set(p, (counts.get(p) ?? 0) + 1);
+    for (const p of placeKeysOf(r)) {
+      const c = counts.get(p.key);
+      if (c) c.count++;
+      else counts.set(p.key, { label: p.label, count: 1 });
+    }
   }
-  return [...counts].map(([place, count]) => ({ place, count })).sort((a, b) => b.count - a.count || a.place.localeCompare(b.place));
+  return [...counts].map(([place, c]) => ({ place, ...c })).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
 // ------------------------------------------------------------ what's drawn

@@ -70,3 +70,16 @@ test('a browser that is not signed in signs in from the link straight away', asy
   await tick();
   assert.equal(localStorage.getItem('threadbear.token'), 'tb_first');
 });
+
+test('a second Sign in again press while the first is claiming changes nothing', async () => {
+  localStorage.setItem('threadbear.token', 'tb_mine');
+  let claims = 0;
+  startSignIn(async () => {
+    if (claims++) throw new Error('used');
+    await tick();
+    return { token: 'tb_new' };
+  }, CODE, refused);
+  await Promise.all([answerPendingSignIn(true), answerPendingSignIn(true)]);
+  assert.equal(claims, 1);
+  assert.equal(localStorage.getItem('threadbear.token'), 'tb_new');
+});
