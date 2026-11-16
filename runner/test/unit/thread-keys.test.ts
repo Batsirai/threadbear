@@ -361,6 +361,16 @@ for (const mode of MODES) {
       await assert.rejects(c.call('schedules.delete', { scheduleId: fullSc.id.slice(0, 8) }), refused);
       // Unknown here: refused, not passed on.
       await assert.rejects(c.call('schedules.delete', { scheduleId: 'nope-not-a-schedule' }), refused);
+      // Nor by first lowering it or taking its check off (verify-fix of 138).
+      await assert.rejects(c.call('schedules.update', { scheduleId: fullSc.id, permissionMode: mode }), refused);
+      assert.equal(scheduler.find(fullSc.id).permissionMode, 'full');
+      for (const off of [null, '']) {
+        await assert.rejects(c.call('schedules.update', { scheduleId: checked.id, check: off }), refused);
+        assert.equal(scheduler.find(checked.id).check, 'true');
+      }
+      await assert.rejects(c.call('schedules.delete', { scheduleId: checked.id }), refused);
+      // Pausing one is still free.
+      await c.call('schedules.update', { scheduleId: fullSc.id, paused: true });
       // One no higher than this thread, with no check, it may delete.
       await c.call('schedules.delete', { scheduleId: mine.id });
       assert.throws(() => scheduler.find(mine.id));

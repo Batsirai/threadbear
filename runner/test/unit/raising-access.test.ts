@@ -166,9 +166,19 @@ for (const mode of ['ask', 'auto'] as const) {
     const longer = await withCard(s, 'deny', 'update_schedule', { scheduleId: watch.id, checkTimeoutSecs: 300 });
     assert.equal(longer.card.title, 'Change how long the schedule "Watch"\'s shell command may run');
     assert.equal((await s.sched.find(watch.id)).checkTimeoutSecs, undefined);
-    // Pausing it, or lowering it, is free.
+    // Pausing it is free. Lowering it, or taking a check off, asks: either
+    // would let delete_schedule through next (verify-fix of finding 138).
     assert.equal((await withCard(s, null, 'update_schedule', { scheduleId: alexs.id, paused: true })).error, false);
-    assert.equal((await withCard(s, null, 'update_schedule', { scheduleId: alexs.id, permissionMode: 'ask' })).error, false);
+    const lowered = await withCard(s, 'deny', 'update_schedule', { scheduleId: alexs.id, permissionMode: 'ask' });
+    assert.equal(lowered.card.title, 'Change the schedule "Alexs", whose runs have Full access, to Ask before edits');
+    assert.equal((await s.sched.find(alexs.id)).permissionMode, undefined);
+    for (const off of [null, '', '  ']) {
+      const unchecked = await withCard(s, 'deny', 'update_schedule', { scheduleId: watch.id, check: off });
+      assert.equal(unchecked.card.title, 'Take the shell command off the schedule "Watch"');
+      assert.equal((await s.sched.find(watch.id)).check, 'slack-read');
+    }
+    // On one this thread could have made itself, lowering is still free.
+    assert.equal((await withCard(s, null, 'update_schedule', { scheduleId: dailySc.id, permissionMode: 'ask' })).error, false);
     s.sched.stop();
   });
 

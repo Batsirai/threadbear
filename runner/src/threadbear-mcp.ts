@@ -965,6 +965,12 @@ export function buildThreadbearTools(
             ...(changes && current.check && check === undefined ? [`Change the schedule "${current.title}", which runs a shell command as you first`] : []),
             // Longer to run is more that command can do (Codex review, 6 Nov).
             ...(checkTimeoutSecs !== undefined && current.check && check === undefined && !changes ? [`Change how long the schedule "${current.title}"'s shell command may run`] : []),
+            // On one above this thread or with a check, lowering it or taking
+            // its check off takes away what the user set up, and would let
+            // delete_schedule through without a card (verify-fix of Daybreak
+            // finding 138). Pausing it stays free.
+            ...((above(was, caller) || current.check) && !current.threadId && permissionMode !== undefined && !raised && permissionMode !== current.permissionMode ? [`Change the schedule "${current.title}", whose runs have ${accessName(was)}, to ${MODE_NAMES[permissionMode]}`] : []),
+            ...(current.check && check !== undefined && !check?.trim() ? [`Take the shell command off the schedule "${current.title}"`] : []),
             ...checkReason(check, caller),
             // A new folder takes the check along (below), approved there as
             // the card shows it: so the card says what it runs, and where.

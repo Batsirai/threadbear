@@ -256,6 +256,14 @@ export class CallerGate {
     // that it runs again do, if its runs are above the caller or it has a check.
     const changes = ['text', 'title', 'at', 'cron', 'cwd'].some((k) => p[k] !== undefined) || (p.paused === false && sc.paused);
     if (changes && (above(was, caller) || sc.check)) throw needs(`changing the schedule "${sc.title}"`, 'update_schedule');
+    // Lowering one above the caller, or taking its check off, is free for a
+    // schedule the caller could have made, but on Mike's it takes away what he
+    // set up, and would let schedules.delete through next (verify-fix of
+    // Daybreak finding 138). Pausing stays free: it's undone with a click.
+    const protectedSc = above(was, caller) || Boolean(sc.check);
+    const lowers = !sc.threadId && typeof p.permissionMode === 'string' && p.permissionMode !== sc.permissionMode;
+    const dropsCheck = Boolean(sc.check) && (p.check === null || (typeof p.check === 'string' && !p.check.trim()));
+    if (protectedSc && (lowers || dropsCheck)) throw needs(`${dropsCheck ? 'taking the shell command off' : 'changing the access of'} the schedule "${sc.title}"`, 'update_schedule');
     if (p.permissionMode !== undefined && !sc.threadId && p.permissionMode === sc.permissionMode) delete out.permissionMode;
     return out;
   }
