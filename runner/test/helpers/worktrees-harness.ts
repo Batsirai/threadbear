@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { makeHarness, tmpDir, type Harness } from './fakes.ts';
 import { git, gitLimits, land, type LandTarget } from '../../src/worktrees.ts';
@@ -63,7 +64,12 @@ export function makeBranch(main: string, id8 = 'abcd1234'): LandTarget {
   return { path: wt, branch: `thread/${id8}`, mainCheckout: main };
 }
 
+// Only ever in a temp repo: a test that works out the folder wrongly (an
+// empty path resolves to the process's own folder) would otherwise commit
+// into the real checkout running the tests, as one did on a fork (14 Nov).
 export function commit(dir: string, files: Record<string, string>, message: string): void {
+  const tmp = fs.realpathSync(os.tmpdir());
+  if (!fs.realpathSync(dir).startsWith(tmp + path.sep)) throw new Error(`commit() is for temp repos only, not ${dir}`);
   write(dir, files);
   sh(dir, `git add -A && git commit -qm "${message}"`);
 }

@@ -361,8 +361,14 @@ test('a commit made in the holder while its group check runs is carried onto its
     await until(() => caps.every((x) => x.out.some((l) => l.startsWith('Waiting for another landing'))), 'b and c waiting');
     write(root, { release: '' });
     assert.equal(await first, 0);
-    await until(() => fs.existsSync(path.join(root, 'holder')), 'the group check');
-    const holder = fs.realpathSync(fs.readFileSync(path.join(root, 'holder'), 'utf8').trim());
+    // Wait for pwd's whole line, not just the file: the shell makes the file
+    // before pwd writes to it, and realpathSync('') is this process's own
+    // folder, so reading it empty committed fix.txt into the checkout running
+    // the tests (seen on a fork, 14 Nov).
+    const said = () => (fs.existsSync(path.join(root, 'holder')) ? fs.readFileSync(path.join(root, 'holder'), 'utf8') : '');
+    await until(() => said().endsWith('\n'), 'the group check');
+    const holder = fs.realpathSync(said().trim());
+    assert.ok(holder.startsWith(root + path.sep), `the holder is one of this test's worktrees, not ${holder}`);
     commit(holder, { 'fix.txt': 'fix\n' }, 'Fix during the check');
   } finally {
     write(root, { 'group-release': '' });
