@@ -1,0 +1,18 @@
+// The website's pages from the address (web/src/route-path.ts). A bad %
+// escape used to throw while the app loaded, so it never showed.
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { parsePath } from './route-path.ts';
+
+test('each page from its address', () => {
+  assert.deepEqual(parsePath('/'), { page: 'list' });
+  assert.deepEqual(parsePath('/new'), { page: 'new' });
+  assert.deepEqual(parsePath('/t/th%201'), { page: 'thread', threadId: 'th 1' });
+  assert.deepEqual(parsePath('/s/my-slug/'), { page: 'share', slug: 'my-slug' });
+  assert.deepEqual(parsePath('/projects/p_1'), { page: 'projects', id: 'p_1' });
+  assert.deepEqual(parsePath('/usage'), { page: 'usage' });
+});
+
+test('a bad escape is the list, not an error that stops the app loading', () => {
+  for (const p of ['/s/%zz', '/t/%E0%A4%A', '/projects/%zz']) assert.deepEqual(parsePath(p), { page: 'list' }, p);
+});

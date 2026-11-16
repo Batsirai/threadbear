@@ -374,7 +374,7 @@ test('the process lookup finds a real connection through lsof and ps', async () 
   const server = net.createServer();
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const addr = server.address() as { port: number };
-  const child = spawn(process.execPath, ['-e', `require('net').connect(${addr.port},'127.0.0.1');setTimeout(()=>{},60000)`], { stdio: 'ignore' });
+  const child = spawn(process.execPath, ['-e', `require('net').connect(${addr.port},'127.0.0.1');setTimeout(()=>{},600000)`], { stdio: 'ignore' });
   const peer = new Promise<number>((r) => server.once('connection', (s) => r(s.remotePort!)));
   try {
     const port = await peer;
