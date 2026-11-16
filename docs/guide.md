@@ -2106,7 +2106,7 @@ made. The card then shows that thread, what it's doing and Open the thread.
 The thread builds the new app on your Mac from your checkout's `main` with
 `desktop/scripts/switch-from-swift.sh`, at background priority, which takes
 20 to 40 minutes the first time and installs Rust first if there's no
-`cargo` (docs/on-your-mac.md says what that puts where). It needs about 5 GB
+`rustup` (docs/on-your-mac.md says what that puts where). It needs about 5 GB
 free with Rust to install, 4 without, and says so before it starts if
 there isn't that much. If something stops
 it (Xcode's command line tools, Rust, disk space, a build error) the thread

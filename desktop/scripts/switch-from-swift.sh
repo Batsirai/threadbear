@@ -9,8 +9,11 @@
 # --no-open stops after installing it, leaving links and the app alone (for
 # trying this on a test Mac without taking over its links or its screen).
 #
-# 1. Rust, if there's no cargo: rustup's own installer, minimal profile,
-#    without touching the shell's startup files (docs/on-your-mac.md).
+# 1. Rust, if there's no rustup: rustup's own installer, minimal profile,
+#    without touching the shell's startup files (docs/on-your-mac.md). Even
+#    beside Homebrew's rust, as the build uses rustup's newest stable, the
+#    Rust GitHub builds and tests with (stage-update.sh): an older one fails
+#    partway through it.
 # 2. The app, built from what's committed on the checkout's main, by
 #    stage-update.sh: the same build the installed app's updates use, so its
 #    clone and target folder are already warm for the first update. Built on
@@ -92,7 +95,7 @@ room_for_it() {
   if [[ -n "$elsewhere" ]]; then
     need_kb=$gib
   else
-    command -v cargo >/dev/null || need_kb=$gib
+    command -v rustup >/dev/null || need_kb=$gib
     local cached=0 build=$((4 * gib))
     [[ -d "$cache" ]] && cached="$(du -sk "$cache" 2>/dev/null | awk '{ print $1 }')" || true
     [[ "$cached" =~ ^[0-9]+$ ]] || cached=0
@@ -136,13 +139,19 @@ if ! installed; then
   elsewhere="$(builds_elsewhere)"
   room_for_it
   # Rust only for a build here: another Mac builds it, or none does (exit 5).
-  if [[ -z "$elsewhere" ]] && ! command -v cargo >/dev/null; then
+  if [[ -z "$elsewhere" ]] && ! command -v rustup >/dev/null; then
     echo "STEP Installing Rust"
     # rustup.rs's own script, over https only, as its site says to run it.
-    # --no-modify-path: the build finds it in ~/.cargo/bin by itself.
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$work/rustup-init.sh"
+    # --no-modify-path: the build finds it in ~/.cargo/bin by itself, and a
+    # terminal's cargo stays whatever it was. THREADBEAR_SWITCH_RUSTUP_INIT
+    # stands in for the download in the tests (switch-from-swift.test.ts).
+    if [[ -n "${THREADBEAR_SWITCH_RUSTUP_INIT:-}" ]]; then
+      cp "$THREADBEAR_SWITCH_RUSTUP_INIT" "$work/rustup-init.sh"
+    else
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$work/rustup-init.sh"
+    fi
     sh "$work/rustup-init.sh" -y --profile minimal --no-modify-path
-    command -v cargo >/dev/null || { echo "Rust installed, but cargo isn't in ~/.cargo/bin." >&2; exit 1; }
+    command -v rustup >/dev/null || { echo "Rust installed, but rustup isn't in ~/.cargo/bin." >&2; exit 1; }
   fi
 
   echo "STEP Building the new app (a first build takes 20 to 40 minutes, its later updates far less)"

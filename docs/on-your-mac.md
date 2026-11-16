@@ -63,8 +63,9 @@ File references are where to look.
   using the new app, which starts a thread that runs
   `desktop/scripts/switch-from-swift.sh`; that thread is an agent on your
   own login, so it uses your Claude or Codex tokens like any other thread):
-  the new app is built on your Mac from your checkout's `main`, so if there's no `cargo`
-  it installs Rust first, with rustup's own installer from
+  the new app is built on your Mac from your checkout's `main` with the
+  newest stable Rust, so if there's no `rustup` (even with Homebrew's
+  `rust`) it installs Rust first, with rustup's own installer from
   `https://sh.rustup.rs` (the minimal profile, about 1 GB with the crates
   the build fetches, in `~/.rustup` and `~/.cargo`; it doesn't touch your
   shell's startup files). The build runs at background priority, takes
