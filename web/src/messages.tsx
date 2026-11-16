@@ -240,9 +240,9 @@ export function MessageText({
               const url = pasted?.get(picture);
               if (url) {
                 return (
-                  <a className="pasted" href={url} target="_blank" rel="noreferrer" title={`Picture ${picture}, click to open it`}>
+                  <OutLink className="pasted" href={url} title={`Picture ${picture}, click to open it`}>
                     <img src={url} alt={`Picture ${picture}`} loading="lazy" />
-                  </a>
+                  </OutLink>
                 );
               }
               return (
@@ -310,9 +310,9 @@ export function MessageText({
               );
             }
             return (
-              <a href={picture.url} target="_blank" rel="noreferrer">
+              <OutLink href={picture.url}>
                 <img className="picture" src={picture.url} alt={alt ?? ''} loading="lazy" referrerPolicy="no-referrer" />
-              </a>
+              </OutLink>
             );
           },
         }}
@@ -400,9 +400,9 @@ export function Pictures({ items }: { items: Picture[] }) {
   return (
     <div className="pictures">
       {items.map((p) => (
-        <a key={p.url} href={p.url} target="_blank" rel="noreferrer">
+        <OutLink key={p.url} href={p.url}>
           <img className="picture" src={p.url} alt="" loading="lazy" width={p.width} height={p.height} />
-        </a>
+        </OutLink>
       ))}
     </div>
   );
