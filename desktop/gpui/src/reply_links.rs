@@ -143,15 +143,23 @@ pub(crate) fn watch() -> impl IntoElement {
     canvas(
         |_, _, _| {},
         |_, _, window, _| {
+            // Any press or release ends a file link's press (`LINK_PRESS`):
+            // the next one is armed afresh by `link_pressed`, after this. A
+            // ⌃-release of a left press comes as the right button's.
             window.on_mouse_event(|event: &MouseDownEvent, phase, _, _| {
-                if phase.capture() && event.button == MouseButton::Left {
-                    LEFT_HELD.with(|held| held.set(true));
+                if phase.capture() {
+                    LINK_PRESS.with(|p| p.borrow_mut().take());
+                    if event.button == MouseButton::Left {
+                        LEFT_HELD.with(|held| held.set(true));
+                    }
                 }
             });
             window.on_mouse_event(|event: &MouseUpEvent, phase, _, _| {
-                if phase.capture() && event.button == MouseButton::Left {
-                    LEFT_HELD.with(|held| held.set(false));
+                if phase.capture() {
                     LINK_PRESS.with(|p| p.borrow_mut().take());
+                    if event.button == MouseButton::Left {
+                        LEFT_HELD.with(|held| held.set(false));
+                    }
                 }
             });
             // A release outside the window is still told by the next move.
@@ -224,47 +232,29 @@ enum LinkTarget {
     File(Option<FileLink>),
 }
 
-/// What a link's words say it names, before any file's looked for.
-enum Named {
-    Web(String),
-    /// A file by its whole path.
-    File(String),
-    /// A path to look for from the thread's folder (`find_file`).
-    Path(String),
-}
-
-/// What `url` names: a web page, a file, or neither (`work:`, `thread:` and
-/// Threadbear's other links). Cheap: no file's looked at or for.
-fn link_names(url: &str) -> Option<Named> {
-    let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')));
-    match scheme.as_deref() {
-        Some("tbpath") => {
-            let rest = &url["tbpath:".len()..];
-            Some(Named::Path(crate::rows::markdown::percent_decode(rest.strip_prefix("?p=").unwrap_or(rest))))
-        }
-        Some("work" | "thread" | "review" | "tbchip" | "button") => None,
-        // `Foo.swift:12` reads as a scheme, but it's a file and a line.
-        Some(s) if s.contains('.') && file_refs::strip_line(url) != url => Some(Named::Path(url.to_owned())),
-        _ => match policy::link_kind(url) {
-            LinkKind::Web(web) => Some(Named::Web(web)),
-            // A link with no scheme is looked for from the thread's folder
-            // like a path in inline code; a `file:` URL is the file.
-            LinkKind::File(path) if path.starts_with('/') || threadbear_core::reducer::text::is_windows_path(&path) => Some(Named::File(path)),
-            LinkKind::File(path) => Some(Named::Path(path)),
-            _ => None,
-        },
-    }
-}
-
 impl ThreadPane {
     /// What `url` names, for a click, a menu or a card. `work:`, `thread:`
     /// and Threadbear's other links name neither.
     fn link_target(&self, url: &str) -> Option<LinkTarget> {
-        Some(match link_names(url)? {
-            Named::Web(web) => LinkTarget::Web(web),
-            Named::File(path) => LinkTarget::File(Some(FileLink { path, query: None, fragment: None })),
-            Named::Path(text) => LinkTarget::File(self.find_file(&text)),
-        })
+        let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')));
+        match scheme.as_deref() {
+            Some("tbpath") => {
+                let rest = &url["tbpath:".len()..];
+                let text = crate::rows::markdown::percent_decode(rest.strip_prefix("?p=").unwrap_or(rest));
+                Some(LinkTarget::File(self.find_file(&text)))
+            }
+            Some("work" | "thread" | "review" | "tbchip" | "button") => None,
+            // `Foo.swift:12` reads as a scheme, but it's a file and a line.
+            Some(s) if s.contains('.') && file_refs::strip_line(url) != url => Some(LinkTarget::File(self.find_file(url))),
+            _ => match policy::link_kind(url) {
+                LinkKind::Web(web) => Some(LinkTarget::Web(web)),
+                // A link with no scheme is looked for from the thread's folder
+                // like a path in inline code; a `file:` URL is the file.
+                LinkKind::File(path) if path.starts_with('/') || threadbear_core::reducer::text::is_windows_path(&path) => Some(LinkTarget::File(Some(FileLink { path, query: None, fragment: None }))),
+                LinkKind::File(path) => Some(LinkTarget::File(self.find_file(&path))),
+                _ => None,
+            },
+        }
     }
 
     /// The file a path in a reply names: from the thread's folder and what
@@ -465,8 +455,8 @@ pub(crate) fn link_aware(text: impl IntoElement, ix: usize, row: &Row, thread: &
 /// of replies in the Swift app and found the GPUI one selecting the words
 /// instead (16 Nov).
 struct LinkPress {
-    pane: WeakEntity<ThreadPane>,
-    url: String,
+    /// The file the link names, found as it was pressed.
+    path: PathBuf,
     at: Point<Pixels>,
 }
 
@@ -477,29 +467,31 @@ thread_local! {
 /// About what the Finder waits for, as the Swift drag did.
 const DRAG_AFTER: f64 = 4.;
 
-/// A press in a reply: on a link to a file in this Mac's thread, it's kept
-/// for a drag and the words aren't selected from it, as in the Swift app.
-/// The text view says which link it went down on (`take_pressed_link`); a
-/// web page's link, or one in another Mac's thread, selects as ever.
+/// A press in a reply: on a link to a file that's on this Mac, in this
+/// Mac's thread, it's kept for a drag and the words aren't selected from it,
+/// as in the Swift app (TextKit's `peek(at:)` finds the file on the press
+/// too). The text view says which link it went down on
+/// (`take_pressed_link`). A web page's link, one to a file that isn't
+/// there, or one in another Mac's thread selects as ever.
 fn link_pressed(pane: &WeakEntity<ThreadPane>, event: &MouseDownEvent, cx: &mut App) {
-    LINK_PRESS.with(|p| p.borrow_mut().take());
     let Some(url) = gpui_kit::base::GlobalState::take_pressed_link(cx) else { return };
+    let Some(pane) = pane.upgrade() else { return };
     // Another Mac's paths are that Mac's: never a file here to hand out
     // (file_drag.rs).
-    if event.click_count != 1 || event.modifiers.modified() || pane.upgrade().is_none_or(|p| p.read(cx).summary.is_remote()) {
+    if event.click_count != 1 || event.modifiers.modified() || pane.read(cx).summary.is_remote() {
         return;
     }
-    if !matches!(link_names(&url), Some(Named::File(_) | Named::Path(_))) {
+    let Some(LinkTarget::File(Some(file))) = pane.read(cx).link_target(&url) else { return };
+    if policy::local_metadata(Path::new(&file.path)).is_err() {
         return;
     }
     gpui_kit::base::GlobalState::suppress_text_selection(cx);
-    LINK_PRESS.with(|p| *p.borrow_mut() = Some(LinkPress { pane: pane.clone(), url: url.to_string(), at: event.position }));
+    LINK_PRESS.with(|p| *p.borrow_mut() = Some(LinkPress { path: PathBuf::from(file.path), at: event.position }));
 }
 
 /// The pointer moving with a file link pressed, anywhere in the window
-/// (`watch`): far enough, and the file it names goes with it. Which file is
-/// only worked out now, as it can mean a look through folders that a plain
-/// click shouldn't wait on twice. A link to nothing here drags nothing.
+/// (`watch`): far enough, and the file goes with it. Gone or swapped since
+/// the press, the drag hands nothing on (`DraggedFile::still_grabbed`).
 fn drag_moved(event: &MouseMoveEvent, window: &mut Window, cx: &mut App) {
     let press = LINK_PRESS.with(|p| {
         let mut p = p.borrow_mut();
@@ -509,13 +501,9 @@ fn drag_moved(event: &MouseMoveEvent, window: &mut Window, cx: &mut App) {
         let far = p.as_ref().is_some_and(|press| (event.position - press.at).magnitude() >= DRAG_AFTER);
         if far { p.take() } else { None }
     });
-    let Some(press) = press else { return };
-    let Some(pane) = press.pane.upgrade() else { return };
-    let Some(LinkTarget::File(Some(file))) = pane.read(cx).link_target(&press.url) else { return };
-    if policy::local_metadata(Path::new(&file.path)).is_err() {
-        return;
+    if let Some(press) = press {
+        crate::file_drag::start(press.path, window, cx);
     }
-    crate::file_drag::start(PathBuf::from(file.path), window, cx);
 }
 
 /// The menu for a right-click on a reply: the link's, if the press is on a

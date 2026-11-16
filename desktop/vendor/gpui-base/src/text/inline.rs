@@ -1423,11 +1423,12 @@ impl Element for Inline {
             });
         }
 
-        if !is_selection && !self.links.is_empty() {
+        if !self.links.is_empty() {
             // Threadbear's: a plain left press on a link says which link it
             // went down on, for a handler further out that may drag the link
             // out (`GlobalState::take_pressed_link`). Bubble phase, so it's
-            // noted before the handlers around this text see the press.
+            // noted before the handlers around this text see the press. With
+            // words selected here too: the press clears them first.
             window.on_mouse_event({
                 let links = self.links.clone();
                 let text_layout = text_layout.clone();
