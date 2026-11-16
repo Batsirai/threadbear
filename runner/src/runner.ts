@@ -2014,12 +2014,9 @@ export class Runner {
           this.markDirty(st);
         });
       rt.preparing = held;
-      const left = await leaving;
-      if (left) {
-        rec.agentNotice = left;
-        this.markDirty(st);
-      }
-      // Stopped meanwhile: the notice waits for its next message.
+      // The notice it leaves is on the record (agentNotice), so one stopped
+      // meanwhile still has it for its next message.
+      await leaving;
       if (gone()) return;
     } else if (!rt.session) {
       const left = this.tellTornDown(st, msg.turnId);

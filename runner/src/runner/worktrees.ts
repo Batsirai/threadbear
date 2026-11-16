@@ -376,7 +376,8 @@ export const worktreesPart = {
     this.tellActivity({ kind: 'moved', threadId: rec.id, from, to });
     if (!fresh) {
       this.emit(st, { type: 'system.note', text: `This thread's worktree ${went} when it was archived, so it carries on in the main checkout, ${to}.` }, turnId);
-      return `[Threadbear] Your worktree at ${w.path} ${went} after its work landed on main. You're now in the main checkout, ${to}, which other threads share: stage your own files by name.`;
+      rec.agentNotice = `[Threadbear] Your worktree at ${w.path} ${went} after its work landed on main. You're now in the main checkout, ${to}, which other threads share: stage your own files by name.`;
+      return rec.agentNotice;
     }
     const nw = fresh.made.worktree;
     this.log.info('made a fresh worktree for a thread brought back', { threadId: rec.id, path: nw.path, branch: nw.branch });
@@ -385,9 +386,16 @@ export const worktreesPart = {
     // removed worktree, so this one's cleanup is owed (archiveWhenGone runs
     // it once this is done, or settleLostCleanups after a restart), and
     // there's no point setting it up. As prepareWorktreeNow does.
+    // Saved with the move, before setup, so a runner that stops during
+    // setup still tells the agent with its next message (deliver).
+    rec.agentNotice = `[Threadbear] Your worktree at ${w.path} ${went} after its work landed on main. You're now in a fresh worktree of your own at ${nw.path}, on the branch ${nw.branch}, made from main as it is now. Commit there and run tb land when it's done, as before.`;
+    this.markDirty(st);
     if (rec.archivedAt) nw.cleanupOwed = true;
     else await this.setUpWorktree(st, fresh.made, fresh.patch, turnId);
-    return `[Threadbear] Your worktree at ${w.path} ${went} after its work landed on main. You're now in a fresh worktree of your own at ${nw.path}, on the branch ${nw.branch}, made from main as it is now. Commit there and run tb land when it's done, as before.`;
+    // Moved to another folder during setup: the notice no longer says where
+    // it is.
+    if (rec.cwd !== to) delete rec.agentNotice;
+    return rec.agentNotice;
   },
 
   // A new worktree for a thread brought back to a removed one, from the

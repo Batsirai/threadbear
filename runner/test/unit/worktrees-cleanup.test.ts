@@ -61,9 +61,16 @@ test('a thread stopped while its fresh worktree is set up is told of the move wi
   await until(() => notes(h, id).some((n) => n.startsWith('Removed')), 'the cleanup');
   h.runner.send(id, 'More please');
   await until(() => fs.existsSync(path.join(w.path, '.setup-ran')), 'the fresh worktree');
+  // Saved before setup, so a runner stopping now still tells the agent.
+  assert.equal(typeof h.runner.threads.get(id)!.rec.agentNotice, 'string');
   h.runner.interrupt(id);
   await until(() => h.runner.get(id).status !== 'running' && h.runner.get(id).status !== 'starting', 'stopped');
   assert.equal(h.adapter.sessions.length, 1, 'no CLI for the stopped turn');
+  await until(() => !(h.runner.threads.get(id)!.rt as any).preparing, 'setup done');
+  // A slash command would become words with the notice in front of it.
+  h.runner.send(id, '/compact');
+  await until(() => notes(h, id).some((n) => n.includes('Send one first, then /compact again')), 'the command held');
+  assert.equal(h.adapter.sessions.length, 1);
   h.runner.send(id, 'Try again');
   await until(() => h.adapter.sessions.length === 2, 'a new CLI');
   const sent = h.adapter.last.sent.at(-1)!.text;

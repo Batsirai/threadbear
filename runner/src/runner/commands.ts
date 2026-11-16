@@ -57,7 +57,7 @@ export const commandsPart = {
     const name = msg.text.trim().split(/\s/)[0];
     if (plan.kind === 'cli' && rec.handoff) {
       plan = { kind: 'note', text: `This thread has just moved to ${this.modelLabel(rec)}, and the agent catches up on the conversation with your next message. Send one first, then ${name} again.` };
-    } else if (plan.kind === 'cli' && !rt.session && this.leavesRemovedWorktree(rec)) {
+    } else if (plan.kind === 'cli' && !rt.session && (this.leavesRemovedWorktree(rec) || typeof rec.agentNotice === 'string')) {
       plan = { kind: 'note', text: `This thread's worktree has gone, so it carries on in a fresh one and the agent hears about the move with your next message. Send one first, then ${name} again.` };
     }
     if (plan.kind === 'cli') return false;
