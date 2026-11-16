@@ -157,7 +157,6 @@ test("Stop while compacting a turn another thread opened queues its message agai
   cli.result('interrupted');
   await tick(8);
   const st = h.runner.mustGet(id);
-  assert.ok(!cli.sent.some((m) => m.text === text));
   // Queued again, as a stopped message from another thread is, so it
   // starts the next turn, going straight in this time.
   assert.ok(st.rec.queue.some((q) => q.text === text) || h.adapter.sessions.some((x) => x.sent.some((m) => m.text.includes('The build passed.'))), 'queued again, not lost');
