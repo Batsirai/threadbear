@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FakeClock } from '../../src/clock.ts';
-import { type CiRun, bareRepoArgs, ciVerdict, FETCH_INTERVAL_MS, FIRST_LOOK_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
+import { type CiRun, bareRepoArgs, ciVerdict, earlierVerdict, FETCH_INTERVAL_MS, FIRST_LOOK_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
 import { LATER, asGitHub, commit, fakeGpg, git, kept, key, release, signedTag, upstreamFor, waitFor, withVictimGpg, world } from '../helpers/upstream-harness.ts';
 
 test('repoKey: the same repo however its URL is written', () => {
@@ -263,6 +263,50 @@ test("ciVerdict: every workflow's latest attempt has to pass", () => {
   assert.match(ciVerdict([run('1', 'completed', 'success', 1), run('1', 'completed', 'failure', 2)])!, /didn't pass/);
 });
 
+test("earlierVerdict: a workflow that didn't run on the tip counts by its last finished run on a commit the tip has", () => {
+  const run = (sha: string, status: string, conclusion: string | null): CiRun => ({ workflow: '9', name: 'Runner', status, conclusion, attempt: 1, sha });
+  const has = new Set(['c3', 'c2', 'c1']);
+  assert.equal(earlierVerdict([], has), undefined, 'never ran: nothing to go on');
+  assert.equal(earlierVerdict([run('c2', 'completed', 'success'), run('c1', 'completed', 'failure')], has), undefined, 'fixed since');
+  assert.equal(earlierVerdict([run('c2', 'completed', 'failure'), run('c1', 'completed', 'success')], has), '"Runner" didn\'t pass on c2, the last commit it ran on');
+  // Cancelled for a newer push, or skipped, says nothing: the one before decides.
+  assert.match(earlierVerdict([run('c3', 'completed', 'cancelled'), run('c2', 'completed', 'failure')], has)!, /didn't pass on c2/);
+  assert.match(earlierVerdict([run('c3', 'in_progress', null), run('c2', 'completed', 'success')], has)!, /still running on c3/);
+  // A push the tip doesn't have (main rewound, or another branch's) isn't evidence.
+  assert.equal(earlierVerdict([run('x9', 'completed', 'failure'), run('c1', 'completed', 'success')], has), undefined);
+});
+
+test("Mike's runner holds a release when a workflow that didn't run on the tip was red on the last commit it ran on", async () => {
+  const w = world();
+  asGitHub(w.mike, w.root);
+  fs.mkdirSync(path.join(w.mike, '.github', 'workflows'), { recursive: true });
+  commit(w.mike, '.github/workflows/build.yml', 'Build on GitHub');
+  const broke = commit(w.mike, '.github/workflows/runner.yml', 'Runner tests on GitHub');
+  // Touches only what build.yml watches: runner.yml doesn't run on it.
+  const tip = commit(w.mike, 'README.md', 'Docs');
+  git(w.mike, 'push', '-q', 'origin', 'main');
+  const committed = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000;
+  const clock = new FakeClock(committed + 2 * SETTLE_MS);
+  const runnerRun = (sha: string, conclusion: string): CiRun => ({ workflow: '8', name: 'Runner', status: 'completed', conclusion, attempt: 1, file: '.github/workflows/runner.yml', sha });
+  let history: CiRun[] = [runnerRun(broke, 'failure')];
+  const askedFor: string[] = [];
+  const up = upstreamFor(w.mike, w.home, clock, {
+    publish: { publish: true, signingKey: w.mikeKey.priv },
+    runningMainSettled: () => true,
+    ciRuns: async () => [{ workflow: '7', name: 'Build', status: 'completed', conclusion: 'success', attempt: 1, file: '.github/workflows/build.yml', sha: tip }],
+    ciHistory: async (_repo: string, file: string) => (askedFor.push(file), history),
+  });
+  assert.equal(await up.publishOnce(), undefined, "runner.yml's red run holds it");
+  assert.deepEqual(askedFor, ['.github/workflows/runner.yml'], 'only the workflow that sat the tip out');
+  assert.equal(up.status().held?.commit, tip);
+  assert.equal(up.status().held!.why, `"Runner" didn't pass on ${broke.slice(0, 8)}, the last commit it ran on`);
+  // Re-run green on that commit: the tip can go.
+  history = [runnerRun(broke, 'success')];
+  const tag = await up.publishOnce();
+  assert.equal(tag, tagFor(new Date(clock.now())));
+  assert.equal(git(w.mike, 'rev-parse', `${tag}^{commit}`), tip);
+});
+
 test("Mike's runner holds a release until GitHub's checks pass on that commit", async () => {
   const w = world();
   asGitHub(w.mike, w.root);
@@ -271,7 +315,7 @@ test("Mike's runner holds a release until GitHub's checks pass on that commit", 
   git(w.mike, 'push', '-q', 'origin', 'main');
   const committed = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000;
   const clock = new FakeClock(committed + 2 * SETTLE_MS);
-  let runs: CiRun[] | Error = [{ workflow: '7', name: 'Builds on Xcode 26', status: 'completed', conclusion: 'failure', attempt: 1 }];
+  let runs: CiRun[] | Error = [{ workflow: '7', name: 'Builds on Xcode 26', status: 'completed', conclusion: 'failure', attempt: 1, file: '.github/workflows/build.yml' }];
   const asked: string[] = [];
   let notesCalls = 0;
   const up = upstreamFor(w.mike, w.home, clock, {
@@ -283,6 +327,7 @@ test("Mike's runner holds a release until GitHub's checks pass on that commit", 
       if (runs instanceof Error) throw runs;
       return runs;
     },
+    ciHistory: async () => assert.fail('every workflow ran on the tip'),
   });
 
   assert.equal(await up.publishOnce(), undefined, 'a red build holds it');
@@ -299,7 +344,7 @@ test("Mike's runner holds a release until GitHub's checks pass on that commit", 
   assert.match(up.status().held!.why, /couldn't read GitHub's checks/);
 
   assert.equal(notesCalls, 0, 'notes generation waits for the exact commit checks too');
-  runs = [{ workflow: '7', name: 'Builds on Xcode 26', status: 'completed', conclusion: 'success', attempt: 2 }];
+  runs = [{ workflow: '7', name: 'Builds on Xcode 26', status: 'completed', conclusion: 'success', attempt: 2, file: '.github/workflows/build.yml' }];
   const tag = await up.publishOnce();
   assert.equal(tag, tagFor(new Date(clock.now())));
   assert.equal(git(w.mike, 'rev-parse', `${tag}^{commit}`), tip);

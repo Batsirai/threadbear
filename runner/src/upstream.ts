@@ -30,8 +30,10 @@
 // hand on: the runner it's running is main's, has been marked good and up
 // for an hour, and main's tip is an hour old, so a commit that crashes
 // the runner or is about to be followed by its fix isn't what goes out.
-// And GitHub's checks have passed on that exact commit (ciVerdict): the
-// runner staying up says nothing about the apps building. release/2026-11-04
+// And GitHub's checks have passed on that exact commit (ciVerdict), and
+// each workflow that didn't run on it (its paths didn't change) passed on
+// the last commit it did run on (earlierVerdict): the runner staying up
+// says nothing about the apps building. release/2026-11-04
 // to -06 went out not building on Xcode 26.6, and people installing it
 // found out before Mike did (PR #1, Maroš's fork).
 import { spawn } from 'node:child_process';
@@ -123,7 +125,8 @@ export type UpstreamStatus = {
 };
 
 // One GitHub Actions run of a workflow on a commit, as ciVerdict needs it.
-export type CiRun = { workflow: string; name: string; status: string; conclusion: string | null; attempt: number };
+// file: its workflow file (.github/workflows/x.yml); sha: the commit it ran on.
+export type CiRun = { workflow: string; name: string; status: string; conclusion: string | null; attempt: number; file?: string; sha?: string };
 
 // signingKey: a key file, as `git tag -s` takes it (user.signingkey): a
 // plain private key (a fork of a fork, or Mike's before Touch ID), or a
@@ -181,6 +184,9 @@ export type UpstreamDeps = {
   stageMaxBytes?: number;
   // The Actions runs on a commit, from GitHub (githubRuns). Replaced in tests.
   ciRuns?: (repo: string, commit: string) => Promise<CiRun[]>;
+  // One workflow's latest push runs on main, newest first, from GitHub
+  // (githubWorkflowRuns). Replaced in tests.
+  ciHistory?: (repo: string, file: string) => Promise<CiRun[]>;
 };
 
 // The push runs on one commit of a public GitHub repo ("owner/name"). No
@@ -192,8 +198,35 @@ export async function githubRuns(repo: string, commit: string): Promise<CiRun[]>
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-  const body = (await res.json()) as { workflow_runs?: { workflow_id: number; name: string; status: string; conclusion: string | null; run_attempt?: number }[] };
-  return (body.workflow_runs ?? []).map((r) => ({ workflow: String(r.workflow_id), name: r.name, status: r.status, conclusion: r.conclusion, attempt: r.run_attempt ?? 1 }));
+  return ciRunsFrom(await res.json());
+}
+
+// A workflow's latest push runs on main (`file`, .github/workflows/x.yml),
+// newest first: earlierVerdict looks back through them. One page is a day
+// or two of a busy main, and a workflow quiet for longer than that has
+// nothing on main since to have broken.
+export async function githubWorkflowRuns(repo: string, file: string): Promise<CiRun[]> {
+  const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(path.basename(file))}/runs?branch=main&event=push&per_page=100`, {
+    headers: { accept: 'application/vnd.github+json', 'user-agent': 'threadbear-runner' },
+    signal: AbortSignal.timeout(30_000),
+  });
+  // A workflow GitHub doesn't know (only just added, never run) has no verdict.
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  return ciRunsFrom(await res.json());
+}
+
+function ciRunsFrom(json: unknown): CiRun[] {
+  const body = json as { workflow_runs?: { workflow_id: number; name: string; status: string; conclusion: string | null; run_attempt?: number; path?: string; head_sha?: string }[] };
+  return (body.workflow_runs ?? []).map((r) => ({
+    workflow: String(r.workflow_id),
+    name: r.name,
+    status: r.status,
+    conclusion: r.conclusion,
+    attempt: r.run_attempt ?? 1,
+    ...(r.path ? { file: r.path } : {}),
+    ...(r.head_sha ? { sha: r.head_sha } : {}),
+  }));
 }
 
 // Whether a commit's checks let it be a release: undefined when they do,
@@ -213,6 +246,31 @@ export function ciVerdict(runs: CiRun[]): string | undefined {
   if (runsOf.some((r) => r.status !== 'completed')) return "GitHub's checks are still running on it";
   return undefined;
 }
+
+// A run that says nothing about the commit it ran on: stopped for a newer
+// push, or skipped.
+const NO_VERDICT = new Set(['cancelled', 'skipped', 'neutral', 'stale']);
+
+// A workflow that didn't run on the tip, as its paths didn't change: what
+// its last finished run on a commit the tip has says, from `history`
+// (newest first, as githubWorkflowRuns gives them). Without this, a red run
+// is passed over by the next push that doesn't touch its paths, and that
+// tip goes out with the break: release/2026-11-15 was tagged on a commit
+// only Android and the desktop app had run on. Undefined when it passed,
+// or there's nothing to go on.
+export function earlierVerdict(history: CiRun[], has: ReadonlySet<string>): string | undefined {
+  for (const r of history) {
+    if (!r.sha || !has.has(r.sha)) continue;
+    const on = r.sha.slice(0, 8);
+    if (r.status !== 'completed') return `"${r.name}" is still running on ${on}`;
+    if (NO_VERDICT.has(r.conclusion ?? '')) continue;
+    return r.conclusion === 'success' ? undefined : `"${r.name}" didn't pass on ${on}, the last commit it ran on`;
+  }
+  return undefined;
+}
+
+// How far back a workflow's last run is looked for among the tip's commits.
+const HISTORY_COMMITS = 1000;
 
 export function signersPath(home: string): string {
   return path.join(home, 'upstream-signers');
@@ -1010,8 +1068,21 @@ export class Upstream {
     if (!key.startsWith('github.com/')) return "origin isn't on GitHub, so its checks can't be read";
     const pushed = await this.pushMain(checkout, tip);
     if (pushed) return pushed;
+    const repo = key.slice('github.com/'.length);
     try {
-      return ciVerdict(await (this.deps.ciRuns ?? githubRuns)(key.slice('github.com/'.length), tip));
+      const runs = await (this.deps.ciRuns ?? githubRuns)(repo, tip);
+      const said = ciVerdict(runs);
+      if (said) return said;
+      const ran = new Set(runs.map((r) => r.file));
+      const quiet = workflows.filter((f) => !ran.has(f));
+      if (!quiet.length) return undefined;
+      const has = new Set((await this.git(checkout, ['rev-list', `--max-count=${HISTORY_COMMITS}`, tip])).split('\n').filter(Boolean));
+      const held: string[] = [];
+      for (const file of quiet) {
+        const why = earlierVerdict(await (this.deps.ciHistory ?? githubWorkflowRuns)(repo, file), has);
+        if (why) held.push(why);
+      }
+      return held.length ? held.join('; ') : undefined;
     } catch (e) {
       return `couldn't read GitHub's checks (${String(e)})`;
     }
