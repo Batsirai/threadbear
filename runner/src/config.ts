@@ -154,7 +154,7 @@ export type Config = {
   // THREADBEAR_SYNC=off turns it off for tests and dev runners.
   // urlRefused: why the configured url isn't used (plain http off this
   // Mac, secure-url.ts), so sync is off and tb status says why.
-  sync: { enabled: boolean; url?: string; urlRefused?: string; site?: string; name?: string; runnerId?: string; icon?: string; pastedPictures?: boolean; full?: boolean; fullAsked?: string; usageWarning?: boolean };
+  sync: { enabled: boolean; url?: string; urlRefused?: string; site?: string; name?: string; runnerId?: string; icon?: string; pastedPictures?: boolean; full?: boolean; usageWarning?: boolean };
   // The silent on-device secret check (src/secret-check.ts): off unless asked.
   secretCheck?: boolean;
   // Mike's Connectors gateway's base URL (connectors.ts), for the app's
@@ -232,9 +232,8 @@ export type RunnerJson = {
   // icon: an SF Symbol for this runner in lists (machine.ts works one out).
   // An rpcUrl left from the direct link between Macs (gone 13 Nov 2026) is ignored.
   // full: true sends tool output to your Convex deployment as well, scrubbed first
-  // (docs/full-convex.md). Unset to start: the main runner asks once, when a
-  // phone, the website or another machine would show it (convex-use.ts), noting
-  // when in fullAsked.
+  // (docs/full-convex.md). Off unless set. fullAsked, fullAskedThread and
+  // fullAskedQuestion are left from the once-only offer (taken out 16 Nov 2026).
   // usageWarning: false hides tb status's warning near Convex's Free limits.
   // pastedPictures: false keeps pictures you paste off your Convex deployment
   // (docs/on-your-mac.md).
@@ -529,12 +528,9 @@ function syncConfig(raw: RunnerJson['sync'], env: NodeJS.ProcessEnv): Config['sy
   const icon = nonEmpty(raw?.icon);
   if (icon) out.icon = icon;
   if (raw?.pastedPictures === false) out.pastedPictures = false;
-  // Unset stays unset: an install from before full sync was the default is
-  // asked, never switched on by an update (docs/full-convex.md step 6).
+  // Unset stays unset, which is off: an update never switches it on.
   if (raw?.full === true) out.full = true;
   else if (raw?.full === false) out.full = false;
-  const asked = nonEmpty(raw?.fullAsked);
-  if (asked) out.fullAsked = asked;
   if (raw?.usageWarning === false) out.usageWarning = false;
   return out;
 }

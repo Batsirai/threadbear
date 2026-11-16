@@ -44,14 +44,7 @@ import { SignInState } from './sign-in-state.ts';
 import { ProcessRegistry } from './proc.ts';
 import { Runner } from './runner.ts';
 import { startOwnThread } from './own-threads.ts';
-import { askBrief, ConvexUseTally, FullSyncOffer, fullSyncAnswerer, fullSyncQuestion, fullSyncReason } from './convex-use.ts';
-// How long after starting the runner looks for a reason to ask about full sync,
-// and how long after a pairing or a new machine it asks (convex-use.ts).
-const ASK_FULL_SYNC_AFTER_MS = 5 * 60_000;
-const ASK_FULL_SYNC_EVENT_MS = 30_000;
-// And how often it looks again while it hasn't asked: a token issued by hand
-// (npx convex run tokens:issue) fires nothing here.
-const ASK_FULL_SYNC_LOOK_MS = 60 * 60_000;
+import { ConvexUseTally } from './convex-use.ts';
 import { CodexAdapter } from './adapters/codex/adapter.ts';
 import { AcpAdapter } from './adapters/acp/adapter.ts';
 import { ACP_AGENTS, ACP_PROVIDERS, type AcpProvider } from './adapters/acp/agents.ts';
@@ -325,15 +318,6 @@ async function main(): Promise<void> {
   const instructions = new InstructionsStore({ home: cfg.home, token, publish: (n) => runner.publish(n) });
   runner = new Runner({
     threadKey: (id) => makeThreadKey(token, id),
-    // Mike's pick on the full sync question's card sets it, once: the asking
-    // thread's agent can't (Daybreak 121, convex-use.ts fullSyncAnswer).
-    answered: fullSyncAnswerer({
-      asked: () => {
-        const s = readRunnerJson(cfg.home).sync;
-        return { thread: s?.fullAskedThread, question: s?.fullAskedQuestion };
-      },
-      set: (on) => void settings.update({ fullSync: on }),
-    }),
     standingInstructions: () => instructions.given(),
     projects,
     atMac: () => atMac,
@@ -541,9 +525,6 @@ async function main(): Promise<void> {
     if (scheduler.list(id).some((sc) => sc.threadId === id && !sc.finishedAt && sc.check)) leftBehind.push("its schedules' shell checks");
     return { ...info, leftBehind };
   };
-  // Made further down, once there's a runner to start its thread on; the
-  // backend's remote-runner updates reach it through this (convex-use.ts).
-  let fullSyncOfferRef: FullSyncOffer | undefined;
   const sync = new ConvexSync({
     config: { ...cfg.sync, runnerId: syncRunnerId, icon: runnerIcon },
     use: new ConvexUseTally({ home: cfg.home }),
@@ -599,8 +580,6 @@ async function main(): Promise<void> {
       // Another runner's followProblem comes in with these rows.
       if (n.method === 'remoteThreads.updated') {
         publishUpdates();
-        // Another machine has turned up on this backend: full sync would help.
-        if ((n.params as { runners?: { online?: boolean }[] } | undefined)?.runners?.some((r) => r.online)) fullSyncOfferRef?.trigger('machine');
       }
     },
     home: cfg.home,
@@ -741,65 +720,6 @@ async function main(): Promise<void> {
     // The app's Bring Them In and Let's Discuss titles (UpdatesPanel).
     openByHand: () => runner.list(['inbox', 'snoozed']).find((t) => /^(Bring in|Discuss) Mike's release /.test(t.title))?.id,
   });
-  // Full sync starts off, and the main runner asks once whether to turn it on,
-  // when it would help: a phone or browser paired, or another machine here
-  // (convex-use.ts FullSyncOffer). An install with sync.full set either way is
-  // never asked. Noted in runner.json once the thread is open, so it's once.
-  // The question the asking thread was given, noted with its id: Mike's
-  // pick counts only on a card that asks exactly that (fullSyncAnswer).
-  let fullSyncQuestionAsked: string | undefined;
-  const fullSyncOffer = new FullSyncOffer({
-    read: () => {
-      const j = readRunnerJson(cfg.home);
-      return { syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && syncKey), key: syncKey, full: j.sync?.full, asked: j.sync?.fullAsked };
-    },
-    start: (reason) => {
-      // The checkout's tb, as this release's folder is pruned after a few more.
-      const tbPath = thisRelease?.checkout ? path.join(thisRelease.checkout, 'runner', 'bin', 'tb') : path.join(import.meta.dirname, '..', 'bin', 'tb');
-      const tb = `'${tbPath.replace(/'/g, `'\\''`)}'`;
-      const machine = process.platform === 'darwin' ? 'Mac' : 'machine';
-      fullSyncQuestionAsked = fullSyncQuestion(reason, machine);
-      return startOwnThread(runner, askBrief(tb, reason, machine), thisRelease?.checkout);
-    },
-    note: (threadId, clear) => {
-      const json = readRunnerJson(cfg.home);
-      const { fullAsked: _a, fullAskedThread: _t, fullAskedQuestion: _q, ...rest } = json.sync ?? {};
-      json.sync = clear ? rest : { ...rest, fullAsked: new Date().toISOString(), ...(threadId ? { fullAskedThread: threadId, ...(fullSyncQuestionAsked ? { fullAskedQuestion: fullSyncQuestionAsked } : {}) } : {}) };
-      writeRunnerJson(cfg.home, json);
-    },
-    later: (fn, ms) => void setTimeout(fn, ms).unref?.(),
-    delayMs: ASK_FULL_SYNC_EVENT_MS,
-    allowed: () => !stopping && !draining,
-    log: (msg, meta) => log.info(msg, meta),
-  });
-  fullSyncOfferRef = fullSyncOffer;
-  // A phone, browser or other machine that's already there: a few minutes in,
-  // so a release that's about to roll back doesn't ask, then hourly while it
-  // hasn't, for a token issued by hand or a lookup that failed. Two small
-  // reads (tokens, and the runners list without their threads), and only a
-  // runner heard from in the last few minutes counts: one whose key was revoked
-  // can't heartbeat, but lingers in the list.
-  const lookForFullSyncReason = async () => {
-    if (!fullSyncOffer.open || stopping || draining) return;
-    try {
-      const devices = await sync.listTokens();
-      const now = Date.now();
-      const others = (await sync.scheduleBackend().runners()).filter((r) => r.id !== syncRunnerId && r.lastSeenAt !== undefined && now - r.lastSeenAt < 3 * 60_000);
-      fullSyncOffer.trigger(fullSyncReason({ devices, otherRunners: others.length }));
-    } catch {
-      // Offline or refused: the next look tries again.
-    }
-  };
-  setTimeout(() => {
-    void lookForFullSyncReason();
-    const look = setInterval(() => {
-      // Once it's asked, or been answered, there's nothing left to look for. An
-      // offer waiting to open isn't that: it may fail and need the next look.
-      if (!fullSyncOffer.eligible) clearInterval(look);
-      else void lookForFullSyncReason();
-    }, ASK_FULL_SYNC_LOOK_MS);
-    look.unref?.();
-  }, ASK_FULL_SYNC_AFTER_MS).unref?.();
   const upstream = new Upstream({
     home: cfg.home,
     checkout: thisRelease?.checkout,
@@ -880,7 +800,7 @@ async function main(): Promise<void> {
   updaterReady = true;
 
   runner.attachClis(updates);
-  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync, (kind) => fullSyncOffer.trigger(kind)), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
+  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
   // runner.status carries the CLI statuses too (protocol, "runner.status").
   const restartStatus = methods['runner.status'];
   methods['runner.status'] = (p) => {

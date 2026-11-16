@@ -776,8 +776,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       return 0;
     }
     case 'settings': {
-      // tb settings full on|off: full sync (docs/full-convex.md), the one
-      // setting the runner asks about by itself (convex-use.ts askBrief).
+      // tb settings full on|off: full sync (docs/full-convex.md).
       if (args[0] === 'full') {
         const v = args[1];
         if (v !== 'on' && v !== 'off') {

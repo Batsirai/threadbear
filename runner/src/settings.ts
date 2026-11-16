@@ -151,11 +151,10 @@ export class SettingsService {
     if (u.keepAwake !== undefined) json.keepAwake = this.cfg.keepAwake = u.keepAwake;
     // Read each time it's needed (bring-in.ts), so this takes effect at once.
     if (u.bringIn !== undefined) json.releases = { ...json.releases, bringIn: u.bringIn };
-    // Saved only: the mirror reads it when the runner starts. Either answer is
-    // an answer, so the runner never asks about it again (convex-use.ts).
-    // And the question's thread can't answer it again (Daybreak 121).
+    // Saved only: the mirror reads it when the runner starts. The once-only
+    // offer's notes (taken out 16 Nov 2026) go with any answer.
     if (u.fullSync !== undefined) {
-      const { fullAskedThread: _t, fullAskedQuestion: _q, ...sync } = json.sync ?? {};
+      const { fullAsked: _a, fullAskedThread: _t, fullAskedQuestion: _q, ...sync } = json.sync ?? {};
       json.sync = { ...sync, full: u.fullSync };
     }
     if (folders !== undefined || pool !== undefined) {

@@ -165,8 +165,7 @@ yourself: it can run their agents.
 Say what was set up (their Convex project and its URL, where the app is), and
 that the runner and app update themselves when their `main` changes. Also say,
 in a line, that full sync is off: it would let their phone, the website and other
-machines show tool output and diffs too, and Threadbear offers it once they pair a
-phone or add a machine (`tb settings full on` turns it on now).
+machines show tool output and diffs too, and `tb settings full on` turns it on.
 
 ## Another Mac (optional)
 

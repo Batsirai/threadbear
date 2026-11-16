@@ -61,8 +61,7 @@ export function signInLink(site: string, token: string): string {
   return `${site}/#token=${token}`;
 }
 
-// `onPaired`: a phone or browser token was issued here, the moment full sync
-// starts to help (convex-use.ts FullSyncOffer).
+// `onPaired`: a phone or browser token was issued here.
 export function devicesMethods(sync: ConvexSync, onPaired?: (kind: DeviceKind) => void): Record<string, (p: Record<string, unknown>) => unknown> {
   return {
     'devices.list': async (): Promise<DeviceList> => {
