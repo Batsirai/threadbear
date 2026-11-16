@@ -1278,6 +1278,9 @@ impl Threadbear {
         // caught up if it needs to be (pane_cache.rs). Taken out before the
         // open one goes in, which could otherwise push it out. A pane brought
         // from a panel is the thread's one, and a kept one can't be too.
+        // For the switch's line in the log (ThreadPane::log_read), before
+        // taking from and adding to the kept ones changes them.
+        let why = (if self.kept.was_evicted(&id) { "evicted" } else { "new" }, self.kept.len());
         let kept = self.kept.take(&id, cx).filter(|_| moved.is_none());
         // The thread that was open stays loaded, for switching back.
         self.leave_pane(cx);
@@ -1289,13 +1292,18 @@ impl Threadbear {
         let pane = match (moved, kept) {
             (Some(pane), _) => pane,
             (None, Some(pane)) => {
+                threadbear_client::log::write("switch", &format!("id={} from=kept up_s={}", crate::thread::short_id(&summary.id), crate::app_log::uptime_s()));
                 pane.update(cx, |p, cx| {
                     p.summary_changed(&summary, cx);
                     p.shown_again(cx);
                 });
                 pane
             }
-            (None, None) => cx.new(|cx| ThreadPane::new(client, ThreadSummary::clone(&summary), composer.clone(), cx)),
+            (None, None) => cx.new(|cx| {
+                let mut pane = ThreadPane::new(client, ThreadSummary::clone(&summary), composer.clone(), cx);
+                pane.timing.why = Some(why);
+                pane
+            }),
         };
         let reduce = cx.reduce_motion();
         pane.update(cx, |p, _| p.entering = crate::open_motion::Entering::new(opening, reduce));

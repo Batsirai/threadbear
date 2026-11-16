@@ -50,6 +50,13 @@ pub(crate) struct LoadTiming {
     /// one, unless a reconnect or Try again read it again. Switching back to a
     /// kept thread makes none (app.rs, `kept`).
     reads: u32,
+    /// No transcript was showing when this read started, so Mike was looking
+    /// at the spinner for it, rather than at rows a reload replaces.
+    cold: bool,
+    /// Why opening the thread had to read it (app.rs `open`): `new`, not
+    /// opened since the app started, or `evicted`, pushed out of the kept
+    /// ones (pane_cache.rs); and how many were kept then.
+    pub(crate) why: Option<(&'static str, usize)>,
 }
 
 impl LoadTiming {
@@ -558,7 +565,7 @@ impl ThreadPane {
         let client = self.client.clone();
         let id = self.summary.id.clone();
         let root = self.summary.cwd.clone();
-        self.timing = LoadTiming { started: Some(std::time::Instant::now()), reads: self.timing.reads + 1, ..Default::default() };
+        self.timing = LoadTiming { started: Some(std::time::Instant::now()), reads: self.timing.reads + 1, cold: !self.loaded, ..Default::default() };
         cx.spawn(async move |this, cx| {
             let v = match call(client.clone(), "threads.events", json!({ "threadId": id, "limit": EVENTS_PAGE })).await {
                 Ok(v) => v,
@@ -574,6 +581,7 @@ impl ThreadPane {
                         } else {
                             this.load_failed = Some(e.message);
                         }
+                        threadbear_client::log::write("switch", &format!("id={} from=read failed after_ms={:.0} up_s={}", short_id(&this.summary.id), this.timing.since(), crate::app_log::uptime_s()));
                         cx.notify();
                     })
                     .ok();
@@ -1545,6 +1553,34 @@ impl ThreadPane {
     }
 }
 
+impl ThreadPane {
+    /// One line in the app's log per read, once its rows are on screen:
+    /// how long it kept Mike waiting and where the time went, which
+    /// desktop/scripts/switch-stats.mjs adds up. Only the installed app writes
+    /// the file (app_log.rs). Mike, 16 Nov, seeing more spinners switching
+    /// threads, and nothing had recorded how long they lasted.
+    fn log_read(&self) {
+        let t = &self.timing;
+        let from = if t.cold { "read" } else { "refresh" };
+        let why = t.why.map_or(String::new(), |(why, kept)| format!(" why={why} kept={kept}"));
+        let remote = if self.summary.runner_id.is_some() { " remote" } else { "" };
+        threadbear_client::log::write(
+            "switch",
+            &format!(
+                "id={} from={from}{why}{remote} waited_ms={:.0} request_ms={:.0} kb={} decode_ms={:.0} fold_ms={:.0} rows={} up_s={}",
+                short_id(&self.summary.id),
+                t.painted_ms.unwrap_or(0.),
+                t.request_ms,
+                t.bytes / 1024,
+                t.decode_ms,
+                t.fold_ms,
+                self.feed.model().rows().len(),
+                crate::app_log::uptime_s(),
+            ),
+        );
+    }
+}
+
 #[cfg(feature = "automation")]
 impl ThreadPane {
     /// The rows as the Swift app's dump gives them, with their heights once
@@ -1729,11 +1765,17 @@ impl Render for ThreadPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The first frame drawn with its rows, for the read's timings: once
         // this frame is on screen.
-        if self.loaded && self.timing.started.is_some() && self.timing.painted_ms.is_none() {
+        // Its read done, not only rows showing: a reload under rows already
+        // shown would otherwise count the frame drawn as it started.
+        if self.loaded && self.timing.ready_ms.is_some() && self.timing.painted_ms.is_none() {
             self.timing.painted_ms = Some(-1.);
             let me = cx.weak_entity();
             window.on_next_frame(move |_, cx| {
-                me.update(cx, |this, _| this.timing.painted_ms = Some(this.timing.since())).ok();
+                me.update(cx, |this, _| {
+                    this.timing.painted_ms = Some(this.timing.since());
+                    this.log_read();
+                })
+                .ok();
             });
         }
         let loading = !self.loaded && self.error.is_none() && self.load_failed.is_none();
@@ -1895,4 +1937,10 @@ fn change_outbox(app: &WeakEntity<crate::app::Threadbear>, thread_id: &str, cx: 
     // A held message is in the drafts file while it's held, and out of it
     // once it's gone or come back to the box (`held_drafts`).
     app.update(cx, |app, cx| app.drafts_changed(cx)).ok();
+}
+
+/// A thread's id as the log names it: the first eight characters, as a
+/// `thread:` link or `tb show` takes it.
+pub(crate) fn short_id(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
 }
