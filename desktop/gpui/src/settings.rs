@@ -13,8 +13,9 @@
 // mechanical: read each key across as-is, and for the frame
 // parse NSStringFromRect's "{{x, y}, {w, h}}" (bottom-left origin) into a
 // top-left one.
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use threadbear_client::config::RunnerConfig;
 use threadbear_core::completion_sound::{self, Ding};
@@ -115,6 +116,33 @@ pub struct Saved {
     /// 13 Nov). A panel with its title hidden moves from its background
     /// either way. The GPUI app's own.
     pub panel_background_drag: Option<bool>,
+    /// Fields this build doesn't know (a newer build's), kept as they are,
+    /// so going back a version and forward again loses nothing.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Saved {
+    fn after_a_broken_file() -> Self {
+        let now = threadbear_core::inbox::iso_time(crate::now_ms());
+        Saved { swift_import: Some(now.clone()), swift_tour_import: Some(now), tour_seen: Some(true), ..Saved::default() }
+    }
+}
+
+/// A JSON object read field by field: a field `T` can't take is left out
+/// (and logged by name, never its value), so the rest still count. None
+/// when it isn't a JSON object at all. `T` must take any one of its fields
+/// alone (`#[serde(default)]`).
+pub(crate) fn tolerant<T: DeserializeOwned>(data: &[u8], file: &str) -> Option<T> {
+    let Ok(Value::Object(mut fields)) = serde_json::from_slice::<Value>(data) else { return None };
+    fields.retain(|key, value| {
+        let fits = serde_json::from_value::<T>(Value::Object(Map::from_iter([(key.clone(), value.clone())]))).is_ok();
+        if !fits {
+            threadbear_client::log::write("settings", &format!("{file}: left out {key}, which isn't the type this build reads"));
+        }
+        fits
+    });
+    serde_json::from_value(Value::Object(fields)).ok()
 }
 
 /// The settings file: where it is and what's in it. Reading is at launch only;
@@ -142,8 +170,27 @@ impl Settings {
         Self::load_from(path)
     }
 
+    /// One field of the wrong type (an agent's edit, an older build reading
+    /// a newer one's) loses only that field. A file that can't be read at
+    /// all is kept beside it as desktop-settings.json.broken, and the steps
+    /// that must only ever happen once count as done: the file is only ever
+    /// written by this app, so it has run here before, and bringing the
+    /// Swift app's drafts across again could put back ones already sent
+    /// (swift_import.rs). It used to read as no file at all, and the next
+    /// save wrote the defaults over it.
     pub fn load_from(path: PathBuf) -> Self {
-        let saved = std::fs::read(&path).ok().and_then(|data| serde_json::from_slice::<Saved>(&data).ok()).unwrap_or_default();
+        let saved = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Saved::default(),
+            read => match read.ok().and_then(|data| tolerant::<Saved>(&data, Self::file_name())) {
+                Some(saved) => saved,
+                None => {
+                    let aside = path.with_file_name(format!("{}.broken", Self::file_name()));
+                    let kept = std::fs::copy(&path, &aside).is_ok();
+                    threadbear_client::log::write("settings", &format!("{} couldn't be read{}; starting from the defaults, with the Swift import and the tour counted as done", Self::file_name(), if kept { ", kept as .broken" } else { "" }));
+                    Saved::after_a_broken_file()
+                }
+            },
+        };
         Settings { path, saved }
     }
 
@@ -235,18 +282,39 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_file_is_as_good_as_none() {
+    fn a_broken_file_is_kept_and_the_once_only_steps_stay_done() {
         let path = temp_file("broken");
         std::fs::write(&path, "{ half").unwrap();
-        let s = Settings::load_from(path);
-        assert_eq!(s.saved, Saved::default());
+        let s = Settings::load_from(path.clone());
+        assert!(s.saved.swift_import.is_some(), "no second Swift import, which could bring sent drafts back");
+        assert!(s.saved.swift_tour_import.is_some());
+        assert_eq!(s.saved.tour_seen, Some(true));
+        assert_eq!(s.zoom_percent(), zoom::DEFAULT_PERCENT);
+        assert_eq!(std::fs::read_to_string(path.with_file_name("desktop-settings.json.broken")).unwrap(), "{ half");
     }
 
     #[test]
-    fn unknown_fields_are_kept_out_of_the_way() {
-        let path = temp_file("unknown");
-        std::fs::write(&path, r#"{"textZoomPercent": 140, "somethingNewer": true}"#).unwrap();
+    fn one_field_of_the_wrong_type_loses_only_that_field() {
+        let path = temp_file("wrong-type");
+        std::fs::write(&path, r#"{"textZoomPercent": 140, "swiftImport": "2026-11-12T01:00:00Z", "swiftImportParts": null, "inboxOrder": 5, "tourSeen": true}"#).unwrap();
         let s = Settings::load_from(path);
         assert_eq!(s.zoom_percent(), 140);
+        assert_eq!(s.saved.swift_import.as_deref(), Some("2026-11-12T01:00:00Z"));
+        assert_eq!(s.saved.swift_import_parts, Vec::<String>::new());
+        assert_eq!(s.saved.inbox_order, None);
+        assert_eq!(s.saved.tour_seen, Some(true));
+    }
+
+    #[test]
+    fn unknown_fields_are_read_past_and_saved_back() {
+        let path = temp_file("unknown");
+        std::fs::write(&path, r#"{"textZoomPercent": 140, "somethingNewer": {"on": true}}"#).unwrap();
+        let mut s = Settings::load_from(path.clone());
+        assert_eq!(s.zoom_percent(), 140);
+        s.set_zoom_percent(110);
+        s.save_checked().unwrap();
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["somethingNewer"], serde_json::json!({ "on": true }));
+        assert_eq!(written["textZoomPercent"], 110);
     }
 }
