@@ -528,6 +528,10 @@ type Runtime = {
   looseEndsBusy?: boolean;
   // That check's look at git, while it's going (LooseEndsPart.checkLooseEnds).
   looseEndsGather?: Promise<LooseEnd[]>;
+  // The card (its seq) of a finished helper that would have archived
+  // itself but for threads it started still going: it looks again as each
+  // of them finishes (runner/quiet-inbox.ts).
+  quietOnceChildrenDone?: number;
 };
 
 export type ThreadState = { rec: ThreadRecord; rt: Runtime };
@@ -2763,10 +2767,8 @@ export class Runner {
       this.markDirty(st);
     }
     // Finished for good, with nothing for Mike: a helper thread with nothing
-    // left open archives itself, and one only waiting on threads it started
-    // hibernates until they're done (experiment quietInbox,
-    // runner/quiet-inbox.ts). Not one a schedule had out of the archive: the
-    // lines above have dealt with it.
+    // left open archives itself (runner/quiet-inbox.ts). Not one a schedule
+    // had out of the archive: the lines above have dealt with it.
     if (finished && !review && !rec.labReviewOwed && !rt.turn && !rec.archivedAt && !this.stopping) void this.settleQuietly(st, Boolean(said?.next?.length));
     if (archive && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Archived, as the agent was asked to once it had finished.' });

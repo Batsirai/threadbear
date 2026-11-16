@@ -103,7 +103,12 @@ export const looseEndsPart = {
   // A thread that changed in a way its starter's card cares about.
   recheckStarter(this: Runner, st: ThreadState): void {
     const parent = st.rec.startedBy?.threadId;
-    if (parent) this.recheckLooseEnds(this.threads.get(parent));
+    if (!parent) return;
+    const up = this.threads.get(parent);
+    this.recheckLooseEnds(up);
+    // A finished helper held back only by threads it started goes once
+    // they're done, if its card is still the one it finished with.
+    if (up && up.rt.quietOnceChildrenDone !== undefined && up.rt.quietOnceChildrenDone === this.looseEndsCard(up)) void this.settleQuietly(up, false);
   },
 };
 

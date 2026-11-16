@@ -3678,42 +3678,35 @@ threads as before.
 
 ## A quiet inbox
 
-Experiment `quietInbox` (`runner/src/runner/quiet-inbox.ts`), off unless
-`runner.json` has `"experiments": { "quietInbox": true }`. On 12 Nov 2026
-Mike asked why three threads other threads had started sat in his inbox
-with nothing for him to do, and said of a done card listing threads its
-thread had started: "If that thread is waiting on another thread, then it
-shouldn't be in the inbox."
+`runner/src/runner/quiet-inbox.ts`. On 12 Nov 2026 Mike asked why three
+threads other threads had started sat in his inbox with nothing for him to
+do. Tried as the experiment `quietInbox` until 16 Nov, then made standard.
+The experiment also hibernated a finished thread whose only loose ends were
+threads it started, waking it with their replies; that was taken out, as it
+hid threads Mike wanted to read (a starred coordinator, the daily brief) and
+its wakes rarely had anything to say. A wait the agent asks for itself
+(end_turn's `waitFor`) is unchanged.
 
 When a turn finishes for good (completed, `needs: "nothing"`, nothing
 queued or running, no card waiting, no lab review of it started or owed,
-and not putting itself away with `archive`, `snooze` or `waitFor`), the
-runner gathers the thread's loose ends as the done card does (above),
-whether or not `looseEnds` is on, and then:
+and not putting itself away with `archive`, `snooze` or `waitFor`), and the
+thread's `startedBy.kind` is `thread`, its `next` is empty and Mike has had
+nothing to do with it, the runner gathers its loose ends as the done card
+does (above), whether or not `looseEnds` is on. If nothing is left at all
+(no `scheduled` either), it's archived (`archivedBy: "threadbear"`) after a
+`system.note`: "Archived: another thread started this one, and it finished
+with nothing left for you." If all that's left is threads it started
+(`thread` ends, working or waiting on Mike), it stays in the inbox, and
+each of them finishing or being archived looks again (`recheckStarter`),
+as long as the thread's done card is still the one it finished with; the
+last one going archives it, with no turn of its own.
 
-- **Waiting on its threads.** If every loose end is a `thread` (one it
-  started that's working or waiting on Mike; `scheduled` ones aside), it
-  hibernates waiting on them exactly as end_turn's `waitFor` would
-  (`waitingOn`, a day at the latest, the same note and the same wake with
-  their replies; each wait is marked `quiet`, so the wake's message says
-  the runner put it away and that there may be nothing more to do). Not
-  if any of them has less access than it (a lower mode, or a sandbox it
-  isn't in): their closing reply would reach its agent without the card
-  `send_message` shows for that, so it stays in the inbox. A `quiet` wait
-  never counts as asked for, so a thread raised, or a helper lowered,
-  while it waits wakes without their replies (Waiting on threads, above).
-  `finished` is dropped, so anything waiting on it in turn
-  doesn't count it as finished until its own wake turn finishes.
-- **A helper archives itself.** If nothing is left at all (no `scheduled`
-  either), the thread's `startedBy.kind` is `thread`, and its `next` is
-  empty, it's archived (`archivedBy: "threadbear"`) after a `system.note`:
-  "Archived: another thread started this one, and it finished with nothing
-  left for you." Not if Mike has had anything to do with it: a message of
-  his after its first (an answer to its card counts), a star, or having
-  been unarchived by hand (`keptOut` on its record, set by any
-  `threads.update` with `archived: false` on an archived thread). Its
-  first message is its starter's brief whatever it looks like, as `tb new`
-  from an agent's shell has no "Sent by the agent" line.
+Mike has had something to do with it if there's a message of his after its
+first (an answer to its card counts), a star, or it's been unarchived by
+hand (`keptOut` on its record, set by any `threads.update` with
+`archived: false` on an archived thread). Its first message is its
+starter's brief whatever it looks like, as `tb new` from an agent's shell
+has no "Sent by the agent" line.
 
 Anything else stays in the inbox: a turn that asks, fails or is stopped,
 one with follow-ups, uncommitted or unlanded work, an open PR. A message, an archive or a hibernate that arrives while git

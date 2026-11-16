@@ -312,12 +312,12 @@ export const hibernationPart = {
   // agent as a message, as send_message would let it without a card: the
   // waited-on thread has no less access than the waiting one has now, or the
   // waiting one's agent asked for it itself (end_turn's waitFor) and hasn't
-  // been raised since. A wait the quiet inbox made was never asked for, so
-  // it counts only the first (Daybreak, 12 Nov 2026: an Ask helper's closing
-  // reply started a turn in its Full-access starter).
+  // been raised since. A wait the agent never asked for (`by` missing) counts
+  // only the first (Daybreak, 12 Nov 2026: an Ask helper's closing reply
+  // started a turn in its Full-access starter).
   mayHear(this: Runner, me: Authority, w: NonNullable<ThreadState['rec']['waitingOn']>[number]): boolean {
     if (this.mayTellOf(me, w.threadId)) return true;
-    return !w.quiet && w.by !== undefined && !above(me, w.by);
+    return w.by !== undefined && !above(me, w.by);
   },
 
   deliverWaits(this: Runner, st: ThreadState, waits: NonNullable<ThreadState['rec']['waitingOn']>): void {
@@ -345,11 +345,7 @@ export const hibernationPart = {
     });
     const one = waits.length === 1;
     const why = one ? `"${waits[0].title}" finished` : 'the threads it was waiting on finished';
-    // A wait the runner started (experiment quietInbox, quiet-inbox.ts): the
-    // agent never said it would wait, and may have nothing more to do.
-    const text = waits.every((x) => x.quiet)
-      ? `Threadbear hibernated this thread after your last turn, as all it had left open was the thread${one ? '' : 's'} it started. ${one ? 'It has' : 'They have'} finished now.\n\n${parts.join('\n\n')}\n\nIf that leaves something to do, or to tell the user, do it now; if not, say so in a line. read_thread has the rest of ${one ? 'it' : 'them'}.`
-      : `The thread${one ? '' : 's'} you hibernated to wait on ${one ? 'has' : 'have'} finished.\n\n${parts.join('\n\n')}\n\nCarry on from here. read_thread has the rest of ${one ? 'it' : 'them'}.`;
+    const text = `The thread${one ? '' : 's'} you hibernated to wait on ${one ? 'has' : 'have'} finished.\n\n${parts.join('\n\n')}\n\nCarry on from here. read_thread has the rest of ${one ? 'it' : 'them'}.`;
     // Reports held for it while they worked come with this wake rather than
     // as a second one (runner/nested.ts).
     const reports = this.takeHeld(st);

@@ -668,6 +668,16 @@ To get rid of one for good, hover it there and click the trash, or
 right-click it and choose Delete…; after you confirm, it goes to the
 runner's trash folder, with no Undo in the app.
 
+A thread another thread's agent started archives itself when it finishes
+with nothing left for you: nothing asked, no follow-ups suggested, nothing
+uncommitted, unlanded or unmerged, no background job running and no
+check-in booked. If threads it started itself are still going, it waits for
+them first. A note in the thread says why it went, and it shows as archived
+under "Threads it started" in the Highlights of the thread that started it.
+It stays in the inbox if you've written in it, starred it or brought it back
+out of the archive, and so does one that failed or was stopped. Threads you
+started, and ones a tool or a schedule started, never archive this way.
+
 Back and Forward (⌘[ and ⌘], in the Go menu, or the ‹ and › beside the share
 icon at the top right of a thread) step through the threads and
 pages you've had open, as a browser does. Hover either arrow to see which
