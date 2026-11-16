@@ -218,7 +218,7 @@ test('a helper written to after it finished, while its helpers worked, is decide
 });
 
 test('works beside the done card\'s own check, which still fills the card', async () => {
-  const h = setup({ looseEnds: true });
+  const h = setup();
   const own = mine(h);
   finish(h, own);
   await until(() => Boolean(h.runner.get(own).looseEnds), 'the card check');

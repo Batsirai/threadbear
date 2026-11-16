@@ -2716,7 +2716,7 @@ export class Runner {
       !rt.taskEndedInTurn && !rt.finished.length;
     const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor));
     this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue, signedOut);
-    // The done card's loose ends (experiment looseEnds), unless it's going
+    // The done card's loose ends, unless it's going
     // away now; and the card of the thread that started this one, which
     // lists this one while it's working.
     if (outcome === 'completed' && said?.needs === 'nothing' && !archive) void this.checkLooseEnds(st);

@@ -3532,9 +3532,10 @@ type OpenAsk = Ask & { ticked?: true }
 
 ## Loose ends
 
-Experiment `looseEnds` (`runner/src/loose-ends.ts`,
-`runner/src/runner/loose-ends.ts`), off unless `runner.json` has
-`"experiments": { "looseEnds": true }`. On 6 Nov 2026 Mike typed some form
+`runner/src/loose-ends.ts`, `runner/src/runner/loose-ends.ts`. Tried as
+the experiment `looseEnds` from 7 Nov 2026, standard since 16 Nov (typed
+asks fell to two in five days, and nine in ten archives came from the done
+card's button). On 6 Nov 2026 Mike typed some form
 of "anything else, or should we archive?" 27 times rather than click the
 done card's Archive, which puts a thread away at once: he wanted to know
 nothing was left first. The runner now checks what it can see for itself
@@ -3692,7 +3693,7 @@ queued or running, no card waiting, no lab review of it started or owed,
 and not putting itself away with `archive`, `snooze` or `waitFor`), and the
 thread's `startedBy.kind` is `thread`, its `next` is empty and Mike has had
 nothing to do with it, the runner gathers its loose ends as the done card
-does (above), whether or not `looseEnds` is on. If nothing is left at all
+does (above). If nothing is left at all
 (no `scheduled` either), it's archived (`archivedBy: "threadbear"`) after a
 `system.note`: "Archived: another thread started this one, and it finished
 with nothing left for you." If all that's left is threads it started

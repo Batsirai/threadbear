@@ -33,7 +33,7 @@ export type View = {
   needs?: string;
   asks: Ask[];
   next: string[];
-  // The done card's loose ends (experiment looseEnds), as their words.
+  // The done card's loose ends, as their words.
   looseEnds: string[];
   // Review by another lab's ledger on the last turn's card.
   review?: unknown;
@@ -207,9 +207,6 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
         h.runner.threads.get(thread.id)!.rec.labReview = { ...ledger, delivered: ledger.rounds };
       },
       looseEnds: (checkIn) => {
-        const file = path.join(h.cfg.home, 'runner.json');
-        const json = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-        fs.writeFileSync(file, JSON.stringify({ ...json, experiments: { ...json.experiments, looseEnds: true } }));
         const mine = thread.id;
         const others = h.runner.schedulesFor;
         h.runner.schedulesFor = (t) => (t === mine ? [{ id: `s-${mine}`, title: checkIn.title, text: '', whenText: '', paused: false, createdAt: '', updatedAt: '', runs: 0, threadId: t, nextRunAt: checkIn.at }] : (others?.(t) ?? []));
@@ -219,7 +216,7 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
   // The loose ends check runs after the turn ends, off the turn's path.
   for (const id of ids) {
     const end = Date.now() + 2000;
-    while (h.runner.threads.get(id)?.rec.needs?.needs === 'nothing' && !h.runner.get(id).looseEnds && fs.readFileSync(path.join(h.cfg.home, 'runner.json'), 'utf8').includes('"looseEnds":true') && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+    while (h.runner.threads.get(id)?.rec.needs?.needs === 'nothing' && !h.runner.get(id).looseEnds && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
   }
   sync.start();
   await sync.flushNow();

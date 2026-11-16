@@ -1,4 +1,4 @@
-// Loose ends on the done card (experiment looseEnds, loose-ends.ts;
+// Loose ends on the done card (loose-ends.ts;
 // docs/protocol.md, "Loose ends"). Checked when a turn ends with needs
 // "nothing", and again when something they depend on may have moved: an
 // action ran (Land), Mike opened the thread, or a thread it started
@@ -7,7 +7,6 @@
 import type { Runner, ThreadState } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { LooseEnd } from '../protocol.ts';
-import { experimentOn } from '../experiments.ts';
 import { childLooseEnds, editedLooseEnds, runningLooseEnds, scheduleLooseEnds, worktreeLooseEnds, type ChildThread } from '../loose-ends.ts';
 
 // Opening a thread checks again at most this often: a click between
@@ -61,7 +60,6 @@ export const looseEndsPart = {
   // Checks the thread's loose ends for its done card and puts them on its
   // summary. Quiet on failure: a card that says nothing is today's card.
   async checkLooseEnds(this: Runner, st: ThreadState): Promise<void> {
-    if (!experimentOn(this.cfg.home, 'looseEnds')) return;
     const seq = this.looseEndsCard(st);
     if (seq === undefined) return;
     const { rec, rt } = st;

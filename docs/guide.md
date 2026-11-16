@@ -182,7 +182,26 @@ card lists them under "Or carry on". Click any of them to tick them
 send: the ticked ones go to the agent together, with your words. Not
 sure what one means? Click the ? at its right to ask; it toggles the
 same way, so you can ask about several, tick others, and send them all
-together. When
+together.
+
+Before you archive, the Done card says what's still open, so you don't
+have to ask the agent first. Threadbear checks it itself: commits on the
+thread's worktree branch that aren't on main, files in its worktree that
+aren't committed (or, for a thread with no worktree of its own, files it
+changed that aren't committed and commits it made that aren't pushed),
+work it pushed that isn't on main yet (naming the PR when one is open on
+GitHub), threads it started that are still working or waiting for you,
+and a background job it's still running (archiving would stop it). The
+agent adds the things only it knows, like a reply it's waiting on from
+someone. They're listed under "Still open": a thread opens from its line,
+and Land is the chip above the message box. A check-in it booked shows
+under "Coming back", as the thread comes back by itself when it runs. If
+nothing is left, the card just says Done, so Archive is safe. It checks
+again when you open the thread, after an action like Land, and when a
+thread it started finishes. The phone's and the website's Done cards
+show the same list, though not for a thread on another Mac.
+
+When
 the reply does need you, a Needs you card takes its place in the message
 box, outlined, listing what to do; the same list is near the top of the
 thread's [Highlights](#highlights), with a box to tick off beside each

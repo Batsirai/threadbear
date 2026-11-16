@@ -1,4 +1,4 @@
-// Loose ends on the done card (experiment looseEnds; loose-ends.ts and
+// Loose ends on the done card (loose-ends.ts and
 // runner/loose-ends.ts): what's still open on a finished thread, checked
 // by the runner so a plain Archive is safe without asking the agent.
 import { test } from 'node:test';
@@ -15,7 +15,6 @@ import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { Scrubber } from '../../src/scrub.ts';
 import { useScrubForCuts } from '../../src/safe-cut.ts';
 import { redactSecrets, scrubText } from '../../src/redaction.ts';
-import { EXPERIMENTS } from '../../src/experiments.ts';
 import type { Schedule } from '../../src/protocol.ts';
 import type { WorktreeRecord } from '../../src/worktrees.ts';
 
@@ -53,10 +52,8 @@ async function until(check: () => boolean, what: string): Promise<void> {
   }
 }
 
-function setup(on = true) {
-  const home = tmpDir();
-  if (on) fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { looseEnds: true } }));
-  return makeHarness(home);
+function setup() {
+  return makeHarness(tmpDir());
 }
 
 function finish(h: ReturnType<typeof setup>, id: string, input: Record<string, unknown> = { needs: 'nothing' }) {
@@ -66,12 +63,6 @@ function finish(h: ReturnType<typeof setup>, id: string, input: Record<string, u
   s.text(`m${Math.random()}`, 'Done.');
   s.result('completed');
 }
-
-test('looseEnds: off by default, with a check-in booked', () => {
-  const x = EXPERIMENTS.find((e) => e.id === 'looseEnds');
-  assert.equal(x?.on, false);
-  assert.match(x?.reminder ?? '', /^[0-9a-f]{8}$/);
-});
 
 test('looseEnds: a worktree with nothing left says nothing; commits off main and uncommitted files are named', async () => {
   const w = repoWithWorktree();
@@ -153,10 +144,7 @@ test('looseEnds: a done turn gets a check on its summary, kept up to date, and o
   assert.equal(s.looseEnds, undefined);
 });
 
-test('looseEnds: not checked when off, when the turn needs Alex, or when it archives itself', async () => {
-  const off = setup(false);
-  const a = off.runner.create({ text: 'Fix it', accountId: 'claude-main' }).thread.id;
-  finish(off, a);
+test('looseEnds: not checked when the turn needs Alex, or when it archives itself', async () => {
   const h = setup();
   const b = h.runner.create({ text: 'Fix it', accountId: 'claude-main' }).thread.id;
   finish(h, b, { needs: 'you', asks: [{ question: 'Deploy it?' }] });
@@ -166,7 +154,6 @@ test('looseEnds: not checked when off, when the turn needs Alex, or when it arch
   const d = h.runner.create({ text: 'Fix it', accountId: 'claude-main' }).thread.id;
   finish(h, d);
   await until(() => Boolean(h.runner.get(d).looseEnds), 'the control');
-  assert.equal(off.runner.get(a).looseEnds, undefined);
   assert.equal(h.runner.get(b).looseEnds, undefined);
   assert.equal(h.runner.get(c).looseEnds, undefined);
   assert.deepEqual(h.runner.get(d).looseEnds?.ends, []);
