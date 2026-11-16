@@ -11,10 +11,6 @@ export const SENDS_PER_HOUR = 120;
 // when it lost its install, so this only stops a backend stuck in a loop;
 // nobody else can use it up, as only the deployment passes the check.
 export const REGISTRATIONS_PER_DEPLOYMENT_PER_DAY = 20;
-// Times a day /register may call one deployment back, whether or not it
-// says yes, so a deployment that answers slowly (or no) can't keep the
-// relay making calls for it.
-export const CHECKS_PER_DEPLOYMENT_PER_DAY = 40;
 
 // Relay-wide limits (Daybreak 144, 16 Nov 2026). The check in verify.ts
 // proves a caller runs the deployment it names, not that it runs
@@ -113,10 +109,12 @@ export const registerVerified = internalMutation({
 });
 
 // Asked by /register before it calls a deployment back: whether a
-// registration for it could succeed now, counting the call-back against
-// the deployment's daily allowance of them (registerVerified still checks
-// its own limits). In a mutation, so requests at once are counted too.
-export const startCheck = internalMutation({
+// registration for it could succeed now (registerVerified still checks).
+// Read-only on purpose: anything it counted could be run up by anyone
+// naming someone else's deployment, before the call-back says who they
+// are. So call-backs to a deployment that keeps saying no aren't capped;
+// they only ever go to its own convex.site address (verify.ts).
+export const mayRegister = internalQuery({
   args: { deployment: v.string() },
   returns: v.boolean(),
   handler: async (ctx, { deployment }) => {
@@ -125,22 +123,12 @@ export const startCheck = internalMutation({
       .query('installs')
       .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
       .first();
-    if (existing && (existing.registeredDay === today ? (existing.registeredToday ?? 0) : 0) >= REGISTRATIONS_PER_DEPLOYMENT_PER_DAY) return false;
-    if (!existing) {
-      const counts = await ctx.db
-        .query('days')
-        .withIndex('by_day', (q) => q.eq('day', today))
-        .unique();
-      if ((counts?.newInstalls ?? 0) >= NEW_INSTALLS_PER_DAY) return false;
-    }
-    const checks = await ctx.db
-      .query('checks')
-      .withIndex('by_deployment', (q) => q.eq('deployment', deployment).eq('day', today))
+    if (existing) return (existing.registeredDay === today ? (existing.registeredToday ?? 0) : 0) < REGISTRATIONS_PER_DEPLOYMENT_PER_DAY;
+    const counts = await ctx.db
+      .query('days')
+      .withIndex('by_day', (q) => q.eq('day', today))
       .unique();
-    if ((checks?.count ?? 0) >= CHECKS_PER_DEPLOYMENT_PER_DAY) return false;
-    if (checks) await ctx.db.patch(checks._id, { count: checks.count + 1 });
-    else await ctx.db.insert('checks', { deployment, day: today, count: 1 });
-    return true;
+    return (counts?.newInstalls ?? 0) < NEW_INSTALLS_PER_DAY;
   },
 });
 
@@ -307,12 +295,7 @@ export const expire = internalMutation({
       .withIndex('by_hour', (q) => q.lt('hour', hourOf(now - 2 * 86_400_000)))
       .take(EXPIRE_BATCH);
     for (const row of old) await ctx.db.delete(row._id);
-    const checks = await ctx.db
-      .query('checks')
-      .withIndex('by_day', (q) => q.lt('day', day(now)))
-      .take(EXPIRE_BATCH);
-    for (const row of checks) await ctx.db.delete(row._id);
-    if ([idle, gone, old, checks].some((b) => b.length === EXPIRE_BATCH)) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
+    if ([idle, gone, old].some((b) => b.length === EXPIRE_BATCH)) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
     return { installs: idle.length, removed: gone.length, hours: old.length };
   },
 });

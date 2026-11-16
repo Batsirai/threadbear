@@ -18,7 +18,7 @@ import { httpRouter } from 'convex/server';
 import { httpAction } from './_generated/server';
 import { internal } from './_generated/api';
 import { convexSite, deploymentVouches } from './verify';
-import { FCM_TOKEN, fcmGone } from './fcmMessage';
+import { FCM_TOKEN, androidSealedOk, fcmGone } from './fcmMessage';
 import { reasonKey } from './reasons';
 import { storedVersion } from './versions';
 
@@ -58,7 +58,7 @@ http.route({
     const nonce = str(b.nonce, 100);
     if (!site || !nonce) return json({ error: 'update Threadbear: this relay only registers Convex cloud deployments that confirm the registration (docs/push-relay.md)' }, 403);
     // Over a limit already: say so without calling anyone back.
-    if (!(await ctx.runMutation(internal.relay.startCheck, { deployment: site }))) return json({ error: 'too many new installs today' }, 429);
+    if (!(await ctx.runQuery(internal.relay.mayRegister, { deployment: site }))) return json({ error: 'too many new installs today' }, 429);
     if (!(await deploymentVouches(site, nonce))) return json({ error: "the deployment didn't confirm this registration" }, 403);
     try {
       return json(await ctx.runMutation(internal.relay.registerVerified, { deployment: site, ...(version ? { version } : {}) }));
@@ -87,10 +87,11 @@ http.route({
     const admitted = await ctx.runMutation(internal.relay.admit, { installId: auth[1]!, installKey: auth[2]!, ...(version ? { version } : {}) });
     if (admitted === 'auth') return json({ error: 'unauthorized' }, 401);
     if (admitted === 'limited') return json({ error: 'rate limited' }, 429);
-    // Firebase takes 4 KB of data in all, and a bigger one would fail as
-    // INVALID_ARGUMENT, which the relay counts against the install as a
-    // bad token (relay.ts tokenFault). A real backend's is under 2 KB.
-    const encrypted = str(b.encrypted, android ? 3_000 : 4000);
+    // An Android one that wouldn't fit Firebase's 4 KB (fcmMessage.ts
+    // androidSealedOk) goes without it, so the phone shows its stand-in, as
+    // anything over 4,000 characters always has: a long thread title can
+    // make a real one that big, so refusing the send would lose it.
+    const encrypted = android ? (androidSealedOk(b.encrypted) ? b.encrypted : undefined) : str(b.encrypted, 4000);
     // A throw (a malformed APNS_KEY_P8 makes signing throw) is counted
     // like any other failure, so relay:stats sees it.
     const r = await (android
