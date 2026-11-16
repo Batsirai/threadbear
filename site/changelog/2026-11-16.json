@@ -2,19 +2,6 @@
   "release": "2026-11-16",
   "highlights": [
     {
-      "kind": "added",
-      "title": "Nested threads",
-      "text": "Threads another thread started sit under it in the sidebar, and it hears from them once, when they've all finished. The group opens by itself when one has a question for you, and each one opens with a line saying who started it and why. An experiment: turn it on in Settings > General > Experiments.",
-      "media": {
-        "type": "clip",
-        "src": "nested-threads.mp4",
-        "poster": "nested-threads.webp",
-        "width": 1830,
-        "height": 1640,
-        "alt": "In the sidebar, GPUI Port Coordinator's row says 1 needs you and 5 working. Its group opens to show the threads it started indented under it, one asking a question and five working, with 2 finished at the bottom. Opening the one with the question shows \"Started by GPUI Port Coordinator, building the Browser pane\" at the top of the thread."
-      }
-    },
-    {
       "kind": "changed",
       "title": "Pick who reviews code",
       "text": "Settings > General > Code review now lists who reviews a thread's code changes, in order, each with its own model and effort. Drag them to change the order, or take one off. When one runs out, the next takes over.",
