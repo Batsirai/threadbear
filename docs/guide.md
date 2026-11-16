@@ -1399,7 +1399,9 @@ new change, until a round finds nothing. A quiet line in the thread, over
 the reply, shows who reviewed and how it came out, with each finding and
 what was done about it under it; the line opens the review thread. It
 stays off the done card, as it happens in the background. The review thread is archived when it's
-done, so it stays out of your inbox. A thread gets at most three reviews
+done, so it stays out of your inbox. That holds however the review ends:
+if it gives no verdict, asks you something or stops with an error, your
+thread still wakes with whatever it said, and carries on. A thread gets at most three reviews
 between your messages, and if the last one's fixes weren't looked at, the
 card says so. For now the findings only show on the Mac whose runner ran
 the thread; the phone, the website and your other Macs see the agent's

@@ -159,12 +159,15 @@ export const labReviewPart = {
     if (!rec) return undefined;
     // Only while the thread it reviews still waits on it: not a review from
     // before the ledger, nor one reopened later to explain itself.
-    if (rec.reviewOf) {
-      const waiting = this.threads.get(rec.reviewOf)?.rec.waitingOn?.some((w) => w.threadId === rec.id && w.review && !w.done);
-      return waiting ? { verdict: true } : undefined;
-    }
+    if (rec.reviewOf) return this.awaitedReview(rec) ? { verdict: true } : undefined;
     const open = openFindings(rec.labReview);
     return open.length ? { open } : undefined;
+  },
+
+  // A review thread the thread it reviews is still waiting on.
+  awaitedReview(this: Runner, rec: ThreadRecord): boolean {
+    if (!rec.reviewOf) return false;
+    return Boolean(this.threads.get(rec.reviewOf)?.rec.waitingOn?.some((w) => w.threadId === rec.id && w.review && !w.done));
   },
 
   // Reviews the last runner owed (startLabReview), once they're here: for

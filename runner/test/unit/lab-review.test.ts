@@ -828,3 +828,50 @@ test("labReview: a thread of a kept pool working in a worktree outside its folde
   assert.equal(login?.account.id, 'claude-3', 'not OpenCode, which no pool holds, nor the Codex pool');
   assert.equal(login?.independent, false);
 });
+
+// Grok's review of beddc644 ended with no end_turn the runner saw, and the
+// reviewed thread (and the thread waiting on it) slept for hours, while the
+// review sat in Mike's inbox as needing him (16 Nov 2026, 53cd067b). However
+// a review's turn ends, the thread it reviews hears and the review goes.
+function reviewSession(h: ReturnType<typeof setup>, id: string) {
+  const w = h.runner.threads.get(id)!.rec.waitingOn!.find((x) => x.review && !x.done)!;
+  const rs = h.codex.sessions.find((s) => s.opts.threadId === w.threadId)!;
+  rs.init();
+  return { reviewId: w.threadId, rs };
+}
+
+test('labReview: a review that ends without end_turn still wakes the agent with its reply, and goes', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const { reviewId, rs } = reviewSession(h, id);
+  rs.text('r1', 'peek.css:2 leaves a gap under the sheet.');
+  rs.result();
+  assert.equal(h.runner.get(id).snoozedUntil, undefined, 'awake');
+  const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+  assert.match(msg, /peek\.css:2 leaves a gap/);
+  assert.ok(h.runner.get(reviewId).archivedAt, 'the review is put away, not left asking Alex');
+});
+
+test('labReview: a review that ends asking Alex something still hands its findings back', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const { reviewId, rs } = reviewSession(h, id);
+  turn(h, reviewId, { session: rs, input: { needs: 'you', asks: [{ question: 'Should I run the e2e suite?' }] }, reply: 'src/app.ts:3 drops the session.' });
+  assert.equal(h.runner.get(id).snoozedUntil, undefined);
+  assert.match(h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string, /drops the session/);
+  assert.ok(h.runner.get(reviewId).archivedAt);
+});
+
+test('labReview: a review that fails still wakes the agent, saying it gave no verdict', () => {
+  const h = setup();
+  const id = start(h);
+  turn(h, id, { diffs: [codeDiff()] });
+  const { reviewId, rs } = reviewSession(h, id);
+  rs.result('failed', undefined, 'the model returned an error');
+  assert.equal(h.runner.get(id).snoozedUntil, undefined);
+  const msg = h.events(id).filter((e) => e.type === 'user.message').at(-1).text as string;
+  assert.match(msg, /stopped with an error before it gave a verdict: the model returned an error/);
+  assert.ok(h.runner.get(reviewId).archivedAt);
+});

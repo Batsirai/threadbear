@@ -2801,8 +2801,18 @@ export class Runner {
     // turn counts (the one after a sub-agent or background job ends is
     // often where the report is), so this reads end_turn itself, not `away`.
     // Judged before endTurn, which starts any queued message.
-    const finished = outcome === 'completed' && said?.needs === 'nothing' && !rec.queue.length && !archive &&
-      !snoozeFromTool(turn.endTurn) && !waitForFromTool(turn.endTurn) &&
+    // A review the reviewed thread is waiting on (runner/lab-review.ts) is
+    // finished however its turn ended: with no end_turn the runner saw, a
+    // question for Mike or an error. Its reply goes back as the findings and
+    // the review is put away (deliverReview), as a review is never Mike's
+    // to answer. Grok's end_turn went unseen and the thread it reviewed,
+    // and the one waiting on that, slept for hours (16 Nov 2026, 53cd067b).
+    // Not one that carries on by itself (a lost network, a limit, a login
+    // moved), nor one Mike stopped.
+    const reviewEnded = !turn.local && this.awaitedReview(rec) &&
+      (outcome === 'completed' || (outcome === 'failed' && !limitHit && !netLost && !signedOut));
+    const finished = (reviewEnded || (outcome === 'completed' && said?.needs === 'nothing' && !archive &&
+      !snoozeFromTool(turn.endTurn) && !waitForFromTool(turn.endTurn))) && !rec.queue.length &&
       !rec.subagents?.some((a) => a.status === 'running') && !rt.tasks.length && !rt.approvals.size &&
       // A job that ended mid-turn: the CLI's turn reading its result is next.
       !rt.taskEndedInTurn && !rt.finished.length;
@@ -2840,7 +2850,10 @@ export class Runner {
     if (!review && owed && finished && !rt.turn && !rec.labReviewOwed) review = this.startLabReview(st, owed.turnId, owed.reply, owed.seq);
     if (review) this.waitOnReview(st, review);
     // Owed to the next runner (a handover): finished once it's reviewed.
-    else if (finished && !rec.labReviewOwed) this.markFinished(st, turn.lastText);
+    else if (finished && !rec.labReviewOwed) {
+      const stopped = outcome === 'failed' ? `The review stopped with an error before it gave a verdict: ${r.error || 'no reason given'}.` : '';
+      this.markFinished(st, stopped ? [stopped, turn.lastText?.trim()].filter(Boolean).join('\n\n') : turn.lastText);
+    }
     if (outcome === 'completed' && this.waitedOnFor(rec.id).length) this.tellActivity({ kind: 'waited-on', threadId: rec.id });
     // A schedule's message brought this thread out of the archive (sendTo).
     // A run that finishes with nothing for Mike puts it back, so a watcher he

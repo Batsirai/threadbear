@@ -37,6 +37,8 @@ type Tool = {
   output: AcpToolContent[];
   rawOutput?: unknown;
   diffed: Set<string>;
+  // A call through Grok's use_tool (useToolCall).
+  wrapped?: boolean;
 };
 
 function toolKind(acp: string | undefined): ToolKind {
@@ -116,6 +118,20 @@ const firstLine = (s: string): string => firstLineSafely(s, 200, '…');
 export function canonicalToolName(name: string): string {
   const m = /^threadbear[_:.-]+(.+)$/.exec(name);
   return m ? `mcp__threadbear__${m[1]}` : name;
+}
+
+// Grok calls a deferred tool (an MCP server's, threadbear's among them)
+// through its own `use_tool`, as `{ tool_name: "threadbear__end_turn",
+// tool_input: {...} }`. Its first frame is titled use_tool and only a later
+// one names the tool, so the shape is enough, once the call is known to be
+// use_tool (by its title or name, now or before, or Grok's `variant`).
+function useToolCall(u: AcpToolCall, t: Tool): { name: string; input: Record<string, unknown> } | undefined {
+  const raw = u.rawInput;
+  if (!isPlainObject(raw) || typeof raw.tool_name !== 'string' || !raw.tool_name || !isPlainObject(raw.tool_input)) return undefined;
+  const isUseTool = raw.variant === 'UseTool' || [u.title, u.name, t.title, t.name].includes('use_tool') || t.wrapped === true;
+  if (!isUseTool) return undefined;
+  t.wrapped = true;
+  return { name: raw.tool_name, input: raw.tool_input };
 }
 
 export class AcpNormalizer {
@@ -219,7 +235,14 @@ export class AcpNormalizer {
     if (typeof u.kind === 'string') t.acpKind = u.kind;
     if (typeof u.name === 'string' && u.name) t.name = u.name;
     if (typeof u.title === 'string' && u.title) t.title = u.title;
-    if (isPlainObject(u.rawInput) && Object.keys(u.rawInput).length) t.input = u.rawInput;
+    const wrapped = useToolCall(u, t);
+    if (wrapped) {
+      // The row is the tool it calls, so the runner sees end_turn as
+      // end_turn: named `use_tool`, every Grok review's verdict went unseen
+      // and the thread it reviewed slept on (16 Nov 2026, 53cd067b).
+      t.name = wrapped.name;
+      t.input = wrapped.input;
+    } else if (isPlainObject(u.rawInput) && Object.keys(u.rawInput).length) t.input = u.rawInput;
     // Everything this call has ever named, however it was named.
     for (const p of requestPaths(u)) if (!t.paths.includes(p)) t.paths.push(p);
     if (Array.isArray(u.content)) t.output = u.content;
@@ -291,6 +314,9 @@ export class AcpNormalizer {
     if (!texts.length && isPlainObject(t.rawOutput)) {
       const said = t.rawOutput.output ?? t.rawOutput.error;
       if (typeof said === 'string') texts.push(said);
+      // Grok's MCP result: `output: { OkayOutput: "Noted: ..." }` (or its
+      // error's). Dropped, end_turn's "Noted" never reached the runner.
+      else if (isPlainObject(said)) for (const v of Object.values(said)) if (typeof v === 'string') texts.push(v);
     }
     out.push({ kind: 'event', event: { type: 'tool.result', itemId: t.id, ok, ...truncateResultText(texts.join('\n'), t.id, this.ctx), images } });
   }
