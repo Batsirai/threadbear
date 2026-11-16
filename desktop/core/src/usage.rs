@@ -1481,7 +1481,7 @@ pub fn lines_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Op
             out.push(format!("{}{}", if pooled { "## " } else { "# " }, name(&section.provider)));
             for account in &section.accounts {
                 let mut line = account.name();
-                if let Some(plan) = &account.plan {
+                if let Some(plan) = account.plan.as_ref().filter(|_| !account.plan_ended) {
                     line.push_str(&format!(" ({plan})"));
                 }
                 if let Some(note) = &account.note {

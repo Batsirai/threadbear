@@ -677,3 +677,34 @@ test("a Codex login's usage resets: kept from its reading, dropped once one has 
   s.clock.advance(61 * 60_000);
   assert.equal(store.usageFor(codex)?.resets, undefined);
 });
+
+// claude-main, 16 Nov 2026: its Max lapsed and the Usage card still said
+// "Max" and "Used up, back Wed 5 am". The flip shows on the next rescan.
+test("registry: a login whose plan lapsed is planEnded, with no plan name or usage, and a rescan says so", () => {
+  const d = discoveryRoot();
+  const file = path.join(d.accts, 'claude-2', '.claude.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const write = (organizationType: string) => fs.writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: 'two@example.com', organizationType } }));
+  write('claude_max');
+  const usage = new UsageStore({ limitsFile: path.join(d.root, 'none.json'), dataDir: path.join(d.root, 'data'), clock: new FakeClock(GENERATED), log: nullLogger });
+  usage.record('claude-2', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0, resetsAt: new Date(GENERATED + 86_400_000).toISOString() }], blocked: true, plan: 'Max' });
+  mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
+    const registry = new AccountRegistry(d.cfg, usage);
+    let two = registry.get('claude-2')!;
+    assert.equal(two.planEnded, undefined);
+    assert.equal(two.plan, 'Max');
+    assert.ok(two.usage);
+    const seen: Account[][] = [];
+    registry.onChange((accounts) => seen.push(accounts));
+    write('claude_free');
+    mock.timers.tick(11_000);
+    two = registry.get('claude-2')!;
+    assert.equal(two.planEnded, true);
+    assert.equal(two.plan, undefined);
+    assert.equal(two.usage, undefined);
+    assert.equal(seen.length, 1, 'clients are told');
+  } finally {
+    mock.timers.reset();
+  }
+});

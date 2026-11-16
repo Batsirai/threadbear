@@ -254,11 +254,15 @@ export class AccountRegistry {
     if (signIn?.signedOut) out.signedOut = true;
     if (signIn?.loginEndsAt) out.loginEndsAt = signIn.loginEndsAt;
     if (!this.usage) return out;
+    // A lapsed plan's last reading (a reset, "Max") would only promise room
+    // that isn't coming, to every client, the phone and older apps
+    // included, so none is sent. Pools skip it on planEnded alone.
+    const ended = !!out.planEnded;
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
-    if (id.plan) out.plan = id.plan;
+    if (id.plan && !ended) out.plan = id.plan;
     out.title = out.provider === 'codex' ? codexTitle(out.email, out.id) : out.provider === 'claude' ? (out.email ?? out.id) : out.title;
-    const usage = this.usage.usageFor(out);
+    const usage = ended ? undefined : this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;
   }

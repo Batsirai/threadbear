@@ -272,6 +272,8 @@ export function blockedUntil(a: Account, now: number): number {
 // limit, back at 6:10 pm", or "is down to 6% of its weekly limit, which
 // resets Thu 1 pm".
 export function limitWhy(a: Account, now: number, hit = false): string {
+  // Its last reading's reset would promise room that isn't coming.
+  if (a.planEnded) return "has no paid plan any more";
   const w = limitWindow(a);
   const name = w ? (w.kind === 'five_hour' ? '5-hour' : 'weekly') : 'usage';
   const at = w?.resetsAt && Date.parse(w.resetsAt) > now ? resetTime(w.resetsAt, now) : undefined;

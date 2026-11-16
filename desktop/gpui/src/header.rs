@@ -906,7 +906,10 @@ impl Threadbear {
         if !blocked && !failed_on_limit && waiting.is_none() {
             return None;
         }
-        let mut text = format!("{} has reached its limit", threadbear_core::logins::short_account_name(&thread.account_id, accounts));
+        let ended = logins.account(&thread.account_id).is_some_and(|a| a.plan_ended);
+        let name = threadbear_core::logins::short_account_name(&thread.account_id, accounts);
+        // A lapsed plan has no reset coming (the runner sends no usage for it).
+        let mut text = if ended { format!("{name}'s plan has ended") } else { format!("{name} has reached its limit") };
         // The soonest of the windows that are used up (`mainWindows`).
         let reset = usage.as_ref().and_then(|u| threadbear_core::new_thread::main_windows(u).into_iter().filter(|w| w.remaining_percent < 1.).filter_map(|w| w.resets_at).min());
         if let Some(ms) = reset {

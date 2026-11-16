@@ -148,6 +148,9 @@ pub fn room_tooltip<Tz: TimeZone>(account: &Account, now: &DateTime<Tz>) -> Stri
     if let Some(note) = account.note.as_deref().filter(|n| !n.is_empty()) {
         text.push_str(&format!(" ({note})"));
     }
+    if account.plan_ended {
+        return format!("{text}: Plan ended.");
+    }
     let Some(usage) = usage_of(account) else { return text };
     let main = main_windows(&usage);
     if usage.blocked {

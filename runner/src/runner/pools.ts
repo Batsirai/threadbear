@@ -285,6 +285,9 @@ export const poolsPart = {
     const { rec } = st;
     const now = this.clock.now();
     const account = this.usableAccounts().find((a) => a.id === rec.accountId);
+    // A lapsed plan has no reset to wait for: the thread stays stopped, and
+    // its limit box lets Mike move it.
+    if (account?.planEnded) return;
     // backAt when the reading says it's out; else (the turn found out
     // first) the tightest window's reset, or UNKNOWN_WAIT_MS.
     const at = account ? (backAt(account, now) ?? blockedUntil(account, now)) : now + UNKNOWN_WAIT_MS;
