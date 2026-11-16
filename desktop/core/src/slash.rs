@@ -355,9 +355,12 @@ impl PaletteLayout {
     }
 
     /// A dragged width: never under 480 (three columns and their words),
-    /// never wider than the window less a margin each side.
+    /// never wider than the window less a margin each side. In a window
+    /// too narrow for 480 and those margins, 8 in from each side, as
+    /// auto_width has it, rather than 480 and off the window.
     pub fn width_in(w: f64, window: f64) -> f64 {
-        w.max(480.).min((window - 80.).max(480.))
+        let most = (window - 80.).max(480.).min(window - 16.);
+        w.max(480.).min(most)
     }
 
     /// The width with none dragged: the box's, but never under the 480 a
@@ -692,6 +695,11 @@ mod tests {
         assert_eq!(PaletteLayout::height_in(400., 200.), 220., "220 even in a short window");
         assert_eq!(PaletteLayout::width_in(300., 1200.), 480.);
         assert_eq!(PaletteLayout::width_in(2000., 1200.), 1120.);
+        // A window narrower than 480 and its margins: 8 in from each side, as
+        // one with none dragged (auto_width), not 480 and off the window.
+        assert_eq!(PaletteLayout::width_in(600., 380.), 364.);
+        assert_eq!(PaletteLayout::width_in(300., 420.), 404.);
+        assert_eq!(PaletteLayout::width_in(500., 520.), 480.);
         assert_eq!(PaletteLayout::column(50., 110., 400., 900.), 110.);
         assert_eq!(PaletteLayout::column(700., 110., 400., 900.), 500., "leaving the others theirs");
     }

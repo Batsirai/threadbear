@@ -19,6 +19,10 @@ use crate::tips::Tip as _;
 
 /// The bands' width (PaletteFrame.band) and the palette's corners.
 const BAND: f32 = 10.;
+/// What the palette's columns don't get of its width, in points: the two
+/// 7-point lines between them and its 1-pixel edge each side (a point at
+/// most).
+pub(crate) const CHROME: f64 = 7. * 2. + 2.;
 pub(crate) const RADIUS: f32 = 14.;
 /// What the bands are called, to VoiceOver and to a script.
 const EDGE_NAMES: [(PaletteEdge, &str); 5] = [
@@ -47,9 +51,13 @@ thread_local! {
     /// Where the box is across the window (its left and width), last drawn,
     /// so a wide palette is kept inside the window.
     static BOX: Cell<(f32, f32)> = const { Cell::new((0., 0.)) };
-    /// The palette's top edge in the window's pixels, last drawn (the dump's
-    /// `palette.top`, in points), to check it stays inside the window.
-    static TOP: Cell<Option<f32>> = const { Cell::new(None) };
+    /// Where the palette was last drawn and the window it was in, and its
+    /// detail column's width, in the window's pixels (the dump's
+    /// `palette.frame`, `window` and `detailWidth`, in points), to check it
+    /// stays inside the window and leaves the details room.
+    static FRAME: Cell<Option<[f32; 4]>> = const { Cell::new(None) };
+    static VIEWPORT: Cell<(f32, f32)> = const { Cell::new((0., 0.)) };
+    static DETAIL: Cell<f32> = const { Cell::new(0.) };
     /// The band the pointer's over, lit in the accent.
     static LIT: Cell<bool> = const { Cell::new(false) };
     /// The palette as last drawn, in points: its width and height, and its
@@ -68,10 +76,34 @@ pub(crate) fn drawn() -> Option<[f64; 4]> {
     DRAWN.get()
 }
 
-/// The palette's top edge as last drawn, in the window's points.
+/// Where the palette was last drawn (x, y, width, height), the window's
+/// size, and the detail column's width, in the window's points.
 #[cfg(feature = "automation")]
-pub(crate) fn drawn_top() -> Option<f64> {
-    TOP.get().map(|top| f64::from(top / style::zoom_scale()))
+pub(crate) fn drawn_frame() -> Option<([f64; 4], [f64; 2], f64)> {
+    let points = |v: f32| f64::from(v / style::zoom_scale());
+    let (w, h) = VIEWPORT.get();
+    FRAME.get().map(|f| (f.map(points), [points(w), points(h)], points(DETAIL.get())))
+}
+
+/// A canvas that keeps where the palette itself is drawn, in the window it's
+/// drawn in, for the dump.
+pub(crate) fn measure_palette() -> impl IntoElement {
+    canvas(
+        |bounds, window, _| {
+            FRAME.set(Some([f32::from(bounds.origin.x), f32::from(bounds.origin.y), f32::from(bounds.size.width), f32::from(bounds.size.height)]));
+            let viewport = window.viewport_size();
+            VIEWPORT.set((f32::from(viewport.width), f32::from(viewport.height)));
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+}
+
+/// A canvas that keeps how wide the detail column came out, for the dump.
+pub(crate) fn measure_detail() -> impl IntoElement {
+    canvas(|bounds, _, _| DETAIL.set(f32::from(bounds.size.width)), |_, _, _, _| {}).absolute().inset_0().size_full()
 }
 
 /// What's kept, from the app's prefs.
@@ -118,16 +150,9 @@ pub(crate) fn left_offset(width: f32, window_width: f32) -> f32 {
     }
 }
 
-/// A canvas that keeps where the box is across the window, and where the
-/// palette's top is.
+/// A canvas that keeps where the box is across the window.
 pub(crate) fn measure_box() -> impl IntoElement {
-    canvas(
-        |bounds, _, _| {
-            BOX.set((f32::from(bounds.origin.x), f32::from(bounds.size.width)));
-            TOP.set(Some(f32::from(bounds.top())));
-        },
-        |_, _, _, _| {},
-    )
+    canvas(|bounds, _, _| BOX.set((f32::from(bounds.origin.x), f32::from(bounds.size.width))), |_, _, _, _| {})
     // Pinned, not left where the flow would put it (the box's canvas in
     // composer.rs).
     .absolute()
@@ -264,6 +289,7 @@ pub(crate) fn column_rule(which: usize, width: f64, others: f64, total: f64, cx:
         .group(group.clone())
         .flex_none()
         .relative()
+        // Counted in CHROME.
         .w(style::px(7.))
         .h_full()
         .flex()

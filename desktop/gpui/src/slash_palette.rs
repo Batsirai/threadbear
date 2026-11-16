@@ -317,16 +317,21 @@ impl Composer {
         let auto_height = slash::palette_height(f64::from(viewport.height / zoom), 300., 560.);
         let (width, height) = crate::slash_resize::size(layout, f64::from(self.card_width.get() / zoom), size(viewport.width / zoom, viewport.height / zoom), auto_height);
         // No taller than the room over the box, so it doesn't run off the
-        // top of the window where the box sits high up (the new-thread page).
+        // top of the window where the box sits high up (the new-thread page),
+        // even where that's under its usual least (a short window zoomed in):
+        // shorter beats cut off.
         let room = f64::from(self.box_top.get() / zoom) - 8. - 8.;
-        let height = if room > 0. { height.min(room.max(160.)) } else { height };
+        let height = height.min(room.max(0.));
         // Each column as wide as its longest entry needs, or as it was
         // dragged to, the description the rest; measured over every command,
         // not just the matches, so the columns hold still while typing
         // (SlashPalette.columnWidths).
         let categories_natural = layout.categories.unwrap_or_else(|| categories_natural_width(&view));
         let list_natural = layout.list.unwrap_or_else(|| list_natural_width(&view.all));
-        let (categories_width, list_width) = slash::column_widths(width, categories_natural, list_natural, layout.list.is_some(), 200., 120., 110.);
+        // Shared out over what's inside its edge and the two lines between
+        // the columns, so the detail really gets its 200.
+        let inner = width - crate::slash_resize::CHROME;
+        let (categories_width, list_width) = slash::column_widths(inner, categories_natural, list_natural, layout.list.is_some(), 200., 120., 110.);
         crate::slash_resize::drawn_as((width, height), (categories_width, list_width));
         let hairline = style::hairline(cx);
         let composer = cx.entity().downgrade();
@@ -345,10 +350,11 @@ impl Composer {
             // Keep clicks out of the transcript under it.
             .occlude()
             .child(div().flex_none().w(px(categories_width as f32)).h_full().child(categories))
-            .child(crate::slash_resize::column_rule(0, categories_width, list_width + 200., width, cx))
+            .child(crate::slash_resize::column_rule(0, categories_width, list_width + 200., inner, cx))
             .child(div().flex_none().w(px(list_width as f32)).h_full().child(list))
-            .child(crate::slash_resize::column_rule(1, list_width, categories_width + 200., width, cx))
-            .child(div().flex_1().min_w_0().h_full().child(detail))
+            .child(crate::slash_resize::column_rule(1, list_width, categories_width + 200., inner, cx))
+            .child(div().relative().flex_1().min_w_0().h_full().child(detail).child(crate::slash_resize::measure_detail()))
+            .child(crate::slash_resize::measure_palette())
             // Its edges drag it bigger; a right-click anywhere on it puts it back.
             .children(crate::slash_resize::edges((width, height), cx))
             .context_menu(move |menu, _, _| crate::slash_resize::menu(menu_composer.clone(), menu));
@@ -576,8 +582,12 @@ impl Composer {
             // height, and its categories' and list's widths.
             "size": crate::slash_resize::drawn().map(|d| [d[0], d[1]]),
             "columns": crate::slash_resize::drawn().map(|d| [d[2], d[3]]),
-            // Its top edge in the window, in points: under 0 is off the top.
-            "top": crate::slash_resize::drawn_top(),
+            // Where it was drawn (x, y, width, height) and the window's
+            // size, in the window's points, and how wide its detail column
+            // came out.
+            "frame": crate::slash_resize::drawn_frame().map(|f| f.0),
+            "window": crate::slash_resize::drawn_frame().map(|f| f.1),
+            "detailWidth": crate::slash_resize::drawn_frame().map(|f| f.2),
         })
     }
 }
