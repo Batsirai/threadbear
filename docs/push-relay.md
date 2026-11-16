@@ -23,6 +23,9 @@ each person's own Mac and their own Convex deployment.
   registered for) and daily totals (notifications sent and failed, why
   the failed ones failed as Apple's status and reason word, new
   installs). No device tokens, no thread ids, nothing per notification.
+  An install nobody has used for 90 days is removed (a daily cron,
+  `relay:expire`); its backend registers again by itself if it ever
+  sends another (since 16 Nov 2026).
 - **Opting out:** `npx convex env set PUSH_RELAY off` on your deployment. Then
   nothing goes to the relay, and the phone gets no notifications (they'd have
   to come from somewhere). Mike can forget an install:
@@ -95,7 +98,23 @@ deployment's `/relay/verify` (`convex/http.ts`), which says yes only to a
 nonce it made in the last five minutes, once. Only someone running the
 deployment passes, so each deployment gets one install (registering again
 gives it a new key) and nobody can use up anyone else's. The relay only
-calls back to `https://<name>[.<region>].convex.site`.
+calls back to `https://<name>[.<region>].convex.site`, and never follows a
+redirect from there (`redirect: 'error'`, and a yes only counts from the
+address it asked): any deployment could answer 307 and have the relay post
+on to a host of its choosing (Daybreak, 16 Nov 2026).
+
+The check proves a caller runs the deployment, not that it runs
+Threadbear, and anyone can make Convex deployments. So on top of each
+install's own limits there are relay-wide ones (Daybreak, 16 Nov 2026),
+sized well above real use and never touching an install that's already
+here: at most 100 deployments the relay hasn't seen before register in a
+UTC day (a deployment it knows can always register again); installs
+under a week old share one allowance of 600 sends an hour; and an
+install whose sends fail on bad device tokens (Apple's 400 and 410,
+Firebase's 400 and 404) gets 20 of those an hour. The relay's own
+failures (a revoked key, a timeout) don't count against anyone. A fork
+running its own relay gets the same limits, which a single person won't
+come near.
 
 There's no unchecked way in. Backends from before 5 Nov 2026 used one,
 with a shared daily allowance anyone could use up, and it went the same
@@ -113,7 +132,9 @@ hosts (self-hosted, a custom domain) can't use this relay: run your own
   `https://impartial-hound-393.ap-southeast-2.convex.site`), dev
   `clean-terrier-424`. Env: the same `APNS_*` as Threadbear's prod.
 - Limits: 120 sends an hour per install; 20 registrations a day per
-  deployment.
+  deployment; and the relay-wide ones in "Registering" above
+  (`relay/convex/relay.ts` has them all). `newInstalls` in each day of
+  `relay:stats` counts the deployments that registered for the first time.
 - Stats for Mike: `npx convex run relay:stats --prod` in `relay/`. Each
   day's `reasons` tallies the failures as `"<status> <reason>"` (since 6
   Nov 2026), and the relay's own log has a `[send] failed:` line for each

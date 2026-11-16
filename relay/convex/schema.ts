@@ -15,6 +15,8 @@ export default defineSchema({
     // Sends in the current hour, for the rate limit.
     hourStart: v.number(),
     hourSends: v.number(),
+    // Of those, the ones a bad device token failed (relay.ts tokenFault).
+    hourBad: v.optional(v.number()),
     // The deployment it registered for, checked by calling it back
     // (verify.ts), and how often that deployment registered on that UTC
     // day. None for installs from before the check (5 Nov 2026).
@@ -23,7 +25,9 @@ export default defineSchema({
     registeredToday: v.optional(v.number()),
   })
     .index('by_installId', ['installId'])
-    .index('by_deployment', ['deployment']),
+    .index('by_deployment', ['deployment'])
+    // For removing installs nobody has used in a long while (relay.ts expire).
+    .index('by_lastSeenAt', ['lastSeenAt']),
 
   // Anonymous totals per UTC day: notifications forwarded and installs that
   // sent one. What Mike looks at; nothing per install.
@@ -32,6 +36,9 @@ export default defineSchema({
     sends: v.number(),
     failed: v.number(),
     registrations: v.number(),
+    // Of those, deployments seen for the first time, capped relay-wide
+    // (relay.ts NEW_INSTALLS_PER_DAY). Since 16 Nov 2026.
+    newInstalls: v.optional(v.number()),
     // Of those, the ones registered without a deployment check, which
     // only happened on 5 Nov 2026 (that way in is gone; kept so old day
     // rows still match the schema).
@@ -43,4 +50,12 @@ export default defineSchema({
     // 2026, when 65 sends in two days failed and nothing said why.
     reasons: v.optional(v.record(v.string(), v.number())),
   }).index('by_day', ['day']),
+
+  // Sends this UTC hour ("2026-11-16T09") by installs under a week old,
+  // which share one allowance (relay.ts NEW_INSTALL_SENDS_PER_HOUR).
+  // Removed after two days (relay.ts expire).
+  hours: defineTable({
+    hour: v.string(),
+    newSends: v.number(),
+  }).index('by_hour', ['hour']),
 });

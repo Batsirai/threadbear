@@ -102,7 +102,7 @@ http.route({
     // install), so the relay's own logs say why sends fail; relay:stats
     // tallies the same.
     if (!ok) console.warn(`[send] failed: ${reasonKey(r.status, r.reason)}`);
-    await ctx.runMutation(internal.relay.counted, { ok, status: r.status, ...(r.reason ? { reason: r.reason } : {}) });
+    await ctx.runMutation(internal.relay.counted, { ok, status: r.status, installId: auth[1]!, ...(r.reason ? { reason: r.reason } : {}) });
     const gone = android ? fcmGone(r.status, r.reason) : r.status === 410 || r.reason === 'BadDeviceToken' || r.reason === 'Unregistered';
     return json({ ok, status: r.status, ...(r.reason ? { reason: r.reason } : {}), ...(gone ? { gone: true } : {}) });
   }),

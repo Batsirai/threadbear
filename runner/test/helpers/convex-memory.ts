@@ -19,6 +19,8 @@ import { v } from 'convex/values';
 import { objectProblem, problem } from './convex-validate.ts';
 
 const CONVEX = path.join(import.meta.dirname, '../../../convex');
+// The push relay's own Convex project (relay/convex), for memoryBackend(RELAY).
+export const RELAY = path.join(import.meta.dirname, '../../../relay/convex');
 
 export class ConvexError extends Error {
   data: unknown;
@@ -38,8 +40,8 @@ const defineTable = (fields: unknown): Def => {
   const def: Def = { __idx: {}, __fields: fields, index: (n, f) => ((def.__idx[n] = f), def), searchIndex: () => def };
   return def;
 };
-let indexes: Record<string, Record<string, string[]>> = {};
-let tableFields: Record<string, unknown> = {};
+// Per project folder (CONVEX or RELAY): each table's indexes and fields.
+const schemas = new Map<string, { indexes: Record<string, Record<string, string[]>>; tableFields: Record<string, unknown> }>();
 
 const isValidator = (x: unknown): x is V => Boolean(x && typeof x === 'object' && (x as { isConvexValidator?: unknown }).isConvexValidator);
 
@@ -58,15 +60,16 @@ const fakes: Record<string, Record<string, unknown>> = {
 
 const loaded = new Map<string, Record<string, unknown>>();
 
-export function load(name: string): Record<string, any> {
-  const hit = loaded.get(name);
+export function load(name: string, root = CONVEX): Record<string, any> {
+  const key = root === CONVEX ? name : `${root}:${name}`;
+  const hit = loaded.get(key);
   if (hit) return hit;
-  const raw = fs.readFileSync(path.join(CONVEX, `${name}.ts`), 'utf8');
+  const raw = fs.readFileSync(path.join(root, `${name}.ts`), 'utf8');
   const bound: Record<string, unknown> = {};
   for (const m of raw.matchAll(/^import (type )?\{([^}]*)\} from '([^']+)';$/gm)) {
     if (m[1]) continue;
     const from = m[3]!;
-    const mod = fakes[from] ?? (from.startsWith('./') ? load(from.slice(2)) : undefined);
+    const mod = fakes[from] ?? (from.startsWith('./') ? load(from.slice(2), root) : undefined);
     if (!mod) throw new Error(`convex-memory: no fake for ${from} (in ${name}.ts)`);
     for (const spec of m[2]!.split(',').map((s) => s.trim()).filter(Boolean)) {
       if (spec.startsWith('type ')) continue;
@@ -77,22 +80,27 @@ export function load(name: string): Record<string, any> {
   const names = [...raw.matchAll(/^export (?:async )?(?:function|const|let|class) (\w+)/gm)].map((m) => m[1]!);
   let src = raw.replace(/^import [^;]*;$/gm, '').replace(/^export default /m, 'const __default = ').replace(/^export /gm, '');
   src = stripTypeScriptTypes(src, { mode: 'strip' });
-  const mod = new Function(...Object.keys(bound), `${src}\nreturn { ${names.join(', ')}${/__default/.test(src) ? ', __default' : ''} };`)(...Object.values(bound));
-  loaded.set(name, mod);
+  const mod = new Function(...Object.keys(bound), `${src}\nreturn { ${[...names, ...(/__default/.test(src) ? ['__default'] : [])].join(', ')} };`)(...Object.values(bound));
+  loaded.set(key, mod);
   return mod;
 }
 
-function loadIndexes(): void {
-  if (Object.keys(indexes).length) return;
-  const schema = load('schema').__default as Record<string, Def>;
-  indexes = Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__idx]));
-  tableFields = Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__fields]));
+function loadSchema(root: string) {
+  const hit = schemas.get(root);
+  if (hit) return hit;
+  const schema = load('schema', root).__default as Record<string, Def>;
+  const out = {
+    indexes: Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__idx])),
+    tableFields: Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__fields])),
+  };
+  schemas.set(root, out);
+  return out;
 }
 
 type Row = Record<string, any> & { _id: string; _creationTime: number };
 
-export function memoryBackend() {
-  loadIndexes();
+export function memoryBackend(root = CONVEX) {
+  const { indexes, tableFields } = loadSchema(root);
   const tables: Record<string, Row[]> = {};
   const files = new Set<string>();
   const deleted: string[] = [];
