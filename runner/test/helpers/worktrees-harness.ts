@@ -7,9 +7,8 @@
 import { test } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
-import { makeHarness, tmpDir, type Harness } from './fakes.ts';
+import { isMadeTmp, makeHarness, tmpDir, type Harness } from './fakes.ts';
 import { git, gitLimits, land, type LandTarget } from '../../src/worktrees.ts';
 import { PATIENCE_MS } from './patience.ts';
 export { holdUntil } from './patience.ts';
@@ -64,12 +63,13 @@ export function makeBranch(main: string, id8 = 'abcd1234'): LandTarget {
   return { path: wt, branch: `thread/${id8}`, mainCheckout: main };
 }
 
-// Only ever in a temp repo: a test that works out the folder wrongly (an
-// empty path resolves to the process's own folder) would otherwise commit
+// Only ever in a folder this test made: one that works out the folder wrongly
+// (an empty path resolves to the process's own folder) would otherwise commit
 // into the real checkout running the tests, as one did on a fork (14 Nov).
+// Checked against tmpDir()'s own folders rather than the temp dir, which can
+// hold a real checkout too.
 export function commit(dir: string, files: Record<string, string>, message: string): void {
-  const tmp = fs.realpathSync(os.tmpdir());
-  if (!fs.realpathSync(dir).startsWith(tmp + path.sep)) throw new Error(`commit() is for temp repos only, not ${dir}`);
+  if (!isMadeTmp(dir)) throw new Error(`commit() is for this test's temp repos only, not ${dir || '(empty path)'}`);
   write(dir, files);
   sh(dir, `git add -A && git commit -qm "${message}"`);
 }

@@ -151,6 +151,16 @@ process.on('exit', () => {
 });
 
 // A temp folder that's removed when the test process exits.
+// Whether dir is inside a folder tmpDir() made in this process: what the
+// worktree tests' commit() checks before it runs git there (worktrees-harness.ts).
+export function isMadeTmp(dir: string): boolean {
+  const real = fs.realpathSync(dir);
+  return made.some((d) => {
+    const rel = path.relative(fs.realpathSync(d), real);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  });
+}
+
 export function tmpDir(prefix = 'tb-test-'): string {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   made.push(d);
