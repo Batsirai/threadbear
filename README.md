@@ -12,7 +12,7 @@
 <h1 align="center">Threadbear</h1>
 
 <p align="center">
-  A Mac app for running your Claude Code and Codex threads, on the subscriptions you already have.<br>
+  A Mac app for running your Claude Code, Codex, Grok, Cursor and OpenCode threads, on the subscriptions you already have.<br>
   You get all of the source, so when something bugs you, you (or more likely your agent) can change it.
 </p>
 
@@ -93,9 +93,10 @@ You fork the code, so you can change anything. My changes come as a daily releas
 - **Schedules that run on any of your Macs.** Send a thread a message at a set
   time, once or over and over, or start a new thread each time, on whichever
   Mac you pick.
-- **Runs on your own Claude or Codex login.** It drives the official `claude`
-  and `codex` command line tools, logged in as you, and never reads or copies
-  your login tokens.
+- **Runs on your own logins.** It drives the official `claude` and `codex`
+  command line tools, logged in as you, and never reads or copies your login
+  tokens. Grok, Cursor and OpenCode get threads too, through their own CLIs
+  ([more on those](docs/guide.md#accounts-pools-and-usage)).
 
 The [launch video](https://www.youtube.com/watch?v=HCR6jqR0LEI) goes through
 all of it in about 25 minutes, so grab yourself a lovely cup of tea first.
@@ -108,7 +109,8 @@ You'll need:
 
 - A Mac with Apple silicon, on macOS 26 or later
 - Xcode 26 or newer, and Node 24 or newer
-- Claude Code or Codex, installed and logged in
+- Claude Code or Codex, installed and logged in. Grok, Cursor and OpenCode
+  can run threads too, but titles and the librarian need a Claude login
 - A free [Convex](https://convex.dev) account
 - The GitHub CLI (`gh`), to make your fork
 
@@ -188,7 +190,8 @@ If you're an agent, start here:
 Where things are:
 
 - `runner/`: the runner (TypeScript), the background process that drives the
-  `claude` and `codex` CLIs
+  `claude` and `codex` CLIs, and Grok, Cursor and OpenCode over the Agent
+  Client Protocol
 - `app/`: the Mac app (SwiftUI and AppKit)
 - `ios/`: the iPhone app
 - `convex/`: the backend, `web/`: the website
