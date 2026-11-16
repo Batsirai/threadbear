@@ -314,7 +314,10 @@ PING=(ssh -o BatchMode=yes -o ConnectTimeout=20 -o ControlMaster=no -o ControlPa
 tree_of() {
   local kid
   echo "$1"
-  for kid in $(pgrep -P "$1" 2>/dev/null); do tree_of "$kid"; done
+  # Children by ps, not pgrep -P: Homebrew's proctools pgrep and pkill are
+  # reported to take -P with no pattern as every process on the machine, so a
+  # stop would signal them all (teodorboev's fork, 14 Nov 2026).
+  for kid in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'); do tree_of "$kid"; done
 }
 kill_tree() {
   local pids p left n=0
@@ -747,7 +750,8 @@ trap finish EXIT
 # ssh lived on, and the check with it.
 on_signal() {
   local kid
-  for kid in $(pgrep -P $$ 2>/dev/null); do kill_tree "$kid"; done
+  # ps, not pgrep -P, as in tree_of above.
+  for kid in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$$" '$2 == p { print $1 }'); do kill_tree "$kid"; done
   exit "$1"
 }
 trap 'on_signal 143' TERM

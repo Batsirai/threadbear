@@ -101,7 +101,10 @@ lock_pid=""
 # of one that has just exited would end the trap before its exit (Codex).
 on_signal() {
   [ -z "$lock_pid" ] || kill "$lock_pid" 2>/dev/null || true
-  pkill -TERM -P $$ 2>/dev/null || true
+  # Children by ps, not pgrep -P: Homebrew's proctools pgrep and pkill are
+  # reported to take -P with no pattern as every process on the machine, so a
+  # stop would signal them all (teodorboev's fork, 14 Nov 2026).
+  for kid in $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$$" '$2 == p { print $1 }'); do kill -TERM "$kid" 2>/dev/null || true; done
   if [ -n "$ssh_pid" ]; then
     kill "$ssh_pid" 2>/dev/null || true
     "${SSH[@]}" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
