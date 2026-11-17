@@ -16,6 +16,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpDir } from './fakes.ts';
+import { testSkippedOnWindows } from './platform.ts';
+
+// scripts/check-remote.sh copies a checkout to another machine with ssh and
+// rsync and names hosts with `hostname -s`: the check hosts are Macs and Linux.
+export const test = testSkippedOnWindows("check-remote.sh runs checks on another machine over ssh and rsync, and Windows' hostname has no -s");
 
 export const SCRIPT = path.join(import.meta.dirname, '..', '..', '..', 'scripts', 'check-remote.sh');
 

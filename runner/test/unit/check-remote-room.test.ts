@@ -1,10 +1,9 @@
 // scripts/check-remote.sh against fake hosts (helpers/check-remote-harness.ts
 // says how, and why it's several files): hosts short of disk: passing them over, and what the check wants free.
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { GiB, linuxDf, macDf, setup } from '../helpers/check-remote-harness.ts';
+import { GiB, linuxDf, macDf, setup, test } from '../helpers/check-remote-harness.ts';
 
 const changedSomething = (s: ReturnType<typeof setup>) => fs.writeFileSync(path.join(s.repo, 'changed.txt'), 'c\n');
 

@@ -84,3 +84,10 @@ export function realPath(p: string, q: RealProbe = {}): string {
     }
   }
 }
+
+// A path with forward slashes whatever the platform, for text a person reads
+// (messages name files as ./tools/x.sh) and for words a shell takes. It
+// changes nothing on macOS and Linux, where path.sep is already /.
+export function slashes(p: string): string {
+  return path.sep === '/' ? p : p.split(path.sep).join('/');
+}

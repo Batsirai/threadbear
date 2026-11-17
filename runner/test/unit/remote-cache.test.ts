@@ -6,8 +6,13 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test, type TestContext } from 'node:test';
+import { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { testSkippedOnWindows } from '../helpers/platform.ts';
+
+// These run Mike's build-host scripts for a Linux or Mac box with a stand-in
+// df and du on PATH, so there is nothing on Windows to run them against.
+const test = testSkippedOnWindows("desktop/scripts/remote.sh and trim-remote-cache.sh are for a Linux or Mac build host, and the tests fake df and du with bash scripts on PATH");
 
 const SCRIPTS = path.join(import.meta.dirname, '..', '..', '..', 'desktop', 'scripts');
 const TRIM = path.join(SCRIPTS, 'trim-remote-cache.sh');
