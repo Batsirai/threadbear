@@ -140,7 +140,7 @@ test('Daybreak 148: a runner back at the Mac while its held pushes drain stops t
   try {
     const b = memoryBackend();
     await secondary(b, 33, start);
-    const sec = () => b.rows('runners').find((r: any) => r.runnerId === 'sec');
+    const sec = () => b.rows('runners').find((r: any) => r.runnerId === 'sec')!;
     // It says he left (setPresence false, which sends the first batch as
     // this drain does), then that he's back, with fresh heartbeats.
     await b.ctx.db.patch(sec()._id, { atMac: false });
@@ -164,7 +164,7 @@ test('Daybreak 148: each drain only takes pushes held before it began, whatever 
   try {
     const b = memoryBackend();
     await secondary(b, 33, start);
-    const sec = () => b.rows('runners').find((r: any) => r.runnerId === 'sec');
+    const sec = () => b.rows('runners').find((r: any) => r.runnerId === 'sec')!;
     await b.ctx.db.patch(sec()._id, { atMac: false });
     const from = b.scheduled.length;
     await call(b.ctx, sync.drainHeldPushes, { runnerId: 'sec', before: start });
@@ -190,7 +190,7 @@ test('Daybreak 148: a stale runner that checks in again before its drain runs ke
   const from = b.scheduled.length;
   await call(b.ctx, sync.sendStaleHeldPushes, {});
   assert.equal(b.scheduled.length, from + 1, 'a drain was handed on');
-  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec');
+  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec')!;
   await b.ctx.db.patch(sec._id, { lastSeenAt: Date.now() });
   await call(b.ctx, sync.drainHeldPushes, (b.scheduled[from] as any).args);
   assert.deepEqual(notified(b), []);
@@ -208,7 +208,7 @@ test('a push held just after Mike left goes to the away phones, not held for goo
   await b.ctx.db.insert('threads', { threadId: 'late', runnerId: 'sec', ...THREAD_BASICS, title: 'Late', view: 'inbox', needsYou: true });
   const t = await call(b.ctx, devices.threadForPush, { threadId: 'late' });
   assert.equal(t.atMac, true, 'notify read that he was there');
-  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec');
+  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec')!;
   await b.ctx.db.patch(sec._id, { atMac: false });
   await call(b.ctx, devices.holdPush, { threadId: 'late' });
   assert.equal(b.rows('threads')[0].pushHeldAt, undefined, 'not held');
@@ -227,7 +227,7 @@ test('a runner flipping presence between notify and holdPush bounces a push once
   const b = memoryBackend();
   await secondary(b, 0, Date.now());
   await b.ctx.db.insert('threads', { threadId: 'flip', runnerId: 'sec', ...THREAD_BASICS, title: 'Flip', view: 'inbox', needsYou: true });
-  const sec = () => b.rows('runners').find((r: any) => r.runnerId === 'sec');
+  const sec = () => b.rows('runners').find((r: any) => r.runnerId === 'sec')!;
   const from = b.scheduled.length;
   await b.ctx.scheduler.runAfter(0, { toString: () => 'internal.push.notify' }, { threadId: 'flip', held: true });
   let ran = 0;
@@ -250,7 +250,7 @@ test('a push held for a runner that said Mike left goes with the next cron', asy
   const now = Date.now();
   await secondary(b, 0, now);
   await b.ctx.db.insert('threads', { threadId: 'late', runnerId: 'sec', ...THREAD_BASICS, title: 'Late', view: 'inbox', needsYou: true });
-  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec');
+  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec')!;
   await b.ctx.db.patch(sec._id, { atMac: false });
   await call(b.ctx, devices.holdPush, { threadId: 'late', retried: true });
   assert.ok(b.rows('threads')[0].pushHeldAt > 0, 'held by the retry');
