@@ -60,23 +60,35 @@ export function writeState(dir, state) {
   fs.renameSync(tmp, file);
 }
 
-// The release `current` points at, or null when there's no link yet.
-export function readCurrentLink(dir) {
+// The release `current` points at, or null when there's no link yet. On
+// Windows `current` is a text file holding the release's id instead:
+// a symlink there needs admin or Developer Mode, and a directory junction
+// can't be renamed over another, so it couldn't be swapped atomically.
+// src/release.ts's currentLink reads it the same way.
+export function readCurrentLink(dir, platform = process.platform) {
+  const file = path.join(dir, 'current');
   try {
-    return path.basename(fs.readlinkSync(path.join(dir, 'current')));
+    return path.basename(fs.readlinkSync(file));
+  } catch {
+    if (platform !== 'win32') return null;
+  }
+  try {
+    const id = fs.readFileSync(file, 'utf8').trim();
+    return id && !/[\\/]/.test(id) ? id : null;
   } catch {
     return null;
   }
 }
 
-// A new link under a temp name renamed over the old one: rename is atomic,
-// so `current` always names a whole release. The target is relative so the
-// data dir can move.
-export function pointCurrent(dir, id) {
+// A new link (or on Windows a file) under a temp name renamed over the old
+// one: rename is atomic, so `current` always names a whole release. The
+// target is relative so the data dir can move.
+export function pointCurrent(dir, id, platform = process.platform) {
   const link = path.join(dir, 'current');
   const tmp = `${link}.${process.pid}.tmp`;
   fs.rmSync(tmp, { force: true });
-  fs.symlinkSync(path.join('releases', id), tmp);
+  if (platform === 'win32') fs.writeFileSync(tmp, id + '\n');
+  else fs.symlinkSync(path.join('releases', id), tmp);
   fs.renameSync(tmp, link);
 }
 
