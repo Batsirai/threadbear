@@ -2148,19 +2148,34 @@ Mike, and it lived on the main Mac alone.
   (`~/.claude`'s first) and `projects/*/memory/*.md` once a minute, masks
   secret values it knows of, and sends what changed or went to `putMemory`.
   Each change takes the next `seq`; a deleted file stays as a `gone` row.
-- **The others** read `memorySince(after)` a page at a time and write each
-  file into every Claude login (and Codex's `AGENTS.md` for the global one,
-  where there's a Codex home), one write per real place. `memory-sync.json` in
-  the data dir holds the last `seq` and the hash of each file as written, so:
-  a file that's changed since is offered back (`offerMemory`) before it's
-  replaced, and one that was there before sync ever wrote that path is left
-  alone for good (and offered).
-- **Offers** are a runner key's agents' new or changed files, each version
-  once. Only the owner reads them (`memoryOffers`), and it writes them to
-  `memory-offers/<runnerId>/<path>` in its data dir, never into memory, then
-  `takeMemoryOffers`. Folding them in is for Mike or a scheduled job (the
-  nightly retro on Mike's Mac). A runner key can't write `memoryFiles`, so it
-  can't change what the main Mac's agents, or any other runner's, are told.
+- **The others** read `memorySince(after)` a page at a time into
+  `memory-cache/` in the data dir, then each pass make every Claude login (and
+  Codex's `AGENTS.md` for the global file, where there's a Codex home) match
+  it, so a login added later, or a file deleted by hand, catches up. Only
+  places whose real path is inside a login's folder, a Codex home or
+  `~/.agents` are written. `memory-sync.json` records, for each file on disk,
+  the hash sync last wrote there:
+  - missing: written; already the main Mac's version: adopted (kept up to
+    date, never deleted);
+  - something else there before sync wrote to it, or a file too big or not a
+    plain file: left alone for good, and offered once;
+  - changed since sync wrote it: offered, and kept until the main Mac has a
+    newer version, which then replaces it;
+  - every write and delete happens after the pass's offers have gone, and
+    only if the file is still as it was read, so an edit landing in between
+    waits for the next pass.
+- **Offers** are a runner key's agents' new or changed files, one row per
+  version (two logins' different edits of one file are two offers), at most
+  200 waiting per runner (`memoryOfferCounts`). Only the owner reads them
+  (`memoryOffers`, 20 at a time), and it writes each to
+  `memory-offers/<runnerId>/<path>/<hash>.md` in its data dir, never into
+  memory, then `takeMemoryOffers`; past 20 MB there it stops taking them, so a
+  runner key can't fill its disk. Folding them in is for Mike or a scheduled
+  job (the nightly retro on Mike's Mac). A runner key can't write
+  `memoryFiles`, so it can't change what the main Mac's agents, or any other
+  runner's, are told.
+- **Sizes.** At most 50 files and 2 MB of text a call (the runner sends up to
+  1 MB). A stopping or handing-over runner stops syncing first.
 - **The limit.** Anything that can write a memory file on the main Mac can
   brief every runner's agents, as it already briefs every thread in that
   folder there. Memory goes to the backend in the clear, as transcripts do.

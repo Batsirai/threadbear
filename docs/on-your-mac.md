@@ -591,7 +591,7 @@ File references are where to look.
   `projects/<folder>/memory/`) and Codex's `AGENTS.md`, leaving alone any file
   that was there first, and sends their own new or changed memory files back
   to your main Mac, which saves them under `memory-offers/` in its data folder.
-  It keeps what it last synced in `memory-sync.json` there
+  It keeps the main Mac's copy in `memory-cache/` and what it last synced in `memory-sync.json` there
   (`runner/src/memory-sync.ts`).
 - Token Stats' files, if you have that app, and any logins you've added
   under `accounts` in its data folder (`claude-1`, `codex-1`...).
