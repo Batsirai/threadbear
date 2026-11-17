@@ -19,6 +19,8 @@ const SECRET_FILE = new RegExp(
     String.raw`(?:^|[/\\])(?:\.npmrc|\.netrc|\.pypirc|\.pgpass|\.git-credentials|\.htpasswd|\.boto)$`,
     // Agents' and CLIs' own logins: Codex's auth.json, Claude's .credentials.json, tokens.json.
     String.raw`(?:^|[/\\])(?:\.?credentials|auth|tokens?)\.json$`,
+    // A login's year-long token (year-token.ts).
+    String.raw`(?:^|[/\\])threadbear-token\.json$`,
     String.raw`(?:^|[/\\])(?:credentials?|secrets?|service[-_]?account[\w.-]*|client_secret[\w.-]*)(?:\.(?:json|ya?ml|toml|txt|ini|csv))?$`,
     // Any file in a folder that's for secrets.
     String.raw`(?:^|[/\\])(?:secrets|\.ssh|\.aws|\.gnupg|\.kube|\.azure|\.docker|keychains)[/\\]`,

@@ -14,6 +14,9 @@ import { TOKEN_FILE, TOKEN_LIFETIME_MS, readYearToken } from '../../src/year-tok
 import { cliEnv } from '../../src/adapters/claude/adapter.ts';
 import { discoverAccounts } from '../../src/accounts.ts';
 import type { Account } from '../../src/protocol.ts';
+import { FakeAccounts, makeHarness, tick } from '../helpers/fakes.ts';
+import { onYearToken } from '../../src/year-token.ts';
+import { withholdPath } from '../../src/withhold.ts';
 
 const TOKEN = 'sk-ant-oat01-' + 'a'.repeat(90);
 const MADE = '2026-11-17T07:00:00.000Z';
@@ -79,4 +82,35 @@ test("a token login isn't asked the CLI; its end is a year from when it was made
   accounts[0] = { ...accounts[0], yearToken: {} };
   assert.deepEqual(state.view(accounts[0]), {});
   state.stop();
+});
+
+test('a new token lets go of the login\'s sessions, so the next turn starts on it, and takes a refusal back', async () => {
+  const fake = new FakeAccounts();
+  const notes: string[] = [];
+  const h = makeHarness(undefined, {}, { accounts: fake, signIn: { noteRefused: () => {}, noteWorked: (id: string) => void notes.push(id), onChange: () => () => {} } });
+  h.runner.sendAccounts();
+  const { thread } = h.runner.create({ text: 'x', accountId: 'claude-3' });
+  const first = h.adapter.last;
+  first.init();
+  first.result();
+  await tick();
+  assert.equal(first.ended, false);
+  notes.length = 0;
+  fake.base = fake.base.map((a) => (a.id === 'claude-3' ? { ...a, yearToken: { madeAt: MADE } } : a));
+  h.runner.sendAccounts();
+  assert.equal(first.ended || first.killed || first.endedHard, true, 'the idle session goes');
+  assert.deepEqual(notes, ['claude-3']);
+  h.runner.send(thread.id, 'again');
+  await tick();
+  assert.notEqual(h.adapter.last, first, 'a new session');
+});
+
+test('every token read is told to the scrubber, and its file counts as a secret file', () => {
+  const got: string[] = [];
+  const stop = onYearToken((t) => got.push(t));
+  const other = 'sk-ant-oat01-' + 'c'.repeat(90);
+  readYearToken(folder({ token: other, madeAt: MADE }));
+  stop();
+  assert.ok(got.includes(other));
+  assert.ok(withholdPath('/Users/x/Token Stats/claude-1/threadbear-token.json'));
 });

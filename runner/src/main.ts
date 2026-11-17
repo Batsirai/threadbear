@@ -3,6 +3,7 @@
 // THREADBEAR_PORT pointing at temp places.
 // First, so every process the runner starts on Windows has no console window.
 import './win32-hide.ts';
+import { onYearToken } from './year-token.ts';
 import { realCopy } from './real-copy.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -487,6 +488,11 @@ async function main(): Promise<void> {
     runner.sharedPools = sharedPools;
   }
   const scrubber = new Scrubber({ secretsDir: paths.secrets(cfg.home), log });
+  // A login's year-long token, whole and without its fixed prefix.
+  onYearToken((t) => {
+    scrubber.known.add(t);
+    scrubber.known.add(t.replace(/^sk-ant-oat01-/, ''));
+  });
   // Text cut short anywhere in the runner is cut where none of these values
   // (nor anything the rules know) is split in two (safe-cut.ts). Not counted
   // in the scrubber's status: nothing is taken out here.

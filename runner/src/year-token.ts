@@ -21,6 +21,23 @@ export const TOKEN_LIFETIME_MS = 365 * 24 * 3600_000;
 
 export type YearToken = { token: string; madeAt?: string };
 
+// Every token read, for the scrubber's known values (main.ts): a thread's
+// command could print one, or a changed form of one no shape rule knows
+// (Codex's review, 17 Nov). A listener added late is told those already
+// read.
+const seen = new Set<string>();
+const listeners = new Set<(token: string) => void>();
+export function onYearToken(fn: (token: string) => void): () => void {
+  listeners.add(fn);
+  for (const t of seen) fn(t);
+  return () => listeners.delete(fn);
+}
+function noteRead(token: string): void {
+  if (seen.has(token)) return;
+  seen.add(token);
+  for (const fn of listeners) fn(token);
+}
+
 // The login's token, or undefined when it has none or the file isn't one.
 export function readYearToken(configDir: string): YearToken | undefined {
   if (!configDir) return undefined;
@@ -32,6 +49,7 @@ export function readYearToken(configDir: string): YearToken | undefined {
   }
   const o = v as { token?: unknown; madeAt?: unknown } | null;
   if (!o || typeof o.token !== 'string' || !/^sk-ant-oat01-[A-Za-z0-9_-]{40,}$/.test(o.token)) return undefined;
+  noteRead(o.token);
   const made = typeof o.madeAt === 'string' && Number.isFinite(Date.parse(o.madeAt)) ? new Date(o.madeAt).toISOString() : undefined;
   return { token: o.token, ...(made ? { madeAt: made } : {}) };
 }

@@ -1068,11 +1068,35 @@ export class Runner {
     }, wait);
   }
 
+  // A login's year-long token made, renewed or taken away (year-token.ts):
+  // its CLIs got their token when they started, so each lets go of its
+  // session (once its turn is over) and the next turn starts on the new
+  // one. Else Send again after New token… runs on the old token, and its
+  // refusal marks the new one out (Codex's review, 17 Nov).
+  private tokenKeys = new Map<string, string>();
+  renewTokens(accounts: Account[]): void {
+    for (const a of accounts) {
+      if (a.provider !== 'claude') continue;
+      const key = JSON.stringify(a.yearToken ?? null);
+      const was = this.tokenKeys.get(a.id);
+      this.tokenKeys.set(a.id, key);
+      if (was === undefined || was === key) continue;
+      this.signIn?.noteWorked(a.id);
+      for (const st of this.threads.values()) {
+        if (st.rec.accountId !== a.id || !st.rt.session) continue;
+        st.rt.releaseWhenIdle = true;
+        if (!st.rt.turn) this.releaseSession(st);
+      }
+      this.log.info('a login changed its year-long token; its sessions start again on it', { accountId: a.id });
+    }
+  }
+
   sendAccounts(): void {
     // A login added, or a usage reading that shows room again, can carry
     // on a thread waiting for room in its pool.
     this.armRoomTimer();
     const accounts = this.safeAccounts();
+    this.renewTokens(accounts);
     // The built-in pools follow the login list.
     const pools = this.pools(accounts);
     const poolsKey = JSON.stringify(pools);

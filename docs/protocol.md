@@ -2395,7 +2395,11 @@ thread to another login when the one it's on runs out of room.
   three days ahead, with New token…. A refused turn holds it out as for
   any login, until a new token. A token only runs models: claude.ai's own
   connectors and Remote Control don't work on it. Usage readings come from
-  turns as before. Deleting the file goes back to the sign-in.
+  turns as before. Deleting the file goes back to the sign-in. When a
+  login's `yearToken` changes, its CLIs let go of their sessions once
+  their turns end, so the next turn runs on the new token, and a refusal
+  on it is taken back. Each token read, whole and without its prefix, is
+  a known value to the secret scrubbing, and the file a secrets file.
 - **Which login.** Of the pool's logins of a provider that are OK to run
   on, the one whose weekly window resets soonest, since whatever is left
   in it then is lost; the most room breaks a tie. Logins with no weekly
