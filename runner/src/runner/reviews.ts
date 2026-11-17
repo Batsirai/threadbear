@@ -237,12 +237,23 @@ export const reviewsPart = {
   recoverReviews(this: Runner, st: ThreadState): void {
     // Reviews save their record before their event. Threads without reviews
     // need no extra log scan (the common case, including long transcripts).
-    if (!st.rec.reviews?.length && !st.rec.queue.some(q => q.reviewId)) return;
+    if (!st.rec.reviews?.length && !st.rec.queue.some(q => q?.reviewId)) return;
+    // An answer already queued keeps only its review's own pictures. First,
+    // before reading the log: a moved thread's log is the other runner's
+    // word, and anything below that throws would leave this undone, with
+    // the queue sent next (Codex's review, 17 Nov). Nothing in it can throw.
+    st.rec.queue = st.rec.queue.map(q => {
+      if (!q?.reviewId) return q;
+      const own = (list: unknown): ImageRef[] => (Array.isArray(list) ? list : []).filter(img => this.ownReplyImage(st, q.reviewId!, img as ImageRef));
+      const images = own(q.images);
+      const reviewResponse = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse ? {...q.reviewResponse, images: own(q.reviewResponse.images)} : q.reviewResponse;
+      return {...q, images, ...(reviewResponse ? {reviewResponse} : {})};
+    });
     const log = this.store.log(st.rec.id);
     const latest = new Map<string, DesignReview>();
     const sent = new Set(st.rec.reviewDeliveries ?? []);
     for (const event of log.read(1, log.lastSeq)) {
-      if (event.type === 'review.updated') latest.set(event.review.id, event.review);
+      if (event.type === 'review.updated' && event.review && typeof event.review === 'object' && typeof event.review.id === 'string') latest.set(event.review.id, event.review);
     }
     const reviews = new Map((st.rec.reviews ?? []).map(r => [r.id, r]));
     for (const [id, review] of latest) if (!reviews.has(id) || reviews.get(id)!.revision < review.revision) reviews.set(id, review);
@@ -254,16 +265,6 @@ export const reviewsPart = {
     // The delivery marker is written after session.send, not merely after
     // user.message. A failed turn.started append leaves the answer unsent.
     st.rec.queue = st.rec.queue.filter(q => !q.reviewId || !sent.has(q.reviewId));
-    // An answer already queued keeps only its review's own pictures too.
-    // Nothing in it can throw: a record that made this fail part way would
-    // leave the queue unchecked, and it's sent next (Codex's review).
-    st.rec.queue = st.rec.queue.map(q => {
-      if (!q.reviewId) return q;
-      const own = (list: unknown): ImageRef[] => (Array.isArray(list) ? list : []).filter(img => this.ownReplyImage(st, q.reviewId!, img as ImageRef));
-      const images = own(q.images);
-      const reviewResponse = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse ? {...q.reviewResponse, images: own(q.reviewResponse.images)} : q.reviewResponse;
-      return {...q, images, ...(reviewResponse ? {reviewResponse} : {})};
-    });
     for (const [id, review] of reviews) {
       if (review.status === 'answered' && review.replyTurnId && review.response && !sent.has(id) && !st.rec.queue.some(q => q.reviewId === id)) {
         st.rec.queue.push({turnId: review.replyTurnId, text: reviewReply(review, review.response), images: review.response.images ?? [], reviewId: id, reviewResponse: review.response});

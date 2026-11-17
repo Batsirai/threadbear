@@ -498,4 +498,10 @@ test('a client from before reply pictures keeps them; a moved review brings none
   const bad=st.rec.queue.find((q:any)=>q.turnId==='t-bad');
   assert.deepEqual(bad.images,[]);
   assert.deepEqual(bad.reviewResponse.images,[]);
+  // Nor can a log event that isn't a review: the queue is checked first.
+  st.rec.queue.push({turnId:'t-log',text:'x',images:[{path:source,mediaType:'image/png'}],reviewId:review.id} as any);
+  const log=h.store.log(thread.id);
+  log.append({seq:log.lastSeq+1,ts:new Date().toISOString(),type:'review.updated',review:null} as any);
+  h.runner.recoverReviews(st);
+  assert.deepEqual(st.rec.queue.find((q:any)=>q.turnId==='t-log').images,[]);
 });
