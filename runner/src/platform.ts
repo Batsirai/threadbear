@@ -28,14 +28,14 @@ function localAppData(p: Probe): string {
 // default_home (desktop/client/src/config.rs) has to say the same.
 export function dataDirFor(p: Probe = {}): string {
   if ((p.platform ?? process.platform) === 'win32') return path.win32.join(localAppData(p), 'Threadbear');
-  return path.join(p.home ?? os.homedir(), 'Library', 'Application Support', 'Threadbear');
+  return path.posix.join(p.home ?? os.homedir(), 'Library', 'Application Support', 'Threadbear');
 }
 
 // Where the runner writes its log: ~/Library/Logs on a Mac (and Linux, which
 // kept the Mac's names), the data dir's Logs folder on Windows.
 export function logFileFor(p: Probe = {}): string {
   if ((p.platform ?? process.platform) === 'win32') return path.win32.join(localAppData(p), 'Threadbear', 'Logs', 'threadbear-runner.log');
-  return path.join(p.home ?? os.homedir(), 'Library', 'Logs', 'threadbear-runner.log');
+  return path.posix.join(p.home ?? os.homedir(), 'Library', 'Logs', 'threadbear-runner.log');
 }
 
 // The name of a program file: claude.exe on Windows, claude elsewhere.
