@@ -1343,14 +1343,14 @@ pub(crate) async fn automation(app: &WeakEntity<Threadbear>, main: AnyWindowHand
     // A frame, so a screenshot straight after shows what this did.
     cx.update_window(handle, |_, window, cx| window.render_frame(cx)).ok();
     cx.background_executor().timer(Duration::from_millis(250)).await;
-    let state = view.read_with(cx, |v, _| v.state());
+    let state = view.read_with(cx, |v, cx| v.state(cx));
     Ok(json!(format!("ok {state}")))
 }
 
 #[cfg(feature = "automation")]
 impl ReviewWindow {
     /// What the Swift command answers, and a little more for the specs.
-    fn state(&self) -> Value {
+    fn state(&self, cx: &App) -> Value {
         let s = &self.session;
         let draft = s.draft();
         json!({
@@ -1397,5 +1397,5 @@ impl ReviewWindow {
 #[cfg(feature = "automation")]
 pub(crate) fn dump(cx: &App) -> Value {
     let Some(reviews) = cx.try_global::<Reviews>() else { return json!([]) };
-    json!(reviews.windows.values().map(|(_, view)| view.read(cx).state()).collect::<Vec<_>>())
+    json!(reviews.windows.values().map(|(_, view)| view.read(cx).state(cx)).collect::<Vec<_>>())
 }
