@@ -42,7 +42,8 @@ File references are where to look.
   `--local` run won't finish until it has seen every one of those ports
   taken off again; it deletes the note then. With `--url`, setup keeps
   the addresses you gave it in `self-hosted-own-addresses.json` there
-  (the same default folder), so a later `--local` or `--tailnet` run asks
+  (the same default folder), as a move off does with the old ones it
+  finds in runner.json, so a later `--local` or `--tailnet` run asks
   each of them, from this Mac, whether it still reaches the backend through
   your proxy, and stops if one does. Setup never deletes it, as from this
   Mac it can't prove your proxy is gone: delete it yourself once those

@@ -863,6 +863,13 @@ async function selfHostedBackend() {
   }
   const old = own ? { api: [], site: [] } : recordedAddresses({ api: plan.was ? [plan.was.url] : [], site: plan.was?.site ? [plan.was.site] : [] });
   const moveOff = old.api.length + old.site.length > 0;
+  // On record too, before anything changes: a Mac set up before the record
+  // existed moving straight off, while its proxy happens to be down, would
+  // otherwise leave nothing for later runs to ask about (Codex's third look).
+  if (moveOff && !dry) {
+    fs.mkdirSync(DEFAULT_HOME, { recursive: true });
+    fs.writeFileSync(ownAddressesFile, JSON.stringify(old, null, 2) + '\n');
+  }
   if (moveOff && !dry) {
     const now = containerState(BACKEND_CONTAINER);
     if (now && !now.running) docker(['start', BACKEND_CONTAINER]);

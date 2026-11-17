@@ -375,6 +375,9 @@ test('setup checks the old address before anything changes and again before runn
   // A move off checks what's on record as well as this --home's runner.json.
   assert.match(src, /const old = own \? \{ api: \[\], site: \[\] \} : recordedAddresses\(/);
   const pre = src.indexOf('if (now && (await answers(ADMIN_URL, 60))) await checkOldAddressGone(old);');
+  // A move off writes what it'll check on record first, so an older Mac's addresses stay asked about.
+  const kept = src.indexOf("fs.writeFileSync(ownAddressesFile, JSON.stringify(old, null, 2) + '\\n');");
+  assert.ok(kept > 0 && kept < pre);
   assert.ok(pre > 0 && pre < src.indexOf('ensureContainer(BACKEND_CONTAINER'), 'pre-check before the containers change');
   assert.ok(pre < src.indexOf('unserve(ts, tailnetPort, localPort, moving);'));
   const post = src.indexOf('const oldAddress = moveOff ? await checkOldAddressGone(old) : undefined;');
