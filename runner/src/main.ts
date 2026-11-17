@@ -43,7 +43,7 @@ import { ThreadStore } from './store.ts';
 import { AccountRegistry } from './accounts.ts';
 import { ClaudeAdapter, cliEnv } from './adapters/claude/adapter.ts';
 import { SignInState } from './sign-in-state.ts';
-import { ProcessRegistry } from './proc.ts';
+import { ProcessRegistry, killGroup } from './proc.ts';
 import { Runner } from './runner.ts';
 import { startOwnThread } from './own-threads.ts';
 import { ConvexUseTally } from './convex-use.ts';
@@ -1414,13 +1414,7 @@ async function main(): Promise<void> {
   // Last resort if the process exits some other way: kill the CLI groups
   // synchronously so they never outlive the runner.
   process.on('exit', () => {
-    for (const pid of registry.pids()) {
-      try {
-        process.kill(-pid, 'SIGKILL');
-      } catch {
-        // gone
-      }
-    }
+    for (const pid of registry.pids()) killGroup(pid, 'SIGKILL');
   });
 }
 

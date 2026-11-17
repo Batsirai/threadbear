@@ -4,6 +4,7 @@
 // from Keith's (platima) Windows port, with the data folder moved out of
 // Roaming.
 
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -40,4 +41,46 @@ export function logFileFor(p: Probe = {}): string {
 // The name of a program file: claude.exe on Windows, claude elsewhere.
 export function exeName(name: string, platform: NodeJS.Platform = process.platform): string {
   return platform === 'win32' ? `${name}.exe` : name;
+}
+
+// A path's real form, the one to compare two paths by. On macOS and Linux
+// that is fs.realpathSync, exactly as before. On Windows it is the native
+// one (GetFinalPathNameByHandle): the JS one resolves links but leaves the
+// 8.3 short names (C:\Users\RUNNER~1, which is how GitHub's runners spell
+// TEMP, and how any profile folder longer than eight characters can turn
+// up in a cwd) and the case as they were given, while git and the files
+// Windows hands back use the long form, so two spellings of one folder
+// compared as two. Throws when the path isn't there, as realpathSync does.
+type RealProbe = { platform?: NodeJS.Platform; native?: (p: string) => string; plain?: (p: string) => string };
+
+export function realPathSync(p: string, q: RealProbe = {}): string {
+  if ((q.platform ?? process.platform) === 'win32') return (q.native ?? fs.realpathSync.native)(p);
+  return (q.plain ?? fs.realpathSync)(p);
+}
+
+// The same, without throwing. When the path isn't there, macOS and Linux
+// give it back as it was; Windows makes its nearest folder that is there
+// real and keeps the rest, so a path to a file about to be made still
+// compares with the folder it will be in.
+export function realPath(p: string, q: RealProbe = {}): string {
+  try {
+    return realPathSync(p, q);
+  } catch {
+    // not there, or not readable
+  }
+  const platform = q.platform ?? process.platform;
+  if (platform !== 'win32') return p;
+  const P = path.win32;
+  let rest = '';
+  for (let d = p; ; ) {
+    const up = P.dirname(d);
+    if (up === d) return p;
+    rest = rest ? P.join(P.basename(d), rest) : P.basename(d);
+    d = up;
+    try {
+      return P.join(realPathSync(d, q), rest);
+    } catch {
+      // one folder up
+    }
+  }
 }
