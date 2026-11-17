@@ -113,6 +113,7 @@ const HELP = `tb: talk to the Threadbear runner
                                   stops it, without moving
   tb delete <threadId>
   tb accounts                     the Claude and Codex logins (* new threads start on it)
+  tb accounts --json              every login with its usage (weekly %, resets) as JSON
   tb accounts <account> [--json]  that account's models and its default
   tb pools [--json]               the pools, their logins and room (* new threads start on it)
   tb actions <threadId> [--json]  the thread's actions, panels and patches (from its folder)
@@ -632,6 +633,25 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
           return 0;
         }
         console.log(formatModels(a, r.defaults));
+        return 0;
+      }
+      if (f.json) {
+        // Every login with the runner's merged usage (this runner's turns,
+        // Token Stats' limits.json and other runners' shared readings), the
+        // same view list_accounts and the apps get, for scripts that check
+        // room left: usage.json alone is only this runner's own readings.
+        const accounts = r.accounts.map((a) => ({
+          id: a.id,
+          provider: a.provider,
+          title: a.title,
+          email: a.email,
+          note: a.note,
+          isDefault: a.id === r.defaults.accountId,
+          signedOut: a.signedOut,
+          planEnded: a.planEnded,
+          usage: a.usage,
+        }));
+        console.log(JSON.stringify({ accounts, defaultAccountId: r.defaults.accountId }, null, 2));
         return 0;
       }
       for (const a of r.accounts) {

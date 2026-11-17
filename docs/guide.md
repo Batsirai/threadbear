@@ -1360,7 +1360,9 @@ none of its logins are in doesn't show there. Two logins on one machine
 signed in to the same account (two config folders, say) are told apart
 there by which login you picked, and Settings > Pools shows the login's
 note or id beside the email; other machines still match them by email.
-`tb accounts` says when two logins share an email. A login signed in on several
+`tb accounts` says when two logins share an email, and `tb accounts --json`
+gives every login with the room it has left (each limit's percent and reset,
+merged from all your machines' readings), for a script to check. A login signed in on several
 machines is one subscription, so each machine shows the newest reading of
 its room from your first Mac, and one that hit its limit there waits on
 the others too. A Mac with a key of its own gets your first Mac's readings of only the
