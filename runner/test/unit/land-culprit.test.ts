@@ -185,11 +185,10 @@ test('a landing set aside is never in anyone else\'s group, and its own tb check
   assert.equal(await first, 0);
   assert.deepEqual(await Promise.all(rest), [0, 0, 0], said(caps));
   assert.ok(caps[1].out.includes('Checking thread/c0000000 by itself: test.'), said(caps));
-  // c's own check had only main and c in it: b and d may already be on main.
-  const cRuns = runs(root).map((r) => r.files).filter((x) => x.includes('c.txt'));
-  assert.equal(cRuns.length, 1, JSON.stringify(runs(root)));
-  const bd = runs(root).map((r) => r.files).filter((x) => x.includes('b.txt') && x.includes('d.txt') && !x.includes('c.txt'));
-  assert.ok(bd.length >= 1, JSON.stringify(runs(root)));
+  // c landed by itself, and nobody landed with it.
+  assert.doesNotMatch(caps[1].out.join('\n'), /In the same check|in one check with/, said(caps));
+  for (const i of [0, 2]) assert.doesNotMatch(caps[i].out.join('\n'), /thread\/c0000000/, said(caps));
+  for (const n of ['b', 'c', 'd']) assert.ok(fs.existsSync(path.join(main, `${n}.txt`)), n);
 });
 
 test('a tb land stopped while it waits leaves the line and says so', async () => {
