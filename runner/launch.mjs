@@ -289,6 +289,9 @@ async function main() {
   if (given.home) process.env.THREADBEAR_HOME = given.home;
   if (given.port) process.env.THREADBEAR_PORT = given.port;
   if (given.log) {
+    // The runner writes the same file, as it does on a Mac, where launchd
+    // sends stderr to the file the runner logs to.
+    process.env.THREADBEAR_LOG = given.log;
     fs.mkdirSync(path.dirname(given.log), { recursive: true });
     logFd = fs.openSync(given.log, 'a');
   }
