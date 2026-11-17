@@ -357,7 +357,10 @@ File references are where to look.
   `runner.json` (never `checkHosts`), copies the clone's files (not its history) with rsync over
   ssh to the first of them that's a Mac, answers and is free, builds there under
   `~/.cache/threadbear-check/gpui` and copies the two binaries back with scp
-  (`desktop/scripts/remote.sh`). Remote commands and performance tools keep
+  (`desktop/scripts/remote.sh`). A host with a small internal disk can keep
+  that cache on a bigger one: `scripts/move-host-cache.sh <host> <folder>`
+  moves `~/.cache/threadbear-check` and `~/.cache/threadbear-parity` there
+  and leaves links in their place, which the scripts follow. Remote commands and performance tools keep
   `~/.cache/threadbear-perf.lock` and `~/.cache/threadbear-check/lock` on the
   host while they run, waiting for other builds, checks and measurements.
   Real-input test tools read process names with `ps` and, on macOS,

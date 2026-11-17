@@ -167,7 +167,11 @@ boot="$base/run-$tag-tools"
 # be this account's own and closed to others, or the run stops: a group with
 # write on the cache could otherwise swap one in between (Codex's review of
 # Daybreak 114/116, 13 Nov). A fresh boot folder each run, never one found there.
-"${SSH[@]}" "$host" "umask 077 && mkdir -p $base && for d in .cache ${base%/*} $base; do [ -d \$d ] && [ ! -L \$d ] && [ -O \$d ] && chmod go-w \$d || { echo \"remote.sh: ~/\$d on $host isn't a folder of this account's own\" >&2; exit 1; }; done && rm -rf $boot && mkdir -m 700 $boot"
+# ~/.cache/threadbear-check itself may be a link to a bigger disk
+# (scripts/move-host-cache.sh): only this account can have made it, as .cache
+# is checked first to be its own and closed to others. Where it points must
+# be this account's folder too. A link to a disk that isn't mounted says so.
+"${SSH[@]}" "$host" "umask 077 && { [ ! -L ${base%/*} ] || [ -d ${base%/*} ] || { echo \"remote.sh: ~/${base%/*} on $host is a link to \$(readlink ${base%/*}), which isn't there (an external disk not mounted until someone logs in to its desktop?)\" >&2; exit 1; }; } && mkdir -p $base && for d in .cache ${base%/*} $base; do [ -d \$d ] && { [ ! -L \$d ] || [ \$d = ${base%/*} ]; } && [ -O \$d ] && chmod go-w \$d || { echo \"remote.sh: ~/\$d on $host isn't a folder of this account's own\" >&2; exit 1; }; done && rm -rf $boot && mkdir -m 700 $boot"
 for helper in perf-lock.pl perf-children.pl hangup-guard.sh; do
   "${SSH[@]}" "$host" "cat > $boot/$helper" <"$root/scripts/$helper"
 done
