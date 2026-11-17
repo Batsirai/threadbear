@@ -269,7 +269,7 @@ pub struct ThreadPane {
     /// when it's next shown (`shown_again`).
     stale: bool,
     /// The zoom when it was kept (`set_kept`).
-    kept_zoom: Option<u32>,
+    kept_zoom: Option<u64>,
     _subs: Vec<Subscription>,
 }
 
@@ -669,7 +669,7 @@ impl ThreadPane {
     /// measured at, so its rows are measured again if that's changed.
     pub(crate) fn set_kept(&mut self, cx: &mut Context<Self>) {
         self.behind = true;
-        self.kept_zoom = Some(crate::style::zoom_percent());
+        self.kept_zoom = Some(crate::style::layout_key());
         // Older pages paged in while it was read go, as Swift's sessions
         // do once hidden: it's kept for coming back to the end of it, and
         // they're read again if it's scrolled up to them.
@@ -707,7 +707,7 @@ impl ThreadPane {
         self.behind = false;
         // Rows are measured in points: a zoom since it was last shown
         // (shell.rs only remeasures the panes on show).
-        if self.kept_zoom.take().is_some_and(|z| z != crate::style::zoom_percent()) {
+        if self.kept_zoom.take().is_some_and(|z| z != crate::style::layout_key()) {
             self.remeasure_rows(cx);
         }
         // Behind since the connection came back, or its first read failed

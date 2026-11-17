@@ -514,6 +514,12 @@ pub(crate) mod metrics {
     pub const NEST_INDENT: f32 = 22.;
     pub const NEST_GUIDE: f32 = LEADING + 4.;
     pub const NEST_TILE: f32 = 24.;
+
+    /// Over and under a thread row's words: 8, or 4 with Appearance's
+    /// Compact spacing.
+    pub fn row_pad() -> f32 {
+        if crate::style::compact() { 4. } else { 8. }
+    }
 }
 pub(crate) use metrics::*;
 
@@ -1815,8 +1821,8 @@ impl Threadbear {
             .relative()
             .items_center()
             .gap(px(10.))
-            .pt(px(8.))
-            .pb(px(8.))
+            .pt(px(row_pad()))
+            .pb(px(row_pad()))
             .pl(px(LEADING + if nested_row { NEST_INDENT } else { 0. }))
             .pr(px(TRAILING))
             .rounded(px(CORNER))
@@ -1854,7 +1860,7 @@ impl Threadbear {
                 this.open_row_menu(menu_id.clone(), ev.position, window, cx)
             }))
             .child(tile)
-            .child(v_flex().flex_1().min_w_0().gap(px(3.)).child(h_flex().child(title_el).when(show_buttons, |s| s.child(div().flex_none().w(px(actions_room)).h(px(1.))))).child(second_line))
+            .child(v_flex().flex_1().min_w_0().gap(px(if style::compact() { 1. } else { 3. })).child(h_flex().child(title_el).when(show_buttons, |s| s.child(div().flex_none().w(px(actions_room)).h(px(1.))))).child(second_line))
             .when_some(buttons, |s, b| s.child(h_flex().absolute().right(px(TRAILING - 5.)).top_0().bottom_0().items_center().gap(px(2.)).child(b)))
             // A tour sample's row, for the tour to light it (tour.rs).
             .when(is_sample, |s| s.children(crate::tour::mark(threadbear_core::tour::Target::SampleRow(t.title.clone()))))

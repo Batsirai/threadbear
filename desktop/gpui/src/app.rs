@@ -311,6 +311,10 @@ impl Threadbear {
         // Light or dark as Settings › General says, else the Mac's, followed
         // as it changes.
         crate::style::set_appearance(crate::style::Appearance::from_name(settings.saved.appearance.as_deref().unwrap_or("system")), window, cx);
+        // The rest of Appearance: accent, spacing and font.
+        crate::style::set_accent_choice(crate::style::Accent::from_name(settings.saved.accent.as_deref().unwrap_or("system")), cx);
+        crate::style::set_compact(settings.saved.compact.unwrap_or(false));
+        crate::style::set_font_choice(crate::style::Font::from_name(settings.saved.font.as_deref().unwrap_or("system")), cx);
         let appearance = window.observe_window_appearance(|window, cx| {
             crate::style::refresh_system_accent(cx);
             crate::style::refresh_system_contrast(cx);
@@ -1231,6 +1235,39 @@ impl Threadbear {
         crate::style::set_appearance(appearance, window, cx);
         self.settings.saved.appearance = (appearance != crate::style::Appearance::System).then(|| appearance.name().to_owned());
         self.save_settings_soon(cx);
+        cx.notify();
+    }
+
+    /// Appearance's accent (`style::Accent`), kept in this app's settings file.
+    pub(crate) fn set_accent(&mut self, accent: crate::style::Accent, window: &mut Window, cx: &mut Context<Self>) {
+        crate::style::set_accent_choice(accent, cx);
+        self.settings.saved.accent = (accent != crate::style::Accent::System).then(|| accent.name().to_owned());
+        self.look_changed(window, cx);
+    }
+
+    /// Appearance's Spacing: Compact or Roomy.
+    pub(crate) fn set_compact(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        crate::style::set_compact(on);
+        self.settings.saved.compact = on.then_some(true);
+        self.look_changed(window, cx);
+    }
+
+    /// Appearance's Font (`style::Font`).
+    pub(crate) fn set_font(&mut self, font: crate::style::Font, window: &mut Window, cx: &mut Context<Self>) {
+        crate::style::set_font_choice(font, cx);
+        self.settings.saved.font = (font != crate::style::Font::System).then(|| font.name().to_owned());
+        self.look_changed(window, cx);
+    }
+
+    /// After an accent, spacing or font change: saved, and the open thread's
+    /// rows measured again, as a zoom does (`set_zoom`).
+    fn look_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pane) = &self.pane {
+            pane.update(cx, |p, cx| p.remeasure_rows(cx));
+        }
+        self.save_settings_soon(cx);
+        window.refresh();
+        cx.refresh_windows();
         cx.notify();
     }
 

@@ -2208,13 +2208,25 @@ out. A change leaves the list once a commit that rebuilds it says so with a
 once you dismiss it. In a copy with no changes of its own there's nothing
 to see.
 
-### Light and dark
+### Light and dark, accent, spacing and font
 
-Threadbear follows your Mac's appearance (System Settings > Appearance)
-unless you pick one for it alone: Settings (⌘,) > General > Appearance has
-Same as the Mac, Light and Dark. It changes straight away and stays picked
-the next time the app opens. On Windows the first choice is Same as Windows,
-which follows Settings > Personalization > Colors > Choose your mode.
+Settings (⌘,) > General > Appearance is how Threadbear looks, for Threadbear
+alone. Each change shows straight away and stays picked the next time the
+app opens.
+
+- **Light or dark**: three pictures. Same as the Mac (Same as Windows on
+  Windows) follows the system's own setting: System Settings > Appearance,
+  or Settings > Personalization > Colors > Choose your mode on Windows.
+- **Accent**: the colour of buttons, ticks, the outline of a card that
+  needs you and the tint behind your own messages. The first dot is the
+  Mac's accent (blue elsewhere); the rest are bear colours (Fur, Honey,
+  Berry, Rose, Plum, Sky, Moss and Slate), from Wayne Sutton's fork.
+- **Spacing**: Roomy, or Compact for shorter sidebar rows and less room
+  around each of your messages, so more fits.
+- **Text size**: Smaller, Normal or Larger, the same as View > Zoom
+  (⌘= and ⌘-), which goes further either way.
+- **Font**: System, Serif or Monospaced for everything but code, which
+  keeps its own.
 
 On Mac, Increase Contrast in System Settings > Accessibility > Display
 also strengthens text and borders. It is read at launch and when you return

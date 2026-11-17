@@ -262,7 +262,7 @@ impl ThreadPane {
         let faint = style::faint_text(cx);
         let pending = message.pending;
         let faded = pending.is_some();
-        let mut col = v_flex().items_end().pt(px(USER_TOP)).pb(px(USER_BOTTOM));
+        let mut col = v_flex().items_end().pt(px(user_top())).pb(px(user_bottom()));
         if !message.images.is_empty() {
             col = col.child(self.user_images(&message.images, ix, message.text.is_empty() && message.origin.as_deref() == Some("phone"), cx));
         }
@@ -447,7 +447,7 @@ impl ThreadPane {
             // is on the Mac: TextKit leaves a last paragraph's off.
             .child(div().when(text.is_some(), |d| d.mb(px(8.))).child(title))
             .when_some(text, |d, text| d.child(div().text_size(px(size::BODY)).line_height(px(size::BODY_LINE)).child(text)));
-        h_flex().w_full().px(px(SIDE_INSET)).justify_center().child(div().w_full().max_w(px(MAX_CONTENT_WIDTH)).pt(px(USER_TOP)).pb(px(USER_BOTTOM)).child(card)).into_any_element()
+        h_flex().w_full().px(px(SIDE_INSET)).justify_center().child(div().w_full().max_w(px(MAX_CONTENT_WIDTH)).pt(px(user_top())).pb(px(user_bottom())).child(card)).into_any_element()
     }
 
     /// A row's markdown, its links going to `link_clicked` (and from there

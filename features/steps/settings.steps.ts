@@ -3,7 +3,7 @@ import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
 /** The Settings window while it's open, from either app's dump. */
-type SettingsInfo = { tab: string; keepAwake?: boolean | null; fullSync?: boolean | null; privateFolders?: string[] | null; labReviewers?: string[] | null };
+type SettingsInfo = { tab: string; accent?: string; compact?: boolean; keepAwake?: boolean | null; fullSync?: boolean | null; privateFolders?: string[] | null; labReviewers?: string[] | null };
 const shown = (d: unknown) => (d as { settingsWindow?: SettingsInfo | null }).settingsWindow;
 
 When('I open Settings', async function (this: ThreadbearWorld) {
@@ -61,4 +61,13 @@ Then('Settings lists the reviewers {string}', async function (this: ThreadbearWo
 // Where the keyboard is in the Settings window: its list of sections, as it opens.
 When('I press the {word} arrow in Settings', async function (this: ThreadbearWorld, dir: string) {
   await this.app.do({ cmd: 'arrow', dir, settings: true });
+});
+
+// Appearance's accent and spacing, this app's own (GPUI only).
+Then('Settings says the accent is {string}', async function (this: ThreadbearWorld, accent: string) {
+  await this.until(`the accent ${accent}`, (d) => shown(d)?.accent === accent);
+});
+
+Then('Settings says the spacing is compact', async function (this: ThreadbearWorld) {
+  await this.until('Compact spacing', (d) => shown(d)?.compact === true);
 });

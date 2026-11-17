@@ -52,6 +52,12 @@ pub struct Saved {
     pub inbox_order: Option<String>,
     /// `appearance`: "system", "light" or "dark" (`AppAppearance`).
     pub appearance: Option<String>,
+    /// Appearance's accent, `style::Accent`'s name. None is the system's.
+    pub accent: Option<String>,
+    /// Appearance's Spacing: Some(true) is Compact. None is Roomy.
+    pub compact: Option<bool>,
+    /// Appearance's Font, `style::Font`'s name. None is the system's.
+    pub font: Option<String>,
     /// `dockLayout`: the Dock's JSON, the same shape Swift's Codable saves.
     pub dock_layout: Option<Value>,
     /// `completionSound`: the ding when a thread finishes (ding.rs). Off
