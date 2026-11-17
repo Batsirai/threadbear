@@ -284,6 +284,8 @@ export function memoryBackend(root = CONVEX) {
         const list = () => [...jobs.values()];
         return { order: () => ({ async *[Symbol.asyncIterator]() { yield* list().reverse(); } }), async *[Symbol.asyncIterator]() { yield* list(); } };
       },
+      // A stored file's id is any name a test gave it (file()), or no table's row; a job's, a scheduled one's.
+      normalizeId: (table: string, id: string) => (table === '_storage' ? (files.has(id) || !id.includes(':') ? id : null) : table === '_scheduled_functions' ? (jobs.has(id) ? id : null) : null),
     },
     normalizeId: (table: string, id: string) => (id.startsWith(`${table}:`) ? id : null),
   };

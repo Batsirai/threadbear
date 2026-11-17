@@ -399,6 +399,8 @@ export class Moves {
   private ended = new Set<string>();
   private stop?: () => void;
   private idleTimer?: { cancel(): void };
+  // Steps to try again (see `retry`), by move, with how many tries so far.
+  private retries = new Map<string, { timer?: { cancel(): void }; tries: number }>();
 
   constructor(deps: MovesDeps) {
     this.d = deps;
@@ -418,6 +420,8 @@ export class Moves {
     this.stop?.();
     this.stop = undefined;
     this.idleTimer?.cancel();
+    for (const r of this.retries.values()) r.timer?.cancel();
+    this.retries.clear();
   }
 
   // Threads leaving this runner whose rows it must no longer write: past
@@ -472,13 +476,24 @@ export class Moves {
       if (row.from === me) await this.asSource(row);
       else if (row.to === me) await this.asTarget(row);
       this.done.add(key);
+      this.retries.delete(row.moveId);
     } catch (e) {
       // Not yet (the turn isn't over, the thread isn't described): the
       // next update or look tries again.
       if (e instanceof Waiting) return;
       const note = e instanceof Error ? e.message : String(e);
+      // The backend refusing for the minute it's being updated (a deploy's
+      // stepping stone, convex/stepping.ts), or T's adopt or done not going
+      // through after the switch, where there's nothing to fail and a move
+      // left claimed would keep the thread from ever moving again: the
+      // same step again shortly, not the move given up.
+      if (BEING_UPDATED.test(note) || row.state === 'claimed') {
+        this.d.log.warn('a move step will be tried again', { moveId: row.moveId, state: row.state, error: note });
+        this.retry(row);
+        return;
+      }
       this.d.log.warn('a move step failed', { moveId: row.moveId, state: row.state, error: note });
-      if (!ENDED.includes(row.state) && row.state !== 'claimed') {
+      if (!ENDED.includes(row.state)) {
         this.ended.add(row.moveId);
         await this.backend()
           .call('moveFailed', { moveId: row.moveId, note })
@@ -635,6 +650,21 @@ export class Moves {
 
   // While a thread finishes its turn: every few seconds, the moves waiting
   // on an idle thread are tried again.
+  // The row's step again after a while, longer each time (20 s up to 5
+  // minutes), while the row is still in that state.
+  // A step that goes through forgets the tries (step).
+  private retry(row: MoveRow): void {
+    const r = this.retries.get(row.moveId) ?? { tries: 0 };
+    r.timer?.cancel();
+    r.tries++;
+    r.timer = (this.d.setTimer ?? defaultTimer)(() => {
+      r.timer = undefined;
+      const latest = this.rows.get(row.moveId);
+      if (latest && latest.state === row.state) void this.step(latest);
+    }, Math.min(RETRY_MAX_MS, RETRY_MS * 2 ** (r.tries - 1)));
+    this.retries.set(row.moveId, r);
+  }
+
   private lookAgain(): void {
     if (this.idleTimer) return;
     this.idleTimer = (this.d.setTimer ?? defaultTimer)(() => {
@@ -643,6 +673,11 @@ export class Moves {
     }, this.d.idleCheckMs ?? 3000);
   }
 }
+
+// What the backend says while a deploy's stepping stone has a machine off.
+const BEING_UPDATED = /The backend is being updated/;
+const RETRY_MS = 20_000;
+const RETRY_MAX_MS = 5 * 60_000;
 
 // A step that can't be taken yet: not a failure.
 class Waiting extends Error {

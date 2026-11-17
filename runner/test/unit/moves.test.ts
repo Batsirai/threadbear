@@ -206,6 +206,45 @@ test('a busy thread waits for its turn to end before it freezes', async () => {
   await until(() => moveRow(w).state === 'done', 'done once the turn ended');
 });
 
+// A step refused while the backend is being updated (a deploy's stepping
+// stone, convex/stepping.ts) is tried again, not taken for the move failing;
+// so is T's adopt and done after the switch, which once lost left the move
+// claimed and the thread unable to move again until T restarted.
+test('a step refused while the backend is updated, and T\'s done after the switch, are tried again', async () => {
+  const w = await world();
+  await call(w.b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId: 'T9', runnerId: MINI, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });
+  const s = source('T9');
+  const t = target({ cwd: '/x', accountId: 'a', leftBehind: [] });
+  const adopt = t.host.adopt!;
+  let adopts = 0;
+  t.host.adopt = async (row) => {
+    if (++adopts === 1) throw new Error('the folder was busy');
+    return adopt(row);
+  };
+  const timers: { fn: () => void; ms: number }[] = [];
+  const setTimer = (fn: () => void, ms: number) => (timers.push({ fn, ms }), { cancel() {} });
+  const common = { runnerName: (id: string) => names[id] ?? id };
+  const refused = new Set(['moveReady']);
+  const tb = w.backendFor(OWNER, LAPTOP);
+  const flaky: MovesBackend = {
+    ...tb,
+    async call(fn, args) {
+      if (refused.delete(fn)) throw new Error('[Request ID: x] Server Error Uncaught ConvexError: {"kind":"conflict","message":"The backend is being updated. Try again in a minute."}');
+      return tb.call(fn, args);
+    },
+  };
+  new Moves({ self: () => MINI, backend: () => w.backendFor(MINI_KEY, MINI), host: { ...common, ...s.host } as MovesHost, log, setTimer }).start();
+  new Moves({ self: () => LAPTOP, backend: () => flaky, host: { ...common, ...t.host } as MovesHost, log, setTimer }).start();
+  await startBound(w, 'T9', s, t);
+  await until(() => timers.some((x) => x.ms === 20_000), 'a try again booked');
+  assert.equal(moveRow(w).state, 'asking', 'not failed');
+  timers.splice(timers.findIndex((x) => x.ms === 20_000), 1)[0]!.fn();
+  await until(() => moveRow(w).state === 'claimed' && timers.some((x) => x.ms === 20_000), 'claimed, its adopt to try again');
+  timers.splice(timers.findIndex((x) => x.ms === 20_000), 1)[0]!.fn();
+  await until(() => moveRow(w).state === 'done', 'done once the adopt went through');
+  assert.equal(t.adopted, 1);
+});
+
 test("a move the new runner can't take fails, and the thread stays where it was", async () => {
   const w = await world();
   await call(w.b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId: 'T3', runnerId: MINI, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });

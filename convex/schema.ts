@@ -7,6 +7,7 @@ import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
 import { machineTimers } from '@convex-dev/state-machines';
 import { commandStateV } from './commandStates';
+import { moveStateV } from './moveStates';
 import { requiredUnlessStepping } from './stepping';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
@@ -600,6 +601,12 @@ export const appSchema = defineSchema({
     from: v.string(),
     to: v.string(),
     state: v.union(...moveStates.map((x) => v.literal(x))),
+    // The same, as its state machine has it (moveMachine.ts), which writes
+    // `state` from it on every move. Required, once the backfill has given
+    // every row one (migrations.ts, convex/migrations.json); optional only in
+    // the deploy that runs it (stepping.ts).
+    moveState: requiredUnlessStepping('moveState', moveStateV),
+    moveStateTimers: requiredUnlessStepping('moveState', machineTimers),
     cwd: v.optional(v.string()), // what Mike picked; absent, T chooses
     accountId: v.optional(v.string()),
     // What the Move sheet's preview showed, as a digest T checks (moveBinding).
@@ -614,18 +621,19 @@ export const appSchema = defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     frozenAt: v.optional(v.number()),
-    // When the last of its rows went to T (moves.ts rehomeRows): a claimed
-    // move ends only after, so a next move of the thread can't start while
-    // a page of this one is still to run (Daybreak, 15 Nov 2026).
+    // Rows from before moveState: the backfill reads them (moveStates.ts
+    // moveStateFrom), and its states `handedOver` and `claimed.doneAsked`
+    // hold them since. Nothing writes them now.
     rehomedAt: v.optional(v.number()),
-    // T said it's done (moveDone) before that: rehomeRows ends it then.
     doneAsked: v.optional(v.boolean()),
   })
     .index('by_moveId', ['moveId'])
     .index('by_thread', ['threadId', 'createdAt'])
     .index('by_from', ['from', 'updatedAt'])
     .index('by_to', ['to', 'updatedAt'])
-    .index('by_state', ['state', 'updatedAt']),
+    .index('by_state', ['state', 'updatedAt'])
+    // The Machines page's counts and lists of moves in a state (viewer.ts).
+    .index('by_move_state', ['moveState.kind']),
 
   // A runner on a runner key asking for a new thread on another runner
   // (docs/protocol.md, "Asking another runner"). It can't queue work there

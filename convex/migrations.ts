@@ -12,6 +12,7 @@
 import { ConvexError, v } from 'convex/values';
 import { internalMutation, internalQuery, type MutationCtx } from './_generated/server';
 import { commandStateFrom } from './commandStates';
+import { moveStateFrom } from './moveStates';
 
 // Rows per run: each is a small patch, and a command's row can be a few hundred KB.
 const PAGE = 100;
@@ -30,7 +31,19 @@ const commandState: Step = async (ctx, cursor) => {
   return { cursor: page.continueCursor, done: page.isDone };
 };
 
-const BACKFILLS: Record<string, Step> = { commandState };
+// threadMoves.moveState and moveStateTimers, from `state` and its fields
+// (moveStates.ts). Rows written since have both. A row in a state with a
+// deadline gets its timer once the machine is live (moves.ts expireMoves).
+const moveState: Step = async (ctx, cursor) => {
+  const page = await ctx.db.query('threadMoves').paginate({ numItems: PAGE, cursor, maximumBytesRead: PAGE_BYTES });
+  for (const m of page.page) {
+    if (m.moveState !== undefined && m.moveStateTimers !== undefined) continue;
+    await ctx.db.patch(m._id, { moveState: m.moveState ?? moveStateFrom(m), moveStateTimers: m.moveStateTimers ?? [] });
+  }
+  return { cursor: page.continueCursor, done: page.isDone };
+};
+
+const BACKFILLS: Record<string, Step> = { commandState, moveState };
 const mark = (name: string) => `backfill-${name}-done`;
 
 /** One run of a backfill from where the last left off. Run it until it says done. */

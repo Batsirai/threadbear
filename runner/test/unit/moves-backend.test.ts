@@ -18,6 +18,28 @@ const SHA = 'a'.repeat(64);
 const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
 const sync = load('sync');
 const moves = load('moves');
+const machinesModule = load('machines');
+const migrations = load('migrations');
+
+// Runs `f` as if `ms` had passed.
+async function later<T>(ms: number, f: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  Date.now = () => realNow() + ms;
+  try {
+    return await f();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+// Fires the move machine's timers due within `ms` from now, as Convex's scheduler would.
+async function fireTimers(s: { ctx: unknown; pendingTimers: () => { id: string; args: any; at: number }[]; timerRan: (id: string) => void }, ms: number) {
+  const at = Date.now() + ms;
+  for (const t of s.pendingTimers().filter((t) => t.at <= at)) {
+    await later(t.at - Date.now(), () => call(s.ctx, machinesModule.deliver, t.args));
+    s.timerRan(t.id);
+  }
+}
 
 async function setup() {
   process.env.RUNNER_KEY = OWNER;
@@ -273,18 +295,21 @@ test('a move fails or is cancelled only before the switch, and a stuck one fails
   await s.mini.claim(c);
   assert.equal(await outcome(s.owner.failed(c)), 'conflict');
 
-  // Nobody answered T5's, and another frozen for too long.
+  // Nobody answered T5's, and another frozen for too long: the machine's timers end them.
   const d = (await s.owner.start('T5', CLOUD)).moveId;
-  moveOf(s, d).updatedAt -= 11 * 60_000;
   const e = (await s.owner.start('T3', MINI)).moveId;
   await s.owner.info(e);
   await s.mini.ready(e);
   await s.owner.frozen(e);
-  moveOf(s, e).frozenAt -= 31 * 60_000;
-  await call(s.ctx, moves.expireMoves as never, {});
+  await fireTimers(s, 9 * 60_000);
+  assert.equal(moveOf(s, d).state, 'asking');
+  await fireTimers(s, 11 * 60_000);
   assert.equal(moveOf(s, d).state, 'failed');
   assert.equal(moveOf(s, d).note, "cloud didn't answer.");
+  assert.equal(moveOf(s, e).state, 'packing');
+  await fireTimers(s, 31 * 60_000);
   assert.equal(moveOf(s, e).state, 'failed');
+  assert.equal(moveOf(s, e).note, 'The move took more than 30 minutes.');
   assert.equal(moveOf(s, c).state, 'claimed', 'past the switch, the new runner finishes it');
 });
 
@@ -396,8 +421,103 @@ test('a ready move fails once its thread’s runner has gone offline, or after 1
   const long = (await s.owner.start('R3', MINI)).moveId;
   await s.owner.info(long);
   await s.mini.ready(long);
-  moveOf(s, long).updatedAt -= 12 * 60 * 60_000 + 60_000;
-  await call(s.ctx, moves.expireMoves as never, {});
+  await fireTimers(s, 11 * 60 * 60_000);
+  assert.equal(moveOf(s, long).state, 'ready');
+  await fireTimers(s, 12 * 60 * 60_000 + 60_000);
   assert.equal(moveOf(s, long).state, 'failed');
   assert.match(moveOf(s, long).note, /still busy 12 hours later/);
+});
+
+// ------------------------------------------------------------ the move machine
+
+const { legacyMoveState, MOVE_READY_MS } = load('moveStates') as { legacyMoveState: (s: { kind: string }) => string; MOVE_READY_MS: number };
+
+test('every step writes moveState with state, and the move only takes the steps its state allows', async () => {
+  const s = await setup();
+  await s.owner.upsert(thread('M1', LAPTOP));
+  const id = (await s.owner.start('M1', MINI)).moveId;
+  const kinds = [moveOf(s, id).moveState.kind];
+  // Out of order: refused as before, with the state it's in.
+  await assert.rejects(s.owner.frozen(id), /The move is asking, so it can't start packing/);
+  await assert.rejects(s.mini.ready(id), /before its thread is described/);
+  await s.owner.info(id);
+  await s.mini.ready(id);
+  kinds.push(moveOf(s, id).moveState.kind);
+  await s.owner.frozen(id);
+  kinds.push(moveOf(s, id).moveState.kind);
+  assert.equal(moveOf(s, id).moveState.frozenAt, moveOf(s, id).frozenAt);
+  await s.owner.packed(id, [s.file('c1')]);
+  kinds.push(moveOf(s, id).moveState.kind);
+  await s.mini.claim(id);
+  kinds.push(moveOf(s, id).moveState.kind);
+  assert.deepEqual(kinds, ['asking', 'ready', 'packing', 'unpacking', 'claimed']);
+  for (const r of s.rows('threadMoves')) assert.equal(legacyMoveState(r.moveState), r.state);
+  // None of the machine's own fields reach the runners.
+  const listed = (await s.mini.list(MINI))[0];
+  assert.ok(!('moveState' in listed) && !('moveStateTimers' in listed));
+  // Leaving a state with a deadline cancels its timer: a claimed move has none.
+  assert.deepEqual(s.pendingTimers().filter((t) => t.args.id === moveOf(s, id)._id), []);
+});
+
+test('T saying done before its rows have gone over ends the move once they have, and either order ends it once', async () => {
+  const s = await setup();
+  await s.owner.upsert(thread('D1', LAPTOP), thread('D2', LAPTOP));
+  const go = async (threadId: string) => {
+    const id = (await s.owner.start(threadId, MINI)).moveId;
+    await s.owner.info(id);
+    await s.mini.ready(id);
+    await s.owner.frozen(id);
+    await s.owner.packed(id, [s.file(`c-${threadId}`)]);
+    await s.mini.claim(id);
+    return id;
+  };
+  // Done first: it waits, claimed, for the rows.
+  const first = await go('D1');
+  await s.mini.done(first);
+  await s.mini.done(first); // again is fine
+  assert.deepEqual(moveOf(s, first).moveState, { kind: 'claimed', claimedAt: moveOf(s, first).moveState.claimedAt, doneAsked: true });
+  await s.rehome();
+  assert.equal(moveOf(s, first).moveState.kind, 'done');
+  // Rows first: handed over, still `claimed` to the runners, until T says done.
+  const second = await go('D2');
+  await s.rehome();
+  assert.equal(moveOf(s, second).moveState.kind, 'handedOver');
+  assert.equal(moveOf(s, second).state, 'claimed');
+  assert.equal(await outcome(s.owner.start('D2', CLOUD)), 'conflict', 'not moving again before it ends');
+  await s.mini.done(second);
+  assert.equal(moveOf(s, second).state, 'done');
+  await s.mini.done(second);
+  assert.equal(moveOf(s, second).state, 'done');
+});
+
+test('the backfill gives moves from before moveState their state and deadlines, and the sweep arms their timers', async () => {
+  const s = await setup();
+  const now = Date.now();
+  const base = { from: LAPTOP, to: MINI, createdAt: now - 60_000, moveState: undefined };
+  const old = [
+    { moveId: 'm-asking', threadId: 'A', state: 'asking', updatedAt: now - 9 * 60_000, want: { kind: 'asking', askBy: now + 60_000 } },
+    { moveId: 'm-ready', threadId: 'B', state: 'ready', updatedAt: now - 1000, want: { kind: 'ready', readyAt: now - 1000, giveUpAt: now - 1000 + MOVE_READY_MS } },
+    { moveId: 'm-packing', threadId: 'C', state: 'packing', updatedAt: now, frozenAt: now - 31 * 60_000, want: { kind: 'packing', frozenAt: now - 31 * 60_000, giveUpAt: now - 60_000 } },
+    { moveId: 'm-claimed', threadId: 'D', state: 'claimed', updatedAt: now - 5, doneAsked: true, want: { kind: 'claimed', claimedAt: now - 5, doneAsked: true } },
+    { moveId: 'm-rehomed', threadId: 'E', state: 'claimed', updatedAt: now - 5, rehomedAt: now - 2, want: { kind: 'handedOver', claimedAt: now - 5, rehomedAt: now - 2 } },
+    { moveId: 'm-done', threadId: 'F', state: 'done', updatedAt: now - 3, want: { kind: 'done', endedAt: now - 3 } },
+  ];
+  for (const { want: _, ...row } of old) await s.ctx.db.insert('threadMoves', { ...base, ...row });
+  assert.equal(await call(s.ctx, migrations.done, { name: 'moveState' }), false);
+  while (!(await call(s.ctx, migrations.run, { name: 'moveState' })).done);
+  assert.equal(await call(s.ctx, migrations.done, { name: 'moveState' }), true);
+  assert.deepEqual(old.map((o) => moveOf(s, o.moveId).moveState), old.map((o) => o.want));
+  assert.ok(s.rows('threadMoves').every((r) => Array.isArray(r.moveStateTimers) && r.moveStateTimers.length === 0));
+
+  // Once the machine is live, the sweep arms each deadline the row already had.
+  await call(s.ctx, moves.expireMoves as never, {});
+  const due = Object.fromEntries(s.pendingTimers().map((t) => [t.args.event + ':' + s.rows('threadMoves').find((m) => m._id === t.args.id)!.moveId, t.at]));
+  assert.deepEqual(due, { 'NO_ANSWER:m-asking': now + 60_000, 'WAITED_TOO_LONG:m-ready': now - 1000 + MOVE_READY_MS, 'TOO_SLOW:m-packing': now - 60_000 });
+  // Armed once: the sweep again leaves them be.
+  await call(s.ctx, moves.expireMoves as never, {});
+  assert.equal(s.pendingTimers().length, 3);
+  // The one past its deadline ends as soon as its timer runs.
+  await fireTimers(s, 0);
+  assert.equal(moveOf(s, 'm-packing').state, 'failed');
+  assert.equal(moveOf(s, 'm-asking').state, 'asking');
 });

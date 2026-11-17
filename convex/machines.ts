@@ -1,5 +1,6 @@
 // Every state machine in the backend (docs/lifecycles.md), checked together
-// when the app loads: so far a command's (commandMachine.ts). Functions that
+// when the app loads: a command's (commandMachine.ts) and a move's
+// (moveMachine.ts). Functions that
 // send `server` events, purge rows or read failed timers are built with this
 // catalog's internalMutation, which carries the brand those need and a db
 // that can't write a machine's state; the rest of the backend stays on
@@ -12,10 +13,11 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internalMutation, internalQuery, mutation, type MutationCtx } from './_generated/server';
 import { appSchema } from './schema';
 import { command as commandMachine } from './commandMachine';
+import { move as moveMachine } from './moveMachine';
 import { steppingFor } from './stepping';
 
 // A machine whose backfill's stepping stone is being deployed is left out (stepping.ts).
-export const machines: Machines<typeof appSchema> = defineMachines(appSchema, steppingFor('commandState') ? [] : [commandMachine], {
+export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [...(steppingFor('commandState') ? [] : [commandMachine]), ...(steppingFor('moveState') ? [] : [moveMachine])] as never, {
   mutation,
   internalMutation,
   internalQuery,
@@ -25,6 +27,7 @@ export const machines: Machines<typeof appSchema> = defineMachines(appSchema, st
 
 // Imported from here rather than its own module: sending needs the catalog, and importing this loads it.
 export const command = commandMachine;
+export const move = moveMachine;
 
 /** A new command, pending for its runner: the machine's QUEUE, which writes its state (and `state`) and arms its timer. */
 export async function queued(ctx: MutationCtx, fields: Omit<WithoutSystemFields<Doc<'commands'>>, 'state' | 'commandState' | 'commandStateTimers'>): Promise<Id<'commands'>> {

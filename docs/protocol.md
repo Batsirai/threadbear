@@ -6272,13 +6272,24 @@ Any state before `claimed` can go to `failed` (`moves:moveFailed { moveId,
 note }`, by S or T, with what went wrong in a line Mike can read) or
 `cancelled` (`moves:cancelMove`, owner, before `unpacking`). A move frozen
 30 minutes ago and not yet claimed fails by itself, and one still `asking`
-after 10 minutes (T offline). One `ready` waits for S's thread to finish
+after 10 minutes from its start or S's description (T offline). One `ready` waits for S's thread to finish
 its turn, so it fails only once S hasn't been heard from for 10 minutes,
 or after 12 hours whatever S says, so it can't block the thread's next
 move for good. On `failed` or `cancelled` S unfreezes the
 thread if it froze it and T throws away its staging; the chunks are deleted
 when a move ends, whichever way. A runner that restarts reads its moves
-again and carries on from the state.
+again and carries on from the state. A step refused with "The backend is
+being updated" (a deploy's stepping stone, for a minute) is tried again
+rather than failing the move, and so is T's adopt and `moveDone` at
+`claimed`, where there's nothing to fail: 20 seconds later, then longer
+each time, up to 5 minutes. Older runners failed the move, or left it
+`claimed` until T restarted.
+
+In the backend a move is a state machine (`convex/moveMachine.ts`,
+[machines.md](machines.md)) on its own field, `moveState`; `state` stays
+these strings, written from it. Its one state runners don't see is
+`handedOver` (every row gone to T, waiting for T's `moveDone`), shown as
+`claimed`.
 
 - **Starting.** `moves:startMove { threadId, to, cwd?, accountId?, expect? }` (owner
   only; `expect` from API 83, the preview's binding below): the thread's row must be another runner's or this one's, `to` a

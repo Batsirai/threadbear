@@ -11,35 +11,37 @@
 //
 // Runners never talk to each other, and nothing here can read the bundle:
 // it's sealed on S to the key T put on the move.
+//
+// The move's lifecycle is a state machine (moveMachine.ts): each function
+// checks its caller, then sends the machine the step's event, which says
+// whether the move is in a state that takes it.
 import { ConvexError, v } from 'convex/values';
-import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
+import type { WithoutSystemFields } from 'convex/server';
+import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { checkRunnerId, forbidden, hasLiveKey, runnerAuth, sha256, withoutCredentials } from './lib';
 import { buryIndexRows, countBodyBytes, countMessageBytes, MAX_RUNNER_UPLOAD_BYTES, moveView, storageInUse, storedBytes } from './sync';
 import { docBytes, type Caller } from './runnerAccess';
+import { machines, move as moveMachine } from './machines';
 
 // A runner heard from this recently is online (as phone.ts has it).
 const ONLINE_MS = 3 * 60_000;
-// A move T hasn't answered fails after this; one frozen and not yet claimed
-// after MOVE_FROZEN_MS (expireMoves). Ended moves are listed for a day and
-// kept a week.
-export const MOVE_ASK_MS = 10 * 60_000;
-export const MOVE_FROZEN_MS = 30 * 60_000;
+// A move T hasn't answered fails after MOVE_ASK_MS; one frozen and not yet
+// claimed after MOVE_FROZEN_MS (moveStates.ts, the machine's timers). Ended
+// moves are listed for a day and kept a week.
 // A ready move waits for S's thread to finish its turn before freezing it, so
 // it has no short limit while S is online. It fails once S has been gone this
 // long (a Mac asleep or switched off), or after MOVE_READY_MS whatever S says:
 // left ready, it would block every later move of the thread (startMove's
 // "already moving").
 export const MOVE_READY_OFFLINE_MS = 10 * 60_000;
-export const MOVE_READY_MS = 12 * 60 * 60_000;
 export const MOVE_LISTED_MS = 24 * 60 * 60_000;
 const MOVE_KEPT_MS = 7 * 24 * 60 * 60_000;
 // 12 chunks of at most 10 MB: the 100 MB a bundle may be, with room.
 export const MAX_MOVE_CHUNKS = 12;
 const MOVE_TICKETS = MAX_MOVE_CHUNKS * 2;
 const PLAN_MAX_BYTES = 16 * 1024;
-const NOTE_CHARS = 500;
 const PICK_CHARS = 1024;
 const LISTED = 50;
 // Rows handed over a run at a time (rehomeRows), as a thread can have more
@@ -52,7 +54,6 @@ const REHOME_STUCK_MS = 10 * 60_000;
 type Move = Doc<'threadMoves'>;
 type MoveState = Move['state'];
 const GOING: readonly MoveState[] = ['asking', 'ready', 'packing', 'unpacking', 'claimed'];
-const BEFORE_CLAIM: readonly MoveState[] = ['asking', 'ready', 'packing', 'unpacking'];
 
 const bad = (message: string) => new ConvexError({ kind: 'badArgs', message });
 const conflict = (message: string) => new ConvexError({ kind: 'conflict', message });
@@ -78,8 +79,15 @@ async function mustBe(ctx: QueryCtx | MutationCtx, caller: Caller, m: Move, side
   throw forbidden('act on a move between runners with keys of their own with the main key');
 }
 
-function mustBeIn(m: Move, states: readonly MoveState[], what: string): void {
-  if (!states.includes(m.state)) throw conflict(`The move is ${m.state}, so it can't ${what}.`);
+type MoveEvent = Parameters<typeof moveMachine.send>[2];
+
+// The machine's step, or the conflict a runner has always been told when the
+// move's state doesn't take it (the guard's reason, if one refused it).
+async function step(ctx: MutationCtx, m: Move, event: MoveEvent, what: string) {
+  const r = await moveMachine.send(ctx, m._id, event);
+  if (r.status === 'done') return r;
+  if (r.code === 'GUARD_BLOCKED') throw conflict(r.reasons.join(' '));
+  throw conflict(`The move is ${m.state}, so it can't ${what}.`);
 }
 
 function randomId(): string {
@@ -88,31 +96,6 @@ function randomId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function runnerName(ctx: QueryCtx | MutationCtx, runnerId: string): Promise<string> {
-  return (await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique())?.name ?? runnerId;
-}
-
-// The chunks go whichever way a move ends: nothing else names them. Every
-// upload made for the move (sync.ts redeemUpload names each with it), not
-// just those movePacked listed, and each runner gets its bytes back.
-async function dropChunks(ctx: MutationCtx, m: Move): Promise<void> {
-  const ids = new Set<Id<'_storage'>>(m.chunks ?? []);
-  for (const row of await ctx.db.query('storageOwners').withIndex('by_move', (q) => q.eq('moveId', m.moveId)).take(MOVE_TICKETS * 2)) ids.add(row.storageId);
-  for (const id of ids) {
-    if (await ctx.db.system.get(id)) await ctx.storage.delete(id);
-    for (const row of await ctx.db.query('storageOwners').withIndex('by_storageId', (q) => q.eq('storageId', id)).collect()) {
-      await ctx.db.delete(row._id);
-      if (!row.bytes) continue;
-      const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', row.runnerId)).unique();
-      if (usage) await ctx.db.patch(usage._id, { bytes: Math.max(0, usage.bytes - row.bytes) });
-    }
-  }
-}
-
-async function end(ctx: MutationCtx, m: Move, state: 'done' | 'failed' | 'cancelled', note?: string): Promise<void> {
-  await dropChunks(ctx, m);
-  await ctx.db.patch(m._id, { state, chunks: undefined, updatedAt: Date.now(), ...(note ? { note: note.slice(0, NOTE_CHARS) } : {}) });
-}
 
 function cleanPick(value: string | undefined, what: string): string | undefined {
   if (value === undefined) return undefined;
@@ -142,7 +125,7 @@ const listedMove = v.object({
 });
 
 function listed(m: Move) {
-  const { _id, _creationTime, chunks, rehomedAt: _r, doneAsked: _d, ...rest } = m;
+  const { _id, _creationTime, chunks, rehomedAt: _r, doneAsked: _d, moveState: _s, moveStateTimers: _t, ...rest } = m;
   return { ...rest, ...(chunks ? { chunks: chunks.length } : {}) };
 }
 
@@ -176,7 +159,9 @@ export const startMove = mutation({
       if (GOING.includes(m.state)) throw conflict('This thread is already moving.');
     }
     const moveId = randomId();
-    await ctx.db.insert('threadMoves', { moveId, threadId: a.threadId, from: t.runnerId, to: a.to, state: 'asking', ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}), ...(a.expect ? { expect: a.expect } : {}), createdAt: now, updatedAt: now });
+    const fields: Omit<WithoutSystemFields<Move>, 'moveState' | 'moveStateTimers'> = { moveId, threadId: a.threadId, from: t.runnerId, to: a.to, state: 'asking', ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}), ...(a.expect ? { expect: a.expect } : {}), createdAt: now, updatedAt: now };
+    const made = await moveMachine.create(ctx, fields as never, { type: 'START' });
+    if (made.status !== 'done') throw conflict(`The move couldn't be started: ${made.reasons.join(' ')}`);
     return { moveId };
   },
 });
@@ -189,8 +174,7 @@ export const cancelMove = mutation({
     await runnerAuth(ctx, key, 'cancelMove');
     const m = await moveRow(ctx, moveId);
     if (m.state === 'cancelled') return null;
-    mustBeIn(m, ['asking', 'ready', 'packing'], 'be cancelled');
-    await end(ctx, m, 'cancelled', 'Cancelled.');
+    await step(ctx, m, { type: 'CANCEL' }, 'be cancelled');
     return null;
   },
 });
@@ -262,10 +246,9 @@ export const moveInfo = mutation({
     const caller = await runnerAuth(ctx, key, 'moveInfo');
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'from');
-    mustBeIn(m, ['asking'], 'be described');
-    if (m.info !== undefined) return null;
-    smallObject(info, 'info');
-    await ctx.db.patch(m._id, { info: describedThread(info as Record<string, unknown>), updatedAt: Date.now() });
+    if (m.state === 'asking' && m.info !== undefined) return null;
+    if (m.state === 'asking') smallObject(info, 'info');
+    await step(ctx, m, { type: 'DESCRIBE', info: m.state === 'asking' ? describedThread(info as Record<string, unknown>) : {} }, 'be described');
     return null;
   },
 });
@@ -281,11 +264,11 @@ export const moveReady = mutation({
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'to');
     if (m.state === 'ready' && m.key === sealKey) return null;
-    mustBeIn(m, ['asking'], 'be made ready');
-    if (!SEAL_KEY.test(sealKey)) throw bad('sealKey must be a raw X25519 key in base64');
-    if (m.info === undefined) throw conflict("The move can't be made ready before its thread is described.");
-    smallObject(plan, 'plan');
-    await ctx.db.patch(m._id, { state: 'ready', plan, key: sealKey, updatedAt: Date.now() });
+    if (m.state === 'asking') {
+      if (!SEAL_KEY.test(sealKey)) throw bad('sealKey must be a raw X25519 key in base64');
+      if (m.info !== undefined) smallObject(plan, 'plan');
+    }
+    await step(ctx, m, { type: 'READY', plan, sealKey }, 'be made ready');
     return null;
   },
 });
@@ -299,9 +282,7 @@ export const moveFrozen = mutation({
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'from');
     if (m.state === 'packing') return null;
-    mustBeIn(m, ['ready'], 'start packing');
-    const now = Date.now();
-    await ctx.db.patch(m._id, { state: 'packing', frozenAt: now, updatedAt: now });
+    await step(ctx, m, { type: 'FREEZE' }, 'start packing');
     return null;
   },
 });
@@ -318,7 +299,7 @@ export const moveChunkUrl = mutation({
     const caller = await runnerAuth(ctx, key, 'moveChunkUrl');
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'from');
-    mustBeIn(m, ['packing'], 'take chunks');
+    if (m.state !== 'packing') throw conflict(`The move is ${m.state}, so it can't take chunks.`);
     if (caller.owner) return ctx.storage.generateUploadUrl();
     const tickets = await ctx.db.query('uploadTickets').withIndex('by_move', (q) => q.eq('moveId', moveId)).take(MOVE_TICKETS + 1);
     if (tickets.length >= MOVE_TICKETS) throw new ConvexError({ kind: 'tooMany', message: `A move may have at most ${MOVE_TICKETS} upload URLs` });
@@ -339,7 +320,7 @@ export const movePacked = mutation({
     const m = await moveRow(ctx, a.moveId);
     await mustBe(ctx, caller, m, 'from');
     if (m.state === 'unpacking' && m.sha256 === a.sha256) return null;
-    mustBeIn(m, ['packing'], 'be packed');
+    if (m.state !== 'packing') throw conflict(`The move is ${m.state}, so it can't be packed.`);
     if (a.chunks.length < 1 || a.chunks.length > MAX_MOVE_CHUNKS) throw bad(`a move has 1 to ${MAX_MOVE_CHUNKS} chunks`);
     if (new Set(a.chunks).size !== a.chunks.length) throw bad('a chunk is named twice');
     if (!/^[0-9a-f]{64}$/.test(a.sha256)) throw bad('sha256 must be 64 hex characters');
@@ -351,7 +332,7 @@ export const movePacked = mutation({
         if (!owners.some((o) => o.runnerId === caller.runnerId)) throw forbidden("use a stored file its runner didn't upload");
       }
     }
-    await ctx.db.patch(m._id, { state: 'unpacking', chunks: a.chunks, sha256: a.sha256, bytes: a.bytes, updatedAt: Date.now() });
+    await step(ctx, m, { type: 'PACK', chunks: a.chunks, sha256: a.sha256, bytes: a.bytes }, 'be packed');
     return null;
   },
 });
@@ -393,7 +374,7 @@ export const moveChunks = query({
     const caller = await runnerAuth(ctx, key, 'moveChunks');
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'to');
-    mustBeIn(m, ['unpacking', 'claimed'], 'be downloaded');
+    if (m.state !== 'unpacking' && m.state !== 'claimed') throw conflict(`The move is ${m.state}, so it can't be downloaded.`);
     const urls: string[] = [];
     for (const id of m.chunks ?? []) {
       const url = await ctx.storage.getUrl(id);
@@ -419,34 +400,36 @@ export const moveClaim = mutation({
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'to');
     if (m.state === 'claimed') return null;
-    mustBeIn(m, ['unpacking'], 'be claimed');
-    const t = await ctx.db
-      .query('threads')
-      .withIndex('by_threadId', (q) => q.eq('threadId', m.threadId))
-      .unique();
-    if (!t || t.runnerId !== m.from) {
-      await end(ctx, m, 'failed', `The thread isn't on ${await runnerName(ctx, m.from)} any more.`);
-      return null;
-    }
-    const now = Date.now();
-    // Its projects were the old Mac's (a project id is only its runner's
-    // own, sync.ts heldElsewhere): it leaves them, and the new Mac puts it in
-    // its own. Kept, they'd show the thread under the old Mac's project to
-    // apps that look a project up by id alone, for as long as the new Mac
-    // didn't write the row again (Daybreak 141, cross-lab review).
-    await ctx.db.patch(t._id, { runnerId: m.to, pendingApproval: undefined, projects: undefined, updatedMs: now });
-    for (const l of await ctx.db.query('projectThreads').withIndex('by_threadId', (q) => q.eq('threadId', m.threadId)).collect()) await ctx.db.delete(l._id);
-    await moveView(ctx, m.from, t.view, undefined);
-    await moveView(ctx, m.to, undefined, t.view);
-    await buryIndexRows(ctx, m.threadId, m.to);
-    for (const c of await ctx.db.query('pocketCards').withIndex('by_runnerId', (q) => q.eq('runnerId', m.from)).collect()) {
-      if (c.threadId === m.threadId) await ctx.db.patch(c._id, { runnerId: m.to, updatedAt: new Date(now).toISOString() });
-    }
-    await ctx.db.patch(m._id, { state: 'claimed', updatedAt: now });
-    await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId: m.threadId, from: m.from, to: m.to, table: 0, cursor: null });
+    // The machine fails it instead if the thread isn't on S any more.
+    if ((await step(ctx, m, { type: 'CLAIM' }, 'be claimed')).to === 'claimed') await switchThread(ctx, m);
     return null;
   },
 });
+
+// The switch itself, in the claim's mutation: the thread, its Pocket cards
+// and its share link to T, S's sidebar row for it gone, and its mirrored
+// rows to follow in runs of their own (rehomeRows).
+async function switchThread(ctx: MutationCtx, m: Move): Promise<void> {
+  const t = (await ctx.db
+    .query('threads')
+    .withIndex('by_threadId', (q) => q.eq('threadId', m.threadId))
+    .unique())!;
+  const now = Date.now();
+  // Its projects were the old Mac's (a project id is only its runner's
+  // own, sync.ts heldElsewhere): it leaves them, and the new Mac puts it in
+  // its own. Kept, they'd show the thread under the old Mac's project to
+  // apps that look a project up by id alone, for as long as the new Mac
+  // didn't write the row again (Daybreak 141, cross-lab review).
+  await ctx.db.patch(t._id, { runnerId: m.to, pendingApproval: undefined, projects: undefined, updatedMs: now });
+  for (const l of await ctx.db.query('projectThreads').withIndex('by_threadId', (q) => q.eq('threadId', m.threadId)).collect()) await ctx.db.delete(l._id);
+  await moveView(ctx, m.from, t.view, undefined);
+  await moveView(ctx, m.to, undefined, t.view);
+  await buryIndexRows(ctx, m.threadId, m.to);
+  for (const c of await ctx.db.query('pocketCards').withIndex('by_runnerId', (q) => q.eq('runnerId', m.from)).collect()) {
+    if (c.threadId === m.threadId) await ctx.db.patch(c._id, { runnerId: m.to, updatedAt: new Date(now).toISOString() });
+  }
+  await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId: m.threadId, from: m.from, to: m.to, table: 0, cursor: null });
+}
 
 /**
  * T has the thread running: the move is over once its rows have all gone
@@ -461,13 +444,8 @@ export const moveDone = mutation({
     const caller = await runnerAuth(ctx, key, 'moveDone');
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'to');
-    if (m.state === 'done') return null;
-    mustBeIn(m, ['claimed'], 'be done');
-    if (!m.rehomedAt) {
-      if (!m.doneAsked) await ctx.db.patch(m._id, { doneAsked: true, updatedAt: Date.now() });
-      return null;
-    }
-    await end(ctx, m, 'done');
+    if (m.state === 'done' || (m.moveState.kind === 'claimed' && m.moveState.doneAsked)) return null;
+    await step(ctx, m, { type: 'DONE' }, 'be done');
     return null;
   },
 });
@@ -481,8 +459,7 @@ export const moveFailed = mutation({
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'either');
     if (m.state === 'failed' || m.state === 'cancelled') return null;
-    mustBeIn(m, BEFORE_CLAIM, 'fail');
-    await end(ctx, m, 'failed', note.replace(/[\u0000-\u001f]+/g, ' ').trim() || 'The move failed.');
+    await step(ctx, m, { type: 'FAIL', note }, 'fail');
     return null;
   },
 });
@@ -527,16 +504,10 @@ async function rehoming(ctx: MutationCtx, a: { moveId?: string; threadId: string
       .withIndex('by_moveId', (q) => q.eq('moveId', a.moveId!))
       .unique();
   } else {
-    for (const x of await ctx.db.query('threadMoves').withIndex('by_thread', (q) => q.eq('threadId', a.threadId)).collect()) if (x.state === 'claimed' && !x.rehomedAt && x.from === a.from && x.to === a.to) m = x;
+    for (const x of await ctx.db.query('threadMoves').withIndex('by_thread', (q) => q.eq('threadId', a.threadId)).collect()) if (x.moveState.kind === 'claimed' && x.from === a.from && x.to === a.to) m = x;
   }
-  if (!m || m.state !== 'claimed' || m.rehomedAt || m.threadId !== a.threadId || m.from !== a.from || m.to !== a.to) return null;
+  if (!m || m.moveState.kind !== 'claimed' || m.threadId !== a.threadId || m.from !== a.from || m.to !== a.to) return null;
   return m;
-}
-
-// Every row has gone to T: T's done (if it has said so) ends the move.
-async function rehomed(ctx: MutationCtx, m: Move): Promise<void> {
-  await ctx.db.patch(m._id, { rehomedAt: Date.now() });
-  if (m.doneAsked) await end(ctx, m, 'done');
 }
 
 /**
@@ -549,10 +520,14 @@ async function rehomed(ctx: MutationCtx, m: Move): Promise<void> {
  * the last page (moveDone), so no next move starts before then; and a
  * page run again finds nothing more of S's to give (Daybreak, 15 Nov 2026).
  */
-export const rehomeRows = internalMutation({
+// Built with the machines' catalog, as REHOMED is the server's to send.
+export const rehomeRows = machines.internalMutation({
   args: { moveId: v.optional(v.string()), threadId: v.string(), from: v.string(), to: v.string(), table: v.number(), cursor: v.union(v.string(), v.null()) },
   returns: v.null(),
-  handler: async (ctx, { moveId, threadId, from, to, table, cursor }) => {
+  handler: async (machineCtx, { moveId, threadId, from, to, table, cursor }) => {
+    const ctx = machineCtx as unknown as MutationCtx;
+    // Every row has gone to T: T's done (if it has said so) ends the move.
+    const rehomed = async (m: Move) => void (await moveMachine.send(machineCtx, m._id, { type: 'REHOMED' }));
     const m = await rehoming(ctx, { moveId, threadId, from, to });
     if (!m) return null;
     const name = REHOME_TABLES[table];
@@ -563,7 +538,7 @@ export const rehomeRows = internalMutation({
     // Nothing more to give: past the last table, the thread gone (its rows
     // go with it), or not T's (which a claimed move's can't be).
     if (!name || !t || t.runnerId !== to) {
-      await rehomed(ctx, m);
+      await rehomed(m);
       return null;
     }
     const fromKeyed = await hasLiveKey(ctx, from);
@@ -589,42 +564,37 @@ export const rehomeRows = internalMutation({
     }
     const next = page.isDone ? { table: table + 1, cursor: null } : { table, cursor: page.continueCursor };
     if (REHOME_TABLES[next.table]) await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId, from, to, ...next });
-    else await rehomed(ctx, m);
+    else await rehomed(m);
     return null;
   },
 });
 
 /**
- * A move T never answered fails after MOVE_ASK_MS, a ready one whose S is
- * gone or that has waited MOVE_READY_MS fails too, one frozen and not
- * claimed after MOVE_FROZEN_MS, so a thread isn't left frozen on S for
- * good. Ended moves go after a week. The cron, every few minutes.
+ * The sweep, every few minutes. The machine's timers end a move T never
+ * answered, a ready one that has waited MOVE_READY_MS and one frozen and not
+ * claimed after MOVE_FROZEN_MS; this ends a ready one whose S has gone
+ * (which no timer can know), arms the timers of a move the backfill brought
+ * over, sends a stuck claimed move's rows again, and deletes ended moves
+ * after a week.
  */
-export const expireMoves = internalMutation({
+export const expireMoves = machines.internalMutation({
   args: {},
   returns: v.null(),
-  handler: async (ctx) => {
+  handler: async (machineCtx) => {
+    const ctx = machineCtx as unknown as MutationCtx;
     const now = Date.now();
-    for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', 'asking').lt('updatedAt', now - MOVE_ASK_MS)).take(50)) {
-      await end(ctx, m, 'failed', `${await runnerName(ctx, m.to)} didn't answer.`);
-    }
-    // A handful at most: one per thread moving.
-    for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', 'ready')).take(100)) {
-      if (m.updatedAt < now - MOVE_READY_MS) {
-        await end(ctx, m, 'failed', 'The thread was still busy 12 hours later, so it stays where it is.');
-        continue;
-      }
-      const s = await ctx.db
-        .query('runners')
-        .withIndex('by_runnerId', (q) => q.eq('runnerId', m.from))
-        .unique();
-      const seen = Math.max(s?.lastSeenAt ?? 0, m.updatedAt);
-      if (seen < now - MOVE_READY_OFFLINE_MS) await end(ctx, m, 'failed', `${await runnerName(ctx, m.from)} went offline before the thread could be packed, so it stays where it is.`);
-    }
-    for (const state of ['packing', 'unpacking'] as const) {
-      // A handful at most: one per thread moving.
+    // A handful at most in each: one per thread moving.
+    for (const state of ['asking', 'ready', 'packing', 'unpacking'] as const) {
       for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', state)).take(100)) {
-        if ((m.frozenAt ?? m.updatedAt) < now - MOVE_FROZEN_MS) await end(ctx, m, 'failed', 'The move took more than 30 minutes.');
+        // A move from before its machine (migrations.ts) has a deadline and no timer yet.
+        if (!m.moveStateTimers.length) await moveMachine.armTimers(machineCtx, m._id);
+        if (state !== 'ready') continue;
+        const s = await ctx.db
+          .query('runners')
+          .withIndex('by_runnerId', (q) => q.eq('runnerId', m.from))
+          .unique();
+        const seen = Math.max(s?.lastSeenAt ?? 0, m.updatedAt);
+        if (seen < now - MOVE_READY_OFFLINE_MS) await moveMachine.send(machineCtx, m._id, { type: 'SOURCE_GONE' });
       }
     }
     // A claimed move T said was done whose rows still haven't all gone over
@@ -632,12 +602,12 @@ export const expireMoves = internalMutation({
     // its rows go again from the start, which gives only what's still S's,
     // and the last page ends it.
     for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', 'claimed').lt('updatedAt', now - REHOME_STUCK_MS)).take(100)) {
-      if (m.rehomedAt || !m.doneAsked) continue;
+      if (m.moveState.kind !== 'claimed' || !m.moveState.doneAsked) continue;
       await ctx.db.patch(m._id, { updatedAt: now });
       await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId: m.threadId, from: m.from, to: m.to, table: 0, cursor: null });
     }
     for (const state of ['done', 'failed', 'cancelled'] as const) {
-      for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', state).lt('updatedAt', now - MOVE_KEPT_MS)).take(100)) await ctx.db.delete(m._id);
+      for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', state).lt('updatedAt', now - MOVE_KEPT_MS)).take(100)) await moveMachine.purge(machineCtx, m._id);
     }
     return null;
   },
