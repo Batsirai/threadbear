@@ -2211,7 +2211,8 @@ to see.
 Threadbear follows your Mac's appearance (System Settings > Appearance)
 unless you pick one for it alone: Settings (⌘,) > General > Appearance has
 Same as the Mac, Light and Dark. It changes straight away and stays picked
-the next time the app opens.
+the next time the app opens. On Windows the first choice is Same as Windows,
+which follows Settings > Personalization > Colors > Choose your mode.
 
 On Mac, Increase Contrast in System Settings > Accessibility > Display
 also strengthens text and borders. It is read at launch and when you return

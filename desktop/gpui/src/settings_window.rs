@@ -93,6 +93,8 @@ impl Tab {
 
 /// The sidebar's width, and the window's, at 100% (`SettingsLayout`).
 const SIDEBAR_WIDTH: f32 = 215.;
+/// The Appearance menu's tip, and its holder's label for scripts.
+const APPEARANCE_TIP: &str = if cfg!(target_os = "macos") { "Light or dark for Threadbear, whatever the Mac is set to" } else { "Light or dark for Threadbear, whatever the system is set to" };
 
 impl Threadbear {
     /// ⌘, or the gear: the window, brought forward if it's open, on `tab` if
@@ -652,7 +654,7 @@ impl SettingsWindow {
     fn appearance_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let current = style::appearance();
         let app = self.app.clone();
-        let menu = Button::new("settings-appearance").label(current.title()).small().secondary().dropdown_caret(true).tooltip("Light or dark for Threadbear, whatever the Mac is set to").dropdown_menu(move |menu: PopupMenu, _, _| {
+        let menu = Button::new("settings-appearance").label(current.title()).small().secondary().dropdown_caret(true).tooltip(APPEARANCE_TIP).dropdown_menu(move |menu: PopupMenu, _, _| {
             let mut menu = menu;
             for choice in style::Appearance::ALL {
                 let app = app.clone();
@@ -667,9 +669,15 @@ impl SettingsWindow {
         section(
             "settings-appearance-section",
             "Appearance",
-            "Light or dark for Threadbear only. Same as the Mac follows System Settings > Appearance.",
+            if cfg!(target_os = "macos") {
+                "Light or dark for Threadbear only. Same as the Mac follows System Settings > Appearance."
+            } else if cfg!(target_os = "windows") {
+                "Light or dark for Threadbear only. Same as Windows follows Settings > Personalization > Colors."
+            } else {
+                "Light or dark for Threadbear only, or the same as the rest of your desktop."
+            },
             "change it for you.",
-            vec![row("Appearance", div().id("settings-appearance-holder").test_support().a11y_role(Role::GenericContainer).aria_label("Light or dark for Threadbear, whatever the Mac is set to").child(menu), cx)],
+            vec![row("Appearance", div().id("settings-appearance-holder").test_support().a11y_role(Role::GenericContainer).aria_label(APPEARANCE_TIP).child(menu), cx)],
             cx,
         )
     }

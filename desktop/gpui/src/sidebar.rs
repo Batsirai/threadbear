@@ -497,6 +497,9 @@ pub(crate) fn palette(cx: &App) -> Palette {
 pub(crate) mod metrics {
     /// From the sidebar's edges to a row's highlight.
     pub const OUTER_INSET: f32 = 8.;
+    /// Over the search row: 4 beside a Mac's traffic lights, more where
+    /// there are none and it would sit against the window's top edge.
+    pub const SEARCH_TOP: f32 = if cfg!(target_os = "macos") { 4. } else { 10. };
     /// Inside a row's highlight, left of its text: wider than the right side
     /// to leave a gutter for the unread dot, so titles line up with or without.
     pub const LEADING: f32 = 18.;
@@ -1404,7 +1407,11 @@ impl Threadbear {
             .size_full()
             .bg(p.side)
             // One line: search and New thread (Mike asked 30 Oct).
-            .child(h_flex().gap(px(6.)).px(px(OUTER_INSET)).pt(px(4.)).items_stretch().child(self.render_search(&p, cx)).child(self.render_new_thread(new_thread_active, &p, cx)))
+            // On a Mac the row sits level with the traffic lights in the
+            // window's top strip; with no lights beside it (Windows, Linux)
+            // it sat against the window's top edge, so it gets more room
+            // there (Mike, on his Windows laptop, 17 Nov).
+            .child(h_flex().gap(px(6.)).px(px(OUTER_INSET)).pt(px(SEARCH_TOP)).items_stretch().child(self.render_search(&p, cx)).child(self.render_new_thread(new_thread_active, &p, cx)))
             // Nothing about the connection here: the banner over the thread
             // says it, as the Swift app's does, and only once it's worth
             // saying (`connection_banner`). The raw error showed here in the
