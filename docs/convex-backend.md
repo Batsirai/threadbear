@@ -469,7 +469,12 @@ lid closed with Mike at it never says he left. The cron only hands each
 such runner to a mutation of its own (`sync:drainHeldPushes`), which sends
 16 at a time and schedules the next 16, so one runner's backlog (a
 secondary key may hold 3,000 large rows) can't read past a mutation's
-limit and stop another Mac's pushes (Daybreak 119, 13 Nov).
+limit and stop another Mac's pushes (Daybreak 119, 13 Nov). Each drain
+ends: it takes only pushes held before it began (one `push.notify` holds
+again because he's back waits for his next leave) and stops as soon as the
+runner counts as present again, so a runner that keeps saying he's there
+and keeps its threads needing him can't keep a drain going (Daybreak 148,
+17 Nov).
 
 **Keeping old and new working together.** For a while after any change,
 an older runner, a newer backend and an App Store phone app from weeks ago
