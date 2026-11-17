@@ -69,7 +69,58 @@ function strip<T extends { _id: unknown; _creationTime: unknown }>(doc: T): Omit
 // stripped of the ones known today.
 const PHONE_THREAD_KEYS = new Set([...Object.keys(threadFields), 'view']);
 type PhoneThread = Infer<typeof row>;
-function stripThread(doc: Doc<'threads'>): PhoneThread {
+// Which runner a project id is, for apps that look a project up by its id
+// alone: the iPhone and Android apps from before API 82 (and any still in
+// people's hands), and an open page from before. Ids are each runner's own
+// random ones and two runners never share one honestly, so when two do, one
+// is copying the other's to dress its threads as that project: the one
+// without a runner key of its own (the main Mac) is the id's, else the
+// first written. A thread's project is shown only when the id is its own
+// runner's, and the list has only the id's runner's project, so no order of
+// writes, row from before, or moved thread puts another Mac's thread under
+// it (Daybreak 141, cross-lab review, 17 Nov 2026). Asked once per id in a
+// query; small rows (projectHeads) once they exist.
+type ProjectOwners = (id: string) => Promise<string | undefined>;
+
+function projectOwners(ctx: QueryCtx): ProjectOwners {
+  const seen = new Map<string, Promise<string | undefined>>();
+  let heads: Promise<boolean> | undefined;
+  const owner = async (id: string) => {
+    heads ??= ctx.db
+      .query('backendMarks')
+      .withIndex('by_name', (q) => q.eq('name', HEADS_MARK))
+      .first()
+      .then((m) => m !== null);
+    const rows = await ((await heads) ? ctx.db.query('projectHeads').withIndex('by_project_id', (q) => q.eq('id', id)) : ctx.db.query('projects').withIndex('by_project_id', (q) => q.eq('id', id))).take(8);
+    if (rows.length <= 1) return rows[0]?.runnerId;
+    const main = [];
+    for (const r of rows) if (!(await hasLiveKey(ctx, r.runnerId))) main.push(r);
+    return (main.length ? main : rows).sort((a, b) => a._creationTime - b._creationTime)[0]!.runnerId;
+  };
+  return (id) => {
+    let hit = seen.get(id);
+    if (!hit) seen.set(id, (hit = owner(id)));
+    return hit;
+  };
+}
+
+// A thread's projects, only those whose id is its own runner's (projectOwners).
+// One no runner has yet stays: no app finds a project for it.
+async function ownProjectRefs(out: Record<string, unknown>, runnerId: string, owners: ProjectOwners): Promise<void> {
+  const refs = out.projects as { id: string }[] | undefined;
+  if (!refs?.length) return;
+  const kept = [];
+  for (const r of refs) {
+    const who = await owners(r.id);
+    if (who === undefined || who === runnerId) kept.push(r);
+  }
+  if (kept.length !== refs.length) {
+    if (kept.length) out.projects = kept;
+    else delete out.projects;
+  }
+}
+
+async function stripThread(doc: Doc<'threads'>, owners: ProjectOwners): Promise<PhoneThread> {
   const out: Record<string, unknown> = {};
   for (const [k, value] of Object.entries(doc)) if (PHONE_THREAD_KEYS.has(k) && value !== undefined) out[k] = value;
   // Out of its list for a runner key's cap (sync.ts upsertThreads): shown where it belongs.
@@ -78,6 +129,7 @@ function stripThread(doc: Doc<'threads'>): PhoneThread {
   holdThreadTimes(out, isReadableTime);
   // Counts a phone turns into an Int, however old the row (Daybreak 109).
   holdReviewNumbers(out);
+  await ownProjectRefs(out, doc.runnerId, owners);
   // Web links only, for a row written before upsertThreads dropped the rest
   // (API 82, Daybreak 139), so an older app or an open old page gets none.
   return webLinksOnly(out) as PhoneThread;
@@ -156,7 +208,8 @@ export const threads = query({
       .withIndex('by_view_activity', (x) => x.eq('view', view))
       .order('desc');
     const rows = view === 'den' ? await q.take(DEN_LIMIT) : await q.collect();
-    return rows.map(stripThread);
+    const owners = projectOwners(ctx);
+    return Promise.all(rows.map((t) => stripThread(t, owners)));
   },
 });
 
@@ -170,7 +223,8 @@ export const threadsAt = query({
     await checkPhoneToken(ctx, token);
     const q = ctx.db.query('threads').withIndex('by_view_activity', (x) => x.eq('view', view)).order('desc');
     const rows = view === 'den' ? await q.take(DEN_LIMIT) : await q.collect();
-    return { rows: rows.map(stripThread), at: Date.now() };
+    const owners = projectOwners(ctx);
+    return { rows: await Promise.all(rows.map((t) => stripThread(t, owners))), at: Date.now() };
   },
 });
 
@@ -188,6 +242,7 @@ export const threadsSince = query({
   returns: v.object({ rows: v.array(v.object({ ...row.fields, updatedMs: v.number() })), gone: v.array(v.string()), more: v.optional(v.boolean()) }),
   handler: async (ctx, { token, since }) => {
     await checkPhoneToken(ctx, token);
+    const owners = projectOwners(ctx);
     if (since < Date.now() - SINCE_OLDEST_MS) return { rows: [], gone: [], more: true };
     const docs = await ctx.db.query('threads').withIndex('by_updated', (x) => x.gte('updatedMs', since)).take(SINCE_CAP + 1);
     const goneRows = await ctx.db.query('threadGone').withIndex('by_at', (x) => x.gte('at', since)).take(SINCE_CAP + 1);
@@ -199,7 +254,7 @@ export const threadsSince = query({
     for (const d of docs) {
       // Out of its list for a runner key's cap: threads doesn't show it either.
       if (d.view === 'overflow') gone.push(d.threadId);
-      else rows.push({ ...stripThread(d), updatedMs: d.updatedMs ?? since });
+      else rows.push({ ...(await stripThread(d, owners)), updatedMs: d.updatedMs ?? since });
     }
     return { rows, gone };
   },
@@ -223,6 +278,7 @@ export const search = query({
   returns: v.array(row),
   handler: async (ctx, { token, text, everywhere }) => {
     await checkPhoneToken(ctx, token);
+    const owners = projectOwners(ctx);
     const words = text.trim();
     if (!words) return [];
     const byField = (index: 'search_title' | 'search_keywords' | 'search_preview', field: 'title' | 'keywords' | 'preview') =>
@@ -236,7 +292,7 @@ export const search = query({
     for (const t of found) {
       if (seen.has(t.threadId) || out.length >= SEARCH_LIMIT) continue;
       seen.add(t.threadId);
-      out.push(stripThread(t));
+      out.push(await stripThread(t, owners));
     }
     if (everywhere && out.length < SEARCH_LIMIT) {
       const said = await ctx.db
@@ -253,7 +309,7 @@ export const search = query({
           .query('threads')
           .withIndex('by_threadId', (q) => q.eq('threadId', m.threadId))
           .first();
-        if (t) out.push(stripThread(t));
+        if (t) out.push(await stripThread(t, owners));
       }
     }
     return out;
@@ -319,7 +375,7 @@ export const thread = query({
       add(m);
     }
     const messages = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-    return { thread: stripThread(t), messages };
+    return { thread: await stripThread(t, projectOwners(ctx)), messages };
   },
 });
 
@@ -331,7 +387,7 @@ export const threadRow = query({
   returns: row,
   handler: async (ctx, { token, threadId }) => {
     await checkPhoneToken(ctx, token);
-    return stripThread(await findThread(ctx, threadId));
+    return await stripThread(await findThread(ctx, threadId), projectOwners(ctx));
   },
 });
 
@@ -523,7 +579,13 @@ export const projects = query({
       const { runnerId, id, title, createdBy, createdAt, updatedAt, threadCount, lastActivityAt } = p;
       out.push({ runnerId, id, title, createdBy, archived: p.archived, createdAt, updatedAt, threadCount, ...(lastActivityAt !== undefined ? { lastActivityAt } : {}), folders: [], goals: '', state: '', notes: '', ...(await iconOf(ctx, p)) });
     }
-    return out.sort((a, b) => (b.lastActivityAt ?? b.updatedAt).localeCompare(a.lastActivityAt ?? a.updatedAt));
+    // An id two runners have: only its own runner's (projectOwners).
+    const count = new Map<string, number>();
+    for (const p of out) count.set(p.id, (count.get(p.id) ?? 0) + 1);
+    const owners = projectOwners(ctx);
+    const kept = [];
+    for (const p of out) if (count.get(p.id) === 1 || (await owners(p.id)) === p.runnerId) kept.push(p);
+    return kept.sort((a, b) => (b.lastActivityAt ?? b.updatedAt).localeCompare(a.lastActivityAt ?? a.updatedAt));
   },
 });
 
@@ -573,6 +635,7 @@ export const projectThreads = query({
   returns: v.array(row),
   handler: async (ctx, { token, runnerId, projectId, limit }) => {
     await checkPhoneToken(ctx, token);
+    const owners = projectOwners(ctx);
     const n = pageLimit(limit, PAGE_DEFAULT, PROJECT_THREADS_MAX);
     if (runnerId === undefined) return [];
     const links = await ctx.db
@@ -588,7 +651,7 @@ export const projectThreads = query({
         .unique();
       // Only while the thread is still that runner's: a thread moved to
       // another Mac isn't in its old Mac's project (moves.ts moveClaim).
-      if (t && t.runnerId === runnerId) out.push(stripThread(t));
+      if (t && t.runnerId === runnerId) out.push(await stripThread(t, owners));
     }
     return out.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
   },

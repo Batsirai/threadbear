@@ -122,31 +122,39 @@ test("a runner key can't give its thread or a project of its own another runner'
   assert.deepEqual(main.projects?.map((p) => p.id), ['p_shared']);
 });
 
-// A runner key that got in first, while the id had no project here yet (or
-// before API 82): its thread under the id and its own project with the id go
-// as soon as the main Mac writes its projects, which every start does
-// (cross-lab review, 17 Nov 2026).
-test("a runner key that used a project id first loses it when the main Mac writes that project (141, old apps)", async () => {
+// Whatever got stored, in whatever order (a runner key using the id before
+// the main Mac's project was mirrored, rows from before API 82, a thread
+// moved before moves cleared its projects, an id with a space that hid its
+// link), what the apps read has the id only as the main Mac's: older apps
+// look a project up by its id alone (cross-lab review, 17 Nov 2026).
+test("whatever was stored first, apps read a project id only as its own runner's (141, old apps)", async () => {
   const s = await setup();
-  // Before the main Mac has mirrored p_shared: the other runner's project and thread take the id.
+  // Before the main Mac has mirrored p_shared: the other runner's project and threads take the id.
   await call(s.ctx, sync.setProjects, { key: MINI_KEY, runnerId: MINI, projects: [project('p_shared', 'Trusted project'), project('p_mini', 'Mini project')] });
   await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('EVIL', MINI, { projects: [{ id: 'p_shared', title: 'Trusted project' }, { id: 'p_mini', title: 'Mini project' }] })] });
-  assert.equal(s.rows('projects').filter((p) => p.id === 'p_shared').length, 1);
-  // Then the main Mac writes its own, by either call.
-  for (const write of ['set', 'upsert'] as const) {
-    if (write === 'set') await call(s.ctx, sync.setProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')] });
-    else {
-      // The squat again, as an older backend kept it, then the main Mac's change.
-      await s.ctx.db.insert('projects', { ...project('p_shared', 'Trusted project'), runnerId: MINI });
-      await call(s.ctx, sync.upsertProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')], removed: [] });
-    }
-    assert.deepEqual(s.rows('projects').filter((p) => p.id === 'p_shared').map((p) => p.runnerId), [LAPTOP], write);
-    assert.deepEqual(s.rows('projectHeads').filter((p) => p.id === 'p_shared').map((p) => p.runnerId), [LAPTOP], write);
-    const list = (await call(s.ctx, phone.projects, { token: s.token })) as { runnerId: string; id: string }[];
-    assert.deepEqual(list.filter((p) => p.id === 'p_shared').map((p) => p.runnerId), [LAPTOP], write);
-    const { thread: read } = (await call(s.ctx, phone.thread, { token: s.token, threadId: 'EVIL' })) as { thread: { projects?: { id: string }[] } };
-    assert.deepEqual(read.projects?.map((p) => p.id), ['p_mini'], `${write}: its own project stays, the main Mac's id goes`);
-    assert.ok(!s.rows('projectThreads').some((l) => l.projectId === 'p_shared' && l.runnerId === MINI), write);
-  }
-  assert.ok(s.rows('projects').some((p) => p.runnerId === MINI && p.id === 'p_mini'));
+  // One whose ids once joined to the same key: its p_shared ref has no link row.
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('SLY', MINI, { projects: [{ id: 'p_shared zz', title: 'x' }] })] });
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('SLY', MINI, { projects: [{ id: 'p_shared', title: 'x' }, { id: 'zz', title: 'x' }] })] });
+  // The main Mac's own, and a thread it moved to Mac mini before moves cleared projects.
+  await call(s.ctx, sync.setProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')] });
+  await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread('MAIN', LAPTOP, { projects: [{ id: 'p_shared', title: 'Main project' }] })] });
+  const moved = s.rows('threads').find((t) => t.threadId === 'MAIN')!;
+  await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread('OLDMOVE', LAPTOP, { projects: [{ id: 'p_shared', title: 'Main project' }] })] });
+  await s.ctx.db.patch(s.rows('threads').find((t) => t.threadId === 'OLDMOVE')!._id, { runnerId: MINI });
+
+  const list = (await call(s.ctx, phone.projects, { token: s.token })) as { runnerId: string; id: string; title: string }[];
+  assert.deepEqual(list.filter((p) => p.id === 'p_shared').map((p) => [p.runnerId, p.title]), [[LAPTOP, 'Main project']]);
+  assert.ok(list.some((p) => p.runnerId === MINI && p.id === 'p_mini'), "the runner's own project is still listed");
+  const refs = async (threadId: string) => ((await call(s.ctx, phone.thread, { token: s.token, threadId })) as { thread: { projects?: { id: string }[] } }).thread.projects?.map((p) => p.id);
+  assert.deepEqual(await refs('EVIL'), ['p_mini'], 'its own project stays, the main Mac\'s id goes');
+  assert.deepEqual(await refs('SLY'), ['zz'], 'an id no runner has stays: no app finds a project for it');
+  assert.deepEqual(await refs('OLDMOVE'), undefined);
+  assert.deepEqual(await refs(moved.threadId), ['p_shared'], "the main Mac's own thread keeps it");
+  // The lists the apps follow say the same.
+  const inbox = (await call(s.ctx, phone.threadsAt, { token: s.token, view: 'inbox' })) as { rows: { threadId: string; projects?: { id: string }[] }[] };
+  const byId = new Map(inbox.rows.map((r) => [r.threadId, r.projects?.map((p) => p.id)]));
+  assert.deepEqual([byId.get('EVIL'), byId.get('OLDMOVE'), byId.get('MAIN')], [['p_mini'], undefined, ['p_shared']]);
+  // And the main Mac's project page has only its own threads.
+  const page = (await call(s.ctx, phone.projectThreads, { token: s.token, runnerId: LAPTOP, projectId: 'p_shared' })) as { threadId: string }[];
+  assert.deepEqual(page.map((t) => t.threadId).sort(), ['MAIN']);
 });

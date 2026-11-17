@@ -780,7 +780,9 @@ export default defineSchema({
     icon: v.optional(v.object({ symbol: v.optional(v.string()), picture: v.optional(v.string()), by: v.string() })),
   })
     .index('by_runnerId', ['runnerId'])
-    .index('by_runner_id', ['runnerId', 'id']),
+    .index('by_runner_id', ['runnerId', 'id'])
+    // Which runner an id is when two have it (phone.ts projectOwners).
+    .index('by_project_id', ['id']),
 
   // How many of a runner's threads are in each of the phone's tucked-away
   // views (API 30), kept by the writes that move a thread between views, so
@@ -818,9 +820,6 @@ export default defineSchema({
     // its own runnerId, so one runner's threads can't turn up in another
     // runner's project by taking its id (Daybreak finding 141, 16 Nov 2026).
     .index('by_runner_project', ['runnerId', 'projectId'])
-    // Other runners' threads under an id a runner's project write has
-    // (sync.ts claimProjectIds).
-    .index('by_project_runner', ['projectId', 'runnerId'])
     .index('by_threadId', ['threadId']),
 
   // A thread row gone in the last day, so a client following phone:threadsSince
