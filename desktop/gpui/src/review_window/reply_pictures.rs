@@ -21,9 +21,12 @@ use threadbear_core::composer::{self as words, PICTURE_MARK_STR};
 use threadbear_core::reducer::ImageRef;
 
 /// One chip's picture: where it came from, and the runner's copy once it's in.
+/// `failed`: it couldn't be read, so its chip was taken out; one that Undo
+/// puts back is left out of the reply, rather than holding Send for ever.
 pub(super) struct ReplyPicture {
     source: PathBuf,
     image: Option<ImageRef>,
+    failed: bool,
 }
 
 #[derive(Default)]
@@ -56,7 +59,7 @@ impl ReplyPictures {
             let start = out.len();
             out.push_str(PICTURE_MARK_STR);
             tokens.push((start..out.len(), picture_token(&id)));
-            self.chips.insert(id, ReplyPicture { source: PathBuf::from(&image.path), image: Some(image) });
+            self.chips.insert(id, ReplyPicture { source: PathBuf::from(&image.path), image: Some(image), failed: false });
         }
         let mut content = InputContent::new(out);
         for (range, token) in tokens {
@@ -70,30 +73,54 @@ impl ReplyPictures {
         state.tokens().iter().map(|span| span.token().id().clone()).collect()
     }
 
-    /// The reply and its pictures as the draft keeps them, or None while a
-    /// picture is still on its way in (it can't be sent without it).
+    /// The reply and its pictures as the draft keeps them, each picture's
+    /// chip its `[Picture N]`, or None while a picture is still on its way in
+    /// (it can't be sent without it). A chip with no picture (one that
+    /// failed, put back by Undo) is left out, and so is a mark that isn't a chip.
     pub(super) fn draft_of(&self, state: &TextareaState) -> Option<(String, Vec<ImageRef>)> {
-        let mut images = Vec::new();
-        for id in Self::ids(state) {
-            images.push(self.chips.get(&id)?.image.clone()?);
+        if self.loading(state) {
+            return None;
         }
-        Some((words::message_text(state.value().as_ref(), 1), images))
+        let text = state.value().to_string();
+        let mut spans: Vec<_> = state.tokens().iter().map(|span| (span.range(), span.token().id().clone())).collect();
+        spans.sort_by_key(|(range, _)| range.start);
+        let mut reply = String::with_capacity(text.len());
+        let mut images = Vec::new();
+        let mut at = 0;
+        for (range, id) in spans {
+            if range.start < at || range.end > text.len() {
+                continue;
+            }
+            reply.push_str(&words::draft_words(&text[at..range.start]));
+            if let Some(image) = self.chips.get(&id).and_then(|c| c.image.clone()) {
+                images.push(image);
+                reply.push_str(&words::picture_marker(images.len()));
+            }
+            at = range.end;
+        }
+        reply.push_str(&words::draft_words(&text[at..]));
+        Some((reply, images))
     }
 
     /// Whether a picture in the box is still being copied in.
     pub(super) fn loading(&self, state: &TextareaState) -> bool {
-        Self::ids(state).iter().any(|id| self.chips.get(id).is_none_or(|c| c.image.is_none()))
+        Self::ids(state).iter().any(|id| self.chips.get(id).is_some_and(|c| c.image.is_none() && !c.failed))
+    }
+
+    /// The pictures in the box that are in, for comparing with the draft's.
+    pub(super) fn count(&self, state: &TextareaState) -> usize {
+        Self::ids(state).iter().filter(|id| self.chips.get(*id).is_some_and(|c| c.image.is_some())).count()
     }
 
     /// The runner's own copies, once a save has them: the same pictures in
     /// the same order, so the box points at the copies that last.
     pub(super) fn adopt(&mut self, state: &TextareaState, images: &[ImageRef]) {
-        let ids = Self::ids(state);
+        let ids: Vec<_> = Self::ids(state).into_iter().filter(|id| self.chips.get(id).is_some_and(|c| c.image.is_some())).collect();
         if ids.len() != images.len() {
             return;
         }
         for (id, image) in ids.iter().zip(images) {
-            if let Some(chip) = self.chips.get_mut(id).filter(|c| c.image.is_some()) {
+            if let Some(chip) = self.chips.get_mut(id) {
                 chip.image = Some(image.clone());
             }
         }
@@ -190,7 +217,7 @@ impl ReviewWindow {
             crate::web_panels::keyboard_to_app(window);
         });
         for (id, path) in ids.into_iter().zip(pictures) {
-            self.reply_pictures.chips.insert(id.clone(), ReplyPicture { source: path.clone(), image: None });
+            self.reply_pictures.chips.insert(id.clone(), ReplyPicture { source: path.clone(), image: None, failed: false });
             self.import_reply_picture(id, path, cx);
         }
         cx.notify();
@@ -238,7 +265,9 @@ impl ReviewWindow {
                 }
             }
             Err(message) => {
-                self.reply_pictures.chips.remove(&id);
+                if let Some(chip) = self.reply_pictures.chips.get_mut(&id) {
+                    chip.failed = true;
+                }
                 self.pending_chip_removal.push(id);
                 self.session.error = Some(format!("Couldn\u{2019}t add that picture: {message}"));
             }

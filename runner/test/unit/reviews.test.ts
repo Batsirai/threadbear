@@ -6,7 +6,7 @@ import { makeHarness, tick } from '../helpers/fakes.ts';
 import { makePng } from '../helpers/png.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { stills, withCharset } from '../../src/review-media.ts';
-import { PASSED_OVER_TAIL } from '../../src/reviews.ts';
+import { PASSED_OVER_TAIL, fitReview } from '../../src/reviews.ts';
 
 function fixture() {
   const h = makeHarness();
@@ -457,4 +457,20 @@ test('a reply can carry pictures: kept with the review, sent with the answer, on
   // Its copy outlives inbox/.
   fs.rmSync(pasted.path);
   assert.ok(fs.existsSync(message.images[0].path));
+});
+
+test('a client from before reply pictures keeps them; a moved review brings none', () => {
+  const {h,thread,source,input}=fixture();
+  const {review}=h.runner.createReview(thread.id,input);
+  const pasted=h.runner.importMedia(source).image;
+  const saved=h.runner.saveReview(thread.id,review.id,0,{notes:{},reply:'[Picture 1]',images:[pasted]}).review;
+  // The Swift app's draft has no images: the saved one stays with its marker.
+  const older=h.runner.saveReview(thread.id,review.id,saved.revision,{pickedId:'A',notes:{},reply:'[Picture 1]'}).review;
+  assert.deepEqual(older.draft.images,saved.draft.images);
+  // images: [] takes it away.
+  assert.equal(h.runner.saveReview(thread.id,review.id,older.revision,{notes:{},images:[]}).review.draft.images,undefined);
+  // Another runner's pictures name its files, which could be any file here.
+  const moved=fitReview({...review,status:'answered',replyTurnId:'t',response:{notes:{},images:[{path:'/Users/someone/private.png',mediaType:'image/png'}]},draft:{notes:{},images:[{path:'/etc/hosts',mediaType:'image/png'}]}})!;
+  assert.equal(moved.response!.images,undefined);
+  assert.equal(moved.draft.images,undefined);
 });

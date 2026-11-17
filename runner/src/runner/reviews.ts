@@ -62,7 +62,7 @@ export const reviewsPart = {
     this.checkAccepting();
     const review = this.mustReview(st, reviewId);
     this.checkReviewRevision(review, revision);
-    const draft = this.keepReplyImages(st, review, reviewDraft(review, raw));
+    const draft = this.keepReplyImages(st, review, reviewDraft(review, withSavedImages(review, raw)));
     const next = {...review, draft, revision: review.revision + 1, updatedAt: this.isoNow()};
     this.persistReview(st, next);
     return {review: structuredClone(next)};
@@ -73,7 +73,7 @@ export const reviewsPart = {
     const review = this.mustReview(st, reviewId);
     // Its pictures kept by their contents, so a retry that names the same
     // ones from inbox/ is the same answer.
-    const draft = this.keepReplyImages(st, review, reviewDraft(review, raw, true));
+    const draft = this.keepReplyImages(st, review, reviewDraft(review, withSavedImages(review, raw), true));
     // A dropped WebSocket response must not send Mike's answer twice.
     if (review.status === 'answered' && sameDraft(review.response, draft)) {
       this.kickQueue(st);
@@ -231,3 +231,11 @@ export const reviewsPart = {
 };
 
 export type ReviewsPart = RunnerPart<typeof reviewsPart>;
+
+// A client from before reply pictures (the frozen Swift app) sends a draft
+// without `images`: the pictures already saved stay, rather than going with
+// their [Picture N] still in the words. `images: []` takes them away.
+function withSavedImages(review: DesignReview, raw: ReviewDraft): ReviewDraft {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || 'images' in raw || !review.draft.images?.length) return raw;
+  return {...raw, images: review.draft.images};
+}

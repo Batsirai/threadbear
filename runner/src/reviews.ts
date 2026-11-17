@@ -150,8 +150,10 @@ export function fitReview(raw: unknown): DesignReview | undefined {
     if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
     const draft = { ...d };
     set(draft, 'reply', 8000);
-    if (Array.isArray(draft.images)) draft.images = draft.images.slice(0, maxReplyImages);
-    else delete draft.images;
+    // A reply's pictures name the other runner's files, which an extra Mac
+    // could point anywhere on this one (Codex's review, 17 Nov): they don't
+    // come with the move.
+    delete draft.images;
     if (draft.notes && typeof draft.notes === 'object' && !Array.isArray(draft.notes)) {
       const notes: Record<string, string> = Object.create(null);
       for (const [id, note] of Object.entries(draft.notes).slice(0, 12)) {

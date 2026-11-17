@@ -436,8 +436,11 @@ impl ReviewWindow {
         let shown = self.session.shown_draft();
         let wanted = shown.reply.clone().unwrap_or_default();
         let images = shown.images.clone();
-        // A changed runner draft or answer still wins over an unreported local edit.
-        if self.reply_synced != wanted {
+        // A changed runner draft or answer still wins over an unreported local
+        // edit; a picture added or taken away elsewhere with the same words (a
+        // reply of pictures alone) does too.
+        let pictures_changed = !self.reply_pictures.loading(self.reply.read(cx)) && self.reply_pictures.count(self.reply.read(cx)) != images.len();
+        if self.reply_synced != wanted || pictures_changed {
             let same = self.reply_pictures.draft_of(self.reply.read(cx)).is_some_and(|(reply, now)| reply == wanted && now == images);
             if !same {
                 let content = self.reply_pictures.content_for(&wanted, &images);

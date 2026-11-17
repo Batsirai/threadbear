@@ -98,9 +98,9 @@ impl ReviewDraft {
         if let Some(reply) = &self.reply {
             out.insert("reply".into(), json!(reply));
         }
-        if !self.images.is_empty() {
-            out.insert("images".into(), Value::Array(self.images.iter().map(crate::inline_chips::image_json).collect()));
-        }
+        // Always, empty too: a runner keeps the saved pictures for a client
+        // that leaves `images` out, as one from before them does.
+        out.insert("images".into(), Value::Array(self.images.iter().map(crate::inline_chips::image_json).collect()));
         if self.none {
             out.insert("none".into(), json!(true));
         }
@@ -418,6 +418,9 @@ pub struct ReviewSession {
     cache: SharedDraftCache,
     cache_key: String,
     owner: String,
+    /// The pictures the save on its way sent, so its answer's copies of them
+    /// replace only those, not pictures changed meanwhile.
+    saving_images: Vec<ImageRef>,
 }
 
 impl ReviewSession {
@@ -444,6 +447,7 @@ impl ReviewSession {
             cache,
             cache_key,
             owner,
+            saving_images: Vec::new(),
         };
         // A draft kept here from before: it's what was typed, so it wins, and
         // if the review has moved on since, it's in conflict.
@@ -683,6 +687,7 @@ impl ReviewSession {
             return None;
         }
         self.saving = true;
+        self.saving_images = self.draft.images.clone();
         Some(SaveCall { revision: self.review.revision, draft: self.draft.clone() })
     }
 
@@ -697,7 +702,7 @@ impl ReviewSession {
         // The runner's copies of the pictures, so the next look doesn't see a
         // change and save again (and again).
         let theirs = self.review.response.as_ref().unwrap_or(&self.review.draft);
-        if newer && self.draft.normalized().same_but_picture_copies(theirs) {
+        if newer && self.draft.images == self.saving_images && self.draft.normalized().same_but_picture_copies(theirs) {
             self.draft.images = theirs.images.clone();
         }
         self.dirty = self.draft.normalized() != *self.review.response.as_ref().unwrap_or(&self.review.draft);
@@ -725,6 +730,14 @@ impl ReviewSession {
     pub fn save_failed_then_loaded(&mut self, call: &SaveCall, latest: DesignReview) {
         let revision = latest.revision;
         let theirs = latest.draft.clone();
+        // The save got there and only its answer was lost: the runner has
+        // this draft, its pictures as its own copies. Not a change elsewhere.
+        let sent = call.draft.normalized();
+        if revision > call.revision && latest.is_pending() && (theirs == sent || theirs.same_but_picture_copies(&sent)) {
+            self.saving_images = call.draft.images.clone();
+            self.save_done(latest);
+            return;
+        }
         self.receive(latest);
         if revision > call.revision && theirs != call.draft.normalized() && theirs != self.draft.normalized() {
             self.conflict = true;
@@ -1766,7 +1779,7 @@ mod tests {
         assert_eq!(sent["pickedIds"], json!(["A", "D"]));
         assert_eq!(ReviewDraft::decode(&sent), Some(draft));
         let none = ReviewDraft { none: true, ..Default::default() }.to_json();
-        assert_eq!(none, json!({ "notes": {}, "pickedIds": [], "none": true }));
+        assert_eq!(none, json!({ "notes": {}, "pickedIds": [], "images": [], "none": true }));
     }
 
     #[test]
@@ -1819,8 +1832,33 @@ mod tests {
         assert!(!s.dirty(), "the runner's copy of the same picture isn't an edit");
         assert_eq!(s.draft().images, theirs.images);
         assert_eq!(ReviewDraft::decode(&theirs.to_json()), Some(theirs));
-        let only = ReviewDraft { images: vec![pasted], ..Default::default() };
+        let only = ReviewDraft { images: vec![pasted.clone()], ..Default::default() };
         assert!(only.can_submit(&two().options));
+
+        // A picture changed while a save of another was on its way stays.
+        let mut s = session(two());
+        s.set_reply_with_pictures("[Picture 1]", vec![pasted.clone()]);
+        let call = s.begin_save().unwrap();
+        let other = ImageRef::new("/home/inbox/2.png", "image/png");
+        s.set_reply_with_pictures("[Picture 1]", vec![other.clone()]);
+        let mut back = s.review().clone();
+        back.revision += 1;
+        back.draft = ReviewDraft { images: vec![ImageRef::new("/kept/1.png", "image/png")], ..call.draft.normalized() };
+        s.save_done(back);
+        assert_eq!(s.draft().images, vec![other], "not the copy of the one it replaced");
+        assert!(s.dirty() && s.save_again());
+
+        // A save whose answer was lost, though the runner kept it, isn't a conflict.
+        let mut s = session(two());
+        s.set_reply_with_pictures("[Picture 1]", vec![pasted]);
+        let call = s.begin_save().unwrap();
+        let mut latest = s.review().clone();
+        latest.revision += 1;
+        latest.draft = ReviewDraft { images: vec![ImageRef::new("/kept/1.png", "image/png")], ..call.draft.normalized() };
+        s.save_failed("connection lost");
+        s.save_failed_then_loaded(&call, latest);
+        assert!(!s.conflict() && !s.dirty(), "{:?}", s.error);
+        assert_eq!(s.draft().images[0].path, "/kept/1.png");
     }
 
     #[test]
