@@ -112,7 +112,8 @@ test('remote builds expose the full live log and still find the built binaries',
   for (const dir of [scripts, bin, home, temp]) fs.mkdirSync(dir, { recursive: true });
   // dev-app refuses a group-writable TMPDIR, and a umask of 0002 (some Linux boxes) makes one.
   fs.chmodSync(temp, 0o700);
-  fs.copyFileSync(path.join(path.dirname(DEV_APP), 'dev-app.ts'), path.join(scripts, 'dev-app.ts'));
+  // With what it imports (its state folder's check, shared with the spec driver).
+  for (const f of ['dev-app.ts', 'own-folder.ts']) fs.copyFileSync(path.join(path.dirname(DEV_APP), f), path.join(scripts, f));
   fs.writeFileSync(path.join(checkout, 'package.json'), '{"type":"module"}');
   const config = path.join(home, 'Library', 'Application Support', 'Threadbear');
   fs.mkdirSync(config, { recursive: true });
