@@ -264,12 +264,14 @@ const FAQ = [
   // what Mike's real deployment used, not measured on anyone else's.
   ["What does it cost?",
     "Threadbear is free. You need Claude Code or Codex, so a Claude or ChatGPT plan, which you're probably paying for already, and a Convex account for your deployment. With one Mac and a few threads a day that should fit on Convex's <a href=\"https://www.convex.dev/pricing\">free plan</a> very comfortably. If you use it as much as I do you'll go over, but on Starter that only comes to about US$1.50 a month."],
-  ["Which Macs does it run on?",
-    "Macs with Apple silicon, on macOS 26 or later."],
-  // A Linux runner still needs a Mac set up first (INSTALL.md, section 6), hence "second". Taylor's
-  // fork isn't Mike's and he hasn't run it, hence "check it over"; he asked for the link on 6 Nov 2026.
-  ["Is there a Windows or Linux version?",
-    "Not of the app, it's Mac only. A Linux server can be a second, always-on machine though (<a href=\"https://github.com/mikecann/threadbear/blob/main/INSTALL.md#6-a-runner-on-linux-optional\">section 6 of INSTALL.md</a> has how), so your threads can run there while you drive them from your Mac, your phone or the website. If you want a proper Windows or Linux version then I thoroughly encourage you to spend some tokens and build it, I'd personally love to see it. Taylor Rupe has already got one going on Windows through WSL in <a href=\"https://github.com/t-rupe/threadbear/blob/main/wsl/README.md\">their own fork</a>, with no Mac needed (you use the website and the iPhone app instead). I haven't tried it myself, so get your agent to check it over first."],
+  // The GPUI app (desktop/README.md) is one app for all three since Mike's 17 Nov switch. Windows'
+  // runner isn't native yet (docs/gpui-port/runner-windows.md), and INSTALL.md is still written for
+  // a Mac, hence the second answer. Taylor's fork isn't Mike's and he hasn't run it; he asked for
+  // the link on 6 Nov 2026.
+  ["What does it run on?",
+    "Macs with Apple silicon on macOS 26 or later, Windows and Linux. It's one app for all three now, built on <a href=\"https://gpui.rs\">GPUI</a> (the same thing Zed is built on)."],
+  ["How well does it work on Windows and Linux?",
+    "It's early days to be honest. I use it on my Mac all day, but I've only just started trying it on Windows myself. The install guide is still written for a Mac, so on Windows or Linux your agent will have to work a few bits out for itself, and on Windows the runner (the little process that drives your agents) lives in WSL for now. If something's off then get your agent to fix it, that's kinda the whole point. A Linux server also makes a nice always-on second machine (<a href=\"https://github.com/mikecann/threadbear/blob/main/INSTALL.md#6-a-runner-on-linux-optional\">section 6 of INSTALL.md</a> has how), and Taylor Rupe got Threadbear going on Windows through WSL in <a href=\"https://github.com/t-rupe/threadbear/blob/main/wsl/README.md\">their own fork</a> before any of this, so that's worth a look too."],
   // The 5-hour meter and the Agent SDK: docs/guide.md, "Accounts, pools and Usage".
   ["Does it use my subscription or an API key?",
     "Your subscription. Threadbear runs the official <code>claude</code> and <code>codex</code> command line tools, logged in as you, and it never reads or copies your login tokens. Claude threads go through Claude Code's Agent SDK though, and Anthropic's 5-hour limit seems to charge that more per token than typing into a terminal (people have measured anywhere from about 1.6 to 2.9x, while weekly limits look about the same). <a href=\"/docs/accounts\">The docs on accounts</a> have more."],
@@ -282,7 +284,7 @@ const FAQ = [
   ["What happens when my Mac's asleep?",
     "You can still read all your threads on your phone and the website, because they're synced to your Convex deployment. The agents run on your Mac though, so they can't do anything while it's asleep (Threadbear won't keep it awake unless you turn on <a href=\"/docs/experiments\">that experiment</a>), and anything you send from your phone waits for it to wake up. If you want work to keep going, a second Mac or a Linux server can be an always-on machine, and you can pick it when you start a thread from your phone."],
   ["Do I need the iPhone app?",
-    "No, the Mac app does everything on its own. The iPhone app and the browser links are for when you're away from your desk."],
+    "No, the desktop app does everything on its own. The iPhone app and the browser links are for when you're away from your desk."],
   // runner/src/sync.ts mirrors this; docs/on-your-mac.md has the full list. Full sync starts off
   // and is offered once a phone, the website or another machine is paired (docs/full-convex.md, step 6).
   ["What goes up to Convex?",
@@ -315,8 +317,8 @@ function structuredData() {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     name: "Threadbear",
-    description: "A Mac app Mike Cann made for running Claude Code and Codex threads on your own subscriptions, with an iPhone app, a link per thread and patches your agents can write.",
-    operatingSystem: "macOS 26 or later, Apple silicon",
+    description: "A desktop app for Mac, Windows and Linux that Mike Cann made for running Claude Code and Codex threads on your own subscriptions, with an iPhone app, a link per thread and patches your agents can write.",
+    operatingSystem: "macOS 26 or later (Apple silicon), Windows, Linux",
     applicationCategory: "DeveloperApplication",
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     url: `${SITE_URL}/`,
