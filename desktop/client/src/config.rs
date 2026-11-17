@@ -45,12 +45,36 @@ impl RunnerConfig {
     }
 }
 
-/// The runner keeps the Mac's folder names on every platform for now
-/// (INSTALL.md, "A runner on Linux"). A Windows runner may choose
-/// %APPDATA%\Threadbear instead; this follows whatever it picks.
+/// The runner's data dir, as runner/src/platform.ts's dataDirFor has it:
+/// the Mac's folder names on macOS and Linux (INSTALL.md, "A runner on
+/// Linux"), %LOCALAPPDATA%\Threadbear on Windows.
 pub fn default_home() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    if cfg!(windows) {
+        windows_home(std::env::var_os("LOCALAPPDATA").filter(|d| !d.is_empty()).map(PathBuf::from), &home)
+    } else {
+        mac_home(&home)
+    }
+}
+
+fn mac_home(home: &Path) -> PathBuf {
     home.join("Library").join("Application Support").join("Threadbear")
+}
+
+/// Windows: %LOCALAPPDATA%\Threadbear, where the native runner lives. A
+/// PC whose runner is still in WSL has its token copied to the Mac's
+/// folder names under the profile instead, so while that folder has a
+/// token and the new one doesn't, the old one is the runner's (until the
+/// WSL runners have moved over, 17 Nov 2026).
+fn windows_home(local: Option<PathBuf>, home: &Path) -> PathBuf {
+    let new = local.unwrap_or_else(|| home.join("AppData").join("Local")).join("Threadbear");
+    let old = mac_home(home);
+    let token = |d: &Path| d.join("secrets").join("runner-token").is_file();
+    if !token(&new) && token(&old) {
+        old
+    } else {
+        new
+    }
 }
 
 /// Why a scripted app (one with THREADBEAR_AUTOMATION set) mustn't start
@@ -111,6 +135,27 @@ fn port_from_runner_json(home: &Path) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_finds_the_native_runner_and_falls_back_to_the_wsl_token() {
+        let dir = std::env::temp_dir().join(format!("tb-desktop-home-{}", std::process::id()));
+        let local = dir.join("AppData").join("Local");
+        let new = local.join("Threadbear");
+        let old = mac_home(&dir);
+        // Neither has a token yet: the native runner's place.
+        assert_eq!(windows_home(Some(local.clone()), &dir), new);
+        // Only the WSL runner's copied token: that one.
+        std::fs::create_dir_all(old.join("secrets")).unwrap();
+        std::fs::write(old.join("secrets").join("runner-token"), "t").unwrap();
+        assert_eq!(windows_home(Some(local.clone()), &dir), old);
+        // Once the native runner has one, it wins.
+        std::fs::create_dir_all(new.join("secrets")).unwrap();
+        std::fs::write(new.join("secrets").join("runner-token"), "t").unwrap();
+        assert_eq!(windows_home(Some(local), &dir), new);
+        // No LOCALAPPDATA: where Windows puts it.
+        assert_eq!(windows_home(None, &dir), new);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn reads_the_port_from_runner_json() {
