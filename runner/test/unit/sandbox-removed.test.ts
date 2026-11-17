@@ -149,7 +149,7 @@ test('renaming a thread with more access asks first; its own title, or one no hi
 // Grok's review of the removal: `confined` had also put a sandboxed
 // thread below everyone, so with it gone a leftover sandboxed Full thread
 // counted as Full, and its title and words could reach an Ask thread (its
-// same-work note, a quiet-inbox wait).
+// a quiet-inbox wait).
 test("a thread an older release ran in the sandbox counts as the least, below even Ask, for what it says", async () => {
   const { above, LEAST } = await import('../../src/threadbear-mcp.ts');
   const { outside } = folders();

@@ -2211,7 +2211,7 @@ refuses, and a message to an old one gets a note saying why) rather than
 running on the machine instead; taking `sandbox` out of runner.json says
 that's fine. Such a thread counts as the least access there is, below
 even Ask, so its title and words reach no other thread without a card
-(same-work notes, waits), and it gets no lab review (which would run its
+(a quiet-inbox wait), and it gets no lab review (which would run its
 tests on the machine). `threads.create` with `confined: true` (an older runner
 handing over a sandboxed agent's call) is refused. A thread's move still
 says `unconfine: false` for an agent's to an older runner across a
@@ -7342,7 +7342,7 @@ above the target's (`ask` < `auto` < `full`), `create_thread` or a
 `new_thread` `schedule_message` with a mode above the caller's,
 `send_message`, `move_thread`, `schedule_message` or `update_thread`'s
 `title` to a thread with more access than the caller (a title reaches its
-agent and others', as in a new thread's same-work note; `tb` refuses the
+agent and others', as in list_threads; `tb` refuses the
 same rename), `join_project` putting such a thread in a project,
 `update_project` changing the title, goals, state, notes or folders of a
 project such a thread is in (by the project's list or the thread's own), `move_thread` of a thread a schedule's check runs for
