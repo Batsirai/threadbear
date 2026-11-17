@@ -10,6 +10,7 @@ import { credentialUrlProblem } from './secure-url.ts';
 import { parseLabReviewers, type LabReviewer } from './lab-reviewers.ts';
 import { findGatewayClient } from './notion-tasks.ts';
 import { onPath } from './adapters/acp/agents.ts';
+import { dataDirFor, exeName, logFileFor } from './platform.ts';
 import { CLI_POLICIES, isEffortLevel, isProvider, type CliPolicy, type EffortLevel, type PermissionMode, type Provider } from './protocol.ts';
 
 // <package version>+<release id>, or +source when run from a checkout.
@@ -269,12 +270,13 @@ export function defaultModeOf(v: unknown): DefaultMode | undefined {
 }
 
 export function defaultHome(userHome = os.homedir()): string {
-  return path.join(userHome, 'Library', 'Application Support', 'Threadbear');
+  return dataDirFor({ home: userHome });
 }
 
+// ~\ too on Windows, where a person types the separator they're used to.
 export function expandHome(p: string, userHome = os.homedir()): string {
   if (p === '~') return userHome;
-  if (p.startsWith('~/')) return path.join(userHome, p.slice(2));
+  if (p.startsWith('~/') || (path.sep === '\\' && p.startsWith('~\\'))) return path.join(userHome, p.slice(2));
   return p;
 }
 
@@ -285,7 +287,7 @@ export function expandHome(p: string, userHome = os.homedir()): string {
 // then says is missing. Only ~/.local/bin counted until 13 Nov 2026, though
 // INSTALL.md said the PATH's would do (jayehzzz's fork).
 function findClaude(pathEnv: string, userHome: string): string {
-  const native = path.join(userHome, '.local', 'bin', 'claude');
+  const native = path.join(userHome, '.local', 'bin', exeName('claude'));
   if (onPath('claude', path.dirname(native))) return native;
   return onPath('claude', pathEnv) ?? native;
 }
@@ -443,7 +445,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     port,
     host: '127.0.0.1',
     maxLive: Number.isFinite(maxLive) && maxLive >= 1 ? Math.floor(maxLive) : DEFAULT_MAX_LIVE,
-    logFile: expand(env.THREADBEAR_LOG || path.join(userHome, 'Library', 'Logs', 'threadbear-runner.log')),
+    logFile: expand(env.THREADBEAR_LOG || logFileFor({ home: userHome })),
     claudePath: expand(env.THREADBEAR_CLAUDE_PATH || json.claudePath || findClaude(env.PATH ?? '', userHome)),
     idleMs,
     defaults: {

@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { Account, PermissionMode, Provider } from '../../protocol.ts';
 import type { AcpToolCall } from './normalize.ts';
 import type { InitializeResult } from './connection.ts';
+import { exeName } from '../../platform.ts';
 import { grokGuardDir, grokTrusts, guardPluginName } from './grok-guard.ts';
 
 export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok'>;
@@ -66,10 +67,15 @@ function isExecutableFile(file: string): boolean {
 
 // Also config.ts's, for a claude from npm or Homebrew. Relative PATH folders
 // never count: a thread's folder must not supply the runner's CLI.
-export function onPath(name: string, pathEnv: string): string | undefined {
-  for (const dir of pathEnv.split(':')) {
-    if (!path.isAbsolute(dir)) continue;
-    const file = path.join(dir, name);
+// On Windows the PATH is split on ; and a program is name.exe (a .cmd shim
+// can't be started without a shell, so it never counts).
+export function onPath(name: string, pathEnv: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  const win = platform === 'win32';
+  const P = win ? path.win32 : path.posix;
+  for (const entry of pathEnv.split(win ? ';' : ':')) {
+    const dir = win ? entry.trim().replace(/^"(.*)"$/, '$1') : entry;
+    if (!P.isAbsolute(dir)) continue;
+    const file = P.join(dir, exeName(name, platform));
     if (isExecutableFile(file)) return file;
   }
   return undefined;
