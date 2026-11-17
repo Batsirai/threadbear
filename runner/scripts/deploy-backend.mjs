@@ -22,7 +22,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConvexAdminError, convexEnv, prodArgs, readConvexAdmin } from '../src/convex-admin.ts';
 import { Fail, stepRetryingNetwork } from './deploy-steps.mjs';
-import { backfillsAt, lastJson, plan as planStones } from './backend-stones.mjs';
+import { backfillsAt, lastJson, STEPPING_FILE, withStepping } from './backend-stones.mjs';
 
 const HELP = `deploy-backend.mjs: deploy convex/ and web/ at a commit to the runner's Convex deployment, if they changed.
 
@@ -300,36 +300,36 @@ function main(argv) {
   if (todo.functions) {
     // Stepping stones (backend-stones.mjs): backfills this commit needs to have
     // run on the deployment before its schema can go out.
-    const run = (fn, args, cwd = tmp) => spawnSync(npx, ['convex', 'run', fn, JSON.stringify(args), ...prodArgs(admin)], { cwd, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    const run = (fn, args) => spawnSync(npx, ['convex', 'run', fn, JSON.stringify(args), ...prodArgs(admin)], { cwd: tmp, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
     // A deployment whose functions are older than migrations.ts can't say: not done.
     const isDone = (name) => {
       const r = run('migrations:done', { name });
       return r.status === 0 && lastJson(r.stdout) === true;
     };
-    let steps;
+    let pending = [];
     try {
-      steps = planStones(repo, commit, readJson(stateFile).functions?.commit, isDone);
+      pending = backfillsAt(repo, commit).filter((name) => !isDone(name));
     } catch (e) {
       failed('backfills', e);
     }
-    for (const { name, stone, deployStone } of steps) {
+    if (pending.length) {
       try {
-        if (deployStone) {
-          const dir = exportAt(stone);
-          const opts = { cwd: dir, env };
-          step(`Installing packages for ${stone.slice(0, 7)}, which ${name}'s backfill runs on`, npm, ['ci', '--no-audit', '--no-fund', '--prefer-offline'], opts);
-          step(`Deploying the Convex functions at ${stone.slice(0, 7)} first`, npx, ['convex', 'deploy', '--typecheck', 'enable', '--skip-large-indexes-check'], opts);
-          writeJson(stateFile, { ...readJson(stateFile), functions: { tree: treeOf(repo, stone, FUNCTION_PATHS), commit: stone, at: new Date().toISOString() }, failed: undefined });
+        const file = path.join(tmp, STEPPING_FILE);
+        const original = fs.readFileSync(file, 'utf8');
+        fs.writeFileSync(file, withStepping(original, pending));
+        step(`Deploying the Convex functions at ${short} as a stepping stone for ${pending.join(', ')}`, npx, ['convex', 'deploy', '--typecheck', 'enable', '--skip-large-indexes-check'], opts);
+        fs.writeFileSync(file, original);
+        for (const name of pending) {
+          say(`Running the ${name} backfill...`);
+          // A page a run; a few hundred runs is a very big table.
+          for (let i = 0; ; i++) {
+            const r = run('migrations:run', { name });
+            if (r.status !== 0) throw new Fail(`The ${name} backfill failed: ${String(r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ')}`);
+            if (lastJson(r.stdout)?.done === true) break;
+            if (i > 10_000) throw new Fail(`The ${name} backfill was still going after 10,000 runs.`);
+          }
+          say(`The ${name} backfill is done.`);
         }
-        say(`Running the ${name} backfill...`);
-        // A page a run; a few hundred runs is a very big table.
-        for (let i = 0; ; i++) {
-          const r = run('migrations:run', { name });
-          if (r.status !== 0) throw new Fail(`The ${name} backfill failed: ${String(r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ')}`);
-          if (lastJson(r.stdout)?.done === true) break;
-          if (i > 10_000) throw new Fail(`The ${name} backfill was still going after 10,000 runs.`);
-        }
-        say(`The ${name} backfill is done.`);
       } catch (e) {
         failed('backfills', e);
       }

@@ -12,8 +12,10 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internalMutation, internalQuery, mutation, type MutationCtx } from './_generated/server';
 import { appSchema } from './schema';
 import { command as commandMachine } from './commandMachine';
+import { steppingFor } from './stepping';
 
-export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [commandMachine], {
+// A machine whose backfill's stepping stone is being deployed is left out (stepping.ts).
+export const machines: Machines<typeof appSchema> = defineMachines(appSchema, steppingFor('commandState') ? [] : [commandMachine], {
   mutation,
   internalMutation,
   internalQuery,

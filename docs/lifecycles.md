@@ -63,14 +63,17 @@ Two things are particular to Threadbear, and each machine follows them:
   (`runner/scripts/deploy-backend.mjs`), and other people's copies bring in
   Mike's releases days apart, skipping commits. A machine needs its field
   required, and Convex refuses to deploy a schema that rows already stored
-  don't match. So a migration is two commits landed together: the widen
-  (the new field optional, every write setting it, a backfill in
-  `convex/migrations.ts`), then the switch (the field required, the machine
-  on it, and the backfill's name in `convex/migrations.json`). The deploy
-  script reads that list: for a backfill the deployment hasn't finished, it
-  deploys the widen first, runs the backfill to the end, then the switch
-  (`runner/scripts/backend-stones.mjs`). Ville's and Keith's servers go
-  through it with nothing to do by hand.
+  don't match, and forks carry schema changes of their own. So the switch
+  (the field `requiredUnlessStepping`, the machine on it, a backfill in
+  `convex/migrations.ts` and its name in `convex/migrations.json`) is
+  deployed in two steps by the deploy script: once with
+  `convex/stepping.ts` naming the backfill (the field optional, the machine
+  off and its functions saying "try again in a minute"), then, after
+  `migrations:run` has said done, as it is
+  (`runner/scripts/backend-stones.mjs`). It only ever deploys the tree it's
+  updating to: an earlier design that deployed the widen commit first broke
+  on merges and on forks' own schema changes (Codex's review). Ville's and
+  Keith's servers go through it with nothing to do by hand.
 
 The functions still use Convex's own builders and send the machine's role
 events from them, after checking the caller's key or token themselves (the

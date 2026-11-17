@@ -7,6 +7,7 @@ import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
 import { machineTimers } from '@convex-dev/state-machines';
 import { commandStateV } from './commandStates';
+import { requiredUnlessStepping } from './stepping';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
 // docs/protocol.md): "link" is readable by anyone with /s/<slug>; "off"
@@ -557,10 +558,11 @@ export const appSchema = defineSchema({
     args: v.any(),
     state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')),
     // The same, as its state machine has it (commandMachine.ts), which writes
-    // `state` from it on every move. Required since every row was backfilled
-    // (migrations.ts, convex/migrations.json).
-    commandState: commandStateV,
-    commandStateTimers: machineTimers,
+    // `state` from it on every move. Required, once the backfill has given
+    // every row one (migrations.ts, convex/migrations.json); optional only in
+    // the deploy that runs it (stepping.ts).
+    commandState: requiredUnlessStepping('commandState', commandStateV),
+    commandStateTimers: requiredUnlessStepping('commandState', machineTimers),
     note: v.optional(v.string()),
     createdAt: v.number(),
     takenAt: v.optional(v.number()),

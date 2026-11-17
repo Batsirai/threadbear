@@ -14,6 +14,7 @@ import { v } from 'convex/values';
 import { appSchema } from './schema';
 import { internal } from './_generated/api';
 import { legacyState, type CommandState } from './commandStates';
+import { unlessStepping } from './stepping';
 
 // How long a command waits for its runner, and how long a taken one has to finish (sync.ts).
 export const COMMAND_KEEP_MS = 14 * 24 * 60 * 60_000;
@@ -24,7 +25,7 @@ const finish = [
   { to: 'failed', effect: 'failed', description: "Its runner says it didn't work, and why." },
 ] as const;
 
-export const command = defineMachine(
+export const command = unlessStepping('commandState', () => defineMachine(
   appSchema,
   {
     name: 'command',
@@ -105,7 +106,7 @@ export const command = defineMachine(
       },
     },
   },
-);
+));
 
 // The state's string and timestamps on the row, as clients and the indexes read them.
 async function legacy<S extends CommandState>(ctx: { db: unknown }, id: unknown, next: S): Promise<S> {

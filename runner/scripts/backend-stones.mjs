@@ -1,43 +1,40 @@
-// Stepping stones for a backend deploy (deploy-backend.mjs, convex/migrations.ts).
+// Stepping stones for a backend deploy (deploy-backend.mjs, convex/stepping.ts,
+// convex/migrations.ts).
 //
 // A schema change that makes a field required can only be deployed once every
 // stored row has it: Convex checks every row against the new schema and
 // refuses the deploy otherwise. Threadbear's backends upgrade themselves to
 // whatever commit their main Mac's runner updates to, often skipping many
-// commits (other people's copies bring Mike's releases in days apart), so
-// "deploy the widen, backfill, then deploy the narrow" can't rely on each step
-// being deployed in turn.
+// commits, and forks carry schema changes of their own, so the deploy can't
+// count on an earlier release having been deployed, nor deploy one of Mike's
+// older commits in its place (a fork's rows wouldn't fit it).
 //
-// So a commit that needs a backfill lists it in convex/migrations.json:
+// So a release that needs a backfill lists it in convex/migrations.json:
 //
 //   { "backfills": [{ "name": "commandState" }] }
 //
-// The commit that first lists a name must come straight after the one that
-// added the backfill to convex/migrations.ts (the widen): that parent is the
-// stepping stone. Before deploying a commit, the deploy script asks the
-// deployment whether each listed backfill has finished (`migrations:done`),
-// and for one that hasn't, deploys the stone first (unless what's deployed is
-// already it or later), runs `migrations:run` until it says done, and only
-// then deploys the commit. A deployment that has done it skips all of this.
+// and the field is `requiredUnlessStepping` in its schema. Before deploying
+// it, the deploy script asks the deployment which listed backfills have
+// finished (`migrations:done`). For any that haven't, it deploys the same
+// tree once with convex/stepping.ts naming them (the fields optional, their
+// machines off), runs `migrations:run` until each says done, then deploys
+// the tree as it is.
 //
 // Node built-ins only, like deploy-backend.mjs.
 import { spawnSync } from 'node:child_process';
 
 export const MIGRATIONS_FILE = 'convex/migrations.json';
+export const STEPPING_FILE = 'convex/stepping.ts';
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-
-function git(repo, args) {
-  const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-  return { ok: r.status === 0, out: String(r.stdout ?? '').trim(), err: String(r.stderr ?? '').trim() };
-}
+const STEPPING_LINE = /^export const STEPPING: readonly string\[\] = \[\];$/m;
 
 /** The backfills a commit needs before it can be deployed, by name. */
 export function backfillsAt(repo, commit) {
-  const r = git(repo, ['show', `${commit}:${MIGRATIONS_FILE}`]);
-  if (!r.ok) return [];
+  const r = spawnSync('git', ['-C', repo, 'show', `${commit}:${MIGRATIONS_FILE}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (r.status !== 0) return [];
   let parsed;
   try {
-    parsed = JSON.parse(r.out);
+    parsed = JSON.parse(r.stdout);
   } catch (e) {
     throw new Error(`${MIGRATIONS_FILE} at ${commit.slice(0, 7)} isn't JSON: ${e.message}`);
   }
@@ -48,48 +45,13 @@ export function backfillsAt(repo, commit) {
   });
 }
 
-/** The stone for a backfill: the parent of the first commit (in `commit`'s history) that listed it. */
-export function stoneFor(repo, commit, name) {
-  const r = git(repo, ['log', '--format=%H', '--reverse', '--first-parent', '-S', `"${name}"`, commit, '--', MIGRATIONS_FILE]);
-  if (!r.ok) throw new Error(`git log for ${name} failed: ${r.err}`);
-  const first = r.out.split('\n').find((h) => h && backfillsAt(repo, h).includes(name));
-  if (!first) throw new Error(`No commit before ${commit.slice(0, 7)} lists the backfill ${name}`);
-  const parent = git(repo, ['rev-parse', `${first}^`]);
-  if (!parent.ok) throw new Error(`The commit that lists ${name} has no parent to deploy first`);
-  return parent.out;
+/** convex/stepping.ts's text naming these backfills, from the file as the release has it. */
+export function withStepping(text, names) {
+  if (!STEPPING_LINE.test(text)) throw new Error(`${STEPPING_FILE} doesn't have its empty STEPPING list, so the backfills ${names.join(', ')} can't be run before this deploy`);
+  return text.replace(STEPPING_LINE, `export const STEPPING: readonly string[] = ${JSON.stringify(names)};`);
 }
 
-/** Whether `ancestor` is `commit` or comes before it. */
-export function atOrAfter(repo, commit, ancestor) {
-  if (!commit) return false;
-  return git(repo, ['merge-base', '--is-ancestor', ancestor, commit]).ok;
-}
-
-/**
- * What to do before deploying `commit`, given what's deployed now and what the
- * deployment says is done: for each backfill not done, its stone, and whether
- * the stone has to be deployed first (it isn't when what's deployed is the
- * stone or later). `isDone(name)` asks the deployment.
- */
-export function plan(repo, commit, deployed, isDone) {
-  const steps = [];
-  for (const name of backfillsAt(repo, commit)) {
-    if (isDone(name)) continue;
-    const stone = stoneFor(repo, commit, name);
-    steps.push({ name, stone, depth: Number(git(repo, ['rev-list', '--count', '--first-parent', stone]).out) || 0 });
-  }
-  // Oldest stone first, so no deploy goes back to an older one. Whether each
-  // stone needs deploying depends on what the one before left deployed.
-  steps.sort((a, b) => a.depth - b.depth);
-  let now = deployed;
-  return steps.map(({ name, stone }) => {
-    const deployStone = !atOrAfter(repo, now, stone);
-    if (deployStone) now = stone;
-    return { name, stone, deployStone };
-  });
-}
-
-/** The answer `npx convex run` printed: its last line of JSON. */
+/** The answer `npx convex run` printed: its last line of JSON, or the whole of it. */
 export function lastJson(text) {
   const lines = String(text).trim().split('\n').reverse();
   for (const line of lines) {
