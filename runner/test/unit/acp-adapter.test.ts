@@ -7,7 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { AcpAdapter, AcpSession, EDIT_RULE, modelChoices } from '../../src/adapters/acp/adapter.ts';
-import { ACP_AGENTS, acpAccounts, isCursorBinary, opencodeEnv } from '../../src/adapters/acp/agents.ts';
+import { ACP_AGENTS, acpAccounts, folderPlugins, isCursorBinary, opencodeEnv } from '../../src/adapters/acp/agents.ts';
 import type { AcpAgent } from '../../src/adapters/acp/agents.ts';
 import { AcpMcpServer } from '../../src/adapters/acp/mcp-http.ts';
 import { commandRule } from '../../src/adapters/codex/approvals.ts';
@@ -183,6 +183,9 @@ test('OpenCode 1 refuses an asking thread under a folder with plugins; 2 and Ful
     assert.match(refuses({ cwd, mode: 'plan', binary: path.join(dir, 'gone') }) ?? '', /OpenCode plugins/, 'an unknown version is treated as 1');
     assert.equal(refuses({ cwd, mode: 'full', binary: one }), undefined);
     assert.equal(refuses({ cwd, mode: 'ask', binary: two }), undefined);
+    // Up to the home folder, not into it: its own is the user's.
+    assert.equal(folderPlugins(cwd, path.join(dir, 'repo')), undefined);
+    assert.equal(folderPlugins(cwd, dir), path.join(dir, 'repo', '.opencode', 'plugins'));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

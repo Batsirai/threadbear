@@ -204,9 +204,13 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-// The first .opencode/plugin(s) folder with anything in it, from `cwd` up.
-export function folderPlugins(cwd: string): string | undefined {
+// The first .opencode/plugin(s) folder with anything in it, from `cwd` up:
+// to the home folder (not its own, which is the user's, as ~/.config's is)
+// when `cwd` is under it, else to the root.
+export function folderPlugins(cwd: string, home = os.homedir()): string | undefined {
+  const top = path.resolve(home);
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (dir === top) return undefined;
     for (const name of ['plugin', 'plugins']) {
       const p = path.join(dir, '.opencode', name);
       try {
