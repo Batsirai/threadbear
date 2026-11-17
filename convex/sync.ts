@@ -365,11 +365,14 @@ async function dropThread(ctx: MutationCtx, threadId: string, row: Doc<'threads'
 // stall the rest of a legitimate runner's mirror. Only what an agent asks for
 // directly (a Pocket card, a schedule) is refused when it's too big, so the
 // agent hears why.
-// With three runner keys all at their caps, the database holds at most about
-// 3 x 75 MB of theirs (messages 48 MB, threads 3,000 x 8 KB, the rest under
-// 5 MB) and file storage 3 x 150 MB: inside Convex's free plan with room
-// for the main Mac's own (docs/protocol.md, "Caps").
-export const MAX_RUNNER_KEYS = 3;
+// With four runner keys all at their caps, the database holds at most about
+// 4 x 75 MB of theirs (messages 48 MB, threads 3,000 x 8 KB, the rest under
+// 5 MB) and file storage 4 x 150 MB: inside Convex's free plan (0.5 GB and
+// 1 GB) with room for the main Mac's own (docs/protocol.md, "Caps").
+// Four since 17 Nov 2026: bruce, the Hetzner box and the Pixel held three,
+// and a Windows laptop (its runner in WSL) needed a fourth. The whole-list
+// reads above were already budgeted for four (6.4 MB).
+export const MAX_RUNNER_KEYS = 4;
 const INDEX_READ_PER_RUNNER = 2_000;
 export const RUNNER_KEY_CAPS = {
   threadDoc: 8_192,

@@ -72,8 +72,9 @@ in, and "What the review changed" at the end says what moved and why.
    onto a new box is not a move (no `rehomeRows`, no dead `runners` rows),
    and two boxes can never both act as that runner.
 4. **Box credentials are their own class**, not runner keys. Runner keys
-   are capped at `MAX_RUNNER_KEYS = 3` (`convex/sync.ts:358`), budgeted
-   for whole machines, and bruce and the Hetzner box hold two already;
+   are capped at `MAX_RUNNER_KEYS = 4` (`convex/sync.ts`), budgeted
+   for whole machines, and bruce, the Hetzner box, the Pixel and the Dell
+   hold all four;
    a new runner key also drops shared logins (`sync.ts:3520`). A **box
    key** is scoped in `convex/runnerAccess.ts` to one `runnerId` *and*
    one `threadId`, with caps sized for one thread, outside that limit:

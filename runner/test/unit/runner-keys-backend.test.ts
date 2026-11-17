@@ -428,6 +428,15 @@ test('a key over a runner id that has a live key needs replace', async () => {
   await call(s.ctx, sync.addRunnerKey, { key: OWNER, runnerId: MINI, name: 'mac-mini', ownerRunnerId: LAPTOP, replace: true });
 });
 
+test('four runner keys can be live at once, and a fifth is refused until one is revoked', async () => {
+  const s = await setup();
+  // setup() already has the mac-mini's: three more make four (bruce, the Hetzner box, the Pixel, the Dell).
+  for (const id of ['keyed0000002', 'keyed0000003', 'keyed0000004']) await call(s.ctx, sync.addRunnerKey, { key: OWNER, runnerId: id, name: id, ownerRunnerId: LAPTOP });
+  assert.equal(await outcome(call(s.ctx, sync.addRunnerKey, { key: OWNER, runnerId: 'keyed0000005', name: 'fifth', ownerRunnerId: LAPTOP })), 'tooMany');
+  await call(s.ctx, sync.revokeRunnerKey, { key: OWNER, runnerId: 'keyed0000002' });
+  await call(s.ctx, sync.addRunnerKey, { key: OWNER, runnerId: 'keyed0000005', name: 'fifth', ownerRunnerId: LAPTOP });
+});
+
 test("names are compared as they'd look, and the name a runner key ends up with is never another's", async () => {
   const s = await setup();
   await hb(s, OWNER, LAPTOP, 'Laptop');
