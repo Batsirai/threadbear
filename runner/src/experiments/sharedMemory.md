@@ -13,8 +13,8 @@ A thread on your main Mac knows you mostly from what Claude Code loads before yo
 
 ## Lives in
 
-`runner/src/memory-sync.ts` (scanning, writing down, offers, the minute timer), `memoryBackend` and the attach in `runner/src/sync.ts`'s heartbeat, its construction in `runner/src/main.ts`. In the backend: `convex/memorySync.ts`, the `memoryFiles` and `memoryOffers` tables in `convex/schema.ts`, and `putMemory`, `memorySince`, `offerMemory`, `memoryOffers` and `takeMemoryOffers` in `convex/sync.ts` (API 84). The runner keeps `memory-sync.json` in its data dir.
+`runner/src/memory-sync.ts` (scanning, writing down, offers, the minute timer), `memoryBackend` and the attach in `runner/src/sync.ts`'s heartbeat, its construction in `runner/src/main.ts`. In the backend: `convex/memorySync.ts`, the `memoryFiles`, `memoryOffers` and `memoryOfferCounts` tables in `convex/schema.ts`, and `putMemory`, `memorySince`, `offerMemory`, `memoryOffers` and `takeMemoryOffers` in `convex/sync.ts` (API 84). The runner keeps `memory-sync.json` and `memory-cache/` in its data dir.
 
 ## Taking it out
 
-Delete `runner/src/memory-sync.ts` and its test, `memory` in `ConvexSync`'s deps, `memoryBackend` and its attach line in `runner/src/sync.ts`, and `memorySync` in `runner/src/main.ts`. In the backend, delete `convex/memorySync.ts`, the five functions in `convex/sync.ts` and their rows in `ACCESS` (`convex/runnerAccess.ts`) and in docs/protocol.md's table, then the two tables once they're empty. Files sync wrote on other runners stay where they are.
+Delete `runner/src/memory-sync.ts` and its test, `memory` in `ConvexSync`'s deps, `memoryBackend` and its attach line in `runner/src/sync.ts`, and `memorySync` in `runner/src/main.ts`. In the backend, delete `convex/memorySync.ts`, the five functions in `convex/sync.ts` and their rows in `ACCESS` (`convex/runnerAccess.ts`) and in docs/protocol.md's table, then the three tables once they're empty. Files sync wrote on other runners stay where they are.
