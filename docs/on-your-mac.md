@@ -267,6 +267,15 @@ File references are where to look.
   status checks whether that process is still alive.
   `threadbear-land-done/` there keeps, for a week, what
   landed for a landing whose `tb` was stopped before it heard.
+- **Borrowed worktrees** (`runner/src/borrows.ts`): `borrow-worktree.sh`
+  writes a small `threadbear-borrow` file in the borrowed worktree's git
+  folder (the borrowing thread's id, a process id for a script's borrow,
+  the time). Two minutes after the runner starts and then hourly, it looks
+  at every repo its threads have had worktrees in, and takes back borrows
+  nobody gave back: only clean ones with everything on main, nothing
+  running in them (it lists processes' current folders with `lsof`, or
+  `/proc` on Linux), and their borrower gone or a day unused. It locks one
+  as a spare or removes it, and deletes its borrow branch.
 - **The runner** listens on `127.0.0.1:8797` only, and needs a token
   (`runner/src/config.ts`). It starts the official `claude` and `codex`
   CLIs for your threads. Each thread's CLI gets a key of its own in its

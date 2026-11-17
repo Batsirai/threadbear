@@ -512,6 +512,40 @@ and refuses one with any commit main hasn't got. Run in a thread, `tb land`
 refuses another thread's `thread/<id8>` branch: someone else is working
 in that folder (`THREADBEAR_THREAD_ID= tb land` lands it anyway).
 
+### Borrows nobody gives back
+
+On 17 Nov 2026 every slot up to borrow-worktree.sh's cap of 50 was taken,
+25 of them by borrows landed days before and never given back (threads
+that land and move on, and a `sync-main.sh` killed mid-check), so
+sync-main couldn't borrow one and main wasn't pushed. Now:
+
+- `borrow-worktree.sh` has no cap: it takes the first free slot number.
+- It writes who borrowed beside git's files, `<worktree's git
+  dir>/threadbear-borrow`: `thread=` (`THREADBEAR_THREAD_ID`), `pid=`
+  (`THREADBEAR_BORROW_PID`, for a script that gives it back itself),
+  `scratch=1` (`THREADBEAR_BORROW_SCRATCH`: what's in it may be thrown
+  away once that process has gone) and `at=`. `--give-back` removes it.
+- `sync-main.sh` gives its borrow back however it ends (a failure, a
+  stop, success), and borrows as a scratch one under its own process id,
+  so even a SIGKILL leaves nothing for long. A failed borrow fails the
+  script, saying main wasn't moved or pushed.
+- The runner (`runner/src/borrows.ts`), two minutes after it starts and
+  then hourly, takes back a borrow in any repo its threads have had
+  worktrees in when its borrower has gone: its process has ended, its
+  thread is archived, or, with neither recorded (or a thread this runner
+  doesn't have), nothing has happened there for a day (git's HEAD log).
+  An open thread's borrow is never taken, however quiet. Nor is anything
+  with work in it: a rebase or merge half done, changes or untracked
+  files, commits not on main, or a process whose current folder is
+  inside. The one exception is a scratch borrow whose process has gone:
+  what it left half done is aborted and reset to main first. A detached,
+  unlocked slot no thread holds (a spare claimed and never set up) goes
+  back the same way after a quiet day. Taken back is what `--give-back`
+  does: detached, its branch deleted, locked as a spare, or removed when
+  there are six spares already. `thread/borrow-*` branches with no
+  checkout and all on main are deleted too. The runner's log says what it
+  took back and why.
+
 Run in a thread, `tb land` lands the thread's own worktree from that
 worktree, from its repo's main checkout, or from a folder outside git.
 From any other checkout the folder wins: a thread's sub-agents work in

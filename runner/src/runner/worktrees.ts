@@ -7,8 +7,10 @@ import type { RunnerPart } from './part.ts';
 import type { Action, EventBody } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import { BIN_DIR, threadEnv } from '../restart.ts';
-import { cleanUpWorktree, clearBuildCaches, makeWorktree, readPlainFile, sameSubfolder, stillCheckedOut, worktreeFolderNow, worktreeGone, type WorktreeRecord } from '../worktrees.ts';
+import { cleanUpWorktree, clearBuildCaches, makeWorktree, readPlainFile, realpath, sameSubfolder, stillCheckedOut, worktreeFolderNow, worktreeGone, type WorktreeRecord } from '../worktrees.ts';
 import { isDirectory } from '../fsutil.ts';
+import { sweepBorrows } from '../borrows.ts';
+import type { Logger } from '../log.ts';
 import { automaticTrust, findWorktreePatch, isInside, readWorktreePatch, runCommand, type PatchSet, type WorktreePatch, worktreePatchFiles } from '../patches.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -482,6 +484,29 @@ export const worktreesPart = {
     return Promise.all(checks).then(() => undefined);
   },
 
+  // Borrowed worktrees whose borrower has gone (borrows.ts). A thread's
+  // worktree and the folder an open thread works in are never touched.
+  async sweepBorrows(this: Runner): Promise<void> {
+    const mains = new Set<string>();
+    const held = new Set<string>();
+    for (const { rec } of this.threads.values()) {
+      const w = rec.worktree;
+      if (w) mains.add(w.mainCheckout);
+      if (w && !w.removedAt) held.add(realpath(w.path));
+      if (!rec.archivedAt) held.add(realpath(rec.cwd));
+    }
+    const thread = (id: string) => {
+      const st = this.threads.get(id);
+      return !st ? 'unknown' : st.rec.archivedAt ? 'archived' : 'open';
+    };
+    for (const main of mains) {
+      if (!isDirectory(main)) continue;
+      const r = await sweepBorrows(main, { thread, held });
+      for (const b of r.reclaimed) this.log.info('took back a borrowed worktree', { ...b });
+      if (r.branches.length) this.log.info('deleted borrow branches with no worktree, all on main', { repo: main, branches: r.branches });
+    }
+  },
+
   // When the thread is archived or deleted: its worktree and branch go if
   // everything on them is on main; otherwise they stay, and the thread (or,
   // once it's deleted, a notice) says so and how to land or drop them.
@@ -547,3 +572,29 @@ export const worktreesPart = {
 };
 
 export type WorktreesPart = RunnerPart<typeof worktreesPart>;
+
+// Takes back borrowed worktrees nobody gave back (borrows.ts), in every
+// repo a thread here has had a worktree of. Two minutes after start, then
+// hourly.
+export function startBorrowSweep(runner: Runner, log: Logger): () => void {
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      await runner.sweepBorrows();
+    } catch (e) {
+      log.warn('borrowed worktree sweep failed', { error: String(e) });
+    } finally {
+      running = false;
+    }
+  };
+  const first = setTimeout(() => void run(), 2 * 60_000);
+  const timer = setInterval(() => void run(), 3_600_000);
+  first.unref();
+  timer.unref();
+  return () => {
+    clearTimeout(first);
+    clearInterval(timer);
+  };
+}

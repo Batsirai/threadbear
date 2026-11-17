@@ -14,6 +14,7 @@ import { threadOfSocket } from './peer.ts';
 import { threadKey as makeThreadKey } from './rpc-auth.ts';
 import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, writeRunnerJson } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
+import { startBorrowSweep } from './runner/worktrees.ts';
 import { RELEASE, markConfigStop, markGoodLater, onStopRequest, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
 import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
@@ -1210,6 +1211,9 @@ async function main(): Promise<void> {
     ],
     log,
   });
+  // Borrowed worktrees nobody gave back (borrows.ts), on this Mac's real
+  // data dir only: a dev runner's threads aren't the ones that borrowed.
+  const stopBorrowSweep = cfg.home === defaultHome() ? startBorrowSweep(runner, log) : () => {};
   const cancelMarkGood = markGoodLater(cfg.home, RELEASE.release, log, process.env, () => {
     restarter.proven();
     updater.start();
@@ -1251,6 +1255,7 @@ async function main(): Promise<void> {
     upstream.stop();
     swiftChanges.stop();
     stopHousekeeping();
+    stopBorrowSweep();
     log.info('runner stopping', { signal });
     // Whatever stopped it, a pending restart has now happened. A draining
     // runner's restart was the handover, which the new runner has taken.
@@ -1317,6 +1322,7 @@ async function main(): Promise<void> {
       upstream.stop();
       swiftChanges.stop();
       stopHousekeeping();
+      stopBorrowSweep();
       scheduler.stop();
       librarian.stop();
       // stuckJobs goes on: background work can hold a thread here for hours,

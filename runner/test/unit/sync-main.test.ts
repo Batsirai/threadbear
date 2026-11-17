@@ -134,3 +134,61 @@ test("when GitHub has moved and a landing holds the lock, pushAfterLanding leave
     await held;
   }
 });
+
+// Both moved: the check runs in a worktree borrowed with borrow-worktree.sh.
+// `check` is check.sh's body there.
+function bothMoved(check: string) {
+  const { root, main } = repos();
+  fs.copyFileSync(path.join(import.meta.dirname, '..', '..', '..', 'borrow-worktree.sh'), path.join(main, 'borrow-worktree.sh'));
+  fs.writeFileSync(path.join(main, 'worktree-setup.sh'), '#!/bin/sh\n');
+  fs.writeFileSync(path.join(main, 'check.sh'), `#!/bin/sh\n${check}\n`);
+  sh(main, 'chmod +x borrow-worktree.sh worktree-setup.sh check.sh && git add -A && git commit -qm scripts && git push -q origin main');
+  sh(root, 'git clone -q origin.git other 2>/dev/null && cd other && git checkout -q main && echo c > c && git add c && git commit -qm c && git push -q origin main');
+  sh(main, 'echo b > b && git add b && git commit -qm b');
+  return { root, main, origin: () => sh(root, 'git --git-dir=origin.git rev-parse main') };
+}
+const borrowBranches = (main: string) => sh(main, "git branch --list 'thread/borrow-*'");
+const spares = (main: string) => sh(main, 'git worktree list --porcelain').split('\n').filter((l) => l === 'locked threadbear spare').length;
+
+test('both moved: checked in a borrowed worktree, pushed, and the worktree given back', async () => {
+  const { main, origin } = bothMoved('true');
+  const r = await run(main).done;
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /checked and pushed/);
+  assert.equal(origin(), sh(main, 'git rev-parse main'));
+  assert.equal(borrowBranches(main), '');
+  assert.equal(spares(main), 1);
+});
+
+test("both moved and no worktree can be borrowed: it fails, says nothing was pushed, and main isn't touched", async () => {
+  const { main, origin } = bothMoved('true');
+  const before = { main: sh(main, 'git rev-parse main'), origin: origin() };
+  // On 17 Nov every slot was taken; here the borrow fails outright.
+  fs.writeFileSync(path.join(main, 'borrow-worktree.sh'), "#!/bin/sh\necho \"Couldn't make a worktree in somewhere.\" >&2\nexit 1\n");
+  const r = await run(main).done;
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /Couldn't borrow a worktree to check in, so main wasn't moved or pushed\./);
+  assert.deepEqual({ main: sh(main, 'git rev-parse main'), origin: origin() }, before);
+});
+
+test('both moved and the check fails or the run is stopped: the borrowed worktree is given back either way', async () => {
+  const failed = bothMoved('echo junk > check-junk.txt; exit 1');
+  const r = await run(failed.main).done;
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /The check failed/);
+  assert.equal(borrowBranches(failed.main), '', 'given back, untracked junk and all');
+  assert.equal(spares(failed.main), 1);
+
+  const { root, main, origin } = bothMoved('true');
+  fs.writeFileSync(path.join(main, 'check.sh'), `#!/bin/sh\ntouch '${root}/checking'\nsleep 30\n`);
+  sh(main, 'git commit -qam "slow check"');
+  const before = origin();
+  // Stopped as a background task is: its whole process group.
+  const p = spawn(path.join(main, 'scripts', 'sync-main.sh'), [], { cwd: main, env, detached: true, stdio: 'ignore' });
+  const closed = new Promise<void>((res) => p.once('close', () => res()));
+  await until(() => fs.existsSync(path.join(root, 'checking')), 'the check to start');
+  process.kill(-p.pid!, 'SIGTERM');
+  await closed;
+  await until(() => borrowBranches(main) === '' && spares(main) === 1, 'the borrow given back');
+  assert.equal(origin(), before, 'nothing pushed');
+});

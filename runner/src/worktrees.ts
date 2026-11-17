@@ -251,7 +251,7 @@ async function makeWorktreeNow(opts: { cwd: string; threadId: string; patch: Wor
 // everything git doesn't track except the kept folders, and checks out its
 // branch there, so its first build only recompiles what changed.
 
-const SPARE = 'threadbear spare';
+export const SPARE = 'threadbear spare';
 
 // How many spares a repo keeps. Each holds its build caches (a gigabyte or
 // so for Threadbear's), so past this an archived thread's worktree is

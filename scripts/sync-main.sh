@@ -117,14 +117,31 @@ if git merge-base --is-ancestor origin/main main; then
 fi
 
 echo "main and GitHub's have both moved; checking this Mac's commits on top of GitHub's in a borrowed worktree..."
-wt="$("$MAIN/borrow-worktree.sh" | tail -1)"
-[ -d "$wt" ] || die "Couldn't borrow a worktree; nothing synced."
+# Given back however this ends: a failure, a stop (the traps below turn
+# INT, TERM and HUP into an exit, so the EXIT trap runs), or success. Only
+# SIGKILL gets past that, so the borrow names this process and says what's
+# in it is scratch: once the process has gone, the runner aborts what was
+# half done there and takes it back (runner/src/borrows.ts). On 17 Nov a
+# killed run's borrow was among the 25 never given back.
+wt=""
 give_back() {
+  [ -n "$wt" ] || return 0
   git -C "$wt" rebase --abort >/dev/null 2>&1 || true
+  git -C "$wt" merge --abort >/dev/null 2>&1 || true
   git -C "$wt" reset -q --hard main >/dev/null 2>&1 || true
+  # Untracked files the check left (not ignored ones: the build caches stay
+  # for the next borrower), which --give-back would refuse.
+  git -C "$wt" clean -fdq >/dev/null 2>&1 || true
   "$MAIN/borrow-worktree.sh" --give-back "$wt" >/dev/null 2>&1 || echo "Couldn't give $wt back; run $MAIN/borrow-worktree.sh --give-back $wt" >&2
 }
 trap give_back EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Failing here has to fail the script: on 17 Nov every slot was taken, and
+# the run's caller read its output as a push.
+wt="$(THREADBEAR_BORROW_PID=$$ THREADBEAR_BORROW_SCRATCH=1 "$MAIN/borrow-worktree.sh" | tail -1)" || wt=""
+[ -n "$wt" ] && [ -d "$wt" ] || { wt=""; die "Couldn't borrow a worktree to check in, so main wasn't moved or pushed."; }
 git -C "$wt" reset -q --hard main
 # A merge on this Mac's side (a release brought in) would be flattened by a
 # rebase, losing what only the merge holds, so GitHub's is merged in then.

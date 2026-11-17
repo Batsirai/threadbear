@@ -16,6 +16,17 @@
 #                                     in the pool for the next thread, and its
 #                                     borrow branch deleted
 #
+# A borrow nobody gives back is taken back by the runner once it's safe
+# (runner/src/borrows.ts): clean, everything on main, nothing running in
+# it, and its borrower gone (the thread archived, the script that took it
+# ended) or, with none recorded, unused for a day. On 17 Nov 25 slots sat
+# on borrow branches never given back, all 50 were taken, and sync-main
+# couldn't borrow one. So the borrower is written beside git's own files:
+# the thread (THREADBEAR_THREAD_ID) and, for a script that gives it back
+# itself, its process (THREADBEAR_BORROW_PID), and whether what's in it is
+# scratch the runner may throw away once that process has gone
+# (THREADBEAR_BORROW_SCRATCH=1; sync-main's is).
+#
 # Taking a spare is a rename of git's lock file, the same as the runner's
 # (claimSpare in runner/src/worktrees.ts), so only one of two at once wins
 # and a thread and the runner never take the same one.
@@ -64,6 +75,7 @@ if [ "${1:-}" = "--give-back" ]; then
   fi
   branch="$(git -C "$dir" symbolic-ref -q --short HEAD || true)"
   git -C "$dir" checkout -q --detach
+  rm -f "$(git -C "$dir" rev-parse --absolute-git-dir)/threadbear-borrow"
   # Only the branch this script made; it's all on main, or on it by patch
   # (checked above).
   case "$branch" in thread/borrow-*) git -C "$MAIN" branch -q -D "$branch" ;; esac
@@ -96,12 +108,27 @@ if [ -n "$claimed" ]; then
   git -C "$claimed" checkout -q -b "$(borrow_branch "$claimed")" main
 else
   mkdir -p "$THREADS"
+  # The first free slot number. No cap on the number: on 17 Nov a cap of 50
+  # was reached with every slot taken, and the borrow failed. A failed add
+  # (another borrower took that number first) tries the next, a few times.
   n=1
-  until claimed="$THREADS/slot-$n"; [ ! -e "$claimed" ] && git -C "$MAIN" worktree add -q -b "$(borrow_branch "$claimed")" "$claimed" main 2>/dev/null; do
+  tries=0
+  while :; do
+    claimed="$THREADS/slot-$n"
+    if [ ! -e "$claimed" ]; then
+      err="$(git -C "$MAIN" worktree add -q -b "$(borrow_branch "$claimed")" "$claimed" main 2>&1)" && break
+      tries=$((tries + 1))
+      [ "$tries" -lt 5 ] || { echo "Couldn't make a worktree in $THREADS: $err" >&2; exit 1; }
+    fi
     n=$((n + 1))
-    [ "$n" -le 50 ] || { echo "Couldn't make a worktree in $THREADS." >&2; exit 1; }
   done
 fi
+{
+  echo "thread=${THREADBEAR_THREAD_ID:-}"
+  echo "pid=${THREADBEAR_BORROW_PID:-}"
+  echo "scratch=${THREADBEAR_BORROW_SCRATCH:-}"
+  echo "at=$(date +%s)"
+} >"$(git -C "$claimed" rev-parse --absolute-git-dir)/threadbear-borrow"
 
 "$claimed/worktree-setup.sh" >&2
 echo "$claimed"
