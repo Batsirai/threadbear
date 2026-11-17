@@ -417,7 +417,10 @@ impl Threadbear {
                 .left_0()
                 .size_full(),
             )
-            .child(v_flex().absolute().top_0().left_0().size_full().items_center().justify_center().gap(px(26.)).child(card).child(pager))
+            // Centred, with auto margins rather than justify_center, so in a
+            // window too short for the card it scrolls rather than its top
+            // (and the bear) going off the window.
+            .child(div().id("hello-scroll").absolute().top_0().left_0().size_full().overflow_y_scroll().child(v_flex().min_h_full().items_center().py(px(24.)).child(v_flex().my_auto().items_center().gap(px(26.)).child(card).child(pager))))
             .track_focus(&focus)
             .key_context("Hello")
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| match ev.keystroke.key.as_str() {
@@ -493,7 +496,8 @@ impl Threadbear {
     }
 
     fn render_hello_agents(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let rows = rules::agent_rows(&self.logins.accounts);
+        let all = rules::agent_rows(&self.logins.accounts);
+        let rows = rules::shown_rows(all.clone());
         // Done spinning once the login's signed in.
         if self.hello.signing.as_deref().is_some_and(|id| self.hello_signed_in(id) || (id == "claude-main" && rules::any_ready(&self.logins.accounts))) {
             self.hello.signing = None;
@@ -521,7 +525,7 @@ impl Threadbear {
             let tag = (row.state == AgentState::Ready).then_some("Signed in");
             list.push(hello_row(&row.provider, row.name.clone(), tag, row.detail.clone(), right, cx));
         }
-        if rows.iter().all(|r| r.provider != "claude") {
+        if all.iter().all(|r| r.provider != "claude") {
             // Nothing signed in to Claude Code here yet: its own sign-in.
             let busy = self.hello.signing.as_deref() == Some("claude-main");
             let button = PushButton::new("hello-sign-in-claude", if busy { "Waiting" } else { "Sign in…" }, if busy { "Finish signing in in Terminal and your browser" } else { "Opens Terminal on Claude Code's sign-in" }).busy(busy).render(cx, {
@@ -534,7 +538,7 @@ impl Threadbear {
         }
         // Another Claude login, for a second subscription: the pool moves a
         // thread to it when the first runs low.
-        if rows.iter().any(|r| r.provider == "claude" && r.state == AgentState::Ready) || adding.is_some() {
+        if all.iter().any(|r| r.provider == "claude" && r.state == AgentState::Ready) || adding.is_some() {
             let busy = adding.is_some();
             let button = PushButton::new("hello-add-login", if busy { "Waiting" } else { "Add" }, if busy { "Finish signing in in Terminal and your browser" } else { "Sign in to another Claude account, in Terminal" }).busy(busy).render(cx, {
                 let app = cx.entity().downgrade();

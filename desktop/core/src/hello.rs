@@ -156,6 +156,30 @@ pub fn agent_rows(accounts: &[Account]) -> Vec<AgentRow> {
         .collect()
 }
 
+/// The rows the card shows: each login while there are a few, and past
+/// four, one row per provider for the signed-in ones ("a@b.c and 3 more"),
+/// so a Mac with many logins still fits the card on the screen. A login that
+/// needs signing in keeps a row of its own, for its Sign in….
+pub fn shown_rows(rows: Vec<AgentRow>) -> Vec<AgentRow> {
+    if rows.len() <= 4 {
+        return rows;
+    }
+    let mut out: Vec<AgentRow> = vec![];
+    for provider in ["claude", "codex"] {
+        let ready: Vec<&AgentRow> = rows.iter().filter(|r| r.provider == provider && r.state == AgentState::Ready).collect();
+        if let Some(first) = ready.first() {
+            let who = first.detail.split(", ").next().unwrap_or(&first.detail).to_owned();
+            let detail = match ready.len() {
+                1 => first.detail.clone(),
+                n => format!("{who} and {} more", n - 1),
+            };
+            out.push(AgentRow { detail, ..(*first).clone() });
+        }
+        out.extend(rows.iter().filter(|r| r.provider == provider && r.state == AgentState::SignedOut).cloned());
+    }
+    out
+}
+
 /// Whether any Claude or Codex login can run a thread now.
 pub fn any_ready(accounts: &[Account]) -> bool {
     agent_rows(accounts).iter().any(|r| r.state == AgentState::Ready)
@@ -254,6 +278,17 @@ mod tests {
         assert_eq!(rows[1].state, AgentState::SignedOut);
         assert_eq!(rows[2].state, AgentState::Ready, "Codex is only listed once it has a sign-in");
         assert_eq!(rows[2].name, "Codex");
+    }
+
+    #[test]
+    fn many_logins_fold_into_one_row_a_provider() {
+        let mut accounts: Vec<Account> = (1..=5).map(|i| account(&format!("claude-{i}"), "claude", Some(&format!("{i}@b.c")))).collect();
+        accounts.push(account("claude-9", "claude", None));
+        accounts.push(account("codex-main", "codex", None));
+        let rows = shown_rows(agent_rows(&accounts));
+        let details: Vec<&str> = rows.iter().map(|r| r.detail.as_str()).collect();
+        assert_eq!(details, ["1@b.c and 4 more", "Not signed in yet", "codex-main"]);
+        assert_eq!(shown_rows(agent_rows(&accounts[..3])).len(), 3, "a few stay one each");
     }
 
     #[test]
