@@ -558,7 +558,7 @@ impl Threadbear {
                 app.update(cx, |this, cx| this.hello_choose_folder(window, cx)).ok();
             }
         });
-        let mut rows = vec![hello_row("folder", if shown.is_empty() { "Your threads folder".into() } else { shown }, None, "Or pick one in the + menu as you start a thread".into(), Some(change), cx)];
+        let mut rows = vec![hello_row("folder", if shown.is_empty() { "Your threads folder".into() } else { shown }, None, "Or pick another as you start a thread".into(), Some(change), cx)];
         let gh: (Option<&'static str>, String) = match self.hello.gh.as_deref() {
             None => (None, "Looking…".into()),
             Some("") => (None, "Not signed in; agents still commit on this Mac".into()),
@@ -613,7 +613,7 @@ impl Threadbear {
         }
         if let Some(on) = settings["keepAwake"].as_bool() {
             let switch = switch("hello-keep-awake", on, "Stop your Mac sleeping on its own while a thread is working", cx, |this, on, cx| this.update_runner_settings(json!({ "keepAwake": on }), cx));
-            rows.push(hello_row("moon", "Keep the Mac awake".into(), None, "While a thread is working, so a long one isn't cut off".into(), Some(switch), cx));
+            rows.push(hello_row("moon", "Keep the Mac awake".into(), None, "So a long thread isn't cut off halfway".into(), Some(switch), cx));
         }
         let connectors = self.hello.open_connectors;
         let button = PushButton::new("hello-connectors", if connectors { "Opens next" } else { "Show me" }, "Opens Connectors once you're done here").render(cx, {
@@ -626,7 +626,7 @@ impl Threadbear {
                 .ok();
             }
         });
-        rows.push(hello_row("powerplug", "Connectors".into(), None, "Notion, Gmail, Sentry and more, for your agents".into(), Some(button), cx));
+        rows.push(hello_row("powerplug", "Connectors".into(), None, "Notion, Gmail, Sentry and more".into(), Some(button), cx));
         let now = style::appearance();
         let looks = h_flex().gap(px(4.)).children(style::Appearance::ALL.into_iter().map(|choice| {
             let on = choice == now;
@@ -644,7 +644,7 @@ impl Threadbear {
                 .on_click(cx.listener(move |this, _, window, cx| this.set_appearance(choice, window, cx)))
         }));
         let _ = window;
-        rows.push(hello_row("sun.max", "Look".into(), None, "Light, dark, or as your Mac is".into(), Some(looks.into_any_element()), cx));
+        rows.push(hello_row("sun.max", "Look".into(), None, String::new(), Some(looks.into_any_element()), cx));
         group(rows, cx)
     }
 
@@ -710,9 +710,18 @@ fn hello_row(icon: &str, title: String, tag: Option<&str>, detail: String, right
     let secondary = style::secondary_text(cx);
     let green = hsla(145. / 360., 0.45, 0.55, 1.);
     let mark = if matches!(icon, "claude" | "codex") { crate::icons::provider_mark(icon) } else { crate::icons::symbol(icon) };
-    let mut name = h_flex().gap(px(8.)).items_center().child(div().text_size(px(style::size::LABEL)).font_medium().text_color(fg).text_ellipsis().overflow_hidden().whitespace_nowrap().child(title));
-    if let Some(tag) = tag {
-        name = name.child(h_flex().flex_none().gap(px(4.)).items_center().text_size(px(style::size::DETAIL)).text_color(green).child(div().size(px(6.)).rounded_full().bg(green)).child(tag.to_owned()));
+    // Long words (the first message) wrap rather than being cut off.
+    let mut name = h_flex().gap(px(8.)).items_center().child(div().min_w_0().text_size(px(style::size::LABEL)).font_medium().text_color(fg).child(title));
+    match tag {
+        // The app's one mark for what it would pick: the gold star.
+        Some("Recommended") => {
+            let star = style::recommended_star(cx);
+            name = name.child(h_flex().flex_none().gap(px(3.)).items_center().text_size(px(style::size::DETAIL)).text_color(star).child("★").child("Recommended"));
+        }
+        Some(tag) => {
+            name = name.child(h_flex().flex_none().gap(px(4.)).items_center().text_size(px(style::size::DETAIL)).text_color(green).child(div().size(px(6.)).rounded_full().bg(green)).child(tag.to_owned()));
+        }
+        None => {}
     }
     h_flex()
         .gap(px(12.))
@@ -720,7 +729,7 @@ fn hello_row(icon: &str, title: String, tag: Option<&str>, detail: String, right
         .px(px(14.))
         .py(px(10.))
         .child(div().flex_none().size(px(28.)).rounded(px(7.)).bg(fg.opacity(0.07)).flex().items_center().justify_center().child(mark.with_size(px(14.)).text_color(fg.opacity(0.8))))
-        .child(v_flex().flex_1().min_w_0().gap(px(2.)).child(name).child(div().text_size(px(style::size::DETAIL)).text_color(secondary).child(detail)))
+        .child(v_flex().flex_1().min_w_0().gap(px(2.)).child(name).when(!detail.is_empty(), |c| c.child(div().text_size(px(style::size::DETAIL)).text_color(secondary).child(detail))))
         .children(right.map(|r| div().flex_none().child(r)))
         .into_any_element()
 }
