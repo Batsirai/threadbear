@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 // @ts-expect-error launch.mjs has no types
 import { pointCurrent, readCurrentLink } from '../../launch.mjs';
 import { currentLink } from '../../src/release.ts';
@@ -44,5 +45,29 @@ test('elsewhere current stays a relative symlink', { skip: process.platform === 
     assert.equal(currentLink(h), 'r1');
   } finally {
     fs.rmSync(h, { recursive: true, force: true });
+  }
+});
+
+test("a supervised runner stops when launch.mjs asks over IPC (Windows' stop)", async () => {
+  const { fork } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-stopreq-'));
+  try {
+    const script = path.join(dir, 'child.ts');
+    const release = path.join(import.meta.dirname, '..', '..', 'src', 'release.ts');
+    fs.writeFileSync(script, `import { onStopRequest } from ${JSON.stringify(pathToFileURL(release).href)};\nonStopRequest(() => { process.send?.({ type: 'stopping' }); setTimeout(() => process.exit(0), 10); });\nprocess.send?.({ type: 'ready' });\nsetInterval(() => {}, 1000);\n`);
+    const child = fork(script, { env: { ...process.env, THREADBEAR_SUPERVISED: '1' }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+    const seen: string[] = [];
+    child.on('message', (m: { type: string }) => {
+      seen.push(m.type);
+      if (m.type === 'ready') {
+        child.send({ type: 'other' });
+        child.send({ type: 'stop' });
+      }
+    });
+    const code = await new Promise((r) => child.on('exit', r));
+    assert.equal(code, 0);
+    assert.deepEqual(seen, ['ready', 'stopping']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -369,11 +369,14 @@ async function main() {
     clearTimeout(child.watchdog);
   }
 
-  // SIGTERM, then SIGKILL if it's still there.
+  // SIGTERM, then SIGKILL if it's still there. On Windows SIGTERM is
+  // already a hard kill, so the runner is asked over IPC instead
+  // (release.ts onStopRequest) and only killed if it hasn't gone by then.
   function stopChild(child, graceMs = killAfterMs) {
     if (child.exited) return;
     try {
-      child.proc.kill('SIGTERM');
+      if (process.platform === 'win32' && child.proc.connected) child.proc.send({ type: 'stop' });
+      else child.proc.kill('SIGTERM');
     } catch {
       // gone
     }

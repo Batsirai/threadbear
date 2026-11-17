@@ -303,3 +303,21 @@ export function onSupervisorGone(fn: () => void): () => void {
   (process.channel as { unref?: () => void } | undefined)?.unref?.();
   return () => process.off('disconnect', handler);
 }
+
+// Calls fn once when the supervisor asks this runner to stop over IPC
+// ({ type: 'stop' }), which is how launch.mjs stops it on Windows: there
+// SIGTERM is a hard kill, so the runner would never save its threads or
+// stop its CLIs. Elsewhere launch.mjs sends SIGTERM as before. Returns an
+// unsubscribe; does nothing when not supervised.
+export function onStopRequest(fn: () => void): () => void {
+  if (!supervised()) return () => {};
+  let called = false;
+  const handler = (m: unknown) => {
+    if (called || !m || typeof m !== 'object' || (m as { type?: unknown }).type !== 'stop') return;
+    called = true;
+    fn();
+  };
+  process.on('message', handler);
+  (process.channel as { unref?: () => void } | undefined)?.unref?.();
+  return () => process.off('message', handler);
+}
