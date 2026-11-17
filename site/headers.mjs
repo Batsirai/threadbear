@@ -35,6 +35,10 @@ export function headersFor(pathname, contentType = "") {
     // Pages can change any time, so browsers check back every five minutes.
     headers["Cache-Control"] = "public, max-age=300";
     headers["Content-Security-Policy"] = CSP;
+  } else if (pathname === "/changelog.json") {
+    // Forks' runners read it for their Updates panel (scripts/changelog.mjs, changelogFeed), and a
+    // release's entry is written a few hours after the release, so five minutes, like a page.
+    headers["Cache-Control"] = "public, max-age=300";
   } else if (HASHED.test(pathname)) {
     // A changed file gets a new name, so the old one can be kept for a year.
     headers["Cache-Control"] = "public, max-age=31536000, immutable";

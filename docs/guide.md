@@ -2133,9 +2133,14 @@ and already on Mike's main (not one signed on a side branch). Mike can
 replace that key through a signed release: a new key counts a week after a
 release signed with the old one names it, and a key he revokes stops
 counting at once. When there's one your copy doesn't have, the Updates icon
-gets a coloured dot, and its From Mike section lists what's new in plain
-words, grouped by release. Older releases without notes show their commit
-subjects instead. Bring Them In starts a thread that works out how Mike's
+gets a coloured dot, and its From Mike section shows what's new: the
+biggest changes as cards from the [What's new page](https://threadbear.mikecann.app/changelog),
+each with its picture or clip (hover one for what it does, click it to see
+it on the page), how many things were added, changed and fixed, with See
+all for the whole page, and how many important fixes there are (hover for
+which). A release the page doesn't have yet, or any release when the page
+can't be reached, is listed in plain words instead, and older releases
+without notes show their commit subjects. Bring Them In starts a thread that works out how Mike's
 changes merge with your own, without checking anything out, tells you what
 they bring and how it would settle any clashes, and asks. Nothing from the
 release runs until you say go: then it merges, runs the checks and lands. Let's Discuss starts one that

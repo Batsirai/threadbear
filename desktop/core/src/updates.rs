@@ -174,6 +174,42 @@ pub struct Release {
     pub subjects: Vec<String>,
     /// Each verified release main doesn't have yet, newest first.
     pub notes: Vec<Notes>,
+    /// Why each commit Mike marked `Important:` matters, once each.
+    pub important: Vec<String>,
+    /// The What's new page's cards for those releases (protocol "Mike's
+    /// releases", `changelog`), when the runner could read them.
+    pub changelog: Option<Changelog>,
+}
+
+/// The What's new page's cards for the releases main doesn't have.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Changelog {
+    /// The whole page, for See all.
+    pub page: String,
+    pub releases: Vec<ChangelogRelease>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChangelogRelease {
+    pub tag: String,
+    /// That release on the page, for its cards.
+    pub link: String,
+    pub cards: Vec<Card>,
+    pub added: i64,
+    pub changed: i64,
+    pub fixed: i64,
+}
+
+/// One of a release's main changes, as the page shows it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Card {
+    /// added, changed or fixed.
+    pub kind: String,
+    pub title: String,
+    pub text: String,
+    /// The picture, or a clip's still, on the site.
+    pub picture: String,
+    pub clip: bool,
 }
 
 /// One verified release's notes, or its commit subjects as a fallback.
@@ -274,7 +310,52 @@ impl Release {
                 .filter_map(|n| Some(Notes { tag: n["tag"].as_str()?.to_owned(), date: text(n, "date"), lines: n["lines"].as_array().map(|_| strings(&n["lines"]))? }))
                 .filter(|n| !n.lines.is_empty())
                 .collect(),
+            important: {
+                let mut whys: Vec<String> = Vec::new();
+                for why in v["important"].as_array().into_iter().flatten().filter_map(|i| i["why"].as_str()) {
+                    if !whys.iter().any(|w| w == why) {
+                        whys.push(why.to_owned());
+                    }
+                }
+                whys
+            },
+            changelog: Changelog::decode(&v["changelog"]),
         })
+    }
+}
+
+impl Changelog {
+    fn decode(v: &Value) -> Option<Changelog> {
+        let page = v["page"].as_str().filter(|p| p.starts_with("https://"))?.to_owned();
+        let count = |r: &Value, k: &str| r[k].as_i64().unwrap_or(0).max(0);
+        let releases: Vec<ChangelogRelease> = v["releases"]
+            .as_array()?
+            .iter()
+            .filter_map(|r| {
+                Some(ChangelogRelease {
+                    tag: r["tag"].as_str()?.to_owned(),
+                    link: r["link"].as_str().filter(|l| l.starts_with("https://")).unwrap_or(&page).to_owned(),
+                    cards: r["highlights"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|h| {
+                            Some(Card {
+                                kind: h["kind"].as_str()?.to_owned(),
+                                title: h["title"].as_str()?.to_owned(),
+                                text: h["text"].as_str().unwrap_or_default().to_owned(),
+                                picture: h["picture"].as_str().filter(|p| p.starts_with("https://"))?.to_owned(),
+                                clip: h["clip"].as_bool().unwrap_or(false),
+                            })
+                        })
+                        .collect(),
+                    added: count(r, "added"),
+                    changed: count(r, "changed"),
+                    fixed: count(r, "fixed"),
+                })
+            })
+            .collect();
+        (!releases.is_empty()).then_some(Changelog { page, releases })
     }
 }
 
@@ -450,6 +531,67 @@ pub fn upstream_line(u: Option<&Upstream>) -> Option<String> {
 /// What the From Mike section lists under a release: the plain-words notes
 /// Mike's runner wrote, a heading per release when there's more than one, or
 /// (from older tags) the first commit subjects.
+/// How many of the page's cards the From Mike section shows; See all has the rest.
+pub const DIGEST_CARDS: usize = 4;
+
+/// What the From Mike section shows when the What's new page has the
+/// releases main doesn't (Mike picked it on 17 Nov 2026 over the notes as
+/// text): their cards, newest first, with each one's link; how many
+/// changes there are of each kind, the cards' and the plain lines'; the
+/// Important whys; and the notes of any release the page has no entry for
+/// yet, dated, as `release_lines` gives them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Digest {
+    pub cards: Vec<(Card, String)>,
+    pub more: usize,
+    pub added: i64,
+    pub changed: i64,
+    pub fixed: i64,
+    pub important: Vec<String>,
+    pub page: String,
+    pub notes: Vec<(Option<String>, Vec<String>)>,
+}
+
+/// None when there's no page to show from: the section lists the notes.
+pub fn release_digest(r: &Release) -> Option<Digest> {
+    let c = r.changelog.as_ref()?;
+    let mut d = Digest { important: r.important.clone(), page: c.page.clone(), ..Default::default() };
+    let mut cards = Vec::new();
+    for rel in &c.releases {
+        for card in &rel.cards {
+            match card.kind.as_str() {
+                "added" => d.added += 1,
+                "changed" => d.changed += 1,
+                _ => d.fixed += 1,
+            }
+            cards.push((card.clone(), rel.link.clone()));
+        }
+        d.added += rel.added;
+        d.changed += rel.changed;
+        d.fixed += rel.fixed;
+    }
+    d.more = cards.len().saturating_sub(DIGEST_CARDS);
+    cards.truncate(DIGEST_CARDS);
+    d.cards = cards;
+    d.notes = r
+        .notes
+        .iter()
+        .filter(|n| !c.releases.iter().any(|rel| rel.tag == n.tag))
+        .map(|n| (Some(release_day(&n.tag, n.date.as_deref())), n.lines.clone()))
+        .collect();
+    Some(d)
+}
+
+/// "5 added, 23 changed, 14 fixed", leaving out a kind there's none of.
+pub fn digest_counts(d: &Digest) -> String {
+    [(d.added, "added"), (d.changed, "changed"), (d.fixed, "fixed")].iter().filter(|(n, _)| *n > 0).map(|(n, k)| format!("{n} {k}")).collect::<Vec<_>>().join(", ")
+}
+
+/// "3 important fixes", for a line whose tip lists them.
+pub fn important_line(n: usize) -> Option<String> {
+    (n > 0).then(|| if n == 1 { "1 important fix".to_owned() } else { format!("{n} important fixes") })
+}
+
 pub fn release_lines(r: &Release) -> Vec<(Option<String>, Vec<String>)> {
     let first_subjects = || r.subjects.iter().take(5).cloned().collect::<Vec<_>>();
     if r.notes.is_empty() {
@@ -1161,4 +1303,56 @@ mod tests {
         assert_eq!(release.date.as_deref(), at);
         assert_eq!(release.notes[0].date.as_deref(), at);
     }
+
+    #[test]
+    fn the_from_mike_section_shows_the_pages_cards_counts_and_notes_it_has_no_entry_for() {
+        let up = |changelog: Value| {
+            RunnerUpdates::decode(&json!({ "state": "idle", "upstream": { "state": "available", "release": {
+                "tag": "release/2026-11-16", "changes": 41, "subjects": ["a"],
+                "important": [{ "commit": "1", "why": "Pairing tokens" }, { "commit": "2", "why": "Pairing tokens" }, { "commit": "3", "why": "Open gate" }],
+                "notes": [
+                    { "tag": "release/2026-11-16", "lines": ["Reviewers"] },
+                    { "tag": "release/2026-11-15", "lines": ["Fifteen"] },
+                    { "tag": "release/2026-11-14", "lines": ["Open Anything"] }
+                ],
+                "changelog": changelog
+            } } }))
+            .unwrap()
+            .upstream
+            .unwrap()
+            .release
+            .unwrap()
+        };
+        let card = |kind: &str, title: &str| json!({ "kind": kind, "title": title, "text": "x", "picture": format!("https://threadbear.mikecann.app/media/changelog/x/{title}.webp") });
+        let r = up(json!({ "page": "https://threadbear.mikecann.app/changelog", "releases": [
+            { "tag": "release/2026-11-16", "link": "https://threadbear.mikecann.app/changelog#2026-11-16", "highlights": [card("changed", "reviewers")], "added": 1, "changed": 3, "fixed": 6 },
+            { "tag": "release/2026-11-14", "link": "https://threadbear.mikecann.app/changelog#2026-11-14", "highlights": [
+                card("added", "app"), { "kind": "added", "title": "anything", "text": "x", "picture": "https://threadbear.mikecann.app/a.webp", "clip": true }, card("added", "reinstall"), card("changed", "spelling"),
+                // Not a web picture: left out.
+                { "kind": "added", "title": "local", "text": "x", "picture": "file:///etc/passwd" }
+            ], "added": 4, "changed": 16, "fixed": 7 }
+        ] }));
+        assert_eq!(r.important, ["Pairing tokens", "Open gate"]);
+        let d = release_digest(&r).unwrap();
+        let titles: Vec<_> = d.cards.iter().map(|(c, link)| (c.title.as_str(), link.rsplit('#').next().unwrap())).collect();
+        assert_eq!(titles, [("reviewers", "2026-11-16"), ("app", "2026-11-14"), ("anything", "2026-11-14"), ("reinstall", "2026-11-14")]);
+        assert!(d.cards[2].0.clip);
+        assert_eq!(d.more, 1);
+        assert_eq!(digest_counts(&d), "8 added, 21 changed, 13 fixed");
+        assert_eq!(important_line(d.important.len()).as_deref(), Some("2 important fixes"));
+        assert_eq!(important_line(1).as_deref(), Some("1 important fix"));
+        assert_eq!(important_line(0), None);
+        assert_eq!(d.page, "https://threadbear.mikecann.app/changelog");
+        // 15 Nov isn't on the page yet, so its notes stand in, dated.
+        assert_eq!(d.notes, [(Some("15 Nov".to_owned()), vec!["Fifteen".to_owned()])]);
+        // No page, or one with none of these releases: the notes as before.
+        assert_eq!(release_digest(&up(Value::Null)), None);
+        assert_eq!(release_digest(&up(json!({ "page": "https://threadbear.mikecann.app/changelog", "releases": [] }))), None);
+        assert_eq!(release_digest(&up(json!({ "page": "http://evil.example/changelog", "releases": [{ "tag": "release/2026-11-16" }] }))), None);
+        // A release on the page with no cards still counts its lines.
+        let plain = release_digest(&up(json!({ "page": "https://threadbear.mikecann.app/changelog", "releases": [{ "tag": "release/2026-11-15", "added": 0, "changed": 4, "fixed": 1 }] }))).unwrap();
+        assert!(plain.cards.is_empty());
+        assert_eq!(digest_counts(&plain), "4 changed, 1 fixed");
+    }
+
 }

@@ -1520,6 +1520,23 @@ type UpstreamStatus = {
     // notes, or its commit subjects when it was tagged without notes.
     // `date` is that tag's, as the release's own
     notes?: { tag: string; date?: string; lines: string[] }[]
+    // The What's new page's cards for those releases, when upstream is a
+    // repo with a page (runner/src/changelog.ts: Mike's) and the runner
+    // could read its /changelog.json at this check. Not signed: something
+    // to look at only, so clients fall back on `notes`, and show the notes
+    // of a release missing from `releases` (its entry comes hours after
+    // the tag). `picture` is always an https file on the page's site.
+    changelog?: {
+      page: string                // https://threadbear.mikecann.app/changelog
+      releases: {
+        tag: string
+        link: string              // that release on the page (#2026-11-16)
+        highlights: { kind: "added" | "changed" | "fixed"; title: string; text: string; picture: string; clip?: true }[]
+        added: number             // its plain lines besides the cards
+        changed: number
+        fixed: number
+      }[]
+    }
   }
   // Mike's runner (runner.json releases.publish): the last tag it made.
   published?: { tag: string; at: string }

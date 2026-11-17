@@ -42,6 +42,21 @@ Feature: The Updates panel
     When I press "Start a thread that merges Mike's release into your main" in the Updates panel
     Then a thread called "Bring in Mike's release of 10 Nov" opens
 
+  # The What's new page's cards for the releases a fork doesn't have
+  # (protocol "Mike's releases", changelog), which Mike picked over the
+  # notes as text on 17 Nov 2026. A release the page has no entry for yet
+  # keeps its notes.
+  @updates.panel @swift-pending
+  Scenario: Mike's releases show the What's new page's cards, counts and important fixes
+    When Mike has releases of 14 to 16 Nov with cards on the What's new page
+    And I open the Updates panel
+    Then the Updates panel lists "[card] Pick who reviews code -> https://threadbear.mikecann.app/changelog#2026-11-16"
+    And the Updates panel lists "[card] Open Anything (clip) -> https://threadbear.mikecann.app/changelog#2026-11-14"
+    And the Updates panel lists "6 added, 20 changed, 14 fixed [See all -> https://threadbear.mikecann.app/changelog]"
+    And the Updates panel lists "2 important fixes (tip: Pairing used a reusable token; A swapped file could launch an app)"
+    And the Updates panel lists "## 15 Nov"
+    And the Updates panel lists "  A note for a day the page hasn't got yet"
+
   # Someone's fork with changes of their own to the old Swift app (protocol
   # "Your changes to the old app"). The Swift app has nothing to rebuild.
   @updates.swiftchanges @swift-pending

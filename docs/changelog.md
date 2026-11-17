@@ -27,6 +27,10 @@ This is Mike's copy's page. In a fork there's nothing to do here.
   which the site's Worker serves at `/media/changelog/<release>/<name>`. A name never changes
   once it's up (they're cached for good): a new picture gets a new name.
 - `npm run media -- check` says whether every file the JSON names is up on the live site.
+- The build also writes `/changelog.json` (`changelogFeed`): the newest 20 releases' cards and
+  line counts. Forks' runners read it for the Updates panel's From Mike section
+  (`runner/src/changelog.ts`), so a release's cards show there once its entry is deployed, and
+  its pictures need to be up by then.
 
 ## Writing a release's entry
 

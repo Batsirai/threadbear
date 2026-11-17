@@ -44,6 +44,7 @@ import path from 'node:path';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { applyKeyChanges, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signerKey, SIGNERS_FILE } from './release-keys.ts';
+import { changelogFor, type ReleaseChangelog } from './changelog.ts';
 
 export const FETCH_INTERVAL_MS = 6 * 60 * 60_000;
 // After a look that failed (no network yet after waking, GitHub down) the
@@ -110,6 +111,10 @@ export type UpstreamRelease = {
   // newest first. Each verified tag's commit subjects fill in when its
   // message has no plain-words notes.
   notes?: { tag: string; date?: string; lines: string[] }[];
+  // The What's new page's cards for those releases, when upstream is a
+  // repo with one and it could be read (changelog.ts). Not signed: only
+  // something to look at, with the notes as the fallback.
+  changelog?: ReleaseChangelog;
 };
 
 // runner.status's `upstream`, and RunnerUpdates' (docs/protocol.md).
@@ -192,6 +197,9 @@ export type UpstreamDeps = {
   // One workflow's latest push runs on main, newest first, from GitHub
   // (githubWorkflowRuns). Replaced in tests.
   ciHistory?: (repo: string, file: string) => Promise<CiRun[]>;
+  // The What's new page's cards for some release tags (changelogFor).
+  // Replaced in tests.
+  changelog?: (upstreamKey: string, tags: string[]) => Promise<ReleaseChangelog | undefined>;
 };
 
 // The push runs on one commit of a public GitHub repo ("owner/name"). No
@@ -610,6 +618,10 @@ export class Upstream {
       }
       if (!release) return this.set({ state: 'idle', checkedAt, reason: 'no signed releases yet' });
       const state = release.changes > 0 ? 'available' : 'idle';
+      if (state === 'available') {
+        const changelog = await this.changelogFor(urls.upstream, release);
+        if (changelog) release = { ...release, changelog };
+      }
       if (state === 'available' && this.st.release?.tag !== release.tag) this.deps.log.info('a newer release from upstream', { tag: release.tag, changes: release.changes });
       const status = this.set({ state, checkedAt, release });
       try {
@@ -621,6 +633,18 @@ export class Upstream {
     } catch (e) {
       this.deps.log.warn('could not check upstream for releases', { error: String(e) });
       return this.set({ state: 'failed', checkedAt, reason: String((e as Error).message ?? e).slice(0, 300) });
+    }
+  }
+
+  // The page's cards for the releases main doesn't have. A failure only
+  // leaves them out: the panel shows the notes instead.
+  private async changelogFor(upstream: string, release: UpstreamRelease): Promise<ReleaseChangelog | undefined> {
+    const tags = release.notes?.length ? release.notes.map((n) => n.tag) : [release.tag];
+    try {
+      return await (this.deps.changelog ?? changelogFor)(repoKey(upstream), tags);
+    } catch (e) {
+      this.deps.log.info('could not read the changelog page; the notes stand in', { error: String(e) });
+      return undefined;
     }
   }
 
