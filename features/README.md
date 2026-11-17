@@ -62,6 +62,7 @@ npm run check                           # steps line up, no apps needed
 TB_APP=gpui  node_modules/.bin/cucumber-js        # or swift
 TB_TAGS='@sidebar.search' ...                     # just these
 TB_INCLUDE_PENDING=1 ...                          # to see what's left
+TB_SHARD=2/2 ...                                  # half the files, as CI's second Linux job does
 TB_REDUCE_MOTION=on ...                           # GPUI with Reduce Motion (off otherwise, whatever the Mac says)
 ```
 

@@ -121,6 +121,19 @@ After({ tags: '@picture-loading' }, () => {
   else process.env.MOCK_SCRIPTED_TURNS = startingScriptedTurns;
 });
 
+// On CI, a line per scenario as it ends: the progress dots never end their
+// line, so GitHub's log showed nothing at all for a run that hit its time
+// limit (17 Nov), not even which scenario it was on.
+let scenarioStarted = 0;
+Before(() => {
+  scenarioStarted = Date.now();
+});
+After(({ result, pickle, willBeRetried }) => {
+  if (!process.env.CI) return;
+  const secs = ((Date.now() - scenarioStarted) / 1000).toFixed(1).padStart(5);
+  console.log(`\n${secs}s ${result?.status ?? '?'}${willBeRetried ? ' (will retry)' : ''} ${path.basename(pickle.uri)}: ${pickle.name}`);
+});
+
 Before(async function (this: ThreadbearWorld, { pickle }) {
   // A scenario about paging needs a thread longer than one page of events.
   const long = pickle.tags.some((t) => t.name === '@long-thread');
