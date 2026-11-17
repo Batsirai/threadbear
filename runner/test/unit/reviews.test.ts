@@ -482,4 +482,14 @@ test('a client from before reply pictures keeps them; a moved review brings none
   const fitted=h.runner.ownReplyImages(st,{...review,draft:{notes:{},images:[kept,{path:'/etc/hosts',mediaType:'image/png'},{path:link,mediaType:'image/png'}]},response:{notes:{},images:[{path:source,mediaType:'image/png'}]}});
   assert.deepEqual(fitted.draft.images,[kept]);
   assert.equal(fitted.response!.images,undefined);
+  // An id that climbs out of the reviews folder owns nothing, even pictures that are real copies.
+  const climbing=path.relative(path.join(h.store.mediaDir(thread.id),'reviews'),path.dirname(path.dirname(kept.path)));
+  assert.equal(h.runner.ownReplyImage(st,`../reviews/${climbing}`,kept),false);
+  assert.equal(h.runner.ownReplyImage(st,review.id,kept),true);
+  // A queued answer keeps only its own pictures through recovery.
+  st.rec.queue.push({turnId:'t-q',text:'x',images:[kept,{path:source,mediaType:'image/png'}],reviewId:review.id,reviewResponse:{notes:{},images:[{path:source,mediaType:'image/png'}]}});
+  h.runner.recoverReviews(st);
+  const queued=st.rec.queue.find((q:any)=>q.turnId==='t-q');
+  assert.deepEqual(queued.images,[kept]);
+  assert.deepEqual(queued.reviewResponse.images,[]);
 });

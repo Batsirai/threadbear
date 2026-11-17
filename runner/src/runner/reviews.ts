@@ -159,20 +159,27 @@ export const reviewsPart = {
     return {...draft, images};
   },
 
-  // The review with only the reply pictures kept beside it here (what
-  // keepReplyImages made), none that's a link or anywhere else.
+  // Whether a reply picture is one keepReplyImages made for this review:
+  // directly in its reply folder, not a link. The review's id must be one
+  // folder name, or a moved log's "../.." could point it at another
+  // thread's (Codex's review, 17 Nov).
+  ownReplyImage(this: Runner, st: ThreadState, reviewId: string, img: ImageRef): boolean {
+    if (typeof reviewId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(reviewId) || typeof img?.path !== 'string') return false;
+    const reviewsDir = path.join(this.store.mediaDir(st.rec.id), 'reviews');
+    try {
+      const kept = fs.realpathSync(path.join(reviewsDir, reviewId, 'reply'));
+      if (path.dirname(path.dirname(kept)) !== fs.realpathSync(reviewsDir)) return false;
+      return !fs.lstatSync(img.path).isSymbolicLink() && path.dirname(fs.realpathSync(img.path)) === kept;
+    } catch {
+      return false;
+    }
+  },
+
+  // The review with only its own reply pictures (ownReplyImage).
   ownReplyImages(this: Runner, st: ThreadState, review: DesignReview): DesignReview {
-    const dir = path.join(this.store.mediaDir(st.rec.id), 'reviews', review.id, 'reply');
-    let kept: string;
-    try { kept = fs.realpathSync(dir); } catch { kept = ''; }
-    const own = (img: ImageRef) => {
-      try {
-        return !!kept && !!img?.path && !fs.lstatSync(img.path).isSymbolicLink() && path.dirname(fs.realpathSync(img.path)) === kept;
-      } catch { return false; }
-    };
     const fit = (draft: ReviewDraft | undefined): ReviewDraft | undefined => {
       if (!draft?.images) return draft;
-      const images = Array.isArray(draft.images) ? draft.images.filter(own) : [];
+      const images = Array.isArray(draft.images) ? draft.images.filter(img => this.ownReplyImage(st, review.id, img)) : [];
       if (images.length === draft.images.length) return draft;
       const {images: _, ...rest} = draft;
       return images.length ? {...rest, images} : rest;
@@ -247,6 +254,13 @@ export const reviewsPart = {
     // The delivery marker is written after session.send, not merely after
     // user.message. A failed turn.started append leaves the answer unsent.
     st.rec.queue = st.rec.queue.filter(q => !q.reviewId || !sent.has(q.reviewId));
+    // An answer already queued keeps only its review's own pictures too.
+    st.rec.queue = st.rec.queue.map(q => {
+      if (!q.reviewId) return q;
+      const images = (Array.isArray(q.images) ? q.images : []).filter(img => this.ownReplyImage(st, q.reviewId!, img));
+      const reviewResponse = q.reviewResponse?.images ? {...q.reviewResponse, images: q.reviewResponse.images.filter(img => this.ownReplyImage(st, q.reviewId!, img))} : q.reviewResponse;
+      return images.length === q.images?.length && reviewResponse === q.reviewResponse ? q : {...q, images, ...(reviewResponse ? {reviewResponse} : {})};
+    });
     for (const [id, review] of reviews) {
       if (review.status === 'answered' && review.replyTurnId && review.response && !sent.has(id) && !st.rec.queue.some(q => q.reviewId === id)) {
         st.rec.queue.push({turnId: review.replyTurnId, text: reviewReply(review, review.response), images: review.response.images ?? [], reviewId: id, reviewResponse: review.response});
