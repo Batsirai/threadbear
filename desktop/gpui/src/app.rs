@@ -1255,6 +1255,7 @@ impl Threadbear {
         });
         let handle = input.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
+        crate::web_panels::keyboard_to_app(window);
         cx.notify();
     }
 
