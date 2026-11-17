@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { denyWaitLoop, isWaitCommand, sleepSeconds, SHORT_WAIT_MARK, WAIT_LOOP_REASON } from '../../src/wait-loops.ts';
+import { denyWaitLoop, isWaitCommand, shellCode, sleepSeconds, SHORT_WAIT_MARK, WAIT_LOOP_REASON } from '../../src/wait-loops.ts';
 
 test('sleep arguments read as seconds', () => {
   assert.equal(sleepSeconds('30'), 30);
@@ -73,4 +73,28 @@ test('a long command is read in linear time', () => {
 test('the reason says to poll on a cron, never a one-off that would drop the wait', () => {
   assert.match(WAIT_LOOP_REASON, /cron/);
   assert.doesNotMatch(WAIT_LOOP_REASON, /`when`/);
+});
+
+test('quoted text and printed heredocs are not code, but -c scripts and heredocs a shell reads are (Codex review round 2)', () => {
+  assert.ok(!isWaitCommand('printf "wait for CI; sleep 60"', false));
+  assert.ok(!isWaitCommand("cat <<'EOF' > poll.sh\nuntil test -f ready; do sleep 60; done\nEOF\nchmod +x poll.sh"));
+  assert.ok(isWaitCommand("bash <<'EOF'\nuntil test -f ready; do sleep 60; done\nEOF"));
+  assert.ok(isWaitCommand("ssh tinker-desk bash -s <<'EOF'\nwhile true; do sleep 30; done\nEOF"));
+  // A sleep whose length is quoted still sleeps.
+  assert.ok(isWaitCommand('until test -f ready; do sleep "60"; done'));
+  assert.ok(isWaitCommand('until test -f ready; do sleep "$DELAY"; done'));
+  assert.equal(shellCode(`echo "a \\" b" 'c' && bash -c 'sleep 9'`), 'echo  _   _  && bash -c  sleep 9 ');
+});
+
+test('foreground timers are refused; quick polls and CI watches in the turn are not', () => {
+  assert.ok(isWaitCommand('sleep 600', false));
+  assert.ok(!isWaitCommand('until test -f ready; do sleep 5; done', false));
+  assert.ok(!isWaitCommand('gh pr checks 72 --watch', false));
+});
+
+test('many gh pr checks without --watch are read in linear time', () => {
+  const big = 'gh pr checks '.repeat(4000);
+  const t = performance.now();
+  isWaitCommand(big);
+  assert.ok(performance.now() - t < 50, `took ${performance.now() - t} ms`);
 });

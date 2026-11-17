@@ -1988,9 +1988,12 @@ refuses such a call as it's made, in every mode: a Bash call with
 `run_in_background` whose command has a `while`, `until` or `for` loop and a
 `sleep` from there on, a `sleep` of a minute or more by itself, or `gh run
 watch` / `gh pr checks --watch`; and a foreground one whose loop sleeps 30
-seconds or more between looks, as the CLI moves a command that hits its
-timeout to the background. The text is read with linear scans only, as the
-hook runs on the runner's event loop. The reason tells the agent to wait
+seconds or more between looks, or that sleeps a minute or more, as the CLI
+moves a command that hits its timeout to the background (a quick poll there
+is a server coming up, and a CI watch is a turn waiting for its own
+checks). Quoted text and a heredoc's body aren't read as code, except a
+`-c` script and a heredoc a shell or ssh reads. The text is read in linear
+time, as the hook runs on the runner's event loop. The reason tells the agent to wait
 with `schedule_message` on a cron (a one-off whose check prints nothing is
 done for good, which would drop the wait) and a `check` that prints once
 it's ready, then end its turn with `snooze`, so the thread hibernates and

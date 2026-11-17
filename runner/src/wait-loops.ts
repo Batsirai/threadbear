@@ -50,41 +50,108 @@ export function sleepSeconds(arg: string): number | undefined {
   return Number(m[1]) * unit;
 }
 
-// What a command does that looks like waiting, read loosely from its text
-// with linear scans only (a nested lazy regex took 300 ms on 10 KB of
-// unclosed `while x; do`, on the runner's event loop: Codex's review).
+// The command with the text that isn't run blanked, in one pass: a quoted
+// string becomes `_` (so `sleep "60"` still has an argument, of a length
+// that can't be read), unless it follows `-c`, where it's the script
+// (bash -c 'until …'), and a heredoc's body goes unless a shell or ssh reads
+// it (`cat <<EOF` prints a script, `bash <<EOF` runs one). Codex's review,
+// 18 Nov: `printf "wait; sleep 60"` and a printed loop were refused.
+export function shellCode(command: string): string {
+  const n = command.length;
+  let out = '';
+  let i = 0;
+  while (i < n) {
+    const c = command[i];
+    if (c === '\\') {
+      out += command.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      while (j < n && command[j] !== c) j += c === '"' && command[j] === '\\' ? 2 : 1;
+      // Whether `-c` comes just before, looking back over spaces only.
+      let k = out.length - 1;
+      while (k >= 0 && (out[k] === ' ' || out[k] === '\t')) k--;
+      const script = out[k] === 'c' && out[k - 1] === '-' && (k < 2 || /\s/.test(out[k - 2]));
+      out += script ? ` ${command.slice(i + 1, j)} ` : ' _ ';
+      i = j + 1;
+      continue;
+    }
+    if (c === '<' && command[i + 1] === '<' && command[i + 2] !== '<') {
+      const m = /^<<-?\s*(['"]?)([\w.-]+)\1/.exec(command.slice(i, i + 200));
+      if (m) {
+        const lineStart = out.lastIndexOf('\n') + 1;
+        const runs = /(?:^|[\s;&|(])(?:\S*\/)?(?:bash|sh|zsh|dash|ssh)\b/.test(out.slice(lineStart));
+        out += command.slice(i, i + m[0].length);
+        i += m[0].length;
+        if (runs) continue;
+        // The rest of the line is still code (`<<EOF | sh` aside); the body
+        // runs to a line holding only the word, or to the end.
+        const nl = command.indexOf('\n', i);
+        if (nl < 0) continue;
+        out += command.slice(i, nl + 1);
+        let at = nl + 1;
+        i = n;
+        while (at < n) {
+          const end = command.indexOf('\n', at);
+          const line = command.slice(at, end < 0 ? n : end);
+          if (line.trim() === m[2]) {
+            i = end < 0 ? n : end;
+            break;
+          }
+          if (end < 0) break;
+          at = end + 1;
+        }
+        continue;
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+// What a command does that looks like waiting, read loosely from its code
+// (shellCode) with linear scans only: a nested lazy regex took 300 ms on 10
+// KB of unclosed `while x; do`, on the runner's event loop (Codex's review).
 // loopSleep: the longest sleep at or after the first while/until/for, so
 // `while sleep 5; do …` and a sleep after a nested loop's `done` count (0
 // for one whose length can't be read, -1 with no loop or no sleep in it).
 // longestSleep: the longest sleep anywhere. watch: a CLI watching CI.
 export type WaitShape = { loopSleep: number; longestSleep: number; watch: boolean };
 
-// Where a shell command can start. A quote isn't one, so text inside a
-// string (title="sleep forever") isn't read as a command, except right after
-// `-c`, where the string is the script (bash -c 'until …').
-const START = String.raw`(?:^|[\s;&|(\x60{]|-c\s+['"])`;
+// Where a shell command can start.
+const START = String.raw`(?:^|[\s;&|(\x60{])`;
 const LOOP_RE = new RegExp(`${START}(?:while|until|for)\\s`);
-const SLEEP_RE = new RegExp(`${START}sleep\\s+([^\\s;&|)'"\\x60]+)`, 'g');
+const SLEEP_RE = new RegExp(`${START}sleep\\s+([^\\s;&|)\\x60]+)`, 'g');
 
 export function waitShape(command: string): WaitShape {
-  const loopAt = command.search(LOOP_RE);
+  const code = shellCode(command);
+  const loopAt = code.search(LOOP_RE);
   let loopSleep = -1;
   let longestSleep = -1;
-  for (const m of command.matchAll(SLEEP_RE)) {
+  for (const m of code.matchAll(SLEEP_RE)) {
     const secs = sleepSeconds(m[1]) ?? 0;
     longestSleep = Math.max(longestSleep, secs);
     if (loopAt >= 0 && m.index >= loopAt) loopSleep = Math.max(loopSleep, secs);
   }
-  const watch = /\bgh\s+run\s+watch\b/.test(command) || /\bgh\s+pr\s+checks\b[^;&|\n]*--watch\b/.test(command);
+  // A command at a time, so no scan runs on past the end of one (a regex
+  // looking for --watch after each `gh pr checks` was quadratic).
+  const watch = code.split(/[;&|\n]/).some((c) => /\bgh\s+run\s+watch\b/.test(c) || (/\bgh\s+pr\s+checks\b/.test(c) && /\s--watch\b/.test(c)));
   return { loopSleep, longestSleep, watch };
 }
 
-// Whether a command would wait past the turn: in the background, any loop
-// that sleeps, a sleep of a minute or more (a timer), or a CI watch; in the
-// foreground, a loop that sleeps FOREGROUND_POLL_SECONDS or more between looks.
+// Whether a command would wait past the turn. In the background: any loop
+// that sleeps, a sleep of a minute or more (a timer), or a CI watch. In the
+// foreground, where the CLI moves a command that hits its timeout to the
+// background: a loop that sleeps FOREGROUND_POLL_SECONDS or more between
+// looks, or a timer. A quick poll there is a server coming up, and a CI
+// watch is how a turn that ships something waits for its checks, which the
+// agent is still there for.
 export function isWaitCommand(command: string, background = true): boolean {
   const w = waitShape(command);
-  if (!background) return w.loopSleep >= FOREGROUND_POLL_SECONDS;
+  if (!background) return w.loopSleep >= FOREGROUND_POLL_SECONDS || w.longestSleep >= TIMER_SECONDS;
   return w.loopSleep >= 0 || w.longestSleep >= TIMER_SECONDS || w.watch;
 }
 
