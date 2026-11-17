@@ -759,7 +759,7 @@ pub(crate) trait AskHost: Sized + 'static {
                 // (RowRenderer's AskButton peek); a review has none, its
                 // window being the look, and keeps its tip.
                 let key = self.ask_link_key(index, n).filter(|_| crate::reply_links::has_card(&target));
-                let tip: &'static str = if key.is_some() { "" } else if target.starts_with("review:") { "Open the design options" } else { "Open this" };
+                let tip: &'static str = if key.is_some() { "" } else if target.starts_with("review:") { "Open the design options" } else if target.starts_with("thread:") { "Open that thread" } else { "Open this" };
                 let shown = key.as_ref().filter(|k| crate::chips::card_shown(k, crate::chips::SLOWER)).and_then(|_| self.ask_link_card(&title, &target, cx)).map(|card| crate::chips::under(metrics::BUTTON_HEIGHT, card));
                 let button = card_button(("ask-link", index * 100 + n), &format!("{title} ↗"), look, tip, cx)
                     .relative()

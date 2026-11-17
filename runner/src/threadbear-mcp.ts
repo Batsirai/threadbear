@@ -26,7 +26,7 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
+import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, deadEndNudge, deadEndNudged, hasDeadEnd, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -1456,7 +1456,7 @@ export function buildThreadbearTools(
                 .array(
                   z.object({
                     title: z.string().min(1).describe('What the button does, short: "Open login page", "See the preview".'),
-                    url: z.string().min(1).describe('A web page (https://…), a file or folder on this Mac (an absolute or ~ path), or review:<id> to open one of this thread\'s show_options reviews.'),
+                    url: z.string().min(1).describe('A web page (https://…), a file or folder on this Mac (an absolute or ~ path), review:<id> to open one of this thread\'s show_options reviews, or thread:<id> for another thread, when the step is done there.'),
                   }),
                 )
                 .max(3)
@@ -1503,6 +1503,7 @@ export function buildThreadbearTools(
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
         if (needs === 'you' && offersToTakeItBack(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         let restart = '';
         if (needs === 'you' && appRestarts && asksForAppRestart(asks)) {
           if (!appRestarts.isWatching(selfId)) appRestarts.watch(selfId);
@@ -1559,7 +1560,7 @@ export function buildThreadbearTools(
                 .array(
                   z.object({
                     title: z.string().min(1).describe('What the button does, short: "Open login page", "See the preview".'),
-                    url: z.string().min(1).describe('A web page (https://…), a file or folder on this Mac (an absolute or ~ path), or review:<id> to open one of this thread\'s show_options reviews.'),
+                    url: z.string().min(1).describe('A web page (https://…), a file or folder on this Mac (an absolute or ~ path), review:<id> to open one of this thread\'s show_options reviews, or thread:<id> for another thread, when the step is done there.'),
                   }),
                 )
                 .max(3)
@@ -1631,6 +1632,7 @@ export function buildThreadbearTools(
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
         if (needs === 'you' && offersToTakeItBack(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         // Asking Mike to Restart to Update means wanting to know when he
         // has, to check the change in the running app: the same as
         // wait_for_app_restart, unless that was already asked for.

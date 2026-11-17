@@ -332,7 +332,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
 
       <div className="dock">
         {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} /> : null}
-        <Dock token={token} thread={t} lastSeq={lastSeq} onSent={setPending} onArchive={() => void act({ archive: true })} />
+        <Dock token={token} thread={t} lastSeq={lastSeq} onSent={setPending} onArchive={() => void act({ archive: true })} linkTo={linkTo} />
       </div>
     </article>
   );
@@ -373,7 +373,7 @@ function bookedWhen(at: string): string {
   return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
-function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string; thread: Row; lastSeq?: number; onSent: (id: Id<'commands'>) => void; onArchive: () => void }) {
+function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token: string; thread: Row; lastSeq?: number; onSent: (id: Id<'commands'>) => void; onArchive: () => void; linkTo: (id: string) => string }) {
   const send = useMutation(api.phone.send);
   const interrupt = useMutation(api.phone.interrupt);
   const [text, setText] = useState('');
@@ -433,11 +433,27 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
           </div>
           {a.links?.length ? (
             <div className="ask-links">
-              {a.links.map((l) => (
-                <OutLink key={l.url} className="btn primary" href={l.url}>
-                  {l.title} ↗
-                </OutLink>
-              ))}
+              {a.links.map((l) =>
+                // An ask whose step is in another thread links it as
+                // thread:<id>: opened here, as the Mac and the phone do.
+                l.url.startsWith('thread:') ? (
+                  <a
+                    key={l.url}
+                    className="btn primary"
+                    href={linkTo(l.url.slice('thread:'.length))}
+                    onClick={(ev) => {
+                      ev.preventDefault();
+                      go(linkTo(l.url.slice('thread:'.length)));
+                    }}
+                  >
+                    {l.title}
+                  </a>
+                ) : (
+                  <OutLink key={l.url} className="btn primary" href={l.url}>
+                    {l.title} ↗
+                  </OutLink>
+                ),
+              )}
             </div>
           ) : null}
           {choices(a).length ? (

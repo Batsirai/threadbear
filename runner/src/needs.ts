@@ -29,8 +29,11 @@ const MAX_NEXT_CHARS = 120;
 // Web pages, paths on this Mac, and review:<id>, which opens one of the
 // thread's show_options reviews (Mike, 30 Oct: "Watch A" opened the video
 // but nothing opened the stills to compare). Anything else (javascript:,
-// other schemes) isn't something a button should open.
-const LINK_URL = /^(?:https?:\/\/|file:\/\/|\/|~\/|review:[\w-]+$)/i;
+// other schemes) isn't something a button should open. And thread:<id>, for
+// an ask whose step is in another thread: on 17 Nov one said "Pick a
+// direction ... in its own thread" with nothing to tap, and the phone had no
+// way there.
+const LINK_URL = /^(?:https?:\/\/|file:\/\/|\/|~\/|(?:review|thread):[\w-]+$)/i;
 
 // Which form of end_turn a call was written for, when it shows. A Codex
 // thread's tool list is fixed when it starts, so its agent may have the form
@@ -488,6 +491,27 @@ export function tryFirstNudge(): string {
   return `${TRY_FIRST_NUDGE} If you could try that step and haven't, try it now, then call end_turn again with whatever is left. If you already tried, or it really needs the user (a password or code, a payment, something physical, an approval that is theirs to give), call end_turn again as you were, and say in your reply what you tried or why it needs them: this note comes once a turn.`;
 }
 
+// An ask about another thread with no answers and no link: "Pick a
+// direction for the app in its own thread" (17 Nov 2026) was a numbered line
+// on the phone with nothing to press and no way to that thread. A bare ask
+// is otherwise fine (the answer is typed), so only one naming a thread is
+// held up, once a turn, as the agent may mean it.
+export const DEAD_END_NUDGE = 'Not ended: an ask on this card points at another thread but has no link to it, so the user has no way there from the card.';
+export function deadEndNudge(asks: Ask[]): string {
+  const which = asks.filter(isDeadEnd).map((a) => `"${cutSafely(a.action, 80)}"`).join(', ');
+  return `${DEAD_END_NUDGE} (${which}). Add a link to it, { title: "Open its thread", url: "thread:<its id from list_threads>" }, or leave it off this card and let that thread ask. If it isn't about another thread, call end_turn again as you were: this note comes once a turn.`;
+}
+const NAMES_A_THREAD = /\bthreads?\b/i;
+function isDeadEnd(a: Ask): boolean {
+  return !a.options?.length && !a.links?.length && NAMES_A_THREAD.test(`${a.action} ${a.why ?? ''}`);
+}
+export function hasDeadEnd(asks: Ask[]): boolean {
+  return asks.some(isDeadEnd);
+}
+export function deadEndNudged(events: PersistedEvent[]): boolean {
+  return nudgedSince(events, DEAD_END_NUDGE);
+}
+
 // An answer that hands a step back to the agent. By its label, as the wording
 // asks for these words and agents keep to them: "Can you do it?", "Can you do
 // it in Chrome?", "Connected, you do it", "Do it for me later".
@@ -498,6 +522,11 @@ export function offersToTakeItBack(asks: Ask[]): boolean {
 
 // Whether this turn has had the note (connectors.ts, nudgedThisTurn, is the same).
 export function triedFirstNudged(events: PersistedEvent[]): boolean {
+  return nudgedSince(events, TRY_FIRST_NUDGE);
+}
+
+// Whether a note starting `note` has been sent since this turn began.
+function nudgedSince(events: PersistedEvent[], note: string): boolean {
   let start = 0;
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].type === 'turn.started') {
@@ -505,7 +534,7 @@ export function triedFirstNudged(events: PersistedEvent[]): boolean {
       break;
     }
   }
-  return events.slice(start).some((e) => e.type === 'tool.result' && typeof e.text === 'string' && e.text.startsWith(TRY_FIRST_NUDGE));
+  return events.slice(start).some((e) => e.type === 'tool.result' && typeof e.text === 'string' && e.text.startsWith(note));
 }
 
 // A change only Mike can judge, left as a soft line at the end of a done
@@ -525,7 +554,7 @@ const END_TURN_ASKS =
   ONLY_THEY_CAN_TRY +
   'The asks are your "What I need from you" list: the user reads and answers them in a card under your message, each drawn as one paragraph of message text, its action then its why, with its buttons under it. So don\'t also list them in your message. ' +
   'Write each ask the way you would in that list, so it makes sense on its own to someone who has forgotten everything: action is its first sentence, the thing to do or the question ("Next time you leave the room, take your phone and leave the laptop idle on power."); why carries on the same paragraph with what it is about and what you want back, in a sentence or two ("It should lock within a minute of you going. Tell me whether it did, and I\'ll tune the Bluetooth cutoff."). Say where in it when it matters (System Settings › Bluetooth), and name things rather than places (not "Slack #channel", but "Your Slack draft to Emily names the automation guy Hayden; he is Pete"). When one ask is several questions or choices, end its why with them as a short markdown list, one per line, rather than running them together. ' +
-  'Give links whenever there is somewhere to go to do it or judge it: the page to log in on, the Slack message (its permalink), the PR, the preview, the file or screenshot to look at, the project to open (a path opens in its own app, e.g. a .key file in Keynote), or review:<id> for a show_options review in this thread (its window, to compare and pick). Each is a button on the ask, so title it as the action ("Open login page", "Open the Slack message", "Open Short 4 in Tandem"). ' +
+  'Give links whenever there is somewhere to go to do it or judge it: the page to log in on, the Slack message (its permalink), the PR, the preview, the file or screenshot to look at, the project to open (a path opens in its own app, e.g. a .key file in Keynote), review:<id> for a show_options review in this thread (its window, to compare and pick), or thread:<id> when the step is in another thread (that thread, to answer it there). Each is a button on the ask, so title it as the action ("Open login page", "Open the Slack message", "Open Short 4 in Tandem"). ' +
   // Mike, 29 Oct: an ask said "Look at the screenshots in Highlights" in
   // plain words over a "See the tab" button for the same screenshot.
   'The paragraph is markdown, so where action or why names the thing a link opens, make those words a link to the same url ("Look at [the pairing screenshot](/Users/you/shots/pair.png) and say whether to land it."): the user can hover them for a peek or click them, and the button stays as the next step. ' +

@@ -278,6 +278,9 @@ fn an_asks_link_opens_a_page_a_file_or_a_review_and_nothing_else() {
     assert_eq!(link("/tmp/shot.png").target("").as_deref(), Some("/tmp/shot.png"));
     assert_eq!(link("review:abc123").target("").as_deref(), Some("review:abc123"));
     assert_eq!(link("review:").target(""), None);
+    // An ask whose step is in another thread opens that thread.
+    assert_eq!(link("thread:335f6ddb").target("").as_deref(), Some("thread:335f6ddb"));
+    assert_eq!(link("thread:").target(""), None);
     assert_eq!(link("javascript:alert(1)").target(""), None);
     assert_eq!(link("notes.md").target("/Users/m"), None);
 }

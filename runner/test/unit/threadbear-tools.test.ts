@@ -10,7 +10,7 @@ import { Relay, type RelayRow } from '../../src/relay.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { RemoteThreads } from '../../src/thread-index.ts';
-import { needsFromTool } from '../../src/needs.ts';
+import { hasDeadEnd, needsFromTool } from '../../src/needs.ts';
 import { CodexTools, type ToolDefinition } from '../../src/adapters/codex/tools.ts';
 import { toolTitle } from '../../src/tools.ts';
 import { ThreadRouter } from '../../src/handover.ts';
@@ -1238,6 +1238,40 @@ test('a reply that came only as a summary: end_turn asks for it again, and the r
   const read = await call('read_thread', { threadId: thread.id });
   assert.match(read.text, /Step 2/);
   assert.doesNotMatch(read.text, /resent the full/);
+});
+
+test('end_turn asks once about an ask pointing at another thread with no link, and takes a thread: link', async () => {
+  // 17 Nov 2026: "Pick a direction ... in its own thread", no answers, no
+  // link, and on the phone no way to that thread.
+  const deadEnd = { asks: [{ question: 'Is it lit?', options: [{ label: 'Yes' }, { label: 'No' }] }, { question: 'Pick a direction for the app in its own thread.' }] };
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  s.text('m1', 'Checked the lights.');
+  const { call } = tools(h, thread.id, undefined, () => true);
+  toolCall(s, 'e1', END_TURN, deadEnd);
+  const refused = await call('end_turn', deadEnd);
+  assert.equal(refused.error, true);
+  assert.match(refused.text, /^Not ended: an ask on this card points at another thread/);
+  assert.match(refused.text, /Pick a direction/);
+  assert.doesNotMatch(refused.text, /Is it lit/);
+  assert.match(refused.text, /thread:<its id/);
+  // A bare ask about anything else is typed into, and never held up.
+  assert.equal(hasDeadEnd(needsFromTool({ asks: [{ question: 'What size is the gate?' }] })?.asks ?? []), false);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: false, text: refused.text, truncated: false, images: [] } });
+  // Once a turn: as it was, it's taken.
+  s.text('m2', 'It needs a typed answer.');
+  toolCall(s, 'e2', END_TURN, deadEnd);
+  assert.equal((await call('end_turn', deadEnd)).error, false);
+
+  // With a link to the thread it's never held up, and the link is kept.
+  const linked = { asks: [{ question: 'Pick a direction for the app in its own thread.', links: [{ title: 'Open its thread', url: 'thread:4355fbae' }] }] };
+  assert.deepEqual(needsFromTool(linked)?.asks?.[0].links, [{ title: 'Open its thread', url: 'thread:4355fbae' }]);
+  const other = makeHarness();
+  const o = start(other);
+  o.s.text('m1', 'Checked the lights.');
+  toolCall(o.s, 'e1', END_TURN, linked);
+  const fine = await tools(other, o.thread.id, undefined, () => true).call('end_turn', linked);
+  assert.equal(fine.error, false, fine.text);
 });
 
 test('end_turn asks once for a try at a step a card offers to take back, in both forms', async () => {

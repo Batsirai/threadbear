@@ -308,7 +308,8 @@ impl AskLink {
     }
 
     /// What clicking it opens (`AskLink.target`): a web page, a file with `~`
-    /// expanded against `home`, or a review; None for anything else, which
+    /// expanded against `home`, a review, or another thread (`thread:<id>`,
+    /// for an ask whose step is over there); None for anything else, which
     /// isn't drawn.
     pub fn target(&self, home: &str) -> Option<String> {
         let url = self.url.trim();
@@ -321,7 +322,7 @@ impl AskLink {
         let (scheme, rest) = url.split_once(':')?;
         match scheme.to_ascii_lowercase().as_str() {
             "http" | "https" | "file" => Some(url.to_owned()),
-            "review" if !rest.trim().is_empty() => Some(url.to_owned()),
+            "review" | "thread" if !rest.trim().is_empty() => Some(url.to_owned()),
             _ => None,
         }
     }

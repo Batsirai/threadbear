@@ -16,6 +16,9 @@ struct AsksCard: View {
     /// new card clears.
     @State private var pickTaps = 0
     @State private var sendTaps = 0
+    /// The thread's own link handling, so a `thread:<id>` link (an ask whose
+    /// step is in another thread) opens that thread rather than nothing.
+    @Environment(\.threadLink) private var threadLink
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -91,6 +94,7 @@ struct AsksCard: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
+                .environment(\.openURL, OpenURLAction { threadLink($0, nil) })
             }
         }
     }
