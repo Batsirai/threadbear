@@ -86,6 +86,21 @@ export function needsFromTool(input: unknown): Needs | undefined {
     if (options.length) {
       ask.options = options;
       if (answers.some((o) => o.does)) ask.optionNotes = answers.map((o) => o.does ?? '');
+      else {
+        // The older form told agents to end why with the choices as a list,
+        // so they wrote each option twice: a bullet in the text ("Followers
+        // only (simplest)", "... (my pick)") and a bare button. Mike, 17 Nov
+        // 2026 (thread 95e13589): the card didn't look like the usual one,
+        // with what each does under its button and the pick marked. A list
+        // that matches the buttons one for one becomes their notes.
+        const field = ask.why !== undefined ? 'why' : 'action';
+        const moved = optionNotesFromList(ask[field] ?? '', options);
+        if (moved) {
+          ask.optionNotes = moved.notes;
+          if (moved.text) ask[field] = moved.text;
+          else if (field === 'why') delete ask.why;
+        }
+      }
       // Only an index that points at one of them; anything else is no pick.
       const s = r.suggested;
       if (typeof s === 'number' && Number.isInteger(s) && s >= 0 && s < options.length) ask.suggested = s;
@@ -97,6 +112,49 @@ export function needsFromTool(input: unknown): Needs | undefined {
   }
   if (o.needs === undefined) return asks.length ? { needs: 'you', asks } : done(o.next);
   return asks.length ? { needs: 'you', asks } : { needs: 'you' };
+}
+
+// Words worth matching on: lower case, three letters or more, so "a", "an"
+// and "to" don't tie a bullet to the wrong button.
+function matchWords(s: string): Set<string> {
+  return new Set(s.toLowerCase().match(/[a-z0-9']{3,}/g) ?? []);
+}
+
+// A pick said in words, which the card marks itself from suggested.
+const PICK_NOTE = /\s*\((?:my pick|my recommendation|recommended|suggested)\)\s*/gi;
+
+// The trailing markdown list in an ask's text, when it has one line per
+// option and each line shares words with a different option: the text
+// without it, and the lines in the options' order as their notes. Undefined
+// when it isn't clearly the options again (several questions, a list of
+// steps), so that list stays where the agent put it.
+export function optionNotesFromList(text: string, options: string[]): { text: string; notes: string[] } | undefined {
+  const lines = text.replace(/\s+$/, '').split('\n');
+  let start = lines.length;
+  while (start > 0 && /^\s*(?:[-*•]|\d+[.)])\s+\S/.test(lines[start - 1])) start--;
+  const items = lines.slice(start).map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim());
+  if (items.length !== options.length || items.length < 2) return undefined;
+  const optionWords = options.map(matchWords);
+  const itemWords = items.map((i) => matchWords(i.replace(PICK_NOTE, ' ')));
+  const pairs: { item: number; option: number; score: number }[] = [];
+  itemWords.forEach((w, item) =>
+    optionWords.forEach((o, option) => {
+      const score = [...o].filter((x) => w.has(x)).length;
+      if (score > 0) pairs.push({ item, option, score });
+    }),
+  );
+  // Best overlaps first; every option needs a line of its own, or it's not
+  // clearly a restatement.
+  pairs.sort((a, b) => b.score - a.score);
+  const notes: (string | undefined)[] = options.map(() => undefined);
+  const used = new Set<number>();
+  for (const p of pairs) {
+    if (notes[p.option] !== undefined || used.has(p.item)) continue;
+    notes[p.option] = items[p.item].replace(PICK_NOTE, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_SHORT);
+    used.add(p.item);
+  }
+  if (notes.some((n) => !n)) return undefined;
+  return { text: lines.slice(0, start).join('\n').trim(), notes: notes as string[] };
 }
 
 // A turn that needs nothing, with any follow-ups it suggested: the done
@@ -581,7 +639,7 @@ const END_TURN_ASKS =
   'needs "you" when it does: an approval, a decision, a key, something to look at, a question. Give one ask per thing they have to do, most blocking first. ' +
   ONLY_THEY_CAN_TRY +
   'The asks are your "What I need from you" list: the user reads and answers them in a card under your message, each drawn as one paragraph of message text, its action then its why, with its buttons under it. So don\'t also list them in your message. ' +
-  'Write each ask the way you would in that list, so it makes sense on its own to someone who has forgotten everything: action is its first sentence, the thing to do or the question ("Next time you leave the room, take your phone and leave the laptop idle on power."); why carries on the same paragraph with what it is about and what you want back, in a sentence or two ("It should lock within a minute of you going. Tell me whether it did, and I\'ll tune the Bluetooth cutoff."). Say where in it when it matters (System Settings › Bluetooth), and name things rather than places (not "Slack #channel", but "Your Slack draft to Emily names the automation guy Hayden; he is Pete"). When one ask is several questions or choices, end its why with them as a short markdown list, one per line, rather than running them together. ' +
+  'Write each ask the way you would in that list, so it makes sense on its own to someone who has forgotten everything: action is its first sentence, the thing to do or the question ("Next time you leave the room, take your phone and leave the laptop idle on power."); why carries on the same paragraph with what it is about and what you want back, in a sentence or two ("It should lock within a minute of you going. Tell me whether it did, and I\'ll tune the Bluetooth cutoff."). Say where in it when it matters (System Settings › Bluetooth), and name things rather than places (not "Slack #channel", but "Your Slack draft to Emily names the automation guy Hayden; he is Pete"). When one ask is several questions, end its why with them as a short markdown list, one per line, rather than running them together; choices go in options, not the list, with suggested for your pick. ' +
   'Give links whenever there is somewhere to go to do it or judge it: the page to log in on, the Slack message (its permalink), the PR, the preview, the file or screenshot to look at, the project to open (a path opens in its own app, e.g. a .key file in Keynote), review:<id> for a show_options review in this thread (its window, to compare and pick), or thread:<id> when the step is in another thread (that thread, to answer it there). Each is a button on the ask, so title it as the action ("Open login page", "Open the Slack message", "Open Short 4 in Tandem"). ' +
   // Mike, 29 Oct: an ask said "Look at the screenshots in Highlights" in
   // plain words over a "See the tab" button for the same screenshot.

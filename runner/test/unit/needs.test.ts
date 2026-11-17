@@ -82,6 +82,31 @@ test('end_turn input: a decision keeps its why, options and a valid pick', () =>
   assert.equal(needsFromTool({ needs: 'you', asks: [{ action: 'a', options: Array.from({ length: 9 }, (_, i) => `o${i}`) }] })!.asks![0].options!.length, 6);
 });
 
+// Thread 95e13589, 17 Nov 2026: an older-form ask listed its two options in
+// why, in the other order, with "(my pick)" on one, as well as giving them as
+// buttons, and the card showed the list instead of notes under the buttons.
+test('end_turn input: a why that lists the options again becomes their notes', () => {
+  const why = 'Right now a release only reaches followers. Should an admin be able to announce it to everyone?\n- Followers only (simplest)\n- Followers by default, with an "announce to everyone" switch per release (my pick)';
+  assert.deepEqual(needsFromTool({ needs: 'you', asks: [{ action: 'Decide who sees a release.', why, options: ['Add an announce switch', 'Followers only'], suggested: 0 }] })!.asks, [
+    {
+      action: 'Decide who sees a release.',
+      why: 'Right now a release only reaches followers. Should an admin be able to announce it to everyone?',
+      options: ['Add an announce switch', 'Followers only'],
+      optionNotes: ['Followers by default, with an "announce to everyone" switch per release', 'Followers only (simplest)'],
+      suggested: 0,
+    },
+  ]);
+  // Several questions, or a list that doesn't match the buttons one for
+  // one, stays in the text.
+  const questions = 'Two things:\n- Which region?\n- How many replicas?';
+  assert.equal(needsFromTool({ needs: 'you', asks: [{ action: 'a', why: questions, options: ['Sydney', 'Tokyo'] }] })!.asks![0].why, questions);
+  const three = 'Pick one:\n- Merge it\n- Test it\n- Close it';
+  assert.equal(needsFromTool({ needs: 'you', asks: [{ action: 'a', why: three, options: ['Merge', 'Test'] }] })!.asks![0].why, three);
+  // Notes the agent gave itself win.
+  const own = needsFromTool({ needs: 'you', asks: [{ question: 'Merge it?\n- Merge now\n- Test first', options: [{ label: 'Merge', does: 'I merge' }, { label: 'Test' }] }] })!.asks![0];
+  assert.deepEqual(own.optionNotes, ['I merge', '']);
+});
+
 test('end_turn input: links to go and do the thing, web or local, a few at most', () => {
   const asks = needsFromTool({
     needs: 'you',
