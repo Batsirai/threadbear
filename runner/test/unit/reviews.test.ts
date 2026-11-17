@@ -533,3 +533,30 @@ test('a queued message only sends the thread\'s own pictures', async () => {
   const logged=h.runner.events(thread.id,{limit:1000}).events.find((e:any)=>e.type==='user.message'&&e.turnId==='q-own') as any;
   assert.equal(logged.images.length,2,'the transcript shows what went');
 });
+
+// Codex's review of that, 17 Nov: a retry after the session went re-sent a
+// logged message's pictures unchecked; a list that isn't one stalled the
+// queue for good; and a picture left out moved the next one onto its marker.
+test('every send to the CLI checks its pictures, keeps the markers right, and a bad list never stalls the queue', async () => {
+  const {h,thread,source}=fixture();
+  h.adapter.last.result(); await tick();
+  const st=(h.runner as any).threads.get(thread.id);
+  const media=h.store.mediaDir(thread.id);
+  fs.mkdirSync(media,{recursive:true});
+  const own=path.join(media,'own.png');
+  fs.copyFileSync(source,own);
+  // Straight to the session, as the retry after a lost session sends.
+  const before=h.adapter.last.sent.length;
+  st.rt.session.send({id:'direct',text:'Before [Picture 1], after [Picture 2]',images:[{path:source,mediaType:'image/png'},{path:own,mediaType:'image/png'}]});
+  const direct=h.adapter.last.sent[before] as any;
+  assert.deepEqual(direct.images.map((i:any)=>path.basename(i.path)),['own.png']);
+  assert.equal(direct.text,'Before [Picture 1 unavailable], after [Picture 1]');
+  h.adapter.last.result(); await tick();
+  // A queued message whose images aren't a list goes, with none.
+  st.rec.queue.push({turnId:'q-bad',text:'hello',images:{}} as any);
+  st.rec.queue.push({turnId:'q-next',text:'after it',images:[]});
+  h.runner.kickQueue(st); await tick();
+  const sent=h.adapter.last.sent.find((m:any)=>m.id==='q-bad') as any;
+  assert.ok(sent,'it went rather than stalling');
+  assert.deepEqual(sent.images,[]);
+});

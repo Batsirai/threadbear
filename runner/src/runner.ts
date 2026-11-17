@@ -1962,14 +1962,10 @@ export class Runner {
     // answer), so anything else came from a record another runner wrote (a
     // moved thread's queue, which recovery steps that throw can leave
     // unchecked) and could name any file here (Codex's review, 17 Nov).
-    const own = (msg.images ?? []).flatMap((ref) => {
-      const file = this.ownPicture(st, ref);
-      return file ? [{ ...ref, path: file }] : [];
-    });
-    if (own.length !== (msg.images ?? []).length) {
-      this.log.warn('left out queued pictures that are not the thread\'s own', { threadId: rec.id, turnId: msg.turnId, left: (msg.images ?? []).length - own.length });
-      msg = { ...msg, images: own };
-    }
+    // Here so the transcript shows what goes; every send to the CLI checks
+    // again (startSession), which covers the paths that don't come by here.
+    const checked = this.ownInput(st, { text: msg.text, images: msg.images });
+    if (checked.text !== msg.text || checked.images !== msg.images) msg = { ...msg, text: checked.text, images: checked.images };
     // New work (a review's answer comes this way without sendTo).
     delete rec.finished;
     // A review can be replayed after a failed turn.started append. Its
@@ -2280,6 +2276,13 @@ export class Runner {
       },
       sink,
     );
+    // Every input to the CLI (a turn, a steer, a retry after the session
+    // went) sends only the thread's own pictures (ownInput), whichever path
+    // it took (Codex's review, 17 Nov: a retry re-sent a logged message's
+    // pictures as they were).
+    const session = rt.session;
+    const send = session.send.bind(session);
+    session.send = (input) => send(this.ownInput(st, input));
     if (claude && !claude.trusted) this.noteClaudeSkipped(st, claude);
     this.log.info('session started', { threadId: rec.id, resume, accountId: account.id, ...(rec.resumeAt ? { resumeAt: rec.resumeAt } : {}) });
     this.markDirty(st);
@@ -3825,6 +3828,31 @@ export class Runner {
       }
     }
     return { id: msg.turnId, text: '[Earlier messages stopped before a reply. Answer them along with the latest message below.]\n\n' + parts.join('\n\n'), images };
+  }
+
+  // The input with only the thread's own pictures (ownPicture), at their
+  // real paths. Each [Picture N] in the words follows its picture to its new
+  // number, or says "[Picture N unavailable]" for one left out, as the
+  // interrupted-messages merge does; a list that isn't one is none. The same
+  // input back when nothing changed.
+  ownInput<T extends { text: string; images: ImageRef[] }>(st: ThreadState, input: T): T {
+    const refs: unknown[] = Array.isArray(input.images) ? input.images : [];
+    const numbers: (number | undefined)[] = [];
+    const images: ImageRef[] = [];
+    for (const ref of refs) {
+      const file = this.ownPicture(st, ref as ImageRef);
+      if (file) images.push({ ...(ref as ImageRef), path: file });
+      numbers.push(file ? images.length : undefined);
+    }
+    const same = Array.isArray(input.images) && images.length === refs.length && images.every((img, i) => img.path === (refs[i] as ImageRef).path);
+    if (same) return input;
+    if (images.length !== refs.length) this.log.warn('left out pictures that are not the thread\'s own', { threadId: st.rec.id, left: refs.length - images.length });
+    const text = typeof input.text === 'string' ? input.text.replace(/\[Picture (\d{1,3})\]/g, (marker, n) => {
+      const i = Number(n) - 1;
+      if (i < 0 || i >= refs.length) return marker;
+      return numbers[i] ? `[Picture ${numbers[i]}]` : `[Picture ${n} unavailable]`;
+    }) : input.text;
+    return { ...input, text, images };
   }
 
   // A picture's real path if it's this thread's own, else undefined: a
