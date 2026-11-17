@@ -55,6 +55,22 @@ export const rearmTimer = machines.internalMutation({
   },
 });
 
+/**
+ * Delivers again every timer whose job failed: the deploy runs it after a
+ * stepping stone (stepping.ts), as a timer due while its machine was off
+ * found nobody to deliver it to. One that fails again for a bug of its own
+ * stays failed. `npx convex run machines:rearmFailed`
+ */
+export const rearmFailed = machines.internalMutation({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const failed = await machines.failedTimers(ctx, { limit: 200 });
+    for (const t of failed) await machines.rearmTimer(ctx, t);
+    return failed.length;
+  },
+});
+
 // History is a fact per step, kept by the component. Commands are gone a day
 // after they finish (sync.ts pruneOld), so their history goes after two weeks.
 // The cron, daily; a batch a run, again straight away while there's more.

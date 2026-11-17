@@ -40,7 +40,18 @@ export class ConvexError extends Error {
   }
 }
 
-const fnRef = (prefix: string[]): unknown => new Proxy(() => prefix.join('.'), { get: (_, p) => (p === Symbol.toPrimitive ? () => prefix.join('.') : fnRef([...prefix, String(p)])) });
+// A function reference, as internal.x.y: its name as Convex gives it
+// (getFunctionName: "x:y", without "internal"/"api"), for the state
+// machines library's lookups.
+const FUNCTION_NAME = Symbol.for('functionName');
+const fnRef = (prefix: string[]): unknown =>
+  new Proxy(() => prefix.join('.'), {
+    get: (_, p) => {
+      if (p === Symbol.toPrimitive) return () => prefix.join('.');
+      if (p === FUNCTION_NAME) return `${prefix.slice(1, -1).join('/')}:${prefix.at(-1)}`;
+      return fnRef([...prefix, String(p)]);
+    },
+  });
 
 // defineTable keeps each table's indexes, for withIndex's order, and its
 // fields (an object of validators, or one validator), for checking writes.
@@ -298,11 +309,13 @@ export function memoryBackend(root = CONVEX) {
   // Every job by id, as _scheduled_functions has them, for the library's
   // timers: a timer is cancelled only while it's pending. runAt's go in
   // `timers` (not `scheduled`, which tests read as runAfter's), due at `at`.
-  const jobs = new Map<string, { _id: string; name: string; args: unknown; scheduledTime: number; state: { kind: 'pending' | 'canceled' | 'success' } }>();
+  const jobs = new Map<string, { _id: string; name: string; args: unknown[]; scheduledTime: number; state: { kind: 'pending' | 'canceled' | 'success' | 'failed' } }>();
   const timers: { id: string; fn: string; args: any; at: number }[] = [];
   const job = (fn: unknown, args: unknown, at: number) => {
     const id = `_scheduled_functions:${++next}`;
-    jobs.set(id, { _id: id, name: String(fn), args, scheduledTime: at, state: { kind: 'pending' } });
+    const name = (fn as Record<symbol, unknown>)[FUNCTION_NAME];
+    // As _scheduled_functions keeps them: the function's name, its args in an array.
+    jobs.set(id, { _id: id, name: typeof name === 'string' ? name : String(fn), args: [args], scheduledTime: at, state: { kind: 'pending' } });
     return id;
   };
   // The history component's facts (the library's one call to it per step).
@@ -347,6 +360,11 @@ export function memoryBackend(root = CONVEX) {
     timerRan: (id: string) => {
       const j = jobs.get(id);
       if (j) j.state = { kind: 'success' };
+    },
+    // A timer whose delivery threw, as Convex marks the job.
+    timerFailed: (id: string) => {
+      const j = jobs.get(id);
+      if (j) j.state = { kind: 'failed' } as never;
     },
     reads: () => counter.reads,
     bytesRead: () => counter.bytes,

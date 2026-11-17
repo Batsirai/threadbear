@@ -331,3 +331,18 @@ test("the Machines page's queries answer only one of this deployment's tokens", 
   // Only a machine's own tables: not tokens, keys or anything else.
   await assert.rejects(call(s.ctx, viewer.rows, { token: TOKEN, table: 'tokens' }), /isn't a machine's table/);
 });
+
+// Codex's review: a timer due while the deploy's stepping stone had the
+// machine off failed its job, and nothing delivered it again.
+test('timers that failed while the machine was off are delivered again after the deploy', async () => {
+  const s = await setup();
+  const id = await s.send();
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: id });
+  const lease = s.pendingTimers().find((t) => t.args.id === id && t.args.event === 'LEASE_LAPSED')!;
+  s.timerFailed(lease.id);
+  assert.deepEqual((await call(s.ctx, machinesModule.failedTimers, {})).map((t: { event: string }) => t.event), ['LEASE_LAPSED']);
+  assert.equal(await call(s.ctx, machinesModule.rearmFailed, {}), 1);
+  await fireTimers(s, Date.now() + sync.TAKEN_LEASE_MS + 1000);
+  assert.equal(s.row(id).commandState.kind, 'lapsed');
+  assert.deepEqual(await call(s.ctx, machinesModule.failedTimers, {}), []);
+});
