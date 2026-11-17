@@ -749,7 +749,10 @@ export type CodexTurnUsage = {
 // pickedIds: every option picked, in the review's order, with pickedId the
 // first of them for clients from before several could be picked (4 Nov).
 // reply: Mike's own words on the whole review. none: none of them will do.
-export type ReviewDraft = { pickedId?: string; pickedIds?: string[]; notes: Record<string, string>; reply?: string; none?: true };
+// images: pictures pasted into the reply, each placed by a [Picture N] marker
+// in reply, as a message's are (Mike, 17 Nov: a picture pasted in the review
+// window went in as its file path).
+export type ReviewDraft = { pickedId?: string; pickedIds?: string[]; notes: Record<string, string>; reply?: string; images?: ImageRef[]; none?: true };
 
 // One picture of an option: its first, or another screen or state of it.
 // media: a video (video/mp4, video/quicktime) or page (text/html) the

@@ -850,7 +850,9 @@ a paragraph.
 // are two or more; pickedId is always the first pick, for older clients.
 // Clients send pickedIds (it wins over pickedId); a client that sends only
 // pickedId still works. none: none of them will do, never with picks.
-type ReviewDraft = { pickedId?: string, pickedIds?: string[], notes: Record<string, string>, reply?: string, none?: true }
+// images: pictures pasted into the reply, each placed by a [Picture N] in
+// reply, as a message's are (see Reply pictures, below).
+type ReviewDraft = { pickedId?: string, pickedIds?: string[], notes: Record<string, string>, reply?: string, images?: ImageRef[], none?: true }
 // media: a video (video/mp4, video/quicktime) or an HTML page (text/html)
 // the window plays or shows in place of image, which is then its still.
 type ReviewShot = { title?: string, image: ImageRef, media?: ImageRef }
@@ -910,7 +912,7 @@ shots each and 40 in all, each image at most 25 MB, video 200 MB and page
 IDs and titles, title/note at most 200/4000 characters, `url` http or https.
 Draft notes are at most 4000 characters per option and the reply 8000;
 unknown option IDs, picks of reference options and `none` with picks are
-invalid. A response needs a pick, `none`, a reply or a nonblank note.
+invalid. A response needs a pick, `none`, a reply, a picture or a nonblank note.
 Saving an empty draft is allowed. The agent's message reads `Picked A.
 <title>.` or `Picked A + D. <title> + <title>.`, or `Picked none of them.`,
 then the reply as written, then any notes. With a pick, a last paragraph
@@ -919,6 +921,19 @@ names the pickable options passed over (`Passed over: B. <title>; C.
 later offer one as a new follow-up. The Mac, phone and GPUI apps read that
 wording back for Mike's bubble (`ReviewAnswer`), leaving the passed-over
 paragraph out, so change them with it.
+
+Reply pictures: a picture pasted or dropped in the window's reply box is a
+chip, as in the thread's box, imported with `media.import` and sent in the
+draft's `images` with `[Picture N]` markers in `reply` (Mike, 17 Nov 2026:
+the box was plain text, so a pasted screenshot went in as its file path).
+At most 20. Save and respond take only pictures in the runner's `inbox/`
+(what `media.import` made) or ones already kept with the review, never a
+link, and copy each into `media/<thread>/reviews/<id>/reply/` under a name
+from its contents, so a draft outlives the inbox's week, saving the same
+picture again keeps one copy, and a retried answer naming the inbox copy
+is the same answer. The saved draft names those copies, and the window
+takes them in place of its own. Pictures alone are an answer. The agent's
+message carries them as its `images`.
 
 Every change persists a `review.updated` event with `{ review: DesignReview }`.
 An option's `url` is an http or https page; the Mac app drops any other

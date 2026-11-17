@@ -81,6 +81,21 @@ Feature: Design reviews
     And I open the review
     Then the review has "B" ticked and the reply "Bigger, please. That one."
 
+  # Mike, 17 Nov: a screenshot pasted in the reply went in as its file path,
+  # where the thread's box makes it a chip, so the agent never saw it.
+  @review.picks @swift-pending @windows-pending @linux-pending
+  Scenario: A picture pasted in the reply is a chip and goes with the answer
+    When I open the review
+    And I tick "C" in the review
+    And I paste "Is it cut off at the bottom? " in the review with ⌘V
+    And I paste a picture in the review with ⌘V
+    Then the review's reply holds 1 picture, and says "Is it cut off at the bottom? [Picture 1]"
+    When I press Send in the review
+    Then the review window has closed
+    And the transcript shows my message "Review: Account picker"
+    When I press "Open review"
+    Then the review window shows it sent "Is it cut off at the bottom? [Picture 1]" with 1 picture
+
   @review.picks
   Scenario: Sending answers the agent, and the review can't be changed after
     When I open the review

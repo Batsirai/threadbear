@@ -349,6 +349,10 @@ pub struct ReviewDraft {
     pub picked_ids: Vec<String>,
     pub notes: BTreeMap<String, String>,
     pub reply: Option<String>,
+    /// Pictures pasted into the reply, each placed by a `[Picture N]` in
+    /// `reply`, as a message's are (Mike, 17 Nov: one pasted in the review
+    /// window went in as its file path).
+    pub images: Vec<ImageRef>,
     pub none: bool,
 }
 
@@ -376,7 +380,9 @@ impl ReviewDraft {
             .unwrap_or_default();
         let mut picked_ids = picked_ids;
         picked_ids.truncate(REVIEW_OPTIONS_MAX);
-        Some(ReviewDraft { picked_ids, notes, reply: string(c, "reply").map(|r| review_text(r, REVIEW_REPLY_MAX)), none: boolean(c, "none").unwrap_or(false) })
+        // A picture that doesn't read is left out rather than the draft.
+        let images = c.get("images").and_then(Value::as_array).map(|list| list.iter().take(REVIEW_REPLY_IMAGES_MAX).filter_map(ImageRef::decode).collect()).unwrap_or_default();
+        Some(ReviewDraft { picked_ids, notes, reply: string(c, "reply").map(|r| review_text(r, REVIEW_REPLY_MAX)), images, none: boolean(c, "none").unwrap_or(false) })
     }
 }
 
@@ -423,6 +429,8 @@ pub const REVIEW_OPTIONS_MAX: usize = 12;
 /// An option's shots (maxReviewShots) and a draft's reply (reviewDraft).
 pub const REVIEW_SHOTS_MAX: usize = 8;
 pub const REVIEW_REPLY_MAX: usize = 8000;
+/// The most pictures a reply takes (runner/src/reviews.ts maxReplyImages).
+pub const REVIEW_REPLY_IMAGES_MAX: usize = 20;
 
 fn review_text(text: String, max: usize) -> String {
     match text.char_indices().nth(max) {

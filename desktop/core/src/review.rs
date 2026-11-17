@@ -72,7 +72,17 @@ impl ReviewDraft {
         if !self.picked_ids.iter().all(|id| options.iter().any(|o| &o.id == id && !o.reference)) {
             return false;
         }
-        !self.picked_ids.is_empty() || self.none || self.has_reply() || self.has_notes()
+        if self.images.len() > crate::reducer::REVIEW_REPLY_IMAGES_MAX {
+            return false;
+        }
+        !self.picked_ids.is_empty() || self.none || self.has_reply() || !self.images.is_empty() || self.has_notes()
+    }
+
+    /// The same apart from where its pictures are: the runner keeps its own
+    /// copies of the ones pasted (runner/reviews.ts keepReplyImages), so the
+    /// draft it saved names them there.
+    pub fn same_but_picture_copies(&self, other: &ReviewDraft) -> bool {
+        self.images.len() == other.images.len() && ReviewDraft { images: other.images.clone(), ..self.clone() } == *other
     }
 
     /// What `reviews.save` and `reviews.respond` take (`jsonValue`): always
@@ -87,6 +97,9 @@ impl ReviewDraft {
         out.insert("pickedIds".into(), json!(self.picked_ids));
         if let Some(reply) = &self.reply {
             out.insert("reply".into(), json!(reply));
+        }
+        if !self.images.is_empty() {
+            out.insert("images".into(), Value::Array(self.images.iter().map(crate::inline_chips::image_json).collect()));
         }
         if self.none {
             out.insert("none".into(), json!(true));
@@ -103,6 +116,7 @@ impl ReviewDraft {
             picked_ids: self.picked_ids.clone(),
             notes: self.notes.iter().filter_map(|(id, note)| (!note.trim().is_empty()).then(|| (id.clone(), note.trim().to_owned()))).collect(),
             reply: (!reply.is_empty()).then(|| reply.to_owned()),
+            images: self.images.clone(),
             none: self.none,
         }
     }
@@ -572,6 +586,18 @@ impl ReviewSession {
         self.edit(next)
     }
 
+    /// The reply with its pictures, `[Picture N]` placing the N-th: what the
+    /// window's box holds, once every picture in it has been copied in.
+    pub fn set_reply_with_pictures(&mut self, text: &str, images: Vec<ImageRef>) -> bool {
+        if !self.editable() {
+            return false;
+        }
+        let mut next = self.draft.clone();
+        next.reply = (!text.is_empty()).then(|| text.to_owned());
+        next.images = images;
+        self.edit(next)
+    }
+
     pub fn set_note(&mut self, text: &str, id: &str) -> bool {
         if !self.editable() {
             return false;
@@ -667,6 +693,12 @@ impl ReviewSession {
         let stale = saved.revision < self.review.revision;
         if newer {
             self.review = saved;
+        }
+        // The runner's copies of the pictures, so the next look doesn't see a
+        // change and save again (and again).
+        let theirs = self.review.response.as_ref().unwrap_or(&self.review.draft);
+        if newer && self.draft.normalized().same_but_picture_copies(theirs) {
+            self.draft.images = theirs.images.clone();
         }
         self.dirty = self.draft.normalized() != *self.review.response.as_ref().unwrap_or(&self.review.draft);
         if stale && self.dirty {
@@ -1766,6 +1798,30 @@ mod tests {
     }
 
     // The session, after ReviewSessionTests.
+
+    // Mike, 17 Nov: a picture pasted in the reply went in as its path. It
+    // goes as a picture now, and the runner's copy of it must not look like
+    // a change, or the window would save every half second for ever.
+    #[test]
+    fn a_reply_with_pictures_saves_once_and_takes_the_runners_copies() {
+        let mut s = session(two());
+        let pasted = ImageRef::new("/home/inbox/1.png", "image/png");
+        assert!(s.set_reply_with_pictures("Cut off? [Picture 1]", vec![pasted.clone()]));
+        assert!(s.can_submit(), "pictures alone would be an answer too");
+        let call = s.begin_save().expect("a save is due");
+        assert_eq!(call.draft.to_json()["images"], json!([{ "path": "/home/inbox/1.png", "mediaType": "image/png" }]));
+        let mut theirs = call.draft.normalized();
+        theirs.images = vec![ImageRef::new("/home/media/t/reviews/r/reply/abc.png", "image/png")];
+        let mut back = s.review().clone();
+        back.revision += 1;
+        back.draft = theirs.clone();
+        s.save_done(back);
+        assert!(!s.dirty(), "the runner's copy of the same picture isn't an edit");
+        assert_eq!(s.draft().images, theirs.images);
+        assert_eq!(ReviewDraft::decode(&theirs.to_json()), Some(theirs));
+        let only = ReviewDraft { images: vec![pasted], ..Default::default() };
+        assert!(only.can_submit(&two().options));
+    }
 
     #[test]
     fn an_edit_during_a_save_is_kept_for_the_next_save() {

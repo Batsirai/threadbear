@@ -991,6 +991,12 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             if let Some(words) = cmd["set"].as_str() {
                 cx.write_to_clipboard(ClipboardItem::new_string(words.to_string()));
             }
+            // `"image": path`: a PNG's bytes, as a screenshot copied to the
+            // clipboard puts them there.
+            if let Some(file) = cmd["image"].as_str() {
+                let bytes = std::fs::read(file).map_err(|e| format!("couldn't read {file}: {e}"))?;
+                cx.write_to_clipboard(ClipboardItem { entries: vec![ClipboardEntry::Image(Image::from_bytes(ImageFormat::Png, bytes))] });
+            }
             // `"type": "html"`: the HTML beside the words, as a draft's Copy puts it.
             let words = if cmd["type"] == "html" { crate::draft_boxes::clipboard_html().unwrap_or_default() } else { cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default() };
             Ok(json!(format!("ok {}", serde_json::to_string(&words).unwrap_or_default())))

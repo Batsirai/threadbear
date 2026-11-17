@@ -5,10 +5,12 @@
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import { reviewInput, reviewDraft, reviewReply, sameDraft, type ReviewInput } from '../reviews.ts';
+import type { ImageRef } from '../protocol.ts';
 import type { DesignReview, ReviewDraft } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import type { QueuedSend } from '../store.ts';
-import { copyImageInto } from '../media.ts';
+import { copyImageInto, extForMediaType, imageRefFor, readImageInfo } from '../media.ts';
+import { paths } from '../config.ts';
 import { copyReviewMedia } from '../review-media.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -60,7 +62,7 @@ export const reviewsPart = {
     this.checkAccepting();
     const review = this.mustReview(st, reviewId);
     this.checkReviewRevision(review, revision);
-    const draft = reviewDraft(review, raw);
+    const draft = this.keepReplyImages(st, review, reviewDraft(review, raw));
     const next = {...review, draft, revision: review.revision + 1, updatedAt: this.isoNow()};
     this.persistReview(st, next);
     return {review: structuredClone(next)};
@@ -69,7 +71,9 @@ export const reviewsPart = {
   respondReview(this: Runner, threadId: string, reviewId: string, revision: number, raw: ReviewDraft): { review: DesignReview; turnId?: string } {
     const st = this.mustGet(threadId);
     const review = this.mustReview(st, reviewId);
-    const draft = reviewDraft(review, raw, true);
+    // Its pictures kept by their contents, so a retry that names the same
+    // ones from inbox/ is the same answer.
+    const draft = this.keepReplyImages(st, review, reviewDraft(review, raw, true));
     // A dropped WebSocket response must not send Mike's answer twice.
     if (review.status === 'answered' && sameDraft(review.response, draft)) {
       this.kickQueue(st);
@@ -79,7 +83,7 @@ export const reviewsPart = {
     this.checkReviewRevision(review, revision);
     const turnId = crypto.randomUUID();
     const next: DesignReview = {...review, draft, response: draft, status: 'answered', revision: review.revision + 1, updatedAt: this.isoNow(), replyTurnId: turnId};
-    const message: QueuedSend = {turnId, text: reviewReply(review, draft), images: [], reviewId, reviewResponse: draft};
+    const message: QueuedSend = {turnId, text: reviewReply(review, draft), images: draft.images ?? [], reviewId, reviewResponse: draft};
     // The answer and outbox live in one atomic thread.json write. Publish
     // the card only after it succeeds, then start the queued reply.
     this.persistReview(st, next, [...st.rec.queue, message], true);
@@ -111,6 +115,48 @@ export const reviewsPart = {
       if (review.status !== 'pending') continue;
       this.persistReview(st, {...review, status: 'superseded', revision: review.revision + 1, updatedAt: this.isoNow()});
     }
+  },
+
+  // A reply's pictures, copied in beside the review's own (reviews/<id>/reply)
+  // so a draft outlives inbox/'s week and the queued answer has them after a
+  // restart. Only what media.import put in inbox/, or ones already kept here:
+  // a draft's path is never a way to read some other file. Named by their
+  // contents, so saving the same picture twice keeps one copy.
+  keepReplyImages(this: Runner, st: ThreadState, review: DesignReview, draft: ReviewDraft): ReviewDraft {
+    if (!draft.images?.length) return draft;
+    const dir = path.join(this.store.mediaDir(st.rec.id), 'reviews', review.id, 'reply');
+    const real = (p: string) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+    const under = (file: string, folder: string) => file.startsWith(folder + path.sep);
+    // Made first, so its real path is the one its copies will have (/var
+    // and /private/var are one folder on a Mac).
+    fs.mkdirSync(dir, {recursive: true});
+    const inbox = real(paths.inbox(this.cfg.home));
+    const kept = real(dir);
+    const images = draft.images.map((img): ImageRef => {
+      const name = path.basename(img.path);
+      let file: string;
+      try {
+        if (fs.lstatSync(img.path).isSymbolicLink()) throw new Error('link');
+        file = fs.realpathSync(img.path);
+      } catch {
+        throw new RpcError(ErrorCode.badParams, `Picture not found: ${name}`);
+      }
+      if (under(file, kept)) return imageRefFor(file, img.mediaType);
+      if (!under(file, inbox)) throw new RpcError(ErrorCode.badParams, `A reply's pictures come through media.import: ${name}`);
+      const info = readImageInfo(file);
+      if (!info) throw new RpcError(ErrorCode.badParams, `Not a picture that can be sent: ${name}`);
+      const bytes = fs.readFileSync(file);
+      const hash = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 24);
+      const target = path.join(dir, `${hash}.${extForMediaType(info.mediaType)}`);
+      if (!fs.existsSync(target)) {
+        // Whole or not at all: a half-written copy would keep its name.
+        const temp = `${target}.${crypto.randomUUID()}.tmp`;
+        fs.writeFileSync(temp, bytes);
+        fs.renameSync(temp, target);
+      }
+      return imageRefFor(target, info.mediaType);
+    });
+    return {...draft, images};
   },
 
   mustReview(this: Runner, st: ThreadState, id: string): DesignReview {
@@ -176,7 +222,7 @@ export const reviewsPart = {
     st.rec.queue = st.rec.queue.filter(q => !q.reviewId || !sent.has(q.reviewId));
     for (const [id, review] of reviews) {
       if (review.status === 'answered' && review.replyTurnId && review.response && !sent.has(id) && !st.rec.queue.some(q => q.reviewId === id)) {
-        st.rec.queue.push({turnId: review.replyTurnId, text: reviewReply(review, review.response), images: [], reviewId: id, reviewResponse: review.response});
+        st.rec.queue.push({turnId: review.replyTurnId, text: reviewReply(review, review.response), images: review.response.images ?? [], reviewId: id, reviewResponse: review.response});
       }
       if (latest.get(id)?.revision !== review.revision) this.emit(st, {type: 'review.updated', review});
     }

@@ -419,3 +419,42 @@ test('the Mac, phone and GPUI bubbles know the passed-over line', () => {
   for (const file of ['app/Sources/ThreadbearCore/Protocol/DesignReview.swift','ios/ThreadbearKit/Sources/ThreadbearKit/ReviewAnswer.swift','desktop/core/src/reducer/event.rs'])
     assert.ok(fs.readFileSync(path.join(root,file),'utf8').includes(JSON.stringify(PASSED_OVER_TAIL)),file);
 });
+
+// Mike, 17 Nov: a picture pasted in the review window went in as its file
+// path. A reply carries pictures as a message does, [Picture N] in its words.
+test('a reply can carry pictures: kept with the review, sent with the answer, only from inbox/', async () => {
+  const {h,thread,source,input}=fixture();
+  const {review}=h.runner.createReview(thread.id,input);
+  const pasted=h.runner.importMedia(source).image;
+  const saved=h.runner.saveReview(thread.id,review.id,0,{pickedId:'A',notes:{},reply:'Is the apple cut off? [Picture 1]',images:[pasted]}).review;
+  const kept=saved.draft.images![0];
+  assert.notEqual(kept.path,pasted.path,'copied in beside the review, so inbox/ can be cleaned');
+  assert.match(kept.path,new RegExp(`reviews/${review.id}/reply/`));
+  assert.equal(kept.mediaType,'image/png');
+  // Saved again as the window has it now: the same copy, not another.
+  const again=h.runner.saveReview(thread.id,review.id,saved.revision,{...saved.draft}).review;
+  assert.equal(again.draft.images![0].path,kept.path);
+  assert.equal(fs.readdirSync(path.dirname(kept.path)).length,1);
+  // Any other file is refused, a link into inbox/ too.
+  assert.throws(()=>h.runner.saveReview(thread.id,review.id,again.revision,{notes:{},images:[{path:source,mediaType:'image/png'}]}),/media.import/);
+  const link=path.join(path.dirname(pasted.path),'link.png');
+  fs.symlinkSync(source,link);
+  assert.throws(()=>h.runner.saveReview(thread.id,review.id,again.revision,{notes:{},images:[{path:link,mediaType:'image/png'}]}),/not found/i);
+  assert.throws(()=>h.runner.saveReview(thread.id,review.id,again.revision,{notes:{},images:'x'} as any),/list/);
+  // Pictures alone are an answer; a retry naming the inbox copy is the same one.
+  const second=h.runner.createReview(thread.id,input).review;
+  const answer={notes:{},images:[pasted]};
+  const sent=h.runner.respondReview(thread.id,second.id,0,answer);
+  assert.deepEqual(h.runner.respondReview(thread.id,second.id,0,answer),sent);
+  const answered=h.runner.respondReview(thread.id,review.id,again.revision,{pickedId:'A',notes:{},reply:'Is the apple cut off? [Picture 1]',images:[pasted]});
+  assert.equal(answered.review.status,'answered');
+  h.adapter.last.result(); await tick();
+  h.adapter.last.result(); await tick();
+  const message=h.runner.events(thread.id,{limit:1000}).events.find(e=>e.type==='user.message'&&e.reviewId===review.id) as any;
+  assert.ok(message,'the answer went to the agent');
+  assert.equal(message.images.length,1);
+  assert.match(message.text,/Picked A\. First\.\n\nIs the apple cut off\? \[Picture 1\]/);
+  // Its copy outlives inbox/.
+  fs.rmSync(pasted.path);
+  assert.ok(fs.existsSync(message.images[0].path));
+});

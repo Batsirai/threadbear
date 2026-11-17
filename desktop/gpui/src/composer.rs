@@ -1283,32 +1283,7 @@ impl Composer {
         let chip = self.pictures.get(id);
         let number = self.chip_numbers.get(id).copied().unwrap_or(1);
         let dimmed = chip.is_none_or(|c| c.image.is_none());
-        let path = self.picture_path(id);
-        let selected = ctx.is_selected();
-        let fill = style::chip_fill(cx);
-        let edge = if selected { style::accent(cx) } else { style::hairline(cx) };
-        let label_color = if dimmed { style::faint_text(cx) } else { style::quiet_text(cx) };
-        h_flex()
-            .h_full()
-            .items_center()
-            .child(
-                h_flex()
-                    .h(px(style::size::CHIP_HEIGHT))
-                    // PictureChip.draw strokes half a point inside its 3 and
-                    // 7; here the edge takes room, so the padding gives it back.
-                    .pl(px(2.5))
-                    .pr(px(6.5))
-                    .gap(px(5.))
-                    .rounded(px(6.))
-                    .bg(fill)
-                    .border(gpui_kit::px(0.5))
-                    .border_color(edge)
-                    // A click opens the picture (`open_picture`).
-                    .when(path.is_some(), |s| s.cursor_pointer())
-                    .when_some(path, |s, path| s.child(img(path).size(px(14.)).rounded(px(3.)).object_fit(ObjectFit::Cover).when(dimmed, |s| s.opacity(0.5))))
-                    .child(div().text_size(px(13.)).text_color(label_color).child(format!("Picture {number}"))),
-            )
-            .into_any_element()
+        picture_chip(self.picture_path(id), number, dimmed, ctx.is_selected(), cx)
     }
 
     /// The strip over the words (AttachmentStrip): a thumbnail for each
@@ -1773,6 +1748,36 @@ pub(crate) fn remove_badge(id: impl Into<ElementId>) -> impl StatefulInteractive
         .tip("Remove")
 }
 
+/// A picture's chip among the words, here and in the review window's reply
+/// (review_window/reply_pictures.rs): a small rounded tag with the thumbnail
+/// and "Picture N" (PictureChip.draw), dimmed until the picture's in.
+pub(crate) fn picture_chip(path: Option<PathBuf>, number: usize, dimmed: bool, selected: bool, cx: &App) -> AnyElement {
+    let fill = style::chip_fill(cx);
+    let edge = if selected { style::accent(cx) } else { style::hairline(cx) };
+    let label_color = if dimmed { style::faint_text(cx) } else { style::quiet_text(cx) };
+    h_flex()
+        .h_full()
+        .items_center()
+        .child(
+            h_flex()
+                .h(px(style::size::CHIP_HEIGHT))
+                // PictureChip.draw strokes half a point inside its 3 and
+                // 7; here the edge takes room, so the padding gives it back.
+                .pl(px(2.5))
+                .pr(px(6.5))
+                .gap(px(5.))
+                .rounded(px(6.))
+                .bg(fill)
+                .border(gpui_kit::px(0.5))
+                .border_color(edge)
+                // A click opens the picture (`open_picture`).
+                .when(path.is_some(), |s| s.cursor_pointer())
+                .when_some(path, |s, path| s.child(img(path).size(px(14.)).rounded(px(3.)).object_fit(ObjectFit::Cover).when(dimmed, |s| s.opacity(0.5))))
+                .child(div().text_size(px(13.)).text_color(label_color).child(format!("Picture {number}"))),
+        )
+        .into_any_element()
+}
+
 /// The ×'s name for VoiceOver (the Swift one's accessibilityLabel), and for
 /// `composer-peek` to find it by.
 pub(crate) const REMOVE_LABEL: &str = "Remove image";
@@ -1803,7 +1808,7 @@ pub(crate) fn is_markdown(path: &Path) -> bool {
 /// saved to a file the runner can import, as ComposerTextView.takeImages does.
 /// PNG and JPEG go as they are; the runner turns TIFF and BMP into PNG
 /// (`media.import`). An SVG stays out: the runner doesn't take them.
-fn save_pasted_image(image: &gpui_kit::Image) -> Option<PathBuf> {
+pub(crate) fn save_pasted_image(image: &gpui_kit::Image) -> Option<PathBuf> {
     let ext = match image.format {
         ImageFormat::Png => "png",
         ImageFormat::Jpeg => "jpeg",
