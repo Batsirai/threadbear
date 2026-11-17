@@ -44,7 +44,9 @@ File references are where to look.
   the addresses you gave it in `self-hosted-own-addresses.json` there
   (the same default folder), so a later `--local` or `--tailnet` run asks
   each of them, from this Mac, whether it still reaches the backend through
-  your proxy, and stops if one does; it deletes the file once none does.
+  your proxy, and stops if one does. Setup never deletes it, as from this
+  Mac it can't prove your proxy is gone: delete it yourself once those
+  addresses are gone for good, and setup stops asking.
 - **Apps:** `~/Applications/Threadbear.app` and
   `~/Applications/Threadbear Runner.app`, both built and signed on your Mac.
   If you press Start using the new app in the Swift app (or run

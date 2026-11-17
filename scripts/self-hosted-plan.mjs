@@ -340,7 +340,9 @@ export function oldAddressStep({ checks, mode, again }) {
 // off checks them all, not only the ones this --home's runner.json names, so
 // a --url setup that stopped before saving runner.json, a later readdress,
 // or a run for another --home still checks (Codex's review of Daybreak 150).
-// Removed once a move off has seen none of them reach the backend.
+// Never removed by setup: from this Mac it can't prove a proxy is gone, so
+// every later run off your address asks again and says so. You delete it
+// once those addresses are gone for good.
 export const OWN_ADDRESSES_FILE = 'self-hosted-own-addresses.json';
 
 // { api: [...], site: [...] } from the file's text and more addresses to add;

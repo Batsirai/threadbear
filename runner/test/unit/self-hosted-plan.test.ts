@@ -358,6 +358,8 @@ test('every address a --url setup was given stays on record until a move off has
   assert.deepEqual(first, { api: [OWN_URL], site: [OWN_SITE] });
   // New addresses add to the old, which a proxy may still forward too.
   assert.deepEqual(m.ownAddresses(JSON.stringify(first), { api: ['https://new.example.com'], site: [OWN_SITE] }), { api: [OWN_URL, 'https://new.example.com'], site: [OWN_SITE] });
+  // Missing pieces (an older Mac's runner.json with no sync.site) are left out.
+  assert.deepEqual(m.ownAddresses(undefined, { api: [undefined as unknown as string, OWN_URL], site: [undefined as unknown as string] }), { api: [OWN_URL], site: [] });
   // A damaged file loses only what isn't an address list.
   assert.deepEqual(m.ownAddresses('{"api":[3,"https://a.example"],"site":"x"}'), { api: ['https://a.example'], site: [] });
   assert.deepEqual(m.ownAddresses('not json'), { api: [], site: [] });
@@ -377,12 +379,16 @@ test('setup checks the old address before anything changes and again before runn
   assert.ok(pre < src.indexOf('unserve(ts, tailnetPort, localPort, moving);'));
   const post = src.indexOf('const oldAddress = moveOff ? await checkOldAddressGone(old) : undefined;');
   assert.ok(post > src.indexOf('await waitForBackend();'), 'again on the moved backend');
-  assert.ok(src.indexOf('fs.rmSync(ownAddressesFile', post) > post, 'cleared only after it passed');
+  // Never cleared by setup: a pass is only this Mac's view, so later runs ask and say so again.
+  assert.ok(!src.includes('fs.rmSync(ownAddressesFile'));
+  // An older Mac's addresses from runner.json go on record when it moves to new ones.
+  assert.match(src, /reachOf\(saved\.url\) === 'url' \? saved : \{\}/);
+  assert.match(src, /recordedAddresses\(\{ api: \[before\.url, plan\.url\], site: \[before\.site, plan\.site\] \}\)/);
   const body = src.slice(src.indexOf('async function selfHostedBackend()'), src.indexOf('async function runnerJson('));
   assert.ok(body.includes('await checkOldAddressGone(old)'), 'inside selfHostedBackend, which runs before runnerJson writes the new sync.url');
   assert.ok(src.indexOf('sh = await selfHostedBackend();') < src.indexOf('await runnerJson(url, sh?.site);'));
   assert.match(src, /if \(step\.do === 'fail'\) throw new Fail\(step\.message\);/);
   // The end of setup doesn't call it this Mac only without saying what's left.
   assert.match(src, /on this Mac only\$\{sh\.oldAddress \? ' once your old proxy rules are gone \(below\)' : ''\}/);
-  assert.match(src, /if \(sh\?\.oldAddress\) note\(`Moved off your own address: \$\{sh\.oldAddress\}`\);/);
+  assert.match(src, /if \(sh\?\.oldAddress\) note\(`Your own address from before: \$\{sh\.oldAddress\}/);
 });

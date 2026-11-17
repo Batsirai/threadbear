@@ -227,8 +227,10 @@ setup stops, naming it, and the next run checks again. `curl https://<your
 address>/version` printing the backend's version means it's still forwarded.
 An address that doesn't answer counts as gone (or a Mac whose old name is gone
 could never move), but setup can only see from this Mac, so it says so at the
-end: it's only on this Mac or your tailnet once your proxy's rules for those
-addresses are gone (`oldAddressStep`, Daybreak 150, 17 Nov 2026).
+end, on that run and every later one: it's only on this Mac or your tailnet
+once your proxy's rules for those addresses are gone. When they are for good,
+delete `self-hosted-own-addresses.json` and setup stops asking
+(`oldAddressStep`, Daybreak 150, 17 Nov 2026).
 
 ## What setup makes
 

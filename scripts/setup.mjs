@@ -66,7 +66,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { isJoining, joinSteps, runnerKeyPlan } from './runner-key-plan.mjs';
-import { ADMIN_URL, backendContainer, DATA_VOLUME, mustSeeTailnetOff, offTailnetStep, oldAddressStep, origins, OWN_ADDRESSES_FILE, ownAddresses, PORTS, selfHostedPlan, servedOn, tailnetPendingFiles } from './self-hosted-plan.mjs';
+import { ADMIN_URL, backendContainer, DATA_VOLUME, mustSeeTailnetOff, offTailnetStep, oldAddressStep, origins, OWN_ADDRESSES_FILE, ownAddresses, PORTS, reachOf, selfHostedPlan, servedOn, tailnetPendingFiles } from './self-hosted-plan.mjs';
 import { ConvexAdminError, convexEnv, readConvexAdmin, SELF_HOSTED_ENV_FILE } from '../runner/src/convex-admin.ts';
 
 const repo = path.resolve(import.meta.dirname, '..');
@@ -760,6 +760,7 @@ async function checkOwnAddress(url, site, { quiet = false, fresh = false } = {})
 // setup if one still reaches it; otherwise returns what it saw, for the end
 // of setup to say.
 const ownAddressesFile = path.join(DEFAULT_HOME, OWN_ADDRESSES_FILE);
+// Strings only: runner.json's sync.site may be missing.
 function recordedAddresses(add) {
   return ownAddresses(fs.existsSync(ownAddressesFile) ? fs.readFileSync(ownAddressesFile, 'utf8') : undefined, add);
 }
@@ -853,7 +854,12 @@ async function selfHostedBackend() {
   // stops after this still has them checked by any later move off.
   if (own && !dry) {
     fs.mkdirSync(DEFAULT_HOME, { recursive: true });
-    fs.writeFileSync(ownAddressesFile, JSON.stringify(recordedAddresses({ api: [plan.url], site: [plan.site] }), null, 2) + '\n');
+    // With the ones runner.json has now, if they're your own too: a Mac set up
+    // before this record existed may be moving to new addresses with the old
+    // proxy rules still up (Codex's second look).
+    const saved = readRunnerJson().sync ?? {};
+    const before = typeof saved.url === 'string' && reachOf(saved.url) === 'url' ? saved : {};
+    fs.writeFileSync(ownAddressesFile, JSON.stringify(recordedAddresses({ api: [before.url, plan.url], site: [before.site, plan.site] }), null, 2) + '\n');
   }
   const old = own ? { api: [], site: [] } : recordedAddresses({ api: plan.was ? [plan.was.url] : [], site: plan.was?.site ? [plan.was.site] : [] });
   const moveOff = old.api.length + old.site.length > 0;
@@ -911,10 +917,10 @@ async function selfHostedBackend() {
   if (own) await checkOwnAddress(url, site, { quiet: prechecked });
   // Before runner.json gets the new address: one that stops here is the same move next time.
   const oldAddress = moveOff ? await checkOldAddressGone(old) : undefined;
-  if (oldAddress) {
-    ok(`${[...old.api, ...old.site].join(' and ')} no longer reach the backend from this Mac`);
-    fs.rmSync(ownAddressesFile, { force: true });
-  }
+  // The record stays: from this Mac setup can't prove your proxy is gone, so
+  // every later run asks again and says so, not only this one (Codex's second
+  // look). Delete the file yourself once those addresses are gone for good.
+  if (oldAddress) ok(`${[...old.api, ...old.site].join(' and ')} don't reach the backend from this Mac`);
   // Notifications would only fail: the relay checks a backend by calling it
   // back on a Convex host (relay/convex/verify.ts). Off, the phone and the
   // Mac say there are none, rather than going quiet (convex/pushHealth.ts).
@@ -1020,7 +1026,7 @@ function finish(url, sh) {
   }
   // Beside "this Mac only" or "your tailnet only": what setup could check of
   // that after a move off your own address, and what it can't.
-  if (sh?.oldAddress) note(`Moved off your own address: ${sh.oldAddress}`);
+  if (sh?.oldAddress) note(`Your own address from before: ${sh.oldAddress} Once they're gone for good, delete ${ownAddressesFile} and setup stops asking.`);
   // "From anywhere" isn't true of a self-hosted backend, which is only on the
   // tailnet, or only on this Mac.
   if (sh?.local) {
