@@ -152,7 +152,8 @@ export function fitReview(raw: unknown): DesignReview | undefined {
     set(draft, 'reply', 8000);
     // A reply's pictures name the other runner's files, which an extra Mac
     // could point anywhere on this one (Codex's review, 17 Nov): they don't
-    // come with the move.
+    // come with the move, and the words say so where they were.
+    if (Array.isArray(draft.images) && typeof draft.reply === 'string') draft.reply = keepPictureMarkers(draft.reply, draft.images.map(() => false));
     delete draft.images;
     if (draft.notes && typeof draft.notes === 'object' && !Array.isArray(draft.notes)) {
       const notes: Record<string, string> = Object.create(null);
@@ -225,6 +226,22 @@ function replyImages(raw: unknown): ImageRef[] {
     if (!img || typeof img !== 'object' || Array.isArray(img) || typeof (img as ImageRef).path !== 'string' || !(img as ImageRef).path) bad(`images[${i}] must be a picture with a path.`);
     const { path: file, mediaType, width, height } = img as ImageRef;
     return { path: file, mediaType: typeof mediaType === 'string' ? mediaType : 'application/octet-stream', ...(typeof width === 'number' ? { width } : {}), ...(typeof height === 'number' ? { height } : {}) };
+  });
+}
+
+// Words whose pictures were cut to those `keep` marks: each [Picture N]
+// follows its picture to its new number, or says "[Picture N unavailable]"
+// for one left out, so a later picture never lands on an earlier one's
+// marker (Codex's review, 17 Nov). A marker past the list stays as written.
+export function keepPictureMarkers(text: string, keep: boolean[]): string {
+  if (typeof text !== 'string' || keep.every(Boolean)) return text;
+  const numbers: (number | undefined)[] = [];
+  let next = 0;
+  for (const k of keep) numbers.push(k ? ++next : undefined);
+  return text.replace(/\[Picture (\d{1,3})\]/g, (marker, n) => {
+    const i = Number(n) - 1;
+    if (i < 0 || i >= keep.length) return marker;
+    return numbers[i] ? `[Picture ${numbers[i]}]` : `[Picture ${n} unavailable]`;
   });
 }
 

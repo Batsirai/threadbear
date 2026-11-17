@@ -6,7 +6,7 @@ import { makeHarness, tick } from '../helpers/fakes.ts';
 import { makePng } from '../helpers/png.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { stills, withCharset } from '../../src/review-media.ts';
-import { PASSED_OVER_TAIL, fitReview } from '../../src/reviews.ts';
+import { PASSED_OVER_TAIL, fitReview, keepPictureMarkers } from '../../src/reviews.ts';
 
 function fixture() {
   const h = makeHarness();
@@ -559,4 +559,9 @@ test('every send to the CLI checks its pictures, keeps the markers right, and a 
   const sent=h.adapter.last.sent.find((m:any)=>m.id==='q-bad') as any;
   assert.ok(sent,'it went rather than stalling');
   assert.deepEqual(sent.images,[]);
+});
+
+test('markers follow the pictures kept', () => {
+  assert.equal(keepPictureMarkers('A [Picture 1], B [Picture 2], C [Picture 3] [Picture 9]',[false,true,true]),'A [Picture 1 unavailable], B [Picture 1], C [Picture 2] [Picture 9]');
+  assert.equal(keepPictureMarkers('same [Picture 1]',[true]),'same [Picture 1]');
 });

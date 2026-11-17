@@ -4,7 +4,7 @@
 // is the Runner; runner.ts puts them on its prototype.
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
-import { reviewInput, reviewDraft, reviewReply, sameDraft, type ReviewInput } from '../reviews.ts';
+import { keepPictureMarkers, reviewInput, reviewDraft, reviewReply, sameDraft, type ReviewInput } from '../reviews.ts';
 import type { ImageRef } from '../protocol.ts';
 import type { DesignReview, ReviewDraft } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
@@ -179,10 +179,14 @@ export const reviewsPart = {
   ownReplyImages(this: Runner, st: ThreadState, review: DesignReview): DesignReview {
     const fit = (draft: ReviewDraft | undefined): ReviewDraft | undefined => {
       if (!draft?.images) return draft;
-      const images = Array.isArray(draft.images) ? draft.images.filter(img => this.ownReplyImage(st, review.id, img)) : [];
-      if (images.length === draft.images.length) return draft;
+      const all: unknown[] = Array.isArray(draft.images) ? draft.images : [];
+      const keep = all.map(img => this.ownReplyImage(st, review.id, img as ImageRef));
+      if (Array.isArray(draft.images) && keep.every(Boolean)) return draft;
+      const images = all.filter((_, i) => keep[i]) as ImageRef[];
       const {images: _, ...rest} = draft;
-      return images.length ? {...rest, images} : rest;
+      // The words' markers follow (keepPictureMarkers).
+      const reply = typeof rest.reply === 'string' ? {reply: keepPictureMarkers(rest.reply, keep)} : {};
+      return images.length ? {...rest, ...reply, images} : {...rest, ...reply};
     };
     const draft = fit(review.draft)!;
     const response = fit(review.response);
@@ -242,12 +246,22 @@ export const reviewsPart = {
     // before reading the log: a moved thread's log is the other runner's
     // word, and anything below that throws would leave this undone, with
     // the queue sent next (Codex's review, 17 Nov). Nothing in it can throw.
+    // The words' markers follow what's kept (keepPictureMarkers).
     st.rec.queue = st.rec.queue.map(q => {
       if (!q?.reviewId) return q;
-      const own = (list: unknown): ImageRef[] => (Array.isArray(list) ? list : []).filter(img => this.ownReplyImage(st, q.reviewId!, img as ImageRef));
-      const images = own(q.images);
-      const reviewResponse = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse ? {...q.reviewResponse, images: own(q.reviewResponse.images)} : q.reviewResponse;
-      return {...q, images, ...(reviewResponse ? {reviewResponse} : {})};
+      const own = (list: unknown): [ImageRef[], boolean[]] => {
+        const all: unknown[] = Array.isArray(list) ? list : [];
+        const keep = all.map(img => this.ownReplyImage(st, q.reviewId!, img as ImageRef));
+        return [all.filter((_, i) => keep[i]) as ImageRef[], keep];
+      };
+      const [images, keep] = own(q.images);
+      const text = keepPictureMarkers(q.text, keep);
+      let reviewResponse = q.reviewResponse;
+      if (reviewResponse && typeof reviewResponse === 'object' && 'images' in reviewResponse) {
+        const [kept, keptMask] = own(reviewResponse.images);
+        reviewResponse = {...reviewResponse, images: kept, ...(typeof reviewResponse.reply === 'string' ? {reply: keepPictureMarkers(reviewResponse.reply, keptMask)} : {})};
+      }
+      return {...q, text, images, ...(reviewResponse ? {reviewResponse} : {})};
     });
     const log = this.store.log(st.rec.id);
     const latest = new Map<string, DesignReview>();

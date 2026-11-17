@@ -443,7 +443,11 @@ test("a compromised old runner's oversized review notes arrive cut to what show_
   // picture (Codex's review, 17 Nov): it comes without it.
   const secret = path.join(tmpDir(), 'private.png');
   fs.writeFileSync(secret, 'png');
-  const queue = [{ turnId: 'q-answer', text: 'Review: Fine', images: [{ path: secret, mediaType: 'image/png' }], reviewId: 'fits', reviewResponse: { notes: { a: null }, images: [{ path: secret, mediaType: 'image/png' }] } }];
+  const queue = [{ turnId: 'q-answer', text: 'Review: Fine\n\nLook [Picture 1]', images: [{ path: secret, mediaType: 'image/png' }], reviewId: 'fits', reviewResponse: { notes: { a: null }, reply: 'Look [Picture 1]', images: [{ path: secret, mediaType: 'image/png' }] } },
+    // A message's picture at the other runner's own path (another user, say),
+    // which came with the move: it's this thread's copy here.
+    { turnId: 'q-photo', text: 'and this [Picture 1]', images: [{ path: `/home/someone/.threadbear/threads/${id}/media/moved.png`, mediaType: 'image/png' }] }];
+  packed.push({ path: 'thread/media/moved.png', data: fs.readFileSync(path.join(import.meta.dirname, '..', '..', '..', 'features', 'support', 'sample.png')) } as any);
   recEntry.data = Buffer.from(JSON.stringify({ ...JSON.parse(recEntry.data.toString('utf8')), queue, reviews: [review('big', '`'.repeat(20_000), Array.from({ length: 20 }, (_, n) => option(n, '`x'.repeat(5000)))), fits, 'not a review', { id: 'no options' }] }));
   await t.runner.placeMove(r, packed);
   await t.runner.adoptMoved(r);
@@ -452,6 +456,12 @@ test("a compromised old runner's oversized review notes arrive cut to what show_
   assert.ok(answer, 'the answer itself still comes');
   assert.deepEqual(answer.images, []);
   assert.equal(answer.reviewResponse.images, undefined);
+  assert.match(answer.text, /Look \[Picture 1 unavailable\]/, 'the words say it was left out');
+  const photo = [...(t.store.load(id)?.queue ?? []), ...t.runner.events(id, { limit: 1000 }).events.filter((e) => e.type === 'user.message')].find((q: any) => q.turnId === 'q-photo') as any;
+  assert.ok(photo, 'the message came');
+  assert.equal(photo.images.length, 1, 'with its picture');
+  assert.equal(path.basename(photo.images[0].path), 'moved.png');
+  assert.ok(photo.images[0].path.startsWith(fs.realpathSync(t.home)) || photo.images[0].path.startsWith(t.home), photo.images[0].path);
   const [big, kept, ...rest] = t.runner.listReviews(id).reviews.sort((a, b) => (a.id === 'big' ? -1 : b.id === 'big' ? 1 : 0));
   assert.deepEqual(rest, []);
   assert.equal(big!.note!.length, 4000);

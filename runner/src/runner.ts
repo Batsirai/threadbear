@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import os from 'node:os';
 import { SAMPLE_THREADS, WELCOME_PATCH } from './samples.ts';
-import { reviewInput, reviewDraft, reviewReply, sameDraft, type ReviewInput } from './reviews.ts';
+import { keepPictureMarkers, reviewInput, reviewDraft, reviewReply, sameDraft, type ReviewInput } from './reviews.ts';
 import path from 'node:path';
 import { ConvexKeys, convexFolderFor, type ConvexKey, type ConvexDeployments, type ConvexKeysOptions, type ConvexLogin } from './convex-keys.ts';
 import crypto from 'node:crypto';
@@ -3847,11 +3847,7 @@ export class Runner {
     const same = Array.isArray(input.images) && images.length === refs.length && images.every((img, i) => img.path === (refs[i] as ImageRef).path);
     if (same) return input;
     if (images.length !== refs.length) this.log.warn('left out pictures that are not the thread\'s own', { threadId: st.rec.id, left: refs.length - images.length });
-    const text = typeof input.text === 'string' ? input.text.replace(/\[Picture (\d{1,3})\]/g, (marker, n) => {
-      const i = Number(n) - 1;
-      if (i < 0 || i >= refs.length) return marker;
-      return numbers[i] ? `[Picture ${numbers[i]}]` : `[Picture ${n} unavailable]`;
-    }) : input.text;
+    const text = keepPictureMarkers(input.text, numbers.map(Boolean));
     return { ...input, text, images };
   }
 

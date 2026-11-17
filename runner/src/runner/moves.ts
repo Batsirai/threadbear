@@ -12,7 +12,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Runner } from '../runner.ts';
+import type { Runner, ThreadState } from '../runner.ts';
+import type { ImageRef } from '../protocol.ts';
 import { normaliseRecord, type ThreadRecord } from '../store.ts';
 import type { RunnerPart } from './part.ts';
 import { providerName } from '../providers.ts';
@@ -28,7 +29,7 @@ import { claudeCommands } from '../claude-trust.ts';
 import { untrustedGit } from '../safe-git.ts';
 import { isPermissionMode } from '../protocol.ts';
 import { isThreadIdShape } from '../thread-id.ts';
-import { fitReview } from '../reviews.ts';
+import { fitReview, keepPictureMarkers } from '../reviews.ts';
 import { cleanUpWorktree, makeWorktree, MAIN, parseCheckouts, realpath, type WorktreeRecord } from '../worktrees.ts';
 
 // What T placed for a move, so adopting after a restart and throwing it
@@ -234,10 +235,12 @@ function dropMovedReplyImages(rec: Record<string, any>): boolean {
     const hasResponseImages = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse;
     if (Array.isArray(q.images) && q.images.length === 0 && !hasResponseImages) return q;
     changed = true;
-    const next = { ...q, images: [] };
+    // The words say where they were (keepPictureMarkers).
+    const gone = (list: unknown) => (Array.isArray(list) ? list : []).map(() => false);
+    const next = { ...q, images: [], ...(typeof q.text === 'string' ? { text: keepPictureMarkers(q.text, gone(q.images)) } : {}) };
     if (hasResponseImages) {
-      const { images: _, ...rest } = q.reviewResponse;
-      next.reviewResponse = rest;
+      const { images, ...rest } = q.reviewResponse;
+      next.reviewResponse = typeof rest.reply === 'string' ? { ...rest, reply: keepPictureMarkers(rest.reply, gone(images)) } : rest;
     }
     return next;
   });
@@ -1035,6 +1038,12 @@ export const movesPart = {
     const st = this.threads.get(row.threadId);
     if (!st) throw new Error("The moved thread didn't load.");
     if (sanitizeMoved(st.rec as unknown as Record<string, any>, atMostAsk, placed.fromName, placed.leftBehind)) this.store.save(st.rec);
+    // Its queued messages' pictures name the other runner's media folder,
+    // which can be at another path (another user, Linux): each that came
+    // with the move is this thread's copy here, by its name. Anything else
+    // is left out when it's sent (ownInput), as it was never this thread's
+    // (Codex's review, 17 Nov).
+    if (this.rebaseMovedQueue(st, row.threadId)) this.store.save(st.rec);
     const lines = [`Moved from ${placed.fromName} to ${this.moveRunnerName(row.to)}, in ${placed.cwd}.`, ...placed.leftBehind];
     this.emit(st, { type: 'system.note', text: lines.join(' ') });
     this.markDirty(st);
@@ -1049,6 +1058,27 @@ export const movesPart = {
     // Through the same filter again: a placed.json from before it had one.
     const schedules = movedSchedules(placed.schedules ?? [], row.threadId).schedules;
     return { adopted: true, ...(schedules.length ? { schedules } : {}) };
+  },
+
+  // True if it changed any.
+  rebaseMovedQueue(this: Runner, st: ThreadState, threadId: string): boolean {
+    let changed = false;
+    const media = this.store.mediaDir(threadId);
+    for (const q of st.rec.queue) {
+      if (!q || !Array.isArray(q.images)) continue;
+      q.images = q.images.map((img: ImageRef) => {
+        if (!img || typeof img.path !== 'string') return img;
+        const from = img.path.replace(/\\/g, '/').split('/');
+        // .../<thread id>/media/<name>, as any runner keeps them.
+        if (from.length < 3 || from.at(-2) !== 'media' || from.at(-3) !== threadId) return img;
+        const name = from.at(-1)!;
+        const here = path.join(media, name);
+        if (here === img.path || !/^[^/\\]+$/.test(name) || !this.ownPicture(st, { ...img, path: here })) return img;
+        changed = true;
+        return { ...img, path: here };
+      });
+    }
+    return changed;
   },
 
   // T: the move failed or was cancelled before the switch.
