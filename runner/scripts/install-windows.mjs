@@ -31,7 +31,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { readCurrentLink } from '../launch.mjs';
-import { schtasks, taskExists, taskName, taskXml, writeXml } from './windows-task.mjs';
+import { endTask, schtasks, taskExists, taskName, taskXml, writeXml } from './windows-task.mjs';
 
 const RUNNER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_LABEL = 'com.mikerosoft.threadbear.runner';
@@ -201,11 +201,7 @@ async function main() {
     console.log(`End and delete the task "${task}", delete ${path.join(binDir, 'tb.cmd')} and take ${binDir} off this user's PATH. The data dir stays.`);
     if (v['dry-run']) return 0;
     if (taskExists(task)) {
-      try {
-        schtasks(['/End', '/TN', task]);
-      } catch {
-        // not running
-      }
+      if (!(await endTask(task, home))) console.error("The runner hadn't stopped 45 s after its task was ended; it's left to finish.");
       schtasks(['/Delete', '/TN', task, '/F']);
     }
     fs.rmSync(path.join(binDir, 'tb.cmd'), { force: true });
@@ -259,12 +255,10 @@ async function main() {
 
   const xml = path.join(dir, 'task.xml');
   writeXml(xml, taskXml({ node: process.execPath, launch: path.join(dir, 'launch.mjs'), home: home === path.resolve(defaultHome) ? undefined : home, port: v.port, log, user }));
-  if (running) {
-    try {
-      schtasks(['/End', '/TN', task]);
-    } catch {
-      // not running after all
-    }
+  // The old runner lets go of the data dir before the new one starts.
+  if (running && !(await endTask(task, home))) {
+    console.error("The runner that was running hadn't stopped 45 s after its task was ended, so the new one wasn't started. Try again in a minute.");
+    return 1;
   }
   schtasks(['/Create', '/TN', task, '/XML', xml, '/F']);
 

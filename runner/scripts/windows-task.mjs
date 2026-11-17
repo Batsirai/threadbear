@@ -124,3 +124,46 @@ export function restartCommandText(name) {
     .map((a) => `schtasks ${a.map((x) => (/\s/.test(x) ? `"${x}"` : x)).join(' ')}`)
     .join(' && ');
 }
+
+// The runner pid in <home>/run/runner.pid (lock.ts writes { pid, lstart }),
+// or undefined.
+function lockHolder(home) {
+  try {
+    const raw = fs.readFileSync(path.join(home, 'run', 'runner.pid'), 'utf8').trim();
+    const pid = /^\d+$/.test(raw) ? Number(raw) : JSON.parse(raw).pid;
+    return Number.isInteger(pid) && pid > 1 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
+// Ends the task and waits until its runner has let go of the data dir: End
+// kills only conhost.exe, and launch.mjs then stops its runner over IPC
+// (watchParent, a couple of seconds, then up to the runner's grace), so a
+// /Run straight after it would start a runner the old one's lock refuses
+// (Codex's review, 17 Nov 2026). Resolves true once it's gone, false at
+// the deadline. `deps` are for tests.
+export async function endTask(name, home, { timeoutMs = 45_000, end = (n) => schtasks(['/End', '/TN', n]), holder = lockHolder, alive = pidAlive, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  const pid = holder(home);
+  try {
+    end(name);
+  } catch {
+    // not running
+  }
+  if (!pid) return true;
+  const deadline = Date.now() + timeoutMs;
+  while (alive(pid)) {
+    if (Date.now() > deadline) return false;
+    await sleep(250);
+  }
+  return true;
+}

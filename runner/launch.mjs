@@ -186,24 +186,44 @@ export function launchArgs(argv) {
   return out;
 }
 
-// Calls gone() once the process `ppid` has exited, checking every couple of
-// seconds. `alive` is for tests.
-export function watchParent(ppid, gone, { everyMs = 2000, alive = (pid) => {
+// Calls gone() once the process `ppid` has exited, checking every second.
+// Windows can hand a dead process's id to a new one, so every
+// `identityEvery` checks `startedAt(ppid)` is compared with what it was at
+// the start (Codex's review): a different start time is a different
+// process. With no start time to compare (PowerShell refused), only the
+// id is watched. `alive` and `startedAt` are for tests.
+export function watchParent(ppid, gone, { everyMs = 1000, identityEvery = 60, alive = (pid) => {
   try {
     process.kill(pid, 0);
     return true;
   } catch (e) {
     return e.code === 'EPERM';
   }
-} } = {}) {
+}, startedAt = windowsStartTime } = {}) {
   if (!ppid || ppid <= 1) return null;
+  const first = startedAt(ppid);
+  let n = 0;
   const timer = setInterval(() => {
-    if (alive(ppid)) return;
+    // A later read that fails says nothing either way, so it's no reason to stop.
+    const same = alive(ppid) && (!first || ++n % identityEvery !== 0 || [undefined, first].includes(startedAt(ppid)));
+    if (same) return;
     clearInterval(timer);
     gone();
   }, everyMs);
   timer.unref?.();
   return timer;
+}
+
+// A process's start time (100 ns ticks since 1601, so no time zone), from
+// PowerShell, or undefined.
+function windowsStartTime(pid) {
+  try {
+    const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${Math.trunc(pid)} -ErrorAction Stop).StartTime.ToFileTimeUtc()`], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    const t = out.stdout?.trim();
+    return out.status === 0 && /^\d+$/.test(t) ? t : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function log(level, msg, extra) {

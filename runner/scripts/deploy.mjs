@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { pointCurrent, readCurrentLink, readState, releaseExists, runnerJsonBroken, writeState } from '../launch.mjs';
 import { connectRpc } from './rpc-client.mjs';
-import { restartArgs, restartCommandText, schtasks, taskArgs, taskExists, taskName } from './windows-task.mjs';
+import { endTask, restartCommandText, schtasks, taskArgs, taskExists, taskName } from './windows-task.mjs';
 import { ChecksUnavailable, Fail, SLEPT_EXIT, SleptThrough, UNAVAILABLE_EXIT, checkHostsFrom, checkSlept, nodeBeforeLaunch, packagesInstalled, remoteChecks, sleepCount, smokeHello, smokeTimedOut, step, unitTests } from './deploy-steps.mjs';
 // THREADBARE_* was the old name for these variables (config.ts, adoptOldNames).
 for (const [k, v] of Object.entries(process.env)) {
@@ -488,15 +488,11 @@ async function kickstart(c) {
   // systemd's restart, like kickstart -k, returns once the old one is gone
   // and the new one started.
   if (c.windows) {
-    // End, then run: Task Scheduler has no restart of its own.
+    // End, wait for the old runner to let go of the data dir, then run:
+    // Task Scheduler has no restart of its own (windows-task.mjs, endTask).
     try {
-      for (const a of restartArgs(c.task)) {
-        try {
-          schtasks(a);
-        } catch (e) {
-          if (a[0] === '/Run') throw e; // /End fails when it isn't running
-        }
-      }
+      if (!(await endTask(c.task, c.home))) throw new Error("the old runner hadn't stopped 45 s after its task was ended");
+      schtasks(['/Run', '/TN', c.task]);
     } catch (e) {
       throw new Fail(`${restartCommand(c)} failed: ${String(e.stderr || e.message).trim()}`);
     }

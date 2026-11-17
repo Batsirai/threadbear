@@ -85,7 +85,7 @@ test("launch.mjs stops its runners once the process that started it has gone (Wi
   const { watchParent } = await import('../../launch.mjs');
   let alive = true;
   let calls = 0;
-  const timer = watchParent(4242, () => calls++, { everyMs: 5, alive: () => alive });
+  const timer = watchParent(4242, () => calls++, { everyMs: 5, alive: () => alive, startedAt: () => undefined });
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(calls, 0);
   alive = false;
@@ -93,4 +93,33 @@ test("launch.mjs stops its runners once the process that started it has gone (Wi
   assert.equal(calls, 1);
   clearInterval(timer);
   assert.equal(watchParent(1, () => calls++), null);
+});
+
+test("launch.mjs's parent watch takes a reused process id for its parent gone, and a failed read for nothing", async () => {
+  // @ts-expect-error launch.mjs has no types
+  const { watchParent } = await import('../../launch.mjs');
+  let start: string | undefined = '100';
+  let calls = 0;
+  const timer = watchParent(4242, () => calls++, { everyMs: 2, identityEvery: 2, alive: () => true, startedAt: () => start });
+  start = undefined; // PowerShell refused this time
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(calls, 0);
+  start = '200'; // a new process with the same id
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(calls, 1);
+  clearInterval(timer);
+});
+
+test('ending the task waits for the old runner to let go of the data dir', async () => {
+  // @ts-expect-error .mjs, no types
+  const { endTask } = await import('../../scripts/windows-task.mjs');
+  let ended = 0;
+  let checks = 0;
+  const ok = await endTask('t', '/h', { end: () => ended++, holder: () => 4242, alive: () => ++checks < 3, sleep: async () => {} });
+  assert.equal(ok, true);
+  assert.equal(ended, 1);
+  assert.equal(checks, 3);
+  const late = await endTask('t', '/h', { timeoutMs: -1, end: () => {}, holder: () => 4242, alive: () => true, sleep: async () => {} });
+  assert.equal(late, false);
+  assert.equal(await endTask('t', '/h', { end: () => {}, holder: () => undefined }), true);
 });

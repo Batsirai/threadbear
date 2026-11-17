@@ -547,10 +547,12 @@ export class CliUpdates {
   // tries again for one still in use.
   private async cleanupCodex(): Promise<void> {
     // Every process's command line: ps, or on Windows (no ps) PowerShell's
-    // process table, which says the same.
+    // process table, which says the same, in UTF-8 (it writes the console's
+    // code page otherwise, and C:\\Users\\José would come back garbled and
+    // match nothing).
     const ps =
       process.platform === 'win32'
-        ? await this.exec(path.join(this.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }'], { timeoutMs: 30_000 })
+        ? await this.exec(path.join(this.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }'], { timeoutMs: 30_000 })
         : await this.exec('/bin/ps', ['-axo', 'args='], { timeoutMs: 10_000 });
     if (ps.code !== 0) return; // without the process list, nothing is safe to delete
     const removed = this.copies.cleanup(this.cfg.cliUpdates.keepCodexVersions, this.d.hooks.codexBinariesInUse(), ps.stdout);
