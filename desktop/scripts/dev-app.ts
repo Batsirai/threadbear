@@ -69,6 +69,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ownFolder } from './own-folder.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const CHECKOUT = fs.realpathSync(path.join(here, '../..'));
@@ -88,31 +89,7 @@ export const INSTANCE_ID = /^[A-Za-z0-9_-]{1,40}$/;
  * reap deleted that (Daybreak, 13 Nov, finding 116). macOS's TMPDIR is already the user's own.
  */
 export function stateRoot(tmp: string = process.env.TMPDIR ?? os.tmpdir()): string {
-  const parent = fs.realpathSync(tmp);
-  const uid = process.getuid?.();
-  // Windows has no uids, and its temp folder is the user's own.
-  if (uid === undefined) {
-    const dir = path.join(parent, 'threadbear-gpui-dev-app');
-    fs.mkdirSync(dir, { recursive: true });
-    return dir;
-  }
-  const up = fs.statSync(parent);
-  const shared = (up.mode & 0o022) !== 0;
-  // Writable by others without the sticky bit, anyone could rename our folder away and put theirs in its place.
-  if (shared && !(up.mode & 0o1000)) throw new Error(`${parent} (TMPDIR) can be changed by other accounts and isn't sticky: set TMPDIR to a folder of your own`);
-  // A sticky folder's owner can still rename anyone's folder in it, so it has to be root's or ours.
-  if (up.uid !== uid && up.uid !== 0) throw new Error(`${parent} (TMPDIR) belongs to someone else: set TMPDIR to a folder of your own`);
-  const dir = path.join(parent, shared ? `threadbear-gpui-dev-app-${uid}` : 'threadbear-gpui-dev-app');
-  try {
-    fs.mkdirSync(dir, { mode: 0o700 });
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-  }
-  const s = fs.lstatSync(dir);
-  if (!s.isDirectory() || s.uid !== uid || (s.mode & 0o077) !== 0) {
-    throw new Error(`${dir} isn't a folder of this account's own (mode 700), so it's not used: remove it if it's yours, or set TMPDIR to a folder of your own`);
-  }
-  return dir;
+  return ownFolder(tmp, 'threadbear-gpui-dev-app', { hint: 'TMPDIR', uidSuffix: true });
 }
 
 export type Instance = {

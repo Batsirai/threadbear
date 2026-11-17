@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, type Driver, type Dump } from './driver.ts';
+import { ownFolder } from '../../desktop/scripts/own-folder.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const exe = process.platform === 'win32' ? 'threadbear-gpui.exe' : 'threadbear-gpui';
@@ -284,7 +285,8 @@ export class GpuiDriver implements Driver {
    * text, crash_report.rs), the end of its log (command names, never their
    * words) and of what it printed. The spec's temp folder goes at teardown,
    * panics and log with it, so `keep` copies them to a private folder first
-   * and names it (TB_SPEC_EVIDENCE, or tb-spec-evidence in the temp folder).
+   * and names it (TB_SPEC_EVIDENCE, or tb-spec-evidence in the temp folder,
+   * with the uid on a temp folder others share), or says why it couldn't.
    * A terminal test on the cloud box once got only "the app stopped" (13 Nov).
    */
   async evidence(keep: boolean): Promise<string> {
@@ -310,30 +312,45 @@ export class GpuiDriver implements Driver {
     const said = printed(this.log).trimEnd().slice(-2500);
     if (said) parts.push(`The end of what it printed:\n${said}`);
     if (keep && this.home) {
-      const dir = this.keepEvidence(panics);
-      if (dir) parts.push(`Kept in ${dir}`);
+      parts.push(this.keepEvidence(panics));
     }
     return parts.join('\n\n');
   }
 
-  /** Copies the panics, app log and output out of the temp folder that teardown removes. Keeps the newest 20 runs' worth. */
-  private keepEvidence(panics: string[]): string | undefined {
+  /**
+   * Copies the panics, app log and output out of the temp folder that teardown removes. Keeps the
+   * newest 20 runs' worth. Says where, or why nothing was kept.
+   *
+   * The folder they go in is this account's own or refused (`ownFolder`): on Linux the temp folder
+   * is everyone's, and another account could make tb-spec-evidence first, rename a run's folder
+   * away and put one in its place with output.txt a symlink to a file of ours, which the write
+   * followed (Daybreak 149, 17 Nov). In a folder only we can change, nobody can. The copies are
+   * made with O_EXCL too, so even then nothing already there is written through.
+   */
+  private keepEvidence(panics: string[]): string {
+    let root: string;
     try {
-      const root = process.env.TB_SPEC_EVIDENCE ?? path.join(fs.realpathSync(os.tmpdir()), 'tb-spec-evidence');
-      fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+      const named = process.env.TB_SPEC_EVIDENCE;
+      root = named
+        ? ownFolder(path.dirname(path.resolve(named)), path.basename(path.resolve(named)), { hint: 'TB_SPEC_EVIDENCE', othersMayRead: true, makeParent: true })
+        : ownFolder(os.tmpdir(), 'tb-spec-evidence', { hint: 'TB_SPEC_EVIDENCE', uidSuffix: true });
+    } catch (e) {
+      return `Not kept: ${(e as Error).message}`;
+    }
+    try {
       const dir = fs.mkdtempSync(path.join(root, `${new Date().toISOString().replace(/[:.]/g, '-')}-`));
       if (panics.length) fs.mkdirSync(path.join(dir, 'crashes'), { mode: 0o700 });
-      for (const file of panics) fs.copyFileSync(file, path.join(dir, 'crashes', path.basename(file)));
+      for (const file of panics) fs.copyFileSync(file, path.join(dir, 'crashes', path.basename(file)), fs.constants.COPYFILE_EXCL);
       const log = path.join(this.home, 'app.log');
-      if (fs.existsSync(log)) fs.copyFileSync(log, path.join(dir, 'app.log'));
-      fs.writeFileSync(path.join(dir, 'output.txt'), printed(this.log).slice(-64_000), { mode: 0o600 });
+      if (fs.existsSync(log)) fs.copyFileSync(log, path.join(dir, 'app.log'), fs.constants.COPYFILE_EXCL);
+      fs.writeFileSync(path.join(dir, 'output.txt'), printed(this.log).slice(-64_000), { mode: 0o600, flag: 'wx' });
       this.keptEvidence.push(dir);
       // Only this driver's folders: TB_SPEC_EVIDENCE may be a folder with other things in it.
       const runs = fs.readdirSync(root).filter((n) => KEPT_NAME.test(n)).sort();
       for (const old of runs.slice(0, Math.max(0, runs.length - 20))) fs.rmSync(path.join(root, old), { recursive: true, force: true });
-      return dir;
-    } catch {
-      return undefined;
+      return `Kept in ${dir}`;
+    } catch (e) {
+      return `Not kept: ${(e as Error).message}`;
     }
   }
 
