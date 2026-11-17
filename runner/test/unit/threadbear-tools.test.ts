@@ -1277,6 +1277,12 @@ test('end_turn asks once about an ask pointing at another thread with no link, a
   const told = await call2('end_turn', short);
   assert.equal(told.error, true);
   assert.match(told.text, new RegExp(`Use thread:${app.id} for`));
+  // A made-up id as long as a whole one is refused too, not taken on length.
+  const madeUp = { asks: [{ question: 'Pick one in its own thread.', links: [{ title: 'Open', url: `thread:${'a'.repeat(65)}` }] }] };
+  toolCall(o.s, 'e9', END_TURN, madeUp);
+  const nope = await call2('end_turn', madeUp);
+  assert.equal(nope.error, true);
+  assert.match(nope.text, /doesn't name one thread/);
   const linked = { asks: [{ question: 'Pick a direction for the app in its own thread.', links: [{ title: 'Open its thread', url: `thread:${app.id}` }] }] };
   assert.deepEqual(needsFromTool(linked)?.asks?.[0].links, [{ title: 'Open its thread', url: `thread:${app.id}` }]);
   toolCall(o.s, 'e2', END_TURN, linked);

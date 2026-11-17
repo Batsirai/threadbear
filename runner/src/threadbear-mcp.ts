@@ -388,19 +388,22 @@ export function buildThreadbearTools(
     }
   };
 
-  // An ask's thread:<id> links, each as a whole id: the phone and the web
-  // look a short one up only in the inbox (an archived thread's prefix found
-  // nothing), so a short or wrong one is refused here, saying the whole id.
+  // An ask's thread:<id> links, each the whole id of a real thread: the phone
+  // and the web look a short one up only in the inbox (an archived thread's
+  // prefix found nothing), so a short or wrong one is refused here, saying
+  // the whole id. Looked up every time, not judged by length (Codex: a long
+  // made-up id would have passed).
   const checkThreadLinks = async (asks: { links?: { url: string }[] }[]): Promise<void> => {
     for (const link of asks.flatMap((a) => a.links ?? [])) {
       const m = /^thread:([\w-]+)$/i.exec(link.url);
-      if (!m || m[1].length >= 36) continue;
+      if (!m) continue;
       let whole: string;
       try {
         whole = (await find(m[1])).id;
       } catch (e) {
         throw new Error(`Not ended: the ask link ${link.url} doesn't name one thread (${e instanceof Error ? e.message : String(e)}). Fix the link, or leave it out, and call end_turn again.`);
       }
+      if (whole === m[1]) continue;
       throw new Error(`Not ended: an ask link needs the whole thread id. Use thread:${whole} for ${link.url}, and call end_turn again.`);
     }
   };

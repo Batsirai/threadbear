@@ -203,7 +203,7 @@ impl AskHost for DecisionCard {
     fn ask_open_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
         // Another thread (an ask whose step is there) opens in the app, not
         // through the open gate as an address.
-        if let Some(id) = target.strip_prefix("thread:").or_else(|| target.strip_prefix("THREAD:")) {
+        if let Some((_, id)) = target.split_once(':').filter(|(scheme, _)| scheme.eq_ignore_ascii_case("thread")) {
             let id = id.to_owned();
             if let Some(app) = self.app.upgrade() {
                 app.update(cx, |app, cx| app.open_thread_link(&id, window, cx));
