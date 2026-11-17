@@ -1,6 +1,8 @@
 // Runner entry point: `node src/main.ts`. launchd runs this (see
 // scripts/install-runner.sh); tests run it with THREADBEAR_HOME and
 // THREADBEAR_PORT pointing at temp places.
+// First, so every process the runner starts on Windows has no console window.
+import './win32-hide.ts';
 import { realCopy } from './real-copy.ts';
 import fs from 'node:fs';
 import path from 'node:path';
