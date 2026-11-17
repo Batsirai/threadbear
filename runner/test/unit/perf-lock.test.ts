@@ -839,3 +839,48 @@ test('a Desk client finishing early cannot release locks while its GUI workload 
   assert.equal(await next.done, 0, next.output);
   assert.throws(() => process.kill(pid, 0));
 });
+
+// 18 Nov: perl --child sat under Desk Runner for 41 minutes, never reaching
+// the bash that writes the pidfile, and outlived its ssh. Desk Runner starts
+// the line outside the guard's tree and the wrapper leaves its group, so the
+// pidfile is the only way the guard can find it: it has to be written first.
+test('a Desk run held up before its command still stops when the ssh goes', async (t) => {
+  const h = host(t);
+  const bin = path.join(h.home, '.local/bin');
+  const stall = path.join(h.home, 'stall');
+  const stalled = path.join(h.home, 'stalled.pid');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(stall);
+  // Like Desk Runner: the line runs away from the client (reparented, out of
+  // the guard's tree), and the client waits until it is stopped itself.
+  fs.writeFileSync(path.join(bin, 'desk'), `#!/bin/bash\nPATH="$HOME/stall:$PATH" perl -e 'fork and exit; open(STDIN, "<", "/dev/null"); exec @ARGV' /bin/bash -c "$1"\nexec sleep 600\n`, { mode: 0o755 });
+  // perf-children.pl --child never gets anywhere, as on Tinker Desk.
+  fs.writeFileSync(path.join(stall, 'perl'), `#!/bin/bash\nif [ "\${2:-}" = --child ]; then echo $$ >"$HOME/stalled.pid"; exec sleep 600; fi\nexec /usr/bin/perl "$@"\n`, { mode: 0o755 });
+  const pidfile = path.join(h.home, 'desk.pid');
+  const run = h.run(['sh', '-c', 'echo never', 'sh'], {}, pidfile);
+  await until(() => fs.existsSync(stalled), 'the desk line did not start');
+  const pid = Number(fs.readFileSync(stalled, 'utf8'));
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
+  assert.equal(fs.readFileSync(pidfile, 'utf8').trim(), String(pid));
+  run.stdin!.end();
+  await run.done;
+  await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, 'the held-up desk run outlived its ssh');
+  assert.doesNotMatch(run.output, /never/);
+});
+
+// From 17 Nov Tinker Desk's build folders were on an SSD Desk Runner hadn't
+// been allowed to read, and macOS held its open() there with nobody to ask.
+// A FIFO with no writer blocks an open the same way.
+test('a Desk run that cannot read its folders says why instead of hanging', { skip: process.platform === 'win32' }, async (t) => {
+  const h = host(t);
+  const bin = path.join(h.home, '.local/bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'desk'), '#!/bin/sh\nexec env -i HOME="$HOME" PATH="$PATH" /bin/bash -c "$1"\n', { mode: 0o755 });
+  const blocked = path.join(h.home, 'blocked');
+  assert.equal(spawnSync('mkfifo', [blocked]).status, 0);
+  const ran = path.join(h.home, 'ran');
+  const run = h.run(['sh', '-c', 'touch "$1"', 'sh', ran], { THREADBEAR_REMOTE_SOURCE: blocked, THREADBEAR_DESK_READ_SECONDS: '1' }, path.join(h.home, 'desk.pid'));
+  assert.equal(await run.done, 126, run.output);
+  assert.match(run.output, /Desk Runner couldn't open .*blocked.*Removable Volumes/);
+  assert.ok(!fs.existsSync(ran));
+});
