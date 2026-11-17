@@ -5,6 +5,8 @@
 // are what an agent showed Mike on purpose or he pasted (replyImages), or a shared thread's.
 import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
+import { machineTimers } from '@convex-dev/state-machines';
+import { commandStateV } from './commandStates';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
 // docs/protocol.md): "link" is readable by anyone with /s/<slug>; "off"
@@ -552,6 +554,11 @@ export default defineSchema({
     kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press'), v.literal('slashCommands')),
     args: v.any(),
     state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')),
+    // The same, as its state machine has it (commandStates.ts): written with
+    // `state` on every move, and on rows from before it by the backfill
+    // (migrations.ts), so it can become required once that has run.
+    commandState: v.optional(commandStateV),
+    commandStateTimers: v.optional(machineTimers),
     note: v.optional(v.string()),
     createdAt: v.number(),
     takenAt: v.optional(v.number()),

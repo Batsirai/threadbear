@@ -6,6 +6,7 @@
 import { ConvexError, v, type Infer } from 'convex/values';
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
+import { commandStateFields } from './commandStates';
 import { messageButton, threadFields, views } from './schema';
 import { checkPhoneToken, hasLiveKey, pageLimit, readRunnerOrder, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { API_VERSION } from './version';
@@ -825,7 +826,8 @@ export const cancel = mutation({
     await checkPhoneToken(ctx, token);
     const c = await ctx.db.get(commandId);
     if (!c || c.kind !== 'send' || c.args?.from === 'mac' || c.state !== 'pending') return false;
-    await ctx.db.patch(commandId, { state: 'failed', note: 'Cancelled', doneAt: Date.now(), args: finishedArgs(c.args) });
+    const now = Date.now();
+    await ctx.db.patch(commandId, { ...commandStateFields({ kind: 'failed', doneAt: now }), note: 'Cancelled', doneAt: now, args: finishedArgs(c.args) });
     await endCommandFiles(ctx, commandId);
     for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
     return true;
@@ -1275,7 +1277,7 @@ async function queue(ctx: MutationCtx, runnerId: string, kind: 'send' | 'respond
     bytes += docBytes(c);
     if (++n >= WAITING_PER_RUNNER || bytes > WAITING_BYTES_PER_RUNNER) throw new ConvexError({ kind: 'tooMany', message: 'Too much is waiting for that runner: it takes it when it next comes online.' });
   }
-  const commandId = await ctx.db.insert('commands', { runnerId, ...(threadId ? { threadId } : {}), kind, args, state: 'pending', createdAt: Date.now() });
+  const commandId = await ctx.db.insert('commands', { runnerId, ...(threadId ? { threadId } : {}), kind, args, ...commandStateFields({ kind: 'pending' }), createdAt: Date.now() });
   for (const image of Array.isArray(args.images) ? (args.images as { storageId: Id<'_storage'> }[]) : []) await ctx.db.insert('commandFiles', { storageId: image.storageId, commandId });
   return commandId;
 }

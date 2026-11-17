@@ -15,6 +15,7 @@ import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } fr
 import type { DataModel, Doc, Id } from './_generated/dataModel';
 import { checkRunnerId, forbidden, isSeq, MAX_SEQ, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
 import { docBytes, isThreadId } from './runnerAccess';
+import { commandStateFields } from './commandStates';
 import { messageButton } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
@@ -309,7 +310,7 @@ export const queueCommand = mutation({
       throw new ConvexError({ kind: 'badArgs', message: `a ${kind} needs a thread` });
     }
     const images = kind === 'send' || kind === 'create' ? await commandPictures(ctx, (args as { images?: unknown } | null)?.images) : [];
-    const commandId = await ctx.db.insert('commands', { runnerId, ...(threadId !== undefined ? { threadId } : {}), kind, args: { ...commandArgs(kind, args), ...(images.length ? { images } : {}), from: 'mac' }, state: 'pending', createdAt: Date.now() });
+    const commandId = await ctx.db.insert('commands', { runnerId, ...(threadId !== undefined ? { threadId } : {}), kind, args: { ...commandArgs(kind, args), ...(images.length ? { images } : {}), from: 'mac' }, ...commandStateFields({ kind: 'pending' }), createdAt: Date.now() });
     // On their way, so nothing deletes them before that runner has fetched
     // them; sync:finishCommand deletes them once it has (as a phone's photos).
     for (const image of images) await ctx.db.insert('commandFiles', { storageId: image.storageId, commandId });

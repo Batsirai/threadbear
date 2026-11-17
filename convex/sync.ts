@@ -8,6 +8,7 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { messageButton, threadFields, views } from './schema';
 import { API_VERSION } from './version';
+import { commandStateFields } from './commandStates';
 import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
@@ -2939,13 +2940,15 @@ export const takeCommand = mutation({
     if (c.threadId !== undefined && c.runnerId !== 'any') {
       const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', c.threadId!)).unique();
       if (!t || t.runnerId !== c.runnerId) {
-        await ctx.db.patch(commandId, { state: 'failed', doneAt: Date.now(), args: finishedArgs(c.args), note: t ? 'That thread is on another runner now.' : 'That thread has gone.' });
+        const now = Date.now();
+        await ctx.db.patch(commandId, { ...commandStateFields({ kind: 'failed', doneAt: now }), doneAt: now, args: finishedArgs(c.args), note: t ? 'That thread is on another runner now.' : 'That thread has gone.' });
         await endCommandFiles(ctx, commandId);
         for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
         return false;
       }
     }
-    await ctx.db.patch(commandId, { state: 'taken', takenAt: Date.now(), ...(attempt !== undefined ? { attempt } : {}) });
+    const now = Date.now();
+    await ctx.db.patch(commandId, { ...commandStateFields({ kind: 'taken', takenAt: now, ...(attempt !== undefined ? { attempt } : {}) }), takenAt: now, ...(attempt !== undefined ? { attempt } : {}) });
     return true;
   },
 });
@@ -2992,7 +2995,8 @@ export const finishCommand = mutation({
     // A note is a line for the phone: cut, so a finished command stays small (pruneOld reads them).
     const said = note ? clean(cutBytes(note, caller.owner ? NOTE_MAX : CAP.note)) : undefined;
     // A lapsed command's own note ("never said how it went") goes with the lapse.
-    await ctx.db.patch(commandId, { state: ok ? 'done' : 'failed', doneAt: Date.now(), lapsedAt: undefined, note: said, ...(made ? { resultThreadId: made } : {}), ...(kept !== undefined ? { result: kept } : {}) });
+    const now = Date.now();
+    await ctx.db.patch(commandId, { ...commandStateFields({ kind: ok ? 'done' : 'failed', doneAt: now }), doneAt: now, lapsedAt: undefined, note: said, ...(made ? { resultThreadId: made } : {}), ...(kept !== undefined ? { result: kept } : {}) });
     // Its words, and a secret's sealed answer (docs/protocol.md, "Secrets"), have
     // done their job: see finishedArgs.
     await ctx.db.patch(commandId, { args: finishedArgs(c.args) });
@@ -3034,7 +3038,7 @@ export const lapseCommands = internalMutation({
       }
       read += docBytes(c);
       left--;
-      await ctx.db.patch(c._id, { state: 'failed', doneAt: now, lapsedAt: now, args: lapsedArgs(c.args), note: LAPSED_NOTE });
+      await ctx.db.patch(c._id, { ...commandStateFields({ kind: 'lapsed', doneAt: now, lapsedAt: now }), doneAt: now, lapsedAt: now, args: lapsedArgs(c.args), note: LAPSED_NOTE });
       await endCommandFiles(ctx, c._id);
       for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
     }
@@ -3452,7 +3456,7 @@ export const pruneFiles = internalMutation({
         if (full()) break;
         const images = Array.isArray(c.args?.images) ? c.args.images : [];
         charge(c, images.length);
-        await ctx.db.patch(c._id, { state: 'failed', doneAt: now, args: finishedArgs(c.args), note: state === 'pending' ? 'No runner took it in time.' : 'Its runner never finished it.' });
+        await ctx.db.patch(c._id, { ...commandStateFields({ kind: 'failed', doneAt: now }), doneAt: now, args: finishedArgs(c.args), note: state === 'pending' ? 'No runner took it in time.' : 'Its runner never finished it.' });
         await endCommandFiles(ctx, c._id);
         for (const image of images) await deleteIfUnused(ctx, image.storageId);
       }

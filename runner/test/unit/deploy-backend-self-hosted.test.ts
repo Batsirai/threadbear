@@ -52,8 +52,8 @@ function treeOf(paths: string[]): string {
 
 test('the website is built again when the backend address changes, even with the same code', () => {
   const home = selfHostedHome();
-  const functions = treeOf(['convex', 'convex.json', 'package.json', 'package-lock.json']);
-  const site = treeOf(['web', 'package.json', 'package-lock.json']);
+  const functions = treeOf(['convex', 'convex.json', 'package.json', 'package-lock.json', 'vendor']);
+  const site = treeOf(['web', 'package.json', 'package-lock.json', 'vendor']);
   const state = (url?: string) => fs.writeFileSync(path.join(home, 'backend.json'), JSON.stringify({ functions: { tree: functions }, site: { tree: site, ...(url ? { url } : {}) } }));
   // The same address: nothing to do.
   state('https://mac.tail1.ts.net:3210');

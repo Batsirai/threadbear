@@ -14,11 +14,21 @@
 // checked, as some stand for rows from before a rule on purpose.
 import fs from 'node:fs';
 import path from 'node:path';
-import { stripTypeScriptTypes } from 'node:module';
+import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { v } from 'convex/values';
 import { objectProblem, problem } from './convex-validate.ts';
 
 const CONVEX = path.join(import.meta.dirname, '../../../convex');
+// The state machines library (convex/machines.ts), and the convex/server it
+// builds on, from the repo root's node_modules, where convex/ installs it:
+// the real thing, run against this database. Its schema has to be the real
+// one too (defineSchema's tables, each with its validator), so the schema
+// fakes below wrap Convex's own.
+const rootRequire = createRequire(path.join(CONVEX, '..', 'package.json'));
+const serverModule = (await import(pathToFileURL(rootRequire.resolve('convex/server')).href)) as Record<string, any>;
+const realServer = (serverModule.defineTable ? serverModule : serverModule.default) as Record<string, any>;
+const stateMachines = (await import(pathToFileURL(rootRequire.resolve('@convex-dev/state-machines')).href)) as Record<string, unknown>;
 // The push relay's own Convex project (relay/convex), for memoryBackend(RELAY).
 export const RELAY = path.join(import.meta.dirname, '../../../relay/convex');
 
@@ -37,7 +47,11 @@ const fnRef = (prefix: string[]): unknown => new Proxy(() => prefix.join('.'), {
 type V = Parameters<typeof problem>[0];
 type Def = { __idx: Record<string, string[]>; __fields: unknown; index: (n: string, f: string[]) => Def; searchIndex: () => Def };
 const defineTable = (fields: unknown): Def => {
-  const def: Def = { __idx: {}, __fields: fields, index: (n, f) => ((def.__idx[n] = f), def), searchIndex: () => def };
+  const def = realServer.defineTable(fields) as Def & Record<string, any>;
+  const index = def.index.bind(def);
+  def.__idx = {};
+  def.__fields = fields;
+  def.index = (n: string, f: string[]) => ((def.__idx[n] = f), index(n, f), def);
   return def;
 };
 // Per project folder (CONVEX or RELAY): each table's indexes and fields.
@@ -53,9 +67,10 @@ function fitProblem(fields: unknown, doc: Record<string, unknown>): string | nul
 
 const fakes: Record<string, Record<string, unknown>> = {
   'convex/values': { v, ConvexError },
-  'convex/server': { defineSchema: (t: Record<string, Def>) => t, defineTable },
+  'convex/server': { defineSchema: (t: Record<string, Def>) => realServer.defineSchema(t), defineTable },
   './_generated/server': { mutation: (x: unknown) => x, query: (x: unknown) => x, internalMutation: (x: unknown) => x, internalQuery: (x: unknown) => x, action: (x: unknown) => x, internalAction: (x: unknown) => x },
-  './_generated/api': { internal: fnRef(['internal']), api: fnRef(['api']) },
+  './_generated/api': { internal: fnRef(['internal']), api: fnRef(['api']), components: fnRef(['components']) },
+  '@convex-dev/state-machines': stateMachines,
 };
 
 const loaded = new Map<string, Record<string, unknown>>();
@@ -88,7 +103,7 @@ export function load(name: string, root = CONVEX): Record<string, any> {
 function loadSchema(root: string) {
   const hit = schemas.get(root);
   if (hit) return hit;
-  const schema = load('schema', root).__default as Record<string, Def>;
+  const schema = (load('schema', root).__default as { tables: Record<string, Def> }).tables;
   const out = {
     indexes: Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__idx])),
     tableFields: Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__fields])),
@@ -242,7 +257,15 @@ export function memoryBackend(root = CONVEX) {
     async delete(id: string) {
       for (const t of Object.keys(tables)) tables[t] = tables[t]!.filter((r) => r._id !== id);
     },
-    system: { get: async (id: string) => (files.has(id) ? { _id: id } : null) },
+    // (id) for a stored file, or (table, id) as the state machines library asks for its timers' jobs.
+    system: {
+      get: async (a: string, b?: string) => (b === undefined ? (files.has(a) ? { _id: a } : null) : a === '_scheduled_functions' ? (jobs.get(b) ?? null) : files.has(b) ? { _id: b } : null),
+      query: (table: string) => {
+        if (table !== '_scheduled_functions') throw new Error(`convex-memory: no system table ${table}`);
+        const list = () => [...jobs.values()];
+        return { order: () => ({ async *[Symbol.asyncIterator]() { yield* list().reverse(); } }), async *[Symbol.asyncIterator]() { yield* list(); } };
+      },
+    },
     normalizeId: (table: string, id: string) => (id.startsWith(`${table}:`) ? id : null),
   };
   const storage = {
@@ -264,7 +287,43 @@ export function memoryBackend(root = CONVEX) {
     },
   };
   const scheduled: unknown[] = [];
-  const ctx = { db, storage, scheduler: { runAfter: async (_ms: number, fn: unknown, args: unknown) => void scheduled.push({ fn: String(fn), args }) } };
+  // Every job by id, as _scheduled_functions has them, for the library's
+  // timers: a timer is cancelled only while it's pending. runAt's go in
+  // `timers` (not `scheduled`, which tests read as runAfter's), due at `at`.
+  const jobs = new Map<string, { _id: string; name: string; args: unknown; scheduledTime: number; state: { kind: 'pending' | 'canceled' | 'success' } }>();
+  const timers: { id: string; fn: string; args: any; at: number }[] = [];
+  const job = (fn: unknown, args: unknown, at: number) => {
+    const id = `_scheduled_functions:${++next}`;
+    jobs.set(id, { _id: id, name: String(fn), args, scheduledTime: at, state: { kind: 'pending' } });
+    return id;
+  };
+  // The history component's facts (the library's one call to it per step).
+  const history: Record<string, any>[] = [];
+  const ctx = {
+    db,
+    storage,
+    scheduler: {
+      runAfter: async (ms: number, fn: unknown, args: unknown) => (scheduled.push({ fn: String(fn), args }), job(fn, args, Date.now() + ms)),
+      runAt: async (at: number, fn: unknown, args: any) => {
+        const id = job(fn, args, at);
+        timers.push({ id, fn: String(fn), args, at });
+        return id;
+      },
+      cancel: async (id: string) => {
+        const j = jobs.get(id);
+        if (j && j.state.kind === 'pending') j.state = { kind: 'canceled' };
+      },
+    },
+    runMutation: async (fn: unknown, args: any) => {
+      if (String(fn).endsWith('lib.record')) return (history.push(...args.facts.map((f: Record<string, unknown>) => ({ ...f, at: Date.now() }))), null);
+      throw new Error(`convex-memory: runMutation(${String(fn)}) isn't faked`);
+    },
+    runQuery: async (fn: unknown, args: any) => {
+      if (!String(fn).endsWith('lib.list')) throw new Error(`convex-memory: runQuery(${String(fn)}) isn't faked`);
+      const page = history.filter((h) => h.machine === args.machine && h.subject === args.subject);
+      return { page: args.order === 'desc' ? page.reverse() : page, isDone: true, continueCursor: '' };
+    },
+  };
   // For call: rows written meanwhile are checked.
   Object.defineProperty(ctx, CALLS, { value: inCall });
   return {
@@ -274,6 +333,13 @@ export function memoryBackend(root = CONVEX) {
     hasFile: (id: string) => files.has(id),
     deleted,
     scheduled,
+    history,
+    // The timers still pending, due by `at` (a test runs the deliver mutation for one that's due).
+    pendingTimers: () => timers.filter((t) => jobs.get(t.id)?.state.kind === 'pending'),
+    timerRan: (id: string) => {
+      const j = jobs.get(id);
+      if (j) j.state = { kind: 'success' };
+    },
     reads: () => counter.reads,
     bytesRead: () => counter.bytes,
     resetReads: () => ((counter.reads = 0), (counter.bytes = 0)),

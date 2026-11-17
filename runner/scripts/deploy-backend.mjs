@@ -22,6 +22,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConvexAdminError, convexEnv, prodArgs, readConvexAdmin } from '../src/convex-admin.ts';
 import { Fail, stepRetryingNetwork } from './deploy-steps.mjs';
+import { backfillsAt, lastJson, plan as planStones } from './backend-stones.mjs';
 
 const HELP = `deploy-backend.mjs: deploy convex/ and web/ at a commit to the runner's Convex deployment, if they changed.
 
@@ -37,9 +38,11 @@ Options:
 const DEFAULT_HOME = path.join(os.homedir(), 'Library', 'Application Support', 'Threadbear');
 // What each part is built from. The root package files are the Convex
 // dependency's version, so they count for both.
-const FUNCTION_PATHS = ['convex', 'convex.json', 'package.json', 'package-lock.json'];
-const SITE_PATHS = ['web', 'package.json', 'package-lock.json'];
-const EXPORT_PATHS = ['convex', 'convex.json', 'web', 'package.json', 'package-lock.json', '.npmrc'];
+// vendor/ holds packages that aren't on npm (the state machines library),
+// which package.json installs from a file, so it's part of both.
+const FUNCTION_PATHS = ['convex', 'convex.json', 'package.json', 'package-lock.json', 'vendor'];
+const SITE_PATHS = ['web', 'package.json', 'package-lock.json', 'vendor'];
+const EXPORT_PATHS = ['convex', 'convex.json', 'web', 'package.json', 'package-lock.json', '.npmrc', 'vendor'];
 
 const say = (msg) => console.log(msg);
 
@@ -256,22 +259,27 @@ function main(argv) {
   const target = admin.kind === 'selfHosted' ? `the self-hosted backend at ${admin.url}` : (deployment ?? "the key's deployment");
   const what = [todo.functions && 'functions', todo.site && 'website'].filter(Boolean).join(' and ');
   if (v['dry-run']) {
-    say(`Would deploy the ${what} at ${short} to ${target}.`);
+    const backfills = todo.functions ? backfillsAt(repo, commit) : [];
+    say(`Would deploy the ${what} at ${short} to ${target}.${backfills.length ? ` First it checks these backfills have run there, and runs any that haven't: ${backfills.join(', ')}.` : ''}`);
     return 0;
   }
 
   if (unlocked) throw new Fail('No lockf or flock here to keep two backend deploys apart. Install flock (util-linux).');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-backend-'));
-  process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
-  // Only the paths that commit has: git archive fails on a missing one, and an
-  // older commit (or a fork) may have no .npmrc (cross-lab review, 10 Nov 2026).
-  const present = spawnSync('git', ['-C', repo, 'ls-tree', '--name-only', commit, '--', ...EXPORT_PATHS], { encoding: 'utf8' });
-  if (present.status !== 0) throw new Fail(`git ls-tree failed: ${String(present.stderr).trim()}`);
-  const paths = present.stdout.split('\n').filter(Boolean);
-  const archive = spawnSync('git', ['-C', repo, 'archive', '--format=tar', commit, '--', ...paths], { maxBuffer: 512 * 1024 * 1024 });
-  if (archive.status !== 0) throw new Fail(`git archive failed: ${String(archive.stderr).trim()}`);
-  const untar = spawnSync('tar', ['-x', '-C', tmp], { input: archive.stdout });
-  if (untar.status !== 0) throw new Fail(`tar failed: ${String(untar.stderr).trim()}`);
+  const exportAt = (rev) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-backend-'));
+    process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
+    // Only the paths that commit has: git archive fails on a missing one, and an
+    // older commit (or a fork) may have no .npmrc (cross-lab review, 10 Nov 2026).
+    const present = spawnSync('git', ['-C', repo, 'ls-tree', '--name-only', rev, '--', ...EXPORT_PATHS], { encoding: 'utf8' });
+    if (present.status !== 0) throw new Fail(`git ls-tree failed: ${String(present.stderr).trim()}`);
+    const paths = present.stdout.split('\n').filter(Boolean);
+    const archive = spawnSync('git', ['-C', repo, 'archive', '--format=tar', rev, '--', ...paths], { maxBuffer: 512 * 1024 * 1024 });
+    if (archive.status !== 0) throw new Fail(`git archive failed: ${String(archive.stderr).trim()}`);
+    const untar = spawnSync('tar', ['-x', '-C', dir], { input: archive.stdout });
+    if (untar.status !== 0) throw new Fail(`tar failed: ${String(untar.stderr).trim()}`);
+    return dir;
+  };
+  const tmp = exportAt(commit);
 
   // Only the key picks the deployment: anything left over from a checkout's
   // .env.local or a thread's environment could point somewhere else.
@@ -290,6 +298,42 @@ function main(argv) {
     failed('packages', e);
   }
   if (todo.functions) {
+    // Stepping stones (backend-stones.mjs): backfills this commit needs to have
+    // run on the deployment before its schema can go out.
+    const run = (fn, args, cwd = tmp) => spawnSync(npx, ['convex', 'run', fn, JSON.stringify(args), ...prodArgs(admin)], { cwd, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    // A deployment whose functions are older than migrations.ts can't say: not done.
+    const isDone = (name) => {
+      const r = run('migrations:done', { name });
+      return r.status === 0 && lastJson(r.stdout) === true;
+    };
+    let steps;
+    try {
+      steps = planStones(repo, commit, readJson(stateFile).functions?.commit, isDone);
+    } catch (e) {
+      failed('backfills', e);
+    }
+    for (const { name, stone, deployStone } of steps) {
+      try {
+        if (deployStone) {
+          const dir = exportAt(stone);
+          const opts = { cwd: dir, env };
+          step(`Installing packages for ${stone.slice(0, 7)}, which ${name}'s backfill runs on`, npm, ['ci', '--no-audit', '--no-fund', '--prefer-offline'], opts);
+          step(`Deploying the Convex functions at ${stone.slice(0, 7)} first`, npx, ['convex', 'deploy', '--typecheck', 'enable', '--skip-large-indexes-check'], opts);
+          writeJson(stateFile, { ...readJson(stateFile), functions: { tree: treeOf(repo, stone, FUNCTION_PATHS), commit: stone, at: new Date().toISOString() }, failed: undefined });
+        }
+        say(`Running the ${name} backfill...`);
+        // A page a run; a few hundred runs is a very big table.
+        for (let i = 0; ; i++) {
+          const r = run('migrations:run', { name });
+          if (r.status !== 0) throw new Fail(`The ${name} backfill failed: ${String(r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ')}`);
+          if (lastJson(r.stdout)?.done === true) break;
+          if (i > 10_000) throw new Fail(`The ${name} backfill was still going after 10,000 runs.`);
+        }
+        say(`The ${name} backfill is done.`);
+      } catch (e) {
+        failed('backfills', e);
+      }
+    }
     try {
       // --skip-large-indexes-check: there's no terminal to say yes in, so
       // without it a new index on a big table (messages.search_text, 140k

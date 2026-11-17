@@ -193,3 +193,53 @@ test("a runner request's claim: the same claim asked again is told yes, any othe
   // The asking runner reads it back with its claim (requestOut lets it through).
   assert.equal((await call(s.ctx, relay.runnerRequest, { key: OWNER, requestId: 'req-00001' })).claim, 'second-claim-id');
 });
+
+// ------------------------------------------------------------ the widen (commandState)
+
+const migrations = load('migrations');
+const { legacyState } = load('commandStates') as { legacyState: (s: { kind: string }) => string };
+
+test('every move writes commandState with state, so the two always agree', async () => {
+  const s = await setup();
+  const ids = [await s.send('a'), await s.send('b'), await s.send('c'), await s.send('d')];
+  const [a, b, c, d] = ids as [string, string, string, string];
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: a, attempt: ATTEMPT });
+  await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: a, ok: true });
+  await call(s.ctx, phone.cancel, { token: TOKEN, commandId: b });
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: c });
+  await later(sync.TAKEN_LEASE_MS + 60_000, () => call(s.ctx, sync.lapseCommands, {}));
+  const kinds = Object.fromEntries(ids.map((id) => [id, s.row(id).commandState?.kind]));
+  assert.deepEqual(kinds, { [a]: 'done', [b]: 'failed', [c]: 'lapsed', [d]: 'pending' });
+  assert.deepEqual(s.row(a).commandState, { kind: 'done', doneAt: s.row(a).doneAt });
+  for (const r of s.rows('commands')) assert.equal(legacyState(r.commandState), r.state, JSON.stringify(r));
+  // The main Mac's own commands for another runner too.
+  const q = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: MINI, threadId: 'B', kind: 'send', args: { text: 'hi' } });
+  assert.deepEqual(s.row(q).commandState, { kind: 'pending' });
+});
+
+test('the backfill gives every row from before commandState its state, a page at a time, and says when it has', async () => {
+  const s = await setup();
+  const now = Date.now();
+  const old = [
+    { state: 'pending', want: { kind: 'pending' } },
+    { state: 'taken', takenAt: now - 5, attempt: ATTEMPT, want: { kind: 'taken', takenAt: now - 5, attempt: ATTEMPT } },
+    { state: 'done', doneAt: now - 3, want: { kind: 'done', doneAt: now - 3 } },
+    { state: 'failed', doneAt: now - 2, want: { kind: 'failed', doneAt: now - 2 } },
+    { state: 'failed', doneAt: now - 1, lapsedAt: now - 1, want: { kind: 'lapsed', doneAt: now - 1, lapsedAt: now - 1 } },
+  ];
+  const ids: string[] = [];
+  for (const { want: _, ...row } of old) ids.push(await s.ctx.db.insert('commands', { runnerId: MINI, kind: 'send', args: {}, createdAt: now - 10, ...row }));
+  for (let i = 0; i < 230; i++) await s.ctx.db.insert('commands', { runnerId: MINI, kind: 'send', args: {}, createdAt: now, state: 'done', doneAt: now });
+  const fresh = await s.send('already has it');
+  assert.equal(await call(s.ctx, migrations.done, { name: 'commandState' }), false);
+  let runs = 0;
+  while (!(await call(s.ctx, migrations.run, { name: 'commandState' })).done) assert.ok(++runs < 10);
+  assert.equal(runs, 2, 'three pages of 100');
+  assert.equal(await call(s.ctx, migrations.done, { name: 'commandState' }), true);
+  assert.deepEqual(ids.map((id) => s.row(id).commandState), old.map((o) => o.want));
+  assert.ok(s.rows('commands').every((r) => r.commandState && Array.isArray(r.commandStateTimers)));
+  assert.deepEqual(s.row(fresh).commandState, { kind: 'pending' });
+  // Run again: nothing to do.
+  assert.deepEqual(await call(s.ctx, migrations.run, { name: 'commandState' }), { done: true });
+  assert.equal(await outcome(call(s.ctx, migrations.run, { name: 'nope' })), 'badArgs');
+});
