@@ -203,6 +203,9 @@ pub mod words {
     pub const CUT_NO_EDIT: &str = "Only the start of this file is shown, so it can't be edited here.";
     pub const NOT_UTF8: &str = "This file isn't UTF-8 text, so it can't be edited here.";
     pub const GONE: &str = "This file isn't there any more.";
+    /// A file opened while the runner was away (restarting onto a new
+    /// release, say): it's read once the app's connected again.
+    pub const WAITING: &str = "Waiting for the runner. This opens once it's back.";
     pub const CONFLICT: &str = "Changed on disk while you were editing.";
     pub const TAKE_FILES: &str = "Take the file's";
     pub const TAKE_FILES_TIP: &str = "Show what's in the file now. What you typed since your last save goes.";

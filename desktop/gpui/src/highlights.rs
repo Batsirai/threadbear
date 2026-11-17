@@ -360,6 +360,15 @@ impl SidePane {
                 if let Some(thread) = this.thread(cx) {
                     this.refresh_highlights(thread.id, Duration::ZERO, cx);
                 }
+                // Files opened while the runner was away: read now, or when
+                // their thread is next shown (reread_file puts that off).
+                let waiting: Vec<String> = this.files.open.iter().filter(|(_, f)| f.waiting_for_runner).map(|(id, _)| id.clone()).collect();
+                for id in waiting {
+                    if let Some(open) = this.files.open.get_mut(&id) {
+                        open.waiting_for_runner = false;
+                    }
+                    this.reread_file(&id, cx);
+                }
             })
             .ok();
         })

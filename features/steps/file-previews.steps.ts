@@ -178,3 +178,9 @@ When('I press Run them over the page in the pane', async function (this: Threadb
   await this.until('the bar asking to run its scripts', (d) => pane(d)?.previewNote === 'This page has scripts');
   await this.app.do({ cmd: 'preview', runScripts: true });
 });
+
+// A note in place of the file (one that only opens in its app, or one waiting
+// for the runner), as against the bar over a file (`the pane says`).
+Then('the pane\'s note reads {string}', async function (this: ThreadbearWorld, words: string) {
+  await this.until(`the pane's note to read "${words}"`, (d) => pane(d)?.previewKind === 'note' && pane(d)?.previewText === words);
+});

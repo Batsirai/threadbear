@@ -955,7 +955,13 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         }
         "link" => {
             let (row, url) = (text(cmd, "row").to_string(), text(cmd, "url").to_string());
-            app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.follow_link_command(&row, &url, window, cx)))??;
+            // The pane alone, not through the app's update: a file link asks
+            // whether the side pane is its thread's, which reads the app,
+            // and GPUI aborts on that read while the app's being updated (a
+            // `~/` file link killed the dev app, 17 Nov). A real click
+            // reaches the pane the same way.
+            let pane = app.read(cx).pane.clone().ok_or("no thread open")?;
+            pane.update(cx, |p, cx| p.follow_link_command(&row, &url, window, cx))?;
             Ok(json!("ok"))
         }
         "archive" => {

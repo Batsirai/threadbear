@@ -84,11 +84,16 @@ pub(crate) struct OpenFile {
     /// Its folder heard it change while another thread was showing, so the
     /// read was put off: coming back reads it again (`load_file`).
     pub changed_away: bool,
+    /// Its read found no runner (a click during a restart, which is most
+    /// days' updates): it's read again when the app's connected again,
+    /// rather than saying "Not connected" until it's opened again. A link
+    /// on an ask's card opened onto a blank pane like this (17 Nov).
+    pub waiting_for_runner: bool,
 }
 
 impl OpenFile {
     fn new(path: String, opened: u64, body: FileBody) -> Self {
-        OpenFile { path, opened, body, truncated: false, size: 0, find: None, edit: None, page_scroll: ScrollHandle::new(), _page_watch: None, _file_watch: None, _reread: None, changed_away: false }
+        OpenFile { path, opened, body, truncated: false, size: 0, find: None, edit: None, page_scroll: ScrollHandle::new(), _page_watch: None, _file_watch: None, _reread: None, changed_away: false, waiting_for_runner: false }
     }
 
     /// The raw text's editor, while it's showing.
@@ -140,6 +145,9 @@ pub(crate) enum FileBody {
     /// A spinner would only flash for a normal file; a beat later there's a note.
     Loading,
     Failed { message: String },
+    /// Asked for while the runner was away; read again once it's back
+    /// (`OpenFile::waiting_for_runner`, SidePane::connected).
+    Waiting,
     Markdown { doc: Entity<TextViewState>, text: Arc<str> },
     /// Code or plain text: a read-only editor, coloured for code. The editor
     /// is made at the next frame, as it needs a window.
@@ -473,10 +481,13 @@ impl SidePane {
         // opening it again from a row does (`opened` moved), and so does
         // coming back to a thread whose file changed while it was away.
         if let Some(open) = self.files.open.get_mut(&thread.id).filter(|f| f.path == path && f.opened == opened) {
-            if !open.changed_away {
+            // One still waiting for the runner is read again too: Back and
+            // the same file again leaves its entry (Codex's review, 17 Nov).
+            if !open.changed_away && !open.waiting_for_runner {
                 return;
             }
             open.changed_away = false;
+            open.waiting_for_runner = false;
         }
         self.read_file(thread, path, opened, cx);
     }
@@ -539,7 +550,41 @@ impl SidePane {
                         }
                         cx.notify();
                     }
+                    // No runner (not a slow one: a timeout while connected
+                    // has no reconnect to wait for, so it fails as it is).
+                    Err(e) if matches!(e.code, threadbear_client::runner::NOT_CONNECTED | threadbear_client::runner::CLOSED) => this.wait_for_runner(&thread_id, &path, opened, cx),
                     Err(e) => this.fail_file(&thread_id, &path, opened, e.message, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// No runner to read it: what was showing stays (a file read again),
+    /// or the pane says it's waiting, and SidePane::connected reads it.
+    fn wait_for_runner(&mut self, thread_id: &str, path: &str, opened: u64, cx: &mut Context<Self>) {
+        let open = self.files.open.entry(thread_id.to_owned()).or_insert_with(|| OpenFile::new(path.to_owned(), opened, FileBody::Waiting));
+        if matches!(open.body, FileBody::Loading | FileBody::Failed { .. }) {
+            open.body = FileBody::Waiting;
+        }
+        open.waiting_for_runner = true;
+        cx.notify();
+        // The answer can land after the reconnect it should wait for: the
+        // client says Connected a moment before its session's set, so the
+        // sweep can run first (Codex's review, 17 Nov). Look again in half
+        // a second, when a runner that's back has its session; one still
+        // away is read by SidePane::connected.
+        let (thread_id, client) = (thread_id.to_owned(), self.client.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+            if client.connected_session().is_none() {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                if let Some(open) = this.files.open.get_mut(&thread_id).filter(|f| f.waiting_for_runner) {
+                    open.waiting_for_runner = false;
+                    this.reread_file(&thread_id, cx);
                 }
             })
             .ok();
@@ -883,6 +928,7 @@ impl SidePane {
             // says which file it's getting.
             FileBody::Loading => div().size_full().flex().items_center().justify_center().child(Spinner::new().with_size(px(14.)).color(p.secondary)).into_any_element(),
             FileBody::Failed { message } => pane_note(&failed_words(message), p).into_any_element(),
+            FileBody::Waiting => pane_note(threadbear_core::text_file::words::WAITING, p).into_any_element(),
             FileBody::Opaque { note } => pane_note(note, p).into_any_element(),
             FileBody::Page(page) => {
                 let page = page.clone();
@@ -1103,6 +1149,10 @@ impl SidePane {
                     FileBody::Failed { message } => {
                         pane.insert("previewKind".into(), json!("note"));
                         pane.insert("previewText".into(), json!(failed_words(message)));
+                    }
+                    FileBody::Waiting => {
+                        pane.insert("previewKind".into(), json!("note"));
+                        pane.insert("previewText".into(), json!(threadbear_core::text_file::words::WAITING));
                     }
                     FileBody::Opaque { note } => {
                         pane.insert("previewKind".into(), json!("note"));
