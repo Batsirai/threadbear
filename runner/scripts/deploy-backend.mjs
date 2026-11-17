@@ -230,7 +230,8 @@ function main(argv) {
   const todo = {
     // A stepping-stone deploy left live (an interrupted run) is never up to
     // date, whatever the tree says: its machine is off until the deploy ends.
-    functions: v.force || state.functions?.tree !== want.functions || state.stepping !== undefined,
+    // So is one whose timers haven't been rearmed since (rearmDue, below).
+    functions: v.force || state.functions?.tree !== want.functions || state.stepping !== undefined || state.rearmDue === true,
     site: v.force || state.site?.tree !== want.site || (state.site?.url !== undefined && state.site.url !== siteUrl),
   };
   if (!todo.functions && !todo.site) {
@@ -315,16 +316,18 @@ function main(argv) {
       failed('backfills', e);
     }
     if (pending.length) {
-      // What was working before, to go back to if the backfill can't finish:
-      // the stepping stone has its machine off (Codex's review).
-      const before = readJson(stateFile).functions;
       try {
         const file = path.join(tmp, STEPPING_FILE);
         const original = fs.readFileSync(file, 'utf8');
         fs.writeFileSync(file, withStepping(original, pending));
         step(`Deploying the Convex functions at ${short} as a stepping stone for ${pending.join(', ')}`, npx, ['convex', 'deploy', '--typecheck', 'enable', '--skip-large-indexes-check'], opts);
         fs.writeFileSync(file, original);
-        writeJson(stateFile, { ...readJson(stateFile), stepping: { commit, names: pending, at: new Date().toISOString() } });
+        // Until the final deploy, a machine is off: a deploy never counts as
+        // up to date while this is here, and the runner's updater tries
+        // again at its next check rather than when main next changes. There's
+        // no going back to the release before: once a row has the new field,
+        // Convex refuses a schema without it.
+        writeJson(stateFile, { ...readJson(stateFile), stepping: { commit, names: pending, at: new Date().toISOString() }, rearmDue: true });
         for (const name of pending) {
           say(`Running the ${name} backfill...`);
           // A page a run; a few hundred runs is a very big table. A run that
@@ -342,18 +345,6 @@ function main(argv) {
           say(`The ${name} backfill is done.`);
         }
       } catch (e) {
-        // Put back what was working, so the machine isn't left off until the
-        // next update tries again.
-        if (readJson(stateFile).stepping && before?.commit && spawnSync('git', ['-C', repo, 'cat-file', '-e', `${before.commit}^{commit}`]).status === 0) {
-          try {
-            const back = exportAt(before.commit);
-            step(`Installing packages for ${before.commit.slice(0, 7)}, the backend as it was`, npm, ['ci', '--no-audit', '--no-fund', '--prefer-offline'], { cwd: back, env });
-            step(`Deploying the Convex functions at ${before.commit.slice(0, 7)} again`, npx, ['convex', 'deploy', '--typecheck', 'enable', '--skip-large-indexes-check'], { cwd: back, env });
-            writeJson(stateFile, { ...readJson(stateFile), functions: before, stepping: undefined });
-          } catch (back) {
-            say(`Couldn't put the backend back as it was: ${String(back?.message ?? back).slice(0, 200)}`);
-          }
-        }
         failed('backfills', e);
       }
     }
@@ -367,10 +358,18 @@ function main(argv) {
       failed('functions', e);
     }
     writeJson(stateFile, { ...readJson(stateFile), functions: { tree: want.functions, commit, at: new Date().toISOString() }, failed: undefined, stepping: undefined });
-    // A timer due while a machine was off failed its job: deliver it again.
-    if (pending.length) {
-      const r = run('machines:rearmFailed', {});
-      if (r.status !== 0) say(`Couldn't rearm timers that failed meanwhile: ${String(r.stderr || r.stdout).trim().split('\n').at(-1)}`);
+    // A timer due while a machine was off failed its job: deliver it again,
+    // a batch a run until none is left. Recorded until it has gone through,
+    // so an interrupted or failed run does it next time.
+    if (readJson(stateFile).rearmDue) {
+      for (let i = 0; ; i++) {
+        const r = run('machines:rearmFailed', {});
+        if (r.status !== 0) {
+          failed('timers', new Fail(`Couldn't deliver again the timers that failed while a machine was off: ${String(r.stderr || r.stdout).trim().split('\n').at(-1)}`));
+        }
+        if (!(Number(lastJson(r.stdout)) > 0) || i > 100) break;
+      }
+      writeJson(stateFile, { ...readJson(stateFile), rearmDue: undefined });
     }
   }
   if (todo.site) {

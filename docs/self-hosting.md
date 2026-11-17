@@ -294,7 +294,9 @@ runs its backfill (`migrations:run`) to the end, then deploys the release
 as it is. It only ever deploys the release it's updating to, so a copy that
 skipped releases, or a fork with schema changes of its own, upgrades the
 same way. For the minute the backfill takes, what the phone or a runner asks
-of that part of the backend is told to try again. `tb logs` and
+of that part of the backend is told to try again. If the backfill or the
+final deploy fails partway, the runner tries again at its next check, every
+few minutes, until it goes through. `tb logs` and
 `<home>/runner/update.log` show each step. If you deploy `convex/` by hand
 instead, do the same: `node runner/scripts/deploy-backend.mjs` does it for
 you, with the admin key in `secrets/convex-self-hosted.env`.

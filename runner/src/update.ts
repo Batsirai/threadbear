@@ -740,7 +740,9 @@ export class RunnerUpdater {
           // couldn't finish, and the backend couldn't be put back) has a
           // machine switched off: tried again at the next check, not only
           // once main changes.
-          if (readJsonSync<{ stepping?: unknown }>(path.join(home, 'backend.json'))?.stepping !== undefined) this.backendTried = undefined;
+          // Likewise timers that failed while it was off and still need delivering.
+          const left = readJsonSync<{ stepping?: unknown; rearmDue?: unknown }>(path.join(home, 'backend.json'));
+          if (left?.stepping !== undefined || left?.rearmDue === true) this.backendTried = undefined;
           log.error('could not deploy the backend at main', { commit: main.short, error: this.backendFailed });
           this.failed(
             { kind: 'backend', commit: main.commit, short: main.short, subject: main.subject, error: this.backendFailed ?? 'unknown error', logFile: backendLogPath(home) },

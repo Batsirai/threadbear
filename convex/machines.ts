@@ -65,7 +65,9 @@ export const rearmFailed = machines.internalMutation({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {
-    const failed = await machines.failedTimers(ctx, { limit: 200 });
+    // Failed deliveries newest first, superseded ones included in the count,
+    // so a wide look; the deploy calls this again until it rearms none.
+    const failed = await machines.failedTimers(ctx, { limit: 2000 });
     for (const t of failed) await machines.rearmTimer(ctx, t);
     return failed.length;
   },
