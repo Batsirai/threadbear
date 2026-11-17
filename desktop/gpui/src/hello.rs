@@ -639,6 +639,8 @@ impl Threadbear {
             let on = choice == now;
             div()
                 .id(SharedString::from(format!("hello-look-{}", choice.name())))
+                .role(Role::Tab)
+                .aria_selected(on)
                 .px(px(8.))
                 .py(px(3.))
                 .rounded(px(5.))
@@ -755,7 +757,7 @@ fn group(rows: Vec<AnyElement>, cx: &App) -> AnyElement {
 }
 
 fn link(id: &'static str, label: &'static str, tip: &'static str, color: Hsla) -> Stateful<Div> {
-    div().id(id).cursor_pointer().text_color(color).child(label).tip(tip)
+    div().id(id).role(Role::Button).cursor_pointer().text_color(color).child(label).tip(tip)
 }
 
 fn switch(id: &'static str, on: bool, tip: &'static str, cx: &mut Context<Threadbear>, set: impl Fn(&mut Threadbear, bool, &mut Context<Threadbear>) + 'static) -> AnyElement {
