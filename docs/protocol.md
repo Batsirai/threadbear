@@ -1976,6 +1976,24 @@ the agent to stop any that are stuck and to ask Mike if it can't tell.
 Jobs it has been told about are kept in `stuck-jobs.json` in the data
 dir for a day, so a runner restart doesn't tell it again.
 
+### Background wait loops
+
+A thread can't be hibernated while its CLI runs background jobs without
+stopping them, so an agent that waits on something outside its turn (a
+merge to land, CI, another thread, a time) with a background shell that
+sleeps until it's there keeps its thread awake: on 17 Nov a "wait until
+this Mac's main has Ian's commit" loop sat for 40 minutes, and Hibernate
+asked to kill it. The Claude adapter's PreToolUse hook (wait-loops.ts)
+refuses such a call as it's made, in every mode: a Bash call with
+`run_in_background` whose command is a `while`, `until` or `for` loop that
+sleeps, a `sleep` of a minute or more by itself, or `gh run watch` /
+`gh pr checks --watch`. The reason tells the agent to wait with
+`schedule_message` and a `check` that prints once it's ready, then end its
+turn with `snooze`, so the thread hibernates and the check wakes it. A
+short wait it will use within its turn (a server starting) goes through
+when the command carries `# short wait`. Codex's shell has no hook to
+refuse a call with, so Codex threads are left to the stuck-job check.
+
 ### Frozen CLIs
 
 A CLI can freeze on something only a person can answer: on 31 Oct 2026 a

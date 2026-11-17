@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { readYearToken } from '../../year-token.ts';
 import { denySecrets } from '../../secrets-guard.ts';
+import { denyWaitLoop } from '../../wait-loops.ts';
 import os from 'node:os';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { HookInput, McpServerConfig, ModelInfo, Options, PermissionResult, Query, SDKControlGetContextUsageResponse, SDKUserMessage, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
@@ -506,8 +507,10 @@ class ClaudeSession implements AgentSession {
           // let it through: only tools that can queue, so the rest don't
           // make a round trip per call.
           // ...and keeps the runner's token from a thread that isn't on Full
-          // access (secrets-guard.ts).
-          { matcher: [QUEUE_HOOK_MATCHER, ...SECRETS_ONLY_TOOLS].join('|'), hooks: [async (input) => this.onSecretsCall(input) ?? this.onQueuedCall(input) ?? this.onEditCall(input)] },
+          // access (secrets-guard.ts), and refuses a background wait loop,
+          // which would keep the thread from hibernating (wait-loops.ts).
+          // After onQueuedCall, which notes every call it sees.
+          { matcher: [QUEUE_HOOK_MATCHER, ...SECRETS_ONLY_TOOLS].join('|'), hooks: [async (input) => this.onSecretsCall(input) ?? this.onQueuedCall(input) ?? this.onWaitLoop(input) ?? this.onEditCall(input)] },
           // A hook's ask comes before allow rules, so it's how a folder's
           // untrusted ones stop applying once the thread leaves Full
           // (askBeforeEveryTool). Only on a session that may need it.
@@ -639,6 +642,15 @@ class ClaudeSession implements AgentSession {
     const home = this.opts.env?.THREADBEAR_HOME;
     if (!home || typeof call.tool_name !== 'string' || !call.tool_input || typeof call.tool_input !== 'object') return undefined;
     const why = denySecrets(call.tool_name, call.tool_input as Record<string, unknown>, home, typeof call.cwd === 'string' ? call.cwd : undefined);
+    return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : undefined;
+  }
+
+  // A background shell that only waits (wait-loops.ts), in every mode: Full
+  // is where it's most often started, and the reason says how to wait instead.
+  private onWaitLoop(input: HookInput): { hookSpecificOutput: { hookEventName: 'PreToolUse'; permissionDecision: 'deny'; permissionDecisionReason: string } } | undefined {
+    const call = input as { tool_name?: string; tool_input?: unknown };
+    if (typeof call.tool_name !== 'string' || !call.tool_input || typeof call.tool_input !== 'object') return undefined;
+    const why = denyWaitLoop(call.tool_name, call.tool_input as Record<string, unknown>);
     return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : undefined;
   }
 

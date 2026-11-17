@@ -741,7 +741,10 @@ that turn. It also stops any background jobs that thread's agent left running,
 including shell jobs waiting their turn in a queue. From the row's hover buttons,
 Threadbear asks first. A scheduled message can bring the agent back later,
 but it does not keep those jobs alive. To let a job finish, leave its thread
-awake; the agent can end its reply while the job carries on.
+awake; the agent can end its reply while the job carries on. An agent that
+only needs to wait for something (a merge, CI, another thread) is stopped
+from doing it with a background job, and uses a scheduled check instead,
+so its thread can still hibernate.
 
 You can also ask a thread to do it to itself ("hibernate this until
 Thursday", "archive this when you're done"). It finishes its reply first,
