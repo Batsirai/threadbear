@@ -43,7 +43,7 @@ export const BORROW_IDLE_MS = 24 * 3_600_000;
 // Git's own markers of something half done in a checkout.
 const HALF_DONE = ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'sequencer', 'BISECT_LOG'];
 
-export type Borrower = { thread?: string; home?: string; pid?: number; scratch?: boolean; at?: number };
+export type Borrower = { thread?: string; home?: string; branch?: string; pid?: number; scratch?: boolean; at?: number };
 
 export function parseBorrower(text: string): Borrower {
   const b: Borrower = {};
@@ -52,6 +52,7 @@ export function parseBorrower(text: string): Borrower {
     if (!v) continue;
     if (k === 'thread') b.thread = v;
     else if (k === 'home') b.home = v;
+    else if (k === 'branch') b.branch = v;
     else if (k === 'pid' && /^\d+$/.test(v)) b.pid = Number(v);
     else if (k === 'scratch') b.scratch = v === '1';
     else if (k === 'at' && /^\d+$/.test(v)) b.at = Number(v) * 1000;
@@ -135,6 +136,14 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       skip('a process is working in it');
       continue;
     }
+    // The branch being worked on there (a rebase's too) must be the one it
+    // was borrowed on: a record left behind in a folder someone has since
+    // switched to their own branch says nothing about them.
+    const ours = () => {
+      const wb = workingBranch(admin);
+      return wb === undefined ? !scratch && !who.branch : wb.startsWith(`refs/heads/${BORROW_PREFIX}`) && (!who.branch || wb === `refs/heads/${who.branch}`);
+    };
+    if (!ours()) continue;
     // Before each git that changes it: still the checkout git made there
     // (not a link to somewhere else, main say), still this borrow (its
     // record unchanged: given back and borrowed again, it's someone
@@ -152,7 +161,10 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       // Its script's work, thrown away as the script itself would have.
       let here: string | undefined;
       for (const args of [['rebase', '--abort'], ['merge', '--abort'], ['cherry-pick', '--abort']]) {
-        if (!(here = still())) break;
+        if (!(here = still()) || !ours()) {
+          here = undefined;
+          break;
+        }
         await git(here, args);
       }
       // Back on its borrow branch, as it always is outside a rebase.
@@ -197,13 +209,15 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
     const tip = (await git(c.path, ['rev-parse', 'HEAD'])).stdout.trim();
     const second = await unsafe();
     if (second) {
-      // A commit or an edit came in while it was looked at: put it back.
-      if (branch && (here = still(tip))) await git(here, ['checkout', '-q', branch]);
+      // A commit or an edit came in while it was looked at: back on its
+      // branch, moved to what's there now so a new commit stays on it.
+      if (branch && (here = still(tip))) await git(here, ['checkout', '-q', '-B', branch]);
       skip(second);
       continue;
     }
-    // -d, not -D: git itself refuses a branch that isn't all on main.
-    if (branch && !(await git(mainCheckout, ['branch', '-q', '-d', branch])).ok) {
+    // The branch itself all on main too (nothing else has it checked out
+    // to move it now), and -d so git refuses it as well.
+    if (branch && !((await git(mainCheckout, ['merge-base', '--is-ancestor', `refs/heads/${branch}`, MAIN])).ok && (await git(mainCheckout, ['branch', '-q', '-d', branch])).ok)) {
       if ((here = still(tip))) await git(here, ['checkout', '-q', branch]);
       skip(`its branch has commits that aren't on ${MAIN}`);
       continue;
@@ -213,14 +227,32 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       continue;
     }
     let to: Reclaimed['to'];
+    // Its record goes first: once locked, the next borrower may write its own.
+    const recordFile = path.join(admin, BORROW_FILE);
+    fs.rmSync(recordFile, { force: true });
     if (spares < MAX_SPARES && (await git(mainCheckout, ['worktree', 'lock', '--reason', SPARE, c.path])).ok) {
-      fs.rmSync(path.join(admin, BORROW_FILE), { force: true });
       spares++;
       to = 'spare';
+      // An edit that came in at the last moment: taken back out of the pool
+      // (the same claim as a borrow's, so only if nobody has it yet), so the
+      // next borrower's reset doesn't lose it.
+      const late = await git(c.path, ['status', '--porcelain', '--untracked-files=all']);
+      if (!late.ok || late.stdout.trim()) {
+        const lock = path.join(admin, 'locked');
+        try {
+          fs.renameSync(lock, `${lock}.unspared-${process.pid}`);
+          fs.rmSync(`${lock}.unspared-${process.pid}`, { force: true });
+        } catch {
+          // Claimed already.
+        }
+        skip('it changed as it was set aside, so it was left out of the pool');
+        continue;
+      }
     } else if ((await git(mainCheckout, ['worktree', 'remove', c.path])).ok) {
       // Without --force, git refuses one with changes or untracked files.
       to = 'removed';
     } else {
+      if (record !== undefined && !fs.existsSync(recordFile)) fs.writeFileSync(recordFile, record);
       skip("git couldn't lock or remove it");
       continue;
     }
@@ -235,7 +267,10 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
   if (out && refs.ok) {
     for (const b of refs.stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {
       if (checkedOut.has(b)) continue;
-      if ((await git(mainCheckout, ['branch', '-q', '-d', b])).ok) result.branches.push(b);
+      // Asked of main itself: -d alone goes by a branch's upstream when it
+      // has one, and a pushed branch's work needn't be on main.
+      if (!(await git(mainCheckout, ['merge-base', '--is-ancestor', `refs/heads/${b}`, MAIN])).ok) continue;
+      if ((await git(mainCheckout, ['branch', '-q', '-D', b])).ok) result.branches.push(b);
     }
   }
   return result;
@@ -275,6 +310,17 @@ function lastUsed(admin: string): number {
     }
   }
   return last;
+}
+
+// The branch a checkout is working on: a rebase's own (HEAD is detached
+// while it runs), or HEAD's. undefined when detached.
+function workingBranch(admin: string): string | undefined {
+  for (const d of ['rebase-merge', 'rebase-apply']) {
+    const name = readPlainFile(path.join(admin, d, 'head-name'), 8192)?.trim();
+    if (name) return name.startsWith('refs/heads/') ? name : undefined;
+  }
+  const head = readHead(admin);
+  return head?.startsWith('ref: ') ? head.slice('ref: '.length) : undefined;
 }
 
 function readHead(admin: string): string | undefined {

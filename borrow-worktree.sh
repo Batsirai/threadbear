@@ -126,6 +126,7 @@ fi
 {
   echo "thread=${THREADBEAR_THREAD_ID:-}"
   echo "home=${THREADBEAR_RUNNER_HOME:-}"
+  echo "branch=$(git -C "$claimed" symbolic-ref -q --short HEAD)"
   echo "pid=${THREADBEAR_BORROW_PID:-}"
   echo "scratch=${THREADBEAR_BORROW_SCRATCH:-}"
   echo "at=$(date +%s)"

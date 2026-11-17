@@ -192,3 +192,19 @@ test('both moved and the check fails or the run is stopped: the borrowed worktre
   await until(() => borrowBranches(main) === '' && spares(main) === 1, 'the borrow given back');
   assert.equal(origin(), before, 'nothing pushed');
 });
+
+test("a stopped run's give-back leaves alone a worktree that's no longer its borrow", async () => {
+  const { root, main } = bothMoved('true');
+  fs.writeFileSync(path.join(main, 'check.sh'), `#!/bin/sh\ntouch '${root}/checking'\nsleep 30\n`);
+  sh(main, 'git commit -qam "slow check"');
+  const p = spawn(path.join(main, 'scripts', 'sync-main.sh'), [], { cwd: main, env, detached: true, stdio: 'ignore' });
+  const closed = new Promise<void>((res) => p.once('close', () => res()));
+  await until(() => fs.existsSync(path.join(root, 'checking')), 'the check to start');
+  // Meanwhile it's switched to someone else's branch, with their edit.
+  const wt = path.join(root, 'main-threads', 'slot-1');
+  sh(wt, 'git checkout -q -b someone-else && echo theirs > theirs.txt');
+  process.kill(-p.pid!, 'SIGTERM');
+  await closed;
+  assert.equal(sh(wt, 'git rev-parse --abbrev-ref HEAD'), 'someone-else');
+  assert.equal(fs.readFileSync(path.join(wt, 'theirs.txt'), 'utf8'), 'theirs\n');
+});

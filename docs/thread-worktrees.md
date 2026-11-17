@@ -522,7 +522,7 @@ sync-main couldn't borrow one and main wasn't pushed. Now:
 - `borrow-worktree.sh` has no cap: it takes the first free slot number.
 - It writes who borrowed beside git's files, `<worktree's git
   dir>/threadbear-borrow`: `thread=` (`THREADBEAR_THREAD_ID`), `home=`
-  (its runner's data dir), `pid=`
+  (its runner's data dir), `branch=` (the borrow branch), `pid=`
   (`THREADBEAR_BORROW_PID`, for a script that gives it back itself),
   `scratch=1` (`THREADBEAR_BORROW_SCRATCH`: what's in it may be thrown
   away once that process has gone) and `at=`. `--give-back` removes it.
@@ -543,7 +543,10 @@ sync-main couldn't borrow one and main wasn't pushed. Now:
   inside, asked again after it's detached (a commit made meanwhile puts
   it back on its branch), with `branch -d` so git itself refuses a branch
   not on main, and each change made only while the folder is still the
-  checkout git made there (not a link) with the same borrow record. A
+  checkout git made there (not a link) with the same borrow record, on
+  the branch it was borrowed on (a rebase's own branch counts). Its status
+  is read once more after it's locked, and a late edit takes it back out
+  of the pool. A
   process list that can't be read in full stops the sweep. The one exception is a scratch borrow whose process has gone:
   what it left half done is aborted and reset to main first. A detached,
   unlocked slot no thread holds (a spare claimed and never set up) goes

@@ -210,3 +210,30 @@ test('a borrow folder swapped for a link to main is never touched', async () => 
   assert.equal(fs.readFileSync(path.join(main, 'mine.txt'), 'utf8'), 'main checkout work\n');
   assert.equal(sh(main, 'git rev-parse --abbrev-ref HEAD'), 'main');
 });
+
+test("a dead script's record left in a folder someone switched to their own branch never touches their rebase", async () => {
+  const { main } = makeRepo();
+  addBorrowScript(main);
+  const wt = borrow(main, 'THREADBEAR_BORROW_PID=999999 THREADBEAR_BORROW_SCRATCH=1');
+  sh(wt, 'git checkout -q -b feature');
+  commit(wt, { 'README.md': 'feature\n' }, 'Feature');
+  commit(main, { 'README.md': 'main\n' }, 'Main');
+  sh(wt, 'git rebase -q main >/dev/null 2>&1 || true');
+  assert.ok(fs.existsSync(path.join(admin(wt), 'rebase-merge')), 'a conflicted rebase in progress');
+  const r = await sweepBorrows(main, opts({ now: Date.now() + 9 * DAY }));
+  assert.deepEqual(r.reclaimed, []);
+  assert.ok(fs.existsSync(path.join(admin(wt), 'rebase-merge')), 'their rebase is still there');
+});
+
+test('an orphan borrow branch whose work is only on its upstream, not main, is kept', async () => {
+  const { root, main } = makeRepo();
+  addBorrowScript(main);
+  sh(root, 'git init -q --bare -b main up.git');
+  sh(main, `git remote add origin ${path.join(root, 'up.git')} && git push -q origin main`);
+  sh(main, 'git checkout -q -b thread/borrow-slot-9-20261101-000000');
+  commit(main, { 'runner/pushed.ts': '1\n' }, 'Pushed only');
+  sh(main, 'git push -q -u origin thread/borrow-slot-9-20261101-000000 && git checkout -q main');
+  const r = await sweepBorrows(main, opts());
+  assert.deepEqual(r.branches, []);
+  assert.notEqual(sh(main, 'git branch --list thread/borrow-slot-9-20261101-000000'), '');
+});
