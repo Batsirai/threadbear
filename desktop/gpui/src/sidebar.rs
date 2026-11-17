@@ -1669,6 +1669,7 @@ impl Threadbear {
         }
         let nested_row = matches!(nest, Nest::Child { .. });
         let trailing = rows::trailing(t, &look, mode, clock, wake);
+        let job = rows::job_mark(t, &look);
         let id = t.id.clone();
         // Not while a page is in the thread's place: it isn't what's showing.
         let selected = self.selected.as_deref() == Some(id.as_str()) && self.home_page().is_none() && self.projects.open.is_none();
@@ -1800,6 +1801,13 @@ impl Threadbear {
             // project line ran on under them (Mike, 12 Nov). It's cut short
             // before them instead.
             .child(div().flex_1().min_w(px(if show_buttons { actions_room } else { 6. })))
+            // While a job it left runs on (rows::job_mark), the grey arc a
+            // Running row turns beside "1 job", smaller and in the time's grey;
+            // its tip says which job. Not the transcript's paw: on this line
+            // a paw already means another thread started it.
+            .when_some(job.filter(|_| !show_buttons), |s, tip| {
+                s.child(div().id(ElementId::Name(format!("job-{id}").into())).flex_none().mr(px(-2.)).tip(tip).child(crate::spinner::TurningArc::new(10., p.faint).layered()))
+            })
             .when(!show_buttons, |s| s.child(render_trailing(&trailing, id.clone(), p, cx.reduce_motion())));
 
         let actions = mode.actions();
@@ -2024,6 +2032,7 @@ impl Threadbear {
             json!({
                 "id": t.id, "title": t.title, "status": t.status, "needsYou": t.needs_you, "unread": look.unread, "hovered": hovered,
                 "background": (look.status == rows::RowStatus::Background).then(|| rows::background_short(&t.background_tasks())),
+                "job": rows::job_mark(t, &plain),
                 "waiting": t.waiting_for_room_until_ms().map(|u| rows::waiting_line(u, &clock)).or_else(|| t.waiting_for_network.as_ref().map(|_| "Waiting for connection".to_string())),
                 "subagents": subagents,
                 "origin": rows::byline(t).map(|b| b.symbol),

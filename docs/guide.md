@@ -43,7 +43,8 @@ whether you got there by the arrows, ⌥⌘↓ or a thread named in a reply. Whe
 count), a note says so once, the next time you're at the app. Running holds threads whose agent is
 working now. A thread that
 asks you something keeps its place in the inbox, wake-up or not, and so does
-one that has left a job running while it waits for you. Sub-agents are
+one that has left a job running while it waits for you: a small grey
+arc turning by its time says the job is still going, and hovering it says what it is. Sub-agents are
 different: while they're working the thread stays in Running, even if it has
 asked you something, as what they find can change what it asks. It comes to
 the inbox when they're done, and you can still open it and answer early.

@@ -601,6 +601,21 @@ pub fn trailing<Tz: TimeZone>(t: &ThreadSummary, look: &RowLook, mode: RowMode, 
     }
 }
 
+/// The small grey arc beside the time on a row that's waiting on Mike while
+/// a job it left keeps running (a landing in the queue, a long test). Without
+/// it the row looks finished: Mike asked why a thread with "1 job running"
+/// sat in his inbox (17 Nov) and picked this over a badge, the job's name on
+/// the row or a moving line. Returns the tip, in the transcript's own words
+/// ("1 job running in the background · Land the card fix"). A row whose
+/// status already says it (Working, "2 jobs") gets none.
+pub fn job_mark(t: &ThreadSummary, look: &RowLook) -> Option<String> {
+    if !matches!(look.status, RowStatus::Time | RowStatus::NeedsYou) {
+        return None;
+    }
+    let tasks: Vec<crate::reducer::event::BackgroundTask> = t.background.iter().flatten().filter_map(crate::reducer::event::BackgroundTask::decode).collect();
+    (!tasks.is_empty()).then(|| crate::reducer::groups::BackgroundWork::line_with_detail(&tasks))
+}
+
 /// Whether a hover button should ask first: a turn underway, or background
 /// work the runner would stop (`BusyThreadAction.needsConfirm`).
 pub fn needs_busy_confirm(t: &ThreadSummary) -> bool {
@@ -995,6 +1010,20 @@ mod tests {
         let job = thread(json!({ "needs": "you", "needsYou": true, "background": [{ "kind": "shell", "description": "npm test" }] }));
         assert_eq!(RowLook::of(&job, Some("inbox")).status, RowStatus::Time);
         assert!(RowLook::of(&job, Some("inbox")).unread);
+    }
+
+    #[test]
+    fn job_mark_on_a_row_waiting_with_a_job() {
+        // Waiting on Mike with a job left running: the paw, saying what runs.
+        let job = thread(json!({ "needs": "you", "needsYou": true, "background": [{ "kind": "shell", "description": "Land the card fix on Threadbear main" }] }));
+        let look = RowLook::of(&job, Some("inbox"));
+        assert_eq!(job_mark(&job, &look).as_deref(), Some("1 job running in the background · Land the card fix on Threadbear main"));
+        // Nothing running: no paw.
+        let quiet = thread(json!({ "needs": "you", "needsYou": true }));
+        assert_eq!(job_mark(&quiet, &RowLook::of(&quiet, Some("inbox"))), None);
+        // Under Running its status already says "1 job": no paw as well.
+        let busy = thread(json!({ "background": [{ "kind": "shell", "description": "npm test" }] }));
+        assert_eq!(job_mark(&busy, &RowLook::of(&busy, Some("running"))), None);
     }
 
     #[test]
