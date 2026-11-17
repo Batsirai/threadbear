@@ -141,7 +141,9 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
     // switched to their own branch says nothing about them.
     const ours = () => {
       const wb = workingBranch(admin);
-      return wb === undefined ? !scratch && !who.branch : wb.startsWith(`refs/heads/${BORROW_PREFIX}`) && (!who.branch || wb === `refs/heads/${who.branch}`);
+      // Detached with a branch recorded: a give-back stopped half way, so
+      // only after a quiet day.
+      return wb === undefined ? !scratch && (!who.branch || idle) : wb.startsWith(`refs/heads/${BORROW_PREFIX}`) && (!who.branch || wb === `refs/heads/${who.branch}`);
     };
     if (!ours()) continue;
     // Before each git that changes it: still the checkout git made there
@@ -151,6 +153,8 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
     const still = (head?: string) => {
       const here = checkoutItself(c.path, admin);
       if (!here || readPlainFile(path.join(admin, BORROW_FILE), 8192) !== record) return undefined;
+      // Its borrower may have come back (the thread brought back) since.
+      if (who.thread && !elsewhere && who.pid === undefined && opts.thread(who.thread) === 'open') return undefined;
       if (head !== undefined && readHead(admin) !== head) return undefined;
       return here;
     };
@@ -222,6 +226,14 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       skip(`its branch has commits that aren't on ${MAIN}`);
       continue;
     }
+    // Its status once more, then straight to the lock: once it's a spare,
+    // the next borrower's reset would take an edit made before this.
+    const last = await git(c.path, ['status', '--porcelain', '--untracked-files=all']);
+    if (!last.ok || last.stdout.trim()) {
+      if (branch && (here = still(tip))) await git(here, ['checkout', '-q', '-B', branch]);
+      skip('it changed as it was being set aside');
+      continue;
+    }
     if (!still(tip)) {
       skip(CHANGED);
       continue;
@@ -233,21 +245,6 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
     if (spares < MAX_SPARES && (await git(mainCheckout, ['worktree', 'lock', '--reason', SPARE, c.path])).ok) {
       spares++;
       to = 'spare';
-      // An edit that came in at the last moment: taken back out of the pool
-      // (the same claim as a borrow's, so only if nobody has it yet), so the
-      // next borrower's reset doesn't lose it.
-      const late = await git(c.path, ['status', '--porcelain', '--untracked-files=all']);
-      if (!late.ok || late.stdout.trim()) {
-        const lock = path.join(admin, 'locked');
-        try {
-          fs.renameSync(lock, `${lock}.unspared-${process.pid}`);
-          fs.rmSync(`${lock}.unspared-${process.pid}`, { force: true });
-        } catch {
-          // Claimed already.
-        }
-        skip('it changed as it was set aside, so it was left out of the pool');
-        continue;
-      }
     } else if ((await git(mainCheckout, ['worktree', 'remove', c.path])).ok) {
       // Without --force, git refuses one with changes or untracked files.
       to = 'removed';

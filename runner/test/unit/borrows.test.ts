@@ -237,3 +237,35 @@ test('an orphan borrow branch whose work is only on its upstream, not main, is k
   assert.deepEqual(r.branches, []);
   assert.notEqual(sh(main, 'git branch --list thread/borrow-slot-9-20261101-000000'), '');
 });
+
+test("borrow-worktree.sh passes over slots git still has registered after their folder went", () => {
+  const { root, main } = makeRepo();
+  addBorrowScript(main);
+  const threads = path.join(root, 'proj-threads');
+  for (let n = 1; n <= 6; n++) {
+    sh(main, `git worktree add -q --detach ${path.join(threads, `slot-${n}`)} main`);
+    fs.rmSync(path.join(threads, `slot-${n}`), { recursive: true });
+  }
+  assert.equal(borrow(main), path.join(threads, 'slot-7'));
+});
+
+test('a give-back stopped after its detach, record still there, goes back after a quiet day', async () => {
+  const { main } = makeRepo();
+  addBorrowScript(main);
+  const wt = borrow(main, 'THREADBEAR_THREAD_ID=gone');
+  sh(wt, 'git checkout -q --detach');
+  assert.deepEqual((await sweepBorrows(main, opts({ thread: () => 'archived' }))).reclaimed, []);
+  const later = await sweepBorrows(main, opts({ thread: () => 'archived', now: Date.now() + DAY + 60_000 }));
+  assert.deepEqual(later.reclaimed.map((x) => x.path), [wt]);
+});
+
+test('a thread brought back while the sweep works keeps its borrow', async () => {
+  const { main } = makeRepo();
+  addBorrowScript(main);
+  const wt = borrow(main, 'THREADBEAR_THREAD_ID=t-1');
+  const branch = branchOf(wt);
+  let state: 'archived' | 'open' = 'archived';
+  const r = await sweepBorrows(main, opts({ thread: () => state }), { beforeDetach: () => void (state = 'open') });
+  assert.deepEqual(r.reclaimed, []);
+  assert.equal(branchOf(wt), branch);
+});

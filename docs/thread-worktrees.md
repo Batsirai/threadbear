@@ -545,12 +545,14 @@ sync-main couldn't borrow one and main wasn't pushed. Now:
   not on main, and each change made only while the folder is still the
   checkout git made there (not a link) with the same borrow record, on
   the branch it was borrowed on (a rebase's own branch counts). Its status
-  is read once more after it's locked, and a late edit takes it back out
-  of the pool. A
+  is read once more just before it's locked, and its thread's state
+  before each change (a thread brought back keeps it). A
   process list that can't be read in full stops the sweep. The one exception is a scratch borrow whose process has gone:
   what it left half done is aborted and reset to main first. A detached,
   unlocked slot no thread holds (a spare claimed and never set up) goes
-  back the same way after a quiet day. Taken back is what `--give-back`
+  back the same way after a quiet day, as does a borrow left detached by a
+  give-back that was stopped half way. `borrow-worktree.sh` passes over
+  slot numbers git still has registered after their folder went. Taken back is what `--give-back`
   does: detached, its branch deleted, locked as a spare, or removed when
   there are six spares already. `thread/borrow-*` branches with no
   checkout and all on main are deleted too. The runner's log says what it

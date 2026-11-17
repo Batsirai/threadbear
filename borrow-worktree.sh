@@ -111,11 +111,14 @@ else
   # The first free slot number. No cap on the number: on 17 Nov a cap of 50
   # was reached with every slot taken, and the borrow failed. A failed add
   # (another borrower took that number first) tries the next, a few times.
+  # Paths git still has registered count as taken even with their folder
+  # gone: git refuses to add one there.
+  registered="$(git -C "$MAIN" worktree list --porcelain | sed -n 's/^worktree //p')"
   n=1
   tries=0
   while :; do
     claimed="$THREADS/slot-$n"
-    if [ ! -e "$claimed" ]; then
+    if [ ! -e "$claimed" ] && ! printf '%s\n' "$registered" | grep -qxF "$claimed"; then
       err="$(git -C "$MAIN" worktree add -q -b "$(borrow_branch "$claimed")" "$claimed" main 2>&1)" && break
       tries=$((tries + 1))
       [ "$tries" -lt 5 ] || { echo "Couldn't make a worktree in $THREADS: $err" >&2; exit 1; }
