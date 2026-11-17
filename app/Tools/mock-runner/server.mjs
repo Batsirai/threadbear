@@ -1345,7 +1345,7 @@ async function dispatch(client, method, p) {
         t.highlightsFailed = (t.highlightsFailed ?? 0) + 1;
         throw rpcError(-32000, 'Highlights are temporarily unavailable');
       }
-      return highlights.get(t.summary.id) ?? { highlights: [], edited: [] };
+      return highlights.get(t.summary.id) ?? t.fixtureHighlights ?? { highlights: [], edited: [] };
     }
     case 'threads.removeHighlight':
     case 'mock.unpin': {
@@ -3908,6 +3908,11 @@ function loadFixtures() {
       const t = { summary, events, reviews, buttons, inProgress: new Map(), timers: [], dir };
       updateReviewCount(t);
       loaded.push(t);
+      // Its Highlights, when the fixture has them: `tb highlights <id> --json
+      // > highlights.json` beside an export shows a real thread's Files.
+      const highlightsFile = path.join(dir, 'highlights.json');
+      // (Kept on the thread: this runs before the highlights map exists.)
+      if (fs.existsSync(highlightsFile)) t.fixtureHighlights = JSON.parse(fs.readFileSync(highlightsFile, 'utf8'));
     }
     // Real paths: /tmp is /private/tmp, and dev-app.sh passes the one,
     // the module's own path is the other.

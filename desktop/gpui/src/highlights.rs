@@ -1069,6 +1069,8 @@ pub(crate) struct PaneRow {
     pub on_menu: Option<Rc<dyn Fn(&mut SidePane, Point<Pixels>, &mut Window, &mut Context<SidePane>)>>,
     /// A file on this Mac it drags out as (file_drag.rs).
     pub drag: Option<String>,
+    /// A Files row's preview, drawn in place of its symbol (file_thumbs.rs).
+    pub thumb: Option<AnyElement>,
 }
 
 impl PaneRow {
@@ -1091,6 +1093,7 @@ impl PaneRow {
             on_click: None,
             on_menu: None,
             drag: None,
+            thumb: None,
         }
     }
 
@@ -1176,6 +1179,11 @@ impl PaneRow {
         self
     }
 
+    pub(crate) fn thumb(mut self, thumb: Option<AnyElement>) -> Self {
+        self.thumb = thumb;
+        self
+    }
+
     pub(crate) fn render(self, p: Palette, cx: &mut Context<SidePane>) -> impl IntoElement + use<> {
         let hover = p.hover;
         let label_color = if self.quiet { p.secondary } else { p.fg };
@@ -1199,15 +1207,20 @@ impl PaneRow {
                 d = if self.detail_lines > 1 { d.line_clamp(self.detail_lines).overflow_hidden().text_ellipsis() } else { d.truncate() };
                 s.child(d.child(detail))
             });
-        let needs_blank_icon = self.reserves_icon && self.icon.is_none();
+        let needs_blank_icon = self.reserves_icon && self.icon.is_none() && self.thumb.is_none();
+        // A preview takes the symbol's place, with the words centred beside it.
+        let has_thumb = self.thumb.is_some();
+        let symbol = if has_thumb { None } else { self.icon };
         let row = h_flex()
-            .items_start()
-            .gap(px(8.))
+            .when(!has_thumb, |s| s.items_start())
+            .when(has_thumb, |s| s.items_center())
+            .gap(px(if has_thumb { 10. } else { 8. }))
             .pl(px(LEADING - OUTER_INSET + if self.indent { 24. } else { 0. }))
             .pr(px(TRAILING))
             .py(px(6.))
             .rounded(px(CORNER))
-            .when_some(self.icon, |s, symbol| s.child(div().w(px(16.)).flex_none().flex().justify_center().pt(px(1.)).child(icon(&symbol, 12., self.icon_color.unwrap_or(p.icon)))))
+            .when_some(self.thumb, |s, thumb| s.child(thumb))
+            .when_some(symbol, |s, symbol| s.child(div().w(px(16.)).flex_none().flex().justify_center().pt(px(1.)).child(icon(&symbol, 12., self.icon_color.unwrap_or(p.icon)))))
             .when(needs_blank_icon, |s| s.child(div().w(px(16.)).flex_none()))
             .child(body);
         let row = row.when(self.on_click.is_some(), |s| s.hover(move |st| st.bg(hover)).cursor_pointer());
@@ -1315,6 +1328,18 @@ impl SidePane {
 
     /// `row`, a highlight (`HighlightsView.row`).
     fn highlight_row(&mut self, item: &Highlight, thread: &ThreadSummary, index: &str, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+        self.highlight_row_with(item, thread, index, None, p, cx)
+    }
+
+    /// A Files row's preview (file_thumbs.rs): only for a file of this Mac's,
+    /// as another Mac's paths name nothing here.
+    fn file_thumb(&self, item: &Highlight, thread: &ThreadSummary, p: Palette, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let path = item.path.as_deref().filter(|_| !thread.is_remote())?;
+        let thumb = crate::file_thumbs::current(path, item.last_seq, window, cx);
+        Some(crate::file_thumbs::element(path, thumb.as_ref(), core::highlight_symbol(item), p, cx))
+    }
+
+    fn highlight_row_with(&mut self, item: &Highlight, thread: &ThreadSummary, index: &str, thumb: Option<AnyElement>, p: Palette, cx: &mut Context<Self>) -> AnyElement {
         let is_commit = item.is_commit();
         let detail = if let Some(path) = &item.path {
             Some(core::text::folder(path, Some(&thread.cwd), &crate::files::home_dir()))
@@ -1331,7 +1356,8 @@ impl SidePane {
             .lead(is_commit.then(|| item.sha.clone()).flatten())
             .trailing(how)
             .note(item.note.clone())
-            .detail(detail);
+            .detail(detail)
+            .thumb(thumb);
         if !is_commit {
             let (open, thread2) = (item.clone(), thread.clone());
             pr = pr.on_click(move |this, _window, cx| {
@@ -1505,7 +1531,9 @@ impl SidePane {
             list = list.child(self.heading(Heading { key: fold::PINNED.to_owned(), title: "Pinned".into(), icon: Some(icon("pin", 11., p.secondary).into_any_element()), count: Some(sections.pinned.len()), folded, foldable: true, accessory: None }, p, cx));
             if !folded {
                 for item in &sections.pinned {
-                    list = list.child(self.highlight_row(item, thread, "pinned", p, cx));
+                    // A pinned file gets its preview too; a pinned link has none.
+                    let thumb = self.file_thumb(item, thread, p, window, cx);
+                    list = list.child(self.highlight_row_with(item, thread, "pinned", thumb, p, cx));
                 }
             }
         }
@@ -1514,7 +1542,8 @@ impl SidePane {
             list = list.child(self.heading(Heading { key: fold::FILES.to_owned(), title: "Files".into(), icon: Some(icon("doc", 11., p.secondary).into_any_element()), count: Some(sections.files.len()), folded, foldable: true, accessory: None }, p, cx));
             if !folded {
                 for item in &sections.files {
-                    list = list.child(self.highlight_row(item, thread, "files", p, cx));
+                    let thumb = self.file_thumb(item, thread, p, window, cx);
+                    list = list.child(self.highlight_row_with(item, thread, "files", thumb, p, cx));
                 }
             }
         }

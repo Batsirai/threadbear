@@ -44,6 +44,7 @@ mod explain_pane;
 mod far_rows;
 mod file_drag;
 mod file_edit;
+mod file_thumbs;
 mod file_find;
 mod file_watch;
 mod files;

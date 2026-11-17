@@ -506,6 +506,32 @@ pub fn file_symbol(path: &str) -> &'static str {
     }
 }
 
+/// Whether a Files row keeps what's in a file to itself and shows its symbol
+/// instead of a preview. The previews are always on screen, in recordings and
+/// shared screens too, so anything that may hold a key stays a symbol: a
+/// dotfile (`.env`, `.npmrc`), anything in a hidden folder straight under the
+/// home folder (`~/.convex/config.json`, `~/.ssh`), and names that say
+/// secret, token or key. A hidden folder inside a project (`.work`) is fine.
+pub fn preview_private(path: &str, home: &str) -> bool {
+    use crate::reducer::text::forward_slashes;
+    let (path, home) = (forward_slashes(path), forward_slashes(home));
+    let name = last_component(&path).to_lowercase();
+    if name.starts_with('.') {
+        return true;
+    }
+    let home = home.trim_end_matches('/');
+    if !home.is_empty() {
+        if let Some(rest) = path.strip_prefix(home).and_then(|r| r.strip_prefix('/')) {
+            if rest.split('/').next().is_some_and(|top| top.starts_with('.') && rest.contains('/')) {
+                return true;
+            }
+        }
+    }
+    const WORDS: &[&str] = &["secret", "credential", "password", "passwd", "token", "private", "id_rsa", "id_ed25519", "apikey", "api_key", "api-key"];
+    const EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "keychain", "env", "jks", "kdbx"];
+    WORDS.iter().any(|w| name.contains(w)) || EXTENSIONS.contains(&extension(&name).as_str())
+}
+
 /// A highlight's: a file's by its extension, the rest by kind.
 pub fn highlight_symbol(item: &Highlight) -> &'static str {
     match item.kind {
@@ -1321,6 +1347,28 @@ pub mod patches {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn previews_keep_keys_and_home_dotfolders_to_themselves() {
+        use super::preview_private as private;
+        let home = "/Users/m";
+        // What a video thread's Files show, previews and all.
+        assert!(!private("/Users/m/dev/v1.50.0/notes.md", home));
+        assert!(!private("/Users/m/dev/v1.50.0/.work/BROLL-PLAN.md", home));
+        assert!(!private("/Users/m/dev/v1.50.0/exports/cut.mp4", home));
+        // What could hold a key stays a symbol.
+        assert!(private("/Users/m/.convex/config.json", home));
+        assert!(private("/Users/m/.ssh/known_hosts", home));
+        assert!(private("/Users/m/dev/app/.env", home));
+        assert!(private("/Users/m/dev/app/.env.local", home));
+        assert!(private("/Users/m/dev/app/github-token.txt", home));
+        assert!(private("/Users/m/dev/app/AuthKey_ABC.p8.pem", home));
+        assert!(private("/Users/m/dev/app/client_secret.json", home));
+        // A hidden file straight in the home folder too, and Windows paths alike.
+        assert!(private("/Users/m/.npmrc", home));
+        assert!(private("C:\\Users\\m\\.aws\\config", "C:\\Users\\m"));
+        assert!(!private("C:\\Users\\m\\dev\\notes.md", "C:\\Users\\m"));
+    }
+
     #[test]
     fn chips_sit_on_a_shelf_for_each_place_they_came_from_grouped_by_patch() {
         let patch = |id: &str, extra: serde_json::Value| {

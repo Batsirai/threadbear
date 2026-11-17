@@ -895,7 +895,11 @@ From the top, and only when there's something to show:
   it. Their questions still come to your inbox like any thread's.
 - **Pinned**: what the agent pinned for you (below).
 - **Files**: documents, pages, pictures and videos the thread wrote, opened
-  or mentioned.
+  or mentioned, each with a small preview: the picture itself, a frame of
+  a video or a PDF's first page, or a document's first lines. Dotfiles,
+  hidden folders in your home folder (`~/.convex`, `~/.ssh`) and files
+  named like they hold a key show their icon instead, as the previews are
+  on screen whenever Highlights is. Another Mac's files show their icon.
 - **Links**: web pages and pull requests it opened or mentioned.
 - **Changes**: its commits, and a line such as "4 files edited" that
   opens to the code it changed.
