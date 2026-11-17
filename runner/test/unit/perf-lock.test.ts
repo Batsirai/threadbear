@@ -887,3 +887,20 @@ test('a Desk run that cannot read its folders says why instead of hanging', { sk
   // remote.sh's pidfile is on that same disk, so it's only written after the check.
   assert.ok(!fs.existsSync(pidfile), 'the pidfile was written before the folders were checked');
 });
+
+// A refusal that comes at once (permission denied, or a privacy prompt
+// already answered No) stops the run too, rather than counting as a pass.
+test('a Desk run refused its folders outright says so and does not start', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async (t) => {
+  const h = host(t);
+  const bin = path.join(h.home, '.local/bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'desk'), '#!/bin/sh\nexec env -i HOME="$HOME" PATH="$PATH" /bin/bash -c "$1"\n', { mode: 0o755 });
+  const shut = path.join(h.home, 'shut');
+  fs.mkdirSync(shut, { mode: 0o000 });
+  const ran = path.join(h.home, 'ran');
+  const run = h.run(['sh', '-c', 'touch "$1"', 'sh', ran], { THREADBEAR_REMOTE_SOURCE: shut }, path.join(h.home, 'desk.pid'));
+  // Back before the home's own cleanup, which can't empty a shut folder.
+  try { assert.equal(await run.done, 126, run.output); } finally { fs.chmodSync(shut, 0o700); }
+  assert.match(run.output, /Desk Runner couldn't open .*shut \(Permission denied\)/);
+  assert.ok(!fs.existsSync(ran));
+});

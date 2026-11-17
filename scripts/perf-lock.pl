@@ -276,25 +276,42 @@ if ($desk) {
     # perl -e <this> <pidfile> <seconds> <n> <path>... <command...>
     my $desk_start = <<'START';
 setpgrp(0, 0);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
 my ($pidfile, $wait, $n) = splice(@ARGV, 0, 3);
-for my $path (splice(@ARGV, 0, $n)) {
-    my $pid = fork() // die "perf-lock: fork: $!\n";
-    if (!$pid) { if (-d $path) { opendir(my $d, $path) or exit 2; } else { open(my $f, '<', $path) or exit 2; } exit 0; }
-    my $end = time + $wait;
-    my $done = 0;
-    until (($done = waitpid($pid, 1) == $pid) || time >= $end) { select(undef, undef, undef, 0.1); }
-    next if $done || waitpid($pid, 1) == $pid;
-    kill 'KILL', $pid; waitpid($pid, 0);
-    print STDERR "perf-lock: Desk Runner couldn't open $path within ${wait}s, so this run can't start. "
-        . "macOS is most likely holding it for a privacy permission it can't ask anyone for: on this host, "
-        . "allow Desk Runner in System Settings > Privacy & Security > Files & Folders (Removable Volumes), "
-        . "or give it Full Disk Access.\n";
+sub refuse {
+    print STDERR "perf-lock: Desk Runner $_[0], so this run can't start. macOS may be holding it for a privacy "
+        . "permission it can't ask anyone for: on this host, allow Desk Runner in System Settings > "
+        . "Privacy & Security > Files & Folders (Removable Volumes), or give it Full Disk Access.\n";
     exit 126;
+}
+for my $path (splice(@ARGV, 0, $n)) {
+    pipe(my $why_r, my $why_w) or exit 126;
+    my $pid = fork() // exit 126;
+    if (!$pid) {
+        close $why_r;
+        my $ok = -d $path ? opendir(my $d, $path) : open(my $f, '<', $path);
+        print {$why_w} "$!" unless $ok;
+        exit($ok ? 0 : 2);
+    }
+    close $why_w;
+    # Monotonic, so a clock stepped back mid-wait can't stretch it.
+    my $end = clock_gettime(CLOCK_MONOTONIC) + $wait;
+    my $done = 0;
+    until (($done = waitpid($pid, 1) == $pid) || clock_gettime(CLOCK_MONOTONIC) >= $end) { select(undef, undef, undef, 0.1); }
+    if (!$done && waitpid($pid, 1) != $pid) {
+        kill 'KILL', $pid; waitpid($pid, 0);
+        refuse("couldn't open $path within ${wait}s");
+    }
+    next if $? == 0;
+    my $why = do { local $/; <$why_r> } // '';
+    refuse("couldn't open $path" . (length $why ? " ($why)" : ''));
 }
 open(my $f, '>', $pidfile) or exit 129;
 print {$f} "$$\n";
 close $f or exit 129;
-exit 129 if -e "$pidfile.gone";
+# Gone already: take the pid back out, so a guard reading it late can't
+# signal whatever gets this pid next.
+if (-e "$pidfile.gone") { truncate($pidfile, 0); exit 129; }
 exec { $ARGV[0] } @ARGV or exit 127;
 START
     my @reads = grep { -e $_ } ("$FindBin::Bin/perf-children.pl", $pidfile =~ s{/[^/]*$}{}r,
