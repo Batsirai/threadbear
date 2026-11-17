@@ -67,7 +67,8 @@ For install-runner.sh:
 `;
 
 const DEFAULT_LABEL = 'com.mikerosoft.threadbear.runner';
-const DEFAULT_HOME = path.join(os.homedir(), 'Library', 'Application Support', 'Threadbear');
+// Windows' as src/platform.ts's dataDirFor has it.
+const DEFAULT_HOME = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Threadbear') : path.join(os.homedir(), 'Library', 'Application Support', 'Threadbear');
 // On Linux the data dir keeps its macOS name, so every path in the docs and
 // scripts is the same; systemd takes launchd's place (install-runner.sh).
 const LINUX = process.platform === 'linux';
@@ -169,8 +170,10 @@ function tail(file, lines = 40) {
 // tests or a smoke-test runner must never pick that up.
 function cleanEnv(extra = {}) {
   const env = {};
-  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('THREADBEAR_')) env[k] = v;
-  env.PATH = `${path.dirname(process.execPath)}:${process.env.PATH ?? ''}`;
+  // Windows spells it Path, and a child given both Path and PATH may get
+  // either, so whatever it's called comes off and goes back as PATH.
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('THREADBEAR_') && k.toUpperCase() !== 'PATH') env[k] = v;
+  env.PATH = [path.dirname(process.execPath), process.env.PATH ?? ''].join(path.delimiter);
   return { ...env, ...extra };
 }
 

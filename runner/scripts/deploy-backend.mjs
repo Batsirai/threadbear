@@ -275,7 +275,7 @@ function main(argv) {
 
   // Only the key picks the deployment: anything left over from a checkout's
   // .env.local or a thread's environment could point somewhere else.
-  const env = convexEnv(admin, { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH ?? ''}` });
+  const env = convexEnv(admin, { ...process.env, PATH: [path.dirname(process.execPath), process.env.PATH ?? ''].join(path.delimiter) });
   const npm = path.join(path.dirname(process.execPath), 'npm');
   const npx = path.join(path.dirname(process.execPath), 'npx');
   const opts = { cwd: tmp, env };
