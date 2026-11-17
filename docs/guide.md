@@ -1335,6 +1335,9 @@ gives out free ones, listed under Usage limit resets in its settings), the
 box also offers Use a reset: it restores that login's 5-hour and weekly
 limits at once, spending the reset that expires soonest, and the thread
 carries on. Threadbear never uses one by itself.
+A Codex login that reads as used up is asked for its limits again every
+10 minutes (free, no turn), so a reset you use in Codex itself shows up
+here within minutes and that login is used again.
 Picking a model on another login from the model menu after a limit stop
 (a Codex one when Claude is out, say) carries on straight away too, on
 the model you picked. When the thread is idle otherwise, it says the new

@@ -84,6 +84,7 @@ const MAX_PRESS_NOTES = 20;
 import { appliedChanges, undoChanges } from './undo-edits.ts';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
+import { LimitRecheck } from './limit-recheck.ts';
 import { BIN_DIR, threadEnv } from './restart.ts';
 import { cleanUpWorktree, makeWorktree, sameSubfolder, worktreeInstructions } from './worktrees.ts';
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
@@ -863,6 +864,13 @@ export class Runner {
   // on disk untouched until it hands them over and adopt() loads them.
   start(opts: { skip?: ReadonlySet<string> } = {}): void {
     this.startedAt = this.clock.now();
+    // A login that reads as out gets read again now and then, so a reset
+    // made outside Threadbear lifts it (limit-recheck.ts).
+    if (this.usage) {
+      const usage = this.usage;
+      this.limitRecheck = new LimitRecheck({ clock: this.clock, log: this.log, accounts: () => this.safeAccounts(), adapters: this.adapters, record: (id, r) => usage.record(id, r) });
+      this.limitRecheck.start();
+    }
     const { records, broken } = this.store.loadAll();
     // Which worktrees the always-trust doesn't reach, before anything below
     // can read a patch or start a CLI (runner/moves.ts): every thread on
@@ -983,6 +991,7 @@ export class Runner {
   // block lifts and any thread waiting for room on that login carries on by
   // itself (sendAccounts arms the room timer).
   private resetting = new Set<string>();
+  private limitRecheck?: LimitRecheck;
   async useReset(accountId: string): Promise<{ outcome: UseResetOutcome; account?: Account }> {
     const account = this.safeAccounts().find((a) => a.id === accountId);
     if (!account) throw new RpcError(ErrorCode.accountNotFound, `No login ${accountId} on this runner.`);
@@ -1242,6 +1251,7 @@ export class Runner {
     this.rescanTimer?.cancel();
     this.accountsTimer?.cancel();
     this.liveTimer?.cancel();
+    this.limitRecheck?.stop();
     for (const off of this.unsubs.splice(0)) off();
     for (const st of this.threads.values()) {
       const { rt } = st;

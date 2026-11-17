@@ -206,6 +206,16 @@ export class CodexAdapter implements AgentAdapter {
     );
   }
 
+  // Reads the login's limits in a short-lived app-server, without a turn
+  // (limit-recheck.ts): free, and how a reset done in Codex itself is seen.
+  async readLimits(account: Account): Promise<Extract<AdapterOutput, { kind: 'limits' }> | null> {
+    return withShortLivedProcess(
+      this.shortLived(account, `limits:${account.id}`),
+      async (p) => limitsFromRateLimits((await p.request<GetAccountRateLimitsResponse>('account/rateLimits/read', null)) as never),
+      (p, live) => this.track(p, live),
+    );
+  }
+
   // Archives the thread in Codex (it shows in Codex Desktop's list until
   // then), and any subagent threads this runner saw it start. Resume
   // unarchives. Best effort: the runner logs a failure.

@@ -558,7 +558,10 @@ File references are where to look.
   transcripts, so it can show how much room each login has
   (`runner/src/accounts.ts`, `runner/src/token-tally.ts`;
   `THREADBEAR_TOKEN_TALLY=off` stops the counting). It never reads or
-  copies login tokens or the Keychain.
+  copies login tokens or the Keychain. A Codex login that reads as out of
+  room is asked for its limits every 10 minutes, by starting Codex's own
+  `codex app-server` for a moment (`runner/src/limit-recheck.ts`); that
+  costs no tokens.
 - Whether `~/.opencode/bin/opencode`, an
   `opencode` or `cursor-agent` on your PATH, `~/.local/bin/cursor-agent` and
   `~/.local/bin/agent` exist and where they really lead, and whether

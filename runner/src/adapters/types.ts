@@ -329,6 +329,9 @@ export interface AgentAdapter {
   // Codex: spends one of the login's usage-limit resets (Mike's click on
   // the limit box, never by itself) and reads its limits after.
   useReset?(account: Account): Promise<UseResetResult>;
+  // Codex: reads the login's limits without a turn (limit-recheck.ts), for
+  // a login whose last reading says it's out. null if Codex said nothing.
+  readLimits?(account: Account): Promise<Extract<AdapterOutput, { kind: 'limits' }> | null>;
   // The slash commands the account's CLI offers in a folder (skills
   // included), without starting a turn, for the composer's picker.
   commands?(account: Account, cwd: string, untrusted?: Record<string, unknown>): Promise<SlashCommand[]>;

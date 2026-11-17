@@ -2380,6 +2380,16 @@ thread to another login when the one it's on runs out of room.
   (`account/rateLimitResetCredit/consume`, one idempotency key per click),
   then reads the login's limits again. That reading lifts the block like
   any other, so a thread waiting for room carries on by itself.
+- **Rechecking a login that's out** (since 17 Nov 2026). Readings only
+  come from turns, and pools skip a login that reads as out, so a login
+  reset outside Threadbear (a reset used in Codex) read 0% until its old
+  reset time. Every 10 minutes (the first a minute after start) the runner
+  reads each login whose reading says blocked or under 1% again, if that
+  reading is 10 minutes old or more and its provider can read without a
+  turn (Codex: `account/rateLimits/read` in a short-lived app-server;
+  `runner/src/limit-recheck.ts`). The answer goes into the usage store
+  like a turn's, so room lifts the block and threads waiting for room
+  carry on by themselves. Signed-out and plan-ended logins aren't read.
 - **Carrying on by itself is Mike's to turn off**, per thread:
   `threads.update { carryOnAtReset: false }` ends any wait for room (with
   a note) and stops later limits starting one; pool moves to a login with
