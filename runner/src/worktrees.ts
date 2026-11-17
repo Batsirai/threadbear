@@ -1144,6 +1144,11 @@ async function findBroken(a: {
   group: { entry: QueueEntry }[];
   check: string;
   only: string;
+  // The check host the group's check failed on, when it said one. Every run
+  // here goes to that host and no other: a test that fails only on the Linux
+  // box (13 Nov had one) would otherwise pass for a landing run on the Mac
+  // and fail for the next one run on Linux, which would be refused for it.
+  host?: string;
   env: NodeJS.ProcessEnv;
   shell?: string[];
   timesFile: string;
@@ -1158,7 +1163,12 @@ async function findBroken(a: {
     if (!(await git(dir, ['checkout', '-q', '-f', '--detach', commit])).ok ||
         !(await git(dir, ['update-ref', `refs/heads/${MAIN}`, a.main])).ok ||
         !(await git(dir, ['clean', '-q', '-fdx'])).ok) return { state: 'unknown', text: '' };
-    const r = await runCheck(a.check, dir, a.shell, { ...a.env, THREADBEAR_CHECK_ONLY: a.only, THREADBEAR_CHECK_HOST_ONLY: '1' });
+    const r = await runCheck(a.check, dir, a.shell, {
+      ...(a.host ? { THREADBEAR_CHECK_HOST: a.host } : a.env),
+      THREADBEAR_CHECK_ONLY: a.only,
+      THREADBEAR_CHECK_HOST_ONLY: '1',
+    });
+    const times = parseCheckTimes(r.text);
     // `passed`, not `ok`, and neither `check` nor `intact`: nothing that
     // reads this log for whole checks (typicalCheckSeconds, the updater's
     // passedLandCheck) can take a few test files for one.
@@ -1171,8 +1181,10 @@ async function findBroken(a: {
       passed: r.ok,
       ...(r.ok ? {} : { exit: r.code }),
       seconds: Math.round(r.durationMs / 1000),
-      ...parseCheckTimes(r.text),
+      ...times,
     });
+    // Somewhere else than asked says nothing about there.
+    if (a.host && times.host !== a.host) return { state: 'unknown', text: r.text };
     // Failed means the check ran to its end and named a step that failed.
     return { state: r.ok ? 'passed' : onlyFailed(r.text) ? 'failed' : 'unknown', text: r.text };
   };
@@ -1365,7 +1377,11 @@ async function landLocked(
             startedAt: Date.now(), branches: [t.branch, ...together], pid: process.pid,
             entries: [...(times.entryId ? [times.entryId] : []), ...group.map((g) => g.entry.id)],
           });
-          const found = await findBroken({ t, common, main, own, group, check, only, env: groupEnv, shell: opts.shell, timesFile: times.file });
+          const failedOn = parseCheckTimes(r.text).host;
+          const found = await findBroken({
+            t, common, main, own, group, check, only, env: groupEnv, shell: opts.shell, timesFile: times.file,
+            ...(failedOn && HOST_NAME.test(failedOn) ? { host: failedOn } : {}),
+          });
           setRunning(common, undefined);
           const tailOf = (text: string): string => text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES).join('\n').slice(-8000);
           const why = (branch: string, text: string): string => [
@@ -1394,7 +1410,7 @@ async function landLocked(
               out(allowed.size ? 'Checking again with the ones that passed it.' : 'Checking this one again without them.');
               continue;
             }
-            out('Each of them passes it alone, so it takes more than one of them (or it fails only now and then).');
+            if (!found.left && found.own === 'passed') out('Each of them passes it alone, so it takes more than one of them (or it fails only now and then).');
           }
         }
         // Fixes always come along, so once it's down to this one and the

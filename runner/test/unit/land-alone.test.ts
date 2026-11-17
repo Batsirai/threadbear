@@ -215,6 +215,36 @@ test("when the time for it runs out, the ones already seen to pass are checked n
   }
 });
 
+test('every run alone goes to the check host the group failed on, and one made anywhere else says nothing', async () => {
+  // A check that says where it ran: where it was sent, or else `fallback`.
+  const onHost = (root: string, fallback: string, forAlone: string): string =>
+    `if test -n "\${THREADBEAR_CHECK_ONLY:-}"; then echo "sent to \${THREADBEAR_CHECK_HOST:-nowhere} group=\${THREADBEAR_CHECK_GROUP:-}" >> '${root}/sent'; echo "Checking on ${forAlone} (copied in 1s; x)"; ` +
+    `else echo "Checking on ${fallback} (copied in 1s; x)"; fi; ` + check(root, 'test -f bad.txt');
+  {
+    const { root, main } = makeRepo();
+    const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
+    commit(c.path, { 'bad.txt': 'bad\n' }, 'Break it');
+    const { first, rest, caps } = await queued(root, main, a, [b, c, d], onHost(root, 'linux-box', '$THREADBEAR_CHECK_HOST'));
+    assert.equal(await first, 0);
+    assert.deepEqual(await Promise.all(rest), [0, 1, 0], said(caps));
+    assert.match(caps[1].err.join('\n'), /by itself too/);
+    // That host and no other: not the group's own choice of hosts.
+    assert.deepEqual([...new Set(fs.readFileSync(path.join(root, 'sent'), 'utf8').trim().split('\n'))], ['sent to linux-box group=']);
+  }
+  {
+    // The runs come back from another host (the one asked for had dropped
+    // out): c fails there too, but nobody is refused on that.
+    const { root, main } = makeRepo();
+    const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
+    commit(c.path, { 'bad.txt': 'bad\n' }, 'Break it');
+    const { first, rest, caps } = await queued(root, main, a, [b, c, d], onHost(root, 'linux-box', 'the-mac'));
+    assert.equal(await first, 0);
+    assert.deepEqual(await Promise.all(rest), [0, 1, 0], said(caps));
+    assert.doesNotMatch(said(caps), /by itself too|Left out|Each of them passes/);
+    assert.match(said(caps), /Checking them in smaller groups/);
+  }
+});
+
 test('a check that names nothing to run again is halved as before, with no runs alone', async () => {
   const { root, main } = makeRepo();
   const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);

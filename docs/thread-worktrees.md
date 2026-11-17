@@ -293,9 +293,11 @@ So a failed check says what failed, and that alone is run on each landing:
 - Those runs are in a checkout of tb land's own, `threadbear-land-alone/`
   beside the lock: a clone that borrows the repo's objects, not a worktree,
   so no thread's worktree has another's files come and go in it, and
-  nothing that lists worktrees meets it. They go to a check host or nowhere
-  (`THREADBEAR_CHECK_HOST_ONLY`): with no host, they say so and the group
-  is halved as before.
+  nothing that lists worktrees meets it. They go to the check host the
+  group's check failed on and no other (a test that fails on the Linux box
+  alone would otherwise pass for one landing on the Mac and get the next
+  one refused), or nowhere (`THREADBEAR_CHECK_HOST_ONLY`): with no host,
+  they say so and the group is halved as before.
 - A landing that fails it alone is left out and told so at once, with that
   run's output: its `tb land` stops waiting and exits 1 (`refused` in its
   queue entry). The holder's next check has itself and only the ones that
