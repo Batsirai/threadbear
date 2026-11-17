@@ -73,17 +73,22 @@ type PhoneThread = Infer<typeof row>;
 // alone: the iPhone and Android apps from before API 82 (and any still in
 // people's hands), and an open page from before. Ids are each runner's own
 // random ones and two runners never share one honestly, so when two do, one
-// is copying the other's to dress its threads as that project: the one
-// without a runner key of its own (the main Mac) is the id's, else the
-// first written. A thread's project is shown only when the id is its own
-// runner's, and the list has only the id's runner's project, so no order of
-// writes, row from before, or moved thread puts another Mac's thread under
-// it (Daybreak 141, cross-lab review, 17 Nov 2026). Asked once per id in a
-// query; small rows (projectHeads) once they exist.
-type ProjectOwners = (id: string) => Promise<string | undefined>;
+// is copying the other's to dress its threads as that project: the main
+// Mac's (its runner row says its heartbeats come with the main key, which
+// issuing a runner a key clears, so revoking a key never makes its runner
+// the main Mac) is the id's, else the first written. A thread's project is
+// shown only when the id is its own runner's, and the list has only the
+// id's runner's project, so no order of writes, row from before, or moved
+// thread puts another Mac's thread under it (Daybreak 141, cross-lab
+// review, 17 Nov 2026). Asked once per id in a query, on small rows
+// (projectHeads) once they exist; past OWNER_LOOKUPS ids in one query (a
+// runner's threads naming thousands of made-up ids, to take a list past
+// Convex's index reads) a ref is dropped, not looked up.
+type ProjectOwners = (id: string) => Promise<string | undefined | null>;
+const OWNER_LOOKUPS = 1000;
 
 function projectOwners(ctx: QueryCtx): ProjectOwners {
-  const seen = new Map<string, Promise<string | undefined>>();
+  const seen = new Map<string, Promise<string | undefined | null>>();
   let heads: Promise<boolean> | undefined;
   const owner = async (id: string) => {
     heads ??= ctx.db
@@ -91,26 +96,32 @@ function projectOwners(ctx: QueryCtx): ProjectOwners {
       .withIndex('by_name', (q) => q.eq('name', HEADS_MARK))
       .first()
       .then((m) => m !== null);
-    const rows = await ((await heads) ? ctx.db.query('projectHeads').withIndex('by_project_id', (q) => q.eq('id', id)) : ctx.db.query('projects').withIndex('by_project_id', (q) => q.eq('id', id))).take(8);
+    // One row per runner with the id: as many as there are runners.
+    const rows = await ((await heads) ? ctx.db.query('projectHeads').withIndex('by_project_id', (q) => q.eq('id', id)) : ctx.db.query('projects').withIndex('by_project_id', (q) => q.eq('id', id))).collect();
     if (rows.length <= 1) return rows[0]?.runnerId;
     const main = [];
-    for (const r of rows) if (!(await hasLiveKey(ctx, r.runnerId))) main.push(r);
+    for (const r of rows) {
+      const runner = await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', r.runnerId)).unique();
+      // The main Mac as mainOwnerRunner reads it.
+      if (runner?.byOwner && !(await hasLiveKey(ctx, r.runnerId))) main.push(r);
+    }
     return (main.length ? main : rows).sort((a, b) => a._creationTime - b._creationTime)[0]!.runnerId;
   };
   return (id) => {
     let hit = seen.get(id);
-    if (!hit) seen.set(id, (hit = owner(id)));
+    if (!hit) seen.set(id, (hit = seen.size >= OWNER_LOOKUPS ? Promise.resolve(null) : owner(id)));
     return hit;
   };
 }
 
 // A thread's projects, only those whose id is its own runner's (projectOwners).
-// One no runner has yet stays: no app finds a project for it.
 async function ownProjectRefs(out: Record<string, unknown>, runnerId: string, owners: ProjectOwners): Promise<void> {
   const refs = out.projects as { id: string }[] | undefined;
   if (!refs?.length) return;
   const kept = [];
   for (const r of refs) {
+    // undefined: no runner has the id, so no app finds a project for it.
+    // null: past the lookups a query makes, so it isn't shown.
     const who = await owners(r.id);
     if (who === undefined || who === runnerId) kept.push(r);
   }
@@ -574,14 +585,16 @@ export const projects = query({
     const out = [];
     // `projects` only until the first heartbeat on this backend has copied them.
     const ready = await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', HEADS_MARK)).first();
+    // An id two runners have: only its own runner's (projectOwners), counted
+    // archived ones too, so hiding the main Mac's archived one doesn't leave
+    // the other runner's looking like the only one.
+    const count = new Map<string, number>();
     for await (const p of ready ? ctx.db.query('projectHeads') : ctx.db.query('projects')) {
+      count.set(p.id, (count.get(p.id) ?? 0) + 1);
       if (p.archived && !archived) continue;
       const { runnerId, id, title, createdBy, createdAt, updatedAt, threadCount, lastActivityAt } = p;
       out.push({ runnerId, id, title, createdBy, archived: p.archived, createdAt, updatedAt, threadCount, ...(lastActivityAt !== undefined ? { lastActivityAt } : {}), folders: [], goals: '', state: '', notes: '', ...(await iconOf(ctx, p)) });
     }
-    // An id two runners have: only its own runner's (projectOwners).
-    const count = new Map<string, number>();
-    for (const p of out) count.set(p.id, (count.get(p.id) ?? 0) + 1);
     const owners = projectOwners(ctx);
     const kept = [];
     for (const p of out) if (count.get(p.id) === 1 || (await owners(p.id)) === p.runnerId) kept.push(p);

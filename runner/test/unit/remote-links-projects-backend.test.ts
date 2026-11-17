@@ -27,6 +27,10 @@ async function setup() {
   process.env.CONVEX_SITE_URL = 'https://site.example';
   const b = memoryBackend();
   await b.ctx.db.insert('runnerKeys', { runnerId: MINI, keyHash: await sha256(MINI_KEY), name: 'mac-mini', createdAt: 1 });
+  // The main Mac heartbeats with the main key; Mac mini with its own.
+  for (const [runnerId, byOwner] of [[LAPTOP, true], [MINI, false]] as const) {
+    await b.ctx.db.insert('runners', { runnerId, name: runnerId, version: '1', lastSeenAt: Date.now(), startedAt: 'x', draining: false, threadCount: 1, ...(byOwner ? { byOwner } : {}) });
+  }
   const { code } = await call(b.ctx, sync.issuePairingCode, { key: OWNER, kind: 'browser', name: 'web' });
   const { token } = (await call(b.ctx, tokens.claim, { code })) as { token: string };
   return { ...b, token };
@@ -154,7 +158,42 @@ test("whatever was stored first, apps read a project id only as its own runner's
   const inbox = (await call(s.ctx, phone.threadsAt, { token: s.token, view: 'inbox' })) as { rows: { threadId: string; projects?: { id: string }[] }[] };
   const byId = new Map(inbox.rows.map((r) => [r.threadId, r.projects?.map((p) => p.id)]));
   assert.deepEqual([byId.get('EVIL'), byId.get('OLDMOVE'), byId.get('MAIN')], [['p_mini'], undefined, ['p_shared']]);
+  // The main Mac's project archived: the list without archived ones doesn't
+  // fall back to Mac mini's copy of the id.
+  await call(s.ctx, sync.upsertProjects, { key: OWNER, runnerId: LAPTOP, projects: [{ ...project('p_shared', 'Main project'), archived: true }], removed: [] });
+  const live = (await call(s.ctx, phone.projects, { token: s.token })) as { runnerId: string; id: string }[];
+  assert.deepEqual(live.filter((p) => p.id === 'p_shared'), []);
+  await call(s.ctx, sync.upsertProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')], removed: [] });
+  // Mac mini's key revoked: it's still not the main Mac.
+  for (const k of s.rows('runnerKeys')) await s.ctx.db.patch(k._id, { revokedAt: Date.now() });
+  assert.deepEqual(await refs('EVIL'), ['p_mini']);
+  assert.deepEqual(await refs('MAIN'), ['p_shared']);
   // And the main Mac's project page has only its own threads.
   const page = (await call(s.ctx, phone.projectThreads, { token: s.token, runnerId: LAPTOP, projectId: 'p_shared' })) as { threadId: string }[];
   assert.deepEqual(page.map((t) => t.threadId).sort(), ['MAIN']);
+});
+
+// Each project a thread names is a lookup when the phones read it, so a
+// runner key's thread names at most 10, and a list past 1,000 different ids
+// leaves the rest out rather than go past Convex's index reads (4,096 per
+// query): 100 inbox threads naming 50 made-up ids each (cross-lab review).
+test("a runner key's threads can't name enough project ids to stop the phones' lists loading (141)", async () => {
+  const s = await setup();
+  const many = (n: number, at: number) => Array.from({ length: n }, (_, i) => ({ id: `p_fake_${at}_${i}`, title: 'x' }));
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('ONE', MINI, { projects: many(50, 0) })] });
+  assert.equal(s.rows('threads').find((t) => t.threadId === 'ONE')!.projects.length, 10);
+  // As written before the cap: 120 threads of 50 ids each.
+  for (let i = 0; i < 120; i++) {
+    await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread(`T${i}`, LAPTOP)] });
+    await s.ctx.db.patch(s.rows('threads').find((t) => t.threadId === `T${i}`)!._id, { projects: many(50, i + 1) });
+  }
+  let ranges = 0;
+  const query = s.ctx.db.query.bind(s.ctx.db);
+  (s.ctx.db as { query: unknown }).query = (table: string) => {
+    if (table === 'projectHeads' || table === 'projects') ranges++;
+    return query(table);
+  };
+  const inbox = (await call(s.ctx, phone.threadsAt, { token: s.token, view: 'inbox' })) as { rows: { projects?: unknown[] }[] };
+  assert.equal(inbox.rows.length, 121);
+  assert.ok(ranges <= 1001, `${ranges} project reads`);
 });

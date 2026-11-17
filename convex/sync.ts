@@ -363,6 +363,9 @@ export const RUNNER_KEY_CAPS = {
   threadText: 1_000, // title, preview, cwd, working line, each
   keywords: 400, // the runner's 200 characters (keywords.ts), with room for multi-byte text
   threadsInView: 300, // per view the phone reads whole (inbox, hibernating)
+  // Projects a thread is in: each is a lookup when the phones read it
+  // (phone.ts projectOwners), so 300 inbox threads stay under 4,096 index reads.
+  threadProjects: 10,
   // A runner key's threads in all, every view (the M5 had 714 on 5 Nov,
   // Bruce 7): past it a new one waits (left out, sent again later).
   threads: 3_000,
@@ -750,9 +753,10 @@ export const upsertThreads = mutation({
       // another runner's: the row says where the phone's commands for it go
       // and carries its secret card's key (docs/protocol.md, "Runner keys").
       if (!mayWrite(caller, t.runnerId, existing?.runnerId)) throw forbidden(`write thread ${t.threadId}`);
-      // Only its own runner's projects (heldElsewhere).
+      // Only its own runner's projects (heldElsewhere), and only so many: each
+      // is a lookup when the phones read the thread (phone.ts projectOwners).
       if (t.projects?.length && !caller.owner) {
-        const projects = await ownProjectsOnly(ctx, caller, t.runnerId, t.projects);
+        const projects = await ownProjectsOnly(ctx, caller, t.runnerId, t.projects.slice(0, CAP.threadProjects));
         if (projects.length !== t.projects.length) t = { ...t, projects: projects.length ? projects : undefined };
       }
       // Nor the main key as a runner that has a key of its own (lib.ts actAs).
