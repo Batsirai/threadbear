@@ -1,0 +1,3 @@
+# Unit test files that fail on Windows today. scripts/test-windows.mjs runs
+# every other file as a hard check and these as a report. Take a file off
+# the list once it passes there; the list only shrinks.

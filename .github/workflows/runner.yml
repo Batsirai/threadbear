@@ -139,3 +139,45 @@ jobs:
           name: check-logs-${{ matrix.os }}-node-${{ matrix.node }}
           path: ${{ runner.temp }}/check-logs
           if-no-files-found: ignore
+
+  # The runner on Windows itself, without WSL (docs/gpui-port/runner-windows-plan.md).
+  # check.sh is bash and Mac-shaped, so this runs the typecheck and
+  # scripts/test-windows.mjs: every unit test file except those in
+  # runner/test/windows-known-failing.txt must pass, and those are run as a
+  # report. Take a file off the list once it passes; the list only shrinks.
+  windows:
+    name: windows-latest, Node 24
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: runner/package-lock.json
+
+      - name: Packages
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests that should pass
+        env:
+          THREADBEAR_CLI_UPDATES: 'off'
+          THREADBEAR_SYNC: 'off'
+          THREADBEAR_JOB_PRIORITY: normal
+        run: node scripts/test-windows.mjs
+
+      - name: Known-failing files (a report, never fails the run)
+        if: always()
+        env:
+          THREADBEAR_CLI_UPDATES: 'off'
+          THREADBEAR_SYNC: 'off'
+          THREADBEAR_JOB_PRIORITY: normal
+        run: node scripts/test-windows.mjs --known
