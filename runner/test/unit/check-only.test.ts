@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { onlyFailed } from '../../src/worktrees.ts';
+import { onlyFailed, onlyRan } from '../../src/worktrees.ts';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const PASSES = "import { test } from 'node:test';\ntest('ok', () => {});\n";
@@ -76,11 +76,19 @@ test('--only runs the steps it names and says the rest were left out', () => {
     for (const name of ['runner typecheck', 'convex typecheck', 'web typecheck', 'runner unit tests']) {
       assert.match(step(r.out, name) ?? '', /^skip .*\(--only left it out\)$/, `${name}: ${r.out}`);
     }
+    // And it ends by saying which of the steps asked for it ran: exit 0
+    // alone doesn't tell passing a step from never getting to it. Here
+    // nothing the site reads changed, so its build is skipped, asked for or not.
+    assert.deepEqual([...(onlyRan(r.out) ?? [])], ['web tests']);
+    const two = run(c.root, ['--quick', '--only', 'site build;web tests;no such step']);
+    assert.equal(two.status, 0, two.out);
+    assert.deepEqual([...(onlyRan(two.out) ?? [])], ['web tests']);
     // Without it, they all run.
     const all = run(c.root, ['--quick']);
     assert.equal(all.status, 0, all.out);
     for (const name of ['runner typecheck', 'web tests', 'runner unit tests']) assert.match(step(all.out, name) ?? '', /^ok/, all.out);
     assert.doesNotMatch(all.out, /--only/);
+    assert.equal(onlyRan(all.out), undefined);
   } finally {
     fs.rmSync(c.root, { recursive: true, force: true });
   }
@@ -102,6 +110,7 @@ test('a failed run ends with the --only that runs what failed again, and that ru
     assert.match(step(again.out, 'runner unit tests') ?? '', /^FAIL/, again.out);
     assert.match(step(again.out, 'runner typecheck') ?? '', /^skip/, again.out);
     assert.equal(onlyFailed(again.out), only);
+    assert.deepEqual([...(onlyRan(again.out) ?? [])], ['web tests', 'runner unit tests']);
     const logs = again.out.match(/^FAIL\s+runner unit tests.*?(\S+\.log)/m)?.[1];
     assert.ok(logs && !/ok\.test\.ts|✔ ok/.test(fs.readFileSync(logs, 'utf8')), 'only the named file ran');
   } finally {
@@ -120,6 +129,8 @@ test("a checkout that passes what failed elsewhere says so, including without a 
     assert.match(step(r.out, 'web tests') ?? '', /^ok/, r.out);
     assert.match(step(r.out, 'runner unit tests') ?? '', /^skip .*none of the files --only names are in this checkout/, r.out);
     assert.equal(onlyFailed(r.out), undefined);
+    // Files it doesn't have are files it can't fail: that counts as run.
+    assert.deepEqual([...(onlyRan(r.out) ?? [])], ['web tests', 'runner unit tests']);
     // With one of the files there, that one runs.
     const some = run(c.root, ['--quick', '--only', 'runner unit tests=test/unit/bad.test.ts test/unit/ok.test.ts']);
     assert.equal(some.status, 0, some.out);
@@ -172,6 +183,11 @@ test('a run that is for a check host or nowhere never runs on this Mac', () => {
     assert.match(dropped.out, /remote got: nowhere --quick --only web tests/);
     assert.match(dropped.out, /No check host could take it, and this run was only for one\./);
     assert.doesNotMatch(dropped.out, /So the checks run on this Mac instead|^(ok|skip|FAIL) /m);
+    // Nor when the check command itself says to run here.
+    const local = run(c.root, ['--quick', '--only', 'web tests'], { THREADBEAR_CHECK_HOST_ONLY: '1' });
+    assert.equal(local.status, 4, local.out);
+    assert.match(local.out, /this run was only for a check host/);
+    assert.doesNotMatch(local.out, /^(ok|skip|FAIL) /m);
     // Without it, as ever: the run comes here.
     const here = run(c.root, ['--quick', '--only', 'web tests'], { THREADBEAR_CHECK_HOST: 'nowhere', THREADBEAR_JOB_PRIORITY: 'normal' }, false);
     assert.equal(here.status, 0, here.out);

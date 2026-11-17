@@ -285,11 +285,17 @@ So a failed check says what failed, and that alone is run on each landing:
   "..."`: the steps that failed, and for the runner's unit tests the files
   (when there are 8 or fewer). `./check.sh --quick --only "<that>"` runs
   just those, and says `skip ... (--only left it out)` for the rest. It's
-  the quick way to see a fix work, too.
+  the quick way to see a fix work, too. A run with `--only` ends with
+  `--only ran: "..."`, the steps of those asked for that it ran: exit 0
+  alone doesn't tell passing a step from skipping it.
 - When a group's check fails with that line, the holder runs the same check
-  with `THREADBEAR_CHECK_ONLY` set to it on each landing by itself: its own
-  first, then each of the others replayed onto main without the rest. A few
-  test files are seconds each, plus the copy to the check host.
+  with `THREADBEAR_CHECK_ONLY` set to it on main first, then on each landing
+  by itself: its own, then each of the others replayed onto main without
+  the rest. A few test files are seconds each, plus the copy to the check
+  host.
+- Main has to pass it, having run every step asked for. If main fails it,
+  or skipped a step (the Swift steps never run on main with nothing
+  changed), nobody is blamed and the group is halved as before.
 - Those runs are in a checkout of tb land's own, `threadbear-land-alone/`
   beside the lock: a clone that borrows the repo's objects, not a worktree,
   so no thread's worktree has another's files come and go in it, and
@@ -297,20 +303,22 @@ So a failed check says what failed, and that alone is run on each landing:
   group's check failed on and no other (a test that fails on the Linux box
   alone would otherwise pass for one landing on the Mac and get the next
   one refused), or nowhere (`THREADBEAR_CHECK_HOST_ONLY`): with no host,
-  they say so and the group is halved as before.
+  or a check command that itself says `--local` or `--e2e`, they say so
+  (exit 4) and the group is halved as before.
 - A landing that fails it alone is left out and told so at once, with that
   run's output: its `tb land` stops waiting and exits 1 (`refused` in its
   queue entry). The holder's next check has itself and only the ones that
   passed alone, so it isn't failed again by someone who joined meanwhile.
-- A run that says nothing either way (no host could take it, it was killed)
-  refuses nobody. If nothing passed alone, main is run too: when what
-  failed fails there, nobody is blamed. If each passes alone, it takes two
-  of them together, or it's a test that fails now and then: the group is
-  halved.
-- It's done once per landing, and for no longer than about one check takes
-  (the time runs out: the ones seen to pass go into the next check, the
-  rest wait their turn). Not with a `--despite-red` fix in the group, nor
-  for a check read from a subfolder: those are halved.
+- A run that says nothing either way (no host could take it, it was
+  stopped) refuses nobody. If each passes alone, it takes two of them
+  together, or it's a test that fails now and then: the group is halved.
+- It's done once per landing, and for no longer than about one check takes.
+  Each run is held to the time that's left (`THREADBEAR_CHECK_MAX_SECS`,
+  which covers its wait in the host's line, and a stop of its whole process
+  group after that), with a minute at least. When the time runs out, the
+  ones seen to pass go into the next check and the rest wait their turn.
+  Not with a `--despite-red` fix in the group, nor for a check read from a
+  subfolder: those are halved.
 
 Each of those runs leaves a line in the times log with `alone: true`,
 `only` and `passed`, and none of `ok`, `check` and `intact`, so nothing that

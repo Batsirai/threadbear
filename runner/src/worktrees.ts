@@ -769,7 +769,9 @@ async function lockLanding(file: string, out: (line: string) => void, where: () 
 // left out of its group; and the longest a failed group's landings are each
 // run alone for (findBroken; otherwise about one check's time). Tests
 // shorten them.
-export const landLimits: { progressMs: number; goneMs: number; aloneMs?: number } = { progressMs: 3 * 60_000, goneMs: 5_000 };
+export const landLimits: { progressMs: number; goneMs: number; aloneMs?: number; aloneMinMs: number; aloneGraceMs: number } = {
+  progressMs: 3 * 60_000, goneMs: 5_000, aloneMinMs: 60_000, aloneGraceMs: 30_000,
+};
 
 // A passing check prints nothing of its own, so on 9 Nov finding out where
 // landings spent their time meant scraping transcripts and running timed
@@ -1099,6 +1101,13 @@ export function onlyFailed(text: string): string | undefined {
   return said && !said.startsWith('-') ? said : undefined;
 }
 
+// The steps a run with --only says it ran (check.sh's last line for one), or
+// undefined when it says no such thing.
+export function onlyRan(text: string): Set<string> | undefined {
+  const said = [...text.matchAll(/^--only ran: "([A-Za-z0-9 ._/;()-]{0,4000})"$/gm)].at(-1)?.[1];
+  return said === undefined ? undefined : new Set(said.split(';').filter(Boolean));
+}
+
 // A checkout for findBroken's runs, beside the landing lock: a clone that
 // borrows the repo's objects, so it's small and has the commits tb land
 // makes. Not a worktree, so nothing that lists worktrees meets it, and not a
@@ -1130,12 +1139,14 @@ type Alone = 'passed' | 'failed' | 'unknown';
 // minutes at the median on the 16th, one broken branch at the front of a
 // group of eight costing four checks before anything landed.
 //
-// A landing that fails it alone is the answer for its own tb, with that
-// run's output; one that passes goes into the next check. `unknown` is a run
-// that said nothing either way (no host could take it, it was killed, the
-// time ran out before its turn): never a reason to refuse. When nothing
-// passed, main is run too, and if what failed fails there, nobody is blamed.
-// Undefined when it can't tell anything; the halving is still there.
+// Main goes first: nobody is blamed for what main fails by itself, nor for a
+// step main didn't run (exit 0 from a check that skipped what was asked
+// isn't a pass; Codex's review, 17 Nov). Only then is a landing that fails
+// it alone the answer for its own tb, with that run's output; one that
+// passes goes into the next check. `unknown` is a run that said nothing
+// either way (no host could take it, it was stopped, the time ran out
+// before its turn): never a reason to refuse. Undefined when it can't tell
+// anything; the halving is still there.
 async function findBroken(a: {
   t: LandTarget;
   common: string;
@@ -1156,18 +1167,27 @@ async function findBroken(a: {
   const dir = await aloneCheckout(a.common);
   if (!dir) return undefined;
   const started = Date.now();
-  const limit = landLimits.aloneMs ?? Math.max(5 * 60_000, (typicalCheckSeconds(a.timesFile) ?? 600) * 1000);
+  const usual = Math.max(5 * 60_000, (typicalCheckSeconds(a.timesFile) ?? 600) * 1000);
+  // The time left, which each run is held to as well: one waiting in a busy
+  // host's line would otherwise keep the landing lock for as long as that
+  // took. At least a minute, so the last one in gets a real try.
+  const leftMs = (): number => (landLimits.aloneMs ?? usual) - (Date.now() - started);
   const run = async (branch: string, commit: string): Promise<{ state: Alone; text: string }> => {
     // main is where check.sh looks for what a checkout changes, and nothing
     // of an earlier run stays (a clone of our own: nobody keeps work here).
     if (!(await git(dir, ['checkout', '-q', '-f', '--detach', commit])).ok ||
         !(await git(dir, ['update-ref', `refs/heads/${MAIN}`, a.main])).ok ||
         !(await git(dir, ['clean', '-q', '-fdx'])).ok) return { state: 'unknown', text: '' };
+    const forMs = Math.max(landLimits.aloneMinMs, leftMs());
+    // check-remote.sh stops at THREADBEAR_CHECK_MAX_SECS by itself, its wait
+    // in the host's line included, and tidies up there; the limit on
+    // runCheck is for when that didn't happen, and for other checks.
     const r = await runCheck(a.check, dir, a.shell, {
       ...(a.host ? { THREADBEAR_CHECK_HOST: a.host } : a.env),
       THREADBEAR_CHECK_ONLY: a.only,
       THREADBEAR_CHECK_HOST_ONLY: '1',
-    });
+      THREADBEAR_CHECK_MAX_SECS: String(Math.ceil(forMs / 1000)),
+    }, forMs + landLimits.aloneGraceMs);
     const times = parseCheckTimes(r.text);
     // `passed`, not `ok`, and neither `check` nor `intact`: nothing that
     // reads this log for whole checks (typicalCheckSeconds, the updater's
@@ -1183,18 +1203,23 @@ async function findBroken(a: {
       seconds: Math.round(r.durationMs / 1000),
       ...times,
     });
-    // Somewhere else than asked says nothing about there.
-    if (a.host && times.host !== a.host) return { state: 'unknown', text: r.text };
+    // Somewhere else than asked says nothing about there, nor does one stopped.
+    if (r.stopped || (a.host && times.host !== a.host)) return { state: 'unknown', text: r.text };
     // Failed means the check ran to its end and named a step that failed.
     return { state: r.ok ? 'passed' : onlyFailed(r.text) ? 'failed' : 'unknown', text: r.text };
   };
 
-  const mine = await run(a.t.branch, a.own);
+  const base = await run(MAIN, a.main);
+  const ran = onlyRan(base.text);
+  const asked = a.only.split(';').map((e) => e.split('=')[0]);
+  if (base.state !== 'passed' || !ran || !asked.every((name) => ran.has(name))) return undefined;
+
   const failed = new Map<string, string>();
   const passed = new Set<string>();
   let left = 0;
+  const mine = leftMs() > 0 ? await run(a.t.branch, a.own) : { state: 'unknown' as const, text: '' };
   for (const g of a.group) {
-    if (Date.now() - started > limit) {
+    if (leftMs() <= 0) {
       left++;
       continue;
     }
@@ -1204,9 +1229,6 @@ async function findBroken(a: {
     else if (r.state === 'passed') passed.add(g.entry.id);
     else left++;
   }
-  const anyFailed = mine.state === 'failed' || failed.size > 0;
-  const anyPassed = mine.state === 'passed' || passed.size > 0;
-  if (anyFailed && !anyPassed && (await run(MAIN, a.main)).state !== 'passed') return undefined;
   return { own: mine.state, ownText: mine.text, failed, passed, left };
 }
 
@@ -1609,7 +1631,9 @@ export function overwrittenFiles(text: string): string[] {
 
 // Runs the check through a shell, keeping the end of its output (that's
 // where a test runner says what failed).
-function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extraEnv: NodeJS.ProcessEnv = {}): Promise<{ ok: boolean; code?: number; text: string; durationMs: number }> {
+// With `limitMs` (findBroken's runs), it's stopped past that, its whole
+// process group, and says so: `stopped`.
+function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extraEnv: NodeJS.ProcessEnv = {}, limitMs?: number): Promise<{ ok: boolean; code?: number; text: string; durationMs: number; stopped?: boolean }> {
   const started = Date.now();
   // At background priority: a land's check is the full quick suite.
   const [bin, args] = inBackground(shell[0], [...shell.slice(1), command]);
@@ -1626,11 +1650,38 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extra
     if (!extraEnv.THREADBEAR_CHECK_GROUP) delete env.THREADBEAR_CHECK_GROUP;
     if (!extraEnv.THREADBEAR_CHECK_ONLY) delete env.THREADBEAR_CHECK_ONLY;
     if (!extraEnv.THREADBEAR_CHECK_HOST_ONLY) delete env.THREADBEAR_CHECK_HOST_ONLY;
-    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (!extraEnv.THREADBEAR_CHECK_MAX_SECS && limitMs !== undefined) delete env.THREADBEAR_CHECK_MAX_SECS;
+    // A group of its own when it has a limit, so the ssh and whatever else
+    // it started go with it.
+    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], ...(limitMs !== undefined ? { detached: true } : {}) });
+    let stopped = false;
+    let timers: NodeJS.Timeout[] = [];
+    const done = (r: { ok: boolean; code?: number; text: string }): void => {
+      for (const t of timers) clearTimeout(t);
+      timers = [];
+      resolve({ ...r, durationMs: Date.now() - started, ...(stopped ? { stopped: true } : {}) });
+    };
+    const signal = (s: NodeJS.Signals): void => {
+      try {
+        if (child.pid) process.kill(-child.pid, s);
+      } catch {
+        // Gone already.
+      }
+    };
+    if (limitMs !== undefined) {
+      timers.push(setTimeout(() => {
+        stopped = true;
+        signal('SIGTERM');
+        timers.push(setTimeout(() => signal('SIGKILL'), 5_000));
+        // Something of it may have left the group and kept the pipes open:
+        // the landing lock isn't held for that.
+        timers.push(setTimeout(() => done({ ok: false, text: `${text}\nStopped: it had run for ${Math.round(limitMs / 1000)} s.` }), 15_000));
+      }, limitMs));
+    }
     child.stdout.on('data', take);
     child.stderr.on('data', take);
-    child.on('error', (e) => resolve({ ok: false, text: `${text}\n${e.message}`, durationMs: Date.now() - started }));
-    child.on('close', (code) => resolve({ ok: code === 0, code: code ?? undefined, text, durationMs: Date.now() - started }));
+    child.on('error', (e) => done({ ok: false, text: `${text}\n${e.message}` }));
+    child.on('close', (code) => done({ ok: code === 0 && !stopped, code: code ?? undefined, text }));
   });
 }
 

@@ -127,6 +127,15 @@ if [ "$QUICK" = 1 ] && [ "$APP_ONLY" = 1 ]; then
   echo "--quick is the runner's checks and --app the app's; pick one (or neither for both)." >&2
   exit 2
 fi
+# THREADBEAR_CHECK_HOST_ONLY (below, where the host is picked): a run that's
+# for a check host or nowhere. A check command that itself says --local or
+# --e2e would run it here all the same (Codex's review, 17 Nov), in tb
+# land's own checkout with no packages installed. On a host this isn't set:
+# ssh doesn't carry it.
+if [ -n "${THREADBEAR_CHECK_HOST_ONLY:-}" ] && { [ "$LOCAL" = 1 ] || [ "$E2E" = 1 ]; }; then
+  echo "This check runs on this Mac (--local or --e2e), and this run was only for a check host."
+  exit 4
+fi
 # plain <text> <regex>: whether all of it matches, a line break included
 # (grep would take each line by itself), whatever the locale's letters are.
 plain() {
@@ -325,6 +334,14 @@ only_entry() {
   done
   return 1
 }
+# ran_asked <step>: notes a step --only named as run, for the line a run
+# with --only ends with. tb land runs what failed on main too before it
+# blames a landing, and exit 0 alone wouldn't tell main passing a step from
+# main skipping it (the Swift steps never run on main with nothing changed).
+ONLY_RAN=""
+ran_asked() {
+  if [ -n "$ONLY" ] && only_entry "$1" >/dev/null; then ONLY_RAN="$ONLY_RAN${ONLY_RAN:+;}$1"; fi
+}
 # left_out <step>: says so and succeeds when --only leaves the step out. The
 # steps that install packages always run: they aren't checks, and the ones
 # asked for need them.
@@ -338,6 +355,7 @@ left_out() {
 step() {
   local name="$1" dir="$2"
   if left_out "$name"; then return; fi
+  ran_asked "$name"
   shift 2
   local log="$LOGS/$(printf '%s' "$name" | tr -c 'a-zA-Z0-9' '-').log"
   local start=$SECONDS
@@ -376,6 +394,9 @@ runner_unit_tests() {
   local log="$LOGS/runner-unit-tests.log" list="$LOGS/runner-unit-tests.failed"
   local start=$SECONDS
   if left_out "$name"; then return; fi
+  # (Run, for --only's last line, also when none of its files are here:
+  # files this checkout doesn't have are files it can't fail.)
+  ran_asked "$name"
   # All of them, or the files --only names for this step. One this checkout
   # doesn't have can't fail here: tb land runs a group's failed files on each
   # of its landings alone, and another landing's new test isn't in this one.
@@ -722,9 +743,11 @@ EOF_FAILED
     echo
     echo "To run only what failed again: --only \"$AGAIN\""
   fi
+  [ -z "$ONLY" ] || echo "--only ran: \"$ONLY_RAN\""
   echo
   echo "Logs kept in $LOGS; rm -rf it when you're done."
   exit 1
 fi
+[ -z "$ONLY" ] || echo "--only ran: \"$ONLY_RAN\""
 rm -rf "$LOGS"
 [ -z "$SHOTS" ] || echo "Screenshots are in $SHOTS."

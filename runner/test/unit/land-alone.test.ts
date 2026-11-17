@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { land, landLimits, onlyFailed, type LandTarget } from '../../src/worktrees.ts';
+import { land, landLimits, onlyFailed, onlyRan, type LandTarget } from '../../src/worktrees.ts';
 import { LAND_TIMES_FILE, typicalCheckSeconds, waiting } from '../../src/land-queue.ts';
 import { passedLandCheck } from '../../src/update.ts';
 import { capture, commit, holdUntil, makeBranch, makeRepo, sh, until, write } from '../helpers/worktrees-harness.ts';
@@ -21,14 +21,17 @@ const SAID = 'To run only what failed again: --only "unit tests=test/unit/x.test
 // only what failed, holds the first landing (a.txt alone) until the test
 // lets it go so the rest queue up, and fails as `fails` says: a shell test
 // that's true when this checkout is broken. `alone` is what a run of only
-// what failed does instead, when that differs.
-function check(root: string, fails: string, alone = ''): string {
+// what failed does instead, when that differs. Asked for only what failed,
+// it says it ran it, as check.sh does (`ranIf`: only where that's true).
+function check(root: string, fails: string, alone = '', ranIf = 'true'): string {
   const failing = `echo '${SAID}'; exit 1`;
   return `echo "$(ls *.txt | tr '\\n' ' ')| only=\${THREADBEAR_CHECK_ONLY:-} host=\${THREADBEAR_CHECK_HOST_ONLY:-}" >> '${root}/checks'; ` +
     `if test -z "\${THREADBEAR_CHECK_ONLY:-}" && test -f a.txt && ! test -f b.txt; then touch '${root}/checking'; ${holdUntil(`${root}/release`)}; fi; ` +
-    (alone ? `if test -n "\${THREADBEAR_CHECK_ONLY:-}"; then ${alone}; fi; ` : '') +
+    `if test -n "\${THREADBEAR_CHECK_ONLY:-}"; then if ${ranIf}; then echo '--only ran: "unit tests"'; else echo '--only ran: ""'; fi; ${alone || 'true'}; fi; ` +
     `if ${fails}; then ${failing}; fi`;
 }
+// True in a checkout with a landing's file in it: not on main as these tests leave it.
+const NOT_MAIN = 'ls [b-e].txt >/dev/null 2>&1';
 
 function branches(main: string, names: string[]): LandTarget[] {
   return names.map((n) => {
@@ -52,6 +55,8 @@ async function queued(root: string, main: string, a: LandTarget, others: LandTar
   return { first, rest, caps };
 }
 
+// How many times a holder went looking for who broke its group.
+const rounds = (caps: ReturnType<typeof capture>[]): number => caps.flatMap((c) => c.out).filter((l) => l.startsWith('Running only what failed')).length;
 const said = (caps: ReturnType<typeof capture>[]): string => caps.map((c) => c.out.concat(c.err).join('\n')).join('\n---\n');
 const checks = (root: string): { files: string[]; only: string; host: string }[] =>
   fs.readFileSync(path.join(root, 'checks'), 'utf8').trim().split('\n').map((l) => {
@@ -80,9 +85,11 @@ test('the landing that broke a group is found by running what failed on each alo
   const all = checks(root);
   const whole = all.filter((x) => !x.only);
   assert.deepEqual(whole.map((x) => x.files.join(' ')), ['a.txt', 'a.txt b.txt bad.txt c.txt d.txt', 'a.txt b.txt d.txt'], JSON.stringify(all));
-  // Each of the three alone on main, asked for only what failed, on a host or nowhere.
+  // Main first, then each of the three alone on it, asked for only what
+  // failed, on a host or nowhere.
   const alone = all.filter((x) => x.only);
-  assert.deepEqual(alone.map((x) => x.files.join(' ')).sort(), ['a.txt b.txt', 'a.txt bad.txt c.txt', 'a.txt d.txt']);
+  assert.deepEqual(alone[0].files, ['a.txt']);
+  assert.deepEqual(alone.map((x) => x.files.join(' ')).sort(), ['a.txt', 'a.txt b.txt', 'a.txt bad.txt c.txt', 'a.txt d.txt']);
   for (const x of alone) assert.deepEqual([x.only, x.host], ['unit tests=test/unit/x.test.ts', '1']);
   assert.deepEqual(waiting(path.join(main, '.git')), [], 'nobody left in the line');
   // Those runs are in a checkout of tb land's own, which is no worktree.
@@ -100,7 +107,7 @@ test("a run of only what failed is never taken for a check: not by the updater, 
   const file = path.join(main, '.git', LAND_TIMES_FILE);
   const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
   const alone = lines.filter((l) => l.alone);
-  assert.equal(alone.length, 2);
+  assert.equal(alone.length, 3, 'main and the two of them');
   for (const l of alone) {
     assert.equal(typeof l.passed, 'boolean');
     for (const k of ['ok', 'check', 'intact']) assert.ok(!(k in l), `${k} in ${JSON.stringify(l)}`);
@@ -162,8 +169,8 @@ test('when each passes what failed alone, the group is halved as before', async 
   assert.ok(fs.existsSync(path.join(main, 'd.txt')));
   // The first round ran all three alone, on a main with neither b nor c, and
   // each passed; that landing then halves, and never runs them alone again.
-  const firstRound = checks(root).filter((x) => x.only).slice(0, 3).map((x) => x.files.join(' ')).sort();
-  assert.deepEqual(firstRound, ['a.txt b.txt', 'a.txt c.txt', 'a.txt d.txt']);
+  const firstRound = checks(root).filter((x) => x.only).slice(0, 4).map((x) => x.files.join(' ')).sort();
+  assert.deepEqual(firstRound, ['a.txt', 'a.txt b.txt', 'a.txt c.txt', 'a.txt d.txt']);
   const holder = caps.find((x) => x.out.some((l) => /Each of them passes it alone/.test(l)))!;
   assert.equal(holder.out.filter((l) => l.startsWith('Running only what failed')).length, 1);
 });
@@ -179,10 +186,52 @@ test('when main fails what failed too, nobody is blamed for it', async () => {
   assert.doesNotMatch(said(caps), /by itself too|Left out/);
   assert.match(said(caps), /Checking them in smaller groups/);
   assert.match(caps[1].err.join('\n'), /^The check failed \(exit 1\), so main wasn't touched/);
-  // The three alone, then main: just a.txt, asked for only what failed.
+  // Main is run first, and that's the end of it: one run for each time a
+  // failed group was looked at, and none of a landing alone.
   const alone = checks(root).filter((x) => x.only);
-  assert.deepEqual(alone.at(-1)?.files, ['a.txt']);
-  assert.equal(alone.length, 4);
+  assert.deepEqual(alone[0].files, ['a.txt']);
+  assert.equal(alone.length, rounds(caps), JSON.stringify(alone));
+});
+
+test("when main didn't run what failed (exit 0 with the step skipped), that's no pass, and nobody is blamed", async () => {
+  const { root, main } = makeRepo();
+  const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
+  commit(c.path, { 'bad.txt': 'bad\n' }, 'Break it');
+  // As check.sh's Swift steps: skipped on main with nothing changed, and
+  // here run only where the broken change is.
+  const { first, rest, caps } = await queued(root, main, a, [b, c, d], check(root, 'test -f bad.txt', '', 'test -f bad.txt'));
+  assert.equal(await first, 0);
+  assert.deepEqual(await Promise.all(rest), [0, 1, 0], said(caps));
+  assert.doesNotMatch(said(caps), /by itself too|Left out/);
+  assert.match(said(caps), /Checking them in smaller groups/);
+  const alone = checks(root).filter((x) => x.only);
+  assert.deepEqual(alone[0].files, ['a.txt']);
+  assert.equal(alone.length, rounds(caps), JSON.stringify(alone));
+});
+
+test('a run alone that goes on past its time is stopped, with everything it started, and counts for nothing', async () => {
+  const { root, main } = makeRepo();
+  const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
+  commit(c.path, { 'bad.txt': 'bad\n' }, 'Break it');
+  const before = { ...landLimits };
+  Object.assign(landLimits, { aloneMs: 0, aloneMinMs: 300, aloneGraceMs: 100 });
+  try {
+    // Asked for only what failed, it never ends (a host's line that doesn't move).
+    const stuck = `echo $$ >> '${root}/pids'; sleep 600 & wait`;
+    const started = Date.now();
+    const { first, rest, caps } = await queued(root, main, a, [b, c, d], check(root, 'test -f bad.txt', stuck));
+    assert.equal(await first, 0);
+    assert.deepEqual(await Promise.all(rest), [0, 1, 0], said(caps));
+    assert.ok(Date.now() - started < 120_000);
+    assert.doesNotMatch(said(caps), /by itself too|Left out/);
+    assert.match(said(caps), /Checking them in smaller groups/);
+    // The shell and the sleep under it are gone.
+    const pids = fs.readFileSync(path.join(root, 'pids'), 'utf8').trim().split('\n');
+    await until(() => pids.every((pid) => sh(root, `ps -o pid= -g ${pid} | wc -l`).trim() === '0'), 'the stopped runs to go');
+  } finally {
+    // (aloneMs isn't in `before` when nothing had set it.)
+    Object.assign(landLimits, { aloneMs: undefined }, before);
+  }
 });
 
 test("a run that says nothing either way (no check host could take it) refuses nobody", async () => {
@@ -197,19 +246,28 @@ test("a run that says nothing either way (no check host could take it) refuses n
   assert.match(caps[1].err.join('\n'), /^The check failed \(exit 1\), so main wasn't touched/);
 });
 
-test("when the time for it runs out, the ones already seen to pass are checked next, and the rest wait", async () => {
+test("when the time for it runs out, whoever wasn't run waits, and nobody is refused or landed on a guess", async () => {
   const { root, main } = makeRepo();
   const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
   commit(c.path, { 'bad.txt': 'bad\n' }, 'Break it');
   const before = landLimits.aloneMs;
-  // Time for the holder's own run and no more.
-  landLimits.aloneMs = 0;
+  // The second landing run alone (the holder's own is the first) holds
+  // until the time has been taken away, so the third never gets its turn.
+  const second = `if ${NOT_MAIN}; then n=$(($(cat '${root}/n' 2>/dev/null || echo 0) + 1)); echo $n > '${root}/n'; ` +
+    `if test $n = 2; then touch '${root}/second'; ${holdUntil(`${root}/go`)}; fi; fi`;
   try {
-    const { first, rest, caps } = await queued(root, main, a, [b, c, d], check(root, 'test -f bad.txt'));
+    const { first, rest, caps } = await queued(root, main, a, [b, c, d], check(root, 'test -f bad.txt', second));
     assert.equal(await first, 0);
+    await until(() => fs.existsSync(path.join(root, 'second')), 'the second run alone');
+    landLimits.aloneMs = 0;
+    write(root, { go: '' });
+    // Whoever held the lock: c is the only one refused, and it never lands.
     assert.deepEqual(await Promise.all(rest), [0, 1, 0], said(caps));
     for (const n of ['a', 'b', 'd']) assert.ok(fs.existsSync(path.join(main, `${n}.txt`)), n);
     assert.ok(!fs.existsSync(path.join(main, 'bad.txt')));
+    // Main and two of the three were run in that round, not the third.
+    const round = checks(root).filter((x) => x.only).slice(0, 4).map((x) => x.files.join(' '));
+    assert.equal(round.filter((f) => f !== 'a.txt').length, 2, JSON.stringify(round));
   } finally {
     landLimits.aloneMs = before;
   }
@@ -268,4 +326,11 @@ test("what a failed check says to run again is read only in check.sh's own words
   for (const v of ['x$(id)', 'a`b`', "a'b", '-rf', 'a\\b', 'a&b', 'a|b', 'a>b', '']) assert.equal(onlyFailed(line(v)), undefined, v);
   // Not from the middle of a line a test printed.
   assert.equal(onlyFailed('  not ok 3 - To run only what failed again: --only "site build"\n'), undefined);
+});
+
+test("what a run with --only says it ran is read the same way", () => {
+  assert.deepEqual([...(onlyRan('skip  x (--only left it out)\n--only ran: "runner unit tests;desktop app check (as installed)"\n') ?? [])], ['runner unit tests', 'desktop app check (as installed)']);
+  assert.deepEqual([...(onlyRan('--only ran: ""\n') ?? ['x'])], []);
+  assert.equal(onlyRan('ok    runner unit tests  3s\n'), undefined);
+  assert.equal(onlyRan('  log: --only ran: "site build"\n'), undefined);
 });
