@@ -25,7 +25,10 @@ const SAID = 'To run only what failed again: --only "unit tests=test/unit/x.test
 // it says it ran it, as check.sh does (`ranIf`: only where that's true).
 function check(root: string, fails: string, alone = '', ranIf = 'true'): string {
   const failing = `echo '${SAID}'; exit 1`;
-  return `echo "$(ls *.txt | tr '\\n' ' ')| only=\${THREADBEAR_CHECK_ONLY:-} host=\${THREADBEAR_CHECK_HOST_ONLY:-}" >> '${root}/checks'; ` +
+  // LC_ALL=C: a Linux check host's locale sorts bad.txt before b.txt,
+  // where the expected lists below (and a Mac) have it after (17 Nov: every
+  // landing's check failed on cloud and tinker-desk for hours over it).
+  return `echo "$(LC_ALL=C ls *.txt | tr '\\n' ' ')| only=\${THREADBEAR_CHECK_ONLY:-} host=\${THREADBEAR_CHECK_HOST_ONLY:-}" >> '${root}/checks'; ` +
     `if test -z "\${THREADBEAR_CHECK_ONLY:-}" && test -f a.txt && ! test -f b.txt; then touch '${root}/checking'; ${holdUntil(`${root}/release`)}; fi; ` +
     `if test -n "\${THREADBEAR_CHECK_ONLY:-}"; then if ${ranIf}; then echo '--only ran: "unit tests"'; else echo '--only ran: ""'; fi; ${alone || 'true'}; fi; ` +
     `if ${fails}; then ${failing}; fi`;
