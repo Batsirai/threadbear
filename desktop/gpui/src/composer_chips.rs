@@ -288,10 +288,10 @@ impl Composer {
             // Another runner's thread before its logins have come: its Mac's
             // name where the chips would be, and send (remoteControls).
             (Some(away), false) if !away.logins_known => {
-                return row.child(div().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(div().flex_1()).child(send_button).into_any_element();
+                return row.child(div().min_w_0().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(div().flex_1()).child(send_button).into_any_element();
             }
             // Its logins known: the machine's chip in place of "+".
-            (Some(away), false) => row = row.child(div().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(chip_divider(cx)),
+            (Some(away), false) => row = row.child(div().min_w_0().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(chip_divider(cx)),
             // A new thread for another runner, before it's said what logins
             // it has: the machine chip, and how it's going (draftWaitingControls).
             (Some(away), true) if !away.logins_known => {
@@ -593,7 +593,10 @@ impl Composer {
             .test_support()
             .role(Role::Button)
             .aria_label(name.clone())
-            .flex_none()
+            // It gives way like the other chips, its name ending "…": as
+            // flex_none it pushed Send out of a 560-point box on Linux,
+            // whose font is wider (composer-chips.feature, 17 Nov).
+            .min_w_0()
             .gap(px(4.))
             .h(px(26.))
             .px(px(7.))
@@ -601,10 +604,10 @@ impl Composer {
             .cursor_pointer()
             .hover(|s| s.bg(style::chip_hover_fill(cx)))
             .map(|d| match &moving {
-                Some(_) => d.child(crate::spinner::Spinner::new().color(style::secondary_text(cx)).with_size(px(size::CHIP))),
-                None => d.child(crate::icons::symbol(icon).with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx))),
+                Some(_) => d.child(div().flex_none().child(crate::spinner::Spinner::new().color(style::secondary_text(cx)).with_size(px(size::CHIP)))),
+                None => d.child(div().flex_none().child(crate::icons::symbol(icon).with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx)))),
             })
-            .child(div().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).whitespace_nowrap().child(name))
+            .child(div().min_w_0().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).truncate().child(name))
             .child(div().flex_none().flex().child(Icon::from(IconName::ChevronDown).with_size(px(9.)).text_color(style::faint_icon(cx))))
             .tip(tip)
             .on_click(move |ev: &ClickEvent, window, cx| {
