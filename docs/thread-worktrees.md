@@ -304,7 +304,11 @@ So a failed check says what failed, and that alone is run on each landing:
   alone would otherwise pass for one landing on the Mac and get the next
   one refused), or nowhere (`THREADBEAR_CHECK_HOST_ONLY`): with no host,
   or a check command that itself says `--local` or `--e2e`, they say so
-  (exit 4) and the group is halved as before.
+  (exit 4) and the group is halved as before. A run that names another
+  host than the group's, or names one when the group's check named none,
+  counts for nothing. A Linux host takes a run with `--only` when every
+  step named is one it runs (the Node, site and cargo steps), whatever
+  changed: main, where nothing has, would otherwise always need a Mac.
 - A landing that fails it alone is left out and told so at once, with that
   run's output: its `tb land` stops waiting and exits 1 (`refused` in its
   queue entry). The holder's next check has itself and only the ones that

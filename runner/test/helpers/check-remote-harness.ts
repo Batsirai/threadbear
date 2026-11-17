@@ -214,12 +214,12 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
     tmpdir,
     // peek: a command run in the copy as its check starts, its output kept.
     // env: more for the script's environment (PRINT_LOG, RSYNC_PEEK).
-    run(hostList: string, staySecs: number, peek = '', env: Record<string, string> = {}) {
+    run(hostList: string, staySecs: number, peek = '', env: Record<string, string> = {}, flags: string[] = []) {
       const base: NodeJS.ProcessEnv = { ...process.env };
       delete base.XDG_CACHE_HOME;
       delete base.THREADBEAR_CHECK_PREFER;
       delete base.THREADBEAR_CHECK_GROUP;
-      const r = spawnSync('bash', [path.join(repo, 'scripts', 'check-remote.sh'), hostList, '--quick'], {
+      const r = spawnSync('bash', [path.join(repo, 'scripts', 'check-remote.sh'), hostList, '--quick', ...flags], {
         encoding: 'utf8',
         env: { ...base, HOME: home, TMPDIR: tmpdir, PATH: `${bin}:${process.env.PATH}`, FAKE: fake, PEEK: peek, THREADBEAR_CHECK_STAY_SECS: String(staySecs), ...env },
       });

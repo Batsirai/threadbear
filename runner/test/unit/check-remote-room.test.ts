@@ -143,6 +143,35 @@ test('a big change to the Mac app still goes to a Mac', () => {
   assert.deepEqual(r.copies, ['h2']);
 });
 
+test('a run of only named steps can take a Linux host when each is one it runs, whatever changed', () => {
+  // tb land runs what failed in a group's check on main by itself, on the
+  // host the group failed on: nothing has changed there, which otherwise
+  // means "everything runs" and a Mac.
+  const only = (value: string, change?: string) => {
+    const s = setup({ h1: { state: 'free', os: 'Linux' }, h2: { state: 'free' } });
+    if (change) {
+      fs.mkdirSync(path.dirname(path.join(s.repo, change)), { recursive: true });
+      fs.writeFileSync(path.join(s.repo, change), '\n');
+    }
+    const r = s.run('h1,h2', 3600, '', {}, ['--only', value]);
+    assert.equal(r.status, 0, `${value}: ${r.stdout}${r.stderr}`);
+    return r.copies;
+  };
+  assert.deepEqual(only('runner unit tests=test/unit/a.test.ts test/unit/b.test.ts'), ['h1']);
+  assert.deepEqual(only('runner typecheck;desktop core tests;desktop app check (as installed);site build'), ['h1']);
+  // Even for a change that would otherwise need a Mac: the steps named don't.
+  assert.deepEqual(only('web tests', 'app/Sources/X.swift'), ['h1']);
+  // A Swift step, or one it doesn't know, still goes to the Mac.
+  assert.deepEqual(only('runner unit tests;app mock tests'), ['h2']);
+  assert.deepEqual(only('iphone kit tests'), ['h2']);
+  assert.deepEqual(only('some new step'), ['h2']);
+  // And on the Linux host alone, it says why not.
+  const s = setup({ h1: { state: 'free', os: 'Linux' } });
+  const r = s.run('h1', 3600, '', {}, ['--only', 'app release build']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /it's Linux, and this check needs a Mac \(--only names a step that needs one\)/);
+});
+
 test('a Linux host that could not run it anyway is not named as short of room', () => {
   // Nothing changed, so this one needs a Mac; the Linux host's disk isn't the reason.
   const s = setup({ h1: { state: 'free', os: 'Linux', df: linuxDf(GiB) }, h2: { state: 'free' } });

@@ -1203,8 +1203,11 @@ async function findBroken(a: {
       seconds: Math.round(r.durationMs / 1000),
       ...times,
     });
-    // Somewhere else than asked says nothing about there, nor does one stopped.
-    if (r.stopped || (a.host && times.host !== a.host)) return { state: 'unknown', text: r.text };
+    // One that was stopped says nothing. Nor does one whose host isn't the
+    // group's: another one, or a host named by one and not the other (the
+    // group's own line can be lost off the front of a long output; with no
+    // host known the runs aren't sent to one, and then none may name one).
+    if (r.stopped || times.host !== a.host) return { state: 'unknown', text: r.text };
     // Failed means the check ran to its end and named a step that failed.
     return { state: r.ok ? 'passed' : onlyFailed(r.text) ? 'failed' : 'unknown', text: r.text };
   };
@@ -1657,6 +1660,10 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extra
     let stopped = false;
     let timers: NodeJS.Timeout[] = [];
     const done = (r: { ok: boolean; code?: number; text: string }): void => {
+      // Past its limit, whatever is left of its group goes now: the shell
+      // ending on SIGTERM says nothing about a child of it that ignored it
+      // (Codex's review, 17 Nov), and the timers that would have are cleared.
+      if (stopped) signal('SIGKILL');
       for (const t of timers) clearTimeout(t);
       timers = [];
       resolve({ ...r, durationMs: Date.now() - started, ...(stopped ? { stopped: true } : {}) });

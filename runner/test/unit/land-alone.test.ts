@@ -216,8 +216,9 @@ test('a run alone that goes on past its time is stopped, with everything it star
   const before = { ...landLimits };
   Object.assign(landLimits, { aloneMs: 0, aloneMinMs: 300, aloneGraceMs: 100 });
   try {
-    // Asked for only what failed, it never ends (a host's line that doesn't move).
-    const stuck = `echo $$ >> '${root}/pids'; sleep 600 & wait`;
+    // Asked for only what failed, it never ends (a host's line that doesn't
+    // move), and one thing it started doesn't stop when asked nicely either.
+    const stuck = `echo $$ >> '${root}/pids'; sh -c 'trap "" TERM; echo $$ >> "${root}/pids"; exec sleep 600' >/dev/null 2>&1 & sleep 600 & wait`;
     const started = Date.now();
     const { first, rest, caps } = await queued(root, main, a, [b, c, d], check(root, 'test -f bad.txt', stuck));
     assert.equal(await first, 0);
@@ -227,7 +228,9 @@ test('a run alone that goes on past its time is stopped, with everything it star
     assert.match(said(caps), /Checking them in smaller groups/);
     // The shell and the sleep under it are gone.
     const pids = fs.readFileSync(path.join(root, 'pids'), 'utf8').trim().split('\n');
-    await until(() => pids.every((pid) => sh(root, `ps -o pid= -g ${pid} | wc -l`).trim() === '0'), 'the stopped runs to go');
+    assert.ok(pids.length >= 2, pids.join(' '));
+    const alive = (pid: string): boolean => sh(root, `kill -0 ${pid} 2>/dev/null && echo yes || echo no`) === 'yes';
+    await until(() => !pids.some(alive), 'the stopped runs to go');
   } finally {
     // (aloneMs isn't in `before` when nothing had set it.)
     Object.assign(landLimits, { aloneMs: undefined }, before);

@@ -400,6 +400,7 @@ over_time() {
 
 ARGS=()
 SHOTS=""
+ONLY=""
 QUICK=0
 RUNNER_ONLY=0
 ALL=0
@@ -412,7 +413,7 @@ while [ $# -gt 0 ]; do
     --runner) QUICK=1; RUNNER_ONLY=1; ARGS+=("$1") ;;
     --all) ALL=1; ARGS+=("$1") ;;
     # Its value goes with it, whatever it looks like (check.sh has checked it).
-    --only) ARGS+=("$1" "${2:-}"); shift ;;
+    --only) ONLY="${2:-}"; ARGS+=("$1" "${2:-}"); shift ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -453,11 +454,29 @@ if [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -z "$SHOTS" ] && [ -s "$changed" ] \
 # it from a clone on main, where nothing has, and with Tinker Desk away a
 # Linux host should still take it rather than this Mac (Codex, 9 Nov).
 if [ "$RUNNER_ONLY" = 1 ] && [ -z "$SHOTS" ]; then linux_ok=1; fi
+# --only names the steps that run, so what changed doesn't decide it: a
+# Linux host can take it when every step named is one it runs in --quick
+# (the Node, site and cargo ones; none of the Swift ones). tb land runs what
+# failed in a group's check on main by itself before it blames a landing,
+# on the host the group failed on, and on main nothing has changed: without
+# this a failure on the Linux box could never be looked into there (Codex's
+# review, 17 Nov).
+LINUX_STEPS='^(runner typecheck|app tools parse|convex typecheck|web typecheck|web tests|site build|feature pairing|runner unit tests|desktop core tests|desktop app check|desktop app check \(as installed\)|[a-z ]+ packages)$'
+if [ -n "$ONLY" ] && [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -z "$SHOTS" ]; then
+  linux_ok=1
+  only_rest="$ONLY;"
+  while [ -n "$only_rest" ]; do
+    only_name="${only_rest%%;*}"
+    only_rest="${only_rest#*;}"
+    [[ "${only_name%%=*}" =~ $LINUX_STEPS ]] || linux_ok=0
+  done
+fi
 # Why it needs a Mac, for the message when only Linux hosts answered.
 MAC_WHY="it isn't --quick"
 if [ "$QUICK" = 1 ]; then
   if [ -n "$SHOTS" ]; then MAC_WHY="--shots"
   elif [ "$ALL" = 1 ]; then MAC_WHY="--all"
+  elif [ -n "$ONLY" ]; then MAC_WHY="--only names a step that needs one"
   elif [ ! -s "$changed" ]; then MAC_WHY="nothing changed from main, so it runs everything"
   else MAC_WHY="it changes ios/, app/, dock/ or check.sh"; fi
 fi
