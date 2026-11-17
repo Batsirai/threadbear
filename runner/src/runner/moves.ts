@@ -247,6 +247,38 @@ function dropMovedReplyImages(rec: Record<string, any>): boolean {
   return changed;
 }
 
+// A moved thread's queued messages' pictures name the other runner's media
+// folder, which can be at another path (another user, Linux): each that came
+// with the move (a real file, not a link, in `now`, the record's media folder
+// as it is) is this thread's copy here, in `final`, by its name. Anything else
+// is left out when it's sent (ownInput), as it was never this thread's
+// (Codex's review, 17 Nov). True if it changed any.
+function rebaseQueuedPictures(rec: Record<string, any>, threadId: string, now: string, final: string): boolean {
+  if (!Array.isArray(rec.queue)) return false;
+  let changed = false;
+  for (const q of rec.queue) {
+    if (!q || typeof q !== 'object' || !Array.isArray(q.images)) continue;
+    q.images = q.images.map((img: ImageRef) => {
+      if (!img || typeof img !== 'object' || typeof img.path !== 'string') return img;
+      const from = img.path.replace(/\\/g, '/').split('/');
+      // .../<thread id>/media/<name>, as any runner keeps them.
+      if (from.length < 3 || from.at(-2) !== 'media' || from.at(-3) !== threadId) return img;
+      const name = from.at(-1)!;
+      const here = path.join(final, name);
+      if (!/^[^/\\]+$/.test(name) || name === '.' || name === '..' || here === img.path) return img;
+      try {
+        const st = fs.lstatSync(path.join(now, name));
+        if (!st.isFile() || st.isSymbolicLink()) return img;
+      } catch {
+        return img;
+      }
+      changed = true;
+      return { ...img, path: here };
+    });
+  }
+  return changed;
+}
+
 // On the main Mac, a thread from another runner arrives with at most Ask
 // (Mike, 10 Nov 2026): its mode is that runner's word, an extra Mac may be
 // compromised, and the main Mac's sidebar never showed what mode the
@@ -1012,7 +1044,10 @@ export const movesPart = {
     const clean = (recFile: string) => {
       try {
         const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
-        if (sanitizeMoved(rec, atMostAsk, placed.fromName, placed.leftBehind)) fs.writeFileSync(recFile, JSON.stringify(rec, null, 2));
+        let changed = sanitizeMoved(rec, atMostAsk, placed.fromName, placed.leftBehind);
+        // Before adopting starts its queue (Codex's review, 17 Nov).
+        changed = rebaseQueuedPictures(rec, row.threadId, path.join(path.dirname(recFile), 'media'), this.store.mediaDir(row.threadId)) || changed;
+        if (changed) fs.writeFileSync(recFile, JSON.stringify(rec, null, 2));
       } catch {
         // No record to read: adopt says the thread didn't load.
       }
@@ -1038,12 +1073,9 @@ export const movesPart = {
     const st = this.threads.get(row.threadId);
     if (!st) throw new Error("The moved thread didn't load.");
     if (sanitizeMoved(st.rec as unknown as Record<string, any>, atMostAsk, placed.fromName, placed.leftBehind)) this.store.save(st.rec);
-    // Its queued messages' pictures name the other runner's media folder,
-    // which can be at another path (another user, Linux): each that came
-    // with the move is this thread's copy here, by its name. Anything else
-    // is left out when it's sent (ownInput), as it was never this thread's
-    // (Codex's review, 17 Nov).
-    if (this.rebaseMovedQueue(st, row.threadId)) this.store.save(st.rec);
+    // Again in memory, for one loaded before this (a crash left it live),
+    // for what's still queued.
+    if (rebaseQueuedPictures(st.rec as unknown as Record<string, any>, row.threadId, this.store.mediaDir(row.threadId), this.store.mediaDir(row.threadId))) this.store.save(st.rec);
     const lines = [`Moved from ${placed.fromName} to ${this.moveRunnerName(row.to)}, in ${placed.cwd}.`, ...placed.leftBehind];
     this.emit(st, { type: 'system.note', text: lines.join(' ') });
     this.markDirty(st);
@@ -1058,27 +1090,6 @@ export const movesPart = {
     // Through the same filter again: a placed.json from before it had one.
     const schedules = movedSchedules(placed.schedules ?? [], row.threadId).schedules;
     return { adopted: true, ...(schedules.length ? { schedules } : {}) };
-  },
-
-  // True if it changed any.
-  rebaseMovedQueue(this: Runner, st: ThreadState, threadId: string): boolean {
-    let changed = false;
-    const media = this.store.mediaDir(threadId);
-    for (const q of st.rec.queue) {
-      if (!q || !Array.isArray(q.images)) continue;
-      q.images = q.images.map((img: ImageRef) => {
-        if (!img || typeof img.path !== 'string') return img;
-        const from = img.path.replace(/\\/g, '/').split('/');
-        // .../<thread id>/media/<name>, as any runner keeps them.
-        if (from.length < 3 || from.at(-2) !== 'media' || from.at(-3) !== threadId) return img;
-        const name = from.at(-1)!;
-        const here = path.join(media, name);
-        if (here === img.path || !/^[^/\\]+$/.test(name) || !this.ownPicture(st, { ...img, path: here })) return img;
-        changed = true;
-        return { ...img, path: here };
-      });
-    }
-    return changed;
   },
 
   // T: the move failed or was cancelled before the switch.
