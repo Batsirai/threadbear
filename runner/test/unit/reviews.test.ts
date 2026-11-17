@@ -505,3 +505,31 @@ test('a client from before reply pictures keeps them; a moved review brings none
   h.runner.recoverReviews(st);
   assert.deepEqual(st.rec.queue.find((q:any)=>q.turnId==='t-log').images,[]);
 });
+
+// Codex's review, 17 Nov: a moved thread's queue is another runner's word,
+// and a recovery step that throws on it left its pictures unchecked, to be
+// sent next. Whatever path a queued message took, only the thread's own
+// pictures (its media folder, a review's reply copies) reach the agent.
+test('a queued message only sends the thread\'s own pictures', async () => {
+  const {h,thread,source,input}=fixture();
+  const {review}=h.runner.createReview(thread.id,input);
+  const pasted=h.runner.importMedia(source).image;
+  const kept=h.runner.saveReview(thread.id,review.id,0,{notes:{},reply:'[Picture 1]',images:[pasted]}).review.draft.images![0];
+  h.adapter.last.result(); await tick();
+  const st=(h.runner as any).threads.get(thread.id);
+  const media=h.store.mediaDir(thread.id);
+  fs.mkdirSync(media,{recursive:true});
+  const own=path.join(media,'own.png');
+  fs.copyFileSync(source,own);
+  const link=path.join(media,'link.png');
+  fs.symlinkSync(source,link);
+  const sentBefore=h.adapter.last.sent.length;
+  st.rec.queue.push({turnId:'q-own',text:'look [Picture 1] [Picture 2] [Picture 3] [Picture 4]',images:[{path:source,mediaType:'image/png'},{path:own,mediaType:'image/png'},{path:link,mediaType:'image/png'},{path:kept.path,mediaType:'image/png'}]});
+  h.runner.kickQueue(st);
+  await tick();
+  const sent=h.adapter.last.sent.slice(sentBefore).find((m:any)=>m.id==='q-own') as any;
+  assert.ok(sent,'the message still goes');
+  assert.deepEqual(sent.images.map((i:any)=>path.basename(i.path)),['own.png',path.basename(kept.path)]);
+  const logged=h.runner.events(thread.id,{limit:1000}).events.find((e:any)=>e.type==='user.message'&&e.turnId==='q-own') as any;
+  assert.equal(logged.images.length,2,'the transcript shows what went');
+});

@@ -1957,6 +1957,19 @@ export class Runner {
   // than stuck on a turn that never started.
   startTurn(st: ThreadState, msg: QueuedSend): void {
     const { rec, rt } = st;
+    // Only the thread's own pictures go to the agent: everything queued was
+    // copied into its media folder when it was sent (sendTo, a review's
+    // answer), so anything else came from a record another runner wrote (a
+    // moved thread's queue, which recovery steps that throw can leave
+    // unchecked) and could name any file here (Codex's review, 17 Nov).
+    const own = (msg.images ?? []).flatMap((ref) => {
+      const file = this.ownPicture(st, ref);
+      return file ? [{ ...ref, path: file }] : [];
+    });
+    if (own.length !== (msg.images ?? []).length) {
+      this.log.warn('left out queued pictures that are not the thread\'s own', { threadId: rec.id, turnId: msg.turnId, left: (msg.images ?? []).length - own.length });
+      msg = { ...msg, images: own };
+    }
     // New work (a review's answer comes this way without sendTo).
     delete rec.finished;
     // A review can be replayed after a failed turn.started append. Its
@@ -3779,16 +3792,12 @@ export class Runner {
     const saved = [...new Set(rec.interruptedMessages)].filter(seq => Number.isSafeInteger(seq) && seq > 0 && seq <= rec.lastSeq).sort((a, b) => a - b).flatMap(seq => this.store.log(rec.id).read(seq, seq)).filter(e => e.type === 'user.message' && fromMike(e.text, e) && !this.commandPlan(st, e.text) && !cutOut(rec, e.seq));
     const images: ImageRef[] = [];
     const parts: string[] = [];
-    let media: string | undefined;
-    try { media = fs.realpathSync(this.store.mediaDir(rec.id)); } catch { /* Pictures may have been cleaned up. */ }
     const append = (words: string, refs: ImageRef[]) => {
       const numbers = refs.map(ref => {
-        try {
-          const file = fs.realpathSync(ref.path);
-          if (!media || path.dirname(file) !== media || !fs.statSync(file).isFile()) return undefined;
-          images.push({ ...ref, path: file });
-          return images.length;
-        } catch { return undefined; }
+        const file = this.ownPicture(st, ref);
+        if (!file) return undefined;
+        images.push({ ...ref, path: file });
+        return images.length;
       });
       // Give unplaced pictures a marker too, so combining messages doesn't
       // move a later message's picture ahead of the earlier one's words.
@@ -3816,6 +3825,26 @@ export class Runner {
       }
     }
     return { id: msg.turnId, text: '[Earlier messages stopped before a reply. Answer them along with the latest message below.]\n\n' + parts.join('\n\n'), images };
+  }
+
+  // A picture's real path if it's this thread's own, else undefined: a
+  // regular file (not a link) directly in its media folder, where a sent
+  // message's pictures are copied, or in a review's reply folder there,
+  // where a review answer's are (runner/reviews.ts keepReplyImages).
+  ownPicture(st: ThreadState, ref: ImageRef): string | undefined {
+    if (!ref || typeof ref !== 'object' || typeof ref.path !== 'string') return undefined;
+    try {
+      const media = fs.realpathSync(this.store.mediaDir(st.rec.id));
+      if (fs.lstatSync(ref.path).isSymbolicLink()) return undefined;
+      const file = fs.realpathSync(ref.path);
+      if (!fs.statSync(file).isFile()) return undefined;
+      const dir = path.dirname(file);
+      if (dir === media) return file;
+      const reply = path.relative(media, dir).split(path.sep);
+      return reply.length === 3 && reply[0] === 'reviews' && /^[A-Za-z0-9_-]{1,100}$/.test(reply[1]) && reply[2] === 'reply' ? file : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   // Takes back a queued message that hasn't started: the runner's own,
