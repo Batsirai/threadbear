@@ -30,6 +30,7 @@ pub mod inbox;
 pub mod inline_chips;
 pub mod investigate;
 pub mod juice;
+pub mod link_marks;
 pub mod keyboard;
 pub mod librarian;
 pub mod html_tags;

@@ -1629,6 +1629,12 @@ impl ThreadPane {
                     if let Some(blocks) = crate::shell_blocks::dump_lines(&item.text, &self.summary.id, cx) {
                         out["shellBlocks"] = json!(blocks);
                     }
+                    // The live marks before its links to other threads.
+                    if let Some(app) = self.composer.read(cx).app.upgrade() {
+                        if let Some(marks) = crate::thread_link_marks::dump(&item.text, app.read(cx)) {
+                            out["linkMarks"] = json!(marks);
+                        }
+                    }
                 }
                 if let Some(chips) = crate::chips::row_chips(self, row, cx) {
                     out["chips"] = json!(chips);

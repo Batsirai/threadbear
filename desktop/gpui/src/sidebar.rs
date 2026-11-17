@@ -2202,6 +2202,41 @@ fn abbreviate_home(path: &str) -> String {
     }
 }
 
+impl Threadbear {
+    /// A small copy of a thread's tile, `side` across, for the mark before a
+    /// link to it in a reply (thread_link_marks.rs): its project's picture,
+    /// symbol or letter, its machine's icon for another runner's thread with
+    /// no project, else the folder. No dot or tick: the mark draws its own.
+    pub(crate) fn mini_tile(&self, t: &ThreadSummary, side: f32, cx: &App) -> AnyElement {
+        let p = palette(cx);
+        let radius = px(side * 0.3);
+        let glyph = side * 0.62;
+        let project_icon = t.projects.as_ref().and_then(|ps| ps.first()).and_then(|first| self.sidebar.project_icons.get(&first.id));
+        let tinted = |content: AnyElement, fill: Hsla| div().flex().flex_none().items_center().justify_center().size(px(side)).rounded(radius).bg(fill).child(content).into_any_element();
+        match (rows::tile(t).0, project_icon) {
+            (Tile::Letter(letter), Some(ProjectIcon { image_path: Some(path), .. })) => {
+                let (secondary, fill) = (p.secondary, p.tile);
+                img(std::path::PathBuf::from(path))
+                    .flex_none()
+                    .size(px(side))
+                    .rounded(radius)
+                    .object_fit(ObjectFit::Contain)
+                    .with_fallback(move || div().flex().items_center().justify_center().size(px(side)).rounded(radius).bg(fill).text_size(px(glyph)).font_semibold().text_color(secondary).child(letter.clone()).into_any_element())
+                    .into_any_element()
+            }
+            (Tile::Letter(_), Some(ProjectIcon { symbol: Some(symbol), .. })) if icons::try_symbol(symbol).is_some() => tinted(icons::symbol(symbol).with_size(px(glyph)).text_color(p.secondary).into_any_element(), p.tile),
+            (Tile::Letter(letter), _) => tinted(div().text_size(px(glyph)).line_height(px(side)).font_semibold().text_color(p.secondary).child(letter).into_any_element(), p.tile),
+            (Tile::Folder, _) => {
+                let glyph_icon = match t.runner_id.as_deref() {
+                    Some(id) => icon(self.runner_icon_symbol(Some(id)), glyph, p.secondary),
+                    None => icon("folder", glyph * 0.9, p.faint),
+                };
+                tinted(glyph_icon.into_any_element(), p.tile_empty)
+            }
+        }
+    }
+}
+
 /// `ProjectTiles`: the row's tile, with the dot or tick in the gutter.
 /// `behind` is the colour drawn just under the tile (the row's highlight over
 /// the sidebar), which the ring round the front tile takes so a stacked pair

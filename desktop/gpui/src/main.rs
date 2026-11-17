@@ -130,6 +130,7 @@ mod native_text;
 mod thread_map;
 mod tips;
 mod thread_panels;
+mod thread_link_marks;
 mod tour;
 mod setup_panel;
 mod unsent;

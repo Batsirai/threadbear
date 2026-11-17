@@ -430,6 +430,7 @@ impl ThreadPane {
         // this Mac, and only picture files are drawn (`markdown::pictures`).
         let body = markdown::pictures(header.body.trim(), self.summary.runner_id.is_none()).into_owned();
         let body = self.with_thread_chips(body, cx);
+        let body = self.with_link_marks(body, cx);
         let doc = (!body.is_empty()).then(|| self.markdown_state(&format!("agent-{ix}"), &body, cx));
         let text_style = self.reading_style(cx);
         // Its links' own menus and cards, as a reply's (reply_links.rs).
@@ -482,6 +483,8 @@ impl ThreadPane {
             .plugin(drafts)
             // A thread's id as its chip (`with_thread_chips`).
             .plugin(chips)
+            // The live mark before a link to another thread (`with_link_marks`).
+            .plugin(crate::thread_link_marks::Marks)
             // A closed ```mermaid or ```html fence as what it shows (rich_boxes.rs).
             .plugin(crate::rich_boxes::RichBoxes)
     }
@@ -495,8 +498,10 @@ impl ThreadPane {
         // After `prepare`, which links paths in backticks: a dead one of those
         // goes back to plain code too.
         let source = markdown::dead_file_links(&markdown::prepare(&markdown::pictures(&item.text, local), &self.summary.id), local).into_owned();
-        // Thread ids as chips (chips.rs).
+        // Thread ids as chips (chips.rs), and a live mark before each link
+        // to another thread (thread_link_marks.rs).
         let source = self.with_thread_chips(source, cx);
+        let source = self.with_link_marks(source, cx);
         let doc = self.markdown_state(&item.item_id, &source, cx);
         let text_style = self.reading_style(cx);
         let text = self.linked_text(&doc, &row.id, cx).selectable(true).style(text_style).shared_code_block_highlighter(plain_code_blocks());

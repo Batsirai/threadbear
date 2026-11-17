@@ -1933,6 +1933,14 @@ async function dispatch(client, method, p) {
     }
     case 'mock.stream':
       return startStream(need(p.threadId).summary.id, p);
+    // A thread's state changed by itself, for the live marks before links to
+    // it (thread_link_marks.rs): `status`, and `needsYou` and `needs` when given.
+    case 'mock.status': {
+      const t = need(p.threadId);
+      if (p.needs !== undefined) t.summary.needs = p.needs;
+      setStatus(t.summary.id, p.status ?? t.summary.status, p.needsYou);
+      return { thread: t.summary };
+    }
     // A thread with the id and title given, idle with nothing in it, for a
     // spec that needs one an agent can name by its id (a thread chip): the
     // demo threads' ids aren't the shape the runner's are.

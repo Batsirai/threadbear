@@ -554,6 +554,13 @@ thread, and it goes in as a chip with that thread's title. Dragging a row
 left still archives it; any other way drags the thread. The agent gets a `thread:<id>` link it can
 read the thread from, and clicking the chip once it's sent opens that
 thread. An id that isn't one of your threads pastes as plain text.
+
+When an agent's reply links another of your threads (one it started, say, or
+one it's waiting on), a small copy of that thread's tile sits just before the
+link and shows how it's getting on, changing as it does: a turning ring while
+it works, an orange dot when it needs you, a red one if it failed, and a tick
+once it's done. Rest the pointer on it for the words. The Mac app shows these;
+the phone and the website show the link alone.
 Stop (⌘.) ends a turn that's running.
 If you stop before the agent starts reading your message, Threadbear saves
 it and its pictures and leaves a note under that turn's Worked for line.

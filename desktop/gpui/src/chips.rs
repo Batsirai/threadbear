@@ -755,6 +755,17 @@ impl ThreadPane {
         }
     }
 
+    /// A reply's markdown with a live mark's link before each link to a
+    /// thread the app has (threadbear_core::link_marks, thread_link_marks.rs).
+    pub(crate) fn with_link_marks(&self, text: String, cx: &App) -> String {
+        let Some(app) = self.composer.read(cx).app.upgrade() else { return text };
+        let threads = &app.read(cx).threads;
+        match threadbear_core::link_marks::with_marks(&text, &|id| threads.contains_key(id)) {
+            std::borrow::Cow::Owned(marked) => marked,
+            std::borrow::Cow::Borrowed(_) => text,
+        }
+    }
+
     /// `agentMessageText`'s first line: where the message came from, small
     /// and faint, the sending thread as a chip that opens it while it's
     /// still there (a move's note names the folder instead).
