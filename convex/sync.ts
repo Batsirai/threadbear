@@ -2914,7 +2914,7 @@ export const pendingCommands = query({
 });
 
 export const takeCommand = mutation({
-  // attempt (API 84): the runner's id for this take, the same each time it
+  // attempt (API 85): the runner's id for this take, the same each time it
   // asks again after an error. Without one (an older runner) a second ask
   // gets false, as before.
   args: { key: v.string(), commandId: v.id('commands'), attempt: v.optional(v.string()) },

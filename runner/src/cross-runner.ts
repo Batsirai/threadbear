@@ -133,7 +133,7 @@ export class CrossRunner {
   // Requests being started now, so a double click starts one thread.
   private starting = new Set<string>();
   // A claim whose answer was lost, by request: asking again with it is told
-  // yes if it had in fact gone through (relay:decideRequest, API 84).
+  // yes if it had in fact gone through (relay:decideRequest, API 85).
   private lostClaims = new Map<string, string>();
 
   constructor(deps: CrossRunnerDeps) {

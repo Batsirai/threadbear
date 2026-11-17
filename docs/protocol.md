@@ -6161,7 +6161,7 @@ runner that's this one is the usual create.
   claims the request (`relay:decideRequest` to `claimed`, owner only,
   naming the row it read by its `docId`, so a retry or second click can't
   start a second, nor a click delayed past a refile claim the new row;
-  from backend API 84 with a `claim` id of its own, so when the claim went
+  from backend API 85 with a `claim` id of its own, so when the claim went
   through but its answer was lost, the next Start it asks again with the
   same id and carries on, where before the request stayed "being started"
   with nothing started; the id is forgotten as soon as the claim's answer
@@ -6678,14 +6678,14 @@ the mirror back as state. The Mac app doesn't use it.
   live query on its pending commands over the Convex client's WebSocket
   (it reconnects by itself), and for each one: takes it
   (`sync:takeCommand`, which says no if it was already taken; from
-  backend API 84 the runner passes `attempt`, its own id for the take, and
+  backend API 85 the runner passes `attempt`, its own id for the take, and
   the same attempt asking again after an error gets yes, so a take whose
   answer was lost runs rather than being dropped), applies
   it through the same methods the app's RPCs use (one about a thread a
   draining runner still has goes to that runner, as the app's would),
   then finishes it with
   the outcome and, for a `create` or `quickAsk`, the new thread's id
-  (from API 84 a finish changes only a taken command, so a repeated or
+  (from API 85 a finish changes only a taken command, so a repeated or
   late one can't change how it ended, and a command taken 3 hours ago with
   no finish shows as `failed`, "Its runner never said how it went.", which
   its runner's late finish still settles; it's never handed out again). `send` and

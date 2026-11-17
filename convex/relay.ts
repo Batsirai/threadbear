@@ -604,7 +604,7 @@ export const decideRequest = mutation({
     // The row as read (runnerRequest's docId): another row under this id isn't it.
     docId: v.string(),
     result: v.optional(v.object({ runnerId: v.string(), runnerName: v.string(), threadId: v.string() })),
-    // API 84: with `claimed`, the runner's id for this claim. The same claim
+    // API 85: with `claimed`, the runner's id for this claim. The same claim
     // asked again (its first answer was lost) is told yes, and nothing
     // changes; any other claim of a claimed request is refused, as before.
     claim: v.optional(v.string()),

@@ -556,7 +556,7 @@ export default defineSchema({
     createdAt: v.number(),
     takenAt: v.optional(v.number()),
     doneAt: v.optional(v.number()),
-    // The runner's own id for its take (API 84, sync:takeCommand): the same
+    // The runner's own id for its take (API 85, sync:takeCommand): the same
     // attempt asking again gets true, so a take whose answer was lost on the
     // way back is run, not dropped. Any other ask still gets false.
     attempt: v.optional(v.string()),
@@ -639,7 +639,7 @@ export default defineSchema({
     // Once allowed: where it was started.
     result: v.optional(v.object({ runnerId: v.string(), runnerName: v.string(), threadId: v.string() })),
     decidedAt: v.optional(v.number()),
-    // The main Mac's runner's id for its claim (API 84): the same claim
+    // The main Mac's runner's id for its claim (API 85): the same claim
     // asking again gets it, so a claim whose answer was lost can still start.
     claim: v.optional(v.string()),
   })

@@ -142,7 +142,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 84;
+export const BACKEND_API_VERSION = 85;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -287,7 +287,7 @@ export const RUNNER_ORDER_API_VERSION = 58;
 export const MOVES_API_VERSION = 64;
 // sync:takeCommand takes `attempt`, and relay:decideRequest `claim`, so a take
 // or a claim whose answer was lost can ask again.
-export const COMMAND_ATTEMPT_API_VERSION = 84;
+export const COMMAND_ATTEMPT_API_VERSION = 85;
 // Only the projects that changed go up (sync:upsertProjects), after the
 // whole list once per start.
 export const PROJECTS_DIFF_API_VERSION = 30;
@@ -1452,7 +1452,7 @@ export class ConvexSync {
   // .env files still being read), tried again with the next heartbeat: the
   // pending list doesn't change by itself, so nothing else brings it round.
   private untaken = new Map<string, Command>();
-  // Each command's take id while it's being taken (API 84): asked again
+  // Each command's take id while it's being taken (API 85): asked again
   // after an error, the same id gets true if the first ask had in fact
   // taken it, where any other ask gets false and the command was dropped.
   private attempts = new Map<string, string>();

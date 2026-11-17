@@ -4084,7 +4084,7 @@ test("commands: a thread's command whose take failed still goes before the threa
 // A take that committed but whose answer was lost on the way back: the retry
 // with the next heartbeat got false (it's no longer pending), and the command
 // was dropped, left taken with nobody running it (the state machines survey,
-// 17 Nov 2026). From API 84 the retry carries the same attempt, which the
+// 17 Nov 2026). From API 85 the retry carries the same attempt, which the
 // backend answers true, so it runs, once.
 test('commands: a take whose answer was lost is asked again with the same attempt, and runs once', async () => {
   const takenBy = new Map<string, unknown>();
