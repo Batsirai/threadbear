@@ -60,6 +60,18 @@ export function finishedArgs(args: Record<string, unknown> | undefined): Record<
   return Array.isArray(args?.images) ? { images: args.images } : {};
 }
 
+// A lapsed command's args (lapseCommands): its words go as a finished one's,
+// but what its runner's late finish is checked by stays: a call's method (a
+// moves.describe answer has its repo address cleaned) and whether an update
+// changed the login or model (its answer is kept). Short, by the queues' own checks.
+function lapsedArgs(args: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out = finishedArgs(args);
+  if (typeof args?.method === 'string') out.method = args.method;
+  if (args?.accountId !== undefined) out.accountId = args.accountId;
+  if (args?.model !== undefined) out.model = args.model;
+  return out;
+}
+
 // Finished commands and paged messages older than this are pruned.
 const KEEP_FINISHED_MS = 24 * 60 * 60_000;
 // Rows pruneOld touches a run, well under Convex's per-mutation limits.
@@ -3001,23 +3013,32 @@ export const finishCommand = mutation({
 // It shows as failed, so the phone stops saying "Sending…", but isn't handed
 // out again: it may have run. A late finish still records the real outcome.
 // The cron, every 15 minutes; a batch at a time.
+// In bytes too: a taken command still carries its words (a message can be
+// hundreds of KB), and a mutation may read 16 MiB (Codex's review).
 const LAPSE_BATCH = 100;
+const LAPSE_BYTES = 4 * 1024 * 1024;
 export const LAPSED_NOTE = 'Its runner never said how it went.';
 export const lapseCommands = internalMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
     const now = Date.now();
-    const due = await ctx.db
-      .query('commands')
-      .withIndex('by_state_taken', (q) => q.eq('state', 'taken').lt('takenAt', now - TAKEN_LEASE_MS))
-      .take(LAPSE_BATCH);
-    for (const c of due) {
-      await ctx.db.patch(c._id, { state: 'failed', doneAt: now, lapsedAt: now, args: finishedArgs(c.args), note: LAPSED_NOTE });
+    let left = LAPSE_BATCH;
+    let read = 0;
+    let more = false;
+    for await (const c of ctx.db.query('commands').withIndex('by_state_taken', (q) => q.eq('state', 'taken').lt('takenAt', now - TAKEN_LEASE_MS))) {
+      // Always at least one, so a single huge row can't stop it for good.
+      if (left <= 0 || (read > 0 && read + docBytes(c) > LAPSE_BYTES)) {
+        more = true;
+        break;
+      }
+      read += docBytes(c);
+      left--;
+      await ctx.db.patch(c._id, { state: 'failed', doneAt: now, lapsedAt: now, args: lapsedArgs(c.args), note: LAPSED_NOTE });
       await endCommandFiles(ctx, c._id);
       for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
     }
-    if (due.length === LAPSE_BATCH) await ctx.scheduler.runAfter(0, internal.sync.lapseCommands, {});
+    if (more) await ctx.scheduler.runAfter(0, internal.sync.lapseCommands, {});
     return null;
   },
 });

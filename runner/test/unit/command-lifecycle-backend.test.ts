@@ -20,6 +20,7 @@ const ATTEMPT = '3b241101-e2bb-4255-8caf-4136c566a962';
 const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
 const sync = load('sync');
 const phone = load('phone');
+const relay = load('relay');
 
 async function setup() {
   process.env.RUNNER_KEY = OWNER;
@@ -132,9 +133,44 @@ test('lapsing goes a batch at a time, and schedules itself again while more are 
   assert.equal(ids.filter((id) => s.row(id).state === 'failed').length, 101);
 });
 
-// ------------------------------------------------------------ runner requests
+// Codex's review: a lapse dropped the args a late finish is checked by, so a
+// late moves.describe answer kept its origin's ssh user, and a late login
+// change's answer was thrown away.
+test("a lapsed command's late finish is checked as an on-time one: a description's origin is cleaned, a login change's answer kept", async () => {
+  const s = await setup();
+  const describe = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: MINI, threadId: 'B', kind: 'call', args: { method: 'moves.describe', params: {} } });
+  const login = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: MINI, threadId: 'B', kind: 'update', args: { accountId: 'claude-2' } });
+  for (const id of [describe, login]) await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: id, attempt: ATTEMPT });
+  await later(sync.TAKEN_LEASE_MS + 60_000, () => call(s.ctx, sync.lapseCommands, {}));
+  assert.deepEqual([s.row(describe).state, s.row(login).state], ['failed', 'failed']);
+  assert.equal(s.row(describe).args.params, undefined, 'its words still go');
+  await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: describe, ok: true, result: JSON.stringify({ title: 't', cwd: '/c', home: '/h', provider: 'claude', origin: 'ssh://UNCLASSIFIEDSSHLOGIN@example.com/owner/repo.git' }) });
+  assert.ok(!String(s.row(describe).result).includes('UNCLASSIFIEDSSHLOGIN'), s.row(describe).result);
+  await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: login, ok: true, result: JSON.stringify({ accountId: 'claude-2' }) });
+  assert.equal(s.row(login).result, JSON.stringify({ accountId: 'claude-2' }));
+  assert.deepEqual([s.row(describe).state, s.row(login).state], ['done', 'done']);
+});
 
-const relay = load('relay');
+test('lapsing reads within its byte budget, so taken messages of hundreds of KB still lapse, a run at a time', async () => {
+  const s = await setup();
+  const big = 'x'.repeat(256 * 1024);
+  const ids: string[] = [];
+  for (let i = 0; i < 30; i++) {
+    const id = await s.send(big + i);
+    await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: id });
+    ids.push(id);
+  }
+  let runs = 0;
+  while (ids.some((id) => s.row(id).state === 'taken')) {
+    s.resetReads();
+    await later(sync.TAKEN_LEASE_MS + 60_000, () => call(s.ctx, sync.lapseCommands, {}));
+    assert.ok(s.bytesRead() < 16 * 1024 * 1024, `read ${s.bytesRead()}`);
+    assert.ok(++runs < 10);
+  }
+  assert.ok(runs > 1, 'more than one run');
+});
+
+// ------------------------------------------------------------ runner requests
 
 test("a runner request's claim: the same claim asked again is told yes, any other is refused, and a handed-back claim is spent", async () => {
   const s = await setup();

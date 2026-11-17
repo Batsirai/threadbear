@@ -1898,7 +1898,7 @@ export class ConvexSync {
     this.mustBeOn();
     // An older backend refuses an arg it doesn't know.
     const { claim, ...rest } = p;
-    await this.backend('mutation', 'relay:decideRequest', { key: this.deps.key, ...rest, ...(claim !== undefined && (this.backendApiVersion ?? 0) >= COMMAND_ATTEMPT_API_VERSION ? { claim } : {}) });
+    await this.backend('mutation', 'relay:decideRequest', { key: this.deps.key, ...rest, ...(claim !== undefined && this.backendHeard && (this.backendApiVersion ?? 0) >= COMMAND_ATTEMPT_API_VERSION ? { claim } : {}) });
   }
 
   async closeRequest(requestId: string): Promise<void> {
@@ -4303,6 +4303,14 @@ export class ConvexSync {
     // An earlier command for this thread whose take failed goes again with
     // the next heartbeat: this one waits to go after it (Codex's review).
     if (c.threadId && [...this.untaken.values()].some((u) => u.threadId === c.threadId && u.commandId !== c.commandId && u.createdAt < c.createdAt)) {
+      this.untaken.set(c.commandId, c);
+      return;
+    }
+    // Not before a heartbeat this start has said which backend it is: a
+    // version from the cache may be out of date either way, and a take
+    // without an attempt is the one a lost answer drops (Codex's review).
+    // The heartbeat's answer brings it round (retryCommands).
+    if (!this.backendHeard) {
       this.untaken.set(c.commandId, c);
       return;
     }

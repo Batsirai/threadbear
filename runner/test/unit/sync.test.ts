@@ -4128,6 +4128,30 @@ test('commands: a take whose answer was lost is asked again with the same attemp
   await sync.stop();
 });
 
+// Codex's review: a command that arrived before the first heartbeat said
+// which backend this is went without an attempt, so a lost answer still
+// dropped it. It waits for the heartbeat now.
+test("commands: nothing is taken before a heartbeat has said which backend it is, then it's taken with an attempt", async () => {
+  let answer: (() => void) | undefined;
+  const { h, sync, push, calls, applied } = setupFull({
+    apiVersion: BACKEND_API_VERSION,
+    hold: (fn) => (fn === 'sync:heartbeat' && !answer ? new Promise<void>((r) => (answer = r)) : undefined),
+  });
+  sync.start();
+  const t = h.runner.create({ text: 'hello', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await tick();
+  push([{ commandId: 'early', kind: 'send', threadId: t.id, args: { text: 'one' }, createdAt: 1 }]);
+  await tick(10);
+  assert.equal(calls.filter((c) => c.fn === 'sync:takeCommand').length, 0);
+  answer!();
+  await tick(20);
+  const takes = calls.filter((c) => c.fn === 'sync:takeCommand');
+  assert.equal(takes.length, 1);
+  assert.equal(typeof takes[0]!.args.attempt, 'string');
+  assert.deepEqual(applied.filter((a) => a.startsWith(`send ${t.id}`)).map((a) => a.split(' ')[2]), ['one']);
+  await sync.stop();
+});
+
 test('commands: an older backend is asked to take without an attempt', async () => {
   const { h, sync, push, calls } = setupFull({ apiVersion: COMMAND_ATTEMPT_API_VERSION - 1 });
   sync.start();
