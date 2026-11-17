@@ -269,6 +269,11 @@ impl ThreadPane {
     /// The bear and elapsed time that say a turn is running. It counts by
     /// itself once a second while it's on screen.
     pub(crate) fn working_row(&mut self, started_at: Option<f64>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // The start comes from the transcript, which a secondary runner
+        // writes for its own threads: only one this Mac could have seen
+        // counts (`juice::turn_start`; Daybreak 147).
+        let created = self.summary.created_at.as_deref().and_then(threadbear_core::inbox::parse_ms).map(|ms| ms as f64 / 1000.);
+        let started_at = started_at.and_then(|s| threadbear_core::juice::turn_start(s, crate::now_ms() as f64 / 1000., created));
         self.ensure_ticking(started_at.is_some(), cx);
         let quiet = style::quiet_text(cx);
         let text = match started_at {

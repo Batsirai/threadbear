@@ -300,12 +300,42 @@ fn mix(mut x: u64) -> u64 {
 
 /// The move the paw makes the `n`th time, for a turn whose seed is `seed`
 /// (when it started): random, but never the one before.
+///
+/// Worked out from `n` alone, at the same small cost however long the turn:
+/// each even step is a free pick, and each odd step picks from the moves its
+/// two even neighbours didn't, so no two running are the same. It used to
+/// walk every step since the turn began, so a turn start years back (a
+/// secondary runner can write one, Daybreak 147) froze the app's UI thread.
 pub fn paw_move(seed: u64, n: u64) -> PawMove {
-    let mut at = (mix(seed) % 5) as usize;
-    for i in 1..=n {
-        at = (at + 1 + (mix(seed ^ i.wrapping_mul(0x9e37_79b9_7f4a_7c15)) % 4) as usize) % 5;
+    let pick = |i: u64| mix(seed ^ i.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1));
+    let free = |i: u64| PawMove::ALL[(pick(i) % 5) as usize];
+    if n % 2 == 0 {
+        return free(n);
     }
-    PawMove::ALL[at]
+    let (before, after) = (free(n - 1), free(n.wrapping_add(1)));
+    let open: Vec<PawMove> = PawMove::ALL.into_iter().filter(|m| *m != before && *m != after).collect();
+    open[(pick(n) % open.len() as u64) as usize]
+}
+
+/// The longest a turn's working line counts up from (a week): anything
+/// older isn't a turn this app could have watched start, so it's taken as
+/// not known.
+pub const TURN_START_MAX_AGE: f64 = 7. * 24. * 3600.;
+/// How far ahead of this Mac's clock a turn's start may be (another
+/// machine's clock running fast) before it's taken as not known.
+pub const TURN_START_SKEW: f64 = 5. * 60.;
+
+/// A turn's start (seconds since 1970) as the working line may use it, or
+/// None when it can't be real: in the future, older than a week, or before
+/// the thread was made (`created`, when known). The start comes from the
+/// transcript, which another runner writes for its own threads, so the app
+/// checks it against its own clock before timing anything from it.
+pub fn turn_start(started: f64, now: f64, created: Option<f64>) -> Option<f64> {
+    let real = started.is_finite()
+        && started <= now + TURN_START_SKEW
+        && started >= now - TURN_START_MAX_AGE
+        && created.is_none_or(|c| started >= c - TURN_START_SKEW);
+    real.then_some(started)
 }
 
 /// Where the paw is: turned (degrees, clockwise), squashed (x, y) and moved
@@ -501,6 +531,41 @@ mod tests {
             assert_eq!(paw_move(seed, 7), moves[7]);
         }
         assert_ne!((0..10).map(|n| paw_move(1, n)).collect::<Vec<_>>(), (0..10).map(|n| paw_move(2, n)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_paw_costs_the_same_however_old_the_turn() {
+        // Daybreak 147: a secondary runner's turn.started at 0001-01-01 put
+        // ~26.6 billion steps behind the paw, walked twice a frame.
+        let started = -62_135_596_800.; // 0001-01-01T00:00:00Z
+        let t = (1_763_400_000. - started) as f32;
+        let clock = std::time::Instant::now();
+        for seed in [0u64, 1, u64::MAX] {
+            let _ = paw_pose(seed, t);
+            let _ = paw_now(seed, t);
+            let _ = paw_move(seed, u64::MAX);
+            let _ = paw_move(seed, u64::MAX - 1);
+        }
+        assert!(clock.elapsed() < std::time::Duration::from_millis(50), "{:?}", clock.elapsed());
+        // Far along a turn the moves still never repeat.
+        let far: Vec<PawMove> = (0..40).map(|n| paw_move(9, u64::MAX - 40 + n)).collect();
+        assert!(far.windows(2).all(|w| w[0] != w[1]), "{far:?}");
+    }
+
+    #[test]
+    fn a_turn_start_the_app_cant_have_seen_isnt_timed() {
+        let now = 1_763_400_000.;
+        assert_eq!(turn_start(now - 41., now, None), Some(now - 41.));
+        assert_eq!(turn_start(now - 3. * 3600., now, Some(now - 4. * 3600.)), Some(now - 3. * 3600.));
+        // A little clock skew between machines is fine.
+        assert_eq!(turn_start(now + 30., now, Some(now + 60.)), Some(now + 30.));
+        // Year 1, the future, before the thread, older than a week, not a number.
+        assert_eq!(turn_start(-62_135_596_800., now, None), None);
+        assert_eq!(turn_start(now + 3600., now, None), None);
+        assert_eq!(turn_start(now - 3600., now, Some(now - 60.)), None);
+        assert_eq!(turn_start(now - 8. * 24. * 3600., now, None), None);
+        assert_eq!(turn_start(f64::NAN, now, None), None);
+        assert_eq!(turn_start(f64::NEG_INFINITY, now, None), None);
     }
 
     #[test]
