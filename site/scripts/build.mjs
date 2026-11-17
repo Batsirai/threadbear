@@ -224,7 +224,7 @@ function platforms() {
   const logo = (name, label) => `<span class="platform" title="${label}">${icon(name)}<span class="visually-hidden">${label}</span></span>`;
   return `<div class="platforms">
         <div class="platform-logos">${logo("apple-logo", "Mac")}${logo("windows-logo", "Windows")}${logo("linux-logo", "Linux")}</div>
-        <p class="risk">Free</p>
+        <p class="risk">Free for Mac, Windows and Linux</p>
       </div>`;
 }
 
