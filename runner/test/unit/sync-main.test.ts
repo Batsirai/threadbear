@@ -110,9 +110,14 @@ test("when GitHub has moved and a landing holds the lock, pushAfterLanding leave
     const alone = run(main, home);
     await until(() => alone.output().includes('Taking the landing lock'), 'waiting with no landing queued');
     alone.kill();
-    // A landing in the line: that one will.
+    // A landing in the line that won't push (started before the setting, or
+    // by a tb from before it) changes nothing; one that will, does.
     fs.mkdirSync(queue, { recursive: true });
     fs.writeFileSync(path.join(queue, '1-1-a.json'), JSON.stringify({ id: '1-1-a', pid: process.pid, at: 1 }));
+    const noPush = run(main, home);
+    await until(() => noPush.output().includes('Taking the landing lock'), 'waiting with a landing that will not push');
+    noPush.kill();
+    fs.writeFileSync(path.join(queue, '1-1-a.json'), JSON.stringify({ id: '1-1-a', pid: process.pid, at: 1, push: true }));
     const r = await run(main, home).done;
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /a landing is going: when it lands it merges GitHub's in/);

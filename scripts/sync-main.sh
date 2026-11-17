@@ -58,7 +58,7 @@ if [ "${THREADBEAR_SYNC_LOCKED:-}" != 1 ]; then
   # repo is in runner.json's pushAfterLanding, the landing that holds the
   # lock merges GitHub's in, checks it and pushes once it has landed
   # (worktrees.ts, pushMain), so there's nothing to wait for. Only with a
-  # real landing in the queue (a dry run never pushes), and not when a
+  # landing in the queue that says it will push (a dry run never does), and not when a
   # landing's merge of this same GitHub main already failed: then it won't
   # try again for hours, so this waits and tries itself.
   # -k: without it lockf deletes the lock file, and a landing already
@@ -76,7 +76,7 @@ if [ "${THREADBEAR_SYNC_LOCKED:-}" != 1 ]; then
     const on = Array.isArray(list) && list.some((d) => typeof d === "string" && d && repo(d.replace(/^~(?=\/|$)/, process.env.HOME)) === want);
     const q = path.join(common, "threadbear-land-queue");
     let names = []; try { names = fs.readdirSync(q).filter((n) => n.endsWith(".json")); } catch {}
-    const landing = names.some((n) => { const e = json(path.join(q, n)); return e && Number.isInteger(e.pid) && !e.result && !e.refused && alive(e.pid); });
+    const landing = names.some((n) => { const e = json(path.join(q, n)); return e && e.push === true && Number.isInteger(e.pid) && !e.result && !e.refused && alive(e.pid); });
     const failed = json(path.join(common, "threadbear-land-push.json"))?.github === github;
     process.exit(on && landing && !failed ? 0 : 1);
   ' "$MAIN" "$(dirname "$LOCK")" "$(git -C "$MAIN" rev-parse refs/remotes/origin/main)"; then

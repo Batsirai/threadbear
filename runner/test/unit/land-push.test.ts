@@ -149,3 +149,20 @@ test("a check that changes files on the merge doesn't count for it", async () =>
   assert.equal(onGitHub(fx), github);
   assert.match(c.out.join('\n'), /the check changed files or HEAD/);
 });
+
+// A push GitHub refuses for some other reason than having moved (a rule on
+// the branch, credentials) is said as it is: no merge, no second check.
+test("a push refused while GitHub hasn't moved is said, with no merge made", async () => {
+  const fx = withOrigin();
+  write(fx.bare, { 'hooks/pre-receive': '#!/bin/sh\necho "protected branch" >&2\nexit 1\n' });
+  fs.chmodSync(path.join(fx.bare, 'hooks', 'pre-receive'), 0o755);
+  const github = onGitHub(fx);
+  const t = makeBranch(fx.main);
+  commit(t.path, { 'a.txt': 'a\n' }, 'Add a');
+  const c = capture();
+  assert.equal(await land({ ...t, check: 'true' }, { ...c.opts, push: true }), 0);
+  assert.equal(rev(fx.main, 'main'), rev(t.path, t.branch));
+  assert.equal(onGitHub(fx), github);
+  assert.match(c.out.join('\n'), /GitHub refused the push/);
+  assert.doesNotMatch(c.out.join('\n'), /merging them in/);
+});

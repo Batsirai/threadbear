@@ -435,6 +435,9 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
           branch: t.branch, path: t.path, base: ready.base, commit: ready.commit, check: check ?? null, checkFrom: opts.checkFrom ?? '',
           ...(checkHost ? { checkHost } : {}),
           ...(opts.despiteRed ? { fix: true } : {}),
+          // Read by scripts/sync-main.sh: only a landing that will push is
+          // one it leaves GitHub's main to.
+          ...(opts.push ? { push: true } : {}),
         });
         entryHeld = await holdLock(entryLockFile(common, entry.id), false);
         if (!entryHeld) throw new Error('entry lock taken');
@@ -1645,10 +1648,17 @@ async function pushMain(a: {
   if (!there) return;
   if (there === here) return;
   if ((await git(mc, ['merge-base', '--is-ancestor', there, here])).ok) {
-    if (await push(here)) return out(`Pushed ${MAIN} to GitHub (${await count(`${there}..${here}`)} commits).`);
-    // Refused: GitHub's moved in the meantime. Then it's a fold, below.
+    const pushed = await git(mc, ['push', '-q', 'origin', `${here}:refs/heads/${MAIN}`], quiet);
+    if (pushed.ok) return out(`Pushed ${MAIN} to GitHub (${await count(`${there}..${here}`)} commits).`);
+    // Refused because GitHub's moved meanwhile: then it's a fold, below.
+    // Anything else (credentials, a rule on the branch) is said as it is,
+    // not taken for that: a fold would only make a needless merge and run a
+    // whole check with the lock held (Codex, 17 Nov).
     there = await fetch();
     if (!there) return;
+    if ((await git(mc, ['merge-base', '--is-ancestor', there, here])).ok) {
+      return notPushed(`GitHub refused the push: ${firstLine(pushed.stderr || pushed.stdout)}`);
+    }
   }
   if ((await git(mc, ['merge-base', '--is-ancestor', here, there])).ok) {
     return notPushed(`GitHub's already has it.`);

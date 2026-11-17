@@ -547,7 +547,7 @@ repo without `pushAfterLanding` or when nothing is landing:
   landings queued, the wait for the lock was over 30 minutes (13 Nov).
 
 - both have moved, with `pushAfterLanding` on, the lock held and a real
-  landing in the queue (a dry run never pushes): leaves it to that landing
+  landing in the queue that says it will push (a dry run never does): leaves it to that landing
   and says so, rather than wait. Not when a landing's merge of that same
   GitHub main has already failed (it won't try again for hours): then it
   waits for the lock and tries itself.
