@@ -309,9 +309,10 @@ for my $path (splice(@ARGV, 0, $n)) {
 open(my $f, '>', $pidfile) or exit 129;
 print {$f} "$$\n";
 close $f or exit 129;
-# Gone already: take the pid back out, so a guard reading it late can't
-# signal whatever gets this pid next.
-if (-e "$pidfile.gone") { truncate($pidfile, 0); exit 129; }
+# Gone already: the guard writes .gone before it reads the pidfile, so it
+# may have this pid and be about to stop it (TERM, then KILL 5 s on). Hold
+# the pid till then, so its signals can't reach whatever gets it next.
+if (-e "$pidfile.gone") { truncate($pidfile, 0); sleep 30; exit 129; }
 exec { $ARGV[0] } @ARGV or exit 127;
 START
     my @reads = grep { -e $_ } ("$FindBin::Bin/perf-children.pl", $pidfile =~ s{/[^/]*$}{}r,

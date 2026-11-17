@@ -852,8 +852,9 @@ test('a Desk run held up before its command still stops when the ssh goes', asyn
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(stall);
   // Like Desk Runner: the line runs away from the client (reparented, out of
-  // the guard's tree), and the client waits until it is stopped itself.
-  fs.writeFileSync(path.join(bin, 'desk'), `#!/bin/bash\nPATH="$HOME/stall:$PATH" perl -e 'fork and exit; open(STDIN, "<", "/dev/null"); exec @ARGV' /bin/bash -c "$1"\nexec sleep 600\n`, { mode: 0o755 });
+  // the guard's tree, without the client's fd 197, which would let the
+  // reaper find it), and the client waits until it is stopped itself.
+  fs.writeFileSync(path.join(bin, 'desk'), `#!/bin/bash\nexec 197<&-\nPATH="$HOME/stall:$PATH" perl -e 'fork and exit; open(STDIN, "<", "/dev/null"); exec @ARGV' /bin/bash -c "$1"\nexec sleep 600\n`, { mode: 0o755 });
   // perf-children.pl --child never gets anywhere, as on Tinker Desk.
   fs.writeFileSync(path.join(stall, 'perl'), `#!/bin/bash\nif [ "\${2:-}" = --child ]; then echo $$ >"$HOME/stalled.pid"; exec sleep 600; fi\nexec /usr/bin/perl "$@"\n`, { mode: 0o755 });
   const pidfile = path.join(h.home, 'desk.pid');
