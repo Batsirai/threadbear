@@ -200,5 +200,5 @@ test('a run that is for a check host or nowhere never runs on this Mac', () => {
 
 test("check-remote.sh passes --only and its value on to the host as they are", () => {
   const text = fs.readFileSync(path.join(repo, 'scripts/check-remote.sh'), 'utf8');
-  assert.match(text, /--only\) ARGS\+=\("\$1" "\$\{2:-\}"\); shift ;;/);
+  assert.match(text, /--only\) ONLY="\$\{2:-\}"; ARGS\+=\("\$1" "\$\{2:-\}"\); shift ;;/);
 });

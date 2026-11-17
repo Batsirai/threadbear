@@ -1659,11 +1659,16 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extra
     const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], ...(limitMs !== undefined ? { detached: true } : {}) });
     let stopped = false;
     let timers: NodeJS.Timeout[] = [];
-    const done = (r: { ok: boolean; code?: number; text: string }): void => {
-      // Past its limit, whatever is left of its group goes now: the shell
-      // ending on SIGTERM says nothing about a child of it that ignored it
-      // (Codex's review, 17 Nov), and the timers that would have are cleared.
-      if (stopped) signal('SIGKILL');
+    let finished = false;
+    // `closed`: the run's own process has just ended. Past its limit,
+    // whatever is left of its group goes at that moment: the shell ending on
+    // SIGTERM says nothing about a child of it that ignored it, and the timer
+    // that would have killed it is cleared here. Only then, and only once:
+    // later the group's id may be some other group's (Codex's reviews, 17 Nov).
+    const done = (r: { ok: boolean; code?: number; text: string }, closed = false): void => {
+      if (finished) return;
+      finished = true;
+      if (closed && stopped) signal('SIGKILL');
       for (const t of timers) clearTimeout(t);
       timers = [];
       resolve({ ...r, durationMs: Date.now() - started, ...(stopped ? { stopped: true } : {}) });
@@ -1688,7 +1693,7 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extra
     child.stdout.on('data', take);
     child.stderr.on('data', take);
     child.on('error', (e) => done({ ok: false, text: `${text}\n${e.message}` }));
-    child.on('close', (code) => done({ ok: code === 0 && !stopped, code: code ?? undefined, text }));
+    child.on('close', (code) => done({ ok: code === 0 && !stopped, code: code ?? undefined, text }, true));
   });
 }
 
