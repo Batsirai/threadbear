@@ -129,45 +129,57 @@ const DENY_EVERYTHING: Record<string, string> = { '*': 'deny' };
 //
 // OpenCode 2 (checked on 2.3.0, 17 Nov 2026) needs more, as its --pure is
 // gone and the user's own config folder is a way in too:
-// - OPENCODE_CONFIG_DIR replaces ~/.config/opencode there, so each process
-//   gets an empty folder of its own. A plugin there is imported (its
-//   top-level code runs) before any `plugins` rule can turn it off, and one
-//   can claim an `opencode.*` id to be turned back on; the user's MCP
-//   servers there start with the session, before any rule is asked. On 1
-//   the variable adds a folder, and an empty one adds nothing.
+// - OPENCODE_CONFIG_DIR replaces ~/.config/opencode there, so OpenCode gets
+//   a folder of the runner's own (configDir). A plugin in the user's is
+//   imported (its top-level code runs) before any `plugins` rule can turn it
+//   off, and one can claim an `opencode.*` id to be turned back on; the
+//   user's MCP servers there start with the session, before any rule is
+//   asked. On 1 the variable adds a folder, and an empty one adds nothing.
 // - It reads OPENCODE_CONFIG_PROJECT_DISABLE before the older name, so an
-//   inherited "0" there would win: both are set.
-// - The plugins rule is a second line for anything configured elsewhere
-//   (system config): every plugin off, then OpenCode's built-ins back on, as
-//   they include what applies these rules (opencode.config.agent). 1 ignores it.
-// Not covered: an "Always allow" saved in OpenCode's own app is kept per
-// project in its data folder and outranks "ask" on 2. Threadbear only ever
-// answers once, so only the user's own clicks in OpenCode put one there.
+//   inherited "0" there would win: both are set. OPENCODE_CONFIG (one more
+//   file, read even with the project off) is blanked, which reads as unset.
+// - The plugins rule turns everything else off and OpenCode's built-ins back
+//   on, as they include what applies these rules (opencode.config.agent).
+//   1 ignores it.
+// Not covered, as they're the user's or an admin's own choices, not a
+// folder's: an "Always allow" saved in OpenCode's own app (kept per project
+// in its data folder, and outranking "ask" on 2; Threadbear only ever
+// answers once), an organisation OpenCode is signed in to (its config comes
+// from the data folder too), and system or managed config
+// (/Library/Application Support/opencode, /etc/opencode), which outranks
+// everything here by design.
 export function opencodeEnv(o: { noTools?: boolean } = {}): Record<string, string> {
   const permission = o.noTools ? DENY_EVERYTHING : ASK_FOR_EVERYTHING;
   return {
     OPENCODE_DISABLE_PROJECT_CONFIG: '1',
     OPENCODE_CONFIG_PROJECT_DISABLE: '1',
-    OPENCODE_CONFIG_DIR: emptyConfigDir(),
+    OPENCODE_CONFIG_DIR: configDir(),
+    OPENCODE_CONFIG: '',
     OPENCODE_DISABLE_AUTOUPDATE: '1',
     OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission, agent: { build: { permission }, plan: { permission }, general: { permission }, explore: { permission } }, plugins: ['-*', 'opencode.*'] }),
   };
 }
 
 const CONFIG_DIR_PREFIX = 'threadbear-opencode-config-';
-const DAY_MS = 24 * 60 * 60_000;
+let ownConfigDir: string | undefined;
 
-// A new empty folder per process, so nothing one leaves there reaches the
-// next. Ones over a day old are swept as a new one is made.
-function emptyConfigDir(): string {
+// The runner's own OpenCode config folder: made empty, and only OpenCode
+// writes there (its node_modules for plugins). One for the runner's life,
+// named with its pid, so a folder is only swept once the runner that made it
+// is gone, never from under a session still using it.
+function configDir(): string {
+  if (ownConfigDir && fs.existsSync(ownConfigDir)) return ownConfigDir;
   const tmp = os.tmpdir();
   try {
     for (const name of fs.readdirSync(tmp)) {
       if (!name.startsWith(CONFIG_DIR_PREFIX)) continue;
+      const pid = Number(/^(\d+)-/.exec(name.slice(CONFIG_DIR_PREFIX.length))?.[1]);
+      if (pid && pidAlive(pid)) continue;
       const dir = path.join(tmp, name);
       try {
-        const st = fs.lstatSync(dir);
-        if (st.isDirectory() && Date.now() - st.mtimeMs > DAY_MS) fs.rmSync(dir, { recursive: true, force: true });
+        // Without a pid (none are made so now): only once it's old.
+        if (!pid && Date.now() - fs.lstatSync(dir).mtimeMs < 24 * 60 * 60_000) continue;
+        if (fs.lstatSync(dir).isDirectory()) fs.rmSync(dir, { recursive: true, force: true });
       } catch {
         // Gone already, or not ours to remove.
       }
@@ -175,7 +187,18 @@ function emptyConfigDir(): string {
   } catch {
     // An unreadable temp folder only means nothing is swept.
   }
-  return fs.mkdtempSync(path.join(tmp, CONFIG_DIR_PREFIX));
+  ownConfigDir = fs.mkdtempSync(path.join(tmp, `${CONFIG_DIR_PREFIX}${process.pid}-`));
+  return ownConfigDir;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM: alive, but someone else's.
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 // The first .opencode/plugin(s) folder with anything in it, from `cwd` up.

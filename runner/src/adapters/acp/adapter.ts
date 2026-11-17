@@ -213,6 +213,11 @@ export class AcpSession implements AgentSession {
   private trusted = false;
   // The program this session runs, for a refusal that depends on its version.
   private binary: string;
+  // What an asking mode would have been refused for when the process
+  // started. It holds for the process's life: an OpenCode 1 that started in
+  // Full beside a folder's plugins has imported them, whatever's on disk by
+  // the time the mode is lowered (a new version, the plugins gone).
+  private startRefusal?: string;
   private currentMode?: string;
   private cliCommands: SlashCommand[] = [];
   // Said once, before the first message of a new session.
@@ -236,6 +241,7 @@ export class AcpSession implements AgentSession {
     this.normalizer = new AcpNormalizer(this.ctx);
     this.trusted = deps.agent.trusts?.(opts.cwd) ?? false;
     this.binary = binary;
+    this.startRefusal = deps.agent.refuses?.({ cwd: opts.cwd, mode: 'ask', trusted: this.trusted, binary });
     const args = deps.agent.args({ dataDir: deps.dataDir, trusted: this.trusted, binary });
     this.guard = deps.agent.guardName?.(args);
     this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
@@ -771,7 +777,7 @@ export class AcpSession implements AgentSession {
     this.mode = mode;
     // A mode this folder can't run in (Grok's trusted folders): the process
     // goes, and the next message starts one, which says why it can't.
-    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode, trusted: this.trusted, binary: this.binary });
+    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode, trusted: this.trusted, binary: this.binary }) ?? (mode !== 'full' ? this.startRefusal : undefined);
     if (refused && this.state !== 'closed' && this.state !== 'closing') {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: refused } });
       this.kill();

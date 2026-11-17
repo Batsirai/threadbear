@@ -188,14 +188,14 @@ test('OpenCode 1 refuses an asking thread under a folder with plugins; 2 and Ful
   }
 });
 
-test("each OpenCode process gets an empty config folder of its own, with both project switches on", () => {
+test("OpenCode gets the runner's own config folder, named for its pid, with the project and OPENCODE_CONFIG off", () => {
   const a = opencodeEnv();
   const b = opencodeEnv({ noTools: true });
-  assert.notEqual(a.OPENCODE_CONFIG_DIR, b.OPENCODE_CONFIG_DIR);
-  assert.deepEqual(fs.readdirSync(a.OPENCODE_CONFIG_DIR), []);
+  assert.equal(a.OPENCODE_CONFIG_DIR, b.OPENCODE_CONFIG_DIR, 'one for the runner');
+  assert.ok(path.basename(a.OPENCODE_CONFIG_DIR).startsWith(`threadbear-opencode-config-${process.pid}-`));
   assert.equal(a.OPENCODE_CONFIG_PROJECT_DISABLE, '1');
+  assert.equal(a.OPENCODE_CONFIG, '');
   assert.equal(JSON.parse(b.OPENCODE_CONFIG_CONTENT).permission['*'], 'deny');
-  for (const e of [a, b]) fs.rmSync(e.OPENCODE_CONFIG_DIR, { recursive: true, force: true });
 });
 
 test('OpenCode 2 gets no --pure, which it would refuse; 1 and an unknown version keep it', () => {
@@ -782,6 +782,18 @@ test('a mode change during a turn reaches the agent straight away', async () => 
   await ready(r, s);
   await s.setPermissionMode('ask');
   assert.ok(r.log().some((l) => (l.set as { mode?: string } | undefined)?.mode === 'ask'));
+});
+
+test('a refusal an asking mode had when the process started holds after the folder changes', async () => {
+  let plugins = true;
+  const agent: AcpAgent = { ...ACP_AGENTS.opencode, refuses: ({ mode }) => (mode !== 'full' && plugins ? 'has plugins' : undefined) };
+  const r = rig({ mode: 'full', agent });
+  const s = r.start();
+  await ready(r, s);
+  plugins = false; // taken away, or a new version, before the mode comes down
+  await s.setPermissionMode('ask');
+  assert.ok(events(r.outputs, 'system.note').some((e: { text: string }) => e.text === 'has plugins'));
+  await r.exited();
 });
 
 test('a malformed request is cancelled, never left to hang the turn', async () => {
