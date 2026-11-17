@@ -15,7 +15,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const require = createRequire(path.join(ROOT, 'package.json'));
-const esbuild = require('esbuild') as typeof import('esbuild');
+// esbuild comes with the repo's own packages, which a runner's release
+// build (runner/ only, src/update.ts) doesn't install: there it's skipped.
+let esbuild: typeof import('esbuild') | undefined;
+try {
+  esbuild = require('esbuild') as typeof import('esbuild');
+} catch {
+  esbuild = undefined;
+}
 
 type Handler = (ctx: unknown, request: Request) => Promise<Response>;
 type Router = { lookup: (path: string, method: 'GET') => readonly [{ _handler: Handler }, string, string] | null };
@@ -23,7 +30,7 @@ type Router = { lookup: (path: string, method: 'GET') => readonly [{ _handler: H
 async function router(): Promise<Router> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-no-frames-'));
   const out = path.join(dir, 'http.mjs');
-  await esbuild.build({ entryPoints: [path.join(ROOT, 'convex/http.ts')], bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'silent', nodePaths: [path.join(ROOT, 'node_modules')] });
+  await esbuild!.build({ entryPoints: [path.join(ROOT, 'convex/http.ts')], bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'silent', nodePaths: [path.join(ROOT, 'node_modules')] });
   try {
     return (await import(pathToFileURL(out).href)).default as Router;
   } finally {
@@ -43,7 +50,7 @@ const ctx = {
   storage: { get: async () => new Blob([HTML]) },
 };
 
-test("every page of the site says no other site may frame it, the shared page's too", async () => {
+test("every page of the site says no other site may frame it, the shared page's too", { skip: !esbuild && "the repo's packages aren't installed" }, async () => {
   const http = await router();
   for (const p of ['/', '/t/abc', '/projects/r/p', '/assets/index.js', '/s/some-slug']) {
     const hit = http.lookup(p, 'GET');

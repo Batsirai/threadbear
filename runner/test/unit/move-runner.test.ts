@@ -322,7 +322,11 @@ test("a clone goes only to a new folder under this home, beside one of this runn
   // never hidden, never one that's there already, never a name tools look
   // for in the folders above them (security review, 16 Nov 2026).
   assert.ok('problem' in (await ask(`/Users/alex/${beside}/x`, '/Users/alex', '', 'git@github.com:attacker/.hidden.git')));
-  assert.ok('problem' in (await ask(`/Users/alex/${beside}/x`, '/Users/alex', '', `https://github.com/attacker/${path.basename(repo)}`)));
+  // (A folder of its own beside the repo, named in lower case: the name
+  // from an origin is lowercased, and a mixed-case tmp folder's name only
+  // matches it on a Mac's case-insensitive disk.)
+  fs.mkdirSync(path.join(path.dirname(repo), 'taken'));
+  assert.ok('problem' in (await ask(`/Users/alex/${beside}/x`, '/Users/alex', '', 'https://github.com/attacker/taken')));
   for (const name of ['node_modules', 'bin', 'Vendor', 'site-packages', 'go']) {
     assert.ok('problem' in (await ask(`/Users/alex/${beside}/${name}`, '/Users/alex', '', `https://github.com/attacker/${name}.git`)), name);
   }
@@ -375,7 +379,7 @@ test("a folder that's no repo goes only to the same place under this home", asyn
   const ok = await ask(`/Users/alex/${rel}`);
   assert.ok(!('problem' in ok) && ok.cwd === path.join(home, rel), JSON.stringify(ok));
   // A link under this home that leads out of it.
-  fs.symlinkSync('/private/etc', path.join(inHome, 'etc-link'));
+  fs.symlinkSync(realpath('/etc'), path.join(inHome, 'etc-link'));
   const linked = await ask(`/Users/alex/${rel}/etc-link`);
   assert.ok('problem' in linked && /leads out of the home folder/.test(linked.problem), JSON.stringify(linked));
 });
