@@ -304,7 +304,7 @@ export function worktreeInstructions(w: WorktreeRecord): string {
   return [
     `This thread has its own git worktree of ${w.repo} at ${w.path}, on the branch ${w.branch}, made from ${MAIN}.`,
     `Commit your work there, on that branch. Other threads work in worktrees of their own, and the main checkout at ${w.mainCheckout} isn't yours to edit.`,
-    `When the work is done and checked, run \`tb land\` in the worktree: it rebases the branch on ${MAIN}, runs the repo's check and fast-forwards ${MAIN} to it. It never pushes. It may first wait for another thread's landing, so run it in the background with the longest timeout allowed. After landing you can carry on, and the next \`tb land\` lands only what's new.`,
+    `When the work is done and checked, run \`tb land\` in the worktree: it rebases the branch on ${MAIN}, runs the repo's check and fast-forwards ${MAIN} to it. It may first wait for another thread's landing, so run it in the background with the longest timeout allowed. After landing you can carry on, and the next \`tb land\` lands only what's new.`,
   ].join(' ');
 }
 
@@ -342,6 +342,10 @@ export type LandOptions = {
   checkFrom?: string;
   // The check hosts this landing asks for: THREADBEAR_CHECK_HOST if left out.
   checkHost?: string;
+  // Push main to origin once it has landed, folding GitHub's main in first
+  // when that has moved too (pushMain). The CLI's comes from runner.json's
+  // `pushAfterLanding`, so only the owner's own Mac pushes.
+  push?: boolean;
 };
 
 // The hosts a landing asked for, as check.sh would take them (an ssh host
@@ -1582,8 +1586,157 @@ async function landLocked(
     out(`Landed on ${MAIN} in ${t.mainCheckout}:`);
     out(mine);
     if (group.length) out(`In the same check, and landed with it: ${together.join(', ')}.`);
+    // Still under the lock: a fold of GitHub's main moves main here too.
+    // Never a reason to fail the landing, which is done.
+    if (opts.push) {
+      try {
+        await pushMain({ mainCheckout: t.mainCheckout, common, check, checkFrom: opts.checkFrom ?? '', shell: opts.shell, timesFile: times.file, out });
+      } catch (e) {
+        out(`Landed, but ${MAIN} wasn't pushed to GitHub: ${(e as Error).message}`);
+      }
+    }
     return 0;
   }
+}
+
+// After a landing, main goes to GitHub (`push`, from runner.json's
+// pushAfterLanding). On 17 Nov main here was 36 commits ahead of GitHub's
+// and GitHub's 9 hours stale: GitHub's main had three commits of its own,
+// so scripts/sync-main.sh needed the landing lock, and with landings queued
+// all afternoon it waited over an hour and never got it (lockf isn't a fair
+// queue). The landing's own holder has the lock already, so it does it:
+//
+// - GitHub's main is behind this one: push.
+// - GitHub's has moved too: merge it in (a merge, never a rebase, so main
+//   here only ever fast-forwards and no queued landing's base is rewritten),
+//   check that merge in the land-alone checkout, fast-forward main to it and
+//   push. A conflict or failed check leaves main as it landed, says why, and
+//   isn't tried again for the same GitHub main for a few hours, as each try
+//   is a whole check with everyone waiting behind it.
+const PUSH_MEMO = 'threadbear-land-push.json';
+export const pushLimits = { retryMs: 6 * 3600_000 };
+
+async function pushMain(a: {
+  mainCheckout: string;
+  common: string;
+  check: string | undefined;
+  checkFrom: string;
+  shell?: string[];
+  timesFile: string;
+  out: (line: string) => void;
+}): Promise<void> {
+  const { mainCheckout: mc, out } = a;
+  // Nobody's there to answer a password or host key prompt.
+  const quiet: NodeJS.ProcessEnv = { GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes' };
+  const notPushed = (why: string): void => out(`${MAIN} wasn't pushed to GitHub: ${why}`);
+  const fetch = async (): Promise<string | undefined> => {
+    const f = await git(mc, ['fetch', '-q', 'origin', MAIN], quiet);
+    if (!f.ok) {
+      notPushed(`fetching GitHub's failed (${firstLine(f.stderr || f.stdout)}). The next landing tries again, or run scripts/sync-main.sh.`);
+      return undefined;
+    }
+    return gitOut(mc, ['rev-parse', `refs/remotes/origin/${MAIN}`]);
+  };
+  const push = async (commit: string): Promise<boolean> => (await git(mc, ['push', '-q', 'origin', `${commit}:refs/heads/${MAIN}`], quiet)).ok;
+  const count = async (range: string): Promise<string> => (await gitOut(mc, ['rev-list', '--count', range])) ?? '?';
+
+  const here = await gitOut(mc, ['rev-parse', `refs/heads/${MAIN}`]);
+  if (!here) return notPushed(`couldn't read ${MAIN} in ${mc}.`);
+  let there = await fetch();
+  if (!there) return;
+  if (there === here) return;
+  if ((await git(mc, ['merge-base', '--is-ancestor', there, here])).ok) {
+    if (await push(here)) return out(`Pushed ${MAIN} to GitHub (${await count(`${there}..${here}`)} commits).`);
+    // Refused: GitHub's moved in the meantime. Then it's a fold, below.
+    there = await fetch();
+    if (!there) return;
+  }
+  if ((await git(mc, ['merge-base', '--is-ancestor', here, there])).ok) {
+    return notPushed(`GitHub's already has it.`);
+  }
+
+  // Both have moved.
+  const memoFile = path.join(a.common, PUSH_MEMO);
+  let memo: { github?: string; at?: number; why?: string } | undefined;
+  try {
+    memo = JSON.parse(fs.readFileSync(memoFile, 'utf8'));
+  } catch {
+    memo = undefined;
+  }
+  if (memo?.github === there && typeof memo.at === 'number' && Date.now() - memo.at < pushLimits.retryMs) {
+    return notPushed(`GitHub's ${MAIN} has commits this one doesn't, and bringing them in failed at ${new Date(memo.at).toLocaleTimeString()} (${memo.why ?? 'see an earlier landing'}). It's tried again when GitHub's moves or in a few hours; scripts/sync-main.sh tries now.`);
+  }
+  const gave = (why: string, more = ''): void => {
+    try {
+      fs.writeFileSync(memoFile, JSON.stringify({ github: there, at: Date.now(), why }));
+    } catch {
+      // Then the next landing tries again.
+    }
+    notPushed(`GitHub's ${MAIN} has commits this one doesn't, and ${why}, so ${MAIN} here is as it landed.${more}`);
+  };
+  const theirs = (await gitOut(mc, ['log', '--oneline', '--no-decorate', `${here}..${there}`])) ?? '';
+  out(`GitHub's ${MAIN} has ${theirs.split('\n').filter(Boolean).length} commits this one doesn't; merging them in and checking that before pushing.`);
+  const merged = await git(mc, ['merge-tree', '--write-tree', '--name-only', here, there]);
+  if (!merged.ok) {
+    const files = merged.stdout.split('\n\n')[0].split('\n').slice(1).filter(Boolean);
+    return gave(merged.code === 1 ? `they conflict with it in ${files.join(', ') || 'some files'}` : `git couldn't merge them (${firstLine(merged.stderr)})`,
+      ' Bring them together by hand (scripts/sync-main.sh says how).');
+  }
+  const tree = merged.stdout.split('\n')[0].trim();
+  const message = `Bring in GitHub's ${MAIN}\n\nCommits made on GitHub that this Mac's ${MAIN} didn't have:\n\n${theirs}`;
+  const fold = await gitOut(mc, ['commit-tree', tree, '-p', here, '-p', there, '-m', message]);
+  if (!fold) return gave(`git couldn't make the merge commit`);
+
+  if (a.check) {
+    const dir = await aloneCheckout(a.common);
+    // main is where check.sh looks for what changed: GitHub's commits.
+    if (!dir ||
+        !(await git(dir, ['checkout', '-q', '-f', '--detach', fold])).ok ||
+        !(await git(dir, ['update-ref', `refs/heads/${MAIN}`, here])).ok ||
+        !(await git(dir, ['clean', '-q', '-fdx'])).ok) {
+      return notPushed(`there was no checkout to check GitHub's commits in. The next landing tries again.`);
+    }
+    out(`Running the check on the merge: ${a.check}`);
+    setRunning(a.common, { startedAt: Date.now(), branches: [`GitHub's ${MAIN}`], pid: process.pid, entries: [] });
+    // To the check hosts as a group's goes, never this Mac for one person's
+    // THREADBEAR_CHECK_HOST.
+    const r = await runCheck(a.check, a.checkFrom ? path.join(dir, a.checkFrom) : dir, a.shell, { THREADBEAR_CHECK_GROUP: '1' });
+    setRunning(a.common, undefined);
+    logCheckTimes(a.timesFile, {
+      at: new Date().toISOString(),
+      branch: `origin/${MAIN}`,
+      fold: true,
+      commit: fold,
+      ok: r.ok,
+      ...(r.ok ? {} : { exit: r.code }),
+      seconds: Math.round(r.durationMs / 1000),
+      ...parseCheckTimes(r.text),
+      check: a.check,
+    });
+    if (!r.ok) {
+      const tail = r.text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES).join('\n').slice(-8000);
+      return gave(`the check failed on the merge${r.code !== undefined ? ` (exit ${r.code})` : ''}`, ` The last lines of its output:\n\n${tail}`);
+    }
+    out(`The check passed on the merge (${Math.round(r.durationMs / 1000)} s).`);
+  }
+
+  // As a landing moves main: only from where it was, and only main itself.
+  const unready = await mainNotReady(mc);
+  if (unready) return notPushed(unready);
+  if ((await gitOut(mc, ['rev-parse', `refs/heads/${MAIN}`])) !== here) return notPushed(`${MAIN} moved while GitHub's was being checked. The next landing tries again.`);
+  const ff = await git(mc, ['merge', '-q', '--ff-only', fold]);
+  if (!ff.ok) {
+    const files = overwrittenFiles(ff.stderr + ff.stdout);
+    return notPushed(files.length
+      ? `the main checkout at ${mc} has uncommitted changes in files GitHub's commits change (${files.join(', ')}). The next landing tries again.`
+      : `git merge --ff-only failed in ${mc}: ${firstLine(ff.stderr || ff.stdout)}`);
+  }
+  if ((await gitOut(mc, ['rev-parse', `refs/heads/${MAIN}`])) !== fold) return notPushed(`${MAIN} didn't end up at the merge; look at git reflog in ${mc}.`);
+  if (await push(fold)) {
+    fs.rmSync(memoFile, { force: true });
+    return out(`Brought GitHub's commits into ${MAIN}, checked, and pushed it to GitHub.`);
+  }
+  notPushed(`GitHub refused the push (it may have moved again). ${MAIN} here has GitHub's commits now; the next landing pushes it.`);
 }
 
 // Why tb land can't move main in the main checkout now, or undefined: HEAD

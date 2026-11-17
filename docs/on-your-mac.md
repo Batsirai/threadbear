@@ -441,6 +441,12 @@ File references are where to look.
   state. It rejects covered or inactive samples without sending Accessibility
   or automation requests to the app. Closing the benchmark's owner pipe stops
   the watcher. These helpers never run as part of the installed app.
+- **Pushing main after landing** (`pushMain` in `runner/src/worktrees.ts`):
+  only for repos listed in `pushAfterLanding` in `runner.json`, which
+  nothing sets for you. After `tb land` moves main there, it runs `git fetch
+  origin main` and `git push origin main`; when `origin` has commits main
+  doesn't, it merges them in first, runs the repo's check on that, and
+  pushes only if it passes. Otherwise `tb land` never pushes.
 - **Following GitHub on a second machine** (`runner/src/follow-origin.ts`):
   only with `followOrigin: true` in that machine's `runner.json`, which
   nothing sets for you. Every 5 minutes the runner runs `git fetch origin

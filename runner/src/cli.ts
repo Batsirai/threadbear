@@ -16,7 +16,7 @@ import { DEV_HELP, formatModels, logsCommand, runDev } from './tb-dev.ts';
 import { findWorktreePatch, isInside } from './patches.ts';
 import { TRUST_ALL } from './patch-trust.ts';
 import { checkoutTop, land, landTargetFromGit, realpath, type LandTarget } from './worktrees.ts';
-import { landRefusal } from './follow-origin.ts';
+import { landRefusal, pushAfterLanding } from './follow-origin.ts';
 import { gateCacheDir, gh, landHold } from './land-gate.ts';
 import { activityCommand } from './activity.ts';
 import { runnerKeysCommand } from './runner-keys.ts';
@@ -147,7 +147,8 @@ const HELP = `tb: talk to the Threadbear runner
                                   summarize or generate. It spends like any other
   tb land [--dry-run] [--despite-red]
                                   in a thread's own worktree: rebase its branch on main, run
-                                  the repo's check, then move main to it (never pushes);
+                                  the repo's check, then move main to it (and push it, only in a
+                                  repo listed in runner.json's pushAfterLanding);
                                   --dry-run stops before main moves. A GitHub workflow
                                   marked "# tb land: hold while red" holds the landings it
                                   would run for while it's red on main; --despite-red
@@ -384,6 +385,8 @@ async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, 
     // A workflow red on main holds what it would run for (land-gate.ts).
     despiteRed,
     hold: (root, files) => { const dir = gateCacheDir(root); return landHold(root, files, (line) => console.log(line), gh, dir ? { dir } : undefined); },
+    // Main goes to GitHub once it has landed, on the owner's Mac only.
+    push: !dryRun && pushAfterLanding(cfg.home, target.mainCheckout),
   });
 }
 

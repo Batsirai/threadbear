@@ -133,7 +133,8 @@ main takes the whole release back out in one go.
 
 ## 6. Offer to push it
 
-`tb land` never pushes, so their own copy on GitHub (`origin`) is still on
+`tb land` doesn't push (unless they've listed the repo in runner.json's
+`pushAfterLanding`), so their own copy on GitHub (`origin`) is still on
 the old main: if this Mac went, the merge and anything of theirs not yet
 pushed would go with it. Once it's landed, if `git log origin/main..main`
 lists anything, say so and ask whether to push it. Run `git push origin

@@ -361,7 +361,9 @@ if `tb` isn't found (an older runner, or outside a thread), use
   reused with its Swift build caches so the app builds warm. Your system prompt says where. Commit there. When
   the work is done and checked, `tb land` rebases it on main, runs
   `./check.sh --quick` and fast-forwards main in the main checkout
-  (`--dry-run` first if you like; it never pushes). Landings waiting
+  (`--dry-run` first if you like). On Mike's Mac it then pushes main to
+  GitHub, merging GitHub's in first if that has moved
+  (`pushAfterLanding` in runner.json). Landings waiting
   for the lock are checked together in the next check. When a group
   fails, what failed is run on each landing alone and the broken ones
   are left out, told why at once (docs/thread-worktrees.md, "Landing

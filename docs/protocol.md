@@ -5157,7 +5157,9 @@ files do not overlap. See docs/thread-worktrees.md for the command.
 main (a conflict aborts and names the files), runs `check`, then
 `git merge --ff-only` in the main checkout (refused, and nothing changed,
 if main's own uncommitted changes are in the way) and prints what landed.
-It never pushes. `--dry-run` stops before main moves.
+It pushes only in a repo listed in runner.json's `pushAfterLanding`
+(docs/thread-worktrees.md, "Syncing main with GitHub"). `--dry-run` stops
+before main moves.
 
 When the thread is archived or deleted, `teardown` runs first in the
 worktree's root, whether or not the branch landed (an `action.run` with

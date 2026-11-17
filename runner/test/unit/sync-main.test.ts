@@ -36,8 +36,10 @@ function holdLock(root: string, main: string) {
   return new Promise<void>((r) => p.once('close', () => r()));
 }
 
-function run(main: string) {
-  const p = spawn(path.join(main, 'scripts', 'sync-main.sh'), [], { cwd: main, env });
+// THREADBEAR_HOME: a data dir of the test's own, so the real runner.json's
+// pushAfterLanding never counts.
+function run(main: string, home = path.join(path.dirname(main), 'home')) {
+  const p = spawn(path.join(main, 'scripts', 'sync-main.sh'), [], { cwd: main, env: { ...env, THREADBEAR_HOME: home } });
   let out = '';
   p.stdout.on('data', (d) => (out += d));
   p.stderr.on('data', (d) => (out += d));
@@ -87,4 +89,29 @@ test('when GitHub has moved, it still waits for the landing lock before moving m
   assert.equal(done.code, 0, done.out);
   assert.match(done.out, /fast-forwarded to GitHub's/);
   assert.equal(sh(main, 'git rev-parse main'), sh(root, 'git --git-dir=origin.git rev-parse main'));
+});
+
+// 17 Nov: with landings coming all afternoon it waited over an hour for the
+// lock and never got it. With pushAfterLanding on, the landing holding the
+// lock pushes once it lands (land-push.test.ts), so it doesn't wait.
+test("when GitHub has moved and a landing holds the lock, pushAfterLanding leaves it to that landing", async () => {
+  const { root, main } = repos();
+  sh(root, 'git clone -q origin.git other 2>/dev/null && cd other && git checkout -q main && echo c > c && git add c && git commit -qm c && git push -q origin main');
+  sh(main, 'echo b > b && git add b && git commit -qm b');
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ pushAfterLanding: [main] }));
+  const held = holdLock(root, main);
+  await until(() => fs.existsSync(path.join(root, 'held')), 'lock held');
+  const before = sh(main, 'git rev-parse main');
+  try {
+    const r = await run(main, home).done;
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /a landing is going: when it lands it merges GitHub's in/);
+    assert.doesNotMatch(r.out, /Taking the landing lock/);
+    assert.equal(sh(main, 'git rev-parse main'), before);
+  } finally {
+    fs.writeFileSync(path.join(root, 'release'), '');
+    await held;
+  }
 });

@@ -110,8 +110,9 @@ stays. Separate repos do not block one another.
    Afterwards it checks main and main's reflog are at the checked commit.
 5. Prints what landed (`git log --oneline main@{1}..main`).
 
-It never pushes. The runner and the app follow the local main by
-themselves. On a machine with `followOrigin` on (docs/dev-tools.md), `tb
+It pushes only where runner.json's `pushAfterLanding` lists the repo
+(below, "Syncing main with GitHub"); otherwise main stays on this Mac. The
+runner and the app follow the local main by themselves. On a machine with `followOrigin` on (docs/dev-tools.md), `tb
 land` refuses in the repo the runner follows, as that main has to stay
 GitHub's: push the branch as `cloud/<topic>` or hand the work to the main
 Mac.
@@ -514,13 +515,38 @@ rebase cannot validate the new combination, even when files don't overlap.
 ### Syncing main with GitHub
 
 Main on this Mac moves by `tb land`; GitHub's moves by pushes and merged
-PRs. To bring them together, run `scripts/sync-main.sh` (from any
-checkout).
+PRs (CONTRIBUTING edits made on GitHub, say).
+
+With the repo's main checkout in runner.json's `pushAfterLanding` (Mike's
+lists this repo), each landing does it: once main has moved, still holding
+the lock, `tb land` fetches GitHub's main and
+
+- when GitHub's is behind, pushes;
+- when GitHub's has commits of its own, merges them in (a merge commit,
+  never a rebase: main here only ever fast-forwards, so no waiting
+  landing's base is rewritten), runs the landing's check on that merge in
+  `threadbear-land-alone/`, fast-forwards main to it and pushes. A
+  conflict or a failed check leaves main as it landed and says why, and
+  isn't tried again for that same GitHub main for six hours
+  (`threadbear-land-push.json` beside the lock), as each try is a whole
+  check with everyone waiting behind it. The landing itself has landed
+  either way.
+
+On 17 Nov GitHub's main had three commits of its own while landings came
+all afternoon: `scripts/sync-main.sh` waited over an hour for the landing
+lock and never got it (lockf isn't a fair queue), and GitHub's main was 36
+commits and 9 hours behind.
+
+`scripts/sync-main.sh` (from any checkout) does the same by hand, for a
+repo without `pushAfterLanding` or when nothing is landing:
 
 - only this Mac's has moved (the usual case): pushes main straight away,
   without waiting for the landing lock. A push moves only GitHub's main,
   as a fast-forward or not at all, so it can't race a landing; with
   landings queued, the wait for the lock was over 30 minutes (13 Nov).
+
+- both have moved and a landing holds the lock, with `pushAfterLanding`
+  on: leaves it to that landing and says so, rather than wait.
 
 Otherwise it takes the landing lock for the rest, so no landing can move
 main meanwhile, then:
