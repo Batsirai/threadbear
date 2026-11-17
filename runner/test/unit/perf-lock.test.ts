@@ -20,6 +20,24 @@ async function until(check: () => boolean, message: string) {
   }
   if (!check()) assert.fail(message);
 }
+// When a process started, as perf-children.pl records it: lstart on macOS,
+// and on Linux seconds since boot, as lstart there moves with the clock's
+// boot time when the clock is stepped (WSL, 17 Nov).
+function born(pid: number | string): string {
+  const bootTime = () => {
+    if (process.platform !== 'linux') return 0;
+    const m = fs.readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)/m);
+    return m ? Number(m[1]) : 0;
+  };
+  for (let tries = 1; ; tries++) {
+    const boot = bootTime();
+    const lstart = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout.trim();
+    if (!boot || !lstart) return lstart;
+    if (bootTime() !== boot && tries < 5) continue;
+    const at = Date.parse(`${lstart.replace(/\s+/g, ' ')} UTC`);
+    return Number.isNaN(at) ? lstart : `boot+${at / 1000 - boot}`;
+  }
+}
 function host(t: TestContext) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-perf-lock-'));
   const env = { ...process.env, HOME: home, THREADBEAR_PERF_LOCK_OWNER: '' };
@@ -365,10 +383,10 @@ while True: time.sleep(1)
   const first = h.run([process.execPath, entry]);
   await until(() => fs.existsSync(terminalPid) && Number(fs.readFileSync(terminalPid, 'utf8')) > 1, 'terminal session did not start');
   const pid = Number(fs.readFileSync(terminalPid, 'utf8'));
-  const born = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
+  const firstBorn = born(String(pid));
   t.after(() => {
-    const now = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
-    if (born && now === born) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    const now = born(String(pid));
+    if (firstBorn && now === firstBorn) { try { process.kill(pid, 'SIGKILL'); } catch {} }
   });
   if (loss.startsWith('app')) process.kill(Number(fs.readFileSync(path.join(h.home, 'app.pid'), 'utf8')), 'SIGKILL');
   if (loss === 'worker' || loss.startsWith('app') || loss === 'closed-proof') process.kill(Number(fs.readFileSync(workerPid, 'utf8')), 'SIGKILL');
@@ -406,10 +424,10 @@ test('a fork after discovery is found even when its parent exits before the resc
   fs.writeFileSync(path.join(h.home, 'fork-now'), '');
   await until(() => fs.existsSync(pidfile) && Number(fs.readFileSync(pidfile, 'utf8')) > 1, 'late fork did not start');
   const pid = Number(fs.readFileSync(pidfile, 'utf8'));
-  const born = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
+  const firstBorn = born(String(pid));
   t.after(() => {
-    const now = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
-    if (born && now === born) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    const now = born(String(pid));
+    if (firstBorn && now === firstBorn) { try { process.kill(pid, 'SIGKILL'); } catch {} }
   });
   fs.writeFileSync(path.join(h.home, 'resume-scan'), '');
   assert.notEqual(await first.done, 0);
@@ -432,7 +450,7 @@ test('stale registration and snapshot identities never stop an unrelated process
   t.after(async () => { process.kill(-unrelated.pid!, 'SIGKILL'); await unrelatedDone; });
   await until(() => childPid.includes('\n'), 'unrelated subtree did not start');
   fs.writeFileSync(path.join(registry, String(unrelated.pid)), 'stale registration');
-  const childBorn = spawnSync('ps', ['-p', childPid.trim(), '-o', 'lstart='], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout.trim();
+  const childBorn = born(childPid.trim());
   fs.writeFileSync(path.join(registry, `anchor-${unrelated.pid}`), `${childPid.trim()}\n${childBorn}\nstale registration`);
   first.stdin!.end();
   await until(() => fs.existsSync(path.join(h.home, 'scan-ready')), 'scan did not pause');
@@ -497,10 +515,10 @@ test('worker death reaps children that Node launched without the proof descripto
   const first = h.run([process.execPath, entry]);
   await until(() => fs.existsSync(pidfile) && Number(fs.readFileSync(pidfile, 'utf8')) > 1, 'background child did not start');
   const pid = Number(fs.readFileSync(pidfile, 'utf8'));
-  const born = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
+  const firstBorn = born(String(pid));
   t.after(() => {
-    const now = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
-    if (born && now === born) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    const now = born(String(pid));
+    if (firstBorn && now === firstBorn) { try { process.kill(pid, 'SIGKILL'); } catch {} }
   });
   process.kill(Number(fs.readFileSync(workerPid, 'utf8')), 'SIGKILL');
   const next = h.run(['sh', '-c', 'echo next']);
@@ -564,16 +582,16 @@ test('loss of an anchor cannot unlock a live group whose ownership is now uncert
   const first = h.run([process.execPath, entry]);
   await until(() => fs.existsSync(childFile) && Number(fs.readFileSync(childFile, 'utf8')) > 1, 'child did not start');
   const child = Number(fs.readFileSync(childFile, 'utf8'));
-  const born = spawnSync('ps', ['-p', String(child), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
+  const firstBorn = born(String(child));
   const stopChild = () => {
-    const now = spawnSync('ps', ['-p', String(child), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
-    if (born && now === born) { try { process.kill(child, 'SIGKILL'); } catch {} }
+    const now = born(String(child));
+    if (firstBorn && now === firstBorn) { try { process.kill(child, 'SIGKILL'); } catch {} }
   };
   t.after(stopChild);
   const worker = Number(fs.readFileSync(workerFile, 'utf8'));
   const registry = fs.readFileSync(registryFile, 'utf8');
   const [anchor, anchorBorn] = fs.readFileSync(path.join(registry, `anchor-${worker}`), 'utf8').split('\n');
-  assert.equal(spawnSync('ps', ['-p', anchor, '-o', 'lstart='], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout.trim(), anchorBorn);
+  assert.equal(born(anchor), anchorBorn);
   process.kill(Number(anchor), 'SIGKILL');
   process.kill(worker, 'SIGKILL');
   const next = h.run(['sh', '-c', 'echo entered-next-lease']);
@@ -608,7 +626,7 @@ test('stopped child groups retire their anchors during a continuing lease', asyn
   await until(() => first.output.includes('stopped twenty'), 'sequential children did not stop');
   const { registry, groups } = JSON.parse(fs.readFileSync(groupsFile, 'utf8')) as { registry: string; groups: number[] };
   const live = () => {
-    const rows = spawnSync('ps', ['-axo', 'pid=,stat=,lstart='], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout;
+    const rows = spawnSync('ps', ['-axo', 'pid=,stat='], { encoding: 'utf8' }).stdout;
     return groups.filter((group) => {
       let record: string;
       try { record = fs.readFileSync(path.join(registry, `anchor-${group}`), 'utf8'); }
@@ -616,10 +634,10 @@ test('stopped child groups retire their anchors during a continuing lease', asyn
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         record = fs.readFileSync(path.join(registry, `retired-${group}`), 'utf8');
       }
-      const [pid, born] = record.split('\n');
+      const [pid, recorded] = record.split('\n');
       return rows.split('\n').some((row) => {
-        const m = row.match(/^\s*(\d+)\s+(\S+)\s+(.+?)\s*$/);
-        return m && m[1] === pid && !m[2].startsWith('Z') && m[3] === born;
+        const m = row.match(/^\s*(\d+)\s+(\S+)/);
+        return m && m[1] === pid && !m[2].startsWith('Z') && born(pid) === recorded;
       });
     });
   };
@@ -710,10 +728,10 @@ for (const loss of ['owner', 'transport'] as const) test(`${loss} loss reaps a n
   const first = h.run([process.execPath, entry]);
   await until(() => fs.existsSync(ready) && fs.existsSync(orphanFile) && Number(fs.readFileSync(orphanFile, 'utf8')) > 1, 'nested orphan did not start');
   const pid = Number(fs.readFileSync(orphanFile, 'utf8'));
-  const born = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
+  const firstBorn = born(String(pid));
   const stopOrphan = () => {
-    const now = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
-    if (born && now === born) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    const now = born(String(pid));
+    if (firstBorn && now === firstBorn) { try { process.kill(pid, 'SIGKILL'); } catch {} }
   };
   if (loss === 'owner') first.kill('SIGKILL');
   else { first.stdout!.destroy(); first.stderr!.destroy(); first.stdin!.end(); }
