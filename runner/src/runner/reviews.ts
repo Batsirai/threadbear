@@ -164,7 +164,7 @@ export const reviewsPart = {
   // folder name, or a moved log's "../.." could point it at another
   // thread's (Codex's review, 17 Nov).
   ownReplyImage(this: Runner, st: ThreadState, reviewId: string, img: ImageRef): boolean {
-    if (typeof reviewId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(reviewId) || typeof img?.path !== 'string') return false;
+    if (typeof reviewId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(reviewId) || !img || typeof img !== 'object' || typeof img.path !== 'string') return false;
     const reviewsDir = path.join(this.store.mediaDir(st.rec.id), 'reviews');
     try {
       const kept = fs.realpathSync(path.join(reviewsDir, reviewId, 'reply'));
@@ -255,11 +255,14 @@ export const reviewsPart = {
     // user.message. A failed turn.started append leaves the answer unsent.
     st.rec.queue = st.rec.queue.filter(q => !q.reviewId || !sent.has(q.reviewId));
     // An answer already queued keeps only its review's own pictures too.
+    // Nothing in it can throw: a record that made this fail part way would
+    // leave the queue unchecked, and it's sent next (Codex's review).
     st.rec.queue = st.rec.queue.map(q => {
       if (!q.reviewId) return q;
-      const images = (Array.isArray(q.images) ? q.images : []).filter(img => this.ownReplyImage(st, q.reviewId!, img));
-      const reviewResponse = q.reviewResponse?.images ? {...q.reviewResponse, images: q.reviewResponse.images.filter(img => this.ownReplyImage(st, q.reviewId!, img))} : q.reviewResponse;
-      return images.length === q.images?.length && reviewResponse === q.reviewResponse ? q : {...q, images, ...(reviewResponse ? {reviewResponse} : {})};
+      const own = (list: unknown): ImageRef[] => (Array.isArray(list) ? list : []).filter(img => this.ownReplyImage(st, q.reviewId!, img as ImageRef));
+      const images = own(q.images);
+      const reviewResponse = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse ? {...q.reviewResponse, images: own(q.reviewResponse.images)} : q.reviewResponse;
+      return {...q, images, ...(reviewResponse ? {reviewResponse} : {})};
     });
     for (const [id, review] of reviews) {
       if (review.status === 'answered' && review.replyTurnId && review.response && !sent.has(id) && !st.rec.queue.some(q => q.reviewId === id)) {

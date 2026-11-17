@@ -492,4 +492,10 @@ test('a client from before reply pictures keeps them; a moved review brings none
   const queued=st.rec.queue.find((q:any)=>q.turnId==='t-q');
   assert.deepEqual(queued.images,[kept]);
   assert.deepEqual(queued.reviewResponse.images,[]);
+  // A malformed one can't make the check fail open.
+  st.rec.queue.push({turnId:'t-bad',text:'x',images:[{path:source,mediaType:'image/png'}, null],reviewId:review.id,reviewResponse:{notes:{},images:{}}} as any);
+  h.runner.recoverReviews(st);
+  const bad=st.rec.queue.find((q:any)=>q.turnId==='t-bad');
+  assert.deepEqual(bad.images,[]);
+  assert.deepEqual(bad.reviewResponse.images,[]);
 });
