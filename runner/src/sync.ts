@@ -733,8 +733,14 @@ export function convexPoster(url: string, fetchFn: typeof fetch = fetch): Post {
     })) as { status?: string; value?: unknown; errorMessage?: string; errorData?: unknown } | undefined;
     if (!res.ok || !body || body.status !== 'success') {
       // A ConvexError's data (`{ kind, message }`), as the Convex client
-      // keeps it, so forbiddenText can tell a runner key's refusal.
-      throw Object.assign(new Error(body?.errorMessage ?? `HTTP ${res.status}`), body?.errorData !== undefined ? { data: body.errorData } : {});
+      // keeps it, so forbiddenText can tell a runner key's refusal. Its
+      // message is the error's own: a ConvexError's errorMessage over HTTP
+      // is only "[Request ID: …] Server Error", and the backend's refusals
+      // (tooMany, badArgs) are written for whoever ran the tb command to
+      // read. Anything else keeps errorMessage, request id and all.
+      const said = (body?.errorData as { message?: unknown } | null | undefined)?.message;
+      const message = typeof said === 'string' && said.trim() ? said : (body?.errorMessage ?? `HTTP ${res.status}`);
+      throw Object.assign(new Error(message), body?.errorData !== undefined ? { data: body.errorData } : {});
     }
     return body.value;
   };
