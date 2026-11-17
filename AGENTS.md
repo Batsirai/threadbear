@@ -291,8 +291,9 @@ default, on for him (Mike asked 6 Nov).
   `docs/experiments.md` with it: the guide and the forking table point
   there, and `experiment-docs.test.ts` fails while it's out of date. Edit
   the experiment's file, never the generated doc. One file each and a
-  union merge on the doc mean two threads adding experiments at once
-  don't collide when they land.
+  line-by-line merge on the doc (`scripts/merge-lines.mjs`) mean two
+  threads adding or taking out experiments at once don't collide when
+  they land.
 - Book the check-in when it lands: `schedule_message` with `new_thread`
   in this repo, about four days out, telling that thread to look at how
   the experiment has gone and ask Mike whether to turn it on for

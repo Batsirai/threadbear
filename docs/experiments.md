@@ -2,7 +2,7 @@
 
 <!-- Made by `npm run experiment-docs` in runner/ from runner/src/experiments/*.md:
 edit those, not this. Each entry is one line, so two threads adding one at once
-both keep theirs (.gitattributes merges this file by union). -->
+both keep theirs (.gitattributes merges this file line by line). -->
 
 New features that are still being tried out start off, with a switch under
 `experiments` in `runner.json` (the user guide, "Experiments", says how to turn one
