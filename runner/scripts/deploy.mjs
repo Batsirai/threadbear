@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { pointCurrent, readCurrentLink, readState, releaseExists, runnerJsonBroken, writeState } from '../launch.mjs';
 import { connectRpc } from './rpc-client.mjs';
+import { restartArgs, restartCommandText, schtasks, taskArgs, taskExists, taskName } from './windows-task.mjs';
 import { ChecksUnavailable, Fail, SLEPT_EXIT, SleptThrough, UNAVAILABLE_EXIT, checkHostsFrom, checkSlept, nodeBeforeLaunch, packagesInstalled, remoteChecks, sleepCount, smokeHello, smokeTimedOut, step, unitTests } from './deploy-steps.mjs';
 // THREADBARE_* was the old name for these variables (config.ts, adoptOldNames).
 for (const [k, v] of Object.entries(process.env)) {
@@ -70,6 +71,10 @@ const DEFAULT_HOME = path.join(os.homedir(), 'Library', 'Application Support', '
 // On Linux the data dir keeps its macOS name, so every path in the docs and
 // scripts is the same; systemd takes launchd's place (install-runner.sh).
 const LINUX = process.platform === 'linux';
+// A runner on Windows is a Scheduled Task (windows-task.mjs), whose
+// definition install-windows.mjs keeps as <home>/runner/task.xml: that
+// stands in for the plist here.
+const WINDOWS = process.platform === 'win32';
 // What a release holds from runner/, besides node_modules and release.json.
 const RELEASE_PATHS = ['src', 'bin', 'package.json', 'package-lock.json', '.npmrc'];
 const KEEP_RELEASES = 5;
@@ -203,20 +208,26 @@ function setup(v) {
     // the real runner, so a sandbox has to name its own.
     labelKnown: v.label !== undefined || isDefaultHome,
     follow: v.follow ? path.resolve(expandHome(v.follow)) : undefined,
-    target: `gui/${process.getuid()}/${label}`,
+    target: WINDOWS ? '' : `gui/${process.getuid()}/${label}`,
+    windows: WINDOWS,
+    task: taskName(label, os.userInfo().username),
     // A runner on Linux is a systemd user service of the same name
     // (install-runner.sh), and its unit file stands in for the plist.
     linux: LINUX,
     unit: `${label}.service`,
-    plist: LINUX
+    plist: WINDOWS
+      ? path.join(home, 'runner', 'task.xml')
+      : LINUX
       ? path.join(env.THREADBEAR_SYSTEMD_UNITS_DIR || path.join(os.homedir(), '.config', 'systemd', 'user'), `${label}.service`)
       : path.join(env.THREADBEAR_LAUNCH_AGENTS_DIR || path.join(os.homedir(), 'Library', 'LaunchAgents'), `${label}.plist`),
-    log: isDefaultHome ? path.join(os.homedir(), 'Library', 'Logs', 'threadbear-runner.log') : path.join(home, 'runner.log'),
+    log: isDefaultHome ? (WINDOWS ? path.join(home, 'Logs', 'threadbear-runner.log') : path.join(os.homedir(), 'Library', 'Logs', 'threadbear-runner.log')) : path.join(home, 'runner.log'),
     threadId,
     inThread: Boolean(threadId) || underRunner,
     launchctl: env.THREADBEAR_LAUNCHCTL || 'launchctl',
     systemctl: env.THREADBEAR_SYSTEMCTL || 'systemctl',
-    npm: path.join(path.dirname(process.execPath), 'npm'),
+    // npm beside this Node; on Windows its script, which step() runs on
+    // Node, as npm.cmd can't be started without a shell.
+    npm: process.platform === 'win32' ? path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js') : path.join(path.dirname(process.execPath), 'npm'),
     runnerDir: path.resolve(import.meta.dirname, '..'),
   };
 }
@@ -262,6 +273,7 @@ function installedAs(c) {
 function programArgs(c) {
   if (!c.labelKnown || !fs.existsSync(c.plist)) return [];
   if (c.linux) return unitExecStart(fs.readFileSync(c.plist, 'utf8'));
+  if (c.windows) return taskArgs(c.plist);
   const r = spawnSync('plutil', ['-convert', 'json', '-o', '-', c.plist], { encoding: 'utf8' });
   try {
     return JSON.parse(r.stdout).ProgramArguments ?? [];
@@ -338,7 +350,7 @@ function sameFile(a, b) {
 function requireReleases(c) {
   const how = installedAs(c);
   if (how === 'releases') return;
-  const what = how === 'missing' ? `isn't installed as a LaunchAgent (${c.label})` : `runs from a checkout (${c.plist} doesn't start ${path.join(c.dir, 'launch.mjs')})`;
+  const what = how === 'missing' ? `isn't installed as ${c.windows ? 'a Scheduled Task' : 'a LaunchAgent'} (${c.label})` : `runs from a checkout (${c.plist} doesn't start ${path.join(c.dir, 'launch.mjs')})`;
   if (c.isDefaultHome || c.inThread) {
     throw new Fail(
       `The runner at ${c.home} ${what}, so a release would never start. the user has to switch it to releases once, from a terminal:\n  ${path.join(c.runnerDir, 'scripts', 'install-runner.sh')}\nDon't run that from a thread: it stops the runner the thread runs on. Until then, runner changes wait for him.`,
@@ -458,6 +470,7 @@ function unitExecStart(text) {
 }
 
 function jobLoaded(c) {
+  if (c.windows) return taskExists(c.task);
   if (c.linux) return spawnSync(c.systemctl, ['--user', 'is-active', '--quiet', c.unit], { stdio: 'ignore' }).status === 0;
   return spawnSync(c.launchctl, ['print', c.target], { stdio: 'ignore' }).status === 0;
 }
@@ -471,6 +484,21 @@ async function kickstart(c) {
   }
   // systemd's restart, like kickstart -k, returns once the old one is gone
   // and the new one started.
+  if (c.windows) {
+    // End, then run: Task Scheduler has no restart of its own.
+    try {
+      for (const a of restartArgs(c.task)) {
+        try {
+          schtasks(a);
+        } catch (e) {
+          if (a[0] === '/Run') throw e; // /End fails when it isn't running
+        }
+      }
+    } catch (e) {
+      throw new Fail(`${restartCommand(c)} failed: ${String(e.stderr || e.message).trim()}`);
+    }
+    return;
+  }
   const [cmd, args] = c.linux ? [c.systemctl, ['--user', 'restart', c.unit]] : [c.launchctl, ['kickstart', '-k', c.target]];
   const r = await new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -763,7 +791,10 @@ function snapshotHead(c, g, dest) {
   const tar = path.join(dest, '.snapshot.tar');
   git(g.root, ['archive', '--format=tar', `--output=${tar}`, 'HEAD', '--', ...present]);
   const strip = g.prefix.split('/').filter(Boolean).length;
-  const r = spawnSync('tar', ['-xf', tar, '-C', dest, '--strip-components', String(strip)], { encoding: 'utf8' });
+  // Windows' own bsdtar by its full path: a GNU tar on the PATH (Git's)
+  // reads C:\ as a remote host.
+  const tarBin = WINDOWS ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+  const r = spawnSync(tarBin, ['-xf', tar, '-C', dest, '--strip-components', String(strip)], { encoding: 'utf8' });
   fs.rmSync(tar, { force: true });
   if (r.status !== 0) throw new Fail(`Couldn't unpack the snapshot: ${r.stderr.trim()}`);
 }
@@ -856,7 +887,7 @@ async function smoke(c, id) {
   const fd = fs.openSync(out, 'a');
   const child = spawn(process.execPath, [path.join(root, 'src', 'main.ts')], {
     cwd: root,
-    detached: true, // its own process group, so it can be stopped whole
+    detached: !WINDOWS, // its own process group, so it can be stopped whole (a tree kill on Windows)
     stdio: ['ignore', fd, fd],
     env: cleanEnv({
       THREADBEAR_HOME: home,
@@ -878,7 +909,8 @@ async function smoke(c, id) {
   const gone = new Promise((r) => child.once('exit', (code, signal) => r((exited = { code, signal }))));
   const kill = (sig) => {
     try {
-      process.kill(-child.pid, sig);
+      if (WINDOWS) spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      else process.kill(-child.pid, sig);
     } catch {
       // already gone
     }
@@ -929,6 +961,7 @@ async function smoke(c, id) {
 // ---------------------------------------------------------------- restart and health
 
 function restartCommand(c) {
+  if (c.windows) return restartCommandText(c.task);
   return c.linux ? `systemctl --user restart ${c.unit}` : `launchctl kickstart -k ${c.target}`;
 }
 
@@ -1190,7 +1223,7 @@ async function wentWrong(c, id, before, r, waitMs) {
         console.error(e.message);
       }
     } else {
-      console.error(LINUX ? 'Restart it with its label: systemctl --user restart <label>.service' : `Restart it with its label: launchctl kickstart -k gui/${process.getuid()}/<label>`);
+      console.error(WINDOWS ? 'Restart its Scheduled Task, in the Threadbear folder of Task Scheduler.' : LINUX ? 'Restart it with its label: systemctl --user restart <label>.service' : `Restart it with its label: launchctl kickstart -k gui/${process.getuid()}/<label>`);
     }
   } else {
     console.error('There is no earlier release to go back to.');

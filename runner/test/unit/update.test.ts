@@ -1055,7 +1055,10 @@ test("a build's own checks are no more than tb land's: the same steps, command a
   const deploySteps = fs.readFileSync(new URL('../../scripts/deploy-steps.mjs', import.meta.url), 'utf8');
   const deploy = fs.readFileSync(new URL('../../scripts/deploy.mjs', import.meta.url), 'utf8');
   assert.match(deploySteps, /step\(name, checkSh, \['--runner'\]/);
-  assert.match(deploySteps, /step\('Unit tests', c\.npm, \['test'\]/);
+  // Off Windows; there it runs less (test-windows.mjs leaves out the files
+  // known to fail there), which a landing's full run still covers.
+  assert.match(deploySteps, /: \[c\.npm, \['test'\]\];/);
+  assert.match(deploySteps, /step\('Unit tests', \.\.\.suite, opts, io\)/);
   assert.match(deploy, /step\('Typecheck', c\.npm, \['run', 'typecheck'\]/);
 });
 

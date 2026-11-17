@@ -71,3 +71,11 @@ test("a supervised runner stops when launch.mjs asks over IPC (Windows' stop)", 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("launch.mjs takes the Windows task's --home, --port and --log, and nothing else", async () => {
+  // @ts-expect-error launch.mjs has no types
+  const { launchArgs } = await import('../../launch.mjs');
+  assert.deepEqual(launchArgs(['--home', 'C:\\x y\\Threadbear', '--port', '8899', '--log', 'C:\\l.log', '--other', 'v']), { home: 'C:\\x y\\Threadbear', port: '8899', log: 'C:\\l.log' });
+  assert.deepEqual(launchArgs([]), {});
+  assert.deepEqual(launchArgs(['--home']), {});
+});

@@ -168,13 +168,31 @@ export function markBootClean(dir, at, pid = process.pid) {
   return true;
 }
 
+// Where log() writes: stderr, which launchd and systemd send to the
+// runner's log file. On Windows the task has nowhere for it to go, so
+// --log names the file (launchArgs).
+let logFd = 2;
+
+// The supervisor's own arguments, which only the Windows task passes: a
+// Scheduled Task's action has no environment of its own, so the data dir
+// and port come as --home and --port and go into the environment the
+// runners inherit, and --log is where output goes (see logFd).
+export function launchArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i++) {
+    const k = argv[i];
+    if ((k === '--home' || k === '--port' || k === '--log') && argv[i + 1] !== undefined) out[k.slice(2)] = argv[++i];
+  }
+  return out;
+}
+
 function log(level, msg, extra) {
   // Same line format as the runner's log (src/log.ts); launchd sends
   // stderr to the runner's log file. Written straight to the fd so a line
   // logged from the 'exit' handler isn't lost.
   const line = `${new Date().toISOString()} ${level} launch: ${msg}${extra ? ' ' + JSON.stringify(extra) : ''}\n`;
   try {
-    fs.writeSync(2, line);
+    fs.writeSync(logFd, line);
   } catch {
     // no stderr to write to
   }
@@ -267,6 +285,13 @@ function codesignVerifies(app) {
 // (code 1) and launchd starts it again, as before handovers; with a
 // draining child still running it tries again itself after CRASH_RETRY_MS.
 async function main() {
+  const given = launchArgs(process.argv.slice(2));
+  if (given.home) process.env.THREADBEAR_HOME = given.home;
+  if (given.port) process.env.THREADBEAR_PORT = given.port;
+  if (given.log) {
+    fs.mkdirSync(path.dirname(given.log), { recursive: true });
+    logFd = fs.openSync(given.log, 'a');
+  }
   // Exit code 0 isn't a failed start to launchd; KeepAlive starts it again.
   if (takeStagedApp(process.env.THREADBEAR_RUNNER_APP, codesignVerifies)) process.exit(0);
   const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -315,7 +340,7 @@ async function main() {
     const proc = spawn(process.execPath, [path.join(root, 'src', 'main.ts')], {
       cwd: root,
       env: { ...process.env, THREADBEAR_SUPERVISED: '1' },
-      stdio: ['ignore', 'pipe', 'inherit', 'ipc'],
+      stdio: ['ignore', 'pipe', logFd === 2 ? 'inherit' : logFd, 'ipc'],
     });
     const boot = plan.state.boots.at(-1);
     boot.pid = proc.pid;
@@ -333,7 +358,8 @@ async function main() {
     // Forwarded unchanged; only scanned for the listening line.
     let partial = '';
     proc.stdout.on('data', (chunk) => {
-      process.stdout.write(chunk);
+      if (logFd === 2) process.stdout.write(chunk);
+      else fs.writeSync(logFd, chunk);
       if (child.listened) return;
       partial += chunk.toString('utf8');
       if (LISTENING_LINE.test(partial)) listening(child);
