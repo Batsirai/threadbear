@@ -51,13 +51,21 @@ if [ "${1:-}" = "--give-back" ]; then
     thread/borrow-*|"") ;;
     *) echo "$dir is on $current, not a borrowed branch: it's someone else's now, so it wasn't given back." >&2; exit 1 ;;
   esac
+  # Landed means on main, or on it by patch: a group check in `tb land`
+  # rebases the branch again before main moves, so what's on main can be the
+  # same changes under new ids (17 Nov, slot-32). `git cherry` marks each
+  # commit of HEAD's that main has no equal of with "+".
   if ! git -C "$dir" merge-base --is-ancestor HEAD main; then
-    echo "$dir has commits that aren't on main; land them first." >&2
-    exit 1
+    unlanded="$(git -C "$dir" cherry main HEAD)" || { echo "Couldn't compare $dir with main." >&2; exit 1; }
+    if printf '%s\n' "$unlanded" | grep -q '^+'; then
+      echo "$dir has commits that aren't on main; land them first." >&2
+      exit 1
+    fi
   fi
   branch="$(git -C "$dir" symbolic-ref -q --short HEAD || true)"
   git -C "$dir" checkout -q --detach
-  # Only the branch this script made; it's all on main (checked above).
+  # Only the branch this script made; it's all on main, or on it by patch
+  # (checked above).
   case "$branch" in thread/borrow-*) git -C "$MAIN" branch -q -D "$branch" ;; esac
   git -C "$MAIN" worktree lock --reason "$SPARE" "$dir"
   echo "$dir is a spare again."

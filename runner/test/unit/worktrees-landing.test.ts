@@ -389,6 +389,32 @@ test('a borrowed spare is never given to a new thread until it is given back', a
   assert.equal(after.worktree.path, slot1, 'given back, it is a spare again');
 });
 
+// As on 17 Nov (slot-32): a group check in tb land rebases the branch again
+// before main moves, so main has the borrow's changes under new commit ids.
+test("--give-back takes a borrow landed under new ids, but not one with a commit main hasn't got", async () => {
+  const { main } = makeRepo();
+  addBorrowScript(main);
+  const wt = sh(main, './borrow-worktree.sh 2>/dev/null');
+  const branch = sh(wt, 'git rev-parse --abbrev-ref HEAD');
+  commit(wt, { 'runner/b.ts': '1\n' }, 'Add b');
+  commit(wt, { 'runner/c.ts': '1\n' }, 'Add c');
+  // Another landing went first, then the borrow's commits were replayed on it.
+  commit(main, { 'runner/other.ts': '1\n' }, 'Other landing');
+  sh(main, `git cherry-pick ${branch}~1 ${branch}`);
+  assert.equal(sh(wt, 'git cherry main HEAD'), sh(wt, 'git rev-list --reverse main..HEAD').split('\n').map((c) => `- ${c}`).join('\n'));
+
+  // One more commit that never landed: refused, and the branch is kept.
+  commit(wt, { 'runner/d.ts': '1\n' }, 'Add d');
+  assert.throws(() => sh(main, `./borrow-worktree.sh --give-back ${wt}`), /has commits that aren't on main/);
+  assert.equal(sh(wt, 'git rev-parse --abbrev-ref HEAD'), branch);
+  assert.ok(!isLocked(main, wt));
+
+  sh(wt, 'git reset -q --hard HEAD~1');
+  assert.match(sh(main, `./borrow-worktree.sh --give-back ${wt}`), /is a spare again/);
+  assert.equal(sh(main, `git branch --list '${branch}'`), '');
+  assert.ok(isLocked(main, wt));
+});
+
 test('a thread brought back never carries on in a borrowed worktree made where its own was', async () => {
   const { main } = makeRepo();
   addBorrowScript(main);

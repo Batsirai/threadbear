@@ -478,7 +478,10 @@ A thread started outside the repo borrows one by hand with
 `./borrow-worktree.sh` and gives it back with `--give-back <dir>`. The
 borrowed one is on a branch of its own, `thread/borrow-<slot>-<time>`,
 so `tb land` in it lands it like any thread's (it only lands a `thread/`
-branch); giving it back deletes that branch. Run in a thread, `tb land`
+branch); giving it back deletes that branch. It takes a branch whose
+commits are all on main, by id or by patch (a group check rebases the
+branch again before main moves, so main can have them under new ids),
+and refuses one with any commit main hasn't got. Run in a thread, `tb land`
 refuses another thread's `thread/<id8>` branch: someone else is working
 in that folder (`THREADBEAR_THREAD_ID= tb land` lands it anyway).
 
