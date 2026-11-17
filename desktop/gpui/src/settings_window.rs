@@ -221,8 +221,78 @@ fn bind_sidebar_keys(cx: &mut App) {
     });
 }
 
+/// The app, for a section's bear button: sections are drawn by free
+/// functions that have only the `App`.
+struct SettingsApp(WeakEntity<Threadbear>);
+impl Global for SettingsApp {}
+
+/// Starts a thread about a section, in the main window (`start_thread_about`).
+fn start_thread_about(title: &str, cx: &mut App) {
+    let Some(app) = cx.try_global::<SettingsApp>().and_then(|a| a.0.upgrade()) else { return };
+    let main = app.read(cx).main_window;
+    let words = format!("About Threadbear's {title} settings: ");
+    cx.activate(true);
+    main.update(cx, |_, window, cx| app.update(cx, |app, cx| app.start_thread_about(words, window, cx))).ok();
+}
+
+/// A section's bear button, at the end of its heading: start a thread about
+/// it (Mike, 17 Nov, in place of "Ask your agent to ..." in its ⓘ).
+fn thread_button(id: &str, title: &str, cx: &App) -> AnyElement {
+    let tip = format!("Start a thread about {title}");
+    let title = title.to_owned();
+    let (faint, fg) = (style::secondary_text(cx), cx.theme().foreground);
+    div()
+        .id(SharedString::from(format!("{id}-thread")))
+        .test_support()
+        .a11y_role(Role::Button)
+        .aria_label(tip.clone())
+        .tip(tip)
+        .cursor_pointer()
+        .p(px(2.))
+        .rounded(px(4.))
+        .text_color(faint)
+        .hover(move |s| s.text_color(fg))
+        .on_click(move |_, _, cx| start_thread_about(&title, cx))
+        .child(icons::symbol("bear.plus").with_size(px(17.)))
+        .into_any_element()
+}
+
+/// A section's ⓘ: what it is, then a button to start a thread about it.
+fn section_info(id: &str, title: &str, about: &str, cx: &App) -> AnyElement {
+    use gpui_kit::component::popover::Popover;
+    let secondary = style::secondary_text(cx);
+    let (about, title) = (SharedString::from(about.to_owned()), title.to_owned());
+    let trigger_tip = about.clone();
+    let button_id = SharedString::from(format!("{id}-info-thread"));
+    Popover::new(ElementId::Name(SharedString::from(format!("{id}-info"))))
+        .anchor(gpui_kit::Anchor::BottomLeft)
+        .trigger(crate::home_page::InfoTrigger::new(SharedString::from(format!("{id}-info")), trigger_tip, secondary))
+        .content(move |_, _, _| {
+            let title = title.clone();
+            v_flex()
+                .w(px(280.))
+                .p(px(12.))
+                .gap(px(10.))
+                .text_size(px(12.))
+                .child(about.clone())
+                .child(
+                    h_flex().child(
+                        Button::new(button_id.clone())
+                            .label("Start a thread about this")
+                            .icon(icons::symbol("bear.plus"))
+                            .small()
+                            .secondary()
+                            .tooltip("Opens a new thread to ask your agent about these settings")
+                            .on_click(move |_, _, cx| start_thread_about(&title, cx)),
+                    ),
+                )
+        })
+        .into_any_element()
+}
+
 impl SettingsWindow {
     fn new(app: WeakEntity<Threadbear>, client: std::sync::Arc<threadbear_client::runner::Client>, instructions_now: Option<StandingInstructions>, tab: Tab, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.set_global(SettingsApp(app.clone()));
         let instructions = cx.new(|cx| TextareaState::new(window, cx).placeholder("For example: I build with React, TypeScript and Convex. Write plainly and briefly."));
         let mut subs = vec![cx.subscribe_in(&instructions, window, |this, _, ev: &InputEvent, _, cx| {
             if matches!(ev, InputEvent::Change) && !this.filling {
@@ -1113,8 +1183,7 @@ fn rows_with_dividers(rows: Vec<AnyElement>, cx: &App) -> AnyElement {
 /// headings from the window's: 10 points on macOS 27.
 const ROW_INSET: f32 = 10.;
 
-fn section_with_body(id: &'static str, title: &str, about: &str, ask: &str, body: AnyElement, cx: &App) -> AnyElement {
-    let info = format!("{about}\n\nAsk your agent to {ask}");
+fn section_with_body(id: &'static str, title: &str, about: &str, _ask: &str, body: AnyElement, cx: &App) -> AnyElement {
     // As a grouped Form draws a section on macOS 27, measured from the Swift
     // window: the heading in line with the rows' words and 11 points over
     // the group, which has no edge, corners of 12 and a fill of 3% of the
@@ -1122,7 +1191,16 @@ fn section_with_body(id: &'static str, title: &str, about: &str, ask: &str, body
     v_flex()
         .id(id)
         .gap(px(11.))
-        .child(h_flex().gap(px(6.)).items_center().px(px(ROW_INSET)).child(div().text_size(px(13.)).line_height(px(16.)).font_semibold().child(title.to_owned())).child(info_tip(SharedString::from(format!("{id}-info")), info, cx)))
+        .child(
+            h_flex()
+                .gap(px(6.))
+                .items_center()
+                .px(px(ROW_INSET))
+                .child(div().text_size(px(13.)).line_height(px(16.)).font_semibold().child(title.to_owned()))
+                .child(section_info(id, title, about, cx))
+                .child(div().flex_1())
+                .child(thread_button(id, title, cx)),
+        )
         .child(div().rounded(px(12.)).bg(style::primary_opacity(cx, 0.03)).child(body))
         .into_any_element()
 }

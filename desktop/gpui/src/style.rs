@@ -227,14 +227,19 @@ pub fn set_font_choice(choice: Font, cx: &mut App) {
     use gpui_kit::component::Theme;
     use std::rc::Rc;
     FONT.store(Font::ALL.iter().position(|f| *f == choice).unwrap_or(0) as u32, Ordering::Relaxed);
-    let family = choice.family(cx);
+    // System is named too, not left out: a config with no family keeps
+    // whatever the theme had, so going back from Monospaced stayed
+    // Monospaced (Mike, 17 Nov). `.SystemUIFont` is GPUI's name for the
+    // system's own, which the kit then resolves to the installed family.
+    let family = choice.family(cx).unwrap_or_else(|| ".SystemUIFont".into());
     let theme = Theme::global_mut(cx);
     let mode = theme.mode;
     for config in [&mut theme.light_theme, &mut theme.dark_theme] {
         let mut changed = (**config).clone();
-        changed.font_family = family.clone();
+        changed.font_family = Some(family.clone());
         *config = Rc::new(changed);
     }
+    theme.font_family = family;
     Theme::change(mode, None, cx);
     bump_look();
 }

@@ -12,6 +12,10 @@ use gpui_kit::component::Icon;
 /// here: the star's shape, filled with the current text colour.
 const STAR_FILLED: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2.5l2.9 6.4 7 .7-5.2 4.7 1.5 6.9L12 17.7l-6.2 3.5 1.5-6.9-5.2-4.7 7-.7z" fill="black"/></svg>"#;
 
+/// A bear's head with a plus: start a thread about this (Settings' sections,
+/// Mike, 17 Nov). Drawn in Lucide's line style to sit with the other icons.
+const BEAR_PLUS: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 7.6A2.6 2.6 0 1 1 8.4 4.6"/><path d="M11.6 4.6A2.6 2.6 0 1 1 14.8 7.6"/><circle cx="10" cy="12" r="6.6"/><circle cx="7.6" cy="10.6" r=".5" fill="black"/><circle cx="12.4" cy="10.6" r=".5" fill="black"/><ellipse cx="10" cy="14.4" rx="1.9" ry="1.4"/><path d="M19.5 15.5v7M16 19h7"/></svg>"#;
+
 /// A filled message bubble distinguishes a board card worked on by this
 /// thread from the outline button that opens another thread.
 const BUBBLE_FILLED: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 3h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7l-5 3V5a2 2 0 0 1 2-2z" fill="black"/></svg>"#;
@@ -87,6 +91,7 @@ pub fn try_symbol(name: &str) -> Option<Icon> {
     let lucide = match name {
         "star" => IconName::Star,
         "star.fill" => return Some(Icon::default().data(STAR_FILLED)),
+        "bear.plus" => return Some(Icon::default().data(BEAR_PLUS)),
         "bubble.left.fill" => return Some(Icon::default().data(BUBBLE_FILLED)),
         "star.slash" => IconName::StarOff,
         "tray" => IconName::Inbox,

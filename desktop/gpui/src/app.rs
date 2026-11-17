@@ -1238,6 +1238,26 @@ impl Threadbear {
         cx.notify();
     }
 
+    /// A Settings section's bear button: a new thread in the main window,
+    /// in front, its box started with what it's about for the person to
+    /// finish and send. Words already in the new-thread box stay, with
+    /// these after them.
+    pub(crate) fn start_thread_about(&mut self, words: String, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
+        self.set_mode(crate::shell::SidebarMode::Inbox, cx);
+        self.new_thread(cx);
+        let composer = self.ensure_new_composer(window, cx);
+        let input = composer.read(cx).input.clone();
+        input.update(cx, |state, cx| {
+            let had = state.value().to_string();
+            let text = if had.trim().is_empty() { words } else { format!("{}\n\n{words}", had.trim_end()) };
+            state.set_value(text, window, cx);
+        });
+        let handle = input.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.notify();
+    }
+
     /// Appearance's accent (`style::Accent`), kept in this app's settings file.
     pub(crate) fn set_accent(&mut self, accent: crate::style::Accent, window: &mut Window, cx: &mut Context<Self>) {
         crate::style::set_accent_choice(accent, cx);

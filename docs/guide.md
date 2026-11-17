@@ -2051,8 +2051,10 @@ for the command to finish before editing the worktree it's using.
 
 The same goes for settings. The Settings window (⌘,) shows what's set and has
 controls for only a few common things, and the ⓘ beside each section says
-what it is and what to ask your agent. Click it to read it, or hover for a
-quick look. Most settings live in `runner.json` in Threadbear's data folder,
+what it is. Click it to read it, or hover for a quick look. The bear with a
+plus at the end of each section's heading (and Start a thread about this,
+under the ⓘ's words) opens a new thread with the section named in its box,
+so you can ask an agent to change it or explain it. Most settings live in `runner.json` in Threadbear's data folder,
 and an agent can change them or set up anything more involved, so ask one
 first. If you edit it by hand and leave it broken (a trailing comma, say),
 the runner won't start until it's fixed, and never writes over it: `tb logs`
