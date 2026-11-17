@@ -895,6 +895,28 @@ pub fn sidebar_selection(cx: &App, active: bool) -> Hsla {
     primary_opacity(cx, if active { 0.08 } else { 0.06 })
 }
 
+/// The status marks' colours: a list panel's rows, the sidebar's Failed
+/// and its spinner and tick, the sub-agents' marks. From Okabe and Ito's
+/// palette, which a red-green colour-blind eye still tells apart (issue #67,
+/// Mike picked "safe for everyone, no setting" on 17 Nov): failed is a rose
+/// rather than red, so it doesn't turn into the needs-you orange for a
+/// deuteranope. Each mark has its own shape too. An error's words keep
+/// `failed`'s red: they're read, not told apart at a glance.
+pub fn status_failed(cx: &App) -> Hsla {
+    pick(cx, rgb_hsla(0xe0457b), rgb_hsla(0xc42a63))
+}
+
+/// A list row's `warning`: Okabe-Ito's yellow, a darker gold on light.
+pub fn status_warning(cx: &App) -> Hsla {
+    pick(cx, rgb_hsla(0xf0e442), rgb_hsla(0x8f7a00))
+}
+
+/// Working and done: Okabe-Ito's sky blue (its blue on light), so neither
+/// leans on the accent, which can be any colour, red included.
+pub fn status_progress(cx: &App) -> Hsla {
+    pick(cx, rgb_hsla(0x56b4e9), rgb_hsla(0x0072b2))
+}
+
 /// Theme.failed.
 pub fn failed(cx: &App) -> Hsla {
     pick(cx, rgb(0xff453a).into(), hsla(0.0, 0.71, 0.46, 1.0))

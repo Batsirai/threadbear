@@ -572,7 +572,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       }
       if (r.note) console.log(r.note);
       if (r.image) console.log(r.image.path);
-      for (const item of r.items ?? []) console.log(`  ${item.tone === 'done' ? '✓' : item.tone === 'failed' ? '✗' : item.tone === 'attention' ? '!' : '·'} ${item.title}${item.detail ? `  ${item.detail}` : ''}`);
+      for (const item of r.items ?? []) console.log(`  ${item.tone === 'done' ? '✓' : item.tone === 'failed' ? '✗' : item.tone === 'attention' ? '!' : item.tone === 'warning' ? '▲' : item.tone === 'working' ? '…' : '·'} ${item.title}${item.detail ? `  ${item.detail}` : ''}`);
       return 0;
     }
     case 'actions': {

@@ -63,6 +63,14 @@ Then('the list row {string} says {string} and {string}', async function (this: T
   });
 });
 
+Then('the list rows {string} have the marks {string}', async function (this: ThreadbearWorld, titles: string, marks: string) {
+  const want = titles.split(' | ').map((t, i) => [t, marks.split(' | ')[i]]);
+  await this.until(`${titles} marked ${marks}`, (d) => {
+    const rows = pane(d)?.list?.flatMap((s) => s.rows) ?? [];
+    return want.every(([title, mark]) => rows.find((r) => r.title === title)?.mark === mark);
+  });
+});
+
 Then('the image panel shows a picture', async function (this: ThreadbearWorld) {
   await this.until('a picture in the image panel', (d) => /^picture \d+x\d+/.test(pane(d)?.image ?? ''));
 });

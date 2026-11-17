@@ -3809,6 +3809,13 @@ The new hero is shorter, and every page now leads with what the app does.
         { title: 'Docs', detail: 'Build failed: no image at /docs/hero.png', path: path.join(root, 'logs/docs-build.txt'), icon: 'globe', tone: 'failed', section: 'This branch', trailing: '20m' },
         { title: 'Local', detail: 'astro dev on port 4321', url: 'http://localhost:4321/', icon: 'laptopcomputer', section: 'Elsewhere' },
         { title: 'Production', detail: 'main, deployed 2 days ago', url: 'https://example.com', icon: 'globe', section: 'Elsewhere', trailing: '2d' },
+        // One row of each tone with no icon of its own, so each shows its
+        // tone's mark (issue #67: a shape per tone, not colour alone).
+        { title: 'Preview sign-in', detail: 'Waiting for you to sign in', tone: 'attention', section: 'Checks' },
+        { title: 'Lint', detail: '3 errors in convex/auth.ts', tone: 'failed', section: 'Checks', trailing: '12s' },
+        { title: 'Bundle size', detail: '212 KB, over the 200 KB budget', tone: 'warning', section: 'Checks' },
+        { title: 'Typecheck', tone: 'working', section: 'Checks', trailing: 'running' },
+        { title: 'Deploy', tone: 'done', section: 'Checks', trailing: '5m' },
       ],
     }];
     site.summary.patches = [{ id: 'deploys', source: 'project', file: path.join(root, '.threadbear/patches/deploys.ts') }];

@@ -268,15 +268,20 @@ impl SidePane {
 
     /// A row with a link or a file opens it the way a highlight does.
     fn list_row(&mut self, item: &PanelItem, index: usize, reserves: bool, thread: &ThreadSummary, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+        // Each tone has its shape (`PanelItem::symbol`) and one of the
+        // colour-blind-safe status colours (issue #67).
         let color = match item.tone_kind() {
             Some("attention") => Some(p.needs_you),
-            Some("failed") => Some(p.failed),
+            Some("failed") => Some(p.status_failed),
+            Some("warning") => Some(p.warning),
+            Some("working") | Some("done") => Some(p.progress),
             _ => None,
         };
         // A patch's detail is usually a sentence, so it gets two lines and keeps its start.
         let mut row = PaneRow::new(SharedString::from(format!("panel-row-{index}")), item.title.clone())
             .icon_opt(item.symbol())
             .tinted(color)
+            .turning(item.tone_kind() == Some("working") && item.icon.as_deref().is_none_or(str::is_empty))
             .reserves_icon(reserves)
             .trailing(item.trailing.clone())
             .trailing_symbol(if item.tone_kind() == Some("done") && item.icon.is_some() { Some("checkmark") } else { None })
@@ -720,7 +725,7 @@ impl SidePane {
                                 sections.push(json!({ "key": heading, "title": heading, "count": 0, "folded": false, "rows": [] }));
                             }
                             let last = sections.last_mut().expect("a section");
-                            let row = json!({ "title": item.title, "trailing": item.trailing, "detail": item.detail, "symbol": item.icon.clone().filter(|i| !i.is_empty()).or_else(|| item.tone_kind().map(str::to_owned)) });
+                            let row = json!({ "title": item.title, "trailing": item.trailing, "detail": item.detail, "symbol": item.icon.clone().filter(|i| !i.is_empty()).or_else(|| item.tone_kind().map(str::to_owned)), "tone": item.tone_kind(), "mark": item.symbol() });
                             last["rows"].as_array_mut().expect("rows").push(row);
                             last["count"] = json!(last["count"].as_i64().unwrap_or(0) + 1);
                         }

@@ -37,6 +37,16 @@ Feature: What a folder's patches give a thread
     And the list panel has the heading "Elsewhere" with the rows "Local | Production"
     And the list row "Pricing" says "12m" and "Waiting on the plan prices"
 
+  # Issue #67: a red-green colour-blind eye can't tell orange from red, so
+  # each tone has a shape of its own as well as its colour. The Swift app
+  # is frozen and keeps its circles.
+  @panel.list @swift-pending
+  Scenario: Each tone in a list panel has a mark of its own
+    When I open the thread "Rebuild the three landing pages"
+    And I show the "deploys.previews" section of the pane
+    Then the list panel has the heading "Checks" with the rows "Preview sign-in | Lint | Bundle size | Typecheck | Deploy"
+    And the list rows "Preview sign-in | Lint | Bundle size | Typecheck | Deploy" have the marks "exclamationmark.circle.fill | xmark.diamond.fill | exclamationmark.triangle.fill | circle.dashed | checkmark"
+
   @panel.image
   Scenario: An image panel draws its picture
     When I open the thread "Pick a colour for the new Share button"

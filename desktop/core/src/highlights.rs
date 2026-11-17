@@ -1198,7 +1198,8 @@ pub struct PanelItem {
     pub path: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub icon: Option<String>,
-    /// "attention", "failed" or "done"; anything else is plain.
+    /// "attention", "failed", "warning", "working" or "done"; anything else
+    /// is plain.
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub tone: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
@@ -1209,17 +1210,24 @@ pub struct PanelItem {
 
 impl PanelItem {
     pub fn tone_kind(&self) -> Option<&str> {
-        self.tone.as_deref().filter(|t| matches!(*t, "attention" | "failed" | "done"))
+        self.tone.as_deref().filter(|t| matches!(*t, "attention" | "failed" | "warning" | "working" | "done"))
     }
 
     /// The row's own icon, else one for its tone, else none (`ListPanel.icon`).
+    /// Each tone has a shape of its own, not just a colour, so a red-green
+    /// colour-blind eye can tell them apart (issue #67, Mike picked "safe for
+    /// everyone, no setting" on 17 Nov): a circle needs you, a diamond
+    /// failed, a triangle warns, a dashed circle (drawn turning) is working
+    /// and a tick is done.
     pub fn symbol(&self) -> Option<&str> {
         if let Some(icon) = self.icon.as_deref().filter(|i| !i.is_empty()) {
             return Some(icon);
         }
         match self.tone_kind() {
-            Some("attention") => Some("exclamationmark.circle"),
-            Some("failed") => Some("xmark.circle"),
+            Some("attention") => Some("exclamationmark.circle.fill"),
+            Some("failed") => Some("xmark.diamond.fill"),
+            Some("warning") => Some("exclamationmark.triangle.fill"),
+            Some("working") => Some("circle.dashed"),
             Some("done") => Some("checkmark"),
             _ => None,
         }
@@ -1608,16 +1616,22 @@ mod tests {
             {"title": "Build", "tone": "failed", "path": "/w/site/build.log"},
             {"title": "Deploy", "tone": "done"},
             {"title": "Odd", "tone": "sparkly"},
-            {"detail": "no title"}
+            {"detail": "no title"},
+            {"title": "Bundle", "tone": "warning"},
+            {"title": "Typecheck", "tone": "working"}
         ], "note": null}));
         let items = render.items.expect("items");
-        assert_eq!(items.len(), 6, "a row with no title has one that's empty");
+        assert_eq!(items.len(), 8, "a row with no title has one that's empty");
         assert_eq!(items[0].symbol(), Some("arrow.triangle.branch"));
-        assert_eq!(items[1].symbol(), Some("exclamationmark.circle"));
-        assert_eq!(items[2].symbol(), Some("xmark.circle"));
+        // One shape per tone, so they don't rest on colour alone (issue #67).
+        assert_eq!(items[1].symbol(), Some("exclamationmark.circle.fill"));
+        assert_eq!(items[2].symbol(), Some("xmark.diamond.fill"));
         assert_eq!(items[3].symbol(), Some("checkmark"));
         assert_eq!(items[4].symbol(), None, "a tone this app doesn't know is plain");
         assert_eq!(items[4].tone_kind(), None);
+        assert_eq!(items[6].symbol(), Some("exclamationmark.triangle.fill"));
+        assert_eq!(items[7].symbol(), Some("circle.dashed"));
+        assert_eq!(items[7].tone_kind(), Some("working"));
         assert!(render.note.is_none());
     }
 

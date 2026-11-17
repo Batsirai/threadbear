@@ -453,7 +453,10 @@ pub(crate) struct Palette {
     pub(crate) secondary: Hsla,
     pub(crate) faint: Hsla,
     pub(crate) accent: Hsla,
+    /// The status marks' failed rose and working-and-done blue
+    /// (`style::status_failed`), safe for a red-green colour-blind eye.
     pub(crate) failed: Hsla,
+    pub(crate) progress: Hsla,
     pub(crate) hover: Hsla,
     pub(crate) selected: Hsla,
     pub(crate) tile: Hsla,
@@ -476,7 +479,8 @@ pub(crate) fn palette(cx: &App) -> Palette {
         secondary: style::secondary_text(cx),
         faint: style::faint_text(cx),
         accent: style::accent(cx),
-        failed: style::failed(cx),
+        failed: style::status_failed(cx),
+        progress: style::status_progress(cx),
         hover: style::sidebar_hover(cx),
         selected: style::sidebar_selected(cx),
         tile: style::primary_opacity(cx, 0.08),
@@ -2079,7 +2083,7 @@ impl Threadbear {
                 Tile::Folder if t.runner_id.is_some() => "runner".to_string(),
                 Tile::Folder => "folder".to_string(),
             };
-            let mark = if plain.done { Some("tick") } else if plain.unread { Some("dot") } else { None };
+            let mark = if plain.status == rows::RowStatus::Failed { Some("failed") } else if plain.done { Some("tick") } else if plain.unread { Some("dot") } else { None };
             let finished_shown = key != "inbox" && key != "starred";
             let subagents: Vec<Value> = if matches!(key, "hibernating" | "archived") {
                 vec![]
@@ -2276,9 +2280,25 @@ fn render_tile(t: &ThreadSummary, look: &RowLook, behind: Hsla, project_icon: Op
         (Tile::Letter(_), Some(ProjectIcon { symbol: Some(symbol), .. })) if icons::try_symbol(symbol).is_some() => tinted(icons::symbol(symbol).with_size(px(scaled(14.))).text_color(p.secondary).into_any_element()),
         (Tile::Letter(letter), _) => tinted(div().text_size(px(scaled(14.))).font_semibold().text_color(p.secondary).child(letter.clone()).into_any_element()),
     };
-    let mark: Option<AnyElement> = if look.done {
+    let mark: Option<AnyElement> = if look.status == rows::RowStatus::Failed {
+        // Its last turn failed: a diamond where the dot would be, so it reads
+        // apart from needs you by shape, not just by its colour (issue #67).
+        Some(
+            div()
+                .id(SharedString::from(format!("failed-{}", t.id)))
+                .tip("The last turn failed")
+                .absolute()
+                .left(px(-(LEADING + 10.) / 2. - 1.))
+                .top_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .child(icon("xmark.diamond.fill", 10., p.failed))
+                .into_any_element(),
+        )
+    } else if look.done {
         // Finished with nothing needed: a tick where the dot would be.
-        Some(div().absolute().left(px(-(LEADING + 10.) / 2. - 1.)).top_0().bottom_0().flex().items_center().child(icon("checkmark", 10., p.accent)).into_any_element())
+        Some(div().absolute().left(px(-(LEADING + 10.) / 2. - 1.)).top_0().bottom_0().flex().items_center().child(icon("checkmark", 10., p.progress)).into_any_element())
     } else if look.unread {
         Some(
             div()
@@ -2378,8 +2398,8 @@ fn trailing_words(trailing: &rows::Trailing, id: String, p: &Palette) -> AnyElem
             .gap(px(5.))
             .text_size(meta).line_height(px(15.))
             .font_medium()
-            .text_color(p.accent)
-            .child(crate::spinner::TurningArc::new(12., p.accent).layered())
+            .text_color(p.progress)
+            .child(crate::spinner::TurningArc::new(12., p.progress).layered())
             .child(text)
             .into_any_element(),
         TrailingKind::Background => h_flex()

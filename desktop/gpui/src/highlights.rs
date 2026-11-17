@@ -1013,6 +1013,11 @@ pub(crate) struct Palette {
     pub accent: Hsla,
     pub failed: Hsla,
     pub needs_you: Hsla,
+    /// The status marks' colours (`style::status_failed` and on): a row's
+    /// failed, warning, working and done, apart from an error's red words.
+    pub status_failed: Hsla,
+    pub warning: Hsla,
+    pub progress: Hsla,
     pub card: Hsla,
     pub card_border: Hsla,
 }
@@ -1030,6 +1035,9 @@ pub(crate) fn palette(cx: &App) -> Palette {
         accent: style::accent(cx),
         failed: style::failed(cx),
         needs_you: style::needs_you_text(cx),
+        status_failed: style::status_failed(cx),
+        warning: style::status_warning(cx),
+        progress: style::status_progress(cx),
         card: style::primary_opacity(cx, 0.05),
         card_border: style::card_border(cx),
     }
@@ -1080,6 +1088,9 @@ pub(crate) struct PaneRow {
     pub drag: Option<String>,
     /// A Files row's preview, drawn in place of its symbol (file_thumbs.rs).
     pub thumb: Option<AnyElement>,
+    /// Its symbol turns, as a list row whose tone is `working` (the sidebar's
+    /// arc, so working looks the same in both).
+    pub turning: bool,
 }
 
 impl PaneRow {
@@ -1103,6 +1114,7 @@ impl PaneRow {
             on_menu: None,
             drag: None,
             thumb: None,
+            turning: false,
         }
     }
 
@@ -1188,6 +1200,11 @@ impl PaneRow {
         self
     }
 
+    pub(crate) fn turning(mut self, turning: bool) -> Self {
+        self.turning = turning;
+        self
+    }
+
     pub(crate) fn thumb(mut self, thumb: Option<AnyElement>) -> Self {
         self.thumb = thumb;
         self
@@ -1229,7 +1246,11 @@ impl PaneRow {
             .py(px(6.))
             .rounded(px(CORNER))
             .when_some(self.thumb, |s, thumb| s.child(thumb))
-            .when_some(symbol, |s, symbol| s.child(div().w(px(16.)).flex_none().flex().justify_center().pt(px(1.)).child(icon(&symbol, 12., self.icon_color.unwrap_or(p.icon)))))
+            .when_some(symbol, |s, symbol| {
+                let color = self.icon_color.unwrap_or(p.icon);
+                let mark = if self.turning { crate::spinner::TurningArc::new(12., color).layered().into_any_element() } else { icon(&symbol, 12., color).into_any_element() };
+                s.child(div().w(px(16.)).flex_none().flex().justify_center().pt(px(1.)).child(mark))
+            })
             .when(needs_blank_icon, |s| s.child(div().w(px(16.)).flex_none()))
             .child(body);
         let row = row.when(self.on_click.is_some(), |s| s.hover(move |st| st.bg(hover)).cursor_pointer());
@@ -1468,7 +1489,7 @@ impl SidePane {
                     let (symbol, color) = match s.status.as_str() {
                         "running" => ("circle.dashed", None),
                         "completed" => ("checkmark", None),
-                        "failed" => ("xmark", Some(p.failed)),
+                        "failed" => ("xmark", Some(p.status_failed)),
                         _ => ("minus", None),
                     };
                     let id = thread.id.clone();
@@ -1504,7 +1525,7 @@ impl SidePane {
                 for row in shown {
                     let color = match row.state {
                         core::StartedState::NeedsYou => Some(p.accent),
-                        core::StartedState::Failed => Some(p.failed),
+                        core::StartedState::Failed => Some(p.status_failed),
                         _ => None,
                     };
                     let (id, title) = (row.thread.id.clone(), row.thread.title.clone());

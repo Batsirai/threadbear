@@ -37,6 +37,14 @@ const LOCK_OPEN: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
 /// low, and beside the Swift card's it read as a different mark.
 const CHECKMARK_TALL: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13.5l5 5.5L20 3.5"/></svg>"#;
 
+/// The list panels' status shapes (issue #67): filled, with the mark cut out,
+/// so the shape reads at 13 px whatever its colour. A circle for needs you, a
+/// diamond for failed and a triangle for a warning, so a red-green
+/// colour-blind eye tells them apart by shape, not by orange against red.
+const CIRCLE_ALERT_FILLED: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><mask id="m"><rect width="24" height="24" fill="white"/><path d="M12 6.8v6.4" stroke="black" stroke-width="2.6" stroke-linecap="round"/><circle cx="12" cy="17.2" r="1.55" fill="black"/></mask><circle cx="12" cy="12" r="10.5" fill="black" mask="url(#m)"/></svg>"#;
+const DIAMOND_X_FILLED: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><mask id="m"><rect width="24" height="24" fill="white"/><path d="M8.9 8.9l6.2 6.2M15.1 8.9l-6.2 6.2" stroke="black" stroke-width="2.5" stroke-linecap="round"/></mask><path d="M12 .8L23.2 12 12 23.2.8 12z" fill="black" stroke="black" stroke-width="1.2" stroke-linejoin="round" mask="url(#m)"/></svg>"#;
+const TRIANGLE_ALERT_FILLED: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><mask id="m"><rect width="24" height="24" fill="white"/><path d="M12 9.2v5.2" stroke="black" stroke-width="2.5" stroke-linecap="round"/><circle cx="12" cy="18" r="1.45" fill="black"/></mask><path d="M12 2.2L23 21.4H1z" fill="black" stroke="black" stroke-width="1.6" stroke-linejoin="round" mask="url(#m)"/></svg>"#;
+
 /// The done card's tick (`checkmark` at 14 pt): about 12 by 12 at 16.
 pub fn tall_checkmark() -> Icon {
     Icon::default().data(CHECKMARK_TALL)
@@ -201,6 +209,9 @@ pub fn try_symbol(name: &str) -> Option<Icon> {
         "doc.plaintext" => IconName::FileText,
         "safari" => IconName::Compass,
         "exclamationmark.triangle" => IconName::TriangleAlert,
+        "exclamationmark.triangle.fill" => return Some(Icon::default().data(TRIANGLE_ALERT_FILLED)),
+        "exclamationmark.circle.fill" => return Some(Icon::default().data(CIRCLE_ALERT_FILLED)),
+        "xmark.diamond.fill" => return Some(Icon::default().data(DIAMOND_X_FILLED)),
         "bolt.horizontal" | "bolt.horizontal.circle" => IconName::Zap,
         "lock" => IconName::Lock,
         "lock.open" => return Some(Icon::default().data(LOCK_OPEN)),
