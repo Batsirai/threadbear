@@ -17,11 +17,13 @@ Feature: Files opened in the side pane
   # The runner restarts onto main several times a day, and the pane reads
   # every file through it. A link Mike clicked on an ask's card during one
   # (17 Nov) left the pane saying "Not connected" for good, which looked like
-  # the link doing nothing. GPUI's only, as the Swift app is frozen.
+  # the link doing nothing. GPUI's only, as the Swift app is frozen. Gone
+  # for 10 seconds: Windows CI took longer than 4 to get from losing the
+  # runner to the click, so the runner was back and the note never showed.
   @file.host @swift-pending
   Scenario: A file clicked while the runner restarts opens once it's back
     When I open the thread "Rebuild the three landing pages"
-    And the runner restarts and is gone for 4 seconds
+    And the runner restarts and is gone for 10 seconds
     And the app has lost the runner
     And I click the highlight "pricing-before.png"
     Then the pane's note reads "Waiting for the runner. This opens once it's back."
