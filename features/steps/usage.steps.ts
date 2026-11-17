@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import type { Dump } from '../support/driver.ts';
 import type { ThreadbearWorld } from '../support/world.ts';
 
-type Login = { name: string; provider?: string | null; status?: string | null; signInEnds?: string | null; meters: { title: string; left: string; verdict?: string | null }[]; more: string[] };
+type Login = { name: string; provider?: string | null; status?: string | null; logo?: string; line?: string | null; ring?: number | null; why?: string | null; signInEnds?: string | null; meters: { title: string; left: string; verdict?: string | null }[]; more: string[] };
 type Usage = {
   shown: boolean;
   icon: { percent: number; login?: string | null; tip: string; dot?: boolean };
@@ -74,6 +74,28 @@ Then('in the {string} card, {string} has {string}', async function (this: Thread
 
 Then('in the {string} card, {string} says {string}', async function (this: ThreadbearWorld, card: string, name: string, status: string) {
   await this.until(`${name} in ${card} saying ${status}`, (d) => login(d, card, name)?.status === status);
+});
+
+Then('in the {string} card, {string} has the {string} logo and a ring at {int}%', async function (this: ThreadbearWorld, card: string, name: string, logo: string, ring: number) {
+  await this.until(`${name} in ${card} with the ${logo} logo and ${ring}%`, (d) => login(d, card, name)?.logo === logo && login(d, card, name)?.ring === ring);
+});
+
+Then('in the {string} card, {string} has the {string} logo and no ring', async function (this: ThreadbearWorld, card: string, name: string, logo: string) {
+  await this.until(`${name} in ${card} with the ${logo} logo and no ring`, (d) => login(d, card, name)?.logo === logo && login(d, card, name)?.ring == null);
+});
+
+Then("in the {string} card, {string}'s line starts {string}", async function (this: ThreadbearWorld, card: string, name: string, start: string) {
+  await this.until(`${name}'s line in ${card} starting "${start}"`, (d) => Boolean(login(d, card, name)?.line?.startsWith(start)));
+});
+
+Then('in the {string} card, {string} says why: {string}', async function (this: ThreadbearWorld, card: string, name: string, why: string) {
+  await this.until(`${name} in ${card} saying ${why}`, (d) => login(d, card, name)?.why === why);
+});
+
+/** A Grok login with no usage, as the runner lists one it can't read a limit for. */
+When('a Grok login with no reading is added', async function (this: ThreadbearWorld) {
+  const { accounts } = answer(await this.app.do({ cmd: 'mock', method: 'accounts', params: {} })) as { accounts: object[] };
+  await this.app.do({ cmd: 'mock', method: 'accounts', params: { accounts: [...accounts, { id: 'grok-main', provider: 'grok', title: 'Grok', configDir: '~/.grok', models: [] }] } });
 });
 
 Then("the {string} card names each login's provider: {string}", async function (this: ThreadbearWorld, card: string, logins: string) {

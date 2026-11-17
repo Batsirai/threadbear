@@ -24,6 +24,19 @@ Feature: The Usage panel and its honey pot
     And in the "Claude" card, "alex+4@example.com" says "Limit reached"
     And the "Personal" card names each login's provider: "Codex: alex@example.com, Claude: alex+3@example.com"
 
+  # Option B of Mike's 17 Nov review: a card per login with its logo, a ring
+  # with its week, and one line where "Limit reached" sat over "Used up". A
+  # login with no number says why. The frozen Swift app has none of it.
+  @usage.pools @swift-pending
+  Scenario: Each login's card has its logo, a ring and one line saying how it stands
+    When I click the honey pot in the activity bar
+    Then in the "Claude" card, "alex@example.com" has the "claude" logo and a ring at 78%
+    And in the "Claude" card, "alex+4@example.com" has the "claude" logo and a ring at 31%
+    And in the "Claude" card, "alex+4@example.com"'s line starts "Used up, back"
+    When a Grok login with no reading is added
+    Then in the "Not in a pool" card, "Grok" has the "grok" logo and no ring
+    And in the "Not in a pool" card, "Grok" says why: "Grok reports its limit only from its background service"
+
   @usage.pools
   Scenario: Weekly Fable can be switched off in the panel's settings, and stays off
     When I click the honey pot in the activity bar

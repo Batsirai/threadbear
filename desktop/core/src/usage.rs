@@ -1233,6 +1233,90 @@ pub struct LoginRow {
     pub meters: Vec<Meter>,
     /// Old numbers' "Numbers from 6:02 am", then the extra lines.
     pub more: Vec<String>,
+    /// "claude", "codex", "grok": the logo on its card.
+    pub provider: String,
+    /// The ring at the right of its card: the week's room, else the tighter
+    /// window's. None with no reading.
+    pub ring: Option<f64>,
+    /// The one line under its name: "Used up, back 8 am" in red rather than
+    /// "Limit reached" over it (Mike, 17 Nov), else the week's verdict.
+    pub headline: Option<Verdict>,
+    /// The 5-hour window, as a chip at the card's foot.
+    pub five_hour: Option<Chip>,
+    /// No reading: why, in place of "Nothing known yet".
+    pub unknown: Option<Unknown>,
+}
+
+/// A small window's room as a chip: "5-hour 91%", coloured as its meter's
+/// words would be, with the meter's tip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chip {
+    pub text: String,
+    pub tone: Tone,
+    pub tip: String,
+}
+
+/// Why a login has no number, short, and the longer why for its tip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Unknown {
+    pub text: String,
+    pub tip: String,
+}
+
+/// Why there's no reading, by provider. Claude and Codex report theirs on
+/// every turn, so one with none hasn't run a turn here. Grok's CLI shows its
+/// plan's limit only through its background service (`grok usage`), which
+/// Threadbear doesn't run; OpenCode's own models bill a balance.
+pub fn unknown_reason(provider: &str, provider_name: &str) -> Unknown {
+    let (text, tip) = match provider {
+        "claude" | "codex" | "" => ("No turn has run on it yet".to_owned(), "Its limit shows after its first turn here".to_owned()),
+        "grok" => (
+            "Grok reports its limit only from its background service".to_owned(),
+            "Threadbear reads each login's limit from what its turns report. Grok's turns don't carry it, and its CLI shows it only through Grok's background service".to_owned(),
+        ),
+        "opencode" => ("Pay as you go, no weekly limit".to_owned(), "OpenCode's own models spend a balance rather than a weekly limit, and its turns don't report either".to_owned()),
+        _ => (format!("{provider_name} doesn't report its limit"), "Threadbear reads each login's limit from what its turns report".to_owned()),
+    };
+    Unknown { text, tip }
+}
+
+/// The card's one line: signed out or ended first, then the most pressing
+/// main window's verdict (used up, runs out early), then a block with no
+/// reset to name, then the week's verdict (or the only window's).
+fn headline(status: Option<LoginStatus>, meters: &[Meter]) -> Option<Verdict> {
+    match status {
+        Some(LoginStatus::PlanEnded) => return Some(Verdict { text: LoginStatus::PlanEnded.words().to_owned(), tone: Tone::Fine }),
+        Some(LoginStatus::SignedOut) => return Some(Verdict { text: LoginStatus::SignedOut.words().to_owned(), tone: Tone::Out }),
+        Some(LoginStatus::NothingKnown) => return None,
+        _ => {}
+    }
+    let main: Vec<&Meter> = meters.iter().filter(|m| m.kind == "five_hour" || m.kind == "weekly").collect();
+    for tone in [Tone::Out, Tone::Short] {
+        if let Some(v) = main.iter().filter_map(|m| m.verdict.as_ref()).find(|v| v.tone == tone) {
+            return Some(v.clone());
+        }
+    }
+    if status == Some(LoginStatus::LimitReached) {
+        return Some(Verdict { text: LoginStatus::LimitReached.words().to_owned(), tone: Tone::Out });
+    }
+    main.iter().find(|m| m.kind == "weekly").or(main.first()).and_then(|m| m.verdict.clone())
+}
+
+fn ring(meters: &[Meter]) -> Option<f64> {
+    let main = || meters.iter().filter(|m| m.kind == "five_hour" || m.kind == "weekly");
+    main().find(|m| m.kind == "weekly").or_else(|| main().min_by(|a, b| a.remaining.total_cmp(&b.remaining))).map(|m| m.remaining)
+}
+
+fn five_hour_chip(meters: &[Meter]) -> Option<Chip> {
+    let m = meters.iter().find(|m| m.kind == "five_hour")?;
+    let tone = if m.remaining < 1. {
+        Tone::Out
+    } else if m.short || m.verdict.as_ref().is_some_and(|v| v.tone == Tone::Short) {
+        Tone::Short
+    } else {
+        Tone::Fine
+    };
+    Some(Chip { text: format!("{} {}", m.title, percent(m.remaining)), tone, tip: m.tip.clone() })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1370,7 +1454,7 @@ pub fn cards_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Op
                     .iter()
                     .map(|section| CardSection {
                         title: mixed.then(|| name(&section.provider)),
-                        logins: section.accounts.iter().map(|a| login_row(a, own.get(&a.id).map(String::as_str), stats, show_model_weeks, now, zone)).collect(),
+                        logins: section.accounts.iter().map(|a| login_row(a, &name(&section.provider), own.get(&a.id).map(String::as_str), stats, show_model_weeks, now, zone)).collect(),
                     })
                     .collect(),
             }
@@ -1378,7 +1462,7 @@ pub fn cards_named<Tz: TimeZone>(pools: &[Pool], accounts: &[Account], stats: Op
         .collect()
 }
 
-fn login_row<Tz: TimeZone>(account: &Account, notice: Option<&str>, stats: Option<&Stats>, show_model_weeks: bool, now: i64, zone: &Tz) -> LoginRow {
+fn login_row<Tz: TimeZone>(account: &Account, provider_name: &str, notice: Option<&str>, stats: Option<&Stats>, show_model_weeks: bool, now: i64, zone: &Tz) -> LoginRow {
     let usage = usage(account);
     let status = match &usage {
         _ if account.plan_ended => Some(LoginStatus::PlanEnded),
@@ -1411,6 +1495,11 @@ fn login_row<Tz: TimeZone>(account: &Account, notice: Option<&str>, stats: Optio
         dot: stats.is_some(),
         status,
         sign_in_ends: sign_in_ends(account, now).map(|at| sign_in_ends_words(at, now, zone)),
+        provider: account.provider.clone(),
+        ring: ring(&meters),
+        headline: headline(status, &meters),
+        five_hour: five_hour_chip(&meters),
+        unknown: (status == Some(LoginStatus::NothingKnown)).then(|| unknown_reason(&account.provider, provider_name)),
         meters,
         more,
     }
@@ -2051,6 +2140,58 @@ mod tests {
         assert_eq!(footer(&l.accounts, now, &z).as_deref(), Some("Usage from Token Stats at 11:15 am. Couldn't check usage just now."));
         assert!(!needs_newer_runner(&l.accounts));
         assert!(needs_newer_runner(&l.accounts[4..]));
+    }
+
+    fn row_for(account: Account, now: i64) -> LoginRow {
+        let accounts = [account];
+        cards(&[], &accounts, None, true, now, &zone()).remove(0).sections.remove(0).logins.remove(0)
+    }
+
+    #[test]
+    fn each_login_card_has_one_line_and_a_ring() {
+        let now = at(13, 0);
+        let back = at(15, 40);
+        // Room in both: the week's number in the ring, the 5-hour as a chip.
+        let fine = row_for(login("c1", "claude", Some(91.), 39., false, Some(back)), now);
+        assert_eq!(fine.provider, "claude");
+        assert_eq!(fine.ring, Some(39.));
+        assert_eq!(fine.five_hour.as_ref().map(|c| (c.text.as_str(), c.tone)), Some(("5-hour 91%", Tone::Fine)));
+        assert!(fine.unknown.is_none());
+        // At its limit on the 5-hour: one red line saying when it's back, not
+        // "Limit reached" over "Used up".
+        let out = row_for(login("c2", "claude", Some(0.), 50., true, Some(back)), now);
+        assert_eq!(out.headline, Some(Verdict { text: "Used up, back 3:40 pm".into(), tone: Tone::Out }));
+        assert_eq!(out.ring, Some(50.), "the ring stays the week's");
+        assert_eq!(out.five_hour.as_ref().map(|c| c.tone), Some(Tone::Out));
+        // Blocked with nothing saying when it's back.
+        let blocked = row_for(login("c3", "claude", Some(30.), 50., true, None), now);
+        assert_eq!(blocked.headline, Some(Verdict { text: "Limit reached".into(), tone: Tone::Out }));
+        // A week used up rings red at 0.
+        let mut week_out = login("c4", "codex", None, 0., true, None);
+        week_out.usage = Some(json!({ "windows": [{ "kind": "weekly", "title": "Weekly", "remainingPercent": 0, "resetsAt": iso_time(back) }], "blocked": true }));
+        let week_out = row_for(week_out, now);
+        assert_eq!(week_out.ring, Some(0.));
+        assert_eq!(week_out.headline.as_ref().map(|v| v.text.as_str()), Some("Used up, back 3:40 pm"));
+        assert!(week_out.five_hour.is_none());
+    }
+
+    #[test]
+    fn a_login_with_no_reading_says_why() {
+        let now = at(13, 0);
+        let bare = |id: &str, provider: &str| Account { id: id.into(), provider: provider.into(), title: id.into(), ..Default::default() };
+        let grok = row_for(bare("grok-main", "grok"), now);
+        assert_eq!(grok.ring, None);
+        assert_eq!(grok.headline, None);
+        assert_eq!(grok.unknown.as_ref().map(|u| u.text.as_str()), Some("Grok reports its limit only from its background service"));
+        assert_eq!(row_for(bare("oc", "opencode"), now).unknown.map(|u| u.text), Some("Pay as you go, no weekly limit".into()));
+        assert_eq!(row_for(bare("c9", "claude"), now).unknown.map(|u| u.text), Some("No turn has run on it yet".into()));
+        assert_eq!(row_for(bare("x9", "codex"), now).unknown.map(|u| u.text), Some("No turn has run on it yet".into()));
+        // A login that's signed out or ended says that instead.
+        let mut gone = bare("c8", "claude");
+        gone.signed_out = true;
+        let gone = row_for(gone, now);
+        assert!(gone.unknown.is_none());
+        assert_eq!(gone.headline.map(|v| v.text), Some("Signed out".into()));
     }
 
     #[test]

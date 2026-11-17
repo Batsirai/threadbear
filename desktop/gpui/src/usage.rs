@@ -320,6 +320,14 @@ impl Threadbear {
                     "note": l.note,
                     "today": l.today.as_ref().map(|t| &t.0),
                     "status": l.status.map(LoginStatus::words),
+                    // What the card draws: its logo, the one line under its
+                    // name, the ring's number, the 5-hour chip and, with no
+                    // reading, why.
+                    "logo": l.provider,
+                    "line": l.headline.as_ref().map(|v| &v.text),
+                    "ring": l.ring.map(|r| r.round() as i64),
+                    "fiveHour": l.five_hour.as_ref().map(|c| &c.text),
+                    "why": l.unknown.as_ref().map(|u| &u.text),
                     "signInEnds": l.sign_in_ends,
                     "meters": l.meters.iter().map(|m| json!({ "title": m.title, "left": m.left, "verdict": m.verdict.as_ref().map(|v| &v.text) })).collect::<Vec<_>>(),
                     "more": l.more,
@@ -687,26 +695,22 @@ fn hover_note(chart: &Chart, slot: i64, accounts: &[Account], dark: bool, now: i
         .into_any_element()
 }
 
-/// `PoolCard`: the pool's icon, name and what it's spent today, then each
-/// login in it. A pool of more than one provider names each provider over
-/// its logins, as a Claude and a Codex login have different windows.
+/// `PoolCard`: the pool's icon, name and what it's spent today, then a card
+/// for each login in it (option B of the 17 Nov review). Each card carries
+/// its provider's logo, so a pool that mixes providers no longer names them
+/// over its logins.
 fn pool_card(card: &Card, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
-    let mut column = card_box(v_flex(), p).child(
-        h_flex()
-            .gap(px(7.))
-            .px(px(12.))
-            .py(px(9.))
-            .child(icon(&card.symbol, 14., p.secondary))
-            .child(div().text_size(px(13.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD).text_color(p.fg).truncate().child(card.title.clone()))
-            .child(div().flex_1())
-            .children(card.today.as_ref().map(|(words, tip)| today_words(SharedString::from(format!("usage-card-today-{}", card.id)), words, tip, p))),
-    );
+    let header = h_flex()
+        .gap(px(7.))
+        .px(px(2.))
+        .child(icon(&card.symbol, 14., p.secondary))
+        .child(div().text_size(px(13.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD).text_color(p.fg).truncate().child(card.title.clone()))
+        .child(div().flex_1())
+        .children(card.today.as_ref().map(|(words, tip)| today_words(SharedString::from(format!("usage-card-today-{}", card.id)), words, tip, p)));
+    let mut column = v_flex().gap(px(8.)).child(header);
     for (s, section) in card.sections.iter().enumerate() {
-        if let Some(title) = &section.title {
-            column = column.child(div().px(px(12.)).pt(px(6.)).text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(p.tertiary).child(title.clone()));
-        }
         for login in &section.logins {
-            column = column.child(div().w_full().h(gpui_kit::px(1.)).bg(p.divider)).child(login_row(&format!("{}-{s}", card.id), login, accounts, content, dark, now, p, cx));
+            column = column.child(login_row(&format!("{}-{s}", card.id), login, accounts, content, dark, now, p, cx));
         }
     }
     column.into_any_element()
@@ -750,49 +754,152 @@ fn today_words(id: SharedString, words: &str, tip: &str, p: &Palette) -> AnyElem
     crate::highlights::tipped_as(div().id(id).flex_none().text_size(px(11.)).line_height(px(14.)).font_features(tabular()).text_color(p.secondary).whitespace_nowrap(), tip.to_owned(), gpui_kit::Role::GenericContainer).child(words.to_owned()).into_any_element()
 }
 
-/// `LoginRow`: its colour's dot, its name and note and what it's spent
-/// today, its windows' meters side by side (two a row, or one over the other,
-/// in a narrower panel), then only the extras that decide something.
+/// A verdict's colour: red used up, orange runs out early, green room going
+/// spare, else quiet.
+fn tone_colour(tone: Tone, p: &Palette) -> (Hsla, bool) {
+    match tone {
+        Tone::Out => (p.red, true),
+        Tone::Short => (p.orange, true),
+        Tone::Spare => (p.green, false),
+        Tone::Fine => (p.tertiary, false),
+    }
+}
+
+/// `LoginRow`, as a card of its own: its provider's logo, its name and one
+/// line saying how it stands, a ring with the week's room at the right, then
+/// the week's chart, a model's own week, and at the foot the 5-hour window as
+/// a chip and what it's spent today. A login with no reading is just the top
+/// line, saying why, with a dashed ring.
 fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
     let colour = login_colour(&login.id, accounts, dark);
     let id = |part: &str| SharedString::from(format!("usage-{key}-{}-{part}", login.id));
-    let name_row = crate::highlights::tipped_as(h_flex().id(id("name")).gap(px(7.)).items_center(), login.tip.clone(), gpui_kit::Role::GenericContainer)
-        .when(login.dot, |s| s.child(dot(colour, p)))
-        .child(div().min_w_0().text_size(px(12.5)).line_height(px(15.)).font_weight(FontWeight::MEDIUM).text_color(p.fg).truncate().child(login.name.clone()))
-        .children(login.note.as_ref().map(|note| div().min_w_0().text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).truncate().child(note.clone())))
-        .child(div().flex_1().min_w(px(8.)))
-        .children(login.today.as_ref().map(|(words, tip)| today_words(id("today"), words, tip, p)));
-    let status = login.status.map(|s| {
-        let limit = s.is_stop();
-        div().text_size(px(11.)).line_height(px(14.)).when(limit, |d| d.font_weight(FontWeight::MEDIUM)).text_color(if limit { p.red } else { p.tertiary }).child(s.words())
-    });
+    let name = crate::highlights::tipped_as(h_flex().id(id("name")).gap(px(6.)).items_center().min_w_0(), login.tip.clone(), gpui_kit::Role::GenericContainer)
+        .child(div().min_w_0().text_size(px(12.5)).line_height(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(p.fg).truncate().child(login.name.clone()))
+        .children(login.note.as_ref().map(|note| div().min_w_0().text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).truncate().child(note.clone())));
+    let line: Option<AnyElement> = if let Some(unknown) = &login.unknown {
+        Some(crate::highlights::tipped_as(div().id(id("why")).text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).line_clamp(2), unknown.tip.clone(), gpui_kit::Role::GenericContainer).child(unknown.text.clone()).into_any_element())
+    } else {
+        login.headline.as_ref().map(|v| {
+            let (tone, loud) = tone_colour(v.tone, p);
+            div().text_size(px(11.)).line_height(px(14.)).when(loud, |d| d.font_weight(FontWeight::MEDIUM)).text_color(tone).line_clamp(2).child(v.text.clone()).into_any_element()
+        })
+    };
+    let ring_tip = login.meters.iter().find(|m| m.kind == "weekly").map(|m| m.tip.clone()).or_else(|| login.unknown.as_ref().map(|u| u.tip.clone())).unwrap_or_default();
+    let ring = crate::highlights::tipped_as(div().id(id("ring")).flex_none().size(px(RING)), ring_tip, gpui_kit::Role::GenericContainer).child(room_ring(login.ring, if login.ring.is_some_and(|r| r < 1.) { p.red } else { colour }, p));
+    let header = h_flex()
+        .gap(px(10.))
+        .items_center()
+        .child(icons::provider_mark(&login.provider).with_size(px(18.)).text_color(p.secondary))
+        .child(v_flex().flex_1().min_w_0().gap(px(1.)).child(name).children(line))
+        .child(ring);
     // Signed out, or its sign-in ending within days: say so, with the same
     // Sign in… as the thread's signed-out line (header.rs), so a scheduled
     // job on it doesn't fail overnight (14 Nov).
-    let ending = login.sign_in_ends.as_ref().map(|words| div().text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(p.orange).child(words.clone()));
     let signed_out = login.status == Some(LoginStatus::SignedOut);
-    let status = match (status, ending) {
-        (Some(s), _) if signed_out => Some(s),
-        (_, Some(e)) => Some(e),
-        (s, None) => s,
-    };
+    let ending = login.sign_in_ends.as_ref().filter(|_| !signed_out).map(|words| div().text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(p.orange).child(words.clone()));
     let sign_in = (signed_out || login.sign_in_ends.is_some()).then(|| {
         let account = login.id.clone();
-        crate::highlights::tipped(div().id(id("sign-in")).flex_none().px(px(7.)).py(px(2.)).rounded(px(5.)).text_size(px(11.)).line_height(px(14.)).text_color(p.fg).bg(p.divider), "Opens Terminal on this login's own sign-in")
+        let button = crate::highlights::tipped(div().id(id("sign-in")).flex_none().px(px(7.)).py(px(2.)).rounded(px(5.)).text_size(px(11.)).line_height(px(14.)).text_color(p.fg).bg(p.divider), "Opens Terminal on this login's own sign-in")
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.sign_in_login(&account, cx)))
-            .child("Sign in…")
+            .child("Sign in…");
+        h_flex().gap(px(8.)).items_center().children(ending).child(div().flex_1()).child(button)
     });
-    let status = match (status, sign_in) {
-        (Some(s), Some(b)) => Some(h_flex().gap(px(8.)).items_center().child(s).child(div().flex_1()).child(b).into_any_element()),
-        (Some(s), None) => Some(s.into_any_element()),
-        (None, _) => None,
-    };
-    let meters = (!login.meters.is_empty()).then(|| meters_layout(&id(""), &login.meters, colour, content - style::zoomed(24.), now, p));
+    // The week's chart on its own: the ring says what's left and the line
+    // above what to do, so it needs no title. A model's own week keeps its
+    // meter's title, number and verdict.
+    let week = login.meters.iter().find(|m| m.kind == "weekly").map(|m| {
+        let chart = m.week_chart(now, &Local);
+        let (grid, plot, labels, orange) = (p.grid, p.plot, p.secondary, p.orange);
+        crate::highlights::tipped_as(div().id(id("week")).w_full(), m.tip.clone(), gpui_kit::Role::GenericContainer)
+            .child(canvas(|_, _, _| (), move |bounds, _, window, cx| paint_week(&chart, colour, grid, plot, labels, orange, bounds, window, cx)).w_full().h(px(58.)))
+    });
+    let others: Vec<Meter> = login.meters.iter().filter(|m| m.kind != "weekly" && m.kind != "five_hour").cloned().collect();
+    let others = (!others.is_empty()).then(|| meters_layout(&id(""), &others, colour, content - style::zoomed(24.), now, p));
+    let chip = login.five_hour.as_ref().map(|c| {
+        let text = match c.tone {
+            Tone::Out => p.red,
+            Tone::Short => p.orange,
+            _ => p.secondary,
+        };
+        crate::highlights::tipped_as(div().id(id("five-hour")).flex_none().px(px(7.)).py(px(1.)).rounded(px(8.)).bg(p.bar_track).text_size(px(11.)).line_height(px(15.)).font_features(tabular()).text_color(text), c.tip.clone(), gpui_kit::Role::GenericContainer).child(c.text.clone())
+    });
+    let today = login.today.as_ref().map(|(words, tip)| today_words(id("today"), words, tip, p));
+    let foot = (chip.is_some() || today.is_some()).then(|| h_flex().gap(px(8.)).items_center().children(chip).children(today));
     let more = (!login.more.is_empty()).then(|| v_flex().gap(px(2.)).text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).children(login.more.iter().map(|line| div().child(line.clone()))));
     // A lapsed plan stays listed, so Mike can see it's still there, but
     // faded: it isn't one to act on.
     let ended = login.status == Some(LoginStatus::PlanEnded);
-    v_flex().w_full().gap(px(8.)).px(px(12.)).py(px(10.)).when(ended, |d| d.opacity(0.5)).child(name_row).children(status).children(meters).children(more).into_any_element()
+    let slim = login.unknown.is_some();
+    card_box(v_flex().w_full().gap(px(8.)).px(px(12.)).py(px(if slim { 8. } else { 10. })), p)
+        .when(ended, |d| d.opacity(0.5))
+        .child(header)
+        .children(sign_in)
+        .children(week)
+        .children(others)
+        .children(foot)
+        .children(more)
+        .into_any_element()
+}
+
+/// The ring's size, as the mockup has it.
+const RING: f32 = 40.;
+
+/// The ring at the right of a login's card: the week's room as an arc in the
+/// login's colour (red at nothing left) with the number inside, or a dashed
+/// ring with a "?" when there's no reading.
+fn room_ring(room: Option<f64>, colour: Hsla, p: &Palette) -> impl IntoElement {
+    let (track, words, quiet) = (p.bar_track, p.fg, p.tertiary);
+    canvas(|_, _, _| (), move |bounds, _, window, cx| {
+        if !shown(bounds, window) {
+            return;
+        }
+        let z = style::zoomed;
+        let stroke = z(3.5);
+        let centre = point(f32::from(bounds.origin.x) + f32::from(bounds.size.width) / 2., f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.);
+        let radius = (f32::from(bounds.size.width).min(f32::from(bounds.size.height)) - stroke) / 2.;
+        let arc = |share: f32, colour: Hsla, dashed: bool, window: &mut Window| {
+            let mut builder = PathBuilder::stroke(gpui_kit::px(stroke));
+            if dashed {
+                let dash = gpui_kit::px(z(2.5));
+                builder = builder.dash_array(&[dash, dash]);
+            }
+            // From the top, clockwise, in short straight pieces: smooth at
+            // this size, and no arc flags to get backwards.
+            let steps = ((64. * share).ceil() as usize).max(1);
+            let at = |i: usize| {
+                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * share * i as f32 / steps as f32;
+                point(gpui_kit::px(centre.x + radius * angle.cos()), gpui_kit::px(centre.y + radius * angle.sin()))
+            };
+            builder.move_to(at(0));
+            for i in 1..=steps {
+                builder.line_to(at(i));
+            }
+            if let Ok(path) = builder.build() {
+                window.paint_path(path, colour);
+            }
+        };
+        match room {
+            Some(room) => {
+                arc(1., track, false, window);
+                let share = (room / 100.).clamp(0., 1.) as f32;
+                if share > 0.005 {
+                    arc(share, colour, false, window);
+                } else {
+                    // Nothing left: a dot of red at the top, so the ring
+                    // still says which way it went.
+                    let dot = z(2.);
+                    let top = Bounds::new(point(gpui_kit::px(centre.x - dot), gpui_kit::px(centre.y - radius - dot)), size(gpui_kit::px(dot * 2.), gpui_kit::px(dot * 2.)));
+                    window.paint_quad(gpui_kit::fill(top, colour).corner_radii(Corners::all(gpui_kit::px(dot))));
+                }
+                paint_words(&format!("{}%", room.round() as i64), z(10.5), FontWeight::SEMIBOLD, words, centre, Align::Centre, window, cx);
+            }
+            None => {
+                arc(1., quiet, true, window);
+                paint_words("?", z(12.), FontWeight::MEDIUM, quiet, centre, Align::Centre, window, cx);
+            }
+        }
+    })
+    .size_full()
 }
 
 /// SwiftUI's ViewThatFits over the meters: a row of them when they fit at
