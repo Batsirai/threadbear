@@ -1619,7 +1619,7 @@ impl ThreadPane {
                     if let Some(labels) = crate::reply_buttons::dump_labels(&item.text, &self.summary.id) {
                         out["buttons"] = json!(labels);
                     }
-                    if let Some(drafts) = crate::draft_boxes::dump(&item.text, &self.summary.id) {
+                    if let Some(drafts) = crate::draft_boxes::dump(&item.text, &self.summary.id, &row.id, cx) {
                         out["drafts"] = drafts;
                     }
                     // Its ```mermaid and ```html boxes (rich_boxes.rs).

@@ -18,7 +18,7 @@ export type Row = {
   /** A reply's ```slack, ```email and ```draft boxes as drawn: the label, each
    * line, each formatted piece ("bold: Hi", "link: docs <https://x.dev>") and
    * what Copy says ("Copy" or "Copied"). */
-  drafts?: { label: string; lines: string[]; styled: string[]; copy: string }[];
+  drafts?: { label: string; lines: string[]; styled: string[]; copy: string; edited?: boolean; editing?: boolean }[];
   /** A reply's closed ```bash blocks and their icons: "[put, copy] npm test", or "[copy] npm test". */
   shellBlocks?: string[];
   /** The chips a row draws among its words: "picture: Picture 1", "card:

@@ -566,6 +566,11 @@ impl Composer {
         // say, then the box's own chips, whose markers go after them.
         let boxes = self.note_images_len(cx);
         let words = composer::sent_text(&draft_text, boxes + 1).trim().to_string();
+        // Drafts he's changed in this thread's replies go on the end, for
+        // the agent to use his words (draft_boxes.rs).
+        let thread = self.thread_id.clone().unwrap_or_default();
+        let edits = crate::draft_boxes::unsent_edits(&thread, cx);
+        let words = [words, edits.clone()].into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join("\n\n");
         let (text, images_to_send, answers) = match self.card_message(&words, cx) {
             Some((message, mut note_images, answers)) => {
                 note_images.extend(images.clone());
@@ -593,6 +598,9 @@ impl Composer {
         let composer = cx.entity().downgrade();
         let restore = RestoreDraft { text: draft_text, images, card: picks, as_sent: None };
         pane.update(cx, |p, cx| p.send_message(text, images_to_send, answers, Some(restore), composer, cx));
+        if !edits.is_empty() {
+            crate::draft_boxes::note_edits_sent(&thread, cx);
+        }
         cx.notify();
     }
 

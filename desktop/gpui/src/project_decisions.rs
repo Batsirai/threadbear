@@ -110,7 +110,12 @@ impl DecisionCard {
         if answers.is_empty() {
             return;
         }
-        let text = composer::answers_message(&self.asks, &self.picks, &self.notes, "");
+        // Drafts he changed in the thread's replies go too (draft_boxes.rs).
+        let edits = crate::draft_boxes::unsent_edits(&self.thread, cx);
+        let text = composer::answers_message(&self.asks, &self.picks, &self.notes, &edits);
+        if !edits.is_empty() {
+            crate::draft_boxes::note_edits_sent(&self.thread, cx);
+        }
         let images = composer::note_images(&self.asks, &self.picks, &self.notes);
         let answers_json = Value::Array(answers.iter().map(|(_, a)| json!({ "action": a.action, "answer": a.answer })).collect());
         let words: Vec<String> = answers.iter().map(|(_, a)| a.answer.clone()).collect();

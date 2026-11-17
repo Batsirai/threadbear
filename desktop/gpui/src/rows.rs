@@ -456,7 +456,7 @@ impl ThreadPane {
     /// text view would send them.
     pub(crate) fn linked_text(&self, doc: &Entity<gpui_kit::base::TextViewState>, row_id: &str, cx: &mut Context<Self>) -> TextView {
         let weak = cx.weak_entity();
-        let drafts = crate::draft_boxes::DraftBoxes { origin: self.origin(), cwd: self.summary.cwd.clone(), row: row_id.to_owned() };
+        let drafts = crate::draft_boxes::DraftBoxes { origin: self.origin(), thread: self.summary.id.clone(), cwd: self.summary.cwd.clone(), row: row_id.to_owned() };
         let chips = crate::chips::ThreadChipPills { row: row_id.to_owned() };
         let row_id = row_id.to_owned();
         let local = self.summary.runner_id.is_none();

@@ -179,6 +179,14 @@ top right, puts it on the clipboard with its links and bold, so it
 pastes into Slack or Mail as it looks. The phone and the website show it
 the same way.
 
+To change a draft before the agent sends it for you, press Edit beside
+Copy, change the words and press Done (or ⌘Return). The box says
+"edited" and shows your version, and Undo puts the agent's back. Your
+version goes on the end of your next message to that thread (an answer
+on its card counts, from the thread or a project page), with a line
+asking the agent to use your words, so picking "Post and close" posts
+what you wrote. The change is kept on your Mac, in the desktop app.
+
 A reply that needs nothing from you ends with a Done card at the top of
 the message box, with an Archive button to put the thread away. When something it talked about is
 still worth doing (a piece it didn't get to, a check that's due), the
