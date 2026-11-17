@@ -86,7 +86,11 @@ Then('Finish setting up is open with {string}, {string} and {string} all done', 
   });
 });
 
-After({ tags: '@tour.firstrun' }, () => {
+// After every scenario, not just one tag's: when the setup-cards scenarios
+// moved to @tour.hello, a launch they'd allowed to start by itself carried on
+// into every scenario after them, and the setup cards covered the window for
+// all of updates, usage and web-panels on the Mac (17 Nov).
+After(() => {
   delete process.env.THREADBEAR_TOUR_AUTOSTART;
   delete process.env.THREADBEAR_SWIFT_DEFAULTS;
 });
