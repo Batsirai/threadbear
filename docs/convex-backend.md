@@ -476,7 +476,8 @@ runner counts as present again, so a runner that keeps saying he's there
 and keeps its threads needing him can't keep a drain going (Daybreak 148,
 17 Nov). Holding a push asks again whether he's there, in the same
 transaction: if he left since `push.notify` looked, it goes to the away
-phones instead, as nothing would send a push held after his leave's drain.
+phones instead (once: if he's gone again by the next hold, it's held), as
+nothing would send a push held after his leave's drain.
 
 **Keeping old and new working together.** For a while after any change,
 an older runner, a newer backend and an App Store phone app from weeks ago

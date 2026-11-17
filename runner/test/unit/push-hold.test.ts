@@ -212,10 +212,33 @@ test('a push held just after Mike left goes to the away phones, not held for goo
   await b.ctx.db.patch(sec._id, { atMac: false });
   await call(b.ctx, devices.holdPush, { threadId: 'late' });
   assert.equal(b.rows('threads')[0].pushHeldAt, undefined, 'not held');
-  assert.deepEqual(notified(b), [{ threadId: 'late', held: true }]);
+  assert.deepEqual(notified(b), [{ threadId: 'late', held: true, retried: true }]);
   // Still there: held as before.
   await b.ctx.db.patch(sec._id, { atMac: true });
   await call(b.ctx, devices.holdPush, { threadId: 'late' });
   assert.ok(b.rows('threads')[0].pushHeldAt > 0);
   assert.equal(notified(b).length, 1);
+});
+
+// verify-fix on that change: a runner there for every notify's read and away
+// for every holdPush could keep one push bouncing between them. It goes back
+// to notify once, and is held the second time.
+test('a runner flipping presence between notify and holdPush bounces a push once at most', async () => {
+  const b = memoryBackend();
+  await secondary(b, 0, Date.now());
+  await b.ctx.db.insert('threads', { threadId: 'flip', runnerId: 'sec', ...THREAD_BASICS, title: 'Flip', view: 'inbox', needsYou: true });
+  const sec = () => b.rows('runners').find((r: any) => r.runnerId === 'sec');
+  const from = b.scheduled.length;
+  await b.ctx.scheduler.runAfter(0, { toString: () => 'internal.push.notify' }, { threadId: 'flip', held: true });
+  let ran = 0;
+  for (let i = from; i < b.scheduled.length && ran < 100; i++, ran++) {
+    const s = b.scheduled[i] as any;
+    // push.ts notify, held: there when it reads, gone by the hold.
+    await b.ctx.db.patch(sec()._id, { atMac: true });
+    const t = await call(b.ctx, devices.threadForPush, { threadId: s.args.threadId });
+    await b.ctx.db.patch(sec()._id, { atMac: false });
+    if (t.atMac) await call(b.ctx, devices.holdPush, { threadId: s.args.threadId, ...(s.args.retried ? { retried: true } : {}) });
+  }
+  assert.equal(ran, 2, 'the push and its one retry');
+  assert.ok(b.rows('threads')[0].pushHeldAt > 0, 'then held, for his next leave');
 });

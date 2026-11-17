@@ -235,9 +235,10 @@ async function deliver(ctx: ActionCtx, alert: { title: string; body: string; thr
 // (the default) only while he isn't at the Mac (the rest are held for when
 // he leaves), "off" none.
 export const notify = internalAction({
-  args: { threadId: v.string(), held: v.optional(v.boolean()) },
+  // retried: devices.holdPush found him gone and sent this back once.
+  args: { threadId: v.string(), held: v.optional(v.boolean()), retried: v.optional(v.boolean()) },
   returns: vSendResult,
-  handler: async (ctx, { threadId, held }): Promise<SendSummary> => {
+  handler: async (ctx, { threadId, held, retried }): Promise<SendSummary> => {
     const t: { title: string; status: string; preview: string; pendingApproval?: any; needsYou: boolean; atMac: boolean; mac?: string } | null = await ctx.runQuery(internal.devices.threadForPush, { threadId });
     // It may have been seen on the Mac in the meantime.
     if (!t || !t.needsYou) return { sent: 0, failed: 0, skipped: 'noLongerNeedsYou' };
@@ -248,7 +249,7 @@ export const notify = internalAction({
     // it's held again (Codex's review).
     if (held) {
       if (!t.atMac) return await sendAlert(ctx, alert, (n) => n === 'away');
-      await ctx.runMutation(internal.devices.holdPush, { threadId });
+      await ctx.runMutation(internal.devices.holdPush, { threadId, ...(retried ? { retried } : {}) });
       return { sent: 0, failed: 0, skipped: 'atMac' };
     }
     if (!t.atMac) return await sendAlert(ctx, alert);

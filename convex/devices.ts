@@ -124,18 +124,21 @@ export const pushOutcome = internalMutation({
 // there, but he may have left since, and the drain his leaving started may
 // be over: a push held now would wait for his next leave, maybe for good
 // (Codex's review of Daybreak 148). So it asks again here, in the same
-// transaction as the write, and sends it to the away phones instead.
+// transaction as the write, and sends it to the away phones instead. Once:
+// a push that comes back here away again (`retried`, a runner flipping its
+// presence between notify's read and this) is held, so no flipping can keep
+// one push bouncing between notify and here (verify-fix on that change).
 export const holdPush = internalMutation({
-  args: { threadId: v.string() },
+  args: { threadId: v.string(), retried: v.optional(v.boolean()) },
   returns: v.null(),
-  handler: async (ctx, { threadId }) => {
+  handler: async (ctx, { threadId, retried }) => {
     const t = await ctx.db
       .query('threads')
       .withIndex('by_threadId', (q) => q.eq('threadId', threadId))
       .unique();
     if (!t || !t.needsYou) return null;
-    if (await presentAt(ctx, t.runnerId)) await ctx.db.patch(t._id, { pushHeldAt: Date.now() });
-    else await ctx.scheduler.runAfter(0, internal.push.notify, { threadId, held: true });
+    if (retried || (await presentAt(ctx, t.runnerId))) await ctx.db.patch(t._id, { pushHeldAt: Date.now() });
+    else await ctx.scheduler.runAfter(0, internal.push.notify, { threadId, held: true, retried: true });
     return null;
   },
 });
