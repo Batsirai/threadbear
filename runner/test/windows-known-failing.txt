@@ -8,6 +8,7 @@ acp-grok.test.ts
 agent-write-trust.test.ts
 background.test.ts
 check-mock-swift-tests.test.ts
+check-only.test.ts
 check-remote-line.test.ts
 check-remote-room-failures.test.ts
 claude-path.test.ts
@@ -22,6 +23,7 @@ hangup-guard.test.ts
 highlights.test.ts
 home-patch-edits.test.ts
 instructions.test.ts
+land-alone.test.ts
 land-gate.test.ts
 land-queue.test.ts
 land-times.test.ts
