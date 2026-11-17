@@ -1221,7 +1221,7 @@ impl PaneRow {
             .child(div().min_w_0().truncate().text_size(px(style::size::LABEL)).line_height(px(style::natural_line(style::size::LABEL))).text_color(label_color).child(self.title.clone()))
             .child(div().flex_1().min_w(px(4.)))
             .when_some(self.trailing, |s, t| s.child(div().flex_none().text_size(px(style::size::SMALL)).line_height(px(style::natural_line(style::size::SMALL))).text_color(p.faint).child(t)))
-            .when_some(self.trailing_symbol, |s, symbol| s.child(icon(&symbol, 11., p.secondary)));
+            .when_some(self.trailing_symbol, |s, symbol| s.child(icon(&symbol, 11., self.icon_color.unwrap_or(p.secondary))));
         let body = v_flex()
             .flex_1()
             .min_w_0()

@@ -46,6 +46,7 @@ Feature: What a folder's patches give a thread
     And I show the "deploys.previews" section of the pane
     Then the list panel has the heading "Checks" with the rows "Preview sign-in | Lint | Bundle size | Typecheck | Deploy"
     And the list rows "Preview sign-in | Lint | Bundle size | Typecheck | Deploy" have the marks "exclamationmark.circle.fill | xmark.diamond.fill | exclamationmark.triangle.fill | circle.dashed | checkmark"
+    And the list row "Docs" has its globe and the mark "xmark.diamond.fill" beside its title
 
   @panel.image
   Scenario: An image panel draws its picture

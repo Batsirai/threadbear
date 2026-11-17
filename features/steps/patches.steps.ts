@@ -71,6 +71,13 @@ Then('the list rows {string} have the marks {string}', async function (this: Thr
   });
 });
 
+Then('the list row {string} has its globe and the mark {string} beside its title', async function (this: ThreadbearWorld, title: string, mark: string) {
+  await this.until(`"${title}" with a globe and ${mark}`, (d) => {
+    const row = pane(d)?.list?.flatMap((s) => s.rows).find((r) => r.title === title);
+    return row?.mark === 'globe' && row.toneMark === mark;
+  });
+});
+
 Then('the image panel shows a picture', async function (this: ThreadbearWorld) {
   await this.until('a picture in the image panel', (d) => /^picture \d+x\d+/.test(pane(d)?.image ?? ''));
 });

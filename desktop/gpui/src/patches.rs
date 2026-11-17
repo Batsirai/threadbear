@@ -281,10 +281,12 @@ impl SidePane {
         let mut row = PaneRow::new(SharedString::from(format!("panel-row-{index}")), item.title.clone())
             .icon_opt(item.symbol())
             .tinted(color)
-            .turning(item.tone_kind() == Some("working") && item.icon.as_deref().is_none_or(str::is_empty))
+            .turning(item.tone_kind() == Some("working") && item.own_icon().is_none())
             .reserves_icon(reserves)
             .trailing(item.trailing.clone())
-            .trailing_symbol(if item.tone_kind() == Some("done") && item.icon.is_some() { Some("checkmark") } else { None })
+            // A row with its own icon gets its tone's shape at the end of the
+            // line too, so the tone isn't told by the icon's colour alone.
+            .trailing_symbol(item.own_icon().and(item.tone_symbol()))
             .detail(item.detail.clone())
             .detail_lines(2);
         let (path, url, title) = (item.path.clone(), item.url.clone(), item.title.clone());
@@ -725,7 +727,7 @@ impl SidePane {
                                 sections.push(json!({ "key": heading, "title": heading, "count": 0, "folded": false, "rows": [] }));
                             }
                             let last = sections.last_mut().expect("a section");
-                            let row = json!({ "title": item.title, "trailing": item.trailing, "detail": item.detail, "symbol": item.icon.clone().filter(|i| !i.is_empty()).or_else(|| item.tone_kind().map(str::to_owned)), "tone": item.tone_kind(), "mark": item.symbol() });
+                            let row = json!({ "title": item.title, "trailing": item.trailing, "detail": item.detail, "symbol": item.icon.clone().filter(|i| !i.is_empty()).or_else(|| item.tone_kind().map(str::to_owned)), "tone": item.tone_kind(), "mark": item.symbol(), "toneMark": item.own_icon().and(item.tone_symbol()) });
                             last["rows"].as_array_mut().expect("rows").push(row);
                             last["count"] = json!(last["count"].as_i64().unwrap_or(0) + 1);
                         }

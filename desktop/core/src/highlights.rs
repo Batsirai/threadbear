@@ -1220,9 +1220,20 @@ impl PanelItem {
     /// failed, a triangle warns, a dashed circle (drawn turning) is working
     /// and a tick is done.
     pub fn symbol(&self) -> Option<&str> {
-        if let Some(icon) = self.icon.as_deref().filter(|i| !i.is_empty()) {
+        if let Some(icon) = self.own_icon() {
             return Some(icon);
         }
+        self.tone_symbol()
+    }
+
+    /// The row's own icon, if it has one.
+    pub fn own_icon(&self) -> Option<&str> {
+        self.icon.as_deref().filter(|i| !i.is_empty())
+    }
+
+    /// The shape for its tone alone. A row with its own icon shows it at the
+    /// end of the title's line, so its tone isn't left to the icon's colour.
+    pub fn tone_symbol(&self) -> Option<&str> {
         match self.tone_kind() {
             Some("attention") => Some("exclamationmark.circle.fill"),
             Some("failed") => Some("xmark.diamond.fill"),
@@ -1623,6 +1634,7 @@ mod tests {
         let items = render.items.expect("items");
         assert_eq!(items.len(), 8, "a row with no title has one that's empty");
         assert_eq!(items[0].symbol(), Some("arrow.triangle.branch"));
+        assert_eq!(items[0].tone_symbol(), None);
         // One shape per tone, so they don't rest on colour alone (issue #67).
         assert_eq!(items[1].symbol(), Some("exclamationmark.circle.fill"));
         assert_eq!(items[2].symbol(), Some("xmark.diamond.fill"));
@@ -1632,6 +1644,8 @@ mod tests {
         assert_eq!(items[6].symbol(), Some("exclamationmark.triangle.fill"));
         assert_eq!(items[7].symbol(), Some("circle.dashed"));
         assert_eq!(items[7].tone_kind(), Some("working"));
+        let own = PanelItem { icon: Some("globe".into()), ..items[2].clone() };
+        assert_eq!((own.symbol(), own.tone_symbol()), (Some("globe"), Some("xmark.diamond.fill")), "its own icon, and its tone's shape beside");
         assert!(render.note.is_none());
     }
 
