@@ -146,13 +146,13 @@ test('a run of only named steps can take a Linux host when each is one it runs, 
   // tb land runs what failed in a group's check on main by itself, on the
   // host the group failed on: nothing has changed there, which otherwise
   // means "everything runs" and a Mac.
-  const only = (value: string, change?: string) => {
+  const only = (value: string, change?: string, extra: string[] = []) => {
     const s = setup({ h1: { state: 'free', os: 'Linux' }, h2: { state: 'free' } });
     if (change) {
       fs.mkdirSync(path.dirname(path.join(s.repo, change)), { recursive: true });
       fs.writeFileSync(path.join(s.repo, change), '\n');
     }
-    const r = s.run('h1,h2', 3600, '', {}, ['--only', value]);
+    const r = s.run('h1,h2', 3600, '', {}, ['--only', value, ...extra]);
     assert.equal(r.status, 0, `${value}: ${r.stdout}${r.stderr}`);
     return r.copies;
   };
@@ -160,6 +160,10 @@ test('a run of only named steps can take a Linux host when each is one it runs, 
   assert.deepEqual(only('runner typecheck;desktop core tests;desktop app check (as installed);site build'), ['h1']);
   // Even for a change that would otherwise need a Mac: the steps named don't.
   assert.deepEqual(only('web tests', 'app/Sources/X.swift'), ['h1']);
+  // With --all too, as tb land asks for main's run of what failed: it only
+  // forces the steps named (Codex's review, 17 Nov).
+  assert.deepEqual(only('runner unit tests=test/unit/a.test.ts', undefined, ['--all']), ['h1']);
+  assert.deepEqual(only('app mock tests', undefined, ['--all']), ['h2']);
   // A Swift step, or one it doesn't know, still goes to the Mac.
   assert.deepEqual(only('runner unit tests;app mock tests'), ['h2']);
   assert.deepEqual(only('iphone kit tests'), ['h2']);

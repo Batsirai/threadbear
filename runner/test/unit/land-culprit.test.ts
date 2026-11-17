@@ -13,7 +13,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { land, landLimits, setAside, type LandTarget } from '../../src/worktrees.ts';
-import { joinQueue, queueDir, readEntry, waiting, waitingLine } from '../../src/land-queue.ts';
+import { joinQueue, queueDir, readEntry, setRunning, waiting, waitingLine } from '../../src/land-queue.ts';
 import { capture, commit, holdUntil, makeBranch, makeRepo, sh, until, write } from '../helpers/worktrees-harness.ts';
 
 landLimits.goneMs = 50;
@@ -191,7 +191,7 @@ test('a landing set aside is never in anyone else\'s group, and its own tb check
   for (const n of ['b', 'c', 'd']) assert.ok(fs.existsSync(path.join(main, `${n}.txt`)), n);
 });
 
-test('a tb land stopped while it waits leaves the line and says so', async () => {
+for (const inCheck of [false, true]) test(`a tb land stopped while it waits ${inCheck ? 'in the running group says it may still land' : 'leaves the line and says so'}`, async () => {
   const { root, main } = makeRepo();
   const [b] = branches(main, ['b']);
   const common = path.join(main, '.git');
@@ -212,10 +212,18 @@ test('a tb land stopped while it waits leaves the line and says so', async () =>
     const exited = new Promise<number | null>((r) => child.once('close', (code) => r(code)));
     await until(() => /Waiting for another landing/.test(text), 'the child waiting', 20_000);
     assert.equal(waiting(common).length, 1);
+    // As a holder checking a group with it in: that may still land it.
+    if (inCheck) setRunning(common, { startedAt: Date.now(), branches: ['thread/holder', b.branch], pid: process.pid, entries: [waiting(common)[0].id] });
     child.kill('SIGTERM');
     assert.equal(await exited, 143, text);
-    assert.match(text, /tb land was stopped \(SIGTERM\) while it waited in the landing queue, so thread\/b0000000 is out of the line and nothing of it landed\. Run tb land again to rejoin/);
-    assert.deepEqual(fs.readdirSync(queueDir(common)).filter((n) => n.endsWith('.json')), []);
+    const entries = fs.readdirSync(queueDir(common)).filter((n) => n.endsWith('.json'));
+    if (inCheck) {
+      assert.match(text, /while it waited in the landing queue: thread\/b0000000 is out of the line, but it was in the group being checked, which may still land it/);
+      assert.equal(entries.length, 1, 'left for the holder to write its result into');
+    } else {
+      assert.match(text, /tb land was stopped \(SIGTERM\) while it waited in the landing queue: thread\/b0000000 is out of the line and nothing of it landed\. Run tb land again to rejoin/);
+      assert.deepEqual(entries, []);
+    }
   } finally {
     write(root, { drop: '' });
     await new Promise((r) => holder.once('close', r));

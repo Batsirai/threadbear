@@ -14,7 +14,7 @@ import type { WorktreePatch } from './patches.ts';
 import { inBackground } from './background.ts';
 import { mainCheckoutOf as linkedMainCheckout } from './patch-trust.ts';
 import { untrustedGitArgs } from './safe-git.ts';
-import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
+import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, readRunning, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
 
 // What a thread's record keeps about its worktree.
 export type WorktreeRecord = {
@@ -459,9 +459,19 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     // the line, as nobody would hear how its landing went, so it says so in
     // what its thread reads. On 17 Nov two waits killed by the two-hour
     // limit left their threads thinking they were still queued.
+    // One already in the running group's check may still land with it (a
+    // holder lands one whose tb has gone, if its branch hasn't moved), and
+    // one whose group has landed has: it says which (Codex's review).
     const stopped = (signal: NodeJS.Signals): void => {
-      if (entry) leaveQueue(common, entry.id);
-      err(`tb land was stopped (${signal}) while it waited in the landing queue, so ${t.branch} is out of the line and nothing of it landed. Run tb land again to rejoin (in the background, with the longest timeout).`);
+      const now = entry && readEntry(common, entry.id);
+      const inCheck = !!entry && !!readRunning(common)?.entries?.includes(entry.id);
+      const said = now?.result
+        ? `it had already landed with its group (${now.result.landed.slice(0, 9)} on ${MAIN}); its next tb land moves ${t.branch} there.`
+        : inCheck
+          ? `${t.branch} is out of the line, but it was in the group being checked, which may still land it: its next tb land says whether it did, and lands it if not.`
+          : `${t.branch} is out of the line and nothing of it landed. Run tb land again to rejoin (in the background, with the longest timeout).`;
+      if (entry && !now?.result && !inCheck) leaveQueue(common, entry.id);
+      err(`tb land was stopped (${signal}) while it waited in the landing queue: ${said}`);
       process.exit(128 + (os.constants.signals[signal] ?? 15));
     };
     const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];

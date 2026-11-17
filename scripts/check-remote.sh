@@ -462,9 +462,10 @@ if [ "$RUNNER_ONLY" = 1 ] && [ -z "$SHOTS" ]; then linux_ok=1; fi
 # failed in a group's check on main by itself before it blames a landing,
 # on the host the group failed on, and on main nothing has changed: without
 # this a failure on the Linux box could never be looked into there (Codex's
-# review, 17 Nov).
+# review, 17 Nov). With --all too: tb land asks for it on main's run there,
+# and with --only it only forces the steps named (Codex's review, 17 Nov).
 LINUX_STEPS='^(runner typecheck|app tools parse|convex typecheck|web typecheck|web tests|site build|feature pairing|runner unit tests|desktop core tests|desktop app check|desktop app check \(as installed\)|[a-z ]+ packages)$'
-if [ -n "$ONLY" ] && [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -z "$SHOTS" ]; then
+if [ -n "$ONLY" ] && [ "$QUICK" = 1 ] && [ -z "$SHOTS" ]; then
   linux_ok=1
   only_rest="$ONLY;"
   while [ -n "$only_rest" ]; do
@@ -477,8 +478,8 @@ fi
 MAC_WHY="it isn't --quick"
 if [ "$QUICK" = 1 ]; then
   if [ -n "$SHOTS" ]; then MAC_WHY="--shots"
-  elif [ "$ALL" = 1 ]; then MAC_WHY="--all"
   elif [ -n "$ONLY" ]; then MAC_WHY="--only names a step that needs one"
+  elif [ "$ALL" = 1 ]; then MAC_WHY="--all"
   elif [ ! -s "$changed" ]; then MAC_WHY="nothing changed from main, so it runs everything"
   else MAC_WHY="it changes ios/, app/, dock/ or check.sh"; fi
 fi
