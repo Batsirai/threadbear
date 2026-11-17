@@ -23,6 +23,8 @@ const ICONS = {
   "stack": "Stack", "clock": "Clock", "users-three": "UsersThree", "keyboard": "Keyboard", "flask": "Flask",
   "plugs-connected": "PlugsConnected", "warning-circle": "WarningCircle", "hard-drives": "HardDrives",
   "lifebuoy": "Lifebuoy", "compass": "Compass", "book-open": "BookOpen",
+  // The docs search box (src/docs-search.js).
+  "magnifying-glass": "MagnifyingGlass",
 };
 for (const [file, entry] of Object.entries(ICONS)) {
   const [name, weight] = Array.isArray(entry) ? entry : [entry, "regular"];

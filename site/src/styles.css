@@ -524,6 +524,34 @@ a.video-card:hover .video-play { scale: 1.06; }
 .doc-index a { display: block; padding: var(--s-100) 0; border-bottom: 1px solid var(--line); font-size: 16px; line-height: 24px; font-weight: 500; text-decoration: none; }
 .doc-next { margin-top: var(--s-500); padding-top: var(--s-200); border-top: 1px solid var(--line); font-size: 16px; line-height: 24px; font-weight: 500; }
 .doc-next a { text-decoration: none; }
+/* The docs search (src/docs-search.js): a button above the docs list that looks like a field, and
+   the box it opens over the page, near the top like a command palette, with the results under it.
+   A result's matched words are marked in honey, and the heading a result opens flashes once. */
+.docs-search-open { display: flex; align-items: center; gap: var(--s-100); width: 100%; margin-bottom: var(--s-200); padding: var(--s-75) var(--s-100); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); color: var(--ink-faint); font: inherit; font-size: 14px; line-height: 20px; text-align: left; cursor: pointer; transition: border-color 300ms var(--ease), color 300ms var(--ease); }
+.docs-search-open[hidden] { display: none; }
+.docs-search-open:hover { border-color: var(--ink-faint); color: var(--ink-soft); }
+.docs-search-open .icon { font-size: 16px; }
+.docs-search-open span { flex: 1; }
+.docs-search-open kbd, .docs-search kbd { font-family: var(--sans); font-size: 12px; line-height: 16px; padding: 0 var(--s-50); border: 1px solid var(--line); border-radius: var(--r); color: var(--ink-faint); background: var(--page); }
+.docs-search { width: min(640px, calc(100vw - var(--s-400))); max-height: min(560px, calc(100dvh - var(--s-900))); margin: var(--s-900) auto auto; padding: 0; border: 0; border-radius: var(--r-2xl); background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(31, 28, 24, .08), 0 24px 64px rgba(60, 45, 20, .22); overflow: hidden; }
+.docs-search[open] { display: flex; flex-direction: column; }
+.docs-search::backdrop { background: rgba(31, 28, 24, .28); backdrop-filter: blur(2px); }
+.ds-field { display: flex; align-items: center; gap: var(--s-100); padding: var(--s-100) var(--s-200); border-bottom: 1px solid var(--line); }
+.ds-field .icon { font-size: 20px; color: var(--ink-faint); }
+.ds-field input { flex: 1; min-width: 0; padding: var(--s-75) 0; border: 0; outline: 0; background: none; color: var(--ink); font: inherit; font-size: 18px; line-height: 28px; }
+.ds-results { list-style: none; overflow-y: auto; padding: var(--s-75); }
+.ds-results:empty { display: none; }
+.ds-results a { display: flex; flex-direction: column; gap: var(--s-25); padding: var(--s-75) var(--s-100); border-radius: var(--r-lg); text-decoration: none; color: var(--ink); }
+.ds-results [aria-selected="true"] a { background: var(--well); }
+.ds-title { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--s-75); font-size: 15px; line-height: 20px; font-weight: 500; }
+.ds-page { font-size: 13px; font-weight: 400; color: var(--ink-faint); white-space: nowrap; }
+.ds-text { font-size: 14px; line-height: 20px; color: var(--ink-soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ds-results mark { background: var(--honey-tint); color: var(--honey-d); border-radius: var(--r-sm); }
+@media (pointer: coarse) { .docs-search kbd, .docs-search-open kbd { display: none; } }
+.ds-empty { padding: var(--s-300) var(--s-200); font-size: 14px; line-height: 20px; color: var(--ink-soft); }
+@keyframes ds-flash { from { background-color: var(--honey-tint); } to { background-color: transparent; } }
+.doc :target, .doc .ds-flash { animation: ds-flash 2s var(--ease); border-radius: var(--r-md); }
+::highlight(docs-search) { background-color: #f3dcae; color: var(--ink); }
 @media (max-width: 860px) {
   .docs { grid-template-columns: minmax(0, 1fr); margin: var(--s-500) auto var(--s-700); padding: 0 var(--s-200); gap: var(--s-300); }
   .docs-nav { position: static; }

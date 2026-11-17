@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { APP_STORE_LIVE, APP_STORE_URL, GITHUB_PUBLIC, GITHUB_URL, LAUNCH_VIDEO_ID, SITE_URL } from "../site.mjs";
-import { markdown, readGuide, summary } from "./docs.mjs";
+import { markdown, readGuide, searchEntries, summary } from "./docs.mjs";
 import { changelogFeed, changelogPage, readPeople, readReleases } from "./changelog.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -358,8 +358,7 @@ function fill(template, values) {
 }
 
 /** Copies a file into dist with a hash of its contents in the name, so it can be cached for good. */
-function fingerprint(name) {
-  const body = readFileSync(join(src, name));
+function fingerprint(name, body = readFileSync(join(src, name))) {
   const hash = createHash("sha256").update(body).digest("hex").slice(0, 8);
   const hashed = name.replace(/\.(\w+)$/, `.${hash}.$1`);
   writeFileSync(join(dist, hashed), body);
@@ -407,7 +406,8 @@ function writePage(name, page, content, label = `${name}.html`) {
     // the docs list, where it's the page itself).
     docsCurrent: inDocs ? ' aria-current="page"' : "",
     structuredData: name === "index" ? structuredData() : "",
-    script: `<script src="${siteScript}" defer></script>`,
+    // The docs pages also get their search box's script (src/docs-search.js), a module.
+    script: `<script src="${siteScript}" defer></script>${inDocs ? `\n  <script type="module" src="${docsSearchScript}"></script>` : ""}`,
     content,
   });
   if (/\{\{[\w -]+\}\}/.test(out)) throw new Error(`${label} has a {{placeholder}} left over: ${out.match(/\{\{[\w -]+\}\}/)[0]}`);
@@ -446,10 +446,17 @@ const docIcon = (slug) => {
   if (!docIcons[slug]) throw new Error(`docs/guide.md's section ${slug} has no icon in site/docs-icons.json`);
   return icon(docIcons[slug]);
 };
+// The docs search (src/docs-search.js): its index, the guide cut at every heading, written with a
+// hash in its name like the scripts, and the button above the docs list that opens the box. The
+// button stays hidden until the script's running, so without JavaScript there's no dead button.
+const docsSearchScript = fingerprint("docs-search.js");
+const docsSearchIndex = fingerprint("docs-search.json", JSON.stringify(searchEntries(guide)));
+const docsSearchButton = `<button type="button" class="docs-search-open" data-index="${docsSearchIndex}" aria-label="Search the docs" hidden>${icon("magnifying-glass")}<span>Search</span><kbd>⌘K</kbd></button>`;
 function docsNav(current) {
   const items = guide.sections.map(({ slug, title }) =>
     `          <li><a href="/docs/${slug}"${slug === current ? ' aria-current="page"' : ""}>${docIcon(slug)}<span>${escape(title)}</span></a></li>`);
   return `      <nav class="docs-nav" aria-label="Docs">
+        ${docsSearchButton}
         <a class="docs-home" href="/docs"${current ? "" : ' aria-current="page"'}>${icon("book-open")}<span>${escape(guide.title)}</span></a>
         <ol>
 ${items.join("\n")}

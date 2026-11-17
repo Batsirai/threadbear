@@ -26,7 +26,7 @@ const CSP = [
 ].join("; ");
 
 /** styles.1a2b3c4d.css and site.1a2b3c4d.js: the build puts a hash of the contents in the name. */
-const HASHED = /\.[0-9a-f]{8}\.(css|js)$/;
+const HASHED = /\.[0-9a-f]{8}\.(css|js|json)$/;
 
 /** Headers to set on a response for `pathname` with this Content-Type. */
 export function headersFor(pathname, contentType = "") {
