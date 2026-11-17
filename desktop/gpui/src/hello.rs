@@ -197,11 +197,14 @@ impl Threadbear {
         cx.notify();
         self.hello_finish(false, window, cx);
         self.new_thread(cx);
+        // The new-thread page's box with the words in it, then its send: the
+        // app's own, as the box's would call it, since a composer can't
+        // reach back into the app from inside this update. The words stay,
+        // greyed, until the thread exists, and come back on a failure.
         let composer = self.ensure_new_composer(window, cx);
-        composer.update(cx, |c, cx| {
-            c.replace_text(threadbear_core::tour::FIRST_MESSAGE.to_owned(), cx);
-            c.send(window, cx);
-        });
+        composer.update(cx, |c, cx| c.replace_text(threadbear_core::tour::FIRST_MESSAGE.to_owned(), cx));
+        let text = threadbear_core::tour::FIRST_MESSAGE.to_owned();
+        self.send_new_thread(text.clone(), vec![], text, window, cx);
         self.hello.sending = false;
     }
 
