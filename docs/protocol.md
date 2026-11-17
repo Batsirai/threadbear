@@ -1752,8 +1752,11 @@ other restarting. The runner keeps the last build it saw of each and the
 threads waiting, in `app-restart.json` in the data dir, so both outlast its
 own restarts.
 
-- `wait_for_app_restart` (`{ text? }`) puts the calling thread on the list,
-  remembering the build running then. Asking again replaces its request.
+- `wait_for_app_restart` (`{ text?, commit? }`) puts the calling thread on
+  the list, remembering the build running then and the commit the new build
+  must contain: `commit` if given, else main's HEAD in the thread's folder
+  at that moment (none when that isn't a git repo). Asking again replaces
+  its request.
 - An `end_turn` with `needs: "you"` whose asks mention "Restart to Update"
   (in `action`, `why` or `where`) does the same, unless the thread is already on
   the list, and its reply says so. So does a completed turn whose
@@ -1766,7 +1769,12 @@ own restarts.
   Threadbear app has restarted onto <short> (<commit>), as you asked to
   hear." and its `text`, or "Check your change in the running app.". Then
   it's off the list. The same build again (the app reconnecting to a
-  restarted runner) changes nothing. A thread that remembered only one app's
+  restarted runner) changes nothing. A new build whose `commit` doesn't
+  contain the thread's commit (`git merge-base --is-ancestor` in its folder:
+  a build staged before the thread landed) keeps the thread on the list,
+  now from that build, with a `system.note` "<app> restarted onto <short>,
+  which doesn't have <commit> yet. Still waiting." When git can't tell (an
+  unknown commit, no repo) any new build counts, as before. A thread that remembered only one app's
   build waits for that app: the other's first `build` isn't a restart of it.
   One that remembered neither (no app had said) takes either.
 - An archived thread, or a request more than a day old, gets only the

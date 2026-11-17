@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Clock } from './clock.ts';
@@ -30,6 +31,11 @@ type Watch = {
   fromDesktopShort?: string;
   due?: AppBuild;
   dueApp?: AppKind;
+  // The commit the app has to contain, in the thread's repo: main's HEAD
+  // when it asked, or the commit it named. An app swapping in a build it
+  // staged before the thread landed is a different tree but hasn't got the
+  // change (2f98f449, 17 Nov), so that keeps it waiting.
+  want?: { commit: string; short: string; repo: string };
 };
 type SavedState = { build?: AppBuild; desktopBuild?: AppBuild; watching: Watch[] };
 
@@ -46,9 +52,36 @@ export function asksForAppRestart(asks: { action?: unknown; why?: unknown; where
   return (asks ?? []).some((a) => /restart to update/i.test(`${a.action ?? ''} ${a.why ?? ''} ${a.where ?? ''}`));
 }
 
+// The two questions asked of git, swappable in tests. `resolve` gives a
+// full commit id or undefined; `contains` says whether `commit` has
+// `ancestor` in its history, or undefined when git can't tell (a commit it
+// doesn't know, no repo), which counts as the old rule: any new build.
+export type RestartGit = {
+  resolve(repo: string, rev: string): string | undefined;
+  contains(repo: string, ancestor: string, commit: string): boolean | undefined;
+};
+
+export const realGit: RestartGit = {
+  resolve(repo, rev) {
+    try {
+      return execFileSync('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', `${rev}^{commit}`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  contains(repo, ancestor, commit) {
+    try {
+      execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', ancestor, commit], { timeout: 5000, stdio: 'ignore' });
+      return true;
+    } catch (e) {
+      return (e as { status?: number }).status === 1 ? false : undefined;
+    }
+  },
+};
+
 // `away`: whether a draining runner still has the thread (handover.ts's
 // Peers), so it isn't here yet but will be.
-type Deps = { runner: Pick<Runner, 'get' | 'note' | 'send' | 'has'>; home: string; clock: Clock; log: Logger; away?: (threadId: string) => boolean };
+type Deps = { runner: Pick<Runner, 'get' | 'note' | 'send' | 'has'>; home: string; clock: Clock; log: Logger; away?: (threadId: string) => boolean; git?: RestartGit };
 
 const appName = (app: AppKind) => (app === 'desktop' ? 'Threadbear GPUI app' : 'Threadbear app');
 
@@ -63,7 +96,10 @@ export class AppRestarts {
   // other than the one it's running now. Asking again replaces the request.
   // `running` names each app's build, the GPUI app's first: with both
   // connected, `build` alone was the frozen Swift app's (13 Nov).
-  watch(threadId: string, text?: string): { build?: AppBuild; running?: string } {
+  // `commit`: what the new build must contain, by default main's HEAD in
+  // the thread's folder (a thread's worktree shares its refs).
+  watch(threadId: string, text?: string, commit?: string): { build?: AppBuild; running?: string; waitingFor?: string } {
+    const want = this.wanted(threadId, commit);
     const state = this.read();
     state.watching = state.watching.filter((w) => w.threadId !== threadId);
     state.watching.push({
@@ -72,11 +108,25 @@ export class AppRestarts {
       requestedAt: new Date(this.deps.clock.now()).toISOString(),
       ...(state.build ? { fromTree: state.build.tree, fromShort: state.build.short } : {}),
       ...(state.desktopBuild ? { fromDesktopTree: state.desktopBuild.tree, fromDesktopShort: state.desktopBuild.short } : {}),
+      ...(want ? { want } : {}),
     });
     this.write(state);
     const build = state.desktopBuild ?? state.build;
     const running = [state.desktopBuild && `the GPUI app on ${state.desktopBuild.short}`, state.build && `the Swift app on ${state.build.short}`].filter(Boolean).join(', ');
-    return { ...(build ? { build } : {}), ...(running ? { running } : {}) };
+    return { ...(build ? { build } : {}), ...(running ? { running } : {}), ...(want ? { waitingFor: want.short } : {}) };
+  }
+
+  private wanted(threadId: string, commit?: string): Watch['want'] {
+    const git = this.deps.git ?? realGit;
+    let repo: string | undefined;
+    try {
+      repo = this.deps.runner.get(threadId).cwd;
+    } catch {
+      return undefined;
+    }
+    if (!repo) return undefined;
+    const full = commit?.trim() ? git.resolve(repo, commit.trim()) : (git.resolve(repo, 'refs/heads/main') ?? git.resolve(repo, 'refs/heads/master'));
+    return full ? { commit: full, short: full.slice(0, 9), repo } : undefined;
   }
 
   isWatching(threadId: string): boolean {
@@ -87,8 +137,10 @@ export class AppRestarts {
   appHello(build: AppBuild, app: AppKind = 'mac'): void {
     const state = this.read();
     const { runner, log, away } = this.deps;
+    const git = this.deps.git ?? realGit;
     const now: Watch[] = [];
     const kept: Watch[] = [];
+    const older: Watch[] = [];
     for (const w of state.watching) {
       const known = app === 'desktop' ? w.fromDesktopTree : w.fromTree;
       const other = app === 'desktop' ? w.fromTree : w.fromDesktopTree;
@@ -97,7 +149,13 @@ export class AppRestarts {
       // the GPUI app's first hello with a build isn't a restart).
       const counts = known !== undefined ? known !== build.tree : other === undefined;
       if (!counts) kept.push(w);
-      else if (runner.has(w.threadId)) now.push(w);
+      // A new build, but one without the commit it's waiting for: keep
+      // waiting, from this build, so a reconnect on it isn't news again.
+      else if (w.want && git.contains(w.want.repo, w.want.commit, build.commit) === false) {
+        const moved = app === 'desktop' ? { fromDesktopTree: build.tree, fromDesktopShort: build.short } : { fromTree: build.tree, fromShort: build.short };
+        kept.push({ ...w, ...moved });
+        if (runner.has(w.threadId)) older.push(w);
+      } else if (runner.has(w.threadId)) now.push(w);
       // Finishing a turn on the old runner after a handover: told when it
       // comes across (THREADBEAR-5).
       else if (away?.(w.threadId)) kept.push({ ...w, due: build, dueApp: app });
@@ -107,6 +165,13 @@ export class AppRestarts {
     else state.build = build;
     state.watching = kept;
     this.write(state);
+    for (const w of older) {
+      try {
+        runner.note(w.threadId, `${appName(app)} restarted onto ${build.short}, which doesn't have ${w.want!.short} yet. Still waiting.`);
+      } catch (e) {
+        log.warn('could not note an older app build', { threadId: w.threadId, error: String(e) });
+      }
+    }
     for (const w of now) this.tell(w, build, app);
   }
 

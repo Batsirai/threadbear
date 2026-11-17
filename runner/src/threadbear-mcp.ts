@@ -1754,10 +1754,13 @@ export function buildThreadbearTools(
           tool(
             'wait_for_app_restart',
             "Sends you a message in this thread when the user's Threadbear Mac app next restarts onto a new build: after you've landed an app change and asked them to Restart to Update (in the Threadbear menu), so you can check it in the running app. An end_turn ask that mentions Restart to Update does this by itself. `text` is what to send then; by default a line saying it restarted. One per thread: asking again replaces it.",
-            { text: z.string().max(4000).optional().describe('What to send when it restarts, e.g. what to check.') },
-            handle(async ({ text }) => {
-              const { running } = appRestarts.watch(selfId, text);
-              return `You'll get a message here when the app restarts onto a build other than the one running now${running ? ` (${running})` : ''}. End your turn when you've nothing else to do.`;
+            {
+              text: z.string().max(4000).optional().describe('What to send when it restarts, e.g. what to check.'),
+              commit: z.string().max(200).optional().describe("A commit the build must have. Default: main's HEAD now."),
+            },
+            handle(async ({ text, commit }) => {
+              const { running, waitingFor } = appRestarts.watch(selfId, text, commit);
+              return `You'll get a message here when the app restarts onto a build other than the one running now${running ? ` (${running})` : ''}${waitingFor ? ` that contains ${waitingFor}` : ''}. End your turn when you've nothing else to do.`;
             }),
           ),
         ]

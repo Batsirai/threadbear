@@ -218,3 +218,60 @@ test('the wait names each running app with its build', () => {
   const { watcher: w3, thread: t3 } = setUp();
   assert.equal(w3.watch(t3.id).running, undefined);
 });
+
+// 2f98f449, 17 Nov: the GPUI app swapped in a build it had staged hours
+// before the thread landed, and the thread was told to check a change the
+// running app didn't have.
+test('a new build without the commit the thread waits for keeps it waiting', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const { h, watcher, thread } = setUp();
+  const repo = h.runner.get(thread.id).cwd;
+  const git = (...a: string[]) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
+  git('init', '-q', '-b', 'main');
+  const commit = (msg: string) => {
+    fs.writeFileSync(`${repo}/f`, msg);
+    git('add', 'f');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', msg);
+    return git('rev-parse', 'HEAD');
+  };
+  const staged = commit('staged earlier');
+  const landed = commit('the change');
+  const D = (c: string, tree: string) => ({ commit: c, short: c.slice(0, 7), tree });
+  watcher.appHello(D(staged, 'tree-0'), 'desktop');
+  const { waitingFor } = watcher.watch(thread.id);
+  assert.equal(waitingFor, landed.slice(0, 9));
+  // The older staged build swapped in under a new tree: a note, no message.
+  watcher.appHello(D(staged, 'tree-1'), 'desktop');
+  assert.equal(said(h, thread.id).message, undefined);
+  assert.match(String(h.events(thread.id).findLast((e) => e.type === 'system.note')?.text), /doesn't have .* yet\. Still waiting\./);
+  assert.ok(watcher.isWatching(thread.id));
+  // Reconnecting on that same build isn't news again.
+  const notes = () => h.events(thread.id).filter((e) => e.type === 'system.note').length;
+  const before = notes();
+  watcher.appHello(D(staged, 'tree-1'), 'desktop');
+  assert.equal(notes(), before);
+  // A build of main after the landing tells it.
+  const later = commit('someone else, later');
+  watcher.appHello(D(later, 'tree-2'), 'desktop');
+  assert.match(said(h, thread.id).message, new RegExp(`restarted onto ${later.slice(0, 7)}`));
+  assert.ok(!watcher.isWatching(thread.id));
+});
+
+test('a named commit, and one git can\'t place, fall back sensibly', () => {
+  const { h, thread } = setUp();
+  const asked: string[] = [];
+  const watcher = new AppRestarts({
+    runner: h.runner, home: h.home, clock: h.clock, log: nullLogger,
+    git: {
+      resolve: (_repo, rev) => (asked.push(rev), rev === 'mine' ? 'c0ffee1234567' : undefined),
+      contains: () => undefined,
+    },
+  });
+  watcher.appHello(A);
+  assert.equal(watcher.watch(thread.id, undefined, 'mine').waitingFor, 'c0ffee123');
+  assert.deepEqual(asked, ['mine']);
+  // Git can't tell: any new build counts, as before.
+  watcher.appHello(B);
+  assert.match(said(h, thread.id).message, /restarted onto bbbb222/);
+});
