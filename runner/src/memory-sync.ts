@@ -6,13 +6,15 @@
 // Tinker Desk started knowing nothing about him (17 Nov 2026).
 //
 // The main Mac (the owner key) puts its files up (sync:putMemory). Every other
-// runner copies them down into each of its Claude logins (sync:memorySince),
-// and Codex's AGENTS.md for the global one. A file someone changed there isn't
-// written over unseen: it's offered back first (sync:offerMemory), and one
-// that was there before sync ever wrote it is left alone. Offers land on the
-// main Mac in memory-offers/ in the data dir, as data for the nightly retro to
-// fold in or drop, never straight into memory: a runner key mustn't be able
-// to brief the main Mac's agents (convex/memorySync.ts).
+// runner keeps a copy of them (memory-cache/ in its data dir, from
+// sync:memorySince) and, each pass, makes every one of its Claude logins (and
+// Codex's AGENTS.md, for the global file) match it. A file someone changed
+// there isn't written over unseen: it's offered back first
+// (sync:offerMemory), and one that was there before sync ever wrote to that
+// place is left alone. Offers land on the main Mac in memory-offers/ in the
+// data dir, as data for the nightly retro to fold in or drop, never straight
+// into memory: a runner key mustn't be able to brief the main Mac's agents
+// (convex/memorySync.ts).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,10 +26,19 @@ import type { Logger } from './log.ts';
 export const MEMORY_PATH = /^(?:global\/CLAUDE\.md|memory\/~(?:-[A-Za-z0-9-]*)?\/[A-Za-z0-9][A-Za-z0-9._-]*\.md)$/;
 export const MAX_MEMORY_PATH = 240;
 export const MAX_MEMORY_FILE = 128 * 1024;
+// One call's files, by count and by bytes of text (the backend refuses more,
+// convex/memorySync.ts MAX_MEMORY_BATCH and MAX_BATCH_BYTES).
 export const MEMORY_BATCH = 50;
+export const MEMORY_BATCH_BYTES = 1024 * 1024;
 export const GLOBAL_PATH = 'global/CLAUDE.md';
 export const MEMORY_TICK_MS = 60_000;
 export const MEMORY_API_VERSION = 84;
+// The most the main Mac keeps in memory-offers/ before it stops taking more.
+// Another runner's key can send offers as fast as it likes, so they can't be
+// allowed to fill the main Mac's disk; past this they wait in the backend,
+// which holds a few per runner (MAX_OFFERS_PER_RUNNER), until the folder has
+// been gone through.
+export const MAX_OFFERS_ON_DISK = 20 * 1024 * 1024;
 
 export type MemoryPut = { path: string; hash: string; text?: string; gone?: boolean };
 export type MemoryRow = { path: string; hash: string; text: string; gone?: true; seq: number };
@@ -45,7 +56,8 @@ export type MemoryBackend = {
 
 export type MemorySyncDeps = {
   home: string;
-  // The runner's data dir: memory-sync.json, and memory-offers/ on the main Mac.
+  // The runner's data dir: memory-sync.json and memory-cache/, and
+  // memory-offers/ on the main Mac.
   dataDir: string;
   on: () => boolean;
   // Each Claude login's config dir (~/.claude for claude-main), and each
@@ -60,15 +72,22 @@ export type MemorySyncDeps = {
 
 // What this runner last synced, so it can tell its own writes from edits.
 type Manifest = {
-  // Receivers: the newest seq applied.
+  // Receivers: the newest seq taken into memory-cache/.
   after: number;
-  // The hash of each file as last put up (main Mac) or written down (others).
+  // Main Mac: each path's hash as last put up. Others: as the main Mac has it
+  // now, which is what memory-cache/ holds.
   files: Record<string, string>;
-  // Others: the hash last offered for each path, so it's offered once.
-  offered: Record<string, string>;
-  // Others: files that were there before sync wrote that path, left alone
-  // for good (another login's own CLAUDE.md, say).
+  // Others, by file on disk: the path it holds and the hash sync last wrote
+  // there. A file whose hash still matches is sync's to replace or delete.
+  wrote: Record<string, { path: string; hash: string }>;
+  // Others, by file: the main Mac's version was already there when sync
+  // first looked, so it's kept up to date but never deleted.
+  adopted: Record<string, true>;
+  // Others, by file: something else was there before sync, so it's left
+  // alone for good (another login's own CLAUDE.md, say).
   kept: Record<string, true>;
+  // Others, by file: the hash of the text last offered from it.
+  offered: Record<string, string>;
 };
 
 export function memoryPathOk(p: string): boolean {
@@ -100,17 +119,33 @@ export function slugOf(folder: string, home: string): string {
   return homeSlug(home) + folder.slice(1);
 }
 
-function readText(file: string): string | undefined {
+// A file as it is on disk now: missing, there but not something sync reads
+// (a folder, a FIFO, over the size limit), or its text.
+type Seen = { state: 'missing' } | { state: 'odd' } | { state: 'text'; text: string; hash: string };
+
+function look(file: string): Seen {
+  let st: fs.Stats;
   try {
-    const st = fs.lstatSync(file);
-    // A link is followed (the M5's logins link their CLAUDE.md to one file);
-    // anything that isn't a plain file in the end is skipped.
-    const real = st.isSymbolicLink() ? fs.realpathSync(file) : file;
-    const rst = fs.statSync(real);
-    if (!rst.isFile() || rst.size > MAX_MEMORY_FILE) return undefined;
-    return fs.readFileSync(real, 'utf8');
+    // Followed: the M5's logins link their CLAUDE.md to one file.
+    st = fs.statSync(file);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      // A link to nowhere is still something there.
+      try {
+        fs.lstatSync(file);
+        return { state: 'odd' };
+      } catch {
+        return { state: 'missing' };
+      }
+    }
+    return { state: 'odd' };
+  }
+  if (!st.isFile() || st.size > MAX_MEMORY_FILE) return { state: 'odd' };
+  try {
+    const text = fs.readFileSync(file, 'utf8');
+    return { state: 'text', text, hash: sha256(text) };
   } catch {
-    return undefined;
+    return { state: 'odd' };
   }
 }
 
@@ -124,6 +159,10 @@ function real(p: string): string {
   }
 }
 
+function inside(file: string, roots: string[]): boolean {
+  return roots.some((r) => file.startsWith(r + path.sep));
+}
+
 function uniq<T>(items: T[], keyOf: (t: T) => string): T[] {
   const seen = new Set<string>();
   return items.filter((t) => {
@@ -134,29 +173,16 @@ function uniq<T>(items: T[], keyOf: (t: T) => string): T[] {
   });
 }
 
-// Every shareable file this runner's logins hold now: path -> text. Where two
-// logins hold the same path in different folders (logins not linked to one
-// memory), the newer file wins.
-export function scanLocal(home: string, claudeDirs: string[]): Map<string, string> {
-  const out = new Map<string, { text: string; mtime: number }>();
-  const add = (p: string, file: string) => {
-    if (!memoryPathOk(p)) return;
-    const text = readText(file);
-    if (text === undefined) return;
-    let mtime = 0;
-    try {
-      mtime = fs.statSync(file).mtimeMs;
-    } catch {}
-    const had = out.get(p);
-    if (!had || mtime > had.mtime) out.set(p, { text, mtime });
-  };
-  const dirs = uniq(claudeDirs.filter(isDirectory), real);
-  // The global file: ~/.claude's first, else the first login that has one.
-  const globals = uniq([path.join(home, '.claude'), ...dirs], real).map((d) => path.join(d, 'CLAUDE.md'));
-  const g = globals.find((f) => readText(f) !== undefined);
-  if (g) out.set(GLOBAL_PATH, { text: readText(g)!, mtime: Infinity });
-  const seenMemory = new Set<string>();
-  for (const dir of dirs) {
+function claudeDirsOf(home: string, dirs: string[]): string[] {
+  return uniq([path.join(home, '.claude'), ...dirs].filter(isDirectory), real);
+}
+
+// Every memory file under home in these logins, as path -> the files that
+// hold it (one per distinct real folder).
+function memoryFiles(home: string, claudeDirs: string[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const dir of claudeDirs) {
     const projects = path.join(dir, 'projects');
     let slugs: string[] = [];
     try {
@@ -170,28 +196,62 @@ export function scanLocal(home: string, claudeDirs: string[]): Map<string, strin
       const mem = path.join(projects, slug, 'memory');
       if (!isDirectory(mem)) continue;
       const r = real(mem);
-      if (seenMemory.has(r)) continue;
-      seenMemory.add(r);
+      if (seen.has(r)) continue;
+      seen.add(r);
       let names: string[] = [];
       try {
         names = fs.readdirSync(mem);
       } catch {
         continue;
       }
-      for (const name of names) if (name.endsWith('.md') && !name.startsWith('.')) add(`memory/${folder}/${name}`, path.join(mem, name));
+      for (const name of names) {
+        if (!name.endsWith('.md') || name.startsWith('.')) continue;
+        const p = `memory/${folder}/${name}`;
+        if (!memoryPathOk(p)) continue;
+        out.set(p, [...(out.get(p) ?? []), path.join(mem, name)]);
+      }
     }
   }
-  return new Map([...out].map(([p, v]) => [p, v.text]));
+  return out;
+}
+
+// The main Mac's files now: path -> text. ~/.claude's CLAUDE.md is the global
+// one (else the first login's that has one). Where two logins hold the same
+// memory path in different folders (logins not linked to one memory), the
+// newer file wins.
+export function scanLocal(home: string, claudeDirs: string[]): Map<string, string> {
+  const dirs = claudeDirsOf(home, claudeDirs);
+  const out = new Map<string, string>();
+  for (const d of dirs) {
+    const g = look(path.join(d, 'CLAUDE.md'));
+    if (g.state === 'text') {
+      out.set(GLOBAL_PATH, g.text);
+      break;
+    }
+  }
+  for (const [p, files] of memoryFiles(home, dirs)) {
+    let best: { text: string; mtime: number } | undefined;
+    for (const f of files) {
+      const s = look(f);
+      if (s.state !== 'text') continue;
+      let mtime = 0;
+      try {
+        mtime = fs.statSync(f).mtimeMs;
+      } catch {}
+      if (!best || mtime > best.mtime) best = { text: s.text, mtime };
+    }
+    if (best) out.set(p, best.text);
+  }
+  return out;
 }
 
 // Where a path goes on this runner: one file per distinct real place, across
-// every login (and Codex's AGENTS.md for the global one).
+// every login (and Codex's AGENTS.md for the global one, where Codex is).
 export function targetsOf(p: string, home: string, claudeDirs: string[], codexDirs: string[]): string[] {
   if (!memoryPathOk(p)) return [];
-  const claude = uniq([path.join(home, '.claude'), ...claudeDirs], real);
+  const claude = claudeDirsOf(home, claudeDirs);
   let files: string[];
   if (p === GLOBAL_PATH) {
-    // Only Codex homes that are there: a Mac without Codex gets no ~/.codex.
     const codex = uniq([path.join(home, '.codex'), ...codexDirs].filter(isDirectory), real);
     files = [...claude.map((d) => path.join(d, 'CLAUDE.md')), ...codex.map((d) => path.join(d, 'AGENTS.md'))];
   } else {
@@ -202,24 +262,69 @@ export function targetsOf(p: string, home: string, claudeDirs: string[], codexDi
   return uniq(files, real);
 }
 
+// Calls of at most MEMORY_BATCH files and MEMORY_BATCH_BYTES of text.
+function batches<T extends { text?: string }>(items: T[]): T[][] {
+  const out: T[][] = [];
+  let cur: T[] = [];
+  let bytes = 0;
+  for (const it of items) {
+    const b = Buffer.byteLength(it.text ?? '');
+    if (cur.length && (cur.length >= MEMORY_BATCH || bytes + b > MEMORY_BATCH_BYTES)) {
+      out.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(it);
+    bytes += b;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+function dirBytes(dir: string): number {
+  let total = 0;
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) total += dirBytes(p);
+    else {
+      try {
+        total += fs.lstatSync(p).size;
+      } catch {}
+    }
+  }
+  return total;
+}
+
 export class MemorySync {
   private deps: MemorySyncDeps;
   private backend?: MemoryBackend;
   private manifest: Manifest;
   private manifestPath: string;
+  private cacheDir: string;
   private running = false;
   private timer?: { unref?: () => void };
   private stopped = false;
+  private fullSaid = false;
 
   constructor(deps: MemorySyncDeps) {
     this.deps = deps;
     this.manifestPath = path.join(deps.dataDir, 'memory-sync.json');
+    this.cacheDir = path.join(deps.dataDir, 'memory-cache');
     const m = readJsonSync<Partial<Manifest>>(this.manifestPath);
+    const obj = <T>(x: unknown): Record<string, T> => (x && typeof x === 'object' && !Array.isArray(x) ? { ...(x as Record<string, T>) } : {});
     this.manifest = {
       after: typeof m?.after === 'number' ? m.after : 0,
-      files: m?.files && typeof m.files === 'object' ? { ...m.files } : {},
-      offered: m?.offered && typeof m.offered === 'object' ? { ...m.offered } : {},
-      kept: m?.kept && typeof m.kept === 'object' ? { ...m.kept } : {},
+      files: obj(m?.files),
+      wrote: obj(m?.wrote),
+      adopted: obj(m?.adopted),
+      kept: obj(m?.kept),
+      offered: obj(m?.offered),
     };
   }
 
@@ -231,6 +336,8 @@ export class MemorySync {
     this.schedule(1000);
   }
 
+  // A runner that's stopping or handing over: no more passes, so two
+  // runners never write the same files or manifest.
   stop(): void {
     this.stopped = true;
   }
@@ -247,15 +354,15 @@ export class MemorySync {
 
   // One pass. Exposed for tests.
   async tick(): Promise<void> {
-    if (this.running || !this.backend || !this.deps.on()) return;
+    if (this.running || this.stopped || !this.backend || !this.deps.on()) return;
     this.running = true;
     try {
       if (this.backend.owner) {
         await this.putUp();
         await this.takeOffers();
       } else {
-        await this.offerEdits();
         await this.pullDown();
+        await this.reconcile();
       }
     } catch (e) {
       this.deps.log.warn('memory sync failed', { error: String((e as Error)?.message ?? e) });
@@ -272,39 +379,43 @@ export class MemorySync {
 
   private async putUp(): Promise<void> {
     const local = scanLocal(this.deps.home, this.deps.claudeDirs());
-    const changes: (MemoryPut & { sent: string })[] = [];
+    const changes: MemoryPut[] = [];
     for (const [p, raw] of local) {
       const text = this.deps.scrub(raw);
       const hash = sha256(text);
-      if (this.manifest.files[p] !== hash) changes.push({ path: p, hash, text, sent: hash });
+      if (this.manifest.files[p] !== hash) changes.push({ path: p, hash, text });
     }
     for (const p of Object.keys(this.manifest.files)) {
-      if (!local.has(p)) changes.push({ path: p, hash: sha256(''), gone: true, sent: '' });
+      if (!local.has(p)) changes.push({ path: p, hash: sha256(''), gone: true });
     }
-    for (let i = 0; i < changes.length; i += MEMORY_BATCH) {
-      const batch = changes.slice(i, i + MEMORY_BATCH);
-      await this.backend!.put(batch.map(({ sent: _s, ...f }) => f));
+    for (const batch of batches(changes)) {
+      await this.backend!.put(batch);
       for (const f of batch) {
         if (f.gone) delete this.manifest.files[f.path];
-        else this.manifest.files[f.path] = f.sent;
+        else this.manifest.files[f.path] = f.hash;
       }
       this.save();
     }
     if (changes.length) this.deps.log.info('memory put up', { files: changes.length });
   }
 
-  // Offers from other runners go into memory-offers/<runner>/<path>, where
-  // the nightly retro reads them. Never into memory itself.
+  // Offers from other runners go into memory-offers/<runner>/<path>/<hash>.md,
+  // where the nightly retro reads them. Never into memory.
   private async takeOffers(): Promise<void> {
+    const root = path.join(this.deps.dataDir, 'memory-offers');
+    if (dirBytes(root) > MAX_OFFERS_ON_DISK) {
+      if (!this.fullSaid) this.deps.log.warn('memory-offers is full; offers wait in the backend until it has been gone through', { root });
+      this.fullSaid = true;
+      return;
+    }
+    this.fullSaid = false;
     const offers = await this.backend!.offers();
     if (!offers.length) return;
-    const root = path.join(this.deps.dataDir, 'memory-offers');
     const taken: { id: string; hash: string }[] = [];
     for (const o of offers) {
-      if (memoryPathOk(o.path) && /^[A-Za-z0-9_-]{1,64}$/.test(o.runnerId)) {
-        const file = path.join(root, o.runnerId, ...o.path.split('/'));
-        if (!file.startsWith(root + path.sep)) continue;
-        atomicWriteFileSync(file, o.text, 0o600);
+      if (memoryPathOk(o.path) && /^[A-Za-z0-9_-]{1,64}$/.test(o.runnerId) && /^[0-9a-f]{64}$/.test(o.hash)) {
+        const file = path.join(root, o.runnerId, ...o.path.split('/'), `${o.hash.slice(0, 12)}.md`);
+        if (file.startsWith(root + path.sep)) atomicWriteFileSync(file, o.text, 0o600);
       }
       taken.push({ id: o.id, hash: o.hash });
     }
@@ -314,43 +425,26 @@ export class MemorySync {
 
   // ---- every other runner
 
-  private targets(p: string): string[] {
-    return targetsOf(p, this.deps.home, this.deps.claudeDirs(), this.deps.codexDirs());
+  private cacheFile(p: string): string {
+    return path.join(this.cacheDir, ...p.split('/'));
   }
 
-  // Files here that differ from what sync last wrote: new memories, or edits
-  // to one the main Mac sent. Each offered once per version.
-  private async offerEdits(): Promise<void> {
-    const local = scanLocal(this.deps.home, this.deps.claudeDirs());
-    // Codex's AGENTS.md is the global file too.
-    const offers: { path: string; hash: string; text: string }[] = [];
-    for (const [p, raw] of local) {
-      const text = this.deps.scrub(raw);
-      const hash = sha256(text);
-      const ownHash = sha256(raw);
-      if (this.manifest.files[p] === ownHash || this.manifest.files[p] === hash) continue;
-      if (this.manifest.offered[p] === hash) continue;
-      offers.push({ path: p, hash, text });
-    }
-    await this.sendOffers(offers);
-  }
-
-  private async sendOffers(offers: { path: string; hash: string; text: string }[]): Promise<void> {
-    for (let i = 0; i < offers.length; i += MEMORY_BATCH) {
-      const batch = offers.slice(i, i + MEMORY_BATCH);
-      await this.backend!.offer(batch);
-      for (const o of batch) this.manifest.offered[o.path] = o.hash;
-      this.save();
-    }
-    if (offers.length) this.deps.log.info('memory offered to the main Mac', { files: offers.length });
-  }
-
+  // The main Mac's changes, into memory-cache/. Nothing in the logins is
+  // touched here; reconcile() does that.
   private async pullDown(): Promise<void> {
-    for (let pages = 0; pages < 200; pages++) {
+    for (let pages = 0; pages < 500; pages++) {
       const page = await this.backend!.since(this.manifest.after);
       for (const row of page.rows) {
         if (row.seq <= this.manifest.after) continue;
-        await this.apply(row);
+        if (memoryPathOk(row.path)) {
+          if (row.gone) {
+            fs.rmSync(this.cacheFile(row.path), { force: true });
+            delete this.manifest.files[row.path];
+          } else {
+            atomicWriteFileSync(this.cacheFile(row.path), row.text, 0o600);
+            this.manifest.files[row.path] = row.hash;
+          }
+        }
         this.manifest.after = row.seq;
       }
       this.save();
@@ -358,42 +452,122 @@ export class MemorySync {
     }
   }
 
-  private async apply(row: MemoryRow): Promise<void> {
-    if (!memoryPathOk(row.path)) return;
-    const was = this.manifest.files[row.path];
-    let wrote = false;
-    for (const file of this.targets(row.path)) {
-      if (this.manifest.kept[file]) continue;
-      const current = readText(file);
-      const exists = current !== undefined || fs.existsSync(file);
-      const hash = current === undefined ? undefined : sha256(current);
-      if (row.gone) {
-        // Only a file sync wrote, and nobody's changed since.
-        if (hash !== undefined && hash === was) fs.rmSync(real(file), { force: true });
-        continue;
-      }
-      if (hash === row.hash) {
-        wrote = true;
-        continue;
-      }
-      if (exists && hash !== was) {
-        if (was === undefined) {
-          // There before sync: someone's own file, left as it is from now on.
-          this.manifest.kept[file] = true;
-          this.deps.log.warn('memory sync left a file it did not write', { file });
+  private cached(p: string): string | undefined {
+    const s = look(this.cacheFile(p));
+    return s.state === 'text' && s.hash === this.manifest.files[p] ? s.text : undefined;
+  }
+
+  // Makes every login match the main Mac's files, offering first anything
+  // that would be lost. Writes happen only after the offers have gone, and
+  // each only if the file is still as it was when it was read: an edit that
+  // lands in between is left for the next pass, which offers it.
+  private async reconcile(): Promise<void> {
+    const { home } = this.deps;
+    const claude = this.deps.claudeDirs();
+    const codex = this.deps.codexDirs();
+    const roots = uniq([...claudeDirsOf(home, claude), ...[path.join(home, '.codex'), ...codex].filter(isDirectory), path.join(home, '.agents')].map(real), (r) => r);
+    const offers: { file: string; path: string; text: string; hash: string }[] = [];
+    const writes: { file: string; path: string; text: string; hash: string; expect: string | undefined }[] = [];
+    const deletes: { file: string; expect: string }[] = [];
+    const offer = (file: string, p: string, text: string) => {
+      const scrubbed = this.deps.scrub(text);
+      const hash = sha256(scrubbed);
+      if (this.manifest.offered[file] !== hash) offers.push({ file, path: p, text: scrubbed, hash });
+    };
+    const handled = new Set<string>();
+
+    // The main Mac's files, in every place they go.
+    for (const [p, want] of Object.entries(this.manifest.files)) {
+      const text = this.cached(p);
+      if (text === undefined) continue;
+      for (const file of targetsOf(p, home, claude, codex)) {
+        const at = real(file);
+        handled.add(at);
+        if (!inside(at, roots) || this.manifest.kept[at]) continue;
+        const seen = look(at);
+        const mine = this.manifest.wrote[at];
+        if (seen.state === 'odd') {
+          this.manifest.kept[at] = true;
           continue;
         }
-        // Changed here since sync wrote it: offered back before it's replaced.
-        if (current !== undefined) {
-          const text = this.deps.scrub(current);
-          const h = sha256(text);
-          if (this.manifest.offered[row.path] !== h) await this.sendOffers([{ path: row.path, hash: h, text }]);
+        if (seen.state === 'missing') {
+          writes.push({ file: at, path: p, text, hash: want, expect: undefined });
+          continue;
         }
+        if (seen.hash === want) {
+          if (!mine) this.manifest.adopted[at] = true;
+          this.manifest.wrote[at] = { path: p, hash: want };
+          continue;
+        }
+        if (!mine) {
+          // Someone's own file, there before sync: kept, and offered once.
+          this.manifest.kept[at] = true;
+          this.deps.log.warn('memory sync left a file it did not write', { file: at });
+          offer(at, p, seen.text);
+          continue;
+        }
+        if (seen.hash !== mine.hash) {
+          // Changed here since sync wrote it: offered, and kept until the main
+          // Mac has a newer version than the one it was changed from (so a
+          // line an agent here just added to MEMORY.md isn't taken straight
+          // back out). Then that replaces it, the edit having been offered.
+          offer(at, p, seen.text);
+          if (mine.hash === want) continue;
+        }
+        writes.push({ file: at, path: p, text, hash: want, expect: seen.hash });
       }
-      atomicWriteFileSync(real(file), row.text);
-      wrote = true;
     }
-    if (row.gone) delete this.manifest.files[row.path];
-    else if (wrote) this.manifest.files[row.path] = row.hash;
+
+    // Files sync wrote whose path the main Mac no longer has.
+    for (const [at, mine] of Object.entries(this.manifest.wrote)) {
+      if (this.manifest.files[mine.path] !== undefined) continue;
+      handled.add(at);
+      const seen = look(at);
+      if (seen.state === 'text' && seen.hash !== mine.hash) offer(at, mine.path, seen.text);
+      if (seen.state === 'text' && seen.hash === mine.hash && !this.manifest.adopted[at]) deletes.push({ file: at, expect: seen.hash });
+      else {
+        delete this.manifest.wrote[at];
+        delete this.manifest.adopted[at];
+      }
+    }
+
+    // Anything else here: new memories, and a global file the main Mac doesn't have.
+    const local = memoryFiles(home, claudeDirsOf(home, claude));
+    if (this.manifest.files[GLOBAL_PATH] === undefined) local.set(GLOBAL_PATH, targetsOf(GLOBAL_PATH, home, claude, codex));
+    for (const [p, files] of local) {
+      for (const file of files) {
+        const at = real(file);
+        if (handled.has(at) || !inside(at, roots)) continue;
+        const seen = look(at);
+        if (seen.state === 'text') offer(at, p, seen.text);
+      }
+    }
+
+    // Offers first, as one offer row per text: two logins' different edits of
+    // one file are two offers, never one in place of the other.
+    const sendable = uniq(offers, (o) => `${o.path}\n${o.hash}`);
+    for (const batch of batches(sendable)) {
+      await this.backend!.offer(batch.map(({ path: p, hash, text }) => ({ path: p, hash, text })));
+    }
+    for (const o of offers) this.manifest.offered[o.file] = o.hash;
+    if (sendable.length) this.deps.log.info('memory offered to the main Mac', { files: sendable.length });
+
+    let wrote = 0;
+    for (const w of writes) {
+      const now = look(w.file);
+      const still = w.expect === undefined ? now.state === 'missing' : now.state === 'text' && now.hash === w.expect;
+      if (!still) continue;
+      atomicWriteFileSync(w.file, w.text);
+      this.manifest.wrote[w.file] = { path: w.path, hash: w.hash };
+      wrote++;
+    }
+    for (const d of deletes) {
+      const now = look(d.file);
+      if (now.state === 'text' && now.hash === d.expect) fs.rmSync(d.file, { force: true });
+      delete this.manifest.wrote[d.file];
+      delete this.manifest.adopted[d.file];
+    }
+    if (wrote || deletes.length) this.deps.log.info('memory written down', { files: wrote, deleted: deletes.length });
+    this.save();
   }
 }

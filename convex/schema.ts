@@ -1118,7 +1118,8 @@ export default defineSchema({
     .index('by_seq', ['seq']),
 
   // What a runner key's agents saved to memory there (API 84), waiting for
-  // the main Mac to take it. Only the owner reads these, as data.
+  // the main Mac to take it: one row per version, so two logins' edits of
+  // one file are both kept. Only the owner reads these, as data.
   memoryOffers: defineTable({
     runnerId: v.string(),
     path: v.string(),
@@ -1126,6 +1127,13 @@ export default defineSchema({
     text: v.string(),
     at: v.number(),
   })
-    .index('by_runner_path', ['runnerId', 'path'])
+    .index('by_runner_path_hash', ['runnerId', 'path', 'hash'])
     .index('by_at', ['at']),
+
+  // How many offers each runner has waiting, so the cap is checked without
+  // reading every waiting offer's text.
+  memoryOfferCounts: defineTable({
+    runnerId: v.string(),
+    count: v.number(),
+  }).index('by_runnerId', ['runnerId']),
 });

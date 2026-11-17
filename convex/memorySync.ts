@@ -24,13 +24,16 @@ export const MAX_MEMORY_PATH = 240;
 // Each file, as UTF-8. The biggest on the M5 was 21 KB (misc's MEMORY.md).
 export const MAX_MEMORY_FILE = 128 * 1024;
 export const MAX_MEMORY_BATCH = 50;
+// Text in one call, so a batch's reads and writes stay well inside a
+// mutation's limits (the runner sends up to 1 MB, MEMORY_BATCH_BYTES).
+export const MAX_BATCH_BYTES = 2 * 1024 * 1024;
 // Files one answer of memorySince carries, so a first read of a few MB comes
 // in pages well under a query's limits.
 export const MEMORY_PAGE = 60;
 // Offers a runner key may have waiting at once, and how many the owner reads
 // in one go.
 export const MAX_OFFERS_PER_RUNNER = 200;
-export const OFFER_PAGE = 50;
+export const OFFER_PAGE = 20;
 const HASH = /^[0-9a-f]{64}$/;
 
 export function memoryPathOk(p: string): boolean {
@@ -54,7 +57,26 @@ export function badMemoryFile(f: MemoryPut): string | undefined {
   return undefined;
 }
 
+export function batchBytes(files: { text?: string }[]): number {
+  let n = 0;
+  for (const f of files) n += new TextEncoder().encode(f.text ?? '').length;
+  return n;
+}
+
 type Db = { db: MutationCtx['db'] };
+
+// A runner's count of waiting offers, moved by `by`. Returns the new count.
+export async function bumpOfferCount(ctx: Db, runnerId: string, by: number): Promise<number> {
+  const row = await ctx.db.query('memoryOfferCounts').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique();
+  const count = Math.max(0, (row?.count ?? 0) + by);
+  if (row) await ctx.db.replace(row._id, { runnerId, count });
+  else await ctx.db.insert('memoryOfferCounts', { runnerId, count });
+  return count;
+}
+
+export async function offerCount(ctx: { db: QueryCtx['db'] }, runnerId: string): Promise<number> {
+  return (await ctx.db.query('memoryOfferCounts').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique())?.count ?? 0;
+}
 
 // Writes what differs from the table, each change with the next sequence
 // number, so a runner reading "after seq N" never misses one: mutations are

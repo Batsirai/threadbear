@@ -14,7 +14,7 @@ import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
 import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdThreadTimes, impossibleUsage, isIsoTime, LOGIN_EMAIL, LOGIN_PROVIDER, loginKey, isThreadId, mayClaim, NAME_CHARS, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, nameSkeleton, webLinksOnly, normalName, ownsCard, SCHEDULE_ID, utf8Bytes, wholeIn, type Caller, type UsageDoc } from './runnerAccess';
 import { dropWake, seedWakes, syncWake } from './wakes';
-import { badMemoryFile, MAX_MEMORY_BATCH, MAX_OFFERS_PER_RUNNER, memoryAfter, OFFER_PAGE, putMemoryFiles } from './memorySync';
+import { badMemoryFile, batchBytes, bumpOfferCount, MAX_BATCH_BYTES, MAX_MEMORY_BATCH, MAX_OFFERS_PER_RUNNER, memoryAfter, offerCount, OFFER_PAGE, putMemoryFiles } from './memorySync';
 import { pushFailing, pushOff } from './pushHealth';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
 import { issueToken as makeToken, issuePairingCode as makePairingCode, listTokens as allTokens, revokeToken as revokeOne, tokenInfo, tokenKind, MAX_DAYS } from './tokens';
@@ -2566,14 +2566,17 @@ async function writePools(ctx: { db: MutationCtx['db'] }, runnerId: string, pool
 
 const memoryPut = v.object({ path: v.string(), hash: v.string(), text: v.optional(v.string()), gone: v.optional(v.boolean()) });
 
-function checkMemoryBatch(files: { path: string; hash: string; text?: string; gone?: boolean }[]): void {
+function checkMemoryBatch(files: { path: string; hash: string; text?: string; gone?: boolean }[], versions = false): void {
   if (files.length > MAX_MEMORY_BATCH) throw new ConvexError({ kind: 'badArgs', message: `at most ${MAX_MEMORY_BATCH} files at once` });
+  if (batchBytes(files) > MAX_BATCH_BYTES) throw new ConvexError({ kind: 'badArgs', message: `at most ${MAX_BATCH_BYTES} bytes of text at once` });
   const seen = new Set<string>();
   for (const f of files) {
     const bad = badMemoryFile(f);
     if (bad) throw new ConvexError({ kind: 'badArgs', message: bad });
-    if (seen.has(f.path)) throw new ConvexError({ kind: 'badArgs', message: `${f.path} twice` });
-    seen.add(f.path);
+    // An offer is a version, so one path may come twice with different text.
+    const k = versions ? `${f.path}\n${f.hash}` : f.path;
+    if (seen.has(k)) throw new ConvexError({ kind: 'badArgs', message: `${f.path} twice` });
+    seen.add(k);
   }
 }
 
@@ -2605,8 +2608,9 @@ export const memorySince = query({
 });
 
 // What a runner key's agents saved there: new files, or its own edits to
-// one the main Mac sent. Kept apart from memoryFiles, for the main Mac to
-// read as data. The owner key has no use for it: its files are memory.
+// one the main Mac sent, one row per version (the same version again is
+// nothing new). Kept apart from memoryFiles, for the main Mac to read as
+// data. The owner key has no use for it: its files are memory.
 export const offerMemory = mutation({
   args: { key: v.string(), runnerId: v.string(), files: v.array(v.object({ path: v.string(), hash: v.string(), text: v.string() })) },
   returns: v.null(),
@@ -2614,20 +2618,19 @@ export const offerMemory = mutation({
     const caller = await runnerAuth(ctx, key, 'offerMemory');
     await actAs(ctx, caller, runnerId);
     if (caller.owner) throw new ConvexError({ kind: 'badArgs', message: "the main Mac's memory is put up with putMemory" });
-    checkMemoryBatch(files);
+    checkMemoryBatch(files, true);
     const now = Date.now();
-    const waiting = await ctx.db.query('memoryOffers').withIndex('by_runner_path', (q) => q.eq('runnerId', runnerId)).take(MAX_OFFERS_PER_RUNNER + 1);
-    let count = waiting.length;
+    let count = await offerCount(ctx, runnerId);
+    let added = 0;
     for (const f of files) {
-      const row = waiting.find((r) => r.path === f.path);
-      if (row) {
-        if (row.hash !== f.hash) await ctx.db.replace(row._id, { runnerId, path: f.path, hash: f.hash, text: f.text, at: now });
-        continue;
-      }
+      const row = await ctx.db.query('memoryOffers').withIndex('by_runner_path_hash', (q) => q.eq('runnerId', runnerId).eq('path', f.path).eq('hash', f.hash)).first();
+      if (row) continue;
       if (count >= MAX_OFFERS_PER_RUNNER) throw new ConvexError({ kind: 'full', message: `${MAX_OFFERS_PER_RUNNER} offers already waiting for the main Mac` });
       await ctx.db.insert('memoryOffers', { runnerId, path: f.path, hash: f.hash, text: f.text, at: now });
       count++;
+      added++;
     }
+    if (added) await bumpOfferCount(ctx, runnerId, added);
     return null;
   },
 });
@@ -2643,8 +2646,8 @@ export const memoryOffers = query({
   },
 });
 
-// Offers the main Mac has saved. One changed since it read it (a newer
-// hash) stays, to be read again.
+// Offers the main Mac has saved. The hash must match, so a mix-up of ids
+// can't drop an offer it never saw.
 export const takeMemoryOffers = mutation({
   args: { key: v.string(), taken: v.array(v.object({ id: v.id('memoryOffers'), hash: v.string() })) },
   returns: v.null(),
@@ -2652,7 +2655,10 @@ export const takeMemoryOffers = mutation({
     await runnerAuth(ctx, key, 'takeMemoryOffers');
     for (const t of taken.slice(0, OFFER_PAGE)) {
       const row = await ctx.db.get(t.id);
-      if (row && row.hash === t.hash) await ctx.db.delete(t.id);
+      if (row && row.hash === t.hash) {
+        await ctx.db.delete(t.id);
+        await bumpOfferCount(ctx, row.runnerId, -1);
+      }
     }
     return null;
   },

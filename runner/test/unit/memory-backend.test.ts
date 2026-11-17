@@ -60,18 +60,35 @@ test("a runner key can't write the shared files, and bad paths are refused", asy
   assert.equal(s.rows('memoryFiles').length, 0);
 });
 
-test("a runner key's offers reach only the main Mac, and a newer one isn't taken by mistake", async () => {
+test("a runner key's offers reach only the main Mac, each version its own row, counted", async () => {
   const s = await setup();
-  await call(s.ctx, sync.offerMemory, { key: MINI_KEY, runnerId: MINI, files: [{ path: 'memory/~-dev-me-misc/new.md', hash: H('d'), text: 'learned' }] });
+  const offer = (hash: string, text: string) => call(s.ctx, sync.offerMemory, { key: MINI_KEY, runnerId: MINI, files: [{ path: 'memory/~-dev-me-misc/new.md', hash, text }] });
+  await offer(H('d'), 'learned');
   assert.match(await refusal(call(s.ctx, sync.offerMemory, { key: MINI_KEY, runnerId: 'someone-else', files: [] })), /act as runner/);
   assert.match(await refusal(call(s.ctx, sync.memoryOffers, { key: MINI_KEY })), /only the main Mac's key/);
+  assert.match(await refusal(call(s.ctx, sync.takeMemoryOffers, { key: MINI_KEY, taken: [] })), /only the main Mac's key/);
   assert.match(await refusal(call(s.ctx, sync.offerMemory, { key: OWNER, runnerId: MINI, files: [] })), /act as runner|putMemory/);
+  // Another login's different edit of the same file, and the first again.
+  await offer(H('e'), 'learned differently');
+  await offer(H('d'), 'learned');
   const offers = await call(s.ctx, sync.memoryOffers, { key: OWNER });
-  assert.deepEqual(offers.map((o: { runnerId: string; path: string; text: string }) => [o.runnerId, o.path, o.text]), [[MINI, 'memory/~-dev-me-misc/new.md', 'learned']]);
-  // Changed again before the main Mac took the first: that one stays.
-  await call(s.ctx, sync.offerMemory, { key: MINI_KEY, runnerId: MINI, files: [{ path: 'memory/~-dev-me-misc/new.md', hash: H('e'), text: 'learned more' }] });
+  assert.deepEqual(offers.map((o: { runnerId: string; text: string }) => [o.runnerId, o.text]), [[MINI, 'learned'], [MINI, 'learned differently']]);
+  assert.equal((s.rows('memoryOfferCounts')[0] as unknown as { count: number }).count, 2);
+  // A wrong hash takes nothing.
+  await call(s.ctx, sync.takeMemoryOffers, { key: OWNER, taken: [{ id: offers[0].id, hash: H('f') }] });
+  assert.equal(s.rows('memoryOffers').length, 2);
   await call(s.ctx, sync.takeMemoryOffers, { key: OWNER, taken: offers.map((o: { id: string; hash: string }) => ({ id: o.id, hash: o.hash })) });
-  assert.deepEqual(s.rows('memoryOffers').map((r: { text: string }) => r.text), ['learned more']);
+  assert.equal(s.rows('memoryOffers').length, 0);
+  assert.equal((s.rows('memoryOfferCounts')[0] as unknown as { count: number }).count, 0);
   // None of it is memory.
   assert.equal(s.rows('memoryFiles').length, 0);
+});
+
+test('offers stop at the cap until the main Mac takes some, and a batch is bounded in bytes', async () => {
+  const s = await setup();
+  await s.ctx.db.insert('memoryOfferCounts', { runnerId: MINI, count: 200 });
+  assert.match(await refusal(call(s.ctx, sync.offerMemory, { key: MINI_KEY, runnerId: MINI, files: [{ path: 'memory/~/a.md', hash: H('a'), text: 'x' }] })), /already waiting/);
+  const big = 'x'.repeat(100 * 1024);
+  const files = Array.from({ length: 30 }, (_, i) => ({ path: `memory/~/f${i}.md`, hash: H('b'), text: big }));
+  assert.match(await refusal(call(s.ctx, sync.putMemory, { key: OWNER, files })), /bytes of text at once/);
 });

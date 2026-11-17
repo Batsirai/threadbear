@@ -1260,6 +1260,7 @@ async function main(): Promise<void> {
     // a restart of its own has no deadline.
     const checksDone = scheduler.settled(/^SIG|supervisor/.test(signal) ? 15_000 : undefined);
     librarian.stop();
+    memorySync.stop();
     stuckJobs.stop();
     frozenClis.stop();
     macScreen?.stop();
@@ -1327,6 +1328,8 @@ async function main(): Promise<void> {
       tally.stopWriting();
       // The new release mirrors from here on.
       secretCheck.stop();
+      // The new release syncs memory from here on, not both.
+      memorySync.stop();
       void sync.stop();
       // The older runners it was connected to are the new primary's now:
       // it connects to every one of them, and each thread they hand over
