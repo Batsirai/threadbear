@@ -1,6 +1,7 @@
 // The agents Threadbear runs over ACP, one row each: everything that differs
 // between them. A new agent is a row here, a row in providers.ts and its
 // line in docs/on-your-mac.md.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,7 +16,9 @@ export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok'>;
 // What a process is started for: the runner's data dir (where Grok's hook
 // lives), and whether it's a small job that may use no tools at all.
 // trusted: the folder was one the agent trusts when this process started.
-export type AgentRun = { dataDir?: string; noTools?: boolean; trusted?: boolean };
+// binary: the program about to be started, for an agent whose flags depend
+// on its version (OpenCode).
+export type AgentRun = { dataDir?: string; noTools?: boolean; trusted?: boolean; binary?: string };
 
 export type AcpAgent = {
   provider: AcpProvider;
@@ -127,8 +130,38 @@ export function opencodeEnv(o: { noTools?: boolean } = {}): Record<string, strin
   return {
     OPENCODE_DISABLE_PROJECT_CONFIG: '1',
     OPENCODE_DISABLE_AUTOUPDATE: '1',
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission, agent: { build: { permission }, plan: { permission }, general: { permission }, explore: { permission } } }),
+    // plugins: OpenCode 2's way to keep the user's own plugins out, as
+    // --pure does on 1 (2 dropped the flag): every plugin off, then its
+    // built-ins (all `opencode.*`) back on, as they include what reads the
+    // permission rules here (opencode.config.agent). 1 ignores the key.
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission, agent: { build: { permission }, plan: { permission }, general: { permission }, explore: { permission } }, plugins: ['-*', 'opencode.*'] }),
   };
+}
+
+// OpenCode's major version, from `--version` ("1.19.5", "opencode v2.3.0"),
+// remembered per binary until it changes on disk. Undefined if it can't tell.
+const majors = new Map<string, { key: string; major?: number }>();
+export function opencodeMajor(binary: string | undefined): number | undefined {
+  if (!binary) return undefined;
+  let key: string;
+  try {
+    const st = fs.statSync(binary);
+    key = `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return undefined;
+  }
+  const known = majors.get(binary);
+  if (known?.key === key) return known.major;
+  let major: number | undefined;
+  try {
+    const out = execFileSync(binary, ['--version'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const m = /(?:^|\s)v?(\d+)\./.exec(out.trim());
+    major = m ? Number(m[1]) : undefined;
+  } catch {
+    major = undefined;
+  }
+  majors.set(binary, { key, major });
+  return major;
 }
 
 export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
@@ -147,7 +180,9 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
       return isExecutableFile(own) ? own : onPath('opencode', pathEnv);
     },
     // --pure: no plugins, the user's own included, for the same reason.
-    args: () => ['acp', '--pure'],
+    // OpenCode 2 has no --pure (it prints its help and exits instead of
+    // serving), so there the `plugins` rule in opencodeEnv does it.
+    args: (run) => ((opencodeMajor(run?.binary) ?? 1) >= 2 ? ['acp'] : ['acp', '--pure']),
     updateArgs: ['upgrade'],
     env: opencodeEnv,
     identifies: (init) => /opencode/i.test(init.agentInfo?.name ?? '') || Boolean(init.authMethods?.some((m) => m.id === 'opencode-login')),

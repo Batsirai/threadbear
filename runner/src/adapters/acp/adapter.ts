@@ -159,7 +159,8 @@ export class AcpAdapter implements AgentAdapter {
   async models(account: Account): Promise<ModelChoice[]> {
     const { deps } = this;
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
-    const p = new AcpProcess({ binary: this.binary(), args: deps.agent.args({ dataDir: deps.dataDir }), env: this.env(account), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
+    const bin = this.binary();
+    const p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, binary: bin }), env: this.env(account), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
     try {
       const init = await p.start();
       if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
@@ -231,7 +232,7 @@ export class AcpSession implements AgentSession {
     this.ctx = fileContext(opts.cwd, opts.mediaDir, opts.blobsDir);
     this.normalizer = new AcpNormalizer(this.ctx);
     this.trusted = deps.agent.trusts?.(opts.cwd) ?? false;
-    const args = deps.agent.args({ dataDir: deps.dataDir, trusted: this.trusted });
+    const args = deps.agent.args({ dataDir: deps.dataDir, trusted: this.trusted, binary });
     this.guard = deps.agent.guardName?.(args);
     this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
     this.proc.onNotification = (method, params) => this.notification(method, params);

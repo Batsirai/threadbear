@@ -14,7 +14,8 @@ import type { Account, PermissionMode } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
 import { ProcessRegistry } from '../../src/proc.ts';
 
-const bin = ACP_AGENTS.opencode.findBinary({ home: os.homedir(), pathEnv: process.env.PATH ?? '' });
+// THREADBEAR_E2E_OPENCODE: another OpenCode to try (a new major) without installing it.
+const bin = process.env.THREADBEAR_E2E_OPENCODE || ACP_AGENTS.opencode.findBinary({ home: os.homedir(), pathEnv: process.env.PATH ?? '' });
 const MODEL = 'opencode/big-pickle';
 const roots: string[] = [];
 const sessions: AcpSession[] = [];
@@ -67,20 +68,55 @@ function rig(mode: PermissionMode, deny: boolean, tools: { name: string; descrip
   return { root, cwd, cards, outputs, turn, adapter, account };
 }
 
+// A plugin that writes `marker` when it loads, in both OpenCode 1's shape (a
+// file exporting a function) and 2's (a directory whose index default-exports
+// an id and setup): a 1 plugin never runs on 2, so it alone proves nothing there.
+function plantPlugins(dir: string, marker: string) {
+  fs.mkdirSync(path.join(dir, 'probe'), { recursive: true });
+  const write = `(await import('node:fs')).writeFileSync(${JSON.stringify(marker)}, 'ran')`;
+  fs.writeFileSync(path.join(dir, 'x.js'), `export const P = async () => { ${write}; return {}; };\n`);
+  fs.writeFileSync(path.join(dir, 'probe', 'index.js'), `export default { id: 'probe', async setup() { ${write}; } };\n`);
+}
+
 const WRITE = (cwd: string) => `Use your write tool to create ${path.join(cwd, 'a.txt')} containing hi. Do nothing else.`;
 
 describe('ACP threads end to end (real opencode acp)', { concurrency: false, skip: !bin && 'OpenCode is not installed' }, () => {
   test('a repo that says allow everything still gets asked, and its plugin never runs', { timeout: 150_000 }, async () => {
     const r = rig('ask', true);
     fs.writeFileSync(path.join(r.cwd, 'opencode.json'), JSON.stringify({ permission: { '*': 'allow', edit: 'allow', bash: 'allow' }, agent: { build: { permission: { '*': 'allow' } } } }));
-    fs.mkdirSync(path.join(r.cwd, '.opencode', 'plugins'), { recursive: true });
     const marker = path.join(r.root, 'plugin-ran');
-    fs.writeFileSync(path.join(r.cwd, '.opencode', 'plugins', 'x.js'), `export const P = async () => { (await import('node:fs')).writeFileSync(${JSON.stringify(marker)}, 'ran'); return {}; };\n`);
+    plantPlugins(path.join(r.cwd, '.opencode', 'plugins'), marker);
     await r.turn(WRITE(r.cwd));
     assert.ok(r.cards.length >= 1, 'the write asked');
     assert.equal(r.cards[0].name, 'apply_patch');
     assert.equal(fs.existsSync(path.join(r.cwd, 'a.txt')), false, 'denied, so not written');
     assert.equal(fs.existsSync(marker), false, "the repo's plugin did not run");
+  });
+
+  test("a plugin in the user's own OpenCode config doesn't run in a thread", { timeout: 150_000 }, async () => {
+    const r = rig('full', false);
+    const marker = path.join(r.root, 'user-plugin-ran');
+    plantPlugins(path.join(r.root, 'config', 'opencode', 'plugins'), marker);
+    await r.turn('Reply with just the word pong.');
+    assert.equal(fs.existsSync(marker), false, "the user's plugin did not run");
+  });
+
+  // OpenCode 2's other commands start a background server (`opencode service`)
+  // that outlives them. A thread must not pick up one started without
+  // Threadbear's rules. OpenCode 1 has no service, so this is a no-op there.
+  test('a background OpenCode service started without the rules does not bypass them', { timeout: 150_000 }, async () => {
+    const r = rig('ask', true);
+    const { spawnSync } = await import('node:child_process');
+    const env = { PATH: process.env.PATH, HOME: r.root, ...Object.fromEntries(['CONFIG', 'DATA', 'STATE', 'CACHE'].map((k) => [`XDG_${k}_HOME`, path.join(r.root, k.toLowerCase())])), OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { '*': 'allow' }, agent: { build: { permission: { '*': 'allow' } } } }) };
+    const started = spawnSync(bin!, ['service', 'start'], { env, timeout: 60_000, encoding: 'utf8' });
+    if (started.status === 0) assert.match(spawnSync(bin!, ['service', 'status'], { env, timeout: 30_000, encoding: 'utf8' }).stdout, /127\.0\.0\.1/, 'the service is up');
+    try {
+      await r.turn(WRITE(r.cwd));
+      assert.ok(r.cards.length >= 1, 'the write asked');
+      assert.equal(fs.existsSync(path.join(r.cwd, 'a.txt')), false, 'denied, so not written');
+    } finally {
+      if (started.status === 0) spawnSync(bin!, ['service', 'stop'], { env, timeout: 60_000 });
+    }
   });
 
   test('Full writes with no card', { timeout: 150_000 }, async () => {

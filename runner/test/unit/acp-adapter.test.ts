@@ -159,6 +159,24 @@ test('the row turns the folder config, plugins and the agent\'s updates off', ()
   assert.equal(conf.agent.build.permission['*'], 'ask', "an agent's own rules outrank the top level");
   assert.equal(conf.agent.plan.permission['*'], 'ask');
   assert.ok(ACP_AGENTS.opencode.args().includes('--pure'));
+  assert.deepEqual(conf.plugins, ['-*', 'opencode.*'], "OpenCode 2's: the user's plugins off, its own back on");
+});
+
+test('OpenCode 2 gets no --pure, which it would refuse; 1 and an unknown version keep it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-oc-major-'));
+  const fake = (name: string, out: string) => {
+    const f = path.join(dir, name);
+    fs.writeFileSync(f, `#!/bin/sh\necho '${out}'\n`, { mode: 0o755 });
+    return f;
+  };
+  try {
+    assert.deepEqual(ACP_AGENTS.opencode.args({ binary: fake('two', 'opencode v2.3.0') }), ['acp']);
+    assert.deepEqual(ACP_AGENTS.opencode.args({ binary: fake('one', '1.19.5') }), ['acp', '--pure']);
+    assert.deepEqual(ACP_AGENTS.opencode.args({ binary: fake('odd', 'who knows') }), ['acp', '--pure']);
+    assert.deepEqual(ACP_AGENTS.opencode.args({ binary: path.join(dir, 'gone') }), ['acp', '--pure']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a folder's plugin doesn't run", async () => {

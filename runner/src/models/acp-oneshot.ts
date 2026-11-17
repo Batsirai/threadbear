@@ -69,7 +69,7 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     const env = cliEnv(req.account, deps.env ?? process.env);
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CLAUDE_AGENT_SDK_CLIENT_APP;
-    const args = deps.agent.args({ dataDir: deps.dataDir, noTools: true });
+    const args = deps.agent.args({ dataDir: deps.dataDir, noTools: true, binary });
     const proc = new AcpProcess({ binary, args, env: { ...env, ...deps.agent.env({ noTools: true }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
     let text = '';
     // As AcpSession's checkGuard: Grok must report Threadbear's hook running
