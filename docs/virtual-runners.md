@@ -26,6 +26,22 @@ in, and "What the review changed" at the end says what moved and why.
   the first time. The row shows "Starting a machine" with a spinner while
   the box boots and clones the repo, the message waits in the queue, then
   the turn runs.
+- The first time a thread runs on it with a Claude login that has no
+  cloud token yet, the thread shows one card: "Make one for <login>" or
+  "Paste a token". Making one runs `claude setup-token` on the Mac, which
+  opens claude.ai to approve and gets the code back on a localhost
+  callback, so there's nothing to copy. The message waits and goes once
+  the token is set. The same card comes back when a token is revoked or
+  expires. (Mike picked this on 17 Nov over a switch per login in
+  Settings or Capy-style setup cards; Settings still lists each cloud
+  token with its expiry and a link to revoke it.)
+  If that login already uses a year-long token on the Mac (thread
+  d0cf502c: each login may opt in, kept in its own `settings.json`), the
+  card offers to use it, but a separate cloud token is the default: a box
+  can leak its token, and revoking a shared one would sign the Mac out
+  too. `claude auth status` reports any token as signed in, so a dead
+  cloud token only shows when a turn is refused with a 401; that is what
+  brings the card back.
 - Ten threads on it are ten boxes. They show under the one entry, never
   as ten machines in the menu or in Settings.
 - A thread that's been idle a few minutes **sleeps**: its work is saved
