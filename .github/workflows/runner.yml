@@ -148,7 +148,7 @@ jobs:
   windows:
     name: windows-latest, Node 24
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: runner
@@ -174,10 +174,16 @@ jobs:
           THREADBEAR_JOB_PRIORITY: normal
         run: node scripts/test-windows.mjs
 
+      # Many of these wait on something Windows never gives, so each test
+      # gets 20 s and the whole report 20 minutes, and it never fails the run.
       - name: Known-failing files (a report, never fails the run)
         if: always()
+        continue-on-error: true
+        timeout-minutes: 20
         env:
           THREADBEAR_CLI_UPDATES: 'off'
           THREADBEAR_SYNC: 'off'
           THREADBEAR_JOB_PRIORITY: normal
+          THREADBEAR_TEST_TIMEOUT_MS: '20000'
+          THREADBEAR_TEST_CONCURRENCY: '4'
         run: node scripts/test-windows.mjs --known
