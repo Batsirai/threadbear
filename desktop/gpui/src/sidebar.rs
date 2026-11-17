@@ -625,7 +625,7 @@ impl Threadbear {
 
     /// The nestedThreads experiment is on for this Mac's runner: Settings'
     /// switch first, as it changes without a new hello, else the hello's
-    /// list (as `open_anything_on`).
+    /// list.
     pub(crate) fn nested_threads_on(&self) -> bool {
         let id = nested::EXPERIMENT;
         let switch = self.runner_settings.as_ref().and_then(|s| s["experiments"].as_array()?.iter().find(|e| e["id"] == id).map(|e| e["on"].as_bool() == Some(true)));

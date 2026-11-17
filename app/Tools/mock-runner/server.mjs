@@ -415,13 +415,10 @@ let connectors = {
   ],
 };
 addDemoProjects();
-// The experiments the mock's hello says are on: Open Anything (⌘K) unless
-// TB_MOCK_OPEN_ANYTHING_OFF, for the spec that it's gone while off, and
-// Decisions on the Projects page with TB_MOCK_DECISIONS, and nested threads
-// with TB_MOCK_NESTED.
+// The experiments the mock's hello says are on: Decisions on the Projects
+// page with TB_MOCK_DECISIONS, and nested threads with TB_MOCK_NESTED.
 function mockExperiments() {
   return [
-    ...(process.env.TB_MOCK_OPEN_ANYTHING_OFF ? [] : ['openAnything']),
     ...(process.env.TB_MOCK_DECISIONS ? ['projectDecisions'] : []),
     // TB_MOCK_NESTED_OFF keeps its demo threads with the experiment off.
     ...(process.env.TB_MOCK_NESTED && !process.env.TB_MOCK_NESTED_OFF ? ['nestedThreads'] : []),

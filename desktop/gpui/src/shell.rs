@@ -744,13 +744,7 @@ impl Threadbear {
             // A project's page tabs; they do nothing anywhere else.
             Command::PreviousTab => self.step_project_tab(-1, cx),
             Command::NextTab => self.step_project_tab(1, cx),
-            // Only while the experiment's on: its keys and menu item go
-            // with it, but a stale binding mustn't open it either.
-            Command::OpenAnything | Command::OpenAnythingAlso => {
-                if self.open_anything_on() {
-                    self.toggle_open_anything(window, cx);
-                }
-            }
+            Command::OpenAnything | Command::OpenAnythingAlso => self.toggle_open_anything(window, cx),
             // Each brings the Threads panel back if ⌘/ folded it away.
             Command::ShowInbox | Command::ShowScheduled | Command::ShowProjects | Command::ShowLibrarian | Command::ShowHibernating | Command::ShowArchived => {
                 self.unfold_threads(cx);
@@ -1117,12 +1111,8 @@ impl Threadbear {
         for (chord, command) in standard_keys() {
             desired.insert(chord.to_owned(), command);
         }
-        // An experiment's keys only while it's on (`ShortcutCommand::experiment`).
-        let on = self.open_anything_on();
-        self.bound_open_anything = on;
         for command in Command::ALL {
-            let shortcut = command.shortcut().filter(|c| c.experiment().is_none() || on);
-            if let Some(key) = shortcut.and_then(|c| self.shortcuts.key(c)) {
+            if let Some(key) = command.shortcut().and_then(|c| self.shortcuts.key(c)) {
                 desired.insert(key.chord(macos), *command);
             }
         }
@@ -1298,10 +1288,9 @@ impl Threadbear {
                     Separator,
                     item("Show Previous Tab", Command::PreviousTab).enabled(self.can_step_project_tab(-1, cx)),
                     item("Show Next Tab", Command::NextTab).enabled(self.can_step_project_tab(1, cx)),
-                ]
-                .into_iter()
-                .chain(self.open_anything_on().then(|| [Separator, item("Open Anything…", Command::OpenAnything)]).into_iter().flatten())
-                .collect(),
+                    Separator,
+                    item("Open Anything…", Command::OpenAnything),
+                ],
             ),
             TopMenu::new(
                 "Thread",
