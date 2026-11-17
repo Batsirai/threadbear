@@ -254,6 +254,42 @@ test("calls refused while the backend is updated are asked again, and T's done a
   assert.equal(t.adopted, 1);
 });
 
+// Codex's review: a call waiting to be asked again belongs to its move. One
+// cancelled while it waited gives up, and its late tidying up leaves alone a
+// newer move of the same thread, which would otherwise unfreeze it mid-pack.
+test('a call waiting out an update gives up once its move ends, and leaves a newer move of the thread alone', async () => {
+  const w = await world();
+  await call(w.b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId: 'T8', runnerId: MINI, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });
+  const s = source('T8');
+  const t = target({ cwd: '/x', accountId: 'a', leftBehind: [] });
+  const timers: { fn: () => void; ms: number }[] = [];
+  const setTimer = (fn: () => void, ms: number) => (timers.push({ fn, ms }), { cancel() {} });
+  const common = { runnerName: (id: string) => names[id] ?? id };
+  let packed = 0;
+  const sb = w.backendFor(MINI_KEY, MINI);
+  const refusing: MovesBackend = {
+    ...sb,
+    async call(fn, args) {
+      if (fn === 'movePacked' && ++packed === 1) throw new Error('The backend is being updated. Try again in a minute.');
+      return sb.call(fn, args);
+    },
+  };
+  new Moves({ self: () => MINI, backend: () => refusing, host: { ...common, ...s.host } as MovesHost, log, setTimer }).start();
+  new Moves({ self: () => LAPTOP, backend: () => w.backendFor(OWNER, LAPTOP), host: { ...common, ...t.host } as MovesHost, log, setTimer }).start();
+  const a = (await startBound(w, 'T8', s, t)).moveId;
+  await until(() => timers.some((x) => x.ms === 20_000), "the pack's call waiting to be asked again");
+  await call(w.b.ctx, moves.cancelMove, { key: OWNER, moveId: a });
+  await w.refresh();
+  s.idle = false;
+  const b = (await startBound(w, 'T8', s, t)).moveId;
+  await w.refresh();
+  await until(() => s.seen.at(-1)?.moveId === b && s.seen.at(-1)?.state === 'ready', 'the new move waiting on the turn');
+  timers.splice(timers.findIndex((x) => x.ms === 20_000), 1)[0]!.fn();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(packed, 1, 'not asked again once cancelled');
+  assert.deepEqual([s.seen.at(-1)?.moveId, s.seen.at(-1)?.state], [b, 'ready'], 'the thread still shows the new move');
+});
+
 test("a move the new runner can't take fails, and the thread stays where it was", async () => {
   const w = await world();
   await call(w.b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId: 'T3', runnerId: MINI, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });

@@ -512,6 +512,11 @@ export class Moves {
   // being updated (a deploy's stepping stone, convex/stepping.ts: a minute
   // or so): only the call, so a step that has already uploaded a bundle or
   // placed a thread doesn't do it again (Codex's review).
+  private over(moveId: unknown): boolean {
+    const row = typeof moveId === 'string' ? this.rows.get(moveId) : undefined;
+    return !!row && ENDED.includes(row.state);
+  }
+
   private backend(): MovesBackend {
     const b = this.d.backend();
     if (!b) throw new Error("This runner isn't connected to Threadbear's backend.");
@@ -522,9 +527,11 @@ export class Moves {
           try {
             return await b.call(fn, args);
           } catch (e) {
-            if (tries >= UPDATING_TRIES || !BEING_UPDATED.test(e instanceof Error ? e.message : String(e))) throw e;
+            if (tries >= UPDATING_TRIES || !BEING_UPDATED.test(e instanceof Error ? e.message : String(e)) || this.over(args.moveId)) throw e;
             this.d.log.warn('the backend is being updated: asking again shortly', { fn });
             await new Promise<void>((done) => (this.d.setTimer ?? defaultTimer)(done, Math.min(RETRY_MAX_MS, RETRY_MS * 2 ** (tries - 1))));
+            // Ended while it waited (cancelled): its own row's step tidies up.
+            if (this.over(args.moveId)) throw e;
           }
         }
       },
@@ -593,6 +600,10 @@ export class Moves {
       case 'failed':
       case 'cancelled': {
         if (!host.has(id)) return;
+        // Another move of the thread has started since (this one's step ran
+        // late, after a wait): what the thread shows is that one's (Codex's review).
+        const now = this.movingOf(id);
+        if (now && now.moveId !== row.moveId) return;
         // A move that ended long ago (seen again after a restart) says nothing.
         if (Date.now() - row.updatedAt > FAILED_SHOWN_MS) host.setMoving(id, undefined);
         else {
