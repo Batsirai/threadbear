@@ -4,6 +4,12 @@
 // channel; requests run there too and their results come back as tasks.
 // Read-outs that exist only for the scripted control (`automation.rs`).
 #![cfg_attr(not(feature = "automation"), allow(dead_code, unused_imports))]
+// A Windows release is a windowed program, not a console one: without this
+// Windows opens a cmd window behind the app for its stderr (Mike's Dell, 17
+// Nov). Its log goes to a file instead (app_log.rs). Debug and scripted
+// builds keep the console, as the specs and anyone running one by hand read
+// what it prints.
+#![cfg_attr(all(windows, not(debug_assertions), not(feature = "automation")), windows_subsystem = "windows")]
 mod a11y;
 mod activity;
 mod activity_panels;

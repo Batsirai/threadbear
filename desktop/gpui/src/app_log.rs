@@ -3,15 +3,25 @@
 // scripted app's app.log beside its automation file, so a spec or an agent
 // driving it can read why something didn't happen (`dev-app.sh log` reads
 // the Swift app's). Any other launch (a debug build run by hand) writes to
-// stderr only, and never into the installed app's file.
+// stderr only, and never into the installed app's file. A Windows release
+// has no stderr to see (main.rs makes it a windowed program), so it writes
+// to %LOCALAPPDATA%\Threadbear\Logs\desktop.log, panics included.
 use crate::installed;
 use std::path::{Path, PathBuf};
+
+/// A build with no console: the Windows release (main.rs's
+/// `windows_subsystem`, under the same conditions).
+const NO_CONSOLE: bool = cfg!(all(windows, not(debug_assertions), not(feature = "automation")));
 
 pub(crate) fn path() -> Option<PathBuf> {
     let launch = installed::launch();
     if launch.scripted {
         let file = std::env::var_os("THREADBEAR_AUTOMATION")?;
         return Some(Path::new(&file).parent()?.join("app.log"));
+    }
+    if NO_CONSOLE {
+        let local = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty())?;
+        return Some(PathBuf::from(local).join("Threadbear").join("Logs").join("desktop.log"));
     }
     launch.installed.then(|| installed::logs_dir().join("desktop.log"))
 }
@@ -34,5 +44,14 @@ pub(crate) fn start() {
     match opened {
         Ok(()) => threadbear_client::log::write("app", &format!("started {}", installed::launch().build.as_ref().map_or("(no build info)", |b| b.short.as_str()))),
         Err(e) => eprintln!("threadbear: couldn't open the app log at {}: {e}", path.display()),
+    }
+    // With no console, Rust's own panic message would go nowhere, so it goes
+    // in the log too, before whatever hook was there (crash_reporting.rs).
+    if NO_CONSOLE {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            threadbear_client::log::write("panic", &info.to_string());
+            previous(info);
+        }));
     }
 }

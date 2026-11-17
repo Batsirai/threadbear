@@ -214,7 +214,9 @@ File references are where to look.
   once that passes 2 MB): when the connection to the runner went and came
   back, requests the runner turned down or didn't answer, the runner's
   notices, and messages held while it restarted, by thread id and never
-  their words (`desktop/client/src/log.rs`),
+  their words (`desktop/client/src/log.rs`); on Windows that log is
+  `%LOCALAPPDATA%\Threadbear\Logs\desktop.log`, with any panic's message
+  in it too, as the app has no console window there (`desktop/gpui/src/app_log.rs`),
   and its last 10 panics in `~/Library/Logs/Threadbear/crashes/desktop`
   (the message with anything in quotes and any paths taken out, the file and
   line in Threadbear's code, and the names of the functions it was in), with
