@@ -113,10 +113,6 @@ impl Threadbear {
         rules::cards(self.hello_can_pair())
     }
 
-    pub(crate) fn hello_is_on(&self) -> bool {
-        self.hello.at.is_some()
-    }
-
     /// The first launch (tour.rs's `tour_start_if_new`), and Help > Set Up
     /// Threadbear.
     pub(crate) fn hello_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
