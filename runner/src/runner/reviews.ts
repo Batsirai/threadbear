@@ -159,6 +159,29 @@ export const reviewsPart = {
     return {...draft, images};
   },
 
+  // The review with only the reply pictures kept beside it here (what
+  // keepReplyImages made), none that's a link or anywhere else.
+  ownReplyImages(this: Runner, st: ThreadState, review: DesignReview): DesignReview {
+    const dir = path.join(this.store.mediaDir(st.rec.id), 'reviews', review.id, 'reply');
+    let kept: string;
+    try { kept = fs.realpathSync(dir); } catch { kept = ''; }
+    const own = (img: ImageRef) => {
+      try {
+        return !!kept && !!img?.path && !fs.lstatSync(img.path).isSymbolicLink() && path.dirname(fs.realpathSync(img.path)) === kept;
+      } catch { return false; }
+    };
+    const fit = (draft: ReviewDraft | undefined): ReviewDraft | undefined => {
+      if (!draft?.images) return draft;
+      const images = Array.isArray(draft.images) ? draft.images.filter(own) : [];
+      if (images.length === draft.images.length) return draft;
+      const {images: _, ...rest} = draft;
+      return images.length ? {...rest, images} : rest;
+    };
+    const draft = fit(review.draft)!;
+    const response = fit(review.response);
+    return draft === review.draft && response === review.response ? review : {...review, draft, ...(response ? {response} : {})};
+  },
+
   mustReview(this: Runner, st: ThreadState, id: string): DesignReview {
     const review = st.rec.reviews?.find(r => r.id === id);
     if (!review) throw new RpcError(ErrorCode.badParams, `Review not found: ${id}`);
@@ -216,6 +239,10 @@ export const reviewsPart = {
     }
     const reviews = new Map((st.rec.reviews ?? []).map(r => [r.id, r]));
     for (const [id, review] of latest) if (!reviews.has(id) || reviews.get(id)!.revision < review.revision) reviews.set(id, review);
+    // A reply's pictures are only ever this thread's own copies: a moved
+    // thread's log is the other runner's word, and could name any file here
+    // (Codex's review, 17 Nov).
+    for (const [id, review] of reviews) reviews.set(id, this.ownReplyImages(st, review));
     if (reviews.size) st.rec.reviews = [...reviews.values()];
     // The delivery marker is written after session.send, not merely after
     // user.message. A failed turn.started append leaves the answer unsent.

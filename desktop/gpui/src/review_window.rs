@@ -291,6 +291,9 @@ pub(crate) struct ReviewWindow {
     pending_chip_removal: Vec<SharedString>,
     /// A picture came in: the draft takes the box at the next draw.
     reply_changed: bool,
+    /// How many pictures the draft had when the box and it last agreed, as
+    /// `reply_synced` is its words: a change to it is from elsewhere.
+    pictures_synced: usize,
     /// Holds the keys when the reply box hasn't got them: the arrows step,
     /// Space flicks to today's version, Return and Esc go in and out.
     focus: FocusHandle,
@@ -318,6 +321,7 @@ impl ReviewWindow {
         // Its pictures as chips where their markers are.
         let mut reply_pictures = reply_pictures::ReplyPictures::default();
         let content = reply_pictures.content_for(&typed, &session.draft().images);
+        let session_pictures = session.draft().images.len();
         let reply = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx).placeholder("Add a reply").auto_grow(1, 13);
             state.set_value(content, window, cx);
@@ -377,6 +381,7 @@ impl ReviewWindow {
             reply_pictures,
             pending_chip_removal: Vec::new(),
             reply_changed: false,
+            pictures_synced: session_pictures,
             focus,
             save_timer: None,
             call_task: None,
@@ -439,7 +444,9 @@ impl ReviewWindow {
         // A changed runner draft or answer still wins over an unreported local
         // edit; a picture added or taken away elsewhere with the same words (a
         // reply of pictures alone) does too.
-        let pictures_changed = !self.reply_pictures.loading(self.reply.read(cx)) && self.reply_pictures.count(self.reply.read(cx)) != images.len();
+        // Against what was last agreed, not the box now, which a chip being
+        // typed over (IME composing) has already lost (Codex's review).
+        let pictures_changed = self.pictures_synced != images.len();
         if self.reply_synced != wanted || pictures_changed {
             let same = self.reply_pictures.draft_of(self.reply.read(cx)).is_some_and(|(reply, now)| reply == wanted && now == images);
             if !same {
@@ -447,6 +454,7 @@ impl ReviewWindow {
                 self.reply.update(cx, |s, cx| s.set_value(content, window, cx));
             }
             self.reply_synced = wanted;
+            self.pictures_synced = images.len();
         } else {
             // A save's answer names the runner's own copies of the same pictures.
             self.reply_pictures.adopt(self.reply.read(cx), &images);

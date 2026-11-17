@@ -473,4 +473,13 @@ test('a client from before reply pictures keeps them; a moved review brings none
   const moved=fitReview({...review,status:'answered',replyTurnId:'t',response:{notes:{},images:[{path:'/Users/someone/private.png',mediaType:'image/png'}]},draft:{notes:{},images:[{path:'/etc/hosts',mediaType:'image/png'}]}})!;
   assert.equal(moved.response!.images,undefined);
   assert.equal(moved.draft.images,undefined);
+  // Recovered from the log, as a moved thread's own events are: only this
+  // review's own copies stay.
+  const st=(h.runner as any).threads.get(thread.id);
+  const kept=older.draft.images![0];
+  const link=path.join(path.dirname(kept.path),'link.png');
+  fs.symlinkSync(source,link);
+  const fitted=h.runner.ownReplyImages(st,{...review,draft:{notes:{},images:[kept,{path:'/etc/hosts',mediaType:'image/png'},{path:link,mediaType:'image/png'}]},response:{notes:{},images:[{path:source,mediaType:'image/png'}]}});
+  assert.deepEqual(fitted.draft.images,[kept]);
+  assert.equal(fitted.response!.images,undefined);
 });

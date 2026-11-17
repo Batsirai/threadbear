@@ -731,10 +731,13 @@ impl ReviewSession {
         let revision = latest.revision;
         let theirs = latest.draft.clone();
         // The save got there and only its answer was lost: the runner has
-        // this draft, its pictures as its own copies. Not a change elsewhere.
+        // exactly this draft, so it isn't a change elsewhere. Not with any
+        // pictures in it: their copies there have other names, and a copy
+        // can't be told from another picture put in its place elsewhere
+        // (Codex's review, 17 Nov), so that stays a conflict to settle.
         let sent = call.draft.normalized();
-        if revision > call.revision && latest.is_pending() && (theirs == sent || theirs.same_but_picture_copies(&sent)) {
-            self.saving_images = call.draft.images.clone();
+        if revision > call.revision && latest.is_pending() && theirs == sent && sent.images.is_empty() {
+            self.saving_images = Vec::new();
             self.save_done(latest);
             return;
         }
@@ -1848,17 +1851,28 @@ mod tests {
         assert_eq!(s.draft().images, vec![other], "not the copy of the one it replaced");
         assert!(s.dirty() && s.save_again());
 
-        // A save whose answer was lost, though the runner kept it, isn't a conflict.
+        // A save whose answer was lost, though the runner kept it, isn't a
+        // conflict; with pictures it is, as their copies can't be told from
+        // other pictures put in their place elsewhere.
+        let mut s = session(two());
+        s.set_reply("Words alone");
+        let call = s.begin_save().unwrap();
+        let mut latest = s.review().clone();
+        latest.revision += 1;
+        latest.draft = call.draft.normalized();
+        s.save_failed("connection lost");
+        s.save_failed_then_loaded(&call, latest);
+        assert!(!s.conflict() && !s.dirty(), "{:?}", s.error);
         let mut s = session(two());
         s.set_reply_with_pictures("[Picture 1]", vec![pasted]);
         let call = s.begin_save().unwrap();
         let mut latest = s.review().clone();
         latest.revision += 1;
-        latest.draft = ReviewDraft { images: vec![ImageRef::new("/kept/1.png", "image/png")], ..call.draft.normalized() };
+        latest.draft = ReviewDraft { images: vec![ImageRef::new("/kept/other.png", "image/png")], ..call.draft.normalized() };
         s.save_failed("connection lost");
         s.save_failed_then_loaded(&call, latest);
-        assert!(!s.conflict() && !s.dirty(), "{:?}", s.error);
-        assert_eq!(s.draft().images[0].path, "/kept/1.png");
+        assert!(s.conflict(), "not taken as the copy of mine");
+        assert_eq!(s.draft().images[0].path, "/home/inbox/1.png");
     }
 
     #[test]

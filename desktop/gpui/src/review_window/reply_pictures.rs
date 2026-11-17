@@ -107,10 +107,6 @@ impl ReplyPictures {
         Self::ids(state).iter().any(|id| self.chips.get(id).is_some_and(|c| c.image.is_none() && !c.failed))
     }
 
-    /// The pictures in the box that are in, for comparing with the draft's.
-    pub(super) fn count(&self, state: &TextareaState) -> usize {
-        Self::ids(state).iter().filter(|id| self.chips.get(*id).is_some_and(|c| c.image.is_some())).count()
-    }
 
     /// The runner's own copies, once a save has them: the same pictures in
     /// the same order, so the box points at the copies that last.
@@ -293,6 +289,7 @@ impl ReviewWindow {
         let parts = self.reply_pictures.draft_of(self.reply.read(cx));
         let Some((reply, images)) = parts else { return };
         self.reply_synced = reply.clone();
+        self.pictures_synced = images.len();
         if self.session.set_reply_with_pictures(&reply, images) {
             self.edited(cx);
         }
