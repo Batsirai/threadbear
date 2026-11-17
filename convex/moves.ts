@@ -391,7 +391,13 @@ export const moveClaim = mutation({
       return null;
     }
     const now = Date.now();
-    await ctx.db.patch(t._id, { runnerId: m.to, pendingApproval: undefined, updatedMs: now });
+    // Its projects were the old Mac's (a project id is only its runner's
+    // own, sync.ts heldElsewhere): it leaves them, and the new Mac puts it in
+    // its own. Kept, they'd show the thread under the old Mac's project to
+    // apps that look a project up by id alone, for as long as the new Mac
+    // didn't write the row again (Daybreak 141, cross-lab review).
+    await ctx.db.patch(t._id, { runnerId: m.to, pendingApproval: undefined, projects: undefined, updatedMs: now });
+    for (const l of await ctx.db.query('projectThreads').withIndex('by_threadId', (q) => q.eq('threadId', m.threadId)).collect()) await ctx.db.delete(l._id);
     await moveView(ctx, m.from, t.view, undefined);
     await moveView(ctx, m.to, undefined, t.view);
     await buryIndexRows(ctx, m.threadId, m.to);

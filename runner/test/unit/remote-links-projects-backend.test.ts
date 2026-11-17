@@ -121,3 +121,32 @@ test("a runner key can't give its thread or a project of its own another runner'
   const { thread: main } = (await call(s.ctx, phone.thread, { token: s.token, threadId: 'MAIN' })) as { thread: { projects?: { id: string }[] } };
   assert.deepEqual(main.projects?.map((p) => p.id), ['p_shared']);
 });
+
+// A runner key that got in first, while the id had no project here yet (or
+// before API 82): its thread under the id and its own project with the id go
+// as soon as the main Mac writes its projects, which every start does
+// (cross-lab review, 17 Nov 2026).
+test("a runner key that used a project id first loses it when the main Mac writes that project (141, old apps)", async () => {
+  const s = await setup();
+  // Before the main Mac has mirrored p_shared: the other runner's project and thread take the id.
+  await call(s.ctx, sync.setProjects, { key: MINI_KEY, runnerId: MINI, projects: [project('p_shared', 'Trusted project'), project('p_mini', 'Mini project')] });
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('EVIL', MINI, { projects: [{ id: 'p_shared', title: 'Trusted project' }, { id: 'p_mini', title: 'Mini project' }] })] });
+  assert.equal(s.rows('projects').filter((p) => p.id === 'p_shared').length, 1);
+  // Then the main Mac writes its own, by either call.
+  for (const write of ['set', 'upsert'] as const) {
+    if (write === 'set') await call(s.ctx, sync.setProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')] });
+    else {
+      // The squat again, as an older backend kept it, then the main Mac's change.
+      await s.ctx.db.insert('projects', { ...project('p_shared', 'Trusted project'), runnerId: MINI });
+      await call(s.ctx, sync.upsertProjects, { key: OWNER, runnerId: LAPTOP, projects: [project('p_shared', 'Main project')], removed: [] });
+    }
+    assert.deepEqual(s.rows('projects').filter((p) => p.id === 'p_shared').map((p) => p.runnerId), [LAPTOP], write);
+    assert.deepEqual(s.rows('projectHeads').filter((p) => p.id === 'p_shared').map((p) => p.runnerId), [LAPTOP], write);
+    const list = (await call(s.ctx, phone.projects, { token: s.token })) as { runnerId: string; id: string }[];
+    assert.deepEqual(list.filter((p) => p.id === 'p_shared').map((p) => p.runnerId), [LAPTOP], write);
+    const { thread: read } = (await call(s.ctx, phone.thread, { token: s.token, threadId: 'EVIL' })) as { thread: { projects?: { id: string }[] } };
+    assert.deepEqual(read.projects?.map((p) => p.id), ['p_mini'], `${write}: its own project stays, the main Mac's id goes`);
+    assert.ok(!s.rows('projectThreads').some((l) => l.projectId === 'p_shared' && l.runnerId === MINI), write);
+  }
+  assert.ok(s.rows('projects').some((p) => p.runnerId === MINI && p.id === 'p_mini'));
+});

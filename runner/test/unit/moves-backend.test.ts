@@ -331,3 +331,28 @@ test('the main Mac drops its own chunks for a move that ended before it was pack
   assert.ok(!s.deleted.includes('used1'));
   assert.ok(!s.deleted.includes('theirs1'));
 });
+
+// A project id is only its runner's own (sync.ts heldElsewhere), so a thread
+// moved to another Mac leaves its old Mac's projects at the switch: kept,
+// the new Mac could leave it listed in the old Mac's project page, and under
+// that project in the phone apps from before API 82, by never writing it
+// again (Daybreak 141, cross-lab review, 17 Nov 2026).
+test("a thread moved to another Mac leaves the old Mac's projects at the switch", async () => {
+  const s = await setup();
+  await call(s.ctx, sync.setProjects, { key: OWNER, runnerId: LAPTOP, projects: [{ id: 'p_main', title: 'Main', folders: [], goals: '', state: '', notes: '', createdBy: 'mike', archived: false, createdAt: 'c', updatedAt: 'u', threadCount: 1 }] });
+  await s.owner.upsert(thread('T1', LAPTOP, { projects: [{ id: 'p_main', title: 'Main' }] }));
+  assert.equal(s.rows('projectThreads').length, 1);
+  const { moveId } = await s.owner.start('T1', MINI);
+  await s.owner.info(moveId);
+  await s.mini.ready(moveId);
+  await s.owner.frozen(moveId);
+  await s.owner.packed(moveId, [s.file('chunk1')]);
+  await s.mini.claim(moveId);
+  const row = s.rows('threads').find((t) => t.threadId === 'T1')!;
+  assert.equal(row.runnerId, MINI);
+  assert.equal(row.projects, undefined);
+  assert.deepEqual(s.rows('projectThreads'), []);
+  // And it stays out while Mac mini only adds replies.
+  await s.mini.append('T1', 'later', 9);
+  assert.equal(s.rows('threads').find((t) => t.threadId === 'T1')!.projects, undefined);
+});

@@ -696,6 +696,41 @@ async function ownProjectsOnly<P extends { id: string }>(ctx: QueryCtx, caller: 
   return out;
 }
 
+// After a runner's project write, the ids it wrote are its alone, whichever
+// came first: another runner's thread under one leaves it (its row's
+// projects and its link), and with the main key, another runner's project
+// with the id goes (row, head, notes, picture). So a runner key that wrote
+// first, while the id had no project here yet, or before API 82, loses it
+// as soon as the main Mac writes its projects (every start sends them all).
+// Two ranges of one index, so a project's own threads aren't read.
+async function claimProjectIds(ctx: MutationCtx, caller: Caller, runnerId: string, ids: string[]): Promise<void> {
+  for (const id of ids) {
+    const others = [
+      ...(await ctx.db.query('projectThreads').withIndex('by_project_runner', (q) => q.eq('projectId', id).lt('runnerId', runnerId)).collect()),
+      ...(await ctx.db.query('projectThreads').withIndex('by_project_runner', (q) => q.eq('projectId', id).gt('runnerId', runnerId)).collect()),
+    ];
+    for (const l of others) {
+      await ctx.db.delete(l._id);
+      const t = await threadRow(ctx, l.threadId);
+      if (!t?.projects?.some((p) => p.id === id)) continue;
+      const left = t.projects.filter((p) => p.id !== id);
+      await ctx.db.patch(t._id, { projects: left.length ? left : undefined, updatedMs: Date.now() });
+    }
+    if (!caller.owner) continue;
+    for (const p of await ctx.db.query('projects').withIndex('by_project_id', (q) => q.eq('id', id)).collect()) {
+      if (p.runnerId === runnerId) continue;
+      await ctx.db.delete(p._id);
+      await dropHead(ctx, p.runnerId, id);
+      await dropNotes(ctx, p.runnerId, id);
+      const icon = await ctx.db.query('projectIcons').withIndex('by_runner_project', (q) => q.eq('runnerId', p.runnerId).eq('projectId', id)).unique();
+      if (icon) {
+        await ctx.db.delete(icon._id);
+        await freeStorage(ctx, caller, icon.storageId);
+      }
+    }
+  }
+}
+
 // The project ids on a thread row, in a fixed order, so upsertThreads can
 // tell whether its links need touching without reading them.
 const projectKey = (t: { projects?: { id: string }[] } | null | undefined) => (t?.projects ?? []).map((p) => p.id).sort().join(' ');
@@ -1783,6 +1818,7 @@ export const setProjects = mutation({
     await replaceRows(ctx, 'projects', runnerId, projects.map((p) => ({ ...p, notes: '' })));
     await syncNotes(ctx, runnerId, projects);
     await syncHeads(ctx, runnerId, projects.map((p) => ({ ...p, runnerId })));
+    await claimProjectIds(ctx, caller, runnerId, projects.map((p) => p.id));
     // A picture for a project that's gone, or that has no picture any more,
     // goes with it. One the runner hasn't replaced yet stays, so the phone
     // keeps showing the old picture rather than a letter meanwhile.
@@ -1845,6 +1881,7 @@ export const upsertProjects = mutation({
       await syncHead(ctx, { ...p, runnerId });
       if (!p.icon?.picture) await dropIcon(p.id);
     }
+    await claimProjectIds(ctx, caller, runnerId, projects.map((p) => p.id));
     for (const id of removed) {
       const existing = await one(id);
       if (existing) await ctx.db.delete(existing._id);

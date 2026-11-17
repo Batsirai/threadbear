@@ -818,6 +818,9 @@ export default defineSchema({
     // its own runnerId, so one runner's threads can't turn up in another
     // runner's project by taking its id (Daybreak finding 141, 16 Nov 2026).
     .index('by_runner_project', ['runnerId', 'projectId'])
+    // Other runners' threads under an id a runner's project write has
+    // (sync.ts claimProjectIds).
+    .index('by_project_runner', ['projectId', 'runnerId'])
     .index('by_threadId', ['threadId']),
 
   // A thread row gone in the last day, so a client following phone:threadsSince

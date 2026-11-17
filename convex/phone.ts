@@ -586,7 +586,9 @@ export const projectThreads = query({
         .query('threads')
         .withIndex('by_threadId', (q) => q.eq('threadId', l.threadId))
         .unique();
-      if (t) out.push(stripThread(t));
+      // Only while the thread is still that runner's: a thread moved to
+      // another Mac isn't in its old Mac's project (moves.ts moveClaim).
+      if (t && t.runnerId === runnerId) out.push(stripThread(t));
     }
     return out.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
   },
