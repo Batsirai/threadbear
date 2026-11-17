@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { CliUpdates, type CliUpdatesHooks } from '../../src/updates/manager.ts';
+import { ACP_CHECK_FRESH_MS, CliUpdates, type CliUpdatesHooks } from '../../src/updates/manager.ts';
 import { UpdateHistory, HISTORY_MAX_LINES, OUTPUT_MAX_BYTES } from '../../src/updates/history.ts';
 import { compareVersions, defaultExec, type Exec } from '../../src/updates/exec.ts';
 import { FakeClock } from '../../src/clock.ts';
@@ -558,6 +558,21 @@ test('Update runs the agent\'s own updater and reports what happened', async () 
   const row = c.u.list().find((r) => r.provider === 'opencode')!;
   assert.equal(row.update?.state, 'succeeded');
   assert.equal(row.installedVersion, '2.0.0');
+});
+
+test('an Update that finds nothing newer says up to date for a day, then offers Update again', async () => {
+  const c = acpSetup();
+  c.u.update('opencode');
+  await c.u.settled();
+  let row = c.u.list().find((r) => r.provider === 'opencode')!;
+  assert.equal(row.update?.state, 'unchanged');
+  assert.equal(row.status, 'current');
+  assert.equal(row.latestVersion, '1.0.0');
+  assert.ok(row.checkedAt);
+  c.clock.advance(ACP_CHECK_FRESH_MS);
+  row = c.u.list().find((r) => r.provider === 'opencode')!;
+  assert.equal(row.status, 'unknown');
+  assert.equal(row.latestVersion, undefined);
 });
 
 test('a failed update says why', async () => {

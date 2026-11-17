@@ -805,7 +805,9 @@ pub fn update_title(cli: &CliStatus) -> Option<&'static str> {
     if is_updating(cli) {
         return None;
     }
-    if cli.can_update_now {
+    // An agent with no version feed offers Update any time, except while
+    // the runner says its last Update found nothing newer (`current`).
+    if cli.can_update_now && cli.status != "current" {
         return Some("Update");
     }
     match cli.status.as_str() {
@@ -980,6 +982,16 @@ mod tests {
         assert_eq!(status_line(&current), "Claude Code 2.1.311, up to date");
         assert!(!cli_pending(&current));
         assert_eq!(managed_line(&CliStatus { managed_by: "none".into(), ..current }), Some("Set by hand in runner.json, so Threadbear leaves it alone"));
+    }
+
+    #[test]
+    fn an_agent_with_no_feed_hides_update_while_its_last_one_found_nothing() {
+        let agent = CliStatus { provider: "opencode".into(), name: Some("OpenCode".into()), installed_version: Some("1.19.5".into()), status: "unknown".into(), policy: "off".into(), can_update_now: true, ..Default::default() };
+        assert_eq!(status_line(&agent), "OpenCode 1.19.5");
+        assert_eq!(update_title(&agent), Some("Update"));
+        let checked = CliStatus { status: "current".into(), latest_version: Some("1.19.5".into()), update: Some(CliUpdate { state: "unchanged".into(), target_version: Some("1.19.5".into()), ..Default::default() }), ..agent };
+        assert_eq!(status_line(&checked), "OpenCode 1.19.5, up to date");
+        assert_eq!(update_title(&checked), None);
     }
 
     #[test]

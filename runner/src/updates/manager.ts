@@ -68,6 +68,8 @@ export type CliUpdatesDeps = {
 type UpdateOptions = { version?: string; force?: boolean; bootstrap?: boolean };
 
 const ACP_UPDATE_TIMEOUT_MS = 5 * 60_000;
+// How long an ACP agent's "nothing newer" stands before Update is offered again.
+export const ACP_CHECK_FRESH_MS = 24 * 60 * 60_000;
 
 // An ACP agent's `--version`: OpenCode prints "1.18.23", Grok
 // "grok 1.0.77 (50ca579fa996) [stable]". The first word that starts with a
@@ -233,16 +235,29 @@ export class CliUpdates {
   private acpStatus(p: Provider): CliStatus {
     const installedVersion = this.installed[p];
     const s = this.st[p] ?? {};
+    // With no version feed, Update asking the agent's own updater is the
+    // only check there is. When that found nothing newer (or just
+    // installed it) in the last day, say it's up to date, as a feed would:
+    // before 17 Nov the row kept its Update button and a press that found
+    // nothing just spun and came back, saying nothing.
+    const u = s.update;
+    const fresh =
+      !!installedVersion &&
+      (u?.state === 'unchanged' || u?.state === 'succeeded') &&
+      u.targetVersion === installedVersion &&
+      !!u.finishedAt &&
+      this.d.clock.now() - Date.parse(u.finishedAt) < ACP_CHECK_FRESH_MS;
     return {
       provider: p,
       path: this.d.acp!.binary(p) ?? '',
       managedBy: 'cli',
-      status: 'unknown',
+      status: fresh ? 'current' : 'unknown',
       policy: 'off',
       canUpdateNow: true,
       inUse: this.d.hooks.versionsInUse(p),
       ...(installedVersion ? { installedVersion } : {}),
-      ...(s.update ? { update: { ...s.update } } : {}),
+      ...(fresh ? { latestVersion: installedVersion, checkedAt: u!.finishedAt } : {}),
+      ...(u ? { update: { ...u } } : {}),
     };
   }
 
