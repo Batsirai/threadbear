@@ -132,7 +132,11 @@ fn welcome_folder() -> String {
     if crate::scripted::scripted() {
         return threadbear_client::config::RunnerConfig::from_env().home.join("Welcome").to_string_lossy().into_owned();
     }
-    crate::installed::home_dir().join("ThreadbearThreads").join("Welcome").to_string_lossy().into_owned()
+    // As `~/`, which the runner expands to its own home: the runner may not
+    // share the app's home or path style. On Windows the app's home came out
+    // as `.`, so `.\ThreadbearThreads\Welcome` reached the runner in WSL,
+    // which made the samples inside its release folder (17 Nov).
+    "~/ThreadbearThreads/Welcome".to_owned()
 }
 
 impl Threadbear {
