@@ -12,7 +12,7 @@ reading the code, unless it says it was tested.
 |---|---|---|---|
 | `commands.state` (`convex/sync.ts`, "A command's lifecycle") | pending, taken, done, failed (plus `lapsedAt` on a failed one) | A take whose answer was lost made the runner's retry get `false`, so the command was dropped and stayed taken for 14 days. A finish overwrote however a command had ended. A runner that stopped mid-apply left the phone on "Sending…" for two weeks. | API 84: `takeCommand`'s `attempt`, a finish only from taken (or lapsed), a 3-hour lease (`lapseCommands`) that fails it without handing it out again |
 | `threadMoves.state` (`convex/moves.ts`) | asking, ready, packing, unpacking, claimed, done, failed, cancelled | A move left `ready` (its source runner gone) was never ended, so the thread could never move again. | `expireMoves` fails a ready move once its source has been gone 10 minutes, or after 12 hours |
-| `runnerRequests.state` (`convex/relay.ts`) | pending, claimed, allowed, denied, closed | A claim that went through but whose answer was lost left the request "being started" with nothing started. | API 84: `decideRequest`'s `claim` |
+| `runnerRequests.state` (`convex/relay.ts`) | pending, claimed, allowed, denied, closed | A claim that went through but whose answer was lost left the request "being started" with nothing started. | API 84: `decideRequest`'s `claim`, one answer per request at a time. Still open: a lost claim followed by a runner restart stays claimed until the asking card expires (an hour); handing it back on a timer could start the thread twice, as a claimed request may already be starting elsewhere |
 
 Each was already written as an explicit set of moves in one place (the
 comment in `sync.ts`, `GOING`/`mustBeIn` in `moves.ts`, `MOVES` in
