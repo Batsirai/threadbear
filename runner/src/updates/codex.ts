@@ -47,6 +47,7 @@ export type CodexCopiesOptions = {
   dir: string; // <home>/tools/codex
   exec: Exec;
   npmPath: string; // the npm next to the runner's Node
+  platform?: NodeJS.Platform; // tests
   resolve: CodexResolver;
   checkSurface: SurfaceCheck;
   tmpDir?: string;
@@ -63,8 +64,19 @@ export class CodexCopies {
     this.dir = o.dir;
   }
 
-  get currentLink(): string {
+  // The `current` link, or on Windows (where a symlink needs admin or
+  // Developer Mode) a text file naming the version, as runner releases
+  // have it there (launch.mjs, readCurrentLink).
+  private get pointer(): string {
     return path.join(this.dir, 'current');
+  }
+
+  // What to start Codex from: the link, or on Windows the folder the
+  // file names (the pointer itself until there is one).
+  get currentLink(): string {
+    if ((this.o.platform ?? process.platform) !== 'win32') return this.pointer;
+    const v = this.currentVersion();
+    return v ? path.join(this.dir, v) : this.pointer;
   }
 
   state(): CodexState {
@@ -79,12 +91,13 @@ export class CodexCopies {
 
   // The version `current` points at, from the link itself.
   currentVersion(): string | undefined {
+    let v: string;
     try {
-      const v = path.basename(fs.readlinkSync(this.currentLink));
-      return VERSION_RE.test(v) && fs.existsSync(path.join(this.dir, v)) ? v : undefined;
+      v = (this.o.platform ?? process.platform) === 'win32' ? fs.readFileSync(this.pointer, 'utf8').trim() : path.basename(fs.readlinkSync(this.pointer));
     } catch {
       return undefined;
     }
+    return VERSION_RE.test(v) && fs.existsSync(path.join(this.dir, v)) ? v : undefined;
   }
 
   has(version: string): boolean {
@@ -231,8 +244,9 @@ export class CodexCopies {
     if (!this.has(version)) throw new Error(`Codex ${version} isn't installed`);
     const before = this.currentVersion();
     const tmp = path.join(this.dir, `.current-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
-    fs.symlinkSync(version, tmp);
-    fs.renameSync(tmp, this.currentLink);
+    if ((this.o.platform ?? process.platform) === 'win32') fs.writeFileSync(tmp, version + '\n');
+    else fs.symlinkSync(version, tmp);
+    fs.renameSync(tmp, this.pointer);
     const s = this.state();
     if (before && before !== version) s.previous = before;
     if (s.previous === version) s.previous = before !== version ? before : undefined;
