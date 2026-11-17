@@ -108,6 +108,16 @@ impl ReplyPictures {
     }
 
 
+    /// Each picture chip's file, in the box's order: the runner's copy once
+    /// it's in, else the one it came from.
+    fn paths(&self, state: &TextareaState) -> Vec<(SharedString, String)> {
+        Self::ids(state).into_iter().filter_map(|id| {
+            let chip = self.chips.get(&id)?;
+            let path = chip.image.as_ref().map_or_else(|| chip.source.to_string_lossy().into_owned(), |i| i.path.clone());
+            Some((id, path))
+        }).collect()
+    }
+
     /// The runner's own copies, once a save has them: the same pictures in
     /// the same order, so the box points at the copies that last.
     pub(super) fn adopt(&mut self, state: &TextareaState, images: &[ImageRef]) {
@@ -293,6 +303,15 @@ impl ReviewWindow {
         if self.session.set_reply_with_pictures(&reply, images) {
             self.edited(cx);
         }
+    }
+
+    /// A plain click on a picture's chip in the reply: the picture full size
+    /// over this window, stepping through the reply's others, as a chip in
+    /// the thread's box opens (composer.rs `open_picture`).
+    pub(super) fn open_reply_picture(&mut self, id: &SharedString, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = self.reply_pictures.paths(self.reply.read(cx));
+        let Some(chosen) = paths.iter().find(|(chip, _)| chip == id).map(|(_, path)| path.clone()) else { return };
+        crate::viewer::open(self, paths.into_iter().map(|(_, path)| path).collect(), &chosen, window, cx);
     }
 
     pub(super) fn reply_loading(&self, cx: &App) -> bool {

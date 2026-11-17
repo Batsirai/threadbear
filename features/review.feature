@@ -90,7 +90,11 @@ Feature: Design reviews
     And I paste "Is it cut off at the bottom? " in the review with ⌘V
     And I paste a picture in the review with ⌘V
     Then the review's reply holds 1 picture, and says "Is it cut off at the bottom? [Picture 1]"
-    When I press Send in the review
+    # Mike, 17 Nov: to look at it full size, as a chip in the thread's box opens.
+    When I click picture 1 in the review's reply
+    Then the review shows picture 1 of 1 full size
+    When I close the picture in the review
+    And I press Send in the review
     Then the review window has closed
     And the transcript shows my message "Review: Account picker"
     When I press "Open review"

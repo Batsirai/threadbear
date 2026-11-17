@@ -28,6 +28,8 @@ type ReviewState = {
   /** The reply's pictures in the draft, and chips in its box. */
   images: number;
   chips: number;
+  /** The picture viewer over the window: "" while it's closed. */
+  viewer: string;
   sendLabel: string;
   editable: boolean;
   actual: boolean;
@@ -151,6 +153,20 @@ When('I paste a picture in the review with ⌘V', async function (this: Threadbe
 Then('the review\'s reply holds {int} picture(s), and says {string}', async function (this: ThreadbearWorld, count: number, words: string) {
   // The draft has it once the runner has copied the picture in.
   await untilReview(this, `${count} picture(s) in "${words}"`, (s) => s.chips === count && s.images === count && s.reply.trim() === words);
+});
+
+When('I click picture {int} in the review\'s reply', async function (this: ThreadbearWorld, number: number) {
+  await review(this, { open: false, pressPicture: number });
+});
+
+Then('the review shows picture {int} of {int} full size', async function (this: ThreadbearWorld, number: number, total: number) {
+  // Drawn, not still loading: the runner read it back.
+  await untilReview(this, `picture ${number} of ${total} in the viewer`, (s) => s.viewer.startsWith(`${number} of ${total} `) && !s.viewer.endsWith('(loading)'));
+});
+
+When('I close the picture in the review', async function (this: ThreadbearWorld) {
+  await review(this, { open: false, closeViewer: true });
+  await untilReview(this, 'the viewer closed', (s) => s.viewer === '');
 });
 
 Then('the review window shows it sent {string} with {int} picture(s)', async function (this: ThreadbearWorld, words: string, count: number) {

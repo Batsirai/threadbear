@@ -172,7 +172,7 @@ impl ReviewWindow {
         // click anywhere in it puts the cursor in it. The edge is drawn inside
         // its 6 of padding, as the Swift box's strokeBorder is.
         let reply = self.reply.clone();
-        let (me, token_owner, paste_owner) = (cx.entity().downgrade(), cx.entity().downgrade(), cx.entity().downgrade());
+        let (me, token_owner, paste_owner, click_owner) = (cx.entity().downgrade(), cx.entity().downgrade(), cx.entity().downgrade(), cx.entity().downgrade());
         let token_state = self.reply.clone();
         let reply_box = div()
             .id("review-reply")
@@ -213,6 +213,14 @@ impl ReviewWindow {
                         None => div().into_any_element(),
                     })
                     .on_paste(move |item, window, cx| paste_owner.upgrade().is_some_and(|this| this.update(cx, |this, cx| this.take_reply_clipboard(Some(item), window, cx))))
+                    // A plain click on a picture's chip opens it full size
+                    // (a drag from it or a Shift-click selects, as in the
+                    // thread's box).
+                    .on_token_click(move |event, window, cx| {
+                        if let Some(this) = click_owner.upgrade() {
+                            this.update(cx, |this, cx| this.open_reply_picture(event.token().id(), window, cx));
+                        }
+                    })
                     .w_full()
                     .text_size(px(style::size::WORK))
                     .line_height(px(style::natural_line(style::size::WORK))),

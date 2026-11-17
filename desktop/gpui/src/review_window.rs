@@ -294,6 +294,9 @@ pub(crate) struct ReviewWindow {
     /// How many pictures the draft had when the box and it last agreed, as
     /// `reply_synced` is its words: a change to it is from elsewhere.
     pictures_synced: usize,
+    /// The picture viewer over this window: a click on a picture's chip in
+    /// the reply opens it full size (viewer.rs), as one in the thread's box does.
+    viewer: crate::viewer::ViewerState,
     /// Holds the keys when the reply box hasn't got them: the arrows step,
     /// Space flicks to today's version, Return and Esc go in and out.
     focus: FocusHandle,
@@ -382,6 +385,7 @@ impl ReviewWindow {
             pending_chip_removal: Vec::new(),
             reply_changed: false,
             pictures_synced: session_pictures,
+            viewer: crate::viewer::ViewerState::new(cx),
             focus,
             save_timer: None,
             call_task: None,
@@ -1011,11 +1015,23 @@ pub(crate) fn plain_button(id: &'static str, title: &str, tip: &'static str, bus
     .child(title.to_owned())
 }
 
+impl crate::viewer::HostsViewer for ReviewWindow {
+    fn viewer_state(&mut self) -> &mut crate::viewer::ViewerState {
+        &mut self.viewer
+    }
+    fn viewer_client(&self) -> Arc<Client> {
+        self.client.clone()
+    }
+}
+
 impl Render for ReviewWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // First, as it counts the frame the stage's clips are drawn in
         // (media_view.rs); they hide while the title bar's menu is up.
-        let clips = crate::media_view::sweeper(window, crate::media_view::Cover { everything: self.more_open, menus: Vec::new() });
+        // A clip on the stage is a view of its own over the window, so it
+        // hides under the picture viewer as it does under the menu.
+        let viewing = self.viewer.is_open();
+        let clips = crate::media_view::sweeper(window, crate::media_view::Cover { everything: self.more_open || viewing, menus: Vec::new() });
         if std::mem::take(&mut self.reply_changed) {
             self.reply_to_draft(window, cx);
         }
@@ -1094,6 +1110,7 @@ impl Render for ReviewWindow {
             .when_some(error, |s, e| s.child(self.render_error_bar(e, cx)))
             .child(body)
             .child(clips)
+            .children(crate::viewer::overlay(self, window, cx))
     }
 }
 
@@ -1324,6 +1341,27 @@ pub(crate) async fn automation(app: &WeakEntity<Threadbear>, main: AnyWindowHand
         })
     })
     .map_err(|e| e.to_string())?;
+    // A real click (pointer events through hit testing) on picture chip N in
+    // the reply, as `composer-peek` with `press` does in the thread's box.
+    if let Some(number) = cmd["pressPicture"].as_u64() {
+        let clicked = cx.update_window(handle, |_, window, cx| -> Result<(), String> {
+            use gpui_kit::test::TestEventExt as _;
+            window.render_frame(cx);
+            let reply = view.read(cx).reply.clone();
+            let range = reply.read(cx).tokens().get((number as usize).saturating_sub(1)).map(|span| span.range()).ok_or_else(|| format!("no picture chip {number} in the reply"))?;
+            let at = reply.read(cx).range_to_bounds(&range).ok_or("the chip isn't on screen")?.center();
+            window.pointer_move(at, None, cx);
+            window.render_frame(cx);
+            window.pointer_down(at, MouseButton::Left, cx);
+            window.pointer_up(at, MouseButton::Left, cx);
+            window.render_frame(cx);
+            Ok(())
+        });
+        clicked.map_err(|e| e.to_string())??;
+    }
+    if cmd["closeViewer"].as_bool() == Some(true) {
+        view.update(cx, |v, cx| crate::viewer::close(v, cx));
+    }
     let busy = |view: &Entity<ReviewWindow>, cx: &mut AsyncApp| view.read_with(cx, |v, _| v.session.saving() || v.session.submitting());
     if cmd["save"].as_bool() == Some(true) {
         view.update(cx, |v, cx| v.save_now(cx));
@@ -1367,6 +1405,9 @@ impl ReviewWindow {
             // The reply's pictures: in the draft, and chips in the box.
             "images": draft.images.len(),
             "chips": self.reply.read(cx).tokens().len(),
+            // The picture viewer over the window: "" when it's closed, else
+            // "<n> of <total> <file>", with " (loading)" until it's drawn.
+            "viewer": self.viewer.describe(),
             "none": draft.none,
             "shot": s.shot(),
             "peeking": s.peeking,
