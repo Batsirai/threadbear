@@ -831,6 +831,12 @@ pub(crate) trait AskHost: Sized + 'static {
                 div()
                     .pl(indent)
                     .pt(px(8.))
+                    // The box took the cursor on this press already; going on
+                    // up, the composer's "a click on its padding puts the
+                    // cursor in the text" took it back to the message box, so
+                    // a click could never get back in here once the message
+                    // box had had it (Mike, 17 Nov).
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .capture_action(move |action: &Enter, window, cx| {
                         if action.secondary {
                             if let Some(this) = this3.upgrade() {
@@ -1141,6 +1147,22 @@ impl Composer {
             lines.push(format!("  {}. {} [{}]{links} -> {}", i + 1, ask.action, choices.join(" | "), answer));
         }
         Some(lines)
+    }
+
+    /// The middle of an ask's Something else box as last drawn, in points
+    /// from the window's top left, for a `click-at` into it. None while it
+    /// isn't open.
+    #[cfg(feature = "automation")]
+    pub(crate) fn answer_box_point(&self, ask: usize, cx: &App) -> Option<(f32, f32)> {
+        self.card.inputs.get(&ask)?;
+        // Another page's box is drawn too, off to the side, so its bounds
+        // aren't somewhere a click would land.
+        if self.open_card(cx).is_some_and(|card| is_paged(&card) && self.card.page != ask) {
+            return None;
+        }
+        let bounds = self.card.box_bounds.get(ask)?;
+        let at = bounds.center();
+        (bounds.size.width > px(0.)).then(|| (f32::from(at.x), f32::from(at.y)))
     }
 
     /// The Swift automation's `decide`: picks as its buttons pick, waiting in

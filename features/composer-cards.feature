@@ -29,6 +29,27 @@ Feature: The open card in the composer
     When I send my picks
     Then the transcript shows my message "2. Check who gets the beta"
 
+  @card.somethingelse @swift-pending @windows-pending @linux-pending
+  Scenario: A click gets back into a Something else box after the message box had the cursor
+    When I open the thread "Ship the beta to TestFlight"
+    And I pick answer 0 of ask 1 on the card
+    And I type "Also" in the composer
+    And I click into the Something else box of ask 1
+    And I type "Accepted it already" where the cursor is
+    Then ask 1 on the card is answered "something else: \"Accepted it already\""
+
+  @card.somethingelse @swift-pending @windows-pending @linux-pending
+  Scenario: Through AppKit, a click gets back into a Something else box after the message box had the keyboard
+    When I open the thread "Ship the beta to TestFlight"
+    And I pick answer 0 of ask 1 on the card
+    And I type "maybe" on the keyboard
+    And I press Backspace 5 times on the keyboard
+    And I type "" in the composer
+    And I type "Also" on the keyboard
+    And I click into the Something else box of ask 1 through AppKit
+    And I type "accepted" on the keyboard
+    Then ask 1 on the card is answered "something else: \"accepted\""
+
   @card.returnflow
   Scenario: Return with picks and an ask still open goes no further
     When I open the thread "Ship the beta to TestFlight"

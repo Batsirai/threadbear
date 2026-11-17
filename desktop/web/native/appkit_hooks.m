@@ -375,7 +375,8 @@ void tb_view_send_keys(void *nativeView, const char *text) {
   for (NSUInteger i = 0; i < all.length; i++) {
     NSString *one = [all substringWithRange:NSMakeRange(i, 1)];
     unichar c = [one.lowercaseString characterAtIndex:0];
-    unsigned short code = (c >= 'a' && c <= 'z') ? codes[c - 'a'] : 49;
+    // Delete (U+007F) as the Backspace key, so a script can take words out.
+    unsigned short code = (c >= 'a' && c <= 'z') ? codes[c - 'a'] : c == 0x7f ? 51 : 49;
     for (int down = 1; down >= 0; down--) {
       NSEvent *event = [NSEvent keyEventWithType:(down ? NSEventTypeKeyDown : NSEventTypeKeyUp)
                                         location:NSZeroPoint

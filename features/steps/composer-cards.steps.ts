@@ -37,6 +37,32 @@ When('I write {string} as my own answer to ask {int}', async function (this: Thr
   await this.app.do({ cmd: 'decide', write: `${ask}:${words}` });
 });
 
+// A click in the box, through the window's hit testing as a real one goes,
+// so whatever's under it (the composer around it) has its say too.
+When('I click into the Something else box of ask {int}', async function (this: ThreadbearWorld, ask: number) {
+  const point = await this.app.do({ cmd: 'decide', boxPoint: ask });
+  const [, x, y] = point.trim().split(/\s+/);
+  assert.ok(x && y, point);
+  await this.app.do({ cmd: 'click-at', x: Number(x), y: Number(y) });
+});
+
+// The same click through AppKit, as a person's arrives (the Mac only).
+When('I click into the Something else box of ask {int} through AppKit', async function (this: ThreadbearWorld, ask: number) {
+  const point = await this.app.do({ cmd: 'decide', boxPoint: ask });
+  const [, x, y] = point.trim().split(/\s+/);
+  assert.ok(x && y, point);
+  await this.app.do({ cmd: 'native-click', x: Number(x), y: Number(y) });
+});
+
+When('I press Backspace {int} times on the keyboard', async function (this: ThreadbearWorld, times: number) {
+  await this.app.do({ cmd: 'native-keys', text: '\u007f'.repeat(times) });
+});
+
+// Wherever the cursor is, not the message box first.
+When('I type {string} where the cursor is', async function (this: ThreadbearWorld, text: string) {
+  await this.app.do({ cmd: 'type', text, here: true });
+});
+
 When('I send my picks', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'decide', send: true });
 });

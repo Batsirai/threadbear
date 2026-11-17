@@ -604,6 +604,13 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             search.update(cx, |s, cx| s.set_value(words, window, cx));
             Ok(json!("ok"))
         }
+        // `"here": true` types wherever the cursor is, as keys would, rather
+        // than putting it in the message box first.
+        "type" if cmd["here"].as_bool() == Some(true) => {
+            window.render_frame(cx);
+            window.input(text(cmd, "text"), cx);
+            Ok(json!("ok"))
+        }
         "type" | "send" => {
             type_in_composer(app, text(cmd, "text"), cmd["replace"].as_bool().unwrap_or(false), window, cx)?;
             if text(cmd, "cmd") == "send" {
@@ -813,6 +820,13 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // The open card's picks (the Swift `decide`), and its buttons (`ask`).
         "decide" => {
             let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
+            // `boxPoint`: where ask n's (1-based) Something else box is, as
+            // "ok x y" for `click-at`, measured on a fresh frame.
+            if let Some(n) = cmd["boxPoint"].as_u64() {
+                window.render_frame(cx);
+                let (x, y) = composer.read(cx).answer_box_point((n as usize).wrapping_sub(1), cx).ok_or_else(|| format!("ask {n} has no Something else box on screen"))?;
+                return Ok(json!(format!("ok {x} {y}")));
+            }
             composer.update(cx, |c, cx| c.decide(cmd, window, cx)).map(|s| json!(s))
         }
         "ask" => {
