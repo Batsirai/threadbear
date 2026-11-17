@@ -43,7 +43,7 @@ function run(main: string, home = path.join(path.dirname(main), 'home')) {
   let out = '';
   p.stdout.on('data', (d) => (out += d));
   p.stderr.on('data', (d) => (out += d));
-  return { done: new Promise<{ code: number | null; out: string }>((r) => p.once('close', (code) => r({ code, out }))), output: () => out };
+  return { done: new Promise<{ code: number | null; out: string }>((r) => p.once('close', (code) => r({ code, out }))), output: () => out, kill: () => p.kill() };
 }
 
 async function until(check: () => boolean, what: string) {
@@ -104,12 +104,26 @@ test("when GitHub has moved and a landing holds the lock, pushAfterLanding leave
   const held = holdLock(root, main);
   await until(() => fs.existsSync(path.join(root, 'held')), 'lock held');
   const before = sh(main, 'git rev-parse main');
+  const queue = path.join(main, '.git', 'threadbear-land-queue');
   try {
+    // Only the lock held (a dry run, say): no landing will push, so it waits.
+    const alone = run(main, home);
+    await until(() => alone.output().includes('Taking the landing lock'), 'waiting with no landing queued');
+    alone.kill();
+    // A landing in the line: that one will.
+    fs.mkdirSync(queue, { recursive: true });
+    fs.writeFileSync(path.join(queue, '1-1-a.json'), JSON.stringify({ id: '1-1-a', pid: process.pid, at: 1 }));
     const r = await run(main, home).done;
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /a landing is going: when it lands it merges GitHub's in/);
     assert.doesNotMatch(r.out, /Taking the landing lock/);
     assert.equal(sh(main, 'git rev-parse main'), before);
+    // Unless a landing's merge of this same GitHub main failed already.
+    fs.writeFileSync(path.join(main, '.git', 'threadbear-land-push.json'), JSON.stringify({ github: sh(main, 'git rev-parse origin/main'), at: Date.now() }));
+    const again = run(main, home);
+    await until(() => again.output().includes('Taking the landing lock'), 'waiting after a failed merge');
+    again.kill();
+    assert.ok(fs.existsSync(path.join(main, '.git', 'threadbear-land.lock')), 'the probe leaves the lock file');
   } finally {
     fs.writeFileSync(path.join(root, 'release'), '');
     await held;

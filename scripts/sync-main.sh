@@ -57,16 +57,29 @@ if [ "${THREADBEAR_SYNC_LOCKED:-}" != 1 ]; then
   # hour, as lockf isn't a fair queue and landings kept coming). When this
   # repo is in runner.json's pushAfterLanding, the landing that holds the
   # lock merges GitHub's in, checks it and pushes once it has landed
-  # (worktrees.ts, pushMain), so there's nothing to wait for.
-  if [ "$(uname)" = Darwin ]; then busy() { ! /usr/bin/lockf -t 0 "$LOCK" true 2>/dev/null; }; else busy() { ! flock -n "$LOCK" true; }; fi
+  # (worktrees.ts, pushMain), so there's nothing to wait for. Only with a
+  # real landing in the queue (a dry run never pushes), and not when a
+  # landing's merge of this same GitHub main already failed: then it won't
+  # try again for hours, so this waits and tries itself.
+  # -k: without it lockf deletes the lock file, and a landing already
+  # waiting on that file would hold a lock nobody else sees (Codex, 17 Nov).
+  if [ "$(uname)" = Darwin ]; then busy() { ! /usr/bin/lockf -k -t 0 "$LOCK" true 2>/dev/null; }; else busy() { ! flock -n "$LOCK" true; }; fi
   if busy && node -e '
     const fs = require("fs"), path = require("path"), { execFileSync } = require("child_process");
+    const [main, common, github] = process.argv.slice(1);
     const home = process.env.THREADBEAR_HOME || process.env.THREADBEAR_DATA_DIR || path.join(process.env.HOME, "Library/Application Support/Threadbear");
     const repo = (d) => { try { return fs.realpathSync(execFileSync("git", ["-C", d, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()); } catch { return path.resolve(d); } };
-    let list; try { list = JSON.parse(fs.readFileSync(path.join(home, "runner.json"), "utf8")).pushAfterLanding; } catch {}
-    const want = repo(process.argv[1]);
-    process.exit(Array.isArray(list) && list.some((d) => typeof d === "string" && d && repo(d.replace(/^~(?=\/|$)/, process.env.HOME)) === want) ? 0 : 1);
-  ' "$MAIN"; then
+    const json = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return undefined; } };
+    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
+    const list = json(path.join(home, "runner.json"))?.pushAfterLanding;
+    const want = repo(main);
+    const on = Array.isArray(list) && list.some((d) => typeof d === "string" && d && repo(d.replace(/^~(?=\/|$)/, process.env.HOME)) === want);
+    const q = path.join(common, "threadbear-land-queue");
+    let names = []; try { names = fs.readdirSync(q).filter((n) => n.endsWith(".json")); } catch {}
+    const landing = names.some((n) => { const e = json(path.join(q, n)); return e && Number.isInteger(e.pid) && !e.result && !e.refused && alive(e.pid); });
+    const failed = json(path.join(common, "threadbear-land-push.json"))?.github === github;
+    process.exit(on && landing && !failed ? 0 : 1);
+  ' "$MAIN" "$(dirname "$LOCK")" "$(git -C "$MAIN" rev-parse refs/remotes/origin/main)"; then
     echo "GitHub's main and this one have both moved, and a landing is going: when it lands it merges GitHub's in, checks that and pushes (pushAfterLanding in runner.json). Nothing to do here; tb land's output says how it went."
     exit 0
   fi

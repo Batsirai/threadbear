@@ -529,8 +529,9 @@ the lock, `tb land` fetches GitHub's main and
   conflict or a failed check leaves main as it landed and says why, and
   isn't tried again for that same GitHub main for six hours
   (`threadbear-land-push.json` beside the lock), as each try is a whole
-  check with everyone waiting behind it. The landing itself has landed
-  either way.
+  check with everyone waiting behind it. A check that changes files or
+  moves HEAD in that checkout as it runs doesn't count. The landing itself
+  has landed either way.
 
 On 17 Nov GitHub's main had three commits of its own while landings came
 all afternoon: `scripts/sync-main.sh` waited over an hour for the landing
@@ -545,8 +546,11 @@ repo without `pushAfterLanding` or when nothing is landing:
   as a fast-forward or not at all, so it can't race a landing; with
   landings queued, the wait for the lock was over 30 minutes (13 Nov).
 
-- both have moved and a landing holds the lock, with `pushAfterLanding`
-  on: leaves it to that landing and says so, rather than wait.
+- both have moved, with `pushAfterLanding` on, the lock held and a real
+  landing in the queue (a dry run never pushes): leaves it to that landing
+  and says so, rather than wait. Not when a landing's merge of that same
+  GitHub main has already failed (it won't try again for hours): then it
+  waits for the lock and tries itself.
 
 Otherwise it takes the landing lock for the rest, so no landing can move
 main meanwhile, then:

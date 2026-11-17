@@ -1590,7 +1590,7 @@ async function landLocked(
     // Never a reason to fail the landing, which is done.
     if (opts.push) {
       try {
-        await pushMain({ mainCheckout: t.mainCheckout, common, check, checkFrom: opts.checkFrom ?? '', shell: opts.shell, timesFile: times.file, out });
+        await pushMain({ mainCheckout: t.mainCheckout, common, check, shell: opts.shell, timesFile: times.file, out });
       } catch (e) {
         out(`Landed, but ${MAIN} wasn't pushed to GitHub: ${(e as Error).message}`);
       }
@@ -1620,7 +1620,6 @@ async function pushMain(a: {
   mainCheckout: string;
   common: string;
   check: string | undefined;
-  checkFrom: string;
   shell?: string[];
   timesFile: string;
   out: (line: string) => void;
@@ -1700,7 +1699,13 @@ async function pushMain(a: {
     setRunning(a.common, { startedAt: Date.now(), branches: [`GitHub's ${MAIN}`], pid: process.pid, entries: [] });
     // To the check hosts as a group's goes, never this Mac for one person's
     // THREADBEAR_CHECK_HOST.
-    const r = await runCheck(a.check, a.checkFrom ? path.join(dir, a.checkFrom) : dir, a.shell, { THREADBEAR_CHECK_GROUP: '1' });
+    // From the root, as a landing's own check runs (checkFrom is only where
+    // the patch was read from).
+    const r = await runCheck(a.check, dir, a.shell, { THREADBEAR_CHECK_GROUP: '1' });
+    // A check that changed files or moved HEAD didn't check `fold` itself,
+    // as for a landing (Codex, 17 Nov).
+    const intact = (await gitOut(dir, ['rev-parse', 'HEAD'])) === fold &&
+      (await gitOut(dir, ['status', '--porcelain', '--untracked-files=all'])) === '';
     setRunning(a.common, undefined);
     logCheckTimes(a.timesFile, {
       at: new Date().toISOString(),
@@ -1712,7 +1717,9 @@ async function pushMain(a: {
       seconds: Math.round(r.durationMs / 1000),
       ...parseCheckTimes(r.text),
       check: a.check,
+      ...(r.ok && intact ? { intact: true } : {}),
     });
+    if (r.ok && !intact) return gave(`the check changed files or HEAD in ${dir} as it ran, so it didn't check the merge itself`);
     if (!r.ok) {
       const tail = r.text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES).join('\n').slice(-8000);
       return gave(`the check failed on the merge${r.code !== undefined ? ` (exit ${r.code})` : ''}`, ` The last lines of its output:\n\n${tail}`);

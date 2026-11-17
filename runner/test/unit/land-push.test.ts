@@ -133,3 +133,19 @@ test('pushAfterLanding is on only for the repos runner.json lists', () => {
   // A worktree of it names the same repo.
   assert.equal(pushAfterLanding(home, makeBranch(fx.main).path), true);
 });
+
+// A check that fixes things up as it runs passed on files that aren't the
+// merge's, so main doesn't move to the merge (Codex's review, 17 Nov).
+test("a check that changes files on the merge doesn't count for it", async () => {
+  const fx = withOrigin();
+  commit(fx.other, { 'gh.txt': 'from github\n' }, 'Made on GitHub');
+  sh(fx.other, 'git push -q origin main');
+  const github = onGitHub(fx);
+  const t = makeBranch(fx.main);
+  commit(t.path, { 'a.txt': 'a\n' }, 'Add a');
+  const c = capture();
+  assert.equal(await land({ ...t, check: 'if test -f gh.txt; then echo fixed > gh.txt; fi' }, { ...c.opts, push: true }), 0);
+  assert.equal(rev(fx.main, 'main'), rev(t.path, t.branch));
+  assert.equal(onGitHub(fx), github);
+  assert.match(c.out.join('\n'), /the check changed files or HEAD/);
+});
