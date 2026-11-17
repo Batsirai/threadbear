@@ -27,8 +27,9 @@
 #   to ~/.cache/threadbear-check.lock, a hard link to that same file. Otherwise
 #   that waiter and the next check would each hold "the" lock and run at once.
 # - Checks send their files to the mirror and runs/ outside the host's locks,
-#   so the new side starts with neither: a check caught mid-send then fails
-#   (its files aren't there) rather than checking an older copy. Run it again.
+#   as GPUI builds and the parity run do to their src folders, so the new side
+#   starts with none of them: one caught mid-send then fails (its files aren't
+#   there) or sends a whole copy, rather than testing an older one.
 # - Something can make the folder again (a probe's mkdir -p) between moving
 #   it aside and making the link; the link is checked, and made again if so.
 #
@@ -63,9 +64,24 @@ fi
 [ -d "$dest" ] || mkdir -p "$dest"
 chmod 700 "$dest"
 [ -d "$dest" ] && [ -O "$dest" ] || { echo "$dest isn't a folder of this account's own." >&2; exit 1; }
-if [ -n "$others" ] && mount | grep -F " on $(df -P "$dest" | awk 'END { print $6 }') (" | grep -q noowners; then
-  echo "$dest is on a disk that ignores file ownership, and this host has other accounts ($(echo $others)), who could change the build tools kept there. Turn ownership on for that disk (Get Info, or diskutil enableOwnership) and run this again." >&2
-  exit 1
+if [ -n "$others" ]; then
+  # By device, which has no spaces, not by mount point, which can.
+  dev="$(df -P "$dest" | awk 'END { print $1 }')"
+  if mount | grep -F "$dev on " | grep -q noowners; then
+    echo "$dest is on a disk that ignores file ownership, and this host has other accounts ($(echo $others)), who could change the build tools kept there. Turn ownership on for that disk (Get Info, or diskutil enableOwnership) and run this again." >&2
+    exit 1
+  fi
+  # Nor may anyone else be able to rename a folder on the way to it and put
+  # their own in its place. A sticky folder (/tmp) only lets them rename
+  # their own.
+  d="$(cd "$dest" && pwd -P)"
+  while d="${d%/*}"; [ -n "$d" ]; do
+    # The first ten: an ACL or extended attributes add a + or @.
+    perm="$(ls -ld "$d" | awk '{ print substr($1, 1, 10) }')"
+    case "$perm" in d?????????[tT]) ;; d????w????|d???????w?) echo "$d is writable by other accounts on this host ($(echo $others)), who could swap the cache for their own. Pick a folder whose parents aren't." >&2; exit 1 ;; esac
+    owner="$(ls -ldn "$d" | awk '{ print $3 }')"
+    [ "$owner" = 0 ] || [ "$owner" = "$(id -u)" ] || { echo "$d belongs to another account, which could swap the cache for its own." >&2; exit 1; }
+  done
 fi
 cd "$cache"
 for name in threadbear-check threadbear-parity; do
@@ -101,7 +117,11 @@ name="$1" to="$2" old="$3" cache="$4"
 # else (a full disk) stops before the swap.
 rc=0; rsync -aH --delete "$name/" "$to/" || rc=$?
 case "$rc" in 0|23|24) ;; *) echo "The last copy failed (rsync exit $rc); nothing was swapped." >&2; exit 1 ;; esac
-rm -rf "$to/mirror" "$to/runs"
+# The same goes for the GPUI builds' and the parity run's copies of their
+# checkouts (gpui/src-*, parity/src), also sent outside the locks: the next
+# run sends a whole new copy.
+rm -rf "$to/mirror" "$to/runs" "$to/src"
+[ ! -d "$to/gpui" ] || find "$to/gpui" -mindepth 1 -maxdepth 1 \( -name src -o -name 'src-*' \) -exec rm -rf {} +
 if [ "$name" = threadbear-check ]; then
   ln -f "$name/lock" "$cache/threadbear-check.lock"
   rm -f "$to/lock"
