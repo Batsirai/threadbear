@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -79,6 +80,62 @@ test("a review's stills: only files in its own folder, not links, each once", as
     assert.ok(dto.options.slice(1).every((o) => o.shots[0].preview === false));
     // A review id that would lead out of the folder sends nothing.
     assert.equal((await reviewStills({ ...r, id: '../x' }, media)).stills.length, 0);
+  } finally {
+    fs.rmSync(media, { recursive: true, force: true });
+  }
+});
+
+// A BMP of noise: over the 10 MB a reply picture may be, and a format the
+// phone's pictures don't take.
+function bigBmp(file: string): void {
+  const w = 1900, h = 1900, row = (w * 3 + 3) & ~3, size = row * h;
+  const head = Buffer.alloc(54);
+  head.write('BM', 0);
+  head.writeUInt32LE(54 + size, 2);
+  head.writeUInt32LE(54, 10);
+  head.writeUInt32LE(40, 14);
+  head.writeInt32LE(w, 18);
+  head.writeInt32LE(h, 22);
+  head.writeUInt16LE(1, 26);
+  head.writeUInt16LE(24, 28);
+  head.writeUInt32LE(size, 34);
+  fs.writeFileSync(file, Buffer.concat([head, crypto.randomBytes(size)]));
+}
+
+test('a still too big for the phone goes as a shrunk JPEG beside it', { skip: process.platform !== 'darwin' && 'needs sips' }, async () => {
+  const media = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-reviews-'));
+  try {
+    const dir = path.join(media, 'reviews', review.id);
+    fs.mkdirSync(dir, { recursive: true });
+    const big = path.join(dir, 'big.bmp');
+    bigBmp(big);
+    assert.ok(fs.statSync(big).size > 10 * 1024 * 1024);
+    const r: DesignReview = { ...review, options: [{ id: 'A', title: 'A', image: { path: big, mediaType: 'image/bmp' } }] };
+    const { stills, noPreview } = await reviewStills(r, media);
+    assert.equal(noPreview.size, 0);
+    assert.equal(stills.length, 1);
+    assert.equal(path.dirname(stills[0]!.read), path.join(dir, 'phone'));
+    assert.ok(fs.statSync(stills[0]!.read).size <= 10 * 1024 * 1024);
+    assert.deepEqual(fs.readdirSync(path.join(dir, 'phone')), [path.basename(stills[0]!.read)], 'no copy or part file left behind');
+    // Made once: the next open sends the same file.
+    assert.deepEqual((await reviewStills(r, media)).stills, stills);
+  } finally {
+    fs.rmSync(media, { recursive: true, force: true });
+  }
+});
+
+test("a still that can't be shrunk is only no preview, never an error naming a path", async () => {
+  const media = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-reviews-'));
+  try {
+    const dir = path.join(media, 'reviews', review.id);
+    fs.mkdirSync(dir, { recursive: true });
+    const big = path.join(dir, 'big.bmp');
+    bigBmp(big);
+    fs.writeFileSync(path.join(dir, 'phone'), 'a file where the folder goes');
+    const r: DesignReview = { ...review, options: [{ id: 'A', title: 'A', image: { path: big, mediaType: 'image/bmp' } }] };
+    const { stills, noPreview } = await reviewStills(r, media);
+    assert.equal(stills.length, 0);
+    assert.equal(noPreview.size, 1);
   } finally {
     fs.rmSync(media, { recursive: true, force: true });
   }

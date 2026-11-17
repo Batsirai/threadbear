@@ -128,7 +128,17 @@ export async function reviewStills(review: DesignReview, threadMedia: string | u
   return { stills, noPreview };
 }
 
+// Nothing here throws: a failure is only "no preview", as an error's text
+// would name a path on this Mac and go to the phone as the command's note.
 async function phoneStill(file: string, within: string): Promise<string | undefined> {
+  try {
+    return await shrunkStill(file, within);
+  } catch {
+    return undefined;
+  }
+}
+
+async function shrunkStill(file: string, within: string): Promise<string | undefined> {
   const first = readShareImage(file, within);
   if (!('skip' in first)) return file;
   if (!shrinkWouldDo(first.skip)) return undefined;
@@ -136,13 +146,49 @@ async function phoneStill(file: string, within: string): Promise<string | undefi
   const small = path.join(within, 'phone', `${crypto.createHash('sha256').update(file).digest('hex').slice(0, 16)}-${path.basename(file)}.jpg`);
   if (!fs.existsSync(small)) {
     fs.mkdirSync(path.dirname(small), { recursive: true });
-    // Made aside and renamed, so one cut short never passes for the still.
+    // The converter gets a copy read through the checked file's own
+    // descriptor, never the name again: the file swapped for a link in
+    // between would otherwise hand it a picture from anywhere.
+    const copy = `${small}.source`;
     const part = `${small}.part.jpg`;
-    if (!(await convertImage(file, part, { format: 'jpeg', quality: 80, maxPx: PHONE_STILL_PX }))) {
+    try {
+      if (!copyChecked(file, within, copy)) return undefined;
+      // Made aside and renamed, so one cut short never passes for the still.
+      if (!(await convertImage(copy, part, { format: 'jpeg', quality: 80, maxPx: PHONE_STILL_PX }))) return undefined;
+      fs.renameSync(part, small);
+    } finally {
+      fs.rmSync(copy, { force: true });
       fs.rmSync(part, { force: true });
-      return undefined;
     }
-    fs.renameSync(part, small);
   }
   return 'skip' in readShareImage(small, within) ? undefined : small;
+}
+
+// A review takes stills up to 25 MB; a little room over that.
+const STILL_MAX_BYTES = 30 * 1024 * 1024;
+
+// Copies `file` to `to` if it's a plain file inside `within` (by its real
+// path), opened without following a link and read through that descriptor.
+function copyChecked(file: string, within: string, to: string): boolean {
+  const real = fs.realpathSync(file);
+  const rel = path.relative(fs.realpathSync(within), real);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const st = fs.fstatSync(fd);
+    const atReal = fs.statSync(real);
+    if (!st.isFile() || st.size > STILL_MAX_BYTES || st.ino !== atReal.ino || st.dev !== atReal.dev) return false;
+    const bytes = Buffer.alloc(st.size);
+    let got = 0;
+    while (got < bytes.length) {
+      const n = fs.readSync(fd, bytes, got, bytes.length - got, got);
+      if (n === 0) break;
+      got += n;
+    }
+    fs.rmSync(to, { force: true }); // one left by a run that stopped partway
+    fs.writeFileSync(to, bytes.subarray(0, got), { flag: 'wx' });
+    return true;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
