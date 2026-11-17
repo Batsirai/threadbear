@@ -6160,7 +6160,12 @@ runner that's this one is the usual create.
   fingerprint and that the asking thread's row still has that card open,
   claims the request (`relay:decideRequest` to `claimed`, owner only,
   naming the row it read by its `docId`, so a retry or second click can't
-  start a second, nor a click delayed past a refile claim the new row),
+  start a second, nor a click delayed past a refile claim the new row;
+  from backend API 84 with a `claim` id of its own, so when the claim went
+  through but its answer was lost, the next Start it asks again with the
+  same id and carries on, where before the request stayed "being started"
+  with nothing started; the id is forgotten as soon as the claim's answer
+  arrives, so nothing can be started twice under it),
   starts the thread from the
   filed request (here, or as a `create` command for another runner), with
   a first line of its own saying which thread on which runner asked and

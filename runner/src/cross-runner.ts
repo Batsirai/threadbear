@@ -39,7 +39,7 @@ export type CrossRunnerDeps = {
         ownerKey(): boolean;
         fileRequest(p: { requestId: string; threadId: string; target: string; request: RunnerRequestInput }): Promise<void>;
         runnerRequest(requestId: string): Promise<RunnerRequestRow | null>;
-        decideRequest(p: { requestId: string; docId: string; state: 'claimed' | 'allowed' | 'pending' | 'denied'; result?: { runnerId: string; runnerName: string; threadId: string } }): Promise<void>;
+        decideRequest(p: { requestId: string; docId: string; state: 'claimed' | 'allowed' | 'pending' | 'denied'; result?: { runnerId: string; runnerName: string; threadId: string }; claim?: string }): Promise<void>;
         closeRequest(requestId: string): Promise<void>;
       }
     | undefined;
@@ -68,6 +68,13 @@ const other = (m: string) => new RpcError(ErrorCode.other, m);
 // the brief came from and that its words are that runner's.
 // Both come from the asking runner (its thread's id, its name), so only
 // characters that can't end the line or the brackets get in.
+// The backend said no, and will again (not a dropped connection).
+function refused(e: unknown): boolean {
+  const kind = (e as { data?: { kind?: unknown } } | null)?.data?.kind;
+  if (kind === 'badArgs' || kind === 'notFound' || kind === 'forbidden') return true;
+  return /"kind"\s*:\s*"(badArgs|notFound|forbidden)"/.test(String((e as Error | null)?.message ?? ''));
+}
+
 export function askedHeader(row: Pick<RunnerRequestRow, 'threadId' | 'runnerName'>): string {
   const id = row.threadId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
   const name = row.runnerName.replace(/[^A-Za-z0-9 _.'-]/g, '').slice(0, 40).trim() || 'another runner';
@@ -125,6 +132,9 @@ export class CrossRunner {
   private deps: CrossRunnerDeps;
   // Requests being started now, so a double click starts one thread.
   private starting = new Set<string>();
+  // A claim whose answer was lost, by request: asking again with it is told
+  // yes if it had in fact gone through (relay:decideRequest, API 84).
+  private lostClaims = new Map<string, string>();
 
   constructor(deps: CrossRunnerDeps) {
     this.deps = deps;
@@ -221,7 +231,11 @@ export class CrossRunner {
   async answer(threadId: string, approvalId: string, allow: boolean, runnerId?: string, shown?: string): Promise<{ thread?: { id: string; runnerId: string; runnerName: string } }> {
     const backend = this.mustOwn();
     const row = await this.row(threadId, approvalId);
-    if (row.state !== 'pending') throw bad(`That request is ${row.state === 'claimed' ? 'being started' : `already ${row.state}`}.`);
+    // A claim of ours whose answer never came back (a dropped connection):
+    // nothing was started under it, so Start it can carry on from there.
+    const ours = this.lostClaims.get(approvalId);
+    const reclaim = row.state === 'claimed' && ours !== undefined && row.claim === ours;
+    if (row.state !== 'pending' && !reclaim) throw bad(`That request is ${row.state === 'claimed' ? 'being started' : `already ${row.state}`}.`);
     const target = allow ? (runnerId ? (await this.deps.runners()).find((r) => r.id === runnerId) : await this.resolve(row.target)) : undefined;
     if (allow && !target) throw bad(`No runner called ${runnerId ?? row.target}. Pick one.`);
     const place = this.place(row);
@@ -230,6 +244,11 @@ export class CrossRunner {
     // from the phone has an agent that's no longer waiting.
     if ((await this.deps.openCard(threadId)) !== approvalId) throw bad('That request has closed: its thread is no longer waiting for it.');
     if (!allow) {
+      // Our lost claim goes back first: only a pending request can be declined.
+      if (reclaim) {
+        await backend.decideRequest({ requestId: approvalId, docId: row.docId, state: 'pending' });
+        this.lostClaims.delete(approvalId);
+      }
       await backend.decideRequest({ requestId: approvalId, docId: row.docId, state: 'denied' });
       await this.deps.respondThere(threadId, approvalId, 'deny');
       return {};
@@ -261,7 +280,18 @@ export class CrossRunner {
       const p: RunnerRequestInput = { text: askedHeader(row) + text, ...(title ? { title } : {}), ...(cwd ? { cwd } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(permissionMode ? { permissionMode } : {}) };
       // Claimed in the backend before anything starts, so a retry, a second
       // click or this runner restarting midway can't start it twice.
-      await backend.decideRequest({ requestId: approvalId, docId: row.docId, state: 'claimed' });
+      // Kept only while the claim's own answer is unknown: once it's through,
+      // something may start under it, so asking again must never reuse it.
+      const claim = ours ?? crypto.randomUUID();
+      this.lostClaims.set(approvalId, claim);
+      try {
+        await backend.decideRequest({ requestId: approvalId, docId: row.docId, state: 'claimed', claim });
+      } catch (e) {
+        // Refused for good (another claim has it, or it was decided): not ours.
+        if (refused(e)) this.lostClaims.delete(approvalId);
+        throw e;
+      }
+      this.lostClaims.delete(approvalId);
       let made: { id: string };
       if (target.self) {
         try {

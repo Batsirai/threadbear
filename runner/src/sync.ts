@@ -285,7 +285,8 @@ export const INDEX_SINCE_API_VERSION = 29;
 export const RUNNER_ORDER_API_VERSION = 58;
 // Moving a thread to another runner (convex/moves.ts).
 export const MOVES_API_VERSION = 64;
-// sync:takeCommand takes `attempt`, so a take whose answer was lost can ask again.
+// sync:takeCommand takes `attempt`, and relay:decideRequest `claim`, so a take
+// or a claim whose answer was lost can ask again.
 export const COMMAND_ATTEMPT_API_VERSION = 84;
 // Only the projects that changed go up (sync:upsertProjects), after the
 // whole list once per start.
@@ -1282,6 +1283,7 @@ export type RunnerRequestRow = RunnerRequestInput & {
   state: 'pending' | 'claimed' | 'allowed' | 'denied' | 'closed';
   result?: { runnerId: string; runnerName: string; threadId: string };
   decidedAt?: number;
+  claim?: string;
 };
 export type PocketCardSummary = { title: string; text: string; place?: string; icon?: string; threadId?: string; source?: string; updatedAt: string; filedBy?: string };
 
@@ -1892,9 +1894,11 @@ export class ConvexSync {
     return ((await this.backend('query', 'relay:runnerRequest', { key: this.deps.key, requestId })) as RunnerRequestRow | null) ?? null;
   }
 
-  async decideRequest(p: { requestId: string; docId: string; state: 'claimed' | 'allowed' | 'pending' | 'denied'; result?: { runnerId: string; runnerName: string; threadId: string } }): Promise<void> {
+  async decideRequest(p: { requestId: string; docId: string; state: 'claimed' | 'allowed' | 'pending' | 'denied'; result?: { runnerId: string; runnerName: string; threadId: string }; claim?: string }): Promise<void> {
     this.mustBeOn();
-    await this.backend('mutation', 'relay:decideRequest', { key: this.deps.key, ...p });
+    // An older backend refuses an arg it doesn't know.
+    const { claim, ...rest } = p;
+    await this.backend('mutation', 'relay:decideRequest', { key: this.deps.key, ...rest, ...(claim !== undefined && (this.backendApiVersion ?? 0) >= COMMAND_ATTEMPT_API_VERSION ? { claim } : {}) });
   }
 
   async closeRequest(requestId: string): Promise<void> {

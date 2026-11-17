@@ -639,6 +639,9 @@ export default defineSchema({
     // Once allowed: where it was started.
     result: v.optional(v.object({ runnerId: v.string(), runnerName: v.string(), threadId: v.string() })),
     decidedAt: v.optional(v.number()),
+    // The main Mac's runner's id for its claim (API 84): the same claim
+    // asking again gets it, so a claim whose answer was lost can still start.
+    claim: v.optional(v.string()),
   })
     .index('by_requestId', ['requestId'])
     .index('by_runnerId', ['runnerId'])

@@ -407,5 +407,7 @@
 //    (or one whose lease ran out), so a repeated or late finish can't
 //    overwrite how one ended. A taken command no runner finished in 3 hours
 //    shows as failed (lapseCommands), and its runner's late finish still
-//    settles it. A runner sends `attempt` only to a backend of 85 or later.
+//    settles it. relay:decideRequest takes `claim` the same way, so a claim
+//    whose answer was lost can carry on. A runner sends `attempt` and
+//    `claim` only to a backend of 85 or later.
 export const API_VERSION = 85;

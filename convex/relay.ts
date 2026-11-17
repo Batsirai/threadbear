@@ -526,6 +526,7 @@ const requestOut = v.object({
   state: stateV,
   result: v.optional(v.object({ runnerId: v.string(), runnerName: v.string(), threadId: v.string() })),
   decidedAt: v.optional(v.number()),
+  claim: v.optional(v.string()),
 });
 
 async function runnerNameOf(ctx: { db: any }, runnerId: string): Promise<string> {
@@ -592,6 +593,7 @@ export const runnerRequest = query({
 // second), then marks it allowed with where it started; it hands a claim
 // back only when starting failed here; it says no only to a pending one.
 const MOVES: Record<string, string[]> = { claimed: ['pending'], allowed: ['claimed'], pending: ['claimed'], denied: ['pending'] };
+const CLAIM = /^[A-Za-z0-9_-]{8,64}$/;
 
 /** Mike's answer, recorded by the main Mac's runner as it starts the thread (or he said no). */
 export const decideRequest = mutation({
@@ -602,15 +604,22 @@ export const decideRequest = mutation({
     // The row as read (runnerRequest's docId): another row under this id isn't it.
     docId: v.string(),
     result: v.optional(v.object({ runnerId: v.string(), runnerName: v.string(), threadId: v.string() })),
+    // API 84: with `claimed`, the runner's id for this claim. The same claim
+    // asked again (its first answer was lost) is told yes, and nothing
+    // changes; any other claim of a claimed request is refused, as before.
+    claim: v.optional(v.string()),
   },
   returns: v.null(),
-  handler: async (ctx, { key, requestId, state, docId, result }) => {
+  handler: async (ctx, { key, requestId, state, docId, result, claim }) => {
     await runnerAuth(ctx, key, 'decideRequest');
+    if (claim !== undefined && !CLAIM.test(claim)) throw new ConvexError({ kind: 'badArgs', message: 'claim must be 8 to 64 letters, digits, - or _' });
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
     if (!r || String(r._id) !== docId) throw new ConvexError({ kind: 'notFound', message: 'no such request' });
+    if (state === 'claimed' && r.state === 'claimed' && claim !== undefined && r.claim === claim) return null;
     if (!MOVES[state]!.includes(r.state)) throw new ConvexError({ kind: 'badArgs', message: `that request is ${r.state}` });
     if (state === 'allowed' && !result) throw new ConvexError({ kind: 'badArgs', message: 'an allowed request says where it started' });
-    await ctx.db.patch(r._id, { state, ...(state === 'allowed' && result ? { result } : {}), decidedAt: Date.now() });
+    // A claim handed back (pending) loses its id: the next one is a new claim.
+    await ctx.db.patch(r._id, { state, ...(state === 'allowed' && result ? { result } : {}), ...(state === 'claimed' ? { claim } : state === 'pending' ? { claim: undefined } : {}), decidedAt: Date.now() });
     return null;
   },
 });

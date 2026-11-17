@@ -131,3 +131,29 @@ test('lapsing goes a batch at a time, and schedules itself again while more are 
   await later(sync.TAKEN_LEASE_MS + 60_000, () => call(s.ctx, sync.lapseCommands, {}));
   assert.equal(ids.filter((id) => s.row(id).state === 'failed').length, 101);
 });
+
+// ------------------------------------------------------------ runner requests
+
+const relay = load('relay');
+
+test("a runner request's claim: the same claim asked again is told yes, any other is refused, and a handed-back claim is spent", async () => {
+  const s = await setup();
+  await call(s.ctx, relay.fileRequest, { key: MINI_KEY, requestId: 'req-00001', threadId: 'B', target: 'main', request: { text: 'start one' } });
+  const row = () => s.rows('runnerRequests').find((r) => r.requestId === 'req-00001')!;
+  const decide = (state: string, extra: Record<string, unknown> = {}) => call(s.ctx, relay.decideRequest, { key: OWNER, requestId: 'req-00001', docId: String(row()._id), state, ...extra });
+  await decide('claimed', { claim: ATTEMPT });
+  assert.deepEqual([row().state, row().claim], ['claimed', ATTEMPT]);
+  // Its answer was lost; asking again with the same claim is fine, and changes nothing.
+  await decide('claimed', { claim: ATTEMPT });
+  // Another claim, or none (an older runner), is refused as before.
+  assert.equal(await outcome(decide('claimed', { claim: 'another-claim-id' })), 'badArgs');
+  assert.equal(await outcome(decide('claimed')), 'badArgs');
+  assert.equal(await outcome(decide('claimed', { claim: 'x' })), 'badArgs');
+  // Handed back: the claim goes with it, so it can't be reused to skip the next claim.
+  await decide('pending');
+  assert.deepEqual([row().state, row().claim], ['pending', undefined]);
+  await decide('claimed', { claim: 'second-claim-id' });
+  assert.equal(await outcome(decide('claimed', { claim: ATTEMPT })), 'badArgs');
+  // The asking runner reads it back with its claim (requestOut lets it through).
+  assert.equal((await call(s.ctx, relay.runnerRequest, { key: OWNER, requestId: 'req-00001' })).claim, 'second-claim-id');
+});

@@ -40,7 +40,7 @@ function realDirIn(dirs: Set<string>) {
 }
 const realDir = realDirIn(DIRS);
 
-function fake(opts: { owner: boolean; self?: { id: string; name: string }; failCreate?: Error; failThere?: unknown; failRespond?: Error; runners?: RunnerRef[]; beforeOpen?: () => void }) {
+function fake(opts: { owner: boolean; loseClaimAnswer?: number; self?: { id: string; name: string }; failCreate?: Error; failThere?: unknown; failRespond?: Error; runners?: RunnerRef[]; beforeOpen?: () => void }) {
   const log: string[] = [];
   // This fake's own disk, so a test can make a folder appear.
   const dirs = new Set(DIRS);
@@ -69,7 +69,13 @@ function fake(opts: { owner: boolean; self?: { id: string; name: string }; failC
         const r = rows.get(p.requestId)!;
         // The claim names the row it read: one filed again under the id isn't it.
         if (r.docId !== p.docId) throw new Error('no such request');
-        rows.set(p.requestId, { ...r, state: p.state, ...(p.result ? { result: p.result } : {}) });
+        // As relay:decideRequest: the same claim asked again is told yes, any other move is checked.
+        if (p.state === 'claimed' && r.state === 'claimed' && p.claim !== undefined && r.claim === p.claim) return;
+        const from: Record<string, string[]> = { claimed: ['pending'], allowed: ['claimed'], pending: ['claimed'], denied: ['pending'] };
+        if (!from[p.state]!.includes(r.state)) throw Object.assign(new Error(`that request is ${r.state}`), { data: { kind: 'badArgs' } });
+        rows.set(p.requestId, { ...r, state: p.state, ...(p.result ? { result: p.result } : {}), claim: p.state === 'claimed' ? p.claim : undefined });
+        // The claim went through, but its answer never came back.
+        if (p.state === 'claimed' && opts.loseClaimAnswer && opts.loseClaimAnswer-- > 0) throw new Error('fetch failed');
         if (opts.failCreate && p.state === 'claimed') return;
       },
     }),
@@ -428,4 +434,41 @@ test("on Windows a request's folder is read under this PC's home: a Mac's or Lin
   assert.equal(folderHere('/Users/mike/dev/elsewhere', home, isDir), undefined, 'not here');
   assert.equal(folderHere('/Users/mike/../../x', home, isDir), undefined, 'climbing out of the home');
   assert.equal(folderHere('relative/path', home, isDir), undefined);
+});
+
+// A claim that went through but whose answer was lost left the request
+// "being started" for good, with nothing started (the state machines
+// survey, 17 Nov 2026). Start it again now carries on under the same claim.
+test('answering on the main Mac: a claim whose answer was lost starts on the next Start it, once', async () => {
+  const f = fake({ owner: true, loseClaimAnswer: 1 });
+  const row: RunnerRequestRow = { docId: 'doc1', requestId: 'req-lost', runnerId: 'cloud1', runnerName: 'Cloud box', threadId: 'c', target: 'main', text: 'x', createdAt: 1, state: 'pending' };
+  f.rows.set('req-lost', row);
+  f.setOpen('req-lost');
+  await assert.rejects(f.cross.answer('c', 'req-lost', true, undefined, fingerprint(row)), /fetch failed/);
+  assert.equal(f.rows.get('req-lost')!.state, 'claimed');
+  assert.ok(!f.log.some((l) => l.startsWith('here')), 'nothing started under the lost claim');
+  const claim = f.rows.get('req-lost')!.claim;
+  assert.ok(claim);
+  const out = await f.cross.answer('c', 'req-lost', true, undefined, fingerprint({ ...row, state: 'claimed', claim }));
+  assert.equal(out.thread?.id, 'new-here');
+  assert.equal(f.log.filter((l) => l.startsWith('here')).length, 1);
+  assert.equal(f.rows.get('req-lost')!.state, 'allowed');
+  // Once it went through, the claim isn't kept: a later click is refused, never a second start.
+  await assert.rejects(f.cross.answer('c', 'req-lost', true, undefined, fingerprint(row)), /already allowed/);
+  assert.equal(f.log.filter((l) => l.startsWith('here')).length, 1);
+});
+
+test("answering on the main Mac: a lost claim can still be declined, and another runner's claim can't be taken", async () => {
+  const f = fake({ owner: true, loseClaimAnswer: 1 });
+  const row: RunnerRequestRow = { docId: 'doc1', requestId: 'req-no', runnerId: 'cloud1', runnerName: 'Cloud box', threadId: 'c', target: 'main', text: 'x', createdAt: 1, state: 'pending' };
+  f.rows.set('req-no', row);
+  f.setOpen('req-no');
+  await assert.rejects(f.cross.answer('c', 'req-no', true, undefined, fingerprint(row)), /fetch failed/);
+  await f.cross.answer('c', 'req-no', false);
+  assert.equal(f.rows.get('req-no')!.state, 'denied');
+  // A claim this runner never made (another process, before a restart) is still "being started".
+  const g = fake({ owner: true });
+  g.rows.set('req-x', { ...row, requestId: 'req-x', state: 'claimed', claim: 'someone-elses-claim' });
+  g.setOpen('req-x');
+  await assert.rejects(g.cross.answer('c', 'req-x', true, undefined, fingerprint(row)), /being started/);
 });
