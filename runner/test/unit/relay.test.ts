@@ -981,12 +981,18 @@ test("a flood of another runner's rows is held to the newest few thousand, and r
   assert.ok(h.relay.status().held <= MAX_HELD + 1000, `held ${h.relay.status().held}`);
   // The newest row's is what's shown (its turn's end, as the thread is idle).
   assert.ok(first.events[0]!.seq >= 40_001 * SCALE, `seq ${first.events[0]!.seq}`);
-  // A read of what's held, as each one after it is.
-  const before = process.cpuUsage();
-  await h.relay.call(T, 'threads.events', { threadId: T, limit: 1 });
-  const d = process.cpuUsage(before);
-  const ms = (d.user + d.system) / 1000;
-  assert.ok(ms < 100, `a read took ${ms.toFixed(1)} ms of CPU`);
+  // A read of what's held, as each one after it is. CPU time, the best of
+  // up to five, under 500 ms: one takes 25 to 40 ms on an idle machine, but
+  // a busy Linux follower's update build saw 200 (17 Nov), and the reads
+  // this replaced took seconds each, so it still tells the two apart.
+  let ms = Infinity;
+  for (let i = 0; i < 5 && ms >= 500; i++) {
+    const before = process.cpuUsage();
+    await h.relay.call(T, 'threads.events', { threadId: T, limit: 1 });
+    const d = process.cpuUsage(before);
+    ms = Math.min(ms, (d.user + d.system) / 1000);
+  }
+  assert.ok(ms < 500, `a read took ${ms.toFixed(1)} ms of CPU`);
   // Scrolling back reads what was dropped again.
   const older = (await h.relay.call(T, 'threads.events', { threadId: T, beforeSeq: first.events[0]!.seq, limit: 200 })) as { events: unknown[] };
   assert.ok(older.events.length > 0);
