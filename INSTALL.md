@@ -248,3 +248,31 @@ Threads on it are opened and steered from the Mac through Convex, so nothing con
 What's left out on Linux: everything that needs a Mac, such as the iOS
 simulator, Xcode, BrowserBear, ComputerCub and noticing dialogs on the screen.
 Threads that need those belong on the Mac.
+
+## 7. A runner on Windows (optional, new)
+
+A Windows 10 or 11 PC can be a runner too, natively, with no WSL
+(docs/gpui-port/runner-windows-plan.md). It's new, so expect rough edges:
+patches run only when clicked, Codex isn't offered yet, and the Mac-only
+tools are off. Do this as the person who'll use it, in PowerShell, with no
+admin rights needed.
+
+1. **Git for Windows** from https://git-scm.com/download/win (its bash runs
+   patch actions, checks and `tb land`, and it's what Claude Code's Bash
+   tool uses). **Node 24 or newer** from nodejs.org (the zip, unpacked
+   somewhere of yours such as `%LOCALAPPDATA%\Programs\node`, needs no admin).
+2. **Claude Code** with its native installer (`irm https://claude.ai/install.ps1 | iex`,
+   which puts it in `%USERPROFILE%\.local\bin\claude.exe`, where the runner
+   looks), then `claude auth login`.
+3. **The code:** clone their fork (any folder) and, in `runner\`, `npm ci`.
+4. **Join their backend** as in section 6, step 6, with the data folder
+   `%LOCALAPPDATA%\Threadbear` (not the Mac's names: on Windows it's there).
+5. **Install:** `node scripts\install-windows.mjs` in `runner\`, with the
+   Node from step 1 (`--dry-run` says what it will do). It builds the first
+   release, registers a Scheduled Task for this user in Task Scheduler's
+   Threadbear folder that starts the runner at logon with no window, puts
+   `tb` on the user's PATH and waits until the runner is up. The runner then
+   follows its checkout's `main` and builds its own releases, as on a Mac,
+   so keep that checkout pulling theirs. `--uninstall` takes it off again.
+
+The desktop app (the GPUI build for Windows) finds this runner by itself.

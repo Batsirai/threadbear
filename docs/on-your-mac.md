@@ -106,6 +106,13 @@ File references are where to look.
   `~/.config/systemd/user/com.mikerosoft.threadbear.runner.service`, and no
   apps; it converts pictures with ImageMagick and rsvg-convert, and reads
   the account's full name from `getent passwd` rather than `id -F`.
+  A runner on Windows (INSTALL.md, section 7) has a Scheduled Task in its
+  place, in Task Scheduler's Threadbear folder (`\Threadbear\<label>
+  (<user>)`, at logon, for that user only, no admin rights), which runs
+  `conhost.exe --headless` with Node and `<data folder>\runner\launch.mjs`
+  so no window shows; its data folder is `%LOCALAPPDATA%\Threadbear`, with
+  the task's definition as `runner\task.xml` and `bin\tb.cmd`, whose folder
+  goes on the user's PATH (`runner/scripts/install-windows.mjs`).
 - **A one-shot update job:** when the runner's LaunchAgent or
   Threadbear Runner.app is behind main and you press Update it in the
   Updates panel (or the `selfReinstall` experiment is on), the runner
