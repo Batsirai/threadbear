@@ -36,7 +36,8 @@ function fakeIo(runs: Run[]) {
   return { io, said, calls };
 }
 
-const c = { npm: '/opt/node/bin/npm', node: '/opt/node/bin/node' };
+// A Mac's: on Windows unitTests runs test-windows.mjs instead (below).
+const c = { npm: '/opt/node/bin/npm', node: '/opt/node/bin/node', platform: 'darwin' as const };
 
 test('step: a process that never started says why, in the error and its log', () => {
   const { io } = fakeIo([{ status: null, error: Object.assign(new Error('spawn /opt/node/bin/npm EAGAIN'), { code: 'EAGAIN' }) }]);
@@ -72,6 +73,18 @@ test('unitTests: a break that fails both whole runs still stops the build', () =
   const { io, calls } = fakeIo([{ status: 1, output: 'Error: Cannot find module\n' }, { status: 1, output: 'Error: Cannot find module\n' }]);
   assert.throws(() => steps.unitTests(c, {}, io), /Unit tests, again failed \(npm exited with 1\)/);
   assert.equal(calls.length, 2);
+});
+
+test("unitTests on Windows: test-windows.mjs, which leaves out the files known to fail there", () => {
+  const { io, calls } = fakeIo([{ status: 0 }]);
+  steps.unitTests({ ...c, platform: 'win32' }, {}, io);
+  assert.deepEqual(calls.map((x) => [x.cmd, ...x.args]), [[c.node, 'scripts/test-windows.mjs']]);
+});
+
+test('step: a script (npm-cli.js on Windows) runs on this Node', () => {
+  const { io, calls } = fakeIo([{ status: 0 }]);
+  steps.step('npm', 'C:\\node\\node_modules\\npm\\bin\\npm-cli.js', ['ci'], {}, io);
+  assert.deepEqual([calls[0].cmd, ...calls[0].args], [process.execPath, 'C:\\node\\node_modules\\npm\\bin\\npm-cli.js', 'ci']);
 });
 
 test('unitTests: failed files are rerun alone, not the whole suite', () => {
