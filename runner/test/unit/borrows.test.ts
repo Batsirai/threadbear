@@ -20,7 +20,7 @@ function borrow(main: string, env = ''): string {
 const admin = (wt: string) => sh(wt, 'git rev-parse --absolute-git-dir');
 const branchOf = (wt: string) => sh(wt, 'git rev-parse --abbrev-ref HEAD');
 // Lands what's on the borrow, as tb land would: main fast-forwards to it.
-const landIt = (main: string, wt: string) => sh(main, `git merge -q --ff-only $(git -C ${wt} rev-parse HEAD)`);
+const landIt = (main: string, wt: string) => sh(main, `git merge -q --ff-only $(git -C ${wt} rev-parse HEAD) >/dev/null`);
 
 function opts(o: Partial<SweepOptions> = {}): SweepOptions {
   return { thread: () => 'unknown', held: new Set(), cwds: async () => [], pidAlive: () => false, ...o };
@@ -268,4 +268,15 @@ test('a thread brought back while the sweep works keeps its borrow', async () =>
   const r = await sweepBorrows(main, opts({ thread: () => state }), { beforeDetach: () => void (state = 'open') });
   assert.deepEqual(r.reclaimed, []);
   assert.equal(branchOf(wt), branch);
+});
+
+test('a borrow landed under new commit ids (a group check rebased it) goes back too', async () => {
+  const { main } = makeRepo();
+  addBorrowScript(main);
+  const wt = borrow(main, 'THREADBEAR_THREAD_ID=gone');
+  commit(wt, { 'runner/b.ts': '2\n' }, 'Landed by patch');
+  commit(main, { 'runner/other.ts': '1\n' }, 'Someone else first');
+  sh(main, `git cherry-pick $(git -C ${wt} rev-parse HEAD) >/dev/null`);
+  const r = await sweepBorrows(main, opts({ thread: () => 'archived' }));
+  assert.deepEqual(r.reclaimed.map((x) => x.path), [wt]);
 });

@@ -192,7 +192,7 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       const status = await git(c.path, ['status', '--porcelain', '--untracked-files=all']);
       if (!status.ok || status.stdout.trim()) return status.ok ? 'it has changes or untracked files' : "git couldn't read it";
       const tip = (await git(c.path, ['rev-parse', 'HEAD'])).stdout.trim();
-      if (!tip || !(await git(mainCheckout, ['merge-base', '--is-ancestor', tip, MAIN])).ok) return `it has commits that aren't on ${MAIN}`;
+      if (!tip || !(await landed(mainCheckout, tip))) return `it has commits that aren't on ${MAIN}`;
       return undefined;
     };
     const first = await unsafe();
@@ -219,9 +219,9 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       skip(second);
       continue;
     }
-    // The branch itself all on main too (nothing else has it checked out
-    // to move it now), and -d so git refuses it as well.
-    if (branch && !((await git(mainCheckout, ['merge-base', '--is-ancestor', `refs/heads/${branch}`, MAIN])).ok && (await git(mainCheckout, ['branch', '-q', '-d', branch])).ok)) {
+    // The branch itself landed too (nothing else has it checked out to
+    // move it now).
+    if (branch && !((await landed(mainCheckout, `refs/heads/${branch}`)) && (await git(mainCheckout, ['branch', '-q', '-D', branch])).ok)) {
       if ((here = still(tip))) await git(here, ['checkout', '-q', branch]);
       skip(`its branch has commits that aren't on ${MAIN}`);
       continue;
@@ -266,7 +266,7 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       if (checkedOut.has(b)) continue;
       // Asked of main itself: -d alone goes by a branch's upstream when it
       // has one, and a pushed branch's work needn't be on main.
-      if (!(await git(mainCheckout, ['merge-base', '--is-ancestor', `refs/heads/${b}`, MAIN])).ok) continue;
+      if (!(await landed(mainCheckout, `refs/heads/${b}`))) continue;
       if ((await git(mainCheckout, ['branch', '-q', '-D', b])).ok) result.branches.push(b);
     }
   }
@@ -287,6 +287,16 @@ function checkoutItself(dir: string, admin: string): string | undefined {
   if (real !== path.join(realpath(path.dirname(dir)), path.basename(dir))) return undefined;
   const named = readPlainFile(path.join(real, '.git'), 8192)?.split('\n').find((l) => l.startsWith('gitdir:'))?.slice('gitdir:'.length).trim();
   return named && realpath(path.resolve(real, named)) === realpath(admin) ? real : undefined;
+}
+
+// Everything at `ref` is on main: as an ancestor, or by patch, as
+// --give-back allows (a group check in tb land rebases a branch again before
+// main moves, so main can have the same changes under new ids). `git cherry`
+// marks each commit main has no equal of with "+".
+async function landed(mainCheckout: string, ref: string): Promise<boolean> {
+  if ((await git(mainCheckout, ['merge-base', '--is-ancestor', ref, MAIN])).ok) return true;
+  const cherry = await git(mainCheckout, ['cherry', MAIN, ref]);
+  return cherry.ok && !cherry.stdout.split('\n').some((l) => l.startsWith('+'));
 }
 
 function holds(folders: Iterable<string>, dir: string): boolean {

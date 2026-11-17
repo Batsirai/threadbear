@@ -539,7 +539,8 @@ sync-main couldn't borrow one and main wasn't pushed. Now:
   quiet, nor one from another runner's thread (a dev runner's) while
   that runner's data dir is there. Nor is anything
   with work in it: a rebase or merge half done, changes or untracked
-  files, commits not on main, or a process whose current folder is
+  files, commits not on main (on it by patch counts, as for
+  `--give-back`), or a process whose current folder is
   inside, asked again after it's detached (a commit made meanwhile puts
   it back on its branch), with `branch -d` so git itself refuses a branch
   not on main, and each change made only while the folder is still the
