@@ -16,7 +16,8 @@ import { ProcessRegistry } from '../../src/proc.ts';
 
 // THREADBEAR_E2E_OPENCODE: another OpenCode to try (a new major) without installing it.
 const bin = process.env.THREADBEAR_E2E_OPENCODE || ACP_AGENTS.opencode.findBinary({ home: os.homedir(), pathEnv: process.env.PATH ?? '' });
-const MODEL = 'opencode/big-pickle';
+// THREADBEAR_E2E_OPENCODE_MODEL: another free model, when big-pickle's free use has run out.
+const MODEL = process.env.THREADBEAR_E2E_OPENCODE_MODEL || 'opencode/big-pickle';
 const roots: string[] = [];
 const sessions: AcpSession[] = [];
 
@@ -33,6 +34,11 @@ function rig(mode: PermissionMode, deny: boolean, tools: { name: string; descrip
   before?.(cwd, root);
   const xdg = Object.fromEntries(['CONFIG', 'DATA', 'STATE', 'CACHE'].map((k) => [`XDG_${k}_HOME`, path.join(root, k.toLowerCase())]));
   Object.values(xdg).forEach((d) => fs.mkdirSync(d));
+  // THREADBEAR_E2E_OPENCODE_AUTH: an auth.json to use (linked, never copied), for a paid model.
+  if (process.env.THREADBEAR_E2E_OPENCODE_AUTH) {
+    fs.mkdirSync(path.join(xdg.XDG_DATA_HOME, 'opencode'), { recursive: true });
+    fs.symlinkSync(process.env.THREADBEAR_E2E_OPENCODE_AUTH, path.join(xdg.XDG_DATA_HOME, 'opencode', 'auth.json'));
+  }
   const cards: ToolApprovalRequest[] = [];
   const outputs: AdapterOutput[] = [];
   const waiters: (() => void)[] = [];

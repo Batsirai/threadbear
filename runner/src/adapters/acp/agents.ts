@@ -116,7 +116,10 @@ export function isGrokBinary(file: string): boolean {
 // Every tool asks unless it only reads, so a tool an agent adds later asks
 // too. Read of something outside the folder asks as external_directory, and
 // the threadbear tools have their own gate (tool-gate.ts).
-const ASK_FOR_EVERYTHING: Record<string, string> = { '*': 'ask', read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', external_directory: 'ask', 'threadbear_*': 'allow' };
+// question: OpenCode 2's ask-the-user tool comes over ACP as a permission
+// request, which can't carry an answer back (17 Nov 2026). Off, the agent
+// asks in its reply instead, and the next message answers.
+const ASK_FOR_EVERYTHING: Record<string, string> = { '*': 'ask', read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', external_directory: 'ask', 'threadbear_*': 'allow', question: 'deny' };
 const DENY_EVERYTHING: Record<string, string> = { '*': 'deny' };
 
 // OpenCode runs anything without asking unless its config says otherwise,
