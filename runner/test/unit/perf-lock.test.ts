@@ -29,11 +29,12 @@ function born(pid: number | string): string {
     const m = fs.readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)/m);
     return m ? Number(m[1]) : 0;
   };
-  for (let tries = 1; ; tries++) {
+  // Like perf-children.pl, only trust a read with the same boot time either side.
+  for (;;) {
     const boot = bootTime();
     const lstart = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).stdout.trim();
     if (!boot || !lstart) return lstart;
-    if (bootTime() !== boot && tries < 5) continue;
+    if (bootTime() !== boot) continue;
     const at = Date.parse(`${lstart.replace(/\s+/g, ' ')} UTC`);
     return Number.isNaN(at) ? lstart : `boot+${at / 1000 - boot}`;
   }

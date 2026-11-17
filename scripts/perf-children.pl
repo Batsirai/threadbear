@@ -55,12 +55,19 @@ sub ps_rows {
     my @args = @_;
     local $ENV{LC_ALL} = 'C';
     local $ENV{TZ} = 'UTC';
-    for my $try (1 .. 5) {
+    # Never settle for rows read while the boot time moved: one converted
+    # with the wrong boot time is off by the step, and that mismatch is
+    # what killed anchors. A step is a moment, so the next read is clean;
+    # pause after a few in case the clock is being slewed in small steps.
+    for (my $try = 1; ; $try++) {
         my $boot = boot_time();
         open(my $ps, '-|', 'ps', @args) or return undef;
         my @lines = <$ps>;
         return undef unless close $ps;
-        next if boot_time() != $boot && $try < 5;
+        if (boot_time() != $boot) {
+            select(undef, undef, undef, 0.1) if $try >= 3;
+            next;
+        }
         for (@lines) {
             s/\s+$//;
             s/(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d+)$/since_boot($1, $boot)/e;
