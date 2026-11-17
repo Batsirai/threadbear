@@ -49,3 +49,13 @@ test("Claude Code's PowerShell tool is off on Windows, where the guards read onl
   assert.equal(cliEnv(account, {}, 'win32').CLAUDE_CODE_USE_POWERSHELL_TOOL, '0');
   assert.equal(cliEnv(account, {}, 'darwin').CLAUDE_CODE_USE_POWERSHELL_TOOL, undefined);
 });
+
+test("npm and Codex beside the runner's Node: links elsewhere, scripts on Windows", async () => {
+  const { npmBeside, codexBeside, runOnNode } = await import('../../src/platform.ts');
+  assert.equal(npmBeside('/opt/node/bin/node', 'darwin'), '/opt/node/bin/npm');
+  assert.equal(npmBeside('C:\\node\\node.exe', 'win32'), 'C:\\node\\node_modules\\npm\\bin\\npm-cli.js');
+  assert.equal(codexBeside('/opt/node/bin/node', 'linux'), '/opt/node/bin/codex');
+  assert.equal(codexBeside('C:\\node\\node.exe', 'win32'), 'C:\\node\\node_modules\\@openai\\codex\\bin\\codex.js');
+  assert.deepEqual(runOnNode('C:\\n\\npm-cli.js', ['ci'], 'C:\\n\\node.exe'), ['C:\\n\\node.exe', ['C:\\n\\npm-cli.js', 'ci']]);
+  assert.deepEqual(runOnNode('/opt/node/bin/npm', ['ci']), ['/opt/node/bin/npm', ['ci']]);
+});

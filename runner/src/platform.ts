@@ -91,3 +91,24 @@ export function realPath(p: string, q: RealProbe = {}): string {
 export function slashes(p: string): string {
   return path.sep === '/' ? p : p.split(path.sep).join('/');
 }
+
+// npm beside a Node: its `npm` link elsewhere, and on Windows its script,
+// npm-cli.js, as the npm.cmd there can't be started without a shell. A
+// caller runs a .js path on Node (runOnNode).
+export function npmBeside(execPath: string, platform: NodeJS.Platform = process.platform): string {
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  return platform === 'win32' ? P.join(P.dirname(execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js') : P.join(P.dirname(execPath), 'npm');
+}
+
+// What to spawn for a program path: a .js script runs on this Node.
+export function runOnNode(file: string, args: string[], execPath: string = process.execPath): [string, string[]] {
+  return /\.[cm]?js$/i.test(file) ? [execPath, [file, ...args]] : [file, args];
+}
+
+// The npm-installed codex beside a Node: its `codex` link elsewhere, and
+// on Windows the package's codex.js (npm's codex.cmd there can't be
+// started without a shell; resolveCodexBinary finds codex.exe behind it).
+export function codexBeside(execPath: string, platform: NodeJS.Platform = process.platform): string {
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  return platform === 'win32' ? P.join(P.dirname(execPath), 'node_modules', '@openai', 'codex', 'bin', 'codex.js') : P.join(P.dirname(execPath), 'codex');
+}

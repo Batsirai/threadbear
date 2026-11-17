@@ -11,6 +11,7 @@ import type { Account } from '../../protocol.ts';
 import type { Logger } from '../../log.ts';
 import { groupSpawner, groupAlive, killGroup, type ProcessRegistry } from '../../proc.ts';
 import { RUNNER_VERSION } from '../../config.ts';
+import { codexBeside, exeName } from '../../platform.ts';
 import { cliEnv } from '../claude/adapter.ts';
 import { refusal } from './approvals.ts';
 import { OVERSIZED_LINE } from './normalize.ts';
@@ -30,6 +31,9 @@ const PLATFORM: Record<string, { pkg: string; triple: string }> = {
   'darwin-x64': { pkg: '@openai/codex-darwin-x64', triple: 'x86_64-apple-darwin' },
   'linux-arm64': { pkg: '@openai/codex-linux-arm64', triple: 'aarch64-unknown-linux-musl' },
   'linux-x64': { pkg: '@openai/codex-linux-x64', triple: 'x86_64-unknown-linux-musl' },
+  // As @openai/codex's own bin/codex.js has them, with codex.exe.
+  'win32-x64': { pkg: '@openai/codex-win32-x64', triple: 'x86_64-pc-windows-msvc' },
+  'win32-arm64': { pkg: '@openai/codex-win32-arm64', triple: 'aarch64-pc-windows-msvc' },
 };
 
 export type CodexBinary = {
@@ -45,8 +49,8 @@ export type CodexBinary = {
 // The codex next to the runner's own Node: the npm copy Threadbear falls
 // back to until it has a copy of its own (section E), or when updates are
 // off. Never ~/.local/bin/codex, a standalone build nothing updates.
-export function fallbackCodexPath(execPath: string = process.execPath): string {
-  return path.join(path.dirname(execPath), 'codex');
+export function fallbackCodexPath(execPath: string = process.execPath, platform: NodeJS.Platform = process.platform): string {
+  return codexBeside(execPath, platform);
 }
 
 // Finds the native Codex binary behind a launcher, so each thread doesn't
@@ -105,7 +109,7 @@ export function nativeBinaryFor(launcher: string, platform = `${process.platform
   if (!p) return null;
   try {
     const pkgJson = createRequire(launcher).resolve(`${p.pkg}/package.json`);
-    const bin = path.join(path.dirname(pkgJson), 'vendor', p.triple, 'bin', 'codex');
+    const bin = path.join(path.dirname(pkgJson), 'vendor', p.triple, 'bin', exeName('codex', platform.split('-')[0] as NodeJS.Platform));
     fs.accessSync(bin, fs.constants.X_OK);
     return bin;
   } catch {

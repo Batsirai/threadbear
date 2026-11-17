@@ -10,6 +10,7 @@
 // rest move as their turns end; every new process starts the new version.
 import fs from 'node:fs';
 import path from 'node:path';
+import { codexBeside, npmBeside } from '../platform.ts';
 import type { Clock, TimerHandle } from '../clock.ts';
 import type { Config } from '../config.ts';
 import type { Logger } from '../log.ts';
@@ -111,7 +112,7 @@ export class CliUpdates {
     this.copies = new CodexCopies({
       dir: path.join(d.cfg.home, 'tools', 'codex'),
       exec: this.exec,
-      npmPath: path.join(path.dirname(this.execPath), 'npm'),
+      npmPath: npmBeside(this.execPath),
       resolve: d.codex.resolve,
       checkSurface: d.codex.checkSurface,
       tmpDir: paths.run(d.cfg.home),
@@ -337,7 +338,7 @@ export class CliUpdates {
   }
 
   private fallbackCodex(): string {
-    return path.join(path.dirname(this.execPath), 'codex');
+    return codexBeside(this.execPath);
   }
 
   private async refreshInstalled(): Promise<void> {

@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { atomicWriteFileSync, readJsonSync } from '../fsutil.ts';
+import { runOnNode } from '../platform.ts';
 import { VERSION_RE, compareVersions, type Exec } from './exec.ts';
 
 export const CODEX_PACKAGE = '@openai/codex';
@@ -157,8 +158,9 @@ export class CodexCopies {
       // Public npm, whatever ~/.npmrc says: a company registry's expired token
       // gave E401 here, and nothing in tools/codex pins it like runner/.npmrc.
       // The runner's own Node first, so npm and the package's scripts run on it.
-      env.PATH = `${path.dirname(this.o.npmPath)}${path.delimiter}${env.PATH ?? ''}`;
-      const npm = await this.o.exec(this.o.npmPath, ['install', '--prefix', partial, '--no-save', '--no-fund', '--no-audit', '--registry', 'https://registry.npmjs.org/', `${CODEX_PACKAGE}@${version}`], {
+      // (On Windows npmPath is npm-cli.js, deep in Node's folder.)
+      env.PATH = `${/\.[cm]?js$/i.test(this.o.npmPath) ? path.dirname(process.execPath) : path.dirname(this.o.npmPath)}${path.delimiter}${env.PATH ?? ''}`;
+      const npm = await this.o.exec(...runOnNode(this.o.npmPath, ['install', '--prefix', partial, '--no-save', '--no-fund', '--no-audit', '--registry', 'https://registry.npmjs.org/', `${CODEX_PACKAGE}@${version}`]), {
         cwd: this.dir,
         env,
         timeoutMs: INSTALL_TIMEOUT_MS,
