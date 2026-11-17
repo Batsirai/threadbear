@@ -2363,18 +2363,37 @@ you turn it on, and it stays on your Mac.
 
 <!-- picture: /docs-img/setup.webp alt: Finish setting up, bottom left: it ticks itself off as you go -->
 
-The first time the app opens it shows you round the window, one part at a
-time: the window dims, one part lights up, and a card beside it says what
-it is, with an ⓘ that opens its page of these docs. A few made-up sample
-threads give it something to point at: a sample's row with its star, moon
-and box out, your views down the left, Highlights, moving a panel, and an
-example patch's button, Roll a die (it lives in
-`~/ThreadbearThreads/Welcome`). Then it opens your first thread with the
-message written for you, asking the agent for a patch with a hello button
-of your own, and you send it with Return. The samples are deleted when the
-tour ends. Help > Take the Tour runs it again, and that time you can
-skip it. A Mac that joined a Threadbear you already use (setup's
-`--existing`) skips it.
+The first time the new desktop app opens, a few small cards come up before
+the app, one decision each. Return goes on, and each card has Back and
+Skip; Esc puts them all away:
+
+- **Your agents** lists the Claude Code and Codex logins it found on this
+  Mac. One that isn't signed in has Sign in…, which opens Terminal on its
+  own sign-in. Add makes room for another Claude login (a second
+  subscription, say) and opens its sign-in the same way; the row spins
+  until it's signed in. A thread moves to it when the first runs low.
+- **Where threads start** shows the folder new threads open in, with
+  Change…, and whether GitHub's CLI (`gh`) is signed in.
+- **Check in from anywhere** shows a code to scan with the iPhone app, and
+  ticks itself once your phone's paired. It only comes up when your
+  Threadbear has a Convex deployment for a phone to reach.
+- **A few things worth turning on**: review by another lab, keeping the
+  Mac awake while threads work, Connectors (opened once you're done) and
+  the app's look.
+- **Ready when you are** sends your first thread, with its message written
+  for you, asking the agent for a patch with a hello button of your own.
+  Not now leaves the message in a new thread for later.
+
+Help > Set Up Threadbear brings the cards back. Help > Take the Tour shows
+you round the window, one part at a time: the window dims, one part lights
+up, and a card beside it says what it is, with an ⓘ that opens its page of
+these docs. A few made-up sample threads give it something to point at: a
+sample's row with its star, moon and box out, your views down the left,
+Highlights, moving a panel, and an example patch's button, Roll a die (it
+lives in `~/ThreadbearThreads/Welcome`). The samples are deleted when the
+tour ends. A Mac that joined a Threadbear you already use (setup's
+`--existing`) skips both, as does one that finished the tour in the Mac
+app.
 
 While that first thread works, Finish setting up shows what's left after
 setup:

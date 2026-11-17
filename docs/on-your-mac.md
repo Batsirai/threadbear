@@ -613,6 +613,13 @@ File references are where to look.
   (`runner/src/memory-sync.ts`).
 - Token Stats' files, if you have that app, and any logins you've added
   under `accounts` in its data folder (`claude-1`, `codex-1`...).
+- The GPUI app's setup cards, the first time it opens (or from Help > Set
+  Up Threadbear): which account GitHub's CLI is signed in as, by running
+  `gh auth status` once, and nothing else of `gh`'s. Add on its Your agents
+  card makes an empty `accounts/claude-N` folder in the data folder and
+  opens Terminal on `claude auth login` there, as the guide's way of adding
+  a login does; a folder that was never signed in to is taken away again
+  when the cards close (`desktop/gpui/src/hello.rs`).
 - Your first name, from your Mac account's full name (`id -F`), so its
   agents know what to call you (`runner/src/user-name.ts`). It stays in
   the instructions your own threads get.

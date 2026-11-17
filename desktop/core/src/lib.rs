@@ -25,6 +25,7 @@ pub mod hang_sample;
 pub mod hang_watch;
 pub mod handover;
 pub mod highlights;
+pub mod hello;
 pub mod home;
 pub mod inbox;
 pub mod inline_chips;

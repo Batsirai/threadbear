@@ -23,14 +23,14 @@ use threadbear_core::tour::{SetupChecklist, SetupItem};
 /// `devices.list` and `runner.status` (Swift's `devices*` and `localOnly`).
 #[derive(Default)]
 pub(crate) struct SetupState {
-    devices: DeviceList,
+    pub(crate) devices: DeviceList,
     /// `devices.list` has answered since the runner connected.
     loaded: bool,
     /// A runner from before devices (-32601).
     unsupported: bool,
     local_only: bool,
     /// Open signed in, while its token is on its way.
-    opening: bool,
+    pub(crate) opening: bool,
     pub(crate) view: Option<Entity<crate::activity_panels::PanelView>>,
 }
 
@@ -94,6 +94,10 @@ impl Threadbear {
 
     /// Open signed in: a browser token, and the website opened with it, as
     /// Settings › Phone & browser's button does.
+    pub(crate) fn setup_open_website_now(&mut self, cx: &mut Context<Self>) {
+        self.setup_open_website(cx);
+    }
+
     fn setup_open_website(&mut self, cx: &mut Context<Self>) {
         if self.setup.opening {
             return;

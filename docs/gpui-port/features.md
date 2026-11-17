@@ -455,6 +455,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | ID | Feature | What it does | How in GPUI | Route | Size | Swift |
 |---|---|---|---|---|---|---|
 | `tour.firstrun` | First-run tour | Dim, spotlight, arrow, hands-on steps, samples | Drawn overlay with a hole, finding targets by tag wherever the dock put them. | build | L | `Tour` |
+| `tour.hello` | Setup cards | First launch: one card per decision, logins found, phone, extras, first thread | Drawn over the window (hello.rs). | build | M | (GPUI only) |
 | `tour.intros` | One-card intros | First open of a page, pools | Drawn. | build | S | `Tour` (`TourIntro`) |
 | `tour.setup` | Finish setting up | Checklist, self-ticking | Drawn. | build | S | `SetupChecklist` |
 | `tour.about` | About (the Den) | Waving bear, build, numbers | Own GPUI window, drawn. | build | S | `DenWindow` |

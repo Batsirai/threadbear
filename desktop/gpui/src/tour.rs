@@ -191,7 +191,9 @@ impl Threadbear {
         // Once the window's drawn with their threads in it.
         cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(600)).await;
-            this.update_in(cx, |this, window, cx| this.tour_start(false, window, cx)).ok();
+            // The setup cards now, rather than the tour (hello.rs); Help
+            // still has the tour.
+            this.update_in(cx, |this, window, cx| this.hello_start(window, cx)).ok();
         })
         .detach();
     }
@@ -757,7 +759,7 @@ pub(crate) fn waving_bear(side: f32, color: Hsla) -> Div {
 
 /// The card's default button: the accent, white words, as SwiftUI's
 /// `.borderedProminent`; faded and deaf while it can't be pressed.
-fn prominent_button(id: &'static str, label: &'static str, tip: &'static str, enabled: bool, cx: &App) -> Stateful<Div> {
+pub(crate) fn prominent_button(id: &'static str, label: &'static str, tip: &'static str, enabled: bool, cx: &App) -> Stateful<Div> {
     let accent = style::control_accent(cx);
     div()
         .id(id)

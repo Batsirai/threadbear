@@ -314,6 +314,7 @@ actions!(
         RestartToUpdate,
         RestartApp,
         TakeTheTour,
+        SetUpThreadbear,
         FinishSettingUp,
         HibernateHour,
         HibernateEvening,
@@ -404,6 +405,7 @@ commands!(
     // No menu item: a web panel's Try again after Chromium failed to start.
     (RestartApp, RestartApp, None),
     (TakeTheTour, TakeTheTour, None),
+    (SetUpThreadbear, SetUpThreadbear, None),
     (FinishSettingUp, FinishSettingUp, None),
     (HibernateHour, HibernateHour, None),
     (HibernateEvening, HibernateEvening, None),
@@ -772,6 +774,7 @@ impl Threadbear {
             Command::RestartApp => self.restart_app(cx),
             // Help's replay of the tour can be skipped (tour.rs).
             Command::TakeTheTour => self.tour_start(true, window, cx),
+            Command::SetUpThreadbear => self.hello_start(window, cx),
             Command::FinishSettingUp => self.show_setup(cx),
             Command::HibernateHour => self.hibernate_open("hour", window, cx),
             Command::HibernateEvening => self.hibernate_open("evening", window, cx),
@@ -1313,7 +1316,7 @@ impl Threadbear {
             // AppKit adds Fill, Center, Move & Resize and the list of open
             // windows (the main one and any panel in a window of its own).
             TopMenu::new("Window", vec![item("Minimize", Command::Minimize), item("Zoom", Command::Zoom), Separator, item("Bring All to Front", Command::BringAllToFront)]),
-            TopMenu::new("Help", vec![item("Take the Tour", Command::TakeTheTour), item("Finish Setting Up", Command::FinishSettingUp)]),
+            TopMenu::new("Help", vec![item("Set Up Threadbear", Command::SetUpThreadbear), item("Take the Tour", Command::TakeTheTour), item("Finish Setting Up", Command::FinishSettingUp)]),
         ]
     }
 
@@ -1472,6 +1475,8 @@ impl Threadbear {
             .children(self.render_swipe_card(cx).map(|card| deferred(card).with_priority(1)))
             // The tour and the pages' intros, over everything (tour.rs).
             .children(self.render_tour(window, cx))
+            // The first launch's setup cards, over all of it (hello.rs).
+            .children(self.render_hello(window, cx))
             // A click or a key in the window means he's at it, for a window
             // the system never tells it's in front of (an X server with no
             // window manager): reading needs one (`looking_changed`).

@@ -290,6 +290,8 @@ pub struct Threadbear {
     pub(crate) tour: crate::tour::TourState,
     /// Finish setting up's devices (setup_panel.rs).
     pub(crate) setup: crate::setup_panel::SetupState,
+    /// The first launch's setup cards (hello.rs).
+    pub(crate) hello: crate::hello::HelloState,
     _events: Task<()>,
     _subs: Vec<Subscription>,
 }
@@ -593,6 +595,7 @@ impl Threadbear {
             arc_layer: None,
             tour: crate::tour::TourState::new(),
             setup: Default::default(),
+            hello: Default::default(),
             _events: events,
             _subs: vec![appearance, searching, frame, menus, looking, quitting, side_changed, main_context, browser_watch],
         };
@@ -1670,6 +1673,7 @@ impl Threadbear {
         // The tour or a page's intro on show, and Finish setting up (tour.rs, setup_panel.rs).
         dump["tour"] = self.tour_dump(cx);
         dump["setup"] = self.setup_dump(cx);
+        dump["hello"] = self.hello_dump();
         // Videos and PDFs up in the system's views, in any window (media_view.rs).
         dump["media"] = crate::media_view::dump();
         // The card a page swipe shows while it's under way (swipe_nav.rs).

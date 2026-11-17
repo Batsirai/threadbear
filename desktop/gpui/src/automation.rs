@@ -295,6 +295,14 @@ async fn run(app: &WeakEntity<Threadbear>, window: AnyWindowHandle, cmd: &Value,
         .ok();
         return Ok(json!(cx.update(|cx| app.read(cx).tour_line(cx))));
     }
+    // The first launch's setup cards (hello.rs): {"do": "start"|"next"|"back"|"skip"|"end"},
+    // or nothing to read which card's up: "ok 2/6 agents".
+    if cmd["cmd"] == "hello" {
+        let line = cx.update_window(window, |_, window, cx| crate::thread::scripted_input(|| app.update(cx, |t, cx| t.hello_command(cmd, window, cx)))).map_err(|e| e.to_string())??;
+        cx.background_executor().timer(std::time::Duration::from_millis(200)).await;
+        cx.update_window(window, |_, window, cx| window.render_frame(cx)).ok();
+        return Ok(json!(line));
+    }
     // Until what the window shows holds every condition given (or with
     // "not", none), as the Swift command: read from the same `dump` a
     // script reads next (threadbear_core::wait_for), every 50 ms.

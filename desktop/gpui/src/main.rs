@@ -133,6 +133,7 @@ mod thread_panels;
 mod thread_link_marks;
 mod tour;
 mod setup_panel;
+mod hello;
 mod unsent;
 mod updates_panel;
 mod usage;

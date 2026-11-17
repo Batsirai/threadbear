@@ -137,6 +137,3 @@ Given('the app opens as a new install would, after a Swift app whose tour was ne
   await openAsNew(this, 'unfinished');
 });
 
-Then("the tour can't be skipped", async function (this: ThreadbearWorld) {
-  await this.until('a tour with no Skip', (d) => (d as unknown as { tour?: { skippable: boolean } }).tour?.skippable === false);
-});

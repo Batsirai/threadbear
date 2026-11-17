@@ -32,7 +32,7 @@ use threadbear_core::new_thread::abbreviate_home;
 use threadbear_core::runner_settings::{experiment_about, BringIn, RunnerSettings, StandingInstructions};
 use crate::tips::Tip as _;
 
-mod devices;
+pub(crate) mod devices;
 mod keyboard;
 mod pools;
 mod reviewers;
