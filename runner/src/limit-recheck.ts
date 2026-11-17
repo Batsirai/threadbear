@@ -20,6 +20,9 @@ import type { UsageReading } from './usage.ts';
 import { accountRoom, MIN_ROOM_PERCENT } from './usage.ts';
 
 export const RECHECK_MS = 10 * 60_000;
+// How long one read may take before the pass moves on (limit-recheck's
+// backstop; Codex's own read gives up at 30 seconds and closes its process).
+export const READ_DEADLINE_MS = 60_000;
 // The first look after the runner starts: soon, but not in the startup rush.
 export const FIRST_RECHECK_MS = 60_000;
 
@@ -77,13 +80,21 @@ export class LimitRecheck {
     this.running = true;
     try {
       for (const account of this.deps.accounts()) {
+        // stop() mid-pass: start no more Codex processes.
+        if (this.stopped) break;
         const adapter = this.deps.adapters[account.provider];
         const now = this.deps.clock.now();
         if (!dueForRecheck(account, !!adapter?.readLimits, now, this.tried.get(account.id))) continue;
         this.tried.set(account.id, now);
+        const before = account.usage?.readAt;
         try {
-          const l = await adapter!.readLimits!(account);
-          if (!l || this.stopped) continue;
+          const l = await this.withDeadline(adapter!.readLimits!(account));
+          if (this.stopped) break;
+          if (!l) continue;
+          // A turn's reading or a reset's that landed while this one was
+          // out is newer than what it saw: keep that, drop this.
+          const current = this.deps.accounts().find((a) => a.id === account.id);
+          if (current?.usage?.readAt !== before) continue;
           this.deps.record(account.id, {
             windows: l.windows,
             ...(l.blocked !== undefined ? { blocked: l.blocked } : {}),
@@ -98,5 +109,17 @@ export class LimitRecheck {
     } finally {
       this.running = false;
     }
+  }
+
+  // The adapter has its own deadline (and closes its process at it); this
+  // one only makes sure a pass always ends, so the next is scheduled.
+  private withDeadline<T>(p: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const t = this.deps.clock.setTimeout(() => reject(new Error('the read took too long')), READ_DEADLINE_MS);
+      p.then(
+        (v) => (t.cancel(), resolve(v)),
+        (e) => (t.cancel(), reject(e)),
+      );
+    });
   }
 }

@@ -73,6 +73,9 @@ export const DEFAULT_CODEX_TIMINGS: CodexTimings = {
 
 export type NormalizerFactory = (ctx: NormalizerContext, o: { threadId: string }) => CodexNormalizerLike;
 
+// How long readLimits waits for Codex's answer before giving up.
+export const READ_LIMITS_TIMEOUT_MS = 30_000;
+
 export type CodexAdapterDeps = {
   // What the next process starts (E's codexBinary(): Threadbear's own copy,
   // codexPath, or the fallback npm copy). Called on every spawn.
@@ -211,7 +214,19 @@ export class CodexAdapter implements AgentAdapter {
   async readLimits(account: Account): Promise<Extract<AdapterOutput, { kind: 'limits' }> | null> {
     return withShortLivedProcess(
       this.shortLived(account, `limits:${account.id}`),
-      async (p) => limitsFromRateLimits((await p.request<GetAccountRateLimitsResponse>('account/rateLimits/read', null)) as never),
+      async (p) => {
+        // A Codex that never answers would hold its process (and the
+        // recheck's pass) for good; the throw closes it (finally above).
+        let timer: NodeJS.Timeout | undefined;
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('account/rateLimits/read took too long')), READ_LIMITS_TIMEOUT_MS);
+        });
+        try {
+          return limitsFromRateLimits((await Promise.race([p.request<GetAccountRateLimitsResponse>('account/rateLimits/read', null), deadline])) as never);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
       (p, live) => this.track(p, live),
     );
   }

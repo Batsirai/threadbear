@@ -7,7 +7,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { dueForRecheck, FIRST_RECHECK_MS, LimitRecheck, RECHECK_MS } from '../../src/limit-recheck.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { dueForRecheck, FIRST_RECHECK_MS, LimitRecheck, READ_DEADLINE_MS, RECHECK_MS } from '../../src/limit-recheck.ts';
+import { limitsFromRateLimits } from '../../src/adapters/codex/normalize.ts';
+import { accountRoom, UsageStore } from '../../src/usage.ts';
 import type { Account, UsageWindow } from '../../src/protocol.ts';
 import type { AgentAdapter } from '../../src/adapters/types.ts';
 import type { UsageReading } from '../../src/usage.ts';
@@ -88,4 +93,81 @@ test("a read that fails is logged and doesn't stop the next one", async () => {
   await settle();
   assert.deepEqual(reads, ['codex-main', 'codex-2']);
   r.stop();
+});
+
+// From Codex's review of this fix (17 Nov 2026).
+
+test('a read that comes back after a newer reading landed is dropped', async () => {
+  const accounts = [codex('codex-main', { week: 0 })];
+  let answer!: (v: unknown) => void;
+  const { clock, recorded, r } = setup(accounts, () => new Promise((res) => (answer = res)));
+  r.start();
+  clock.advance(FIRST_RECHECK_MS);
+  await settle();
+  // Use a reset (or a turn) records a newer reading meanwhile.
+  accounts[0] = { ...accounts[0]!, usage: { ...accounts[0]!.usage!, windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }], readAt: new Date(clock.now()).toISOString() } };
+  answer({ kind: 'limits', windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0 }], blocked: true });
+  await settle();
+  assert.deepEqual(recorded, [], 'the older 0% would have undone the reset');
+  r.stop();
+});
+
+test('stop() partway through a pass starts no more reads', async () => {
+  const accounts = [codex('codex-main', { week: 0 }), codex('codex-2', { week: 0 })];
+  let answer!: (v: unknown) => void;
+  const { clock, reads, recorded, r } = setup(accounts, () => new Promise((res) => (answer = res)));
+  r.start();
+  clock.advance(FIRST_RECHECK_MS);
+  await settle();
+  r.stop();
+  answer({ kind: 'limits', windows: [], blocked: false });
+  await settle();
+  assert.deepEqual(reads, ['codex-main']);
+  assert.deepEqual(recorded, []);
+});
+
+test("a read that never answers doesn't hold up the others, or the next pass", async () => {
+  const accounts = [codex('codex-main', { week: 0 }), codex('codex-2', { week: 0 })];
+  const { clock, reads, r } = setup(accounts, () => new Promise(() => {}));
+  r.start();
+  clock.advance(FIRST_RECHECK_MS);
+  await settle();
+  assert.deepEqual(reads, ['codex-main']);
+  clock.advance(READ_DEADLINE_MS);
+  await settle();
+  assert.deepEqual(reads, ['codex-main', 'codex-2']);
+  clock.advance(READ_DEADLINE_MS);
+  await settle();
+  clock.advance(RECHECK_MS);
+  await settle();
+  assert.equal(reads.length, 3, 'the next pass came round');
+  r.stop();
+});
+
+test("Codex's real answer, through the real parser and usage store, lifts a login that read 0%", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'limit-recheck-'));
+  try {
+    const clock = new FakeClock(T0);
+    const store = new UsageStore({ limitsFile: path.join(dir, 'limits.json'), dataDir: dir, clock, log: nullLogger });
+    const known = { id: 'codex-main', provider: 'codex' as const, title: 'codex-main', configDir: path.join(dir, '.codex') };
+    // What it read on 15 Nov: used up and blocked.
+    clock.advance(-2 * 86_400_000);
+    store.record('codex-main', limitsFromRateLimits({ ordinaryUsageAllowed: false, rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: Date.parse('2026-11-18T07:36:48Z') / 1000 }, rateLimitReachedType: 'primary' } } as never)! as never);
+    clock.advance(2 * 86_400_000);
+    const accounts = () => [{ ...known, usage: store.usageFor(known) } as Account];
+    assert.equal(accounts()[0]!.usage!.blocked, true);
+    // What Codex said on 17 Nov after the reset (its real shape).
+    const now = { ordinaryUsageAllowed: true, rateLimits: { limitId: 'codex', primary: { usedPercent: 4, windowDurationMins: 10080, resetsAt: Date.parse('2026-11-23T03:07:41Z') / 1000 }, secondary: null, rateLimitReachedType: null } };
+    const adapter = { provider: 'codex', readLimits: async () => limitsFromRateLimits(now as never) } as unknown as AgentAdapter;
+    const r = new LimitRecheck({ clock, log: nullLogger, accounts, adapters: { codex: adapter }, record: (id, reading) => store.record(id, reading) });
+    r.start();
+    clock.advance(FIRST_RECHECK_MS);
+    await settle();
+    r.stop();
+    const after = accounts()[0]!;
+    assert.equal(after.usage!.blocked, undefined, 'the block lifts');
+    assert.equal(accountRoom(after), 96);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
