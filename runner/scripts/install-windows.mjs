@@ -133,6 +133,18 @@ function deploy(home, label, extra) {
   }).status;
 }
 
+// This account as Task Scheduler names it (PC\user, or DOMAIN\user):
+// whoami's answer, as USERDOMAIN can say WORKGROUP (it did over ssh).
+function whoAmI() {
+  try {
+    const me = execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe'), { encoding: 'utf8', windowsHide: true }).trim();
+    if (me.includes('\\')) return me;
+  } catch {
+    // fall back below
+  }
+  return `${process.env.COMPUTERNAME || os.hostname()}\\${os.userInfo().username}`;
+}
+
 function headCommit() {
   const r = spawnSync('git', ['-C', RUNNER_DIR, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true });
   return r.status === 0 ? r.stdout.trim() : undefined;
@@ -169,7 +181,7 @@ async function main() {
     console.error(`A data dir other than ${defaultHome} needs its own --label, so it doesn't replace the real runner's task.`);
     return 2;
   }
-  const user = `${process.env.USERDOMAIN || os.hostname()}\\${os.userInfo().username}`;
+  const user = whoAmI();
   const task = taskName(label, os.userInfo().username);
   const dir = path.join(home, 'runner');
   const binDir = path.join(home, 'bin');
