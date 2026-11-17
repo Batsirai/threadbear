@@ -42,3 +42,10 @@ test('onPath splits the PATH the way the platform does', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Claude Code's PowerShell tool is off on Windows, where the guards read only Bash", async () => {
+  const { cliEnv } = await import('../../src/adapters/claude/adapter.ts');
+  const account = { id: 'claude-1', provider: 'claude' as const, title: '', configDir: '/acct/claude-1' };
+  assert.equal(cliEnv(account, {}, 'win32').CLAUDE_CODE_USE_POWERSHELL_TOOL, '0');
+  assert.equal(cliEnv(account, {}, 'darwin').CLAUDE_CODE_USE_POWERSHELL_TOOL, undefined);
+});

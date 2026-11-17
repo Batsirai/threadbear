@@ -162,7 +162,11 @@ export function threadEnv(threadId: string, home: string, basePath = process.env
     THREADBARE_THREAD_ID: threadId,
     THREADBARE_HOME: home,
     THREADBARE_RUNNER_HOME: home,
-    PATH: basePath ? `${BIN_DIR}${path.delimiter}${basePath}` : BIN_DIR,
+    // On Windows the runner's Node goes on too: bin/tb is a node script,
+    // and Git Bash (Claude's Bash tool there) runs it with whatever node
+    // is on PATH, which a fresh PC hasn't got (cmd and PowerShell run
+    // tb.cmd, which uses THREADBEAR_NODE).
+    PATH: [BIN_DIR, ...(process.platform === 'win32' ? [path.dirname(process.execPath)] : []), ...(basePath ? [basePath] : [])].join(path.delimiter),
   };
 }
 

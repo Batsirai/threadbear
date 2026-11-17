@@ -43,12 +43,18 @@ const INHERITED_SESSION_VARS = [
   'AI_AGENT',
 ];
 
-export function cliEnv(account: Account, base: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
+export function cliEnv(account: Account, base: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...base };
   for (const k of INHERITED_SESSION_VARS) delete env[k];
   if (account.id === 'claude-main') delete env.CLAUDE_CONFIG_DIR;
   else env.CLAUDE_CONFIG_DIR = account.configDir;
   env.CLAUDE_AGENT_SDK_CLIENT_APP = `threadbear-runner/${RUNNER_VERSION}`;
+  // On Windows, Claude Code gives the model a PowerShell tool beside Bash.
+  // The runner's guards (the secrets guard, approvals, what a limited
+  // thread may run) read Bash commands by that name, so a PowerShell call
+  // would pass them unread. Off until they read PowerShell too (the 9 Nov
+  // audit, docs/gpui-port/runner-windows.md).
+  if (platform === 'win32') env.CLAUDE_CODE_USE_POWERSHELL_TOOL = '0';
   return env;
 }
 
