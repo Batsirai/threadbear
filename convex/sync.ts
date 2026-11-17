@@ -2862,6 +2862,26 @@ export const pocketCards = query({
 // pendingCommands, takes each one (once: takeCommand says no the second
 // time), applies it through the same code the Mac app uses, and finishes
 // it with the outcome.
+//
+// A command's lifecycle. `state` is what clients read (phone:command,
+// phone:waiting, relay:commandState), so it keeps its four values; these are
+// the only moves between them:
+//
+//   pending --takeCommand--------------------------> taken
+//   pending --phone:cancel, the thread moved or went,
+//             no runner took it in COMMAND_KEEP_MS--> failed
+//   taken   --finishCommand------------------------> done | failed
+//   taken   --lease (TAKEN_LEASE_MS, no finish)----> failed, lapsedAt set
+//   failed with lapsedAt --a late finishCommand----> done | failed
+//
+// Anything else is refused or left as it is: a second take gets false, unless
+// it's the same attempt asking again (its answer was lost); a finish of a
+// command that isn't taken (or lapsed) changes nothing, so a late or repeated
+// one can't overwrite how it ended. A command is never handed out twice: a
+// lapsed one fails rather than going back to pending, as its runner may have
+// run it.
+export const TAKEN_LEASE_MS = 3 * 60 * 60_000;
+const ATTEMPT = /^[A-Za-z0-9_-]{8,64}$/;
 
 export const pendingCommands = query({
   args: { key: v.string(), runnerId: v.string() },
@@ -2882,12 +2902,24 @@ export const pendingCommands = query({
 });
 
 export const takeCommand = mutation({
-  args: { key: v.string(), commandId: v.id('commands') },
+  // attempt (API 84): the runner's id for this take, the same each time it
+  // asks again after an error. Without one (an older runner) a second ask
+  // gets false, as before.
+  args: { key: v.string(), commandId: v.id('commands'), attempt: v.optional(v.string()) },
   returns: v.boolean(),
-  handler: async (ctx, { key, commandId }) => {
+  handler: async (ctx, { key, commandId, attempt }) => {
     const caller = await runnerAuth(ctx, key, 'takeCommand');
+    if (attempt !== undefined && !ATTEMPT.test(attempt)) throw new ConvexError({ kind: 'badArgs', message: 'attempt must be 8 to 64 letters, digits, - or _' });
     const c = await ctx.db.get(commandId);
-    if (!c || c.state !== 'pending') return false;
+    if (!c) return false;
+    // This same take, asked again: it committed, but its answer never reached
+    // the runner (a dropped connection), which would otherwise drop the
+    // command and leave it taken with nobody running it.
+    if (c.state === 'taken' && attempt !== undefined && c.attempt === attempt) {
+      if (!mayTake(caller, c)) throw forbidden("take that command: it isn't for its runner");
+      return true;
+    }
+    if (c.state !== 'pending') return false;
     if (!mayTake(caller, c)) throw forbidden("take that command: it isn't for its runner");
     // A thread's command is for the runner that has the thread now: one
     // queued before the thread moved to another runner (or went) isn't
@@ -2901,7 +2933,7 @@ export const takeCommand = mutation({
         return false;
       }
     }
-    await ctx.db.patch(commandId, { state: 'taken', takenAt: Date.now() });
+    await ctx.db.patch(commandId, { state: 'taken', takenAt: Date.now(), ...(attempt !== undefined ? { attempt } : {}) });
     return true;
   },
 });
@@ -2920,6 +2952,12 @@ export const finishCommand = mutation({
     const c = await ctx.db.get(commandId);
     if (!c) return null;
     if (!mayFinish(caller, c)) throw forbidden("finish that command: it isn't for its runner");
+    // Only a taken command finishes, or one whose lease ran out, which its
+    // runner's answer still settles. One already done or failed (finished
+    // before, cancelled, expired) stays as it ended: a repeated or stale
+    // finish changes nothing, and null is all a runner ever got back.
+    const lapsed = c.state === 'failed' && c.lapsedAt !== undefined;
+    if (c.state !== 'taken' && !lapsed) return null;
     // A call's answer, or a slashCommands list (API 62).
     // And (API 77) a login or model change's: the login and model that
     // runner applied, which may not be the model asked for.
@@ -2941,7 +2979,8 @@ export const finishCommand = mutation({
     }
     // A note is a line for the phone: cut, so a finished command stays small (pruneOld reads them).
     const said = note ? clean(cutBytes(note, caller.owner ? NOTE_MAX : CAP.note)) : undefined;
-    await ctx.db.patch(commandId, { state: ok ? 'done' : 'failed', doneAt: Date.now(), ...(said ? { note: said } : {}), ...(made ? { resultThreadId: made } : {}), ...(kept !== undefined ? { result: kept } : {}) });
+    // A lapsed command's own note ("never said how it went") goes with the lapse.
+    await ctx.db.patch(commandId, { state: ok ? 'done' : 'failed', doneAt: Date.now(), lapsedAt: undefined, note: said, ...(made ? { resultThreadId: made } : {}), ...(kept !== undefined ? { result: kept } : {}) });
     // Its words, and a secret's sealed answer (docs/protocol.md, "Secrets"), have
     // done their job: see finishedArgs.
     await ctx.db.patch(commandId, { args: finishedArgs(c.args) });
@@ -2952,6 +2991,33 @@ export const finishCommand = mutation({
     // runner's command, or in a picture row (deleteIfUnused).
     await endCommandFiles(ctx, commandId);
     for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
+    return null;
+  },
+});
+
+// A taken command whose runner hasn't finished it in TAKEN_LEASE_MS: its
+// runner stopped partway (a crash, a restart mid-apply) or has been away
+// longer than it keeps trying to say how it went (FINISH_TRIES heartbeats).
+// It shows as failed, so the phone stops saying "Sending…", but isn't handed
+// out again: it may have run. A late finish still records the real outcome.
+// The cron, every 15 minutes; a batch at a time.
+const LAPSE_BATCH = 100;
+export const LAPSED_NOTE = 'Its runner never said how it went.';
+export const lapseCommands = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const now = Date.now();
+    const due = await ctx.db
+      .query('commands')
+      .withIndex('by_state_taken', (q) => q.eq('state', 'taken').lt('takenAt', now - TAKEN_LEASE_MS))
+      .take(LAPSE_BATCH);
+    for (const c of due) {
+      await ctx.db.patch(c._id, { state: 'failed', doneAt: now, lapsedAt: now, args: finishedArgs(c.args), note: LAPSED_NOTE });
+      await endCommandFiles(ctx, c._id);
+      for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
+    }
+    if (due.length === LAPSE_BATCH) await ctx.scheduler.runAfter(0, internal.sync.lapseCommands, {});
     return null;
   },
 });

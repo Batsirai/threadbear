@@ -556,6 +556,13 @@ export default defineSchema({
     createdAt: v.number(),
     takenAt: v.optional(v.number()),
     doneAt: v.optional(v.number()),
+    // The runner's own id for its take (API 84, sync:takeCommand): the same
+    // attempt asking again gets true, so a take whose answer was lost on the
+    // way back is run, not dropped. Any other ask still gets false.
+    attempt: v.optional(v.string()),
+    // When a taken command's lease ran out with no finish (sync:lapseCommands):
+    // it shows as failed, and its runner's late finish still says how it went.
+    lapsedAt: v.optional(v.number()),
     resultThreadId: v.optional(v.string()), // for create, once it lands
     result: v.optional(v.string()), // a call's answer as JSON text (API 44), from an allow-listed method (relay.ts CALLS); a slashCommands list (API 62)
   })
@@ -566,7 +573,9 @@ export default defineSchema({
     // pruneOld: finished ones by when they finished.
     .index('by_state_done', ['state', 'doneAt'])
     // pruneOld: ones no runner took in COMMAND_KEEP_MS, by when they were made.
-    .index('by_state_created', ['state', 'createdAt']),
+    .index('by_state_created', ['state', 'createdAt'])
+    // lapseCommands: taken ones whose lease has run out, by when they were taken.
+    .index('by_state_taken', ['state', 'takenAt']),
 
   // A thread moving from one runner to another (docs/protocol.md, "Moving a
   // thread to another runner", API 64). Only the owner key starts one; each

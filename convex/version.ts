@@ -401,4 +401,11 @@
 //    runner key's agents saved back to the main Mac (sync:memoryOffers,
 //    sync:takeMemoryOffers). Only runners with the sharedMemory experiment on
 //    call any of them.
-export const API_VERSION = 84;
+// 85: sync:takeCommand takes `attempt`, the runner's id for its take: the
+//    same attempt asking again gets true, so a take whose answer was lost
+//    is run rather than dropped. finishCommand changes only a taken command
+//    (or one whose lease ran out), so a repeated or late finish can't
+//    overwrite how one ended. A taken command no runner finished in 3 hours
+//    shows as failed (lapseCommands), and its runner's late finish still
+//    settles it. A runner sends `attempt` only to a backend of 85 or later.
+export const API_VERSION = 85;

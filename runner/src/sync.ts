@@ -285,6 +285,8 @@ export const INDEX_SINCE_API_VERSION = 29;
 export const RUNNER_ORDER_API_VERSION = 58;
 // Moving a thread to another runner (convex/moves.ts).
 export const MOVES_API_VERSION = 64;
+// sync:takeCommand takes `attempt`, so a take whose answer was lost can ask again.
+export const COMMAND_ATTEMPT_API_VERSION = 84;
 // Only the projects that changed go up (sync:upsertProjects), after the
 // whole list once per start.
 export const PROJECTS_DIFF_API_VERSION = 30;
@@ -1448,6 +1450,10 @@ export class ConvexSync {
   // .env files still being read), tried again with the next heartbeat: the
   // pending list doesn't change by itself, so nothing else brings it round.
   private untaken = new Map<string, Command>();
+  // Each command's take id while it's being taken (API 84): asked again
+  // after an error, the same id gets true if the first ask had in fact
+  // taken it, where any other ask gets false and the command was dropped.
+  private attempts = new Map<string, string>();
   // Each thread's command being applied, so the next one for that thread
   // waits for it: every update of the pending list starts its own run of
   // takeCommands, and a text sent after a photo reached the agent first
@@ -4297,12 +4303,18 @@ export class ConvexSync {
       return;
     }
     let taken: unknown;
+    const withAttempt = (this.backendApiVersion ?? 0) >= COMMAND_ATTEMPT_API_VERSION;
+    let attempt = this.attempts.get(c.commandId);
+    if (withAttempt && !attempt) this.attempts.set(c.commandId, (attempt = crypto.randomUUID()));
     try {
-      taken = await this.post('mutation', 'sync:takeCommand', { key: this.deps.key, commandId: c.commandId });
+      taken = await this.post('mutation', 'sync:takeCommand', { key: this.deps.key, commandId: c.commandId, ...(withAttempt && attempt ? { attempt } : {}) });
       this.untaken.delete(c.commandId);
+      this.attempts.delete(c.commandId);
     } catch (e) {
-      // Still pending: the next heartbeat tries it again.
+      // Still pending, or taken by this very ask with its answer lost: the
+      // next heartbeat asks again with the same attempt.
       if (!refusedForGood(e)) this.untaken.set(c.commandId, c);
+      else this.attempts.delete(c.commandId);
       this.deps.log.debug('phone command not taken', { commandId: c.commandId, error: String(e) });
       return;
     }

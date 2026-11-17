@@ -26,6 +26,13 @@ const ONLINE_MS = 3 * 60_000;
 // kept a week.
 export const MOVE_ASK_MS = 10 * 60_000;
 export const MOVE_FROZEN_MS = 30 * 60_000;
+// A ready move waits for S's thread to finish its turn before freezing it, so
+// it has no short limit while S is online. It fails once S has been gone this
+// long (a Mac asleep or switched off), or after MOVE_READY_MS whatever S says:
+// left ready, it would block every later move of the thread (startMove's
+// "already moving").
+export const MOVE_READY_OFFLINE_MS = 10 * 60_000;
+export const MOVE_READY_MS = 12 * 60 * 60_000;
 export const MOVE_LISTED_MS = 24 * 60 * 60_000;
 const MOVE_KEPT_MS = 7 * 24 * 60 * 60_000;
 // 12 chunks of at most 10 MB: the 100 MB a bundle may be, with room.
@@ -588,7 +595,8 @@ export const rehomeRows = internalMutation({
 });
 
 /**
- * A move T never answered fails after MOVE_ASK_MS, one frozen and not
+ * A move T never answered fails after MOVE_ASK_MS, a ready one whose S is
+ * gone or that has waited MOVE_READY_MS fails too, one frozen and not
  * claimed after MOVE_FROZEN_MS, so a thread isn't left frozen on S for
  * good. Ended moves go after a week. The cron, every few minutes.
  */
@@ -599,6 +607,19 @@ export const expireMoves = internalMutation({
     const now = Date.now();
     for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', 'asking').lt('updatedAt', now - MOVE_ASK_MS)).take(50)) {
       await end(ctx, m, 'failed', `${await runnerName(ctx, m.to)} didn't answer.`);
+    }
+    // A handful at most: one per thread moving.
+    for (const m of await ctx.db.query('threadMoves').withIndex('by_state', (q) => q.eq('state', 'ready')).take(100)) {
+      if (m.updatedAt < now - MOVE_READY_MS) {
+        await end(ctx, m, 'failed', 'The thread was still busy 12 hours later, so it stays where it is.');
+        continue;
+      }
+      const s = await ctx.db
+        .query('runners')
+        .withIndex('by_runnerId', (q) => q.eq('runnerId', m.from))
+        .unique();
+      const seen = Math.max(s?.lastSeenAt ?? 0, m.updatedAt);
+      if (seen < now - MOVE_READY_OFFLINE_MS) await end(ctx, m, 'failed', `${await runnerName(ctx, m.from)} went offline before the thread could be packed, so it stays where it is.`);
     }
     for (const state of ['packing', 'unpacking'] as const) {
       // A handful at most: one per thread moving.

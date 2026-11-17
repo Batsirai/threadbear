@@ -7,6 +7,8 @@ crons.interval('prune old rows', { hours: 6 }, internal.sync.pruneOld, {});
 // Stored files whose rows ran out (tool pictures, uploads never sent) and
 // commands no runner took in two weeks: on their own, so neither holds up the other.
 crons.interval('prune old files', { hours: 6 }, internal.sync.pruneFiles, {});
+// Taken commands whose runner never finished them in the lease (sync.ts lapseCommands).
+crons.interval('lapse taken commands', { minutes: 15 }, internal.sync.lapseCommands, {});
 // Tool output past its 30 days, a batch at a time (each row is read to be deleted).
 crons.interval('prune old tool output', { minutes: 15 }, internal.sync.pruneBodies, {});
 // Moves nobody answered, or frozen too long (moves.ts), and old ended ones.

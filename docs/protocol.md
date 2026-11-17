@@ -6223,7 +6223,10 @@ Any state before `claimed` can go to `failed` (`moves:moveFailed { moveId,
 note }`, by S or T, with what went wrong in a line Mike can read) or
 `cancelled` (`moves:cancelMove`, owner, before `unpacking`). A move frozen
 30 minutes ago and not yet claimed fails by itself, and one still `asking`
-after 10 minutes (T offline). On `failed` or `cancelled` S unfreezes the
+after 10 minutes (T offline). One `ready` waits for S's thread to finish
+its turn, so it fails only once S hasn't been heard from for 10 minutes,
+or after 12 hours whatever S says, so it can't block the thread's next
+move for good. On `failed` or `cancelled` S unfreezes the
 thread if it froze it and T throws away its staging; the chunks are deleted
 when a move ends, whichever way. A runner that restarts reads its moves
 again and carries on from the state.
@@ -6669,11 +6672,18 @@ the mirror back as state. The Mac app doesn't use it.
   `commands` for a runner (`runnerId`, or `"any"`). The runner holds a
   live query on its pending commands over the Convex client's WebSocket
   (it reconnects by itself), and for each one: takes it
-  (`sync:takeCommand`, which says no if it was already taken), applies
+  (`sync:takeCommand`, which says no if it was already taken; from
+  backend API 84 the runner passes `attempt`, its own id for the take, and
+  the same attempt asking again after an error gets yes, so a take whose
+  answer was lost runs rather than being dropped), applies
   it through the same methods the app's RPCs use (one about a thread a
   draining runner still has goes to that runner, as the app's would),
   then finishes it with
-  the outcome and, for a `create` or `quickAsk`, the new thread's id. `send` and
+  the outcome and, for a `create` or `quickAsk`, the new thread's id
+  (from API 84 a finish changes only a taken command, so a repeated or
+  late one can't change how it ended, and a command taken 3 hours ago with
+  no finish shows as `failed`, "Its runner never said how it went.", which
+  its runner's late finish still settles; it's never handed out again). `send` and
   `create` give the `user.message` `origin: "phone"`. A `create` can name
   `accountId`, `model` and (backend API 20) `effort`, checked as
   `threads.create` checks them; an effort that isn't a level is dropped. Either can carry

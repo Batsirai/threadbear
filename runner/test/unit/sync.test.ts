@@ -681,7 +681,7 @@ test('the uploader never follows a redirect with the bytes, nor posts them in th
 
 // ------------------------------------------------------------ step 2 and 3
 
-import { BUTTONS_API_VERSION, LOGIN_NOTES_API_VERSION, MESSAGE_CHARS, PLAN_API_VERSION, PLAN_CHARS, toMessageDoc, toolLine, inputSummary, WokeRows, WOKE_BY_API_VERSION, type Command, type MessageDoc } from '../../src/sync.ts';
+import { BUTTONS_API_VERSION, COMMAND_ATTEMPT_API_VERSION, LOGIN_NOTES_API_VERSION, MESSAGE_CHARS, PLAN_API_VERSION, PLAN_CHARS, toMessageDoc, toolLine, inputSummary, WokeRows, WOKE_BY_API_VERSION, type Command, type MessageDoc } from '../../src/sync.ts';
 import { REMOTE_ALLOW_REFUSED, remoteCardShowsAll } from '../../src/tools.ts';
 
 type Fake = { h: ReturnType<typeof makeHarness>; sync: ConvexSync; calls: Call[]; push: (value: unknown) => void; applied: string[]; landed: Call[] };
@@ -4078,6 +4078,66 @@ test("commands: a thread's command whose take failed still goes before the threa
   h.clock.advance(HEARTBEAT_MS);
   await tick(20);
   assert.deepEqual(applied.filter((a) => a.startsWith(`send ${t.id}`)).map((a) => a.split(' ')[2]), ['one', 'two']);
+  await sync.stop();
+});
+
+// A take that committed but whose answer was lost on the way back: the retry
+// with the next heartbeat got false (it's no longer pending), and the command
+// was dropped, left taken with nobody running it (the state machines survey,
+// 17 Nov 2026). From API 84 the retry carries the same attempt, which the
+// backend answers true, so it runs, once.
+test('commands: a take whose answer was lost is asked again with the same attempt, and runs once', async () => {
+  const takenBy = new Map<string, unknown>();
+  let lose = true;
+  const asks: Record<string, unknown>[] = [];
+  const { h, sync, push, applied, calls } = setupFull({
+    apiVersion: BACKEND_API_VERSION,
+    answer: (fn, args) => {
+      if (fn !== 'sync:takeCommand') return undefined;
+      asks.push(args);
+      const id = String(args.commandId);
+      // As convex/sync.ts takeCommand does it.
+      const had = takenBy.get(id);
+      const got = had === undefined ? (takenBy.set(id, args.attempt), true) : args.attempt !== undefined && had === args.attempt;
+      if (lose) {
+        lose = false;
+        throw new Error('fetch failed');
+      }
+      return got;
+    },
+  });
+  sync.start();
+  await sync.flushNow();
+  const t = h.runner.create({ text: 'hello', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await tick();
+  push([{ commandId: 'c1', kind: 'send', threadId: t.id, args: { text: 'one' }, createdAt: 1 }]);
+  await tick(10);
+  assert.deepEqual(applied.filter((a) => a.startsWith(`send ${t.id}`)), []);
+  // The pending list no longer has it: only the heartbeat brings it round.
+  push([]);
+  h.clock.advance(HEARTBEAT_MS);
+  await tick(20);
+  assert.equal(asks.length, 2);
+  assert.equal(typeof asks[0]!.attempt, 'string');
+  assert.equal(asks[1]!.attempt, asks[0]!.attempt, 'the same attempt both times');
+  assert.deepEqual(applied.filter((a) => a.startsWith(`send ${t.id}`)).map((a) => a.split(' ')[2]), ['one']);
+  assert.ok(calls.some((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'c1' && c.args.ok === true));
+  h.clock.advance(HEARTBEAT_MS);
+  await tick(20);
+  assert.equal(asks.length, 2, 'asked no more once it had its answer');
+  await sync.stop();
+});
+
+test('commands: an older backend is asked to take without an attempt', async () => {
+  const { h, sync, push, calls } = setupFull({ apiVersion: COMMAND_ATTEMPT_API_VERSION - 1 });
+  sync.start();
+  await sync.flushNow();
+  const t = h.runner.create({ text: 'hello', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  await tick();
+  push([{ commandId: 'c1', kind: 'send', threadId: t.id, args: { text: 'one' }, createdAt: 1 }]);
+  await tick(10);
+  const take = calls.find((c) => c.fn === 'sync:takeCommand')!;
+  assert.equal('attempt' in take.args, false);
   await sync.stop();
 });
 

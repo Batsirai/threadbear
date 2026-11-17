@@ -356,3 +356,48 @@ test("a thread moved to another Mac leaves the old Mac's projects at the switch"
   await s.mini.append('T1', 'later', 9);
   assert.equal(s.rows('threads').find((t) => t.threadId === 'T1')!.projects, undefined);
 });
+
+// A ready move waits for S's thread to finish its turn, so it has no short
+// limit. But with nothing to end it, a move whose S went away stayed ready
+// for good, and every later move of the thread was refused as "already
+// moving" (the state machines survey, 17 Nov 2026).
+test('a ready move fails once its thread’s runner has gone offline, or after 12 hours, and the thread can move again', async () => {
+  const s = await setup();
+  await s.mini.upsert(thread('R1', MINI));
+  await s.mini.upsert(thread('R2', MINI));
+  await s.owner.upsert(thread('R3', LAPTOP));
+  const busy = (await s.owner.start('R1', CLOUD)).moveId;
+  await s.mini.info(busy);
+  await s.cloud.ready(busy);
+  // S online, its thread still in its turn: it waits, however many sweeps go by.
+  await call(s.ctx, moves.expireMoves as never, {});
+  assert.equal(moveOf(s, busy).state, 'ready');
+  assert.equal(await outcome(s.owner.start('R1', CLOUD)), 'conflict');
+
+  // S went to sleep: once it's been gone ten minutes, the move ends.
+  const mini = s.rows('runners').find((r) => r.runnerId === MINI)!;
+  mini.lastSeenAt = Date.now() - 11 * 60_000;
+  moveOf(s, busy).updatedAt -= 11 * 60_000;
+  await call(s.ctx, moves.expireMoves as never, {});
+  assert.equal(moveOf(s, busy).state, 'failed');
+  assert.equal(moveOf(s, busy).note, 'mac-mini went offline before the thread could be packed, so it stays where it is.');
+  // A move made ready just now isn't failed for S's earlier silence.
+  const fresh = (await s.owner.start('R2', CLOUD)).moveId;
+  await s.mini.info(fresh);
+  await s.cloud.ready(fresh);
+  await call(s.ctx, moves.expireMoves as never, {});
+  assert.equal(moveOf(s, fresh).state, 'ready');
+  mini.lastSeenAt = Date.now();
+  // And the thread can be moved again.
+  await s.owner.cancel(fresh);
+  assert.equal(moveOf(s, (await s.owner.start('R1', CLOUD)).moveId).state, 'asking');
+
+  // S online but the thread busy for 12 hours: it ends too.
+  const long = (await s.owner.start('R3', MINI)).moveId;
+  await s.owner.info(long);
+  await s.mini.ready(long);
+  moveOf(s, long).updatedAt -= 12 * 60 * 60_000 + 60_000;
+  await call(s.ctx, moves.expireMoves as never, {});
+  assert.equal(moveOf(s, long).state, 'failed');
+  assert.match(moveOf(s, long).note, /still busy 12 hours later/);
+});
