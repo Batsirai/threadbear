@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FakeClock } from '../../src/clock.ts';
-import { type CiRun, bareRepoArgs, ciVerdict, earlierVerdict, HISTORY_PAGE, FETCH_INTERVAL_MS, FIRST_LOOK_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
+import { type CiRun, bareRepoArgs, ciVerdict, earlierVerdict, HISTORY_PAGE, FETCH_INTERVAL_MS, FIRST_LOOK_MS, RETRY_AFTER_FAILURE_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
 import { LATER, asGitHub, commit, fakeGpg, git, kept, key, release, signedTag, upstreamFor, waitFor, withVictimGpg, world } from '../helpers/upstream-harness.ts';
 
 test('repoKey: the same repo however its URL is written', () => {
@@ -149,6 +149,30 @@ test('the timer looks a while after start, then every six hours', async () => {
   up.stop();
   assert.equal(clock.pending(), 0);
   void FETCH_INTERVAL_MS;
+});
+
+// A Mac waking from sleep often has no network for its look, and six hours
+// later it's asleep again: a fork's runner failed nearly every look for a
+// week and never kept two of Mike's releases (DavidClarkTucson's fork, 15 Nov).
+test('a failed look tries again 15 minutes later, then goes back to six hours', async () => {
+  const w = world();
+  const clock = new FakeClock();
+  git(w.theirs, 'remote', 'set-url', 'upstream', path.join(w.root, 'gone.git'));
+  const up = upstreamFor(w.theirs, w.home, clock);
+  up.start();
+  clock.advance(FIRST_LOOK_MS);
+  await waitFor(() => up.status().state === 'failed');
+  git(w.theirs, 'remote', 'set-url', 'upstream', path.join(w.root, 'mike.git'));
+  clock.advance(RETRY_AFTER_FAILURE_MS - 1);
+  assert.equal(up.status().state, 'failed');
+  clock.advance(1);
+  await waitFor(() => up.status().state === 'idle');
+  const checkedAt = up.status().checkedAt;
+  clock.advance(RETRY_AFTER_FAILURE_MS);
+  assert.equal(up.status().checkedAt, checkedAt);
+  assert.equal(clock.pending(), 1);
+  up.stop();
+  assert.equal(RETRY_AFTER_FAILURE_MS, 15 * 60_000);
 });
 
 test("Mike's runner tags main once a day, signed, once it has settled", async () => {
