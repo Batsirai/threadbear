@@ -75,7 +75,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Windows needs time for its release build after the behaviour specs, and
     # the Mac for its web runtime specs (about 40 minutes without them).
-    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04' && 45 || 60 }}
+    # Linux too since 17 Nov: its specs alone grew past 39 minutes, and 45
+    # cancelled the run on main.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
