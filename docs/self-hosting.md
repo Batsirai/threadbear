@@ -285,6 +285,17 @@ Everything is in the `threadbear-convex-data` volume. To back it up, export
 with the Convex CLI using the admin key (`npx convex export`, with the
 variables from `secrets/convex-self-hosted.env` set).
 
+Upgrading Threadbear itself needs nothing by hand: your main Mac's runner
+deploys the backend from each release it brings in. When a release changes
+the schema in a way the rows already stored have to be got ready for (a
+field becoming required, listed in `convex/migrations.json`), the deploy
+first deploys the commit before that change, runs its backfill
+(`migrations:run`) to the end, then deploys the release, so a copy that
+skipped releases upgrades the same way. `tb logs` and
+`<home>/runner/update.log` show each step. If you deploy `convex/` by hand
+instead, do the same: `node runner/scripts/deploy-backend.mjs` does it for
+you, with the admin key in `secrets/convex-self-hosted.env`.
+
 The image tag is pinned because an upgrade can need an export and an import
 (Convex's `self-hosted/advanced/upgrading.md`). Move `CONVEX_IMAGE_TAG` on
 deliberately; setup then makes the containers again on the same volume.

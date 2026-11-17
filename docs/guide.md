@@ -1804,6 +1804,14 @@ it to open it in your browser. Threadbear never fetches one by itself, so
 whoever runs that site can't tell you're reading. On the phone a reply
 draws its first 10 pictures; any past that show as their names.
 
+The website also has a Machines page, at `/machines` on your website's
+address, for whoever's signed in there: it draws each of the backend's
+state machines (so far, how a message or request from your phone or the
+Mac travels to a runner: waiting, taken, done or failed, and lapsed when a
+runner never says how it went), with how many are in each state right now,
+and any one's history. It's for looking into something that seems stuck; it
+changes nothing.
+
 ## Self-hosting your backend
 <!-- slug: self-hosting -->
 

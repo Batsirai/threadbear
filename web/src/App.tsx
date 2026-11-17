@@ -2,7 +2,7 @@
 // sidebar (sidebar.tsx) beside a thread with each finished turn folded to
 // "Worked for 4m 12s" and its reply, and the agent's card of asks joined to
 // the composer. A shared thread (/s/<slug>) is share.tsx.
-import { Component, Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Component, Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { useLiveQuery } from './live';
 import { InboxProvider, useInbox } from './inbox';
@@ -21,6 +21,8 @@ import { busy, Lists, ResizeHandle, type Row, useSidebarWidth } from './sidebar'
 import { Pop } from './menu';
 import { pastedOf } from './picture-chips';
 import { Rail } from './rail';
+// Loaded only when it's opened: the viewer's diagrams are most of its size.
+const MachinesPage = lazy(() => import('./machines'));
 import { NewThread, ProjectPage, ProjectsList, RunnerPage, RunnersList, ScheduledList, SchedulePage, UsageList, UsagePage } from './pages';
 import { duration, fold, isNote, splitTurns, type Item } from './turns';
 import { folderName, sender } from './format';
@@ -37,6 +39,15 @@ export function App() {
   // A shared thread is for anyone, signed in or not.
   if (route.page === 'share') return <SharePage key={route.slug} slug={route.slug} token={token} />;
   if (!token) return <SignIn />;
+  // The backend's state machines: a page of its own, the viewer filling it.
+  if (route.page === 'machines')
+    return (
+      <Catch key={token}>
+        <Suspense fallback={<main className="signin"><p>Loading the machines…</p></main>}>
+          <MachinesPage token={token} />
+        </Suspense>
+      </Catch>
+    );
   // Keyed on the token so a fresh sign-in clears an earlier auth error.
   return (
     <Catch key={token}>

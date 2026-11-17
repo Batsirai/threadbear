@@ -7,7 +7,8 @@ crons.interval('prune old rows', { hours: 6 }, internal.sync.pruneOld, {});
 // Stored files whose rows ran out (tool pictures, uploads never sent) and
 // commands no runner took in two weeks: on their own, so neither holds up the other.
 crons.interval('prune old files', { hours: 6 }, internal.sync.pruneFiles, {});
-// Taken commands whose runner never finished them in the lease (sync.ts lapseCommands).
+// Taken commands whose runner never finished them in the lease, for rows from
+// before the command machine's own timer (sync.ts lapseCommands).
 crons.interval('lapse taken commands', { minutes: 15 }, internal.sync.lapseCommands, {});
 // Tool output past its 30 days, a batch at a time (each row is read to be deleted).
 crons.interval('prune old tool output', { minutes: 15 }, internal.sync.pruneBodies, {});
@@ -15,4 +16,6 @@ crons.interval('prune old tool output', { minutes: 15 }, internal.sync.pruneBodi
 crons.interval('expire moves', { minutes: 5 }, internal.moves.expireMoves, {});
 // Pushes held for a Mac that went to sleep with Mike at it (sync.ts).
 crons.interval('send stale held pushes', { minutes: 2 }, internal.sync.sendStaleHeldPushes, {});
+// The state machines' history past two weeks (machines.ts).
+crons.interval('prune machine history', { hours: 24 }, internal.machines.pruneHistory, {});
 export default crons;

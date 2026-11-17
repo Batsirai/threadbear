@@ -37,6 +37,23 @@ async function setup() {
   return { ...b, send, row, seen };
 }
 
+const machinesModule = load('machines');
+
+// Runs what the machine scheduled (commandEnded, after an expiry or a lapse).
+async function runScheduled(s: { ctx: unknown; scheduled: unknown[] }) {
+  for (const job of (s.scheduled as { fn: string; args: Record<string, unknown> }[]).splice(0)) {
+    if (job.fn.endsWith('commandEnded')) await call(s.ctx, sync.commandEnded, job.args);
+  }
+}
+
+// Fires the machine's timers due by `at`, as Convex's scheduler would.
+async function fireTimers(s: { ctx: unknown; pendingTimers: () => { id: string; args: any; at: number }[]; timerRan: (id: string) => void }, at: number) {
+  for (const t of s.pendingTimers().filter((t) => t.at <= at)) {
+    await later(at - Date.now(), () => call(s.ctx, machinesModule.deliver, t.args));
+    s.timerRan(t.id);
+  }
+}
+
 async function later<T>(ms: number, f: () => Promise<T>): Promise<T> {
   const realNow = Date.now;
   Date.now = () => realNow() + ms;
@@ -104,6 +121,7 @@ test("a taken command whose runner never finishes it shows as failed after its l
   await later(sync.TAKEN_LEASE_MS - 60_000, () => call(s.ctx, sync.lapseCommands, {}));
   assert.equal((await s.seen(id)).state, 'taken');
   await later(sync.TAKEN_LEASE_MS + 60_000, () => call(s.ctx, sync.lapseCommands, {}));
+  await runScheduled(s);
   assert.deepEqual(await s.seen(id), { state: 'failed', note: sync.LAPSED_NOTE });
   // The phone's list of waiting messages lets it go.
   assert.deepEqual(await call(s.ctx, phone.waiting, { token: TOKEN, threadId: 'B' }), []);
@@ -142,6 +160,7 @@ test("a lapsed command's late finish is checked as an on-time one: a description
   const login = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: MINI, threadId: 'B', kind: 'update', args: { accountId: 'claude-2' } });
   for (const id of [describe, login]) await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: id, attempt: ATTEMPT });
   await later(sync.TAKEN_LEASE_MS + 60_000, () => call(s.ctx, sync.lapseCommands, {}));
+  await runScheduled(s);
   assert.deepEqual([s.row(describe).state, s.row(login).state], ['failed', 'failed']);
   assert.equal(s.row(describe).args.params, undefined, 'its words still go');
   await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: describe, ok: true, result: JSON.stringify({ title: 't', cwd: '/c', home: '/h', provider: 'claude', origin: 'ssh://UNCLASSIFIEDSSHLOGIN@example.com/owner/repo.git' }) });
@@ -228,8 +247,9 @@ test('the backfill gives every row from before commandState its state, a page at
     { state: 'failed', doneAt: now - 1, lapsedAt: now - 1, want: { kind: 'lapsed', doneAt: now - 1, lapsedAt: now - 1 } },
   ];
   const ids: string[] = [];
-  for (const { want: _, ...row } of old) ids.push(await s.ctx.db.insert('commands', { runnerId: MINI, kind: 'send', args: {}, createdAt: now - 10, ...row }));
-  for (let i = 0; i < 230; i++) await s.ctx.db.insert('commands', { runnerId: MINI, kind: 'send', args: {}, createdAt: now, state: 'done', doneAt: now });
+  // Rows from before the backfill: no commandState at all.
+  for (const { want: _, ...row } of old) ids.push(await s.ctx.db.insert('commands', { runnerId: MINI, kind: 'send', args: {}, createdAt: now - 10, ...row, commandState: undefined }));
+  for (let i = 0; i < 230; i++) await s.ctx.db.insert('commands', { runnerId: MINI, kind: 'send', args: {}, createdAt: now, state: 'done', doneAt: now, commandState: undefined });
   const fresh = await s.send('already has it');
   assert.equal(await call(s.ctx, migrations.done, { name: 'commandState' }), false);
   let runs = 0;
@@ -242,4 +262,72 @@ test('the backfill gives every row from before commandState its state, a page at
   // Run again: nothing to do.
   assert.deepEqual(await call(s.ctx, migrations.run, { name: 'commandState' }), { done: true });
   assert.equal(await outcome(call(s.ctx, migrations.run, { name: 'nope' })), 'badArgs');
+});
+
+// ------------------------------------------------------------ the machine
+
+test("the machine's own timers lapse a taken command and expire a pending one, and leaving a state cancels its timer", async () => {
+  const s = await setup();
+  const taken = await s.send('taken');
+  const waiting = await s.send('waiting');
+  const finished = await s.send('finished');
+  assert.deepEqual(s.pendingTimers().map((t) => t.args.event).sort(), ['EXPIRED', 'EXPIRED', 'EXPIRED']);
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: taken, attempt: ATTEMPT });
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: finished });
+  await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: finished, ok: true });
+  // Taken: its expiry went and its lease began; finished: nothing left.
+  assert.deepEqual(s.pendingTimers().map((t) => [t.args.id, t.args.event]).sort(), [[taken, 'LEASE_LAPSED'], [waiting, 'EXPIRED']].sort());
+  assert.deepEqual(s.row(finished).commandStateTimers, []);
+  await fireTimers(s, Date.now() + sync.TAKEN_LEASE_MS + 1000);
+  await runScheduled(s);
+  assert.deepEqual(await s.seen(taken), { state: 'failed', note: sync.LAPSED_NOTE });
+  assert.equal(s.row(taken).commandState.kind, 'lapsed');
+  assert.equal(s.row(waiting).state, 'pending');
+  await fireTimers(s, Date.now() + sync.COMMAND_KEEP_MS + 1000);
+  await runScheduled(s);
+  assert.deepEqual(await s.seen(waiting), { state: 'failed', note: 'No runner took it in time.' });
+  assert.equal(s.row(waiting).args.text, undefined, 'its words went');
+});
+
+test("every step is in the machine's history, and a refused one says why", async () => {
+  const s = await setup();
+  const id = await s.send();
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: id, attempt: ATTEMPT });
+  await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: id, ok: true });
+  await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: id, ok: false });
+  const mine = s.history.filter((h) => h.subject === id);
+  assert.deepEqual(mine.map((h) => [h.kind, h.event, h.from, h.to]).slice(0, 3), [
+    ['step', 'QUEUE', 'start', 'pending'],
+    ['step', 'TAKE', 'pending', 'taken'],
+    ['step', 'FINISH', 'taken', 'done'],
+  ]);
+});
+
+test('finished commands leave through the machine a day after they finish', async () => {
+  const s = await setup();
+  const id = await s.send();
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: id });
+  await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId: id, ok: true });
+  await later(25 * 60 * 60_000, () => call(s.ctx, sync.pruneOld, {}));
+  assert.equal(s.rows('commands').some((r) => r._id === id), false);
+  assert.equal(s.history.filter((h) => h.subject === id).at(-1)?.kind, 'purged');
+});
+
+test("the Machines page's queries answer only one of this deployment's tokens", async () => {
+  const s = await setup();
+  const viewer = load('viewer');
+  const id = await s.send();
+  await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId: id });
+  for (const token of ['not-a-token', '']) {
+    assert.equal(await call(s.ctx, viewer.overview, { token }), null);
+    assert.equal(await call(s.ctx, viewer.counts, { token, machine: 'command' }), null);
+    assert.equal(await call(s.ctx, viewer.row, { token, table: 'commands', id }), null);
+  }
+  const overview = await call(s.ctx, viewer.overview, { token: TOKEN });
+  assert.deepEqual(overview.machines.map((m: { name: string }) => m.name), ['command']);
+  assert.equal((await call(s.ctx, viewer.counts, { token: TOKEN, machine: 'command' })).counts.taken, 1);
+  const row = await call(s.ctx, viewer.row, { token: TOKEN, table: 'commands', id });
+  assert.equal(row.summary.states.command.kind, 'taken');
+  // Only a machine's own tables: not tokens, keys or anything else.
+  await assert.rejects(call(s.ctx, viewer.rows, { token: TOKEN, table: 'tokens' }), /isn't a machine's table/);
 });

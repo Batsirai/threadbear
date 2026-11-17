@@ -214,7 +214,9 @@ export const views = ['inbox', 'hibernating', 'den'] as const;
 // A move's states, in order (docs/protocol.md, "Moving a thread to another runner").
 export const moveStates = ['asking', 'ready', 'packing', 'unpacking', 'claimed', 'done', 'failed', 'cancelled'] as const;
 
-export default defineSchema({
+// Named as well as the default, so the state machines (machines.ts) can be
+// defined against it.
+export const appSchema = defineSchema({
   // One row per runner (the Mac, Tinker Desk later), written every minute.
   // A phone treats one not seen for 3 minutes as offline.
   runners: defineTable({
@@ -554,11 +556,11 @@ export default defineSchema({
     kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press'), v.literal('slashCommands')),
     args: v.any(),
     state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')),
-    // The same, as its state machine has it (commandStates.ts): written with
-    // `state` on every move, and on rows from before it by the backfill
-    // (migrations.ts), so it can become required once that has run.
-    commandState: v.optional(commandStateV),
-    commandStateTimers: v.optional(machineTimers),
+    // The same, as its state machine has it (commandMachine.ts), which writes
+    // `state` from it on every move. Required since every row was backfilled
+    // (migrations.ts, convex/migrations.json).
+    commandState: commandStateV,
+    commandStateTimers: machineTimers,
     note: v.optional(v.string()),
     createdAt: v.number(),
     takenAt: v.optional(v.number()),
@@ -582,7 +584,9 @@ export default defineSchema({
     // pruneOld: ones no runner took in COMMAND_KEEP_MS, by when they were made.
     .index('by_state_created', ['state', 'createdAt'])
     // lapseCommands: taken ones whose lease has run out, by when they were taken.
-    .index('by_state_taken', ['state', 'takenAt']),
+    .index('by_state_taken', ['state', 'takenAt'])
+    // The Machines page's counts and lists of commands in a state (viewer.ts).
+    .index('by_command_state', ['commandState.kind']),
 
   // A thread moving from one runner to another (docs/protocol.md, "Moving a
   // thread to another runner", API 64). Only the owner key starts one; each
@@ -1156,3 +1160,4 @@ export default defineSchema({
     count: v.number(),
   }).index('by_runnerId', ['runnerId']),
 });
+export default appSchema;

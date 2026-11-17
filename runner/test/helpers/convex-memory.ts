@@ -222,6 +222,14 @@ export function memoryBackend(root = CONVEX) {
       return q;
     },
     async insert(table: string, doc: Record<string, unknown>) {
+      // A command row a test inserts itself stands for one on a deployment
+      // today, which the backfill (migrations.ts) gave its machine state: it
+      // gets it from its old fields, unless the test says commandState itself
+      // (undefined, for a row from before the backfill).
+      if (table === 'commands' && root === CONVEX && !inCall.depth && !('commandState' in doc)) {
+        const { commandStateFrom } = load('commandStates') as { commandStateFrom: (r: unknown) => unknown };
+        doc = { ...doc, commandState: commandStateFrom(doc), commandStateTimers: [] };
+      }
       checkRow(table, doc);
       const _id = `${table}:${++next}`;
       all(table).push({ ...doc, _id, _creationTime: next } as Row);

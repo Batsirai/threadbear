@@ -18,3 +18,9 @@ test('each page from its address', () => {
 test('a bad escape is the list, not an error that stops the app loading', () => {
   for (const p of ['/s/%zz', '/t/%E0%A4%A', '/projects/%zz', '/projects/%zz/p', '/projects/r/%zz']) assert.deepEqual(parsePath(p), { page: 'list' }, p);
 });
+
+test('/machines is the Machines page, with or without a trailing slash', () => {
+  assert.deepEqual(parsePath('/machines'), { page: 'machines' });
+  assert.deepEqual(parsePath('/machines/'), { page: 'machines' });
+  assert.deepEqual(parsePath('/machines/x'), { page: 'list' });
+});

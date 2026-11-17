@@ -8,7 +8,8 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { messageButton, threadFields, views } from './schema';
 import { API_VERSION } from './version';
-import { commandStateFields } from './commandStates';
+import { command, machines } from './machines';
+import { COMMAND_KEEP_MS as KEEP_MS, TAKEN_LEASE_MS as LEASE_MS } from './commandMachine';
 import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
@@ -2876,24 +2877,15 @@ export const pocketCards = query({
 // time), applies it through the same code the Mac app uses, and finishes
 // it with the outcome.
 //
-// A command's lifecycle. `state` is what clients read (phone:command,
-// phone:waiting, relay:commandState), so it keeps its four values; these are
-// the only moves between them:
-//
-//   pending --takeCommand--------------------------> taken
-//   pending --phone:cancel, the thread moved or went,
-//             no runner took it in COMMAND_KEEP_MS--> failed
-//   taken   --finishCommand------------------------> done | failed
-//   taken   --lease (TAKEN_LEASE_MS, no finish)----> failed, lapsedAt set
-//   failed with lapsedAt --a late finishCommand----> done | failed
-//
-// Anything else is refused or left as it is: a second take gets false, unless
-// it's the same attempt asking again (its answer was lost); a finish of a
-// command that isn't taken (or lapsed) changes nothing, so a late or repeated
-// one can't overwrite how it ended. A command is never handed out twice: a
-// lapsed one fails rather than going back to pending, as its runner may have
-// run it.
-export const TAKEN_LEASE_MS = 3 * 60 * 60_000;
+// A command's lifecycle is its state machine, `command` (commandMachine.ts,
+// drawn on the website's Machines page): pending, taken, then done or failed,
+// with a lease that lapses a taken one nobody finishes. Each function here
+// checks who's asking, then sends the machine an event; whatever the machine
+// refuses changes nothing. `state`, the four strings clients read
+// (phone:command, phone:waiting, relay:commandState), is written by the
+// machine with each move.
+export const COMMAND_KEEP_MS = KEEP_MS;
+export const TAKEN_LEASE_MS = LEASE_MS;
 const ATTEMPT = /^[A-Za-z0-9_-]{8,64}$/;
 
 export const pendingCommands = query({
@@ -2927,10 +2919,11 @@ export const takeCommand = mutation({
     if (!c) return false;
     // This same take, asked again: it committed, but its answer never reached
     // the runner (a dropped connection), which would otherwise drop the
-    // command and leave it taken with nobody running it.
-    if (c.state === 'taken' && attempt !== undefined && c.attempt === attempt) {
+    // command and leave it taken with nobody running it. The machine's
+    // sameAttempt guard says yes, and nothing changes.
+    if (c.state === 'taken' && attempt !== undefined) {
       if (!mayTake(caller, c)) throw forbidden("take that command: it isn't for its runner");
-      return true;
+      return (await command.send(ctx, commandId, { type: 'TAKE', attempt })).status === 'done';
     }
     if (c.state !== 'pending') return false;
     if (!mayTake(caller, c)) throw forbidden("take that command: it isn't for its runner");
@@ -2940,16 +2933,14 @@ export const takeCommand = mutation({
     if (c.threadId !== undefined && c.runnerId !== 'any') {
       const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', c.threadId!)).unique();
       if (!t || t.runnerId !== c.runnerId) {
-        const now = Date.now();
-        await ctx.db.patch(commandId, { ...commandStateFields({ kind: 'failed', doneAt: now }), doneAt: now, args: finishedArgs(c.args), note: t ? 'That thread is on another runner now.' : 'That thread has gone.' });
+        await command.send(ctx, commandId, { type: 'THREAD_ELSEWHERE' });
+        await ctx.db.patch(commandId, { args: finishedArgs(c.args), note: t ? 'That thread is on another runner now.' : 'That thread has gone.' });
         await endCommandFiles(ctx, commandId);
         for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
         return false;
       }
     }
-    const now = Date.now();
-    await ctx.db.patch(commandId, { ...commandStateFields({ kind: 'taken', takenAt: now, ...(attempt !== undefined ? { attempt } : {}) }), takenAt: now, ...(attempt !== undefined ? { attempt } : {}) });
-    return true;
+    return (await command.send(ctx, commandId, { type: 'TAKE', ...(attempt !== undefined ? { attempt } : {}) })).status === 'done';
   },
 });
 
@@ -2968,11 +2959,10 @@ export const finishCommand = mutation({
     if (!c) return null;
     if (!mayFinish(caller, c)) throw forbidden("finish that command: it isn't for its runner");
     // Only a taken command finishes, or one whose lease ran out, which its
-    // runner's answer still settles. One already done or failed (finished
-    // before, cancelled, expired) stays as it ended: a repeated or stale
-    // finish changes nothing, and null is all a runner ever got back.
-    const lapsed = c.state === 'failed' && c.lapsedAt !== undefined;
-    if (c.state !== 'taken' && !lapsed) return null;
+    // runner's answer still settles: the machine refuses the rest. One
+    // already done or failed (finished before, cancelled, expired) stays as
+    // it ended, and null is all a runner ever got back.
+    if (c.commandState.kind !== 'taken' && c.commandState.kind !== 'lapsed') return null;
     // A call's answer, or a slashCommands list (API 62).
     // And (API 77) a login or model change's: the login and model that
     // runner applied, which may not be the model asked for.
@@ -2995,8 +2985,8 @@ export const finishCommand = mutation({
     // A note is a line for the phone: cut, so a finished command stays small (pruneOld reads them).
     const said = note ? clean(cutBytes(note, caller.owner ? NOTE_MAX : CAP.note)) : undefined;
     // A lapsed command's own note ("never said how it went") goes with the lapse.
-    const now = Date.now();
-    await ctx.db.patch(commandId, { ...commandStateFields({ kind: ok ? 'done' : 'failed', doneAt: now }), doneAt: now, lapsedAt: undefined, note: said, ...(made ? { resultThreadId: made } : {}), ...(kept !== undefined ? { result: kept } : {}) });
+    if ((await command.send(ctx, commandId, { type: 'FINISH', ok })).status !== 'done') return null;
+    await ctx.db.patch(commandId, { note: said, ...(made ? { resultThreadId: made } : {}), ...(kept !== undefined ? { result: kept } : {}) });
     // Its words, and a secret's sealed answer (docs/protocol.md, "Secrets"), have
     // done their job: see finishedArgs.
     await ctx.db.patch(commandId, { args: finishedArgs(c.args) });
@@ -3014,15 +3004,15 @@ export const finishCommand = mutation({
 // A taken command whose runner hasn't finished it in TAKEN_LEASE_MS: its
 // runner stopped partway (a crash, a restart mid-apply) or has been away
 // longer than it keeps trying to say how it went (FINISH_TRIES heartbeats).
-// It shows as failed, so the phone stops saying "Sending…", but isn't handed
-// out again: it may have run. A late finish still records the real outcome.
-// The cron, every 15 minutes; a batch at a time.
-// In bytes too: a taken command still carries its words (a message can be
-// hundreds of KB), and a mutation may read 16 MiB (Codex's review).
+// The machine's lease timer lapses it: shown as failed, never handed out
+// again (it may have run), and a late finish still records the real outcome.
+// This cron does the same for rows taken before the machine had timers.
+// A batch at a time, in bytes too: a taken command still carries its words
+// (a message can be hundreds of KB), and a mutation may read 16 MiB.
 const LAPSE_BATCH = 100;
 const LAPSE_BYTES = 4 * 1024 * 1024;
 export const LAPSED_NOTE = 'Its runner never said how it went.';
-export const lapseCommands = internalMutation({
+export const lapseCommands = machines.internalMutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
@@ -3038,11 +3028,29 @@ export const lapseCommands = internalMutation({
       }
       read += docBytes(c);
       left--;
-      await ctx.db.patch(c._id, { ...commandStateFields({ kind: 'lapsed', doneAt: now, lapsedAt: now }), doneAt: now, lapsedAt: now, args: lapsedArgs(c.args), note: LAPSED_NOTE });
-      await endCommandFiles(ctx, c._id);
-      for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
+      await command.send(ctx, c._id, { type: 'LAPSE' });
     }
     if (more) await ctx.scheduler.runAfter(0, internal.sync.lapseCommands, {});
+    return null;
+  },
+});
+
+// What goes with a command that ended by itself (the machine's expire and
+// lapse effects schedule this): its words, as a finished one's, and its
+// photos, which nothing will fetch now, with a note for the phone. A lapsed
+// one keeps what its runner's late finish is checked by (lapsedArgs), and
+// one already settled by that finish is left alone.
+export const commandEnded = internalMutation({
+  args: { commandId: v.id('commands'), why: v.union(v.literal('expired'), v.literal('lapsed')) },
+  returns: v.null(),
+  handler: async (ctx, { commandId, why }) => {
+    const c = await ctx.db.get(commandId);
+    if (!c) return null;
+    if (why === 'lapsed' && c.commandState.kind !== 'lapsed') return null;
+    const note = why === 'lapsed' ? LAPSED_NOTE : c.takenAt !== undefined ? 'Its runner never finished it.' : 'No runner took it in time.';
+    await ctx.db.patch(commandId, { args: why === 'lapsed' ? lapsedArgs(c.args) : finishedArgs(c.args), note });
+    await endCommandFiles(ctx, commandId);
+    for (const image of Array.isArray(c.args?.images) ? c.args.images : []) await deleteIfUnused(ctx, image.storageId);
     return null;
   },
 });
@@ -3319,10 +3327,13 @@ export const addHeldPicture = mutation({
 // Finished commands older than a day go, and paged marks older than a day
 // come off (crons.ts). What deletes stored files is pruneFiles, on its own:
 // a bad row there can't hold up the rest, nor this it.
-export const pruneOld = internalMutation({
+export const pruneOld = machines.internalMutation({
   args: {},
   returns: v.null(),
-  handler: async (ctx) => {
+  // Built with the machines' builder for command.purge; the rest of it writes
+  // other tables, which that builder's db allows, through the usual types.
+  handler: async (machineCtx) => {
+    const ctx = machineCtx as unknown as MutationCtx;
     const cutoff = Date.now() - KEEP_FINISHED_MS;
     // At most PRUNE_BATCH rows a run, each kind in turn; with more left it
     // runs again straight away. One mutation that tried to clear a flood in
@@ -3339,7 +3350,9 @@ export const pruneOld = internalMutation({
           break;
         }
         read += docBytes(c);
-        await ctx.db.delete(c._id);
+        // A finished command leaves through its machine (a lapsed one is
+        // the one not final, as its runner's late answer could still come).
+        await command.purge(machineCtx, c._id, { force: c.commandState.kind === 'lapsed' });
         // Any record of its photos left from before endCommandFiles.
         if (Array.isArray(c.args?.images) && c.args.images.length) await endCommandFiles(ctx, c._id);
         left--;
@@ -3395,16 +3408,17 @@ export const pruneOld = internalMutation({
 // share of the row it's for, so rows from before picture rows were capped
 // (up to 1 MiB each) still go, a few a run, rather than stopping it for good.
 // With more left it runs again straight away.
-export const COMMAND_KEEP_MS = 14 * 24 * 60 * 60_000;
 const FILE_PRUNE_ROWS = 200;
 const FILE_PRUNE_BYTES = 6 * 1024 * 1024;
 // What storageInUse reads for one file: a row from each picture table, a few
 // KB each since the caps (and limitsMigration cut the ones from before).
 const FILE_CHECK_BYTES = 64 * 1024;
-export const pruneFiles = internalMutation({
+export const pruneFiles = machines.internalMutation({
   args: {},
   returns: v.null(),
-  handler: async (ctx) => {
+  // Built with the machines' builder for the command's EXPIRE, as pruneOld is.
+  handler: async (machineCtx) => {
+    const ctx = machineCtx as unknown as MutationCtx;
     // Not until rows from before the caps are cut down, or a check could read
     // far more than it's charged. Starts that if no heartbeat has (every Mac
     // asleep when this backend went up).
@@ -3450,16 +3464,14 @@ export const pruneFiles = internalMutation({
       await ctx.db.delete(u._id);
       if (u.storageId) await deleteIfUnused(ctx, u.storageId);
     }
-    // Waiting or taken for weeks: its runner is gone, or never came back.
-    for (const state of ['pending', 'taken'] as const) {
-      for await (const c of ctx.db.query('commands').withIndex('by_state_created', (q) => q.eq('state', state).lt('createdAt', now - COMMAND_KEEP_MS))) {
-        if (full()) break;
-        const images = Array.isArray(c.args?.images) ? c.args.images : [];
-        charge(c, images.length);
-        await ctx.db.patch(c._id, { ...commandStateFields({ kind: 'failed', doneAt: now }), doneAt: now, args: finishedArgs(c.args), note: state === 'pending' ? 'No runner took it in time.' : 'Its runner never finished it.' });
-        await endCommandFiles(ctx, c._id);
-        for (const image of images) await deleteIfUnused(ctx, image.storageId);
-      }
+    // Waiting for weeks: its runner is gone, or never came back. Its timer
+    // does this; the sweep is for rows from before the machine had timers.
+    // Its words and photos go with it (commandEnded, scheduled by the machine).
+    // A taken one has lapsed long before (lapseCommands).
+    for await (const c of ctx.db.query('commands').withIndex('by_state_created', (q) => q.eq('state', 'pending').lt('createdAt', now - COMMAND_KEEP_MS))) {
+      if (full()) break;
+      charge(c, Array.isArray(c.args?.images) ? c.args.images.length : 0);
+      await command.send(machineCtx, c._id, { type: 'EXPIRE' });
     }
     if (full()) await ctx.scheduler.runAfter(0, internal.sync.pruneFiles, {});
     return null;

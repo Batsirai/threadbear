@@ -78,6 +78,8 @@ async function pruneFilesUntilDone(s: S): Promise<number> {
     s.resetReads();
     await call(s.ctx, sync.pruneFiles, {});
     assert.ok(s.bytesRead() < READ_LIMIT, `run ${runs} read ${s.bytesRead()} bytes`);
+    // What an expiry scheduled (its words and photos going: sync.ts commandEnded), as Convex runs it next.
+    for (const job of s.scheduled.filter((x: any) => /commandEnded/.test(x.fn)) as { args: Record<string, unknown> }[]) await call(s.ctx, sync.commandEnded, job.args);
     if (!s.scheduled.some((x: any) => /pruneFiles/.test(x.fn))) return runs;
   }
   throw new Error('pruneFiles never finished');
@@ -609,7 +611,8 @@ test('a command taken and never finished expires too', async () => {
   const s = await setup();
   const commandId = await call(s.ctx, phone.create, { token: TOKEN, text: 'x', runnerId: MINI });
   await call(s.ctx, sync.takeCommand, { key: MINI_KEY, commandId });
-  await later(15 * DAY, () => pruneFilesUntilDone(s));
+  // Its lease lapses it long before (lapseCommands, or its timer).
+  await later(15 * DAY, () => call(s.ctx, sync.lapseCommands, {}));
   assert.equal((await s.ctx.db.get(commandId))?.state, 'failed');
 });
 

@@ -542,3 +542,26 @@ a.lab-review-head:hover { color: var(--muted); }
 .confirm p { margin: 0; }
 .confirm-url { display: block; max-height: 30vh; overflow: auto; padding: 8px 10px; border-radius: 8px; background: var(--fill); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .confirm-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* The Machines page (machines.tsx): a bar, then the viewer filling the rest. */
+.machines-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  --mv-top: 41px;
+}
+.machines-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+  font-weight: 600;
+}
+.machines-bar a {
+  font-weight: 400;
+}
+.machines-page > .mv {
+  flex: 1;
+  min-height: 0;
+}

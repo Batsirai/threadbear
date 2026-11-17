@@ -1,8 +1,8 @@
-// A command's state as a state machine holds it (convex/commandMachine.ts,
+// A command's state as its state machine holds it (convex/commandMachine.ts,
 // docs/lifecycles.md): one member per state, each with only its own data.
 // `commands.state` stays as the four strings clients have always read
-// (phone:command, phone:waiting, relay:commandState) and the indexes use,
-// and is written from this every time, so the two never disagree.
+// (phone:command, phone:waiting, relay:commandState) and the indexes use;
+// the machine writes it from this on every move, so the two never disagree.
 import { v, type Infer } from 'convex/values';
 
 export const commandStateV = v.union(
@@ -39,9 +39,4 @@ export function commandStateFrom(row: { state: LegacyCommandState; createdAt: nu
     case 'failed':
       return row.lapsedAt !== undefined ? { kind: 'lapsed', doneAt: row.doneAt ?? row.lapsedAt, lapsedAt: row.lapsedAt } : { kind: 'failed', doneAt: row.doneAt ?? row.createdAt };
   }
-}
-
-/** Both fields for a write that moves a command: the state, and the string clients read. */
-export function commandStateFields(s: CommandState): { commandState: CommandState; state: LegacyCommandState } {
-  return { commandState: s, state: legacyState(s) };
 }

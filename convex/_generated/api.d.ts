@@ -8,10 +8,15 @@
  * @module
  */
 
+import type * as commandMachine from "../commandMachine.js";
+import type * as commandStates from "../commandStates.js";
 import type * as crons from "../crons.js";
 import type * as devices from "../devices.js";
 import type * as http from "../http.js";
 import type * as lib from "../lib.js";
+import type * as machines from "../machines.js";
+import type * as memorySync from "../memorySync.js";
+import type * as migrations from "../migrations.js";
 import type * as moves from "../moves.js";
 import type * as phone from "../phone.js";
 import type * as projectHeads from "../projectHeads.js";
@@ -25,11 +30,13 @@ import type * as redaction from "../redaction.js";
 import type * as relay from "../relay.js";
 import type * as runnerAccess from "../runnerAccess.js";
 import type * as share from "../share.js";
+import type * as shareCard from "../shareCard.js";
 import type * as shareRekey from "../shareRekey.js";
 import type * as sync from "../sync.js";
 import type * as tokens from "../tokens.js";
 import type * as uploads from "../uploads.js";
 import type * as version from "../version.js";
+import type * as viewer from "../viewer.js";
 import type * as wakes from "../wakes.js";
 
 import type {
@@ -39,10 +46,15 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  commandMachine: typeof commandMachine;
+  commandStates: typeof commandStates;
   crons: typeof crons;
   devices: typeof devices;
   http: typeof http;
   lib: typeof lib;
+  machines: typeof machines;
+  memorySync: typeof memorySync;
+  migrations: typeof migrations;
   moves: typeof moves;
   phone: typeof phone;
   projectHeads: typeof projectHeads;
@@ -56,11 +68,13 @@ declare const fullApi: ApiFromModules<{
   relay: typeof relay;
   runnerAccess: typeof runnerAccess;
   share: typeof share;
+  shareCard: typeof shareCard;
   shareRekey: typeof shareRekey;
   sync: typeof sync;
   tokens: typeof tokens;
   uploads: typeof uploads;
   version: typeof version;
+  viewer: typeof viewer;
   wakes: typeof wakes;
 }>;
 
@@ -92,4 +106,5 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
+  stateMachines: import("@convex-dev/state-machines/_generated/component.js").ComponentApi<"stateMachines">;
 };

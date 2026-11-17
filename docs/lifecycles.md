@@ -14,9 +14,9 @@ reading the code, unless it says it was tested.
 | `threadMoves.state` (`convex/moves.ts`) | asking, ready, packing, unpacking, claimed, done, failed, cancelled | A move left `ready` (its source runner gone) was never ended, so the thread could never move again. | `expireMoves` fails a ready move once its source has been gone 10 minutes, or after 12 hours |
 | `runnerRequests.state` (`convex/relay.ts`) | pending, claimed, allowed, denied, closed | A claim that went through but whose answer was lost left the request "being started" with nothing started. | API 85: `decideRequest`'s `claim`, one answer per request at a time. Still open: a lost claim followed by a runner restart stays claimed until the asking card expires (an hour); handing it back on a timer could start the thread twice, as a claimed request may already be starting elsewhere |
 
-Each was already written as an explicit set of moves in one place (the
-comment in `sync.ts`, `GOING`/`mustBeIn` in `moves.ts`, `MOVES` in
-`relay.ts`), and clients read their `state` strings, so they keep them.
+Commands are now a state machine (below). Moves and runner requests still
+have their moves written by hand in one place (`GOING`/`mustBeIn` in
+`moves.ts`, `MOVES` in `relay.ts`).
 
 ## Still to do, most worth it first
 
@@ -42,29 +42,37 @@ their source of truth; the backend only mirrors them.
 
 ## Moving them onto @convex-dev/state-machines
 
-Mike's apps put lifecycles on his state machines library. For Threadbear
-that's on hold: the library lives in a private repo, and Threadbear's repo is
-public, so vendoring its package here would publish it. Until he decides,
-lifecycles stay hand-written, with their moves in one place.
+Mike's apps put lifecycles on his state machines library, vendored in
+`vendor/` (he OK'd publishing it in this public repo on 17 Nov 2026). The
+machines are drawn in [machines.md](machines.md) and on the website's
+Machines page (`/machines`). So far: **commands** (`convex/commandMachine.ts`).
+Next, one at a time: `threadMoves`, then `runnerRequests`, then the table
+above.
 
-When it goes ahead, two things are particular to Threadbear:
+Two things are particular to Threadbear, and each machine follows them:
 
 - **Clients read the state strings.** The App Store iPhone app, the website
   and older runners read `state` as plain strings (`phone:command`,
   `phone:waiting`, `relay:commandState`, `moves:moves`). A machine's state is
-  a `{ kind, ... }` union, so it goes on a field of its own
-  (`commandState`, `moveState`, `requestState`), and the functions keep
-  answering with the strings.
+  a `{ kind, ... }` union, so it goes on a field of its own (`commandState`;
+  then `moveState`, `requestState`), and the machine's effects write the old
+  string from it on every move, so functions keep answering with the strings
+  and the old indexes keep working.
 - **Every deployment upgrades itself, from whatever it last ran.** Each
   main Mac's runner deploys `convex/` from the commit it updates to
   (`runner/scripts/deploy-backend.mjs`), and other people's copies bring in
   Mike's releases days apart, skipping commits. A machine needs its field
   required, and Convex refuses to deploy a schema that rows already stored
-  don't match. So "widen, backfill, then make it required" can't rely on
-  each step being deployed in turn: a copy jumping from before the widen to
-  after the narrow would fail its deploy and stop updating. The deploy
-  script needs to do it: a commit that makes a field required lists the
-  backfill it needs, and the script deploys the commit before it first,
-  runs that backfill to the end, then deploys the rest. That works for every
-  later migration too, and Ville's and Keith's servers go through it with
-  nothing to do by hand.
+  don't match. So a migration is two commits landed together: the widen
+  (the new field optional, every write setting it, a backfill in
+  `convex/migrations.ts`), then the switch (the field required, the machine
+  on it, and the backfill's name in `convex/migrations.json`). The deploy
+  script reads that list: for a backfill the deployment hasn't finished, it
+  deploys the widen first, runs the backfill to the end, then the switch
+  (`runner/scripts/backend-stones.mjs`). Ville's and Keith's servers go
+  through it with nothing to do by hand.
+
+The functions still use Convex's own builders and send the machine's role
+events from them, after checking the caller's key or token themselves (the
+roles' checks pass: auth here is in args, not `ctx.auth`). Crons that send
+`server` events or purge rows use the catalog's `internalMutation`.
