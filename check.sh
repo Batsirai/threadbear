@@ -99,6 +99,13 @@ if [ -n "${THREADBEAR_CHECK_ONLY:-}" ]; then
   set -- "$@" --only "$THREADBEAR_CHECK_ONLY"
   unset THREADBEAR_CHECK_ONLY
 fi
+# And --all: tb land's run of what failed on main, where the Swift steps
+# would otherwise skip with nothing changed and blame nobody (17 Nov: four
+# hours of group checks halving instead).
+if [ "${THREADBEAR_CHECK_ALL:-}" = 1 ]; then
+  set -- "$@" --all
+fi
+unset THREADBEAR_CHECK_ALL
 ARGS=("$@")
 
 while [ $# -gt 0 ]; do

@@ -387,6 +387,8 @@ async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, 
     hold: (root, files) => { const dir = gateCacheDir(root); return landHold(root, files, (line) => console.log(line), gh, dir ? { dir } : undefined); },
     // Main goes to GitHub once it has landed, on the owner's Mac only.
     push: !dryRun && pushAfterLanding(cfg.home, target.mainCheckout),
+    // Stopped while it waits, it says it's out of the line, then exits.
+    sayWhenStopped: true,
   });
 }
 

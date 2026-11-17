@@ -63,6 +63,14 @@ export type QueueEntry = {
   // would have landed on, `at`) and failed there too. `text` is what its tb
   // prints as it stops. Out of the line from then on, like one with a result.
   refused?: { text: string; at: string };
+  // Checked by itself from now on, never in another's group: a group's
+  // check failed with it, and the holder's next one passed without it
+  // (worktrees.ts, landLocked). It may only fail with the holder, so it
+  // isn't refused; its own tb checks it alone when its turn comes. On 17
+  // Nov one broken landing at the front of the line went into every
+  // holder's group, each halving down to it and landing only the holder,
+  // for over four hours. `why` is what its tb says when it gets there.
+  alone?: { why: string; at: number };
 };
 
 export const queueDir = (common: string): string => path.join(common, 'threadbear-land-queue');
@@ -200,6 +208,7 @@ export function waitingLine(common: string, timesFile: string, me: QueueEntry | 
   const ahead = me ? all.filter((e) => e.id !== me.id && (e.at < me.at || (e.at === me.at && e.id < me.id))).length : all.length;
   const typical = typicalCheckSeconds(timesFile);
   const parts: string[] = [];
+  if (me && readEntry(common, me.id)?.alone) parts.push('set aside to be checked by itself, as a group check failed with it');
   if (running) {
     const ago = Math.max(0, Math.round((now - running.startedAt) / 1000));
     if (me && checking(me)) {

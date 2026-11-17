@@ -229,6 +229,12 @@ their own.
   next run lands them too. On 13 Nov a fix committed there was checked out
   away silently and the same check failed again. Two `tb land`s in
   one worktree take turns (`threadbear-land-worktree.lock` in its git dir).
+- A `tb land` stopped while it waits for the lock (SIGTERM, SIGINT or
+  SIGHUP: an agent's time limit, Ctrl-C) leaves the line and prints that
+  it has, with how to rejoin, so its thread doesn't think it's still
+  queued. Killed outright, its entry is dropped by the next reader. Either
+  way it's out: nobody would hear how it went, and it may have been
+  stopped on purpose.
 - A landing made with `tb land --despite-red` is the repair for what's
   red, so it's a fix in the queue: it goes first on the stack in every
   group check, outside the group's limit, and the red hold isn't asked
@@ -238,6 +244,14 @@ their own.
   checks failed on a broken main while its one-line repair waited). If a
   group with only fixes and the holder fails, the fixes are left out next,
   so a broken "fix" is still found.
+- When the halving narrows a holder's group and a later check without
+  some of the failed group passes and lands, those left out are where the
+  failure was. One by itself, and any fix among them, is set aside
+  (`alone` in its entry): never stacked into anyone's group again, its own
+  tb checks it by itself when its turn comes, and says so, as does its
+  waiting line. It isn't refused, as it may only fail with that holder.
+  Several left out keep the limit the halving gave them, moved onto the
+  main that just landed, rather than lapsing.
 - If a group's check fails, nothing lands. The holder first looks for the
   landing that broke it ("Finding who broke a group", below). When that
   can't say, the group is halved: the
@@ -294,9 +308,21 @@ So a failed check says what failed, and that alone is run on each landing:
   by itself: its own, then each of the others replayed onto main without
   the rest. A few test files are seconds each, plus the copy to the check
   host.
-- Main has to pass it, having run every step asked for. If main fails it,
-  or skipped a step (the Swift steps never run on main with nothing
-  changed), nobody is blamed and the group is halved as before.
+- Main runs it first, with every step it names run whether or not
+  anything changed (`THREADBEAR_CHECK_ALL`, check.sh's `--all`: the Swift
+  steps never run on main with nothing changed, and a skip is no pass).
+  Only the steps main passes are run on the landings; one main fails by
+  itself blames nobody, and when main passes none of them, or skipped
+  one anyway, the group is halved as before. Each landing's own run is as
+  check.sh would make it, so a step that runs only for what it changed
+  (the Swift mock tests for the mock) runs only on the landings that
+  change it, and passes on the rest.
+- A fix (`--despite-red`) in the group, or as the holder, is looked for
+  the same way: what main fails by itself is never blamed on anyone, and
+  a broken "fix" is left out like any other. On 17 Nov half a line of
+  eleven had landed with `--despite-red`, which then switched this off,
+  and the halving kept the broken one (a fix, first in every group) in
+  each holder's group in turn for over four hours.
 - Those runs are in a checkout of tb land's own, `threadbear-land-alone/`
   beside the lock: a clone that borrows the repo's objects, not a worktree,
   so no thread's worktree has another's files come and go in it, and

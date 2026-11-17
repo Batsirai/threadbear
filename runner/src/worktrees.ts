@@ -8,6 +8,7 @@
 // Everything here runs real git. Nothing ever pushes.
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { WorktreePatch } from './patches.ts';
 import { inBackground } from './background.ts';
@@ -333,7 +334,8 @@ export type LandOptions = {
   hold?: (root: string, files: string[]) => Promise<string | undefined>;
   // `tb land --despite-red`: this landing is the repair for what's red, so
   // `hold` isn't asked about its own files. In the queue it's a fix: it
-  // goes first in any group check and the halving never leaves it out.
+  // goes first in any group check, outside the halving's limit (setAside
+  // has the one way it's left out).
   despiteRed?: boolean;
   // Where readCheck looks from, relative to the worktree's root (a
   // subfolder's patch can ask for its own check). Only landings that look
@@ -346,6 +348,9 @@ export type LandOptions = {
   // when that has moved too (pushMain). The CLI's comes from runner.json's
   // `pushAfterLanding`, so only the owner's own Mac pushes.
   push?: boolean;
+  // The CLI's: on SIGTERM, SIGINT or SIGHUP while waiting for the landing
+  // lock, leave the line, say so, and exit (land, `stopped`).
+  sayWhenStopped?: boolean;
 };
 
 // The hosts a landing asked for, as check.sh would take them (an ssh host
@@ -450,11 +455,24 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     // says why now, not after the checks of everyone still in the line.
     const refused = (): QueueEntry['refused'] => (entry ? readEntry(common, entry.id)?.refused : undefined);
     let release: (() => Promise<void>) | undefined;
+    // Stopped while it waits (an agent's time limit, Ctrl-C): it's out of
+    // the line, as nobody would hear how its landing went, so it says so in
+    // what its thread reads. On 17 Nov two waits killed by the two-hour
+    // limit left their threads thinking they were still queued.
+    const stopped = (signal: NodeJS.Signals): void => {
+      if (entry) leaveQueue(common, entry.id);
+      err(`tb land was stopped (${signal}) while it waited in the landing queue, so ${t.branch} is out of the line and nothing of it landed. Run tb land again to rejoin (in the background, with the longest timeout).`);
+      process.exit(128 + (os.constants.signals[signal] ?? 15));
+    };
+    const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+    if (opts.sayWhenStopped) for (const s of signals) process.once(s, stopped);
     try {
       release = await lockLanding(path.join(common, 'threadbear-land.lock'), out, () => waitingLine(common, timesFile, entry), () => !!refused());
     } catch (e) {
       err(`Couldn't lock the repo for landing: ${(e as Error).message}`);
       return 1;
+    } finally {
+      for (const s of signals) process.removeListener(s, stopped);
     }
     if (!release) {
       err(refused()?.text ?? `${t.branch} was left out of its group's check, so nothing landed. Run tb land again.`);
@@ -1076,6 +1094,7 @@ async function stackWaiting(
   const ordered = withFixes ? [...all.filter((e) => e.fix), ...all.filter((e) => !e.fix)] : all.filter((e) => !e.fix);
   for (const e of ordered) {
     if (e.pid === process.pid && e.path === t.path) continue; // this one
+    if (e.alone) continue; // its own tb checks it by itself
     const c = e.fix ? Infinity : Math.min(cap, e.limit !== undefined && e.limitAt === main ? e.limit : Infinity);
     if (!e.fix && counted + 2 > c) continue;
     if (!e.fix && !includeOthers) continue;
@@ -1170,7 +1189,7 @@ async function findBroken(a: {
   env: NodeJS.ProcessEnv;
   shell?: string[];
   timesFile: string;
-}): Promise<{ own: Alone; ownText: string; failed: Map<string, string>; passed: Set<string>; left: number } | undefined> {
+}): Promise<{ own: Alone; ownText: string; failed: Map<string, string>; passed: Set<string>; left: number; only: string; mainFailed: string[] } | undefined> {
   const dir = await aloneCheckout(a.common);
   if (!dir) return undefined;
   const started = Date.now();
@@ -1179,7 +1198,7 @@ async function findBroken(a: {
   // host's line would otherwise keep the landing lock for as long as that
   // took. At least a minute, so the last one in gets a real try.
   const leftMs = (): number => (landLimits.aloneMs ?? usual) - (Date.now() - started);
-  const run = async (branch: string, commit: string): Promise<{ state: Alone; text: string }> => {
+  const run = async (branch: string, commit: string, only: string, extra: NodeJS.ProcessEnv = {}): Promise<{ state: Alone; text: string }> => {
     // main is where check.sh looks for what a checkout changes, and nothing
     // of an earlier run stays (a clone of our own: nobody keeps work here).
     if (!(await git(dir, ['checkout', '-q', '-f', '--detach', commit])).ok ||
@@ -1191,9 +1210,10 @@ async function findBroken(a: {
     // runCheck is for when that didn't happen, and for other checks.
     const r = await runCheck(a.check, dir, a.shell, {
       ...(a.host ? { THREADBEAR_CHECK_HOST: a.host } : a.env),
-      THREADBEAR_CHECK_ONLY: a.only,
+      THREADBEAR_CHECK_ONLY: only,
       THREADBEAR_CHECK_HOST_ONLY: '1',
       THREADBEAR_CHECK_MAX_SECS: String(Math.ceil(forMs / 1000)),
+      ...extra,
     }, forMs + landLimits.aloneGraceMs);
     const times = parseCheckTimes(r.text);
     // `passed`, not `ok`, and neither `check` nor `intact`: nothing that
@@ -1204,7 +1224,7 @@ async function findBroken(a: {
       branch,
       commit,
       alone: true,
-      only: a.only,
+      only,
       passed: r.ok,
       ...(r.ok ? {} : { exit: r.code }),
       seconds: Math.round(r.durationMs / 1000),
@@ -1219,27 +1239,73 @@ async function findBroken(a: {
     return { state: r.ok ? 'passed' : onlyFailed(r.text) ? 'failed' : 'unknown', text: r.text };
   };
 
-  const base = await run(MAIN, a.main);
+  // Main runs every step asked for, changed or not (THREADBEAR_CHECK_ALL is
+  // check.sh's --all): the Swift steps never run on main with nothing
+  // changed, and a skip is no pass, so on 17 Nov a broken mock test was
+  // never looked for alone and four hours of group checks halved instead.
+  // Only the steps main passes are run on the landings: one main fails by
+  // itself says nothing about them, but needn't hide another that it passes
+  // (that day the group failed the desktop core tests and the mock tests).
+  const base = await run(MAIN, a.main, a.only, { THREADBEAR_CHECK_ALL: '1' });
   const ran = onlyRan(base.text);
-  const asked = a.only.split(';').map((e) => e.split('=')[0]);
-  if (base.state !== 'passed' || !ran || !asked.every((name) => ran.has(name))) return undefined;
+  if (base.state === 'unknown' || !ran) return undefined;
+  // A main that failed says which steps it passed in check.sh's own lines.
+  const okOnMain = new Set(parseCheckTimes(base.text).steps.filter((s) => s.status === 'ok').map((s) => s.name));
+  const passedOnMain = (name: string): boolean => ran.has(name) && (base.state === 'passed' || okOnMain.has(name));
+  const kept = a.only.split(';').filter((e) => passedOnMain(e.split('=')[0]));
+  if (!kept.length) return undefined;
+  const only = kept.join(';');
+  const mainFailed = a.only.split(';').map((e) => e.split('=')[0]).filter((name) => !kept.some((k) => k.split('=')[0] === name));
 
   const failed = new Map<string, string>();
   const passed = new Set<string>();
   let left = 0;
-  const mine = leftMs() > 0 ? await run(a.t.branch, a.own) : { state: 'unknown' as const, text: '' };
+  const mine = leftMs() > 0 ? await run(a.t.branch, a.own, only) : { state: 'unknown' as const, text: '' };
   for (const g of a.group) {
     if (leftMs() <= 0) {
       left++;
       continue;
     }
     const alone = await replay(a.t.path, g.entry.base, g.entry.commit, a.main);
-    const r = alone && alone !== a.main ? await run(g.entry.branch, alone) : { state: 'unknown' as const, text: '' };
+    const r = alone && alone !== a.main ? await run(g.entry.branch, alone, only) : { state: 'unknown' as const, text: '' };
     if (r.state === 'failed') failed.set(g.entry.id, r.text);
     else if (r.state === 'passed') passed.add(g.entry.id);
     else left++;
   }
-  return { own: mine.state, ownText: mine.text, failed, passed, left };
+  return { own: mine.state, ownText: mine.text, failed, passed, left, only, mainFailed };
+}
+
+// A landing passed after a group check of it failed (landLocked): those of
+// that group left out of the passing one are where the failure was. One by
+// itself is set aside to be checked alone, never in anyone's group again;
+// so is any fix among them (a fix rides in every group outside the limit,
+// so the one way it's ever left out is that a group of only fixes and the
+// holder failed). It may only fail with the holder, so it isn't refused.
+// The others keep the limit the halving gave them, moved onto the main
+// that's just landed: the failure was in them, not in the old main, and
+// starting again from whole groups lost that. On 17 Nov a broken landing
+// at the front of the line went into each holder's group in turn, the
+// halving narrowed every one down to the holder alone, and each landed
+// only itself: over four hours, nothing else from that line.
+export function setAside(common: string, oldMain: string, newMain: string, holder: string, failed: QueueEntry[], landed: Set<string>, out: (l: string) => void): void {
+  const rest = failed.map((e) => readEntry(common, e.id)).filter((e): e is QueueEntry => !!e && !e.result && !e.refused && !landed.has(e.id));
+  const one = rest.length === 1;
+  const aside: string[] = [];
+  for (const e of rest) {
+    if (one || e.fix) {
+      writeEntry(common, {
+        ...e,
+        alone: {
+          at: Date.now(),
+          why: `Checking ${e.branch} by itself: a group check with it and ${holder} failed, and ${holder}'s next check without it passed.`,
+        },
+      });
+      aside.push(e.branch);
+    } else if (e.limit !== undefined && e.limitAt === oldMain) {
+      writeEntry(common, { ...e, limitAt: newMain });
+    }
+  }
+  if (aside.length) out(`Set aside to be checked by ${aside.length > 1 ? 'themselves' : 'itself'}, as the group failed with ${aside.length > 1 ? 'them' : 'it'} and passed without: ${aside.join(', ')}.`);
 }
 
 async function landLocked(
@@ -1267,11 +1333,19 @@ async function landLocked(
   // nothing about a new one, and kept every later landing checked alone.
   let limit = startLimit && startLimit.at === main ? startLimit.limit : Infinity;
   let withFixes = true;
+  // Set aside by an earlier holder (setAside): checked by itself, so a
+  // landing that broke the others' groups can't break one more.
+  const alone = times.entryId ? readEntry(common, times.entryId)?.alone : undefined;
+  if (alone) out(alone.why);
   // Once a failed group's landings have each been run alone (findBroken):
   // the ones that passed, which are all that go into this landing's checks
   // from then on. It's done once; a group that fails after it is halved.
   let lookedAlone = false;
   let allowed: Set<string> | undefined;
+  // The others in this landing's last failed group check. When a later
+  // check without some of them passes, those it left out are where the
+  // failure was (setAside).
+  let lastFailed: QueueEntry[] | undefined;
 
   for (;;) {
     // 3. The others waiting go on main first, then this branch on top. The
@@ -1286,7 +1360,7 @@ async function landLocked(
     } catch (e) {
       return fail(`Couldn't read the repo's patches for its check: ${(e as Error).message}`);
     }
-    if (!opts.dryRun && !ready.hasMerge) {
+    if (!opts.dryRun && !ready.hasMerge && !alone) {
       let stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes, true, allowed);
       let top = stacked.group.length ? await replay(t.path, main, own, stacked.tip) : undefined;
       // Held on GitHub for what the others change (not a fix's, which is
@@ -1384,6 +1458,7 @@ async function landLocked(
         ...(intact ? { intact: true } : {}),
       });
       if (!r.ok && group.length) {
+        lastFailed = group.map((g) => g.entry);
         // Show the group's failure now: finding the individual landing can
         // take several more checks, and its logs are already available.
         out([
@@ -1398,10 +1473,14 @@ async function landLocked(
         if (!(await back())) return fail(`The check failed with ${group.length + 1} landings together, so nothing landed. ${stuck}`);
         if (carried) return fail(committedMeanwhile);
         // Which of them broke it: first by running only what failed on each
-        // alone (findBroken), when the check says what that was. Not with a
-        // fix in the group (it's the repair for a main that fails by itself)
-        // nor for a check read from a subfolder (it runs from the root here).
-        const only = lookedAlone || opts.despiteRed || opts.checkFrom || group.some((g) => g.entry.fix) ? undefined : onlyFailed(r.text);
+        // alone (findBroken), when the check says what that was. Not for a
+        // check read from a subfolder (it runs from the root here). With a
+        // fix in the group too: what main fails by itself is never blamed
+        // on anyone (findBroken runs main first), and a broken "fix" is
+        // found like any other. On 17 Nov half the line had landed with
+        // --despite-red, so no failed group was ever looked into alone, and
+        // a broken fix at the front of it failed every group for hours.
+        const only = lookedAlone || opts.checkFrom ? undefined : onlyFailed(r.text);
         if (only) {
           lookedAlone = true;
           out('Running only what failed on each of them by itself, to find which broke it.');
@@ -1423,6 +1502,7 @@ async function landLocked(
             '',
             'Fix it, commit, and run tb land again.',
           ].join('\n');
+          if (found?.mainFailed.length) out(`${MAIN} fails ${found.mainFailed.join(', ')} by itself too, so only ${found.only.split(';').map((e) => e.split('=')[0]).join(', ')} is run on each.`);
           if (found) {
             const leftOut: string[] = [];
             for (const g of group) {
@@ -1438,6 +1518,8 @@ async function landLocked(
             // Someone was left out, or the time ran out with some not yet
             // run: the next check is this one with those known to pass.
             if (found.failed.size || (found.left && found.passed.size)) {
+              // Found by name, so nobody is left to check alone for it.
+              if (found.failed.size) lastFailed = undefined;
               allowed = found.passed;
               out(allowed.size ? 'Checking again with the ones that passed it.' : 'Checking this one again without them.');
               continue;
@@ -1589,6 +1671,7 @@ async function landLocked(
     out(`Landed on ${MAIN} in ${t.mainCheckout}:`);
     out(mine);
     if (group.length) out(`In the same check, and landed with it: ${together.join(', ')}.`);
+    if (lastFailed) setAside(common, main, checked, t.branch, lastFailed, new Set(group.map((g) => g.entry.id)), out);
     // Still under the lock: a fold of GitHub's main moves main here too.
     // Never a reason to fail the landing, which is done.
     if (opts.push) {
