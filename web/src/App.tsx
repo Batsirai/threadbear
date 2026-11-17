@@ -436,14 +436,14 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token:
               {a.links.map((l) =>
                 // An ask whose step is in another thread links it as
                 // thread:<id>: opened here, as the Mac and the phone do.
-                l.url.startsWith('thread:') ? (
+                /^thread:/i.test(l.url) ? (
                   <a
                     key={l.url}
                     className="btn primary"
-                    href={linkTo(l.url.slice('thread:'.length))}
+                    href={linkTo(l.url.slice(7))}
                     onClick={(ev) => {
                       ev.preventDefault();
-                      go(linkTo(l.url.slice('thread:'.length)));
+                      go(linkTo(l.url.slice(7)));
                     }}
                   >
                     {l.title}

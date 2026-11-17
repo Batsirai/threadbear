@@ -201,6 +201,15 @@ impl AskHost for DecisionCard {
     /// anything else opens where it opens (the browser, its own app), as the
     /// page has no pane of the thread's.
     fn ask_open_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Another thread (an ask whose step is there) opens in the app, not
+        // through the open gate as an address.
+        if let Some(id) = target.strip_prefix("thread:").or_else(|| target.strip_prefix("THREAD:")) {
+            let id = id.to_owned();
+            if let Some(app) = self.app.upgrade() {
+                app.update(cx, |app, cx| app.open_thread_link(&id, window, cx));
+            }
+            return;
+        }
         if target.starts_with("review:") {
             let thread = self.thread.clone();
             if let Some(app) = self.app.upgrade() {

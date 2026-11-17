@@ -388,6 +388,23 @@ export function buildThreadbearTools(
     }
   };
 
+  // An ask's thread:<id> links, each as a whole id: the phone and the web
+  // look a short one up only in the inbox (an archived thread's prefix found
+  // nothing), so a short or wrong one is refused here, saying the whole id.
+  const checkThreadLinks = async (asks: { links?: { url: string }[] }[]): Promise<void> => {
+    for (const link of asks.flatMap((a) => a.links ?? [])) {
+      const m = /^thread:([\w-]+)$/i.exec(link.url);
+      if (!m || m[1].length >= 36) continue;
+      let whole: string;
+      try {
+        whole = (await find(m[1])).id;
+      } catch (e) {
+        throw new Error(`Not ended: the ask link ${link.url} doesn't name one thread (${e instanceof Error ? e.message : String(e)}). Fix the link, or leave it out, and call end_turn again.`);
+      }
+      throw new Error(`Not ended: an ask link needs the whole thread id. Use thread:${whole} for ${link.url}, and call end_turn again.`);
+    }
+  };
+
   // This runner's threads only: the tools that change a thread's settings,
   // folder or account can't reach another runner's.
   const resolve = async (id: string | undefined): Promise<string> => {
@@ -1503,6 +1520,7 @@ export function buildThreadbearTools(
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
         if (needs === 'you' && offersToTakeItBack(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         let restart = '';
         if (needs === 'you' && appRestarts && asksForAppRestart(asks)) {
@@ -1632,6 +1650,7 @@ export function buildThreadbearTools(
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
         if (needs === 'you' && offersToTakeItBack(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         // Asking Mike to Restart to Update means wanting to know when he
         // has, to check the change in the running app: the same as

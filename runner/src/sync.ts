@@ -1004,6 +1004,8 @@ function steadyDigest(row: ThreadDoc): string {
   return digest(JSON.stringify(rest));
 }
 
+const THREAD_LINK = /^thread:[\w-]+$/i;
+
 export function toPhoneAsk(a: OpenAsk): PhoneAsk {
   const out: PhoneAsk = { action: a.action };
   if (a.why) out.why = a.why;
@@ -1014,7 +1016,9 @@ export function toPhoneAsk(a: OpenAsk): PhoneAsk {
     if (a.optionNotes?.length === a.options.length && a.optionNotes.some(Boolean)) out.optionNotes = a.optionNotes;
     if (a.suggested !== undefined) out.suggested = a.suggested;
   }
-  const links = a.links?.filter((l) => /^https?:\/\//i.test(l.url));
+  // Web pages, and thread:<id> (another thread, which the phone and the web
+  // open in place); a file or review only opens on the Mac.
+  const links = a.links?.filter((l) => /^https?:\/\//i.test(l.url) || THREAD_LINK.test(l.url));
   if (links?.length) out.links = links.map((l) => ({ title: l.title, url: l.url }));
   if (a.ticked) out.ticked = true;
   return out;

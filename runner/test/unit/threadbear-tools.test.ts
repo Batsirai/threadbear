@@ -11,6 +11,7 @@ import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { RemoteThreads } from '../../src/thread-index.ts';
 import { hasDeadEnd, needsFromTool } from '../../src/needs.ts';
+import { toPhoneAsk } from '../../src/sync.ts';
 import { CodexTools, type ToolDefinition } from '../../src/adapters/codex/tools.ts';
 import { toolTitle } from '../../src/tools.ts';
 import { ThreadRouter } from '../../src/handover.ts';
@@ -1264,14 +1265,25 @@ test('end_turn asks once about an ask pointing at another thread with no link, a
   assert.equal((await call('end_turn', deadEnd)).error, false);
 
   // With a link to the thread it's never held up, and the link is kept.
-  const linked = { asks: [{ question: 'Pick a direction for the app in its own thread.', links: [{ title: 'Open its thread', url: 'thread:4355fbae' }] }] };
-  assert.deepEqual(needsFromTool(linked)?.asks?.[0].links, [{ title: 'Open its thread', url: 'thread:4355fbae' }]);
+  // A short id is refused with the whole one, as the phone and the web
+  // only find a short one in the inbox; the whole one is taken.
   const other = makeHarness();
   const o = start(other);
+  const app = start(other, 'Phone app').thread;
   o.s.text('m1', 'Checked the lights.');
-  toolCall(o.s, 'e1', END_TURN, linked);
-  const fine = await tools(other, o.thread.id, undefined, () => true).call('end_turn', linked);
+  const short = { asks: [{ question: 'Pick a direction for the app in its own thread.', links: [{ title: 'Open its thread', url: `thread:${app.id.slice(0, 8)}` }] }] };
+  const call2 = tools(other, o.thread.id, undefined, () => true).call;
+  toolCall(o.s, 'e1', END_TURN, short);
+  const told = await call2('end_turn', short);
+  assert.equal(told.error, true);
+  assert.match(told.text, new RegExp(`Use thread:${app.id} for`));
+  const linked = { asks: [{ question: 'Pick a direction for the app in its own thread.', links: [{ title: 'Open its thread', url: `thread:${app.id}` }] }] };
+  assert.deepEqual(needsFromTool(linked)?.asks?.[0].links, [{ title: 'Open its thread', url: `thread:${app.id}` }]);
+  toolCall(o.s, 'e2', END_TURN, linked);
+  const fine = await call2('end_turn', linked);
   assert.equal(fine.error, false, fine.text);
+  // And it reaches the phone (toPhoneAsk keeps it).
+  assert.deepEqual(toPhoneAsk({ action: 'x', links: [{ title: 'Open its thread', url: `thread:${app.id}` }, { title: 'File', url: '/tmp/a.png' }] }).links, [{ title: 'Open its thread', url: `thread:${app.id}` }]);
 });
 
 test('end_turn asks once for a try at a step a card offers to take back, in both forms', async () => {

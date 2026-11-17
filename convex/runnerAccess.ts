@@ -374,7 +374,11 @@ export function isWebLink(url: unknown): boolean {
   }
 }
 
-/** A thread row with every link that isn't a web page taken out. */
+export function isThreadLink(url: unknown): boolean {
+  return typeof url === 'string' && /^thread:[\w-]{1,64}$/i.test(url);
+}
+
+/** A thread row with every link that isn't a web page (or, on an ask, another thread) taken out. */
 export function webLinksOnly<T extends Record<string, any>>(t: T): T {
   const out: Record<string, any> = { ...t };
   if (Array.isArray(out.links)) {
@@ -384,7 +388,9 @@ export function webLinksOnly<T extends Record<string, any>>(t: T): T {
   if (Array.isArray(out.asks)) {
     out.asks = out.asks.map((a: any) => {
       if (!Array.isArray(a?.links)) return a;
-      const links = a.links.filter((l: any) => isWebLink(l?.url));
+      // An ask may also link another thread (thread:<id>), which the phone
+      // and the web open in place, not as an address.
+      const links = a.links.filter((l: any) => isWebLink(l?.url) || isThreadLink(l?.url));
       const { links: _links, ...rest } = a;
       return links.length ? { ...rest, links } : rest;
     });
