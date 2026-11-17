@@ -5,7 +5,8 @@
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import { convexFolderFor, type ConvexKey, type ConvexDeployments, type ConvexLogin } from '../convex-keys.ts';
-import type { EventBody } from '../protocol.ts';
+import type { EventBody, Panel } from '../protocol.ts';
+import { borrowedPanelId } from './buttons.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import { Projects } from '../projects.ts';
 import { threadEnv } from '../restart.ts';
@@ -333,6 +334,8 @@ export const patchesPart = {
       if (claude) base = { ...base, patches: [...base.patches, claude] };
       base = this.withEditsAsk(base, cwd);
       set = await applyLive(base, { cwd, threadId: rec.id, thread: this.patchThread(rec), run: (command, dir) => this.runLiveCommand(rec.id, command, dir), verify: (file, hash) => this.patchTrust.verify(file, hash) });
+      const borrowed = await this.borrowedPanelSet(st);
+      if (borrowed.length) set = { ...set, panels: [...set.panels, ...borrowed] };
     } catch (e) {
       this.log.warn('could not read the folder for patches', { threadId: rec.id, cwd, error: String(e) });
       base = entry.base;
@@ -364,6 +367,33 @@ export const patchesPart = {
     entry.loaded = true;
     if (changed) this.markDirty(st);
     if (entry.live) this.armLivePoll();
+  },
+
+  // Panel buttons' panels (docs/protocol.md, "Reply buttons"): each pressed
+  // one's panel as a thread in its folder has it, its badge and summary run
+  // there (a patch's server starts from them), under an id of its own and
+  // with `{threadId}` left empty: the thread beside it isn't one of that
+  // folder's, so the page shouldn't take it for one (the YouTube page then
+  // offers its own threads to ask in). One that has gone is left out.
+  async borrowedPanelSet(this: Runner, st: ThreadState): Promise<Panel[]> {
+    const { rec } = st;
+    const out: Panel[] = [];
+    for (const { cwd, panelId } of this.borrowedPanels(st)) {
+      try {
+        if (!isDirectory(cwd)) continue;
+        const theirs = await this.loadSharedPatchSet(cwd, [], this.projects?.allFolders() ?? []);
+        const panel = theirs.panels.find((p) => p.id === panelId && p.kind === 'url');
+        if (!panel) continue;
+        const one = { ...EMPTY_PATCH_SET, panels: [panel], patches: theirs.patches.filter((p) => p.id === panel.patch) };
+        const live = await applyLive(one, { cwd, threadId: rec.id, thread: this.patchThread(rec), run: (command, dir) => this.runLiveCommand(rec.id, command, dir), verify: (file, hash) => this.patchTrust.verify(file, hash) });
+        const shown = live.panels[0];
+        if (!shown) continue;
+        out.push({ ...shown, id: borrowedPanelId(cwd, panelId), from: cwd, ...(shown.url ? { url: shown.url.replaceAll('{threadId}', '') } : {}) });
+      } catch (e) {
+        this.log.warn('could not read a panel button\'s panel', { threadId: rec.id, cwd, error: String(e) });
+      }
+    }
+    return out;
   },
 
   // Threads in the same folder with the same projects get the same set, so

@@ -845,6 +845,10 @@ export class ThreadRouter implements ThreadControl {
     return this.runner.createButton(threadId, input);
   }
 
+  folderPanel(cwd: string, name: string): ReturnType<Runner['folderPanel']> {
+    return this.runner.folderPanel(cwd, name);
+  }
+
   // Only a thread's own agent asks, from its CLI on the runner that has the
   // thread, so this never goes elsewhere.
   requestSecret(threadId: string, req: SecretRequest): Promise<SecretAnswer> {

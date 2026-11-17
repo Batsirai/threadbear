@@ -626,6 +626,7 @@ export type Panel = {
   badge?: number; // a count on its rail button, from the patch's badge function
   summary?: string; // a line or few for its card in Highlights, from the patch's summary function
   convex?: { deployment: string; deploymentUrl: string; team?: string; project?: string }; // the Convex panel's cloud deployment, for panels.convexKey
+  from?: string; // a panel button's: the folder whose patch it is (Reply buttons)
 };
 
 // One row of a `list` panel, as its patch's `items` function returns it.
@@ -783,8 +784,9 @@ export type DesignReview = {
 };
 
 // A button an agent put in its reply (docs/protocol.md, "Reply buttons"):
-// pressing it starts a thread with the brief, or sends a message to a
-// thread. Exactly one of start and send.
+// pressing it starts a thread with the brief, sends a message to a
+// thread, or opens another folder's patch panel beside this one. Exactly one
+// of start, send and panel.
 export type ReplyButtonStart = {
   text: string;
   title?: string;
@@ -797,6 +799,9 @@ export type ReplyButtonStart = {
   why?: string;
 };
 export type ReplyButtonSend = { threadId: string; threadTitle: string; text: string };
+// A web panel of another folder's patches (its id there and its title),
+// shown beside the thread whose reply has the button.
+export type ReplyButtonPanel = { cwd: string; panelId: string; title: string };
 export type ReplyButton = {
   id: string;
   title: string;
@@ -804,6 +809,8 @@ export type ReplyButton = {
   turnId?: string;
   start?: ReplyButtonStart;
   send?: ReplyButtonSend;
+  panel?: ReplyButtonPanel;
+  // A panel button's threadId is its own thread's: it can be pressed again.
   pressed?: { at: string; threadId: string };
   failed?: { at: string; error: string };
 };

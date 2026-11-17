@@ -638,7 +638,9 @@ impl Threadbear {
             return;
         }
         let thread_id = from;
-        if let Some(pressed) = &button.pressed {
+        // A panel button opens its panel on every press (the runner puts it
+        // beside the thread and asks for it to be shown), so it's never spent.
+        if let Some(pressed) = button.pressed.as_ref().filter(|_| button.panel.is_none()) {
             if self.threads.contains_key(&pressed.thread_id) {
                 self.open(pressed.thread_id.clone(), window, cx);
             } else {

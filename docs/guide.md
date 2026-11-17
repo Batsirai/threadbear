@@ -245,11 +245,13 @@ open that comparison window straight from the card.
 A reply can have buttons partway through it, beside the line they're
 about, so you can set jobs off as you read without typing: one starts a
 new thread with a brief the agent wrote ("Fill in the form"), another
-sends a message to a thread that's already going. Hover over a button to
+sends a message to a thread that's already going, and a third opens a
+panel from another folder's patches beside the thread (the Daily brief's
+"Go through comments" opens the YouTube panel), as often as you like. Hover over a button to
 see the brief and where it runs. Nothing happens until you press it, and
 it only runs once: after that it turns green and opens the thread it
 started. The agent hears which you pressed with your next
-message, so a go ahead in your reply doesn't set the same job off twice. It works the same on your phone and the website. A thread
+message, so a go ahead in your reply doesn't set the same job off twice. It works the same on your phone and the website, except a panel button, which only works on the Mac. A thread
 without Full access can't make a button that does more than it could
 itself, and that's checked again when you press it.
 

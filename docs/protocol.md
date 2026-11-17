@@ -543,6 +543,8 @@ type Panel = {
   }                     // a client that knows it shows Convex's embedded
                         // dashboard with panels.convexKey (see "The Convex
                         // panel"); one that doesn't shows `url`
+  from?: string         // a panel button's (see Reply buttons): the folder
+                        // whose patch it is, as the thread isn't there
 }
 
 // One row of a `list` panel (panels.render).
@@ -1012,7 +1014,7 @@ type ReplyButton = {
   title: string         // what the button says, at most 60 characters
   createdAt: string
   turnId?: string       // the turn that made it
-  // Exactly one of start and send.
+  // Exactly one of start, send and panel.
   start?: {             // a new thread, as create_thread would make it
     text: string        // the brief, at most 20,000 characters
     title?: string
@@ -1029,15 +1031,47 @@ type ReplyButton = {
     threadTitle: string // its title when made
     text: string        // at most 20,000 characters
   }
-  pressed?: { at: string, threadId: string } // the thread it started, or the one it messaged
+  panel?: {             // another folder's patch panel, opened beside this thread
+    cwd: string         // the folder, checked when made
+    panelId: string     // its web panel's id there, checked when made
+    title: string       // its title then: "YouTube"
+  }
+  pressed?: { at: string, threadId: string } // the thread it started, or the one it messaged; a panel button's own thread, at its last press
   failed?: { at: string, error: string }     // the last press failed; it can be pressed again
 }
 ```
 
 | method | params | result |
 |---|---|---|
-| `buttons.press` | `{ threadId, buttonId }` | `{ button: ReplyButton }` Starts the thread or sends the message, once. A button already pressed returns as it is, with nothing run again, so a dropped reply or a second click (or a press from the phone and the Mac) never fires twice. A press that fails (the folder has gone, the target thread was deleted) is saved as `failed`, and the error comes back as `-32602` |
+| `buttons.press` | `{ threadId, buttonId }` | `{ button: ReplyButton }` Starts the thread or sends the message, once. A button already pressed returns as it is, with nothing run again, so a dropped reply or a second click (or a press from the phone and the Mac) never fires twice. A press that fails (the folder has gone, the target thread was deleted) is saved as `failed`, and the error comes back as `-32602`. A panel button is the exception: every press opens its panel again (below) |
 | `buttons.list` | `{ threadId }` | `{ buttons: ReplyButton[] }` every button the thread has, oldest first |
+
+**Panel buttons.** Mike asked on 18 Nov 2026 for the Daily brief's "Go
+through comments" to open the YouTube patch's panel (from
+`yt-channel-manager`) rather than start a thread, as he'd write his
+comment replies there. A patch's panels only show for threads in its
+folder, so `add_button`'s `panel: { folder, panel }` names a folder and one
+of its web panels, by id or title, found as a thread there would have
+them (a list panel, which the runner renders for a thread in that folder,
+is refused). Pressing it adds that panel to the pressing thread's
+`panels`, from then on, and asks for it to be shown as `show_panel` does
+(a `panelRequest`), on every press: it opens a panel rather than doing a
+job, so it's never spent, and the agent hears nothing of it. The panel's
+`badge` and `summary` run in its folder whenever the thread's patches are
+read, as for that folder's own threads, which is what starts a patch's
+server (the YouTube patch's badge starts its page's). Its `id` is
+`<panelId>@<8 hex of its folder's hash>` and it has `from`, its folder,
+so nothing takes the thread for one of that folder's (the YouTube page
+lists the threads that have its panel as ones to ask in). Its url's
+`{threadId}` is left empty, for the same reason: the page sees no thread
+of its own, and the YouTube page then offers its recent threads and New
+thread for Ask Claude. A thread's newest press of each panel counts, so
+a brief that makes the same button every day still has one panel. A
+folder that has gone by the press fails it; a panel that isn't there
+once the patches are read again (its patch broke, or its `when` hid it)
+is saved as `failed` after the press. Only this runner's apps show it: the
+phone and the website get start and send buttons only, so a panel
+button's link is drawn there as its words.
 
 Every change persists a `button.updated` event with `{ button }`; clients
 keep the latest per id, as for reviews, and redraw any link to it. A

@@ -59,6 +59,7 @@ export type ThreadControl = {
   hello: Runner['hello'];
   createReview?: (...args: Parameters<Runner['createReview']>) => Aw<ReturnType<Runner['createReview']>>;
   createButton?: (...args: Parameters<Runner['createButton']>) => Aw<ReturnType<Runner['createButton']>>;
+  folderPanel?: (...args: Parameters<Runner['folderPanel']>) => ReturnType<Runner['folderPanel']>;
   pin?: (...args: Parameters<Runner['pin']>) => Aw<ReturnType<Runner['pin']>>;
   unpin?: (...args: Parameters<Runner['unpin']>) => Aw<ReturnType<Runner['unpin']>>;
   showPanel?: (threadId: string, ask: Parameters<Runner['showPanel']>[1]) => ReturnType<Runner['showPanel']>;
@@ -693,7 +694,7 @@ export function buildThreadbearTools(
     ? [
         tool(
           'add_button',
-          "Makes a button the user can press while reading your reply: it starts a new thread with your brief (start) or messages another thread (send), once, only when pressed. Put the [title](button:<id>) it returns on the line it belongs to. Only for a clear next job they'd otherwise type out.",
+          "Makes a button the user can press while reading your reply: it starts a new thread with your brief (start) or messages another thread (send), once, only when pressed, or opens a folder's patch panel beside this thread (panel). Put the [title](button:<id>) it returns on the line it belongs to. Only for a clear next job they'd otherwise type out.",
           {
             title: z.string().min(1).max(60).describe('What the button says, a few words starting with a verb: "Fill in the form".'),
             start: z.object({
@@ -711,8 +712,12 @@ export function buildThreadbearTools(
               threadId: z.string().min(1).describe('Thread id or a unique prefix, on this machine.'),
               text: z.string().min(1).max(20000),
             }).optional(),
+            panel: z.object({
+              folder: z.string().min(1),
+              panel: z.string().min(1).describe('Its web panel, by id or title.'),
+            }).optional(),
           },
-          handle(async ({ title, start, send }, extra) => {
+          handle(async ({ title, start, send, panel }, extra) => {
             if (!control.createButton) throw new Error("This runner can't make buttons.");
             const input: Parameters<Runner['createButton']>[1] = { title };
             if (start) {
@@ -733,8 +738,12 @@ export function buildThreadbearTools(
               if (hit.other) throw new Error(`"${hit.other.t.title}" runs on ${hit.other.runner}; a button here can only message this machine's threads. Use send_message.`);
               input.send = { threadId: hit.id, text: send.text };
             }
+            if (panel) {
+              if (!control.folderPanel) throw new Error("This runner can't open another folder's panel.");
+              input.panel = await control.folderPanel(await folder(panel.folder), panel.panel);
+            }
             const { button } = await control.createButton(selfId, input);
-            const what = button.start ? `starts a thread in ${button.start.cwd}` : `messages "${button.send!.threadTitle}"`;
+            const what = button.start ? `starts a thread in ${button.start.cwd}` : button.panel ? `opens ${button.panel.title} from ${button.panel.cwd} beside this thread` : `messages "${button.send!.threadTitle}"`;
             return `Made button:${button.id}, which ${what} when pressed. Put [${button.title}](button:${button.id}) in your reply where it belongs; a button the reply doesn't link isn't shown.`;
           }),
         ),
