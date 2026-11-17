@@ -541,6 +541,27 @@ test('a failed backend deploy holds the runner back until main changes', async (
   assert.equal(h.deploys, 1);
 });
 
+// A backend deploy that left a stepping stone live (deploy-backend.mjs: a
+// backfill that couldn't finish, with a machine switched off meanwhile) is
+// tried again at the next check, not left until main changes.
+test('a backend deploy that left a stepping stone live is tried again at the next check', async () => {
+  const h = harness();
+  h.backendResult = { ok: false, error: 'The commandState backfill failed' };
+  fs.writeFileSync(path.join(h.home, 'backend.json'), JSON.stringify({ stepping: { commit: 'c2', names: ['commandState'] } }));
+  h.u.start();
+  await h.u.check();
+  await h.u.check();
+  assert.deepEqual(h.backendDeploys, ['c2', 'c2']);
+  // It went through, and the marker's gone: the runner is built, once.
+  h.backendResult = { ok: true };
+  fs.writeFileSync(path.join(h.home, 'backend.json'), JSON.stringify({}));
+  await h.u.check();
+  assert.deepEqual(h.backendDeploys, ['c2', 'c2', 'c2']);
+  assert.equal(h.deploys, 1);
+  await h.u.check();
+  assert.deepEqual(h.backendDeploys, ['c2', 'c2', 'c2']);
+});
+
 // deploy.mjs's exit for a step the Mac slept through (SleptThrough), so the
 // build is tried again later, not marked failed. By exit code, not by words in
 // the log, as a failing test can print anything (Codex, 9 Nov).

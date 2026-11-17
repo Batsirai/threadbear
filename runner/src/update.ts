@@ -736,6 +736,11 @@ export class RunnerUpdater {
         if (this.stopped) return undefined;
         this.backendFailed = b.ok ? undefined : (b.error ?? 'unknown error');
         if (!b.ok) {
+          // A stepping-stone deploy left live (deploy-backend.mjs: its backfill
+          // couldn't finish, and the backend couldn't be put back) has a
+          // machine switched off: tried again at the next check, not only
+          // once main changes.
+          if (readJsonSync<{ stepping?: unknown }>(path.join(home, 'backend.json'))?.stepping !== undefined) this.backendTried = undefined;
           log.error('could not deploy the backend at main', { commit: main.short, error: this.backendFailed });
           this.failed(
             { kind: 'backend', commit: main.commit, short: main.short, subject: main.subject, error: this.backendFailed ?? 'unknown error', logFile: backendLogPath(home) },
