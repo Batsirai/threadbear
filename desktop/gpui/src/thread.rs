@@ -622,6 +622,8 @@ impl ThreadPane {
                     this.feed.begin_subscribe();
                     this.loaded = true;
                     this.load_failed = None;
+                    // A reload that worked puts right the one that didn't.
+                    this.error = None;
                     this.loading_older = false;
                     this.older_skip = None;
                     this.scroller.update(cx, |s, cx| s.reset(this.feed.model().rows().len(), cx));
@@ -994,6 +996,9 @@ impl ThreadPane {
     /// restarts, it waits in the transcript for the new one ("Runner
     /// restarting. Sends when it's back."). `draft` is what to give back.
     pub(crate) fn send_message(&mut self, text: String, images: Vec<ImageRef>, answers: Value, draft: Option<crate::composer::RestoreDraft>, composer: WeakEntity<Composer>, cx: &mut Context<Self>) {
+        // Sending moves on from whatever went wrong before; a send that
+        // fails says so again.
+        self.error = None;
         // By count, never its words (activity.rs).
         crate::activity::sent(Some(&self.summary.id), images.len(), answers.as_object().map(|a| a.len()).or_else(|| answers.as_array().map(Vec::len)).unwrap_or(0), false);
         let thread_id = self.summary.id.clone();
@@ -1179,6 +1184,32 @@ impl ThreadPane {
     pub(crate) fn show_error(&mut self, message: String, cx: &mut Context<Self>) {
         self.error = Some(message);
         cx.notify();
+    }
+
+    /// The error line over the transcript, with a Dismiss. It used to be
+    /// bare words that only went when some later card button's request
+    /// happened to work, so a failed picture ("Couldn't add that picture:
+    /// Not connected to the runner", 17 Nov) sat there for good.
+    fn render_error_line(&self, error: String, danger: Hsla, muted: Hsla, cx: &mut Context<Self>) -> AnyElement {
+        use crate::sidebar::tipped;
+        use gpui_kit::base::TestSupportExt as _;
+        gpui_kit::component::h_flex()
+            .flex_none()
+            .px_7()
+            .py_1()
+            .gap(px(8.))
+            .items_center()
+            .text_sm()
+            .child(div().flex_1().min_w_0().text_color(danger).child(error))
+            .child(
+                tipped!(div().flex_none().cursor_pointer().px(px(6.)).py(px(2.)).rounded(px(5.)).text_color(muted).hover(|s| s.underline()), "thread-error-dismiss", "Hide this message")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.error = None;
+                        cx.notify();
+                    }))
+                    .child("Dismiss"),
+            )
+            .into_any_element()
     }
 
     pub(crate) fn request(&mut self, method: &'static str, params: Value, cx: &mut Context<Self>) {
@@ -1891,7 +1922,7 @@ impl Render for ThreadPane {
             // Whether the left button's down, so asking which link is under
             // the pointer never lands in a click (reply_links.rs).
             .child(crate::reply_links::watch())
-            .when_some(self.error.clone(), |s, e| s.child(div().px_7().py_1().text_sm().text_color(danger).child(e)))
+            .when_some(self.error.clone(), |s, e| s.child(self.render_error_line(e, danger, muted, cx)))
             // Which thread started it, above the transcript (nested threads).
             .children(self.render_started_strip(cx))
             .map(|s| match self.load_failed.clone() {
