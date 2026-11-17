@@ -124,10 +124,17 @@ echo "main and GitHub's have both moved; checking this Mac's commits on top of G
 # half done there and takes it back (runner/src/borrows.ts). On 17 Nov a
 # killed run's borrow was among the 25 never given back.
 wt=""
+borrowed=""
 give_back() {
   [ -n "$wt" ] || return 0
   git -C "$wt" rebase --abort >/dev/null 2>&1 || true
   git -C "$wt" merge --abort >/dev/null 2>&1 || true
+  # Only while it's still this run's borrow: given back by hand meanwhile,
+  # it may be someone else's now, and the reset below would take their work.
+  if [ "$(git -C "$wt" symbolic-ref -q HEAD 2>/dev/null || true)" != "refs/heads/$borrowed" ]; then
+    echo "$wt isn't on $borrowed any more, so it was left as it is." >&2
+    return 0
+  fi
   git -C "$wt" reset -q --hard main >/dev/null 2>&1 || true
   # Untracked files the check left (not ignored ones: the build caches stay
   # for the next borrower), which --give-back would refuse.
@@ -142,6 +149,8 @@ trap 'exit 143' TERM
 # the run's caller read its output as a push.
 wt="$(THREADBEAR_BORROW_PID=$$ THREADBEAR_BORROW_SCRATCH=1 "$MAIN/borrow-worktree.sh" | tail -1)" || wt=""
 [ -n "$wt" ] && [ -d "$wt" ] || { wt=""; die "Couldn't borrow a worktree to check in, so main wasn't moved or pushed."; }
+borrowed="$(git -C "$wt" symbolic-ref -q --short HEAD || true)"
+case "$borrowed" in thread/borrow-*) ;; *) wt=""; die "The borrowed worktree isn't on a borrow branch, so main wasn't moved or pushed." ;; esac
 git -C "$wt" reset -q --hard main
 # A merge on this Mac's side (a release brought in) would be flattened by a
 # rebase, losing what only the merge holds, so GitHub's is merged in then.

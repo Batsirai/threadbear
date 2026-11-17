@@ -32,7 +32,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { git, listCheckouts, MAIN, MAX_SPARES, realpath, SPARE } from './worktrees.ts';
+import { git, listCheckouts, MAIN, MAX_SPARES, readPlainFile, realpath, SPARE } from './worktrees.ts';
 
 export const BORROW_FILE = 'threadbear-borrow';
 export const BORROW_PREFIX = 'thread/borrow-';
@@ -43,20 +43,15 @@ export const BORROW_IDLE_MS = 24 * 3_600_000;
 // Git's own markers of something half done in a checkout.
 const HALF_DONE = ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'sequencer', 'BISECT_LOG'];
 
-export type Borrower = { thread?: string; pid?: number; scratch?: boolean; at?: number };
+export type Borrower = { thread?: string; home?: string; pid?: number; scratch?: boolean; at?: number };
 
-export function readBorrower(admin: string): Borrower | undefined {
-  let text: string;
-  try {
-    text = fs.readFileSync(path.join(admin, BORROW_FILE), 'utf8');
-  } catch {
-    return undefined;
-  }
+export function parseBorrower(text: string): Borrower {
   const b: Borrower = {};
   for (const line of text.split('\n')) {
     const [k, v = ''] = line.split(/=(.*)/s, 2).map((s) => s.trim());
     if (!v) continue;
     if (k === 'thread') b.thread = v;
+    else if (k === 'home') b.home = v;
     else if (k === 'pid' && /^\d+$/.test(v)) b.pid = Number(v);
     else if (k === 'scratch') b.scratch = v === '1';
     else if (k === 'at' && /^\d+$/.test(v)) b.at = Number(v) * 1000;
@@ -64,23 +59,35 @@ export function readBorrower(admin: string): Borrower | undefined {
   return b;
 }
 
+// Never a blocking read: a fifo in its place would hold the runner up.
+export function readBorrower(admin: string): Borrower | undefined {
+  const text = readPlainFile(path.join(admin, BORROW_FILE), 8192);
+  return text === undefined ? undefined : parseBorrower(text);
+}
+
 export type SweepOptions = {
   now?: number;
+  // This runner's data dir: a borrow recorded from another runner's thread
+  // (a dev runner's) is that runner's to judge, while its data dir is there.
+  home?: string;
   // The thread's state on this runner: 'unknown' for an id it doesn't have.
   thread: (id: string) => 'open' | 'archived' | 'unknown';
   // Folders threads use (realpaths): their worktrees and current folders.
   // A borrow with one of them in it is never touched.
   held: Set<string>;
   pidAlive?: (pid: number) => boolean;
-  // Every process's current folder; undefined when that can't be read, and
-  // then nothing is taken back.
+  // Every process's current folder; undefined when that can't be read in
+  // full, and then nothing is taken back.
   cwds?: () => Promise<string[] | undefined>;
 };
 
 export type Reclaimed = { path: string; branch?: string; to: 'spare' | 'removed'; why: string; thread?: string };
 export type SweepResult = { reclaimed: Reclaimed[]; branches: string[]; skipped: { path: string; why: string }[] };
 
-export async function sweepBorrows(mainCheckout: string, opts: SweepOptions): Promise<SweepResult> {
+// Tests' hooks into the moments a race would hit.
+export type SweepHooks = { afterPick?: () => void; beforeDetach?: () => void };
+
+export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hooks: SweepHooks = {}): Promise<SweepResult> {
   const result: SweepResult = { reclaimed: [], branches: [], skipped: [] };
   const now = opts.now ?? Date.now();
   const alive = opts.pidAlive ?? pidAlive;
@@ -102,15 +109,19 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions): Pr
     const skip = (why: string) => void result.skipped.push({ path: c.path, why });
     const admin = (await git(c.path, ['rev-parse', '--absolute-git-dir'])).stdout.trim();
     if (!admin || !fs.existsSync(admin)) continue;
-    const who = readBorrower(admin) ?? {};
+    const record = readPlainFile(path.join(admin, BORROW_FILE), 8192);
+    const who = record === undefined ? {} : parseBorrower(record);
     const idle = now - lastUsed(admin) >= BORROW_IDLE_MS;
+    const elsewhere = who.home !== undefined && opts.home !== undefined && realpath(who.home) !== realpath(opts.home) && fs.existsSync(who.home);
     let why: string | undefined;
     let scratch = false;
-    if (who.pid !== undefined && !alive(who.pid)) {
+    if (who.pid !== undefined) {
+      // A live borrower keeps it, however long it's quiet.
+      if (alive(who.pid)) continue;
       why = 'the script that borrowed it has ended';
       scratch = who.scratch === true;
-    } else if (who.pid !== undefined) {
-      if (idle) why = 'unused for a day';
+    } else if (elsewhere) {
+      continue;
     } else if (who.thread && opts.thread(who.thread) === 'archived') {
       why = 'the thread that borrowed it is archived';
     } else if (who.thread && opts.thread(who.thread) === 'open') {
@@ -124,48 +135,90 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions): Pr
       skip('a process is working in it');
       continue;
     }
-    const head = readHead(admin);
+    // Before each git that changes it: still the checkout git made there
+    // (not a link to somewhere else, main say), still this borrow (its
+    // record unchanged: given back and borrowed again, it's someone
+    // else's), and, given `head`, still on that.
+    const still = (head?: string) => {
+      const here = checkoutItself(c.path, admin);
+      if (!here || readPlainFile(path.join(admin, BORROW_FILE), 8192) !== record) return undefined;
+      if (head !== undefined && readHead(admin) !== head) return undefined;
+      return here;
+    };
+    const CHANGED = 'it changed while it was looked at';
+    hooks.afterPick?.();
+    let head = readHead(admin);
     if (scratch) {
       // Its script's work, thrown away as the script itself would have.
-      for (const args of [['rebase', '--abort'], ['merge', '--abort'], ['cherry-pick', '--abort']]) await git(c.path, args);
-      if (!(await git(c.path, ['reset', '-q', '--hard', MAIN])).ok) {
+      let here: string | undefined;
+      for (const args of [['rebase', '--abort'], ['merge', '--abort'], ['cherry-pick', '--abort']]) {
+        if (!(here = still())) break;
+        await git(here, args);
+      }
+      // Back on its borrow branch, as it always is outside a rebase.
+      head = readHead(admin);
+      if (!here || !head?.startsWith(`ref: refs/heads/${BORROW_PREFIX}`) || !(here = still(head))) {
+        skip(CHANGED);
+        continue;
+      }
+      if (!(await git(here, ['reset', '-q', '--hard', MAIN])).ok) {
         skip("git couldn't reset it");
         continue;
       }
-      await git(c.path, ['clean', '-fdq']);
+      if ((here = still(head))) await git(here, ['clean', '-fdq']);
     }
-    if (HALF_DONE.some((f) => fs.existsSync(path.join(admin, f)))) {
-      skip('something is half done there (a rebase, a merge)');
+    const branch = head?.startsWith('ref: refs/heads/') ? head.slice('ref: refs/heads/'.length) : undefined;
+    if (branch !== undefined && !branch.startsWith(BORROW_PREFIX)) continue;
+    // Clean, nothing half done, and all on main: asked again after the
+    // detach, so a commit or an edit made meanwhile keeps it.
+    const unsafe = async (): Promise<string | undefined> => {
+      if (HALF_DONE.some((f) => fs.existsSync(path.join(admin, f)))) return 'something is half done there (a rebase, a merge)';
+      const status = await git(c.path, ['status', '--porcelain', '--untracked-files=all']);
+      if (!status.ok || status.stdout.trim()) return status.ok ? 'it has changes or untracked files' : "git couldn't read it";
+      const tip = (await git(c.path, ['rev-parse', 'HEAD'])).stdout.trim();
+      if (!tip || !(await git(mainCheckout, ['merge-base', '--is-ancestor', tip, MAIN])).ok) return `it has commits that aren't on ${MAIN}`;
+      return undefined;
+    };
+    const first = await unsafe();
+    if (first) {
+      skip(first);
       continue;
     }
-    const status = await git(c.path, ['status', '--porcelain', '--untracked-files=all']);
-    if (!status.ok || status.stdout.trim()) {
-      skip(status.ok ? 'it has changes or untracked files' : "git couldn't read it");
+    hooks.beforeDetach?.();
+    let here = still(head);
+    if (!here) {
+      skip(CHANGED);
       continue;
     }
-    const tip = (await git(c.path, ['rev-parse', 'HEAD'])).stdout.trim();
-    if (!tip || !(await git(mainCheckout, ['merge-base', '--is-ancestor', tip, MAIN])).ok) {
-      skip(`it has commits that aren't on ${MAIN}`);
-      continue;
-    }
-    // Read again just before the detach: still on the commit and branch
-    // (or none) just checked.
-    if (!scratch && readHead(admin) !== head) {
-      skip('its HEAD changed while it was looked at');
-      continue;
-    }
-    const branch = c.branch;
-    if (branch && !(await git(c.path, ['checkout', '-q', '--detach'])).ok) {
+    if (branch && !(await git(here, ['checkout', '-q', '--detach'])).ok) {
       skip("git couldn't detach it");
       continue;
     }
-    if (branch) await git(mainCheckout, ['branch', '-q', '-D', branch]);
+    const tip = (await git(c.path, ['rev-parse', 'HEAD'])).stdout.trim();
+    const second = await unsafe();
+    if (second) {
+      // A commit or an edit came in while it was looked at: put it back.
+      if (branch && (here = still(tip))) await git(here, ['checkout', '-q', branch]);
+      skip(second);
+      continue;
+    }
+    // -d, not -D: git itself refuses a branch that isn't all on main.
+    if (branch && !(await git(mainCheckout, ['branch', '-q', '-d', branch])).ok) {
+      if ((here = still(tip))) await git(here, ['checkout', '-q', branch]);
+      skip(`its branch has commits that aren't on ${MAIN}`);
+      continue;
+    }
+    if (!still(tip)) {
+      skip(CHANGED);
+      continue;
+    }
     let to: Reclaimed['to'];
     if (spares < MAX_SPARES && (await git(mainCheckout, ['worktree', 'lock', '--reason', SPARE, c.path])).ok) {
       fs.rmSync(path.join(admin, BORROW_FILE), { force: true });
       spares++;
       to = 'spare';
     } else if ((await git(mainCheckout, ['worktree', 'remove', c.path])).ok) {
+      // Without --force, git refuses one with changes or untracked files.
       to = 'removed';
     } else {
       skip("git couldn't lock or remove it");
@@ -182,11 +235,26 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions): Pr
   if (out && refs.ok) {
     for (const b of refs.stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {
       if (checkedOut.has(b)) continue;
-      if (!(await git(mainCheckout, ['merge-base', '--is-ancestor', b, MAIN])).ok) continue;
-      if ((await git(mainCheckout, ['branch', '-q', '-D', b])).ok) result.branches.push(b);
+      if ((await git(mainCheckout, ['branch', '-q', '-d', b])).ok) result.branches.push(b);
     }
   }
   return result;
+}
+
+// The folder as the checkout git made there, by its real path: a real
+// folder, no link in its last part, whose .git names `admin`. Synchronous,
+// so it's the last thing before the git it guards (worktreeFolderNow in
+// worktrees.ts does the same for a thread's own).
+function checkoutItself(dir: string, admin: string): string | undefined {
+  try {
+    if (!fs.lstatSync(dir).isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const real = realpath(dir);
+  if (real !== path.join(realpath(path.dirname(dir)), path.basename(dir))) return undefined;
+  const named = readPlainFile(path.join(real, '.git'), 8192)?.split('\n').find((l) => l.startsWith('gitdir:'))?.slice('gitdir:'.length).trim();
+  return named && realpath(path.resolve(real, named)) === realpath(admin) ? real : undefined;
 }
 
 function holds(folders: Iterable<string>, dir: string): boolean {
@@ -210,11 +278,7 @@ function lastUsed(admin: string): number {
 }
 
 function readHead(admin: string): string | undefined {
-  try {
-    return fs.readFileSync(path.join(admin, 'HEAD'), 'utf8').trim();
-  } catch {
-    return undefined;
-  }
+  return readPlainFile(path.join(admin, 'HEAD'), 8192)?.trim();
 }
 
 export function pidAlive(pid: number): boolean {
@@ -248,9 +312,11 @@ export function processCwds(): Promise<string[] | undefined> {
   }
   if (process.platform === 'win32') return Promise.resolve(undefined);
   return new Promise((resolve) => {
-    execFile('lsof', ['-n', '-P', '-d', 'cwd', '-Fn'], { maxBuffer: 64 * 1024 * 1024, timeout: 60_000 }, (err, stdout) => {
-      // lsof exits 1 when some process couldn't be read; its output still counts.
-      if (err && !stdout) return resolve(undefined);
+    // This user's processes only, so it can read them all and exits 0; any
+    // failure (a timeout, too much output) means the list may be missing
+    // the very process working in a borrow, so it counts as unknown.
+    execFile('lsof', ['-n', '-P', '-a', '-u', String(process.getuid?.() ?? ''), '-d', 'cwd', '-Fn'], { maxBuffer: 64 * 1024 * 1024, timeout: 60_000 }, (err, stdout) => {
+      if (err) return resolve(undefined);
       resolve(String(stdout).split('\n').filter((l) => l.startsWith('n')).map((l) => l.slice(1)));
     });
   });

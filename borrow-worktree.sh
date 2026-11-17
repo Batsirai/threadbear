@@ -22,7 +22,7 @@
 # ended) or, with none recorded, unused for a day. On 17 Nov 25 slots sat
 # on borrow branches never given back, all 50 were taken, and sync-main
 # couldn't borrow one. So the borrower is written beside git's own files:
-# the thread (THREADBEAR_THREAD_ID) and, for a script that gives it back
+# the thread (THREADBEAR_THREAD_ID) and its runner's data dir and, for a script that gives it back
 # itself, its process (THREADBEAR_BORROW_PID), and whether what's in it is
 # scratch the runner may throw away once that process has gone
 # (THREADBEAR_BORROW_SCRATCH=1; sync-main's is).
@@ -125,6 +125,7 @@ else
 fi
 {
   echo "thread=${THREADBEAR_THREAD_ID:-}"
+  echo "home=${THREADBEAR_RUNNER_HOME:-}"
   echo "pid=${THREADBEAR_BORROW_PID:-}"
   echo "scratch=${THREADBEAR_BORROW_SCRATCH:-}"
   echo "at=$(date +%s)"

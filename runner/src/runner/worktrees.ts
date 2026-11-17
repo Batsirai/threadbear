@@ -501,7 +501,7 @@ export const worktreesPart = {
     };
     for (const main of mains) {
       if (!isDirectory(main)) continue;
-      const r = await sweepBorrows(main, { thread, held });
+      const r = await sweepBorrows(main, { thread, held, home: this.cfg.home });
       for (const b of r.reclaimed) this.log.info('took back a borrowed worktree', { ...b });
       if (r.branches.length) this.log.info('deleted borrow branches with no worktree, all on main', { repo: main, branches: r.branches });
     }

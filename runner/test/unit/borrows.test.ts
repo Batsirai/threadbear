@@ -158,3 +158,55 @@ test('past MAX_SPARES a borrow taken back is removed, and leftover borrow branch
   assert.deepEqual(r.branches, ['thread/borrow-slot-99-20261101-000000']);
   assert.notEqual(sh(main, 'git branch --list thread/borrow-slot-98-20261101-000000'), '', 'one with work not on main stays');
 });
+
+test("a live borrower keeps it however quiet, and a dev runner's thread's borrow is that runner's while its data dir is there", async () => {
+  const { root, main } = makeRepo();
+  addBorrowScript(main);
+  const live = borrow(main, 'THREADBEAR_BORROW_PID=4242');
+  const dev = path.join(root, 'dev-home');
+  fs.mkdirSync(dev);
+  const devs = borrow(main, `THREADBEAR_THREAD_ID=dev-1 THREADBEAR_RUNNER_HOME=${dev}`);
+  const later = { now: Date.now() + 9 * DAY, home: path.join(root, 'real-home') };
+  const r = await sweepBorrows(main, opts({ ...later, pidAlive: () => true }));
+  assert.deepEqual(r.reclaimed, []);
+  fs.rmSync(dev, { recursive: true });
+  const gone = await sweepBorrows(main, opts({ ...later, pidAlive: () => true }));
+  assert.deepEqual(gone.reclaimed.map((x) => x.path), [devs], 'its dev runner gone, it goes after a quiet day');
+  assert.match(branchOf(live), /^thread\/borrow-/);
+});
+
+test("a commit made between the sweep's checks and its detach keeps the borrow and its branch", async () => {
+  const { main } = makeRepo();
+  addBorrowScript(main);
+  const wt = borrow(main, 'THREADBEAR_THREAD_ID=gone');
+  const branch = branchOf(wt);
+  // The borrower commits after the sweep has found it clean and all on main.
+  let sneaked = false;
+  const r = await sweepBorrows(main, opts({ thread: () => 'archived' }), {
+    beforeDetach: () => {
+      commit(wt, { 'runner/late.ts': '1\n' }, 'Late');
+      sneaked = true;
+    },
+  });
+  assert.ok(sneaked);
+  assert.deepEqual(r.reclaimed, []);
+  assert.equal(branchOf(wt), branch, 'put back on its branch');
+  assert.equal(sh(wt, 'git log -1 --format=%s'), 'Late');
+  assert.ok(!isLocked(main, wt));
+});
+
+test('a borrow folder swapped for a link to main is never touched', async () => {
+  const { main } = makeRepo();
+  addBorrowScript(main);
+  const wt = borrow(main, 'THREADBEAR_BORROW_PID=999999 THREADBEAR_BORROW_SCRATCH=1');
+  write(main, { 'mine.txt': 'main checkout work\n' });
+  const r = await sweepBorrows(main, opts(), {
+    afterPick: () => {
+      fs.renameSync(wt, `${wt}.moved`);
+      fs.symlinkSync(main, wt);
+    },
+  });
+  assert.deepEqual(r.reclaimed, []);
+  assert.equal(fs.readFileSync(path.join(main, 'mine.txt'), 'utf8'), 'main checkout work\n');
+  assert.equal(sh(main, 'git rev-parse --abbrev-ref HEAD'), 'main');
+});
