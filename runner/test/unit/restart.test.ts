@@ -993,7 +993,10 @@ test('every CLI gets THREADBEAR_THREAD_ID, THREADBEAR_HOME and THREADBEAR_RUNNER
   // This runner's bin/ first, so a bare `tb` in the thread is its tb.
   assert.equal(env.PATH.split(path.delimiter)[0], path.resolve(import.meta.dirname, '..', '..', 'bin'));
   assert.ok(fs.existsSync(path.join(env.PATH.split(path.delimiter)[0], 'tb')));
-  assert.equal(env.PATH.split(path.delimiter).slice(1).join(path.delimiter), process.env.PATH);
+  // On Windows the runner's Node comes next, for Git Bash's tb (threadEnv).
+  const rest = env.PATH.split(path.delimiter).slice(1);
+  if (process.platform === 'win32') assert.equal(rest.shift(), path.dirname(process.execPath));
+  assert.equal(rest.join(path.delimiter), process.env.PATH);
 
   // The Claude adapter puts them in the CLI's environment, over anything
   // inherited (a runner started from inside a thread has its own).
