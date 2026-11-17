@@ -1174,9 +1174,12 @@ to change it.
 
 A thread can move to another of your machines whole: the same thread, with
 its whole conversation, its pictures and Highlights, and the git work in
-its own worktree (commits and uncommitted changes alike). Right-click it
-(or use its **...** menu) and pick **Move to**, then the machine; offline
-ones are greyed. It waits for the turn it's on to end, and its message box
+its own worktree (commits and uncommitted changes alike). Once you have more
+than one machine, the machine a thread is on shows under its message box, by
+name; click it and pick **Move to** a machine. You can also right-click the
+thread (or use its **...** menu) and pick **Move to**, then the machine. Offline
+ones are greyed. While it moves, the machine chip spins and its menu offers
+**Cancel Move**. It waits for the turn it's on to end, and its message box
 and any open card are locked until it lands or you cancel; a message sent
 from your phone meanwhile goes with it. It goes straight away, to the
 folder and login that machine guesses. If it can't go, something won't

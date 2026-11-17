@@ -288,10 +288,10 @@ impl Composer {
             // Another runner's thread before its logins have come: its Mac's
             // name where the chips would be, and send (remoteControls).
             (Some(away), false) if !away.logins_known => {
-                return row.child(div().ml(px(-7.)).child(render_runner_chip(away, cx))).child(div().flex_1()).child(send_button).into_any_element();
+                return row.child(div().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(div().flex_1()).child(send_button).into_any_element();
             }
             // Its logins known: the machine's chip in place of "+".
-            (Some(away), false) => row = row.child(div().ml(px(-7.)).child(render_runner_chip(away, cx))).child(chip_divider(cx)),
+            (Some(away), false) => row = row.child(div().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(chip_divider(cx)),
             // A new thread for another runner, before it's said what logins
             // it has: the machine chip, and how it's going (draftWaitingControls).
             (Some(away), true) if !away.logins_known => {
@@ -309,8 +309,20 @@ impl Composer {
             // This Mac: "+", then the machine chip on a new thread.
             (None, _) => {
                 row = row.child(div().flex_none().ml(px(-7.)).child(self.render_plus(&data, window, cx)));
-                if data.is_new && self.app.upgrade().is_some_and(|a| !a.read(cx).remote.runners.is_empty()) {
+                let others = self.app.upgrade().is_some_and(|a| !a.read(cx).remote.runners.is_empty());
+                if data.is_new && others {
                     row = row.child(self.render_runs_on_chip(cx));
+                } else if others {
+                    // This Mac's thread, once there are other machines: which
+                    // one it's on, and its menu to move it (machine_menu_rows).
+                    if let Some((name, icon)) = self.app.upgrade().and_then(|a| {
+                        let t = a.read(cx);
+                        let name = data.summary.as_ref().and_then(|s| t.runner_label(s))?;
+                        Some((name, t.self_runner_symbol()))
+                    }) {
+                        let cwd = data.summary.as_ref().map_or_else(String::new, |s| s.cwd.clone());
+                        row = row.child(self.render_machine_chip(&data, name.clone(), icon, format!("On {name}"), &cwd, cx)).child(chip_divider(cx));
+                    }
                 }
             }
         }
@@ -562,6 +574,47 @@ impl Composer {
             .child(chip_divider(cx))
     }
 
+    /// The machine chip on a thread's box (`runnerChip`): the machine it's
+    /// on, by icon and name, with a chevron, as there's a menu to move it
+    /// (`Threadbear::machine_menu_rows`). On another runner's thread it leads
+    /// the row in place of "+"; on this Mac's it comes after "+", once there
+    /// are other machines. While a move's going it spins, and its menu is
+    /// Cancel Move, so a second click can't start another.
+    fn render_machine_chip(&self, data: &ChipData, name: String, icon: &'static str, place: String, cwd: &str, cx: &App) -> AnyElement {
+        let thread_id = data.summary.as_ref().map(|s| s.id.clone());
+        let moving = data.summary.as_ref().and_then(|s| s.moving_line());
+        let tip: SharedString = match &moving {
+            Some(line) => line.clone().into(),
+            None => format!("{place}, in {}. Click to move it to another machine", abbreviate_home(cwd)).into(),
+        };
+        let app = self.app.clone();
+        h_flex()
+            .id("composer-runner-name")
+            .test_support()
+            .role(Role::Button)
+            .aria_label(name.clone())
+            .flex_none()
+            .gap(px(4.))
+            .h(px(26.))
+            .px(px(7.))
+            .rounded(px(7.))
+            .cursor_pointer()
+            .hover(|s| s.bg(style::chip_hover_fill(cx)))
+            .map(|d| match &moving {
+                Some(_) => d.child(crate::spinner::Spinner::new().color(style::secondary_text(cx)).with_size(px(size::CHIP))),
+                None => d.child(crate::icons::symbol(icon).with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx))),
+            })
+            .child(div().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).whitespace_nowrap().child(name))
+            .child(div().flex_none().flex().child(Icon::from(IconName::ChevronDown).with_size(px(9.)).text_color(style::faint_icon(cx))))
+            .tip(tip)
+            .on_click(move |ev: &ClickEvent, window, cx| {
+                let (Some(app), Some(id)) = (app.upgrade(), thread_id.clone()) else { return };
+                let at = ev.position();
+                app.update(cx, |app, cx| app.open_machine_menu(id, point(at.x, at.y - px(12.)), window, cx));
+            })
+            .into_any_element()
+    }
+
     /// The model picker's state lives on the composer so its search text and
     /// column stay put while it's open.
     fn picker_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ModelPickerView> {
@@ -663,19 +716,6 @@ fn chip_divider(cx: &App) -> impl IntoElement {
     div().flex_none().w(px(1.)).h(px(12.)).bg(style::chip_divider(cx))
 }
 
-/// The machine chip on another runner's thread (`runnerChip`): its icon and
-/// name at the front of the row, in place of "+" and the folder.
-fn render_runner_chip(away: &AwayRunner, cx: &App) -> impl IntoElement {
-    let tip = format!("{}, in {}", away.place, abbreviate_home(&away.cwd));
-    h_flex()
-        .id("composer-runner-name")
-        .gap(px(4.))
-        .h(px(26.))
-        .px(px(7.))
-        .child(crate::icons::symbol(away.icon).with_size(px(size::CHIP - 1.)).text_color(style::faint_icon(cx)))
-        .child(div().text_size(px(size::CHIP)).text_color(style::quiet_text(cx)).whitespace_nowrap().child(away.name.clone()))
-        .tip(tip.clone())
-}
 
 /// The ring for how full the context is (ContextRing): grey, orange near full,
 /// a sliver even when nearly empty, so it reads as a meter.

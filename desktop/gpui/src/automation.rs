@@ -727,6 +727,16 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             if text(cmd, "menu") == "runner" {
                 return crate::new_thread::runner_menu_command(app, cmd, cx);
             }
+            // The machine chip under an open thread's box: its menu's lines,
+            // or a pick from it (sidebar.rs, machine_menu_rows).
+            if text(cmd, "menu") == "machine" {
+                let Some(id) = app.read(cx).composer(cx).and_then(|c| c.read(cx).thread_id.clone()) else { return Err("no thread open".into()) };
+                if let Some(title) = cmd["click"].as_str() {
+                    let title = title.to_owned();
+                    return app.update(cx, |t, cx| t.machine_menu_click(&id, &title, window, cx)).map(|_| json!("ok"));
+                }
+                return Ok(json!(app.read(cx).machine_menu_lines(&id)));
+            }
             let Some(composer) = app.read(cx).composer(cx) else { return Err("no thread open".into()) };
             let data = composer.read(cx).chip_data(cx);
             match text(cmd, "menu") {

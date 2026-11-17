@@ -163,6 +163,17 @@ Feature: Other runners' threads
     When I right-click the row "Morning brief"
     Then the row's menu offers "Move to"
 
+  # The machine chip under the box: where the thread is, and a menu to move
+  # it, as Capy's "Cloud ▸ Move to a device" (Mike, 17 Nov). The Swift app
+  # is frozen and has only the row's Move to.
+  @sidebar.move @remote-threads @swift-pending
+  Scenario: The machine chip under the box moves the thread
+    Given a move would leave nothing behind
+    When I open the thread "Morning brief"
+    Then the box's machine menu reads "✓ laptop, Move to mac-mini"
+    When I pick "Move to mac-mini" from the box's machine menu
+    Then the box's machine menu reads "✓ laptop, Cancel Move"
+
   @sidebar.move @remote-threads
   Scenario: The sheet opens when something won't come with it
     When I ask to move the thread "Morning brief" to "mac-mini"

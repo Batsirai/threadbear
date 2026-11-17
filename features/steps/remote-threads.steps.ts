@@ -221,3 +221,21 @@ When('its move to this Mac is claimed before the local thread arrives', async fu
 When('I type {string} as the folder on that machine', async function (this: ThreadbearWorld, folder: string) {
   await this.app.do({ cmd: 'composer-menu', menu: 'runner', click: 'Other…', folder });
 });
+
+// The machine chip's menu under an open thread's box, as lines joined by ", "
+// (sidebar.rs, machine_menu_rows).
+Then("the box's machine menu reads {string}", async function (this: ThreadbearWorld, lines: string) {
+  let last: unknown;
+  for (let tries = 0; tries < 50; tries += 1) {
+    // The result line is the menu as a JSON list, maybe after the command's name.
+    const line = await this.app.do({ cmd: 'composer-menu', menu: 'machine' });
+    last = JSON.parse(line.slice(line.indexOf('[')));
+    if (Array.isArray(last) && last.join(', ') === lines) return;
+    await sleep(150);
+  }
+  assert.fail(`the machine menu read ${JSON.stringify(last)}, not "${lines}"`);
+});
+
+When("I pick {string} from the box's machine menu", async function (this: ThreadbearWorld, title: string) {
+  await this.app.do({ cmd: 'composer-menu', menu: 'machine', click: title });
+});

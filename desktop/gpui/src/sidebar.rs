@@ -1119,6 +1119,68 @@ impl Threadbear {
             .collect()
     }
 
+    /// The machine chip under a thread's box: the machine it's on, ticked,
+    /// then the others to move it to (offline ones greyed), or Cancel Move
+    /// while one's going. The same moves as the row's Move to, where Mike's
+    /// already looking: he asked for it on 17 Nov after Capy's "Cloud ▸ Move
+    /// to a device" under its box, as the ⋯ menu was the only way.
+    pub(crate) fn machine_menu_rows(&self, t: &ThreadSummary) -> Vec<MenuRow> {
+        let name = self.runner_label(t).unwrap_or_else(|| "This Mac".to_owned());
+        let symbol = match t.runner_id.as_deref() {
+            Some(id) => self.runner_icon_symbol(Some(id)),
+            None => self.self_runner_symbol(),
+        };
+        let mut rows = vec![MenuRow::runner(name, symbol, true, false, MenuAction::CopyId).disabled(), MenuRow::separator()];
+        if t.moving.as_ref().is_some_and(|m| !matches!(m["state"].as_str(), Some("cancelled") | Some("failed"))) {
+            rows.push(MenuRow::item("Cancel Move", "xmark.circle", MenuAction::CancelMove));
+            return rows;
+        }
+        for r in self.move_targets(t.runner_id.as_deref()) {
+            let title = if r.online { format!("Move to {}", r.name) } else { format!("Move to {}, offline", r.name) };
+            let mut row = MenuRow::item(title, crate::icons::runner_symbol(r.icon.as_deref()), MenuAction::MoveTo(r.id, r.name));
+            row.enabled = r.online;
+            rows.push(row);
+        }
+        rows
+    }
+
+    /// Opens the machine chip's menu (`machine_menu_rows`) at `position`.
+    pub(crate) fn open_machine_menu(&mut self, id: String, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(t) = self.threads.get(&id).cloned() else { return };
+        let menu_rows = self.machine_menu_rows(&t);
+        self.open_menu(Some(id), menu_rows, position, false, window, cx);
+    }
+
+    /// The machine menu as lines, for scripts: "✓ m5", then each move, "(off)"
+    /// after one that can't be picked.
+    pub(crate) fn machine_menu_lines(&self, id: &str) -> Vec<String> {
+        let Some(t) = self.threads.get(id) else { return vec![] };
+        self.machine_menu_rows(t)
+            .into_iter()
+            .filter(|r| !r.separator)
+            .map(|r| match (r.checked, r.enabled) {
+                (true, _) => format!("✓ {}", r.title),
+                (false, false) => format!("{} (off)", r.title),
+                _ => r.title,
+            })
+            .collect()
+    }
+
+    /// A pick from the machine menu, by its title, as a click on it does.
+    pub(crate) fn machine_menu_click(&mut self, id: &str, title: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<(), String> {
+        let Some(t) = self.threads.get(id).cloned() else { return Err("no such thread".into()) };
+        let row = self.machine_menu_rows(&t).into_iter().find(|r| r.title == title && !r.separator).ok_or_else(|| format!("no item {title}"))?;
+        if !row.enabled {
+            return Err(format!("{title} can't be picked"));
+        }
+        match row.action {
+            Some(MenuAction::MoveTo(runner_id, runner_name)) => self.open_move(crate::move_sheet::MoveRequest { thread_id: id.to_owned(), runner_id, runner_name }, window, cx),
+            Some(MenuAction::CancelMove) => self.cancel_move(id.to_owned(), cx),
+            _ => return Err(format!("{title} does nothing")),
+        }
+        Ok(())
+    }
+
     /// Opens `rows` as a popup menu at `position`, for a row or a heading.
     pub(crate) fn open_menu(&mut self, thread: Option<String>, menu_rows: Vec<MenuRow>, position: Point<Pixels>, confirm_busy: bool, window: &mut Window, cx: &mut Context<Self>) {
         let entity = cx.entity().downgrade();
