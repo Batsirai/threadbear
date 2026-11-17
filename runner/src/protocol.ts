@@ -136,6 +136,10 @@ export type Account = {
   // plan, which has no Claude Code: accounts.ts). Pools skip it, and nothing
   // offers to sign it in or promises a reset.
   planEnded?: boolean;
+  // Claude: runs on a year-long token Mike made for it (year-token.ts),
+  // not its 28-day sign-in. madeAt, when known, is when; loginEndsAt is
+  // then a year on. The token itself never leaves the runner.
+  yearToken?: { madeAt?: string };
 };
 
 export type CliPolicy = 'auto' | 'notify' | 'off';

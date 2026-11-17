@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import type { Dump } from '../support/driver.ts';
 import type { ThreadbearWorld } from '../support/world.ts';
 
-type Login = { name: string; provider?: string | null; status?: string | null; logo?: string; line?: string | null; ring?: number | null; why?: string | null; signInEnds?: string | null; meters: { title: string; left: string; verdict?: string | null }[]; more: string[] };
+type Login = { name: string; provider?: string | null; status?: string | null; logo?: string; line?: string | null; ring?: number | null; why?: string | null; signInEnds?: string | null; yearToken?: string | null; tokenButton?: boolean; meters: { title: string; left: string; verdict?: string | null }[]; more: string[] };
 type Usage = {
   shown: boolean;
   icon: { percent: number; login?: string | null; tip: string; dot?: boolean };
@@ -139,7 +139,7 @@ When("{string}'s week resets", async function (this: ThreadbearWorld, account: s
 });
 
 /** Marks a login on the mock as the runner's sign-in check would (docs/protocol.md, Pools, "Signed out"). */
-async function setSignIn(world: ThreadbearWorld, account: string, change: { signedOut?: boolean; loginEndsAt?: string; planEnded?: boolean }) {
+async function setSignIn(world: ThreadbearWorld, account: string, change: { signedOut?: boolean; loginEndsAt?: string; planEnded?: boolean; yearToken?: { madeAt: string } }) {
   const { accounts } = answer(await world.app.do({ cmd: 'mock', method: 'accounts', params: {} })) as { accounts: { id: string; signedOut?: boolean; loginEndsAt?: string }[] };
   const a = accounts.find((x) => x.id === account);
   assert.ok(a, `no ${account} on the mock`);
@@ -161,6 +161,19 @@ When("{string}'s sign-in ends in {int} hours", async function (this: ThreadbearW
 
 Then('in the {string} card, {string} warns its sign-in ends', async function (this: ThreadbearWorld, card: string, name: string) {
   await this.until(`${name} in ${card} saying its sign-in ends`, (d) => /^Sign-in ends /.test(login(d, card, name)?.signInEnds ?? ''));
+});
+
+When('{string} runs on a year-long token made today', async function (this: ThreadbearWorld, account: string) {
+  const made = new Date();
+  await setSignIn(this, account, { yearToken: { madeAt: made.toISOString() }, loginEndsAt: new Date(made.getTime() + 365 * 86_400_000).toISOString() });
+});
+
+Then('in the {string} card, {string} offers a year-long token', async function (this: ThreadbearWorld, card: string, name: string) {
+  await this.until(`${name} in ${card} offering a year-long token`, (d) => login(d, card, name)?.tokenButton === true && !login(d, card, name)?.yearToken);
+});
+
+Then('in the {string} card, {string} says it has a year-long token', async function (this: ThreadbearWorld, card: string, name: string) {
+  await this.until(`${name} in ${card} saying it has a year-long token`, (d) => /^Year-long token until /.test(login(d, card, name)?.yearToken ?? '') && login(d, card, name)?.tokenButton === false);
 });
 
 Then('the honey pot has a dot', async function (this: ThreadbearWorld) {

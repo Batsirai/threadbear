@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { readYearToken } from './year-token.ts';
 import { acpAccounts } from './adapters/acp/agents.ts';
 import path from 'node:path';
 import { isEffortLevel, type Account, type EffortLevel, type ModelChoice } from './protocol.ts';
@@ -155,6 +156,9 @@ function claudeAccount(id: string, configDir: string, profile: LoginProfile | un
   const account: Account = { id, provider: 'claude', title: email ?? id, configDir };
   if (email) account.email = email;
   if (profile?.planEnded) account.planEnded = true;
+  // Only that it has one and when it was made: the token stays in its file.
+  const token = readYearToken(configDir);
+  if (token) account.yearToken = token.madeAt ? { madeAt: token.madeAt } : {};
   const model = resolveDefaultModel(readSettingsModel(path.join(configDir, 'settings.json')), undefined);
   if (model) account.defaultModel = model;
   return account;

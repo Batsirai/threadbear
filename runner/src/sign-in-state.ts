@@ -15,6 +15,7 @@ import { execFile } from 'node:child_process';
 import type { Account } from './protocol.ts';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
+import { yearTokenEnds } from './year-token.ts';
 
 // How often every Claude login is asked again: often enough that signing
 // one back in shows within minutes, and each ask is a fifth of a second.
@@ -114,7 +115,15 @@ export class SignInState {
     if (account.provider !== 'claude') return {};
     const now = this.o.clock.now();
     const refusal = this.refused.get(account.id);
-    return viewOf(this.readings.get(account.id), !!refusal && now - refusal.at < REFUSAL_HOLD_MS, now);
+    return viewOf(this.reading(account), !!refusal && now - refusal.at < REFUSAL_HOLD_MS && (!account.yearToken || refusal.endsAt === this.reading(account)?.endsAt), now);
+  }
+
+  // A year-long token's reading is the runner's own count: `auth status`
+  // calls any token signed in, with no end (year-token.ts). A new token
+  // has another end, so it takes a refusal back as a new sign-in does.
+  private reading(account: Account): Reading | undefined {
+    if (!account.yearToken) return this.readings.get(account.id);
+    return { loggedIn: true, endsAt: yearTokenEnds(account.yearToken.madeAt), checkedAt: this.o.clock.now() };
   }
 
   // A turn on this login failed with its login refused: it counts as signed
@@ -122,7 +131,7 @@ export class SignInState {
   noteRefused(accountId: string): void {
     const account = this.o.accounts().find((a) => a.id === accountId);
     const before = account ? JSON.stringify(this.view(account)) : '';
-    this.refused.set(accountId, { endsAt: this.readings.get(accountId)?.endsAt, at: this.o.clock.now() });
+    this.refused.set(accountId, { endsAt: account ? this.reading(account)?.endsAt : this.readings.get(accountId)?.endsAt, at: this.o.clock.now() });
     // The sweep every CHECK_MS tells listeners when the hold runs out.
     if (account && JSON.stringify(this.view(account)) !== before) this.changed();
     if (account?.provider === 'claude') void this.queue(() => this.check(account));
@@ -162,6 +171,8 @@ export class SignInState {
   }
 
   private async check(account: Account, tell = true): Promise<void> {
+    // The CLI would only say "signed in" for a token (reading()).
+    if (account.yearToken) return;
     let status: AuthStatus | undefined;
     try {
       status = parseAuthStatus(await (this.o.exec ?? realExec)(this.o.claudePath, ['auth', 'status', '--json'], this.o.env(account)));

@@ -222,6 +222,10 @@ type Account = {
   loginEndsAt?: string  // Claude: when this sign-in ends and can't be renewed
                         // (28 days after signing in, from Claude Code 2.1.325).
                         // Clients warn a few days ahead
+  yearToken?: { madeAt?: string } // Claude: runs on a year-long token
+                        // Mike made for it, not its 28-day sign-in ("Year-long
+                        // tokens", below). madeAt is when; loginEndsAt is a
+                        // year on. The token itself is never sent
   planEnded?: boolean   // Claude: its paid plan has lapsed. The CLI's cached
                         // claude.ai profile (oauthAccount in the login's
                         // .claude.json, fetched again at most daily while the
@@ -2374,6 +2378,24 @@ thread to another login when the one it's on runs out of room.
   `defaults.poolId` in `hello` is folder-blind: the app applies folders
   itself (`poolForFolder`, with the shared cases in
   `runner/test/fixtures/pool-folder-cases.json`).
+- **Year-long tokens.** A Claude sign-in lasts about 28 days and can't be
+  renewed; `claude setup-token` makes a token that lasts a year. Mike opts
+  a login in with Year-long token… on its Usage row: the app opens
+  Terminal on its own helper (`desktop/core/src/claude_token.py`), which
+  runs `claude setup-token` for that login and writes
+  `threadbear-token.json` in the login's folder (0600: `{ token, madeAt }`).
+  Not settings.json's `env`, which Mike's logins share through symlinks.
+  The runner sees the file on its next look at the logins, sets
+  `yearToken`, and passes the token to that login's CLI as
+  `CLAUDE_CODE_OAUTH_TOKEN` (cliEnv), where it takes over from the
+  Keychain sign-in; never to another login, a client, Convex or the log,
+  and Claude Code keeps it out of its tools' shells. `claude auth status`
+  calls any token signed in, with no end, so a token login isn't asked:
+  its `loginEndsAt` is `madeAt` plus 365 days, and the usual warning comes
+  three days ahead, with New token…. A refused turn holds it out as for
+  any login, until a new token. A token only runs models: claude.ai's own
+  connectors and Remote Control don't work on it. Usage readings come from
+  turns as before. Deleting the file goes back to the sign-in.
 - **Which login.** Of the pool's logins of a provider that are OK to run
   on, the one whose weekly window resets soonest, since whatever is left
   in it then is lost; the most room breaks a tie. Logins with no weekly

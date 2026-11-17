@@ -1153,6 +1153,36 @@ impl Threadbear {
         .detach();
     }
 
+    /// Year-long token… on a Claude login's Usage row: Terminal on
+    /// `claude setup-token` for that login, through the app's own helper,
+    /// which keeps the token in the login's folder (sign_in::token_script).
+    /// The runner sees the new file on its next look at the logins.
+    pub(crate) fn make_year_token(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(account) = self.logins.account(id).map(|a| SignInAccount { id: a.id.clone(), provider: a.provider_id().to_owned(), title: a.title.clone(), config_dir: a.config_dir.clone() }).filter(|a| a.provider == "claude" && a.can_sign_in()) else {
+            self.show_error(format!("Threadbear can't make a token for {id} from here: run claude setup-token for it in Terminal."), cx);
+            return;
+        };
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let clis = call(client, "clis.list", json!({})).await.ok();
+            let path = clis
+                .as_ref()
+                .and_then(|v| v["clis"].as_array())
+                .and_then(|list| list.iter().find(|c| c["provider"].as_str() == Some("claude")))
+                .and_then(|c| c["path"].as_str())
+                .unwrap_or("")
+                .to_owned();
+            let file = std::env::temp_dir().join(format!("threadbear-token-{}.command", sign_in::file_safe(&account.id)));
+            let written = write_script(&file, &sign_in::token_script(&account, &path));
+            this.update(cx, |this, cx| match written {
+                Ok(()) => crate::open_gate::open_own(&file, cx),
+                Err(e) => this.show_error(format!("Couldn't open Terminal to make a token: {e}"), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Sends the thread's last message of his again, after signing in
     /// (`sendAgain`).
     pub(crate) fn send_again(&mut self, thread: &str, cx: &mut Context<Self>) {

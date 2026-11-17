@@ -1230,6 +1230,11 @@ pub struct LoginRow {
     pub status: Option<LoginStatus>,
     /// "Sign-in ends Tue 6 pm", in the last SIGN_IN_WARN_MS of a sign-in.
     pub sign_in_ends: Option<String>,
+    /// A Claude login on this Mac that can be given a year-long token
+    /// (Year-long token… on its row), or be given a new one.
+    pub can_token: bool,
+    /// It runs on one: "Year-long token until 17 Nov 2027".
+    pub year_token: Option<String>,
     pub meters: Vec<Meter>,
     /// Old numbers' "Numbers from 6:02 am", then the extra lines.
     pub more: Vec<String>,
@@ -1353,6 +1358,9 @@ impl LoginStatus {
 /// nightly retro, 14 and 15 Nov). Not a notification: Mike finds those
 /// annoying for something that can wait a day.
 pub const SIGN_IN_WARN_MS: i64 = 3 * DAY;
+/// How long `claude setup-token`'s token lasts: the runner's loginEndsAt for
+/// a token login is this after it was made (year-token.ts).
+pub const YEAR_MS: i64 = 365 * DAY;
 
 /// When a login's sign-in ends, while that's within SIGN_IN_WARN_MS and it
 /// isn't already signed out.
@@ -1494,7 +1502,15 @@ fn login_row<Tz: TimeZone>(account: &Account, provider_name: &str, notice: Optio
         today: spent_today(stats, &[account.id.as_str()], now, zone),
         dot: stats.is_some(),
         status,
-        sign_in_ends: sign_in_ends(account, now).map(|at| sign_in_ends_words(at, now, zone)),
+        sign_in_ends: sign_in_ends(account, now).map(|at| if account.year_token.is_some() { sign_in_ends_words(at, now, zone).replacen("Sign-in", "Token", 1) } else { sign_in_ends_words(at, now, zone) }),
+        can_token: account.provider_id() == "claude" && !account.plan_ended && (account.id == "claude-main" || !account.config_dir.trim().is_empty()),
+        year_token: account.year_token.as_ref().map(|t| match t.made_at.as_deref().and_then(parse_ms) {
+            Some(made) => match local(made + YEAR_MS, zone) {
+                Some(d) => format!("Year-long token until {} {} {}", d.day(), ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.month0() as usize], d.year()),
+                None => "Year-long token".to_owned(),
+            },
+            None => "Year-long token".to_owned(),
+        }),
         provider: account.provider.clone(),
         ring: ring(&meters),
         headline: headline(status, &meters),
@@ -2140,6 +2156,29 @@ mod tests {
         assert_eq!(footer(&l.accounts, now, &z).as_deref(), Some("Usage from Token Stats at 11:15 am. Couldn't check usage just now."));
         assert!(!needs_newer_runner(&l.accounts));
         assert!(needs_newer_runner(&l.accounts[4..]));
+    }
+
+    #[test]
+    fn a_token_login_says_until_when_and_its_warning_says_token() {
+        let now = parse_ms("2026-11-17T01:00:00Z").unwrap();
+        let account = |id: &str, made: Option<&str>, ends: Option<&str>| Account {
+            id: id.into(),
+            provider: "claude".into(),
+            title: format!("{id}@example.com"),
+            config_dir: format!("/tmp/{id}"),
+            year_token: made.map(|m| crate::logins::YearToken { made_at: Some(m.into()) }),
+            login_ends_at: ends.map(str::to_owned),
+            ..Account::default()
+        };
+        let plain = row_for(account("claude-1", None, None), now);
+        assert_eq!((plain.can_token, plain.year_token.as_deref()), (true, None));
+        let token = row_for(account("claude-4", Some("2026-11-17T00:00:00Z"), Some("2027-11-17T00:00:00Z")), now);
+        assert_eq!(token.year_token.as_deref(), Some("Year-long token until 17 Nov 2027"));
+        assert_eq!(token.sign_in_ends, None);
+        let late = row_for(account("claude-4", Some("2025-11-18T00:00:00Z"), Some("2026-11-18T00:00:00Z")), now);
+        assert!(late.sign_in_ends.as_deref().is_some_and(|w| w.starts_with("Token ends")), "{:?}", late.sign_in_ends);
+        let codex = row_for(Account { provider: "codex".into(), ..account("codex-1", None, None) }, now);
+        assert!(!codex.can_token);
     }
 
     fn row_for(account: Account, now: i64) -> LoginRow {

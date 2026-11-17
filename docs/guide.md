@@ -1270,6 +1270,18 @@ fail overnight. Threadbear learns this from each login's own
 another Mac the line says which Mac to sign in on, as Terminal here would
 only sign in this Mac.
 
+To stop signing in every month, a Claude login's row in Usage has
+Year-long token…. It opens Terminal on `claude setup-token` for that login:
+sign in once, and from then on the login runs on a token that lasts a year.
+Threadbear keeps it in a file in that login's own folder
+(`threadbear-token.json`, which only you can read) and gives it to that
+login's Claude Code and nothing else. The row then says "Year-long token
+until" the day, and three days before that it warns as a sign-in does, with
+New token…. A token can only run models, so claude.ai's own connectors and
+Remote Control don't work on that login; MCP servers you set up yourself
+still do, and so do the usage numbers. To go back to signing in, delete
+that file.
+
 The sign-in command comes from the runner's provider list, so Cursor opens
 `agent login`, for example. Sign in… is offered only when the login's own
 details can be read.

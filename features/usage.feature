@@ -75,6 +75,17 @@ Feature: The Usage panel and its honey pot
     Then in the "Claude" card, "alex+4@example.com" says "Signed out"
     And the honey pot's tooltip says "claude-4 (alex+4@example.com) is signed out"
 
+  # A Claude sign-in lasts 28 days; `claude setup-token` makes a token that
+  # lasts a year. Mike, 17 Nov 2026: let each login opt in. The frozen Swift
+  # app has none of it.
+  @usage.sign-in @swift-pending
+  Scenario: Each Claude login offers a year-long token, and one on a token says until when
+    When I click the honey pot in the activity bar
+    Then in the "Claude" card, "alex+3@example.com" offers a year-long token
+    When "claude-3" runs on a year-long token made today
+    Then in the "Claude" card, "alex+3@example.com" says it has a year-long token
+    And the honey pot has no dot
+
   # claude-main's cancelled Max ran out on 16 Nov 2026 while its row still
   # offered Sign in… and a weekly reset. The frozen Swift app has none of it.
   @usage.sign-in @swift-pending

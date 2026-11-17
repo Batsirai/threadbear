@@ -329,6 +329,8 @@ impl Threadbear {
                     "fiveHour": l.five_hour.as_ref().map(|c| &c.text),
                     "why": l.unknown.as_ref().map(|u| &u.text),
                     "signInEnds": l.sign_in_ends,
+                    "yearToken": l.year_token,
+                    "tokenButton": l.can_token && (l.year_token.is_none() || l.status == Some(LoginStatus::SignedOut) || l.sign_in_ends.is_some()),
                     "meters": l.meters.iter().map(|m| json!({ "title": m.title, "left": m.left, "verdict": m.verdict.as_ref().map(|v| &v.text) })).collect::<Vec<_>>(),
                     "more": l.more,
                 }))).collect::<Vec<_>>(),
@@ -797,13 +799,25 @@ fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, da
     // job on it doesn't fail overnight (14 Nov).
     let signed_out = login.status == Some(LoginStatus::SignedOut);
     let ending = login.sign_in_ends.as_ref().filter(|_| !signed_out).map(|words| div().text_size(px(11.)).line_height(px(14.)).font_weight(FontWeight::MEDIUM).text_color(p.orange).child(words.clone()));
-    let sign_in = (signed_out || login.sign_in_ends.is_some()).then(|| {
+    let due = signed_out || login.sign_in_ends.is_some();
+    let small = |key: &str, tip: &'static str| crate::highlights::tipped(div().id(id(key)).flex_none().px(px(7.)).py(px(2.)).rounded(px(5.)).text_size(px(11.)).line_height(px(14.)).text_color(p.fg).bg(p.divider), tip);
+    // A token login renews with a new token, not a sign-in.
+    let sign_in = (due && login.year_token.is_none()).then(|| {
         let account = login.id.clone();
-        let button = crate::highlights::tipped(div().id(id("sign-in")).flex_none().px(px(7.)).py(px(2.)).rounded(px(5.)).text_size(px(11.)).line_height(px(14.)).text_color(p.fg).bg(p.divider), "Opens Terminal on this login's own sign-in")
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.sign_in_login(&account, cx)))
-            .child("Sign in…");
-        h_flex().gap(px(8.)).items_center().children(ending).child(div().flex_1()).child(button)
+        small("sign-in", "Opens Terminal on this login's own sign-in").on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.sign_in_login(&account, cx))).child("Sign in…")
     });
+    // Year-long token…: a Claude sign-in lasts 28 days, a token from
+    // `claude setup-token` a year (Mike, 17 Nov: opt in per login). Offered
+    // on every Claude login without one, and on a token login near its end.
+    let token = (login.can_token && (login.year_token.is_none() || due)).then(|| {
+        let account = login.id.clone();
+        let label = if login.year_token.is_some() { "New token…" } else { "Year-long token…" };
+        small("token", "Opens Terminal on claude setup-token for this login: one sign-in, then it runs on that token for a year instead of signing in every 28 days. claude.ai's own connectors and Remote Control don't work on it")
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.make_year_token(&account, cx)))
+            .child(label)
+    });
+    let quiet = login.year_token.clone().filter(|_| !due).map(|words| div().text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).child(words));
+    let sign_in = (sign_in.is_some() || token.is_some() || quiet.is_some()).then(|| h_flex().gap(px(8.)).items_center().children(ending).children(quiet).child(div().flex_1()).children(sign_in).children(token));
     // The week's chart on its own: the ring says what's left and the line
     // above what to do, so it needs no title. A model's own week keeps its
     // meter's title, number and verdict.

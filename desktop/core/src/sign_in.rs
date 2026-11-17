@@ -106,6 +106,28 @@ pub fn script_named(account: &SignInAccount, cli_path: &str, command: &str, name
     )
 }
 
+/// The file a login's year-long token is kept in, in its own folder: the
+/// runner's year-token.ts reads it.
+pub const TOKEN_FILE: &str = "threadbear-token.json";
+
+/// Year-long token…: Terminal on `claude setup-token` for one Claude login,
+/// through claude_token.py, which takes the token from what it prints and
+/// writes it to the login's TOKEN_FILE. The helper is part of this app, so
+/// nothing a runner says picks what runs; the login's folder and the CLI's
+/// path are quoted, as in `script`.
+pub fn token_script(account: &SignInAccount, cli_path: &str) -> String {
+    if account.provider != "claude" && !account.provider.is_empty() || !account.can_sign_in() {
+        return "#!/bin/zsh -l\nprintf '%s\\n' 'A year-long token is only for Claude logins on this Mac.'\n".into();
+    }
+    let folder = if account.config_dir.trim().is_empty() { "$HOME/.claude".to_owned() } else { quoted(account.config_dir.trim_end_matches('/')) };
+    let binary = if cli_path.is_empty() { "claude".to_owned() } else { quoted(cli_path) };
+    let first = quoted(&format!("Making a year-long Claude token for Threadbear ({}).", one_line(&account.title)));
+    format!(
+        "#!/bin/zsh -l\nexport PATH=\"$HOME/.local/bin:$PATH\"\nprintf '%s\\n' {first} 'Sign in as that account on the page that opens.'\necho\nhelper=$(cat <<'THREADBEAR_PY'\n{}THREADBEAR_PY\n)\n/usr/bin/python3 -I -c \"$helper\" {binary} {folder}/{TOKEN_FILE}\n",
+        include_str!("claude_token.py")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +173,17 @@ mod tests {
         assert_eq!(printed, format!("printf '%s\\n' {}", quoted(&format!("Signing in to Claude for Threadbear ({}).", one_line(title)))));
         assert!(!printed.contains('\n'));
         assert_eq!(file_safe("../../evil id"), "______evil_id");
+    }
+
+    #[test]
+    fn a_year_long_token_runs_setup_token_through_the_helper_into_the_login_folder() {
+        let s = token_script(&account("claude-1", "claude", "o'ne@example.com", "/Users/x/Token Stats/claude-1"), "/Users/x/.local/bin/claude");
+        assert!(s.contains("\n/usr/bin/python3 -I -c \"$helper\" '/Users/x/.local/bin/claude' '/Users/x/Token Stats/claude-1'/threadbear-token.json\n"), "{s}");
+        assert!(s.contains("o'\\''ne@example.com"), "the name is quoted");
+        assert!(s.contains("setup-token") && s.contains("\nTHREADBEAR_PY\n)"), "the helper, whole");
+        assert_eq!(include_str!("claude_token.py").lines().filter(|l| *l == "THREADBEAR_PY").count(), 0);
+        let main = token_script(&account("claude-main", "claude", "me@example.com", ""), "");
+        assert!(main.contains(" claude $HOME/.claude/threadbear-token.json\n"), "{main}");
+        assert!(token_script(&account("codex-1", "codex", "c", "/x"), "").contains("only for Claude"));
     }
 }

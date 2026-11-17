@@ -280,6 +280,15 @@ File references are where to look.
   that login's own config folder. It reads only whether the login is signed
   in and when its sign-in ends. The CLI answers from its own files without
   going online, and the runner never reads the Keychain or the tokens.
+- **A Claude login's year-long token, if you make one**
+  (`runner/src/year-token.ts`, `desktop/core/src/claude_token.py`): Year-long
+  token… on a Claude login's row in Usage opens Terminal on `claude
+  setup-token` for that login, run by a small Python helper inside the app
+  (`/usr/bin/python3`). It writes `threadbear-token.json` in that login's own
+  folder (only you can read it), with the token and when it was made. The
+  runner reads that file and gives the token to that login's Claude Code as
+  `CLAUDE_CODE_OAUTH_TOKEN`, and to nothing else. Delete the file to go back
+  to the login's normal sign-in.
 - **A pinned file being shown** (`desktop/gpui/src/highlights.rs`): if its
   Highlights request fails, the app retries after 1 second, then 2, then 4,
   up to 5 seconds between tries while you're looking at that thread. It

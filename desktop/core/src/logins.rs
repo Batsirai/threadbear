@@ -66,6 +66,18 @@ pub struct Account {
     /// Code. Pools skip it; nothing offers Sign in… or a reset for it.
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub plan_ended: bool,
+    /// Claude: runs on a year-long token Mike made for it (Year-long token…
+    /// on its Usage row, sign_in.rs), not its 28-day sign-in. The token
+    /// itself never comes to the app.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub year_token: Option<YearToken>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct YearToken {
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub made_at: Option<String>,
 }
 
 impl Account {

@@ -79,6 +79,9 @@ cherry-picked.
   A scenario's `shows` are the words each surface must show.
 - Only ever spawn the official `claude` (and later `codex`) binaries under
   Mike's own logins. Never read or copy OAuth tokens or Keychain credentials.
+  The one exception is a login's year-long token that Mike made with
+  Year-long token… (`threadbear-token.json` in that login's folder): the
+  runner passes it to that login's CLI and nowhere else (Mike, 17 Nov).
 - Tests that hit a real model use the cheapest model, tiny prompts, a temp
   working folder and a temp runner data dir, never the real one.
 - Never kill processes you didn't start; T3 Code runs the same CLIs.

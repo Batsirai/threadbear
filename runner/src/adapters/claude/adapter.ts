@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readYearToken } from '../../year-token.ts';
 import { denySecrets } from '../../secrets-guard.ts';
 import os from 'node:os';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -48,6 +49,13 @@ export function cliEnv(account: Account, base: NodeJS.ProcessEnv = process.env, 
   for (const k of INHERITED_SESSION_VARS) delete env[k];
   if (account.id === 'claude-main') delete env.CLAUDE_CONFIG_DIR;
   else env.CLAUDE_CONFIG_DIR = account.configDir;
+  // A login's own year-long token (year-token.ts), or none: never one from
+  // the runner's environment, which would run this login as another.
+  delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (account.provider === 'claude') {
+    const token = readYearToken(account.configDir);
+    if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token.token;
+  }
   env.CLAUDE_AGENT_SDK_CLIENT_APP = `threadbear-runner/${RUNNER_VERSION}`;
   // On Windows, Claude Code gives the model a PowerShell tool beside Bash.
   // The runner's guards (the secrets guard, approvals, what a limited
