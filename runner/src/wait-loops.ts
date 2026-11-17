@@ -34,7 +34,7 @@ export const TIMER_SECONDS = 60;
 export const FOREGROUND_POLL_SECONDS = 30;
 
 export const WAIT_LOOP_REASON = [
-  "This looks like a wait that would outlast the turn as a background job. While one runs, this thread can't be hibernated: hibernating stops background jobs, so Mike is asked to choose between killing it and leaving the thread awake.",
+  "This looks like a wait that would outlast the turn as a background job. While one runs, this thread can't be hibernated: hibernating stops background jobs, so the user is asked to choose between killing it and leaving the thread awake.",
   // A one-off (`when`) whose check prints nothing is skipped and done for
   // good, so the wait would be dropped (Codex's review, 18 Nov): cron only.
   `If it waits on something outside this turn (a merge or landing, CI, a deploy, another thread, a person, a time), don't run it. Call schedule_message with cron "*/5 * * * *" and \`check\` set to a command that prints only once it's ready, saying in the message what to do then and to delete the schedule; then end_turn with snooze. The thread hibernates and the check wakes it.`,
