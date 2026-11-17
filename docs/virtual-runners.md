@@ -158,17 +158,37 @@ in, and "What the review changed" at the end says what moved and why.
    machines as a provider (Docker or gVisor on the Hetzner box) can come
    later through the same interface: a small host program that keeps one
    connection to Convex and takes jobs, as Amp's self-hosted orbs do.
-10. **Logins never enter the box.** A setup token can do anything Mike's
-    subscription can, for up to a year, and the agent in a box has full
-    access, reads untrusted repos and has the open internet: one prompt
-    injection or a bad `postinstall` would leak it. So a small **login
-    proxy** on a machine Mike owns (the Hetzner box) holds the real
-    credential (a `claude setup-token` token Mike makes himself, never
-    one read from a Keychain). Each box gets only `ANTHROPIC_BASE_URL`
-    pointing at it and a stand-in credential for that box, which the
-    proxy swaps for the real one and which dies with the box. Codex the
-    same way. The spike checks Claude Code's requests survive the swap;
-    if they don't, real threads wait until they do.
+10. **The Claude login is a setup token kept in Convex, as Capy does
+    it.** Mike makes one with `claude setup-token` on his Mac and pastes
+    it into Threadbear once per Claude account; it's stored in Convex
+    sealed with a key held in a Convex environment variable, so a data
+    export or backup doesn't carry it in the clear. A box gets it only
+    through the boot exchange (5), keeps it in the runner's memory and
+    passes it to Claude Code as `CLAUDE_CODE_OAUTH_TOKEN`. It's never in
+    the provider's machine config or on the box's disk. Codex the same
+    way with its own token.
+
+    This does mean the box holds a token that can use the whole
+    subscription for up to a year, and the agent in it can read its own
+    environment. Things that would avoid that, and why not:
+    - **A short-lived token minted from the long one**: Claude Code has
+      no way to do it (`claude setup-token` takes no options, 2.1.326).
+    - **Convex holds a normal login's refresh token and hands boxes only
+      the access token**, which lasts hours: logins now end after 28
+      days, so Mike would sign in again every month, and it would mean
+      calling Claude Code's private sign-in endpoint from Convex.
+    - **A proxy in front of Anthropic that swaps a stand-in credential
+      for the real one**: through Convex HTTP actions it would put every
+      model request (hundreds of KB each) through Convex's usage and add
+      a hop to every turn (Mike, 17 Nov). On a machine of Mike's or a
+      Cloudflare Worker, it's another thing every Threadbear owner has to
+      run, when Convex is "the only reliable constant" they all have.
+
+    What limits the damage instead: Settings says which token a box uses
+    and links to claude.ai to revoke it, and pasting a new one swaps it
+    for every box at its next wake. A Claude account kept only for boxes
+    means a revoke doesn't touch the Mac's threads. Where the provider
+    has an egress allowlist (`caps.egressAllowlist`), it's on by default.
 11. **GitHub tokens for one repo, decided when the box is made.** The repo
     is fixed on the `boxes` row by the owner side at start, never taken
     from what the box later writes. A git credential helper in the box asks
@@ -215,9 +235,9 @@ in, and "What the review changed" at the end says what moved and why.
      with uncommitted work: a new box restores the save, resumes the same
      Claude session with the work intact, and the old credential is
      refused.
-   - **Claude Code runs without the real token in the box**, through the
-     login proxy, for one real turn on the cheapest model, with usage on
-     the right login.
+   - **Claude Code runs on the setup token from Convex**: one real turn on
+     the cheapest model, with the token reaching the box only through the
+     boot exchange, and absent from the provider's machine config.
    - The numbers: cold start to first reply including clone and worktree
      setup on threadbear itself, warm wake to first reply, and the cost of
      an hour awake, paused and saved.
@@ -236,9 +256,8 @@ it's called done.
 
 ## Questions for Mike
 
-- **The login proxy**: the real Claude credential would be a `claude
-  setup-token` token he makes, held only by a proxy on the Hetzner box.
-  All right? It's the one secret this whole design depends on.
+- **The login** (answered 17 Nov): a setup token pasted once and kept in
+  Convex, as Capy does it, not a proxy. See 10.
 
 ## What the review changed
 
@@ -261,7 +280,8 @@ service in Convex". What changed:
 - **Secrets in the environment and a shared sealing key** were the
   biggest holes (all three): the setup token in the box is a whole
   subscription handed to an agent that runs untrusted code. Hence the
-  boot-token exchange (5), the login proxy (10) and per-thread keys (7).
+  boot-token exchange (5) and per-thread keys (7). The login proxy the
+  panel suggested was later dropped for a token kept in Convex (10).
 - **GitHub tokens**: the box mustn't choose the repo, and the `cloud/**`
   ruleset only exists on threadbear (Opus). Hence 11.
 - **Lost commands, duplicate boxes and runaway boxes** (Grok, Fable):
