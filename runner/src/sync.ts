@@ -1896,6 +1896,11 @@ export class ConvexSync {
 
   async decideRequest(p: { requestId: string; docId: string; state: 'claimed' | 'allowed' | 'pending' | 'denied'; result?: { runnerId: string; runnerName: string; threadId: string }; claim?: string }): Promise<void> {
     this.mustBeOn();
+    // Not before a heartbeat this start has said which backend this is: a
+    // claim without its id (a cached version, out of date) is the one a lost
+    // answer leaves "being started" for good (Codex's review). Said before
+    // anything is claimed, so Start it works a moment later.
+    if (p.state === 'claimed' && !this.backendHeard) throw new Error("Threadbear's backend hasn't answered this runner since it started. Try again in a moment.");
     // An older backend refuses an arg it doesn't know.
     const { claim, ...rest } = p;
     await this.backend('mutation', 'relay:decideRequest', { key: this.deps.key, ...rest, ...(claim !== undefined && this.backendHeard && (this.backendApiVersion ?? 0) >= COMMAND_ATTEMPT_API_VERSION ? { claim } : {}) });

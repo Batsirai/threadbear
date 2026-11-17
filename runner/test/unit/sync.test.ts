@@ -4152,6 +4152,25 @@ test("commands: nothing is taken before a heartbeat has said which backend it is
   await sync.stop();
 });
 
+// Codex's review: with a cached backend version, a claim before the first
+// heartbeat went without its id, and a lost answer then stuck it.
+test("a request's claim waits for a heartbeat this start has heard, then carries its id", async () => {
+  let answer: (() => void) | undefined;
+  const { sync, calls } = setupFull({
+    apiVersion: BACKEND_API_VERSION,
+    hold: (fn) => (fn === 'sync:heartbeat' && !answer ? new Promise<void>((r) => (answer = r)) : undefined),
+  });
+  sync.start();
+  const claim = { requestId: 'req-00001', docId: 'd1', state: 'claimed' as const, claim: 'claim-id-0001' };
+  await assert.rejects(sync.decideRequest(claim), /hasn't answered this runner/);
+  assert.equal(calls.filter((c) => c.fn === 'relay:decideRequest').length, 0);
+  answer!();
+  await tick(20);
+  await sync.decideRequest(claim);
+  assert.equal(calls.find((c) => c.fn === 'relay:decideRequest')!.args.claim, 'claim-id-0001');
+  await sync.stop();
+});
+
 test('commands: an older backend is asked to take without an attempt', async () => {
   const { h, sync, push, calls } = setupFull({ apiVersion: COMMAND_ATTEMPT_API_VERSION - 1 });
   sync.start();

@@ -472,3 +472,22 @@ test("answering on the main Mac: a lost claim can still be declined, and another
   g.setOpen('req-x');
   await assert.rejects(g.cross.answer('c', 'req-x', true, undefined, fingerprint(row)), /being started/);
 });
+
+// Codex's review: two overlapping answers could each take a lost claim as
+// theirs (two threads), or a Don't hand back a claim a Start was using.
+test('answering on the main Mac: one answer to a request at a time, Start it or Don’t', async () => {
+  const f = fake({ owner: true, loseClaimAnswer: 1 });
+  const row: RunnerRequestRow = { docId: 'doc1', requestId: 'req-two', runnerId: 'cloud1', runnerName: 'Cloud box', threadId: 'c', target: 'main', text: 'x', createdAt: 1, state: 'pending' };
+  f.rows.set('req-two', row);
+  f.setOpen('req-two');
+  await assert.rejects(f.cross.answer('c', 'req-two', true, undefined, fingerprint(row)), /fetch failed/);
+  // A retry under way (it hasn't read the request yet), and another Start it and a Don't meanwhile.
+  const first = f.cross.answer('c', 'req-two', true, undefined, fingerprint(row));
+  await assert.rejects(f.cross.answer('c', 'req-two', true, undefined, fingerprint(row)), /already being answered/);
+  await assert.rejects(f.cross.answer('c', 'req-two', false), /already being answered/);
+  await first;
+  assert.equal(f.log.filter((l) => l.startsWith('here')).length, 1);
+  assert.equal(f.rows.get('req-two')!.state, 'allowed');
+  // Answered, it's free again: a later click is told it's allowed, not busy.
+  await assert.rejects(f.cross.answer('c', 'req-two', false), /already allowed/);
+});

@@ -230,6 +230,20 @@ export class CrossRunner {
   /** requests.answer, on the main Mac: start it (on `runnerId`, or the one it asked for) or say no. */
   async answer(threadId: string, approvalId: string, allow: boolean, runnerId?: string, shown?: string): Promise<{ thread?: { id: string; runnerId: string; runnerName: string } }> {
     const backend = this.mustOwn();
+    // One answer to a request at a time, Start it or Don't, held from before
+    // anything is read: two overlapping ones could each see a lost claim as
+    // theirs and start two threads, or a Don't hand back a claim a Start was
+    // still using (Codex's review, 17 Nov 2026).
+    if (this.starting.has(approvalId)) throw bad('That request is already being answered.');
+    this.starting.add(approvalId);
+    try {
+      return await this.answerNow(backend, threadId, approvalId, allow, runnerId, shown);
+    } finally {
+      this.starting.delete(approvalId);
+    }
+  }
+
+  private async answerNow(backend: ReturnType<CrossRunner['mustOwn']>, threadId: string, approvalId: string, allow: boolean, runnerId?: string, shown?: string): Promise<{ thread?: { id: string; runnerId: string; runnerName: string } }> {
     const row = await this.row(threadId, approvalId);
     // A claim of ours whose answer never came back (a dropped connection):
     // nothing was started under it, so Start it can carry on from there.
@@ -253,9 +267,7 @@ export class CrossRunner {
       await this.deps.respondThere(threadId, approvalId, 'deny');
       return {};
     }
-    if (this.starting.has(approvalId)) throw bad('That thread is already being started.');
-    this.starting.add(approvalId);
-    try {
+    {
       if (!target) throw bad(`No runner called ${runnerId ?? row.target}. Pick one.`);
       // Said before claiming, so it can be tried again once that Mac is back.
       if (!target.self && target.online === false) throw other(`${target.name} is offline. Try again once it's back.`);
@@ -320,8 +332,6 @@ export class CrossRunner {
       // other runner was slow to close isn't an error to show Mike.
       await this.deps.respondThere(threadId, approvalId, 'allow').catch(() => {});
       return { thread: { id: made.id, runnerId: target.id, runnerName: target.name } };
-    } finally {
-      this.starting.delete(approvalId);
     }
   }
 
