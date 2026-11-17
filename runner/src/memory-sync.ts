@@ -281,6 +281,9 @@ function batches<T extends { text?: string }>(items: T[]): T[][] {
   return out;
 }
 
+// What a folder takes on disk, near enough: every file and folder counts as
+// at least a block, so a flood of empty offers fills the quota too.
+const BLOCK = 4096;
 function dirBytes(dir: string): number {
   let total = 0;
   let entries: fs.Dirent[] = [];
@@ -291,10 +294,10 @@ function dirBytes(dir: string): number {
   }
   for (const e of entries) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) total += dirBytes(p);
+    if (e.isDirectory()) total += BLOCK + dirBytes(p);
     else {
       try {
-        total += fs.lstatSync(p).size;
+        total += Math.max(BLOCK, fs.lstatSync(p).size);
       } catch {}
     }
   }
@@ -342,6 +345,11 @@ export class MemorySync {
     this.stopped = true;
   }
 
+  // Tests: a pass under way.
+  get busy(): boolean {
+    return this.running;
+  }
+
   private schedule(ms: number): void {
     if (this.stopped) return;
     const set = this.deps.setTimer ?? ((run: () => void, wait: number) => setTimeout(run, wait));
@@ -350,6 +358,12 @@ export class MemorySync {
       void this.tick().finally(() => this.schedule(MEMORY_TICK_MS));
     }, ms);
     this.timer.unref?.();
+  }
+
+  // Between awaits: a runner told to stop (a handover) writes nothing more,
+  // so a pass still waiting on the backend can't undo the new runner's work.
+  private live(): void {
+    if (this.stopped) throw new Error('memory sync stopped');
   }
 
   // One pass. Exposed for tests.
@@ -365,13 +379,14 @@ export class MemorySync {
         await this.reconcile();
       }
     } catch (e) {
-      this.deps.log.warn('memory sync failed', { error: String((e as Error)?.message ?? e) });
+      if (!this.stopped) this.deps.log.warn('memory sync failed', { error: String((e as Error)?.message ?? e) });
     } finally {
       this.running = false;
     }
   }
 
   private save(): void {
+    this.live();
     atomicWriteFileSync(this.manifestPath, JSON.stringify(this.manifest), 0o600);
   }
 
@@ -390,6 +405,7 @@ export class MemorySync {
     }
     for (const batch of batches(changes)) {
       await this.backend!.put(batch);
+      this.live();
       for (const f of batch) {
         if (f.gone) delete this.manifest.files[f.path];
         else this.manifest.files[f.path] = f.hash;
@@ -410,6 +426,7 @@ export class MemorySync {
     }
     this.fullSaid = false;
     const offers = await this.backend!.offers();
+    this.live();
     if (!offers.length) return;
     const taken: { id: string; hash: string }[] = [];
     for (const o of offers) {
@@ -434,6 +451,7 @@ export class MemorySync {
   private async pullDown(): Promise<void> {
     for (let pages = 0; pages < 500; pages++) {
       const page = await this.backend!.since(this.manifest.after);
+      this.live();
       for (const row of page.rows) {
         if (row.seq <= this.manifest.after) continue;
         if (memoryPathOk(row.path)) {
@@ -483,8 +501,14 @@ export class MemorySync {
       for (const file of targetsOf(p, home, claude, codex)) {
         const at = real(file);
         handled.add(at);
-        if (!inside(at, roots) || this.manifest.kept[at]) continue;
+        if (!inside(at, roots)) continue;
         const seen = look(at);
+        if (this.manifest.kept[at]) {
+          // Never written, but each version still offered, including one
+          // whose offer failed last time.
+          if (seen.state === 'text') offer(at, p, seen.text);
+          continue;
+        }
         const mine = this.manifest.wrote[at];
         if (seen.state === 'odd') {
           this.manifest.kept[at] = true;
@@ -522,6 +546,13 @@ export class MemorySync {
     for (const [at, mine] of Object.entries(this.manifest.wrote)) {
       if (this.manifest.files[mine.path] !== undefined) continue;
       handled.add(at);
+      // A folder relinked since sync wrote here leads somewhere else now:
+      // forgotten, never deleted.
+      if (real(at) !== at || !inside(at, roots)) {
+        delete this.manifest.wrote[at];
+        delete this.manifest.adopted[at];
+        continue;
+      }
       const seen = look(at);
       if (seen.state === 'text' && seen.hash !== mine.hash) offer(at, mine.path, seen.text);
       if (seen.state === 'text' && seen.hash === mine.hash && !this.manifest.adopted[at]) deletes.push({ file: at, expect: seen.hash });
@@ -545,15 +576,32 @@ export class MemorySync {
 
     // Offers first, as one offer row per text: two logins' different edits of
     // one file are two offers, never one in place of the other.
+    // Each batch is recorded as it goes, so a full backend (too many waiting)
+    // doesn't send the same ones again next pass. A file whose offer didn't
+    // go isn't replaced this pass; everything else still is.
     const sendable = uniq(offers, (o) => `${o.path}\n${o.hash}`);
-    for (const batch of batches(sendable)) {
-      await this.backend!.offer(batch.map(({ path: p, hash, text }) => ({ path: p, hash, text })));
+    const sent = new Set<string>();
+    let sentCount = 0;
+    try {
+      for (const batch of batches(sendable)) {
+        await this.backend!.offer(batch.map(({ path: p, hash, text }) => ({ path: p, hash, text })));
+        this.live();
+        for (const o of batch) sent.add(`${o.path}\n${o.hash}`);
+        sentCount += batch.length;
+        for (const o of offers) if (sent.has(`${o.path}\n${o.hash}`)) this.manifest.offered[o.file] = o.hash;
+        this.save();
+      }
+    } catch (e) {
+      this.live();
+      this.deps.log.warn('memory offers did not all go', { error: String((e as Error)?.message ?? e), sent: sentCount, of: sendable.length });
     }
-    for (const o of offers) this.manifest.offered[o.file] = o.hash;
-    if (sendable.length) this.deps.log.info('memory offered to the main Mac', { files: sendable.length });
+    if (sentCount) this.deps.log.info('memory offered to the main Mac', { files: sentCount });
+    const unsent = new Set(offers.filter((o) => !sent.has(`${o.path}\n${o.hash}`)).map((o) => o.file));
 
+    this.live();
     let wrote = 0;
     for (const w of writes) {
+      if (unsent.has(w.file) || real(w.file) !== w.file) continue;
       const now = look(w.file);
       const still = w.expect === undefined ? now.state === 'missing' : now.state === 'text' && now.hash === w.expect;
       if (!still) continue;
@@ -563,7 +611,7 @@ export class MemorySync {
     }
     for (const d of deletes) {
       const now = look(d.file);
-      if (now.state === 'text' && now.hash === d.expect) fs.rmSync(d.file, { force: true });
+      if (now.state === 'text' && now.hash === d.expect && real(d.file) === d.file && inside(d.file, roots)) fs.rmSync(d.file, { force: true });
       delete this.manifest.wrote[d.file];
       delete this.manifest.adopted[d.file];
     }

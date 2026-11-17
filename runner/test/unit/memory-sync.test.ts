@@ -19,6 +19,12 @@ class FakeBackend {
   nextId = 1;
   // Runs inside an offer call, before it returns (an edit landing mid-request).
   duringOffer?: () => void;
+  // Offers that may wait at once (the backend's MAX_OFFERS_PER_RUNNER), and
+  // offer calls to fail outright.
+  cap = Infinity;
+  failOffers = 0;
+  // Holds memorySince's answer until released.
+  hold?: Promise<void>;
   as(owner: boolean, runnerId: string): MemoryBackend {
     return {
       owner,
@@ -40,13 +46,19 @@ class FakeBackend {
         return n;
       },
       since: async (after: number) => {
+        if (this.hold) await this.hold;
         const rows = [...this.files.values()].filter((r) => r.seq > after).sort((a, b) => a.seq - b.seq);
         return { rows: rows.slice(0, 2), more: rows.length > 2, seq: this.seq };
       },
       offer: async (files) => {
         assert.ok(!owner, "the owner's files aren't offers");
+        if (this.failOffers > 0) {
+          this.failOffers--;
+          throw new Error('network');
+        }
         for (const f of files) {
           if (this.offers.some((o) => o.runnerId === runnerId && o.path === f.path && o.hash === f.hash)) continue;
+          if (this.offers.filter((o) => o.runnerId === runnerId).length >= this.cap) throw new Error('200 offers already waiting for the main Mac');
           this.offers.push({ id: String(this.nextId++), runnerId, ...f, at: Date.now() });
         }
         this.duringOffer?.();
@@ -54,7 +66,7 @@ class FakeBackend {
       },
       offers: async () => {
         assert.ok(owner);
-        return [...this.offers];
+        return this.offers.slice(0, 20);
       },
       take: async (taken) => {
         this.offers = this.offers.filter((o) => !taken.some((t) => t.id === o.id && t.hash === o.hash));
@@ -347,4 +359,76 @@ test('a stopped runner does nothing more', async () => {
   await owner.tick();
   assert.equal(backend.files.size, 0);
   void other;
+});
+
+// Round two of the review.
+
+test('a flood of empty offers still fills the quota on the main Mac', async () => {
+  const { backend, m5, there, both, other, owner } = pair();
+  await both();
+  const dir = path.join(m5.data, 'memory-offers', 'bruce', 'memory', '~');
+  fs.mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < MAX_OFFERS_ON_DISK / 4096 + 10; i++) fs.writeFileSync(path.join(dir, `e${i}.md`), '');
+  write(path.join(there(), 'new.md'), 'learned\n');
+  await other.tick();
+  await owner.tick();
+  assert.equal(backend.offers.length, 1, 'not taken: empty files count as a block each');
+});
+
+test('a folder relinked after sync wrote there is never deleted from', async () => {
+  const { bruce, misc, there, both } = pair();
+  write(path.join(misc, 'a.md'), 'v1\n');
+  await both();
+  assert.equal(read(path.join(there(), 'a.md')), 'v1\n');
+  const outside = path.join(bruce.root, 'outside');
+  fs.renameSync(path.join(bruce.home, '.claude', 'projects'), outside);
+  fs.symlinkSync(outside, path.join(bruce.home, '.claude', 'projects'));
+  fs.rmSync(path.join(misc, 'a.md'));
+  await both();
+  assert.equal(read(path.join(outside, slugOf('~-dev-me-misc', bruce.home), 'memory', 'a.md')), 'v1\n');
+});
+
+test("more new files than the backend will hold don't stop the main Mac's memory coming down, nor get sent again", async () => {
+  const { backend, misc, there, both, other, owner, m5 } = pair();
+  backend.cap = 200;
+  write(path.join(misc, 'a.md'), 'v1\n');
+  await both();
+  for (let i = 0; i < 201; i++) write(path.join(there(), `n${i}.md`), `note ${i}\n`);
+  write(path.join(misc, 'a.md'), 'v2\n');
+  await both();
+  assert.equal(backend.offers.length, 200);
+  assert.equal(read(path.join(there(), 'a.md')), 'v2\n', 'still applied');
+  await owner.tick();
+  await other.tick();
+  await owner.tick();
+  // 20 + 20 taken, and only the one that didn't fit was sent again.
+  assert.equal(backend.offers.length, 200 - 40 + 1);
+  void m5;
+});
+
+test("a pre-existing file whose offer failed is offered on a later pass", async () => {
+  const { backend, m5, bruce, both, owner, other } = pair();
+  write(path.join(m5.home, '.claude', 'CLAUDE.md'), 'mike global\n');
+  write(path.join(bruce.home, '.claude', 'CLAUDE.md'), "bruce's own\n");
+  await owner.tick();
+  backend.failOffers = 1;
+  await other.tick();
+  assert.equal(backend.offers.length, 0);
+  await other.tick();
+  assert.deepEqual(backend.offers.map((o) => o.text), ["bruce's own\n"]);
+  assert.equal(read(path.join(bruce.home, '.claude', 'CLAUDE.md')), "bruce's own\n");
+});
+
+test('a runner stopped mid-pass writes nothing after its backend answers', async () => {
+  const { backend, misc, there, owner, other, bruce } = pair();
+  write(path.join(misc, 'a.md'), 'v1\n');
+  await owner.tick();
+  let release!: () => void;
+  backend.hold = new Promise((r) => (release = r));
+  const pass = other.tick();
+  other.stop();
+  release();
+  await pass;
+  assert.equal(read(path.join(there(), 'a.md')), undefined);
+  assert.equal(fs.existsSync(path.join(bruce.data, 'memory-sync.json')), false);
 });
