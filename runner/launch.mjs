@@ -186,6 +186,26 @@ export function launchArgs(argv) {
   return out;
 }
 
+// Calls gone() once the process `ppid` has exited, checking every couple of
+// seconds. `alive` is for tests.
+export function watchParent(ppid, gone, { everyMs = 2000, alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+} } = {}) {
+  if (!ppid || ppid <= 1) return null;
+  const timer = setInterval(() => {
+    if (alive(ppid)) return;
+    clearInterval(timer);
+    gone();
+  }, everyMs);
+  timer.unref?.();
+  return timer;
+}
+
 function log(level, msg, extra) {
   // Same line format as the runner's log (src/log.ts); launchd sends
   // stderr to the runner's log file. Written straight to the fd so a line
@@ -515,6 +535,12 @@ async function main() {
     for (const c of children) stopChild(c, stopGraceMs);
   }
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => stopAll(sig));
+  // Windows: ending the Scheduled Task (schtasks /End, Task Scheduler's End,
+  // an uninstall) kills only the conhost.exe it started, and this process
+  // and its runners lived on, so a restart left the old runner holding the
+  // port and the lock (17 Nov 2026). With no signal coming, this watches
+  // for its parent to go and stops its runners the usual way.
+  if (process.platform === 'win32') watchParent(process.ppid, () => stopAll('parent gone'));
   // If the supervisor itself goes some other way, its children don't
   // outlive it (they also stop when the IPC channel closes).
   process.on('exit', () => {

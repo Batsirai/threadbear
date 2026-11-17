@@ -79,3 +79,18 @@ test("launch.mjs takes the Windows task's --home, --port and --log, and nothing 
   assert.deepEqual(launchArgs([]), {});
   assert.deepEqual(launchArgs(['--home']), {});
 });
+
+test("launch.mjs stops its runners once the process that started it has gone (Windows' End kills only conhost)", async () => {
+  // @ts-expect-error launch.mjs has no types
+  const { watchParent } = await import('../../launch.mjs');
+  let alive = true;
+  let calls = 0;
+  const timer = watchParent(4242, () => calls++, { everyMs: 5, alive: () => alive });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls, 0);
+  alive = false;
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(calls, 1);
+  clearInterval(timer);
+  assert.equal(watchParent(1, () => calls++), null);
+});

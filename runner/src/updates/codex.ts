@@ -167,12 +167,17 @@ export class CodexCopies {
     fs.rmSync(partial, { recursive: true, force: true });
     let output = '';
     try {
-      const env = { ...(this.o.env ?? process.env) };
+      const env: NodeJS.ProcessEnv = { ...(this.o.env ?? process.env) };
+      // Windows usually spells it Path, and a copy of the environment is
+      // case-sensitive: read whichever it is and put it back as PATH alone.
+      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
+      const inherited = pathKey ? env[pathKey] : undefined;
+      for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH') delete env[k];
       // Public npm, whatever ~/.npmrc says: a company registry's expired token
       // gave E401 here, and nothing in tools/codex pins it like runner/.npmrc.
       // The runner's own Node first, so npm and the package's scripts run on it.
       // (On Windows npmPath is npm-cli.js, deep in Node's folder.)
-      env.PATH = `${/\.[cm]?js$/i.test(this.o.npmPath) ? path.dirname(process.execPath) : path.dirname(this.o.npmPath)}${path.delimiter}${env.PATH ?? ''}`;
+      env.PATH = `${/\.[cm]?js$/i.test(this.o.npmPath) ? path.dirname(process.execPath) : path.dirname(this.o.npmPath)}${path.delimiter}${inherited ?? ''}`;
       const npm = await this.o.exec(...runOnNode(this.o.npmPath, ['install', '--prefix', partial, '--no-save', '--no-fund', '--no-audit', '--registry', 'https://registry.npmjs.org/', `${CODEX_PACKAGE}@${version}`]), {
         cwd: this.dir,
         env,
@@ -288,8 +293,12 @@ export class CodexCopies {
     for (const v of versions) {
       if (keepSet.has(v)) continue;
       const folder = path.join(this.dir, v);
-      const forms = [folder, realpath(folder)];
-      const used = inUse.some((b) => forms.some((f) => b === f || b.startsWith(f + path.sep))) || forms.some((f) => processArgs.includes(f + path.sep) || processArgs.split('\n').some((l) => l.trim() === f));
+      // Windows paths are compared without case (a command line can say
+      // c:\users where the folder is C:\Users).
+      const fold = (p: string) => ((this.o.platform ?? process.platform) === 'win32' ? p.toLowerCase() : p);
+      const forms = [folder, realpath(folder)].map(fold);
+      const args = fold(processArgs);
+      const used = inUse.some((b) => forms.some((f) => fold(b) === f || fold(b).startsWith(f + path.sep))) || forms.some((f) => args.includes(f + path.sep) || args.split(/\r?\n/).some((l) => l.trim() === f));
       if (used) continue;
       fs.rmSync(folder, { recursive: true, force: true });
       removed.push(v);

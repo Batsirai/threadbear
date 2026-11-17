@@ -78,6 +78,9 @@ export function resolveCodexBinary(start: string, execPath: string = process.exe
 // The real path of @openai/codex's bin/codex.js for `start`, or null.
 function findLauncher(start: string): string | null {
   const candidates = [start];
+  // npm's codex.cmd on Windows (a codexPath set by hand) is a batch file
+  // Node can't start without a shell; the package sits beside it.
+  if (/\.cmd$/i.test(start)) candidates.unshift(path.join(path.dirname(start), 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
   try {
     if (fs.statSync(start).isDirectory()) {
       candidates.unshift(
