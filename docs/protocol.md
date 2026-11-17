@@ -3132,6 +3132,15 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   reaches the app. It can't tell whether the turn tried, as turns are busy with
   other work, so it asks; and it can't see a hand-over written as plain prose
   or with no such answer on the card.
+- **A card in plain words.** A card with answers to pick from is refused once
+  a turn too, with an error result that starts `Not ended: read this card as
+  the user will` (`plainCardNudge`), asking the agent to reread its question,
+  labels and `does` lines as someone who hasn't seen its working or the files
+  it links, and reword any name it coined. Called again, it's taken as it is.
+  A card that links a show_options review (`review:`) is left alone, as
+  lettered mockups are fine there. Nothing reaches the app. It's a note, not
+  a line in the description: in replays of cards Mike couldn't follow, the
+  line changed nothing and the note rewrote every one.
 - **Bullet replies off.** `Settings.bulletReplies: false` (runner.json
   only since 2 Nov; Mike, 30 Oct 2026: he liked the folded working but not always
   the bullets in place of the agent's message). `end_turn`'s description

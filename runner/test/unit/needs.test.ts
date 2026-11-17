@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersistedEvent } from '../../src/protocol.ts';
-import { offersToTakeItBack, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
+import { offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
 import { END_TURN_TOOL } from '../../src/needs.ts';
 import { SERVER_NAME } from '../../src/threadbear-mcp.ts';
 import { ClaudeNormalizer, fileContext } from '../../src/adapters/claude/normalize.ts';
@@ -434,6 +434,27 @@ test('every form of end_turn says how to write a follow-up row', () => {
       assert.doesNotMatch(d, /about 8 words/);
     }
   }
+});
+
+// Mike couldn't follow cards whose buttons were the agent's own names for
+// the options ("B: thin machine", 8a971407, 17 Nov). A line in the
+// description did nothing in replays; a once-a-turn note did
+// (~/dev/me/misc/end-turn-eval/asks), so it's that, and not the description.
+test('a card with answers to pick from gets the plain-card note, unless it opens a review', () => {
+  assert.ok(wantsPlainCard([{ action: 'Which design?', options: ['B: thin machine', 'C: no machine'] }]));
+  assert.ok(wantsPlainCard([{ action: 'Done?' }, { action: 'Deploy?', options: ['Deploy it', 'Hold off'] }]));
+  assert.ok(!wantsPlainCard([{ action: 'Run claude setup-token on the Hetzner box.' }]), 'a step with no answers');
+  assert.ok(!wantsPlainCard([]));
+  // Lettered mockups in a show_options review are fine as they are.
+  assert.ok(!wantsPlainCard([{ action: 'Which thumbnail?', options: ['A: glitch', 'B: scanner'], links: [{ title: 'Compare them', url: 'review:abc-123' }] }]));
+  assert.ok(wantsPlainCard([{ action: 'Which design?', options: ['B: thin machine'], links: [{ title: 'Read the assessment', url: '/Users/x/assessment.md' }] }]));
+  const note = plainCardNudge();
+  assert.ok(note.startsWith(PLAIN_CARD_NUDGE));
+  assert.match(note, /call end_turn again as it was/);
+  assert.match(note, /once a turn/);
+  for (const provider of ['claude', 'codex'] as const)
+    for (const [bullets, oneReply] of [[true, false], [false, false], [false, true]] as const)
+      assert.doesNotMatch(endTurnDescription(provider, bullets, oneReply), /read this card as the user will/, 'not standing context');
 });
 
 test('every form of end_turn says to try a step first', () => {

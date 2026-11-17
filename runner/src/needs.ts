@@ -525,6 +525,10 @@ export function triedFirstNudged(events: PersistedEvent[]): boolean {
   return nudgedSince(events, TRY_FIRST_NUDGE);
 }
 
+export function plainCardNudged(events: PersistedEvent[]): boolean {
+  return nudgedSince(events, PLAIN_CARD_NUDGE);
+}
+
 // Whether a note starting `note` has been sent since this turn began.
 function nudgedSince(events: PersistedEvent[], note: string): boolean {
   let start = 0;
@@ -535,6 +539,30 @@ function nudgedSince(events: PersistedEvent[], note: string): boolean {
     }
   }
   return events.slice(start).some((e) => e.type === 'tool.result' && typeof e.text === 'string' && e.text.startsWith(note));
+}
+
+// What end_turn says, once a turn, to a card with answers to pick from. Mike
+// couldn't follow cards five times from 15 to 17 Nov 2026: "What's a thin
+// machine? What's no machine? What's a mirror? Apple?" (8a971407), where the
+// buttons were "B: thin machine", "C: no machine", "A: mirror Apple", the
+// agent's names from an assessment file only the card's link opened. A line
+// in the description like NEXT_ROW did nothing in replays of those turns: the
+// same three labels came back 4 times in 4, and a cold reader found the
+// agent's own names on 0.73 of cards with it against 0.36 without. This note
+// rewrote them all 3 times ("Credits only", "No machine", "Copy Apple's
+// states"), took those names to 0.11, and a cold reader could pick from the
+// card alone 0.78 of the time against 0.55. Cards that read plainly came back
+// much the same (~/dev/me/misc/end-turn-eval/asks). Nothing in the wording can
+// be checked by rule: lettered labels are common and fine for mockups in a
+// show_options review, and a card is written before the reply it could be
+// checked against. A card that opens a review is left alone.
+export const PLAIN_CARD_NUDGE = 'Not ended: read this card as the user will.';
+export function plainCardNudge(): string {
+  return `${PLAIN_CARD_NUDGE} They read it first, often on their phone, before your reply or any file it links, with this thread forgotten. Would they know what each question and button means? If a label or does uses a name you or a file coined ("plan B", "thin machine"), or a term they wouldn't use, reword it to say what that choice does in their words, then call end_turn again. If it already reads plainly, call end_turn again as it was. This note comes once a turn.`;
+}
+export function wantsPlainCard(asks: Ask[]): boolean {
+  if (asks.some((a) => a.links?.some((l) => l.url.startsWith('review:')))) return false;
+  return asks.some((a) => (a.options?.length ?? 0) > 0);
 }
 
 // A change only Mike can judge, left as a soft line at the end of a done

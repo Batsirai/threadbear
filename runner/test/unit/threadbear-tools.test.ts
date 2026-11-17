@@ -10,7 +10,7 @@ import { Relay, type RelayRow } from '../../src/relay.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { RemoteThreads } from '../../src/thread-index.ts';
-import { hasDeadEnd, needsFromTool } from '../../src/needs.ts';
+import { hasDeadEnd, needsFromTool, PLAIN_CARD_NUDGE } from '../../src/needs.ts';
 import { toPhoneAsk } from '../../src/sync.ts';
 import { CodexTools, type ToolDefinition } from '../../src/adapters/codex/tools.ts';
 import { toolTitle } from '../../src/tools.ts';
@@ -26,7 +26,7 @@ function start(h: ReturnType<typeof makeHarness>, text = 'Fix the tests', extra:
 function tools(h: ReturnType<typeof makeHarness>, selfId: string, bulletReplies?: () => boolean, oneReply?: () => boolean) {
   // end_turn's wait for its own call to land is counted, not slept.
   const slept: number[] = [];
-  const list = buildThreadbearTools(h.runner, selfId, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, {
+  const list = buildThreadbearTools(h.runner, selfId, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { plainCardNote: false,
     bulletReplies,
     oneReply,
     sleep: async (ms) => {
@@ -1191,7 +1191,7 @@ test('a repeat end_turn cannot archive a turn that is waiting on Alex', async ()
 test("Codex's summary is the reply, and its final answer after it doesn't take over the preview", async () => {
   const h = makeHarness();
   const { thread, s } = start(h);
-  const t = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { provider: 'codex' }).find((x) => x.name === 'end_turn')!;
+  const t = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, provider: 'codex' }).find((x) => x.name === 'end_turn')!;
   toolCall(s, 'e1', END_TURN, { summary: ['Fixed it.'] });
   const r = (await t.handler({ summary: ['Fixed it.'] } as never, {})) as { content: { text: string }[]; isError?: boolean };
   assert.equal(r.isError, undefined);
@@ -1327,6 +1327,44 @@ test('end_turn asks once for a try at a step a card offers to take back, in both
   }
 });
 
+// The plain-card note (needs.ts, plainCardNudge): on by default, once a turn.
+test('end_turn asks once for a card with answers to be read as the user will, in both forms', async () => {
+  const forms = [
+    { oneReply: true, card: { asks: [{ question: "Which design for Let's Build It's Apple subscriptions?", options: [{ label: 'B: thin machine' }, { label: 'C: no machine' }] }] }, step: { asks: [{ question: 'Run claude setup-token on the Hetzner box.' }] } },
+    { oneReply: false, card: { summary: ['Assessed it.'], asks: [{ action: 'Which design?', why: 'Three ways to go.', options: ['B: thin machine', 'C: no machine'] }] }, step: { summary: ['Built it.'], asks: [{ action: 'Run claude setup-token on the Hetzner box.', why: 'The proxy needs it.' }] } },
+  ];
+  const endTurnOf = (h: ReturnType<typeof makeHarness>, id: string, oneReply: boolean) => {
+    const t = buildThreadbearTools(h.runner, id, Date.now, undefined, undefined, undefined, { oneReply: () => oneReply, sleep: async () => undefined }).find((x) => x.name === 'end_turn')!;
+    return async (args: Record<string, unknown>) => {
+      const r = (await t.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
+      return { text: r.content.map((c) => c.text).join('\n'), error: Boolean(r.isError) };
+    };
+  };
+  for (const { oneReply, card, step } of forms) {
+    const h = makeHarness();
+    const { thread, s } = start(h);
+    s.text('m1', 'Here are the three designs.');
+    const endTurn = endTurnOf(h, thread.id, oneReply);
+    toolCall(s, 'e1', END_TURN, card);
+    const refused = await endTurn(card);
+    assert.equal(refused.error, true);
+    assert.ok(refused.text.startsWith(PLAIN_CARD_NUDGE), refused.text);
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: false, text: refused.text, truncated: false, images: [] } });
+    // Once a turn: called again as it was, the card stands.
+    toolCall(s, 'e2', END_TURN, card);
+    const taken = await endTurn(card);
+    assert.equal(taken.error, false, taken.text);
+
+    // A step with nothing to pick is never held up.
+    const other = makeHarness();
+    const o = start(other);
+    o.s.text('m1', 'Built it.');
+    toolCall(o.s, 'e1', END_TURN, step);
+    const fine = await endTurnOf(other, o.thread.id, oneReply)(step);
+    assert.equal(fine.error, false, fine.text);
+  }
+});
+
 test('bullet replies off: bullets alone are refused, and the summary gives way to the message', async () => {
   const h = makeHarness(undefined, { bulletReplies: false });
   const { thread, s } = start(h);
@@ -1372,7 +1410,7 @@ test('bullet replies off: a message that came only as narration is asked for aga
 test('bullet replies off: Codex is asked for its whole final answer', async () => {
   const h = makeHarness(undefined, { bulletReplies: false });
   const { thread } = start(h);
-  const list = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { provider: 'codex', bulletReplies: () => false });
+  const list = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, provider: 'codex', bulletReplies: () => false });
   const t = list.find((x) => x.name === 'end_turn')!;
   const r = (await t.handler({ summary: ['Fixed it.'] } as never, {})) as { content: { text: string }[] };
   assert.equal(r.content[0].text, 'Noted. Now write your final answer: it ends the turn.');
@@ -1444,7 +1482,7 @@ test('bullets after a message: end_turn says stop, and text after it is dropped'
 test("Codex's end_turn comes before the final answer: never refused, and the answer after it is kept", async () => {
   const h = makeHarness();
   const { thread, s } = start(h);
-  const t = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { provider: 'codex' }).find((x) => x.name === 'end_turn')!;
+  const t = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, provider: 'codex' }).find((x) => x.name === 'end_turn')!;
   assert.match(t.description, /just before your final answer/);
   assert.doesNotMatch(t.description, /after your final message/);
   toolCall(s, 'b1', 'Bash', { command: 'gh pr view 384' });
@@ -1463,7 +1501,7 @@ test("Codex's end_turn comes before the final answer: never refused, and the ans
 test("A Codex thread in ask mode ends its turn and reads without asking, and asks before changing anything", async () => {
   const h = makeHarness();
   const { thread } = start(h);
-  const list = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { provider: 'codex', sleep: async () => {} });
+  const list = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, provider: 'codex', sleep: async () => {} });
   const asked: string[] = [];
   const codex = new CodexTools(list as ToolDefinition[], {
     requestApproval: async (r) => {
@@ -1490,7 +1528,7 @@ test("A Codex thread's end_turn is answered in the form the thread was given, wh
   const h = makeHarness();
   const { thread } = start(h);
   const call = async (oneReply: boolean, args: Record<string, unknown>) => {
-    const list = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { provider: 'codex', oneReply: () => oneReply, sleep: async () => {} });
+    const list = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, provider: 'codex', oneReply: () => oneReply, sleep: async () => {} });
     const codex = new CodexTools(list as ToolDefinition[], { requestApproval: async () => ({ decision: 'allow' }), cwd: () => '/tmp', mode: () => 'full', rules: () => [], addRules: () => {} });
     const r = await codex.call({ threadId: 'n', turnId: 't', callId: 'c', namespace: 'threadbear', tool: 'end_turn', arguments: args }, { fromChild: false, signal: new AbortController().signal });
     return { ok: r.success, text: r.contentItems.map((c) => ('text' in c ? c.text : '')).join('') };
@@ -1524,7 +1562,7 @@ test("A Codex thread's end_turn is answered in the form the thread was given, wh
     assert.match(r.text, /asks\[0\]\.why/);
   }
   // A new thread is only shown the setting's form.
-  const shown = (oneReply: boolean) => buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { provider: 'codex', oneReply: () => oneReply }).find((x) => x.name === 'end_turn')!.description;
+  const shown = (oneReply: boolean) => buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, provider: 'codex', oneReply: () => oneReply }).find((x) => x.name === 'end_turn')!.description;
   assert.notEqual(shown(true), shown(false));
 });
 
@@ -1559,6 +1597,16 @@ function mcpClient(h: ReturnType<typeof makeHarness>, selfId: string, oneReply: 
   };
 }
 
+// The plain-card note (needs.ts) comes once a turn to a card with answers to
+// pick from; these tests are about other things, so they answer it first, as
+// an agent does, by calling end_turn again.
+async function pastPlainCardNote(s: ReturnType<typeof start>['s'], endTurn: (a: Record<string, unknown>) => Promise<{ text: string; error: boolean }>, input: Record<string, unknown>) {
+  toolCall(s, 'e0', END_TURN, input);
+  const r = await endTurn(input);
+  assert.ok(r.text.startsWith(PLAIN_CARD_NUDGE), r.text);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e0', ok: false, text: r.text, truncated: false, images: [] } });
+}
+
 const OLD_ASK = { summary: ['Worked out the story.'], needs: 'you', asks: [{ action: 'Which story should be the spine?', why: "Once you pick, I'll build it.", options: ['No state', 'One database'], suggested: 0 }] };
 
 test('A Claude session on the older end_turn, with its message written, is taken as it is, under one reply', async () => {
@@ -1566,6 +1614,7 @@ test('A Claude session on the older end_turn, with its message written, is taken
   const { thread, s } = start(h);
   const mcp = mcpClient(h, thread.id, true);
   s.text('m1', 'Here is the whole story, as the old description said to write it first.');
+  await pastPlainCardNote(s, mcp.endTurn, OLD_ASK);
   toolCall(s, 'e1', END_TURN, OLD_ASK);
   const r = await mcp.endTurn(OLD_ASK);
   assert.equal(r.error, false, r.text);
@@ -1590,6 +1639,7 @@ test('A Claude session on the older end_turn with no message yet is asked for it
   const mcp = mcpClient(h, thread.id, true);
   toolCall(s, 'b1', 'Bash', { command: 'npm test' });
   toolResult(s, 'b1');
+  await pastPlainCardNote(s, mcp.endTurn, OLD_ASK);
   toolCall(s, 'e1', END_TURN, OLD_ASK);
   const r = await mcp.endTurn(OLD_ASK);
   assert.equal(r.error, false, r.text);
@@ -1616,6 +1666,7 @@ test('A Claude session on the one-reply end_turn, with One reply off, writes its
   assert.equal(refused.error, true);
   assert.match(refused.text, /Please write the whole answer as ordinary text/);
   s.text('m1', 'Three stories, here they are.');
+  await pastPlainCardNote(s, mcp.endTurn, input);
   toolCall(s, 'e2', END_TURN, input);
   const r = await mcp.endTurn(input);
   assert.equal(r.error, false, r.text);
@@ -1664,7 +1715,7 @@ test("end_turn waits for its own call to land, and takes a call that never lands
   const { call, slept } = tools(h, thread.id);
   // The text and the call arrive while the handler is waiting.
   let polls = 0;
-  const late = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, {
+  const late = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false,
     sleep: async () => {
       if (++polls === 3) {
         s.text('m1', 'All done.');
@@ -1985,7 +2036,7 @@ function farRelay(opts: { takes?: boolean } = {}) {
 }
 
 function toolsWith(h: ReturnType<typeof makeHarness>, selfId: string, remote?: RemoteControl) {
-  const list = buildThreadbearTools(h.runner, selfId, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => remote, sleep: async () => undefined });
+  const list = buildThreadbearTools(h.runner, selfId, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { plainCardNote: false, remote: () => remote, sleep: async () => undefined });
   return async (name: string, args: Record<string, unknown> = {}) => {
     const r = (await list.find((x) => x.name === name)!.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
     return { text: r.content.map((c) => c.text).join('\n'), error: Boolean(r.isError) };
@@ -2105,7 +2156,7 @@ test("another runner's thread by its whole id doesn't list every thread here", a
       return typeof v === 'function' ? v.bind(target) : v;
     },
   });
-  const tools = buildThreadbearTools(counted, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => f.control, sleep: async () => undefined });
+  const tools = buildThreadbearTools(counted, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { plainCardNote: false, remote: () => f.control, sleep: async () => undefined });
   const send = tools.find((x) => x.name === 'send_message')!;
   lists = 0;
   const r = (await send.handler({ threadId: f.FAR, text: 'Both spikes run.' } as never, {})) as { content: { text: string }[]; isError?: boolean };
@@ -2125,7 +2176,7 @@ test('a whole id whose lookup fails for another reason says so, not "No thread"'
       return typeof v === 'function' ? v.bind(target) : v;
     },
   });
-  const tools = buildThreadbearTools(flaky, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => farRelay().control, sleep: async () => undefined });
+  const tools = buildThreadbearTools(flaky, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { plainCardNote: false, remote: () => farRelay().control, sleep: async () => undefined });
   const r = (await tools.find((x) => x.name === 'send_message')!.handler({ threadId: other.id, text: 'hi' } as never, {})) as { content: { text: string }[]; isError?: boolean };
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /try again in a moment/);
@@ -2294,7 +2345,7 @@ test("a short id is found on the other runner of a handover once it answers, and
   };
   const router = new ThreadRouter(h.runner, () => elsewhere);
   let slept = 0;
-  const list = buildThreadbearTools(router, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { sleep: async () => void slept++ });
+  const list = buildThreadbearTools(router, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { plainCardNote: false, sleep: async () => void slept++ });
   const send = async (threadId: string) => {
     const r = (await list.find((x) => x.name === 'send_message')!.handler({ threadId, text: 'Merged.' } as never, {})) as { content: { text: string }[]; isError?: boolean };
     return { text: r.content.map((c) => c.text).join('\n'), error: Boolean(r.isError) };
@@ -2351,7 +2402,7 @@ test("a short id here is found when the list of other Macs' threads never comes 
   const other = start(h, 'Answerer').thread;
   const router = new ThreadRouter(h.runner, () => undefined);
   const stuck = { list: () => new Promise<never>(() => {}), call: async () => { throw new Error('unused'); } };
-  const list = buildThreadbearTools(router, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => stuck, sleep: async () => undefined });
+  const list = buildThreadbearTools(router, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { plainCardNote: false, remote: () => stuck, sleep: async () => undefined });
   const r = (await list.find((x) => x.name === 'read_thread')!.handler({ threadId: other.id.slice(0, 8) } as never, {})) as { content: { text: string }[]; isError?: boolean };
   assert.equal(Boolean(r.isError), false, r.content[0].text);
   assert.match(r.content[0].text, /Answerer/);
