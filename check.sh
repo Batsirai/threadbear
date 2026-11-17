@@ -479,6 +479,11 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
     # imports can't break it.
     if [ "$QUICK" = 1 ] && needed '^desktop/|^app/Sources/Threadbear/Resources/(Art|Rich)/|^features/support/sample\.png$'; then
       cargo_step "desktop app check" check --locked -p threadbear-gpui --features automation --all-targets
+      # And as it's installed (install-app.sh, stage-update.sh: frame-stats,
+      # no automation), so code that slips out of its automation cfg fails
+      # here rather than in self-update. Two forks' updates were stuck on
+      # just that (emilsbauga's and TeeLusk's, 14 to 16 Nov).
+      cargo_step "desktop app check (as installed)" check --locked -p threadbear-gpui --features frame-stats
     fi
     [ "$QUICK" = 1 ] || cargo_step "desktop build" check --locked --workspace --all-targets
   fi
