@@ -77,9 +77,7 @@ if [ "${1:-}" = "--on-host" ]; then
   rm -rf "$src" "$TMPDIR"
   # Anything a run cut short left (a copy that never got the lock, logs
   # nobody fetched) goes after half a day.
-  # -H: $base may be a link to a bigger disk (move-host-cache.sh), and find
-  # doesn't look inside a link it's given unless told to.
-  find -H "$base/runs" "$base" -mindepth 1 -maxdepth 1 \( -name '[0-9]*' -o -name 'tmp-*' -o -name 'kept-*' -o -name 'shots-*' -o -name 'check-*.pid*' \) \
+  find "$base/runs" "$base" -mindepth 1 -maxdepth 1 \( -name '[0-9]*' -o -name 'tmp-*' -o -name 'kept-*' -o -name 'shots-*' -o -name 'check-*.pid*' \) \
     -mmin +720 -exec rm -rf {} + 2>/dev/null
   # A checkout's mirror that hasn't sent a run for a week (a removed worktree).
   find "$base/mirror" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null
@@ -523,10 +521,7 @@ host_is_low() {
 # The copy's folders are made private: a host whose umask is 002 (the cloud
 # box) left them group-writable, and the private-dir tests (ios/scripts/
 # private-dir.mjs) refuse a folder under one of those (9 Nov).
-# Exit 3: the folder is a link (move-host-cache.sh) to a disk that isn't
-# mounted: Tinker Desk's external SSD mounts only once someone logs in to its
-# desktop. Said as that, not as a full or unreachable host.
-probe='{ [ ! -L ~/'"$BASE_REL"' ] || [ -d ~/'"$BASE_REL"' ] || exit 3; } && mkdir -p ~/'"$BASE_REL"'/runs && chmod go-w ~/'"$BASE_REL"' ~/'"$BASE_REL"'/runs && cd ~/'"$BASE_REL"' && pwd && uname -s && if [ "$(uname -s)" = Darwin ]; then /usr/bin/lockf -t 0 -k lock true 2>/dev/null && echo free || echo busy; else flock -n lock true 2>/dev/null && echo free || echo busy; fi && '"$free_cmd"
+probe='mkdir -p ~/'"$BASE_REL"'/runs && chmod go-w ~/'"$BASE_REL"' ~/'"$BASE_REL"'/runs && cd ~/'"$BASE_REL"' && pwd && uname -s && if [ "$(uname -s)" = Darwin ]; then /usr/bin/lockf -t 0 -k lock true 2>/dev/null && echo free || echo busy; else flock -n lock true 2>/dev/null && echo free || echo busy; fi && '"$free_cmd"
 # Hosts with no room, as "<host> has <n> GiB free": those this choosing passed
 # over, and those whose copy failed for lack of it, which aren't asked again.
 LOW="" LOW_COPY=""
@@ -574,7 +569,6 @@ choose() {
       out="$(watched "$h" "${SSH[@]}" "$h" "$probe" 2>/dev/null)"
       rc=$?
       [ "$rc" != 125 ] || over_time busy
-      [ "$rc" != 3 ] || break
       [ "$rc" != 0 ] && [ "$rc" != 124 ] && [ "$rc" != 255 ] && [ "$tried_room" = 0 ] || break
       tried_room=1
       kb="$(watched "$h" "${SSH[@]}" "$h" "cd ~ && $free_cmd" 2>/dev/null)" && low_on_room "$kb" || break
@@ -582,10 +576,6 @@ choose() {
     done
     if [ "$rc" = 124 ]; then
       dropped "$h"
-      continue
-    fi
-    if [ "$rc" = 3 ]; then
-      cant_run "$h" "its ~/$BASE_REL is a link to a disk that isn't there (an external disk not mounted until someone logs in to its desktop?)"
       continue
     fi
     if [ "$rc" != 0 ]; then

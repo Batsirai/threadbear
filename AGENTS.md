@@ -342,9 +342,11 @@ if `tb` isn't found (an older runner, or outside a thread), use
   (`scripts/check-remote.sh`); one run at a time, so it may say it's
   waiting for another thread's. A host short of disk is passed over (8 GiB
   free for Swift, 2 otherwise), and if none has room the check fails and
-  names them. Tinker Desk keeps these caches on its external SSD
-  (`scripts/move-host-cache.sh`), so a check there fails with that disk
-  unplugged or before anyone logs in to its desktop. A host that stops answering partway is dropped for the next
+  names them. Tinker Desk's GPUI build folder (`~/.cache/threadbear-check/gpui`)
+  is a volume on its external SSD mounted there, not a link (remote.sh
+  refuses links on that path). A `--desk` run that sits with no output may
+  be waiting on macOS asking Desk Runner to reach a removable volume:
+  `desk "screencapture -x /tmp/s.png"` shows the screen (17 Nov). A host that stops answering partway is dropped for the next
   one. If none can be reached it runs here
   at low priority. `--e2e` always runs here, as it needs the claude login. It skips the deploy tests and BearDock's
   unless something they cover changed from main (`--all` runs them
