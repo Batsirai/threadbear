@@ -14,6 +14,8 @@ const ICONS = {
   "qr-code": "QrCode", "coins": "Coins", "code": "Code", "cursor-click": "CursorClick", "wrench": "Wrench",
   "user-circle": "UserCircle", "git-fork": "GitFork", "desktop": "Desktop", "copy": "Copy", "check": "Check",
   "columns": "Columns", "books": "Books",
+  // The platforms under the hero's copy button.
+  "apple-logo": "AppleLogo", "windows-logo": "WindowsLogo", "linux-logo": "LinuxLogo",
   // The docs pages' own icons (site/docs-icons.json).
   "chats-circle": "ChatsCircle", "paper-plane-tilt": "PaperPlaneTilt", "archive": "Archive", "push-pin": "PushPin",
   "stack": "Stack", "clock": "Clock", "users-three": "UsersThree", "keyboard": "Keyboard", "flask": "Flask",

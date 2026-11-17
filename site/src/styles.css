@@ -115,6 +115,11 @@ code { font-family: var(--mono); font-size: .875em; }
 .nav-links a:hover { background: rgba(31, 28, 24, .05); color: var(--ink); }
 .nav-links a:active { transform: scale(.98); }
 .nav-links a[aria-current="page"] { background: var(--well); color: var(--ink); }
+/* What's new's dot (site.js hides it once you've seen the newest release). Blue, as it's the one
+   thing on the bar saying "look here", the way the app marks unread threads. */
+.whats-new { position: relative; }
+.new-dot { position: absolute; top: 7px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #2f7cf6; box-shadow: 0 0 0 2px var(--card); }
+.whats-new.seen .new-dot, .whats-new[aria-current="page"] .new-dot { display: none; }
 
 /* Buttons (B1, B2): 8 px by 12 px, 16 px semibold, or 14 px in the header. */
 .btn {
@@ -183,6 +188,10 @@ code { font-family: var(--mono); font-size: .875em; }
 .corner svg { width: 100%; height: 100%; display: block; fill: var(--ink); }
 .corner.github { right: 0; clip-path: polygon(0 0, 100% 0, 100% 100%); }
 .corner.github .octo { fill: var(--page); }
+/* Convex's corner, top left: the GitHub one's mirror image, with the mark in the page colour. */
+.corner.convex { left: 0; clip-path: polygon(0 0, 100% 0, 0 100%); }
+.corner.convex .convex-mark { position: absolute; top: 7px; left: 7px; width: 30px; height: 30px; fill: var(--page); transition: transform 300ms var(--ease); }
+.corner.convex:hover .convex-mark { transform: rotate(-20deg); }
 .corner.github:hover .arm { animation: octo-wave 560ms var(--ease); transform-origin: 130px 106px; }
 @keyframes octo-wave { 0%, 100% { transform: rotate(0) } 20%, 60% { transform: rotate(-25deg) } 40%, 80% { transform: rotate(10deg) } }
 
@@ -266,8 +275,11 @@ a.appstore:active { transform: scale(.98); }
 .hero-sub { font-size: 18px; line-height: 28px; color: var(--body); max-width: 700px; margin: var(--s-100) auto 0; }
 .hero-cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: var(--s-100) var(--s-300); margin-top: var(--s-300); }
 .risk { margin-top: var(--s-100); font-size: 14px; line-height: 20px; font-weight: 500; color: var(--ink-soft); }
-.peek { max-width: 640px; margin: var(--s-200) auto 0; }
-.peek .prompt-box { box-shadow: var(--lift); }
+/* The platforms, as logos with "Free" under them (build.mjs platforms()). */
+.platforms { display: flex; flex-direction: column; align-items: center; margin-top: var(--s-200); }
+.platform-logos { display: flex; gap: var(--s-200); color: var(--ink-soft); }
+.platform svg { width: 22px; height: 22px; display: block; }
+.platforms .risk { margin-top: var(--s-50); }
 
 /* The player: the features down the left, the clip on the right (scripts/build.mjs's SLIDES,
    site.js plays it). */
@@ -423,7 +435,7 @@ a.video-card:hover .video-play { scale: 1.06; }
    the playing one filling as its clip runs), and its line moves under the clip. */
 @media (max-width: 860px) {
   /* The corner sat on the nav pill; the menu links the code instead. */
-  .corner.github { display: none; }
+  .corner.github, .corner.convex { display: none; }
   .hero { padding: var(--s-300) var(--s-200) 0; }
   .hero-title { font-size: 36px; line-height: 40px; }
   .hero-sub { font-size: 16px; line-height: 24px; }

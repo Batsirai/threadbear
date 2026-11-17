@@ -16,14 +16,12 @@
       <h1 id="hero-title" class="hero-title">The agent app you can patch yourself</h1>
       <p class="hero-sub">A Mac app for running your Claude Code and Codex threads. You get all of the source, so when something bugs you, you (or more likely your agent) can change it.</p>
       <!-- Installing is a prompt for your own agent, so the hero gives you that rather than a
-           Fork button (Mike, 5 Nov). The prompt itself is printed once, in #get: "See the prompt"
-           goes there without JavaScript, and with it opens a peek at the same text right here. -->
+           Fork button (Mike, 5 Nov). The prompt itself is printed once, in #get. Mike took the
+           "See the prompt" link beside it out on 17 Nov. -->
       <div class="hero-cta">
         {{copyButton}}
-        <a class="link-btn" href="#get" data-peek aria-controls="peek" aria-expanded="false">See the prompt</a>
       </div>
-      <div class="peek" id="peek" hidden><pre class="prompt-box"><code></code></pre></div>
-      <p class="risk">Free, for Macs with Apple silicon.</p>
+      {{platforms}}
 
       <!-- The player: a clip per feature in the launch video's order, the list down the left
            (SLIDES in scripts/build.mjs, the playing in site.js). -->
@@ -137,8 +135,8 @@
     <section class="block closing reveal" aria-labelledby="closing-title">
       <img class="bear-wave" src="/img/bear-wave.webp" alt="" width="280" height="378" loading="lazy" decoding="async">
       <h2 id="closing-title" class="closing-title">If you're gonna spend all day in one app, you want it exactly how you want it</h2>
-      <p class="risk">Free, for Macs with Apple silicon.</p>
       <div class="closing-cta">
         {{copyButton}}
       </div>
+      {{platforms}}
     </section>

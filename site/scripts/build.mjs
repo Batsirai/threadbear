@@ -216,6 +216,32 @@ function copyButton() {
   return `<button type="button" class="btn btn-lg copy-prompt">${icon("copy")}${icon("check")}<span>Copy the install prompt</span></button>`;
 }
 
+/**
+ * What it runs on, as logos, with "Free" under them. The GPUI app is one app for all three
+ * (docs/gpui-port.md), so this replaced "Free, for Macs with Apple silicon." (Mike, 17 Nov).
+ */
+function platforms() {
+  const logo = (name, label) => `<span class="platform" title="${label}">${icon(name)}<span class="visually-hidden">${label}</span></span>`;
+  return `<div class="platforms">
+        <div class="platform-logos">${logo("apple-logo", "Mac")}${logo("windows-logo", "Windows")}${logo("linux-logo", "Linux")}</div>
+        <p class="risk">Free</p>
+      </div>`;
+}
+
+// Convex's mark (the three swooshes), from convex.dev's logo, coloured by CSS.
+const CONVEX_MARK = `<g transform="matrix(1,0,0,1,-129.225,-127.948)"><g transform="matrix(4.16667,0,0,4.16667,0,0)"><g transform="matrix(1,0,0,1,86.6099,107.074)"><path d="M0,-6.544C13.098,-7.973 25.449,-14.834 32.255,-26.287C29.037,2.033 -2.48,19.936 -28.196,8.94C-30.569,7.925 -32.605,6.254 -34.008,4.088C-39.789,-4.83 -41.69,-16.18 -38.963,-26.48C-31.158,-13.247 -15.3,-5.131 0,-6.544"/></g><g transform="matrix(1,0,0,1,47.1708,74.7779)"><path d="M0,-2.489C-5.312,9.568 -5.545,23.695 0.971,35.316C-21.946,18.37 -21.692,-17.876 0.689,-34.65C2.754,-36.197 5.219,-37.124 7.797,-37.257C18.41,-37.805 29.19,-33.775 36.747,-26.264C21.384,-26.121 6.427,-16.446 0,-2.489"/></g><g transform="matrix(1,0,0,1,91.325,66.4152)"><path d="M0,-14.199C-7.749,-24.821 -19.884,-32.044 -33.173,-32.264C-7.482,-43.726 24.112,-25.143 27.557,2.322C27.877,4.876 27.458,7.469 26.305,9.769C21.503,19.345 12.602,26.776 2.203,29.527C9.838,15.64 8.889,-1.328 0,-14.199"/></g></g></g>`;
+
+/**
+ * Convex's logo in the top left corner, the GitHub corner's twin, to say the backend is Convex
+ * (like Video to Markdown's ConvexCorner). The mark is Convex's, drawn in the page colour.
+ */
+function convexCorner() {
+  return `<a class="corner convex" href="https://convex.dev" target="_blank" rel="noopener noreferrer" aria-label="Made with Convex" title="Made with Convex">
+    <svg viewBox="0 0 250 250" aria-hidden="true"><path d="M0,0 L250,0 L0,250 Z"/></svg>
+    <svg class="convex-mark" viewBox="0 0 367 370" aria-hidden="true">${CONVEX_MARK}</svg>
+  </a>`;
+}
+
 /** The corner triangle with the octocat, like Walkies' and Poddle's, once the repo's public. */
 function githubCorner() {
   if (!GITHUB_PUBLIC) return "";
@@ -352,7 +378,8 @@ const siteScript = fingerprint("site.js");
 const layout = readFileSync(join(src, "layout.html"), "utf8");
 const shared = {
   site: SITE_URL, styles, commits: commits.toLocaleString("en-AU"), firstDay,
-  appStoreBadge: appStoreBadge(), copyButton: copyButton(), prompt: escape(INSTALL_PROMPT), showcase: showcase(), launchVideo: launchVideo(), faq: faq(), githubCorner: githubCorner(),
+  appStoreBadge: appStoreBadge(), copyButton: copyButton(), prompt: escape(INSTALL_PROMPT), showcase: showcase(), launchVideo: launchVideo(), faq: faq(), githubCorner: githubCorner(), convexCorner: convexCorner(), platforms: platforms(),
+  latestRelease: readReleases(join(root, "changelog"))[0]?.release ?? "",
   // Moves the top bar in to clear the corner, when there is one.
   bodyClass: GITHUB_PUBLIC ? " has-corner" : "",
 };

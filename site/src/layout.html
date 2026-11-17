@@ -61,6 +61,8 @@
   <!-- The code on GitHub, top right, like Walkies', Poddle's and Quick Ask's corner. Shown while
        GITHUB_PUBLIC (site.mjs) is on. -->
   {{githubCorner}}
+  <!-- Convex's mark in the opposite corner: the backend is Convex (Mike, 17 Nov). -->
+  {{convexCorner}}
   <!-- Skip link for keyboard users (landing page skill, B10). -->
   <a class="skip" href="#content">Skip to content</a>
   <!-- A compact bar floating off the top edge, sized to its content, translucent over a blur
@@ -73,7 +75,8 @@
         <a href="/#get">Install</a>
         <a href="/#faq">FAQ</a>
         <a href="/docs"{{docsCurrent}}>Docs</a>
-        <a href="/changelog"{{changelogCurrent}}>What's new</a>
+        <!-- The dot means a release has come out since you last opened What's new (site.js). -->
+        <a class="whats-new" href="/changelog" data-release="{{latestRelease}}"{{changelogCurrent}}>What's new<span class="new-dot" aria-hidden="true"></span></a>
       </div>
       <a class="btn btn-sm nav-cta" href="/#get">Get Threadbear</a>
       <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="menu" aria-label="Open the menu"><span></span><span></span></button>
