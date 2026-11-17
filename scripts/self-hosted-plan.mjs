@@ -96,10 +96,11 @@ export function ownAddress(raw, flag) {
 //   adminKeyFile  secrets/convex-self-hosted.env is here
 //   syncUrl, syncSite  runner.json's sync.url and sync.site, if any
 //
-// Returns { selfHosted: false } or { selfHosted: true, mode, from?, url?,
-// site?, readdressed? } (from: the mode it had, when this moves it; url and
-// site: the addresses, for mode "url"; readdressed: still "url", at new
-// addresses), or { fail } with why.
+// Returns { selfHosted: false } or { selfHosted: true, mode, from?, was?,
+// url?, site?, readdressed? } (from: the mode it had, when this moves it;
+// was: the old { url, site } when that was "url"; url and site: the
+// addresses, for mode "url"; readdressed: still "url", at new addresses),
+// or { fail } with why.
 export function selfHostedPlan({ flags = {}, joining = false, adminKeyFile = false, syncUrl, syncSite }) {
   const { local = false, tailnet = false } = flags;
   const own = flags.url !== undefined || flags.siteUrl !== undefined;
@@ -142,7 +143,11 @@ export function selfHostedPlan({ flags = {}, joining = false, adminKeyFile = fal
     if (!syncSite) return { fail: 'This Mac\'s backend is at an address of your own, but runner.json has no sync.site saying where its website is. Run setup again with --url and --site-url.' };
     addr = { url: syncUrl, site: syncSite };
   }
-  const moved = had && had !== mode ? { from: had } : {};
+  // Off an address of your own: setup can't take your proxy down, so it
+  // keeps the old addresses to check they no longer reach this backend
+  // (oldAddressStep; Daybreak 150, 17 Nov 2026).
+  const was = had === 'url' && mode !== 'url' ? { was: { url: syncUrl, ...(syncSite ? { site: syncSite } : {}) } } : {};
+  const moved = had && had !== mode ? { from: had, ...was } : {};
   const readdressed = had === 'url' && mode === 'url' && (addr.url !== syncUrl || addr.site !== syncSite) ? { readdressed: true } : {};
   return { selfHosted: true, mode, ...moved, ...(addr ? addr : {}), ...readdressed };
 }
@@ -298,4 +303,29 @@ export function tailnetPendingFiles(defaultHome, home, path) {
   const legacy = path.join(home, TAILNET_PENDING_FILE);
   if (path.resolve(legacy) !== path.resolve(files[0])) files.push(legacy);
   return files;
+}
+
+// A move off an address of your own (--url) to this Mac only or the tailnet.
+// Both ways publish the backend on the same loopback ports (13210, 13211)
+// and keep its data, so the proxy you pointed at them goes on forwarding:
+// share links, and phones paired at that address, still reach it, whatever
+// setup then says about where it can be reached. Setup can't take your proxy
+// down, so it checks each old address from this Mac against the backend's
+// own answer on loopback, before anything changes and again after:
+//   { do: 'fail', message }  one still reaches it; stops, with runner.json
+//                            still naming the old address, so the next run
+//                            is the same move and checks again
+//   { do: 'ok', message }    neither does (one that doesn't answer at all
+//                            counts), said plainly, as this Mac's view only
+// `checks` is [{ addr, want, got }], each { status, body } or { error } as
+// checkOwnAddress's `get` gives them (Daybreak 150, 17 Nov 2026).
+export function oldAddressStep({ checks, mode, again }) {
+  const still = checks.filter(({ want, got }) => !got.error && !want.error && got.status === want.status && got.body === want.body);
+  const where = mode === 'local' ? 'this Mac only' : 'your tailnet only';
+  if (still.length) {
+    const addrs = still.map((c) => c.addr).join(' and ');
+    return { do: 'fail', message: `${addrs} still ${still.length > 1 ? 'reach' : 'reaches'} this backend through your own proxy, so it wouldn't be on ${where}: anyone with a share link, and any phone paired at that address, could still use it. Setup can't take your proxy down for you. Remove the rules that forward ${addrs} to 127.0.0.1:${PORTS.api[1]} and 127.0.0.1:${PORTS.site[1]} (or stop the proxy), check curl ${still[0].addr}/version no longer prints the backend's version, then run ${again}` };
+  }
+  const why = checks.map(({ addr, got }) => `${addr}: ${got.error ?? `answered ${got.status}, not as this backend does`}`).join('; ');
+  return { do: 'ok', message: `your old address no longer reaches this backend from this Mac (${why}). If your proxy forwards it to 127.0.0.1:${PORTS.api[1]} or :${PORTS.site[1]} again, it's reachable there again: keep those rules off.` };
 }

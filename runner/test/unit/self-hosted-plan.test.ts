@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 type Flags = { selfHosted?: boolean; local?: boolean; tailnet?: boolean; url?: string; siteUrl?: string };
-type Plan = { selfHosted?: boolean; mode?: 'local' | 'tailnet' | 'url'; from?: string; fail?: string; url?: string; site?: string; readdressed?: boolean };
+type Plan = { selfHosted?: boolean; mode?: 'local' | 'tailnet' | 'url'; from?: string; was?: { url: string; site?: string }; fail?: string; url?: string; site?: string; readdressed?: boolean };
+type Answer = { status?: number; body?: string; error?: string };
 type Container = { env: Record<string, string>; runArgs: string[]; cmd: string[] };
 // Plain JS with no types, as setup runs before any packages are installed.
 const planModule: string = '../../../scripts/self-hosted-plan.mjs';
@@ -19,6 +20,7 @@ const m = (await import(planModule)) as {
   servedOn: (status: unknown, tailnetPort: number) => { Proxy?: string }[] | undefined;
   mustSeeTailnetOff: (a: { from?: string; pending?: boolean }) => boolean;
   tailnetPendingFiles: (defaultHome: string, home: string, path: unknown) => string[];
+  oldAddressStep: (a: { checks: { addr: string; want: Answer; got: Answer }[]; mode: string; again: string }) => { do: string; message: string };
   offTailnetStep: (a: { cli: boolean; handlers?: { Proxy?: string }[]; tailnetPort: number; localPort: number; moving: boolean }) => { do: string; message?: string };
 };
 
@@ -253,8 +255,8 @@ test('setup run again keeps your own address, and a flag moves it', () => {
   assert.deepEqual(m.selfHostedPlan({ ...was, flags: OWN }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE });
   assert.deepEqual(m.selfHostedPlan({ ...was, flags: { url: 'https://new.example.com', siteUrl: OWN_SITE } }), { selfHosted: true, mode: 'url', url: 'https://new.example.com', site: OWN_SITE, readdressed: true });
   // Moves to and from the other two ways.
-  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { local: true } }), { selfHosted: true, mode: 'local', from: 'url' });
-  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { tailnet: true } }), { selfHosted: true, mode: 'tailnet', from: 'url' });
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { local: true } }), { selfHosted: true, mode: 'local', from: 'url', was: { url: OWN_URL, site: OWN_SITE } });
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { tailnet: true } }), { selfHosted: true, mode: 'tailnet', from: 'url', was: { url: OWN_URL, site: OWN_SITE } });
   assert.deepEqual(m.selfHostedPlan({ adminKeyFile: true, syncUrl: TAILNET_URL, flags: OWN }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE, from: 'tailnet' });
   assert.deepEqual(m.selfHostedPlan({ adminKeyFile: true, syncUrl: LOCAL_URL, flags: OWN }), { selfHosted: true, mode: 'url', url: OWN_URL, site: OWN_SITE, from: 'local' });
   // A setup that stopped before saving its URL can carry on with --url.
@@ -299,4 +301,58 @@ test('setup checks your address from this Mac and from inside Docker before it c
   // A url run never asks Tailscale for this Mac's name, so it takes the
   // backend's own tailnet ports off (the else of `if (tailnet)`), as a local one does.
   assert.match(src, /else if \(own\) ok\(`your own address[^\n]*\n\s*else \{\n\s*tailnet = tailnetSelf\(\);/);
+});
+
+// Daybreak 150 (17 Nov 2026): an owner whose Caddy or nginx forwards their own address to
+// 127.0.0.1:13210 and :13211 runs setup --self-hosted --local. Both ways publish those same ports
+// and keep the data, so the proxy went on forwarding, share links and paired phones still reached
+// the backend, and setup said share links only open on this Mac. Setup can't take the proxy down,
+// so it now refuses the move while the old address still reaches the backend, before anything
+// changes and again after, and otherwise says what it checked and what it can't.
+test('a move off your own address keeps the old addresses, to check they no longer reach the backend', () => {
+  const was = { adminKeyFile: true, syncUrl: OWN_URL, syncSite: OWN_SITE };
+  assert.deepEqual(m.selfHostedPlan({ ...was, flags: { selfHosted: true, local: true } }).was, { url: OWN_URL, site: OWN_SITE });
+  // Only a move off it: staying, new addresses, or moves between the other two ways have none.
+  assert.equal(m.selfHostedPlan(was).was, undefined);
+  assert.equal(m.selfHostedPlan({ ...was, flags: { url: 'https://new.example.com', siteUrl: OWN_SITE } }).was, undefined);
+  assert.equal(m.selfHostedPlan({ adminKeyFile: true, syncUrl: TAILNET_URL, flags: { local: true } }).was, undefined);
+  assert.equal(m.selfHostedPlan({ adminKeyFile: true, syncUrl: LOCAL_URL, flags: OWN }).was, undefined);
+});
+
+test("a move off your own address stops while the old proxy still forwards to the backend", () => {
+  const version = { status: 200, body: '1.29.3' };
+  const site404 = { status: 404, body: 'No matching routes found' };
+  const again = './threadbear setup --self-hosted --local';
+  // The scenario: the proxy still forwards both addresses.
+  const still = m.oldAddressStep({ mode: 'local', again, checks: [{ addr: OWN_URL, want: version, got: version }, { addr: OWN_SITE, want: site404, got: site404 }] });
+  assert.equal(still.do, 'fail');
+  assert.match(still.message, /threadbear\.example\.com and https:\/\/threadbear-site\.example\.com still reach this backend/);
+  assert.match(still.message, /wouldn't be on this Mac only: anyone with a share link/);
+  assert.match(still.message, /curl https:\/\/threadbear\.example\.com\/version/);
+  assert.ok(still.message.endsWith(again));
+  // Only the website's still forwarded: that's enough to stop it.
+  assert.equal(m.oldAddressStep({ mode: 'tailnet', again, checks: [{ addr: OWN_URL, want: version, got: { error: 'ECONNREFUSED' } }, { addr: OWN_SITE, want: site404, got: site404 }] }).do, 'fail');
+  // Taken down: the proxy's own error page, or nothing answering, isn't the backend.
+  const gone = m.oldAddressStep({ mode: 'local', again, checks: [{ addr: OWN_URL, want: version, got: { status: 502, body: 'Bad Gateway' } }, { addr: OWN_SITE, want: site404, got: { error: 'ENOTFOUND' } }] });
+  assert.equal(gone.do, 'ok');
+  // Said plainly as this Mac's view, and that it forwards again if the rules come back.
+  assert.match(gone.message, /no longer reaches this backend from this Mac \(https:\/\/threadbear\.example\.com: answered 502, not as this backend does; https:\/\/threadbear-site\.example\.com: ENOTFOUND\)/);
+  assert.match(gone.message, /reachable there again: keep those rules off/);
+  // A loopback that can't answer gives nothing to compare, so nothing matches it by accident.
+  assert.equal(m.oldAddressStep({ mode: 'local', again, checks: [{ addr: OWN_URL, want: { error: 'ECONNREFUSED' }, got: { error: 'ECONNREFUSED' } }] }).do, 'ok');
+});
+
+test('setup checks the old address before anything changes and again before runner.json moves, and says so at the end', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../../../scripts/setup.mjs', import.meta.url), 'utf8');
+  const pre = src.indexOf('if (now && (await answers(ADMIN_URL, 60))) await checkOldAddressGone(plan.was);');
+  assert.ok(pre > 0 && pre < src.indexOf('ensureContainer(BACKEND_CONTAINER'), 'pre-check before the containers change');
+  assert.ok(pre < src.indexOf('unserve(ts, tailnetPort, localPort, moving);'));
+  const post = src.indexOf('const oldAddress = plan.was ? await checkOldAddressGone(plan.was) : undefined;');
+  assert.ok(post > src.indexOf('await waitForBackend();'), 'again on the moved backend');
+  const body = src.slice(src.indexOf('async function selfHostedBackend()'), src.indexOf('async function runnerJson('));
+  assert.ok(body.includes('const oldAddress = plan.was ? await checkOldAddressGone'), 'inside selfHostedBackend, which runs before runnerJson writes the new sync.url');
+  assert.ok(src.indexOf('sh = await selfHostedBackend();') < src.indexOf('await runnerJson(url, sh?.site);'));
+  assert.match(src, /if \(step\.do === 'fail'\) throw new Fail\(step\.message\);/);
+  assert.match(src, /if \(sh\?\.oldAddress\) note\(`Moved off your own address: \$\{sh\.oldAddress\}`\);/);
 });

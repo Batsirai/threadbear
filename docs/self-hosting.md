@@ -210,6 +210,21 @@ that, saying to use `--tailnet`), and anything else is your own address
 (`reachOf` in `scripts/self-hosted-plan.mjs`). A paired phone needs pairing
 again after any move.
 
+**Moving off your own address.** Setup can't take your proxy down, and the
+local and tailnet ways use the same loopback ports (13210 and 13211), so a
+proxy left up goes on forwarding your old addresses to the backend: share
+links and phones paired there would still reach it. So `--local` or
+`--tailnet` first takes down your proxy's rules for both addresses (or stop
+the proxy), and setup checks from this Mac that neither still reaches the
+backend, before anything changes and again after the move, before
+runner.json gets the new address. If one still does it stops, naming it,
+and runner.json keeps the old address, so the next run is the same move and
+checks again. `curl https://<your address>/version` printing the backend's
+version means it's still forwarded. Setup can only check from this Mac, so
+at the end it says what it saw: if those proxy rules come back, the old
+addresses reach the backend again (`oldAddressStep`, Daybreak 150, 17 Nov
+2026).
+
 ## What setup makes
 
 `scripts/setup.mjs`, "a self-hosted backend":

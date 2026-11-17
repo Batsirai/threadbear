@@ -1914,7 +1914,9 @@ The limits are the tailnet way's, except that Tailscale isn't needed:
 **no phone notifications**, **nothing works while your Mac sleeps**, Docker
 is stopped or your proxy is down, and share links open for **whoever can
 reach your address**. `--local` or `--tailnet` move it off your address,
-and your threads stay.
+and your threads stay. Take your proxy's rules for both addresses down
+first: setup can't do that for you, and it stops, naming the address,
+while either still reaches the backend from this Mac.
 
 ## Patches: your own buttons and panels
 <!-- slug: patches -->

@@ -66,7 +66,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { isJoining, joinSteps, runnerKeyPlan } from './runner-key-plan.mjs';
-import { ADMIN_URL, backendContainer, DATA_VOLUME, mustSeeTailnetOff, offTailnetStep, origins, PORTS, selfHostedPlan, servedOn, tailnetPendingFiles } from './self-hosted-plan.mjs';
+import { ADMIN_URL, backendContainer, DATA_VOLUME, mustSeeTailnetOff, offTailnetStep, oldAddressStep, origins, PORTS, selfHostedPlan, servedOn, tailnetPendingFiles } from './self-hosted-plan.mjs';
 import { ConvexAdminError, convexEnv, readConvexAdmin, SELF_HOSTED_ENV_FILE } from '../runner/src/convex-admin.ts';
 
 const repo = path.resolve(import.meta.dirname, '..');
@@ -668,6 +668,16 @@ async function waitForBackend() {
   throw new Fail(`The backend didn't answer at ${ADMIN_URL} within a minute. docker logs ${BACKEND_CONTAINER} says why.`);
 }
 
+// One request's answer, as { status, body } or { error }, never following a redirect.
+async function get(u) {
+  try {
+    const res = await fetch(u, { signal: AbortSignal.timeout(10_000), redirect: 'manual' });
+    return { status: res.status, body: await res.text() };
+  } catch (e) {
+    return { error: e?.cause?.code ?? e?.cause?.message ?? e?.message ?? String(e) };
+  }
+}
+
 // Your own address (--url): your proxy has to reach this backend at both
 // addresses, from this Mac and from inside the container, or setup stops
 // and says which. Inside matters as much as outside: the backend fetches
@@ -690,14 +700,6 @@ async function checkOwnAddress(url, site, { quiet = false, fresh = false } = {})
   // The command to run again, flags and all: plain `setup` or --self-hosted
   // alone would pick cloud or the tailnet on a Mac that has no admin key yet.
   const again = `./threadbear setup --self-hosted --url ${url} --site-url ${site}${homeArg}`;
-  const get = async (u) => {
-    try {
-      const res = await fetch(u, { signal: AbortSignal.timeout(10_000), redirect: 'manual' });
-      return { status: res.status, body: await res.text() };
-    } catch (e) {
-      return { error: e?.cause?.code ?? e?.cause?.message ?? e?.message ?? String(e) };
-    }
-  };
   const proxyTo = (port) => `http://127.0.0.1:${port}`;
   const want = await get(`${ADMIN_URL}/version`);
   const got = await get(`${url}/version`);
@@ -748,6 +750,24 @@ async function checkOwnAddress(url, site, { quiet = false, fresh = false } = {})
   }
   pass(`${url} reaches the backend from inside Docker`);
   if (quiet) ok(`${url} and ${site} still reach it`);
+}
+
+// A move off your own address: the old one must no longer reach this
+// backend (oldAddressStep in scripts/self-hosted-plan.mjs, which says why).
+// Each address is asked what loopback answers, the API's /version and a
+// website path nothing serves, as checkOwnAddress does. Stops setup if one
+// still does; otherwise returns what it saw, for the end of setup to say.
+async function checkOldAddressGone(was) {
+  const homeArg = path.resolve(home) === DEFAULT_HOME ? '' : ` --home ${JSON.stringify(home)}`;
+  const again = `./threadbear setup --self-hosted --${plan.mode}${homeArg}`;
+  const checks = [{ addr: was.url, want: await get(`${ADMIN_URL}/version`), got: await get(`${was.url}/version`) }];
+  if (was.site) {
+    const probe = `/threadbear-setup-check-${crypto.randomBytes(6).toString('hex')}`;
+    checks.push({ addr: was.site, want: await get(`http://127.0.0.1:${PORTS.site[1]}${probe}`), got: await get(`${was.site}${probe}`) });
+  }
+  const step = oldAddressStep({ checks, mode: plan.mode, again });
+  if (step.do === 'fail') throw new Fail(step.message);
+  return step.message;
 }
 
 // The Convex client's version, as the sync WebSocket's path carries it
@@ -814,6 +834,14 @@ async function selfHostedBackend() {
       prechecked = true;
     } else note(`the backend there now doesn't answer, so there's nothing working to keep; checking your addresses once it's made again`);
   }
+  // Off your own address: checked against the backend as it is before
+  // anything changes, so a proxy still forwarding stops setup with the url
+  // way still working, and again once it's moved (Daybreak 150, 17 Nov 2026).
+  if (plan.was && !dry) {
+    const now = containerState(BACKEND_CONTAINER);
+    if (now && !now.running) docker(['start', BACKEND_CONTAINER]);
+    if (now && (await answers(ADMIN_URL, 60))) await checkOldAddressGone(plan.was);
+  }
   const b = backendContainer(plan.mode, own ? plan : tailnet);
   ensureContainer(BACKEND_CONTAINER, BACKEND_IMAGE, b.env, b.runArgs, b.cmd);
   ensureContainer(DASHBOARD_CONTAINER, DASHBOARD_IMAGE, { NEXT_PUBLIC_DEPLOYMENT_URL: dashboardBackend }, ['-p', `127.0.0.1:${PORTS.dashboard[1]}:6791`]);
@@ -844,6 +872,7 @@ async function selfHostedBackend() {
     if (!fs.existsSync(selfHostedFile)) todo(`the backend's admin key, in ${selfHostedFile}`);
     todo('PUSH_RELAY=off on the backend (the push relay only reaches Convex cloud)');
     if (own) todo(`check ${url} and ${site} reach the backend, from this Mac and from inside Docker`);
+    if (plan.was) todo(`check ${[plan.was.url, plan.was.site].filter(Boolean).join(' and ')} no longer reach the backend through your proxy`);
     return { url, site, dashboard, local, own };
   }
   await waitForBackend();
@@ -860,13 +889,16 @@ async function selfHostedBackend() {
   // that stops here is then one plain `setup` asks about ("can't tell which
   // way it was going") rather than taking for cloud (cross-lab review).
   if (own) await checkOwnAddress(url, site, { quiet: prechecked });
+  // Before runner.json gets the new address: one that stops here is the same move next time.
+  const oldAddress = plan.was ? await checkOldAddressGone(plan.was) : undefined;
+  if (oldAddress) ok(`${plan.was.url} no longer reaches the backend from this Mac`);
   // Notifications would only fail: the relay checks a backend by calling it
   // back on a Convex host (relay/convex/verify.ts). Off, the phone and the
   // Mac say there are none, rather than going quiet (convex/pushHealth.ts).
   const pushSet = selfHostedConvex(['env', 'set', 'PUSH_RELAY', 'off']);
   if (pushSet.status !== 0) throw new Fail(`Setting PUSH_RELAY=off on the backend failed: ${(pushSet.stderr || '').trim().slice(0, 300)}`);
   ok('phone notifications off (the push relay only reaches Convex cloud)');
-  return { url, site, dashboard, local, own };
+  return { url, site, dashboard, local, own, oldAddress };
 }
 
 async function runnerJson(url, site) {
@@ -962,6 +994,9 @@ function finish(url, sh) {
     note(`Your backend runs in Docker on this Mac, at ${url} on your tailnet; its dashboard is ${sh.dashboard} (log in with the admin key in ${selfHostedFile}).`);
     note('Self-hosted means: no phone notifications, the phone needs Tailscale on, nothing works while this Mac sleeps or Docker is stopped, and share links only open on your tailnet. Convex cloud has none of those limits (docs/self-hosting.md).');
   }
+  // Beside "this Mac only" or "your tailnet only": what setup could check of
+  // that after a move off your own address, and what it can't.
+  if (sh?.oldAddress) note(`Moved off your own address: ${sh.oldAddress}`);
   // "From anywhere" isn't true of a self-hosted backend, which is only on the
   // tailnet, or only on this Mac.
   if (sh?.local) {
