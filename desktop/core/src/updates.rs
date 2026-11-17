@@ -587,6 +587,19 @@ pub fn digest_counts(d: &Digest) -> String {
     [(d.added, "added"), (d.changed, "changed"), (d.fixed, "fixed")].iter().filter(|(n, _)| *n > 0).map(|(n, k)| format!("{n} {k}")).collect::<Vec<_>>().join(", ")
 }
 
+/// The Important line's tip: each why on its own line, starting with a
+/// capital (the tag says "Important: the phone pairing...").
+pub fn important_tip(whys: &[String]) -> String {
+    whys.iter()
+        .map(|w| {
+            let mut c = w.chars();
+            let first = c.next().map(|f| f.to_uppercase().collect::<String>()).unwrap_or_default();
+            format!("• {first}{}", c.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// "3 important fixes", for a line whose tip lists them.
 pub fn important_line(n: usize) -> Option<String> {
     (n > 0).then(|| if n == 1 { "1 important fix".to_owned() } else { format!("{n} important fixes") })
@@ -1342,6 +1355,7 @@ mod tests {
         assert_eq!(important_line(d.important.len()).as_deref(), Some("2 important fixes"));
         assert_eq!(important_line(1).as_deref(), Some("1 important fix"));
         assert_eq!(important_line(0), None);
+        assert_eq!(important_tip(&["the pairing token".to_owned(), "Open gate".to_owned()]), "• The pairing token\n• Open gate");
         assert_eq!(d.page, "https://threadbear.mikecann.app/changelog");
         // 15 Nov isn't on the page yet, so its notes stand in, dated.
         assert_eq!(d.notes, [(Some("15 Nov".to_owned()), vec!["Fifteen".to_owned()])]);

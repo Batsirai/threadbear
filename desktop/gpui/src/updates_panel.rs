@@ -73,7 +73,9 @@ fn fetch_picture(url: &str) -> Result<Image, String> {
         return Err("not https".into());
     }
     #[cfg(target_os = "macos")]
-    let agent = crate::composer_url::agent(crate::composer_url::PublicResolver::default());
+    let resolver: crate::composer_url::PublicResolver = Default::default();
+    #[cfg(target_os = "macos")]
+    let agent = crate::composer_url::agent(resolver);
     // composer_url's address check is the Mac's (its interface list); the
     // address is the runner's, made from Mike's site, so elsewhere a plain one.
     #[cfg(not(target_os = "macos"))]
@@ -603,10 +605,14 @@ impl Threadbear {
         let mut cards: Vec<AnyElement> = Vec::new();
         for (i, (card, link)) in d.cards.iter().enumerate() {
             self.want_picture(&card.picture, cx);
+            // A frame of its own holds the picture to the card's height
+            // (an img's own size gave way to a tall picture's), and the whole
+            // picture fits in it: a crop of a screenshot cut its words.
+            let frame = div().w_full().h(px(CARD_PICTURE)).flex_none().overflow_hidden().bg(hsla(0., 0., 0., 0.25)).border_b_1().border_color(style::hairline(cx));
+            // Loading or failed: the card keeps its shape, and its title says what it is.
             let picture: AnyElement = match self.updates_panel.pictures.get(&card.picture) {
-                Some(Picture::Ready(image)) => img(ImageSource::Image(image.clone())).w_full().h(px(CARD_PICTURE)).object_fit(ObjectFit::Cover).into_any_element(),
-                // Loading or failed: the card keeps its shape, and its title says what it is.
-                _ => div().w_full().h(px(CARD_PICTURE)).bg(style::hairline(cx).opacity(0.5)).into_any_element(),
+                Some(Picture::Ready(image)) => frame.child(img(ImageSource::Image(image.clone())).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
+                _ => frame.into_any_element(),
             };
             let play = card.clip.then(|| {
                 div().absolute().right(px(6.)).top(px(CARD_PICTURE - 20.)).px(px(5.)).py(px(1.)).rounded(px(8.)).bg(hsla(0., 0., 0., 0.65)).child(icons::symbol("play").size(px(9.)).text_color(hsla(0., 0., 1., 1.)))
@@ -627,7 +633,7 @@ impl Threadbear {
                         .bg(cx.theme().secondary)
                         .cursor_pointer()
                         .hover(|s| s.border_color(style::secondary_text(cx).opacity(0.5)))
-                        .child(div().border_b_1().border_color(style::hairline(cx)).child(picture))
+                        .child(picture)
                         .children(play)
                         .child(text_line(card.title.clone(), 11.5, fg).px(px(8.)).py(px(5.)).line_clamp(2)),
                     tip,
@@ -658,7 +664,7 @@ impl Threadbear {
                 .into_any_element(),
         );
         if let Some(line) = rules::important_line(d.important.len()) {
-            let whys = d.important.iter().map(|w| format!("• {w}")).collect::<Vec<_>>().join("\n");
+            let whys = rules::important_tip(&d.important);
             out.push(crate::highlights::tipped(div().id("updates-important").child(text_line(line, 11., system_orange(cx))), whys).into_any_element());
         }
         out.extend(notes_lines(d.notes.clone(), cx));
