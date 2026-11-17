@@ -275,3 +275,68 @@ test('a named commit, and one git can\'t place, fall back sensibly', () => {
   watcher.appHello(B);
   assert.match(said(h, thread.id).message, /restarted onto bbbb222/);
 });
+
+// Codex's review, 18 Nov: main moved on with only runner changes before
+// the thread asked, so the one build that comes is of an older commit
+// with the same desktop/ folder.
+test('a build of an older commit with the same app folders counts', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const { h, watcher, thread } = setUp();
+  const repo = h.runner.get(thread.id).cwd;
+  const git = (...a: string[]) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
+  git('init', '-q', '-b', 'main');
+  const commit = (file: string, msg: string) => {
+    fs.mkdirSync(`${repo}/${file.split('/')[0]}`, { recursive: true });
+    fs.writeFileSync(`${repo}/${file}`, msg);
+    git('add', file);
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', msg);
+    return git('rev-parse', 'HEAD');
+  };
+  const before = commit('desktop/a', 'old app');
+  const landed = commit('desktop/a', 'the change');
+  commit('runner/b', 'runner only');
+  watcher.appHello({ commit: before, short: before.slice(0, 7), tree: git('rev-parse', `${before}:desktop`) }, 'desktop');
+  watcher.watch(thread.id);
+  watcher.appHello({ commit: landed, short: landed.slice(0, 7), tree: git('rev-parse', `${landed}:desktop`) }, 'desktop');
+  assert.match(said(h, thread.id).message, new RegExp(`restarted onto ${landed.slice(0, 7)}`));
+});
+
+test('git too slow keeps waiting quietly and asks again next time', () => {
+  const { h, thread } = setUp();
+  let answer: boolean | 'busy' = 'busy';
+  let calls = 0;
+  const watcher = new AppRestarts({
+    runner: h.runner, home: h.home, clock: h.clock, log: nullLogger,
+    git: { resolve: () => 'c0ffee1234567', contains: () => (calls++, answer) },
+  });
+  watcher.appHello(A);
+  watcher.watch(thread.id);
+  watcher.appHello(B);
+  assert.equal(said(h, thread.id).message, undefined);
+  assert.equal(h.events(thread.id).filter((e) => e.type === 'system.note').length, 0);
+  answer = true;
+  watcher.appHello(B);
+  assert.equal(calls, 2);
+  assert.match(said(h, thread.id).message, /restarted onto bbbb222/);
+});
+
+test('a build due after a handover is dropped when an older one replaces it', () => {
+  const { h, thread } = setUp();
+  const away = new Set<string>([thread.id]);
+  const has = (id: string) => !away.has(id) && h.runner.has(id);
+  const C = { commit: 'cccc3333', short: 'cccc333', tree: 'tree-c' };
+  const watcher = new AppRestarts({
+    runner: { get: (id) => h.runner.get(id), note: (id, t) => h.runner.note(id, t), send: (...a) => h.runner.send(...a), has },
+    home: h.home, clock: h.clock, log: nullLogger, away: (id) => away.has(id),
+    git: { resolve: () => 'want1234567', contains: (_r, _a, c) => c !== C.commit },
+  });
+  watcher.appHello(A);
+  watcher.watch(thread.id);
+  watcher.appHello(B);
+  watcher.appHello(C);
+  away.delete(thread.id);
+  watcher.adopted(thread.id);
+  assert.equal(said(h, thread.id).message, undefined);
+  assert.ok(watcher.isWatching(thread.id));
+});

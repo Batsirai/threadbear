@@ -1773,8 +1773,13 @@ own restarts.
   contain the thread's commit (`git merge-base --is-ancestor` in its folder:
   a build staged before the thread landed) keeps the thread on the list,
   now from that build, with a `system.note` "<app> restarted onto <short>,
-  which doesn't have <commit> yet. Still waiting." When git can't tell (an
-  unknown commit, no repo) any new build counts, as before. A thread that remembered only one app's
+  which doesn't have <commit> yet. Still waiting." A build whose `tree`
+  is that commit's tree for the app (main moved on with other changes
+  before the thread asked) counts too. When git can't tell (an unknown
+  commit, no repo) any new build counts, as before; when it's too slow to
+  answer, the thread stays on the list as it was and the next `hello` asks
+  again. A build a thread on a draining runner was due to hear about is
+  forgotten when the same app comes back on a build without the commit. A thread that remembered only one app's
   build waits for that app: the other's first `build` isn't a restart of it.
   One that remembered neither (no app had said) takes either.
 - An archived thread, or a request more than a day old, gets only the
