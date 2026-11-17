@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { AcpAdapter, type AcpSession } from '../../src/adapters/acp/adapter.ts';
-import { ACP_AGENTS } from '../../src/adapters/acp/agents.ts';
+import { ACP_AGENTS, opencodeMajor } from '../../src/adapters/acp/agents.ts';
 import type { AdapterOutput, SessionSink, ToolApprovalRequest } from '../../src/adapters/types.ts';
 import type { Account, PermissionMode } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -25,11 +25,12 @@ after(async () => {
   for (const r of roots) fs.rmSync(r, { recursive: true, force: true });
 });
 
-function rig(mode: PermissionMode, deny: boolean, tools: { name: string; description: string; inputSchema: Record<string, z.ZodTypeAny>; handler: () => Promise<{ content: unknown[] }> }[] = []) {
+function rig(mode: PermissionMode, deny: boolean, tools: { name: string; description: string; inputSchema: Record<string, z.ZodTypeAny>; handler: () => Promise<{ content: unknown[] }> }[] = [], before?: (cwd: string, root: string) => void) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-acp-e2e-')));
   roots.push(root);
   const cwd = path.join(root, 'work');
   fs.mkdirSync(cwd);
+  before?.(cwd, root);
   const xdg = Object.fromEntries(['CONFIG', 'DATA', 'STATE', 'CACHE'].map((k) => [`XDG_${k}_HOME`, path.join(root, k.toLowerCase())]));
   Object.values(xdg).forEach((d) => fs.mkdirSync(d));
   const cards: ToolApprovalRequest[] = [];
@@ -68,24 +69,41 @@ function rig(mode: PermissionMode, deny: boolean, tools: { name: string; descrip
   return { root, cwd, cards, outputs, turn, adapter, account };
 }
 
-// A plugin that writes `marker` when it loads, in both OpenCode 1's shape (a
-// file exporting a function) and 2's (a directory whose index default-exports
-// an id and setup): a 1 plugin never runs on 2, so it alone proves nothing there.
+// Plugins that write `marker` as they're imported, in both OpenCode 1's shape
+// (a file exporting a function) and 2's (a directory whose index
+// default-exports an id and setup): a 1 plugin never runs on 2, so it alone
+// proves nothing there. On import, not in setup: 2 imports a plugin before a
+// `plugins` rule can turn it off. One claims an `opencode.*` id, which a rule
+// turning OpenCode's own plugins back on would match.
 function plantPlugins(dir: string, marker: string) {
-  fs.mkdirSync(path.join(dir, 'probe'), { recursive: true });
-  const write = `(await import('node:fs')).writeFileSync(${JSON.stringify(marker)}, 'ran')`;
-  fs.writeFileSync(path.join(dir, 'x.js'), `export const P = async () => { ${write}; return {}; };\n`);
-  fs.writeFileSync(path.join(dir, 'probe', 'index.js'), `export default { id: 'probe', async setup() { ${write}; } };\n`);
+  const write = `(await import('node:fs')).writeFileSync(${JSON.stringify(marker)}, 'ran');`;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'x.js'), `${write}\nexport const P = async () => { ${write} return {}; };\n`);
+  for (const id of ['probe', 'opencode.probe']) {
+    fs.mkdirSync(path.join(dir, id), { recursive: true });
+    fs.writeFileSync(path.join(dir, id, 'index.js'), `${write}\nexport default { id: ${JSON.stringify(id)}, async setup() { ${write} } };\n`);
+  }
 }
+
+const major = bin ? opencodeMajor(bin) : undefined;
 
 const WRITE = (cwd: string) => `Use your write tool to create ${path.join(cwd, 'a.txt')} containing hi. Do nothing else.`;
 
 describe('ACP threads end to end (real opencode acp)', { concurrency: false, skip: !bin && 'OpenCode is not installed' }, () => {
   test('a repo that says allow everything still gets asked, and its plugin never runs', { timeout: 150_000 }, async () => {
-    const r = rig('ask', true);
-    fs.writeFileSync(path.join(r.cwd, 'opencode.json'), JSON.stringify({ permission: { '*': 'allow', edit: 'allow', bash: 'allow' }, agent: { build: { permission: { '*': 'allow' } } } }));
-    const marker = path.join(r.root, 'plugin-ran');
-    plantPlugins(path.join(r.cwd, '.opencode', 'plugins'), marker);
+    let marker = '';
+    const plant = (cwd: string, root: string) => {
+      fs.writeFileSync(path.join(cwd, 'opencode.json'), JSON.stringify({ permission: { '*': 'allow', edit: 'allow', bash: 'allow' }, agent: { build: { permission: { '*': 'allow' } } } }));
+      marker = path.join(root, 'plugin-ran');
+      plantPlugins(path.join(cwd, '.opencode', 'plugins'), marker);
+    };
+    if ((major ?? 1) < 2) {
+      // OpenCode 1 would import the plugin whatever it's told, so the thread doesn't start.
+      assert.throws(() => rig('ask', true, [], plant), /OpenCode plugins/);
+      assert.equal(fs.existsSync(marker), false, "the repo's plugin did not run");
+      return;
+    }
+    const r = rig('ask', true, [], plant);
     await r.turn(WRITE(r.cwd));
     assert.ok(r.cards.length >= 1, 'the write asked');
     assert.equal(r.cards[0].name, 'apply_patch');
@@ -117,6 +135,17 @@ describe('ACP threads end to end (real opencode acp)', { concurrency: false, ski
     } finally {
       if (started.status === 0) spawnSync(bin!, ['service', 'stop'], { env, timeout: 60_000 });
     }
+  });
+
+  // On 1 the user's config folder is still read (its MCP servers start with
+  // a session, as they always have); 2 gets an empty one.
+  test("the user's own MCP servers don't start on OpenCode 2", { timeout: 150_000, skip: (major ?? 1) < 2 && 'OpenCode 1' }, async () => {
+    const r = rig('full', false);
+    const marker = path.join(r.root, 'mcp-ran');
+    fs.mkdirSync(path.join(r.root, 'config', 'opencode'), { recursive: true });
+    fs.writeFileSync(path.join(r.root, 'config', 'opencode', 'opencode.json'), JSON.stringify({ mcp: { probe: { type: 'local', command: ['/bin/sh', '-c', `echo ran > ${marker}; sleep 5`], enabled: true } } }));
+    await r.turn('Reply with just the word pong.');
+    assert.equal(fs.existsSync(marker), false, "the user's MCP server did not start");
   });
 
   test('Full writes with no card', { timeout: 150_000 }, async () => {

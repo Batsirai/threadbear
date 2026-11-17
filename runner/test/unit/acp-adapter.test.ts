@@ -162,6 +162,42 @@ test('the row turns the folder config, plugins and the agent\'s updates off', ()
   assert.deepEqual(conf.plugins, ['-*', 'opencode.*'], "OpenCode 2's: the user's plugins off, its own back on");
 });
 
+test('OpenCode 1 refuses an asking thread under a folder with plugins; 2 and Full go ahead', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-oc-plugins-'));
+  const fake = (name: string, out: string) => {
+    const f = path.join(dir, name);
+    fs.writeFileSync(f, `#!/bin/sh\necho '${out}'\n`, { mode: 0o755 });
+    return f;
+  };
+  try {
+    const one = fake('one', '1.19.5');
+    const two = fake('two', 'opencode v2.3.0');
+    const cwd = path.join(dir, 'repo', 'pkg');
+    fs.mkdirSync(cwd, { recursive: true });
+    const refuses = ACP_AGENTS.opencode.refuses!;
+    assert.equal(refuses({ cwd, mode: 'ask', binary: one }), undefined, 'no plugins, no refusal');
+    fs.mkdirSync(path.join(dir, 'repo', '.opencode', 'plugins'), { recursive: true });
+    assert.equal(refuses({ cwd, mode: 'ask', binary: one }), undefined, 'an empty plugins folder is nothing');
+    fs.writeFileSync(path.join(dir, 'repo', '.opencode', 'plugins', 'x.js'), '');
+    assert.match(refuses({ cwd, mode: 'ask', binary: one }) ?? '', /OpenCode plugins/, 'a parent folder counts');
+    assert.match(refuses({ cwd, mode: 'plan', binary: path.join(dir, 'gone') }) ?? '', /OpenCode plugins/, 'an unknown version is treated as 1');
+    assert.equal(refuses({ cwd, mode: 'full', binary: one }), undefined);
+    assert.equal(refuses({ cwd, mode: 'ask', binary: two }), undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("each OpenCode process gets an empty config folder of its own, with both project switches on", () => {
+  const a = opencodeEnv();
+  const b = opencodeEnv({ noTools: true });
+  assert.notEqual(a.OPENCODE_CONFIG_DIR, b.OPENCODE_CONFIG_DIR);
+  assert.deepEqual(fs.readdirSync(a.OPENCODE_CONFIG_DIR), []);
+  assert.equal(a.OPENCODE_CONFIG_PROJECT_DISABLE, '1');
+  assert.equal(JSON.parse(b.OPENCODE_CONFIG_CONTENT).permission['*'], 'deny');
+  for (const e of [a, b]) fs.rmSync(e.OPENCODE_CONFIG_DIR, { recursive: true, force: true });
+});
+
 test('OpenCode 2 gets no --pure, which it would refuse; 1 and an unknown version keep it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-oc-major-'));
   const fake = (name: string, out: string) => {

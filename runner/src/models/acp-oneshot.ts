@@ -66,6 +66,9 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     if (!providerInfo(deps.agent.provider).smallJobs) return fail(`${name} can't take small jobs: its tools can't all be turned off.`);
     const binary = deps.binary();
     if (!binary) return fail(`Threadbear can't find ${name} on this Mac.`);
+    // A small job can't ask, so it's held to what an asking thread is.
+    const refused = deps.agent.refuses?.({ cwd: req.cwd, mode: 'ask', binary });
+    if (refused) return fail(refused);
     const env = cliEnv(req.account, deps.env ?? process.env);
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CLAUDE_AGENT_SDK_CLIENT_APP;

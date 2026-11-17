@@ -56,7 +56,8 @@ export type AcpAgent = {
   trusts?(cwd: string): boolean;
   // Why a thread in this folder and mode can't run, if it can't. trusted: what
   // trusts said when its process started, which outlasts the trust file.
-  refuses?(o: { cwd: string; mode: PermissionMode; trusted?: boolean }): string | undefined;
+  // binary: the program the thread runs, for a refusal that depends on its version.
+  refuses?(o: { cwd: string; mode: PermissionMode; trusted?: boolean; binary?: string }): string | undefined;
 };
 
 function isExecutableFile(file: string): boolean {
@@ -125,22 +126,77 @@ const DENY_EVERYTHING: Record<string, string> = { '*': 'deny' };
 // So the folder's OpenCode config isn't read at all, as a folder's Claude
 // settings aren't until trusted. The rules go on the agents too: agent-level
 // rules outrank top-level ones.
+//
+// OpenCode 2 (checked on 2.3.0, 17 Nov 2026) needs more, as its --pure is
+// gone and the user's own config folder is a way in too:
+// - OPENCODE_CONFIG_DIR replaces ~/.config/opencode there, so each process
+//   gets an empty folder of its own. A plugin there is imported (its
+//   top-level code runs) before any `plugins` rule can turn it off, and one
+//   can claim an `opencode.*` id to be turned back on; the user's MCP
+//   servers there start with the session, before any rule is asked. On 1
+//   the variable adds a folder, and an empty one adds nothing.
+// - It reads OPENCODE_CONFIG_PROJECT_DISABLE before the older name, so an
+//   inherited "0" there would win: both are set.
+// - The plugins rule is a second line for anything configured elsewhere
+//   (system config): every plugin off, then OpenCode's built-ins back on, as
+//   they include what applies these rules (opencode.config.agent). 1 ignores it.
+// Not covered: an "Always allow" saved in OpenCode's own app is kept per
+// project in its data folder and outranks "ask" on 2. Threadbear only ever
+// answers once, so only the user's own clicks in OpenCode put one there.
 export function opencodeEnv(o: { noTools?: boolean } = {}): Record<string, string> {
   const permission = o.noTools ? DENY_EVERYTHING : ASK_FOR_EVERYTHING;
   return {
     OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+    OPENCODE_CONFIG_PROJECT_DISABLE: '1',
+    OPENCODE_CONFIG_DIR: emptyConfigDir(),
     OPENCODE_DISABLE_AUTOUPDATE: '1',
-    // plugins: OpenCode 2's way to keep the user's own plugins out, as
-    // --pure does on 1 (2 dropped the flag): every plugin off, then its
-    // built-ins (all `opencode.*`) back on, as they include what reads the
-    // permission rules here (opencode.config.agent). 1 ignores the key.
     OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission, agent: { build: { permission }, plan: { permission }, general: { permission }, explore: { permission } }, plugins: ['-*', 'opencode.*'] }),
   };
 }
 
+const CONFIG_DIR_PREFIX = 'threadbear-opencode-config-';
+const DAY_MS = 24 * 60 * 60_000;
+
+// A new empty folder per process, so nothing one leaves there reaches the
+// next. Ones over a day old are swept as a new one is made.
+function emptyConfigDir(): string {
+  const tmp = os.tmpdir();
+  try {
+    for (const name of fs.readdirSync(tmp)) {
+      if (!name.startsWith(CONFIG_DIR_PREFIX)) continue;
+      const dir = path.join(tmp, name);
+      try {
+        const st = fs.lstatSync(dir);
+        if (st.isDirectory() && Date.now() - st.mtimeMs > DAY_MS) fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Gone already, or not ours to remove.
+      }
+    }
+  } catch {
+    // An unreadable temp folder only means nothing is swept.
+  }
+  return fs.mkdtempSync(path.join(tmp, CONFIG_DIR_PREFIX));
+}
+
+// The first .opencode/plugin(s) folder with anything in it, from `cwd` up.
+export function folderPlugins(cwd: string): string | undefined {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    for (const name of ['plugin', 'plugins']) {
+      const p = path.join(dir, '.opencode', name);
+      try {
+        if (fs.readdirSync(p).length) return p;
+      } catch {
+        // None here.
+      }
+    }
+    if (path.dirname(dir) === dir) return undefined;
+  }
+}
+
 // OpenCode's major version, from `--version` ("1.19.5", "opencode v2.3.0"),
-// remembered per binary until it changes on disk. Undefined if it can't tell.
-const majors = new Map<string, { key: string; major?: number }>();
+// remembered per binary until it changes on disk. A failed probe isn't
+// remembered, so the next process tries again.
+const majors = new Map<string, { key: string; major: number }>();
 export function opencodeMajor(binary: string | undefined): number | undefined {
   if (!binary) return undefined;
   let key: string;
@@ -152,16 +208,16 @@ export function opencodeMajor(binary: string | undefined): number | undefined {
   }
   const known = majors.get(binary);
   if (known?.key === key) return known.major;
-  let major: number | undefined;
   try {
-    const out = execFileSync(binary, ['--version'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const out = execFileSync(binary, ['--version'], { encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'] });
     const m = /(?:^|\s)v?(\d+)\./.exec(out.trim());
-    major = m ? Number(m[1]) : undefined;
+    if (!m) return undefined;
+    const major = Number(m[1]);
+    majors.set(binary, { key, major });
+    return major;
   } catch {
-    major = undefined;
+    return undefined;
   }
-  majors.set(binary, { key, major });
-  return major;
 }
 
 export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
@@ -183,6 +239,14 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
     // OpenCode 2 has no --pure (it prints its help and exits instead of
     // serving), so there the `plugins` rule in opencodeEnv does it.
     args: (run) => ((opencodeMajor(run?.binary) ?? 1) >= 2 ? ['acp'] : ['acp', '--pure']),
+    // OpenCode 1 imports a folder's .opencode/plugins/*.js, running its
+    // top-level code, even with --pure and the folder's config off (tried on
+    // 1.19.5, 17 Nov 2026). 2 doesn't. So unless the thread may run anything
+    // anyway, 1 doesn't start where a folder up the tree has plugins.
+    refuses: ({ cwd, mode, binary }) =>
+      mode !== 'full' && (opencodeMajor(binary) ?? 1) < 2 && folderPlugins(cwd)
+        ? `This folder has OpenCode plugins (${folderPlugins(cwd)}), and OpenCode 1 runs their code as a session opens, before anything can ask you. Update OpenCode to 2 (\`opencode upgrade --major\`) or use Full access, then send this again.`
+        : undefined,
     updateArgs: ['upgrade'],
     env: opencodeEnv,
     identifies: (init) => /opencode/i.test(init.agentInfo?.name ?? '') || Boolean(init.authMethods?.some((m) => m.id === 'opencode-login')),

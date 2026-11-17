@@ -146,9 +146,10 @@ export class AcpAdapter implements AgentAdapter {
   }
 
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession {
-    const refused = this.deps.agent.refuses?.({ cwd: opts.cwd, mode: opts.permissionMode });
+    const binary = this.binary();
+    const refused = this.deps.agent.refuses?.({ cwd: opts.cwd, mode: opts.permissionMode, binary });
     if (refused) throw new Error(refused);
-    const s = new AcpSession(opts, sink, this.deps, this.binary(), this.env(opts.account, opts.env));
+    const s = new AcpSession(opts, sink, this.deps, binary, this.env(opts.account, opts.env));
     s.start();
     return s;
   }
@@ -210,6 +211,8 @@ export class AcpSession implements AgentSession {
   private guardSeen = false;
   // Whether the agent trusted the folder when this process started (Grok).
   private trusted = false;
+  // The program this session runs, for a refusal that depends on its version.
+  private binary: string;
   private currentMode?: string;
   private cliCommands: SlashCommand[] = [];
   // Said once, before the first message of a new session.
@@ -232,6 +235,7 @@ export class AcpSession implements AgentSession {
     this.ctx = fileContext(opts.cwd, opts.mediaDir, opts.blobsDir);
     this.normalizer = new AcpNormalizer(this.ctx);
     this.trusted = deps.agent.trusts?.(opts.cwd) ?? false;
+    this.binary = binary;
     const args = deps.agent.args({ dataDir: deps.dataDir, trusted: this.trusted, binary });
     this.guard = deps.agent.guardName?.(args);
     this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
@@ -767,7 +771,7 @@ export class AcpSession implements AgentSession {
     this.mode = mode;
     // A mode this folder can't run in (Grok's trusted folders): the process
     // goes, and the next message starts one, which says why it can't.
-    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode, trusted: this.trusted });
+    const refused = this.deps.agent.refuses?.({ cwd: this.opts.cwd, mode, trusted: this.trusted, binary: this.binary });
     if (refused && this.state !== 'closed' && this.state !== 'closing') {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: refused } });
       this.kill();
