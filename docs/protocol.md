@@ -1992,7 +1992,9 @@ seconds or more between looks, or that sleeps a minute or more, as the CLI
 moves a command that hits its timeout to the background (a quick poll there
 is a server coming up, and a CI watch is a turn waiting for its own
 checks). Quoted text and a heredoc's body aren't read as code, except a
-`-c` script and a heredoc a shell or ssh reads. The text is read in linear
+shell's `-c` script (`bash -lc` too), ssh's remote command, a `"$(…)"`
+substitution and a heredoc a shell or ssh reads; a quoted number is kept,
+so `sleep "60"` is still a minute. The text is read in linear
 time, as the hook runs on the runner's event loop. The reason tells the agent to wait
 with `schedule_message` on a cron (a one-off whose check prints nothing is
 done for good, which would drop the wait) and a `check` that prints once

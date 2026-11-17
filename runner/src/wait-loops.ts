@@ -50,12 +50,37 @@ export function sleepSeconds(arg: string): number | undefined {
   return Number(m[1]) * unit;
 }
 
+// The words of the command being written at the end of `out`, from the last
+// separator, looking back at most 300 characters so many quotes or heredocs
+// on one long line stay linear (Codex's review, round 3).
+function lastCommandWords(out: string): string[] {
+  const tail = out.slice(Math.max(0, out.length - 300));
+  const cmd = tail.split(/[\n;&|(]/).pop() ?? '';
+  return cmd.trim().split(/\s+/).filter(Boolean);
+}
+
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
+const base = (w: string) => w.split('/').pop() ?? w;
+
+// Whether a quoted string coming next is a script that runs: after a shell's
+// -c (any letters with it, as in bash -lc), or as ssh's remote command.
+function scriptNext(out: string): boolean {
+  const words = lastCommandWords(out);
+  if (words.length && base(words[0]) === 'ssh') return true;
+  let w = words.length - 1;
+  if (!/^-[a-zA-Z]*c[a-zA-Z]*$/.test(words[w] ?? '')) return false;
+  while (w > 0 && words[w].startsWith('-')) w--;
+  return SHELLS.has(base(words[w]));
+}
+
 // The command with the text that isn't run blanked, in one pass: a quoted
-// string becomes `_` (so `sleep "60"` still has an argument, of a length
-// that can't be read), unless it follows `-c`, where it's the script
-// (bash -c 'until …'), and a heredoc's body goes unless a shell or ssh reads
-// it (`cat <<EOF` prints a script, `bash <<EOF` runs one). Codex's review,
-// 18 Nov: `printf "wait; sleep 60"` and a printed loop were refused.
+// string becomes `_`, and a heredoc's body goes. Kept, and read the same
+// way: a shell's -c script or ssh's remote command (bash -lc 'until …'), a
+// double-quoted string with a command substitution in it ("$(until …)"),
+// and a heredoc a shell or ssh reads (`cat <<EOF` prints a script, `bash
+// <<EOF` runs one). A quoted number is kept as it is, so `sleep "60"` is
+// still a minute. Codex's review, 18 Nov: `printf "wait; sleep 60"` and a
+// printed loop were refused, and round 3 found the rest.
 export function shellCode(command: string): string {
   const n = command.length;
   let out = '';
@@ -70,19 +95,24 @@ export function shellCode(command: string): string {
     if (c === "'" || c === '"') {
       let j = i + 1;
       while (j < n && command[j] !== c) j += c === '"' && command[j] === '\\' ? 2 : 1;
-      // Whether `-c` comes just before, looking back over spaces only.
-      let k = out.length - 1;
-      while (k >= 0 && (out[k] === ' ' || out[k] === '\t')) k--;
-      const script = out[k] === 'c' && out[k - 1] === '-' && (k < 2 || /\s/.test(out[k - 2]));
-      out += script ? ` ${command.slice(i + 1, j)} ` : ' _ ';
+      const body = command.slice(i + 1, j);
+      let keep = '_';
+      if (scriptNext(out) || (c === '"' && (body.includes('$(') || body.includes('`')))) keep = shellCode(body);
+      else if (/^\d+(?:\.\d+)?[smhd]?$/.test(body)) keep = body;
+      out += ` ${keep} `;
       i = j + 1;
       continue;
     }
-    if (c === '<' && command[i + 1] === '<' && command[i + 2] !== '<') {
+    // A here-string (<<<word) is one line of input, not a heredoc.
+    if (command.startsWith('<<<', i)) {
+      out += '<<<';
+      i += 3;
+      continue;
+    }
+    if (c === '<' && command[i + 1] === '<') {
       const m = /^<<-?\s*(['"]?)([\w.-]+)\1/.exec(command.slice(i, i + 200));
       if (m) {
-        const lineStart = out.lastIndexOf('\n') + 1;
-        const runs = /(?:^|[\s;&|(])(?:\S*\/)?(?:bash|sh|zsh|dash|ssh)\b/.test(out.slice(lineStart));
+        const runs = lastCommandWords(out).some((w) => SHELLS.has(base(w)) || base(w) === 'ssh');
         out += command.slice(i, i + m[0].length);
         i += m[0].length;
         if (runs) continue;

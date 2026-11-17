@@ -98,3 +98,23 @@ test('many gh pr checks without --watch are read in linear time', () => {
   isWaitCommand(big);
   assert.ok(performance.now() - t < 50, `took ${performance.now() - t} ms`);
 });
+
+test('round 3: here-strings, bash -lc, ssh commands, substitutions, quoted lengths, printed text in a script', () => {
+  assert.ok(isWaitCommand('grep -q ready <<<ready\nuntil test -f ready; do sleep 60; done'));
+  assert.ok(isWaitCommand("bash -lc 'until test -f ready; do sleep 60; done'", false));
+  assert.ok(isWaitCommand("ssh tinker-desk 'until test -f ready; do sleep 60; done'", false));
+  assert.ok(isWaitCommand('result="$(until test -f ready; do sleep 60; done)"', false));
+  assert.ok(isWaitCommand('sleep "600"', false));
+  assert.ok(isWaitCommand('until test -f ready; do sleep "60"; done', false));
+  assert.ok(!isWaitCommand(`python3 -c 'print("example: sleep 60 before retrying")'`, false));
+  assert.ok(!isWaitCommand(`bash -c 'printf "%s\\n" "example: sleep 60 before retrying"'`, false));
+  assert.ok(!isWaitCommand(`git commit -m "Fix the loop that would sleep 60 s; done"`, false));
+  assert.ok(!isWaitCommand("gh pr create --title x --body \"$(cat <<'EOF'\nWe used to sleep 60 in a while loop; do not.\nEOF\n)\"", false));
+});
+
+test('a long line before a heredoc is read in linear time', () => {
+  const big = 'true;'.repeat(8000) + 'cat <<EOF\nx\nEOF';
+  const t = performance.now();
+  isWaitCommand(big);
+  assert.ok(performance.now() - t < 50, `took ${performance.now() - t} ms`);
+});
