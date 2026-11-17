@@ -308,8 +308,12 @@ export function cloneArgs(checkout: string, dir: string): string[] {
 // Brings <dir> to the checkout's main: a clone of the checkout (so only
 // what's committed on main is built, never a working tree), fetched and
 // reset each time. runner/node_modules is kept between runs for the checks,
-// and dropped when package-lock.json changed so they install afresh. `ref` is
-// the checkout's own main unless the machine follows GitHub's (follow-origin.ts).
+// and dropped when package-lock.json changed so they install afresh. So is
+// the repo root's, when the runner sits in a repo: the runner's backend
+// tests load convex/server and the state machines library from there
+// (test/helpers/convex-memory.ts), and deploy.mjs installs it for them. `ref`
+// is the checkout's own main unless the machine follows GitHub's
+// (follow-origin.ts).
 export async function syncClone(checkout: string, prefix: string, dir: string, ref = 'refs/heads/main'): Promise<MainInfo> {
   if (!fs.existsSync(path.join(dir, '.git'))) {
     await fs.promises.rm(dir, { recursive: true, force: true });
@@ -318,21 +322,28 @@ export async function syncClone(checkout: string, prefix: string, dir: string, r
   }
   await gitAsync(dir, ['fetch', '-q', checkout, ref]);
   await gitAsync(dir, ['checkout', '-q', '-B', 'main', 'FETCH_HEAD']);
-  const modules = path.join(dir, prefix, 'node_modules');
-  await gitAsync(dir, ['clean', '-qfdx', '-e', `${prefix}node_modules`]);
-  const lockFile = path.join(dir, prefix, 'package-lock.json');
-  // Beside the clone, not in it: git clean would take it out each time.
-  const stamp = path.join(path.dirname(dir), 'installed-lock');
-  const lock = fs.existsSync(lockFile) ? crypto.createHash('sha256').update(fs.readFileSync(lockFile)).digest('hex') : '';
-  let had = '';
-  try {
-    had = fs.readFileSync(stamp, 'utf8').trim();
-  } catch {
-    // first run
-  }
-  if (had !== lock) {
-    await fs.promises.rm(modules, { recursive: true, force: true });
-    fs.writeFileSync(stamp, lock + '\n');
+  // [folder in the clone, stamp file name]. The stamps are beside the
+  // clone, not in it: git clean would take them out each time.
+  const installs: [string, string][] = [[prefix, 'installed-lock']];
+  if (prefix) installs.push(['', 'installed-lock-root']);
+  // The root's node_modules is only /node_modules: an exclude without the
+  // slash would keep every node_modules in the clone.
+  await gitAsync(dir, ['clean', '-qfdx', ...installs.flatMap(([p]) => ['-e', `/${p}node_modules`])]);
+  for (const [p, name] of installs) {
+    const modules = path.join(dir, p, 'node_modules');
+    const lockFile = path.join(dir, p, 'package-lock.json');
+    const stamp = path.join(path.dirname(dir), name);
+    const lock = fs.existsSync(lockFile) ? crypto.createHash('sha256').update(fs.readFileSync(lockFile)).digest('hex') : '';
+    let had = '';
+    try {
+      had = fs.readFileSync(stamp, 'utf8').trim();
+    } catch {
+      // first run
+    }
+    if (had !== lock) {
+      await fs.promises.rm(modules, { recursive: true, force: true });
+      fs.writeFileSync(stamp, lock + '\n');
+    }
   }
   const tree = await releaseTreeAtAsync(dir, prefix, 'HEAD');
   if (!tree) throw new Error(`main in ${checkout} has no ${prefix}src to build`);

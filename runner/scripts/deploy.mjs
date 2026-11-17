@@ -779,6 +779,13 @@ function checks(c, g) {
   const opts = { cwd: c.runnerDir, env: cleanEnv() };
   if (remoteChecks(checkHostsFrom(readJson(path.join(c.home, 'runner.json'))), g.root, opts)) return;
   if (!packagesInstalled(c.runnerDir)) step('Installing the checkout\'s packages', c.npm, ['ci', '--no-audit', '--no-fund'], opts);
+  // The repo root's too, when the runner sits in a repo that has them: the
+  // backend tests load convex/server and the state machines library from
+  // there (test/helpers/convex-memory.ts). Without them every self-update
+  // that ran its checks here (bruce, Hetzner Cloud, the Pixel) failed from
+  // 17 Nov, while the M5's passed on check hosts, where check.sh installs both.
+  if (g.prefix && fs.existsSync(path.join(g.root, 'package-lock.json')) && !packagesInstalled(g.root))
+    step('Installing the repo\'s packages', c.npm, ['ci', '--no-audit', '--no-fund'], { ...opts, cwd: g.root });
   step('Typecheck', c.npm, ['run', 'typecheck'], opts);
   unitTests(c, opts);
 }

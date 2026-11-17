@@ -107,9 +107,20 @@ test('syncClone brings a clone to main and reports its release tree; docs and te
   fs.mkdirSync(path.join(dir, 'runner', 'node_modules', 'left'), { recursive: true });
   await syncClone(repo, 'runner/', dir);
   assert.ok(fs.existsSync(path.join(dir, 'runner', 'node_modules', 'left')));
+  // The repo root's node_modules too (the backend tests load convex from
+  // there), but no other folder's.
+  fs.mkdirSync(path.join(dir, 'node_modules', 'convex'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'web', 'node_modules', 'stray'), { recursive: true });
+  await syncClone(repo, 'runner/', dir);
+  assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'convex')));
+  assert.ok(!fs.existsSync(path.join(dir, 'web')));
   commit('lock', 'runner/package-lock.json', '{"name":"x","lockfileVersion":3,"v":2}\n');
   await syncClone(repo, 'runner/', dir);
   assert.ok(!fs.existsSync(path.join(dir, 'runner', 'node_modules')));
+  assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'convex')));
+  commit('root lock', 'package-lock.json', '{"name":"r","lockfileVersion":3}\n');
+  await syncClone(repo, 'runner/', dir);
+  assert.ok(!fs.existsSync(path.join(dir, 'node_modules')));
   assert.equal(releaseTreeAt(repo, 'runner/', 'nonsense'), undefined);
 });
 
