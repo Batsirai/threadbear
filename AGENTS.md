@@ -349,9 +349,11 @@ if `tb` isn't found (an older runner, or outside a thread), use
   the work is done and checked, `tb land` rebases it on main, runs
   `./check.sh --quick` and fast-forwards main in the main checkout
   (`--dry-run` first if you like; it never pushes). Landings waiting
-  for the lock are checked together in the next check, and a failed
-  group is halved until the one that broke it is found
-  (docs/thread-worktrees.md, "Landing together"), so run it in the
+  for the lock are checked together in the next check. When a group
+  fails, what failed is run on each landing alone and the broken ones
+  are left out, told why at once (docs/thread-worktrees.md, "Landing
+  together"; a failed check ends with the `./check.sh --only "..."`
+  that runs just what failed, the quick way to see your fix work), so run it in the
   background and expect up to two checks' wait. Mike's Land chip does
   the same. If it refuses, it says why and what to fix: commit your
   changes, sort out the conflicting files, fix the check, or wait for

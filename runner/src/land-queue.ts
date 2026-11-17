@@ -56,6 +56,11 @@ export type QueueEntry = {
   limit?: number;
   limitAt?: string; // the main that limit was set on; it lapses once main moves
   result?: QueueResult;
+  // Left out of its group by the lock's holder: after the group's check
+  // failed, what failed was run on this landing by itself (on the main it
+  // would have landed on, `at`) and failed there too. `text` is what its tb
+  // prints as it stops. Out of the line from then on, like one with a result.
+  refused?: { text: string; at: string };
 };
 
 export const queueDir = (common: string): string => path.join(common, 'threadbear-land-queue');
@@ -123,7 +128,7 @@ export function waiting(common: string): QueueEntry[] {
       leaveQueue(common, e.id);
       continue;
     }
-    if (!e.result) found.push(e);
+    if (!e.result && !e.refused) found.push(e);
   }
   return found.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
 }

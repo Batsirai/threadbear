@@ -411,6 +411,8 @@ while [ $# -gt 0 ]; do
     --quick) QUICK=1; ARGS+=("$1") ;;
     --runner) QUICK=1; RUNNER_ONLY=1; ARGS+=("$1") ;;
     --all) ALL=1; ARGS+=("$1") ;;
+    # Its value goes with it, whatever it looks like (check.sh has checked it).
+    --only) ARGS+=("$1" "${2:-}"); shift ;;
     *) ARGS+=("$1") ;;
   esac
   shift

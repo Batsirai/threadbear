@@ -2027,7 +2027,10 @@ If the group has landed and the command is still waiting for the landing
 lock, the message says it has already landed.
 
 If a check of several landings fails, the command that ran it shows the end
-of its output straight away, then checks smaller groups to find the cause.
+of its output straight away, then runs only what failed on each landing by
+itself to find the one that broke it. That one is told at once and left out,
+and the rest are checked again together. When that can't tell, it checks
+smaller groups instead.
 The agent can read any logs named there while those checks run, but must wait
 for the command to finish before editing the worktree it's using.
 

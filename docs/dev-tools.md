@@ -248,12 +248,16 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   than stopping the live runner's CLIs it names. `--home` on a folder
   holding a thread whose folder isn't under `$TMPDIR` is refused.
   `test/unit/real-copy.test.ts` covers it.
-- `./check.sh [--quick | --app] [--e2e] [--shots DIR]` at the repo root:
+- `./check.sh [--quick | --app] [--e2e] [--shots DIR] [--only STEPS]` at the repo root:
   runner typecheck, unit tests and deploy tests, app `swift build` and
   `swift test` (with the mock runner's packages installed and its tests
   required). `--app` is the app's part alone. `--e2e`
   adds the runner's real-model e2e (cheapest model, temp dirs); `--shots`
-  runs `app/Tools/screenshots.sh`. One line per step, nonzero exit if
+  runs `app/Tools/screenshots.sh`. `--only "step;step=files"` runs just
+  those steps (and, for the runner's unit tests, those files); a failed
+  run ends with the `--only` that runs what failed again, which `tb land`
+  uses to find the landing that broke a group
+  (docs/thread-worktrees.md, "Finding who broke a group"). One line per step, nonzero exit if
   anything failed, on the Node `runner/scripts/find-node.sh` picks.
   Unit tests preload `runner/test/helpers/clean-env.ts`: each process gets
   a temporary HOME and XDG folders, and inherited account/data overrides

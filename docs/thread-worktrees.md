@@ -237,7 +237,9 @@ their own.
   checks failed on a broken main while its one-line repair waited). If a
   group with only fixes and the holder fails, the fixes are left out next,
   so a broken "fix" is still found.
-- If a group's check fails, nothing lands and the group is halved: the
+- If a group's check fails, nothing lands. The holder first looks for the
+  landing that broke it ("Finding who broke a group", below). When that
+  can't say, the group is halved: the
   holder goes again with itself and the first half, and the rest wait with
   their limit halved too. Before retrying, the holder prints the exit code
   and last 40 lines of the failed check's output (up to 8,000 characters),
@@ -266,6 +268,51 @@ their own.
 
 So a landing waits for at most the check that's running and the next one,
 unless a check fails.
+
+### Finding who broke a group
+
+A thread runs a test file or two itself and leaves the whole suite to its
+landing, so a fair share of branches reach the line broken: about a third
+in the four days to 17 Nov. Each failed its whole group's check, and
+halving then cost a whole check per step: 54 failed group checks, 9 hours
+of the check hosts, a median wait of 35 minutes on 16 Nov, and four checks
+before anything landed when the broken branch was the one at the front of
+a group of eight.
+
+So a failed check says what failed, and that alone is run on each landing:
+
+- A failed `./check.sh` ends with `To run only what failed again: --only
+  "..."`: the steps that failed, and for the runner's unit tests the files
+  (when there are 8 or fewer). `./check.sh --quick --only "<that>"` runs
+  just those, and says `skip ... (--only left it out)` for the rest. It's
+  the quick way to see a fix work, too.
+- When a group's check fails with that line, the holder runs the same check
+  with `THREADBEAR_CHECK_ONLY` set to it on each landing by itself: its own
+  first, then each of the others replayed onto main without the rest. A few
+  test files are seconds each, plus the copy to the check host.
+- Those runs are in a checkout of tb land's own, `threadbear-land-alone/`
+  beside the lock: a clone that borrows the repo's objects, not a worktree,
+  so no thread's worktree has another's files come and go in it, and
+  nothing that lists worktrees meets it. They go to a check host or nowhere
+  (`THREADBEAR_CHECK_HOST_ONLY`): with no host, they say so and the group
+  is halved as before.
+- A landing that fails it alone is left out and told so at once, with that
+  run's output: its `tb land` stops waiting and exits 1 (`refused` in its
+  queue entry). The holder's next check has itself and only the ones that
+  passed alone, so it isn't failed again by someone who joined meanwhile.
+- A run that says nothing either way (no host could take it, it was killed)
+  refuses nobody. If nothing passed alone, main is run too: when what
+  failed fails there, nobody is blamed. If each passes alone, it takes two
+  of them together, or it's a test that fails now and then: the group is
+  halved.
+- It's done once per landing, and for no longer than about one check takes
+  (the time runs out: the ones seen to pass go into the next check, the
+  rest wait their turn). Not with a `--despite-red` fix in the group, nor
+  for a check read from a subfolder: those are halved.
+
+Each of those runs leaves a line in the times log with `alone: true`,
+`only` and `passed`, and none of `ok`, `check` and `intact`, so nothing that
+reads the log for whole checks counts one.
 
 ### Where a landing's time goes
 
