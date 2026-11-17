@@ -482,12 +482,11 @@ export class Moves {
       // next update or look tries again.
       if (e instanceof Waiting) return;
       const note = e instanceof Error ? e.message : String(e);
-      // The backend refusing for the minute it's being updated (a deploy's
-      // stepping stone, convex/stepping.ts), or T's adopt or done not going
-      // through after the switch, where there's nothing to fail and a move
-      // left claimed would keep the thread from ever moving again: the
-      // same step again shortly, not the move given up.
-      if (BEING_UPDATED.test(note) || row.state === 'claimed') {
+      // T's adopt or done not going through after the switch, where there's
+      // nothing to fail, and a move left claimed would keep the thread from
+      // ever moving again: the same step again shortly (adopt can run
+      // again), not the move given up.
+      if (row.state === 'claimed') {
         this.d.log.warn('a move step will be tried again', { moveId: row.moveId, state: row.state, error: note });
         this.retry(row);
         return;
@@ -509,10 +508,27 @@ export class Moves {
     }
   }
 
+  // The backend, with each call asked again while the backend says it's
+  // being updated (a deploy's stepping stone, convex/stepping.ts: a minute
+  // or so): only the call, so a step that has already uploaded a bundle or
+  // placed a thread doesn't do it again (Codex's review).
   private backend(): MovesBackend {
     const b = this.d.backend();
     if (!b) throw new Error("This runner isn't connected to Threadbear's backend.");
-    return b;
+    return {
+      ...b,
+      call: async (fn, args) => {
+        for (let tries = 1; ; tries++) {
+          try {
+            return await b.call(fn, args);
+          } catch (e) {
+            if (tries >= UPDATING_TRIES || !BEING_UPDATED.test(e instanceof Error ? e.message : String(e))) throw e;
+            this.d.log.warn('the backend is being updated: asking again shortly', { fn });
+            await new Promise<void>((done) => (this.d.setTimer ?? defaultTimer)(done, Math.min(RETRY_MAX_MS, RETRY_MS * 2 ** (tries - 1))));
+          }
+        }
+      },
+    };
   }
 
   private moving(row: MoveRow, note?: string): ThreadMoving {
@@ -678,6 +694,9 @@ export class Moves {
 const BEING_UPDATED = /The backend is being updated/;
 const RETRY_MS = 20_000;
 const RETRY_MAX_MS = 5 * 60_000;
+// 20 s, 40 s, 80 s, 160 s, then 5 minutes: about 20 minutes, far past a
+// stepping stone's minute, before the step fails as any other error would.
+const UPDATING_TRIES = 7;
 
 // A step that can't be taken yet: not a failure.
 class Waiting extends Error {

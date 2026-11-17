@@ -4,6 +4,9 @@
 // thread and everything under it to the new runner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { call, claimAndFinish, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
@@ -520,4 +523,46 @@ test('the backfill gives moves from before moveState their state and deadlines, 
   await fireTimers(s, 0);
   assert.equal(moveOf(s, 'm-packing').state, 'failed');
   assert.equal(moveOf(s, 'm-asking').state, 'asking');
+});
+
+// Codex's review: while the deploy's stepping stone has the machine off, a
+// runner from before the retries treats a refused moveDone as final, which
+// left the move claimed and the thread unable to move again. moveDone and
+// moveFailed go through then, the way they did before the machine; the rest
+// say the backend is being updated.
+test('during the stepping stone, done and failed go through as before, and keep a backfilled row’s moveState in step', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-stepping-'));
+  try {
+    const convex = path.join(import.meta.dirname, '../../../convex');
+    for (const f of fs.readdirSync(convex)) if (f.endsWith('.ts')) fs.copyFileSync(path.join(convex, f), path.join(root, f));
+    const stepping = path.join(root, 'stepping.ts');
+    fs.writeFileSync(stepping, fs.readFileSync(stepping, 'utf8').replace('export const STEPPING: readonly string[] = [];', "export const STEPPING: readonly string[] = ['moveState'];"));
+    process.env.RUNNER_KEY = OWNER;
+    const b = memoryBackend(root);
+    const m = load('moves', root);
+    const now = Date.now();
+    const base = { from: MINI, to: LAPTOP, createdAt: now - 60_000, updatedAt: now - 1000 };
+    const id = async (moveId: string, row: Record<string, unknown>) => (await b.ctx.db.insert('threadMoves', { moveId, threadId: moveId, ...base, ...row }), moveId);
+    const row = (moveId: string) => b.rows('threadMoves').find((r) => r.moveId === moveId)!;
+    const a = await id('m-claimed', { state: 'claimed' });
+    const r = await id('m-rehomed', { state: 'claimed', rehomedAt: now - 500 });
+    const f = await id('m-asking', { state: 'asking' });
+    // One the backfill has already reached: its moveState follows the old fields.
+    const g = await id('m-backfilled', { state: 'claimed', moveState: { kind: 'claimed', claimedAt: now - 1000, doneAsked: false }, moveStateTimers: [] });
+    const fn = (f: unknown, args: Record<string, unknown>) => call(b.ctx, f as never, { key: OWNER, ...args });
+
+    await fn(m.moveDone, { moveId: a });
+    assert.deepEqual([row(a).state, row(a).doneAsked, row(a).moveState], ['claimed', true, undefined]);
+    await fn(m.moveDone, { moveId: r });
+    assert.equal(row(r).state, 'done');
+    await fn(m.moveFailed, { moveId: f, note: 'no room' });
+    assert.deepEqual([row(f).state, row(f).note], ['failed', 'no room']);
+    await fn(m.moveDone, { moveId: g });
+    assert.deepEqual(row(g).moveState, { kind: 'claimed', claimedAt: row(g).updatedAt, doneAsked: true });
+    assert.equal(await outcome(fn(m.moveFailed, { moveId: a, note: 'x' })), 'conflict', 'past the switch, still');
+    // The rest wait for the machine.
+    await assert.rejects(fn(m.cancelMove, { moveId: g }), /The backend is being updated/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

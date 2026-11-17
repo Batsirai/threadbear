@@ -206,11 +206,13 @@ test('a busy thread waits for its turn to end before it freezes', async () => {
   await until(() => moveRow(w).state === 'done', 'done once the turn ended');
 });
 
-// A step refused while the backend is being updated (a deploy's stepping
-// stone, convex/stepping.ts) is tried again, not taken for the move failing;
-// so is T's adopt and done after the switch, which once lost left the move
-// claimed and the thread unable to move again until T restarted.
-test('a step refused while the backend is updated, and T\'s done after the switch, are tried again', async () => {
+// A call refused while the backend is being updated (a deploy's stepping
+// stone, convex/stepping.ts) is asked again, not taken for the move failing,
+// and only the call: a bundle already uploaded isn't uploaded again, a
+// thread already placed isn't placed again (Codex's review). T's adopt and
+// done after the switch are tried again too: one lost used to leave the
+// move claimed and the thread unable to move again until T restarted.
+test("calls refused while the backend is updated are asked again, and T's done after the switch is tried again", async () => {
   const w = await world();
   await call(w.b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId: 'T9', runnerId: MINI, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });
   const s = source('T9');
@@ -221,27 +223,34 @@ test('a step refused while the backend is updated, and T\'s done after the switc
     if (++adopts === 1) throw new Error('the folder was busy');
     return adopt(row);
   };
+  const place = t.host.place!;
+  let places = 0;
+  t.host.place = async (row, entries) => (places++, place(row, entries));
   const timers: { fn: () => void; ms: number }[] = [];
   const setTimer = (fn: () => void, ms: number) => (timers.push({ fn, ms }), { cancel() {} });
   const common = { runnerName: (id: string) => names[id] ?? id };
-  const refused = new Set(['moveReady']);
-  const tb = w.backendFor(OWNER, LAPTOP);
-  const flaky: MovesBackend = {
-    ...tb,
+  const refused = new Set(['moveReady', 'movePacked', 'moveClaim']);
+  let uploads = 0;
+  const flaky = (b: MovesBackend): MovesBackend => ({
+    ...b,
     async call(fn, args) {
-      if (refused.delete(fn)) throw new Error('[Request ID: x] Server Error Uncaught ConvexError: {"kind":"conflict","message":"The backend is being updated. Try again in a minute."}');
-      return tb.call(fn, args);
+      if (refused.delete(fn)) throw new Error('The backend is being updated. Try again in a minute.');
+      return b.call(fn, args);
     },
-  };
-  new Moves({ self: () => MINI, backend: () => w.backendFor(MINI_KEY, MINI), host: { ...common, ...s.host } as MovesHost, log, setTimer }).start();
-  new Moves({ self: () => LAPTOP, backend: () => flaky, host: { ...common, ...t.host } as MovesHost, log, setTimer }).start();
+    upload: (url, bytes) => (uploads++, b.upload(url, bytes)),
+  });
+  new Moves({ self: () => MINI, backend: () => flaky(w.backendFor(MINI_KEY, MINI)), host: { ...common, ...s.host } as MovesHost, log, setTimer }).start();
+  new Moves({ self: () => LAPTOP, backend: () => flaky(w.backendFor(OWNER, LAPTOP)), host: { ...common, ...t.host } as MovesHost, log, setTimer }).start();
   await startBound(w, 'T9', s, t);
-  await until(() => timers.some((x) => x.ms === 20_000), 'a try again booked');
-  assert.equal(moveRow(w).state, 'asking', 'not failed');
-  timers.splice(timers.findIndex((x) => x.ms === 20_000), 1)[0]!.fn();
-  await until(() => moveRow(w).state === 'claimed' && timers.some((x) => x.ms === 20_000), 'claimed, its adopt to try again');
-  timers.splice(timers.findIndex((x) => x.ms === 20_000), 1)[0]!.fn();
-  await until(() => moveRow(w).state === 'done', 'done once the adopt went through');
+  for (let i = 0; i < 6 && moveRow(w).state !== 'done'; i++) {
+    await until(() => timers.some((x) => x.ms === 20_000) || moveRow(w).state === 'done', 'a call or step to try again');
+    const at = timers.findIndex((x) => x.ms === 20_000);
+    if (at >= 0) timers.splice(at, 1)[0]!.fn();
+  }
+  await until(() => moveRow(w).state === 'done', 'done once each went through');
+  assert.equal(refused.size, 0, 'each call was refused once');
+  assert.equal(uploads, 1, 'the bundle went up once');
+  assert.equal(places, 1, 'the thread was placed once');
   assert.equal(t.adopted, 1);
 });
 

@@ -6278,12 +6278,15 @@ or after 12 hours whatever S says, so it can't block the thread's next
 move for good. On `failed` or `cancelled` S unfreezes the
 thread if it froze it and T throws away its staging; the chunks are deleted
 when a move ends, whichever way. A runner that restarts reads its moves
-again and carries on from the state. A step refused with "The backend is
-being updated" (a deploy's stepping stone, for a minute) is tried again
-rather than failing the move, and so is T's adopt and `moveDone` at
-`claimed`, where there's nothing to fail: 20 seconds later, then longer
-each time, up to 5 minutes. Older runners failed the move, or left it
-`claimed` until T restarted.
+again and carries on from the state. A call refused with "The backend is
+being updated" (a deploy's stepping stone, for a minute) is asked again,
+only that call, rather than failing the move: 20 seconds later, then
+longer each time, up to 5 minutes, for about 20 minutes in all. T's adopt
+and `moveDone` at `claimed`, where there's nothing to fail, are tried again
+the same way whatever went wrong. Older runners failed the move, or left
+it `claimed` until T restarted, so while the stepping stone is up
+`moveDone` and `moveFailed` still go through as they did before the
+machine.
 
 In the backend a move is a state machine (`convex/moveMachine.ts`,
 [machines.md](machines.md)) on its own field, `moveState`; `state` stays

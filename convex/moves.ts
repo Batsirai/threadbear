@@ -24,6 +24,9 @@ import { checkRunnerId, forbidden, hasLiveKey, runnerAuth, sha256, withoutCreden
 import { buryIndexRows, countBodyBytes, countMessageBytes, MAX_RUNNER_UPLOAD_BYTES, moveView, storageInUse, storedBytes } from './sync';
 import { docBytes, type Caller } from './runnerAccess';
 import { machines, move as moveMachine } from './machines';
+import { dropChunks } from './moveMachine';
+import { moveStateFrom } from './moveStates';
+import { steppingFor } from './stepping';
 
 // A runner heard from this recently is online (as phone.ts has it).
 const ONLINE_MS = 3 * 60_000;
@@ -444,6 +447,7 @@ export const moveDone = mutation({
     const caller = await runnerAuth(ctx, key, 'moveDone');
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'to');
+    if (steppingFor('moveState')) return await asBefore(ctx, m, 'done');
     if (m.state === 'done' || (m.moveState.kind === 'claimed' && m.moveState.doneAsked)) return null;
     await step(ctx, m, { type: 'DONE' }, 'be done');
     return null;
@@ -459,10 +463,40 @@ export const moveFailed = mutation({
     const m = await moveRow(ctx, moveId);
     await mustBe(ctx, caller, m, 'either');
     if (m.state === 'failed' || m.state === 'cancelled') return null;
+    if (steppingFor('moveState')) return await asBefore(ctx, m, 'failed', note);
     await step(ctx, m, { type: 'FAIL', note }, 'fail');
     return null;
   },
 });
+
+/**
+ * moveDone and moveFailed while the deploy's stepping stone has the
+ * machine off (stepping.ts), the way they were before it: a runner from
+ * before API 85's retries treats a refusal as final, and a refused done
+ * would leave the move claimed, and the thread unable to move again, until
+ * that runner restarted (Codex's review). The machine has never run on this
+ * deployment then, so the old fields are the move's whole story; a row the
+ * backfill has already reached gets its moveState again from them.
+ */
+async function asBefore(ctx: MutationCtx, m: Move, what: 'done' | 'failed', note?: string): Promise<null> {
+  const now = Date.now();
+  let fields: Partial<Move>;
+  if (what === 'done') {
+    if (m.state === 'done') return null;
+    if (m.state !== 'claimed') throw conflict(`The move is ${m.state}, so it can't be done.`);
+    if (m.rehomedAt) {
+      await dropChunks(ctx, m);
+      fields = { state: 'done', chunks: undefined, updatedAt: now };
+    } else fields = { doneAsked: true, updatedAt: now };
+  } else {
+    if (!['asking', 'ready', 'packing', 'unpacking'].includes(m.state)) throw conflict(`The move is ${m.state}, so it can't fail.`);
+    await dropChunks(ctx, m);
+    fields = { state: 'failed', chunks: undefined, updatedAt: now, note: (note ?? '').replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, 500) || 'The move failed.' };
+  }
+  const backfilled = (m as Partial<Move>).moveState !== undefined;
+  await ctx.db.patch(m._id, { ...fields, ...(backfilled ? { moveState: moveStateFrom({ ...m, ...fields }), moveStateTimers: [] } : {}) });
+  return null;
+}
 
 const REHOME_TABLES = ['messages', 'eventBodies', 'shareImages', 'replyImages', 'heldPictures'] as const;
 
