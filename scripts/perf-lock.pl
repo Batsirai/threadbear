@@ -258,16 +258,25 @@ my @command = @ARGV;
 if ($desk) {
     die "perf-lock: --desk needs a fresh pidfile\n" if $pidfile eq '-' || -e $pidfile || -e "$pidfile.gone";
     my $quote = sub { my $s = shift; $s =~ s/'/'\\''/g; return "'$s'"; };
-    # What Desk Runner must be able to read: this script's folder (the run's
-    # copy of the checkout) and the build folders. On Tinker Desk those are on
-    # an external SSD, and macOS holds a Desk Runner process's open() there
-    # until someone allows it "Removable Volumes", with nobody at the screen
-    # to ask: from 17 Nov every --desk run sat in perl --child, which hadn't
-    # even read its script yet. So each is opened first in a child that's
-    # killed if it takes too long, and the run says why instead of hanging.
-    # perl -e <this> <seconds> <n> <path>... <command...>
-    my $desk_reads = <<'READS';
-my ($wait, $n) = splice(@ARGV, 0, 2);
+    # The desk line's first step, run by Desk Runner. It leaves Desk Runner's
+    # process group (perf-children.pl --child must lead its own), so Desk
+    # Runner's cancel can't reach it, and the hangup guard finds it only by
+    # the pid it writes to <pidfile>. Every step after it execs, keeping the pid.
+    #
+    # Before that it opens what the run needs (this script's folder, the
+    # pidfile's, the build folders), each in a child killed after <seconds>.
+    # On Tinker Desk those are on an external SSD, and macOS holds a Desk
+    # Runner process's open() there until someone allows it "Removable
+    # Volumes", with nobody at the screen to ask: from 17 Nov every --desk run
+    # sat in perl --child, not having read its own script, and outlived its
+    # ssh, as the pid was only written later, by the bash below. The pidfile
+    # is on that disk too (Codex's review), so it's written only after the
+    # check, which ends by itself either way; a run whose ssh went meanwhile
+    # finds <pidfile>.gone and stops there.
+    # perl -e <this> <pidfile> <seconds> <n> <path>... <command...>
+    my $desk_start = <<'START';
+setpgrp(0, 0);
+my ($pidfile, $wait, $n) = splice(@ARGV, 0, 3);
 for my $path (splice(@ARGV, 0, $n)) {
     my $pid = fork() // die "perf-lock: fork: $!\n";
     if (!$pid) { if (-d $path) { opendir(my $d, $path) or exit 2; } else { open(my $f, '<', $path) or exit 2; } exit 0; }
@@ -282,21 +291,18 @@ for my $path (splice(@ARGV, 0, $n)) {
         . "or give it Full Disk Access.\n";
     exit 126;
 }
+open(my $f, '>', $pidfile) or exit 129;
+print {$f} "$$\n";
+close $f or exit 129;
+exit 129 if -e "$pidfile.gone";
 exec { $ARGV[0] } @ARGV or exit 127;
-READS
-    my @reads = grep { -e $_ } ("$FindBin::Bin/perf-children.pl", "$home/.cache/threadbear-check/gpui",
-        map { $ENV{$_} // () } qw(THREADBEAR_REMOTE_SOURCE THREADBEAR_REMOTE_TARGET));
+START
+    my @reads = grep { -e $_ } ("$FindBin::Bin/perf-children.pl", $pidfile =~ s{/[^/]*$}{}r,
+        "$home/.cache/threadbear-check/gpui", map { $ENV{$_} // () } qw(THREADBEAR_REMOTE_SOURCE THREADBEAR_REMOTE_TARGET));
     my $line = join(' ', map { $quote->($_) }
         ('env', "THREADBEAR_PERF_LOCK_OWNER=$ENV{THREADBEAR_PERF_LOCK_OWNER}",
          "THREADBEAR_PERF_CHILDREN=$registry",
-         # The pid goes in the pidfile first thing, not only from the bash
-         # below: this leaves Desk Runner's process group, so its own cancel
-         # can't reach it, and a run held up before bash (18 Nov: perl --child
-         # sat 41 minutes under Desk Runner) was out of the hangup guard's
-         # reach too. Every step after this execs, so the pid stays the same.
-         'perl', '-e', 'setpgrp(0, 0); my $p = shift; open(my $f, ">", $p) or exit 129; print {$f} "$$\n"; close $f or exit 129; exit 129 if -e "$p.gone"; exec { $ARGV[0] } @ARGV or exit 127',
-         $pidfile,
-         'perl', '-e', $desk_reads, $ENV{THREADBEAR_DESK_READ_SECONDS} || 20, scalar(@reads), @reads,
+         'perl', '-e', $desk_start, $pidfile, $ENV{THREADBEAR_DESK_READ_SECONDS} || 20, scalar(@reads), @reads,
          'perl', "$FindBin::Bin/perf-children.pl", '--child', $registry, '/bin/bash', '-c',
          'echo $$ >"$1"; [ ! -e "$1.gone" ] || exit 129; shift; exec "$@"',
          'perf-desk', $pidfile, @command));

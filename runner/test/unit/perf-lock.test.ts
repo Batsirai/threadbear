@@ -879,8 +879,11 @@ test('a Desk run that cannot read its folders says why instead of hanging', { sk
   const blocked = path.join(h.home, 'blocked');
   assert.equal(spawnSync('mkfifo', [blocked]).status, 0);
   const ran = path.join(h.home, 'ran');
-  const run = h.run(['sh', '-c', 'touch "$1"', 'sh', ran], { THREADBEAR_REMOTE_SOURCE: blocked, THREADBEAR_DESK_READ_SECONDS: '1' }, path.join(h.home, 'desk.pid'));
+  const pidfile = path.join(h.home, 'desk.pid');
+  const run = h.run(['sh', '-c', 'touch "$1"', 'sh', ran], { THREADBEAR_REMOTE_SOURCE: blocked, THREADBEAR_DESK_READ_SECONDS: '1' }, pidfile);
   assert.equal(await run.done, 126, run.output);
   assert.match(run.output, /Desk Runner couldn't open .*blocked.*Removable Volumes/);
   assert.ok(!fs.existsSync(ran));
+  // remote.sh's pidfile is on that same disk, so it's only written after the check.
+  assert.ok(!fs.existsSync(pidfile), 'the pidfile was written before the folders were checked');
 });
