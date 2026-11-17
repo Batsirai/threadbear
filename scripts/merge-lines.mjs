@@ -21,8 +21,11 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+// Line endings are evened out to \n first: otherwise a side that turned a
+// file to CRLF has "b\r" where the other took out "b", and it comes back
+// (Codex's review, 17 Nov). The doc is LF in the repo.
 const lines = (text) => {
-  const all = text.split('\n');
+  const all = text.replace(/\r\n/g, '\n').split('\n');
   if (all.at(-1) === '') all.pop();
   return all;
 };

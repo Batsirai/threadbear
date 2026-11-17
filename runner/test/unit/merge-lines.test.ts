@@ -58,6 +58,10 @@ test('merge-lines: the same change on both sides counts once', () => {
   assert.equal(mergeLines(DOC, DOC, DOC), DOC);
 });
 
+test('merge-lines: a side that turned the file to CRLF still loses what the other took out', () => {
+  assert.equal(mergeLines('a\nb\n', 'a\n', 'a\r\nb\r\nc\r\n'), 'a\nc\n');
+});
+
 test('merge-lines: one side adding while the other takes out', () => {
   assert.equal(mergeLines(DOC, adding(DOC, 'one', 'alpha'), without(DOC, 'gamma')), without(adding(DOC, 'one', 'alpha'), 'gamma'));
 });
