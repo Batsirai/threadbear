@@ -61,4 +61,34 @@ export default defineSchema({
     connectionCount: v.number(),
     at: v.number(),
   }).index("by_box_at", ["box", "at"]),
+
+  // --- The login test (claude-turn.ts) ---------------------------------
+
+  // A Claude setup token, sealed with AES-GCM under the deployment's
+  // SEAL_KEY, so a data export or backup doesn't hold it in the clear.
+  logins: defineTable({
+    name: v.string(),
+    sealed: v.string(), // base64 of iv (12 bytes) + ciphertext
+    setAt: v.number(),
+  }).index("by_name", ["name"]),
+
+  // One per box start: the provider gets only this, single use, 10 minutes.
+  // Stored hashed; the box trades it for the login and a report key.
+  bootTokens: defineTable({
+    box: v.string(),
+    login: v.string(),
+    hash: v.string(),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    reportKeyHash: v.optional(v.string()),
+  })
+    .index("by_hash", ["hash"])
+    .index("by_report_key", ["reportKeyHash"]),
+
+  // What the box reports back about its Claude turn.
+  turns: defineTable({
+    box: v.string(),
+    at: v.number(),
+    report: v.any(),
+  }).index("by_box", ["box"]),
 });

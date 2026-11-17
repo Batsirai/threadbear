@@ -125,3 +125,32 @@ heartbeated while paused, and the box was gone after destroy.
   root disk ($0.15/GB-month). Daytona 1 vCPU / 1 GiB about $0.067/h awake.
 - Not yet tested: losing a box (restore from a save), Claude Code through
   the login proxy, cold start of a real runner with a clone of threadbear.
+
+## The login test (17 Nov 2026)
+
+`claude-turn.ts`, with `convex/login.ts` and `box/turn.mjs`: one real
+Claude turn in a Fly box on a `claude setup-token` token kept in Convex
+(docs/virtual-runners.md, decision 10).
+
+- The driver stores the token with `login:setLogin`, which seals it with
+  AES-GCM under the deployment's `SEAL_KEY`, and mints a boot token
+  (`login:mintBoot`: single use, 10 minutes, kept hashed).
+- The box gets only `CONVEX_URL` and `BOOT_TOKEN`. It trades the boot token
+  (`login:exchange`) for the Claude token and a report key, installs Claude
+  Code and runs `claude -p` on Haiku with `CLAUDE_CODE_OAUTH_TOKEN` set
+  only on that child process.
+
+```sh
+CLAUDE_TOKEN_FILE=~/.config/threadbear-box-spike/claude-token node claude-turn.ts
+```
+
+Every check passed: the token wasn't in the Fly machine's config or the
+box's environment, the boot token worked once and was refused after, and
+Haiku answered "box ok" (US$0.0014). Create to report took 40 s, of which
+22 s was `npm install` of Claude Code, which a real image would have
+baked in; the turn itself took 1.8 s.
+
+`claude setup-token` makes a token with `scope=user:inference` (model use
+only), valid a year. When it can open a real browser, claude.ai hands the
+code back to a localhost callback by itself, so Threadbear can make the
+token for the user with one click and an Authorize, no pasting.
