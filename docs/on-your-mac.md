@@ -40,7 +40,11 @@ File references are where to look.
   only this Mac can reach them. Once setup has put them on the tailnet it
   leaves a note, `self-hosted-on-tailnet` in the data folder (the default one, whatever `--home` says, as the containers are the Mac's), so a later
   `--local` run won't finish until it has seen every one of those ports
-  taken off again; it deletes the note then.
+  taken off again; it deletes the note then. With `--url`, setup keeps
+  the addresses you gave it in `self-hosted-own-addresses.json` there
+  (the same default folder), so a later `--local` or `--tailnet` run asks
+  each of them, from this Mac, whether it still reaches the backend through
+  your proxy, and stops if one does; it deletes the file once none does.
 - **Apps:** `~/Applications/Threadbear.app` and
   `~/Applications/Threadbear Runner.app`, both built and signed on your Mac.
   If you press Start using the new app in the Swift app (or run

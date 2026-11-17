@@ -20,6 +20,8 @@ const m = (await import(planModule)) as {
   servedOn: (status: unknown, tailnetPort: number) => { Proxy?: string }[] | undefined;
   mustSeeTailnetOff: (a: { from?: string; pending?: boolean }) => boolean;
   tailnetPendingFiles: (defaultHome: string, home: string, path: unknown) => string[];
+  ownAddresses: (text: string | undefined, add?: { api?: string[]; site?: string[] }) => { api: string[]; site: string[] };
+  OWN_ADDRESSES_FILE: string;
   oldAddressStep: (a: { checks: { addr: string; want: Answer; got: Answer }[]; mode: string; again: string }) => { do: string; message: string };
   offTailnetStep: (a: { cli: boolean; handlers?: { Proxy?: string }[]; tailnetPort: number; localPort: number; moving: boolean }) => { do: string; message?: string };
 };
@@ -321,38 +323,66 @@ test('a move off your own address keeps the old addresses, to check they no long
 
 test("a move off your own address stops while the old proxy still forwards to the backend", () => {
   const version = { status: 200, body: '1.29.3' };
+  const api404 = { status: 404, body: 'No route' };
   const site404 = { status: 404, body: 'No matching routes found' };
   const again = './threadbear setup --self-hosted --local';
   // The scenario: the proxy still forwards both addresses.
-  const still = m.oldAddressStep({ mode: 'local', again, checks: [{ addr: OWN_URL, want: version, got: version }, { addr: OWN_SITE, want: site404, got: site404 }] });
+  const still = m.oldAddressStep({ mode: 'local', again, checks: [
+    { addr: OWN_URL, want: version, got: version },
+    { addr: OWN_URL, want: api404, got: api404 },
+    { addr: OWN_SITE, want: site404, got: site404 },
+  ] });
   assert.equal(still.do, 'fail');
-  assert.match(still.message, /threadbear\.example\.com and https:\/\/threadbear-site\.example\.com still reach this backend/);
+  assert.match(still.message, /^https:\/\/threadbear\.example\.com and https:\/\/threadbear-site\.example\.com still reach this backend/);
   assert.match(still.message, /wouldn't be on this Mac only: anyone with a share link/);
   assert.match(still.message, /curl https:\/\/threadbear\.example\.com\/version/);
   assert.ok(still.message.endsWith(again));
+  // A proxy that turns away /version but still forwards the rest is still forwarding.
+  assert.equal(m.oldAddressStep({ mode: 'local', again, checks: [{ addr: OWN_URL, want: version, got: { status: 403, body: 'no' } }, { addr: OWN_URL, want: api404, got: api404 }] }).do, 'fail');
   // Only the website's still forwarded: that's enough to stop it.
   assert.equal(m.oldAddressStep({ mode: 'tailnet', again, checks: [{ addr: OWN_URL, want: version, got: { error: 'ECONNREFUSED' } }, { addr: OWN_SITE, want: site404, got: site404 }] }).do, 'fail');
   // Taken down: the proxy's own error page, or nothing answering, isn't the backend.
   const gone = m.oldAddressStep({ mode: 'local', again, checks: [{ addr: OWN_URL, want: version, got: { status: 502, body: 'Bad Gateway' } }, { addr: OWN_SITE, want: site404, got: { error: 'ENOTFOUND' } }] });
   assert.equal(gone.do, 'ok');
-  // Said plainly as this Mac's view, and that it forwards again if the rules come back.
-  assert.match(gone.message, /no longer reaches this backend from this Mac \(https:\/\/threadbear\.example\.com: answered 502, not as this backend does; https:\/\/threadbear-site\.example\.com: ENOTFOUND\)/);
-  assert.match(gone.message, /reachable there again: keep those rules off/);
+  // But that's only this Mac's view, said plainly: no local-only promise until the rules are gone.
+  assert.match(gone.message, /didn't reach this backend when setup asked from this Mac, but that's all setup can see/);
+  assert.match(gone.message, /share links and phones paired there may still reach it, so it isn't on this Mac only until then/);
   // A loopback that can't answer gives nothing to compare, so nothing matches it by accident.
   assert.equal(m.oldAddressStep({ mode: 'local', again, checks: [{ addr: OWN_URL, want: { error: 'ECONNREFUSED' }, got: { error: 'ECONNREFUSED' } }] }).do, 'ok');
+});
+
+test('every address a --url setup was given stays on record until a move off has checked it', () => {
+  assert.equal(m.OWN_ADDRESSES_FILE, 'self-hosted-own-addresses.json');
+  // A first --url run that stops before runner.json is saved still leaves them.
+  const first = m.ownAddresses(undefined, { api: [OWN_URL], site: [OWN_SITE] });
+  assert.deepEqual(first, { api: [OWN_URL], site: [OWN_SITE] });
+  // New addresses add to the old, which a proxy may still forward too.
+  assert.deepEqual(m.ownAddresses(JSON.stringify(first), { api: ['https://new.example.com'], site: [OWN_SITE] }), { api: [OWN_URL, 'https://new.example.com'], site: [OWN_SITE] });
+  // A damaged file loses only what isn't an address list.
+  assert.deepEqual(m.ownAddresses('{"api":[3,"https://a.example"],"site":"x"}'), { api: ['https://a.example'], site: [] });
+  assert.deepEqual(m.ownAddresses('not json'), { api: [], site: [] });
 });
 
 test('setup checks the old address before anything changes and again before runner.json moves, and says so at the end', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../../../scripts/setup.mjs', import.meta.url), 'utf8');
-  const pre = src.indexOf('if (now && (await answers(ADMIN_URL, 60))) await checkOldAddressGone(plan.was);');
+  // On record before the containers change, in the default data folder whatever --home says.
+  assert.match(src, /const ownAddressesFile = path\.join\(DEFAULT_HOME, OWN_ADDRESSES_FILE\);/);
+  const record = src.indexOf('fs.writeFileSync(ownAddressesFile,');
+  assert.ok(record > 0 && record < src.indexOf('ensureContainer(BACKEND_CONTAINER'));
+  // A move off checks what's on record as well as this --home's runner.json.
+  assert.match(src, /const old = own \? \{ api: \[\], site: \[\] \} : recordedAddresses\(/);
+  const pre = src.indexOf('if (now && (await answers(ADMIN_URL, 60))) await checkOldAddressGone(old);');
   assert.ok(pre > 0 && pre < src.indexOf('ensureContainer(BACKEND_CONTAINER'), 'pre-check before the containers change');
   assert.ok(pre < src.indexOf('unserve(ts, tailnetPort, localPort, moving);'));
-  const post = src.indexOf('const oldAddress = plan.was ? await checkOldAddressGone(plan.was) : undefined;');
+  const post = src.indexOf('const oldAddress = moveOff ? await checkOldAddressGone(old) : undefined;');
   assert.ok(post > src.indexOf('await waitForBackend();'), 'again on the moved backend');
+  assert.ok(src.indexOf('fs.rmSync(ownAddressesFile', post) > post, 'cleared only after it passed');
   const body = src.slice(src.indexOf('async function selfHostedBackend()'), src.indexOf('async function runnerJson('));
-  assert.ok(body.includes('const oldAddress = plan.was ? await checkOldAddressGone'), 'inside selfHostedBackend, which runs before runnerJson writes the new sync.url');
+  assert.ok(body.includes('await checkOldAddressGone(old)'), 'inside selfHostedBackend, which runs before runnerJson writes the new sync.url');
   assert.ok(src.indexOf('sh = await selfHostedBackend();') < src.indexOf('await runnerJson(url, sh?.site);'));
   assert.match(src, /if \(step\.do === 'fail'\) throw new Fail\(step\.message\);/);
+  // The end of setup doesn't call it this Mac only without saying what's left.
+  assert.match(src, /on this Mac only\$\{sh\.oldAddress \? ' once your old proxy rules are gone \(below\)' : ''\}/);
   assert.match(src, /if \(sh\?\.oldAddress\) note\(`Moved off your own address: \$\{sh\.oldAddress\}`\);/);
 });

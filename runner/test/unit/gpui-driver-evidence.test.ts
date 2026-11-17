@@ -218,6 +218,13 @@ test('an evidence folder others can write to, a symlink, or in a parent anyone c
   r = await failWith(t, { TB_SPEC_EVIDENCE: named });
   assert.match(r.error, /Not kept: .*isn't a folder of this account's own that only it can write to.*TB_SPEC_EVIDENCE/);
   assert.deepEqual(fs.readdirSync(named), []);
+  // Ours, but under a folder anyone can rename things in: the whole tree could be swapped after the check.
+  const open = path.join(path.dirname(shared), 'open');
+  fs.mkdirSync(open);
+  fs.chmodSync(open, 0o777);
+  r = await failWith(t, { TB_SPEC_EVIDENCE: path.join(open, 'mine', 'evidence') });
+  assert.match(r.error, /Not kept: .*open can be changed by other accounts and isn't sticky/);
+  assert.equal(fs.existsSync(path.join(open, 'mine', 'evidence')), false);
   // A shared temp folder without the sticky bit: anyone could rename ours away.
   fs.chmodSync(shared, 0o777);
   r = await failWith(t, { TB_SPEC_EVIDENCE: undefined, TMPDIR: shared });

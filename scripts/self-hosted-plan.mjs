@@ -145,7 +145,8 @@ export function selfHostedPlan({ flags = {}, joining = false, adminKeyFile = fal
   }
   // Off an address of your own: setup can't take your proxy down, so it
   // keeps the old addresses to check they no longer reach this backend
-  // (oldAddressStep; Daybreak 150, 17 Nov 2026).
+  // (oldAddressStep; Daybreak 150, 17 Nov 2026). Setup adds the ones on
+  // record (OWN_ADDRESSES_FILE).
   const was = had === 'url' && mode !== 'url' ? { was: { url: syncUrl, ...(syncSite ? { site: syncSite } : {}) } } : {};
   const moved = had && had !== mode ? { from: had, ...was } : {};
   const readdressed = had === 'url' && mode === 'url' && (addr.url !== syncUrl || addr.site !== syncSite) ? { readdressed: true } : {};
@@ -312,20 +313,45 @@ export function tailnetPendingFiles(defaultHome, home, path) {
 // setup then says about where it can be reached. Setup can't take your proxy
 // down, so it checks each old address from this Mac against the backend's
 // own answer on loopback, before anything changes and again after:
-//   { do: 'fail', message }  one still reaches it; stops, with runner.json
-//                            still naming the old address, so the next run
-//                            is the same move and checks again
-//   { do: 'ok', message }    neither does (one that doesn't answer at all
-//                            counts), said plainly, as this Mac's view only
+//   { do: 'fail', message }  one still reaches it; stops, with the old
+//                            addresses still on record, so the next run
+//                            checks again
+//   { do: 'ok', message }    none does (one that doesn't answer at all
+//                            counts, or a Mac whose old name is gone could
+//                            never move), said plainly as only this Mac's
+//                            view, which can't prove the proxy is gone
 // `checks` is [{ addr, want, got }], each { status, body } or { error } as
-// checkOwnAddress's `get` gives them (Daybreak 150, 17 Nov 2026).
+// setup's `get` gives them, several per address (Daybreak 150, 17 Nov 2026).
 export function oldAddressStep({ checks, mode, again }) {
-  const still = checks.filter(({ want, got }) => !got.error && !want.error && got.status === want.status && got.body === want.body);
+  const same = (a, b) => !a.error && !b.error && a.status === b.status && a.body === b.body;
+  const still = [...new Set(checks.filter(({ want, got }) => same(want, got)).map((c) => c.addr))];
   const where = mode === 'local' ? 'this Mac only' : 'your tailnet only';
+  const addrs = (list) => list.join(' and ');
   if (still.length) {
-    const addrs = still.map((c) => c.addr).join(' and ');
-    return { do: 'fail', message: `${addrs} still ${still.length > 1 ? 'reach' : 'reaches'} this backend through your own proxy, so it wouldn't be on ${where}: anyone with a share link, and any phone paired at that address, could still use it. Setup can't take your proxy down for you. Remove the rules that forward ${addrs} to 127.0.0.1:${PORTS.api[1]} and 127.0.0.1:${PORTS.site[1]} (or stop the proxy), check curl ${still[0].addr}/version no longer prints the backend's version, then run ${again}` };
+    return { do: 'fail', message: `${addrs(still)} still ${still.length > 1 ? 'reach' : 'reaches'} this backend through your own proxy, so it wouldn't be on ${where}: anyone with a share link, and any phone paired at that address, could still use it. Setup can't take your proxy down for you. Remove the rules that forward ${addrs(still)} to 127.0.0.1:${PORTS.api[1]} and 127.0.0.1:${PORTS.site[1]} (or stop the proxy), check curl ${still[0]}/version no longer prints the backend's version, then run ${again}` };
   }
-  const why = checks.map(({ addr, got }) => `${addr}: ${got.error ?? `answered ${got.status}, not as this backend does`}`).join('; ');
-  return { do: 'ok', message: `your old address no longer reaches this backend from this Mac (${why}). If your proxy forwards it to 127.0.0.1:${PORTS.api[1]} or :${PORTS.site[1]} again, it's reachable there again: keep those rules off.` };
+  const all = [...new Set(checks.map((c) => c.addr))];
+  return { do: 'ok', message: `${addrs(all)} didn't reach this backend when setup asked from this Mac, but that's all setup can see: it can't tell whether your proxy still forwards ${all.length > 1 ? 'them' : 'it'} for others. Until you've removed your proxy's rules for ${all.length > 1 ? 'them' : 'it'} (to 127.0.0.1:${PORTS.api[1]} and :${PORTS.site[1]}), share links and phones paired there may still reach it, so it isn't on ${where} until then.` };
+}
+
+// Every address a --url setup was given, kept in the default data folder
+// whatever --home says (the containers and their ports are the Mac's, one
+// set for every data folder), written before the containers change. A move
+// off checks them all, not only the ones this --home's runner.json names, so
+// a --url setup that stopped before saving runner.json, a later readdress,
+// or a run for another --home still checks (Codex's review of Daybreak 150).
+// Removed once a move off has seen none of them reach the backend.
+export const OWN_ADDRESSES_FILE = 'self-hosted-own-addresses.json';
+
+// { api: [...], site: [...] } from the file's text and more addresses to add;
+// anything that isn't a list of strings in it is dropped.
+export function ownAddresses(text, add = {}) {
+  let was = {};
+  try {
+    was = JSON.parse(text ?? '{}') ?? {};
+  } catch {
+    was = {};
+  }
+  const list = (k) => [...new Set([...(Array.isArray(was[k]) ? was[k] : []), ...(add[k] ?? [])].filter((x) => typeof x === 'string' && x))];
+  return { api: list('api'), site: list('site') };
 }
