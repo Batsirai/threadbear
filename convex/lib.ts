@@ -9,6 +9,17 @@ import { callerFrom, FORBIDDEN, forbiddenMessage, isOwnerKey, mayCall, validRunn
 // threadForPush, sync.ts sendStaleHeldPushes).
 export const PRESENCE_FRESH_MS = 3 * 60_000;
 
+// Whether Mike counts as at this runner's Mac now: it said so and is still
+// checking in. One reading for every place that decides it (a push, holding
+// one, draining held ones), so they can't disagree.
+export async function presentAt(ctx: QueryCtx | MutationCtx, runnerId: string): Promise<boolean> {
+  const r = await ctx.db
+    .query('runners')
+    .withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))
+    .unique();
+  return Boolean(r?.atMac) && Date.now() - (r?.lastSeenAt ?? 0) < PRESENCE_FRESH_MS;
+}
+
 // The runner's functions carry the key from its secrets/convex-key: the
 // owner key (the deployment's RUNNER_KEY, set with `npx convex env set
 // RUNNER_KEY <key>`) or a runner key (runnerKeys, `tb runner add`). Every

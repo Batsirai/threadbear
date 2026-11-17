@@ -196,3 +196,26 @@ test('Daybreak 148: a stale runner that checks in again before its drain runs ke
   assert.deepEqual(notified(b), []);
   assert.ok(b.rows('threads').every((t: any) => t.pushHeldAt !== undefined));
 });
+
+// Codex's review of the 148 fix: push.notify read that Mike was at the Mac,
+// he left and the drain his leaving started finished, then notify held the
+// push. Nothing would ever send it (the cron skips a runner that said he
+// left). holdPush asks again and sends it to the away phones instead.
+test('a push held just after Mike left goes to the away phones, not held for good', async () => {
+  const b = memoryBackend();
+  const now = Date.now();
+  await secondary(b, 0, now);
+  await b.ctx.db.insert('threads', { threadId: 'late', runnerId: 'sec', ...THREAD_BASICS, title: 'Late', view: 'inbox', needsYou: true });
+  const t = await call(b.ctx, devices.threadForPush, { threadId: 'late' });
+  assert.equal(t.atMac, true, 'notify read that he was there');
+  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec');
+  await b.ctx.db.patch(sec._id, { atMac: false });
+  await call(b.ctx, devices.holdPush, { threadId: 'late' });
+  assert.equal(b.rows('threads')[0].pushHeldAt, undefined, 'not held');
+  assert.deepEqual(notified(b), [{ threadId: 'late', held: true }]);
+  // Still there: held as before.
+  await b.ctx.db.patch(sec._id, { atMac: true });
+  await call(b.ctx, devices.holdPush, { threadId: 'late' });
+  assert.ok(b.rows('threads')[0].pushHeldAt > 0);
+  assert.equal(notified(b).length, 1);
+});

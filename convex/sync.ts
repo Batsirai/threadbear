@@ -10,7 +10,7 @@ import { messageButton, threadFields, views } from './schema';
 import { API_VERSION } from './version';
 import { command, machines } from './machines';
 import { COMMAND_KEEP_MS as KEEP_MS, TAKEN_LEASE_MS as LEASE_MS } from './commandMachine';
-import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
+import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
@@ -929,16 +929,6 @@ async function sendHeldPushes(ctx: MutationCtx, runnerId: string, before: number
     if (t.needsYou) await ctx.scheduler.runAfter(0, internal.push.notify, { threadId: t.threadId, held: true });
   }
   if (held.length > HELD_BATCH) await ctx.scheduler.runAfter(0, internal.sync.drainHeldPushes, { runnerId, before });
-}
-
-// Whether Mike counts as at this runner's Mac: it said so and is still
-// checking in (as devices.threadForPush reads it for a push).
-async function presentAt(ctx: MutationCtx, runnerId: string): Promise<boolean> {
-  const r = await ctx.db
-    .query('runners')
-    .withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))
-    .unique();
-  return Boolean(r?.atMac) && Date.now() - (r?.lastSeenAt ?? 0) < PRESENCE_FRESH_MS;
 }
 
 // One runner's next batch (sendHeldPushes), in a transaction of its own.

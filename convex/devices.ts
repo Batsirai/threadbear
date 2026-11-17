@@ -4,7 +4,8 @@ import { v } from 'convex/values';
 import { internalMutation, internalQuery } from './_generated/server';
 import { hasLiveToken } from './pushTargets';
 import { runnerName } from './sync';
-import { hasLiveKey, PRESENCE_FRESH_MS } from './lib';
+import { internal } from './_generated/api';
+import { hasLiveKey, PRESENCE_FRESH_MS, presentAt } from './lib';
 import { nextHealth } from './pushHealth';
 
 // Only phones whose token is still good (pushTargets.ts): revoking deletes
@@ -119,7 +120,11 @@ export const pushOutcome = internalMutation({
 });
 
 // Marks a thread's push as held for "away" phones while Mike is at the Mac;
-// sync:setPresence sends it when he leaves.
+// sync:setPresence sends it when he leaves. push.notify read that he was
+// there, but he may have left since, and the drain his leaving started may
+// be over: a push held now would wait for his next leave, maybe for good
+// (Codex's review of Daybreak 148). So it asks again here, in the same
+// transaction as the write, and sends it to the away phones instead.
 export const holdPush = internalMutation({
   args: { threadId: v.string() },
   returns: v.null(),
@@ -128,7 +133,9 @@ export const holdPush = internalMutation({
       .query('threads')
       .withIndex('by_threadId', (q) => q.eq('threadId', threadId))
       .unique();
-    if (t && t.needsYou) await ctx.db.patch(t._id, { pushHeldAt: Date.now() });
+    if (!t || !t.needsYou) return null;
+    if (await presentAt(ctx, t.runnerId)) await ctx.db.patch(t._id, { pushHeldAt: Date.now() });
+    else await ctx.scheduler.runAfter(0, internal.push.notify, { threadId, held: true });
     return null;
   },
 });
