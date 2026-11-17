@@ -221,6 +221,29 @@ function fitMovedReviews(rec: Record<string, any>): boolean {
   return JSON.stringify(rec.reviews) !== before;
 }
 
+// A queued answer to a review names its reply's pictures as the other
+// runner's files, which here could be any file: they don't come with the
+// move, as fitReview leaves them out of the reviews (Codex's review, 17
+// Nov 2026). Done here, before anything on this runner reads the record,
+// so no later step that fails can leave them in a queue that's sent.
+function dropMovedReplyImages(rec: Record<string, any>): boolean {
+  if (!Array.isArray(rec.queue)) return false;
+  let changed = false;
+  rec.queue = rec.queue.map((q: any) => {
+    if (!q || typeof q !== 'object' || q.reviewId === undefined) return q;
+    const hasResponseImages = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse;
+    if (Array.isArray(q.images) && q.images.length === 0 && !hasResponseImages) return q;
+    changed = true;
+    const next = { ...q, images: [] };
+    if (hasResponseImages) {
+      const { images: _, ...rest } = q.reviewResponse;
+      next.reviewResponse = rest;
+    }
+    return next;
+  });
+  return changed;
+}
+
 // On the main Mac, a thread from another runner arrives with at most Ask
 // (Mike, 10 Nov 2026): its mode is that runner's word, an extra Mac may be
 // compromised, and the main Mac's sidebar never showed what mode the
@@ -267,6 +290,7 @@ function sanitizeMoved(rec: Record<string, any>, atMostAsk: boolean, from: strin
   let changed = normaliseRecord(rec);
   changed = dropMovedPowers(rec) || changed;
   changed = fitMovedReviews(rec) || changed;
+  changed = dropMovedReplyImages(rec) || changed;
   if (atMostAsk) {
     const capped = capMovedMode(rec);
     if (capped.was && !notes.some((n) => n.includes('so it asks before tools run here'))) notes.push(cappedNote(capped.was, from));

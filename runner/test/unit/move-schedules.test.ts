@@ -439,9 +439,19 @@ test("a compromised old runner's oversized review notes arrive cut to what show_
   const option = (n: number, note: string) => ({ id: `o${n}`, title: 'T'.repeat(300), note, image });
   const review = (rid: string, note: string, options: unknown[]) => ({ id: rid, title: 'Pick one', note, options, status: 'pending', revision: 1, createdAt: 'c', updatedAt: 'c', draft: { notes: { o0: 'n'.repeat(9000) }, reply: 'r'.repeat(9000) } });
   const fits = { id: 'fits', title: 'Fine', note: 'A `normal` note 😀', options: [{ id: 'a', title: 'A', note: 'why', image }], status: 'pending', revision: 1, createdAt: 'c', updatedAt: 'c', draft: { notes: {} } };
-  recEntry.data = Buffer.from(JSON.stringify({ ...JSON.parse(recEntry.data.toString('utf8')), reviews: [review('big', '`'.repeat(20_000), Array.from({ length: 20 }, (_, n) => option(n, '`x'.repeat(5000)))), fits, 'not a review', { id: 'no options' }] }));
+  // A queued answer to a review naming a file on this Mac as its reply's
+  // picture (Codex's review, 17 Nov): it comes without it.
+  const secret = path.join(tmpDir(), 'private.png');
+  fs.writeFileSync(secret, 'png');
+  const queue = [{ turnId: 'q-answer', text: 'Review: Fine', images: [{ path: secret, mediaType: 'image/png' }], reviewId: 'fits', reviewResponse: { notes: { a: null }, images: [{ path: secret, mediaType: 'image/png' }] } }];
+  recEntry.data = Buffer.from(JSON.stringify({ ...JSON.parse(recEntry.data.toString('utf8')), queue, reviews: [review('big', '`'.repeat(20_000), Array.from({ length: 20 }, (_, n) => option(n, '`x'.repeat(5000)))), fits, 'not a review', { id: 'no options' }] }));
   await t.runner.placeMove(r, packed);
   await t.runner.adoptMoved(r);
+  await tick();
+  const answer = [...(t.store.load(id)?.queue ?? []), ...t.runner.events(id, { limit: 1000 }).events.filter((e) => e.type === 'user.message')].find((q: any) => q.reviewId === 'fits') as any;
+  assert.ok(answer, 'the answer itself still comes');
+  assert.deepEqual(answer.images, []);
+  assert.equal(answer.reviewResponse.images, undefined);
   const [big, kept, ...rest] = t.runner.listReviews(id).reviews.sort((a, b) => (a.id === 'big' ? -1 : b.id === 'big' ? 1 : 0));
   assert.deepEqual(rest, []);
   assert.equal(big!.note!.length, 4000);
