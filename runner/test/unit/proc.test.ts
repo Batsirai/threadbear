@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { ProcessRegistry, approxStartTime, followUpKillDue, groupAlive, hasExited, groupSpawner, killGroup, ownStartTime, pidExists, processInfo, sameStartTime } from '../../src/proc.ts';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { ProcessRegistry, approxStartTime, followUpKillDue, groupAlive, hasExited, groupSpawner, killGroup, ownStartTime, pidExists, processInfo, sameStart, sameStartTime, startOf } from '../../src/proc.ts';
 import { acquireLock } from '../../src/lock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
@@ -31,6 +31,33 @@ async function until(fn: () => boolean, ms = PATIENCE_MS): Promise<boolean> {
   }
   return fn();
 }
+
+// On Linux ps's lstart is the boot time plus the process's age, and the boot
+// time moves when the clock is stepped (WSL, 17 Nov), so records there also
+// keep the boot id and /proc's start ticks, which don't. lstart stays in them
+// for older releases, and records older runners wrote still match.
+test("a process's recorded start doesn't depend on the clock, and older records still match", () => {
+  const info = processInfo(process.pid)!;
+  const ps = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim().replace(/\s+/g, ' ');
+  assert.equal(info.lstart, ps, 'lstart is still what older releases compare');
+  if (process.platform === 'linux') {
+    const stat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8');
+    const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    assert.equal(info.started, `${boot}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`);
+    // A clock step moves lstart but not started: still the same process.
+    assert.equal(sameStart({ lstart: 'Mon Jan 1 00:00:00 2001', started: info.started }, info), true);
+    // Same ticks in another boot is another process.
+    assert.equal(sameStart({ lstart: ps, started: `other-boot:${info.started!.split(':').pop()}` }, info), false);
+  } else {
+    assert.equal(info.started, undefined);
+  }
+  assert.deepEqual(startOf(info), info.started ? { lstart: ps, started: info.started } : { lstart: ps });
+  assert.equal(sameStart(startOf(info), info), true);
+  assert.equal(sameStart({ lstart: ps }, info), true, 'a record an older runner wrote');
+  assert.equal(sameStart({ lstart: 'Mon Jan 1 00:00:00 2001' }, info), false);
+  assert.equal(sameStart({}, info), false);
+  assert.equal(sameStart({ lstart: ps }, null), false);
+});
 
 test('the startup sweep waits until old groups are gone, and leaves a recycled pid alone', async () => {
   const run = tmpDir();

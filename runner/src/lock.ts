@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ownStartTime, pidExists, processInfo, sameStartTime } from './proc.ts';
+import { ownStartTime, pidExists, processInfo, sameStart, sameStartTime, startOf, type Started } from './proc.ts';
 import { IS_WINDOWS } from './platform.ts';
 
 // One runner per data dir. A second one (`npm start` while the LaunchAgent
@@ -13,7 +13,8 @@ export type Lock = { release(): void };
 export function acquireLock(runDir: string): Lock | { heldBy: number } {
   const file = path.join(runDir, 'runner.pid');
   // Where PowerShell can't give the start time on Windows, node's own clock does.
-  const me = { pid: process.pid, lstart: processInfo(process.pid)?.lstart ?? (IS_WINDOWS ? ownStartTime() : '') };
+  const info = processInfo(process.pid);
+  const me = { pid: process.pid, ...(info ? startOf(info) : { lstart: IS_WINDOWS ? ownStartTime() : '' }) };
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       fs.mkdirSync(runDir, { recursive: true });
@@ -42,23 +43,26 @@ export function acquireLock(runDir: string): Lock | { heldBy: number } {
   throw new Error(`Couldn't take the runner lock at ${file}`);
 }
 
-function readHolder(file: string): { pid: number; lstart?: string } | null {
+type Holder = { pid: number; lstart?: string } & Started;
+
+function readHolder(file: string): Holder | null {
   try {
     const raw = fs.readFileSync(file, 'utf8').trim();
     // Older runners wrote just the pid.
     if (/^\d+$/.test(raw)) return { pid: Number(raw) };
-    const j = JSON.parse(raw) as { pid?: unknown; lstart?: unknown };
-    return typeof j.pid === 'number' ? { pid: j.pid, lstart: typeof j.lstart === 'string' ? j.lstart : undefined } : null;
+    const j = JSON.parse(raw) as { pid?: unknown; lstart?: unknown; started?: unknown };
+    if (typeof j.pid !== 'number') return null;
+    return { pid: j.pid, lstart: typeof j.lstart === 'string' ? j.lstart : undefined, ...(typeof j.started === 'string' ? { started: j.started } : {}) };
   } catch {
     return null;
   }
 }
 
-function holderAlive(h: { pid: number; lstart?: string }): boolean {
+function holderAlive(h: Holder): boolean {
   if (IS_WINDOWS) return holderAliveWindows(h);
   const info = processInfo(h.pid);
   if (!info) return false;
-  if (h.lstart) return info.lstart === h.lstart;
+  if (h.lstart || h.started) return sameStart(h, info);
   // A runner under launch.mjs (a release) shows as launch.mjs, not main.ts.
   return /main\.ts|launch\.mjs/.test(info.command);
 }

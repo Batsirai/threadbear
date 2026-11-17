@@ -8,11 +8,11 @@ import { IS_WINDOWS } from './platform.ts';
 
 // A process group, with its leader's start time so a recycled pid is never
 // mistaken for it. lstart is '' when the leader had already exited when the
-// group was noted.
-type Group = { pgid: number; lstart: string };
+// group was noted. started is its clock-proof start on Linux (see Started).
+type Group = { pgid: number; lstart: string } & Started;
 // threadId: the thread (or a job's label) the process was started for, which
 // the RPC server asks about (peer.ts).
-type Entry = { pid: number; command: string; startedAt: string; lstart?: string; groups?: Group[]; threadId?: string };
+type Entry = { pid: number; command: string; startedAt: string; lstart?: string; started?: string; groups?: Group[]; threadId?: string };
 
 const SCAN_MS = 5000;
 
@@ -73,8 +73,9 @@ export class ProcessRegistry {
     // moments ago, so on Windows this stands in for its start time if
     // PowerShell can't give the real one (approxStartTime).
     const spawnedAt = Date.now();
-    const lstart = processInfo(pid)?.lstart ?? (IS_WINDOWS ? approxStartTime(spawnedAt) : undefined);
-    this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...(lstart ? { lstart } : {}), groups: [], ...(threadId ? { threadId } : {}) });
+    const info = processInfo(pid);
+    const start = info ? startOf(info) : IS_WINDOWS ? { lstart: approxStartTime(spawnedAt) } : {};
+    this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}) });
     this.save();
     this.scanTimer ??= setInterval(() => void this.scan(), SCAN_MS).unref();
   }
@@ -115,7 +116,7 @@ export class ProcessRegistry {
     for (const n of names) {
       const entries = readJsonSync<Entry[]>(path.join(path.dirname(this.file), n));
       const e = Array.isArray(entries) ? entries.find((x) => x?.pid === pid) : undefined;
-      if (e?.threadId && (!e.lstart || processInfo(pid)?.lstart === e.lstart)) return e.threadId;
+      if (e?.threadId && (!(e.lstart || e.started) || sameStart(e, processInfo(pid)))) return e.threadId;
     }
     return undefined;
   }
@@ -162,7 +163,8 @@ export class ProcessRegistry {
         if (!this.entries.has(e.pid)) continue; // exited while ps ran
         for (const pgid of pgids) {
           e.groups ??= [];
-          e.groups.push({ pgid, lstart: processInfo(pgid)?.lstart ?? '' });
+          const info = processInfo(pgid);
+          e.groups.push({ pgid, ...(info ? startOf(info) : { lstart: '' }) });
         }
       }
       this.save();
@@ -183,7 +185,7 @@ export class ProcessRegistry {
     const targets: number[] = [];
     for (const e of previous) {
       if (!e || typeof e.pid !== 'number') continue;
-      if (sameGroup({ pgid: e.pid, lstart: e.lstart ?? '' }, e.lstart ? undefined : path.basename(e.command ?? ''))) targets.push(e.pid);
+      if (sameGroup({ pgid: e.pid, lstart: e.lstart ?? '', started: e.started }, e.lstart || e.started ? undefined : path.basename(e.command ?? ''))) targets.push(e.pid);
       for (const g of e.groups ?? []) if (sameGroup(g)) targets.push(g.pgid);
     }
     for (const pgid of targets) {
@@ -270,20 +272,49 @@ function sameGroup(g: Group, commandHint?: string): boolean {
   if (IS_WINDOWS) return Boolean(leader && g.lstart && sameStartTime(g.lstart, leader.lstart));
   if (!leader) return true; // leader gone; the group's members are the original ones
   if (leader.pgid !== g.pgid) return false;
-  if (g.lstart) return leader.lstart === g.lstart;
+  if (g.lstart || g.started) return sameStart(g, leader);
   // Old records with no start time fall back to the command name.
   return Boolean(commandHint) && leader.command.includes(commandHint!);
 }
 
 const C_LOCALE = { ...process.env, LC_ALL: 'C' };
 
-export function processInfo(pid: number): { pgid: number; lstart: string; command: string } | null {
+// A process's identity is its pid and when it started, kept in records
+// (run/runner.pid, children*.json) that outlive the runner. lstart is ps's
+// start time, fixed at fork on macOS. On Linux ps works lstart out as the
+// kernel's boot time plus the process's age, and the boot time moves whenever
+// the clock is stepped (a WSL runner's moved 75 s in 15 minutes, 17 Nov), so
+// a live process could stop matching its own record: a live lock holder
+// looked dead, a recorded CLI looked recycled. There, started is the boot's
+// id and /proc's start time in clock ticks since boot, which never move; the
+// boot id stops a record from before a reboot matching a new process.
+// Records keep lstart as well, as older releases (a rollback, a handover's
+// other runner) read only that.
+export type Started = { started?: string };
+export type ProcessInfo = { pgid: number; lstart: string; command: string } & Started;
+
+export function processInfo(pid: number): ProcessInfo | null {
   if (IS_WINDOWS) return processInfoWindows(pid);
   try {
-    const out = execFileSync('/bin/ps', ['-o', 'pgid=,lstart=,command=', '-p', String(pid)], { encoding: 'utf8', env: C_LOCALE }).trim();
-    // lstart is five fields in the C locale: "Mon Oct 26 15:04:05 2026".
-    const m = /^(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/.exec(out);
-    return m ? { pgid: Number(m[1]), lstart: m[2].replace(/\s+/g, ' '), command: m[3] } : null;
+    for (let tries = 1; ; tries++) {
+      // Read /proc either side of ps: two different starts mean the pid was
+      // reused meanwhile, so one process's start would pair with another's
+      // group and command; read again. One side missing isn't that (it
+      // exited just after ps, or /proc couldn't say), so keep the other
+      // rather than answer "gone": sameGroup takes a gone leader as its
+      // group being the recorded one, which a stale record mustn't get.
+      const before = linuxStart(pid);
+      const out = execFileSync('/bin/ps', ['-o', 'pgid=,lstart=,command=', '-p', String(pid)], { encoding: 'utf8', env: C_LOCALE }).trim();
+      const after = linuxStart(pid);
+      if (before && after && before !== after && tries < 3) continue;
+      // lstart is five fields in the C locale: "Mon Oct 26 15:04:05 2026".
+      const m = /^(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/.exec(out);
+      if (!m) return null;
+      const info = { pgid: Number(m[1]), lstart: m[2].replace(/\s+/g, ' '), command: m[3] };
+      if (before && after && before !== after) return null; // a pid recycled three times over
+      const started = before ?? after;
+      return started ? { ...info, started } : info;
+    }
   } catch {
     return null;
   }
@@ -348,6 +379,37 @@ export function pidExists(pid: number): boolean {
     return true;
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+// What a record keeps of a process's start.
+export function startOf(info: ProcessInfo): { lstart: string } & Started {
+  return info.started ? { lstart: info.lstart, started: info.started } : { lstart: info.lstart };
+}
+
+// Whether a record's start is this process's. A record with started is
+// checked on that alone; one an older runner wrote has only lstart. If /proc
+// couldn't say either side of ps (it shouldn't, for our own processes), a
+// record with started falls back to lstart, which is how it always was.
+export function sameStart(recorded: { lstart?: string } & Started, info: ProcessInfo | null | undefined): boolean {
+  if (!info) return false;
+  if (recorded.started && info.started) return recorded.started === info.started;
+  return Boolean(recorded.lstart) && sameStartTime(recorded.lstart!, info.lstart);
+}
+
+let bootId: string | undefined;
+// "<boot id>:<start ticks>" on Linux, undefined elsewhere or if /proc can't
+// say. Ticks are field 22 of /proc/<pid>/stat; the command name (field 2, in
+// brackets) can hold spaces and brackets, so count from the last ')'.
+function linuxStart(pid: number): string | undefined {
+  if (process.platform !== 'linux') return undefined;
+  try {
+    bootId ??= fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    return bootId && ticks && /^\d+$/.test(ticks) ? `${bootId}:${ticks}` : undefined;
+  } catch {
+    return undefined;
   }
 }
 
