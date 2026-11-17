@@ -1313,9 +1313,14 @@ where it installs.
   Cursor's by where it really lives (`~/.local/share/cursor-agent/...`), and
   only as Grok's when that's named `grok` or `grok-<version>...`.
 - **Asking.** Every tool comes to the runner first. OpenCode gets `*: ask` as
-  inline config, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure`: a
-  folder's `opencode.json` outranks inline config, and its plugins run when a
-  session opens. Each request is answered from the thread's mode when it comes
+  inline config, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` (and 2's
+  `OPENCODE_CONFIG_PROJECT_DISABLE=1`), `OPENCODE_CONFIG` blanked, a config
+  folder of the runner's own (`OPENCODE_CONFIG_DIR`, which on 2 replaces
+  `~/.config/opencode`) and, on 1, `--pure`: a folder's `opencode.json`
+  outranks inline config, and plugins are imported as a session opens, before
+  any rule can turn them off. OpenCode 1 imports a folder's
+  `.opencode/plugins/*.js` whatever it's told, so on 1 an asking thread or a
+  small job doesn't start under a folder that has some. Each request is answered from the thread's mode when it comes
   (Full: allow; otherwise the card). Only the once options are ever chosen, as
   an agent remembers "always" past the thread; "Always allow" is the runner's
   rule (`acp:edit`, or the exact plain command in the folder it runs in: the
@@ -1331,6 +1336,17 @@ where it installs.
   An edit of a file that runs as
   code asks every time, and so does an edit whose arguments aren't the plain file
   tools' (nothing can say where else it writes). Auto acts like Ask.
+- **Questions.** A thread offers forms (`clientCapabilities.elicitation.form`).
+  An `elicitation/create` in form mode becomes question cards, one per field:
+  its description is the question, its title the header, a list a multiple
+  choice. Only the last card takes typed words, so a field with no choices goes
+  last (a form with two can't be shown, and is declined with a note), and
+  words typed in place of a choice go to the field's `<key>_custom`, where it
+  has one. The answer is `accept` with the content, `decline` when the card is
+  dismissed or a required field has no usable answer, and `cancel` when the
+  turn stops; URL mode is declined with a note. OpenCode 2's question tool
+  asks this way, so `question` is allowed in threads. Small jobs offer no
+  forms and deny it.
 - **Cursor** can't be told to always ask (its allow-list and a folder's
   `.cursor/cli.json` can approve things), so Ask, Auto and Plan first run in its
   read-only `ask` and `plan` modes; a thread that can't be put in one doesn't start.

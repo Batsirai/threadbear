@@ -27,6 +27,13 @@ function rig(agent: AcpAgent = ACP_AGENTS.opencode, env: Record<string, string> 
   return { root, ask, log };
 }
 
+test('a small job offers no forms, as there is no one to answer one', async () => {
+  const r = rig();
+  const res = await r.ask({ account, user: 'form', cwd: r.root, timeoutMs: 8000 });
+  assert.equal(res.ok, true);
+  assert.ok(r.log().some((l) => l.form === 'not offered'));
+});
+
 test('it answers, with no MCP servers, in the read-only mode', async () => {
   const r = rig();
   const res = await r.ask({ account, user: 'hello', cwd: r.root, timeoutMs: 8000 });

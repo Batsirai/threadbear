@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { EFFORT_LEVELS, isEffortLevel, type Account, type EffortLevel, type ImageRef, type ModelChoice, type PermissionMode } from '../../protocol.ts';
+import { EFFORT_LEVELS, isEffortLevel, type Account, type EffortLevel, type ImageRef, type ModelChoice, type PermissionMode, type Question } from '../../protocol.ts';
 import type { Logger } from '../../log.ts';
 import type { ProcessRegistry } from '../../proc.ts';
 import { cardInput, displayPath, tooLongForCard } from '../../tools.ts';
@@ -21,7 +21,8 @@ import { cliEnv } from '../claude/adapter.ts';
 import { commandRule, ruleMayCover, shellWords } from '../codex/approvals.ts';
 import { toolGuidance, type ToolDefinition } from '../codex/tools.ts';
 import { fileContext, type NormalizerContext } from '../context.ts';
-import type { AdapterOutput, AgentAdapter, AgentSession, SessionSink, StartSessionOptions, ToolApprovalAnswer, TurnResult, UserInput } from '../types.ts';
+import { formContent, formQuestions, type FormSchema } from '../elicitation.ts';
+import type { AdapterOutput, AgentAdapter, AgentSession, QuestionAnswer, SessionSink, StartSessionOptions, ToolApprovalAnswer, TurnResult, UserInput } from '../types.ts';
 import { SessionNotFoundError } from '../types.ts';
 import type { AcpAgent } from './agents.ts';
 import { AcpExitedError, AcpProcess, AcpRpcError, AUTH_REQUIRED, type AcpTimings, type InitializeResult, type RequestId } from './connection.ts';
@@ -176,7 +177,8 @@ export class AcpAdapter implements AgentAdapter {
 }
 
 type State = 'starting' | 'ready' | 'turn' | 'closing' | 'closed';
-type Pending = { abort: AbortController; options: PermissionOption[] };
+// cancelled: what a cancelled turn answers it with (a form's differs).
+type Pending = { abort: AbortController; options: PermissionOption[]; cancelled?: unknown };
 type PermissionOption = { optionId?: string; kind?: string };
 
 export class AcpSession implements AgentSession {
@@ -244,7 +246,7 @@ export class AcpSession implements AgentSession {
     this.startRefusal = deps.agent.refuses?.({ cwd: opts.cwd, mode: 'ask', trusted: this.trusted, binary });
     const args = deps.agent.args({ dataDir: deps.dataDir, trusted: this.trusted, binary });
     this.guard = deps.agent.guardName?.(args);
-    this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings });
+    this.proc = new AcpProcess({ binary, args, env, cwd: opts.cwd, registry: deps.registry, log: deps.log, label: opts.threadId, timings: deps.timings, forms: true });
     this.proc.onNotification = (method, params) => this.notification(method, params);
     this.proc.onRequest = (id, method, params) => this.request(id, method, params);
     this.proc.onExit = (err) => this.exited(err);
@@ -500,6 +502,14 @@ export class AcpSession implements AgentSession {
       });
       return;
     }
+    if (method === 'elicitation/create' && !this.replaying) {
+      this.form(id, isPlainObject(params) ? params : {}).catch((e: unknown) => {
+        this.deps.log.error('acp form handler threw', { threadId: this.opts.threadId, error: String(e) });
+        this.pending.delete(id);
+        this.proc.respond(id, { action: 'cancel' });
+      });
+      return;
+    }
     // We said we offer no fs or terminal, and the extensions aren't handled
     // yet: refused at once, so nothing hangs waiting for an answer.
     this.deps.log.info('refused an ACP request', { threadId: this.opts.threadId, method });
@@ -627,6 +637,39 @@ export class AcpSession implements AgentSession {
     this.answer(id, options, allow);
   }
 
+  // A form the agent wants filled in (OpenCode 2's question tool), as
+  // question cards. Only form mode is offered; a URL to open is declined.
+  private async form(id: RequestId, p: Record<string, unknown>): Promise<void> {
+    const name = providerName(this.deps.agent.provider);
+    const message = typeof p.message === 'string' ? p.message : '';
+    if (p.mode !== 'form') {
+      this.sink.output({ kind: 'event', event: { type: 'system.note', text: `${name} asked for something Threadbear can't show (${String(p.mode)}), so it was declined.` } });
+      return void this.proc.respond(id, { action: 'decline' });
+    }
+    const schema = isPlainObject(p.requestedSchema) ? (p.requestedSchema as FormSchema) : undefined;
+    const built = formQuestions(message, schema, name);
+    if (built && 'unshown' in built) {
+      this.sink.output({ kind: 'event', event: { type: 'system.note', text: `${built.unshown} It was declined.` } });
+      return void this.proc.respond(id, { action: 'decline' });
+    }
+    const questions: Question[] = built ? built.questions : [{ question: message || `${name} has a question`, header: name.slice(0, 30), multiSelect: false, options: [{ label: 'Accept' }, { label: 'Decline' }] }];
+    const pending: Pending = { abort: new AbortController(), options: [], cancelled: { action: 'cancel' } };
+    this.pending.set(id, pending);
+    let a: QuestionAnswer;
+    try {
+      a = await this.sink.requestQuestion({ toolUseId: typeof p.toolCallId === 'string' ? p.toolCallId : undefined, questions, signal: pending.abort.signal });
+    } catch (e) {
+      this.deps.log.warn('question request failed', { threadId: this.opts.threadId, error: String(e) });
+      a = { answers: null };
+    }
+    // Already answered as cancelled: an interrupt, or the session ending.
+    if (!this.pending.delete(id)) return;
+    if (!a.answers) return void this.proc.respond(id, { action: 'decline' });
+    if (!built) return void this.proc.respond(id, a.answers[questions[0].question] === 'Accept' ? { action: 'accept', content: {} } : { action: 'decline' });
+    const content = formContent(built, a.answers);
+    this.proc.respond(id, content ? { action: 'accept', content } : { action: 'decline' });
+  }
+
   private runsAsCode(paths: string[]): CodeWrite {
     const kinds = paths.map((f) => runsAsCodeByName(f) || (this.opts.runsAsCode?.(f) ?? false));
     return kinds.includes(true) || (kinds.includes('unsure') ? 'unsure' : false);
@@ -637,7 +680,7 @@ export class AcpSession implements AgentSession {
   private cancelPending(respond: boolean): void {
     for (const [id, p] of this.pending) {
       p.abort.abort();
-      if (respond) this.proc.respond(id, { outcome: { outcome: 'cancelled' } });
+      if (respond) this.proc.respond(id, p.cancelled ?? { outcome: { outcome: 'cancelled' } });
     }
     this.pending.clear();
   }

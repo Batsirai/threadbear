@@ -9,7 +9,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { AcpAdapter, type AcpSession } from '../../src/adapters/acp/adapter.ts';
 import { ACP_AGENTS, opencodeMajor } from '../../src/adapters/acp/agents.ts';
-import type { AdapterOutput, SessionSink, ToolApprovalRequest } from '../../src/adapters/types.ts';
+import type { AdapterOutput, QuestionAnswer, QuestionRequest, SessionSink, ToolApprovalRequest } from '../../src/adapters/types.ts';
 import type { Account, PermissionMode } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
 import { ProcessRegistry } from '../../src/proc.ts';
@@ -26,7 +26,7 @@ after(async () => {
   for (const r of roots) fs.rmSync(r, { recursive: true, force: true });
 });
 
-function rig(mode: PermissionMode, deny: boolean, tools: { name: string; description: string; inputSchema: Record<string, z.ZodTypeAny>; handler: () => Promise<{ content: unknown[] }> }[] = [], before?: (cwd: string, root: string) => void) {
+function rig(mode: PermissionMode, deny: boolean, tools: { name: string; description: string; inputSchema: Record<string, z.ZodTypeAny>; handler: () => Promise<{ content: unknown[] }> }[] = [], before?: (cwd: string, root: string) => void, answer?: (r: QuestionRequest) => QuestionAnswer) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-acp-e2e-')));
   roots.push(root);
   const cwd = path.join(root, 'work');
@@ -40,6 +40,7 @@ function rig(mode: PermissionMode, deny: boolean, tools: { name: string; descrip
     fs.symlinkSync(process.env.THREADBEAR_E2E_OPENCODE_AUTH, path.join(xdg.XDG_DATA_HOME, 'opencode', 'auth.json'));
   }
   const cards: ToolApprovalRequest[] = [];
+  const questions: QuestionRequest[] = [];
   const outputs: AdapterOutput[] = [];
   const waiters: (() => void)[] = [];
   const sink: SessionSink = {
@@ -51,8 +52,9 @@ function rig(mode: PermissionMode, deny: boolean, tools: { name: string; descrip
       cards.push(r);
       return { decision: deny ? 'deny' : 'allow' };
     },
-    async requestQuestion() {
-      return { answers: null };
+    async requestQuestion(r) {
+      questions.push(r);
+      return answer ? answer(r) : { answers: null };
     },
     exited() {},
   };
@@ -72,7 +74,7 @@ function rig(mode: PermissionMode, deny: boolean, tools: { name: string; descrip
       waiters.push(resolve);
       s.send({ id: `t${outputs.length}`, text, images: [] });
     });
-  return { root, cwd, cards, outputs, turn, adapter, account };
+  return { root, cwd, cards, questions, outputs, turn, adapter, account };
 }
 
 // Plugins that write `marker` as they're imported, in both OpenCode 1's shape
@@ -152,6 +154,18 @@ describe('ACP threads end to end (real opencode acp)', { concurrency: false, ski
     fs.writeFileSync(path.join(r.root, 'config', 'opencode', 'opencode.json'), JSON.stringify({ mcp: { probe: { type: 'local', command: ['/bin/sh', '-c', `echo ran > ${marker}; sleep 5`], enabled: true } } }));
     await r.turn('Reply with just the word pong.');
     assert.equal(fs.existsSync(marker), false, "the user's MCP server did not start");
+  });
+
+  // OpenCode 2's question tool asks through a form (elicitation/create);
+  // 1 has no question tool over ACP.
+  test("the agent's question is a card, and the answer picked reaches it", { timeout: 150_000, skip: (major ?? 1) < 2 && 'OpenCode 1' }, async () => {
+    const r = rig('ask', true, [], undefined, (q) => ({ answers: { [q.questions[0].question]: q.questions[0].options.at(-1)?.label ?? '' } }));
+    await r.turn('Use your question tool to ask me one question: which colour I prefer, with exactly two options, Red and Blue. After I answer, reply with only the colour I picked.');
+    assert.equal(r.questions.length, 1, 'one card');
+    assert.equal(r.cards.length, 0, 'asking needs no approval card of its own');
+    const picked = r.questions[0].questions[0].options.at(-1)!.label;
+    const result = r.outputs.flatMap((o) => (o.kind === 'event' && o.event.type === 'tool.result' ? [String((o.event as { text?: string }).text)] : [])).join('\n');
+    assert.ok(result.includes('User has answered your questions') && result.includes(`="${picked}"`), `OpenCode's tool says what was picked: ${result}`);
   });
 
   test('Full writes with no card', { timeout: 150_000 }, async () => {

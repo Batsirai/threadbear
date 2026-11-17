@@ -12,7 +12,7 @@ import type { AcpAgent } from '../../src/adapters/acp/agents.ts';
 import { AcpMcpServer } from '../../src/adapters/acp/mcp-http.ts';
 import { commandRule } from '../../src/adapters/codex/approvals.ts';
 import { remoteCardShowsAll } from '../../src/tools.ts';
-import type { AdapterOutput, SessionSink, StartSessionOptions, ToolApprovalAnswer, ToolApprovalRequest } from '../../src/adapters/types.ts';
+import type { AdapterOutput, QuestionAnswer, QuestionRequest, SessionSink, StartSessionOptions, ToolApprovalAnswer, ToolApprovalRequest } from '../../src/adapters/types.ts';
 import type { Account, PermissionMode } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
 import { ProcessRegistry } from '../../src/proc.ts';
@@ -44,7 +44,7 @@ afterEach(async () => {
   for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, string>; opts?: Partial<StartSessionOptions>; deny?: boolean; answer?: (r: ToolApprovalRequest) => ToolApprovalAnswer | Promise<ToolApprovalAnswer> } = {}) {
+function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, string>; opts?: Partial<StartSessionOptions>; deny?: boolean; answer?: (r: ToolApprovalRequest) => ToolApprovalAnswer | Promise<ToolApprovalAnswer>; question?: (r: QuestionRequest) => QuestionAnswer | Promise<QuestionAnswer> } = {}) {
   const root = tmp();
   made.push(root);
   const cwd = path.join(root, 'work');
@@ -53,6 +53,7 @@ function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, 
   const account: Account = { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: root };
   const outputs: AdapterOutput[] = [];
   const cards: ToolApprovalRequest[] = [];
+  const questions: QuestionRequest[] = [];
   let exitedWith: Error | undefined | null = null;
   let exitWaiters: (() => void)[] = [];
   const results: (() => void)[] = [];
@@ -65,8 +66,9 @@ function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, 
       cards.push(req);
       return o.answer ? o.answer(req) : { decision: o.deny ? 'deny' : 'allow' };
     },
-    async requestQuestion() {
-      return { answers: null };
+    async requestQuestion(req) {
+      questions.push(req);
+      return o.question ? o.question(req) : { answers: null };
     },
     exited(e) {
       exitedWith = e;
@@ -93,7 +95,7 @@ function rig(o: { mode?: PermissionMode; agent?: AcpAgent; env?: Record<string, 
   const nextResult = () => new Promise<void>((r) => results.push(r));
   const exited = () => (exitedWith !== null ? Promise.resolve() : new Promise<void>((r) => exitWaiters.push(r)));
   const log = (): Record<string, unknown>[] => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
-  return { root, cwd, adapter, start, cards, outputs, nextResult, exited, log, account, exitError: () => exitedWith };
+  return { root, cwd, adapter, start, cards, questions, outputs, nextResult, exited, log, account, exitError: () => exitedWith };
 }
 
 async function until(cond: () => boolean, ms = 3000): Promise<void> {
@@ -797,6 +799,40 @@ test('a refusal an asking mode had when the process started holds after the fold
   await s.setPermissionMode('ask');
   assert.ok(events(r.outputs, 'system.note').some((e: { text: string }) => e.text === 'has plugins'));
   await r.exited();
+});
+
+const formAnswer = (r: ReturnType<typeof rig>) => r.log().find((l) => 'formAnswer' in l)?.formAnswer;
+
+test("an agent's form (OpenCode 2's question tool) is a question card, and the choice goes back as the form's answer", async () => {
+  const r = rig({ mode: 'ask', question: (q) => ({ answers: { [q.questions[0].question]: 'Green' } }) });
+  const s = r.start();
+  await turn(r, s, 'form');
+  assert.equal(r.questions.length, 1);
+  assert.equal(r.questions[0].toolUseId, 'q-call', 'on the question tool\'s own row');
+  assert.deepEqual(r.questions[0].questions, [{ question: 'Which colour?', header: 'Colour', multiSelect: false, options: [{ label: 'Blue' }, { label: 'Green' }] }]);
+  assert.deepEqual(formAnswer(r), { action: 'accept', content: { q0: 'Green' } });
+});
+
+test('words typed instead of a choice go back as the form\'s own answer; a dismissed card declines', async () => {
+  const typed = rig({ mode: 'full', question: (q) => ({ answers: { [q.questions[0].question]: 'Orange' } }) });
+  await turn(typed, typed.start(), 'form');
+  assert.deepEqual(formAnswer(typed), { action: 'accept', content: { q0_custom: 'Orange' } });
+  const dismissed = rig({ mode: 'ask' });
+  await turn(dismissed, dismissed.start(), 'form');
+  assert.deepEqual(formAnswer(dismissed), { action: 'decline' });
+});
+
+test('a form open when the turn is stopped is answered as cancelled', async () => {
+  let asked: () => void = () => {};
+  const shown = new Promise<void>((resolve) => (asked = resolve));
+  const r = rig({ mode: 'ask', question: (q) => (asked(), new Promise<QuestionAnswer>((resolve) => q.signal.addEventListener('abort', () => resolve({ answers: null })))) });
+  const s = r.start();
+  await ready(r, s);
+  s.send({ id: 'turn-1', text: 'form', images: [] });
+  await shown;
+  await s.interrupt();
+  await until(() => formAnswer(r) !== undefined);
+  assert.deepEqual(formAnswer(r), { action: 'cancel' });
 });
 
 test('a malformed request is cancelled, never left to hang the turn', async () => {
