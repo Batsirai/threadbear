@@ -1779,7 +1779,8 @@ own restarts.
   commit, no repo) any new build counts, as before; when it's too slow to
   answer, the thread stays on the list as it was and the next `hello` asks
   again. A build a thread on a draining runner was due to hear about is
-  forgotten when the same app comes back on a build without the commit. A thread that remembered only one app's
+  forgotten when the same app comes back on any other build (rolled back,
+  or one without the commit); if that one counts, it hears about that. A thread that remembered only one app's
   build waits for that app: the other's first `build` isn't a restart of it.
   One that remembered neither (no app had said) takes either.
 - An archived thread, or a request more than a day old, gets only the

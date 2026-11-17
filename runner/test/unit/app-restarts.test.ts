@@ -340,3 +340,39 @@ test('a build due after a handover is dropped when an older one replaces it', ()
   assert.equal(said(h, thread.id).message, undefined);
   assert.ok(watcher.isWatching(thread.id));
 });
+
+test('a build due after a handover is dropped when the app rolls back', () => {
+  const { h, thread } = setUp();
+  const away = new Set<string>([thread.id]);
+  const watcher = new AppRestarts({
+    runner: { get: (id) => h.runner.get(id), note: (id, t) => h.runner.note(id, t), send: (...a) => h.runner.send(...a), has: (id) => !away.has(id) && h.runner.has(id) },
+    home: h.home, clock: h.clock, log: nullLogger, away: (id) => away.has(id),
+  });
+  watcher.appHello(A);
+  watcher.watch(thread.id);
+  watcher.appHello(B);
+  watcher.appHello(A);
+  away.delete(thread.id);
+  watcher.adopted(thread.id);
+  assert.equal(said(h, thread.id).message, undefined);
+  assert.ok(watcher.isWatching(thread.id));
+});
+
+test('the Swift app\'s tree is its app and dock folders\' trees', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const { realGit } = await import('../../src/app-restarts.ts');
+  const { h, thread } = setUp();
+  const repo = h.runner.get(thread.id).cwd;
+  const git = (...a: string[]) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
+  git('init', '-q', '-b', 'main');
+  for (const d of ['app', 'dock']) {
+    fs.mkdirSync(`${repo}/${d}`, { recursive: true });
+    fs.writeFileSync(`${repo}/${d}/f`, d);
+  }
+  git('add', '.');
+  git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'x');
+  // As app/build-app.sh makes it.
+  const expected = git('rev-parse', 'HEAD:app', 'HEAD:dock').split('\n').join('+');
+  assert.equal(realGit.tree!(repo, git('rev-parse', 'HEAD'), ['app', 'dock']), expected);
+});

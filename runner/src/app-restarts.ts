@@ -93,7 +93,8 @@ export const realGit: RestartGit = {
   },
   tree(repo, commit, dirs) {
     try {
-      const out = execFileSync('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', ...dirs.map((d) => `${commit}:${d}`)], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+      // Not --verify: it takes one revision, and the Swift app's is two.
+      const out = execFileSync('git', ['-C', repo, 'rev-parse', ...dirs.map((d) => `${commit}:${d}`)], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
       const lines = out.split('\n').filter(Boolean);
       return lines.length === dirs.length ? lines.join('+') : undefined;
     } catch {
@@ -174,11 +175,18 @@ export class AppRestarts {
     const asked = new Map<string, boolean | 'busy' | undefined>();
     const has = (want: NonNullable<Watch['want']>) => {
       if (want.trees?.[app] === build.tree) return true;
-      const key = `${want.repo}\0${want.commit}`;
+      // By commit alone: a thread's worktrees share one repo's objects.
+      const key = want.commit;
       if (!asked.has(key)) asked.set(key, git.contains(want.repo, want.commit, build.commit));
       return asked.get(key);
     };
-    for (const w of state.watching) {
+    for (const watch of state.watching) {
+      // This app on another build than the one a handed-over thread was
+      // due to hear about (rolled back, or a newer one): that's no longer
+      // news. If this one is, it's set again below.
+      const stale = watch.due && (watch.dueApp ?? 'mac') === app && watch.due.tree !== build.tree;
+      const { due: _d, dueApp: _a, ...rest } = watch;
+      const w: Watch = stale ? rest : watch;
       const known = app === 'desktop' ? w.fromDesktopTree : w.fromTree;
       const other = app === 'desktop' ? w.fromTree : w.fromDesktopTree;
       // A build of an app the watch had no build of counts only when it
@@ -190,13 +198,9 @@ export class AppRestarts {
       else if (w.want && has(w.want) === 'busy') kept.push(w);
       // A new build, but one without the commit it's waiting for: keep
       // waiting, from this build, so a reconnect on it isn't news again.
-      // A build of this app it was due to hear about (on a draining
-      // runner) that this one replaces is no longer news either.
       else if (w.want && has(w.want) === false) {
-        const { due, dueApp, ...rest } = w;
-        const stale = due && (dueApp ?? 'mac') === app;
         const moved = app === 'desktop' ? { fromDesktopTree: build.tree, fromDesktopShort: build.short } : { fromTree: build.tree, fromShort: build.short };
-        kept.push({ ...rest, ...(due && !stale ? { due, dueApp } : {}), ...moved });
+        kept.push({ ...w, ...moved });
         if (runner.has(w.threadId)) older.push(w);
       } else if (runner.has(w.threadId)) now.push(w);
       // Finishing a turn on the old runner after a handover: told when it
