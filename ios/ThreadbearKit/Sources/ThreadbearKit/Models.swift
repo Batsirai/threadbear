@@ -1076,7 +1076,13 @@ public struct CommandStatus: Codable, Sendable, Hashable {
         note = try c.decodeIfPresent(String.self, forKey: .note)
         threadId = try c.decodeIfPresent(String.self, forKey: .threadId)
         commands = try? c.decodeIfPresent([SlashCommand].self, forKey: .commands)
-        designReviews = try? c.decodeIfPresent(DesignReviewResult.self, forKey: .commands)
+        // A design review comes as JSON text (phone:command, API 86), as its
+        // notes' keys are option ids Convex can't take as object keys.
+        if let text = try? c.decodeIfPresent(String.self, forKey: .commands) {
+            designReviews = try? JSONDecoder().decode(DesignReviewResult.self, from: Data(text.utf8))
+        } else {
+            designReviews = try? c.decodeIfPresent(DesignReviewResult.self, forKey: .commands)
+        }
     }
 }
 

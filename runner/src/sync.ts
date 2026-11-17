@@ -1431,7 +1431,9 @@ export class ConvexSync {
   // "seq path", read from the mirror the first time a thread needs it.
   private replyScanned = new Set<string>();
   private replyDue = new Set<string>();
-  private pendingReplyImages: (ReplyImage & { threadId: string })[] = [];
+  // read and within: a design review's still (API 86), whose path is its
+  // opaque src and whose file is read from inside its review's folder.
+  private pendingReplyImages: (ReplyImage & { threadId: string; read?: string; within?: string })[] = [];
   private replyUp = new Map<string, Set<string>>();
   private flushTimer?: TimerHandle;
   private heartbeatTimer?: TimerHandle;
@@ -3460,7 +3462,7 @@ export class ConvexSync {
       this.replyDue.delete(threadId);
     }
     while (this.pendingReplyImages.length) {
-      const { threadId, seq, path: file, src, pinned } = this.pendingReplyImages[0]!;
+      const { threadId, seq, path: file, src, pinned, read: readFrom, within } = this.pendingReplyImages[0]!;
       let up = this.replyUp.get(threadId);
       if (!up) {
         const rows = (await this.post('query', 'sync:replyImages', { key, threadId })) as { seq: number; path: string }[] | null;
@@ -3469,7 +3471,7 @@ export class ConvexSync {
       }
       const id = `${seq} ${this.scrubber.safeText(file)}`;
       if (!up.has(id)) {
-        const read = readReplyImage(file);
+        const read = readFrom && within ? readShareImage(readFrom, within) : readReplyImage(file);
         if ('skip' in read) {
           this.deps.log.debug('reply picture not sent', { threadId, path: file, why: read.skip });
         } else {
@@ -4687,13 +4689,14 @@ export class ConvexSync {
         }
         // Its stills go up now, and only now: a review nobody opens on the
         // phone keeps its pictures on the Mac. Seq 0 keeps them out of the
-        // thread's own pictures (phone:images reads by seq), and each is in
-        // the review's own media folder, so its path alone tells it apart.
-        const { stills, noPreview } = await reviewStills(review);
+        // thread's own pictures (phone:images reads by seq), and each row is
+        // named by its src, which carries the review's id.
+        const { stills, noPreview } = await reviewStills(review, this.deps.home ? paths.media(this.deps.home, id) : undefined);
         const result = { review: phoneReview(review, noPreview) };
         if (Buffer.byteLength(JSON.stringify(result)) > 250 * 1024) throw new Error('This review is too large for the phone. Open it on the Mac.');
         if (stills.length) {
-          this.pendingReplyImages.push(...stills.map((s) => ({ threadId: id, seq: 0, path: s.path, src: s.src })));
+          // path is the opaque src too, so no path on this Mac goes up.
+          this.pendingReplyImages.push(...stills.map((s) => ({ threadId: id, seq: 0, path: s.src, src: s.src, read: s.read, within: s.within })));
           this.scheduleFlush();
         }
         return { result };

@@ -996,7 +996,9 @@ Backend API 86 adds `phone:designReviews(token, threadId, reviewId?)` and
 commands on the owning runner. Without an id the first returns pending
 review titles (`{ reviews: [{ id, title }], truncated? }`); with an id, or
 the start of one as a `review:` link gives, it returns that review, pending
-or not (`{ review }`). `phone:command` carries the result. The runner must
+or not (`{ review }`). `phone:command` carries the result, as JSON text
+for the phone to parse (a draft's notes are keyed by option id, which
+Convex can't take as an object key). The runner must
 be online to read or answer a review. Responses use `reviews.respond`,
 including its revision checks and idempotent retry behavior.
 
@@ -1011,9 +1013,11 @@ the draft from those fields alone.
 
 A review's stills go up only when the phone opens that review: the
 runner queues them as the `designReviews` command with an id runs, as reply
-pictures at seq 0 with the review's `src`, and `phone:reviewImages(token,
+pictures at seq 0 whose `src` and `path` are both the opaque source, and `phone:reviewImages(token,
 threadId, sources)` follows them as they arrive (`phone:images` leaves them
-out). One over the reply-picture limit (10 MB) or in a format the phone
+out). Only a file in the review's own media folder that isn't a link
+goes (a moved review's paths are the other runner's word). One over the
+reply-picture limit (10 MB) or in a format the phone
 doesn't take is shrunk to a JPEG first, and one that can't be sent at all
 comes with `preview: false`, so the phone says so rather than waiting.
 

@@ -521,14 +521,19 @@ export const images = query({
 
 export const command = query({
   args: { token: v.string(), commandId: v.id('commands') },
-  // result (API 62): a slashCommands command's answer, the thread's list.
+  // result (API 62): a slashCommands command's answer, the thread's list;
+  // (API 86) a designReviews command's, as JSON text.
   returns: v.object({ state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')), note: v.optional(v.string()), threadId: v.optional(v.string()), result: v.optional(v.any()) }),
   handler: async (ctx, { token, commandId }) => {
     await checkPhoneToken(ctx, token);
     const c = await ctx.db.get(commandId);
     if (!c) throw new ConvexError({ kind: 'notFound', message: 'no such command' });
     let result: unknown;
-    if ((c.kind === 'slashCommands' || c.kind === 'designReviews') && c.result) {
+    // A design review (API 86) goes as the runner's JSON text, for the phone
+    // to parse: its notes are keyed by option id, which can be any text, and
+    // Convex refuses an object key that isn't plain ASCII or starts with "$".
+    if (c.kind === 'designReviews' && c.result) result = c.result;
+    else if (c.kind === 'slashCommands' && c.result) {
       try {
         result = JSON.parse(c.result);
       } catch {

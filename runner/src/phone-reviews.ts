@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DesignReview, ReviewDraft } from './protocol.ts';
 import { convertImage } from './images.ts';
-import { readReplyImage } from './share-images.ts';
+import { readShareImage, shrinkWouldDo } from './share-images.ts';
 
 export function reviewImageSource(reviewId: string, imagePath: string): string {
   return `review:${reviewId}:${crypto.createHash('sha256').update(imagePath).digest('hex')}`;
@@ -97,34 +97,43 @@ export function draftFromPhone(raw: unknown): ReviewDraft {
 // Longest side of a still shrunk for the phone: plenty for its screen.
 const PHONE_STILL_PX = 2400;
 
-export type ReviewStill = { path: string; src: string };
+// read: the file to send; within: the folder it must be in when it's read
+// (readShareImage: no links, nothing outside). The row in Convex is named by
+// src alone, never the path.
+export type ReviewStill = { src: string; read: string; within: string };
 
-// A review's stills ready to go up, and the ones that can't. A still over
-// the reply-picture limit (10 MB; a review takes 25) or in a format the
-// phone's pictures don't take is shrunk to a JPEG beside it once, in the
-// review's own media folder, and that copy goes instead.
-export async function reviewStills(review: DesignReview): Promise<{ stills: ReviewStill[]; noPreview: Set<string> }> {
+// A review's stills ready to go up, and the ones that can't. Only files in
+// the review's own media folder (`<thread media>/reviews/<id>`, where
+// createReview copies them), not links, go: a review that came across in a
+// move names paths that runner chose, so a path alone proves nothing. A still
+// over the reply-picture limit (10 MB; a review takes 25) or in a format the
+// phone doesn't take is shrunk to a JPEG in a `phone` folder beside it once,
+// and that copy goes instead.
+export async function reviewStills(review: DesignReview, threadMedia: string | undefined): Promise<{ stills: ReviewStill[]; noPreview: Set<string> }> {
   const stills: ReviewStill[] = [];
   const noPreview = new Set<string>();
   const seen = new Set<string>();
+  const within = threadMedia && /^[a-zA-Z0-9-]{1,200}$/.test(review.id) ? path.join(threadMedia, 'reviews', review.id) : undefined;
   for (const option of review.options) {
     for (const shot of shotsOf(option)) {
       const file = shot.image.path;
       const src = reviewImageSource(review.id, file);
       if (seen.has(src)) continue;
       seen.add(src);
-      const ready = await phoneStill(file);
-      if (ready) stills.push({ path: ready, src });
+      const ready = within ? await phoneStill(file, within) : undefined;
+      if (ready) stills.push({ src, read: ready, within: within! });
       else noPreview.add(src);
     }
   }
   return { stills, noPreview };
 }
 
-async function phoneStill(file: string): Promise<string | undefined> {
-  if (!('skip' in readReplyImage(file))) return file;
-  if (!fs.existsSync(file)) return undefined;
-  const small = path.join(path.dirname(file), 'phone', `${path.basename(file, path.extname(file))}.jpg`);
+async function phoneStill(file: string, within: string): Promise<string | undefined> {
+  const first = readShareImage(file, within);
+  if (!('skip' in first)) return file;
+  if (!shrinkWouldDo(first.skip)) return undefined;
+  // Named for the still's whole path, so a.png and a.webp never share one.
+  const small = path.join(within, 'phone', `${crypto.createHash('sha256').update(file).digest('hex').slice(0, 16)}-${path.basename(file)}.jpg`);
   if (!fs.existsSync(small)) {
     fs.mkdirSync(path.dirname(small), { recursive: true });
     // Made aside and renamed, so one cut short never passes for the still.
@@ -135,5 +144,5 @@ async function phoneStill(file: string): Promise<string | undefined> {
     }
     fs.renameSync(part, small);
   }
-  return 'skip' in readReplyImage(small) ? undefined : small;
+  return 'skip' in readShareImage(small, within) ? undefined : small;
 }

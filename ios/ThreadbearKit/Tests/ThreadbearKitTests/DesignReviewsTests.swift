@@ -57,4 +57,13 @@ struct DesignReviewsTests {
         let review = try JSONDecoder().decode(PhoneDesignReview.self, from: Data(#"{"id":"r","title":"T","status":"pending","revision":0,"draft":{"notes":{}},"options":[{"id":"A","title":"A","shots":[{"src":"review:r:a","kind":"image","preview":false},{"src":"review:r:b","kind":"image"}]}]}"#.utf8))
         #expect(review.options[0].shots.map(\.preview) == [false, nil])
     }
+
+    @Test func aReviewComesAsJSONTextWithAnyNoteKeys() throws {
+        let inner = #"{"review":{"id":"r","title":"T","status":"pending","revision":0,"draft":{"notes":{"Café":"tighter","$odd":"x"}},"options":[]}}"#
+        let outer = try JSONEncoder().encode(["state": "done", "result": inner])
+        let status = try JSONDecoder().decode(CommandStatus.self, from: outer)
+        #expect(status.designReviews?.review?.draft.notes["Café"] == "tighter")
+        #expect(status.designReviews?.review?.draft.notes["$odd"] == "x")
+        #expect(status.commands == nil)
+    }
 }

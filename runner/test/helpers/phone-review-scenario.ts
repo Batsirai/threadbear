@@ -26,7 +26,7 @@ export async function phoneReviewScenario() {
   fs.writeFileSync(file, makePng(120, 80));
   const review = h.runner.createReview(thread.id, { title: 'Layout', recommended: 'A', options: [
     { id: 'A', title: 'First', path: file, shots: [{ path: file, title: 'Detail' }] },
-    { id: 'B', title: 'Today', path: file, reference: true },
+    { id: 'Café', title: 'Today', path: file, reference: true },
   ] }).review;
   h.adapter.last.result();
   let push: ((value: unknown) => void) | undefined;
@@ -65,7 +65,7 @@ export async function phoneReviewScenario() {
     };
     const list = await request('designReviews', {});
     assert.equal(list.state, 'done');
-    assert.equal(list.result.reviews[0].id, review.id);
+    assert.equal(JSON.parse(list.result).reviews[0].id, review.id);
     await sync.flushNow();
     const sources = phoneReview(review).options.flatMap(o => o.shots.map(s => s.src));
     // Nothing of the review's goes up until the phone opens it.
@@ -73,29 +73,34 @@ export async function phoneReviewScenario() {
     assert.deepEqual(await call(b.ctx, modules.phone.reviewImages, { token, threadId: thread.id, sources }), []);
     const read = await request('designReviews', { reviewId: review.id.slice(0, 8) });
     assert.equal(read.state, 'done');
-    assert.deepEqual(read.result.review, phoneReview(review));
+    // As JSON text: its notes are keyed by option ids Convex can't take as keys.
+    assert.deepEqual(JSON.parse(read.result).review, phoneReview(review));
     await sync.flushNow();
     const images = await call(b.ctx, modules.phone.reviewImages, { token, threadId: thread.id, sources });
     assert.equal(images.length, new Set(sources).size, JSON.stringify({ refused, uploads, expected: sources.length }));
     assert.ok(images.every((i: { url: string }) => i.url));
+    // Named in Convex by src alone: no path on the Mac goes up.
+    for (const row of await b.ctx.db.query('replyImages').collect()) assert.ok(row.src?.startsWith('review:') && row.path === row.src, JSON.stringify(row));
     await assert.rejects(call(b.ctx, modules.phone.designReviews, { token: 'invalid', threadId: thread.id }));
     await assert.rejects(call(b.ctx, modules.phone.reviewImages, { token, threadId: 'missing', sources }));
-    assert.equal((await request('respondReview', { reviewId: review.id, revision: 0, draft: { pickedId: 'B', notes: [] } })).state, 'failed');
+    assert.equal((await request('respondReview', { reviewId: review.id, revision: 0, draft: { pickedId: 'Café', notes: [] } })).state, 'failed');
     const saved = h.runner.saveReview(thread.id, review.id, 0, { notes: { A: 'Saved on the Mac' } }).review;
     assert.equal((await request('respondReview', { reviewId: review.id, revision: 0, draft: { pickedId: 'A', notes: [] } })).state, 'failed');
-    const response = { pickedIds: ['A'], notes: [{ id: 'B', text: 'Keep its spacing' }], reply: 'Build the first one' };
+    const response = { pickedIds: ['A'], notes: [{ id: 'Café', text: 'Keep its spacing' }], reply: 'Build the first one' };
     assert.equal((await request('respondReview', { reviewId: review.id, revision: saved.revision, draft: response })).state, 'done');
     const count = () => h.runner.events(thread.id, {}).events.filter(e => e.type === 'user.message' && e.reviewId === review.id).length;
     const before = count();
     assert.equal((await request('respondReview', { reviewId: review.id, revision: saved.revision, draft: response })).state, 'done');
     assert.equal(count(), before, 'retry does not deliver another answer');
     assert.equal(h.runner.getReview(thread.id, review.id).review.status, 'answered');
-    assert.equal(h.runner.getReview(thread.id, review.id).review.response?.notes.B, 'Keep its spacing');
-    assert.equal((await request('designReviews', {})).result.reviews.length, 0);
+    assert.equal(h.runner.getReview(thread.id, review.id).review.response?.notes['Café'], 'Keep its spacing');
+    assert.equal(JSON.parse((await request('designReviews', {})).result).reviews.length, 0);
     // An answered review's short link still opens it, read-only.
     const old = await request('designReviews', { reviewId: review.id.slice(0, 8) });
     assert.equal(old.state, 'done');
-    assert.equal(old.result.review.status, 'answered');
+    const answered = JSON.parse(old.result).review;
+    assert.equal(answered.status, 'answered');
+    assert.deepEqual(answered.draft.notes, { 'Café': 'Keep its spacing' });
     // A review's stills aren't the thread's own pictures.
     assert.ok((await call(b.ctx, modules.phone.images, { token, threadId: thread.id, from: 0 }) as { src?: string }[]).every((i) => !i.src?.startsWith('review:')));
     assert.deepEqual(refused, [], 'all sync writes satisfy the backend schema and validators');

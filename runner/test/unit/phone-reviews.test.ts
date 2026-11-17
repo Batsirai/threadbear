@@ -49,26 +49,37 @@ test("the phone's answer is rebuilt field by field, notes from a list", () => {
   assert.throws(() => draftFromPhone({ notes: [], pickedIds: [1] }));
 });
 
-test("a review's stills: ready ones by their own path, and ones that can't go marked", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-reviews-'));
+test("a review's stills: only files in its own folder, not links, each once", async () => {
+  const media = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-reviews-'));
   try {
+    const dir = path.join(media, 'reviews', review.id);
+    fs.mkdirSync(dir, { recursive: true });
     const good = path.join(dir, 'a.png');
     fs.writeFileSync(good, makePng(40, 30));
     const junk = path.join(dir, 'b.png');
     fs.writeFileSync(junk, 'not a picture at all');
+    // A picture elsewhere on the Mac, named outright and through a link.
+    const elsewhere = path.join(media, 'private.png');
+    fs.writeFileSync(elsewhere, makePng(10, 10));
+    const link = path.join(dir, 'link.png');
+    fs.symlinkSync(elsewhere, link);
+    const still = (p: string) => ({ path: p, mediaType: 'image/png' });
     const r: DesignReview = { ...review, options: [
-      { id: 'A', title: 'A', image: { path: good, mediaType: 'image/png' }, shots: [{ image: { path: good, mediaType: 'image/png' } }, { image: { path: good, mediaType: 'image/png' }, title: 'again' }] },
-      { id: 'B', title: 'B', image: { path: junk, mediaType: 'image/png' } },
-      { id: 'C', title: 'C', image: { path: path.join(dir, 'gone.png'), mediaType: 'image/png' } },
+      { id: 'A', title: 'A', image: still(good), shots: [{ image: still(good) }, { image: still(good), title: 'again' }] },
+      { id: 'B', title: 'B', image: still(junk) },
+      { id: 'C', title: 'C', image: still(path.join(dir, 'gone.png')) },
+      { id: 'D', title: 'D', image: still(elsewhere) },
+      { id: 'E', title: 'E', image: still(link) },
     ] };
-    const { stills, noPreview } = await reviewStills(r);
-    assert.deepEqual(stills, [{ path: good, src: reviewImageSource(r.id, good) }], 'the same still goes once');
-    assert.deepEqual([...noPreview].sort(), [reviewImageSource(r.id, junk), reviewImageSource(r.id, path.join(dir, 'gone.png'))].sort());
+    const { stills, noPreview } = await reviewStills(r, media);
+    assert.deepEqual(stills, [{ src: reviewImageSource(r.id, good), read: good, within: dir }], 'the same still goes once');
+    assert.deepEqual([...noPreview].sort(), [junk, path.join(dir, 'gone.png'), elsewhere, link].map((p) => reviewImageSource(r.id, p)).sort());
     const dto = phoneReview(r, noPreview);
     assert.equal(dto.options[0].shots[0].preview, undefined);
-    assert.equal(dto.options[1].shots[0].preview, false);
-    assert.equal(dto.options[2].shots[0].preview, false);
+    assert.ok(dto.options.slice(1).every((o) => o.shots[0].preview === false));
+    // A review id that would lead out of the folder sends nothing.
+    assert.equal((await reviewStills({ ...r, id: '../x' }, media)).stills.length, 0);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(media, { recursive: true, force: true });
   }
 });

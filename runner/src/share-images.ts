@@ -203,6 +203,14 @@ function realOr(p: string): string {
 }
 
 const OUTSIDE = "it isn't in the thread's media folder";
+const NOT_A_PICTURE = "it isn't a picture";
+
+// Whether a readShareImage skip is only about the file's size or format, so a
+// shrunk JPEG of it could go instead (a design review's stills on the phone,
+// phone-reviews.ts). Not one outside the folder, a link or gone.
+export function shrinkWouldDo(skip: string): boolean {
+  return skip === NOT_A_PICTURE || / MB$/.test(skip);
+}
 
 // The bytes of a shared thread's picture and what they really are, or why
 // not. It goes to a public page, so: a file in `mediaDir` (by its real path
@@ -251,7 +259,7 @@ export function readShareImage(file: string, mediaDir: string | undefined): { by
     }
     // Pictures only: the page draws them with <img>.
     const info = sniffImage(bytes.subarray(0, got));
-    if (!info) return { skip: "it isn't a picture" };
+    if (!info) return { skip: NOT_A_PICTURE };
     return { bytes: new Uint8Array(bytes.subarray(0, got)), mediaType: info.mediaType, ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}) };
   } catch {
     return { skip: "it can't be read" };
