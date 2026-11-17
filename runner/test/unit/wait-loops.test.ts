@@ -21,6 +21,12 @@ test('wait loops, long sleeps and CI watches count as waits', () => {
   assert.ok(isWaitCommand('sleep 10m; tb status'));
   assert.ok(isWaitCommand('gh run watch 123456 --exit-status'));
   assert.ok(isWaitCommand('gh pr checks 72 --watch'));
+  // Shapes from Codex's review, 18 Nov: the sleep in the condition, a quoted
+  // word before it, a nested loop's done first.
+  assert.ok(isWaitCommand('while sleep 5; do test -f ready && break; done'));
+  assert.ok(isWaitCommand('until test -f ready; do echo "not done"; sleep 5; done'));
+  assert.ok(isWaitCommand('until test -f ready; do for x in a b; do echo checking; done; sleep 5; done'));
+  assert.ok(isWaitCommand('nohup sh -c "while true; do sleep 30; done" &'));
 });
 
 test('ordinary background commands are not waits', () => {
@@ -31,12 +37,16 @@ test('ordinary background commands are not waits', () => {
   assert.ok(!isWaitCommand('for f in *.mov; do ffmpeg -i "$f" -c:v libx264 "${f%.mov}.mp4"; done'), 'a loop that never sleeps');
   assert.ok(!isWaitCommand('gh pr checks 72'));
   assert.ok(!isWaitCommand('sleepwalk --fast'), 'only sleep the command');
+  assert.ok(!isWaitCommand('for f in *.mov; do ffmpeg -i "$f" -metadata title="sleep forever" out.mp4; done'), 'a quoted word is not a command');
 });
 
-test('only background Bash calls that wait are refused, and the short-wait mark lets one through', () => {
+test('Bash calls that would wait past the turn are refused, and the short-wait mark lets one through', () => {
   const loop = 'until curl -sf localhost:3000; do sleep 1; done';
   assert.equal(denyWaitLoop('Bash', { command: loop, run_in_background: true }), WAIT_LOOP_REASON);
-  assert.equal(denyWaitLoop('Bash', { command: loop }), undefined, 'in the foreground the turn waits, so nothing is left running');
+  assert.equal(denyWaitLoop('Bash', { command: loop }), undefined, 'a quick poll in the foreground is a server coming up');
+  // A slow poll in the foreground is moved to the background when it times out.
+  assert.equal(denyWaitLoop('Bash', { command: 'until test -f ready; do sleep 60; done', timeout: 1000 }), WAIT_LOOP_REASON);
+  assert.equal(denyWaitLoop('Bash', { command: 'sleep 2 && curl localhost:3000' }), undefined);
   assert.equal(denyWaitLoop('Bash', { command: `${loop} ${SHORT_WAIT_MARK}`, run_in_background: true }), undefined);
   assert.equal(denyWaitLoop('Bash', { command: `${loop} # Short Wait`, run_in_background: true }), undefined, 'in any letters');
   assert.equal(denyWaitLoop('Bash', { command: 'npm run dev', run_in_background: true }), undefined);
@@ -49,4 +59,18 @@ test('the reason names the way to wait instead', () => {
   assert.match(WAIT_LOOP_REASON, /check/);
   assert.match(WAIT_LOOP_REASON, /snooze/);
   assert.ok(WAIT_LOOP_REASON.includes(SHORT_WAIT_MARK));
+});
+
+test('a long command is read in linear time', () => {
+  // 10 KB of unclosed loops took 300 ms with the first regex (Codex's review).
+  const big = 'while x; do '.repeat(5000);
+  const t = performance.now();
+  isWaitCommand(big);
+  isWaitCommand(big + ' sleep 5');
+  assert.ok(performance.now() - t < 50, `took ${performance.now() - t} ms`);
+});
+
+test('the reason says to poll on a cron, never a one-off that would drop the wait', () => {
+  assert.match(WAIT_LOOP_REASON, /cron/);
+  assert.doesNotMatch(WAIT_LOOP_REASON, /`when`/);
 });
