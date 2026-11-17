@@ -2130,6 +2130,41 @@ type StandingInstructions = {
   message, not in a fresh session's instructions, can fade in a compaction, as a
   project's joined line can.
 
+## Shared memory
+
+`runner/src/memory-sync.ts`, `convex/memorySync.ts` (API 84). The
+`sharedMemory` experiment, on each runner that takes part. What Claude Code
+loads before the first message (the global `CLAUDE.md`, and the project's
+memory folder with its `MEMORY.md`) is most of what makes a thread know
+Mike, and it lived on the main Mac alone.
+
+- **Paths.** `global/CLAUDE.md`, or `memory/~<rest>/<name>.md`, where
+  `~<rest>` is Claude Code's project slug with the home folder's slug cut off
+  (`-Users-m5-mike-dev-me-misc` is `~-dev-me-misc`, and lands in
+  `-Users-bruce-dev-me-misc` on Bruce). Folders outside home, and under
+  `~/Library`, aren't shared. Files are up to 128 KB; both sides check the
+  same pattern.
+- **The main Mac** (the owner key) scans each Claude login's `CLAUDE.md`
+  (`~/.claude`'s first) and `projects/*/memory/*.md` once a minute, masks
+  secret values it knows of, and sends what changed or went to `putMemory`.
+  Each change takes the next `seq`; a deleted file stays as a `gone` row.
+- **The others** read `memorySince(after)` a page at a time and write each
+  file into every Claude login (and Codex's `AGENTS.md` for the global one,
+  where there's a Codex home), one write per real place. `memory-sync.json` in
+  the data dir holds the last `seq` and the hash of each file as written, so:
+  a file that's changed since is offered back (`offerMemory`) before it's
+  replaced, and one that was there before sync ever wrote that path is left
+  alone for good (and offered).
+- **Offers** are a runner key's agents' new or changed files, each version
+  once. Only the owner reads them (`memoryOffers`), and it writes them to
+  `memory-offers/<runnerId>/<path>` in its data dir, never into memory, then
+  `takeMemoryOffers`. Folding them in is for Mike or a scheduled job (the
+  nightly retro on Mike's Mac). A runner key can't write `memoryFiles`, so it
+  can't change what the main Mac's agents, or any other runner's, are told.
+- **The limit.** Anything that can write a memory file on the main Mac can
+  brief every runner's agents, as it already briefs every thread in that
+  folder there. Memory goes to the backend in the clear, as transcripts do.
+
 ## Explain
 
 Mike can select words in a thread's transcript and pick Explain from the
@@ -7176,6 +7211,11 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `pools` | any runner | the shared pools, which every runner follows; a runner key gets no member named by another runner's id |
 | `savePools` | owner only | pools reach the main Mac's logins and folders |
 | `adoptPools` | owner only | as `savePools`; a runner key's runner keeps its own until the main Mac sets them |
+| `putMemory` | owner only | shared memory briefs every agent on every runner, so only the main Mac writes it |
+| `memorySince` | any runner | the main Mac's shared memory, which every runner copies down |
+| `offerMemory` | its own | a runner key's own agents' saves, offered to the main Mac as data |
+| `memoryOffers` | owner only | other runners' offers are the main Mac's to read |
+| `takeMemoryOffers` | owner only | as `memoryOffers` |
 | `setSchedules` | owner only | mirrored rows, for a runner on a pre-API 9 schedules.json: no runner key's runner needs it, and it could shadow another runner's ids (its runner stops mirroring, quietly) |
 | `schedules` | its own | lists only its runner's schedules; the owner sees all |
 | `schedulesSince` | its own | as `schedules`, and hears of only its own runner's rows and ids gone |

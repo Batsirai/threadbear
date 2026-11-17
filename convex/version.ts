@@ -395,4 +395,10 @@
 //    matches its own plan. moves:moveInfo keeps only a description's own
 //    fields, typed and bounded. A runner starts moves with it from 83, and
 //    an older backend refuses its startMove, so moves wait for the backend.
-export const API_VERSION = 83;
+// 84: shared memory (memorySync.ts). sync:putMemory (owner only) puts up the
+//    main Mac's global CLAUDE.md and memory files, sync:memorySince reads
+//    them down by sequence number, and sync:offerMemory carries what a
+//    runner key's agents saved back to the main Mac (sync:memoryOffers,
+//    sync:takeMemoryOffers). Only runners with the sharedMemory experiment on
+//    call any of them.
+export const API_VERSION = 84;

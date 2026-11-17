@@ -11,6 +11,7 @@
 // key the deployment's RUNNER_KEY was set to (`npx convex env set`).
 // THREADBEAR_SYNC=off turns it off whatever runner.json says, which
 // check.sh sets so no test runner ever writes to the real project.
+import { MEMORY_API_VERSION, type MemoryBackend, type MemoryOffer, type MemoryRow } from './memory-sync.ts';
 import { wellFormedJson } from './well-formed-json.ts';
 import { moveInfoFrom, type MoveInfo, type MovePreview, type MoveRow, type MovesBackend } from './moves.ts';
 import { START_CARD } from './cross-runner.ts';
@@ -141,7 +142,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 83;
+export const BACKEND_API_VERSION = 84;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -653,6 +654,8 @@ export type SyncDeps = {
   schedules?: { attach(backend: ScheduleBackend): void | Promise<void>; inBackend(): boolean; heldLocal?(): { id: string; why: string }[] };
   // Follows the shared pools once the backend has them (API 38).
   pools?: { attach(backend: PoolBackend): void };
+  // Shares the main Mac's memory with the others (API 84, memory-sync.ts).
+  memory?: { attach(backend: MemoryBackend): void };
   // Takes the other runners' readings of the same logins (API 39).
   sharedUsage?: { setShared(rows: SharedReading[]): void };
   // This machine's figures (runner-stats.ts). Absent in tests, which report none.
@@ -3903,6 +3906,7 @@ export class ConvexSync {
         this.retryCommands();
         if ((this.backendApiVersion ?? 0) >= SCHEDULES_API_VERSION && this.running) void this.deps.schedules?.attach(this.scheduleBackend());
         if ((this.backendApiVersion ?? 0) >= SHARED_POOLS_API_VERSION && this.running) this.deps.pools?.attach(this.poolBackend());
+        if ((this.backendApiVersion ?? 0) >= MEMORY_API_VERSION && this.running) this.deps.memory?.attach(this.memoryBackend());
         if ((this.backendApiVersion ?? 0) >= SHARED_USAGE_API_VERSION && this.running) this.followSharedUsage();
         if ((this.backendApiVersion ?? 0) >= THREAD_INDEX_API_VERSION && this.running) this.index?.start();
         if ((this.backendApiVersion ?? 0) >= RUNNER_STATS_API_VERSION && this.running) this.startStats();
@@ -4213,6 +4217,34 @@ export class ConvexSync {
       },
     };
     return this.poolsTable;
+  }
+
+  // ------------------------------------------------------------ shared memory
+
+  // The backend's side of memory-sync.ts. Which half a runner plays is its
+  // key's: the owner key puts files up and reads offers, a runner key reads
+  // files down and offers its own.
+  memoryBackend(): MemoryBackend {
+    const key = this.deps.key;
+    const runnerId = this.runnerId;
+    return {
+      owner: this.ownerKey(),
+      put: async (files) => Number(await this.backend('mutation', 'sync:putMemory', { key, files })) || 0,
+      since: async (after) => {
+        const r = (await this.backend('query', 'sync:memorySince', { key, after })) as { rows?: MemoryRow[]; more?: boolean; seq?: number } | null;
+        return { rows: Array.isArray(r?.rows) ? r!.rows : [], more: r?.more === true, seq: typeof r?.seq === 'number' ? r.seq : 0 };
+      },
+      offer: async (files) => {
+        await this.backend('mutation', 'sync:offerMemory', { key, runnerId, files });
+      },
+      offers: async () => {
+        const r = await this.backend('query', 'sync:memoryOffers', { key });
+        return Array.isArray(r) ? (r as MemoryOffer[]) : [];
+      },
+      take: async (taken) => {
+        await this.backend('mutation', 'sync:takeMemoryOffers', { key, taken });
+      },
+    };
   }
 
   // ------------------------------------------------------------ commands

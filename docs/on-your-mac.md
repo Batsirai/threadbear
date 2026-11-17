@@ -583,6 +583,16 @@ File references are where to look.
   (never opened). Grok itself reads `~/.grok`, and as it does anywhere your
   `~/.claude` settings, hooks, skills and `CLAUDE.md`; its threads run your
   own Grok and Claude hooks.
+- With the Shared memory experiment on (off unless you turn it on): on your
+  main Mac, each Claude login's `CLAUDE.md` and the memory files under
+  `projects/*/memory/` for folders in your home folder, once a minute, which
+  go to your Convex deployment with known secret values masked. On your other
+  runners it writes those into each Claude login (`CLAUDE.md`,
+  `projects/<folder>/memory/`) and Codex's `AGENTS.md`, leaving alone any file
+  that was there first, and sends their own new or changed memory files back
+  to your main Mac, which saves them under `memory-offers/` in its data folder.
+  It keeps what it last synced in `memory-sync.json` there
+  (`runner/src/memory-sync.ts`).
 - Token Stats' files, if you have that app, and any logins you've added
   under `accounts` in its data folder (`claude-1`, `codex-1`...).
 - Your first name, from your Mac account's full name (`id -F`), so its

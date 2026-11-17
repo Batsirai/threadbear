@@ -210,6 +210,15 @@ export const ACCESS: Record<string, Access> = {
   pools: 'shared',
   savePools: 'owner',
   adoptPools: 'owner',
+  // Shared memory (API 84, memorySync.ts): every runner reads the main
+  // Mac's files, but only the main key writes them, as they brief every
+  // agent everywhere. A runner key's own saves are offers, read by the
+  // main key alone.
+  putMemory: 'owner',
+  memorySince: 'shared',
+  offerMemory: 'own',
+  memoryOffers: 'owner',
+  takeMemoryOffers: 'owner',
   savePocketCard: 'own',
   removePocketCard: 'own',
   pocketCards: 'own',

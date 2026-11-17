@@ -14,6 +14,7 @@ import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
 import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdThreadTimes, impossibleUsage, isIsoTime, LOGIN_EMAIL, LOGIN_PROVIDER, loginKey, isThreadId, mayClaim, NAME_CHARS, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, nameSkeleton, webLinksOnly, normalName, ownsCard, SCHEDULE_ID, utf8Bytes, wholeIn, type Caller, type UsageDoc } from './runnerAccess';
 import { dropWake, seedWakes, syncWake } from './wakes';
+import { badMemoryFile, MAX_MEMORY_BATCH, MAX_OFFERS_PER_RUNNER, memoryAfter, OFFER_PAGE, putMemoryFiles } from './memorySync';
 import { pushFailing, pushOff } from './pushHealth';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
 import { issueToken as makeToken, issuePairingCode as makePairingCode, listTokens as allTokens, revokeToken as revokeOne, tokenInfo, tokenKind, MAX_DAYS } from './tokens';
@@ -2558,6 +2559,105 @@ async function writePools(ctx: { db: MutationCtx['db'] }, runnerId: string, pool
 // word too, never what that key's rows name (F3): `runnerLogins`, which
 // only the owner key writes. It gets no runner id (runnersList is the
 // owner's alone).
+// ------------------------------------------------------------ shared memory
+// memorySync.ts says what these are. The main Mac puts its files up, every
+// runner reads them down, and a runner key's own saves come back as offers
+// only the main Mac reads.
+
+const memoryPut = v.object({ path: v.string(), hash: v.string(), text: v.optional(v.string()), gone: v.optional(v.boolean()) });
+
+function checkMemoryBatch(files: { path: string; hash: string; text?: string; gone?: boolean }[]): void {
+  if (files.length > MAX_MEMORY_BATCH) throw new ConvexError({ kind: 'badArgs', message: `at most ${MAX_MEMORY_BATCH} files at once` });
+  const seen = new Set<string>();
+  for (const f of files) {
+    const bad = badMemoryFile(f);
+    if (bad) throw new ConvexError({ kind: 'badArgs', message: bad });
+    if (seen.has(f.path)) throw new ConvexError({ kind: 'badArgs', message: `${f.path} twice` });
+    seen.add(f.path);
+  }
+}
+
+// The main Mac's files, changed or gone. Owner only: they brief every agent
+// on every runner.
+export const putMemory = mutation({
+  args: { key: v.string(), files: v.array(memoryPut) },
+  returns: v.number(),
+  handler: async (ctx, { key, files }) => {
+    await runnerAuth(ctx, key, 'putMemory');
+    checkMemoryBatch(files);
+    return await putMemoryFiles(ctx, files, Date.now());
+  },
+});
+
+// The files changed after `after` (0 for all of them), a page at a time.
+// `seq` is the newest there is, so a runner knows when it has caught up.
+export const memorySince = query({
+  args: { key: v.string(), after: v.number() },
+  returns: v.object({
+    rows: v.array(v.object({ path: v.string(), hash: v.string(), text: v.string(), gone: v.optional(v.literal(true)), seq: v.number() })),
+    more: v.boolean(),
+    seq: v.number(),
+  }),
+  handler: async (ctx, { key, after }) => {
+    await runnerAuth(ctx, key, 'memorySince');
+    return await memoryAfter(ctx, Number.isFinite(after) && after > 0 ? after : 0);
+  },
+});
+
+// What a runner key's agents saved there: new files, or its own edits to
+// one the main Mac sent. Kept apart from memoryFiles, for the main Mac to
+// read as data. The owner key has no use for it: its files are memory.
+export const offerMemory = mutation({
+  args: { key: v.string(), runnerId: v.string(), files: v.array(v.object({ path: v.string(), hash: v.string(), text: v.string() })) },
+  returns: v.null(),
+  handler: async (ctx, { key, runnerId, files }) => {
+    const caller = await runnerAuth(ctx, key, 'offerMemory');
+    await actAs(ctx, caller, runnerId);
+    if (caller.owner) throw new ConvexError({ kind: 'badArgs', message: "the main Mac's memory is put up with putMemory" });
+    checkMemoryBatch(files);
+    const now = Date.now();
+    const waiting = await ctx.db.query('memoryOffers').withIndex('by_runner_path', (q) => q.eq('runnerId', runnerId)).take(MAX_OFFERS_PER_RUNNER + 1);
+    let count = waiting.length;
+    for (const f of files) {
+      const row = waiting.find((r) => r.path === f.path);
+      if (row) {
+        if (row.hash !== f.hash) await ctx.db.replace(row._id, { runnerId, path: f.path, hash: f.hash, text: f.text, at: now });
+        continue;
+      }
+      if (count >= MAX_OFFERS_PER_RUNNER) throw new ConvexError({ kind: 'full', message: `${MAX_OFFERS_PER_RUNNER} offers already waiting for the main Mac` });
+      await ctx.db.insert('memoryOffers', { runnerId, path: f.path, hash: f.hash, text: f.text, at: now });
+      count++;
+    }
+    return null;
+  },
+});
+
+// The offers waiting, oldest first, for the main Mac.
+export const memoryOffers = query({
+  args: { key: v.string() },
+  returns: v.array(v.object({ id: v.id('memoryOffers'), runnerId: v.string(), path: v.string(), hash: v.string(), text: v.string(), at: v.number() })),
+  handler: async (ctx, { key }) => {
+    await runnerAuth(ctx, key, 'memoryOffers');
+    const rows = await ctx.db.query('memoryOffers').withIndex('by_at').order('asc').take(OFFER_PAGE);
+    return rows.map((r) => ({ id: r._id, runnerId: r.runnerId, path: r.path, hash: r.hash, text: r.text, at: r.at }));
+  },
+});
+
+// Offers the main Mac has saved. One changed since it read it (a newer
+// hash) stays, to be read again.
+export const takeMemoryOffers = mutation({
+  args: { key: v.string(), taken: v.array(v.object({ id: v.id('memoryOffers'), hash: v.string() })) },
+  returns: v.null(),
+  handler: async (ctx, { key, taken }) => {
+    await runnerAuth(ctx, key, 'takeMemoryOffers');
+    for (const t of taken.slice(0, OFFER_PAGE)) {
+      const row = await ctx.db.get(t.id);
+      if (row && row.hash === t.hash) await ctx.db.delete(t.id);
+    }
+    return null;
+  },
+});
+
 export const sharedUsage = query({
   args: { key: v.string(), runnerId: v.optional(v.string()) },
   returns: v.array(v.object({ runnerId: v.optional(v.string()), provider: v.string(), email: v.string(), usage: v.any(), byOwnerKey: v.optional(v.boolean()) })),

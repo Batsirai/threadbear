@@ -1101,4 +1101,31 @@ export default defineSchema({
     nonce: v.string(),
     createdAt: v.number(),
   }).index('by_nonce', ['nonce']),
+
+  // Shared memory (API 84, memorySync.ts): the main Mac's global CLAUDE.md
+  // and memory files, which the other runners copy down. Only the owner key
+  // writes them. A deleted file stays as a row with `gone`, so a runner that
+  // was away hears it went. `seq` goes up by one for each change.
+  memoryFiles: defineTable({
+    path: v.string(),
+    hash: v.string(),
+    text: v.string(),
+    gone: v.optional(v.boolean()),
+    seq: v.number(),
+    updatedMs: v.number(),
+  })
+    .index('by_path', ['path'])
+    .index('by_seq', ['seq']),
+
+  // What a runner key's agents saved to memory there (API 84), waiting for
+  // the main Mac to take it. Only the owner reads these, as data.
+  memoryOffers: defineTable({
+    runnerId: v.string(),
+    path: v.string(),
+    hash: v.string(),
+    text: v.string(),
+    at: v.number(),
+  })
+    .index('by_runner_path', ['runnerId', 'path'])
+    .index('by_at', ['at']),
 });

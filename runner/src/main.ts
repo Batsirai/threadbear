@@ -31,6 +31,7 @@ import { StuckJobs } from './stuck-jobs.ts';
 import { FrozenClis } from './frozen-cli.ts';
 import { KeepAwake } from './keep-awake.ts';
 import { experimentOn } from './experiments.ts';
+import { MemorySync } from './memory-sync.ts';
 import { Reinstaller } from './reinstall.ts';
 import { MacScreen } from './mac-screen.ts';
 import { Projects, drainProjectMethods, projectMethods } from './projects.ts';
@@ -527,6 +528,17 @@ async function main(): Promise<void> {
     if (scheduler.list(id).some((sc) => sc.threadId === id && !sc.finishedAt && sc.check)) leftBehind.push("its schedules' shell checks");
     return { ...info, leftBehind };
   };
+  // Shared memory (memory-sync.ts, the sharedMemory experiment): the main
+  // Mac's global CLAUDE.md and memory folders, on every runner.
+  const memorySync = new MemorySync({
+    home: os.homedir(),
+    dataDir: cfg.home,
+    on: () => experimentOn(cfg.home, 'sharedMemory'),
+    claudeDirs: () => runner.safeAccounts().filter((a) => a.provider === 'claude').map((a) => a.configDir),
+    codexDirs: () => runner.safeAccounts().filter((a) => a.provider === 'codex').map((a) => a.configDir),
+    scrub: (text) => redactSecrets(scrubber.known.mask(text)).text,
+    log,
+  });
   const sync = new ConvexSync({
     config: { ...cfg.sync, runnerId: syncRunnerId, icon: runnerIcon },
     use: new ConvexUseTally({ home: cfg.home }),
@@ -574,6 +586,7 @@ async function main(): Promise<void> {
     secretBox: runner.secrets,
     schedules: scheduler,
     pools: sharedPools,
+    memory: memorySync,
     sharedUsage: usage,
     // The sidebar's list carries what the relay has changed that the
     // backend's rows don't show yet (relay.ts overlay); made below.
