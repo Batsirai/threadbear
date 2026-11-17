@@ -120,6 +120,8 @@ export async function replyImagesFrom(ctx: QueryCtx, threadId: string, from: num
   const inReplies = new Set(rows.filter((r) => r.src).map((r) => r.path));
   const out: { seq: number; src?: string; pinned?: boolean; url: string; width?: number; height?: number }[] = [];
   for (const img of rows) {
+    // A design review's still (API 86) is phone:reviewImages', not the thread's.
+    if (img.src?.startsWith('review:')) continue;
     if (img.pinned) {
       if (inReplies.has(img.path)) continue;
       inReplies.add(img.path);

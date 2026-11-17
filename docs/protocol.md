@@ -896,7 +896,7 @@ The following RPCs take full thread/review IDs. Unknown IDs are errors.
 | method | params | result |
 |---|---|---|
 | `reviews.create` | `{ threadId, title, note?, options: { id, title, path?, shots?: { path, title? }[], url?, note?, reference? }[] }` | `{ review: DesignReview }` |
-| `reviews.get` | `{ threadId, reviewId }` | `{ review: DesignReview }` |
+| `reviews.get` | `{ threadId, reviewId }` | `{ review: DesignReview }`; `reviewId` may be the start of one (8 or more characters) that names only it, among every review the thread has |
 | `reviews.list` | `{ threadId }` | `{ reviews: DesignReview[] }` pending reviews only, oldest first |
 | `reviews.save` | `{ threadId, reviewId, revision, draft: ReviewDraft }` | `{ review: DesignReview }` |
 | `reviews.respond` | `{ threadId, reviewId, revision, draft: ReviewDraft }` | `{ review: DesignReview, turnId?: string }` |
@@ -988,6 +988,42 @@ that the choice/notes will arrive as a later message. The existing URL
 patch panels are independent of these review windows. Reviews take
 pictures, videos and pages, with a live `url` per option opened in the
 browser; overlays are deferred.
+
+#### Reviews on the phone
+
+Backend API 86 adds `phone:designReviews(token, threadId, reviewId?)` and
+`phone:respondReview(token, threadId, reviewId, revision, draft)`. Both queue
+commands on the owning runner. Without an id the first returns pending
+review titles (`{ reviews: [{ id, title }], truncated? }`); with an id, or
+the start of one as a `review:` link gives, it returns that review, pending
+or not (`{ review }`). `phone:command` carries the result. The runner must
+be online to read or answer a review. Responses use `reviews.respond`,
+including its revision checks and idempotent retry behavior.
+
+What the phone gets of a review has no paths in it: each shot's still is
+named by an opaque `src` (`review:<reviewId>:<sha256 of its path>`), and the
+draft or response is only `pickedId`, `pickedIds`, `notes`, `reply` and
+`none`. A draft's pasted pictures (`images`, paths on the Mac) stay there,
+and an answer from the phone keeps them. The answer's `notes` go as a list,
+`[{ id, text }]`, as an option's id can be any text and Convex refuses an
+object key that isn't plain ASCII or starts with `$`; the runner rebuilds
+the draft from those fields alone.
+
+A review's stills go up only when the phone opens that review: the
+runner queues them as the `designReviews` command with an id runs, as reply
+pictures at seq 0 with the review's `src`, and `phone:reviewImages(token,
+threadId, sources)` follows them as they arrive (`phone:images` leaves them
+out). One over the reply-picture limit (10 MB) or in a format the phone
+doesn't take is shrunk to a JPEG first, and one that can't be sent at all
+comes with `preview: false`, so the phone says so rather than waiting.
+
+The phone's Reviews sheet opens from the pending-review button or a
+`review:<id>` link. It shows reference and recommended options, each shot's
+still, multiple picks, none, per-option notes and a reply. HTML and video
+originals stay on the Mac; the phone labels their stills. Loading and
+failed submissions keep the user's draft. A stale revision reloads the
+review and requires another deliberate send. Older backends keep the
+Mac-only explanation.
 
 ### Reply buttons
 
@@ -3329,8 +3365,9 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   opens the turn's working in a sheet instead, and picks the step the same
   way from what it has, a step's one line: a command with a description
   comes as only the description, so a quote of the command finds nothing
-  and the sheet opens with no step lit. A `review:` link says it opens on
-  the Mac. The website has the same one-line steps on the page: a work:
+  and the sheet opens with no step lit. A `review:` link opens the phone's
+  Reviews sheet with backend API 86; older backends say it opens on the
+  Mac. The website has the same one-line steps on the page: a work:
   link scrolls to its step, and is only its words if it finds none; so is
   a `review:` link, and a `thread:` link on a shared page, as whoever it's
   shared with can't open the others.

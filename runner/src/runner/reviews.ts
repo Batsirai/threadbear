@@ -53,8 +53,17 @@ export const reviewsPart = {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))) };
   },
 
+  // reviewId may be the start of one (8 characters or more), as an agent's
+  // review: link often gives, matched among answered and cancelled reviews
+  // too, so an old link still opens; only one it names alone.
   getReview(this: Runner, threadId: string, reviewId: string): { review: DesignReview } {
-    return {review: structuredClone(this.mustReview(this.mustGet(threadId), reviewId))};
+    const st = this.mustGet(threadId);
+    const all = st.rec.reviews ?? [];
+    if (!all.some(r => r.id === reviewId) && reviewId.length >= 8) {
+      const starts = all.filter(r => r.id.startsWith(reviewId));
+      if (starts.length === 1) return {review: structuredClone(starts[0]!)};
+    }
+    return {review: structuredClone(this.mustReview(st, reviewId))};
   },
 
   saveReview(this: Runner, threadId: string, reviewId: string, revision: number, raw: ReviewDraft): { review: DesignReview } {

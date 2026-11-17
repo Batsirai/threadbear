@@ -83,6 +83,7 @@ final class AppModel {
     var hasMessagePages: Bool { (apiVersion ?? 0) >= BackendCompatibility.messagePagesAPIVersion }
     /// Whether to ask for the lines a thread writes when its login runs out
     /// (role `note`): an older backend refuses the argument.
+    var hasDesignReviews: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.designReviewsAPIVersion }
     var hasLoginNotes: Bool { (apiVersion ?? 0) >= BackendCompatibility.loginNotesAPIVersion }
 
     /// Archived threads past the den's newest 100 with these words in

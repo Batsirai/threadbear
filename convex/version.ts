@@ -410,4 +410,8 @@
 //    settles it. relay:decideRequest takes `claim` the same way, so a claim
 //    whose answer was lost can carry on. A runner sends `attempt` and
 //    `claim` only to a backend of 85 or later.
-export const API_VERSION = 85;
+// 86: phone:designReviews and phone:respondReview queue a design review's
+//    read and answer on the thread's runner (reviews.list, reviews.get,
+//    reviews.respond), and phone:reviewImages reads a review's stills,
+//    which the runner puts up only once the phone has asked for that review.
+export const API_VERSION = 86;

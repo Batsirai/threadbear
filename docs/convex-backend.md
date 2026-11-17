@@ -645,6 +645,13 @@ phone names must be one that has heartbeated (or `"any"`), else
   with its `threads.commands` list as the command's `result` (kept by
   `sync:finishCommand` as for a `call`); an older runner fails it as
   unknown.
+- `phone:designReviews({ token, threadId, reviewId? })`,
+  `phone:respondReview({ token, threadId, reviewId, revision, draft })` →
+  commandId, and `phone:reviewImages({ token, threadId, sources })` (API
+  86): the Reviews sheet. The first two are commands the thread's runner
+  answers from its own reviews (the review comes back as the command's
+  `result`); the stills go up only once the phone has opened that review
+  (docs/protocol.md, "Reviews on the phone").
 - `phone:interrupt({ token, threadId })` (API 69) → commandId: Stop,
   queued as an `interrupt` command, which ends the thread's running turn as
   Stop on the Mac does. Runners have applied it since API 44 (the main

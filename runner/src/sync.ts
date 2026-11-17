@@ -28,13 +28,14 @@ import crypto from 'node:crypto';
 import { ConvexClient } from 'convex/browser';
 import { phonePicture } from './project-icons.ts';
 import { RunnerStats, type MachineStats } from './runner-stats.ts';
+import { draftFromPhone, phoneReview, reviewStills } from './phone-reviews.ts';
 import { imagesInEvent, pastedImagesInEvent, readReplyImage, readShareImage, replyImagesInEvent, type ReplyImage, type ShareImage } from './share-images.ts';
 import { extForMediaType, sniffImage } from './media.ts';
 import { makeFunctionReference } from 'convex/server';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { agentsStillWorking, ARCHIVE_VERDICTS, ErrorCode, isEffortLevel, remoteCreateModeOf } from './protocol.ts';
-import type { Account, ArchiveVerdict, ApprovalDecision, ApprovalOption, AskAnswer, EffortLevel, ImageRef, LabReviewLedger, OpenAsk, PermissionMode, PersistedEvent, Project, Question, ReplyButton, Schedule, ThreadSummary } from './protocol.ts';
+import type { Account, ArchiveVerdict, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, EffortLevel, ReviewDraft, ImageRef, LabReviewLedger, OpenAsk, PermissionMode, PersistedEvent, Project, Question, ReplyButton, Schedule, ThreadSummary } from './protocol.ts';
 import { REMOTE_ALLOW_REFUSED, remoteCardShowsAll, summaryField } from './tools.ts';
 import type { Notification } from './runner.ts';
 import type { ScheduleBackend, StoredSchedule } from './schedules.ts';
@@ -142,7 +143,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 85;
+export const BACKEND_API_VERSION = 86;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -619,6 +620,10 @@ export type CommandHost = {
   // The Mac's Move sheet (`moves.describe` and `moves.preview` calls).
   moveDescribe?: (threadId: string) => Promise<MoveInfo>;
   movePreview?: (p: { info: MoveInfo; cwd?: string; accountId?: string }) => Promise<MovePreview>;
+  // The phone's Reviews sheet (API 86).
+  listReviews?: (threadId: string) => unknown;
+  getReview?: (threadId: string, reviewId: string) => unknown;
+  respondReview?: (threadId: string, reviewId: string, revision: number, draft: ReviewDraft) => unknown;
 };
 
 export type SyncDeps = {
@@ -4662,6 +4667,42 @@ export class ConvexSync {
         // the press is done (its row goes up first, as a create's does).
         const pressed = r?.button?.pressed?.threadId;
         return pressed ? { threadId: pressed } : undefined;
+      }
+      case 'designReviews': {
+        // The phone's Reviews sheet (API 86): with no id the thread's pending
+        // reviews, with one that review (or the one an id's start names, as
+        // a review: link may give) for the phone, with no paths in it.
+        if (!host.listReviews || !host.getReview) throw new Error("Update the thread's runner to read reviews on the phone.");
+        const id = needThread();
+        if (a.reviewId === undefined) {
+          const { reviews } = (await host.listReviews(id)) as { reviews: DesignReview[] };
+          return { result: { reviews: reviews.slice(0, 100).map((r) => ({ id: r.id, title: r.title })), truncated: reviews.length > 100 } };
+        }
+        if (typeof a.reviewId !== 'string' || !/^[a-zA-Z0-9-]{1,200}$/.test(a.reviewId)) throw new Error('Invalid review id.');
+        let review: DesignReview;
+        try {
+          review = ((await host.getReview(id, a.reviewId)) as { review: DesignReview }).review;
+        } catch {
+          throw new Error('That review link is missing or names more than one review. Open Reviews to choose one.');
+        }
+        // Its stills go up now, and only now: a review nobody opens on the
+        // phone keeps its pictures on the Mac. Seq 0 keeps them out of the
+        // thread's own pictures (phone:images reads by seq), and each is in
+        // the review's own media folder, so its path alone tells it apart.
+        const { stills, noPreview } = await reviewStills(review);
+        const result = { review: phoneReview(review, noPreview) };
+        if (Buffer.byteLength(JSON.stringify(result)) > 250 * 1024) throw new Error('This review is too large for the phone. Open it on the Mac.');
+        if (stills.length) {
+          this.pendingReplyImages.push(...stills.map((s) => ({ threadId: id, seq: 0, path: s.path, src: s.src })));
+          this.scheduleFlush();
+        }
+        return { result };
+      }
+      case 'respondReview': {
+        if (!host.respondReview) throw new Error("Update the thread's runner to answer reviews on the phone.");
+        if (typeof a.reviewId !== 'string' || !Number.isSafeInteger(a.revision) || Number(a.revision) < 0) throw new Error('Invalid review or revision.');
+        await host.respondReview(needThread(), a.reviewId, Number(a.revision), draftFromPhone(a.draft));
+        return undefined;
       }
       case 'slashCommands': {
         // The phone's palette (API 62): the thread's list, as the Mac

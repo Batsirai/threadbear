@@ -555,7 +555,7 @@ export const appSchema = defineSchema({
     runnerId: v.string(), // or "any"
     threadId: v.optional(v.string()),
     // interrupt and call (API 44) come only from the main Mac's runner (relay.ts queueCommand).
-    kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press'), v.literal('slashCommands')),
+    kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press'), v.literal('slashCommands'), v.literal('designReviews'), v.literal('respondReview')),
     args: v.any(),
     state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')),
     // The same, as its state machine has it (commandMachine.ts), which writes
@@ -576,7 +576,7 @@ export const appSchema = defineSchema({
     // it shows as failed, and its runner's late finish still says how it went.
     lapsedAt: v.optional(v.number()),
     resultThreadId: v.optional(v.string()), // for create, once it lands
-    result: v.optional(v.string()), // a call's answer as JSON text (API 44), from an allow-listed method (relay.ts CALLS); a slashCommands list (API 62)
+    result: v.optional(v.string()), // a call's answer as JSON text (API 44), from an allow-listed method (relay.ts CALLS); a slashCommands list (API 62); a design review for the phone (API 86)
   })
     .index('by_runner_state', ['runnerId', 'state'])
     .index('by_state', ['state'])
@@ -1104,6 +1104,7 @@ export const appSchema = defineSchema({
     height: v.optional(v.number()),
   })
     .index('by_thread_seq', ['threadId', 'seq'])
+    .index('by_thread_src', ['threadId', 'src'])
     .index('by_storageId', ['storageId']),
 
   // This backend's registration with the push relay (docs/push-relay.md),

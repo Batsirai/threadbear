@@ -255,6 +255,18 @@ message, so a go ahead in your reply doesn't set the same job off twice. It work
 without Full access can't make a button that does more than it could
 itself, and that's checked again when you press it.
 
+On the iPhone, tap Reviews in the thread's top bar, or a review link in a
+reply. The sheet shows the options, their notes and a still of each
+picture. Pick any options, None of these, or write a reply, then Send
+answer. Reference options are there to compare and can't be picked. The
+thread's Mac has to be on to load the review and take the answer, and it
+sends the stills only once you open the review, so they can take a moment
+to turn up. Pages and videos show their still; open the real thing on the
+Mac. Pictures pasted into an answer on the Mac stay with it, though the
+phone doesn't show them. This needs your backend on API 86 or newer. If
+the review changes on the Mac while you're answering, your answer stays
+in the sheet while it reloads, ready for you to check and send again.
+
 The comparison window starts on the first option's first picture. An option
 can have several (its overview, how it looks mid-drag, a detail), shown in a
 strip under the picture. Next and back (or the left and right arrow keys)
