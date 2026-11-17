@@ -242,3 +242,19 @@ test('a runner flipping presence between notify and holdPush bounces a push once
   assert.equal(ran, 2, 'the push and its one retry');
   assert.ok(b.rows('threads')[0].pushHeldAt > 0, 'then held, for his next leave');
 });
+
+// Codex's third review: a retried push held after Mike's leave's drain had
+// finished (he's away, so nothing else drains it) goes with the next cron.
+test('a push held for a runner that said Mike left goes with the next cron', async () => {
+  const b = memoryBackend();
+  const now = Date.now();
+  await secondary(b, 0, now);
+  await b.ctx.db.insert('threads', { threadId: 'late', runnerId: 'sec', ...THREAD_BASICS, title: 'Late', view: 'inbox', needsYou: true });
+  const sec = b.rows('runners').find((r: any) => r.runnerId === 'sec');
+  await b.ctx.db.patch(sec._id, { atMac: false });
+  await call(b.ctx, devices.holdPush, { threadId: 'late', retried: true });
+  assert.ok(b.rows('threads')[0].pushHeldAt > 0, 'held by the retry');
+  await cron(b);
+  assert.deepEqual(notified(b), [{ threadId: 'late', held: true }]);
+  assert.equal(b.rows('threads')[0].pushHeldAt, undefined);
+});

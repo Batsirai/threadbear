@@ -951,6 +951,10 @@ export const drainHeldPushes = internalMutation({
 // there but stopped checking in counts as away (devices.ts threadForPush
 // already reads it so for new pushes), and what it held goes now. Its
 // atMac stays: when the Mac wakes and checks in, he's there again.
+// A runner that said he left can still have one held: a push held again by
+// a notify that read him there just before he went, after his leave's drain
+// had finished (devices.holdPush, Codex's review of Daybreak 148). Those
+// go here too, so nothing held while he's away outlasts the next tick.
 // This only hands each such runner's drain to a mutation of its own
 // (drainHeldPushes), so one runner's backlog can't fail or roll back
 // another's (Daybreak 119).
@@ -960,7 +964,7 @@ export const sendStaleHeldPushes = internalMutation({
   handler: async (ctx) => {
     const now = Date.now();
     for (const r of await ctx.db.query('runners').collect()) {
-      if (!r.atMac || now - (r.lastSeenAt ?? 0) < PRESENCE_FRESH_MS) continue;
+      if (r.atMac && now - (r.lastSeenAt ?? 0) < PRESENCE_FRESH_MS) continue;
       const any = await ctx.db
         .query('threads')
         .withIndex('by_runner_pushHeld', (q) => q.eq('runnerId', r.runnerId).gt('pushHeldAt', 0))
