@@ -1753,6 +1753,14 @@ impl Threadbear {
             out["chipsFit"] = json!(send <= row + 0.5);
             // The chips spinning while a login, pool or folder change lands.
             out["busy"] = json!(composer.busy_chips(cx));
+            // Whether the box's caret is scrolled into its view: after a long
+            // paste the end of it should show, not the start.
+            out["caretInView"] = json!(composer.input.read(cx).cursor_layout().map(|(caret, _)| {
+                let input = composer.input.read(cx);
+                let view = input.input_bounds();
+                let top = caret.origin.y - view.origin.y + input.scroll_offset().y;
+                top >= gpui::px(-0.5) && top + caret.size.height <= view.size.height + gpui::px(0.5)
+            }));
             if let Some(card) = composer.card_lines(cx) {
                 out["card"] = json!(card);
             }

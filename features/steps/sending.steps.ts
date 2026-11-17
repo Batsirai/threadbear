@@ -51,6 +51,16 @@ When('I paste {string} into the composer', async function (this: ThreadbearWorld
   await this.app.do({ cmd: 'paste', text: words.replace(/\\n/g, '\n') });
 });
 
+// Several paragraphs that wrap far past the box's ten lines.
+When('I paste a long dictation into the composer', async function (this: ThreadbearWorld) {
+  const paragraph = 'So what I am thinking is we build a really good tool for this, and it should feel quick. '.repeat(6);
+  await this.app.do({ cmd: 'paste', text: [paragraph, paragraph, paragraph].join('\n\n') });
+});
+
+Then('the composer\'s cursor is in view', async function (this: ThreadbearWorld) {
+  await this.until('the caret scrolled into the box', (d) => d.composer.text.length > 1000 && (d.composer as { caretInView?: boolean }).caretInView === true);
+});
+
 Then('the composer says the lines {string}', async function (this: ThreadbearWorld, lines: string) {
   const wanted = lines.replace(/\\n/g, '\n');
   await this.until(`the composer saying ${JSON.stringify(wanted)}`, (d) => d.composer.text === wanted);

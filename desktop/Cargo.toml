@@ -26,6 +26,9 @@ exclude = ["vendor"]
 # scrolled half out of a pane is over its neighbour (13 Nov).
 # And links in a SelectableText (`links`), drawn in a colour and followed on a
 # click that isn't a drag, for the web addresses in Mike's bubble (16 Nov).
+# And a paste longer than a textarea scrolled to its end: `scroll_to` clamped
+# its target with the old text's height and left the box at the top (Mike,
+# 17 Nov: a dictated brain dump showed its start, the end cut off).
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
 gpui-base = { path = "vendor/gpui-base" }

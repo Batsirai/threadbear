@@ -3146,7 +3146,19 @@ impl<M: InputModeKind> InputBaseState<M> {
         // Clamp the deferred target into the same safe range that
         // `update_scroll_offset` enforces on persist, so paint never shows an
         // over-scrolled frame before the post-paint clamp pulls it back.
-        let safe_y_min = (-self.scroll_size.height + self.input_bounds.size.height).min(px(0.));
+        //
+        // `scroll_size` is from the last paint, so right after an edit (a
+        // paste reveals its end at once) it's still the old text's height.
+        // A long paste into a short box clamped the target back to the top
+        // and the deferred offset then overrode the layout's caret-follow,
+        // leaving the end of the paste out of sight (Threadbear, 17 Nov).
+        // The rows as they are now are never shorter than the content, and
+        // layout clamps the deferred offset again with the fresh sizes.
+        let content_height = self
+            .scroll_size
+            .height
+            .max(line_height * self.display_map.wrap_row_count());
+        let safe_y_min = (-content_height + self.input_bounds.size.height).min(px(0.));
         scroll_offset.x = scroll_offset.x.min(px(0.));
         scroll_offset.y = scroll_offset.y.clamp(safe_y_min, px(0.));
         self.deferred_scroll_offset = Some(scroll_offset);
@@ -6396,6 +6408,21 @@ mod tests {
         }
     }
 
+    /// Holds an input at its own height, as a message box sits in a page,
+    /// so an auto-grow box sizes to its rows instead of filling the window.
+    struct GrowRoot<M: InputModeKind>(Entity<InputBaseState<M>>);
+
+    impl<M: InputModeKind> Render for GrowRoot<M> {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_start()
+                .child(div().w(px(400.)).child(self.0.clone()))
+        }
+    }
+
     struct InputView<M: InputModeKind> {
         input: Entity<InputBaseState<M>>,
         window_handle: gpui::WindowHandle<TestRoot<M>>,
@@ -7393,6 +7420,65 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// A long dictated paragraph pasted into an empty auto-grow box (as
+    /// Threadbear's message box, 2 to 10 rows) soft-wraps well past its
+    /// tallest; the caret at the paste's end must be in view afterwards, not
+    /// left below the box with the start of the text showing (Mike, 17 Nov).
+    #[gpui::test]
+    fn test_paste_long_wrapped_text_reveals_caret(cx: &mut TestAppContext) {
+        for text in [
+            "word ".repeat(1500),
+            format!("{}\n\n{}\n\n{}", "one ".repeat(600), "two ".repeat(600), "three ".repeat(600)),
+        ] {
+            let mut input = None;
+            let window = cx.open_window(size(px(500.), px(600.)), |window, cx| {
+                cx.set_global(Theme::default());
+                super::super::init(cx);
+                let state = cx.new(|cx| crate::input::TextareaState::new(window, cx).auto_grow(2, 10));
+                input = Some(state.clone());
+                GrowRoot(state)
+            });
+            let mut cx = VisualTestContext::from_window(window.into(), cx);
+            let input = input.unwrap();
+            cx.update(|window, cx| input.update(cx, |state, cx| state.focus(window, cx)));
+            cx.run_until_parked();
+
+            // A real paste: it asks to reveal the caret right away, before
+            // the box has been laid out with the new text.
+            cx.update(|window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                input.update(cx, |state, cx| state.paste(&Paste, window, cx));
+            });
+            cx.run_until_parked();
+
+            cx.update(|_, cx| {
+                input.read_with(cx, |state, _| {
+                    assert_eq!(state.text.to_string(), text);
+                    assert_eq!(state.cursor(), state.text.len());
+                    // Taller than the box, which stays within its ten rows.
+                    let rows = state.input_bounds.size.height / state.last_layout.as_ref().unwrap().line_height;
+                    assert!(rows > 9.5 && rows <= 10.5, "the box should be ten rows, not {rows}");
+                    assert!(
+                        state.scroll_size.height > state.input_bounds.size.height * 2.,
+                        "the text should be well past the box's height: content {:?}, box {:?}, rows {}",
+                        state.scroll_size.height,
+                        state.input_bounds.size.height,
+                        state.display_map.wrap_row_count(),
+                    );
+                    let (caret, _) = state.cursor_layout().expect("caret painted");
+                    let viewport = state.input_bounds();
+                    let scroll_y = state.scroll_handle.offset().y;
+                    let top = caret.origin.y - viewport.origin.y + scroll_y;
+                    assert!(
+                        top >= px(0.) && top + caret.size.height <= viewport.size.height,
+                        "caret top {top:?} outside viewport height {:?} (scroll {scroll_y:?})",
+                        viewport.size.height,
+                    );
+                });
+            });
+        }
     }
 
     /// Regression test: changing the auto-grow limits keeps the rows fitted to

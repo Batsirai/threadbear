@@ -58,6 +58,13 @@ Feature: Sending a message
     And I paste "there\nworld" into the composer
     Then the composer says the lines "Hello there\nworld"
 
+  # Voice Type pastes a whole dictation at once; Mike reads the end of it
+  # before sending, so the box shows where the words finish (17 Nov).
+  @composer.textbox @swift-pending
+  Scenario: A paste longer than the box shows its end
+    When I paste a long dictation into the composer
+    Then the composer's cursor is in view
+
   @composer.textbox
   Scenario: What I've typed stays with its thread
     When I type "half a thought" in the composer
