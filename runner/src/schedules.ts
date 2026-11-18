@@ -274,7 +274,12 @@ export class Scheduler {
     self?: SelfRunner;
     syncOn?: boolean;
     runCheck?: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
+    // Box mode (box-mode.ts): this runner keeps no schedules at all. Every
+    // way in that would make, change or run one throws this, and nothing
+    // here ever arms a timer, runs a check or touches schedules.json.
+    refuse?: string;
   }) {
+    this.refuse = deps.refuse;
     this.runner = deps.runner;
     this.home = deps.home;
     this.check = deps.runCheck ?? runCheck;
@@ -290,7 +295,15 @@ export class Scheduler {
     this.zone = deps.zone ?? localZone;
   }
 
+  private readonly refuse?: string;
+
+  // Box mode: every way to make, change or run a schedule says why not.
+  private refused(): void {
+    if (this.refuse) throw new RpcError(ErrorCode.badParams, this.refuse);
+  }
+
   start(): void {
+    if (this.refuse) return;
     const saved = readJsonSync<{ version?: number; schedules?: ScheduleRecord[] }>(this.file);
     if (!saved && fs.existsSync(this.file)) this.log.error('schedules.json could not be read; starting with none', { file: this.file });
     // Version 2 is the backend's copy. With sync on it stays one (nothing is
@@ -376,7 +389,7 @@ export class Scheduler {
   // logged and tried again on the next heartbeat; meanwhile a runner still
   // on its own file keeps sending from it.
   async attach(backend: ScheduleBackend): Promise<void> {
-    if (this.backend || this.attaching || this.stopped) return;
+    if (this.refuse || this.backend || this.attaching || this.stopped) return;
     this.attaching = true;
     try {
       if (this.mode === 'local') await this.moveUp(backend);
@@ -631,6 +644,7 @@ export class Scheduler {
   // ------------------------------------------------------------ mutations
 
   async create(p: CreateScheduleParams): Promise<Schedule> {
+    this.refused();
     const text = p.text?.trim();
     if (!text) throw bad('text is required');
     if ((p.cron === undefined) === (p.at === undefined)) throw bad('Give either at (once) or cron (repeating).');
@@ -689,6 +703,7 @@ export class Scheduler {
   private updating: Promise<unknown> = Promise.resolve();
 
   update(p: UpdateScheduleParams): Promise<Schedule> {
+    if (this.refuse) return Promise.reject(new RpcError(ErrorCode.badParams, this.refuse));
     const run = this.updating.then(() => this.updateNow(p));
     this.updating = run.catch(() => undefined);
     return run;
@@ -775,6 +790,7 @@ export class Scheduler {
   }
 
   async delete(scheduleId: string): Promise<Record<string, never>> {
+    this.refused();
     const rec = this.mustGet(scheduleId);
     if (this.mode === 'backend') {
       try {
@@ -793,6 +809,7 @@ export class Scheduler {
   // Runs it now, as if it were due. A repeating one keeps its next time.
   // Another runner's is asked for through the backend, and runs there.
   async runNow(scheduleId: string): Promise<{ schedule: Schedule; threadId?: string; turnId?: string; queued?: boolean }> {
+    this.refused();
     if (this.runningNow.has(scheduleId)) throw new RpcError(ErrorCode.busy, 'This schedule is already being run; try again in a moment.');
     this.runningNow.add(scheduleId);
     try {
@@ -1053,6 +1070,7 @@ export class Scheduler {
   // ------------------------------------------------------------------ runs
 
   private tick(): void {
+    if (this.refuse) return;
     if (this.mode === 'backend') {
       void this.backendTick();
       return;
@@ -1115,6 +1133,7 @@ export class Scheduler {
   // schedules.run requests other runners left for ours. Nothing is sent
   // until the backend is attached.
   private async backendTick(): Promise<void> {
+    if (this.refuse) return;
     this.timer?.cancel();
     this.timer = undefined;
     if (this.stopped) return;

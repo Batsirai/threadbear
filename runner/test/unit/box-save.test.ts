@@ -625,3 +625,21 @@ test("an edit that keeps a file's size and mtime is saved, whatever the repo say
   assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'runner', 'a.txt'), 'utf8'), 'bbbb\n');
   assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'build', 'kept.txt'), 'utf8'), 'staged\n');
 });
+
+test('a symlink staged with -f under an ignored path, whose target is missing, is saved as the link it is', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const top = a.folder.checkout;
+  fs.writeFileSync(path.join(top, '.gitignore'), 'node_modules\nbuild\n');
+  sh(top, 'git add .gitignore && git commit -qm ignore');
+  fs.mkdirSync(path.join(top, 'build'));
+  fs.symlinkSync('../nowhere/target.txt', path.join(top, 'build', 'link'));
+  assert.equal(fs.existsSync(path.join(top, 'build', 'link')), false, 'dangling: exists() says no');
+  sh(top, 'git add -f build/link');
+  const backend = fakeBackend();
+  await save(a.h, a, backend);
+  const [url, sealed] = [...backend.stored][0]!;
+  const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored);
+  assert.equal(fs.readlinkSync(path.join(b.folder.checkout, 'build', 'link')), '../nowhere/target.txt');
+});

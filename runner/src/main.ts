@@ -77,7 +77,7 @@ import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
-import { BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
+import { BOX_NO_SCHEDULES, BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
 import { BoxProcesses } from './box-procs.ts';
 import { SaveHold, saveThread } from './box-save.ts';
 import { ClockJumpWatch } from './clock-jump.ts';
@@ -517,6 +517,8 @@ async function main(): Promise<void> {
     sendElsewhere: (id, text, scheduleId, run, since, preserve) => sendScheduled(runner, peers, id, text, scheduleId, run, since, preserve),
     self: { id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName(), icon: runnerIcon, version: RUNNER_VERSION, release: RELEASE.release, startedAt },
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
+    // A box keeps none (decision 13): every way to make, change or run one is refused.
+    ...(box ? { refuse: BOX_NO_SCHEDULES } : {}),
   });
   // A box has no schedules (decision 13): they stay on the Mac and send to it.
   if (!copyOfReal && !box) scheduler.start();
@@ -762,6 +764,7 @@ async function main(): Promise<void> {
             heard: (state: string, sentAt: number) => saveHold?.heard(state, sentAt),
             // Held by its save: its heartbeats and the save's finish make no work.
             held: () => saveHold?.held ?? false,
+            saving: () => saveHold?.saving ?? false,
           },
         }
       : { sample: machineSampler(cfg.home), schedules: scheduler, pools: sharedPools, memory: memorySync, sharedUsage: usage }),

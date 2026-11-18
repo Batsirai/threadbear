@@ -8056,7 +8056,14 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   librarian, spare-week threads and the borrow sweep; the sync sends no
   presence, logins, projects or their pictures, schedules, pools, shared
   memory or machine figures, and never calls `prune` (its key can't do
-  any of them; a fresh box's first full write goes without it). It runs one thread: any other `create`, from
+  any of them; a fresh box's first full write goes without it). It keeps
+  no schedules: `schedule_message`, `tb schedule` and the backend's
+  `schedule` command are refused with a note that the Mac schedules it
+  (a schedule there sends to the thread and wakes it), and nothing in the
+  box arms a schedule's timer, runs its check or reads `schedules.json`.
+  Its key isn't the owner's (`ownerKey()` is false for `tbb_`, as for
+  `tbr_`), so `create_thread` naming another runner files a request the
+  main Mac asks the user about. It runs one thread: any other `create`, from
   anywhere, is refused (`create_thread` asks the main Mac, as from any
   runner key). Claude Code runs as root there, so `IS_SANDBOX=1` is set
   for everything the runner starts. The app port listens on 127.0.0.1
@@ -8091,7 +8098,8 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   finds it holds the thread before loading it. While it's held, the box's
   heartbeats and its save's `finishCommand` send `held: true`, and
   don't mark the box as holding work (`runnerAuth`'s housekeeping; only a
-  `save` command's finish counts). Then it's packed: the thread's folder in the data dir (its record and events,
+  `save` command's finish counts), and a finish of any other command taken
+  while the save goes waits until its outcome is known. Then it's packed: the thread's folder in the data dir (its record and events,
   not `panels`), its Claude session's transcript and the folder beside
   it, and its git work as a move packs it (`move-git.ts packGit`: the
   commits origin doesn't have and one more of every uncommitted and
@@ -8114,7 +8122,8 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   data. Uploaded to the URL `sync:iconUploadUrl` gives the box key, then
   `boxes:boxSaved({ key, storageId, bytes })`, but only once every change
   of the runner's has gone up (the mirror's flush waited for, then one run
-  to the end with nothing left, and the sidebar index's writer the same; if
+  to the end with nothing left, the sidebar index's writer the same, and
+  any command's finish still to send from before the save; if
   it can't, the command fails and the box
   stays held), so no write after the save marks the box as working; the command finishes
   with `{ bytes }` (and `leftOut`, up to 20 paths left out). A sealed save

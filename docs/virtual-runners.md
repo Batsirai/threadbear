@@ -803,6 +803,19 @@ A fifth look found two more and a follow-up:
   not in `BOX_CALLS`, so a call like that can't hide in a fake again.
 - `flushAll` now drains the sidebar index's writer too.
 
+A sixth look found two more and two follow-ups:
+
+- An agent's `schedule_message` started the box's scheduler, arming timers
+  and checks that could write after a save's copy: a box's scheduler now
+  refuses every way in (`Scheduler`'s `refuse`), saying the Mac schedules it.
+- A symlink staged with `-f` whose target was missing was dropped (an
+  `existsSync` that followed it): `lstat` now.
+- Commands' finishes still to send could mark a saved box as working: the
+  save's barrier sends those from before it, and any other command's
+  finish waits while the save goes.
+- A box key counted as the owner's, so `create_thread` on another runner
+  tried to start it directly: a box files the request, as any runner key.
+
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as
 decision 10 says, so the runner's existing year-long token path carries it

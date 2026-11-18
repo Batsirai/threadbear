@@ -19,7 +19,9 @@ import { readYearToken } from '../../src/year-token.ts';
 import { ConvexSync, readSyncKey } from '../../src/sync.ts';
 import { paths } from '../../src/config.ts';
 import { load } from '../helpers/convex-memory.ts';
-import { BOOT_ENV, BoxBootRefused, BoxFolderBroken, markSetUp, setBaseline, setSaveHold, MACHINE_ID_ENV, bootBox, boxFile, enterBoxEnv, exchangeBoot, prepareBoxFolder, readBoxBoot, readBoxSecrets, repoFolderName, writeBoxSecrets, type ActionPost, type BoxSecrets, type Cloner } from '../../src/box-mode.ts';
+import { Scheduler } from '../../src/schedules.ts';
+import { CrossRunner } from '../../src/cross-runner.ts';
+import { BOX_NO_SCHEDULES, BOOT_ENV, BoxBootRefused, BoxFolderBroken, markSetUp, setBaseline, setSaveHold, MACHINE_ID_ENV, bootBox, boxFile, enterBoxEnv, exchangeBoot, prepareBoxFolder, readBoxBoot, readBoxSecrets, repoFolderName, writeBoxSecrets, type ActionPost, type BoxSecrets, type Cloner } from '../../src/box-mode.ts';
 
 // The backend's gate for a box key (convex/runnerAccess.ts BOX_CALLS, run by
 // lib.ts runnerAuth): a box-mode sync here may call nothing else, so a call
@@ -750,4 +752,135 @@ test("a fresh box's first flush goes all the way under a box key (no prune, whic
   await assert.rejects(sync.flushAll(), /sidebar index didn't go up before its save/);
   await sync.stop();
   assert.deepEqual(refusedCalls.splice(0), []);
+});
+
+test("a box keeps no schedules: every way to make, change or run one is refused, and nothing arms a timer or writes schedules.json", async () => {
+  const h = makeHarness();
+  const t = h.runner.create({ text: 'hi', cwd: h.cfg.defaults.cwd, accountId: 'claude-main' }).thread;
+  // A schedules.json a box should never act on (one an agent wrote by hand).
+  fs.writeFileSync(path.join(h.home, 'schedules.json'), JSON.stringify({ schedules: [{ id: 'sched1', title: 'x', text: 'go', at: new Date(h.clock.now() + 1000).toISOString(), threadId: t.id, createdAt: new Date().toISOString() }] }));
+  const before = h.clock.pending();
+  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, refuse: BOX_NO_SCHEDULES });
+  sched.start();
+  assert.equal(h.clock.pending(), before, 'no timer');
+  assert.deepEqual(sched.list(), []);
+  const refusal = /keeps no schedules/;
+  await assert.rejects(sched.create({ text: 'check in', at: new Date(h.clock.now() + 60_000).toISOString(), threadId: t.id }), refusal);
+  await assert.rejects(sched.update({ scheduleId: 'sched1', paused: true }), refusal);
+  await assert.rejects(sched.delete('sched1'), refusal);
+  await assert.rejects(sched.runNow('sched1'), refusal);
+  await sched.attach({} as never);
+  h.clock.advance(10 * 60_000);
+  await tick();
+  assert.equal(h.clock.pending(), before);
+  assert.equal(h.adapter.sessions.length, 1, 'nothing sent to the thread');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.home, 'schedules.json'), 'utf8')).schedules.length, 1, 'schedules.json untouched');
+});
+
+test("a box's key isn't the owner's: create_thread on another runner files a request for the main Mac to ask", async () => {
+  const h = makeHarness();
+  const t = h.runner.create({ text: 'hi', cwd: h.cfg.defaults.cwd, accountId: 'claude-main' }).thread;
+  const calls: { fn: string; args: Record<string, unknown> }[] = [];
+  const sync = new ConvexSync({
+    config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
+    key: BOX_KEY,
+    runner: h.runner,
+    version: '0.1.0+test',
+    startedAt: '2026-11-19T00:00:00.000Z',
+    clock: h.clock,
+    log: nullLogger,
+    post: onlyBoxCalls(async (_kind, fn, args) => {
+      calls.push({ fn, args });
+      if (fn === 'sync:heartbeat') return { apiVersion: 89 };
+      return null;
+    }),
+    box: { superseded: () => {} },
+  });
+  assert.equal(sync.ownerKey(), false);
+  sync.start();
+  await tick();
+  const created: string[] = [];
+  const cross = new CrossRunner({
+    self: () => ({ id: 'box0thread01', name: 'box' }),
+    backend: () => sync,
+    runners: async () => [{ id: 'box0thread01', name: 'box', self: true }],
+    createHere: async () => (created.push('here'), { id: 'x' }),
+    createThere: async () => (created.push('there'), { id: 'x' }),
+    card: async () => ({ status: 'declined' }),
+    openCard: async () => undefined,
+    respondThere: async () => {},
+    home: () => h.home,
+    realDir: () => undefined,
+  });
+  const said = await cross.start(t.id, { runner: 'main', text: 'Look into it' });
+  assert.match(String(said), /The user said no/);
+  const filed = calls.find((c) => c.fn === 'relay:fileRequest');
+  assert.ok(filed, 'a request filed for the main Mac');
+  assert.equal(filed.args.target, 'main');
+  assert.deepEqual(created, [], 'nothing started directly');
+  assert.deepEqual(refusedCalls.splice(0), []);
+  await sync.stop();
+});
+
+test("while a box's save goes, any other command's finish waits; ones from before go up before boxSaved, and the rest once its outcome is known", async () => {
+  const h = makeHarness();
+  const t = h.runner.create({ text: 'hi', cwd: h.cfg.defaults.cwd, accountId: 'claude-main' }).thread;
+  const finished: string[] = [];
+  let push!: (v: unknown) => void;
+  let saving = false;
+  let failFinish = true;
+  const sync = new ConvexSync({
+    config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
+    key: BOX_KEY,
+    runner: h.runner,
+    version: '0.1.0+test',
+    startedAt: '2026-11-19T00:00:00.000Z',
+    clock: h.clock,
+    log: nullLogger,
+    post: onlyBoxCalls(async (_kind, fn, args) => {
+      if (fn === 'sync:heartbeat') return { apiVersion: 89 };
+      if (fn === 'sync:takeCommand') return true;
+      if (fn === 'sync:messageHeads') return [];
+      if (fn === 'sync:finishCommand') {
+        if (failFinish) throw new Error('network down');
+        finished.push(String(args.commandId));
+      }
+      return null;
+    }),
+    subscriber: { subscribe: (fn, _a, onUpdate) => ((fn === 'sync:pendingCommands' && (push = onUpdate)), () => {}), close: () => {} },
+    commands: { send: () => undefined, respondApproval: () => undefined, answerSecret: () => undefined, update: () => undefined, markSeen: () => undefined, create: () => ({ thread: t }), share: () => undefined, quickAsk: () => ({ thread: t }) },
+    box: { superseded: () => {}, saving: () => saving },
+  });
+  sync.start();
+  await tick();
+  // c1, taken before the save; its finish lost on the way.
+  push([{ commandId: 'c1', kind: 'send', threadId: t.id, args: { text: 'a' }, createdAt: 1 }]);
+  await tick(10);
+  assert.deepEqual(finished, []);
+  // The save starts; c2 is taken during it.
+  saving = true;
+  failFinish = false;
+  push([{ commandId: 'c2', kind: 'send', threadId: t.id, args: { text: 'b' }, createdAt: 2 }]);
+  await tick(10);
+  assert.deepEqual(finished, [], "c2's finish waits");
+  // The save's barrier: c1 (from before) goes, c2 still waits.
+  await sync.flushAll();
+  assert.deepEqual(finished, ['c1']);
+  // A heartbeat while it's still going doesn't send c2.
+  h.clock.advance(60_000);
+  await tick(10);
+  assert.deepEqual(finished, ['c1']);
+  // Outcome known: the next heartbeat sends it.
+  saving = false;
+  h.clock.advance(60_000);
+  await tick(10);
+  assert.deepEqual(finished, ['c1', 'c2']);
+  // A finish from before that can't go fails the barrier.
+  failFinish = true;
+  push([{ commandId: 'c3', kind: 'send', threadId: t.id, args: { text: 'c' }, createdAt: 3 }]);
+  await tick(10);
+  saving = true;
+  await assert.rejects(sync.flushAll(), /finish didn't go up before the thread's save/);
+  assert.deepEqual(refusedCalls.splice(0), []);
+  await sync.stop();
 });

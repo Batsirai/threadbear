@@ -27,6 +27,9 @@ import type { Logger } from './log.ts';
 import type { Baseline } from './box-procs.ts';
 
 export const BOOT_ENV = 'THREADBEAR_BOX_BOOT';
+// What a box says to any schedule (decision 13): it may be asleep when one
+// comes due, so its schedules live on the Mac, which sends to it and wakes it.
+export const BOX_NO_SCHEDULES = "This thread runs on a virtual runner's machine, which keeps no schedules: it may be asleep when one comes due. Ask the user to schedule it from their Mac, where a schedule for this thread sends to it and wakes it.";
 // The variable holding the variable's name: the service sets it from the
 // provider's machineIdEnv (convex/boxProviders/types.ts). A box started
 // without it is taken to be on Fly.

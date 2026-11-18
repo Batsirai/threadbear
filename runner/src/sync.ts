@@ -733,7 +733,9 @@ export type SyncDeps = {
   // by its save runs again only on one of those (box-save.ts SaveHold).
   // `held`: a save holds the box (box-save.ts), so its heartbeats and its
   // save's finish say `held` and don't mark it as working (convex/lib.ts).
-  box?: { machineId?: string; superseded: () => void; taken?: (kind: string) => void; heard?: (state: string, sentAt: number) => void; held?: () => boolean };
+  // `saving`: a save under way or its outcome unknown, when a finish of any
+  // other command waits (it would mark the box as working before the save).
+  box?: { machineId?: string; superseded: () => void; taken?: (kind: string) => void; heard?: (state: string, sentAt: number) => void; held?: () => boolean; saving?: () => boolean };
 };
 
 // How long a row whose thread isn't here (and that wasn't deleted here) waits
@@ -1579,7 +1581,8 @@ export class ConvexSync {
   // A command applied here whose finishCommand failed, tried again with
   // each heartbeat: otherwise it stays "taken", which nothing reaps for 14
   // days, and the phone shows "Sending…" with no Cancel all that time.
-  private unfinished = new Map<string, { args: Record<string, unknown>; tries: number }>();
+  // `deferred`: a box's finish held back while its save goes (finishCommand).
+  private unfinished = new Map<string, { args: Record<string, unknown>; tries: number; deferred?: boolean }>();
   private applied = 0;
   private failed = 0;
   private commandError?: string;
@@ -1999,8 +2002,10 @@ export class ConvexSync {
     return Boolean(this.deps.key?.startsWith('tbr_'));
   }
 
+  // A runner key (tbr_) or a box key (tbb_) isn't the owner's: such a runner
+  // asks the main Mac (create_thread on another runner files a request).
   ownerKey(): boolean {
-    return Boolean(this.deps.key) && !this.deps.key!.startsWith('tbr_');
+    return Boolean(this.deps.key) && !this.deps.key!.startsWith('tbr_') && !this.deps.key!.startsWith('tbb_');
   }
 
   // The backend's side of moving threads (src/moves.ts), once it has it.
@@ -2398,6 +2403,13 @@ export class ConvexSync {
       // And the sidebar index's own writer (thread-index.ts), which another
       // Mac reads the thread's row from.
       if (this.index) await this.index.flushAll(Math.max(1, end - Date.now()));
+      // And commands' finishes still to send from before the save (those it
+      // held back wait for its outcome).
+      for (const [commandId, u] of [...this.unfinished]) {
+        if (u.deferred) continue;
+        await this.finishCommand(commandId, u.args);
+        if (this.unfinished.has(commandId)) throw new Error("A command's finish didn't go up before the thread's save.");
+      }
       return;
     }
   }
@@ -4588,7 +4600,15 @@ export class ConvexSync {
     // command is finished either way.
     if (resultThreadId) await this.writeRowNow(resultThreadId).catch((e) => this.deps.log.debug('could not write the row of a command thread yet', { threadId: resultThreadId, error: String(e) }));
     const held = c.kind === 'save' && this.deps.box?.held?.() ? { held: true } : {};
-    await this.finishCommand(c.commandId, { key: this.deps.key, commandId: c.commandId, ok, ...(note ? { note } : {}), ...(resultThreadId ? { resultThreadId } : {}), ...(result !== undefined ? { result: JSON.stringify(result) } : {}), ...held });
+    const args = { key: this.deps.key, commandId: c.commandId, ok, ...(note ? { note } : {}), ...(resultThreadId ? { resultThreadId } : {}), ...(result !== undefined ? { result: JSON.stringify(result) } : {}), ...held };
+    // A box's save under way: any other command's finish waits until its
+    // outcome is known (retryCommands), so it can't mark the box as working
+    // between the save's copy and boxSaved.
+    if (c.kind !== 'save' && this.deps.box?.saving?.()) {
+      this.unfinished.set(c.commandId, { args, tries: 0, deferred: true });
+      return;
+    }
+    await this.finishCommand(c.commandId, args);
   }
 
   // A thread's commands run one after another, in the order they were
@@ -4626,8 +4646,9 @@ export class ConvexSync {
 
   // With each heartbeat that got through: the backend is answering again.
   private retryCommands(): void {
-    for (const [commandId, { args }] of [...this.unfinished]) {
+    for (const [commandId, { args, deferred }] of [...this.unfinished]) {
       if (this.inFlight.has(commandId)) continue;
+      if (deferred && this.deps.box?.saving?.()) continue;
       this.inFlight.add(commandId);
       void this.finishCommand(commandId, args).finally(() => this.inFlight.delete(commandId));
     }

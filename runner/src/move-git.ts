@@ -228,7 +228,8 @@ export async function packGit(worktree: string, cwd: string, bundleFile: string,
       const real = new Set(indexed.stdout.split('\0').filter(Boolean));
       const headTree = await run(top, ['read-tree', 'HEAD'], { GIT_INDEX_FILE: path.join(tmp, 'head-index') });
       const head = headTree.ok ? new Set((await run(top, ['ls-files', '-z'], { GIT_INDEX_FILE: path.join(tmp, 'head-index') })).stdout.split('\0').filter(Boolean)) : new Set<string>();
-      const staged = [...real].filter((f) => !head.has(f) && fs.existsSync(path.join(top, f)));
+      // There as an entry, a symlink whose target is missing included (lstat, not exists).
+      const staged = [...real].filter((f) => !head.has(f) && fs.lstatSync(path.join(top, f), { throwIfNoEntry: false }) !== undefined);
       for (let i = 0; i < staged.length; i += 200) {
         const add = await run(top, ['add', '-f', '--', ...staged.slice(i, i + 200).map((f) => `:(literal)${f}`)], env);
         if (!add.ok) return { ok: false, reason: `Couldn't read the staged changes in ${top}: ${why(add)}` };
