@@ -398,8 +398,14 @@ export const armClears = machines.internalMutation({
   returns: v.null(),
   handler: async (machineCtx) => {
     const ctx = machineCtx as unknown as MutationCtx;
-    for (const c of await ctx.db.query('threadClears').withIndex('by_clear_state', (q) => q.eq('clearState.kind', 'clearing')).take(100)) {
-      if (!c.clearStateTimers.length) await clear.armTimers(machineCtx, c._id);
+    // Every clearing row (a few small ones), not just the first: armed ones
+    // that keep failing mustn't keep a later one from its timer (Codex's
+    // review). At most 100 armed a run; the next run takes the rest.
+    let armed = 0;
+    for await (const c of ctx.db.query('threadClears').withIndex('by_clear_state', (q) => q.eq('clearState.kind', 'clearing'))) {
+      if (c.clearStateTimers.length) continue;
+      await clear.armTimers(machineCtx, c._id);
+      if (++armed >= 100) break;
     }
     return null;
   },
