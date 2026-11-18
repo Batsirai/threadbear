@@ -455,14 +455,14 @@ kept, and no key works for it.
   [*] --> creating : START (owner) / start
   creating --> starting : CREATED(providerBoxId, attempt?) (server) [newBox] / created
   creating --> awake : READY (runner) / ready
-  creating --> failed : FAILED(error, attempt?) (server) [notStale] / fail
+  creating --> failed : FAILED(error, attempt?) (server) [unexchanged] / fail
   creating --> creating : LOST(attempt?) (server) / createAgain
   creating --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
   creating --> shelved : ARCHIVE (owner) [1. holdsWork] / shelve
   creating --> destroying : ARCHIVE (owner) [else] / archive
   starting --> awake : READY (runner) / ready
   starting --> starting : CREATED(providerBoxId, attempt?) (server) [notStale] / created
-  starting --> failed : FAILED(error, attempt?) (server) [notStale] / fail
+  starting --> failed : FAILED(error, attempt?) (server) [unexchanged] / fail
   starting --> waking : LOST(attempt?) (server) [1. notStale] / bootLost
   starting --> starting : LOST(attempt?) (server) [else] / forgetOldBox
   starting --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
@@ -500,7 +500,7 @@ kept, and no key works for it.
   waking --> waking : CREATED(providerBoxId, attempt?) (server) [2. notStale] / noteBox
   waking --> waking : LOST(attempt?) (server) / forgetOldBox
   waking --> awake : READY (runner) / ready
-  waking --> failed : FAILED(error, attempt?) (server) [notStale] / fail
+  waking --> failed : FAILED(error, attempt?) (server) [unexchanged] / fail
   waking --> waking : BOOT_TIMEOUT at bootBy [1. stillWaking] / retryWake
   waking --> asleep : BOOT_TIMEOUT at bootBy [2. holdsWork] / wakeGaveUp
   waking --> failed : BOOT_TIMEOUT at bootBy [else] / bootTimeout
@@ -548,7 +548,7 @@ From `creating`:
 - The clock sends `BOOT_TIMEOUT` at bootBy. Ten minutes have passed and no box has traded the thread's boot token for its key.
 - `CREATED(providerBoxId, attempt?) (server)` [newBox] → `starting`. The provider has made the box, which boots and starts its runner.
 - `READY (runner)` → `awake`. The box booted and traded its boot token for its key before the provider's answer came back.
-- `FAILED(error, attempt?) (server)` [notStale] → `failed`. The provider couldn't make a box.
+- `FAILED(error, attempt?) (server)` [unexchanged] → `failed`. The provider couldn't make a box.
 - `LOST(attempt?) (server)` stays put. The provider lost the box it was making: the service makes another before the ten minutes are up.
 - `BOOT_TIMEOUT at bootBy` → `failed`. No box checked in: the thread waits for the next message to try again.
 - `ARCHIVE (owner)` [1. holdsWork] → `shelved`. Mike archives the thread while a box of it may hold work newer than its save: that box is kept.
@@ -559,7 +559,7 @@ From `starting`:
 - The clock sends `BOOT_TIMEOUT` at bootBy. Ten minutes have passed since the box was asked for, and it hasn't traded its boot token.
 - `READY (runner)` → `awake`. The box traded its boot token: its key is the only one for the thread from now on.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the booting box, or for a newer attempt's box (the last was lost or given up on), which boots in its place.
-- `FAILED(error, attempt?) (server)` [notStale] → `failed`. The provider says the box didn't start.
+- `FAILED(error, attempt?) (server)` [unexchanged] → `failed`. The provider says the box didn't start.
 - `LOST(attempt?) (server)` [1. notStale] → `waking`. The box was lost while it booted: no key or boot token of it works, and a new box is made, restoring the last save if there is one.
 - `LOST(attempt?) (server)` [else] stays put. An older box's loss, reported late: only what was that box's goes.
 - `BOOT_TIMEOUT at bootBy` → `failed`. The box never checked in: the thread waits for the next message to try again.
@@ -613,7 +613,7 @@ From `waking`:
 - `CREATED(providerBoxId, attempt?) (server)` [2. notStale] stays put. The provider's id for the paused box, sent again: kept, and it can still resume.
 - `LOST(attempt?) (server)` stays put. The paused box was lost before it resumed: its key stops working, and a new box restores the save instead.
 - `READY (runner)` → `awake`. A new box traded its boot token: its key replaces the last box's, which is refused from now.
-- `FAILED(error, attempt?) (server)` [notStale] → `failed`. The provider couldn't bring a box back.
+- `FAILED(error, attempt?) (server)` [unexchanged] → `failed`. The provider couldn't bring a box back.
 - `BOOT_TIMEOUT at bootBy` [1. stillWaking] stays put. The box holding work newer than the save hasn't come back yet, but the provider hasn't said it's gone: the wake keeps trying it, for a while.
 - `BOOT_TIMEOUT at bootBy` [2. holdsWork] → `asleep`. That box hasn't come back in fifteen minutes: the thread sleeps as it was, its box kept (and paused if it's running), until the next message.
 - `BOOT_TIMEOUT at bootBy` [else] → `failed`. No box came back: the thread waits for the next message to try again.

@@ -7896,11 +7896,17 @@ SHA-256 (`boxKeyHash`).
   key holder's machine: one the row never took in is taken in, or, once
   the provider confirms it gone (asked by its id), reported lost, which
   ends its key and its attempt's protection together. Not known: the row's
-  machine gone with one of its attempt left, that one is the key holder by
-  elimination; several left, each wake resumes the next, alone, and a key
-  heartbeat 30 seconds or more after that resume names it. One resumed that
-  way that never answers, or a wake that gives up with it still unsure, is
-  shown on the thread (`RemoteRunner.box.unsure`).
+  machine gone with one of its attempt left, that one is taken in as a
+  guess (it deletes nothing and refuses no report, and a box's own word
+  replaces it); several left, each is tried in turn. A machine resumed
+  while it's unsure is a trial: the thread stays `waking` (no `RESUMED`)
+  until a key heartbeat 30 seconds or more after that resume names it,
+  and one that stops, or sends none within 3 minutes, is paused and the
+  next tried. A failed trial, or a wake that gives up with it still unsure,
+  is shown on the thread (`RemoteRunner.box.unsure`). A create's late
+  `FAILED` for an attempt that has traded its token (or may hold work)
+  changes nothing, nor does a late `CREATED` naming another machine for an
+  attempt the row already names one for.
   A newer boot token for the thread replaces an older one. Each is for one
   attempt at a box (`mintBootToken` returns its `attempt`, numbered from
   1), which the service's `CREATED` and `LOST` name: a loss ends the key,

@@ -611,6 +611,9 @@ export const report = machines.internalMutation({
     }
     // A machine of the key holder's attempt that isn't the key holder's is a duplicate, not the row's machine.
     if (event.type === 'CREATED' && event.attempt !== undefined && event.attempt === row.keyAttempt && row.keyMachineId !== undefined && row.keyMachineId !== event.providerBoxId) return false;
+    // A create's late report for an attempt the row already names another
+    // machine for (a duplicate the provider made): it isn't the row's.
+    if (event.type === 'CREATED' && event.attempt !== undefined && event.attempt === row.providerAttempt && row.providerBoxId !== undefined && row.providerBoxId !== event.providerBoxId) return false;
     return (await boxMachine.send(ctx, row._id, event)).status === 'done';
   },
 });

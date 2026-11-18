@@ -178,9 +178,11 @@ export const boxFor = internalQuery({
  *   attempt's protection in one step.
  * - Not known: the row's machine of that attempt there, alone: nothing to
  *   do; with others: `several`. The row's machine gone (or never named):
- *   none left is a loss, one left is the key holder by elimination (taken
- *   in as it), several left is `several`, which a wake resolves by trying
- *   them in turn (tryNext).
+ *   none left is a loss, one left is taken in as a guess (the row's
+ *   machine, `unsure`, never keyMachineId: a guess deletes nothing and
+ *   refuses nothing), several left is `several`, which a wake resolves by
+ *   trying them in turn (tryNext). Any of these is resumed as a trial
+ *   (bringBack) until a key heartbeat makes sure.
  *
  * `changed`: the row was changed (read it again). `listed`: the attempt's
  * machines, as listed, when it got that far.
@@ -231,9 +233,9 @@ async function identify(op: Op, p: BoxProvider, seen: Seen): Promise<Identified>
 
 /**
  * A machine of the key holder's attempt taken in as the row's (identify):
- * the known key holder's, or (`keyHolder`) the one left by elimination,
- * which is then held for the key holder's until a key heartbeat after its
- * resume makes sure (boxes.unsure).
+ * the known key holder's, or (`keyHolder`) the one left by elimination, a
+ * guess until a key heartbeat after its resume, or the box's own word,
+ * makes sure (boxes.unsure).
  */
 export const takeIn = internalMutation({
   args: { boxId: v.id('boxes'), op: v.string(), providerBoxId: v.string(), attempt: v.number(), keyHolder: v.boolean() },
@@ -245,7 +247,8 @@ export const takeIn = internalMutation({
     await ctx.db.patch(boxId, {
       providerBoxId,
       providerAttempt: attempt,
-      ...(keyHolder ? { keyMachineId: providerBoxId, unsure: { since: row.unsure?.since ?? Date.now(), tried: [providerBoxId], pickedFor: wakeOf(row), ...(row.unsure?.surfaced ? { surfaced: true } : {}) } } : {}),
+      // A guess (by elimination): the row's machine, and unsure, never keyMachineId, which only a box's own word sets.
+      ...(keyHolder ? { unsure: { since: row.unsure?.since ?? Date.now(), tried: [providerBoxId], pickedFor: wakeOf(row), ...(row.unsure?.surfaced ? { surfaced: true } : {}) } } : {}),
     });
     return true;
   },
@@ -261,18 +264,26 @@ const wakeOf = (row: Doc<'boxes'>) => (row.boxState.kind === 'waking' ? row.boxS
  * the thread (`surfaced`). Returns the pick, or null if the row changed.
  */
 export const tryNext = internalMutation({
-  args: { boxId: v.id('boxes'), op: v.string(), attempt: v.number(), machines: v.array(v.string()) },
-  returns: v.union(v.null(), v.string()),
+  args: { boxId: v.id('boxes'), op: v.string(), attempt: v.number(), machines: v.array(v.object({ id: v.string(), state: v.string() })) },
+  // previous: the trial it moved on from, for the caller to pause.
+  returns: v.union(v.null(), v.object({ pick: v.string(), previous: v.optional(v.string()) })),
   handler: async (ctx, { boxId, op, attempt, machines }) => {
     const row = await ctx.db.get(boxId);
     if (!row || !(row.op?.id === op && row.op.until > Date.now()) || row.keyAttempt !== attempt || row.keyMachineId !== undefined || row.boxState.kind !== 'waking' || !machines.length) return null;
-    const u = row.unsure ?? { since: Date.now(), tried: [] };
+    const now = Date.now();
+    const u = row.unsure ?? { since: now, tried: [] };
     const wake = wakeOf(row);
-    if (u.pickedFor === wake && row.providerBoxId !== undefined && machines.includes(row.providerBoxId) && u.tried.includes(row.providerBoxId)) return row.providerBoxId;
+    const current = row.providerBoxId !== undefined && u.tried.includes(row.providerBoxId) ? machines.find((m) => m.id === row.providerBoxId) : undefined;
+    // This wake's pick, kept through its retries while it's still a trial:
+    // not stopped, and not resumed TRIAL_MS ago with no key heartbeat since.
+    const failed = current !== undefined && (current.state === 'stopped' || (u.resumed?.machine === current.id && now >= u.resumed.at + TRIAL_MS));
+    if (current && u.pickedFor === wake && !failed) return { pick: current.id };
     const own = row.providerAttempt === attempt ? row.providerBoxId : undefined;
-    const order = [...machines].sort((a, b) => Number(b === own) - Number(a === own));
+    const order = machines.map((m) => m.id).sort((a, b) => Number(b === own) - Number(a === own));
     let left = order.filter((m) => !u.tried.includes(m));
-    let { tried, surfaced } = u;
+    let { tried } = u;
+    // A trial that failed, or every one tried: said on the thread.
+    let surfaced = u.surfaced === true || failed;
     if (!left.length) {
       left = order;
       tried = [];
@@ -280,7 +291,7 @@ export const tryNext = internalMutation({
     }
     const pick = left[0]!;
     await ctx.db.patch(boxId, { providerBoxId: pick, providerAttempt: attempt, unsure: { since: u.since, tried: [...tried, pick], pickedFor: wake, ...(surfaced ? { surfaced: true } : {}) } });
-    return pick;
+    return { pick, ...(current && current.id !== pick && current.state === 'running' ? { previous: current.id } : {}) };
   },
 });
 
@@ -294,7 +305,7 @@ export const markResumed = internalMutation({
   returns: v.null(),
   handler: async (ctx, { boxId, providerBoxId }) => {
     const row = await ctx.db.get(boxId);
-    if (row?.unsure && row.providerBoxId === providerBoxId) await ctx.db.patch(boxId, { unsure: { ...row.unsure, resumed: { machine: providerBoxId, at: Date.now() } } });
+    if (row?.unsure && row.providerBoxId === providerBoxId && row.unsure.resumed?.machine !== providerBoxId) await ctx.db.patch(boxId, { unsure: { ...row.unsure, resumed: { machine: providerBoxId, at: Date.now() } } });
     return null;
   },
 });
@@ -538,7 +549,25 @@ async function bringBack(op: Op): Promise<void> {
   let identified: Identified = { kind: 'same' };
   if (seen.hasKey && seen.keyAttempt !== undefined && seen.keyAttempt === seen.newest) {
     identified = await identify(op, fenced(op, raw), seen);
-    if (identified.kind === 'several' && seen.kind === 'waking' && (await ctx.runMutation(internal.boxService.tryNext, { boxId, op: op.id, attempt: seen.keyAttempt, machines: identified.of!.map((b) => b.providerBoxId) })) !== null) identified = { ...identified, kind: 'changed' };
+    if (identified.kind === 'several' && seen.kind === 'waking') {
+      const next = await ctx.runMutation(internal.boxService.tryNext, { boxId, op: op.id, attempt: seen.keyAttempt, machines: identified.of!.map((b) => ({ id: b.providerBoxId, state: b.state })) });
+      if (next) {
+        // One at a time: the trial it moves on from is paused first (if it can be), so the next is alone.
+        const p = fenced(op, raw);
+        const prev = next.previous;
+        let pausedPrev = false;
+        if (prev !== undefined && p.pause) {
+          try {
+            await retrying(() => p.pause!(prev));
+            pausedPrev = true;
+          } catch (e) {
+            if (e instanceof LeaseLost || e instanceof OutOfTime) throw e;
+            console.warn("a tried machine didn't pause", message(e));
+          }
+        }
+        identified = { kind: 'changed', of: identified.of!.map((b) => (pausedPrev && b.providerBoxId === prev ? { ...b, state: 'paused' as const } : b)) };
+      }
+    }
     if (identified.kind === 'changed') {
       seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
       if (!seen || (seen.kind !== 'creating' && seen.kind !== 'waking')) return;
@@ -546,8 +575,13 @@ async function bringBack(op: Op): Promise<void> {
   }
   // The box that slept, still holding the thread's key: resume it.
   const keyHolder = seen.hasKey && seen.keyAttempt !== undefined && seen.keyAttempt === seen.newest && seen.providerAttempt === seen.keyAttempt;
+  // A trial: which machine holds the key isn't made sure of (boxes.unsure),
+  // so the one resumed is only provisional: the thread stays waking until a
+  // key heartbeat after its resume says it's the holder (sync.ts heartbeat,
+  // which wakes it again to finish), or the next is tried (tryNext).
+  const trial = seen.unsure && seen.keyMachineId === undefined;
   // Kept running (it couldn't pause with unsaved work in it): it's up already.
-  if (seen.kind === 'waking' && keyHolder && seen.keptRunning) {
+  if (seen.kind === 'waking' && keyHolder && seen.keptRunning && !trial) {
     if (await report(ctx, seen.threadId, { type: 'RESUMED', attempt: seen.keyAttempt! }, op.id)) return;
     seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
     if (!seen || seen.kind !== 'waking') return;
@@ -559,6 +593,12 @@ async function bringBack(op: Op): Promise<void> {
     let taken = false;
     try {
       await retrying(() => paused.resume!(id));
+      if (trial) {
+        // Alone among its attempt's machines, a key heartbeat from now on is its.
+        if (identified.of && !identified.of.some((b) => b.providerBoxId !== id && b.state === 'running')) await ctx.runMutation(internal.boxService.markResumed, { boxId, providerBoxId: id });
+        await ctx.scheduler.runAfter(TRIAL_MS, internal.boxService.wakeBox, { boxId });
+        return;
+      }
       taken = await report(ctx, seen.threadId, { type: 'RESUMED', attempt }, op.id);
     } catch (e) {
       if (e instanceof LeaseLost) throw e;
@@ -579,8 +619,6 @@ async function bringBack(op: Op): Promise<void> {
       await report(ctx, seen.threadId, { type: 'LOST', attempt, providerBoxId: id }, op.id);
     }
     if (taken) {
-      // Not made sure which machine holds the key, and no other of its attempt running: a key heartbeat from now on is this one's.
-      if (seen.unsure && identified.of && !identified.of.some((b) => b.providerBoxId !== id && b.state === 'running')) await ctx.runMutation(internal.boxService.markResumed, { boxId, providerBoxId: id });
       await reconcile(op, paused, id);
       return;
     }
@@ -751,6 +789,8 @@ export const retryKeptSaves = internalMutation({
 
 // How soon a wake whose resume failed (not for the box being gone) tries again.
 export const WAKE_RETRY_MS = 60_000;
+// How long a trial's machine (bringBack, trial) has for its key heartbeat before the next is tried.
+export const TRIAL_MS = 3 * 60_000;
 
 /**
  * The provider's word on box `id`: 'gone' if it no longer has it or the box

@@ -357,8 +357,9 @@ const ORDERS: { name: string; steps: Step[] }[] = [
     steps: [['mint', 'A'], ['created', 1, 'box-1'], ['exchange', 'A', 'ok'], ['idle', 1], ['save', 'A'], ['wake'], ['created', 1, 'box-1'], ['expect', { state: 'waking', provider: 'box-1', works: ['A'] }], ['resumed', 1], ['expect', { state: 'awake', key: 'A', works: ['A'] }]],
   },
   {
-    name: 'the current box\'s CREATED is recorded in any state, saving and asleep too (case 3)',
-    steps: [['mint', 'A'], ['exchange', 'A', 'ok'], ['idle', 1], ['created', 1, 'box-1'], ['expect', { state: 'saving', provider: 'box-1', key: 'A' }], ['save', 'A'], ['created', 1, 'box-1b'], ['expect', { state: 'asleep', provider: 'box-1b', works: ['A'] }]],
+    // A second machine named for the same attempt is a duplicate's (Codex's fifteenth round): not the row's.
+    name: 'the current box\'s CREATED is recorded in any state, saving too, and a second machine for its attempt isn\'t (case 3)',
+    steps: [['mint', 'A'], ['exchange', 'A', 'ok'], ['idle', 1], ['created', 1, 'box-1'], ['expect', { state: 'saving', provider: 'box-1', key: 'A' }], ['save', 'A'], ['created', 1, 'box-1b'], ['expect', { state: 'asleep', provider: 'box-1', works: ['A'] }]],
   },
   {
     name: "an older box's IDLE or RESUMED changes nothing",

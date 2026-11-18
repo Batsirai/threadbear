@@ -1378,7 +1378,12 @@ export const heartbeat = mutation({
       const { rpcUrl: _rpcUrl, ...rest } = runner;
       runner = rest;
     }
-    if (boxRow) await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now(), unreachableSince: undefined, ...heardFrom(boxRow, machineId) });
+    if (boxRow) {
+      const heard = heardFrom(boxRow, machineId);
+      await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now(), unreachableSince: undefined, ...heard });
+      // A trial's wake (boxService.ts bringBack) waits for this: it's woken again to finish.
+      if (heard.keyMachineId !== undefined && boxRow.boxState.kind === 'waking') await ctx.scheduler.runAfter(0, internal.boxService.wakeBox, { boxId: boxRow._id });
+    }
     const box = boxRow ? { box: { serviceId: boxRow.serviceId } } : existing?.box ? { box: existing.box } : {};
     const row = { ...runner, name, lastSeenAt: Date.now(), ...(caller.owner ? { byOwner: true } : {}), ...box };
     // Presence is setPresence's to change; a heartbeat keeps it.

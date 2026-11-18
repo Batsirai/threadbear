@@ -648,6 +648,18 @@ one whose key heartbeat follows being the holder (`unsure`, and a box's
 heartbeat can name its machine too). One that never answers, or a wake
 that gives up still unsure, shows on the thread (`RemoteRunner.box.unsure`).
 
+A fifteenth look found three more. A create whose answer came very late
+could report `FAILED` for an attempt whose box had already traded its
+token and was working, revoking its key and stranding its work: `FAILED`
+is now refused for an attempt that has exchanged or may hold work
+(`unexchanged`), and a late `CREATED` naming another machine for an
+attempt the row already names is a duplicate's. A machine taken in by
+elimination is only a guess (`unsure`, never `keyMachineId`), so it
+deletes no other machine and refuses no report; a box's own word replaces
+it. And a machine resumed while it's unsure is a trial: the thread stays
+waking until its key heartbeat, and one that stops or stays silent past
+`TRIAL_MS` is paused and the next tried.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

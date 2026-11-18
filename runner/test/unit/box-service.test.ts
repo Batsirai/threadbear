@@ -15,6 +15,7 @@ const phone = load('phone');
 const moves = load('moves');
 const boxes = load('boxes');
 const service = load('boxService');
+const { TRIAL_MS } = service;
 const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
 
 const realFetch = globalThis.fetch;
@@ -43,10 +44,12 @@ async function setup(memoryMb = 2048) {
   if (memoryMb > 2048) s.rows('runnerServices')[0].box = { cpus: 2, memoryMb };
   else await call(s.ctx, boxes.setRunnerService, { key: OWNER, serviceId: s.serviceId, name: 'Cloud (Fly)', provider: 'fly', image: 'registry.fly.io/threadbear-box:1', box: { cpus: 2, memoryMb } });
   // Runs the service's scheduled steps as Convex's scheduler would, in order (delays aside), until none are left. Returns their names.
-  const run = async (): Promise<string[]> => {
+  // once: only what's scheduled so far (a trial's later retry stays pending).
+  const run = async (once = false): Promise<string[]> => {
     const ran: string[] = [];
     let steps = 0;
-    while (cursor < s.scheduled.length) {
+    const end = s.scheduled.length;
+    while (cursor < (once ? end : s.scheduled.length)) {
       const job = s.scheduled[cursor++] as { fn: string; args: Record<string, unknown> };
       const [, mod, name] = job.fn.split('.') as [string, string, string];
       if (mod !== 'boxService' && !RUNS.has(`${mod}.${name}`)) continue;
@@ -2151,7 +2154,8 @@ test("an exchange that doesn't name its machine keeps every machine of its attem
   await s.reap();
   await s.reap();
   assert.equal(s.rowOf('T2').providerBoxId, 'twin');
-  assert.equal(s.rowOf('T2').keyMachineId, 'twin');
+  assert.equal(s.rowOf('T2').keyMachineId, undefined, 'a guess, not the box’s word (fifteenth round)');
+  assert.ok(s.rowOf('T2').unsure);
   assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
   assert.ok(s.rowOf('T2').boxKeyHash);
   assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
@@ -2244,6 +2248,7 @@ test("asleep, a message resumes the known key holder's machine the row never too
 });
 
 // 2. With no machine id said, the one machine left of its attempt stayed a paused "duplicate" for good.
+// (Fifteenth round: that one is a guess, resumed as a trial until its key heartbeat.)
 test('by elimination: the row’s machine gone and one of its attempt left, a message resumes that one as the key holder', async () => {
   const s = await setup();
   const { runnerId } = await s.start('T2');
@@ -2257,16 +2262,19 @@ test('by elimination: the row’s machine gone and one of its attempt left, a me
   assert.equal(s.fly.byId('twin')!.state, 'suspended', 'the guard paused the twin');
   s.fly.lose(a.id);
   await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
-  await s.run();
-  assert.equal(s.stateOf('T2'), 'awake');
+  await s.run(true);
+  assert.equal(s.stateOf('T2'), 'waking', 'a trial: waking until its key heartbeat');
   assert.equal(s.rowOf('T2').providerBoxId, 'twin');
-  assert.equal(s.rowOf('T2').keyMachineId, 'twin');
+  assert.equal(s.rowOf('T2').keyMachineId, undefined);
   assert.equal(s.fly.byId('twin')!.state, 'started');
   assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
   assert.equal(s.rowOf('T2').unsure?.resumed?.machine, 'twin');
-  // Its key heartbeat, after it was resumed alone, makes sure.
+  // Its key heartbeat, after it was resumed alone, makes sure, and the wake finishes.
   assert.equal(await outcome(later(31_000, () => s.beat(got.boxKey, runnerId))), 'ok');
+  assert.equal(s.rowOf('T2').keyMachineId, 'twin');
   assert.equal(s.rowOf('T2').unsure, undefined);
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
 });
 
 test('by elimination, the reconciler takes in the one machine left of the key holder’s attempt', async () => {
@@ -2280,12 +2288,13 @@ test('by elimination, the reconciler takes in the one machine left of the key ho
   s.skip();
   await s.reap();
   assert.equal(s.rowOf('T2').providerBoxId, 'twin');
-  assert.equal(s.rowOf('T2').keyMachineId, 'twin');
+  assert.equal(s.rowOf('T2').keyMachineId, undefined, 'a guess');
+  assert.ok(s.rowOf('T2').unsure);
   assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
   assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
 });
 
-test('several machines left and none known: each wake tries the next, a wrong one is said on the thread, and the key heartbeat settles it', async () => {
+test('several machines left and none known: a trial that never answers gives way to the next, it shows on the thread, and the key heartbeat settles it', async () => {
   const s = await setup();
   const { runnerId } = await s.start('T2');
   await s.run();
@@ -2296,33 +2305,61 @@ test('several machines left and none known: each wake tries the next, a wrong on
   await asleepHolding(s, runnerId, got.boxKey);
   s.fly.lose(a.id);
   await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
-  await s.run();
-  assert.equal(s.stateOf('T2'), 'awake');
+  await s.run(true);
+  assert.equal(s.stateOf('T2'), 'waking');
   const first = s.rowOf('T2').providerBoxId!;
   assert.ok(['twin', 'twin2'].includes(first));
   assert.equal(s.fly.byId(first)!.state, 'started');
   assert.equal(s.rowOf('T2').keyMachineId, undefined, 'not known yet');
   assert.equal(s.rowOf('T2').unsure?.resumed?.machine, first);
-  // It never answers with the key: the guard pauses it, and the thread says so.
-  s.fly.byId(first)!.state = 'suspended';
-  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'PAUSED', attempt: 1, providerBoxId: first } }), true);
-  assert.equal(s.stateOf('T2'), 'asleep');
-  const listed = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: 'main-mac' })).find((r: { runnerId: string }) => r.runnerId === runnerId);
-  assert.equal(listed.box.unsure, true);
-  // The next message tries the other, whose key heartbeat settles it.
-  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
-  await s.run();
+  // No key heartbeat within its trial: the wake's retry pauses it and tries the other, and the thread says so.
+  s.skip();
+  await later(TRIAL_MS + 1000, () => call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') }));
   const second = s.rowOf('T2').providerBoxId!;
   assert.notEqual(second, first);
+  assert.equal(s.fly.byId(first)!.state, 'suspended');
   assert.equal(s.fly.byId(second)!.state, 'started');
-  assert.equal(await outcome(later(31_000, () => s.beat(got.boxKey, runnerId))), 'ok');
+  assert.equal(s.stateOf('T2'), 'waking');
+  const listed = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: 'main-mac' })).find((r: { runnerId: string }) => r.runnerId === runnerId);
+  assert.equal(listed.box.unsure, true);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  // Its key heartbeat settles it, and the wake finishes.
+  s.skip();
+  assert.equal(await outcome(later(TRIAL_MS + 40_000, () => s.beat(got.boxKey, runnerId))), 'ok');
   assert.equal(s.rowOf('T2').keyMachineId, second);
   assert.equal(s.rowOf('T2').unsure, undefined);
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
   // Known now: the other is deleted.
   s.skip();
   await s.reap();
   assert.equal(s.fly.byId(first)!.state, 'destroyed');
   assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+});
+
+test("a trial machine that stops before its key heartbeat is a failed trial: the next is tried, the thread still waking", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  twinOf(s, a, 'twin', 'suspended');
+  twinOf(s, a, 'twin2', 'suspended');
+  const got = await s.boot('T2', a.id);
+  await asleepHolding(s, runnerId, got.boxKey);
+  s.fly.lose(a.id);
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
+  await s.run(true);
+  const first = s.rowOf('T2').providerBoxId!;
+  assert.equal(s.stateOf('T2'), 'waking', 'never awake on a trial');
+  s.fly.byId(first)!.state = 'stopped';
+  s.skip();
+  await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  const second = s.rowOf('T2').providerBoxId!;
+  assert.notEqual(second, first);
+  assert.equal(s.fly.byId(second)!.state, 'started');
+  assert.equal(s.stateOf('T2'), 'waking');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.ok(s.rowOf('T2').boxKeyHash);
 });
 
 test("a box's heartbeat names its machine when its exchange didn't, and can't change one already known", async () => {
@@ -2338,4 +2375,51 @@ test("a box's heartbeat names its machine when its exchange didn't, and can't ch
   await beatAs('other');
   assert.equal(s.rowOf('T2').keyMachineId, a.id);
   assert.equal(s.rows('runners').find((r) => r.runnerId === runnerId)!.machineId, undefined, 'not kept on the runner row');
+});
+
+// ------------------------------------------------------------ Codex's fifteenth round (18 Nov 2026)
+
+// 1. A create's late failure revoked a working box's key.
+test("a create's late failure, or a duplicate's late CREATED, changes nothing of an attempt that has traded its token", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  const got = await s.boot('T2', a.id, a.id);
+  await asleepHolding(s, runnerId, got.boxKey);
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
+  assert.equal(s.stateOf('T2'), 'waking');
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'FAILED', error: 'create timed out', attempt: 1 } }), false);
+  assert.equal(s.stateOf('T2'), 'waking');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  // A machine the row doesn't name, for the same attempt: refused, though no id was said.
+  Object.assign(s.rowOf('T2'), { keyMachineId: undefined });
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'CREATED', providerBoxId: 'm9', attempt: 1 } }), false);
+  assert.equal(s.rowOf('T2').providerBoxId, a.id);
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+});
+
+// 2. A guess by elimination had a known key holder's authority.
+test('a guess by elimination deletes no other machine of its attempt, and a box’s own word replaces it', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  twinOf(s, a, 'twin', 'suspended');
+  const got = await s.boot('T2', a.id);
+  s.fly.lose(a.id);
+  s.skip();
+  await s.reap();
+  assert.equal(s.rowOf('T2').providerBoxId, 'twin');
+  // Another machine of the attempt turns up: kept (paused), not deleted on the guess.
+  twinOf(s, a, 'late', 'started');
+  await s.reap();
+  assert.notEqual(s.fly.byId('late')!.state, 'destroyed');
+  // The box's heartbeat says it's on that one: its word replaces the guess.
+  await call(s.ctx, sync.heartbeat, { key: got.boxKey, runner: { runnerId, name: 'box', version: 'v', startedAt: new Date().toISOString(), draining: false, threadCount: 1, machineId: 'late' } });
+  assert.equal(s.rowOf('T2').keyMachineId, 'late');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
 });
