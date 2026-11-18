@@ -177,6 +177,7 @@ impl Threadbear {
             self.new_thread(cx);
             let composer = self.ensure_new_composer(window, cx);
             composer.update(cx, |c, cx| c.focus(window, cx));
+            crate::web_panels::keyboard_to_app(window);
         }
         if std::mem::take(&mut self.hello.open_connectors) && !self.activity_panel_showing(crate::shell::CONNECTORS, cx) {
             self.toggle_under_threads(crate::shell::CONNECTORS, cx);
