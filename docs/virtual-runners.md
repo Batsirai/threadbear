@@ -450,6 +450,54 @@ Machine), does that.
 - A stretch awake across midnight UTC counts only its part after midnight
   toward the new day.
 
+### The two invariants
+
+A fifth look found five more, each a new edge of the patches before. So
+the service was rebuilt around two invariants, each decided in one place,
+and those five fall out of them.
+
+**W (work): a provider machine that may hold work newer than the newest
+save it made is never deleted and never superseded.** Retention's end and
+the thread's deletion are the only overrides.
+
+- The row lists those machines by attempt (`workAttempts`): an attempt
+  joins when its box comes up (READY, RESUMED). A save records the
+  attempt that made it (`save.attempt`), and only that attempt's save as
+  it stops (to sleep, or to be archived) takes it off the list; a save it
+  makes while it keeps working, or another attempt's, doesn't
+  (`boxMachine.ts` savedThrough). LOST for attempt N takes off only N, and
+  the service reports LOST only on the provider's word (`lostBox`).
+- No new attempt is minted, by the service or by the owner's
+  `mintBootToken`, while the list isn't empty: `boxes.ts` newAttempt (and
+  `mayMintAttempt`), the one place both go through. The service resumes
+  that machine, or waits on it, instead.
+- With the provider not set up, or no `CONVEX_CLOUD_URL`, an action
+  changes nothing and tries again a minute later: never FAILED, never a
+  new attempt.
+- The reaper and `destroyBox` never delete a machine on the list
+  (`boxService.ts` planFor), unless its row has expired or is gone
+  altogether.
+
+**M (money): one billing guard, run by the reaper every 5 minutes,
+independent of the row's state** (`boxService.ts` entitled and planFor).
+It lists the provider's machines; any the provider shows running that
+isn't entitled to run now is paused, never deleted. Entitled means: the
+row's current attempt, in a running state (booting within its boot timer,
+waking within 15 minutes, or up and heard from within 15 minutes), and
+within its day's hours (with 10 minutes' grace for the capped save, a save
+or archive until its `saveBy`, Mike's `wakePastHours`, or a move going).
+A pause that fails is tried again every pass. A box paused that way goes
+to sleep as it was (`PAUSED`), its key kept. Running time is charged as
+the provider shows it: `observe` charges each pass to a row whose machine
+runs while the row isn't up (waking, asleep, kept running, half resumed),
+and marks it `seenRunningAt`, which counts toward `maxBoxes`; an up row is
+charged by its state, as before. Retention ends every kept box: archived
+ones as before, and an asleep thread's box (kept running, paused or
+unpausable) after `deleteAfterDays` from when it slept (`retireBox`): the
+box is deleted and the thread comes back from its last save, losing any
+work newer than that. A wake whose box hasn't come up in 15 minutes stops
+(`wakeGaveUp`): the thread sleeps as it was until the next message.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

@@ -11,6 +11,9 @@ export const BOOT_MS = 10 * 60_000;
 export const LEASE_MS = 5 * 60_000;
 // A box asked to save that hasn't said it has by then stays up, and is asked again later.
 export const SAVE_MS = 10 * 60_000;
+// A wake whose box hasn't come up in this long stops: its box (if the
+// provider has it running) is paused, and the thread sleeps as it was.
+export const WAKE_GRACE_MS = 15 * 60_000;
 
 export const boxStateV = v.union(
   // The service is asking the provider for the thread's first box.
@@ -33,7 +36,9 @@ export const boxStateV = v.union(
   v.object({ kind: v.literal('asleep'), since: v.number(), unsaved: v.optional(v.boolean()) }),
   // Coming back for a message: the paused box resumed, or a new one
   // restored from the last save.
-  v.object({ kind: v.literal('waking'), bootBy: v.number() }),
+  // `since`: when it began waking, which bounds how long a box may run
+  // while it does (boxService.ts entitled, WAKE_GRACE_MS).
+  v.object({ kind: v.literal('waking'), bootBy: v.number(), since: v.optional(v.number()) }),
   // Archived while up: the box is asked to save first, so unarchiving
   // comes back to where it was. `since`, `leaseUntil` as awake's; `saveBy`:
   // when it's shelved (paused, kept) if no save came.

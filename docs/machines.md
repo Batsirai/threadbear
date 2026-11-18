@@ -394,7 +394,7 @@ or deleted. Nothing is running; it costs
 a paused box's disk at most.
   end note
   state "waking" as waking
-  waking : bootBy
+  waking : bootBy, since?
   note right of waking
 The thread is coming back for a message:
 its paused box resuming, or a new box
@@ -463,6 +463,7 @@ kept, and no key works for it.
   awake --> awake : LOST(attempt?) (server) [else] / forgetOldBox
   awake --> saving : IDLE(attempt?, capped?) (server) [notStale] / askSave
   awake --> awake : SAVED(storageId, bytes) (runner) / saved
+  awake --> asleep : PAUSED(attempt?) (server) [notStale] / pausedByGuard
   awake --> awake : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   awake --> archiving : ARCHIVE (owner) / askArchiveSave
   saving --> asleep : SAVED(storageId, bytes) (runner) / sleep
@@ -475,6 +476,7 @@ kept, and no key works for it.
   saving --> waking : LOST(attempt?) (server) [1. notStale] / lost
   saving --> saving : LOST(attempt?) (server) [else] / forgetOldBox
   saving --> archiving : ARCHIVE (owner) / askArchiveSave
+  saving --> asleep : PAUSED(attempt?) (server) [notStale] / pausedByGuard
   asleep --> waking : WAKE (server) / wake
   asleep --> asleep : LOST(attempt?) (server) / forgetBox
   asleep --> asleep : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
@@ -487,8 +489,10 @@ kept, and no key works for it.
   waking --> waking : LOST(attempt?) (server) / forgetOldBox
   waking --> awake : READY (runner) / ready
   waking --> failed : FAILED(error, attempt?) (server) [notStale] / fail
-  waking --> waking : BOOT_TIMEOUT at bootBy [1. keptBox] / retryWake
+  waking --> waking : BOOT_TIMEOUT at bootBy [1. stillWaking] / retryWake
+  waking --> asleep : BOOT_TIMEOUT at bootBy [2. holdsWork] / wakeGaveUp
   waking --> failed : BOOT_TIMEOUT at bootBy [else] / bootTimeout
+  waking --> asleep : PAUSED(attempt?) (server) [wakeOverdue] / pausedByGuard
   waking --> archiving : ARCHIVE (owner) [1. keptBox] / archiveWaking
   waking --> destroying : ARCHIVE (owner) [else] / archive
   archiving --> destroying : SAVED(storageId, bytes) (runner) / savedAndGo
@@ -499,6 +503,7 @@ kept, and no key works for it.
   archiving --> archiving : LOST(attempt?) (server) [else] / forgetOldBox
   archiving --> archiving : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   archiving --> awake : WAKE (server) / stayUp
+  archiving --> shelved : PAUSED(attempt?) (server) [notStale] / shelve
   shelved --> waking : WAKE (server) / wake
   shelved --> gone : LOST(attempt?) (server) [1. hasSave] / shelfLost
   shelved --> expired : LOST(attempt?) (server) [else] / shelfLost
@@ -550,6 +555,7 @@ From `awake`:
 - `LOST(attempt?) (server)` [else] stays put. An older box's loss, reported late: only what was that box's goes.
 - `IDLE(attempt?, capped?) (server)` [notStale] → `saving`. The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps.
 - `SAVED(storageId, bytes) (runner)` stays put. The box saved the thread unasked: the save replaces the last one, and it stays awake.
+- `PAUSED(attempt?) (server)` [notStale] → `asleep`. The billing guard paused the box (past its day's hours, or silent past its lease): the thread sleeps as it was.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the box that's up, arriving late: kept, for pausing and deleting it.
 - `ARCHIVE (owner)` → `archiving`. Mike archives the thread: the box is asked to save it first, so unarchiving comes back to where it was.
 
@@ -567,6 +573,7 @@ From `saving`:
 - `LOST(attempt?) (server)` [1. notStale] → `waking`. The provider says the box is gone mid-save: a new box restores the thread from its last save.
 - `LOST(attempt?) (server)` [else] stays put. An older box's loss, reported late: only what was that box's goes.
 - `ARCHIVE (owner)` → `archiving`. Mike archives the thread while it saves: the save is for the archive now.
+- `PAUSED(attempt?) (server)` [notStale] → `asleep`. The billing guard paused the box mid-save: the thread sleeps as it was.
 
 From `asleep`:
 
@@ -586,8 +593,10 @@ From `waking`:
 - `LOST(attempt?) (server)` stays put. The paused box was lost before it resumed: its key stops working, and a new box restores the save instead.
 - `READY (runner)` → `awake`. A new box traded its boot token: its key replaces the last box's, which is refused from now.
 - `FAILED(error, attempt?) (server)` [notStale] → `failed`. The provider couldn't bring a box back.
-- `BOOT_TIMEOUT at bootBy` [1. keptBox] stays put. The kept box hasn't come back yet, but the provider hasn't said it's gone: it may hold work newer than the save, so the wake keeps trying it.
+- `BOOT_TIMEOUT at bootBy` [1. stillWaking] stays put. The box holding work newer than the save hasn't come back yet, but the provider hasn't said it's gone: the wake keeps trying it, for a while.
+- `BOOT_TIMEOUT at bootBy` [2. holdsWork] → `asleep`. That box hasn't come back in fifteen minutes: the thread sleeps as it was, its box kept (and paused if it's running), until the next message.
 - `BOOT_TIMEOUT at bootBy` [else] → `failed`. No box came back: the thread waits for the next message to try again.
+- `PAUSED(attempt?) (server)` [wakeOverdue] → `asleep`. The billing guard paused a box that had been waking too long: the thread sleeps as it was.
 - `ARCHIVE (owner)` [1. keptBox] → `archiving`. Mike archives the thread while its kept box comes back: that box may hold work newer than the save, so it saves first, or is kept.
 - `ARCHIVE (owner)` [else] → `destroying`. Mike archives the thread while a new box is made for it: nothing in it is newer than the save.
 
@@ -603,6 +612,7 @@ From `archiving`:
 - `LOST(attempt?) (server)` [else] stays put. An older box's loss, reported late: only what was that box's goes.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the box, arriving late: kept, for deleting it.
 - `WAKE (server)` → `awake`. Unarchived, or a message, while it saved: the box stays up.
+- `PAUSED(attempt?) (server)` [notStale] → `shelved`. The billing guard paused the box mid-save: it is kept, paused.
 
 From `shelved`:
 

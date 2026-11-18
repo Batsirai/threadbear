@@ -312,7 +312,8 @@ export const appSchema = defineSchema({
     awakeToday: v.optional(v.object({ day: v.string(), ms: v.number() })),
     // The thread saved out of the box (decision 7), sealed with its thread
     // key by the box: the last one only.
-    save: v.optional(v.object({ storageId: v.id('_storage'), at: v.number(), bytes: v.number() })),
+    // `attempt`: the box that made it (boxMachine.ts saveOf).
+    save: v.optional(v.object({ storageId: v.id('_storage'), at: v.number(), bytes: v.number(), attempt: v.optional(v.number()) })),
     // The per-thread key a box seals its saves with, itself sealed under
     // BOX_SEAL_KEY (boxes.ts seal). Handed only to this thread's boxes.
     sealedThreadKey: v.string(),
@@ -346,8 +347,14 @@ export const appSchema = defineSchema({
     // No heartbeat since then, but the provider hasn't said the box is gone
     // (boxService.ts checkBox): kept, its key working, until it says so.
     unreachableSince: v.optional(v.number()),
-    // Attempts whose boxes may hold work newer than the last save (boxMachine.ts holdsWork).
+    // Attempts whose boxes may hold work newer than the newest save each
+    // made (invariant W, boxMachine.ts holdsWork).
     workAttempts: v.optional(v.array(v.number())),
+    // The billing guard's last pass over it (boxService.ts observe), and
+    // when it last saw a machine of it running while its row isn't in a
+    // running state: it counts toward maxBoxes then (invariant M).
+    chargedAt: v.optional(v.number()),
+    seenRunningAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index('by_threadId', ['threadId'])
@@ -359,7 +366,7 @@ export const appSchema = defineSchema({
     .index('by_service_wants', ['serviceId', 'wantsWakeAt'])
     .index('by_service_hours', ['serviceId', 'waitsForHours'])
     .index('by_kept', ['keptRunningSince'])
-    .index('by_service_kept', ['serviceId', 'keptRunningSince'])
+    .index('by_service_seen', ['serviceId', 'seenRunningAt'])
     .index('by_save', ['save.storageId']),
 
   // A Claude login's year-long token for boxes (decision 10), made with

@@ -212,13 +212,14 @@ export const RUNNING: readonly BoxKind[] = ['creating', 'starting', 'awake', 'sa
 
 /**
  * How many of a virtual runner's boxes are running: up or on the way
- * (RUNNING), or kept running though asleep or shelved (keptRunningSince,
- * boxService.ts keepRunning), counting to `upTo` at most: what maxBoxes holds.
+ * (RUNNING), or seen running by the billing guard whatever their row's
+ * state (seenRunningAt: kept running, a pause that failed, a wake gone on;
+ * boxService.ts observe), counting to `upTo` at most: what maxBoxes holds.
  */
 export async function countRunning(ctx: QueryCtx, serviceId: Id<'runnerServices'>, upTo: number): Promise<number> {
   const n = await countBoxes(ctx, serviceId, RUNNING, upTo);
   if (n >= upTo) return n;
-  return n + (await ctx.db.query('boxes').withIndex('by_service_kept', (q) => q.eq('serviceId', serviceId).gt('keptRunningSince', 0)).take(upTo - n)).length;
+  return n + (await ctx.db.query('boxes').withIndex('by_service_seen', (q) => q.eq('serviceId', serviceId).gt('seenRunningAt', 0)).take(upTo - n)).filter((r) => !RUNNING.includes(r.boxState.kind)).length;
 }
 
 // How many of a virtual runner's boxes are in these states, counting to `upTo` at most.
@@ -381,8 +382,19 @@ export const storeBootToken = internalMutation({
   },
 });
 
-/** A new attempt at a box, numbered after every one before, with its boot token's hash (BOOT_MS). */
+/**
+ * A new attempt at a box, numbered after every one before, with its boot
+ * token's hash (BOOT_MS). Invariant W(c), here and only here for both ways
+ * a box is asked for (the service's claimAttempt, the owner's
+ * mintBootToken): none while a box of the thread may hold work newer than
+ * the newest save it made (workAttempts) and the provider hasn't said it's
+ * gone. That box is resumed, or waited on, instead.
+ */
+export function mayMintAttempt(row: Pick<Doc<'boxes'>, 'workAttempts'>): boolean {
+  return !(row.workAttempts?.length);
+}
 export async function newAttempt(ctx: MutationCtx, row: Doc<'boxes'>, bootHash: string): Promise<{ expiresAt: number; attempt: number }> {
+  if (!mayMintAttempt(row)) throw conflict(`A box of this thread (attempt ${row.workAttempts!.join(', ')}) may hold work newer than its save: it's resumed or waited on, not replaced.`);
   const expiresAt = Date.now() + BOOT_MS;
   const attempt = (row.boxAttempt ?? 0) + 1;
   await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt, bootAttempt: attempt, boxAttempt: attempt });
@@ -544,6 +556,7 @@ const serverEvent = v.union(
   v.object({ type: v.literal('LOST'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('DESTROYED') }),
   v.object({ type: v.literal('FAILED'), error: v.string(), attempt: v.optional(v.number()) }),
+  v.object({ type: v.literal('PAUSED'), attempt: v.optional(v.number()) }),
 );
 
 /**
@@ -614,25 +627,25 @@ async function wakeBlocked(ctx: QueryCtx, row: Doc<'boxes'>): Promise<'hours' | 
   if (s.kind === 'saving' && s.capped) return overHours(row, limits.maxAwakeHoursPerDay) ? 'hours' : null;
   if (s.kind === 'saving' || s.kind === 'archiving') return null;
   if (!(await activeMove(ctx, row.threadId)) && overHours(row, limits.maxAwakeHoursPerDay)) return 'hours';
-  // One kept running is counted already: waking it takes no more room.
-  if (row.keptRunningSince === undefined && (await countRunning(ctx, row.serviceId, limits.maxBoxes)) >= limits.maxBoxes) return 'room';
+  // One seen running is counted already: waking it takes no more room.
+  if (row.seenRunningAt === undefined && (await countRunning(ctx, row.serviceId, limits.maxBoxes)) >= limits.maxBoxes) return 'room';
   return null;
 }
 
 const day = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 /**
- * Today's (UTC) awake time: what it had, and the part of today it's been
- * up since `since` if it's up now, or kept running since keptRunningSince
- * (asleep or shelved but unable to pause with unsaved work, boxService.ts
- * keepRunning: that counts too).
+ * Today's (UTC) running time: what's been charged (closed stretches up,
+ * and whatever the billing guard has seen running in any other state,
+ * boxService.ts observe), and the part of today it's been up since `since`
+ * if it's up now.
  */
-export function usedTodayMs(row: Pick<Doc<'boxes'>, 'awakeToday' | 'boxState' | 'keptRunningSince'>, now = Date.now()): number {
+export function usedTodayMs(row: Pick<Doc<'boxes'>, 'awakeToday' | 'boxState'>, now = Date.now()): number {
   const today = day(now);
   const dayStart = Date.parse(`${today}T00:00:00.000Z`);
   const had = row.awakeToday?.day === today ? row.awakeToday.ms : 0;
   const s = row.boxState as { kind: string; since?: number };
-  const up = ['awake', 'saving', 'archiving'].includes(s.kind) && s.since !== undefined ? s.since : row.keptRunningSince;
+  const up = ['awake', 'saving', 'archiving'].includes(s.kind) && s.since !== undefined ? s.since : undefined;
   return up === undefined ? had : had + Math.max(0, now - Math.max(up, dayStart));
 }
 

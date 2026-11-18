@@ -22,7 +22,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'checkBox', 'reapBoxes', 'reapService']);
+const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'checkBox', 'retireBox', 'reapBoxes', 'reapService']);
 // What run() runs of what's scheduled: the service's steps, and a move's rehoming.
 const RUNS = new Set(['boxes.wakeFor', 'boxes.archiveIfStill', 'boxes.wakeWaiting', 'boxes.wakeAllWaiting', 'boxes.failExpired', 'moves.rehomeRows']);
 const REPO = { origin: 'https://github.com/mikecann/threadbear.git', subfolder: '', baseBranch: 'main' };
@@ -320,12 +320,17 @@ test("a provider that keeps failing fails the box with why; the next message tri
   assert.deepEqual(await s.run(), ['wakeFor', 'wakeBox']);
   assert.equal(s.stateOf('T2'), 'starting');
   assert.equal(s.fly.live()[0]!.config.metadata.tb_attempt, '2');
-  // No provider set up: it fails saying so, rather than waiting ten minutes.
+  // No provider set up (invariant W(d)): nothing changes, and it's tried again shortly.
   delete process.env.FLY_API_TOKEN;
   await s.start('T3');
+  s.skip();
+  await call(s.a, service.createBox, { boxId: s.rowOf('T3')._id });
+  assert.equal(s.stateOf('T3'), 'creating');
+  assert.equal(s.rowOf('T3').boxAttempt, undefined, 'no attempt minted');
+  assert.ok((s.scheduled.at(-1) as { fn: string }).fn.endsWith('wakeBox'), 'tried again shortly');
+  process.env.FLY_API_TOKEN = 'fly-token';
   await s.run();
-  assert.equal(s.stateOf('T3'), 'failed');
-  assert.match(s.rowOf('T3').boxState.error, /provider isn't set up/);
+  assert.equal(s.stateOf('T3'), 'starting');
 });
 
 test('a box lost while it was being made is made again, once', async () => {
@@ -385,7 +390,7 @@ test('the reaper destroys orphans and older attempts, adopts a box whose create 
   assert.ok(!s.fly.live().some((m) => m.id === 'unreported'));
 });
 
-test("the reaper sleeps an asleep box that's still running, and loses one that stopped", async () => {
+test("the billing guard pauses an asleep box that's still running, and the reaper loses one that stopped", async () => {
   const s = await setup(2048);
   const { runnerId } = await s.start('T2');
   await s.run();
@@ -397,7 +402,7 @@ test("the reaper sleeps an asleep box that's still running, and loses one that s
   s.fly.failNext('POST', '/suspend', 500, 3);
   await s.run();
   assert.equal(s.fly.byId(m.id)!.state, 'created');
-  assert.ok((await s.reap()).includes('sleepBox'));
+  await s.reap();
   assert.equal(s.fly.byId(m.id)!.state, 'suspended');
   // Stopped while asleep (its snapshot gone): lost, and the next wake starts a new box.
   s.fly.byId(m.id)!.state = 'stopped';
@@ -1262,7 +1267,7 @@ test("a resume that fails for a while keeps the box and tries again; it's replac
 
 test("a kept box's wake keeps trying past its boot timer, and the reaper leaves the box alone", async () => {
   const s = await setup();
-  const { runnerId, m } = await pausedWithMessage(s);
+  const { runnerId, m } = await unsavedPaused(s);
   s.fly.failNext('POST', '/start', 503, 30);
   await s.send(runnerId, 'T2');
   s.skip();
@@ -1274,29 +1279,40 @@ test("a kept box's wake keeps trying past its boot timer, and the reaper leaves 
   s.skip();
   await s.reap();
   assert.equal(s.fly.byId(m.id)!.state, 'suspended', 'not reaped');
+  // Past its grace (fifteen minutes) the wake stops: asleep as it was, its box and key kept.
+  await s.fireTimers(Date.now() + 22 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'asleep');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed');
 });
 
-test("the reaper keeps an older box that may hold work newer than the save, until a save covers it", async () => {
-  const s = await setup();
+// A box that slept at its day's hours with no save: paused, holding work newer than any save.
+// `paused`: whether its pause is expected to have worked.
+async function unsavedPaused(s: Awaited<ReturnType<typeof setup>>, paused = true) {
   const { runnerId } = await s.start('T2');
   await s.run();
   const m = s.fly.live()[0]!;
   const got = await s.boot('T2', m.id);
-  // Slept unsaved (its day's hours, no save came): paused with work newer than any save.
   await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'IDLE', attempt: 1, capped: true } });
   await later(9 * MINUTE, () => s.beat(got.boxKey, runnerId));
   await s.fireTimers(Date.now() + 11 * MINUTE);
   assert.equal(s.stateOf('T2'), 'asleep');
   await s.run();
-  // A newer attempt is asked for (the Mac's own way) while the first may hold that work.
+  if (paused) assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  return { runnerId, m, got };
+}
+
+test("a box that may hold work newer than its save isn't superseded, by the Mac's own boot token or the reaper", async () => {
+  const s = await setup();
+  const { m } = await unsavedPaused(s);
   await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
   s.skip();
-  const newer = await call(s.a, boxes.mintBootToken, { key: OWNER, threadId: 'T2' });
-  assert.equal(newer.attempt, 2);
-  assert.ok(s.rowOf('T2').workAttempts.includes(1));
+  // Invariant W(c): no newer attempt while attempt 1 may hold that work.
+  assert.equal(await outcome(call(s.a, boxes.mintBootToken, { key: OWNER, threadId: 'T2' })), 'conflict');
+  assert.equal(s.rowOf('T2').boxAttempt, 1);
   await s.reap();
   assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed', 'kept: it may hold work newer than the save');
-  assert.ok(got);
 });
 
 // 2. Missed heartbeats alone gave a live box up.
@@ -1349,4 +1365,125 @@ test('awake time across midnight UTC counts only its part after midnight toward 
   const midnight = Date.parse('2026-11-19T00:00:00.000Z');
   const got = awakeAdded({ awakeToday: { day: '2026-11-18', ms: 5 * 60 * MINUTE } }, midnight - 30 * MINUTE, midnight + 30 * MINUTE);
   assert.deepEqual(got.awakeToday, { day: '2026-11-19', ms: 30 * MINUTE });
+});
+
+// ------------------------------------------------------------ Codex's fifth round: invariants W and M (18 Nov 2026)
+
+// 1. W(a)(b)(c): a newer attempt's save, loss or boot token dropped an older box's unsaved work.
+test('W: a box holding work newer than its save is resumed, not replaced, and only its own save or loss lets it go', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  // Attempt 1 saves S1 and keeps working: that save doesn't cover it.
+  await s.save(got.boxKey, 'S1');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'IDLE', attempt: 1, capped: true } });
+  await later(9 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'asleep');
+  // A wake: the Mac can't mint attempt 2, and the service resumes attempt 1.
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
+  assert.equal(await outcome(call(s.a, boxes.mintBootToken, { key: OWNER, threadId: 'T2' })), 'conflict');
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(s.rowOf('T2').boxAttempt, 1);
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  // A loss names only its own attempt (a row from before this, holding two).
+  s.rowOf('T2').workAttempts = [1, 2];
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'LOST', attempt: 2 } });
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+});
+
+// 2. W(c)(d): with the provider not set up, an unarchive gave the kept box up.
+test("W: with no provider set up, waking a kept box changes nothing and tries again, then resumes that box", async () => {
+  const s = await setup();
+  const { runnerId, m } = await unsavedPaused(s);
+  await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: 'T2' });
+  assert.equal(s.stateOf('T2'), 'shelved');
+  await s.run();
+  delete process.env.FLY_API_TOKEN;
+  await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { unarchive: true } });
+  s.skip();
+  await call(s.ctx, boxes.wakeFor, { runnerId });
+  s.skip();
+  await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  assert.equal(s.stateOf('T2'), 'waking');
+  assert.equal(s.rowOf('T2').boxAttempt, 1, 'no new attempt');
+  assert.ok(s.rowOf('T2').boxKeyHash, 'its key kept');
+  process.env.FLY_API_TOKEN = 'fly-token';
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  assert.equal(s.rowOf('T2').boxAttempt, 1);
+});
+
+// 3. M: a suspend that failed for a hiccup was never tried again, and the box fell out of the counts.
+test('M: the billing guard pauses a running box that should be asleep, every pass until it works, counting it meanwhile', async () => {
+  const s = await setup();
+  const failing = s.fly.failWhile((r) => r.path.endsWith('/suspend'), 503);
+  const { m } = await unsavedPaused(s, false);
+  assert.equal(s.stateOf('T2'), 'asleep');
+  assert.notEqual(s.fly.byId(m.id)!.state, 'suspended', 'its pause failed');
+  await s.reap();
+  assert.ok(s.rowOf('T2').seenRunningAt, 'seen running: counted');
+  await setLimits(s, { maxBoxes: 1 });
+  assert.equal(await outcome(s.start('T3')), 'limit');
+  failing.stop();
+  await s.reap();
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  await s.reap();
+  assert.equal(s.rowOf('T2').seenRunningAt, undefined);
+});
+
+// 4. M: a capped box kept running billed for ever.
+test("M: a box kept running asleep is counted and charged, and is let go after its virtual runner's days", async () => {
+  const s = await setup();
+  const refuse = s.fly.failWhile((r) => r.path.endsWith('/suspend'), 400);
+  const { runnerId, m } = await unsavedPaused(s, false);
+  assert.ok(s.rowOf('T2').keptRunningSince, 'kept running: it holds unsaved work and cannot pause');
+  const before = s.rowOf('T2').awakeToday?.ms ?? 0;
+  await later(5 * MINUTE, () => s.reap());
+  assert.ok((s.rowOf('T2').awakeToday?.ms ?? 0) > before, 'its running time is charged');
+  refuse.stop();
+  // Its days are up (asleep, measured from when it slept): the box goes, and it comes back from its last save.
+  await later(15 * 24 * 60 * MINUTE, () => call(s.ctx, service.pruneSaves, {}));
+  await later(15 * 24 * 60 * MINUTE, () => s.run());
+  assert.equal(s.fly.byId(m.id)!.state, 'destroyed');
+  assert.equal(s.stateOf('T2'), 'asleep');
+  assert.equal(s.rowOf('T2').boxKeyHash, undefined);
+  assert.deepEqual(s.rowOf('T2').workAttempts, []);
+  assert.equal(s.rowOf('T2').keptRunningSince, undefined);
+  await s.send(runnerId, 'T2');
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'starting');
+});
+
+// 5. M: a resume that half worked ran for ever, uncounted.
+test('M: a wake whose box runs but never comes up is charged, and paused once its grace is out', async () => {
+  const s = await setup();
+  const { runnerId, m } = await unsavedPaused(s);
+  const stuck = s.fly.failWhile((r) => r.path.endsWith('/wait') && r.query.get('state') === 'started', 503);
+  await s.send(runnerId, 'T2');
+  s.skip();
+  await call(s.ctx, boxes.wakeFor, { runnerId });
+  s.skip();
+  await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  assert.equal(s.fly.byId(m.id)!.state, 'started', 'it runs');
+  assert.equal(s.stateOf('T2'), 'waking');
+  s.skip();
+  // Within its grace the guard leaves it running, and charges it.
+  await later(5 * MINUTE, () => s.reap());
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  const charged = s.rowOf('T2').awakeToday?.ms ?? 0;
+  await later(10 * MINUTE, () => s.reap());
+  assert.ok((s.rowOf('T2').awakeToday?.ms ?? 0) > charged);
+  // Out of its grace: paused, and the thread sleeps as it was, its key kept.
+  await later(16 * MINUTE, () => s.reap());
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  assert.equal(s.stateOf('T2'), 'asleep');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  stuck.stop();
 });

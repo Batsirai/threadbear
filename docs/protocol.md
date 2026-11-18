@@ -7820,8 +7820,16 @@ has to be on for it.
   removed has its box deleted a minute later (unless it's back out of the
   den), every box the provider has for it, older attempts' too.
   `archiveBox` does it at once.
+- **The billing guard** (invariant M, docs/virtual-runners.md "The two
+  invariants"): every 5 minutes the reaper pauses any machine the provider
+  shows running that isn't entitled to run (not the current attempt, not
+  in a running state, silent 15 minutes, waking past 15 minutes, or past
+  its day's hours), counts and charges any machine it sees running while
+  its row isn't up, and the thread of a paused box sleeps as it was.
+  Retention ends an asleep thread's box too, `deleteAfterDays` after it
+  slept: the box goes, and the thread comes back from its last save.
 - **The crons** (`convex/crons.ts`): sleep idle boxes every 2 minutes;
-  every 10, reap what the provider has that nobody wants (no row, an older
+  every 5, guard and reap what the provider has that nobody wants (no row, an older
   attempt than the row's, an archived, expired or failed thread's), take
   in a box whose create never reported, sleep an asleep box still running,
   lose one that stopped (under its op lease, asking the provider again),
@@ -7834,8 +7842,9 @@ has to be on for it.
   `destroyBox` (the actions; each reads the row again and acts on its
   newest attempt only), `claimOp`, `holdOp`, `releaseOp`, `claimAttempt`,
   `boxFor`, `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`,
-  `reapStep`, `servicesToReap`, `serviceProvider`, `stuckDestroying`,
-  `pruneSaves`, `checkBox`, `retryKeptSaves`, `markKept`, `markUnpausable`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
+  `reapStep`, `observe`, `servicesToReap`, `serviceProvider`,
+  `stuckDestroying`, `pruneSaves`, `retireBox`, `checkBox`,
+  `retryKeptSaves`, `markKept`, `markUnpausable`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
   `wakeAllWaiting`, `failExpired`, `archiveIfStill`. `report` takes the
   reporting run's `op`.
 - **Its first command.** The `create` that `startThread` queues names its

@@ -14,6 +14,7 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
   let n = 0;
   // Fail the next calls matching a method and path ending: a status each.
   const failures: { method: string; ends: string; status: number }[] = [];
+  const standing: { match: (r: Seen) => boolean; status: number }[] = [];
   // Do the next matching call, then answer with a failure: an answer lost on the way back.
   const lostAnswers: { method: string; ends: string; status: number }[] = [];
   // Requests held before they're answered, so a test can run something else in between.
@@ -27,6 +28,12 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
     conflictOnCreate: false,
     failNext(method: string, ends: string, status: number, times = 1) {
       for (let i = 0; i < times; i++) failures.push({ method, ends, status });
+    },
+    // Fail every request `match` takes with `status`, until stop() is called.
+    failWhile(match: (r: Seen) => boolean, status: number) {
+      const rule = { match, status };
+      standing.push(rule);
+      return { stop: () => standing.splice(standing.indexOf(rule), 1) };
     },
     // The next request `match` takes waits until release(); `reached` resolves when it arrives.
     hold(match: (r: Seen) => boolean) {
@@ -54,6 +61,8 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
 
   async function handle(r: Seen): Promise<Response> {
     if (r.headers.authorization !== `Bearer ${token}`) return reply(401, 'no');
+    const always = standing.find((x) => x.match(r));
+    if (always) return reply(always.status, 'injected failure');
     const f = failures.findIndex((x) => x.method === r.method && r.path.endsWith(x.ends));
     if (f >= 0) return reply(failures.splice(f, 1)[0]!.status, 'injected failure');
     let m: RegExpMatchArray | null;
