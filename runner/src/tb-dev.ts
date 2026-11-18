@@ -821,7 +821,12 @@ export function exportThread(t: ThreadSummary, events: PersistedEvent[], out: st
       let name = base;
       for (let i = 2; names.has(name); i++) name = `${i}-${base}`;
       names.add(name);
-      fs.copyFileSync(img.path, path.join(mediaDir, name));
+      // The runner keeps media read-only, and a copy keeps that, so a
+      // second export of the same thread has to take the old copy away
+      // first (18 Nov: re-exporting failed with EACCES).
+      const dest = path.join(mediaDir, name);
+      fs.rmSync(dest, { force: true });
+      fs.copyFileSync(img.path, dest);
       rel = `media/${name}`;
       copied.set(img.path, rel);
     }

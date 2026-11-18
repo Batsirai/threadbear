@@ -248,6 +248,18 @@ test('tb export writes the mock runner fixture format, with images copied next t
   assert.equal(back[15].origin, 'runner');
 });
 
+test('a thread exports again over its read-only pictures', { skip: IS_WINDOWS && 'read-only files differ on Windows' }, () => {
+  const src = tmpDir();
+  const shot = path.join(src, 'shot.png');
+  fs.writeFileSync(shot, makePng(4, 3));
+  // The runner's media is read-only (0400), and a copy keeps that.
+  fs.chmodSync(shot, 0o400);
+  const out = path.join(tmpDir(), T.id);
+  exportThread(T, events(shot), out);
+  assert.doesNotThrow(() => exportThread(T, events(shot), out));
+  assert.deepEqual(fs.readdirSync(path.join(out, 'media')), ['shot.png']);
+});
+
 test('the mock runner loads an export', { skip: !fs.existsSync(path.join(MOCK, 'node_modules', 'ws')) && 'mock runner has no node_modules' }, async () => {
   const src = tmpDir();
   fs.writeFileSync(path.join(src, 'shot.png'), makePng(4, 3));
