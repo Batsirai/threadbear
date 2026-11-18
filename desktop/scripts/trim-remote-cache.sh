@@ -219,9 +219,11 @@ need="$REFUSE_GIB"
 # shared-cargo/cargo), this build may get a cold one while another build is
 # in a warm one, so it counts as warm only when every one of them is.
 warm_kb() { [ -d "$1" ] && [ "$(du -sk "$1" 2>/dev/null | awk '{print $1}')" -ge 1048576 ] 2>/dev/null; }
+# A checkout's own target only holds the programs builds hand back, which
+# cargo builds nothing from; perf-target is a whole build of its own.
 warm=0
-if warm_kb "$active_target"; then warm=1
-elif [ "$active_target" != perf-target ]; then
+if [ "$active_target" = perf-target ]; then warm_kb perf-target && warm=1
+else
   slots="${THREADBEAR_REMOTE_SLOTS:-$(head -1 ../builds-at-once 2>/dev/null | tr -d ' ')}"
   case "$slots" in ""|*[!0123456789]*|0) slots=1 ;; esac
   warm=1

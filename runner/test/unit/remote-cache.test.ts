@@ -112,7 +112,11 @@ test('a disk still nearly full refuses the run and says why', (t) => {
 });
 
 test('a first build wants more room than one with a target to build on', (t) => {
+  // Warm is the shared folder ordinary builds go to; a checkout's own only
+  // holds the programs they hand back.
   const warm = host(t, 5, { 'target-aaa': 0, 'target-ddd': 0.1 });
+  assert.equal(warm.trim().status, 3, 'its own handed-back programs counted as warm');
+  sharedSlot(warm, 1, true);
   assert.equal(warm.trim().status, 0);
   const cold = host(t, 5, { 'target-aaa': -1, 'target-ddd': 0.1 });
   const r = cold.trim();
@@ -399,6 +403,10 @@ test('on a host running builds side by side, one warm shared folder beside a col
   fs.writeFileSync(path.join(h.base, '..', 'builds-at-once'), '2\n');
   sharedSlot(h, 1, true);
   assert.equal(h.trim().status, 3, 'started cold with 6 GiB');
+  // Its own folder's handed-back programs build nothing.
+  fs.mkdirSync(path.join(h.base, 'target-aaa', 'debug'), { recursive: true });
+  fs.writeFileSync(path.join(h.base, 'target-aaa', 'debug', 'out'), 'x');
+  assert.equal(h.trim().status, 3, 'its own programs counted as a warm build');
   sharedSlot(h, 2, true);
   const r = h.trim();
   assert.equal(r.status, 0, r.stderr);
