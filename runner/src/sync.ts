@@ -143,7 +143,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 86;
+export const BACKEND_API_VERSION = 87;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -4023,7 +4023,7 @@ export class ConvexSync {
    * with the owner key only (a runner key can't read other runners' threads).
    * Undefined with sync off or before the backend is at RELAY_API_VERSION.
    */
-  relaySource(): { post: Post; subscribe?: Subscribe; key: string; apiVersion: number; upload: Upload } | undefined {
+  relaySource(): { post: Post; subscribe?: Subscribe; key: string; apiVersion: number; upload: Upload; download: Download } | undefined {
     if (this.off || !this.deps.key || (this.backendApiVersion ?? 0) < RELAY_API_VERSION) return undefined;
     const subscriber = this.subscriber;
     return {
@@ -4032,6 +4032,14 @@ export class ConvexSync {
       key: this.deps.key,
       apiVersion: this.backendApiVersion ?? 0,
       upload: (url: string, bytes: Uint8Array, mediaType: string) => this.upload(url, bytes, mediaType),
+      // Pictures pasted into another runner's messages, for the app
+      // (relay.ts readFile): from file storage, https or this Mac only, at
+      // most MAX_PHONE_IMAGE_BYTES, held in memory and never written here.
+      download: (url: string) => {
+        const problem = credentialUrlProblem(url);
+        if (problem) return Promise.reject(new Error(`The picture's URL ${problem}.`));
+        return (this.deps.download ?? convexDownloader())(url);
+      },
     };
   }
 

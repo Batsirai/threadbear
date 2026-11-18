@@ -178,3 +178,55 @@ test('an upload that never went out goes after a day; one in a waiting command s
   await call(s.ctx, sync.finishCommand, { key: MINI_KEY, commandId, ok: true });
   assert.equal(s.hasFile(sent), false);
 });
+
+// The other way (API 87): a picture pasted on the main Mac into a thread on
+// the Mac mini reached the Mac mini and showed on the main Mac as a message
+// with no picture (17 Nov 2026). The Mac mini already puts pasted pictures up
+// for the phone and the website (replyImages, src "picture:N"); the main
+// Mac's runner reads them by the message's seq with relay:picturesAtSeqs.
+async function pasted(s: S, seq: number, n: number, more: Record<string, unknown> = {}) {
+  await s.ctx.db.insert('replyImages', { threadId: 'B', seq, path: `/Users/b/inbox/p${seq}-${n}.png`, src: `picture:${n}`, storageId: s.file(`file-${seq}-${n}`), mediaType: 'image/png', width: 40, height: 30, ...more });
+}
+
+test("the owner key reads the pasted pictures of the messages it names, each with a URL, and nothing else of the thread's", async () => {
+  const s = await setup();
+  await pasted(s, 7, 2);
+  await pasted(s, 7, 1);
+  await pasted(s, 9, 1);
+  // A reply's picture at a seq that's asked for, and one at a seq that isn't.
+  await s.ctx.db.insert('replyImages', { threadId: 'B', seq: 9, path: '/Users/b/x/chart.png', src: 'chart.png', storageId: s.file('chart'), mediaType: 'image/png' });
+  await s.ctx.db.insert('replyImages', { threadId: 'B', seq: 8, path: '/Users/b/x/other.png', src: 'picture:1', storageId: s.file('other'), mediaType: 'image/png' });
+  const got = await call(s.ctx, relay.picturesAtSeqs, { key: OWNER, threadId: 'B', seqs: [9, 7, 11, 7] });
+  assert.deepEqual(got, [
+    { seq: 7, n: 1, path: '/Users/b/inbox/p7-1.png', url: 'https://files.example/file-7-1', mediaType: 'image/png', width: 40, height: 30 },
+    { seq: 7, n: 2, path: '/Users/b/inbox/p7-2.png', url: 'https://files.example/file-7-2', mediaType: 'image/png', width: 40, height: 30 },
+    { seq: 9, n: 1, path: '/Users/b/inbox/p9-1.png', url: 'https://files.example/file-9-1', mediaType: 'image/png', width: 40, height: 30 },
+  ]);
+  // Another thread's rows never come with it.
+  assert.deepEqual(await call(s.ctx, relay.picturesAtSeqs, { key: OWNER, threadId: 'other', seqs: [7] }), []);
+});
+
+test('a picture whose file has gone is left out, and seqs that are not seqs are passed over', async () => {
+  const s = await setup();
+  await pasted(s, 7, 1);
+  await s.ctx.db.insert('replyImages', { threadId: 'B', seq: 7, path: '/Users/b/inbox/gone.png', src: 'picture:2', storageId: 'file-never-stored', mediaType: 'image/png' });
+  const got = (await call(s.ctx, relay.picturesAtSeqs, { key: OWNER, threadId: 'B', seqs: [7, -1, 1.5, Number.MAX_VALUE] })) as { path: string }[];
+  assert.deepEqual(got.map((p) => p.path), ['/Users/b/inbox/p7-1.png']);
+});
+
+test("a runner key can't read them, even of its own thread", async () => {
+  const s = await setup();
+  await pasted(s, 7, 1);
+  assert.equal(await outcome(call(s.ctx, relay.picturesAtSeqs, { key: MINI_KEY, threadId: 'B', seqs: [7] })), 'forbidden');
+  assert.equal(await outcome(call(s.ctx, relay.picturesAtSeqs, { key: 'wrong', threadId: 'B', seqs: [7] })), 'auth');
+});
+
+test('at most fifty messages are read in one call, and thirty pictures of each', async () => {
+  const s = await setup();
+  for (let seq = 1; seq <= 60; seq++) await pasted(s, seq, 1);
+  const got = (await call(s.ctx, relay.picturesAtSeqs, { key: OWNER, threadId: 'B', seqs: Array.from({ length: 60 }, (_, i) => i + 1) })) as { seq: number }[];
+  assert.deepEqual(got.map((p) => p.seq), Array.from({ length: 50 }, (_, i) => i + 1));
+  for (let n = 1; n <= 40; n++) await pasted(s, 100, n);
+  const many = (await call(s.ctx, relay.picturesAtSeqs, { key: OWNER, threadId: 'B', seqs: [100] })) as { n: number }[];
+  assert.equal(many.length, 30);
+});

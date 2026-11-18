@@ -350,7 +350,8 @@ dashboard panel.
   `messageHeads`, `pendingCommands`, which it holds as a live query) and
   `pruneOld` for `crons.ts`. `convex/relay.ts` (API 44) is the main Mac's
   runner reading another runner's thread (`remoteTail`, `remoteMessages`,
-  `remoteThread`) and queueing work for it (`queueCommand`, `commandState`,
+  `remoteThread`, and from API 87 `picturesAtSeqs`, the pictures pasted into
+  its messages) and queueing work for it (`queueCommand`, `commandState`,
   `remoteAccounts`), owner key only, so the Mac app opens other Macs'
   threads with no link to them (docs/protocol.md, "Other runners' threads
   through the backend"). Each takes `key`: the deployment's

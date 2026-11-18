@@ -9,10 +9,13 @@
 // big to send whole.
 //
 // Through Convex, the only way this app reaches another Mac so far, the
-// runner sends no pictures at all, just a line saying how many it kept there,
-// and answers a `files.read` for another runner with "Files on another runner
-// are kept there for now." So these tiles turn up for the mock runner's mac-mini,
-// which plays a direct link, and for whatever comes next.
+// runner gives a message the pictures pasted into it that Mac put up
+// (backend API 87, runner/src/relay.ts), and answers `files.read` for one
+// from the backend's file storage; a picture that never went up has a
+// `threadbear-relay:` path and says why when asked. Tools' pictures still
+// stay on that Mac: "Files on another runner are kept there for now." A
+// message sent from here draws its pictures from this runner's inbox, which
+// the runner answers for too, until that Mac shows the message.
 use crate::call;
 use gpui_kit::*;
 use serde_json::json;

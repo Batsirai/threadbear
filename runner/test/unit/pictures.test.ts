@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { placePictures, unplacedPictures } from '../../src/pictures.ts';
+import { picturesSaid, placePictures, unplacedPictures } from '../../src/pictures.ts';
 import type { ImageRef } from '../../src/protocol.ts';
 
 const red: ImageRef = { path: '/media/red.png', mediaType: 'image/png' };
@@ -72,4 +72,31 @@ test('the pictures no marker places are counted, for the mirror\'s line', () => 
   assert.equal(unplacedPictures('see [Picture 2]', 3), 2);
   assert.equal(unplacedPictures('no markers', 1), 1);
   assert.equal(unplacedPictures('[Picture 1] [Picture 1]', 1), 0);
+});
+
+// Another Mac's runner has only a mirrored message's words (relay.ts): how
+// many pictures they say it came with, and the words without the line the
+// owning runner adds for the ones no marker places (sync.ts toMessageDoc).
+test("a mirrored message's words say how many pictures it came with", () => {
+  assert.deepEqual(picturesSaid('Fix it'), { count: 0, words: 'Fix it' });
+  assert.deepEqual(picturesSaid('[1 picture]'), { count: 1, words: '' });
+  assert.deepEqual(picturesSaid('Look\n\n[3 pictures]'), { count: 3, words: 'Look' });
+  assert.deepEqual(picturesSaid('this [Picture 1] like [Picture 2]'), { count: 2, words: 'this [Picture 1] like [Picture 2]' });
+  // One placed by its marker, one not.
+  assert.deepEqual(picturesSaid('like [Picture 2] please\n\n[1 picture]'), { count: 2, words: 'like [Picture 2] please' });
+  // A marker naming no picture is only words, as placePictures has it.
+  assert.deepEqual(picturesSaid('see [Picture 5]'), { count: 0, words: 'see [Picture 5]' });
+  assert.deepEqual(picturesSaid('[Picture 1] and [Picture 3]'), { count: 1, words: '[Picture 1] and [Picture 3]' });
+  // The line counts only at the very end, in a paragraph of its own.
+  assert.deepEqual(picturesSaid('[2 pictures] came'), { count: 0, words: '[2 pictures] came' });
+  assert.deepEqual(picturesSaid('I sent [2 pictures]'), { count: 0, words: 'I sent [2 pictures]' });
+});
+
+test('what the words say agrees with what the sending runner counted', () => {
+  for (const [text, images] of [['a [Picture 1] b', 1], ['a', 2], ['[Picture 2] x', 3], ['', 1], ['[Picture 3] [Picture 1]', 3], ['[Picture 1] [Picture 1]', 1]] as const) {
+    const unplaced = unplacedPictures(text, images);
+    const note = unplaced === 1 ? '[1 picture]' : unplaced ? `[${unplaced} pictures]` : '';
+    const mirrored = note ? (text ? `${text}\n\n${note}` : note) : text;
+    assert.deepEqual(picturesSaid(mirrored), { count: images, words: text }, mirrored);
+  }
 });

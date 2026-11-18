@@ -1299,7 +1299,7 @@ the summary and then the reply.
 | `runners.stats` | `{}` | `{ stats: RunnerMachineStats[] }`: each runner's latest machine figures, `{ runnerId, at, cpuPercent, cores, memUsed, memTotal, diskFree, diskTotal, load1?, uptimeSec, machine?, os? }` (bytes; `uptimeSec` is the machine's). Asking marks them wanted (`sync:watchRunnersFromMac`, at most every 20 s), so every runner reports every 10 s until nobody has asked for 45 s. The Mac app asks only while a runner's details are open in the Runners panel and its window can be seen. Empty with sync off, on an older backend, or on a runner key. A runner older than this answers `-32601`. The app leaves out a row with a figure past `setRunnerStats`'s limits, as one stored before those were checked would be |
 | `remoteThreads.list` | `{ forTools?: boolean }` | `RemoteThreads`: other runners' threads for the sidebar (see "Other runners' threads"). `forTools` is a draining runner's agent tools asking the primary: it answers as for its own tools, waiting up to 3 seconds for the backend's rows (Agent tools). Empty with sync off, or before the backend (API 12) has answered. A runner older than this answers `-32601` |
 | `runners.setOrder` | `{ runnerIds: string[] }` | `{}`. Mike's runner order, every runner's id with this one's: the same order the phone sets (`phone:setRunnerOrder`), which a phone's new thread follows, saved with `sync:setRunnerOrder` (backend API 58, the owner key only). It comes back as `RemoteThreads.order` in `remoteThreads.updated`. `-32602` for a list that isn't one of strings; an error on a runner key or an older backend. A runner older than this answers `-32601` |
-| `files.read` | `{ path: string, maxBytes?: number, known?: { size, modifiedAt } }` | `{ path, size, modifiedAt, mediaType, data, truncated }` (`data` base64, at most `maxBytes`, default 16 MB, never over 48 MB; `truncated` when the file is longer), or `{ path, unchanged: true, size, modifiedAt }` when `known` matches the file. A file on this runner's Mac, for a Mac app showing one of its threads from another Mac (see "Other runners' threads"). `-32602` for a relative path, a missing file or a folder |
+| `files.read` | `{ path: string, maxBytes?: number, known?: { size, modifiedAt } }` | `{ path, size, modifiedAt, mediaType, data, truncated }` (`data` base64, at most `maxBytes`, default 16 MB, never over 48 MB; `truncated` when the file is longer), or `{ path, unchanged: true, size, modifiedAt }` when `known` matches the file. A file on this runner's Mac, for a Mac app showing one of its threads from another Mac (see "Other runners' threads"). `-32602` for a relative path, a missing file or a folder. With `runnerId` (another runner's), only a picture pasted into one of that runner's messages, from the backend (Other runners' threads through the backend, "Pictures in messages") |
 | `files.list` | `{ path: string }` | `{ path, entries: [{ name, isFolder, hidden, size?, modifiedAt? }], truncated }` (`size` for a file only; `isFolder` follows a symlink; `hidden` is a dotfile; at most 5000 entries, in no set order, `truncated` when the folder has more; a `size` that isn't a whole number of bytes is read as none). A folder on this runner's Mac, for the side pane's folder browser on another Mac (see "Other runners' threads"). `-32602` for a relative path, a missing folder or a file |
 | `schedules.preview` | `{ cron?: string, at?: string, timezone?: string, count?: number }` | `{ whenText: string, runs: string[] }`, the next `count` (default 5, at most 20) times it would run, for an editor to show as someone types. `-32602` with the reason for a cron or zone it can't read |
 | `projects.list` | `{ archived?: boolean }` | `{ projects: Project[] }`, newest `lastActivityAt` first. Archived ones only with `archived: true` (then all of them) |
@@ -2702,7 +2702,9 @@ over the bubble, and drops the runner's "[2 pictures]" line once every
 picture it counts is there (ThreadPictures.words). The runner sends pictures pasted
 into a message to the backend as they're sent, unless `sync.pastedPictures` is
 false in `runner.json`, each with `src` `picture:N`; the website draws them in
-place of the marker, and a chip where one didn't go up. An ask's
+place of the marker, and a chip where one didn't go up, and the main Mac's
+runner gives them to the app for a thread on another Mac (backend API 87,
+Other runners' threads through the backend). An ask's
 Something else box on the Mac takes pictures as chips too (Needs you).
 
 The runner hands the agent the words and pictures in that order: each
@@ -6084,7 +6086,8 @@ only way the app opens another runner's thread.
 - **Which threads.** A `THREAD_METHODS` request whose `threadId` isn't this
   runner's (nor a draining runner's) but is in its `remoteThreads` list.
   `threads.create` with a `runnerId` that's another runner's, and
-  `files.list` with a `runnerId`, go there too.
+  `files.list` with a `runnerId`, go there too, and so does `files.read`
+  with a `runnerId` (pictures in its messages, below).
 - **Reading.** `threads.events` and `threads.subscribe` answer from the
   thread's `messages` rows (Sync, Messages) and its `threads` row. The rows'
   seqs are the other runner's, with gaps where events weren't mirrored, and
@@ -6131,16 +6134,50 @@ only way the app opens another runner's thread.
   its `tool.result` at 8s+6, and up to two `edit.diff`s at 8s+3 and 8s+4, unless an
   old runner's card has those; any more files are named in the result. The app fills
   the row in by `itemId`. Withheld, the result says why. Otherwise the stub stands.
-  Reasoning, sub-agents and pictures stay on that runner from here. `files.read` with
-  a `runnerId` is `-32000`, and the app doesn't ask: it says the file is kept on that
-  machine.
+  Reasoning, sub-agents and tools' pictures stay on that runner from here.
+- **Pictures in messages** (backend API 87). A `user.message` whose row's
+  words say it came with pictures (`[Picture N]` markers, or the `[N pictures]`
+  line the owning runner adds for ones no marker places) gets its `images` from
+  that runner's uploads (`replyImages` rows with `src` `picture:N`, which it
+  writes unless its `sync.pastedPictures` is false), read once by
+  `relay:picturesAtSeqs { key, threadId, seqs }` → `[{ seq, n, path, url,
+  mediaType, width?, height? }]` (at most 50 seqs a read and 30 pictures a seq,
+  owner only). A message with `origin` `runner` or `schedule` is never read for
+  pictures: it may quote another thread's markers. With at least one picture
+  held, `images[N-1]` is picture N, `{ path, mediaType, width?, height? }`,
+  `path` being the file's path on that runner's Mac; one that isn't up has the
+  path `threadbear-relay:<threadId>/<seq>/Picture <N>`; and the `[N pictures]`
+  line is taken off `text`, so `text` and the count of `images` are the
+  sender's (how the app knows its own sent message). With none held, `text` and
+  `images: []` are as before: words alone can name a picture that never was.
+  A message whose row arrived within 20 seconds of being sent and whose pictures
+  aren't all up is held back, its pictures watched through the same query, and
+  sent late (at `8s+1`) once they're up or the 20 seconds end; a row a live
+  tail brings waits from when it came, if its time is within 5 minutes of now.
+  Such a late message is replayed to a subscriber, with or without `relaySeen`,
+  as a late result is. A backend older than 87 is never asked, and messages show
+  as their words. A read that fails is tried again for that thread 30 seconds
+  later. `files.read { path, runnerId, maxBytes? }` answers `{ path, size,
+  modifiedAt, mediaType, data, truncated }` (as `files.read`) for a path held this
+  way for a thread the sidebar lists on that runner, with the bytes from the
+  backend's file storage (25 MB at most, held in memory, never written to
+  disk); a not-up path is asked of the backend again first, and is `-32000`
+  saying it didn't reach Convex if it still isn't there. The same path held
+  for two threads answers from the one used last. A path in this runner's own
+  inbox (a picture the app has just sent to that runner, drawn in the bubble
+  it keeps until the message shows) answers with that file. Any other path is
+  `-32000`, `Files on another runner are kept there for now.` Pictures in
+  replies and pinned ones stay as they were: only the phone and the website
+  show them.
 - **Reads.** A thread is watched only while a client is subscribed to it,
   through `relay:remoteTail` (its newest 15 rows) and `relay:remoteThread`
   (its one row); a minute after the last subscriber goes, both stop. Older
   rows are read once by page (`relay:remoteMessages`, 50 at a time) and kept
   in this runner for half an hour. A tail that starts past the newest row
   held (the Mac slept) reads the rows between once, by `afterSeq`, rather
-  than leave a hole. `runner.status` has `relay: { watching, held, reads, bytes }`:
+  than leave a hole. Pictures are read by row seq, only for held messages
+  that say they have some, 50 messages a read; a held-back message's are
+  watched live until it's sent. `runner.status` has `relay: { watching, held, reads, bytes }`:
   threads watched now, rows held, and since start the reads (and live
   updates) and the JSON bytes they brought back, to measure what it costs.
 - **Acting.** `threads.update` takes `archivedBy: "agent"` with an
@@ -7498,6 +7535,7 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `discardPictures` | owner only | deletes pictures uploaded through `pictureUploadUrl` for a command that wasn't queued, only ones nothing names |
 | `remoteAccounts` | owner only | another runner's logins, with their usage from API 77 |
 | `remoteBody` | owner only | one tool's output on another runner's thread (full sync) |
+| `picturesAtSeqs` | owner only | the pictures pasted into the messages at up to 50 seqs of another runner's thread (`replyImages` with `src` `picture:N`), each with its file's URL (API 87) |
 | `fileRequest` | its own | a request for a thread on another runner, from one of its own threads (Asking another runner); never changed after; at most 5 waiting (one over two hours old doesn't count) and 50 kept, oldest going first, for a week at most |
 | `runnerRequest` | its own | a request its runner filed; the owner reads any |
 | `decideRequest` | owner only | claims a pending request, marks a claimed one allowed (with where it started) or hands it back, or denies a pending one |

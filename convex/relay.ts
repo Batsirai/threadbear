@@ -135,6 +135,59 @@ export const remoteMessages = query({
   },
 });
 
+// How many messages one picturesAtSeqs reads, and pictures of each: a
+// message carries at most a handful (the app pastes up to 6 into one sent
+// to another runner, MAX_COMMAND_FILES), and the relay asks only for the
+// ones whose words say they have some.
+const PICTURE_SEQS_MAX = 50;
+const PICTURES_PER_SEQ = 30;
+// A pasted picture's src (runner/src/share-images.ts pastedImagesInEvent).
+const PASTED = /^picture:(\d{1,3})$/;
+
+/**
+ * The pictures pasted into the messages at `seqs` of another runner's
+ * thread (API 87), each with its file's URL: what that runner put up for
+ * the phone and the website (replyImages with src "picture:N", N being
+ * which of the message's pictures). Read by seq, so the thread's other
+ * pictures are never read. Owner only: the main Mac's runner shows them in
+ * the app and answers its files.read for them (runner/src/relay.ts).
+ */
+export const picturesAtSeqs = query({
+  args: { key: v.string(), threadId: v.string(), seqs: v.array(v.number()) },
+  returns: v.array(
+    v.object({
+      seq: v.number(),
+      n: v.number(),
+      path: v.string(),
+      url: v.string(),
+      mediaType: v.string(),
+      width: v.optional(v.number()),
+      height: v.optional(v.number()),
+    }),
+  ),
+  handler: async (ctx, { key, threadId, seqs }) => {
+    await runnerAuth(ctx, key, 'picturesAtSeqs');
+    const out = [];
+    for (const seq of [...new Set(seqs.filter(isSeq))].sort((a, b) => a - b).slice(0, PICTURE_SEQS_MAX)) {
+      const found = new Map<number, Doc<'replyImages'>>();
+      // A reply's or a pinned picture at the same seq isn't one of these:
+      // passed over, but counted, so a seq can't make this read without end.
+      let read = 0;
+      for await (const img of ctx.db.query('replyImages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId).eq('seq', seq))) {
+        if (++read > PICTURES_PER_SEQ * 2 || found.size >= PICTURES_PER_SEQ) break;
+        const n = Number(PASTED.exec(img.src ?? '')?.[1] ?? 0);
+        if (n >= 1 && !found.has(n)) found.set(n, img);
+      }
+      for (const [n, img] of [...found].sort((a, b) => a[0] - b[0])) {
+        const url = await ctx.storage.getUrl(img.storageId);
+        if (!url) continue;
+        out.push({ seq, n, path: img.path, url, mediaType: img.mediaType, ...(img.width ? { width: img.width } : {}), ...(img.height ? { height: img.height } : {}) });
+      }
+    }
+    return out;
+  },
+});
+
 /** One thread's row (its state, open approval and card), live while it's open. Null once it's gone. */
 export const remoteThread = query({
   args: { key: v.string(), threadId: v.string() },
