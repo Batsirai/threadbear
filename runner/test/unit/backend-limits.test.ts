@@ -5,6 +5,9 @@
 // (test/helpers/convex-memory.ts), which counts the bytes a call reads.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { call, claimAndFinish, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
@@ -25,11 +28,12 @@ const relay = load('relay');
 const tokens = load('tokens');
 const devices = load('devices');
 
-async function setup() {
+// `root`: a copy of convex/ to run instead (a stepping-stone test).
+async function setup(root?: string) {
   process.env.RUNNER_KEY = OWNER;
   delete process.env.RUNNER_KEY_NEXT;
   process.env.CONVEX_SITE_URL = 'https://site.example';
-  const b = memoryBackend();
+  const b = root ? memoryBackend(root) : memoryBackend();
   await b.ctx.db.insert('runnerKeys', { runnerId: MINI, keyHash: await sha256(MINI_KEY), name: 'mac-mini', createdAt: 1 });
   const now = Date.now();
   const tokenId = await b.ctx.db.insert('tokens', { hash: await sha256(TOKEN), name: 'iphone', kind: 'phone', expiresAt: now + 100 * DAY, createdAt: now });
@@ -717,6 +721,32 @@ test('the backfill brings clears from before their machine over, and the sweep a
   await call(s.ctx, sync.armClears, {});
   await call(s.ctx, sync.armClears, {});
   assert.deepEqual(s.pendingTimers().map((t: any) => t.args.event), ['STALLED'], 'armed once, for the clearing one');
+});
+
+// Codex's review: while the deploy's stepping stone has the clear machine
+// off, a batch with one thread that needs a clear still goes through, the
+// way it did before the machine, and the clear's row has its clearState
+// (the release's schema needs it once the stone is done).
+test('during the stepping stone a removal needing a clear goes through with the rest of its batch', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-stepping-'));
+  try {
+    const convex = path.join(import.meta.dirname, '../../../convex');
+    for (const f of fs.readdirSync(convex)) if (f.endsWith('.ts')) fs.copyFileSync(path.join(convex, f), path.join(root, f));
+    const stepping = path.join(root, 'stepping.ts');
+    fs.writeFileSync(stepping, fs.readFileSync(stepping, 'utf8').replace('export const STEPPING: readonly string[] = [];', "export const STEPPING: readonly string[] = ['clearState'];"));
+    const s = await setup(root);
+    const syncAt = load('sync', root);
+    await call(s.ctx, syncAt.upsertThreads, { key: MINI_KEY, threads: [thread('BIG', MINI), thread('SMALL', MINI)] });
+    for (let seq = 1; seq <= 600; seq++) await call(s.ctx, syncAt.appendMessages, { key: MINI_KEY, messages: [{ threadId: 'BIG', seq, role: 'assistant', text: 'b'.repeat(9_000), at: 'now' }] });
+    await call(s.ctx, syncAt.removeThreads, { key: MINI_KEY, threadIds: ['BIG', 'SMALL'] });
+    assert.deepEqual(s.rows('threads').map((t) => t.threadId), [], 'both removed');
+    assert.equal(s.rows('threadClears')[0].clearState.kind, 'clearing');
+    assert.ok((await drain(s, 'dropThreadRows', syncAt.dropThreadRows)) >= 1);
+    assert.equal(s.rows('threadClears').length, 0, 'the id opens');
+    assert.equal(s.rows('messages').filter((m) => m.threadId === 'BIG').length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('removing many threads with big tool output together stays under the read limit', async () => {

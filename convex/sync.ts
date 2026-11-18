@@ -9,7 +9,8 @@ import { internal } from './_generated/api';
 import { messageButton, threadFields, views } from './schema';
 import { API_VERSION } from './version';
 import { clear, command, machines } from './machines';
-import { clearStateFrom } from './clearStates';
+import { CLEAR_RETRY_MS, clearStateFrom } from './clearStates';
+import { steppingFor } from './stepping';
 import { COMMAND_KEEP_MS as KEEP_MS, TAKEN_LEASE_MS as LEASE_MS } from './commandMachine';
 import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
@@ -239,16 +240,29 @@ async function clearThread(ctx: MutationCtx, threadId: string, runnerId: string 
   // runs its backfill) reads from its old fields.
   const state = clearing ? (clearing.clearState ?? clearStateFrom(clearing, Date.now())) : undefined;
   const going = state?.kind === 'clearing';
+  // While the deploy's stepping stone has the machine off, its steps are
+  // written as they were before it, with clearState kept in step (Codex's
+  // review: one thread's clear would otherwise throw and roll back the
+  // whole batch for that minute). A clear left mid-way gets its timer once
+  // the machine is live (armClears).
+  const off = steppingFor('clearState');
   if (going && mode === 'moving') return false;
   if (clearing && going) {
-    if (state.kind === 'clearing' && state.moving) await clear.send(ctx, clearing._id, { type: 'REMOVED' });
+    if (state.kind === 'clearing' && state.moving) {
+      if (off) await ctx.db.patch(clearing._id, { moving: undefined, clearState: { ...state, moving: false }, clearStateTimers: [] });
+      else await clear.send(ctx, clearing._id, { type: 'REMOVED' });
+    }
   } else if (clearing) {
     // Its rows are gone: the takeover's write (or a removal) finishes it.
-    await clear.send(ctx, clearing._id, { type: mode === 'moving' ? 'OWNER_WROTE' : 'REMOVED' });
+    if (!off) await clear.send(ctx, clearing._id, { type: mode === 'moving' ? 'OWNER_WROTE' : 'REMOVED' });
     await ctx.db.delete(clearing._id);
   } else if (await clearRows(ctx, threadId, clearBudget(ctx))) {
-    const made = await clear.create(ctx, { threadId, runnerId: runnerId ?? '' } as never, { type: 'CLEAR', moving: mode === 'moving' });
-    if (made.status !== 'done') throw new ConvexError({ kind: 'conflict', message: `the thread's rows couldn't be cleared: ${made.reasons.join(' ')}` });
+    if (off) {
+      await ctx.db.insert('threadClears', { threadId, runnerId: runnerId ?? '', ...(mode === 'moving' ? { moving: true } : {}), clearState: { kind: 'clearing', moving: mode === 'moving', retryAt: Date.now() + CLEAR_RETRY_MS }, clearStateTimers: [] });
+    } else {
+      const made = await clear.create(ctx, { threadId, runnerId: runnerId ?? '' } as never, { type: 'CLEAR', moving: mode === 'moving' });
+      if (made.status !== 'done') throw new ConvexError({ kind: 'conflict', message: `the thread's rows couldn't be cleared: ${made.reasons.join(' ')}` });
+    }
     await ctx.scheduler.runAfter(0, internal.sync.dropThreadRows, { threadId });
     if (mode === 'moving') return false;
   }
@@ -355,8 +369,16 @@ export const dropThreadRows = machines.internalMutation({
   handler: async (machineCtx, { threadId }) => {
     const ctx = machineCtx as unknown as MutationCtx;
     const clearing = await clearingOf(ctx, threadId);
+    const state = clearing ? (clearing.clearState ?? clearStateFrom(clearing, Date.now())) : undefined;
     // Gone, or a second run of the same clear (a restart while one was queued) that finds it drained.
-    if (!clearing || clearing.clearState?.kind !== 'clearing') return null;
+    if (!clearing || state?.kind !== 'clearing') return null;
+    // The stepping stone (clearThread says why): as before the machine.
+    if (steppingFor('clearState')) {
+      if (await clearRows(ctx, threadId, { bytes: 0 })) await ctx.scheduler.runAfter(0, internal.sync.dropThreadRows, { threadId });
+      else if (state.moving) await ctx.db.patch(clearing._id, { done: true, clearState: { kind: 'awaitingOwner' }, clearStateTimers: [] });
+      else await ctx.db.delete(clearing._id);
+      return null;
+    }
     if (await clearRows(ctx, threadId, { bytes: 0 })) {
       await clear.send(machineCtx, clearing._id, { type: 'PROGRESS' });
       await ctx.scheduler.runAfter(0, internal.sync.dropThreadRows, { threadId });
