@@ -936,6 +936,9 @@ impl Threadbear {
                             self.remote.index.take_update(&t);
                             self.remote.recent.note(&t);
                         }
+                        // The runner's word on it: a message it just took no
+                        // longer holds it under Running (`thread::AWAITING`).
+                        crate::thread::summary_arrived(&t.id);
                         let before = self.threads.insert(t.id.clone(), Arc::new(t.clone()));
                         self.note_failed_account(before.as_deref(), &t);
                         self.note_failed_move(before.as_deref(), &t, cx);
@@ -1124,7 +1127,14 @@ impl Threadbear {
                         let confirmed: std::collections::HashSet<_> = list.rows.iter().map(|t| t.id.clone()).collect();
                         // An explicit, readable archive is still authoritative
                         // even when another row could not be read.
-                        for thread in &list.rows { crate::terminal::thread_updated(thread, cx); }
+                        for thread in &list.rows {
+                            crate::terminal::thread_updated(thread, cx);
+                            // Only a row that changed is news: a list asked
+                            // for before a send may answer after it lands.
+                            if this.threads.get(&thread.id).is_none_or(|old| **old != *thread) {
+                                crate::thread::summary_arrived(&thread.id);
+                            }
+                        }
                         let before = (*this.threads).clone();
                         let cleanup = list.apply(&mut *this.threads);
                         let reload: std::collections::HashSet<_> = confirmed.iter().filter(|id| {

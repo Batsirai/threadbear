@@ -188,13 +188,129 @@ pub(crate) fn outbox_changes() -> u64 {
 }
 
 /// The threads with a message the runner hasn't taken yet (the spinner by
-/// its bubble): the sidebar has them under Running rather than in the Inbox
+/// its bubble), or has taken without a summary since (`AWAITING`): the
+/// sidebar has them under Running rather than in the Inbox
 /// (`inbox::as_sending`). A queued one is left out: the runner has it, and
 /// its summary says what the thread is doing. That also bounds the guess to
 /// the send's own call, whose task marks it queued or takes it out whether
 /// or not a pane is open, so no bubble left behind keeps a thread in Running.
 pub(crate) fn sending() -> Vec<String> {
-    OUTBOX.with(|o| o.borrow().iter().filter(|(_, list)| list.iter().any(|m| !m.queued)).map(|(id, _)| id.clone()).collect())
+    let mut ids: Vec<String> = OUTBOX.with(|o| o.borrow().iter().filter(|(_, list)| list.iter().any(|m| !m.queued)).map(|(id, _)| id.clone()).collect());
+    AWAITING.with(|a| ids.extend(a.borrow().keys().filter(|id| !ids.contains(id)).cloned().collect::<Vec<_>>()));
+    ids
+}
+
+thread_local! {
+    /// Threads the runner has just taken a message for, by the hold's own
+    /// number, until its next summary of them (`summary_arrived`). The
+    /// runner sends the message's `user.message` first and the summary
+    /// saying its turn has started just after, later on a busy Mac or from
+    /// another runner; until then its summary still has the last turn's
+    /// "needs you". Ending the guess as the bubble went put the thread back
+    /// in the Inbox for that moment, and out again a second later (18 Nov).
+    /// Any summary after the message is the runner's word, whatever it
+    /// says: one that failed at once goes straight back to the Inbox.
+    static AWAITING: std::cell::RefCell<HashMap<String, u64>> = std::cell::RefCell::new(HashMap::new());
+    /// Numbers each hold, so a hold's grace only ends that one.
+    static HOLDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// How many summaries of each thread have come, so a send can tell
+    /// whether one has since its click (`taken`).
+    static SUMMARIES: std::cell::RefCell<HashMap<String, u64>> = std::cell::RefCell::new(HashMap::new());
+    /// Each message on its way, by its pending id: `SUMMARIES` for its
+    /// thread when it was sent.
+    static SENT_AT: std::cell::RefCell<HashMap<String, u64>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Notes a message as sent now, for `taken`.
+fn note_sent(thread_id: &str, pending_id: &str) {
+    let at = summaries_of(thread_id);
+    SENT_AT.with(|s| s.borrow_mut().insert(pending_id.to_owned(), at));
+}
+
+/// This Mac's runner has shown a message on its way: it sends the summary
+/// that goes with it after the event, so only one from now on counts as its
+/// word on the send. One between the click and here (opening the thread
+/// marked it seen, say) is older news (Codex's review, 18 Nov). Another
+/// runner's summary can beat its transcript here, so theirs keep the click.
+fn shown_here(thread_id: &str, pending_id: &str) {
+    let now = summaries_of(thread_id);
+    SENT_AT.with(|s| {
+        if let Some(at) = s.borrow_mut().get_mut(pending_id) {
+            *at = now;
+        }
+    });
+}
+
+/// The runner has taken a message on its way (shown, by any path, or
+/// queued): whether the thread should stay under Running until its next
+/// summary. Only if none has come since the click: one that has is the
+/// runner's word already (a turn that failed at once, or asked something,
+/// from another runner whose summary can beat its transcript here), and
+/// holding past it would hide a thread that needs Mike.
+fn taken(thread_id: &str, pending_id: &str) -> bool {
+    SENT_AT.with(|s| s.borrow_mut().remove(pending_id)).is_some_and(|at| at == summaries_of(thread_id))
+}
+
+/// How long a taken message holds its thread under Running if no summary
+/// comes (a dropped connection, another runner that's gone quiet): the
+/// guess never outlives this.
+const HOLD_GRACE: Duration = Duration::from_secs(5);
+
+/// The runner said something new about a thread (`thread.updated`, or a
+/// changed row in this Mac's list or another runner's): what it says now
+/// goes, and a message it took no longer holds the thread under Running.
+pub(crate) fn summary_arrived(thread_id: &str) {
+    SUMMARIES.with(|s| *s.borrow_mut().entry(thread_id.to_owned()).or_default() += 1);
+    if AWAITING.with(|a| a.borrow_mut().remove(thread_id).is_some()) {
+        OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
+    }
+}
+
+/// How many summaries of a thread have come so far.
+fn summaries_of(thread_id: &str) -> u64 {
+    SUMMARIES.with(|s| s.borrow().get(thread_id).copied().unwrap_or(0))
+}
+
+/// Holds a thread under Running until the runner's next summary of it, or
+/// `HOLD_GRACE`, whichever comes first. Returns the hold's number.
+fn hold(thread_id: &str) -> u64 {
+    let n = HOLDS.with(|h| {
+        h.set(h.get() + 1);
+        h.get()
+    });
+    AWAITING.with(|a| a.borrow_mut().insert(thread_id.to_owned(), n));
+    OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
+    n
+}
+
+/// Ends hold `n` on a thread if it's still that one: true if it did.
+fn let_go(thread_id: &str, n: u64) -> bool {
+    let gone = AWAITING.with(|a| {
+        let mut a = a.borrow_mut();
+        let ours = a.get(thread_id) == Some(&n);
+        if ours {
+            a.remove(thread_id);
+        }
+        ours
+    });
+    if gone {
+        OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
+    }
+    gone
+}
+
+/// `hold`, with its grace run out by a task of the app's own, so a pane
+/// closed meanwhile doesn't leave the thread under Running.
+fn hold_for_summary(thread_id: &str, app: WeakEntity<crate::app::Threadbear>, cx: &App) {
+    let n = hold(thread_id);
+    let id = thread_id.to_owned();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(HOLD_GRACE).await;
+        if let_go(&id, n) {
+            app.update(cx, |_, cx| cx.notify()).ok();
+        }
+    })
+    .detach();
 }
 
 fn set_outbox(thread_id: &str, list: Vec<PendingMessage>) {
@@ -638,7 +754,7 @@ impl ThreadPane {
                     // What's still on its way stays at the end, less what this
                     // page shows arrived (a reload after a restart brings them).
                     let _ = this.feed.set_pending(outbox(&this.summary.id));
-                    this.keep_outbox();
+                    this.keep_outbox(cx);
                     // Another runner's thread through this Mac's runner has
                     // gaps in its seqs (`feed.sparse = viaRelay`).
                     this.feed.set_sparse(this.summary.runner_id.is_some());
@@ -892,6 +1008,11 @@ impl ThreadPane {
             if crate::reply_buttons::fold(std::slice::from_ref(&event), &self.summary.id) {
                 cx.notify();
             }
+            if self.subagent_id.is_none() && self.summary.runner_id.is_none() {
+                for m in outbox(&self.summary.id).iter().filter(|m| !m.queued && m.is_landed_by(&event)) {
+                    shown_here(&self.summary.id, &m.id);
+                }
+            }
             let action = self.feed.receive(event);
             self.handle(action, cx);
         }
@@ -958,7 +1079,7 @@ impl ThreadPane {
     /// list holds the view on the row at its top (or follows the tail) across
     /// all of it, which is what `apply` in TranscriptController did by hand.
     pub(crate) fn apply(&mut self, change: TranscriptChange, cx: &mut Context<Self>) {
-        self.keep_outbox();
+        self.keep_outbox(cx);
         if change.is_empty() {
             return;
         }
@@ -987,10 +1108,20 @@ impl ThreadPane {
 
     /// What the model shows as on its way, kept in the outbox, so it
     /// outlives this pane. A sub-agent's pane never sends.
-    fn keep_outbox(&self) {
-        if self.subagent_id.is_none() {
-            set_outbox(&self.summary.id, self.feed.model().pending().to_vec());
+    fn keep_outbox(&self, cx: &mut Context<Self>) {
+        if self.subagent_id.is_some() {
+            return;
         }
+        let id = &self.summary.id;
+        let list = self.feed.model().pending().to_vec();
+        // Gone from the model's list: shown, whether live, in a catch-up or
+        // in a reload (a failed send leaves the outbox before the pane hears).
+        let shown: Vec<String> = outbox(id).into_iter().filter(|m| !m.queued && !list.iter().any(|n| n.id == m.id)).map(|m| m.id).collect();
+        let hold = shown.iter().fold(false, |hold, pending_id| taken(id, pending_id) || hold);
+        if hold {
+            hold_for_summary(id, self.app.clone(), cx);
+        }
+        set_outbox(id, list);
     }
 
     /// The outbox's messages for this thread on show again, after a send's
@@ -1087,6 +1218,9 @@ impl ThreadPane {
             let _ = told.unbounded_send(SendStep::Progress(p));
         });
         let probe = message.clone();
+        // Whether the runner says anything about the thread before it takes
+        // the message (`taken`).
+        note_sent(&thread_id, &pending_id);
         let resend = Resend { thread_id: thread_id.clone(), after_seq: message.after_seq, was_idle, landed: Arc::new(move |v: &Value| Event::decode(v).is_some_and(|e| probe.is_landed_by(&e))) };
         let client = self.client.clone();
         // Its place among this runner's requests, from the click (`Place`).
@@ -1122,6 +1256,7 @@ impl ThreadPane {
             // Gone or taken: no longer one to keep through a quit.
             OUTBOX_DRAFTS.with(|d| d.borrow_mut().remove(&pending_id));
             if let Err(e) = res {
+                SENT_AT.with(|s| s.borrow_mut().remove(&pending_id));
                 // Off the end of the transcript and back in the box, and the
                 // error bar says so, naming the thread, until it's dismissed.
                 let id = pending_id.clone();
@@ -1137,6 +1272,15 @@ impl ThreadPane {
             // user.message usually comes just before this answer, so wait a
             // moment rather than flash the clock on every send (`markQueued`).
             cx.background_executor().timer(Duration::from_millis(600)).await;
+            // Taken with no word from the runner since the click (another
+            // runner's mirror can lag): it's queued now, which ends the
+            // guess, so it holds the thread under Running until the summary
+            // comes, as a shown one does (`AWAITING`).
+            let unshown = outbox(&thread_id).iter().any(|m| m.id == pending_id && !m.queued);
+            if unshown && taken(&thread_id, &pending_id) {
+                let app = app.clone();
+                cx.update(|cx| hold_for_summary(&thread_id, app, cx));
+            }
             change_outbox(&app, &thread_id, cx, move |list| {
                 if let Some(m) = list.iter_mut().find(|m| m.id == pending_id) {
                     m.queued = true;
@@ -1483,7 +1627,7 @@ impl ThreadPane {
                 self.scroller.update(cx, |s, cx| s.scroll_to_row(index, px(offset), cx));
             }
         }
-        self.keep_outbox();
+        self.keep_outbox(cx);
         self.loading_older = false;
         cx.notify();
         if let Some(memory) = self.rows.pending_restore.take() {
@@ -2011,4 +2155,54 @@ fn change_outbox(app: &WeakEntity<crate::app::Threadbear>, thread_id: &str, cx: 
 /// `thread:` link or `tb show` takes it.
 pub(crate) fn short_id(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::{hold, let_go, note_sent, sending, shown_here, summaries_of, summary_arrived, taken};
+
+    #[test]
+    fn on_this_macs_runner_only_a_summary_after_the_message_counts() {
+        // Opening the thread marked it seen, and that summary came after
+        // the click: older news than the message, which this runner shows
+        // before its own summary.
+        note_sent("t3", "p1");
+        summary_arrived("t3");
+        shown_here("t3", "p1");
+        assert!(taken("t3", "p1"));
+        // Nothing to move for a message that isn't on its way.
+        shown_here("t3", "p9");
+        assert!(!taken("t3", "p9"));
+    }
+
+    #[test]
+    fn a_message_taken_holds_only_if_the_runner_said_nothing_since_the_click() {
+        note_sent("t2", "p1");
+        assert!(taken("t2", "p1"));
+        // Once only: it's spoken for.
+        assert!(!taken("t2", "p1"));
+        // Another runner's "needs you" beat the message's own echo here:
+        // that's its word already, so no hold hides it.
+        note_sent("t2", "p2");
+        summary_arrived("t2");
+        assert!(!taken("t2", "p2"));
+        assert!(!taken("t2", "never-sent"));
+    }
+
+    #[test]
+    fn a_taken_message_holds_its_thread_until_the_next_summary() {
+        let n = hold("t1");
+        assert!(sending().contains(&"t1".to_string()));
+        // The runner's next word ends it, whatever it says.
+        let before = summaries_of("t1");
+        summary_arrived("t1");
+        assert_eq!(summaries_of("t1"), before + 1);
+        assert!(!sending().contains(&"t1".to_string()));
+        // An old hold's grace running out leaves a newer one be.
+        assert!(!let_go("t1", n));
+        let newer = hold("t1");
+        assert!(!let_go("t1", n));
+        assert!(let_go("t1", newer));
+        assert!(sending().is_empty());
+    }
 }
