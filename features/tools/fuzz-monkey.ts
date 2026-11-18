@@ -41,6 +41,8 @@ const opt = (name: string, fallback: string) => {
 const seed = Number(opt('seed', String(Date.now() % 100000)));
 const minutes = Number(opt('minutes', '10'));
 const maxSteps = Number(opt('steps', '100000'));
+// Steps before a fresh app (and a fresh walk); a big number keeps one app all run, to see memory over time.
+const sessionSteps = Number(opt('session-steps', '400'));
 const out = path.resolve(opt('out', path.join(os.tmpdir(), 'tb-fuzz')));
 const replayFile = opt('replay', '');
 fs.mkdirSync(out, { recursive: true });
@@ -408,7 +410,7 @@ async function fuzz() {
         }
         if (summary.steps % 50 === 0) summary.rss.push(rssKb(app.pid));
         // A restart of the walk now and then, so one long session isn't the only shape tried.
-        if (trace.length >= 400) break;
+        if (trace.length >= sessionSteps) break;
       }
       if (failure && failure.kind === 'freeze' && openMenu(app.pid)) {
         // A native menu something else opened (a "..." button, say): not a
