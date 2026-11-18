@@ -54,6 +54,7 @@ mod file_thumbs;
 mod file_find;
 mod file_watch;
 mod files;
+mod fonts;
 mod files_store;
 mod folders;
 #[cfg(feature = "frame-stats")]
@@ -263,6 +264,8 @@ fn main() {
     let links = deep_links::receive(&application);
     application.run(|cx| {
         gpui_kit::init(cx);
+        // Fonts the app carries (fonts.rs), before anything is measured in one.
+        fonts::register(cx);
         // An untouched caret should not redraw the window indefinitely.
         // It stays visible after ten seconds and resumes on editing or focus.
         gpui_kit::component::Theme::update(cx, |theme| {

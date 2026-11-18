@@ -2309,8 +2309,9 @@ app opens.
   around each of your messages, so more fits.
 - **Text size**: Smaller, Normal or Larger, the same as View > Zoom
   (⌘= and ⌘-), which goes further either way.
-- **Font**: System, Serif or Monospaced for everything but code, which
-  keeps its own.
+- **Font**: Allo (the default, [a free font](https://allo.joshpuckett.me)
+  that comes with the app), System, Serif or Monospaced for everything but
+  code, which keeps its own.
 
 On Mac, Increase Contrast in System Settings > Accessibility > Display
 also strengthens text and borders. It is read at launch and when you return

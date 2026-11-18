@@ -173,6 +173,11 @@ pub fn set_compact(on: bool) {
 /// its monospaced one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Font {
+    /// The default since 18 Nov (Mike picked it over the system's own after
+    /// seeing both): Allo (allo.joshpuckett.me), bundled in fonts/allo and
+    /// added at launch (`fonts::register`), so it's the same everywhere
+    /// without installing anything.
+    Allo,
     System,
     Serif,
     Mono,
@@ -181,18 +186,22 @@ pub enum Font {
 static FONT: AtomicU32 = AtomicU32::new(0);
 
 impl Font {
-    pub const ALL: [Font; 3] = [Font::System, Font::Serif, Font::Mono];
+    /// What a fresh install, or settings with no font saved, get. FONT starts
+    /// at 0, so it's first in ALL as well.
+    pub const DEFAULT: Font = Font::Allo;
+    pub const ALL: [Font; 4] = [Font::Allo, Font::System, Font::Serif, Font::Mono];
 
     pub fn name(self) -> &'static str {
         match self {
             Font::System => "system",
             Font::Serif => "serif",
             Font::Mono => "mono",
+            Font::Allo => "allo",
         }
     }
 
     pub fn from_name(name: &str) -> Font {
-        Font::ALL.into_iter().find(|f| f.name() == name).unwrap_or(Font::System)
+        Font::ALL.into_iter().find(|f| f.name() == name).unwrap_or(Font::DEFAULT)
     }
 
     pub fn title(self) -> &'static str {
@@ -200,6 +209,7 @@ impl Font {
             Font::System => "System",
             Font::Serif => "Serif",
             Font::Mono => "Monospaced",
+            Font::Allo => "Allo",
         }
     }
 
@@ -213,12 +223,13 @@ impl Font {
             Font::Serif if cfg!(target_os = "windows") => Some("Georgia".into()),
             Font::Serif => Some("Noto Serif".into()),
             Font::Mono => Some(cx.theme().mono_font_family.clone()),
+            Font::Allo => Some("Allo".into()),
         }
     }
 }
 
 pub fn font_choice() -> Font {
-    Font::ALL.get(FONT.load(Ordering::Relaxed) as usize).copied().unwrap_or(Font::System)
+    Font::ALL.get(FONT.load(Ordering::Relaxed) as usize).copied().unwrap_or(Font::DEFAULT)
 }
 
 /// Names the family in both looks' theme configs as well as on the theme,
@@ -1106,6 +1117,22 @@ mod group_hover_text_tests {
         .expect("the test window");
     }
 
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::Font;
+
+    /// FONT starts at 0, so the default has to be first, and an unknown or
+    /// missing name lands on it too.
+    #[test]
+    fn default_is_first_and_the_fallback() {
+        assert_eq!(Font::ALL[0], Font::DEFAULT);
+        assert_eq!(Font::from_name("gone"), Font::DEFAULT);
+        for font in Font::ALL {
+            assert_eq!(Font::from_name(font.name()), font);
+        }
+    }
 }
 
 #[cfg(test)]

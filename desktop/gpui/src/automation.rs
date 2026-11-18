@@ -462,6 +462,13 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
                 Some(name) => Some(crate::settings_window::Tab::from_name(name).ok_or_else(|| format!("tab must be one of {}", crate::settings_window::Tab::ALL.map(|t| t.name()).join(", ")))?),
                 None => None,
             };
+            // Appearance's Font by its saved name ("system", "serif", "mono",
+            // "allo"), for comparing shots of each without the menu.
+            if let Some(name) = cmd["font"].as_str() {
+                let font = crate::style::Font::ALL.into_iter().find(|f| f.name() == name).ok_or_else(|| format!("font must be one of {}", crate::style::Font::ALL.map(|f| f.name()).join(", ")))?;
+                app.update(cx, |t, cx| t.set_font(font, window, cx));
+                return Ok(json!("ok"));
+            }
             app.update(cx, |t, cx| t.open_settings(tab, cx));
             // Its sections' buttons and menus, as the Swift command takes them.
             if let Some(done) = crate::settings_window::automation(app, cmd, cx)? {

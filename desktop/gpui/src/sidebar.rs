@@ -1859,7 +1859,9 @@ impl Threadbear {
                         .line_height(px(15.))
                         .text_color(secondary)
                         .tip(tip.clone())
-                        .child(format!("\u{2022} {runner}")),
+                        // A middle dot, as the app's other separators: Allo's bullet is
+                        // much bigger than the system font's (18 Nov).
+                        .child(format!("\u{b7} {runner}")),
                 )
             })
             // With the hover buttons up, room for them here as on the title's

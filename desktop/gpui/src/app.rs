@@ -322,7 +322,7 @@ impl Threadbear {
         // The rest of Appearance: accent, spacing and font.
         crate::style::set_accent_choice(crate::style::Accent::from_name(settings.saved.accent.as_deref().unwrap_or("system")), cx);
         crate::style::set_compact(settings.saved.compact.unwrap_or(false));
-        crate::style::set_font_choice(crate::style::Font::from_name(settings.saved.font.as_deref().unwrap_or("system")), cx);
+        crate::style::set_font_choice(settings.saved.font.as_deref().map_or(crate::style::Font::DEFAULT, crate::style::Font::from_name), cx);
         let appearance = window.observe_window_appearance(|window, cx| {
             crate::style::refresh_system_accent(cx);
             crate::style::refresh_system_contrast(cx);
@@ -1289,7 +1289,9 @@ impl Threadbear {
     /// Appearance's Font (`style::Font`).
     pub(crate) fn set_font(&mut self, font: crate::style::Font, window: &mut Window, cx: &mut Context<Self>) {
         crate::style::set_font_choice(font, cx);
-        self.settings.saved.font = (font != crate::style::Font::System).then(|| font.name().to_owned());
+        // Only a choice other than the default is saved, so a change of default
+        // reaches everyone who never picked one.
+        self.settings.saved.font = (font != crate::style::Font::DEFAULT).then(|| font.name().to_owned());
         self.look_changed(window, cx);
     }
 
