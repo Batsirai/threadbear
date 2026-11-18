@@ -1434,8 +1434,12 @@ async function landLocked(
   if (alone) out(alone.why);
   // Once a failed group's landings have each been run alone (findBroken):
   // the ones that passed, which are all that go into this landing's checks
-  // from then on. It's done once; a group that fails after it is halved.
-  let lookedAlone = false;
+  // from then on. It's done once for each step that failed; a group that
+  // fails after it on the same steps is halved. The steps looked for that way. A later failure of a step not among
+  // them is looked into too: halving can leave a repair out and show main's
+  // own failure in another step (Codex's review, 18 Nov), and only a run on
+  // main says that's what it is.
+  const looked = new Set<string>();
   // Once findBroken has seen main fail some of what failed by itself: then
   // a fix may be its repair, so this holder's later halvings leave the
   // fixes riding free, as before 18 Nov.
@@ -1588,9 +1592,11 @@ async function landLocked(
         // found like any other. On 17 Nov half the line had landed with
         // --despite-red, so no failed group was ever looked into alone, and
         // a broken fix at the front of it failed every group for hours.
-        const only = lookedAlone || opts.checkFrom ? undefined : onlyFailed(r.text);
+        const said = opts.checkFrom ? undefined : onlyFailed(r.text);
+        const steps = said?.split(';').map((e) => e.split('=')[0]) ?? [];
+        const only = steps.some((name) => !looked.has(name)) ? said : undefined;
         if (only) {
-          lookedAlone = true;
+          for (const name of steps) looked.add(name);
           out('Running only what failed on each of them by itself, to find which broke it.');
           setRunning(common, {
             startedAt: Date.now(), branches: [t.branch, ...together], pid: process.pid,

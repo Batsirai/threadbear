@@ -261,6 +261,31 @@ test('freeFixes: every fix waiting rides free again on that main, not only one g
   assert.equal(readEntry(common, es[1].id)?.ordinaryAt, 'an-old-main');
 });
 
+// Codex's third review: main is broken in one step, a repair for it waits,
+// and two others fail another step only together. The first group (repair
+// in) fails only the second step, which main passes, so the repair is
+// halved like the rest and can be left out; the next failure is main's own
+// step, and is looked into too, which lets the repair ride free again.
+test('a step that fails only once halving leaves the repair out is looked into, and the repair rides free again', async () => {
+  const { root, main } = makeRepo();
+  const [a, p, q, r] = branches(main, ['a', 'p', 'q', 'r']);
+  commit(main, { 'broken.txt': 'x\n' }, 'Break main');
+  for (const t of [a, p, q, r]) sh(t.path, 'git rebase -q main');
+  const body = 'want="${THREADBEAR_CHECK_ONLY:-step one;step two}"; ' +
+    'test -n "${THREADBEAR_CHECK_ONLY:-}" && echo "--only ran: \\"$want\\""; failed=""; ' +
+    'case "$want" in *"step one"*) if test -f broken.txt && ! test -f r.txt; then echo "FAIL  step one            1s  log"; failed="step one"; else echo "ok    step one            1s"; fi;; esac; ' +
+    'case "$want" in *"step two"*) if test -f p.txt && test -f q.txt; then echo "FAIL  step two            1s  log"; failed="${failed:+$failed;}step two"; else echo "ok    step two            1s"; fi;; esac; ' +
+    'if test -n "$failed"; then echo "To run only what failed again: --only \\"$failed\\""; exit 1; fi';
+  const { codes, caps } = await queued(root, main, a, [{ t: p }, { t: q }, { t: r, despiteRed: true }], recorded(root, body));
+  // The repair lands, and one of p and q with it or after; the other fails
+  // with it on main. Only a holder of p or q meets the case (one of r holds
+  // passes straight through), so without the second look this fails in
+  // some runs, not all.
+  assert.equal(codes[2], 0, said(caps));
+  assert.ok(fs.existsSync(path.join(main, 'r.txt')));
+  assert.equal(codes.filter((x) => x === 0).length, 2, said(caps));
+});
+
 test('halveGroup: halves on this main at once, keeps a smaller limit, skips landed ones, and puts each back as it was', () => {
   const { main } = makeRepo();
   const common = path.join(main, '.git');
