@@ -77,7 +77,7 @@ import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
-import { BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
+import { BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
 import { BoxProcesses } from './box-procs.ts';
 import { SaveHold, saveThread } from './box-save.ts';
 import { ClockJumpWatch } from './clock-jump.ts';
@@ -167,7 +167,7 @@ async function main(): Promise<void> {
   // degraded (`broken`): heartbeating on its key, running nothing, saying
   // why on the thread, so the billing guard pauses it with its disk and a
   // person can see to it. Only a fresh box with nothing to lose exits.
-  type Box = { secrets: BoxSecrets; threadKey: Buffer; checkout: string; cwd: string; restored: boolean; again?: true; broken?: string };
+  type Box = { secrets: BoxSecrets; threadKey: Buffer; checkout: string; cwd: string; restored: boolean; again?: true; broken?: string; fresh: boolean };
   const startBox = async (boot: NonNullable<typeof boxBoot>): Promise<Box> => {
     const workRoot = process.env.THREADBEAR_BOX_WORK || path.join(os.homedir(), 'work');
     let secrets: BoxSecrets | undefined;
@@ -176,14 +176,14 @@ async function main(): Promise<void> {
       const post = convexPoster(boot.syncUrl) as unknown as ActionPost;
       ({ secrets, fresh } = await bootBox({ boot, home: cfg.home, claudeDir: cfg.claudeMainDir, post, log }));
       const folder = await prepareBoxFolder({ secrets, fresh, home: cfg.home, claudeDir: cfg.claudeMainDir, workRoot, log });
-      return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), ...folder };
+      return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), ...folder, fresh };
     } catch (e) {
       const why = String((e as Error)?.message ?? e);
       if (secrets && (e instanceof BoxFolderBroken || !fresh)) {
         log.error('box: its folder is unusable; staying up, degraded, running nothing', { error: why });
         const checkout = secrets.prepared?.checkout ?? path.join(workRoot, repoFolderName(secrets.repo.origin));
         const cwd = secrets.prepared?.cwd && isDirectory(secrets.prepared.cwd) ? secrets.prepared.cwd : os.homedir();
-        return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), checkout, cwd, restored: false, broken: why.replace(/^\w/, (c) => c.toLowerCase()) };
+        return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), checkout, cwd, restored: false, broken: why.replace(/^\w/, (c) => c.toLowerCase()), fresh };
       }
       log.error('box: could not start', { error: why });
       process.stderr.write(`The box's runner couldn't start: ${why}\n`);
@@ -191,11 +191,24 @@ async function main(): Promise<void> {
     }
   };
   const box = boxBoot ? await startBox(boxBoot) : undefined;
-  // What was running as the box booted (the provider's), spared when a
-  // stopping save kills everything else in the box (box-procs.ts). Linux's
-  // /proc only: a box without it can't stop its processes, so it can't save.
-  const boxProcs = box && fs.existsSync('/proc/self/stat') ? new BoxProcesses() : undefined;
-  boxProcs?.boot();
+  // The provider's processes, spared when a stopping save kills everything
+  // else in the box (box-procs.ts): taken once, by the first start after a
+  // fresh exchange, before anything of the thread runs, and kept in
+  // box.json for every start after (an agent's process that outlived a
+  // restart is never in it). Linux's /proc only: a box without it can't
+  // stop its processes, so it can't save.
+  const boxProcs =
+    box && fs.existsSync('/proc/self/stat')
+      ? (() => {
+          let baseline = box.secrets.baseline;
+          if (!baseline && box.fresh) {
+            baseline = new BoxProcesses().capture();
+            setBaseline(cfg.home, baseline);
+            box.secrets.baseline = baseline;
+          }
+          return new BoxProcesses({ baseline: baseline ?? [] });
+        })()
+      : undefined;
   if (box) {
     // Decision 1: its sync on the box key, the one login given, no
     // following main or keep-awake (the rest is boxEnv and the checks below).
@@ -625,7 +638,7 @@ async function main(): Promise<void> {
     // A degraded box saves nothing: what it has may be all there is of the work.
     if (box.broken) throw new Error(`This box can't save its thread: ${box.broken}`);
     try {
-      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id, { stopOthers }), hold: saveHold, beforeSaved: () => sync.flushNow(), post: boxPost, upload: convexUploader() });
+      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id, { stopOthers }), hold: saveHold, beforeSaved: () => sync.flushAll(), post: boxPost, upload: convexUploader() });
     } catch (e) {
       if (keyRejected(e)) boxSuperseded();
       throw e;

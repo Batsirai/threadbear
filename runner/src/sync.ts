@@ -1543,6 +1543,9 @@ export class ConvexSync {
   private backendApiVersion?: number;
   private lastFlushAt = -Infinity;
   private flushing = false;
+  // Flushes started and failed, for flushAll.
+  private flushRuns = 0;
+  private flushFails = 0;
   // Threads rows are written one writer at a time (rowTurn): a flush's
   // batches, taken before a change, landing after writeRowNow had written
   // it, or two writeRowNows crossing, left the older row in Convex: a
@@ -2370,6 +2373,32 @@ export class ConvexSync {
 
   // Writes whatever is waiting now, however recent the last write; tests
   // and a stop that wants the last state out use it.
+  /**
+   * Box mode's save (box-save.ts): everything changed so far up, for sure,
+   * before boxSaved, so no mirror write comes after the save and marks the
+   * box as working again. Waits for a flush already going, runs one of its
+   * own to the end, and throws if it failed or left anything to send.
+   */
+  async flushAll(timeoutMs = 60_000): Promise<void> {
+    if (!this.running) throw new Error("The sync isn't running, so the thread's changes can't go up before its save.");
+    const end = Date.now() + timeoutMs;
+    for (;;) {
+      while (this.flushing) {
+        if (Date.now() > end) throw new Error("The sync was still busy, so the thread's changes didn't all go up before its save.");
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      const runs = this.flushRuns;
+      const fails = this.flushFails;
+      await this.flushNow();
+      // Another flush got in first: wait for it, then run one of our own.
+      if (this.flushRuns === runs) continue;
+      if (this.flushFails !== fails) throw new Error(`The thread's changes didn't all go up before its save: ${this.lastError ?? 'the sync failed'}.`);
+      const pending = this.dirty.size + this.removed.size + this.messages.length + this.dirtyLists.size + this.held.size;
+      if (pending) throw new Error(`The thread's changes didn't all go up before its save (${pending} still to send).`);
+      return;
+    }
+  }
+
   async flushNow(): Promise<void> {
     this.flushTimer?.cancel();
     this.flushTimer = undefined;
@@ -3259,6 +3288,7 @@ export class ConvexSync {
   private async flush(): Promise<void> {
     if (this.flushing || !this.running) return;
     this.flushing = true;
+    this.flushRuns++;
     const me = Symbol('flush');
     // The rows of a batch on its way when it failed: they may have landed.
     let unsure: string[] = [];
@@ -3430,6 +3460,7 @@ export class ConvexSync {
       for (const name of lists) this.dirtyLists.add(name);
       const queued = new Set(this.messages.map((x) => `${x.threadId}:${x.seq}`));
       prependAll(this.messages, messages.filter((m) => !queued.has(`${m.threadId}:${m.seq}`)));
+      this.flushFails++;
       this.backoffMs = this.backoffMs ? Math.min(this.backoffMs * 2, BACKOFF_MAX_MS) : BACKOFF_MIN_MS;
       this.retryAt = this.deps.clock.now() + this.backoffMs;
       this.lastError = String((e as Error)?.message ?? e);

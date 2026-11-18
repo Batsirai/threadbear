@@ -547,3 +547,51 @@ test('a save hold is kept on disk from before the thread is touched until the ba
   await tick(10);
   assert.equal(b.adapter.sessions.length, 0);
 });
+
+test("a file the index says is unchanged (assume-unchanged, skip-worktree) is saved as it really is, and one under node_modules fails the save", async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const top = a.folder.checkout;
+  // The agent hid an edit from git.
+  fs.writeFileSync(path.join(top, 'runner', 'a.txt'), 'edited, hidden\n');
+  sh(top, 'git update-index --assume-unchanged runner/a.txt');
+  fs.writeFileSync(path.join(top, 'README.md'), 'edited too\n');
+  sh(top, 'git update-index --skip-worktree README.md');
+  const backend = fakeBackend();
+  await save(a.h, a, backend);
+  const [url, sealed] = [...backend.stored][0]!;
+  const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored);
+  assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'runner', 'a.txt'), 'utf8'), 'edited, hidden\n');
+  assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'README.md'), 'utf8'), 'edited too\n');
+  // The box's own index keeps its flags: only the save's copy loses them.
+  assert.match(sh(top, 'git ls-files -v runner/a.txt'), /^h /);
+  // Under node_modules, the real change is seen, and refused.
+  const c = await boxOn(origin, null);
+  await firstTurn(c.h, c.folder.cwd);
+  const ctop = c.folder.checkout;
+  fs.mkdirSync(path.join(ctop, 'runner', 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(ctop, 'runner', 'node_modules', 'pkg', 'index.js'), 'one\n');
+  sh(ctop, 'git add -f runner/node_modules/pkg/index.js && git commit -qm vendored');
+  fs.writeFileSync(path.join(ctop, 'runner', 'node_modules', 'pkg', 'index.js'), 'patched\n');
+  sh(ctop, 'git update-index --skip-worktree runner/node_modules/pkg/index.js');
+  await assert.rejects(save(c.h, c, fakeBackend()), /runner\/node_modules\/pkg\/index\.js is tracked or staged, with changes/);
+});
+
+test('the mirror must be all up before boxSaved: a flush that fails fails the save, held, and boxSaved is never sent', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const backend = fakeBackend();
+  const order: string[] = [];
+  const watched = { upload: backend.upload, post: async (k: 'mutation', fn: string, args: Record<string, unknown>) => (order.push(fn), backend.post(k, fn, args)) };
+  await assert.rejects(
+    saveThread({ home: a.home, claudeDir: a.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => a.h.runner.quiesceForSave(id), hold: a.hold, beforeSaved: async () => { order.push('flush'); throw new Error('2 still to send'); }, post: watched.post, upload: watched.upload, sleep: async () => {} }),
+    /2 still to send/,
+  );
+  assert.deepEqual(order, ['sync:iconUploadUrl', 'flush']);
+  assert.equal(a.hold.held, true);
+  order.length = 0;
+  await saveThread({ home: a.home, claudeDir: a.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => a.h.runner.quiesceForSave(id), hold: a.hold, beforeSaved: async () => void order.push('flush'), post: watched.post, upload: watched.upload, sleep: async () => {} });
+  assert.deepEqual(order, ['sync:iconUploadUrl', 'flush', 'boxes:boxSaved']);
+});

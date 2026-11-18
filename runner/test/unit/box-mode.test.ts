@@ -18,7 +18,7 @@ import { nullLogger } from '../../src/log.ts';
 import { readYearToken } from '../../src/year-token.ts';
 import { ConvexSync, readSyncKey } from '../../src/sync.ts';
 import { paths } from '../../src/config.ts';
-import { BOOT_ENV, BoxBootRefused, BoxFolderBroken, markSetUp, MACHINE_ID_ENV, bootBox, boxFile, enterBoxEnv, exchangeBoot, prepareBoxFolder, readBoxBoot, readBoxSecrets, repoFolderName, writeBoxSecrets, type ActionPost, type BoxSecrets, type Cloner } from '../../src/box-mode.ts';
+import { BOOT_ENV, BoxBootRefused, BoxFolderBroken, markSetUp, setBaseline, setSaveHold, MACHINE_ID_ENV, bootBox, boxFile, enterBoxEnv, exchangeBoot, prepareBoxFolder, readBoxBoot, readBoxSecrets, repoFolderName, writeBoxSecrets, type ActionPost, type BoxSecrets, type Cloner } from '../../src/box-mode.ts';
 
 const BOOT = `tbt_${'a'.repeat(64)}`;
 const BOX_KEY = `tbb_${'b'.repeat(64)}`;
@@ -629,4 +629,65 @@ test("while a save holds the box, its heartbeats and its save's finish say `held
   await tick();
   assert.equal(calls.filter((c) => c.fn === 'sync:heartbeat').at(-1)!.args.held, undefined);
   await sync.stop();
+});
+
+test("flushAll waits for a flush already going, runs its own to the end, and fails if anything is left or it failed", async () => {
+  const h = makeHarness();
+  const t = h.runner.create({ text: 'hi', cwd: h.cfg.defaults.cwd, accountId: 'claude-main' }).thread;
+  let release!: () => void;
+  let gate: Promise<void> | undefined;
+  let fail = false;
+  const upserts: number[] = [];
+  const sync = new ConvexSync({
+    config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
+    key: BOX_KEY,
+    runner: h.runner,
+    version: '0.1.0+test',
+    startedAt: '2026-11-19T00:00:00.000Z',
+    clock: h.clock,
+    log: nullLogger,
+    post: async (_kind, fn) => {
+      if (fn === 'sync:heartbeat') return { apiVersion: 89 };
+      if (fn === 'sync:upsertThreads') {
+        upserts.push(Date.now());
+        if (gate) await gate;
+        if (fail) throw new Error('network down');
+      }
+      return null;
+    },
+  });
+  sync.start();
+  await sync.flushNow();
+  // A flush under way, held up; a change made meanwhile.
+  gate = new Promise((r) => (release = r));
+  h.runner.update({ threadId: t.id, title: 'one' });
+  void sync.flushNow();
+  await tick();
+  h.runner.update({ threadId: t.id, title: 'two' });
+  let done = false;
+  const all = sync.flushAll().then(() => (done = true));
+  await tick(10);
+  assert.equal(done, false, 'it waits for the flush going');
+  const before = upserts.length;
+  gate = undefined;
+  release();
+  await all;
+  assert.ok(upserts.length > before, 'and then runs one of its own, with the change made meanwhile');
+  // A flush that fails: so does flushAll.
+  fail = true;
+  h.runner.update({ threadId: t.id, title: 'three' });
+  await assert.rejects(sync.flushAll(), /didn't all go up before its save: network down/);
+  await sync.stop();
+});
+
+test("the provider's baseline is kept in box.json, and what else writes box.json keeps it", () => {
+  const home = tmpDir('tb-box-home-');
+  writeBoxSecrets(home, secretsFor('https://github.com/x/proj.git'));
+  const baseline = [{ pid: 1, start: '1', cmd: '/init' }, { pid: 7, start: '7', cmd: 'hallpass' }];
+  setBaseline(home, baseline);
+  markSetUp(home);
+  setSaveHold(home, 'saving');
+  setSaveHold(home, undefined);
+  assert.deepEqual(readBoxSecrets(home)?.baseline, baseline);
+  assert.equal(fs.statSync(boxFile(home)).mode & 0o777, 0o600);
 });

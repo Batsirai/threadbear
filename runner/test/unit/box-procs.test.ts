@@ -9,37 +9,29 @@ import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
 import { BoxProcesses, listProcs, type Proc } from '../../src/box-procs.ts';
 
-const P = (pid: number, ppid: number, start = String(pid), zombie = false): Proc => ({ pid, ppid, start, zombie });
+const P = (pid: number, ppid: number, start = String(pid), alive = true): Proc => ({ pid, ppid, start, alive });
 
-function fakeBox(initial: Proc[]) {
-  let procs = [...initial];
+test('a stopping save kills everything alive but the runner, its ancestors, PID 1 and the baseline, a reused pid included', async () => {
+  // 1 init, 7 the provider's ssh server, 40 the entrypoint, 50 the runner: the baseline the first start took.
+  const baseline = new BoxProcesses({ self: 50, list: () => [P(1, 0), P(7, 1), P(40, 1), P(50, 40), P(9, 1, '9', false)] }).capture();
+  assert.deepEqual(baseline.map((b) => b.pid), [1, 7, 40, 50], 'only the live ones');
+  // Since: the CLI and its shell, a setup's child reparented to init, a
+  // dead one, and a process that took the ssh server's pid after it went.
+  let procs = [P(1, 0), P(40, 1), P(50, 40), P(60, 50), P(61, 60), P(70, 1), P(80, 50, '80', false), P(7, 1, 'later')];
   const killed: number[] = [];
-  const box = new BoxProcesses({
-    self: 50,
-    list: () => procs,
-    kill: (pid, sig) => {
-      assert.equal(sig, 'SIGKILL');
-      killed.push(pid);
-      procs = procs.filter((p) => p.pid !== pid);
-    },
-    sleep: async () => {},
-  });
-  return { box, killed, set: (p: Proc[]) => (procs = p), add: (p: Proc) => procs.push(p) };
-}
+  const box = new BoxProcesses({ self: 50, baseline, list: () => procs, kill: (pid, sig) => (assert.equal(sig, 'SIGKILL'), killed.push(pid), (procs = procs.filter((p) => p.pid !== pid))), sleep: async () => {} });
+  assert.equal(await box.stopOthers(), 4);
+  assert.deepEqual(killed.sort((a, b) => a - b), [7, 60, 61, 70]);
+});
 
-test('a stopping save kills everything the box started, and spares the runner, its ancestors, PID 1 and what was there at boot', async () => {
-  // 1 init, 7 the provider's ssh server (there at boot), 40 the entrypoint, 50 the runner.
-  const f = fakeBox([P(1, 0), P(7, 1), P(40, 1), P(50, 40)]);
-  f.box.boot();
-  // Since: the CLI and its shell, a setup's background child reparented to
-  // init, a zombie, and a process that took the ssh server's old pid.
-  f.add(P(60, 50));
-  f.add(P(61, 60));
-  f.add(P(70, 1));
-  f.add(P(80, 50, '80', true));
-  f.set([...f.box['list']().filter((p) => p.pid !== 7), P(7, 1, 'later')]);
-  assert.equal(await f.box.stopOthers(), 4);
-  assert.deepEqual(f.killed.sort((a, b) => a - b), [7, 60, 61, 70]);
+test('after a restart the baseline is the first start\'s, so an agent\'s process that outlived the old runner is killed', async () => {
+  const baseline = [{ pid: 1, start: '1', cmd: '/init' }, { pid: 7, start: '7', cmd: 'hallpass' }, { pid: 40, start: '40', cmd: 'entrypoint' }];
+  // The new runner is 52 (under the same entrypoint); 51 ran under the old one, which is gone.
+  let procs = [P(1, 0), P(7, 1), P(40, 1), P(52, 40), P(51, 1)];
+  const killed: number[] = [];
+  const box = new BoxProcesses({ self: 52, baseline, list: () => procs, kill: (pid) => (killed.push(pid), (procs = procs.filter((p) => p.pid !== pid))), sleep: async () => {} });
+  assert.equal(await box.stopOthers(), 1);
+  assert.deepEqual(killed, [51]);
 });
 
 test('it looks again until nothing new is left, and says so if something won\'t stop', async () => {
@@ -48,6 +40,7 @@ test('it looks again until nothing new is left, and says so if something won\'t 
   const killed: number[] = [];
   const box = new BoxProcesses({
     self: 50,
+    baseline: [{ pid: 1, start: '1', cmd: '' }],
     list: () => procs,
     kill: (pid) => {
       killed.push(pid);
@@ -57,7 +50,6 @@ test('it looks again until nothing new is left, and says so if something won\'t 
     },
     sleep: async () => {},
   });
-  box.boot();
   procs.push(P(60, 50));
   assert.equal(await box.stopOthers(), 3);
   assert.deepEqual(killed, [60, 101, 100]);
@@ -66,20 +58,30 @@ test('it looks again until nothing new is left, and says so if something won\'t 
   await assert.rejects(stuck.stopOthers(3), /wouldn't stop \(66\)/);
 });
 
-test("the process table is read from /proc, a name with spaces and parens included", () => {
+test("the process table is read from /proc: a name with spaces and parens, a zombie leader with a live thread, and its command", () => {
   const root = tmpDir('tb-proc-');
-  const stat = (pid: number, comm: string, state: string, ppid: number, start: number) => {
-    fs.mkdirSync(path.join(root, String(pid)));
-    const fields = [state, String(ppid), ...Array(17).fill('0'), String(start), '0'];
-    fs.writeFileSync(path.join(root, String(pid), 'stat'), `${pid} (${comm}) ${fields.join(' ')}\n`);
+  const statLine = (pid: number, comm: string, state: string, ppid: number, start: number) => `${pid} (${comm}) ${[state, String(ppid), ...Array(17).fill('0'), String(start), '0'].join(' ')}\n`;
+  const proc = (pid: number, comm: string, state: string, ppid: number, start: number, tasks: string[] = [], cmd = '') => {
+    fs.mkdirSync(path.join(root, String(pid), 'task'), { recursive: true });
+    fs.writeFileSync(path.join(root, String(pid), 'stat'), statLine(pid, comm, state, ppid, start));
+    if (cmd) fs.writeFileSync(path.join(root, String(pid), 'cmdline'), cmd.split(' ').join('\0') + '\0');
+    tasks.forEach((ts, i) => {
+      const tid = pid + i;
+      fs.mkdirSync(path.join(root, String(pid), 'task', String(tid)));
+      fs.writeFileSync(path.join(root, String(pid), 'task', String(tid), 'stat'), statLine(tid, comm, ts, ppid, start));
+    });
   };
-  stat(1, 'init', 'S', 0, 1);
-  stat(42, 'node (box) x', 'R', 1, 12345);
-  stat(43, 'gone', 'Z', 42, 12400);
+  proc(1, 'init', 'S', 0, 1, ['S'], '/sbin/init');
+  proc(42, 'node (box) x', 'R', 1, 12345, ['R']);
+  // Its leader exited, a thread of it still runs: alive, and killed by its group's id.
+  proc(43, 'leader', 'Z', 42, 12400, ['Z', 'R']);
+  // Wholly dead.
+  proc(44, 'gone', 'Z', 42, 12500, ['Z']);
   fs.mkdirSync(path.join(root, 'self'));
   assert.deepEqual(listProcs(root), [
-    { pid: 1, ppid: 0, start: '1', zombie: false },
-    { pid: 42, ppid: 1, start: '12345', zombie: false },
-    { pid: 43, ppid: 42, start: '12400', zombie: true },
+    { pid: 1, ppid: 0, start: '1', alive: true, cmd: '/sbin/init' },
+    { pid: 42, ppid: 1, start: '12345', alive: true },
+    { pid: 43, ppid: 42, start: '12400', alive: true },
+    { pid: 44, ppid: 42, start: '12500', alive: false },
   ]);
 });

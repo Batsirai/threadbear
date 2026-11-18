@@ -310,7 +310,8 @@ export async function saveThread(o: {
   quiesce: (threadId: string) => Promise<ThreadRecord>;
   hold: SaveHold;
   // Before boxSaved: what the thread's stop wrote (its notes, its row) goes
-  // up first, so nothing sent after the save marks the box as working again.
+  // up first, all of it (ConvexSync.flushAll), so nothing sent after the
+  // save marks the box as working again; if it can't, the save fails.
   beforeSaved?: () => Promise<void>;
   post: (kind: 'mutation', fn: string, args: Record<string, unknown>) => Promise<unknown>;
   upload: (url: string, bytes: Uint8Array, mediaType: string) => Promise<string>;
@@ -331,7 +332,9 @@ export async function saveThread(o: {
     const url = await o.post('mutation', 'sync:iconUploadUrl', { key: o.boxKey });
     if (typeof url !== 'string') throw new Error("The backend didn't give the box an upload URL.");
     stored = { storageId: await o.upload(url, sealed, 'application/octet-stream'), bytes: sealed.length, leftOut };
-    await o.beforeSaved?.().catch(() => undefined);
+    // Required: a mirror write still to come after boxSaved would mark the
+    // box as working again. One that can't go fails the save (held).
+    await o.beforeSaved?.();
   } catch (e) {
     // Nothing named in boxSaved: the backend has no save of this, for sure.
     o.hold.settled();

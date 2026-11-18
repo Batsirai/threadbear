@@ -24,6 +24,7 @@ import { git, realpath } from './worktrees.ts';
 import { credentialUrlProblem } from './secure-url.ts';
 import { openSave, restoreSave, SAVE_MAX_BYTES } from './box-save.ts';
 import type { Logger } from './log.ts';
+import type { Baseline } from './box-procs.ts';
 
 export const BOOT_ENV = 'THREADBEAR_BOX_BOOT';
 // The variable holding the variable's name: the service sets it from the
@@ -69,6 +70,10 @@ export type BoxSecrets = {
   // yet heard to say the box may run (box-save.ts SaveHold): a start that
   // finds it holds the thread before loading it.
   saveHold?: 'saving' | 'settled';
+  // The provider's processes as the first start after the exchange found
+  // them, before anything of the thread ran (box-procs.ts): the only ones a
+  // stopping save spares, on every start.
+  baseline?: Baseline[];
 };
 
 export class BoxBootRefused extends Error {}
@@ -255,6 +260,13 @@ export function markSetUp(home: string): void {
   const s = readBoxSecrets(home);
   if (!s || s.setUp) return;
   writeBoxSecrets(home, { ...s, setUp: true });
+}
+
+// The provider's baseline (box-procs.ts), kept once.
+export function setBaseline(home: string, baseline: Baseline[]): void {
+  const s = readBoxSecrets(home);
+  if (!s) throw new Error("This box's secrets are gone, so its baseline can't be kept.");
+  writeBoxSecrets(home, { ...s, baseline });
 }
 
 // The save hold, kept with the box's secrets (SaveHold's persist).

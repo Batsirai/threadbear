@@ -202,6 +202,10 @@ export async function untrustedGit(dir: string, args: readonly string[], opts: U
   // run: a new one is added here once it has been (Muse's review, 11 Nov
   // 2026: log, show, merge, stash and the like reach submodules or diff
   // programs these settings don't cover).
+  // update-index only to clear two flags on named paths (a box's save,
+  // move-git.ts packGit): it reads no file then, so no filter or fsmonitor
+  // runs, and nothing else it can do (--refresh, --index-info, --chmod) is let through.
+  if (sub === 'update-index' && !onlyClearsFlags(rest)) return { ok: false, code: 1, stdout: '', stderr: "untrustedGit runs git update-index only to clear assume-unchanged and skip-worktree on named paths." };
   if (!sub || !SUBCOMMANDS.has(sub) || (sub === 'worktree' && rest[0] !== 'list')) return { ok: false, code: 1, stdout: '', stderr: `untrustedGit doesn't run git ${[sub, sub === 'worktree' ? rest[0] : undefined].filter(Boolean).join(' ')}: nobody has looked at what a repo's config could make it run.` };
   // The same variables as the command, so it reads the config the command will.
   const listed = await execGit(dir, [...LISTING_GIT_CONFIG, '-C', dir, 'config', '--list', '--show-scope', '-z'], { ...untrustedGitEnv(), GIT_NO_LAZY_FETCH: '1', ...opts.env }, 10_000);
@@ -221,7 +225,13 @@ export async function untrustedGit(dir: string, args: readonly string[], opts: U
 
 // What untrustedGit runs. `git submodule` isn't one: it runs git in each
 // submodule with that submodule's own config.
-const SUBCOMMANDS = new Set(['add', 'branch', 'bundle', 'cat-file', 'clone', 'commit-tree', 'diff', 'diff-files', 'diff-index', 'fetch', 'for-each-ref', 'ls-files', 'ls-remote', 'merge-base', 'read-tree', 'remote', 'reset', 'rev-list', 'rev-parse', 'status', 'symbolic-ref', 'update-ref', 'worktree', 'write-tree']);
+const SUBCOMMANDS = new Set(['add', 'branch', 'bundle', 'cat-file', 'clone', 'commit-tree', 'diff', 'diff-files', 'diff-index', 'fetch', 'for-each-ref', 'ls-files', 'ls-remote', 'merge-base', 'read-tree', 'remote', 'reset', 'rev-list', 'rev-parse', 'status', 'symbolic-ref', 'update-index', 'update-ref', 'worktree', 'write-tree']);
+
+// `update-index --no-assume-unchanged -- <paths>` or `--no-skip-worktree`:
+// one of those flags only, then a `--` that every path follows.
+function onlyClearsFlags(rest: readonly string[]): boolean {
+  return (rest[0] === '--no-assume-unchanged' || rest[0] === '--no-skip-worktree') && rest[1] === '--';
+}
 
 // A submodule is a repo of its own, with its own config (.git/modules/<name>/
 // config, or a .git inside it), and the settings above only switch off what

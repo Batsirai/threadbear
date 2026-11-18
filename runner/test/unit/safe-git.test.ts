@@ -222,3 +222,18 @@ test('untrustedGit runs no diff.external, and only the commands it has been look
   assert.equal(fs.existsSync(marker), false);
   assert.throws(() => untrustedGitSync(repo, ['diff']), /listings/);
 });
+
+// A box's save clears two index flags in its own copy of the index
+// (move-git.ts packGit): update-index runs for that and nothing else.
+test('untrustedGit runs update-index only to clear assume-unchanged or skip-worktree on named paths', async () => {
+  const dir = tmpDir('tb-ui-');
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  execFileSync('/bin/sh', ['-c', 'git init -q && echo a > a && git add a && git commit -qm i && git update-index --skip-worktree a'], { cwd: dir, env });
+  for (const args of [['update-index', '--refresh'], ['update-index', '--index-info'], ['update-index', '--no-skip-worktree', 'a'], ['update-index', '--no-skip-worktree', '--chmod=+x', '--', 'a'], ['update-index', '--', 'a']]) {
+    const r = await untrustedGit(dir, args);
+    assert.equal(r.ok, false, args.join(' '));
+    assert.match(r.stderr, /only to clear assume-unchanged and skip-worktree/);
+  }
+  assert.equal((await untrustedGit(dir, ['update-index', '--no-skip-worktree', '--', 'a'])).ok, true);
+  assert.match(execFileSync('git', ['ls-files', '-v'], { cwd: dir, encoding: 'utf8' }), /^H a/);
+});

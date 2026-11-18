@@ -8072,8 +8072,13 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   may be deleted, so the box stops first, categorically: turns are held, a
   running turn is interrupted (30 s to end) and the CLI closed, then every
   other process in the box is killed (all but the runner, its ancestors,
-  PID 1 and what was running when the box booted, the provider's own:
-  `runner/src/box-procs.ts`, from `/proc`), the runner's own work waited
+  PID 1 and the provider's own: `runner/src/box-procs.ts`, from `/proc`).
+  The provider's are a baseline the first start after the exchange takes,
+  before anything of the thread runs, kept in `box.json` (`baseline`: pid,
+  start time, command) and used by every start after, so an agent's
+  process that outlived a restart of the runner is never spared. A process
+  is alive while any of its threads is (a zombie leader can have live
+  ones), and its whole thread group is killed. The runner's own work waited
   for (a minute at most, or the command fails), and it looks again that
   nothing new started. A worktree cleanup or teardown an archive would
   start meanwhile is owed instead (`cleanupOwed`). From the moment a save starts, the thread
@@ -8093,7 +8098,9 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   files under a `node_modules` folder that the checkout's own index doesn't
   have, which a restore refuses: the worktree's setup makes them again; a
   change there to a tracked or staged file fails the command, saying so.
-  It starts from the checkout's own index, so what's staged is in it), in a move's
+  It starts from a copy of the checkout's own index, so what's staged is
+  in it, with every path's assume-unchanged and skip-worktree flags cleared
+  in the copy, so what's saved is the files as they really are), in a move's
   archive (`move-pack.ts`) with a `box.json` naming the thread. At most
   100,000 files and 128 MB unpacked, the limits a restore holds it to,
   checked from the sizes on disk before anything is read, and
@@ -8102,7 +8109,10 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   AES-256-GCM under the thread key: a 12-byte IV, the ciphertext, the
   16-byte tag, bound to `threadbear box save v1 <threadId>` as associated
   data. Uploaded to the URL `sync:iconUploadUrl` gives the box key, then
-  `boxes:boxSaved({ key, storageId, bytes })`, and the command finishes
+  `boxes:boxSaved({ key, storageId, bytes })`, but only once every change
+  of the runner's has gone up (the mirror's flush waited for, then one run
+  to the end with nothing left; if it can't, the command fails and the box
+  stays held), so no write after the save marks the box as working; the command finishes
   with `{ bytes }` (and `leftOut`, up to 20 paths left out). A sealed save
   over 10 MB (one upload) fails the command saying so; saves in parts are
   a TODO. A `boxSaved` whose answer is lost (not a refusal) is sent again

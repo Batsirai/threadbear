@@ -217,6 +217,21 @@ export async function packGit(worktree: string, cwd: string, bundleFile: string,
       if (file && fs.existsSync(file)) {
         fs.copyFileSync(file, path.join(tmp, 'index'));
         r = { ok: true, stdout: '', stderr: '' };
+        // Not what the index says is unchanged (assume-unchanged) or not
+        // there (skip-worktree): `add -A` would take its word and miss the
+        // real files. Those flags go, in the copy only.
+        const tagged = await run(top, ['ls-files', '-v', '-z'], env);
+        if (!tagged.ok) return { ok: false, reason: `Couldn't read the index of ${top}: ${why(tagged)}` };
+        // A tag in lower case is assume-unchanged; S or s, skip-worktree.
+        // One flag per call: git applies only the last of several.
+        const entries = tagged.stdout.split('\0').filter((e) => e.length > 2);
+        const passes: [string, string[]][] = [
+          ['--no-assume-unchanged', entries.filter((e) => /^[a-z]/.test(e)).map((e) => e.slice(2))],
+          ['--no-skip-worktree', entries.filter((e) => e[0] === 'S' || e[0] === 's').map((e) => e.slice(2))],
+        ];
+        for (const [flag, files] of passes) {
+          for (let i = 0; i < files.length && r.ok; i += 200) r = await run(top, ['update-index', flag, '--', ...files.slice(i, i + 200)], env);
+        }
       } else r = await run(top, ['read-tree', 'HEAD'], env);
     } else r = await run(top, ['read-tree', 'HEAD'], env);
     if (r.ok) r = await run(top, ['add', '-A', '.'], env);

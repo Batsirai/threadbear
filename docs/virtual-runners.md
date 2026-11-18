@@ -777,6 +777,19 @@ background children and a teardown starting after the CLI closed. And:
 - Heartbeats and the save's finish while held marked the box as working
   again: they send `held`, which `runnerAuth` takes as housekeeping.
 
+A fourth look found three more ways to lose work, and a follow-up:
+
+- The provider's processes were taken afresh at every start, so an agent's
+  process that outlived a runner restart was spared: the baseline is taken
+  once, by the first start after the exchange, and kept in `box.json`.
+- A zombie thread-group leader with live threads was skipped: a process
+  is alive while any of its tasks is, and its group is killed.
+- The save's copy of the index kept assume-unchanged and skip-worktree,
+  hiding real changes: they're cleared in the copy (`untrustedGit` runs
+  `update-index` for that alone).
+- The mirror's flush before `boxSaved` wasn't sure: `flushAll` waits for one
+  going, runs its own to the end, and fails the save if anything's left.
+
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as
 decision 10 says, so the runner's existing year-long token path carries it
