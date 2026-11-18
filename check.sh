@@ -483,6 +483,27 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
   step "convex typecheck" "$ROOT" npm run convex:typecheck
   step "web typecheck" "$ROOT" npm run web:typecheck
   step "web tests" "$ROOT" npm run web:test
+  # ESLint with mikecann-lint's rules (eslint.config.mjs; old problems are
+  # recorded in eslint-suppressions.json). The whole thing takes about 40 s
+  # and 3 GB, so a landing lints only the code files it changed, and all of
+  # it when the lint setup or packages changed, with --all, or on main.
+  # Old problems fixed by hand don't fail it (--pass-on-unpruned-suppressions):
+  # `npx eslint . --prune-suppressions` tidies the file whenever.
+  # grep to /dev/null, not -q (see swift_needed).
+  if [ "$ALL" = 1 ] || [ -z "$CHANGED" ] \
+    || printf '%s\n' "$CHANGED" | grep -E '^(eslint\.config\.mjs|eslint-suppressions\.json|package(-lock)?\.json)$' >/dev/null; then
+    step "lint" "$ROOT" npm run lint:files -- .
+  else
+    LINT_FILES=()
+    while IFS= read -r f; do
+      if [ -f "$ROOT/$f" ]; then LINT_FILES+=("$f"); fi
+    done < <(printf '%s\n' "$CHANGED" | grep -E '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$' || true)
+    if [ "${#LINT_FILES[@]}" -gt 0 ]; then
+      step "lint" "$ROOT" npm run lint:files -- "${LINT_FILES[@]}"
+    else
+      skip "lint" "no code changed"
+    fi
+  fi
   # The public site (site/) makes its docs pages from docs/guide.md (and the
   # experiments list from docs/experiments.md), and its build refuses some
   # guide content: a section with no icon in site/docs-icons.json, a link

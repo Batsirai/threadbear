@@ -332,6 +332,10 @@ interrupt, snooze or archive it. The runner puts its own `tb` on your PATH;
 if `tb` isn't found (an older runner, or outside a thread), use
 `runner/bin/tb`. `tb --help` lists the rest.
 
+- Lint is mikecann-lint (`eslint.config.mjs`). `./check.sh` lints the code files a
+  landing changed (everything when the lint setup or packages change), so a landing
+  that adds a lint problem doesn't land. Fix the cause the message names; old problems
+  are exempt in `eslint-suppressions.json`. A disable comment needs a reason after `--`.
 - `./check.sh` runs every check (`--quick`: the runner's typecheck and
   unit tests, about a minute, the Mac app's release build when `app/`
   or `dock/` changed, and the GPUI port's core and client tests and a

@@ -37,7 +37,7 @@ function checkout(webTest = 'true') {
   put('runner/node_modules/.keep', '');
   put('runner/test/helpers/clean-env.ts', '');
   put('runner/test/unit/ok.test.ts', PASSES);
-  put('package.json', JSON.stringify({ scripts: { 'convex:typecheck': 'true', 'web:typecheck': 'true', 'web:test': webTest } }));
+  put('package.json', JSON.stringify({ scripts: { 'convex:typecheck': 'true', 'web:typecheck': 'true', 'web:test': webTest, lint: 'true', 'lint:files': 'true' } }));
   put('node_modules/.keep', '');
   put('app/Tools/ok.mjs', '');
   put('app/Tools/mock-runner/ok.mjs', '');
