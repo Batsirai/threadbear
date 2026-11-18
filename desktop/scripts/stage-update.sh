@@ -160,7 +160,9 @@ if [[ -n "$HOSTS" ]]; then
     # remote.sh too (its trap stops the run on the host and leaves the
     # lease): bash holds a trap until a foreground child ends, and the lock
     # here would go while an orphan still queued for a build nobody stages.
-    THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; cd desktop && nice cargo build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 &
+    # A build only, so it can go beside another on a host that allows that
+    # (remote.sh --build), asked for by environment as TRY is.
+    THREADBEAR_REMOTE_BUILD=1 THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; cd desktop && nice cargo build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 &
     REMOTE_PID=$!
     wait "$REMOTE_PID" || rc=$?
     REMOTE_PID=""

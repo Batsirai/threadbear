@@ -273,7 +273,7 @@ function build(opts: { noBuild: boolean; here: boolean; logName: string }): stri
     try {
       // Write both streams straight to the advertised file, as the local
       // build does, so even a long compile can be followed while it runs.
-      r = spawnSync(path.join(CHECKOUT, 'desktop/scripts/remote.sh'), [host, '--', 'bash', '-c', 'cd desktop && nice cargo build -p threadbear-gpui --features automation && echo "BUILT_IN=$CARGO_TARGET_DIR"'], { stdio: ['ignore', fd, fd] });
+      r = spawnSync(path.join(CHECKOUT, 'desktop/scripts/remote.sh'), [host, '--build', '--', 'bash', '-c', 'cd desktop && nice cargo build -p threadbear-gpui --features automation && echo "BUILT_IN=$CARGO_TARGET_DIR"'], { stdio: ['ignore', fd, fd] });
     } finally {
       fs.closeSync(fd);
     }

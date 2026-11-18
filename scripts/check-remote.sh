@@ -942,6 +942,11 @@ while :; do
   # stops as soon as it gets it.
   guarded="$(guarded_cmd "$guard_pid" /bin/bash -c "$inner")"
   lock="$remote_base/lock"
+  # The host's gate (scripts/perf-lock.pl) first, held throughout as the
+  # check has the host alone: builds that share the host hold the check lock
+  # shared, and macOS grants a shared lock even while this waits for it, so
+  # without the gate a stream of overlapping builds would keep a check out.
+  gate="$remote_base/gate"
   # A free host is taken without waiting (75 if another check got there
   # first); otherwise this waits for its turn.
   now=0
@@ -949,12 +954,12 @@ while :; do
   if [ "$HOST_OS" = Linux ]; then
     # A server that runs its own runner and threads: the check goes in under them.
     run="nice -n 10 $guarded"
-    if [ "$now" = 1 ]; then remote_cmd="flock -n -E 75 $lock $run"
-    else remote_cmd="flock -n $lock true 2>/dev/null || echo 'Waiting for another check on $HOST to finish...'; flock $lock $run"; fi
+    if [ "$now" = 1 ]; then remote_cmd="flock -n -E 75 $gate flock -n -E 75 $lock $run"
+    else remote_cmd="flock -n $gate flock -n $lock true 2>/dev/null || echo 'Waiting for another check on $HOST to finish...'; flock $gate flock $lock $run"; fi
   else
     run="$guarded"
-    if [ "$now" = 1 ]; then remote_cmd="/usr/bin/lockf -t 0 -k $lock $run"
-    else remote_cmd="/usr/bin/lockf -t 0 -k $lock true 2>/dev/null || echo 'Waiting for another check on $HOST to finish...'; /usr/bin/lockf -k $lock $run"; fi
+    if [ "$now" = 1 ]; then remote_cmd="/usr/bin/lockf -t 0 -k $gate /usr/bin/lockf -t 0 -k $lock $run"
+    else remote_cmd="/usr/bin/lockf -t 0 -k $gate /usr/bin/lockf -t 0 -k $lock true 2>/dev/null || echo 'Waiting for another check on $HOST to finish...'; /usr/bin/lockf -k $gate /usr/bin/lockf -k $lock $run"; fi
   fi
 
   # A failed step's log path is on the host: its logs come back here, and the

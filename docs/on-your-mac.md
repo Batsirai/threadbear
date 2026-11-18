@@ -377,6 +377,14 @@ File references are where to look.
   (`desktop/scripts/remote.sh`). Remote commands and performance tools keep
   `~/.cache/threadbear-perf.lock` and `~/.cache/threadbear-check/lock` on the
   host while they run, waiting for other builds, checks and measurements.
+  Everything goes in through `~/.cache/threadbear-check/gate` there first,
+  checks included, so runs take their turn in line. A host with a number
+  in `~/.cache/threadbear-check/builds-at-once` (written by hand on that
+  host; Mike's Tinker Desk has 2) runs that many plain builds side by side
+  (`remote.sh --build`, which the app's builds and `dev-app.sh` use), each
+  holding one of the `~/.cache/threadbear-perf.lock.build-<n>` locks and
+  the two above shared, and keeps as many shared build folders; anything
+  else still has the host alone.
   Real-input test tools read process names with `ps` and, on macOS,
   executable paths through system Python's `ctypes` and `libproc`. They use
   those names to refuse input while an ffmpeg encoder is running.

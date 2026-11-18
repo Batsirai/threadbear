@@ -2,10 +2,15 @@
 # Runs a command from this checkout on another machine, so the Rust builds and
 # the spec runs stay off the Mac you're working on (AGENTS.md).
 #
-#   desktop/scripts/remote.sh <ssh host> [--desk] [--perf] [--try] -- <command...>
+#   desktop/scripts/remote.sh <ssh host> [--desk] [--perf] [--try] [--build] -- <command...>
 #
 # --try is for automatic updates: exit 75 instead of queueing behind this
 # checkout's run or either host lease, leaving queued measurements ahead.
+#
+# --build (or THREADBEAR_REMOTE_BUILD=1) says the command only builds: it may
+# run beside other builds on a host that allows more than one at once
+# (~/.cache/threadbear-check/builds-at-once there; scripts/perf-lock.pl), and
+# never beside a measurement, a desk run or a check. Not with --desk or --perf.
 #
 # It copies the checkout, committed or not, less its build folders, to a folder
 # of its own under ~/.cache/threadbear-check/gpui there (so two checkouts at once
@@ -28,6 +33,8 @@ host="${1:?usage: remote.sh <ssh host> [--desk] [--perf] -- <command>}"; shift
 desk=0
 perf=0
 try_flag=""
+build_flag=""
+[ "${THREADBEAR_REMOTE_BUILD:-}" != 1 ] || build_flag="--build "
 # An older remote.sh ignores this request and still builds normally. The
 # updater lives in the app bundle but this script comes from main, which can
 # be rolled back to a version from before --try existed.
@@ -37,11 +44,13 @@ while [ $# -gt 0 ]; do
     --desk) desk=1; shift ;;
     --perf) perf=1; shift ;;
     --try) try_flag="--try "; shift ;;
+    --build) build_flag="--build "; shift ;;
     --) shift; break ;;
     *) break ;;
   esac
 done
 [ $# -gt 0 ] || { echo "no command given" >&2; exit 2; }
+[ -z "$build_flag" ] || [ "$desk" = 0 -a "$perf" = 0 ] || { echo "remote.sh: --build is for plain builds, not with --desk or --perf" >&2; exit 2; }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 base=".cache/threadbear-check/gpui"
 # Each checkout's folders there are its own, by its path here. A caller whose
@@ -189,7 +198,7 @@ precopy="$old_target""mkdir -p $src $target; [ -e $target/.synced-by-content ] |
 cd \"\$HOME/$base\"
 bash \"\$HOME/$boot/trim-remote-cache.sh\" $key ${target##*/}"
 alive_stdin 7
-remote="env THREADBEAR_REMOTE_SOURCE=\"\$HOME/$src\" THREADBEAR_REMOTE_TARGET=\"\$HOME/$target\" THREADBEAR_REMOTE_TOOLS=\"\$HOME/$boot\" perl $boot/perf-lock.pl ${try_flag}- bash -c $(single_quoted "$precopy")"
+remote="env THREADBEAR_REMOTE_SOURCE=\"\$HOME/$src\" THREADBEAR_REMOTE_TARGET=\"\$HOME/$target\" THREADBEAR_REMOTE_TOOLS=\"\$HOME/$boot\" perl $boot/perf-lock.pl ${build_flag}${try_flag}- bash -c $(single_quoted "$precopy")"
 "${SSH[@]}" "$host" "$remote" <&7 &
 ssh_pid=$!
 rc=0
@@ -314,13 +323,13 @@ alive_stdin 7
 # What a run waiting for the host's perf lock is told the holder is running
 # (perf-lock.pl's holder note): the checkout's folder, which names the thread's
 # slot, and the command.
-label="remote.sh from $(basename "$root")$([ "$desk" = 1 ] && printf ' --desk' || true): $*"
+label="remote.sh from $(basename "$root")$([ "$desk" = 1 ] && printf ' --desk' || true)$([ -n "$build_flag" ] && printf ' --build' || true): $*"
 label="THREADBEAR_PERF_LOCK_LABEL=$(single_quoted "${label:0:200}")"
 if [ "$desk" = 1 ]; then
   pidfile="$base/run-$tag.pid"
   remote="env $label THREADBEAR_REMOTE_SOURCE=\"\$HOME/$src\" THREADBEAR_REMOTE_TARGET=\"\$HOME/$target\" perl $src/scripts/perf-lock.pl ${try_flag}--desk $pidfile bash $script $pidfile"
 else
-  remote="env $label THREADBEAR_REMOTE_SOURCE=\"\$HOME/$src\" THREADBEAR_REMOTE_TARGET=\"\$HOME/$target\" perl $src/scripts/perf-lock.pl ${try_flag}- bash $script"
+  remote="env $label THREADBEAR_REMOTE_SOURCE=\"\$HOME/$src\" THREADBEAR_REMOTE_TARGET=\"\$HOME/$target\" perl $src/scripts/perf-lock.pl ${build_flag}${try_flag}- bash $script"
 fi
 "${SSH[@]}" "$host" "$remote; rc=\$?; rm -f $script; rm -rf $boot; exit \$rc" <&7 &
 ssh_pid=$!

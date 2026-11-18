@@ -282,7 +282,7 @@ sub start_anchor {
     open(STDOUT, '>', '/dev/null');
     open(STDERR, '>', '/dev/null');
     # Never hold a command's output pipes, host locks, or an app-looking argv.
-    POSIX::close(198); POSIX::close(199);
+    POSIX::close(198); POSIX::close(199); POSIX::close(200);
     $0 = "threadbear-perf-anchor $group";
     @ARGV = ();
     my $time = started($$);

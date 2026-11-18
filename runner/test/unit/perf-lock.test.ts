@@ -897,3 +897,125 @@ test('a Desk run refused its folders outright says so and does not start', { ski
   assert.match(run.output, /Desk Runner couldn't open .*shut \(Permission denied\)/);
   assert.ok(!fs.existsSync(ran));
 });
+
+// Builds side by side (remote.sh --build), on a host that allows it: Mike
+// asked on 18 Nov, as threads queued behind each other's builds on Tinker
+// Desk all day. A command that runs until a file appears, so a test decides
+// when each one ends.
+function builds(t: TestContext, atOnce?: number) {
+  const h = host(t);
+  if (atOnce) {
+    fs.mkdirSync(path.join(h.home, '.cache/threadbear-check'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cache/threadbear-check/builds-at-once'), `${atOnce}\n`);
+  }
+  const shim = path.join(h.home, 'build.pl');
+  fs.writeFileSync(shim, `exec 'perl', ${JSON.stringify(helper)}, '--build', @ARGV;`);
+  const until = (name: string) => ['sh', '-c', `echo ${name} started; while [ ! -e "$HOME/end-${name}" ]; do sleep 0.05; done; echo ${name} ended`];
+  const end = (name: string) => fs.writeFileSync(path.join(h.home, `end-${name}`), '');
+  const build = (name: string) => h.run(until(name), {}, undefined, false, shim);
+  const alone = (name: string) => h.run(until(name));
+  return { h, build, alone, end };
+}
+
+test('two builds share a host that allows two at once, and a third waits for a lane', async (t) => {
+  const { build, end } = builds(t, 2);
+  const a = build('a');
+  await until(() => a.output.includes('a started'), 'a did not start');
+  const b = build('b');
+  await until(() => b.output.includes('b started'), 'b did not start beside a');
+  const c = build('c');
+  await until(() => c.output.includes('Waiting for one of the 2 builds'), 'c did not wait for a lane');
+  assert.doesNotMatch(c.output, /c started/);
+  end('a');
+  await until(() => c.output.includes('c started'), 'c did not start when a lane came free');
+  end('b'); end('c');
+  for (const r of [a, b, c]) assert.equal(await r.done, 0, r.output);
+});
+
+test('with no builds-at-once a build has the host alone, as before', async (t) => {
+  const { build, end } = builds(t);
+  const a = build('a');
+  await until(() => a.output.includes('a started'), 'a did not start');
+  const b = build('b');
+  await until(() => b.output.includes('Waiting for'), 'b did not wait');
+  assert.doesNotMatch(b.output, /b started/);
+  end('a'); end('b');
+  assert.equal(await a.done, 0, a.output);
+  assert.equal(await b.done, 0, b.output);
+});
+
+test('a measurement waiting for builds keeps new builds out, so builds can never starve it', async (t) => {
+  // macOS's flock grants a shared lock while an exclusive one waits; the gate
+  // is what makes the measurement next.
+  const { build, alone, end } = builds(t, 2);
+  const a = build('a');
+  await until(() => a.output.includes('a started'), 'a did not start');
+  const m = alone('m');
+  await until(() => m.output.includes('Waiting for'), 'm did not wait for the build');
+  assert.match(m.output, /running: sh -c echo a started/, 'm said which build it waits for');
+  const b = build('b');
+  await until(() => b.output.includes('Waiting for'), 'b did not wait behind m');
+  await pause(500);
+  assert.doesNotMatch(b.output, /b started/, 'b jumped ahead of the waiting measurement');
+  end('a');
+  await until(() => m.output.includes('m started'), 'm did not start once a ended');
+  assert.doesNotMatch(b.output, /b started/, 'b ran beside the measurement');
+  end('m');
+  await until(() => b.output.includes('b started'), 'b did not start after m');
+  end('b');
+  for (const r of [a, m, b]) assert.equal(await r.done, 0, r.output);
+});
+
+test("a check waiting at the gate keeps new builds out too", async (t) => {
+  // check-remote.sh's checks take the gate, then the check lock, with lockf.
+  const { h, build, end } = builds(t, 2);
+  const a = build('a');
+  await until(() => a.output.includes('a started'), 'a did not start');
+  const base = path.join(h.home, '.cache/threadbear-check');
+  const check = spawn('perl', ['-MFcntl=:flock', '-e', 'open(my $g, ">>", $ARGV[0]) or die $!; flock($g, LOCK_EX) or die $!; open(my $l, ">>", $ARGV[1]) or die $!; flock($l, LOCK_EX) or die $!; $|=1; print "checking\\n"; sleep 1', path.join(base, 'gate'), path.join(base, 'lock')], { stdio: ['ignore', 'pipe', 'inherit'] });
+  let said = '';
+  check.stdout!.on('data', (s) => { said += s; });
+  const checked = new Promise((r) => check.on('exit', r));
+  await pause(300);
+  const b = build('b');
+  await until(() => b.output.includes('Waiting for'), 'b did not wait behind the check');
+  assert.equal(said, '', 'the check ran beside a build');
+  end('a');
+  await until(() => said.includes('checking'), 'the check did not start once a ended');
+  assert.doesNotMatch(b.output, /b started/);
+  assert.equal(await checked, 0);
+  await until(() => b.output.includes('b started'), 'b did not start after the check');
+  end('b');
+  assert.equal(await b.done, 0, b.output);
+});
+
+test('a measurement inside a shared build refuses rather than waiting for itself', async (t) => {
+  const { h } = builds(t, 2);
+  const shim = path.join(h.home, 'build.pl');
+  const inner = h.run(['perl', helper, '-', 'sh', '-c', 'echo measured'], {}, undefined, false, shim);
+  assert.notEqual(await inner.done, 0, inner.output);
+  assert.match(inner.output, /inside a build that shares/);
+  assert.doesNotMatch(inner.output, /measured/);
+  const nested = h.run(['perl', helper, '--build', '-', 'sh', '-c', 'echo built'], {}, undefined, false, shim);
+  assert.equal(await nested.done, 0, nested.output);
+  assert.match(nested.output, /built/);
+});
+
+test('an update build joins a shared host without queueing, and defers when it would have to', async (t) => {
+  const { h, build, end } = builds(t, 2);
+  const shim = path.join(h.home, 'try-build.pl');
+  fs.writeFileSync(shim, `exec 'perl', ${JSON.stringify(helper)}, '--build', '--try', @ARGV;`);
+  const a = build('a');
+  await until(() => a.output.includes('a started'), 'a did not start');
+  const joined = h.run(['sh', '-c', 'echo updater-ran'], {}, undefined, false, shim);
+  assert.equal(await joined.done, 0, joined.output);
+  assert.match(joined.output, /updater-ran/);
+  const b = build('b');
+  await until(() => b.output.includes('b started'), 'b did not start');
+  const full = h.run(['sh', '-c', 'echo updater-ran'], {}, undefined, false, shim);
+  assert.equal(await full.done, 75, full.output);
+  assert.doesNotMatch(full.output, /updater-ran/);
+  end('a'); end('b');
+  assert.equal(await a.done, 0);
+  assert.equal(await b.done, 0);
+});

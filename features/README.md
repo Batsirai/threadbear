@@ -171,7 +171,11 @@ runs are queued ahead, again every five minutes. The holder is in
 `~/.cache/threadbear-perf.lock.waiting`. Read that file, not `lsof`, to see who holds it: every waiter has the
 lock file open too, so a waiter at 0% CPU looks like a stuck holder. A thread
 killed its own queued run that way on 14 Nov. Other
-checkouts and landing checks cannot build over a measurement. Cargo and Swift
+checkouts and landing checks cannot build over a measurement. Plain builds
+(`remote.sh --build`) may share a host that allows it
+(`~/.cache/threadbear-check/builds-at-once` there; `scripts/perf-lock.pl`
+says how), never with a measurement: a measurement started inside one
+refuses, so measure through `remote.sh` without `--build`. Cargo and Swift
 build executables run at background priority; the benchmark keeps normal
 priority. Cancellation keeps the locks until the remote command has stopped.
 
