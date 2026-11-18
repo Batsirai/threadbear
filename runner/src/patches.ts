@@ -402,6 +402,12 @@ export type ChildLoad = {
   verified?: { hash: string; root: string; code: Map<string, Buffer>; edges: Map<string, Map<string, string>> };
 };
 
+// The reply comes on a channel of its own (fd 3), one line of JSON, so
+// whatever the patch prints on stdout or stderr (thrown away) can't spoil
+// it. The loader runs in a process group of its own, and the read settles on
+// that line, the loader's exit or the timeout, never on its pipes closing,
+// which a process the patch left running could hold open for ever; then the
+// whole group is killed, with whatever the patch started in it.
 async function loadInChild(p: ChildLoad): Promise<LoadedPatch> {
   const input = JSON.stringify({
     id: p.id,
@@ -412,25 +418,46 @@ async function loadInChild(p: ChildLoad): Promise<LoadedPatch> {
       ? { verified: { hash: p.verified.hash, root: p.verified.root, code: [...p.verified.code].map(([f, b]) => [f, b.toString('base64')]), edges: [...p.verified.edges].map(([f, m]) => [f, [...m]]) } }
       : {}),
   });
-  const out = await new Promise<string>((resolve, reject) => {
-    const child = spawn(process.execPath, [CHILD], { cwd: path.dirname(p.file), stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => child.kill('SIGKILL'), CHILD_TIMEOUT_MS);
-    child.stdout.on('data', (d) => (stdout += d));
-    child.stderr.on('data', (d) => (stderr += d));
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
+  const child = spawn(process.execPath, [CHILD], { cwd: path.dirname(p.file), detached: true, stdio: ['pipe', 'ignore', 'ignore', 'pipe'] });
+  const reply = child.stdio[3] as NodeJS.ReadableStream & { destroy(): void };
+  const end = () => {
+    try {
+      if (child.pid) process.kill(-child.pid, 'SIGKILL');
+    } catch {
+      // the group's gone already
+    }
+    child.stdin?.destroy();
+    reply.destroy();
+  };
+  try {
+    const line = await new Promise<string>((resolve, reject) => {
+      let got = '';
+      let exited = false;
+      const timer = setTimeout(() => reject(new Error(`its loader took over ${CHILD_TIMEOUT_MS / 1000} seconds`)), CHILD_TIMEOUT_MS);
+      const done = (f: () => void) => {
+        clearTimeout(timer);
+        f();
+      };
+      reply.on('data', (d: Buffer) => {
+        got += d.toString('utf8');
+        const at = got.indexOf('\n');
+        if (at >= 0) done(() => resolve(got.slice(0, at)));
+      });
+      reply.on('error', () => {});
+      child.on('error', (e) => done(() => reject(e)));
+      child.on('exit', (code) => {
+        if (exited) return;
+        exited = true;
+        // What it wrote before it exited is still on its way: a moment for it.
+        setTimeout(() => done(() => reject(new Error(`its loader exited ${code ?? 'killed'} without a reply`))), 2000).unref();
+      });
+      child.stdin!.on('error', () => {});
+      child.stdin!.end(input);
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`its loader exited ${code ?? 'killed'}: ${stderr.trim().split('\n').pop() ?? ''}`));
-    });
-    child.stdin.end(input);
-  });
-  return JSON.parse(out) as LoadedPatch;
+    return JSON.parse(line) as LoadedPatch;
+  } finally {
+    end();
+  }
 }
 
 /**

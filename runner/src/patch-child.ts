@@ -1,8 +1,10 @@
 // Box mode's patch loader (patches.ts isolatePatchCode): run as a child
 // process of its own, it imports one patch file (from the bytes its trust
 // hash was made from, when it has one, as the runner would), reads it as
-// the runner does, and prints what's static in it as JSON, then exits.
+// the runner does, and sends what's static in it as one line of JSON on fd 3,
+// then exits.
 // Nothing the patch's code starts outlives it.
+import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { readPatchModule, staticPatch } from './patches.ts';
 import { verifiedUrl } from './verified-imports.ts';
@@ -33,4 +35,6 @@ try {
 } catch (e) {
   out = { info: { id: p.id, source: p.source, file: p.file, error: String((e as Error)?.message ?? e).split('\n')[0] }, panels: [], actions: [], hooks: [] };
 }
-process.stdout.write(JSON.stringify(out), () => process.exit(0));
+// On fd 3, the reply's own channel (patches.ts loadInChild): stdout and
+// stderr are the patch's, and thrown away.
+fs.createWriteStream('', { fd: 3 }).end(JSON.stringify(out) + '\n', () => process.exit(0));

@@ -94,3 +94,63 @@ for (const trusted of [false, true]) {
     assert.ok(!ran().some((l) => l.startsWith('late ')), 'no timer of its outlived the read');
   });
 }
+
+// A patch whose code, as it loads, starts a process that holds the
+// loader's stdout and stderr for a minute; and, `noisy`, prints to stdout
+// and stderr around its own reply.
+function patchFolder(opts: { hold?: boolean; noisy?: boolean }): { dir: string; pids: string } {
+  const dir = fs.realpathSync(tmpDir('tb-iso-held-'));
+  const pids = path.join(dir, 'pids.log');
+  const file = path.join(dir, '.threadbear', 'patches', 'held.ts');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const hold = `const held = spawn('sleep', ['60'], { stdio: ['ignore', 'inherit', 'inherit'] });
+fs.appendFileSync(${JSON.stringify(pids)}, held.pid + '\\n');
+held.unref();`;
+  fs.writeFileSync(
+    file,
+    `import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+${opts.noisy ? "console.log('loading the patch');\nprocess.stdout.write('{\"not\": \"the reply\"');\nconsole.error('and on stderr');" : ''}
+${opts.hold ? hold : ''}
+export default { actions: [{ title: 'Held', run: 'echo hi' }] };
+`,
+  );
+  return { dir, pids };
+}
+
+async function readIn(dir: string) {
+  const h = makeHarness(undefined, {}, { panelsRoot: fs.realpathSync(tmpDir()), actionShell: SHELL, actionTimeoutMs: 5000 });
+  const t = h.runner.create({ text: 'go', accountId: 'claude-main', cwd: dir }).thread;
+  h.runner.get(t.id);
+  await settle(h);
+  const summary = h.runner.get(t.id);
+  return { patch: summary.patches?.find((p) => p.id === 'held'), actions: (summary.actions ?? []).filter((a) => a.patch === 'held').map((a) => a.title) };
+}
+
+test("a patch that leaves a process holding the loader's outputs is still read, at once, and what it left is killed with the loader's group", { timeout: 25_000 }, async () => {
+  const f = patchFolder({ hold: true });
+  const started = Date.now();
+  const got = await readIn(f.dir);
+  assert.equal(got.patch?.error, undefined);
+  assert.deepEqual(got.actions, ['Held']);
+  assert.ok(Date.now() - started < 15_000, 'not held up by what it left running');
+  const pid = Number(fs.readFileSync(f.pids, 'utf8').trim().split('\n')[0]);
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const end = Date.now() + 10_000;
+  while (alive() && Date.now() < end) await new Promise((r) => setImmediate(r));
+  assert.equal(alive(), false, 'the process it left is gone');
+});
+
+test('a patch that prints, on stdout and stderr, around its reply is still read: the reply has a channel of its own', async () => {
+  const f = patchFolder({ noisy: true });
+  const got = await readIn(f.dir);
+  assert.equal(got.patch?.error, undefined);
+  assert.deepEqual(got.actions, ['Held']);
+});

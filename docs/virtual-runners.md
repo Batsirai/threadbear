@@ -840,6 +840,13 @@ An eighth look found one more and a follow-up:
 - The gate's `exec` and `execFile` lost `util.promisify`'s contract: their
   replacements carry it now, through the gate.
 
+A ninth look found two more in that loader: a process the patch left
+holding the loader's stdout kept the read (and the thread's first turn)
+waiting for ever, and anything the patch printed spoiled its reply. The
+loader now runs in a process group of its own, the read ends on the reply,
+the loader's exit or a timeout, and the group is killed; the reply comes on
+fd 3, and the patch's stdout and stderr are thrown away.
+
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as
 decision 10 says, so the runner's existing year-long token path carries it

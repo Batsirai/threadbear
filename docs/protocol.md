@@ -8066,7 +8066,11 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   main Mac asks the user about. A repo's patch code never runs in the
   box's runner process: each patch file is imported in a short-lived child
   process (`runner/src/patch-child.ts`) that sends back what's static in it
-  as JSON and exits, so nothing it starts outlives the read. Its functions
+  as one line of JSON on a channel of its own (fd 3; what the patch prints
+  on stdout or stderr is thrown away) and exits. The loader runs in a
+  process group of its own: the read ends on that line, the loader's exit
+  or 30 seconds, never on its pipes closing, and then the whole group is
+  killed, so nothing the patch starts outlives the read or holds it up. Its functions
   aren't run at all: an action or panel with a `when`, `badge`, `label` or
   `summary`, and a list panel (`items`), aren't shown on a box's thread;
   its static actions, panels, hooks (commands, gated like any process) and
