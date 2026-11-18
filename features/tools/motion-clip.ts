@@ -211,8 +211,6 @@ const scenes: Record<string, Scene> = {
     },
     seconds: 6,
   },
-    seconds: 3.5,
-  },
   // A login getting its year-long token while its Usage row's in sight:
   // confetti pops from the row's new "Year-long token until" line (the
   // GPUI app only, confetti.rs).
