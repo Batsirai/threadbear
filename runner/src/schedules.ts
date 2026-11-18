@@ -1163,6 +1163,10 @@ export class Scheduler {
         const fresh = this.stillDue(backend, rec, due);
         if (!fresh) continue;
         rec = fresh;
+        // What the check runs as: the record can change in place while it
+        // runs and while the claim is confirmed below, and its result is
+        // only for that command in that folder (Codex's review).
+        const checkedAs = { command: rec.check, folder: rec.check ? this.checkFolder(rec) : undefined };
         const checked = await this.checked(rec);
         if (this.stopped) continue;
         const after = this.stillDue(backend, rec, due);
@@ -1173,9 +1177,6 @@ export class Scheduler {
           continue;
         }
         const slot = rec.nextRunAt;
-        // What the check ran as: the record can change in place while the
-        // claim is confirmed below.
-        const checkedAs = { command: rec.check, folder: rec.check ? this.checkFolder(rec) : undefined };
         // Still ours, just before it goes: the check may have outlasted a
         // renewal that didn't get through.
         if (!(await this.confirmed(backend, rec.id))) continue;
