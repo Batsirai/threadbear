@@ -293,6 +293,50 @@ test('a failed write is kept and retried with backoff; status says so', async ()
   assert.equal(sync.status().pending, 0);
 });
 
+test("a failed flush puts back a batch of messages too big to spread as arguments, and they all go on the retry", async () => {
+  // THREADBEAR-28: a whole history's worth waiting when Convex timed out.
+  // Putting it back spread it into unshift's arguments, which overflowed the
+  // stack inside the catch, so nothing was put back and no retry was set.
+  let failing = true;
+  const { sync, calls } = setup({ fail: () => (failing ? new Error('HTTP 503') : undefined) });
+  const n = 300_000;
+  const queued = (sync as unknown as { messages: { threadId: string; seq: number }[] }).messages;
+  for (let i = 1; i <= n; i++) queued.push({ threadId: 't1', seq: i, role: 'assistant', text: 'x', at: '2026-11-18T00:00:00.000Z' } as never);
+  sync.start();
+  await sync.flushNow();
+  const s = sync.status();
+  assert.equal(s.state, 'error');
+  assert.equal(s.lastError, 'HTTP 503');
+  assert.equal(s.pending, n);
+  assert.ok(s.retryAt);
+  failing = false;
+  await sync.flushNow();
+  const sent = calls.filter((c) => c.fn === 'sync:appendMessages').flatMap((c) => c.args.messages as { seq: number }[]);
+  assert.equal(sent.length, n);
+  assert.equal(new Set(sent.map((m) => m.seq)).size, n);
+  assert.equal(sync.status().state, 'ok');
+  await sync.stop();
+});
+
+test('appendAll and prependAll take more items than fit in a call', async () => {
+  const { appendAll, prependAll } = await import('../../src/sync.ts');
+  const big = Array.from({ length: 500_000 }, (_, i) => i + 2);
+  const a = [0, 1];
+  appendAll(a, big);
+  assert.equal(a.length, 500_002);
+  assert.deepEqual(a.slice(0, 4), [0, 1, 2, 3]);
+  assert.equal(a.at(-1), 500_001);
+  const b = [-1, 0];
+  prependAll(b, Array.from({ length: 500_000 }, (_, i) => i - 500_002));
+  assert.equal(b.length, 500_002);
+  assert.deepEqual(b.slice(0, 2), [-500_002, -500_001]);
+  assert.deepEqual(b.slice(-3), [-3, -1, 0]);
+  const c = [1, 2];
+  prependAll(c, []);
+  appendAll(c, []);
+  assert.deepEqual(c, [1, 2]);
+});
+
 test('a change while the retry waits replaces the one waiting', async () => {
   let failing = true;
   const { h, sync, docs } = setup({ fail: () => (failing ? new Error('down') : undefined) });

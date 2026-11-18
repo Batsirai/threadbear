@@ -69,6 +69,20 @@ export const FINISH_TRIES = 60;
 export const SHARED_USAGE_POLL_MS = 5 * 60_000;
 // Threads per upsert mutation, and messages per append.
 export const SYNC_BATCH = 50;
+
+// push(...items) and unshift(...items) pass each item as an argument, and a
+// whole history's worth (hundreds of thousands) overflows the stack
+// (THREADBEAR-28, putting a failed flush's messages back). These don't.
+export function appendAll<T>(target: T[], items: readonly T[]): void {
+  for (const item of items) target.push(item);
+}
+
+export function prependAll<T>(target: T[], items: readonly T[]): void {
+  if (!items.length) return;
+  const rest = target.splice(0);
+  appendAll(target, items);
+  appendAll(target, rest);
+}
 export const MESSAGE_BATCH = 100;
 // A message longer than this is cut on the phone; the Mac has it all.
 export const MESSAGE_CHARS = 8000;
@@ -3232,16 +3246,16 @@ export class ConvexSync {
         // And those finishing on the release before: their rows aren't stale.
         const keep = [...new Set([...this.deps.runner.list(ALL).map((t) => t.id), ...(this.deps.elsewhereIds?.() ?? [])])];
         await this.post('mutation', 'sync:prune', { key, runnerId: this.runnerId, keep });
-        messages.unshift(...(await this.catchUp()));
+        prependAll(messages, await this.catchUp());
         this.full = false;
         this.fullAt = this.deps.clock.now();
         this.noteSent();
       } else if (this.catchUpDue) {
-        messages.unshift(...this.catchUpFromHeads());
+        prependAll(messages, this.catchUpFromHeads());
         this.catchUpDue = false;
       }
       const arrived = this.arrivedFrom.size ? this.catchUpArrived() : { docs: [], ids: [] };
-      messages.unshift(...arrived.docs);
+      prependAll(messages, arrived.docs);
       // What it finds is written with the next flush (scheduleFlush, below).
       if (this.sharesCheckDue()) await this.reconcileShares(key);
       this.historiesDue = false;
@@ -3308,7 +3322,8 @@ export class ConvexSync {
       for (const id of this.removing) this.removed.add(id);
       this.removing.clear();
       for (const name of lists) this.dirtyLists.add(name);
-      this.messages.unshift(...messages.filter((m) => !this.messages.some((x) => x.threadId === m.threadId && x.seq === m.seq)));
+      const queued = new Set(this.messages.map((x) => `${x.threadId}:${x.seq}`));
+      prependAll(this.messages, messages.filter((m) => !queued.has(`${m.threadId}:${m.seq}`)));
       this.backoffMs = this.backoffMs ? Math.min(this.backoffMs * 2, BACKOFF_MAX_MS) : BACKOFF_MIN_MS;
       this.retryAt = this.deps.clock.now() + this.backoffMs;
       this.lastError = String((e as Error)?.message ?? e);
@@ -3679,7 +3694,7 @@ export class ConvexSync {
     for (const [id, seq] of have) if (seq > (this.heads.get(id) ?? 0)) this.heads.set(id, seq);
     const out: MessageDoc[] = [];
     for (const t of this.deps.runner.list(ALL)) {
-      if (filled.has(t.id)) out.push(...this.messagesAfter(t, have.get(t.id) ?? 0));
+      if (filled.has(t.id)) appendAll(out, this.messagesAfter(t, have.get(t.id) ?? 0));
     }
     return out;
   }
@@ -3690,7 +3705,7 @@ export class ConvexSync {
     const filled = this.filledThreads();
     const out: MessageDoc[] = [];
     for (const t of this.deps.runner.list(ALL)) {
-      if (filled.has(t.id)) out.push(...this.messagesAfter(t, this.heads.get(t.id) ?? 0));
+      if (filled.has(t.id)) appendAll(out, this.messagesAfter(t, this.heads.get(t.id) ?? 0));
     }
     return out;
   }
@@ -3722,7 +3737,7 @@ export class ConvexSync {
       // review).
       const got = this.messagesAfter(t, from, true);
       if (!got) continue;
-      docs.push(...got);
+      appendAll(docs, got);
       ids.push(id);
     }
     return { docs, ids };
@@ -3742,7 +3757,7 @@ export class ConvexSync {
       if (filled.has(t.id) || this.closedHistories.has(t.id) || this.heldForRow.has(t.id)) continue;
       const got = this.messagesAfter(t, 0, true);
       if (!got) continue;
-      docs.push(...got);
+      appendAll(docs, got);
       threadIds.push(t.id);
     }
     return { docs, threadIds };
