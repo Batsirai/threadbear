@@ -45,6 +45,9 @@ export interface BoxProvider {
   create(spec: CreateSpec): Promise<{ providerBoxId: string }>;
   // Every box with all of these tags, with its own tags, for the reaper.
   list(tags: Record<string, string>): Promise<ListedBox[]>;
+  // One box by its id, asked directly, to confirm what a listing showed
+  // (boxService.ts identify): null once the provider has it no more.
+  get?(id: string): Promise<ListedBox | null>;
   pause?(id: string): Promise<void>;
   resume?(id: string): Promise<void>;
   // A box already gone is fine.

@@ -18,7 +18,7 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { box as boxMachine, command as commandMachine, machines, queued } from './machines';
 import { BOOT_MS } from './boxStates';
-import { checkRunnerId, forbidden, runnerAuth, sha256, withoutCredentials } from './lib';
+import { checkRunnerId, forbidden, MACHINE_ID, runnerAuth, sha256, withoutCredentials } from './lib';
 import { commandArgs } from './relay';
 import { PROVIDERS } from './boxProviders/types';
 import { FLY_SUSPEND_MAX_MB } from './boxProviders/fly';
@@ -401,7 +401,7 @@ export async function newAttempt(ctx: MutationCtx, row: Doc<'boxes'>, bootHash: 
   if (!mayMintAttempt(row)) throw conflict(`A box of this thread (attempt ${row.workAttempts!.join(', ')}) may hold work newer than its save: it's resumed or waited on, not replaced.`);
   // The fence: the older box's key is revoked in this same step, so it can
   // make no work behind the new attempt (it had none since its save).
-  if (row.boxKeyHash !== undefined) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined });
+  if (row.boxKeyHash !== undefined) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined });
   const expiresAt = Date.now() + BOOT_MS;
   const attempt = (row.boxAttempt ?? 0) + 1;
   await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt, bootAttempt: attempt, boxAttempt: attempt });
@@ -444,7 +444,7 @@ export const exchange = action({
   args: { bootToken: v.string(), machineId: v.optional(v.string()) },
   returns: exchanged,
   handler: async (ctx, { bootToken, machineId }): Promise<Exchanged> => {
-    if (machineId !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(machineId)) throw bad('machineId must be the provider id of the box’s own machine');
+    if (machineId !== undefined && !MACHINE_ID.test(machineId)) throw bad('machineId must be the provider id of the box’s own machine');
     if (!BOOT_TOKEN.test(bootToken)) throw refusedBoot();
     const key = await sealKey();
     const bootHash = await sha256(bootToken);
@@ -507,7 +507,7 @@ export const claimBoot = internalMutation({
     if (token.sealed !== sealedToken || row.sealedThreadKey !== sealedThreadKey) throw conflict("The login's cloud token changed while the box started: try again.");
     const r = await boxMachine.send(ctx, row._id, { type: 'READY' });
     if (r.status !== 'done') return null;
-    await ctx.db.patch(row._id, { boxKeyHash, keyMachineId: machineId });
+    await ctx.db.patch(row._id, { boxKeyHash, keyMachineId: machineId, unsure: undefined });
     const url = row.save ? await ctx.storage.getUrl(row.save.storageId) : null;
     return {
       runnerId: row.runnerId,
@@ -601,7 +601,9 @@ export const report = machines.internalMutation({
     if (!row) throw new ConvexError({ kind: 'notFound', message: 'no box for that thread' });
     if (op !== undefined && !(row.op?.id === op && row.op.until > Date.now())) return false;
     if ((event.type === 'LOST' || event.type === 'PAUSED') && event.providerBoxId !== undefined) {
-      if (row.providerBoxId !== event.providerBoxId) return false;
+      // The row's machine, or (a loss) the key holder's not yet taken in.
+      const keyHolders = event.type === 'LOST' && row.keyMachineId === event.providerBoxId && (event.attempt ?? row.keyAttempt) === row.keyAttempt;
+      if (row.providerBoxId !== event.providerBoxId && !keyHolders) return false;
       // Never the key holder's key or protection for another machine of its attempt.
       if (!isKeyMachine(row, event.attempt ?? row.providerAttempt, event.providerBoxId)) return false;
       const { providerBoxId: _id, ...named } = event;

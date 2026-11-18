@@ -150,3 +150,14 @@ test('a call that gets no answer by its deadline is given up, and never reaches 
   held.release();
   assert.equal(fly.machines.length, 0, 'the held create was never handled');
 });
+
+test('get asks for one machine by its id: its state and tags, or null once it is gone or being destroyed', async () => {
+  const fly = fakeFly();
+  const p = make(fly);
+  const { providerBoxId } = await p.create(spec);
+  assert.deepEqual(await p.get(providerBoxId), { providerBoxId, state: 'running', tags: { ...spec.tags, tb_idem: 'box1-1' } });
+  fly.byId(providerBoxId)!.state = 'destroying';
+  assert.equal(await p.get(providerBoxId), null);
+  assert.equal(await p.get('nope'), null);
+  assert.equal(p.machineIdEnv, 'FLY_MACHINE_ID');
+});

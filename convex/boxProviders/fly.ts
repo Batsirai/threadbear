@@ -138,6 +138,18 @@ export function flyProvider(opts: FlyOptions): BoxProvider {
       return (await machines(tags)).map((m) => ({ providerBoxId: m.id, state: flyState(m.state), tags: { ...(m.config?.metadata ?? {}) } }));
     },
 
+    async get(id): Promise<ListedBox | null> {
+      let m: FlyMachine;
+      try {
+        m = await api<FlyMachine>('GET', `/apps/${app}/machines/${enc(id)}`);
+      } catch (e) {
+        if (notFound(e)) return null;
+        throw e;
+      }
+      // Fly answers for a destroyed machine for a while: it's gone.
+      return m.state === 'destroyed' || m.state === 'destroying' ? null : { providerBoxId: m.id, state: flyState(m.state), tags: { ...(m.config?.metadata ?? {}) } };
+    },
+
     async pause(id) {
       try {
         await api('POST', `/apps/${app}/machines/${enc(id)}/suspend`);

@@ -110,6 +110,8 @@ const seenV = v.object({
   keyAttempt: v.optional(v.number()),
   // The key holder's machine, if its exchange said (boxes.ts claimBoot).
   keyMachineId: v.optional(v.string()),
+  // The key holder's machine isn't made sure of yet (boxes.unsure).
+  unsure: v.boolean(),
   providerBoxId: v.optional(v.string()),
   providerAttempt: v.optional(v.number()),
   // The provider box's memory, as made (boxes.size), if it's that attempt's.
@@ -148,6 +150,7 @@ export const boxFor = internalQuery({
       hasKey: row.boxKeyHash !== undefined,
       ...(row.keyAttempt !== undefined ? { keyAttempt: row.keyAttempt } : {}),
       ...(row.keyMachineId !== undefined ? { keyMachineId: row.keyMachineId } : {}),
+      unsure: row.unsure !== undefined,
       ...(row.providerBoxId !== undefined ? { providerBoxId: row.providerBoxId } : {}),
       ...(row.providerAttempt !== undefined ? { providerAttempt: row.providerAttempt } : {}),
       memoryMb: row.size && row.size.attempt === row.providerAttempt ? row.size.memoryMb : UNKNOWN_MB,
@@ -160,6 +163,139 @@ export const boxFor = internalQuery({
       ...(row.size ? { size: { attempt: row.size.attempt, memoryMb: row.size.memoryMb } } : {}),
       ...(row.suspendFails && row.suspendFails.next > Date.now() ? { suspendBackoff: { attempt: row.suspendFails.attempt, ...(row.suspendFails.providerBoxId !== undefined ? { providerBoxId: row.suspendFails.providerBoxId } : {}) } } : {}),
     };
+  },
+});
+
+// ------------------------------------------------------------ which machine holds the key
+
+/**
+ * The key holder's machine, made sure of before a wake, a lease check or
+ * the reconciler decides anything about it (Codex's fourteenth round). One
+ * listing of the box's machines; one not in it is gone.
+ *
+ * - Known (the exchange said, `keyMachineId`): there, and the row names
+ *   another (or none): taken in. Gone: its loss, which ends its key and its
+ *   attempt's protection in one step.
+ * - Not known: the row's machine of that attempt there, alone: nothing to
+ *   do; with others: `several`. The row's machine gone (or never named):
+ *   none left is a loss, one left is the key holder by elimination (taken
+ *   in as it), several left is `several`, which a wake resolves by trying
+ *   them in turn (tryNext).
+ *
+ * `changed`: the row was changed (read it again). `listed`: the attempt's
+ * machines, as listed, when it got that far.
+ */
+type Identified = { kind: 'same' | 'changed' | 'several'; of?: ListedBox[] };
+async function identify(op: Op, p: BoxProvider, seen: Seen): Promise<Identified> {
+  const k = seen.keyAttempt;
+  if (!seen.hasKey || k === undefined) return { kind: 'same' };
+  // Known and the row's: the usual paths (lease check, resume) find its loss.
+  if (seen.keyMachineId !== undefined && seen.keyMachineId === seen.providerBoxId && !seen.unsure) return { kind: 'same' };
+  let listed: ListedBox[];
+  try {
+    listed = await retrying(() => p.list({ tb_box: op.boxId }));
+  } catch (e) {
+    if (e instanceof LeaseLost || e instanceof OutOfTime) throw e;
+    console.warn("the box's machines weren't listed; tried again later", message(e));
+    return { kind: 'same' };
+  }
+  // Gone is not listed: a stopped one is still tried (a resume starts it), as everywhere a wake resumes.
+  const of = listed.filter((b) => Number(b.tags.tb_attempt) === k);
+  // Gone, asked by its id (where the provider can be): a listing missing it isn't enough to give up its work.
+  const gone = async (id: string) => {
+    if (!p.get) return true;
+    try {
+      return (await retrying(() => p.get!(id))) === null;
+    } catch (e) {
+      if (e instanceof LeaseLost || e instanceof OutOfTime) throw e;
+      return false;
+    }
+  };
+  const lost = async (id?: string) => {
+    await report(op.ctx, seen.threadId, { type: 'LOST', attempt: k, ...(id !== undefined ? { providerBoxId: id } : {}) }, op.id);
+    return { kind: 'changed' as const, of };
+  };
+  const takeIn = async (id: string, keyHolder: boolean) => ((await op.ctx.runMutation(internal.boxService.takeIn, { boxId: op.boxId, op: op.id, providerBoxId: id, attempt: k, keyHolder })) ? { kind: 'changed' as const, of } : { kind: 'same' as const, of });
+  if (seen.keyMachineId !== undefined) {
+    const id = seen.keyMachineId;
+    if (!of.some((b) => b.providerBoxId === id)) return (await gone(id)) ? lost(id) : { kind: 'same', of };
+    return seen.providerBoxId === id ? { kind: 'same', of } : takeIn(id, false);
+  }
+  const own = seen.providerAttempt === k ? seen.providerBoxId : undefined;
+  if (own !== undefined && of.some((b) => b.providerBoxId === own)) return { kind: of.length > 1 ? 'several' : 'same', of };
+  if (own !== undefined && !(await gone(own))) return { kind: 'same', of };
+  if (of.length === 0) return lost(own);
+  if (of.length === 1) return takeIn(of[0]!.providerBoxId, true);
+  return { kind: 'several', of };
+}
+
+/**
+ * A machine of the key holder's attempt taken in as the row's (identify):
+ * the known key holder's, or (`keyHolder`) the one left by elimination,
+ * which is then held for the key holder's until a key heartbeat after its
+ * resume makes sure (boxes.unsure).
+ */
+export const takeIn = internalMutation({
+  args: { boxId: v.id('boxes'), op: v.string(), providerBoxId: v.string(), attempt: v.number(), keyHolder: v.boolean() },
+  returns: v.boolean(),
+  handler: async (ctx, { boxId, op, providerBoxId, attempt, keyHolder }) => {
+    const row = await ctx.db.get(boxId);
+    if (!row || !(row.op?.id === op && row.op.until > Date.now()) || row.keyAttempt !== attempt) return false;
+    if (keyHolder ? row.keyMachineId !== undefined : row.keyMachineId !== providerBoxId) return false;
+    await ctx.db.patch(boxId, {
+      providerBoxId,
+      providerAttempt: attempt,
+      ...(keyHolder ? { keyMachineId: providerBoxId, unsure: { since: row.unsure?.since ?? Date.now(), tried: [providerBoxId], pickedFor: wakeOf(row), ...(row.unsure?.surfaced ? { surfaced: true } : {}) } } : {}),
+    });
+    return true;
+  },
+});
+
+const wakeOf = (row: Doc<'boxes'>) => (row.boxState.kind === 'waking' ? row.boxState.since : undefined);
+
+/**
+ * A wake with several machines of the key holder's attempt and no word of
+ * which holds the key: the one it resumes, made the row's. One at a time:
+ * the row's own first, then each not yet tried; a wake keeps its pick
+ * through its retries. Each tried, the round starts again, and it's said on
+ * the thread (`surfaced`). Returns the pick, or null if the row changed.
+ */
+export const tryNext = internalMutation({
+  args: { boxId: v.id('boxes'), op: v.string(), attempt: v.number(), machines: v.array(v.string()) },
+  returns: v.union(v.null(), v.string()),
+  handler: async (ctx, { boxId, op, attempt, machines }) => {
+    const row = await ctx.db.get(boxId);
+    if (!row || !(row.op?.id === op && row.op.until > Date.now()) || row.keyAttempt !== attempt || row.keyMachineId !== undefined || row.boxState.kind !== 'waking' || !machines.length) return null;
+    const u = row.unsure ?? { since: Date.now(), tried: [] };
+    const wake = wakeOf(row);
+    if (u.pickedFor === wake && row.providerBoxId !== undefined && machines.includes(row.providerBoxId) && u.tried.includes(row.providerBoxId)) return row.providerBoxId;
+    const own = row.providerAttempt === attempt ? row.providerBoxId : undefined;
+    const order = [...machines].sort((a, b) => Number(b === own) - Number(a === own));
+    let left = order.filter((m) => !u.tried.includes(m));
+    let { tried, surfaced } = u;
+    if (!left.length) {
+      left = order;
+      tried = [];
+      surfaced = true;
+    }
+    const pick = left[0]!;
+    await ctx.db.patch(boxId, { providerBoxId: pick, providerAttempt: attempt, unsure: { since: u.since, tried: [...tried, pick], pickedFor: wake, ...(surfaced ? { surfaced: true } : {}) } });
+    return pick;
+  },
+});
+
+/**
+ * The row's machine resumed while its key holder isn't made sure of: noted
+ * if no other of its attempt was running, so a key heartbeat from now on can
+ * only be its (sync.ts heartbeat records it as the key holder's).
+ */
+export const markResumed = internalMutation({
+  args: { boxId: v.id('boxes'), providerBoxId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { boxId, providerBoxId }) => {
+    const row = await ctx.db.get(boxId);
+    if (row?.unsure && row.providerBoxId === providerBoxId) await ctx.db.patch(boxId, { unsure: { ...row.unsure, resumed: { machine: providerBoxId, at: Date.now() } } });
+    return null;
   },
 });
 
@@ -243,7 +379,7 @@ export const ACTION_BUDGET_MS = 6 * 60_000;
 // HTTP requests a try of each provider call makes at most (Fly: a pause is
 // a suspend, a state read if that fails, and a wait; a create lists, makes
 // the app if need be, and posts).
-const REQUESTS = { list: 1, destroy: 1, pause: 3, resume: 3, create: 4 } as const;
+const REQUESTS = { list: 1, get: 1, destroy: 1, pause: 3, resume: 3, create: 4 } as const;
 // `progress`: what the run got done, carried into its continuation's
 // arguments so it picks up from there rather than repeating it.
 class OutOfTime extends Error {
@@ -279,6 +415,7 @@ function fenced(op: Op, p: BoxProvider): BoxProvider {
     create: wrap(p.create.bind(p), REQUESTS.create),
     list: wrap(p.list.bind(p), REQUESTS.list),
     destroy: wrap(p.destroy.bind(p), REQUESTS.destroy),
+    ...(p.get ? { get: wrap(p.get.bind(p), REQUESTS.get) } : {}),
     ...(p.pause ? { pause: wrap(p.pause.bind(p), REQUESTS.pause) } : {}),
     ...(p.resume ? { resume: wrap(p.resume.bind(p), REQUESTS.resume) } : {}),
   };
@@ -387,8 +524,6 @@ async function bringBack(op: Op): Promise<void> {
   const { ctx, boxId } = op;
   let seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
   if (!seen || (seen.kind !== 'creating' && seen.kind !== 'waking')) return;
-  // The box that slept, still holding the thread's key: resume it.
-  const keyHolder = seen.hasKey && seen.keyAttempt !== undefined && seen.keyAttempt === seen.newest && seen.providerAttempt === seen.keyAttempt;
   const raw = provider(seen.provider, seen.memoryMb);
   // Invariant W(d): no provider set up (or no address to give a box): nothing
   // changes, and it's tried again shortly. Never FAILED, never a new attempt.
@@ -398,6 +533,19 @@ async function bringBack(op: Op): Promise<void> {
     await ctx.scheduler.runAfter(WAKE_RETRY_MS, internal.boxService.wakeBox, { boxId });
     return;
   }
+  // Which machine holds the key, made sure of first (identify): taken in,
+  // its loss reported, or (several, none known) the next one to try.
+  let identified: Identified = { kind: 'same' };
+  if (seen.hasKey && seen.keyAttempt !== undefined && seen.keyAttempt === seen.newest) {
+    identified = await identify(op, fenced(op, raw), seen);
+    if (identified.kind === 'several' && seen.kind === 'waking' && (await ctx.runMutation(internal.boxService.tryNext, { boxId, op: op.id, attempt: seen.keyAttempt, machines: identified.of!.map((b) => b.providerBoxId) })) !== null) identified = { ...identified, kind: 'changed' };
+    if (identified.kind === 'changed') {
+      seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
+      if (!seen || (seen.kind !== 'creating' && seen.kind !== 'waking')) return;
+    }
+  }
+  // The box that slept, still holding the thread's key: resume it.
+  const keyHolder = seen.hasKey && seen.keyAttempt !== undefined && seen.keyAttempt === seen.newest && seen.providerAttempt === seen.keyAttempt;
   // Kept running (it couldn't pause with unsaved work in it): it's up already.
   if (seen.kind === 'waking' && keyHolder && seen.keptRunning) {
     if (await report(ctx, seen.threadId, { type: 'RESUMED', attempt: seen.keyAttempt! }, op.id)) return;
@@ -431,6 +579,8 @@ async function bringBack(op: Op): Promise<void> {
       await report(ctx, seen.threadId, { type: 'LOST', attempt, providerBoxId: id }, op.id);
     }
     if (taken) {
+      // Not made sure which machine holds the key, and no other of its attempt running: a key heartbeat from now on is this one's.
+      if (seen.unsure && identified.of && !identified.of.some((b) => b.providerBoxId !== id && b.state === 'running')) await ctx.runMutation(internal.boxService.markResumed, { boxId, providerBoxId: id });
       await reconcile(op, paused, id);
       return;
     }
@@ -644,11 +794,17 @@ export const checkBox = internalAction({
   returns: v.null(),
   handler: async (ctx, { boxId }) => {
     await withOp(ctx, boxId, 'checkBox', async (op) => {
-      const seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
-      if (!seen || !['awake', 'saving'].includes(seen.kind) || !seen.providerBoxId) return;
+      let seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
+      if (!seen || !['awake', 'saving'].includes(seen.kind)) return;
       const raw = provider(seen.provider, seen.memoryMb);
       if (!raw) return;
       const p = fenced(op, raw);
+      // Which machine holds the key, made sure of first (identify).
+      if ((await identify(op, p, seen)).kind === 'changed') {
+        seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
+        if (!seen || !['awake', 'saving'].includes(seen.kind)) return;
+      }
+      if (!seen.providerBoxId) return;
       const id = seen.providerBoxId;
       const state = await providerState(p, boxId, id);
       if (state === 'gone') {
@@ -1048,7 +1204,7 @@ export const reapStep = machines.internalMutation({
       if (backoff && backoff.next > Date.now()) return false;
       // The fence: the key of the machine it deletes goes in this same step
       // (the key holder's machine's: a duplicate of its attempt doesn't hold it).
-      if (row && row.keyAttempt === b.attempt && (row.keyMachineId ?? row.providerBoxId) === b.providerBoxId) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined });
+      if (row && row.keyAttempt === b.attempt && (row.keyMachineId ?? row.providerBoxId) === b.providerBoxId) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined });
       return true;
     }
     if (!row) return false;
@@ -1225,6 +1381,8 @@ export const driftPage = internalMutation({
       // Counted while any machine of it runs in the whole listing; none: not counted.
       if (row.seenRunningAt !== undefined && !runningRows.has(row._id)) await ctx.db.patch(row._id, { seenRunningAt: undefined });
       if (row.providerBoxId && !byId.has(row.providerBoxId) && LOSABLE.includes(row.boxState.kind)) missing.push({ boxId: row._id, providerBoxId: row.providerBoxId, attempt: row.providerAttempt ?? newestAttempt(row) });
+      // The key holder's machine, not the row's (not taken in yet), missing too.
+      else if (row.keyMachineId !== undefined && row.keyAttempt !== undefined && row.keyMachineId !== row.providerBoxId && !byId.has(row.keyMachineId) && LOSABLE.includes(row.boxState.kind)) missing.push({ boxId: row._id, providerBoxId: row.keyMachineId, attempt: row.keyAttempt });
     }
     return { missing, next: page.isDone ? null : page.continueCursor };
   },
@@ -1254,8 +1412,15 @@ export const driftOne = internalAction({
       await ctx.scheduler.runAfter(OP_RETRY_MS, internal.boxService.driftOne, m);
       return null;
     }
-    const p = fenced(newOp(ctx, m.boxId, id), raw);
+    const op = newOp(ctx, m.boxId, id);
+    const p = fenced(op, raw);
     try {
+      // The key holder's attempt: made sure of which machine holds it (identify), which reports a loss only when that's sure.
+      const now = await ctx.runQuery(internal.boxService.boxFor, { boxId: m.boxId });
+      if (now && now.hasKey && now.keyAttempt === m.attempt) {
+        await identify(op, p, now);
+        return null;
+      }
       const listed = await retrying(() => p.list({ tb_box: m.boxId }));
       if (listed.some((b) => b.providerBoxId === m.providerBoxId)) return null;
       if (!lossMayBeReported(seen!, m.attempt, listed)) return null;
@@ -1432,7 +1597,7 @@ export const deleteFence = internalMutation({
     const row = await ctx.db.get(boxId);
     if (!row || row.op?.id !== op || row.boxState.kind !== 'asleep' || row.providerBoxId !== providerBoxId) return false;
     if (row.providerAttempt !== undefined && row.workAttempts?.includes(row.providerAttempt)) return false;
-    if (row.keyAttempt !== undefined && row.keyAttempt === row.providerAttempt) await ctx.db.patch(boxId, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined });
+    if (row.keyAttempt !== undefined && row.keyAttempt === row.providerAttempt) await ctx.db.patch(boxId, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined });
     return true;
   },
 });

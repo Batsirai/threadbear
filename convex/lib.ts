@@ -242,3 +242,6 @@ export async function boxOfRunner(ctx: QueryCtx | MutationCtx, runner: { runnerI
     .withIndex('by_runnerId', (q) => q.eq('runnerId', runner.runnerId))
     .first();
 }
+
+/** The shape of a provider's machine id, as a box sends it (boxes.ts exchange, sync.ts heartbeat). */
+export const MACHINE_ID = /^[A-Za-z0-9_-]{1,64}$/;

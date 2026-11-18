@@ -635,6 +635,19 @@ its own observation. And a reaper step's queue mark carries a random job
 id (`reapQueued.job`), not a generation, which started again at 1 once a
 mark was deleted.
 
+A fourteenth look found two ways a wake could wait for good. A key
+holder's machine the row never took in (its `CREATED` lost) that the
+provider then lost was never reported lost; and with no machine id said,
+the one machine left after the row's own was lost stayed a paused
+"duplicate". Now a wake, a lease check and the reconciler make sure of the
+key holder's machine first (`identify`): a known one is taken in, or its
+loss reported once the provider confirms it gone by its id (`get`). Not
+known, the row's machine gone: none left is a loss, one left is the key
+holder by elimination, and several are resumed one per wake, alone, the
+one whose key heartbeat follows being the holder (`unsure`, and a box's
+heartbeat can name its machine too). One that never answers, or a wake
+that gives up still unsure, shows on the thread (`RemoteRunner.box.unsure`).
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

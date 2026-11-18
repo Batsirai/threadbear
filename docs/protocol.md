@@ -6153,7 +6153,7 @@ type RemoteRunner = {
                        // a message reaches (box, below)
   lastSeenAt: string
   followProblem?: string
-  box?: { state: string, waiting?: true, unreachable?: true } // one thread's box on a virtual
+  box?: { state: string, waiting?: true, unreachable?: true, unsure?: true } // one thread's box on a virtual
                        // runner (Virtual runners), as its machine has it:
                        // creating, starting, awake, saving, asleep, waking,
                        // retiring, failed, destroying, gone (archived, its save kept)
@@ -6164,8 +6164,11 @@ type RemoteRunner = {
                        // (with the message) for one to sleep.
                        // `unreachable`: it hasn't heartbeated for 5
                        // minutes, but its provider still has it (show it
-                       // as not answering, not as gone). An older runner
-                       // leaves it out.
+                       // as not answering, not as gone). `unsure`: the
+                       // provider made more than one machine for it and
+                       // which holds its work isn't known yet; each message
+                       // tries the next (Box keys). An older runner
+                       // leaves them out.
 }
 // rpcUrl and tokenFile were the direct link between Macs (step 6 part 2),
 // taken out 13 Nov 2026. An app ignores them if an older runner sends them.
@@ -7885,7 +7888,19 @@ SHA-256 (`boxKeyHash`).
   `CREATED`, `LOST` or `PAUSED` naming the other changes nothing. The box
   runner sends it from slice 3; an exchange without it is taken, its
   machine unknown, and then no machine of that attempt is reported lost,
-  taken in or deleted for the key while another of it is listed.
+  taken in or deleted for the key while another of it is listed. A box's
+  heartbeat may send it too (`runner.machineId`, kept on the box row,
+  never the runner's): it names the key holder's machine if nothing has
+  yet, and changes nothing once one is known. Before a wake, a lease
+  check or the reconciler decides anything, the service makes sure of the
+  key holder's machine: one the row never took in is taken in, or, once
+  the provider confirms it gone (asked by its id), reported lost, which
+  ends its key and its attempt's protection together. Not known: the row's
+  machine gone with one of its attempt left, that one is the key holder by
+  elimination; several left, each wake resumes the next, alone, and a key
+  heartbeat 30 seconds or more after that resume names it. One resumed that
+  way that never answers, or a wake that gives up with it still unsure, is
+  shown on the thread (`RemoteRunner.box.unsure`).
   A newer boot token for the thread replaces an older one. Each is for one
   attempt at a box (`mintBootToken` returns its `attempt`, numbered from
   1), which the service's `CREATED` and `LOST` name: a loss ends the key,

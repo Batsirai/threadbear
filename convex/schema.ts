@@ -354,6 +354,15 @@ export const appSchema = defineSchema({
     // whatever else is tagged with its attempt. Unknown for a box that
     // didn't say, which keeps every machine of its attempt protected.
     keyMachineId: v.optional(v.string()),
+    // While the key holder's machine isn't made sure of (unknown, with more
+    // than one machine of its attempt, or known only by the others being
+    // gone; boxService.ts identify): the machines a wake has tried in turn
+    // (`pickedFor`: the wake, by its `since`, that made the last pick), the one
+    // resumed with no other of its attempt running (a key heartbeat after
+    // that says it's the holder, sync.ts heartbeat), and `surfaced` once a
+    // wake or its resumed box ended with it still unresolved (shown on the
+    // thread, RemoteRunner.box.unsure).
+    unsure: v.optional(v.object({ since: v.number(), tried: v.array(v.string()), pickedFor: v.optional(v.number()), resumed: v.optional(v.object({ machine: v.string(), at: v.number() })), surfaced: v.optional(v.boolean()) })),
     // Attempts whose boxes may hold work newer than the newest save each
     // made (invariant W, boxMachine.ts holdsWork).
     workAttempts: v.optional(v.array(v.number())),

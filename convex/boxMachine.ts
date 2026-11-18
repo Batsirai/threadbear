@@ -288,7 +288,7 @@ export const box = defineMachine(
       created: async (ctx, { id, row, state, event }) => {
         // A key of an older attempt than this box's goes; this box's own (or a newer one's) can't be here yet.
         const olderKey = event.attempt === undefined || (row.keyAttempt ?? 0) < event.attempt;
-        await patch(ctx, id, { ...(olderKey ? { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined } : {}), providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
+        await patch(ctx, id, { ...(olderKey ? { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined } : {}), providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
         return { kind: 'starting' as const, bootBy: state.bootBy };
       },
       noteBox: async (ctx, { id, state, event }) => {
@@ -359,8 +359,10 @@ export const box = defineMachine(
       // The kept box didn't come up within WAKE_GRACE_MS: the thread sleeps
       // as it was, its key kept, and the billing guard pauses the box if
       // it's running (boxService.ts). The next message tries again.
-      wakeGaveUp: async (ctx, { id }) => {
+      wakeGaveUp: async (ctx, { id, row }) => {
         await provide(ctx, 'sleepBox', id);
+        // Which machine holds the key still not made sure of: said on the thread.
+        if (row.unsure) await patch(ctx, id, { unsure: { ...row.unsure, surfaced: true } });
         return { kind: 'asleep' as const, since: Date.now() };
       },
       // The billing guard paused the box (it wasn't entitled to run: past its
@@ -371,6 +373,8 @@ export const box = defineMachine(
         const since = (state as { since?: number }).since;
         if (state.kind !== 'waking' && since !== undefined) await patch(ctx, id, awakeAdded(row, since));
         await freed(ctx, row);
+        // A machine resumed to find out whether it holds the key never said so: said on the thread.
+        if (row.unsure?.resumed) await patch(ctx, id, { unsure: { ...row.unsure, surfaced: true } });
         // A message that came meanwhile wakes it again, if it may run.
         await wakeIfPending(ctx as never, row.runnerId, 'asleep');
         return { kind: 'asleep' as const, since: Date.now() };
@@ -453,7 +457,7 @@ export const box = defineMachine(
       // and their key revoked, so nothing new is made in them meanwhile.
       beginRetire: async (ctx, { id, row }) => {
         const attempts = [...new Set([...(row.workAttempts ?? []), row.providerAttempt, row.keyAttempt].filter((a): a is number => a !== undefined))];
-        await patch(ctx, id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, wantsWakeAt: undefined, waitsForHours: undefined });
+        await patch(ctx, id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined, wantsWakeAt: undefined, waitsForHours: undefined });
         return { kind: 'retiring' as const, since: Date.now(), attempts };
       },
       // Only the attempts it named go: one minted meanwhile isn't touched.
@@ -513,7 +517,7 @@ export const box = defineMachine(
 );
 
 // No key and no boot token work for the thread after this step.
-const revoked = { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } as const;
+const revoked = { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined, bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } as const;
 const noBox = { providerBoxId: undefined, providerAttempt: undefined } as const;
 
 // Attempt ordering, the one rule every event naming an attempt goes by
@@ -545,7 +549,7 @@ function lostBox(row: Box, attempt: number | undefined): Partial<Box> {
     // service reports LOST only then), with whatever was in it: only N stops
     // being kept. Naming none means every box so far.
     ...(row.workAttempts?.length ? { workAttempts: row.workAttempts.filter((a) => attempt !== undefined && a !== attempt) } : {}),
-    ...(gone(row.keyAttempt) ? { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined } : {}),
+    ...(gone(row.keyAttempt) ? { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined } : {}),
     ...(gone(row.bootAttempt) ? { bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } : {}),
     // Its box gone, whatever kept it running or counted it goes with it.
     ...(gone(row.providerAttempt) ? { ...noBox, keptRunningSince: undefined, saveAsks: undefined, seenRunningAt: undefined } : {}),

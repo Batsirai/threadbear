@@ -12,7 +12,7 @@ import { clear, command, machines } from './machines';
 import { CLEAR_RETRY_MS, clearStateFrom } from './clearStates';
 import { steppingFor } from './stepping';
 import { COMMAND_KEEP_MS as KEEP_MS, TAKEN_LEASE_MS as LEASE_MS } from './commandMachine';
-import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor, boxOfRunner } from './lib';
+import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor, boxOfRunner, MACHINE_ID } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
@@ -1294,6 +1294,25 @@ export const sharedThreads = query({
   },
 });
 
+/**
+ * What a box's key heartbeat says of which machine holds the key
+ * (boxes.keyMachineId, boxService.ts identify): the machine id it sends, if
+ * none is known yet; or, with none sent, the machine resumed alone to find
+ * out (boxes.unsure.resumed), once HEARD_AFTER_MS has passed since (so a
+ * heartbeat sent before it isn't taken for its).
+ */
+const HEARD_AFTER_MS = 30_000;
+function heardFrom(row: Doc<'boxes'>, machineId: string | undefined): Partial<Doc<'boxes'>> {
+  if (row.keyAttempt === undefined) return {};
+  if (machineId !== undefined && MACHINE_ID.test(machineId)) {
+    if (row.keyMachineId === undefined) return { keyMachineId: machineId, unsure: undefined };
+    return row.keyMachineId === machineId && row.unsure ? { unsure: undefined } : {};
+  }
+  const r = row.unsure?.resumed;
+  if (r && r.machine === row.providerBoxId && row.providerAttempt === row.keyAttempt && Date.now() >= r.at + HEARD_AFTER_MS && (row.keyMachineId === undefined || row.keyMachineId === r.machine)) return { keyMachineId: r.machine, unsure: undefined };
+  return {};
+}
+
 export const heartbeat = mutation({
   args: {
     key: v.string(),
@@ -1309,6 +1328,8 @@ export const heartbeat = mutation({
       rpcUrl: v.optional(v.string()),
       pressure: v.optional(v.union(v.literal('memory'), v.literal('disk'))),
       followProblem: v.optional(v.string()),
+      // A box's: the provider's id for the machine it runs on (boxes.ts exchange's `machineId`).
+      machineId: v.optional(v.string()),
     }),
   },
   // The backend's API version (version.ts), so the runner can tell when it's
@@ -1351,11 +1372,13 @@ export const heartbeat = mutation({
     // it sends, and its heartbeat renews the box's lease (boxMachine.ts).
     const boxRow = caller.box ? await ctx.db.get(caller.box.id as Id<'boxes'>) : null;
     // A box isn't on the tailnet, so no Mac app dials it: it gives no rpcUrl.
+    const { machineId, ...sent } = runner;
+    runner = sent;
     if (caller.box) {
       const { rpcUrl: _rpcUrl, ...rest } = runner;
       runner = rest;
     }
-    if (boxRow) await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now(), unreachableSince: undefined });
+    if (boxRow) await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now(), unreachableSince: undefined, ...heardFrom(boxRow, machineId) });
     const box = boxRow ? { box: { serviceId: boxRow.serviceId } } : existing?.box ? { box: existing.box } : {};
     const row = { ...runner, name, lastSeenAt: Date.now(), ...(caller.owner ? { byOwner: true } : {}), ...box };
     // Presence is setPresence's to change; a heartbeat keeps it.
@@ -3848,7 +3871,7 @@ export const setThreadIndex = mutation({
 // the runner counts it reachable while it sleeps or starts (decision 6), and
 // `waiting` while a message wants it woken but its virtual runner has
 // maxBoxes up (boxes.ts wakeFor).
-const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()), unreachable: v.optional(v.boolean()) })) });
+const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()), unreachable: v.optional(v.boolean()), unsure: v.optional(v.boolean()) })) });
 
 async function otherRunners(ctx: QueryCtx, runnerId: string) {
   const runners = [];
@@ -3869,7 +3892,7 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
 
 async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean }> {
   const row = await boxOfRunner(ctx, r);
-  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}), ...(row?.unreachableSince !== undefined ? { unreachable: true } : {}) };
+  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}), ...(row?.unreachableSince !== undefined ? { unreachable: true } : {}), ...(row?.unsure?.surfaced ? { unsure: true } : {}) };
 }
 
 // API 29: the other runners on their own, so a heartbeat re-runs only this

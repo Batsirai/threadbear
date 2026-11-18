@@ -46,7 +46,9 @@ export type IndexRow = {
 // its state, which counts as online while it starts or sleeps (decision 6).
 // `waiting`: a message wants it woken, and its virtual runner has its
 // maxBoxes up: it wakes when one sleeps, and the message waits meanwhile.
-export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; followProblem?: string; box?: { state: string; waiting?: true } };
+// `unsure`: the provider made more than one machine for its box and which
+// holds the thread's work isn't known yet; each message tries the next.
+export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; followProblem?: string; box?: { state: string; waiting?: true; unsure?: true } };
 // `moving`: set by the main Mac's runner for a move it knows of (main.ts
 // remoteMoving), never by the backend's rows.
 export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./moves.ts').ThreadMoving };
@@ -54,7 +56,7 @@ export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./mov
 // one's too, for the app's Settings > Runners. Left out before it's heard.
 export type RemoteThreads = { runners: RemoteRunner[]; threads: RemoteThread[]; order?: string[]; ready?: boolean };
 
-type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; followProblem?: string; box?: { state?: unknown; waiting?: unknown } };
+type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; followProblem?: string; box?: { state?: unknown; waiting?: unknown; unsure?: unknown } };
 type SinceRow = RemoteThread & { updatedMs?: number; deleted?: boolean };
 
 const FLUSH_MS = 1000;
@@ -539,7 +541,7 @@ export class ThreadIndex {
           name: r.name,
           ...(r.icon ? { icon: r.icon } : {}),
           online: now - r.lastSeenAt < ONLINE_MS || boxReachable(r.box?.state),
-          ...(r.box ? { box: { state: typeof r.box.state === 'string' ? r.box.state : 'expired', ...(r.box.waiting === true ? { waiting: true as const } : {}) } } : {}),
+          ...(r.box ? { box: { state: typeof r.box.state === 'string' ? r.box.state : 'expired', ...(r.box.waiting === true ? { waiting: true as const } : {}), ...(r.box.unsure === true ? { unsure: true as const } : {}) } } : {}),
           lastSeenAt: new Date(r.lastSeenAt).toISOString(),
           ...(r.followProblem ? { followProblem: r.followProblem } : {}),
         })),
