@@ -40,7 +40,7 @@ caught up. Once you've clicked the list, the up and down arrows move through
 the threads, and Esc in the Scheduled, Projects or Librarian view goes back
 to the Inbox. The list scrolls to keep the open thread's row in sight,
 whether you got there by the arrows, ⌥⌘↓ or a thread named in a reply. When your threads pass 100, and each thousand after (archived ones
-count), a note says so once, the next time you're at the app. Running holds threads whose agent is
+count), a note says so once, the next time you're at the app, with a burst of confetti. Running holds threads whose agent is
 working now, and one you've just sent a message to: while your message
 still has its spinner (a busy Mac can take a while to pick it up), the
 thread has already left the Inbox. If the message can't go, it comes back. A thread that
@@ -126,7 +126,8 @@ pictures. Hover or click it to see where the message came from.
 ### Reading a reply
 
 When an agent finishes a piece of work, its reply is the message it
-writes at the end: what it did and what it found. Everything it did to
+writes at the end: what it did and what it found. While it's being
+written, each new piece fades in as it arrives. Everything it did to
 get there, its notes, thinking, commands and edits, is one line above the
 reply, "Worked for 2m 13s": click it to open it. Pictures it made stay
 out, as they're often the answer. When the agent carries on by itself
@@ -230,7 +231,8 @@ it, and brings it back; the next card opens again. Once you reply, the
 card goes.
 
 To answer a Needs you card, click its buttons: your picks show on the
-card and go with your next message. To answer an ask in your own
+card and go with your next message. A button you pick fills and hops, so
+you can see the click land. To answer an ask in your own
 words, click Something else under it and write in the box that opens
 there. You can paste or drop screenshots in that box too, or use its
 picture button, and each goes in where the cursor is as a chip, as in
@@ -540,7 +542,8 @@ starts the next item ("2. " after "1. milk", "- " after "- milk"), and
 Shift-Return on an empty item ends the list. You can paste or drop images
 into the composer, or add them with +. Each one goes in where the cursor
 is as a small chip, "Picture 1", "Picture 2", with
-its thumbnail, and the agent gets each picture right there in your words.
+its thumbnail, which drops into a strip over your words as the box opens
+for it, and the agent gets each picture right there in your words.
 In the new app, + > Attach images or Markdown… also takes `.md` files: each
 goes in as its path, as a dropped file does, and the agent reads it from
 there.
@@ -1319,7 +1322,8 @@ renewed by itself. Three days before one ends, its row in the Usage panel
 says "Sign-in ends" with the day, the Usage button gets a dot, and its
 tooltip names the login; a signed-out login shows "Signed out" there.
 Either way the row has Sign in…, so a scheduled job on that login doesn't
-fail overnight. Threadbear learns this from each login's own
+fail overnight. Once it's signed back in, confetti pops from its row
+(or from the thread's sign-in line) if you're looking at it. Threadbear learns this from each login's own
 `claude auth status`. For a thread on
 another Mac the line says which Mac to sign in on, as Terminal here would
 only sign in this Mac.
@@ -2481,6 +2485,7 @@ setup:
 - **Open your website**, to check on your threads from any browser.
 
 Each item ticks itself off once it's done, and the list's icon on the
-left-hand rail goes once they all have. Hide this list puts it away, and
+left-hand rail goes once they all have, with confetti if the list is open
+when the last one ticks. Hide this list puts it away, and
 Help > Finish Setting Up brings it back. The phone and website items only
 show when your Threadbear has a Convex deployment for them to use.
