@@ -160,6 +160,10 @@ pub struct Autocorrect {
 
 #[derive(Clone, Debug)]
 struct Made {
+    /// The box's text the ranges below are in: each edit is measured
+    /// against this, so one the composer didn't see (a smart quote put in,
+    /// several keys between checks) still moves them right.
+    text: String,
     /// Where the word is now, and what it reads.
     word: Range<usize>,
     now: String,
@@ -207,29 +211,33 @@ impl Autocorrect {
     }
 
     /// A correction was just made: `original` became `corrected`, now at
-    /// `word` in the box, with what was typed after it up to `after`. The one
-    /// before it is settled, and its outcome returned.
-    pub fn made(&mut self, word: Range<usize>, after: usize, original: &str, corrected: &str) -> Option<Outcome> {
+    /// `word` in `text` (the box), with what was typed after it up to
+    /// `after`. The one before it is settled, and its outcome returned.
+    pub fn made(&mut self, text: &str, word: Range<usize>, after: usize, original: &str, corrected: &str) -> Option<Outcome> {
         let before = self.settle();
-        self.last = Some(Made { now: corrected.to_owned(), word, after, original: original.to_owned(), corrected: corrected.to_owned(), touched: false });
+        if text.get(word.clone()) == Some(corrected) && after <= text.len() && text.is_char_boundary(after) {
+            self.last = Some(Made { text: text.to_owned(), now: corrected.to_owned(), word, after, original: original.to_owned(), corrected: corrected.to_owned(), touched: false });
+        }
         before
     }
 
-    /// The box went from `old` to `new` by the person's edit (not one of
-    /// ours). When that took the last correction back, the word's declined
-    /// from now on and `Reverted` returned; when it moved on, the correction
-    /// is settled as `Accepted` or `Edited`.
-    pub fn edited(&mut self, old: &str, new: &str) -> Option<Outcome> {
+    /// The box's value was set whole (a send, a draft put back): whatever's
+    /// typed next is a new message, so the last correction is settled.
+    pub fn reset(&mut self) -> Option<Outcome> {
+        self.settle()
+    }
+
+    /// The box now reads `new`. When that took the last correction back
+    /// (Undo, or the word typed back as it was), the word's declined from
+    /// now on and `Reverted` returned; when it moved on, the correction is
+    /// settled as `Accepted` or `Edited`.
+    pub fn edited(&mut self, new: &str) -> Option<Outcome> {
         let made = self.last.as_mut()?;
-        if old == new {
+        if made.text == new {
             return None;
         }
-        let (start, old_end, new_end) = changed(old, new);
-        if start == 0 && old_end == old.len() && old.chars().count() > 1 {
-            // The whole box at once (a send, a draft put back, a select-all
-            // typed over): whatever's typed next is a new message.
-            return self.settle();
-        }
+        let (start, old_end, new_end) = changed(&made.text, new);
+        made.text = new.to_owned();
         let grew = new_end as isize - old_end as isize;
         // Typing where the word was, once it's all deleted, is typing it.
         let into_empty = made.word.is_empty() && start == made.word.start;
@@ -237,7 +245,7 @@ impl Autocorrect {
             // Before it: the word moves, unless what's typed joins onto it.
             made.word = (made.word.start as isize + grew) as usize..(made.word.end as isize + grew) as usize;
             made.after = (made.after as isize + grew) as usize;
-            if new[..made.word.start].chars().next_back().is_some_and(wordy) {
+            if new.get(..made.word.start).is_none_or(|before| before.chars().next_back().is_some_and(wordy)) {
                 return self.settle();
             }
             return None;
@@ -248,8 +256,8 @@ impl Autocorrect {
             return if new[start..new_end].chars().any(char::is_alphanumeric) { self.settle() } else { None };
         }
         if start < made.word.start || old_end > made.after {
-            // Something bigger than the word (a select-all and delete, a
-            // send): it's gone.
+            // Something bigger than the word (a select-all and delete): it's
+            // gone.
             return self.settle();
         }
         // In the word, or the space after it: what does it read now?
@@ -473,14 +481,8 @@ mod tests {
 
     /// The box going through `steps`, each one the person's edit, telling
     /// `ac` each; what it said back.
-    fn type_through(ac: &mut Autocorrect, from: &str, steps: &[&str]) -> Vec<Outcome> {
-        let mut was = from.to_owned();
-        let mut said = Vec::new();
-        for now in steps {
-            said.extend(ac.edited(&was, now));
-            was = (*now).to_owned();
-        }
-        said
+    fn type_through(ac: &mut Autocorrect, steps: &[&str]) -> Vec<Outcome> {
+        steps.iter().filter_map(|now| ac.edited(now)).collect()
     }
 
     fn reverted(word: &str, correction: &str) -> Outcome {
@@ -505,13 +507,13 @@ mod tests {
     fn undo_straight_after_a_correction_declines_it() {
         let mut ac = Autocorrect::default();
         // "teh " typed, corrected to "the ".
-        assert_eq!(ac.made(0..3, 4, "teh", "the"), None);
+        assert_eq!(ac.made("the ", 0..3, 4, "teh", "the"), None);
         // Undo puts the word back, with or without the space.
-        assert_eq!(type_through(&mut ac, "the ", &["teh "]), vec![reverted("teh", "the")]);
+        assert_eq!(type_through(&mut ac, &["teh "]), vec![reverted("teh", "the")]);
         assert!(ac.declined("teh") && ac.declined("TEH"));
         let mut ac = Autocorrect::default();
-        ac.made(0..3, 4, "teh", "the");
-        assert_eq!(type_through(&mut ac, "the ", &["teh"]), vec![reverted("teh", "the")]);
+        ac.made("the ", 0..3, 4, "teh", "the");
+        assert_eq!(type_through(&mut ac, &["teh"]), vec![reverted("teh", "the")]);
         // And it's not corrected again, though it's still marked.
         let f = vec![found(3..6, Kind::Correction, Some("the")), found(3..6, Kind::Spelling, None)];
         assert_eq!(ac.keep("ok teh ", f), vec![found(3..6, Kind::Spelling, None)]);
@@ -521,41 +523,41 @@ mod tests {
     fn deleting_into_it_and_typing_the_word_again_declines_it() {
         // Wayne's: "brainz" typed after "hi ", corrected to "brains ".
         let mut ac = Autocorrect::default();
-        ac.made(3..9, 10, "brainz", "brains");
+        ac.made("hi brains ", 3..9, 10, "brainz", "brains");
         let steps = ["hi brains", "hi brain", "hi brai", "hi brain", "hi brainz"];
-        assert_eq!(type_through(&mut ac, "hi brains ", &steps), vec![reverted("brainz", "brains")]);
+        assert_eq!(type_through(&mut ac, &steps), vec![reverted("brainz", "brains")]);
         assert!(ac.declined("brainz"));
         // Deleting it all and typing it again counts too.
         let mut ac = Autocorrect::default();
-        ac.made(0..6, 7, "brainz", "brains");
+        ac.made("brains ", 0..6, 7, "brainz", "brains");
         let mut steps: Vec<String> = (0..7).rev().map(|n| "brains "[..n].to_owned()).collect();
         steps.extend((1..=6).map(|n| "brainz"[..n].to_owned()));
         let steps: Vec<&str> = steps.iter().map(String::as_str).collect();
-        assert_eq!(type_through(&mut ac, "brains ", &steps), vec![reverted("brainz", "brains")]);
+        assert_eq!(type_through(&mut ac, &steps), vec![reverted("brainz", "brains")]);
         // Or typed back in one go (a paste, dictation).
         let mut ac = Autocorrect::default();
-        ac.made(3..9, 10, "brainz", "brains");
-        assert_eq!(type_through(&mut ac, "hi brains ", &["hi brains", "hi ", "hi brainz"]), vec![reverted("brainz", "brains")]);
+        ac.made("hi brains ", 3..9, 10, "brainz", "brains");
+        assert_eq!(type_through(&mut ac, &["hi brains", "hi ", "hi brainz"]), vec![reverted("brainz", "brains")]);
     }
 
     #[test]
     fn typing_on_keeps_it() {
         let mut ac = Autocorrect::default();
-        ac.made(0..3, 4, "teh", "the");
-        let said = type_through(&mut ac, "the ", &["the c", "the ca"]);
+        ac.made("the ", 0..3, 4, "teh", "the");
+        let said = type_through(&mut ac, &["the c", "the ca"]);
         assert_eq!(said, vec![Outcome { response: Response::Accepted, word: "teh".into(), correction: "the".into() }]);
         assert!(!ac.declined("teh"));
         // Nothing more to say about it.
-        assert_eq!(type_through(&mut ac, "the ca", &["the c", "the "]), vec![]);
+        assert_eq!(type_through(&mut ac, &["the c", "the "]), vec![]);
     }
 
     #[test]
     fn changed_to_something_else_is_edited() {
         let mut ac = Autocorrect::default();
-        ac.made(0..3, 4, "teh", "the");
-        assert_eq!(type_through(&mut ac, "the ", &["the", "th", "tho", "thou", "thou "]), vec![]);
+        ac.made("the ", 0..3, 4, "teh", "the");
+        assert_eq!(type_through(&mut ac, &["the", "th", "tho", "thou", "thou "]), vec![]);
         // The next correction settles it.
-        let said = ac.made(5..8, 9, "hsa", "has");
+        let said = ac.made("thou has ", 5..8, 9, "hsa", "has");
         assert_eq!(said, Some(Outcome { response: Response::Edited, word: "teh".into(), correction: "the".into() }));
         assert!(!ac.declined("teh"));
     }
@@ -563,30 +565,58 @@ mod tests {
     #[test]
     fn edits_elsewhere_move_it_along() {
         let mut ac = Autocorrect::default();
-        ac.made(3..6, 7, "teh", "the");
+        ac.made("hi the ", 3..6, 7, "teh", "the");
         // A word typed before it, then Undo of the correction.
-        assert_eq!(type_through(&mut ac, "hi the ", &["hi, the ", "hi, teh "]), vec![reverted("teh", "the")]);
+        assert_eq!(type_through(&mut ac, &["hi, the ", "hi, teh "]), vec![reverted("teh", "the")]);
         // Typed onto its front, it's a different word.
         let mut ac = Autocorrect::default();
-        ac.made(3..6, 7, "teh", "the");
-        assert_eq!(type_through(&mut ac, "hi the ", &["hi xthe "]).len(), 1);
-        assert_eq!(type_through(&mut ac, "hi xthe ", &["hi teh "]), vec![]);
+        ac.made("hi the ", 3..6, 7, "teh", "the");
+        assert_eq!(type_through(&mut ac, &["hi xthe "]).len(), 1);
+        assert_eq!(type_through(&mut ac, &["hi teh "]), vec![]);
         assert!(!ac.declined("teh"));
     }
 
     #[test]
-    fn clearing_the_box_forgets_it() {
-        // A send empties the box; the same word typed in the next message
-        // isn't a take-back.
+    fn a_new_message_forgets_it() {
+        // A send sets the box's value whole, and the composer says so: the
+        // same word typed in the next message isn't a take-back.
         let mut ac = Autocorrect::default();
-        ac.made(0..3, 4, "teh", "the");
-        assert_eq!(type_through(&mut ac, "the ", &["", "t", "te", "teh"]).len(), 1);
+        ac.made("hi the ", 3..6, 7, "teh", "the");
+        assert!(ac.reset().is_some());
+        assert_eq!(type_through(&mut ac, &["", "t", "x", "hi teh"]), vec![]);
         assert!(!ac.declined("teh"));
-        // Nor is a select-all typed over with something new.
+        // Typed over with something new, a later word isn't a take-back.
         let mut ac = Autocorrect::default();
-        ac.made(0..3, 4, "teh", "the");
-        assert_eq!(type_through(&mut ac, "the ", &["s", "so", "so teh"]).len(), 1);
+        ac.made("the ", 0..3, 4, "teh", "the");
+        assert_eq!(type_through(&mut ac, &["s", "so", "so ", "so t", "so te", "so teh"]).len(), 1);
         assert!(!ac.declined("teh"));
+    }
+
+    #[test]
+    fn option_backspace_on_a_lone_word_then_typing_it_back() {
+        let mut ac = Autocorrect::default();
+        ac.made("the ", 0..3, 4, "teh", "the");
+        assert_eq!(type_through(&mut ac, &["the", "", "teh"]), vec![reverted("teh", "the")]);
+    }
+
+    #[test]
+    fn edits_it_didnt_see_one_by_one() {
+        // A straight quote typed before the word, then the smart quote put
+        // in its place (three bytes for one), then Undo of the correction.
+        let mut ac = Autocorrect::default();
+        ac.made("the ", 0..3, 4, "teh", "the");
+        assert_eq!(type_through(&mut ac, &["\"the ", "“the ", "“teh "]), vec![reverted("teh", "the")]);
+        // Nothing it's handed panics, whatever the box became.
+        for text in ["", "x", "é", "😀😀😀😀", "“", "hi the", "\u{fffc}the "] {
+            let mut ac = Autocorrect::default();
+            ac.made("hi the ", 3..6, 7, "teh", "the");
+            ac.edited(text);
+            ac.edited("é😀");
+        }
+        // A made it can't place isn't kept.
+        let mut ac = Autocorrect::default();
+        ac.made("the ", 1..4, 4, "teh", "the");
+        assert_eq!(type_through(&mut ac, &["teh "]), vec![]);
     }
 
     #[test]
@@ -603,7 +633,7 @@ mod tests {
     #[test]
     fn multibyte_edits() {
         let mut ac = Autocorrect::default();
-        ac.made(4..9, 10, "cafe", "café");
-        assert_eq!(type_through(&mut ac, "hé café ", &["hé café", "hé caf", "hé cafe"]), vec![reverted("cafe", "café")]);
+        ac.made("hé café ", 4..9, 10, "cafe", "café");
+        assert_eq!(type_through(&mut ac, &["hé café", "hé caf", "hé cafe"]), vec![reverted("cafe", "café")]);
     }
 }
