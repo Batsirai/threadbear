@@ -6,6 +6,7 @@ import type { Logger } from './log.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { parseProcesses, powershellPath, win32Helper } from './win32-helper.ts';
+import crypto from 'node:crypto';
 
 // A process group, with its leader's start time so a recycled pid is never
 // mistaken for it. lstart is '' when the leader had already exited when the
@@ -13,7 +14,24 @@ import { parseProcesses, powershellPath, win32Helper } from './win32-helper.ts';
 type Group = { pgid: number; lstart: string } & Started;
 // threadId: the thread (or a job's label) the process was started for, which
 // the RPC server asks about (peer.ts).
-type Entry = { pid: number; command: string; startedAt: string; lstart?: string; started?: string; groups?: Group[]; threadId?: string };
+// job: on Windows, the Job Object the CLI and everything it starts are in
+// (JobControl), by name.
+type Entry = { pid: number; command: string; startedAt: string; lstart?: string; started?: string; groups?: Group[]; threadId?: string; job?: string };
+
+// Windows' stand-in for a CLI's process group: a Job Object, made by the
+// runner's helper (win32-helper.ps1) as the CLI starts. Ending it ends
+// every process still in it, whatever became of their parents, which
+// taskkill /T can't find once a parent has gone. Tests pass a stand-in.
+export type JobControl = { assign(pid: number, name: string): Promise<unknown>; end(name: string): Promise<unknown> };
+
+export const helperJobs: JobControl = {
+  assign: (pid, name) => win32Helper().ask('jobAssign', { pid, name }),
+  end: (name) => win32Helper().ask('jobEnd', { name }),
+};
+
+export function newJobName(): string {
+  return `Local\\threadbear-job-${crypto.randomBytes(16).toString('hex')}`;
+}
 
 const SCAN_MS = 5000;
 
@@ -76,13 +94,22 @@ export class ProcessRegistry {
     const spawnedAt = Date.now();
     const info = processInfo(pid);
     const start = info ? startOf(info) : IS_WINDOWS ? { lstart: approxStartTime(spawnedAt) } : {};
-    this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}) });
+    // Never the runner itself (tests register their own process).
+    const job = this.jobs && pid !== process.pid ? newJobName() : undefined;
+    this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}), ...(job ? { job } : {}) });
     this.save();
+    // Straight away, while the runner still holds the child (so the pid is
+    // still this CLI's): what it starts from then on goes in the job too.
+    if (job) this.jobs!.assign(pid, job).catch((e) => this.log.warn("could not put a CLI in a job of its own; taskkill /T still stops it", { pid, error: String(e) }));
     this.scanTimer ??= setInterval(() => void this.scan(), SCAN_MS).unref();
   }
 
   remove(pid: number): void {
+    const job = this.entries.get(pid)?.job;
     if (this.entries.delete(pid)) this.save();
+    // The CLI has exited: whatever it left running goes with its job, as its
+    // process group does on a Mac.
+    if (job) this.endJob(job, pid);
     if (this.entries.size === 0 && this.scanTimer) {
       clearInterval(this.scanTimer);
       this.scanTimer = undefined;
@@ -237,8 +264,21 @@ export class ProcessRegistry {
   // CLI it replaces. A group is only touched if its leader is the process
   // that was recorded (same start time), or the leader has exited and the
   // group lives on (a pid isn't reused while its group exists).
+  // The jobs (Windows) of CLIs that are gone. A job's name is the runner's,
+  // random, so ending one can only reach what's in it, never a reused pid.
+  jobs?: JobControl = IS_WINDOWS ? helperJobs : undefined;
+
+  private endJob(name: string, pid?: number): Promise<void> {
+    return (this.jobs ?? helperJobs).end(name).then(
+      () => undefined,
+      (e) => this.log.warn("could not end a CLI's job", { pid, error: String(e) }),
+    );
+  }
+
   async sweepOrphans(graceMs = 3000): Promise<number> {
     const previous = readJsonSync<Entry[]>(this.file) ?? [];
+    // What the previous runner's CLIs left, whatever became of the CLIs.
+    await Promise.all(previous.filter((e) => typeof e?.job === 'string').map((e) => this.endJob(e.job!, e.pid)));
     const targets: number[] = [];
     for (const e of previous) {
       if (!e || typeof e.pid !== 'number') continue;
@@ -261,6 +301,7 @@ export class ProcessRegistry {
   // SIGTERM every live group, wait up to graceMs, then SIGKILL stragglers.
   async killAll(graceMs = 3000): Promise<void> {
     const pids = this.pids();
+    await Promise.all([...this.entries.values()].filter((e) => e.job).map((e) => this.endJob(e.job!, e.pid)));
     const groups = pids.flatMap((pid) => [pid, ...this.toolGroups(pid)]);
     for (const pgid of groups) killGroup(pgid, 'SIGTERM');
     await waitGone(groups, graceMs);

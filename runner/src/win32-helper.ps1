@@ -12,6 +12,8 @@
 #   processes   every process, one "pid ppid created" line each, created
 #               as a FILETIME (100 ns since 1601, UTC; 0 when Windows
 #               won't say)
+#   jobAssign   put pid (a CLI just started) in a new job called name
+#   jobEnd      end every process still in the job called name
 #   snapshot    for port: every established connection to it, with the
 #               pid holding the client's end, and every process (below),
 #               in one answer, so any number of connections waiting to be
@@ -35,6 +37,29 @@ $env:PSModulePath = $system
 foreach ($m in 'Microsoft.PowerShell.Utility', 'CimCmdlets', 'NetTCPIP') {
   Import-Module "$system\$m" -ErrorAction Stop
 }
+# Job Objects (jobAssign, jobEnd), through kernel32 declared in memory:
+# Add-Type would compile C# to files in %TEMP%, which a thread can write.
+$asm = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object Reflection.AssemblyName 'ThreadbearNative'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
+$type = $asm.DefineDynamicModule('ThreadbearNative').DefineType('ThreadbearNative.Kernel32', 'Public, Class')
+$importCtor = [Runtime.InteropServices.DllImportAttribute].GetConstructor([string])
+$lastError = [Runtime.InteropServices.DllImportAttribute].GetField('SetLastError')
+function Declare($name, $ret, [Type[]]$params) {
+  $m = $type.DefinePInvokeMethod($name, 'kernel32.dll', [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, $ret, $params, [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
+  $m.SetImplementationFlags('PreserveSig')
+  $m.SetCustomAttribute((New-Object Reflection.Emit.CustomAttributeBuilder($importCtor, @('kernel32.dll'), [Reflection.FieldInfo[]]@($lastError), @($true))))
+}
+Declare 'CreateJobObjectW' ([IntPtr]) @([IntPtr], [string])
+Declare 'OpenJobObjectW' ([IntPtr]) @([UInt32], [bool], [string])
+Declare 'OpenProcess' ([IntPtr]) @([UInt32], [bool], [UInt32])
+Declare 'AssignProcessToJobObject' ([bool]) @([IntPtr], [IntPtr])
+Declare 'TerminateJobObject' ([bool]) @([IntPtr], [UInt32])
+Declare 'CloseHandle' ([bool]) @([IntPtr])
+$K = $type.CreateType()
+function LastError { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+# The job of each CLI this helper has put in one, by name. A helper started
+# again later opens one by its name instead.
+$jobs = @{}
+
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $in = [Console]::In
 $out = [Console]::Out
@@ -77,6 +102,45 @@ while ($true) {
           "p $($_.ProcessId) $($_.ParentProcessId) $created"
         }
         $result = ((@($conns) + @($procs)) -join "`n")
+      }
+      'jobAssign' {
+        # A job of its own for a CLI the runner has just started (it holds
+        # the child's handle, so the pid is still that CLI's), named by the
+        # runner with a random part. Everything the CLI starts from then on
+        # is in it too, and can't leave.
+        $name = [string]$req.name
+        if ($name -notmatch '^Local\\threadbear-job-[0-9a-f]{32}$') { throw "not a job name: $name" }
+        $job = $K::CreateJobObjectW([IntPtr]::Zero, $name)
+        $err = LastError
+        if ($job -eq [IntPtr]::Zero) { throw "CreateJobObject failed ($err)" }
+        # 183: there's already one by that name, which isn't ours to use.
+        if ($err -eq 183) { [void]$K::CloseHandle($job); throw 'a job by that name already exists' }
+        # PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        $proc = $K::OpenProcess(0x0101, $false, [UInt32]$req.pid)
+        if ($proc -eq [IntPtr]::Zero) { $err = LastError; [void]$K::CloseHandle($job); throw "OpenProcess failed ($err)" }
+        $ok = $K::AssignProcessToJobObject($job, $proc)
+        $err = LastError
+        [void]$K::CloseHandle($proc)
+        if (-not $ok) { [void]$K::CloseHandle($job); throw "AssignProcessToJobObject failed ($err)" }
+        $jobs[$name] = $job
+        $result = 'ok'
+      }
+      'jobEnd' {
+        # Ends every process still in the CLI's job. None left: the job has
+        # gone with them, and there's nothing to do.
+        $name = [string]$req.name
+        if ($name -notmatch '^Local\\threadbear-job-[0-9a-f]{32}$') { throw "not a job name: $name" }
+        $job = $jobs[$name]
+        $jobs.Remove($name)
+        # JOB_OBJECT_TERMINATE
+        if (-not $job) { $job = $K::OpenJobObjectW(0x0008, $false, $name) }
+        if ($job -eq [IntPtr]::Zero -or -not $job) { $result = 'gone' } else {
+          $ok = $K::TerminateJobObject($job, 1)
+          $err = LastError
+          [void]$K::CloseHandle($job)
+          if (-not $ok) { throw "TerminateJobObject failed ($err)" }
+          $result = 'ended'
+        }
       }
       default { throw "unknown op: $($req.op)" }
     }

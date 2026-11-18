@@ -123,7 +123,10 @@ File references are where to look.
   of `lsof` and `ps` it keeps one hidden `powershell.exe` running for its
   life (`runner/src/win32-helper.ps1`), which lists processes
   (`Get-CimInstance Win32_Process`) and finds who holds a connection
-  (`Get-NetTCPConnection`).
+  (`Get-NetTCPConnection`). It also puts each CLI the runner starts in a
+  Job Object of its own (`Local\threadbear-job-<random>`), and ends the job
+  when the CLI exits, so nothing a thread started outlives it, as a CLI's
+  process group does on a Mac.
 - **A one-shot update job:** when the runner's LaunchAgent or
   Threadbear Runner.app is behind main (or you press Update it in the
   Updates panel after one failed), the runner

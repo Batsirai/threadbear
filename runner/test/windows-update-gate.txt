@@ -16,3 +16,4 @@ deploy-steps.test.ts
 fsutil.test.ts
 system-tools.test.ts
 win32-helper.test.ts
+windows-jobs.test.ts

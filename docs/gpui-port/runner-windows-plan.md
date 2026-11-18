@@ -78,7 +78,12 @@ fresh PC), which is what you want gone.
 5. **The native helper and security parity.** A small Rust exe (it builds
    in the desktop workspace's CI already): Job Objects so nothing a thread
    started outlives it, the process table, which process owns a socket (peer
-   identity), idle time and keep-awake. Then the secrets guard's Windows
+   identity), idle time and keep-awake. *Done differently (18 Nov): the
+   helper is one hidden PowerShell the runner keeps
+   (`runner/src/win32-helper.ps1`), with kernel32 declared in memory for
+   the Job Objects, so there's no binary to build, ship or keep up to date;
+   peer identity and Job Objects are in, idle time and keep-awake not yet.*
+   Then the secrets guard's Windows
    forms, Keith's trust fixes, git hooks off `/dev/null`, ACLs on
    `secrets\`. Another lab tries to break each before it's called done.
 6. **Polish.** Codex on Windows, pictures, stuck-job detection, a Windows
