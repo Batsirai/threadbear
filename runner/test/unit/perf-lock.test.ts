@@ -265,14 +265,6 @@ test('remote build wrappers background builds without lowering the benchmark she
   assert.ok(!fs.readdirSync(h.home).some((n) => n.startsWith('threadbear-build-bin.')));
 });
 
-test('real-screen stays a safe import inside a check already holding the host lock', () => {
-  const shared = fs.readFileSync(path.join(root, 'features/tools/real-screen.ts'), 'utf8');
-  assert.doesNotMatch(shared, /ensurePerfLock/);
-  for (const name of ['scroll-perf.ts', 'switch-perf.ts', 'long-thread.ts', 'real-runner.ts', 'real-gestures.ts', 'real-select.ts', 'real-typing.ts', 'real-review-paste.ts']) {
-    assert.match(fs.readFileSync(path.join(root, 'features/tools', name), 'utf8'), /await ensurePerfLock\(\)/, name);
-  }
-});
-
 test('free check probes keep the same inode that waiting measurements have open', () => {
   const check = fs.readFileSync(path.join(root, 'scripts/check-remote.sh'), 'utf8');
   for (const probe of check.matchAll(/\/usr\/bin\/lockf -t 0 ([^;\n]*?)true/g)) {

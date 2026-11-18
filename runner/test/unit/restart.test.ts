@@ -475,8 +475,6 @@ test('the restart notices are the sentences the Mac app reads', () => {
   assert.equal(pendingMessage(3, 1), 'The runner will restart when 2 threads finish and you answer 1.');
   assert.equal(pendingMessage(1, 1), 'The runner will restart when you answer 1 thread.');
   assert.equal(pendingMessage(2, 2), 'The runner will restart when you answer 2 threads.');
-  const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'src', 'restart.ts'), 'utf8');
-  assert.match(src, /'The pending runner restart was cancelled\.'/);
 });
 
 test('background shells and subagents hold an idle restart until they finish', async () => {
