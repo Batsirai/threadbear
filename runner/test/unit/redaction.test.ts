@@ -380,6 +380,24 @@ test("Threadbear's own tokens are redacted", () => {
   assert.equal(redactSecrets("tbp_short is a name").redacted, false);
 });
 
+// A virtual runner's box key and boot token (convex/boxes.ts): an agent in a
+// box that prints either mustn't leave it in a stored or shared message.
+test("a box key and a boot token are redacted, whole or cut short", async () => {
+  const backend = (await import("../../../convex/redaction.ts")) as { redactSecrets: typeof redactSecrets };
+  for (const redact of [redactSecrets, backend.redactSecrets]) {
+    for (const prefix of ["tbb_", "tbt_"]) {
+      const secret = prefix + "0f9e".repeat(16);
+      const { text, redacted } = redact(`export THREADBEAR_KEY=${secret} # box`);
+      assert.equal(redacted, true, prefix);
+      assert.equal(text.includes(secret), false, prefix);
+      assert.equal(text.includes(secret.slice(0, 20)), false, prefix);
+      // Cut off at the end of a message.
+      assert.equal(redact(`the key is ${secret.slice(0, 30)}`).text.includes(secret.slice(4, 30)), false, `${prefix} cut short`);
+      assert.equal(redact(`${prefix}short is a name`).redacted, false, prefix);
+    }
+  }
+});
+
 test("scrubbing twice changes nothing more", () => {
   const once = scrubText(`OPENAI_API_KEY=sk-${"a1".repeat(24)} and Bearer ${"b2".repeat(20)}`);
   assert.equal(scrubText(once), once);

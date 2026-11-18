@@ -5,10 +5,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { call, claimAndFinish, load, outcome } from '../helpers/convex-memory.ts';
-import { BOX_RUNNER, boxBackend, CLAUDE_TOKEN, later, LOGIN, OWNER, THREAD } from '../helpers/box-backend.ts';
+import { BOX_RUNNER, boxBackend, CLAUDE_TOKEN, later, LOGIN, OWNER, SEAL_KEY, THREAD } from '../helpers/box-backend.ts';
 
 const sync = load('sync');
 const boxes = load('boxes');
+const viewer = load('viewer');
+const PHONE = 'phone-token';
 const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
 const { BOOT_MS, LEASE_MS, SAVE_MS } = load('boxStates') as Record<string, number>;
 const MINI_KEY = 'tbr_mac-mini';
@@ -113,6 +115,48 @@ test('an expired, unknown, malformed or replaced boot token is refused', async (
   assert.equal(await outcome(s.exchange(newer)), 'ok');
   // Nothing is minted for a box that isn't booting.
   assert.equal(await outcome(s.mint()), 'conflict');
+});
+
+test("an exchange that can't unseal uses nothing up: the boot token works once the right seal key is back", async () => {
+  const s = await boxBackend();
+  await s.setToken();
+  const token = await s.mint();
+  const before = { ...s.box() };
+  // A deployment whose BOX_SEAL_KEY was changed: as valid a key, but not the one that sealed.
+  process.env.BOX_SEAL_KEY = Buffer.alloc(32, 9).toString('base64');
+  await assert.rejects(s.exchange(token));
+  assert.equal(s.state(), 'creating');
+  assert.equal(s.box().boxKeyHash, undefined);
+  assert.equal(s.box().bootTokenHash, before.bootTokenHash);
+  // A sealed value gone bad does the same.
+  process.env.BOX_SEAL_KEY = SEAL_KEY;
+  const sealed = s.rows('cloudTokens')[0].sealed;
+  s.rows('cloudTokens')[0].sealed = `${sealed.slice(0, -6)}AAAAA=`;
+  await assert.rejects(s.exchange(token));
+  assert.equal(s.state(), 'creating');
+  s.rows('cloudTokens')[0].sealed = sealed;
+  assert.equal((await s.exchange(token)).claudeToken, CLAUDE_TOKEN);
+  assert.equal(s.state(), 'awake');
+});
+
+test('of two exchanges racing with one boot token, exactly one wins', async () => {
+  const s = await boxBackend();
+  await s.setToken();
+  const bootHash = await sha256(await s.mint());
+  // Both read and unseal before either claims.
+  const p1 = await call(s.ctx, boxes.peekBoot, { bootHash });
+  const p2 = await call(s.ctx, boxes.peekBoot, { bootHash });
+  const claim = async (p: { sealedToken: string; sealedThreadKey: string }, k: string) => call(s.ctx, boxes.claimBoot, { bootHash, boxKeyHash: await sha256(k), sealedToken: p.sealedToken, sealedThreadKey: p.sealedThreadKey });
+  assert.notEqual(await claim(p1, 'tbb_first'), null);
+  assert.equal(await claim(p2, 'tbb_second'), null);
+  assert.equal(s.box().boxKeyHash, await sha256('tbb_first'));
+  // A token set again between the read and the claim: try again, nothing used up.
+  await s.report({ type: 'LOST' });
+  const again = await sha256(await s.mint());
+  const p3 = await call(s.ctx, boxes.peekBoot, { bootHash: again });
+  await s.setToken(`sk-ant-oat01-${'Z'.repeat(60)}`);
+  assert.equal(await outcome(call(s.ctx, boxes.claimBoot, { bootHash: again, boxKeyHash: 'x', sealedToken: p3.sealedToken, sealedThreadKey: p3.sealedThreadKey })), 'conflict');
+  assert.equal(s.state(), 'waking');
 });
 
 test('with no cloud token for its login, the exchange refuses and the boot token still works once one is set', async () => {
@@ -276,7 +320,17 @@ test('no query hands back a sealed token, a thread key or a key hash', async () 
   const got = await s.boot();
   await heartbeat(s, got.boxKey);
   const sealed = [s.rows('cloudTokens')[0].sealed, s.box().sealedThreadKey, s.box().boxKeyHash];
-  const answers = [await call(s.ctx, boxes.cloudTokens, { key: OWNER }), await call(s.ctx, sync.threadsOf, { key: got.boxKey, runnerId: BOX_RUNNER }), await call(s.ctx, sync.runnersList, { key: OWNER })];
+  // The Machines page's queries, for a phone or browser token.
+  await s.ctx.db.insert('tokens', { hash: await sha256(PHONE), name: 'iphone', kind: 'phone', expiresAt: Date.now() + 1e9, createdAt: Date.now() });
+  const viewed = [
+    await call(s.ctx, viewer.overview, { token: PHONE }),
+    await call(s.ctx, viewer.rows, { token: PHONE, table: 'boxes' }),
+    await call(s.ctx, viewer.rows, { token: PHONE, table: 'boxes', machine: 'box', kind: 'awake' }),
+    await call(s.ctx, viewer.row, { token: PHONE, table: 'boxes', id: s.boxId }),
+  ];
+  assert.equal(viewed[1].rows.length, 1, 'the viewer still lists the box');
+  assert.equal(viewed[3].doc.threadId, THREAD, 'and shows its row');
+  const answers = [...viewed, await call(s.ctx, boxes.cloudTokens, { key: OWNER }), await call(s.ctx, sync.threadsOf, { key: got.boxKey, runnerId: BOX_RUNNER }), await call(s.ctx, sync.runnersList, { key: OWNER })];
   const text = JSON.stringify(answers);
   for (const x of [...sealed, CLAUDE_TOKEN, got.threadKey]) assert.ok(!text.includes(x), 'nothing secret in what queries return');
 });

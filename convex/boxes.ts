@@ -12,7 +12,7 @@
 // provider, boxes:startThread, the wake hook in machines.ts queued(), the
 // crons, a runner's box mode and its image.
 import { ConvexError, v, type Infer } from 'convex/values';
-import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx } from './_generated/server';
+import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { box as boxMachine, machines } from './machines';
@@ -233,7 +233,9 @@ const exchanged = v.object({
 });
 
 type Exchanged = Infer<typeof exchanged>;
-type Claimed = { runnerId: string; threadId: string; login: string; sealedToken: string; sealedThreadKey: string; repo: Exchanged['repo']; save: Exchanged['save'] };
+type Peeked = { login: string; threadId: string; sealedToken: string; sealedThreadKey: string };
+type Claimed = { runnerId: string; threadId: string; repo: Exchanged['repo']; save: Exchanged['save'] };
+const refusedBoot = () => new ConvexError({ kind: 'auth', message: 'boot token unknown, used or expired' });
 
 /**
  * The box's first call, with the boot token the provider started it with
@@ -241,61 +243,83 @@ type Claimed = { runnerId: string; threadId: string; login: string; sealedToken:
  * login's token, the thread key, the repo and the last save. The new key
  * replaces any earlier box's in the same step, so only one box can ever act
  * as the thread's runner (decision 3).
+ *
+ * Unsealing comes first, from a read that uses nothing up (peekBoot): a
+ * deployment whose BOX_SEAL_KEY changed, or a sealed value gone bad, fails
+ * here and leaves the boot token and the box as they were. Only then does
+ * claimBoot use the token up, in one step that checks it again.
  */
 export const exchange = action({
   args: { bootToken: v.string() },
   returns: exchanged,
   handler: async (ctx, { bootToken }): Promise<Exchanged> => {
-    if (!BOOT_TOKEN.test(bootToken)) throw new ConvexError({ kind: 'auth', message: 'boot token unknown, used or expired' });
-    // Before anything is used up: a deployment that can't unseal says so
-    // while the boot token still works.
+    if (!BOOT_TOKEN.test(bootToken)) throw refusedBoot();
     const key = await sealKey();
+    const bootHash = await sha256(bootToken);
+    const peeked: Peeked | null = await ctx.runQuery(internal.boxes.peekBoot, { bootHash });
+    if (!peeked) throw refusedBoot();
+    let claudeToken: string;
+    let threadKey: string;
+    try {
+      claudeToken = new TextDecoder().decode(await unseal(key, peeked.sealedToken, tokenPurpose(peeked.login)));
+      threadKey = b64(await unseal(key, peeked.sealedThreadKey, threadKeyPurpose(peeked.threadId)));
+    } catch {
+      throw new ConvexError({ kind: 'config', message: "The box's secrets can't be unsealed with this deployment's BOX_SEAL_KEY. The boot token still works once that's fixed." });
+    }
     const boxKey = BOX_KEY_PREFIX + randomHex(32);
-    const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash: await sha256(bootToken), boxKeyHash: await sha256(boxKey) });
-    if (!got) throw new ConvexError({ kind: 'auth', message: 'boot token unknown, used or expired' });
-    return {
-      boxKey,
-      runnerId: got.runnerId,
-      threadId: got.threadId,
-      claudeToken: new TextDecoder().decode(await unseal(key, got.sealedToken, tokenPurpose(got.login))),
-      threadKey: b64(await unseal(key, got.sealedThreadKey, threadKeyPurpose(got.threadId))),
-      repo: got.repo,
-      save: got.save,
-    };
+    const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash, boxKeyHash: await sha256(boxKey), sealedToken: peeked.sealedToken, sealedThreadKey: peeked.sealedThreadKey });
+    if (!got) throw refusedBoot();
+    return { boxKey, runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save };
+  },
+});
+
+// The box a boot token is for, if the token is unused and unexpired: a
+// minted token's hash is cleared once it's used (READY) or replaced.
+async function bootBox(ctx: QueryCtx, bootHash: string): Promise<Doc<'boxes'> | null> {
+  const row = await ctx.db.query('boxes').withIndex('by_boot_hash', (q) => q.eq('bootTokenHash', bootHash)).first();
+  return row && (row.bootExpiresAt ?? 0) > Date.now() && BOOTING.includes(row.boxState.kind) ? row : null;
+}
+
+async function cloudToken(ctx: QueryCtx, login: string): Promise<Doc<'cloudTokens'>> {
+  const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', login)).unique();
+  if (!token) throw new ConvexError({ kind: 'noCloudToken', message: `There's no cloud token for ${login} yet: set one in Threadbear, then start the box again.` });
+  return token;
+}
+
+/** What the exchange unseals, read without using the boot token up. A login with no cloud token refuses here. */
+export const peekBoot = internalQuery({
+  args: { bootHash: v.string() },
+  returns: v.union(v.null(), v.object({ login: v.string(), threadId: v.string(), sealedToken: v.string(), sealedThreadKey: v.string() })),
+  handler: async (ctx, { bootHash }) => {
+    const row = await bootBox(ctx, bootHash);
+    if (!row) return null;
+    const token = await cloudToken(ctx, row.login);
+    return { login: row.login, threadId: row.threadId, sealedToken: token.sealed, sealedThreadKey: row.sealedThreadKey };
   },
 });
 
 /**
- * One step: the boot token checked unexpired and used up, the box told it's
- * up (READY), and the new box key's hash put in place of the last one. A
- * login with no cloud token refuses before anything changes, so the box
- * can try again once Mike has set one.
+ * One step: the boot token checked again (unused, unexpired), and the
+ * sealed values the action unsealed still the ones there (a token set
+ * again meanwhile means trying again), then used up, the box told it's up
+ * (READY), and the new box key's hash put in place of the last one. Of two
+ * exchanges racing with one token, exactly one gets here first.
  */
 export const claimBoot = internalMutation({
-  args: { bootHash: v.string(), boxKeyHash: v.string() },
-  returns: v.union(
-    v.null(),
-    v.object({ runnerId: v.string(), threadId: v.string(), login: v.string(), sealedToken: v.string(), sealedThreadKey: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }), save: v.union(v.null(), v.object({ url: v.string(), at: v.number(), bytes: v.number() })) }),
-  ),
-  handler: async (ctx, { bootHash, boxKeyHash }) => {
-    const row = await ctx.db.query('boxes').withIndex('by_boot_hash', (q) => q.eq('bootTokenHash', bootHash)).first();
-    if (!row || (row.bootExpiresAt ?? 0) <= Date.now()) return null;
-    const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique();
-    if (!token) throw new ConvexError({ kind: 'noCloudToken', message: `There's no cloud token for ${row.login} yet: set one in Threadbear, then start the box again.` });
+  args: { bootHash: v.string(), boxKeyHash: v.string(), sealedToken: v.string(), sealedThreadKey: v.string() },
+  returns: v.union(v.null(), v.object({ runnerId: v.string(), threadId: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }), save: v.union(v.null(), v.object({ url: v.string(), at: v.number(), bytes: v.number() })) })),
+  handler: async (ctx, { bootHash, boxKeyHash, sealedToken, sealedThreadKey }) => {
+    const row = await bootBox(ctx, bootHash);
+    if (!row) return null;
+    const token = await cloudToken(ctx, row.login);
+    if (token.sealed !== sealedToken || row.sealedThreadKey !== sealedThreadKey) throw conflict("The login's cloud token changed while the box started: try again.");
     const r = await boxMachine.send(ctx, row._id, { type: 'READY' });
-    if (r.status !== 'done') {
-      // Its state takes no box now (archived meanwhile): the token goes.
-      await ctx.db.patch(row._id, { bootTokenHash: undefined, bootExpiresAt: undefined });
-      return null;
-    }
+    if (r.status !== 'done') return null;
     await ctx.db.patch(row._id, { boxKeyHash });
     const url = row.save ? await ctx.storage.getUrl(row.save.storageId) : null;
     return {
       runnerId: row.runnerId,
       threadId: row.threadId,
-      login: row.login,
-      sealedToken: token.sealed,
-      sealedThreadKey: row.sealedThreadKey,
       repo: row.repo,
       save: row.save && url ? { url, at: row.save.at, bytes: row.save.bytes } : null,
     };

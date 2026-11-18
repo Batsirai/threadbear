@@ -31,9 +31,23 @@ export const counts = query({
 });
 export const rows = query({
   args: { ...viewerArgs.rows, token: v.string() },
-  handler: async (ctx, { token, ...args }) => ((await signedIn(ctx, token)) ? await viewer.rows(ctx, args) : null),
+  handler: async (ctx, { token, ...args }) => ((await signedIn(ctx, token)) ? withoutSecrets(await viewer.rows(ctx, args)) : null),
 });
 export const row = query({
   args: { ...viewerArgs.row, token: v.string() },
-  handler: async (ctx, { token, ...args }) => ((await signedIn(ctx, token)) ? await viewer.row(ctx, args) : null),
+  handler: async (ctx, { token, ...args }) => ((await signedIn(ctx, token)) ? withoutSecrets(await viewer.row(ctx, args)) : null),
 });
+
+// What a row may hold that no page shows: a box's boot token and key
+// hashes and its sealed thread key, and a cloud token's sealed value
+// (boxes.ts). Taken out wherever they are in what the viewer returns (a
+// row's doc, its fields, its parent's and children's), whatever the table.
+export const SECRET_FIELDS: readonly string[] = ['bootTokenHash', 'boxKeyHash', 'sealedThreadKey', 'sealed'];
+export function withoutSecrets<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withoutSecrets) as T;
+  // Only plain objects: bytes (an ArrayBuffer) stay as they are.
+  if (value === null || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(value)) if (!SECRET_FIELDS.includes(k)) out[k] = withoutSecrets(x);
+  return out as T;
+}

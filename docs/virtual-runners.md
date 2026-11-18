@@ -280,10 +280,13 @@ The backend's first slice (18 Nov 2026), with tests in
   logins with when each was made and set, never the token.
 - **The boot exchange** (decision 5): `boxes:mintBootToken` (owner) keeps
   only a boot token's hash, for 10 minutes, a newer one replacing it;
-  `boxes:exchange` (no key) claims it in one mutation (`claimBoot`:
-  unexpired, used up, READY sent, the new box key's hash in place of the
-  last one's), then unseals and returns the box key, runner id, thread id,
-  cloud token, thread key, repo and the last save's URL. The per-thread
+  `boxes:exchange` (no key) reads and unseals first without using anything
+  up (`peekBoot`), then claims it in one mutation (`claimBoot`: checked
+  again, used up, READY sent, the new box key's hash in place of the last
+  one's) and returns the box key, runner id, thread id, cloud token,
+  thread key, repo and the last save's URL. `tbb_` and `tbt_` are redacted
+  from transcripts, and the Machines page leaves out the boxes' hashes and
+  sealed values. The per-thread
   key is made, sealed, with the box row (`boxes:newBox`, internal, for
   `startThread`).
 - **Saves** (decision 7): `boxes:boxSaved` (a box key only) takes a file

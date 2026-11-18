@@ -16,7 +16,7 @@ import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
-import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdThreadTimes, impossibleUsage, isIsoTime, LOGIN_EMAIL, LOGIN_PROVIDER, loginKey, isThreadId, mayClaim, NAME_CHARS, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, nameSkeleton, webLinksOnly, normalName, ownsCard, SCHEDULE_ID, utf8Bytes, wholeIn, type Caller, type UsageDoc } from './runnerAccess';
+import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdThreadTimes, impossibleUsage, isIsoTime, LOGIN_EMAIL, LOGIN_PROVIDER, loginKey, isThreadId, mayClaim, NAME_CHARS, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, nameSkeleton, webLinksOnly, normalName, ownsCard, ownThreadOnly, SCHEDULE_ID, utf8Bytes, wholeIn, type Caller, type UsageDoc } from './runnerAccess';
 import { dropWake, seedWakes, syncWake } from './wakes';
 import { badMemoryFile, batchBytes, bumpOfferCount, MAX_BATCH_BYTES, MAX_MEMORY_BATCH, MAX_OFFERS_PER_RUNNER, memoryAfter, offerCount, OFFER_PAGE, putMemoryFiles } from './memorySync';
 import { pushFailing, pushOff } from './pushHealth';
@@ -898,7 +898,8 @@ export const upsertThreads = mutation({
           skipped.push(t.threadId);
           continue;
         }
-        if ((t.view === 'inbox' || t.view === 'hibernating') && (!existing || existing.view !== t.view) && (vc[t.view] ?? 0) >= CAP.threadsInView) {
+        // A box has its one thread, and moves no other row in or out of a list.
+        if (!caller.box && (t.view === 'inbox' || t.view === 'hibernating') && (!existing || existing.view !== t.view) && (vc[t.view] ?? 0) >= CAP.threadsInView) {
           const oldest = await ctx.db.query('threads').withIndex('by_runner_view', (q) => q.eq('runnerId', t.runnerId).eq('view', t.view)).first();
           if (!oldest || (oldest.lastActivityMs ?? 0) >= (t.lastActivityMs ?? 0)) stored = { view: 'overflow', wantView: t.view };
           else {
@@ -940,7 +941,7 @@ export const upsertThreads = mutation({
       } else {
         await moveView(ctx, t.runnerId, was?.view, row.view);
         // It left a capped list: an overflowed one takes the room.
-        if (was && was.view !== row.view) await refill(ctx, t.runnerId, was.view);
+        if (was && was.view !== row.view && !caller.box) await refill(ctx, t.runnerId, was.view);
       }
       // Most writes are a status flip in the same projects: only a new
       // thread, one taken over, or one whose projects changed reads its links.
@@ -1232,7 +1233,8 @@ export const sharedThreads = query({
     const caller = await runnerAuth(ctx, key, 'sharedThreads');
     await actAs(ctx, caller, runnerId);
     const out: string[] = [];
-    for await (const row of ctx.db.query('threads').withIndex('by_runner_share', (q) => q.eq('runnerId', runnerId).eq('share.access', 'link'))) out.push(row.threadId);
+    // A box hears of its own thread only (ownThreadOnly), as with every list here.
+    for await (const row of ctx.db.query('threads').withIndex('by_runner_share', (q) => q.eq('runnerId', runnerId).eq('share.access', 'link'))) if (ownThreadOnly(caller, row.threadId)) out.push(row.threadId);
     return out;
   },
 });
@@ -1470,6 +1472,7 @@ export const threadsOf = query({
     await actAs(ctx, caller, runnerId);
     const out = [];
     for await (const row of ctx.db.query('threads').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))) {
+      if (!ownThreadOnly(caller, row.threadId)) continue;
       const { _id, _creationTime, pushedAt: _p, pushHeldAt: _h, updatedMs: _u, wantView, ...rest } = row;
       out.push({ ...rest, view: rest.view === 'overflow' ? (wantView ?? 'inbox') : rest.view });
     }
@@ -1642,7 +1645,7 @@ export const appendMessages = mutation({
         // call; one there's still no room for waits (skipped, sent again).
         if (!caller.owner) {
           const doc = { ...m, runnerId: caller.runnerId };
-          if (!(await roomForMessage(ctx, caller.runnerId, docBytes(doc), insertedNow, budget))) {
+          if (!(await roomForMessage(ctx, caller.runnerId, docBytes(doc), insertedNow, budget, undefined, caller.box?.threadId))) {
             skipped.push(`${m.threadId}:${m.seq}`);
             continue;
           }
@@ -1679,7 +1682,7 @@ export const appendMessages = mutation({
           }
           const grow = storedBytes({ ...existing, ...patch }) - storedBytes(existing);
           if (grow > 0) {
-            const room = await roomForMessage(ctx, caller.runnerId, grow, insertedNow, budget, existing._id);
+            const room = await roomForMessage(ctx, caller.runnerId, grow, insertedNow, budget, existing._id, caller.box?.threadId);
             if (!room) {
               skipped.push(`${m.threadId}:${m.seq}`);
               continue;
@@ -1732,7 +1735,9 @@ async function takenBack<T extends Doc<'messages'> | Doc<'eventBodies'>>(ctx: Mu
 // being grown (`growing`, passed over). True, and the bytes counted, when
 // there's room; false, and nothing counted, when there isn't (the caller
 // skips the row, and the runner sends it again).
-async function roomForMessage(ctx: MutationCtx, runnerId: string, size: number, insertedNow: Set<string>, budget: { evicted: number; owners: Map<string, string | null> }, growing?: Id<'messages'>): Promise<boolean> {
+// `onlyThread`: a box's, which evicts its own thread's rows only; the oldest
+// being another's means no room (it waits) rather than that one going.
+async function roomForMessage(ctx: MutationCtx, runnerId: string, size: number, insertedNow: Set<string>, budget: { evicted: number; owners: Map<string, string | null> }, growing?: Id<'messages'>, onlyThread?: string): Promise<boolean> {
   const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique();
   let used = usage?.messageBytes ?? 0;
   while (used + size > CAP.messageBytes && budget.evicted < CAP.evictPerWrite) {
@@ -1742,9 +1747,11 @@ async function roomForMessage(ctx: MutationCtx, runnerId: string, size: number, 
     let victim: Doc<'messages'> | undefined;
     for await (const m of ctx.db.query('messages').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))) {
       if (m._id === growing) continue;
+      if (onlyThread !== undefined && m.threadId !== onlyThread) break;
       if (!insertedNow.has(String(m._id))) victim = m;
       break;
     }
+    if (!victim && onlyThread !== undefined) break;
     // Under this runner's id but in a thread that's since gone to another:
     // that one's, not this one's to delete. It goes to the thread's runner,
     // and counts as one this call has seen to.
@@ -1825,6 +1832,7 @@ export const messageHeads = query({
     await actAs(ctx, caller, runnerId);
     const out = [];
     for await (const t of ctx.db.query('threads').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))) {
+      if (!ownThreadOnly(caller, t.threadId)) continue;
       const newest = await ctx.db
         .query('messages')
         .withIndex('by_thread_seq', (q) => q.eq('threadId', t.threadId))
@@ -3104,7 +3112,7 @@ export const finishCommand = mutation({
     // A press (API 59) names the thread its button started or messaged, also the runner's own.
     if (resultThreadId && (c.kind === 'create' || c.kind === 'quickAsk' || c.kind === 'press')) {
       const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', resultThreadId)).unique();
-      if (t && (c.runnerId === 'any' ? caller.owner || t.runnerId === (caller as { runnerId?: string }).runnerId : t.runnerId === c.runnerId)) made = resultThreadId;
+      if (t && ownThreadOnly(caller, t.threadId) && (c.runnerId === 'any' ? caller.owner || t.runnerId === (caller as { runnerId?: string }).runnerId : t.runnerId === c.runnerId)) made = resultThreadId;
     }
     // A note is a line for the phone: cut, so a finished command stays small (pruneOld reads them).
     const said = note ? clean(cutBytes(note, caller.owner ? NOTE_MAX : CAP.note)) : undefined;
@@ -3285,7 +3293,8 @@ export const appendBodies = mutation({
       let used = (usage?.bodyBytes ?? 0) - (existing ? docBytes(strippedBody(existing)) : 0);
       while (used + size > CAP.bodyBytes && evicted < CAP.bodyEvictPerWrite) {
         const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', caller.runnerId)).first();
-        if (!oldest || oldest._id === existing?._id) break;
+        // A box evicts its own thread's only: another's waits rather than go.
+        if (!oldest || oldest._id === existing?._id || !ownThreadOnly(caller, oldest.threadId)) break;
         // In a thread that's since gone to another runner: that one's (handedOn).
         if (!(await handedOn(ctx, 'eventBodies', oldest, caller.runnerId, owners))) await ctx.db.delete(oldest._id);
         used = Math.max(0, used - docBytes(strippedBody(oldest)));
@@ -3720,12 +3729,14 @@ export const setThreadIndex = mutation({
       // thread became another's goes, so the Mac's sidebar never lists it
       // twice or under the wrong Mac. Checked on every write, not just the first.
       if (!(await claimable(ctx, caller, row.threadId))) {
-        if (existing && !existing.deleted) await ctx.db.patch(existing._id, { deleted: true, updatedMs });
+        // Not a box's to bury: another thread's row is none of its business.
+        if (existing && !existing.deleted && ownThreadOnly(caller, row.threadId)) await ctx.db.patch(existing._id, { deleted: true, updatedMs });
         continue;
       }
       if (existing) await ctx.db.replace(existing._id, { ...row, runnerId, updatedMs });
       else {
-        if (!caller.owner && count >= CAP.indexRows) {
+        // A box has one row (its thread's), so never another's to evict.
+        if (!caller.owner && !caller.box && count >= CAP.indexRows) {
           // A tombstone gives way first, then the oldest archived row among
           // the oldest few, and a live one only when there's neither.
           const oldestFew = await ctx.db.query('threadIndex').withIndex('by_runner_updated', (q) => q.eq('runnerId', runnerId)).take(CAP.indexEvictScan);
@@ -3752,13 +3763,14 @@ export const setThreadIndex = mutation({
         .query('threadIndex')
         .withIndex('by_runner_thread', (q) => q.eq('runnerId', runnerId).eq('threadId', threadId))
         .unique();
-      if (row) await bury(row);
+      // A box buries only its own thread's row (ownThreadOnly).
+      if (row && ownThreadOnly(caller, threadId)) await bury(row);
     }
     // The first write after a start says which threads it still has.
     if (keep) {
       const kept = new Set([...keep, ...rows.map((r) => r.threadId)]);
       for await (const row of ctx.db.query('threadIndex').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))) {
-        if (!kept.has(row.threadId)) await bury(row);
+        if (!kept.has(row.threadId) && ownThreadOnly(caller, row.threadId)) await bury(row);
       }
     }
     return null;

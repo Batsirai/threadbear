@@ -131,3 +131,50 @@ test('an archived box key, or one that never was, is refused everywhere', async 
   assert.equal(await outcome(call(s.ctx, sync.pendingCommands, { key: s.boxKey, runnerId: BOX_RUNNER })), 'auth');
   assert.equal(await outcome(call(s.ctx, sync.heartbeat, { key: `tbb_${'0'.repeat(64)}`, runner: { runnerId: BOX_RUNNER, name: 'b', version: 'v', startedAt: AT, draining: false, threadCount: 1 } })), 'auth');
 });
+
+// Codex's review of the first slice (18 Nov 2026): a box key read and
+// buried rows of another thread that sat under its runner id (the owner key
+// may write one there). Every list and write by runner id is held to the
+// box's own thread.
+test("a box neither sees nor touches another thread's rows under its own runner id", async () => {
+  const s = await setup();
+  await s.write(THREAD);
+  const U = 'owner-thread-u';
+  // The owner key puts thread U under the box's runner id, shared, with a message, a sidebar row, a request and old messages and tool output.
+  await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [{ ...THREAD_BASICS, threadId: U, runnerId: BOX_RUNNER, title: 'u', view: 'inbox', needsYou: false, share: { access: 'link', slug: 'slugslugslugslug' } }] });
+  await call(s.ctx, sync.appendMessages, { key: OWNER, messages: [{ threadId: U, seq: 1, role: 'assistant', text: 'private', at: AT }] });
+  const index = (threadId: string) => ({ threadId, title: 't', cwd: '/x', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: '', createdAt: AT, lastActivityAt: AT });
+  await call(s.ctx, sync.setThreadIndex, { key: OWNER, runnerId: BOX_RUNNER, rows: [index(U)], removed: [] });
+  await machinesModule.request.create(s.ctx, { requestId: 'req-of-thread-u', runnerId: BOX_RUNNER, threadId: U, target: 'mini', text: 'x', createdAt: Date.now(), state: 'pending' }, { type: 'FILE' });
+  await s.ctx.db.insert('messages', { threadId: U, seq: 0, role: 'assistant', text: 'old', at: AT, runnerId: BOX_RUNNER });
+  await s.ctx.db.insert('eventBodies', { threadId: U, seq: 0, runnerId: BOX_RUNNER, at: 1, text: 'old output' });
+
+  // Reads: none of U.
+  const listed = await call(s.ctx, sync.threadsOf, { key: s.boxKey, runnerId: BOX_RUNNER });
+  assert.deepEqual(listed.map((t: { threadId: string }) => t.threadId), [THREAD]);
+  assert.deepEqual(await call(s.ctx, sync.sharedThreads, { key: s.boxKey, runnerId: BOX_RUNNER }), []);
+  assert.ok(!(await call(s.ctx, sync.messageHeads, { key: s.boxKey, runnerId: BOX_RUNNER })).some((h: { threadId: string }) => h.threadId === U));
+  assert.equal(await call(s.ctx, relay.runnerRequest, { key: s.boxKey, requestId: 'req-of-thread-u' }), null);
+  assert.equal(await outcome(call(s.ctx, relay.closeRequest, { key: s.boxKey, requestId: 'req-of-thread-u' })), 'notFound');
+
+  // Writes: U's sidebar row isn't buried, by name, by being left out of keep, or by writing it.
+  await call(s.ctx, sync.setThreadIndex, { key: s.boxKey, runnerId: BOX_RUNNER, rows: [index(U)], removed: [U], keep: [] });
+  const uRow = s.rows('threadIndex').find((r) => r.threadId === U && r.runnerId === BOX_RUNNER)!;
+  assert.equal(uRow.deleted, undefined, "U's sidebar row stands");
+  // A create it finishes can't name U as the thread it made.
+  const create = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: BOX_RUNNER, kind: 'create', args: { text: 'go', cwd: '/w' } });
+  await call(s.ctx, sync.takeCommand, { key: s.boxKey, commandId: create });
+  await call(s.ctx, sync.finishCommand, { key: s.boxKey, commandId: create, ok: true, resultThreadId: U });
+  assert.equal(s.rows('commands').find((c) => c._id === create)!.resultThreadId, undefined);
+
+  // Over its caps, it makes room among its own thread's rows only: U's old message and output stay, and its own wait.
+  const usage = s.rows('runnerStorage').find((r) => r.runnerId === BOX_RUNNER);
+  if (usage) Object.assign(usage, { messageBytes: 1e12, bodyBytes: 1e12 });
+  else await s.ctx.db.insert('runnerStorage', { runnerId: BOX_RUNNER, bytes: 0, messageBytes: 1e12, bodyBytes: 1e12 });
+  const m = await call(s.ctx, sync.appendMessages, { key: s.boxKey, messages: [{ threadId: THREAD, seq: 5, role: 'assistant', text: 'mine', at: AT }] });
+  assert.deepEqual(m.skipped, [`${THREAD}:5`]);
+  const b = await call(s.ctx, sync.appendBodies, { key: s.boxKey, bodies: [{ threadId: THREAD, seq: 5, text: 'out' }] });
+  assert.deepEqual(b.skipped, [`${THREAD}:5`]);
+  assert.ok(s.rows('messages').some((x) => x.threadId === U && x.seq === 0));
+  assert.ok(s.rows('eventBodies').some((x) => x.threadId === U && x.seq === 0));
+});

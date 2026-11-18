@@ -7647,17 +7647,24 @@ SHA-256 (`boxKeyHash`).
   repo, save }`: the box key, the login's cloud token, the thread's key
   for sealing its saves (base64, 32 bytes), the repo the owner fixed
   (`origin` without credentials, `subfolder`, `baseBranch`) and the last
-  save's URL, or null. In the same mutation the boot token is used up, the
-  box's machine goes to `awake` (`READY`), and the new key's hash replaces
-  the last box's, so the last box's key is refused from that moment. A
-  login with no cloud token refuses with `kind: "noCloudToken"` and leaves
-  the boot token as it was. A newer boot token for the thread replaces an
-  older one.
+  save's URL, or null. It unseals first, from a read that uses nothing
+  up, so a deployment that can't unseal (`kind: "config"`) leaves the
+  boot token and the box as they were. Then, in one mutation that checks
+  the token again, it's used up, the box's machine goes to `awake`
+  (`READY`), and the new key's hash replaces the last box's, so the last
+  box's key is refused from that moment. A login with no cloud token
+  refuses with `kind: "noCloudToken"` and leaves the boot token as it was.
+  A newer boot token for the thread replaces an older one. Box keys and
+  boot tokens (`tbb_`, `tbt_`) are redacted from transcripts like runner
+  keys.
 - **What it reaches.** Only what running its one thread needs (the list
   below, `BOX_CALLS` in `convex/runnerAccess.ts`), each for its own
   runner as a runner key's is, and each row checked against its thread
   too (`ownThreadOnly`): a thread row only under its own thread id, never a
-  new thread; messages, tool output and pictures of that thread; its
+  new thread. Every list and write by runner id (`threadsOf`,
+  `sharedThreads`, `messageHeads`, `setThreadIndex`'s `removed` and `keep`,
+  its requests, making room under its caps) leaves out any other thread
+  the owner key put under its runner id. Messages, tool output and pictures of that thread; its
   runner's commands for that thread or for no thread (another thread's are
   hidden from `pendingCommands` and refused); its thread's moves only.
   Everything else is refused as `forbidden`: everything owner-only,
@@ -7674,9 +7681,11 @@ SHA-256 (`boxKeyHash`).
 - **Heartbeats.** A box's `heartbeat` marks its `runners` row `box: {
   serviceId }`, renews the box's lease (`boxes.lastHeartbeatAt`) and
   drops any `rpcUrl`: no Mac app dials a box.
+- **The Machines page** (`convex/viewer.ts`) leaves out a box's
+  `bootTokenHash`, `boxKeyHash` and `sealedThreadKey`, and any `sealed`.
 - **Internal.** `boxes:authorize` (an action's gate), `storeCloudToken`,
   `newBox` and `insertBox` (a thread's box row), `storeBootToken`,
-  `claimBoot` (the exchange's one step) and `report` (what the service saw
+  `peekBoot` (the exchange's read), `claimBoot` (its one step) and `report` (what the service saw
   of the provider, as the machine's `server` events).
 
 A box key may call:

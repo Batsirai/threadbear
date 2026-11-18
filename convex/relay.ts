@@ -14,7 +14,7 @@ import type { OrderedQuery } from 'convex/server';
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { DataModel, Doc, Id } from './_generated/dataModel';
 import { checkRunnerId, forbidden, isSeq, MAX_SEQ, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
-import { docBytes, isThreadId, mayTouch } from './runnerAccess';
+import { docBytes, isThreadId, mayTouch, ownThreadOnly } from './runnerAccess';
 import { queued, request as requestMachine } from './machines';
 import { requestStateFrom } from './requestStates';
 import { steppingFor } from './stepping';
@@ -624,6 +624,8 @@ export const fileRequest = mutation({
       const old = now - r.createdAt > REQUEST_KEEP_MS;
       if (!old && kept < REQUESTS_KEPT_MAX) break;
       if (!old && r.state === 'claimed') continue;
+      // A box makes room among its own thread's requests only.
+      if (!ownThreadOnly(caller, r.threadId)) continue;
       await ctx.db.delete(r._id);
       kept--;
     }
@@ -644,7 +646,7 @@ export const runnerRequest = query({
   handler: async (ctx, { key, requestId }) => {
     const caller = await runnerAuth(ctx, key, 'runnerRequest');
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
-    if (!r || (!caller.owner && r.runnerId !== caller.runnerId)) return null;
+    if (!r || (!caller.owner && r.runnerId !== caller.runnerId) || !ownThreadOnly(caller, r.threadId)) return null;
     const { _id, _creationTime, requestState: _s, ...rest } = r;
     return { ...rest, docId: String(_id), runnerName: await runnerNameOf(ctx, r.runnerId) };
   },
@@ -698,7 +700,7 @@ export const closeRequest = mutation({
   handler: async (ctx, { key, requestId }) => {
     const caller = await runnerAuth(ctx, key, 'closeRequest');
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
-    if (!r || (!caller.owner && r.runnerId !== caller.runnerId)) throw new ConvexError({ kind: 'notFound', message: 'no such request' });
+    if (!r || (!caller.owner && r.runnerId !== caller.runnerId) || !ownThreadOnly(caller, r.threadId)) throw new ConvexError({ kind: 'notFound', message: 'no such request' });
     // Only one nobody has started: a claimed one may be starting now.
     if (r.state !== 'pending') return null;
     if (steppingFor('requestState')) await asBefore(ctx, r, { state: 'closed', decidedAt: Date.now() });
