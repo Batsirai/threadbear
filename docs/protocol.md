@@ -7906,7 +7906,9 @@ SHA-256 (`boxKeyHash`).
   is shown on the thread (`RemoteRunner.box.unsure`). A create's late
   `FAILED` for an attempt that has traded its token (or may hold work)
   changes nothing, nor does a late `CREATED` naming another machine for an
-  attempt the row already names one for.
+  attempt the row already names one for, unless it names the key holder's
+  machine, which the row then takes as its own. A refused `CREATED` deletes
+  its machine only if the reaper's plan and fence would delete it then.
   A newer boot token for the thread replaces an older one. Each is for one
   attempt at a box (`mintBootToken` returns its `attempt`, numbered from
   1), which the service's `CREATED` and `LOST` name: a loss ends the key,

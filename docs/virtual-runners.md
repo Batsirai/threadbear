@@ -660,6 +660,15 @@ it. And a machine resumed while it's unsure is a trial: the thread stays
 waking until its key heartbeat, and one that stops or stays silent past
 `TRIAL_MS` is paused and the next tried.
 
+A sixteenth look found that a refused `CREATED` was taken as leave to
+delete its machine: with Fly duplicates, the create's late answer for the
+key holder's machine was refused (the row named the other) and the key
+holder deleted. Now a `CREATED` naming the key holder's machine (by the
+box's word) makes it the row's, and a refused one deletes its machine only
+if the reaper's plan and fence would, in the same check
+(`deleteIfReaperWould`). The reaper doesn't take a machine in while an
+action holds the box's lease.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

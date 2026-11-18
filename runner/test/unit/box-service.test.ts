@@ -2423,3 +2423,73 @@ test('a guess by elimination deletes no other machine of its attempt, and a boxâ
   assert.equal(s.rowOf('T2').keyMachineId, 'late');
   assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
 });
+
+// ------------------------------------------------------------ Codex's sixteenth round (18 Nov 2026)
+
+// Fly makes two machines for attempt 1: dupA turns up first and is the
+// row's (adopted); the create's own machine (m1) exchanges, saying (or not)
+// which it is; then the create's answer, CREATED(m1), arrives late.
+async function lateCreate(s: Awaited<ReturnType<typeof setup>>, said: boolean) {
+  const { runnerId } = await s.start('T2');
+  const held = s.fly.hold((r) => r.method === 'POST' && r.path.endsWith('/machines'));
+  const making = s.run();
+  await held.arrived;
+  const post = s.fly.seen.find((r) => r.method === 'POST' && r.path.endsWith('/machines'))!;
+  s.fly.machines.push({ id: 'dupA', name: 'dupA', state: 'started', config: structuredClone(post.json.config) });
+  Object.assign(s.rowOf('T2'), { providerBoxId: 'dupA', providerAttempt: 1 });
+  const got = said ? await call(s.a, boxes.exchange, { bootToken: s.bootOf('dupA'), machineId: 'm1' }) : await s.exchange(s.bootOf('dupA'));
+  await s.beat(got.boxKey, runnerId);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  held.release();
+  await making;
+  return { runnerId, got };
+}
+
+test("a create's late CREATED for the key holder's machine makes it the row's, and never deletes it", async () => {
+  const s = await setup();
+  const { runnerId, got } = await lateCreate(s, true);
+  assert.notEqual(s.fly.byId('m1')!.state, 'destroyed');
+  assert.equal(s.rowOf('T2').providerBoxId, 'm1');
+  assert.equal(s.rowOf('T2').keyMachineId, 'm1');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+});
+
+test("a refused CREATED alone deletes nothing: with which machine holds the key unknown, the machine is kept", async () => {
+  const s = await setup();
+  const { runnerId, got } = await lateCreate(s, false);
+  assert.notEqual(s.fly.byId('m1')!.state, 'destroyed', 'it may be the one holding the work');
+  assert.equal(s.rowOf('T2').providerBoxId, 'dupA');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+});
+
+test("the reaper doesn't take in a machine while an action holds the box's lease", async () => {
+  const s = await setup();
+  await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  Object.assign(s.rowOf('T2'), { providerBoxId: undefined, providerAttempt: undefined });
+  const box = { providerBoxId: m.id, state: 'running', boxId: boxIdOf(s, 'T2'), attempt: 1 };
+  const [step] = await call(s.ctx, service.reapPlan, { serviceId: s.serviceId, boxes: [box] });
+  assert.equal(step.do, 'adopt');
+  s.rowOf('T2').op = { id: 'another-run', name: 'createBox', until: Date.now() + 60 * MINUTE };
+  await call(s.ctx, service.reapStep, { serviceId: s.serviceId, box, do: 'adopt', seen: step.seen });
+  assert.equal(s.rowOf('T2').providerBoxId, undefined);
+  s.rowOf('T2').op = undefined;
+  await call(s.ctx, service.reapStep, { serviceId: s.serviceId, box, do: 'adopt', seen: step.seen });
+  assert.equal(s.rowOf('T2').providerBoxId, m.id);
+});
+
+test("a refused CREATED for a machine the reaper would delete is still deleted at once", async () => {
+  const s = await setup();
+  await s.start('T2');
+  const held = s.fly.hold((r) => r.method === 'POST' && r.path.endsWith('/machines'));
+  const making = s.run();
+  await held.arrived;
+  // The thread can't come back meanwhile: nothing could hold work.
+  Object.assign(s.rowOf('T2'), { boxState: { kind: 'expired', at: Date.now() }, boxStateTimers: [] });
+  held.release();
+  await making;
+  assert.equal(s.fly.byId('m1')!.state, 'destroyed');
+});

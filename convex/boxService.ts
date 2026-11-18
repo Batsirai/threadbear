@@ -663,9 +663,30 @@ async function bringBack(op: Op): Promise<void> {
     await report(ctx, seen.threadId, { type: 'FAILED', error: `${made.name}: ${message(e)}`, attempt }, op.id);
     return;
   }
-  // Not taken: the thread was archived meanwhile, or a newer attempt has
-  // its box. This one isn't wanted.
-  if (!(await report(ctx, seen.threadId, { type: 'CREATED', providerBoxId, attempt }, op.id))) await p.destroy(providerBoxId).catch((e) => console.warn('an unwanted box was not deleted; the reaper will', message(e)));
+  // Not taken: the thread was archived meanwhile, a newer attempt has its
+  // box, or it's a duplicate. A refusal alone deletes nothing: the machine
+  // goes only if the reaper's own plan and fence would delete it now.
+  if (!(await report(ctx, seen.threadId, { type: 'CREATED', providerBoxId, attempt }, op.id))) await deleteIfReaperWould(ctx, seen.serviceId, p, boxId, providerBoxId).catch((e) => {
+    if (e instanceof LeaseLost) throw e;
+    console.warn('an unwanted box was not deleted; the reaper will', message(e));
+  });
+}
+
+/**
+ * A machine some step found unwanted, deleted only as the reaper would:
+ * its plan for it, from a listing now, must be `destroy`, and the reaper's
+ * step (reapStep: the same check again, and its fence) must agree in one
+ * mutation. Never the key holder's machine, nor one of an attempt that may
+ * hold work unless the key holder's is known and it isn't that.
+ */
+async function deleteIfReaperWould(ctx: ActionCtx, serviceId: Id<'runnerServices'>, p: BoxProvider, boxId: Id<'boxes'>, id: string): Promise<void> {
+  const listed = (await retrying(() => p.list({ tb_box: boxId }))).map((b) => ({ providerBoxId: b.providerBoxId, state: b.state, boxId: b.tags.tb_box ?? '', attempt: Number(b.tags.tb_attempt) || 0 }));
+  const box = listed.find((b) => b.providerBoxId === id);
+  if (!box) return;
+  const step = (await ctx.runQuery(internal.boxService.reapPlan, { serviceId, boxes: listed })).find((s) => s.box.providerBoxId === id);
+  if (step?.do !== 'destroy') return;
+  if (!(await ctx.runMutation(internal.boxService.reapStep, { serviceId, box, do: 'destroy', seen: step.seen, siblings: siblingsOf(listed, box) }))) return;
+  await retrying(() => p.destroy(id));
 }
 
 // ------------------------------------------------------------ sleeping and deleting
@@ -1250,7 +1271,8 @@ export const reapStep = machines.internalMutation({
     if (!row) return false;
     // Only the row's own machine's loss: a duplicate's says nothing of it.
     if (planned === 'lost') return row.providerBoxId === b.providerBoxId && isKeyMachine(row, b.attempt, b.providerBoxId) && (await boxMachine.send(machineCtx, row._id, { type: 'LOST', attempt: b.attempt })).status === 'done';
-    if (planned === 'adopt') await boxMachine.send(machineCtx, row._id, { type: 'CREATED', providerBoxId: b.providerBoxId, attempt: b.attempt });
+    // Not while an action holds the box's lease: it may be changing which machine is the row's.
+    if (planned === 'adopt' && !(row.op && row.op.until > Date.now())) await boxMachine.send(machineCtx, row._id, { type: 'CREATED', providerBoxId: b.providerBoxId, attempt: b.attempt });
     if (planned === 'paused') await boxMachine.send(machineCtx, row._id, { type: 'PAUSED', attempt: b.attempt });
     return false;
   },

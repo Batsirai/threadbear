@@ -609,11 +609,15 @@ export const report = machines.internalMutation({
       const { providerBoxId: _id, ...named } = event;
       return (await boxMachine.send(ctx, row._id, named)).status === 'done';
     }
-    // A machine of the key holder's attempt that isn't the key holder's is a duplicate, not the row's machine.
-    if (event.type === 'CREATED' && event.attempt !== undefined && event.attempt === row.keyAttempt && row.keyMachineId !== undefined && row.keyMachineId !== event.providerBoxId) return false;
-    // A create's late report for an attempt the row already names another
-    // machine for (a duplicate the provider made): it isn't the row's.
-    if (event.type === 'CREATED' && event.attempt !== undefined && event.attempt === row.providerAttempt && row.providerBoxId !== undefined && row.providerBoxId !== event.providerBoxId) return false;
+    if (event.type === 'CREATED' && event.attempt !== undefined && event.attempt === row.keyAttempt && row.keyMachineId !== undefined) {
+      // The key holder's machine, by the box's own word: the row's, whatever it named before.
+      // Any other of its attempt is a duplicate, not the row's machine.
+      if (row.keyMachineId !== event.providerBoxId) return false;
+    } else if (event.type === 'CREATED' && event.attempt !== undefined && event.attempt === row.providerAttempt && row.providerBoxId !== undefined && row.providerBoxId !== event.providerBoxId) {
+      // A create's late report for an attempt the row already names another
+      // machine for (a duplicate the provider made): it isn't the row's.
+      return false;
+    }
     return (await boxMachine.send(ctx, row._id, event)).status === 'done';
   },
 });
