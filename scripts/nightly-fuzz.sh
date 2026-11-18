@@ -186,4 +186,4 @@ while [ "$(now)" -lt "$stop" ]; do
   "$NODE" "$root/scripts/nightly-fuzz-summary.mjs" "$out" "$busy_waits" || say "summary failed"
 done
 "$NODE" "$root/scripts/nightly-fuzz-summary.mjs" "$out" "$busy_waits" --done || say "summary failed"
-say "night over: $n rounds, $busy_waits waits for a busy host"
+say "night over: $(( n - ${NIGHTLY_FUZZ_START:-0} )) rounds, $busy_waits waits for a busy host"
