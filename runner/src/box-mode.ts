@@ -211,9 +211,10 @@ export async function bootBox(o: { boot: BoxBoot; home: string; claudeDir: strin
     ...(got.login ? { login: got.login } : {}),
     save: got.save,
   };
-  writeBoxSecrets(o.home, secrets);
-  writePrivate(path.join(paths.secrets(o.home), 'convex-key'), got.boxKey + '\n');
+  // box.json last: a start that finds it finds the rest written too.
   writePrivate(path.join(o.claudeDir, TOKEN_FILE), JSON.stringify({ token: got.claudeToken, madeAt: new Date().toISOString() }) + '\n');
+  writePrivate(path.join(paths.secrets(o.home), 'convex-key'), got.boxKey + '\n');
+  writeBoxSecrets(o.home, secrets);
   o.log.info('box: traded its boot token', { runnerId: got.runnerId, threadId: got.threadId, machineId: o.boot.machineId, restoring: Boolean(got.save) });
   return secrets;
 }
