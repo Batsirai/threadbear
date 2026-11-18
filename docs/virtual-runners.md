@@ -17,8 +17,9 @@ Status: the spike passed (Order, 1), and the backend is built in two
 slices (18 Nov, "What's built", below): the tables, the box's state
 machine, box keys, cloud tokens and the boot exchange; then the Fly
 adapter, the service's actions, starting a thread, waking, reachable
-boxes and the crons; then the runner's box mode (19 Nov, slice 3). There's
-no box image yet, so nothing has made a real box through the app. A first draft of the plan
+boxes and the crons; then the runner's box mode (19 Nov, slice 3) and the
+box image it boots (slice 4). Nothing has made a real box through the app
+yet. A first draft of the plan
 went to a review panel (Fable, Opus and Grok, 16 Nov), each reading the
 code; their changes are folded in, and "What the review changed" at the
 end says what moved and why.
@@ -855,11 +856,57 @@ box's alone, and goes with it. And the save doesn't yet push the thread's
 branch and `refs/threadbear/save` to `origin` (that waits for GitHub
 tokens, decision 11).
 
+The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
+`entrypoint.sh`, `smoke.sh`, `runner/.dockerignore`), built and published by
+`.github/workflows/box-image.yml` (Faster starts, 1):
+
+- **What's in it.** For linux/amd64, Fly's default: Node 24 on Debian 13
+  (`node:24-trixie-slim`, pinned by digest) with git, procps and ca-certificates; Claude Code's native
+  linux-x64 build at a pinned version, checked against its SHA-256
+  (`CLAUDE_CODE_VERSION`, `CLAUDE_CODE_SHA256`), where its installer puts
+  it (`~/.local/bin/claude`, a link into `~/.local/share/claude/versions`),
+  with `DISABLE_AUTOUPDATER` set; and the runner from the commit being
+  built, as a release holds it (`src`, `bin`, the package files, `npm ci
+  --omit=dev`), with a `release.json` naming the commit, so it reports
+  `0.1.0+<built>-<commit>`. The agent SDK's own copy of Claude Code (some
+  250 MB) is left out, as the runner always names the CLI. No secrets.
+  About 1.3 GB unpacked (Claude Code 373 MB, the runner's packages 218
+  MB) and 330 MB to pull; the first build, on the Hetzner box, took about
+  4 minutes.
+- **Its entrypoint** runs the runner in box mode, as the service passes no
+  command; with no `THREADBEAR_BOX_BOOT` or `THREADBEAR_SYNC_URL` it stops
+  at once (64), saying why, rather than start an ordinary runner. As root
+  (Claude Code with `IS_SANDBOX=1`), in `/work` (`THREADBEAR_BOX_WORK`),
+  with the runner's log on stderr too, so the provider's logs show a box's
+  start (Faster starts, 2). Nothing restarts the runner: when it exits the
+  machine stops, as the Fly adapter's `restart: no` intends.
+- **Which runner it is.** Built from the repo at a commit rather than from
+  a signed release, so it's the runner Mike's backend is deployed from: a
+  push to main that changes what the image holds publishes
+  `ghcr.io/mikecann/threadbear-box:<commit>` and `:latest`, and
+  `setRunnerService` makes a virtual runner with `:latest` when it names
+  no image (`DEFAULT_BOX_IMAGE`). A new box is a few minutes behind main
+  while the image builds; the runner and backend stay compatible both ways,
+  as for any runner. A release tag publishes `:release-<date>` too, for a
+  virtual runner pinned to a release. A fork's push builds its own, under
+  its owner's name (docs/forking.md).
+- **Checked before it's pushed** (`smoke.sh`, no secrets): with no boot
+  token it exits 64 and says why; Claude Code runs at the version its link
+  names, with git, ps and the runner's version; and in box mode the whole
+  runner loads and trades its boot token at `THREADBEAR_SYNC_URL` with a
+  stand-in for Convex in the same container, which refuses it (`auth`),
+  and the runner stops at once, saying so.
+- **Moving Claude Code on** is by hand: both values from its release
+  manifest (the Dockerfile says how), in a commit that rebuilds the image.
+  Until then a box runs that version, while Mike's other runners follow
+  Claude Code's latest.
+- The package has to be public, as Fly pulls with no credentials. The
+  first push makes it private; its settings on GitHub change that, once.
+
 Not built yet, in about the order they're needed:
 
-- TODO the box image: Claude Code and the runner baked in, its
-  entrypoint the runner with `THREADBEAR_BOX_BOOT` (Faster starts, 1), and
-  a real box started from the Mac end to end.
+- TODO a real box started from the Mac end to end, on Fly with the box
+  image.
 - TODO a save bigger than one upload, 10 MB, in chunks, as a move's are;
   and the save's push of the branch and `refs/threadbear/save` (decision
   7), with GitHub tokens (decision 11).
@@ -922,7 +969,8 @@ He chose to stay on Fly (it's about a seventh of E2B's price for the same
 box). Where the time went, and what takes each part away, cheapest first:
 
 1. **Bake the image** (71 s: installing Claude Code and the runner's
-   packages). The box image carries both. No running cost.
+   packages). The box image carries both. No running cost. Built 19 Nov
+   (slice 4, "What's built"); its first real start will say what's left.
 2. **Find the 30 s** between a new thread and its first text that the
    setup and the turn don't explain. Read the runner's log in box mode.
 3. **A pool of suspended spare boxes.** The service keeps a few boxes

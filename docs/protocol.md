@@ -7754,9 +7754,11 @@ the service's Convex actions (`convex/boxService.ts`); nothing on a Mac
 has to be on for it.
 
 - **Making one.** `boxes:setRunnerService({ key, serviceId?, name,
-  provider, image, box: { cpus, memoryMb }, region?, limits? })` makes
+  provider, image?, box: { cpus, memoryMb }, region?, limits? })` makes
   one, or changes one (its provider can't change), and returns its id;
-  limits left out are `BOX_LIMITS` (`maxBoxes` 5, `idleSleepMinutes` 10,
+  an image left out is `DEFAULT_BOX_IMAGE`
+  (`ghcr.io/mikecann/threadbear-box:latest`, the box image below) or as
+  it was, and limits left out are `BOX_LIMITS` (`maxBoxes` 5, `idleSleepMinutes` 10,
   `maxAwakeHoursPerDay` 8, `deleteAfterDays` 14) or as they were. A Fly
   box is 2048 MB at most, the most Fly can pause, and every box 1024 MB at
   least (`MIN_BOX_MB`), so a box can restore any save another took.
@@ -8036,6 +8038,15 @@ A box key may call:
 
 The runner in a box (`runner/src/box-mode.ts`, `box-save.ts`): an ordinary
 runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
+The box image (`runner/box/Dockerfile`) is Node 24 on Debian with git,
+Claude Code at a pinned version (`~/.local/bin/claude`) and the runner from
+the commit it was built from. Its entrypoint (`runner/box/entrypoint.sh`)
+runs the runner as root, in box mode, with `IS_SANDBOX=1`,
+`DISABLE_AUTOUPDATER=1`, `THREADBEAR_BOX_WORK=/work` and the runner's log on
+stderr as well (`THREADBEAR_LOG_STDERR=1`); with no `THREADBEAR_BOX_BOOT`, or
+no `THREADBEAR_SYNC_URL`, it exits 64 at once, saying why, rather than start
+an ordinary runner. Nothing restarts the runner in the box: when it exits,
+the machine stops.
 
 - **Starting.** Before anything else it reads the boot token and takes it
   out of its own environment, so nothing it starts (Claude Code, its

@@ -1,0 +1,120 @@
+# The box image (runner/box/Dockerfile; docs/virtual-runners.md, "The box
+# image"): what a virtual runner's machine boots to run one thread. Built for
+# linux/amd64 (Fly's default), checked with runner/box/smoke.sh, then
+# published to GitHub's container registry as
+# ghcr.io/<repo owner>/threadbear-box, so Mike's is
+# ghcr.io/mikecann/threadbear-box and a fork's is its own:
+#
+# - a push to main that changes what the image holds: `<commit>` and
+#   `latest`. New boxes take `latest` (the service's default image,
+#   convex/boxes.ts DEFAULT_BOX_IMAGE), so they run the runner from the
+#   main that Mike's backend is deployed from;
+# - a release tag (release/YYYY-MM-DD, runner/src/upstream.ts):
+#   `<commit>` and `release-YYYY-MM-DD`, for a virtual runner pinned to a
+#   release;
+# - by hand (workflow_dispatch): `<commit>`, and `latest` from main.
+#
+# The package must be public, as Fly pulls it with no credentials: the
+# first push makes it private, and its Package settings on GitHub change
+# that, once.
+#
+# Free, as runner.yml's must be (Mike, 9 Nov): a standard hosted runner, no
+# schedule, a newer push cancelling the run before it, and only when the
+# image's files changed (the paths below: what the Dockerfile copies, the
+# image's own files, and this file). Nothing but GITHUB_TOKEN, with
+# packages: write to push; no action but checkout, pinned as
+# workflow-pins.test.ts wants; plain docker for the rest.
+name: Box image
+
+on:
+  push:
+    branches: [main]
+    # Paths aren't checked for tags: every release tag builds.
+    tags: ['release/*']
+    paths:
+      - 'runner/src/**'
+      - 'runner/bin/**'
+      - 'runner/package.json'
+      - 'runner/package-lock.json'
+      - 'runner/.npmrc'
+      - 'runner/.dockerignore'
+      - 'runner/box/Dockerfile'
+      - 'runner/box/entrypoint.sh'
+      - 'runner/box/smoke.sh'
+      - '.github/workflows/box-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: box-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Names and tags
+        id: names
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          image="ghcr.io/${OWNER,,}/threadbear-box"
+          tags="$image:$SHA"
+          case "$REF" in
+            refs/heads/main) tags="$tags $image:latest" ;;
+            refs/tags/release/*) tags="$tags $image:release-${REF#refs/tags/release/}" ;;
+          esac
+          {
+            echo "image=$image"
+            echo "tags=$tags"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tags: $tags"
+
+      - name: Sign in to the registry
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Build
+        # The last `latest` as a cache, when there is one: the Claude Code and
+        # packages layers only change when their versions do.
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          SHA: ${{ github.sha }}
+          BUILT_AT: ${{ steps.names.outputs.built_at }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          docker build --platform linux/amd64 -f runner/box/Dockerfile \
+            --cache-from "$IMAGE:latest" --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg COMMIT="$SHA" --build-arg BUILT_AT="$BUILT_AT" \
+            --label org.opencontainers.image.source="$SOURCE" \
+            --label org.opencontainers.image.revision="$SHA" \
+            --label org.opencontainers.image.description="Threadbear virtual runner box: the runner in box mode and Claude Code" \
+            -t "$IMAGE:$SHA" runner
+          docker image ls "$IMAGE"
+
+      - name: Smoke test
+        run: runner/box/smoke.sh "${{ steps.names.outputs.image }}:${{ github.sha }}"
+
+      - name: Push
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          SHA: ${{ github.sha }}
+          TAGS: ${{ steps.names.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            [ "$tag" = "$IMAGE:$SHA" ] || docker tag "$IMAGE:$SHA" "$tag"
+            docker push "$tag"
+          done

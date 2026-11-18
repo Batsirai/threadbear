@@ -16,6 +16,7 @@ const moves = load('moves');
 const boxes = load('boxes');
 const service = load('boxService');
 const { TRIAL_MS } = service;
+const { DEFAULT_BOX_IMAGE } = boxes as { DEFAULT_BOX_IMAGE: string };
 const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
 
 const realFetch = globalThis.fetch;
@@ -533,7 +534,15 @@ test('only the owner makes, changes and lists virtual runners, and the values ar
   assert.deepEqual(big.limits, { maxBoxes: 3, idleSleepMinutes: 10, maxAwakeHoursPerDay: 8, deleteAfterDays: 14 });
   assert.equal(big.region, 'syd');
   assert.equal(listed.find((x: { serviceId: string }) => x.serviceId === s.serviceId).running, 1, "the helper's own box is creating");
-  const bad = (a: Record<string, unknown>) => outcome(call(s.ctx, boxes.setRunnerService, { key: OWNER, name: 'X', provider: 'fly', image: 'img:1', box: { cpus: 1, memoryMb: 1024 }, ...a }));
+  // No image: the box image this repo's workflow publishes (runner/box/Dockerfile);
+  // changing a virtual runner without one keeps the image it has.
+  const plain = await call(s.ctx, boxes.setRunnerService, { key: OWNER, name: 'Plain', provider: 'fly', box: { cpus: 1, memoryMb: 1024 } });
+  const imageOf = async (id: string) => (await call(s.ctx, boxes.runnerServices, { key: OWNER })).find((x: { serviceId: string }) => x.serviceId === id).image;
+  assert.equal(await imageOf(plain), DEFAULT_BOX_IMAGE);
+  assert.equal(DEFAULT_BOX_IMAGE, 'ghcr.io/mikecann/threadbear-box:latest');
+  await call(s.ctx, boxes.setRunnerService, { key: OWNER, serviceId: made, name: 'Big', provider: 'fly', box: { cpus: 4, memoryMb: 2048 } });
+  assert.equal(await imageOf(made), 'img:1');
+  const bad =(a: Record<string, unknown>) => outcome(call(s.ctx, boxes.setRunnerService, { key: OWNER, name: 'X', provider: 'fly', image: 'img:1', box: { cpus: 1, memoryMb: 1024 }, ...a }));
   assert.equal(await bad({ provider: 'aws' }), 'badArgs');
   assert.equal(await bad({ box: { cpus: 1, memoryMb: 1000 } }), 'badArgs');
   // Under 1024 MB, a box may not have the memory to restore its thread's save (box-save.ts).

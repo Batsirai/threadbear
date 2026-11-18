@@ -10,8 +10,8 @@
 // the same, which is wrong for keys, tokens and IVs. Mutations only store
 // hashes and sealed values, and change state atomically.
 //
-// Not built yet (docs/virtual-runners.md, "What's built"): a runner's box
-// mode and its image, and starting or waking one from the phone.
+// Not built yet (docs/virtual-runners.md, "What's built"): starting or
+// waking one from the phone.
 import { ConvexError, v, type Infer } from 'convex/values';
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
@@ -202,6 +202,11 @@ async function addBox(ctx: MutationCtx, a: NewBox): Promise<Id<'boxes'>> {
 
 const SERVICE_NAME = /^[^\u0000-\u001f\u007f]{1,80}$/;
 const IMAGE = /^[\x21-\x7e]{1,300}$/;
+// A virtual runner's image when none is given: the box image Mike's repo's
+// workflow builds from main and publishes (runner/box/Dockerfile,
+// .github/workflows/box-image.yml). Mike's own: a fork builds and names its
+// own (docs/forking.md).
+export const DEFAULT_BOX_IMAGE = 'ghcr.io/mikecann/threadbear-box:latest';
 const REGION = /^[a-z0-9-]{1,20}$/;
 // Each limit's whole-number range.
 const LIMIT_RANGE = { maxBoxes: [1, 100], idleSleepMinutes: [1, 24 * 60], maxAwakeHoursPerDay: [1, 24], deleteAfterDays: [1, 365] } as const;
@@ -255,11 +260,12 @@ export const runnerServices = query({
 
 /**
  * Makes a virtual runner, or changes one (`serviceId`): its name, image,
- * box size, region and limits (any left out: BOX_LIMITS, or as they were).
+ * box size, region and limits (any left out: BOX_LIMITS, or as they were;
+ * the image left out: DEFAULT_BOX_IMAGE, or as it was).
  * A provider is a virtual runner's for life: another one is a new runner.
  */
 export const setRunnerService = mutation({
-  args: { key: v.string(), serviceId: v.optional(v.id('runnerServices')), name: v.string(), provider: v.string(), image: v.string(), box: v.object({ cpus: v.number(), memoryMb: v.number() }), region: v.optional(v.string()), limits: v.optional(limitsArg) },
+  args: { key: v.string(), serviceId: v.optional(v.id('runnerServices')), name: v.string(), provider: v.string(), image: v.optional(v.string()), box: v.object({ cpus: v.number(), memoryMb: v.number() }), region: v.optional(v.string()), limits: v.optional(limitsArg) },
   returns: v.id('runnerServices'),
   handler: async (ctx, { key, serviceId, ...a }) => {
     await runnerAuth(ctx, key, 'setRunnerService');
@@ -269,7 +275,7 @@ export const setRunnerService = mutation({
     // newer than its save then has to be kept running (boxService.ts): so,
     // for now, only sizes the provider can pause.
     if (a.provider === 'fly' && a.box.memoryMb > FLY_SUSPEND_MAX_MB) throw bad(`box.memoryMb must be ${FLY_SUSPEND_MAX_MB} or less: Fly can't pause a bigger box.`);
-    if (!IMAGE.test(a.image)) throw bad('image must be an image reference, up to 300 characters with no spaces');
+    if (a.image !== undefined && !IMAGE.test(a.image)) throw bad('image must be an image reference, up to 300 characters with no spaces');
     if (!Number.isSafeInteger(a.box.cpus) || a.box.cpus < 1 || a.box.cpus > 16) throw bad('box.cpus must be a whole number from 1 to 16');
     if (!Number.isSafeInteger(a.box.memoryMb) || a.box.memoryMb < 256 || a.box.memoryMb > 65536 || a.box.memoryMb % 256) throw bad('box.memoryMb must be a multiple of 256 from 256 to 65536');
     // A box's runner holds a save in memory to write it and to restore it
@@ -287,7 +293,7 @@ export const setRunnerService = mutation({
       if (!Number.isSafeInteger(x) || x < lo || x > hi) throw bad(`limits.${k} must be a whole number from ${lo} to ${hi}`);
       limits[k] = x;
     }
-    const fields = { name: a.name.trim(), provider: a.provider, image: a.image, box: { cpus: a.box.cpus, memoryMb: a.box.memoryMb }, limits };
+    const fields = { name: a.name.trim(), provider: a.provider, image: a.image ?? old?.image ?? DEFAULT_BOX_IMAGE, box: { cpus: a.box.cpus, memoryMb: a.box.memoryMb }, limits };
     if (old) {
       // A region left out goes: the provider picks one.
       await ctx.db.patch(old._id, { ...fields, region: a.region });
