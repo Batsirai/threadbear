@@ -7,6 +7,9 @@
 // "Sending…" on the phone for two weeks.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
@@ -393,4 +396,37 @@ test('timers that failed while the machine was off are delivered again after the
   await fireTimers(s, Date.now() + sync.TAKEN_LEASE_MS + 1000);
   assert.equal(s.row(id).commandState.kind, 'lapsed');
   assert.deepEqual(await call(s.ctx, machinesModule.failedTimers, {}), []);
+});
+
+// While the deploy's stepping stone has the request machine off, the main
+// Mac's answer and the asking runner's close go through as before: a thread
+// already started whose `allowed` was refused would leave its request
+// claimed. A new request waits for the machine.
+test('during the stepping stone, a request is answered and closed as before, keeping a backfilled one in step', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-stepping-'));
+  try {
+    const convex = path.join(import.meta.dirname, '../../../convex');
+    for (const f of fs.readdirSync(convex)) if (f.endsWith('.ts')) fs.copyFileSync(path.join(convex, f), path.join(root, f));
+    const stepping = path.join(root, 'stepping.ts');
+    fs.writeFileSync(stepping, fs.readFileSync(stepping, 'utf8').replace('export const STEPPING: readonly string[] = [];', "export const STEPPING: readonly string[] = ['requestState'];"));
+    process.env.RUNNER_KEY = OWNER;
+    const b = memoryBackend(root);
+    const relayAt = load('relay', root);
+    const now = Date.now();
+    const insert = (requestId: string, row: Record<string, unknown>) => b.ctx.db.insert('runnerRequests', { requestId, runnerId: MINI, threadId: 'B', target: 'main', text: 't', createdAt: now - 10, ...row });
+    const row = (requestId: string) => b.rows('runnerRequests').find((r) => r.requestId === requestId)!;
+    await insert('req-claimed', { state: 'claimed', claim: ATTEMPT, decidedAt: now - 5 });
+    await insert('req-pend01', { state: 'pending', requestState: { kind: 'pending' } });
+    const decide = (requestId: string, state: string, extra: Record<string, unknown> = {}) => call(b.ctx, relayAt.decideRequest, { key: OWNER, requestId, docId: String(row(requestId)._id), state, ...extra });
+    const where = { runnerId: 'laptop000001', runnerName: 'Laptop', threadId: 'new-thread' };
+    await decide('req-claimed', 'claimed', { claim: ATTEMPT });
+    await decide('req-claimed', 'allowed', { result: where });
+    assert.deepEqual([row('req-claimed').state, row('req-claimed').result, row('req-claimed').requestState], ['allowed', where, undefined]);
+    await call(b.ctx, relayAt.closeRequest, { key: OWNER, requestId: 'req-pend01' });
+    assert.equal(row('req-pend01').state, 'closed');
+    assert.equal(row('req-pend01').requestState.kind, 'closed');
+    assert.equal(await outcome(decide('req-pend01', 'claimed', { claim: ATTEMPT })), 'badArgs');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

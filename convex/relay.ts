@@ -16,6 +16,8 @@ import type { DataModel, Doc, Id } from './_generated/dataModel';
 import { checkRunnerId, forbidden, isSeq, MAX_SEQ, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
 import { docBytes, isThreadId } from './runnerAccess';
 import { queued, request as requestMachine } from './machines';
+import { requestStateFrom } from './requestStates';
+import { steppingFor } from './stepping';
 import { messageButton } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
@@ -619,6 +621,7 @@ export const decideRequest = mutation({
     if (claim !== undefined && !CLAIM.test(claim)) throw new ConvexError({ kind: 'badArgs', message: 'claim must be 8 to 64 letters, digits, - or _' });
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
     if (!r || String(r._id) !== docId) throw new ConvexError({ kind: 'notFound', message: 'no such request' });
+    if (steppingFor('requestState')) return await decideAsBefore(ctx, r, state, result, claim);
     if (state === 'allowed' && !result && r.state === 'claimed') throw new ConvexError({ kind: 'badArgs', message: 'an allowed request says where it started' });
     const type = EVENTS[state];
     const event = type === 'CLAIM' ? { type, ...(claim !== undefined ? { claim } : {}) } : type === 'ALLOW' ? { type, result: result ?? { runnerId: '', runnerName: '', threadId: '' } } : { type };
@@ -639,7 +642,29 @@ export const closeRequest = mutation({
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
     if (!r || (!caller.owner && r.runnerId !== caller.runnerId)) throw new ConvexError({ kind: 'notFound', message: 'no such request' });
     // Only one nobody has started: a claimed one may be starting now.
-    if (r.state === 'pending') await requestMachine.send(ctx, r._id, { type: 'CLOSE' });
+    if (r.state !== 'pending') return null;
+    if (steppingFor('requestState')) await asBefore(ctx, r, { state: 'closed', decidedAt: Date.now() });
+    else await requestMachine.send(ctx, r._id, { type: 'CLOSE' });
     return null;
   },
 });
+
+// While the deploy's stepping stone has the machine off (stepping.ts), the
+// main Mac's answer and the asking runner's close go through the way they
+// did before it: a thread already started whose `allowed` was refused would
+// otherwise leave its request claimed. The machine has never run on this
+// deployment then, so the old fields are the request's whole story; a row
+// the backfill has already reached gets its requestState again from them.
+const MOVES_BEFORE: Record<string, string[]> = { claimed: ['pending'], allowed: ['claimed'], pending: ['claimed'], denied: ['pending'] };
+async function decideAsBefore(ctx: MutationCtx, r: Doc<'runnerRequests'>, state: 'claimed' | 'allowed' | 'pending' | 'denied', result: Doc<'runnerRequests'>['result'], claim: string | undefined): Promise<null> {
+  if (state === 'claimed' && r.state === 'claimed' && claim !== undefined && r.claim === claim) return null;
+  if (!MOVES_BEFORE[state]!.includes(r.state)) throw new ConvexError({ kind: 'badArgs', message: `that request is ${r.state}` });
+  if (state === 'allowed' && !result) throw new ConvexError({ kind: 'badArgs', message: 'an allowed request says where it started' });
+  await asBefore(ctx, r, { state, ...(state === 'allowed' && result ? { result } : {}), ...(state === 'claimed' ? { claim } : state === 'pending' ? { claim: undefined } : {}), decidedAt: Date.now() });
+  return null;
+}
+
+async function asBefore(ctx: MutationCtx, r: Doc<'runnerRequests'>, fields: Partial<Doc<'runnerRequests'>>): Promise<void> {
+  const backfilled = (r as Partial<Doc<'runnerRequests'>>).requestState !== undefined;
+  await ctx.db.patch(r._id, { ...fields, ...(backfilled ? { requestState: requestStateFrom({ ...r, ...fields }) } : {}) });
+}
