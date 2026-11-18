@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openCardEvents, phoneCommands, primaryRemote, ThreadRouter } from '../../src/handover.ts';
+import { openCardEvents, phoneCommands, primaryRemote, runnerAlive, ThreadRouter } from '../../src/handover.ts';
 import type { PersistedEvent } from '../../src/protocol.ts';
 import { FakeAccounts, FakeAdapter, makeHarness, testConfig, tick, type Harness } from '../helpers/fakes.ts';
 import { skipOnWindows } from '../helpers/platform.ts';
@@ -1111,4 +1111,16 @@ test("Peers.openCards: a draining runner from the morning of 13 Nov, answering e
   assert.equal(openCardsAnswer({ threads: [] }, 'm3'), undefined);
   assert.equal(openCardsAnswer(null, 'x'), undefined);
   assert.equal(openCardsAnswer({ events: 'no' }, 'x'), undefined);
+});
+
+// Windows' processInfo has only the program's name, never main.ts: a
+// draining runner there was always taken for gone and left running (18 Nov).
+test('runnerAlive knows a runner on Windows by its program alone', () => {
+  const info = (command: string) => ({ pgid: 1, lstart: '1', command });
+  assert.equal(runnerAlive(1, info('node'), true), true);
+  assert.equal(runnerAlive(1, info('node.exe'), true), true);
+  assert.equal(runnerAlive(1, info('claude'), true), false);
+  assert.equal(runnerAlive(1, null, true), false);
+  assert.equal(runnerAlive(1, info('node /x/releases/r/src/main.ts'), false), true);
+  assert.equal(runnerAlive(1, info('node'), false), false);
 });

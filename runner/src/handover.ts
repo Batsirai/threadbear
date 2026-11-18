@@ -33,6 +33,7 @@ import type { Scheduler } from './schedules.ts';
 import type { CommandHost } from './sync.ts';
 import type { DrainProjectOp, MembershipChange, Projects } from './projects.ts';
 import { processInfo } from './proc.ts';
+import { IS_WINDOWS } from './platform.ts';
 
 // `auth: 'challenge'`: this runner answers the RPC's auth challenge
 // (docs/protocol.md, "Auth"). A drain file without it is from an older
@@ -74,10 +75,15 @@ export function listDrainInfos(home: string): DrainInfo[] {
   return out.sort((a, b) => a.pid - b.pid);
 }
 
-// A runner process (main.ts under a supervisor), not a recycled pid.
-export function runnerAlive(pid: number): boolean {
-  const info = processInfo(pid);
-  return Boolean(info && /main\.ts/.test(info.command));
+// A runner process (main.ts under a supervisor), not a recycled pid. On
+// Windows processInfo has only the program's name, so node is all it can
+// tell; a pid reused by some other node fails the connect after. Matching
+// main.ts alone there took every draining runner for gone, so the new one
+// swept its threads and left it running, holding its release's folder,
+// which then failed the next update's prune (18 Nov).
+export function runnerAlive(pid: number, info = processInfo(pid), windows = IS_WINDOWS): boolean {
+  if (!info) return false;
+  return /main\.ts/.test(info.command) || (windows && /^node(\.exe)?$/i.test(info.command.trim()));
 }
 
 export function bucketOf(t: Pick<ThreadSummary, 'archivedAt' | 'snoozedUntil'>, now: number): Bucket {

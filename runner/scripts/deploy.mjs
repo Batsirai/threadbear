@@ -664,12 +664,23 @@ function pruneList(c, extraKeep = []) {
 }
 
 function prune(c, extraKeep) {
-  const gone = pruneList(c, extraKeep);
-  for (const id of gone) fs.rmSync(path.join(c.releases, id), { recursive: true, force: true });
+  // Tidying only: the new release is already current, so a folder that
+  // won't go (on Windows, one a process still runs from or has open) is
+  // left for the next deploy rather than failing this one (18 Nov).
+  const remove = (dir) => {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return true;
+    } catch (e) {
+      say(`Left ${path.basename(dir)} for next time: ${e.code ?? e.message}`);
+      return false;
+    }
+  };
+  const gone = pruneList(c, extraKeep).filter((id) => remove(path.join(c.releases, id)));
   // Builds a killed deploy left behind; this one holds the lock, so no
   // other deploy is building.
   for (const name of fs.existsSync(c.releases) ? fs.readdirSync(c.releases) : []) {
-    if (name.startsWith('.building-')) fs.rmSync(path.join(c.releases, name), { recursive: true, force: true });
+    if (name.startsWith('.building-')) remove(path.join(c.releases, name));
   }
   if (gone.length) say(`Removed ${plural(gone.length, 'old release')}: ${gone.join(', ')}`);
 }
