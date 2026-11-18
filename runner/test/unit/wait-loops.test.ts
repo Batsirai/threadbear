@@ -63,11 +63,19 @@ test('the reason names the way to wait instead', () => {
 
 test('a long command is read in linear time', () => {
   // 10 KB of unclosed loops took 300 ms with the first regex (Codex's review).
+  // CPU time, the best of up to five, under 500 ms: a busy Linux
+  // follower's update build took 78 ms of the clock (18 Nov), and the old
+  // regex's quadratic time on this 60 KB would be seconds.
   const big = 'while x; do '.repeat(5000);
-  const t = performance.now();
-  isWaitCommand(big);
-  isWaitCommand(big + ' sleep 5');
-  assert.ok(performance.now() - t < 50, `took ${performance.now() - t} ms`);
+  let ms = Infinity;
+  for (let i = 0; i < 5 && ms >= 500; i++) {
+    const t = process.cpuUsage();
+    isWaitCommand(big);
+    isWaitCommand(big + ' sleep 5');
+    const d = process.cpuUsage(t);
+    ms = Math.min(ms, (d.user + d.system) / 1000);
+  }
+  assert.ok(ms < 500, `took ${ms} ms of CPU`);
 });
 
 test('the reason says to poll on a cron, never a one-off that would drop the wait', () => {
