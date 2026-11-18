@@ -95,7 +95,10 @@ for (let i = 0; i < repeat && Date.now() < deadline - 30_000; i++) {
   const code = await new Promise((done) => cucumber.once('exit', (c) => done(c)));
   clearTimeout(timer);
   for (const f of fs.existsSync(failuresDir) ? fs.readdirSync(failuresDir) : []) {
-    fs.renameSync(path.join(failuresDir, f), path.join(out, 'failures', `r${i}-${f}`));
+    // A copy, not a rename: on Tinker Desk the cache's folders aren't all on
+    // one disk (EXDEV, 18 Nov).
+    fs.copyFileSync(path.join(failuresDir, f), path.join(out, 'failures', `r${i}-${f}`));
+    fs.rmSync(path.join(failuresDir, f), { force: true });
   }
   const ran = lines() - before;
   meta.rounds.push({ seed: roundSeed, code, cut, scenarios: ran });
