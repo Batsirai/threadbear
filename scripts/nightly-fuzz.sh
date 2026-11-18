@@ -122,13 +122,19 @@ areas=("Sidebar and inbox" "Thread header" "Transcript row kinds" "Composer" "Ca
   "Rich content" "Patches panels" "File previews" "Projects, Librarian" "Settings" "Navigation, shortcuts")
 conds=(slow slow+dark slow+narrow slow+wide slow+motion order)
 agent_backoff_until=0
+# OpenCode 2 leaves a background service behind even with --standalone, so
+# it's stopped after every model round and when the night ends.
+stop_opencode() { pkill -f "$oc_home/bin/opencode" 2>/dev/null || true; }
+trap stop_opencode EXIT
 
-n=0; stress_n=0; agent_n=0; busy_waits=0
+# NIGHTLY_FUZZ_START=3 starts the rotation at the monkey, for a try.
+n=${NIGHTLY_FUZZ_START:-0}; stress_n=0; agent_n=0; busy_waits=0
 while [ "$(now)" -lt "$stop" ]; do
   if poddle_busy; then say "Poddle's tests are on: waiting"; sleep 300; continue; fi
   left=$(( (stop - $(now)) / 60 ))
   [ "$left" -ge 4 ] || break
-  round_min=$(( left < 9 ? left - 1 : 9 ))
+  # About 7 minutes of work, so with the build and setup a round is about 10.
+  round_min=$(( left < 8 ? left - 1 : 7 ))
   # stress, agent, stress, monkey, ...
   case $(( n % 4 )) in
     0|2) kind=stress ;;
@@ -144,9 +150,10 @@ while [ "$(now)" -lt "$stop" ]; do
       what="$cond $shard"
       cmd=(node features/tools/stress.mjs --cond "$cond" --shard "$shard" --minutes "$round_min" --out "$dir") ;;
     agent)
-      area="${areas[$(( agent_n % ${#areas[@]} ))]}"
-      what="$area (${models[$model_i]})"
-      cmd=(env "${oc_env[@]}" FUZZ_OUT="$dir" features/tools/fuzz-agent-desk.sh "opencode:${models[$model_i]}" "$round_min" "$area") ;;
+      # Two areas, a fresh app each: one session tends to stop at its token cap in about 3 minutes.
+      area="${areas[$(( agent_n % ${#areas[@]} ))]}"; area2="${areas[$(( (agent_n + 1) % ${#areas[@]} ))]}"
+      what="$area; $area2 (${models[$model_i]})"
+      cmd=(env "${oc_env[@]}" FUZZ_OUT="$dir" features/tools/fuzz-agent-desk.sh "opencode:${models[$model_i]}" "$round_min" "$area" "$area2") ;;
     monkey)
       what="mock-weight 40"
       cmd=(env FUZZ_OUT="$dir" features/tools/fuzz-monkey.sh "$(( $(now) % 100000 ))" "$round_min" --mock-weight 40) ;;
@@ -154,7 +161,10 @@ while [ "$(now)" -lt "$stop" ]; do
   say "round $n: $kind ${cmd[*]:0:12}"
   started=$(now)
   rc=0
-  bash "$root/desktop/scripts/remote.sh" local --desk --try -- "${cmd[@]}" >"$dir.log" 2>&1 </dev/null || rc=$?
+  # NIGHTLY_FUZZ_QUEUE=1 waits in line instead, for a daytime try (the host's
+  # busy all day, so a run that always gives way may never get a turn).
+  try=--try; [ "${NIGHTLY_FUZZ_QUEUE:-}" != 1 ] || try=""
+  bash "$root/desktop/scripts/remote.sh" local --desk $try -- "${cmd[@]}" >"$dir.log" 2>&1 </dev/null || rc=$?
   if [ "$rc" = 75 ]; then
     # Someone else's turn: give it back and try again shortly.
     rm -f "$dir.log"; busy_waits=$((busy_waits + 1))
@@ -165,7 +175,8 @@ while [ "$(now)" -lt "$stop" ]; do
   case "$kind" in
     stress) stress_n=$((stress_n + 1)) ;;
     agent)
-      agent_n=$((agent_n + 1))
+      agent_n=$((agent_n + 2))
+      stop_opencode
       # The free tier saying no: an hour of the other two instead.
       if grep -rqsE 'ModelDeprecated|has been deprecated|[Mm]odel not found' "$dir" "$dir.log"; then
         say "${models[$model_i]} is gone: trying the next free model"; model_i=$((model_i + 1))
