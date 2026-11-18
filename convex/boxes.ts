@@ -418,6 +418,9 @@ const exchanged = v.object({
   repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }),
   // The last save, to restore from; null for a thread's first box.
   save: v.union(v.null(), v.object({ url: v.string(), at: v.number(), bytes: v.number() })),
+  // The Claude login the box runs on, as its cloud token is kept (an email):
+  // a token login writes no oauthAccount, so the box's runner is told it.
+  login: v.string(),
 });
 
 type Exchanged = Infer<typeof exchanged>;
@@ -461,7 +464,7 @@ export const exchange = action({
     const boxKey = BOX_KEY_PREFIX + randomHex(32);
     const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash, boxKeyHash: await sha256(boxKey), sealedToken: peeked.sealedToken, sealedThreadKey: peeked.sealedThreadKey, ...(machineId !== undefined ? { machineId } : {}) });
     if (!got) throw refusedBoot();
-    return { boxKey, runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save };
+    return { boxKey, runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save, login: peeked.login };
   },
 });
 

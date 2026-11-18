@@ -76,7 +76,10 @@ import { isDirectory, removeTempFiles } from './fsutil.ts';
 import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
-import { ConvexSync, defaultRunnerName, ensureRunnerId, readSyncKey } from './sync.ts';
+import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
+import { bootBox, enterBoxEnv, prepareBoxFolder, readBoxBoot, type ActionPost, type BoxSecrets } from './box-mode.ts';
+import { saveThread } from './box-save.ts';
+import { ClockJumpWatch } from './clock-jump.ts';
 import { pushFailingText } from './push-failing.ts';
 import { Scrubber } from './scrub.ts';
 import { useScrubForCuts } from './safe-cut.ts';
@@ -108,6 +111,11 @@ async function main(): Promise<void> {
   const bootSteps: Record<string, number> = {};
   const bootImports = Math.round(bootSince);
   const bootStep = (name: string) => (bootSteps[name] = Math.round(performance.now() - bootSince));
+  // Box mode (box-mode.ts): a runner in a virtual runner's machine, for one
+  // thread. Its boot token is read and taken out of the environment before
+  // anything else, so nothing the runner starts inherits it.
+  const boxBoot = readBoxBoot(process.env);
+  if (boxBoot) enterBoxEnv(process.env);
   const cfg = loadConfig();
   // A dev runner on a copy of the real data dir (real-copy.ts): whatever
   // came with the copy, it never syncs as Mike's runner (nor relays or
@@ -149,6 +157,32 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   process.on('exit', () => lock.release());
+
+  // Box mode's first step, before anything else talks to the backend: the
+  // boot exchange, then the thread's folder (a clone, or its last save).
+  const startBox = async (boot: NonNullable<typeof boxBoot>): Promise<{ secrets: BoxSecrets; threadKey: Buffer; checkout: string; cwd: string; restored: boolean; again?: true }> => {
+    try {
+      const post = convexPoster(boot.syncUrl) as unknown as ActionPost;
+      const secrets = await bootBox({ boot, home: cfg.home, claudeDir: cfg.claudeMainDir, post, log });
+      const folder = await prepareBoxFolder({ secrets, home: cfg.home, claudeDir: cfg.claudeMainDir, workRoot: process.env.THREADBEAR_BOX_WORK || path.join(os.homedir(), 'work'), log });
+      return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), ...folder };
+    } catch (e) {
+      log.error('box: could not start', { error: String((e as Error)?.message ?? e) });
+      process.stderr.write(`The box's runner couldn't start: ${(e as Error)?.message ?? e}\n`);
+      process.exit(1);
+    }
+  };
+  const box = boxBoot ? await startBox(boxBoot) : undefined;
+  if (box) {
+    // Decision 1: its sync on the box key, the one login given, no
+    // following main or keep-awake (the rest is boxEnv and the checks below).
+    cfg.sync = { ...cfg.sync, enabled: true, runnerId: box.secrets.runnerId };
+    if (box.secrets.login) cfg.claudeMainEmail = box.secrets.login;
+    cfg.followMain = false;
+    cfg.keepAwake = false;
+    cfg.defaults = { ...cfg.defaults, cwd: box.cwd, accountId: 'claude-main' };
+    log.info('box mode', { runnerId: box.secrets.runnerId, threadId: box.secrets.threadId, machineId: box.secrets.machineId, cwd: box.cwd, restored: box.restored });
+  }
 
   if (!fs.existsSync(cfg.claudePath)) log.warn('claude CLI not found', { path: cfg.claudePath });
   // A sync or gateway URL that would send keys in the clear (secure-url.ts):
@@ -356,7 +390,8 @@ async function main(): Promise<void> {
     clock: realClock,
     log,
     models,
-    patchTrust: new PatchTrust({ file: path.join(cfg.home, 'patch-trust.json'), always: [ownCheckout()] }),
+    // A box's clone is its own checkout too: its repo's worktree setup runs as a new thread's would.
+    patchTrust: new PatchTrust({ file: path.join(cfg.home, 'patch-trust.json'), always: [ownCheckout(), ...(box ? [box.checkout] : [])] }),
     // Keeps any text end_turn's own sign-up or wait_for_app_restart gave.
     appRestartAsked: (threadId) => {
       if (!appRestarts.isWatching(threadId)) appRestarts.watch(threadId);
@@ -365,6 +400,7 @@ async function main(): Promise<void> {
   });
   // Until it is listening (below): see Runner.holdWaits.
   runner.holdWaits = true;
+  if (box) runner.boxThread = box.secrets.threadId;
   const settings = new SettingsService({ config: cfg, publish: (n) => runner.publish(n), poolIds: () => runner.listPools().pools.map((p) => p.id) });
   // Runners still finishing turns after a handover: connected before the
   // threads load, so the ones they have are left to them. Nothing after the
@@ -437,7 +473,8 @@ async function main(): Promise<void> {
     self: { id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName(), icon: runnerIcon, version: RUNNER_VERSION, release: RELEASE.release, startedAt },
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
   });
-  if (!copyOfReal) scheduler.start();
+  // A box has no schedules (decision 13): they stay on the Mac and send to it.
+  if (!copyOfReal && !box) scheduler.start();
   // The done card's loose ends list the check-ins booked for a thread.
   runner.schedulesFor = (id) => scheduler.list(id);
   runner.scheduleChecks = () => scheduler.localChecks();
@@ -445,7 +482,7 @@ async function main(): Promise<void> {
   // membership); the librarian needs both.
   projects.start(runner);
   const librarian = new Librarian({ host: runner, projects, models, clock: realClock, log, home: cfg.home, pocket: pocketControl });
-  if (!copyOfReal) librarian.start();
+  if (!copyOfReal && !box) librarian.start();
   // Background jobs that look stuck get their thread a message.
   const stuckJobs = new StuckJobs({ host: runner, clock: realClock, log, home: cfg.home });
   stuckJobs.start();
@@ -518,6 +555,33 @@ async function main(): Promise<void> {
   // in the scrubber's status: nothing is taken out here.
   useScrubForCuts((text) => redactSecrets(scrubber.known.mask(text)).text);
   runner.secrets.onWritten = (value) => scrubber.known.add(value);
+  if (box) {
+    scrubber.known.add(box.secrets.boxKey);
+    scrubber.known.add(box.secrets.threadKey);
+  }
+  // A box whose key the backend turns down has been superseded by a newer
+  // box for its thread: it stops its CLI and exits, so the provider's
+  // machine stops (docs/protocol.md, "Box mode"). `stop` is made further
+  // down; one that comes before it waits for it.
+  let stopRef: ((signal: string) => void) | undefined;
+  let supersededWanted = false;
+  const boxSuperseded = () => {
+    if (supersededWanted) return;
+    supersededWanted = true;
+    log.warn("box: the backend turned this box's key down, so a newer box has the thread; stopping");
+    stopRef?.('superseded');
+  };
+  // The backend's `save` (box-save.ts): its own calls, on the box key.
+  const boxPost = box ? convexPoster(boxBoot!.syncUrl) : undefined;
+  const saveBox = async (threadId: string) => {
+    if (!box || !boxPost || threadId !== box.secrets.threadId) throw new Error("That isn't this box's thread.");
+    try {
+      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, snapshot: (id) => runner.snapshotForSave(id), post: boxPost, upload: convexUploader() });
+    } catch (e) {
+      if (keyRejected(e)) boxSuperseded();
+      throw e;
+    }
+  };
   // Set once the relay is made, further down; sync's list goes through it.
   let relayRef: Relay | undefined;
   // Other runners' threads that are moving, as this (the main Mac's) runner
@@ -571,7 +635,10 @@ async function main(): Promise<void> {
     key: syncKey,
     statePath: `${cfg.home}/sync-state.json`,
     cachePath: `${cfg.home}/sync-sent.json`,
-    presence: async () => (atMac = isAtMac(rpcServer?.appConnected() ?? false, await hidIdleMs())),
+    // A box has no one at it, and its key may call only what running its
+    // thread needs (BOX_CALLS): no presence, logins, projects, schedules,
+    // pools, shared memory or machine figures.
+    ...(box ? {} : { presence: async () => (atMac = isAtMac(rpcServer?.appConnected() ?? false, await hidIdleMs())) }),
     appConnected: () => rpcServer?.appConnected() ?? false,
     followProblem: () => (updaterReady ? updater.status().followProblem : undefined),
     // A thread past a move's switch is the other runner's: never written
@@ -587,9 +654,13 @@ async function main(): Promise<void> {
       get: (id) => runner.get(id),
       events: (id, o) => runner.events(id, o),
       cuts: (id) => runner.cuts(id),
-      listProjects: () => projects.list({ archived: true }),
-      listSchedules: () => scheduler.list(),
-      listAccounts: () => runner.hello().accounts,
+      ...(box
+        ? {}
+        : {
+            listProjects: () => projects.list({ archived: true }),
+            listSchedules: () => scheduler.list(),
+            listAccounts: () => runner.hello().accounts,
+          }),
       buttons: (id) => runner.listButtons(id).buttons,
     },
     // The phone's commands, through the same methods the app's RPCs use,
@@ -607,13 +678,18 @@ async function main(): Promise<void> {
       movePreview: async (p) => {
         return runner.previewMove({ ...p, self: syncRunnerId });
       },
+      // A box's one thread, under its own id, in its clone, on its one login.
+      ...(box
+        ? {
+            create: (p: Parameters<typeof runner.create>[0]) => runner.create({ ...p, id: box.secrets.threadId, cwd: box.cwd, accountId: 'claude-main' }),
+            save: saveBox,
+          }
+        : {}),
     },
-    sample: machineSampler(cfg.home),
     secretBox: runner.secrets,
-    schedules: scheduler,
-    pools: sharedPools,
-    memory: memorySync,
-    sharedUsage: usage,
+    ...(box
+      ? { box: { ...(box.secrets.machineId ? { machineId: box.secrets.machineId } : {}), superseded: boxSuperseded } }
+      : { sample: machineSampler(cfg.home), schedules: scheduler, pools: sharedPools, memory: memorySync, sharedUsage: usage }),
     // The sidebar's list carries what the relay has changed that the
     // backend's rows don't show yet (relay.ts overlay); made below.
     publish: (n) => {
@@ -645,6 +721,15 @@ async function main(): Promise<void> {
   // sit needing Mike with nothing to answer (13 Nov, Peers.openCards).
   const handedOver = peers.status().length > 0;
   sync.start({ hold: handedOver });
+  // A Mac waking from sleep, or a box resumed: a new websocket at once,
+  // rather than a minute on a dead one (clock-jump.ts).
+  const clockJumps = new ClockJumpWatch({
+    onJump: (gapMs) => {
+      log.info('the clock jumped: reconnecting', { gapMs });
+      sync.reconnectNow('clock jumped');
+    },
+  });
+  clockJumps.start();
   if (handedOver) {
     try {
       sync.seedCards(await peers.openCards());
@@ -777,7 +862,7 @@ async function main(): Promise<void> {
     send: (threadId, text) => void runner.send(threadId, text, [], { queue: true }),
   });
   runner.spareWeek = spareWeek;
-  spareWeek.start();
+  if (!box) spareWeek.start();
   const upstream = new Upstream({
     home: cfg.home,
     checkout: thisRelease?.checkout,
@@ -1261,9 +1346,11 @@ async function main(): Promise<void> {
   });
   // Borrowed worktrees nobody gave back (borrows.ts), on this Mac's real
   // data dir only: a dev runner's threads aren't the ones that borrowed.
-  const stopBorrowSweep = cfg.home === defaultHome() ? startBorrowSweep(runner, log) : () => {};
+  const stopBorrowSweep = cfg.home === defaultHome() && !box ? startBorrowSweep(runner, log) : () => {};
   const cancelMarkGood = markGoodLater(cfg.home, RELEASE.release, log, process.env, () => {
     restarter.proven();
+    // A box never updates itself or anything else: a new release is a new image.
+    if (box) return;
     updater.start();
     reinstaller.consider();
     upstream.start();
@@ -1292,12 +1379,15 @@ async function main(): Promise<void> {
   step('held reports', () => runner.settleAllHeld());
   // Reviews a runner that went away owed (runner/lab-review.ts).
   step('owed reviews', () => runner.startOwedReviews());
+  // A box restored from a save: its worktree's setup again (box-save.ts).
+  if (box?.restored && !box.again) void runner.setUpRestored(box.secrets.threadId).catch((e) => log.warn("box: couldn't set up the restored worktree", { error: String(e) }));
 
   let stopping = false;
   const stop = async (signal: string) => {
     if (stopping) return;
     stopping = true;
     cancelMarkGood();
+    clockJumps.stop();
     updater.stop();
     reinstaller.stop();
     upstream.stop();
@@ -1336,7 +1426,8 @@ async function main(): Promise<void> {
     // A restart's new release writes everything again under the same
     // runnerId; only a stop for good tells the phone this runner is gone.
     secretCheck.stop();
-    await sync.stop({ bye: signal !== 'restart' && !draining });
+    // A superseded box's key is refused: there's no one to say bye to.
+    await sync.stop({ bye: signal !== 'restart' && signal !== 'superseded' && !draining });
     try {
       await runner.shutdown();
       await server.close().catch(() => {});
@@ -1475,6 +1566,8 @@ async function main(): Promise<void> {
     // A moment for the last drain.handedOver to reach the primary.
     setTimeout(() => void stop('drained'), 500);
   };
+  stopRef = (signal) => void stop(signal);
+  if (supersededWanted) void stop('superseded');
   // The supervisor is gone: nothing would restart this runner, and its
   // children would be orphans.
   onSupervisorGone(() => void stop('supervisor gone'));

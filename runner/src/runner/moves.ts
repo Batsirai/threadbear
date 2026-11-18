@@ -1147,6 +1147,29 @@ export const movesPart = {
   moveRunnerName(this: Runner, runnerId: string): string {
     return this.runnerNames?.(runnerId) ?? runnerId;
   },
+
+  // Box mode's save (src/box-save.ts): the thread's record as it is now,
+  // written out with its events, so a copy of its folder is whole. Its CLI
+  // keeps running (a move releases it; a save is only a copy).
+  snapshotForSave(this: Runner, threadId: string): ThreadRecord {
+    const st = this.threads.get(threadId);
+    if (!st) throw new Error("The box's thread isn't here, so there's nothing to save.");
+    this.flushDeltas(st);
+    this.store.save(st.rec);
+    return structuredClone(st.rec);
+  },
+
+  // Box mode, after a box restored its thread from a save (box-save.ts): the
+  // worktree's setup again, as the save carries no installed packages
+  // (unpackGit leaves node_modules behind). The checkout is the box's own
+  // clone, trusted as the runner's own checkout is.
+  async setUpRestored(this: Runner, threadId: string): Promise<void> {
+    const st = this.threads.get(threadId);
+    const w = st?.rec.worktree;
+    if (!st || !w || w.removedAt || !w.patchFile) return;
+    const patch = await findWorktreePatch(w.mainCheckout, this.panelsRoot, this.patchCache, undefined, this.patchTrust).catch(() => undefined);
+    if (patch) await this.setUpWorktree(st, { worktree: w, patchFile: path.join(w.path, w.patchFile) }, patch);
+  },
 };
 
 export type MovesPart = RunnerPart<typeof movesPart>;

@@ -87,6 +87,9 @@ export type Config = {
   // Where accounts are discovered. Tests can narrow these.
   claudeMainDir: string;
   claudeMainJson: string;
+  // Box mode (box-mode.ts): claude-main's email as the boot exchange gave
+  // it, as a setup-token login writes no oauthAccount to .claude.json.
+  claudeMainEmail?: string;
   tokenStatsAccountsDir: string;
   // <data dir>/accounts: more logins for anyone without Token Stats (the
   // guide's "Adding another login"), claude-N and codex-N as there.

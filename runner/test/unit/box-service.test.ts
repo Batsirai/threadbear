@@ -132,12 +132,13 @@ test('a thread starts on a virtual runner: its runner, its box and its create, t
   assert.deepEqual({ runnerId: cmd.runnerId, threadId: cmd.threadId, kind: cmd.kind, state: cmd.state }, { runnerId, threadId: 'T2', kind: 'create', state: 'pending' });
   assert.deepEqual(cmd.args, { text: 'hello', permissionMode: 'ask', from: 'mac' });
   assert.deepEqual(await s.run(), ['createBox']);
-  // One machine, of the virtual runner's image and size, its boot token and the deployment's address in its environment and nothing else.
+  // One machine, of the virtual runner's image and size, its boot token, the deployment's address and the name of its machine-id variable in its environment and nothing else.
   assert.equal(s.fly.live().length, 1);
   const m = s.fly.live()[0]!;
   assert.equal(m.config.image, 'registry.fly.io/threadbear-box:1');
   assert.deepEqual(m.config.guest, { cpu_kind: 'shared', cpus: 2, memory_mb: 2048 });
-  assert.deepEqual(Object.keys(m.config.env).sort(), ['THREADBEAR_BOX_BOOT', 'THREADBEAR_SYNC_URL']);
+  assert.deepEqual(Object.keys(m.config.env).sort(), ['THREADBEAR_BOX_BOOT', 'THREADBEAR_MACHINE_ID_ENV', 'THREADBEAR_SYNC_URL']);
+  assert.equal(m.config.env.THREADBEAR_MACHINE_ID_ENV, 'FLY_MACHINE_ID');
   assert.equal(m.config.env.THREADBEAR_SYNC_URL, 'https://dep.convex.cloud');
   assert.match(s.bootOf(m.id), /^tbt_[0-9a-f]{64}$/);
   const row = s.rowOf('T2');

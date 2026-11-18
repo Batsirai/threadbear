@@ -508,6 +508,10 @@ File references are where to look.
   tells your deployment it is online once a minute. Before the first
   successful heartbeat, a failed request is retried after 1 second,
   doubling up to a minute. Key refusals and rate limits wait a minute.
+  After the Mac wakes from sleep (the clock jumps more than 15 seconds
+  between the runner's 2-second ticks, `runner/src/clock-jump.ts`), it
+  opens a new connection to the deployment and heartbeats straight away,
+  at most once in 30 seconds.
 - **Schedule checks** (`runner/src/schedule-check.ts`): a schedule's
   check command, if it has one, runs in
   `/bin/sh` before each run, as you, for at most a minute (or up to five,

@@ -44,6 +44,8 @@ export const newThreadsPart = {
     // Projects it starts in (New Thread on a project's page), joined
     // before its first turn, so that turn already has the project's brief.
     projectIds?: string[];
+    // Box mode's one thread, made under the id the backend gave it (boxThread).
+    id?: string;
   }): { thread: ThreadSummary; turnId: string } {
     if (!params.text && !params.images?.length) throw new RpcError(ErrorCode.badParams, 'text or images required');
     checkImages(params.images ?? []);
@@ -172,8 +174,15 @@ export const newThreadsPart = {
     worktree?: boolean;
     startedBy?: ThreadStartedBy;
     detached?: boolean;
+    id?: string;
   }): { st: ThreadState; notes: string[]; loginNote?: string } {
     this.checkAccepting();
+    // A box runs one thread (docs/virtual-runners.md, decision 1): only that
+    // one, once, under its own id. Anything else asks the main Mac
+    // (create_thread from a box files a request, as from any runner key).
+    if (this.boxThread !== undefined) {
+      if (params.id !== this.boxThread || this.threads.has(this.boxThread)) throw new RpcError(ErrorCode.badParams, "This runner is a box for one thread, so it can't start another here.");
+    } else if (params.id !== undefined) throw new RpcError(ErrorCode.badParams, 'Only a box names the id of a new thread.');
     // New threads belong on the new release.
     if (this.draining) throw new RpcError(ErrorCode.busy, 'This runner is handing over to a new one; start the thread there.');
     // A blank folder means the default, not the runner's own folder.
@@ -209,7 +218,7 @@ export const newThreadsPart = {
     const retired = this.retiredSandbox(cwd);
     if (retired) throw new RpcError(ErrorCode.badParams, retired);
     const now = this.isoNow();
-    const id = crypto.randomUUID();
+    const id = params.id ?? crypto.randomUUID();
     const rec: ThreadRecord = {
       id,
       title: params.title?.trim() ? cutSafely(params.title.trim(), 200) : titleFrom(params.text),

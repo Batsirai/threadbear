@@ -17,8 +17,8 @@ Status: the spike passed (Order, 1), and the backend is built in two
 slices (18 Nov, "What's built", below): the tables, the box's state
 machine, box keys, cloud tokens and the boot exchange; then the Fly
 adapter, the service's actions, starting a thread, waking, reachable
-boxes and the crons. No runner runs in box mode yet, and there's no box
-image, so nothing has made a real box through the app. A first draft of the plan
+boxes and the crons; then the runner's box mode (19 Nov, slice 3). There's
+no box image yet, so nothing has made a real box through the app. A first draft of the plan
 went to a review panel (Fable, Opus and Grok, 16 Nov), each reading the
 code; their changes are folded in, and "What the review changed" at the
 end says what moved and why.
@@ -677,11 +677,57 @@ its delete succeeds or a listing asked for after the mark lacks it): its exchang
 refused, as is any exchange that doesn't name its machine while one of its
 attempt is condemned, and a heartbeat naming it gives it nothing.
 
+The third slice (19 Nov 2026), the runner's **box mode**
+(`runner/src/box-mode.ts`, `box-save.ts`, `clock-jump.ts`; docs/protocol.md
+"Box mode"), with tests in `runner/test/unit/box-mode.test.ts` (the real
+runner entry point among them), `box-save.test.ts` and
+`clock-jump.test.ts`:
+
+- **Starting.** `THREADBEAR_BOX_BOOT` set means box mode. The boot token
+  is read and taken out of the environment first, then traded at
+  `THREADBEAR_SYNC_URL` with the machine's id (the variable the service now
+  names in `THREADBEAR_MACHINE_ID_ENV`, from the provider's
+  `machineIdEnv`; `FLY_MACHINE_ID` if it names none). The exchange now
+  also gives the box its `login`. What it got goes in the data dir's
+  secrets (`box.json`, `convex-key`) and the token in claude-main's
+  `threadbear-token.json`, each 0600; a runner that restarts on the same
+  machine uses them rather than the spent token.
+- **The folder**: the repo cloned into `~/work` on its base branch, and the
+  `create` makes the thread under its own id in the subfolder, with a
+  worktree as any new thread in that repo gets (the clone trusted as the
+  runner's own checkout); or, with a save, the save restored on the clone
+  and the same session resumed.
+- **Limits** (decision 1): no self-update, CLI updates, keep-awake,
+  `followOrigin`, reinstaller, Sentry, schedules, librarian or spare-week
+  threads; no presence, logins, projects, pools or machine figures sent;
+  one thread (`Runner.boxThread`); the login's email given; `IS_SANDBOX=1`.
+- **Superseded**: a call refused as a bad key ends the box: no more calls,
+  its CLI stopped, the process exits (no `bye`).
+- **The `save` command**: the thread's folder, transcript and git work
+  (move-pack.ts and move-git.ts, as decision 7 planned), sealed under the
+  thread key, uploaded on the box key and named in `boxSaved`. Over one
+  upload (10 MB) it fails, saying so.
+- **Clock jumps**, for every runner: a wall-clock jump of over 15 s between
+  2-second ticks (a box resumed, a Mac waking) makes the sync's Convex
+  client again at once and heartbeats, at most every 30 s. The spike
+  measured 60 s to 3.3 s on Fly.
+
+Where it differs from the plan: the Claude token is on the box's disk, in
+`threadbear-token.json`, rather than only in the runner's memory as
+decision 10 says, so the runner's existing year-long token path carries it
+to the CLI and a restarted runner still has it; the box's disk is the
+box's alone, and goes with it. And the save doesn't yet push the thread's
+branch and `refs/threadbear/save` to `origin` (that waits for GitHub
+tokens, decision 11).
+
 Not built yet, in about the order they're needed:
 
-- TODO the runner's box mode and its image: the exchange, the `create`
-  for its named thread, the `save` command (and a save bigger than one
-  upload, 10 MB, in chunks, as a move's are), `IS_SANDBOX` in the image.
+- TODO the box image: Claude Code and the runner baked in, its
+  entrypoint the runner with `THREADBEAR_BOX_BOOT` (Faster starts, 1), and
+  a real box started from the Mac end to end.
+- TODO a save bigger than one upload, 10 MB, in chunks, as a move's are;
+  and the save's push of the branch and `refs/threadbear/save` (decision
+  7), with GitHub tokens (decision 11).
 - TODO a lost box's taken command put back to pending once (decision 12).
 - TODO starting and waking from the phone (`startThread` takes the owner
   key only), and archiving a sleeping box's thread without waking it.

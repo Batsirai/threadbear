@@ -779,6 +779,9 @@ export class Runner {
   appCanAllow?: () => boolean;
   // This runner's name, for what such a refusal says (main.ts sets it).
   ownName?: string;
+  // Box mode (src/box-mode.ts): the one thread this runner exists for. Any
+  // other new thread is refused (makeThread), and that one only under its id.
+  boxThread?: string;
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;

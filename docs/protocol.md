@@ -7027,7 +7027,12 @@ the mirror back as state. The Mac app doesn't use it.
 - **Commands.** The phone's mutations (`convex/phone.ts`) add a row to
   `commands` for a runner (`runnerId`, or `"any"`). The runner holds a
   live query on its pending commands over the Convex client's WebSocket
-  (it reconnects by itself), and for each one: takes it
+  (it reconnects by itself; and after a pause the process didn't see, a
+  wall-clock jump of more than 15 s between its 2-second ticks, such as a
+  Mac waking from sleep or a box resumed, the runner drops that client and
+  makes a new one with every live query on it at once, then heartbeats,
+  at most once in 30 s: `runner/src/clock-jump.ts`, `reconnectNow` in
+  `sync.ts`), and for each one: takes it
   (`sync:takeCommand`, which says no if it was already taken; from
   backend API 85 the runner passes `attempt`, its own id for the take, and
   the same attempt asking again after an error gets yes, so a take whose
@@ -7741,8 +7746,10 @@ has to be on for it.
   runner's `maxBoxes` it's refused at once (`kind: "limit"`, saying how
   many are up), and nothing is written.
 - **The box.** The provider starts it from the image with only
-  `THREADBEAR_SYNC_URL` (the deployment's address) and
-  `THREADBEAR_BOX_BOOT` (its boot token, Box keys) in its environment,
+  `THREADBEAR_SYNC_URL` (the deployment's address),
+  `THREADBEAR_BOX_BOOT` (its boot token, Box keys) and, for a provider that
+  declares one, `THREADBEAR_MACHINE_ID_ENV` (the name of the variable that
+  holds the machine's own id, `BoxProvider.machineIdEnv`) in its environment,
   tagged `tb_box` (its `boxes` row), `tb_attempt` and `tb_service`. Each
   create is one attempt, made once however often it's tried. Its state
   is its machine's (docs/machines.md, `box`).
@@ -7869,10 +7876,11 @@ SHA-256 (`boxKeyHash`).
   and 64 hex characters) in its environment and nothing else reusable.
   `boxes:exchange({ bootToken, machineId? })` trades it, once and within
   10 minutes of its minting, for `{ boxKey, runnerId, threadId, claudeToken, threadKey,
-  repo, save }`: the box key, the login's cloud token, the thread's key
+  repo, save, login }`: the box key, the login's cloud token, the thread's key
   for sealing its saves (base64, 32 bytes), the repo the owner fixed
-  (`origin` without credentials, `subfolder`, `baseBranch`) and the last
-  save's URL, or null. It unseals first, from a read that uses nothing
+  (`origin` without credentials, `subfolder`, `baseBranch`), the last
+  save's URL, or null, and the login the box runs on (as its cloud token
+  is kept, an email), which a token login can't read from `.claude.json`. It unseals first, from a read that uses nothing
   up, so a deployment that can't unseal (`kind: "config"`) leaves the
   boot token and the box as they were. Then, in one mutation that checks
   the token again, it's used up, the box's machine goes to `awake`
@@ -7982,6 +7990,75 @@ A box key may call:
 `moveFrozen`, `moveChunkUrl`, `movePacked`, `moveChunks`, `moveClaim`,
 `moveDone`, `moveFailed`, `boxSaved`
 <!-- /box-calls -->
+
+### Box mode
+
+The runner in a box (`runner/src/box-mode.ts`, `box-save.ts`): an ordinary
+runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
+
+- **Starting.** Before anything else it reads the boot token and takes it
+  out of its own environment, so nothing it starts (Claude Code, its
+  shells, a worktree's setup) inherits it. Then `boxes:exchange` at
+  `THREADBEAR_SYNC_URL`, with `machineId` from the variable
+  `THREADBEAR_MACHINE_ID_ENV` names (`FLY_MACHINE_ID` when it names none;
+  left out if it isn't an id the backend takes). A network failure, or
+  `config`, `noCloudToken` or `conflict` (each leaves the token as it was),
+  is tried again, 2 s doubling to 15 s, for up to the token's 10 minutes;
+  `auth` (used, expired, unknown) stops the box at once, as does an answer
+  it can't use. What it got is kept in the data dir's secrets, 0600:
+  `box.json` (the box key, runner id, thread id, thread key, repo, login,
+  machine id, the save's URL and the boot token's SHA-256, never the token)
+  and `convex-key` (the box key, the sync key as any runner's is); the
+  login's token goes to claude-main's `threadbear-token.json` (0600), which
+  the runner already passes to that login's CLI as a year-long token. A
+  runner that starts again on the same machine under the same boot token
+  uses `box.json` rather than exchange again.
+- **The thread's folder.** The repo is cloned (`origin`, https or ssh
+  only) into `THREADBEAR_BOX_WORK` (default `~/work`) under its own name,
+  on `baseBranch`. With no save, that's all: the thread's `create` command
+  makes the thread under the id the backend named, in `subfolder`, on
+  claude-main, and its first turn makes a worktree as a new thread in that
+  repo would, its patch trusted as the runner's own checkout is. With a
+  save, it's restored on top of the clone (below), and the thread's next
+  turn resumes the same Claude session. Done once per box (`box.json`'s
+  `prepared`).
+- **What box mode turns off** (decision 1): self-update and following
+  main, CLI updates, keep-awake, `followOrigin`, the reinstaller and
+  upstream releases, Sentry, the Mac screen watch, schedules, the
+  librarian, spare-week threads and the borrow sweep; the sync sends no
+  presence, logins, projects, schedules, pools, shared memory or machine
+  figures (its key can't). It runs one thread: any other `create`, from
+  anywhere, is refused (`create_thread` asks the main Mac, as from any
+  runner key). Claude Code runs as root there, so `IS_SANDBOX=1` is set
+  for everything the runner starts. The app port listens on 127.0.0.1
+  only, as every runner's does; nothing dials a box.
+- **Heartbeats** carry `runner.machineId`, the same id as the exchange.
+- **Superseded.** Any call refused with `kind: "auth"` (the box key
+  unknown: a newer box for the thread has traded its boot token, or the
+  box was lost, failed or archived) means this box no longer has the
+  thread. It sends nothing more, stops its CLIs and exits with no `bye`,
+  so the provider's machine stops for the service to clean up.
+- **The `save` command** (only the backend sends it, for the box's own
+  thread): the thread's folder in the data dir (its record and events,
+  not `panels`), its Claude session's transcript and the folder beside
+  it, and its git work as a move packs it (`move-git.ts packGit`: the
+  commits origin doesn't have and one more of every uncommitted and
+  untracked file, in a git bundle; ignored files stay behind), in a move's
+  archive (`move-pack.ts`) with a `box.json` naming the thread. Sealed
+  AES-256-GCM under the thread key: a 12-byte IV, the ciphertext, the
+  16-byte tag, bound to `threadbear box save v1 <threadId>` as associated
+  data. Uploaded to the URL `sync:iconUploadUrl` gives the box key, then
+  `boxes:boxSaved({ key, storageId, bytes })`, and the command finishes
+  with `{ bytes }`. A sealed save over 10 MB (one upload) fails the command
+  saying so; saves in parts are a TODO. The thread's CLI keeps running.
+- **Restoring.** The save is downloaded (https, no redirects, 10 MB at
+  most), opened (one that doesn't open with the thread's key, or isn't
+  that thread's, stops the box), the thread's folder written into the data
+  dir, its git work put back on the clone (`unpackGit`), in a worktree at
+  `<clone>-threads/<the folder name it had>` on `thread/<id8>` if it had
+  one, and its transcript put where Claude Code looks for the folder it
+  now runs in. Once the runner is up, the worktree's setup runs again
+  (installed packages weren't saved).
 
 ## Sharing
 

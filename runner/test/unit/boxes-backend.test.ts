@@ -88,6 +88,8 @@ test('the exchange works once: a box key, the runner and thread, the login token
   assert.equal(Buffer.from(got.threadKey, 'base64').length, 32);
   assert.deepEqual(got.repo, { origin: 'https://github.com/mikecann/threadbear.git', subfolder: 'runner', baseBranch: 'main' });
   assert.equal(got.save, null);
+  // The login it runs on, as box mode can't read it from a token login's .claude.json.
+  assert.equal(got.login, LOGIN);
   const row = s.box();
   assert.equal(row.boxState.kind, 'awake');
   assert.equal(row.boxKeyHash, await sha256(got.boxKey));

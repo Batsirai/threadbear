@@ -572,7 +572,9 @@ export type Post = (kind: 'mutation' | 'query', fn: string, args: Record<string,
 // `onUpdate` is called with each new result, `onError` when the
 // subscription fails. Returns the unsubscribe. Tests pass a fake.
 export type Subscribe = (fn: string, args: Record<string, unknown>, onUpdate: (value: unknown) => void, onError: (error: Error) => void) => () => void;
-export type Subscriber = { subscribe: Subscribe; close(): Promise<void> | void };
+// `reconnect`: drop the websocket and make a new one with every live
+// subscription on it (a clock jump, clock-jump.ts). Absent in fakes.
+export type Subscriber = { subscribe: Subscribe; close(): Promise<void> | void; reconnect?(): void };
 // Puts a picture's bytes at the upload URL the backend gave (file storage)
 // and returns its storage id. Tests pass a fake.
 export type Upload = (url: string, bytes: Uint8Array, mediaType: string) => Promise<string>;
@@ -650,6 +652,10 @@ export type CommandHost = {
   listReviews?: (threadId: string) => unknown;
   getReview?: (threadId: string, reviewId: string) => unknown;
   respondReview?: (threadId: string, reviewId: string, revision: number, draft: ReviewDraft) => unknown;
+  // Box mode only (src/box-save.ts): the backend's `save` command, the
+  // thread packed, sealed and uploaded, then boxSaved. Absent elsewhere,
+  // where a `save` is refused.
+  save?: (threadId: string) => Promise<unknown>;
 };
 
 export type SyncDeps = {
@@ -718,6 +724,11 @@ export type SyncDeps = {
   // full write's prune. Absent in small tests.
   elsewhere?: (threadId: string) => boolean;
   elsewhereIds?: () => string[];
+  // Box mode (src/box-mode.ts): the key is a box key, the heartbeat names
+  // the provider's machine, and a key the backend turns down means a newer
+  // box has the thread, so `superseded` is called once and nothing more is
+  // tried (docs/protocol.md, "Box mode").
+  box?: { machineId?: string; superseded: () => void };
 };
 
 // How long a row whose thread isn't here (and that wasn't deleted here) waits
@@ -869,16 +880,40 @@ async function moveDownload(url: string, fetchFn: typeof fetch = fetch): Promise
 
 // The Convex client's WebSocket subscription, for the phone's commands:
 // it reconnects by itself and re-runs the query whenever a row changes.
-export function convexSubscriber(url: string): Subscriber {
-  let client: ConvexClient | undefined;
+// `reconnect` doesn't wait for it: after a pause (clock-jump.ts) the old
+// socket can take a minute to notice it's dead, so a new client takes every
+// live subscription over at once and the old one is closed. `make` is for tests.
+export type MinimalConvexClient = {
+  onUpdate(fn: unknown, args: Record<string, unknown>, onUpdate: (v: unknown) => void, onError: (e: Error) => void): () => void;
+  close(): Promise<void>;
+};
+export function convexSubscriber(url: string, make: () => MinimalConvexClient = () => new ConvexClient(url, { unsavedChangesWarning: false }) as unknown as MinimalConvexClient): Subscriber {
+  let client: MinimalConvexClient | undefined;
+  type Live = { fn: string; args: Record<string, unknown>; onUpdate: (v: unknown) => void; onError: (e: Error) => void; off: () => void };
+  const live = new Set<Live>();
+  const on = (c: MinimalConvexClient, s: Omit<Live, 'off'>) => c.onUpdate(makeFunctionReference<'query'>(s.fn), s.args, s.onUpdate, s.onError);
   return {
     subscribe: (fn, args, onUpdate, onError) => {
-      client ??= new ConvexClient(url, { unsavedChangesWarning: false });
-      return client.onUpdate(makeFunctionReference<'query'>(fn), args, onUpdate, onError);
+      client ??= make();
+      const s: Live = { fn, args, onUpdate, onError, off: () => {} };
+      s.off = on(client, s);
+      live.add(s);
+      return () => {
+        if (!live.delete(s)) return;
+        s.off();
+      };
+    },
+    reconnect: () => {
+      const old = client;
+      if (!old) return;
+      client = make();
+      for (const s of live) s.off = on(client, s);
+      void old.close().catch(() => undefined);
     },
     close: async () => {
       const c = client;
       client = undefined;
+      live.clear();
       await c?.close();
     },
   };
@@ -1545,6 +1580,9 @@ export class ConvexSync {
   private heartbeatRefused?: string;
   private keyRejected = false;
   private restartAsked = false;
+  // Box mode: the backend turned the box key down, so a newer box has the
+  // thread. Said once; nothing is sent after it.
+  private superseded = false;
   private picturesPausedUntil?: number;
   private ownerKeyRotating = false;
   private pushOff = false;
@@ -1580,7 +1618,14 @@ export class ConvexSync {
     // the Free plan (convex-use.ts): a runner can't read its team's usage.
     // Counted once it's taken: a failed try and its retry aren't twice the use.
     const send: typeof post = async (kind, fn, args) => {
-      const out = await post(kind, fn, args);
+      if (this.superseded) throw new Error('this box has been superseded: a newer box has the thread');
+      let out: unknown;
+      try {
+        out = await post(kind, fn, args);
+      } catch (e) {
+        if (this.deps.box && keyRejected(e)) this.boxSuperseded();
+        throw e;
+      }
       if (kind === 'mutation' && deps.use) deps.use.record(Buffer.byteLength(JSON.stringify(args)), fn === 'sync:appendBodies');
       return out;
     };
@@ -3999,6 +4044,9 @@ export class ConvexSync {
       ...(this.deps.config.icon && (this.backendApiVersion ?? 0) >= RUNNER_ICON_API_VERSION ? { icon: this.deps.config.icon } : {}),
       ...(this.stats?.pressure && (this.backendApiVersion ?? 0) >= RUNNER_STATS_API_VERSION ? { pressure: this.stats.pressure } : {}),
       ...followProblem,
+      // A box's machine (boxes.ts exchange's machineId): a box's backend is
+      // always new enough, and only a box sends it.
+      ...(this.deps.box?.machineId ? { machineId: this.deps.box.machineId } : {}),
     };
     void this.post('mutation', 'sync:heartbeat', { key: this.deps.key, runner }).then(
       (r) => {
@@ -4021,6 +4069,8 @@ export class ConvexSync {
         if ((this.backendApiVersion ?? 0) >= RUNNER_STATS_API_VERSION && this.running) this.startStats();
       },
       (e) => {
+        // A box's key turned down: superseded, said once already (boxSuperseded).
+        if (this.superseded) return;
         // A key that isn't this runner's (runner.json's sync.runnerId isn't
         // the one `tb runner add` made it for) fails every heartbeat: said
         // once, loudly, as nothing else here would show it.
@@ -4054,6 +4104,32 @@ export class ConvexSync {
       this.scheduleFlush();
     }
     this.heartbeatTimer = this.deps.clock.setTimeout(() => this.heartbeat(), HEARTBEAT_MS);
+  }
+
+  // Box mode: the box key was turned down, which only happens once a newer
+  // box for the thread has traded its boot token (or the box was lost,
+  // failed or archived). This box must stop at once, not try again: the
+  // runner stops its CLI and exits (main.ts), so the provider's machine
+  // stops and the service cleans it up.
+  private boxSuperseded(): void {
+    if (this.superseded) return;
+    this.superseded = true;
+    this.deps.log.warn("convex turned down this box's key: a newer box has the thread, so this one stops", { runnerId: this.runnerId });
+    this.heartbeatTimer?.cancel();
+    this.deps.box?.superseded();
+  }
+
+  /**
+   * After a pause the process didn't see (clock-jump.ts): a new websocket
+   * at once, every live subscription on it, and a heartbeat now rather
+   * than at the next minute.
+   */
+  reconnectNow(reason: string): void {
+    if (!this.running || this.superseded) return;
+    this.deps.log.info('convex reconnecting', { reason });
+    this.subscriber?.reconnect?.();
+    this.heartbeatTimer?.cancel();
+    this.heartbeat();
   }
 
   // The backend turned the key down. Said once (an error in the log, which
@@ -4377,6 +4453,7 @@ export class ConvexSync {
           void this.takeCommands(Array.isArray(value) ? (value as Command[]) : []);
         },
         (error) => {
+          if (this.deps.box && keyRejected(error)) this.boxSuperseded();
           this.commandsState = 'error';
           this.commandError = String(error?.message ?? error);
           this.deps.log.warn('convex command subscription failed', { error: this.commandError });
@@ -4804,6 +4881,12 @@ export class ConvexSync {
         if (!host.threadCommands) throw new Error("This runner can't list a thread's commands for the phone.");
         const r = (await host.threadCommands(needThread())) as { commands?: unknown[] } | undefined;
         return { result: r?.commands ?? [] };
+      }
+      case 'save': {
+        // A box's thread, saved out of the box before it sleeps or is
+        // archived (docs/protocol.md, "Box mode"). Only the backend sends it.
+        if (!host.save) throw new Error("This runner isn't a box, so it has nothing to save.");
+        return { result: await host.save(needThread()) };
       }
       case 'schedule': {
         if (!host.schedule) throw new Error('this runner can\'t change schedules');
