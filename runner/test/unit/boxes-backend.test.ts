@@ -459,8 +459,15 @@ test('timers: a box that never checks in fails; one that stops heartbeating is l
   await later(SAVE_MS - 2000, () => heartbeat(s, boxKey));
   await s.fireTimers(Date.now() + SAVE_MS + 10);
   assert.equal(s.state(), 'awake');
-  // No heartbeat for the lease: lost, its key refused.
+  // No heartbeat for the lease: not lost on that alone (Codex's fourth round):
+  // marked unreachable, its key kept, while the provider is asked.
   await s.fireTimers(Date.now() + 3 * LEASE_MS);
+  assert.equal(s.state(), 'awake');
+  assert.ok(s.box().unreachableSince);
+  assert.ok(s.box().boxKeyHash);
+  assert.ok((s.scheduled as { fn: string }[]).some((j) => j.fn.endsWith('checkBox')));
+  // The provider says it's gone: lost, its key refused.
+  assert.equal(await s.report({ type: 'LOST' }), true);
   assert.equal(s.state(), 'waking');
   assert.equal(s.box().boxKeyHash, undefined);
   assert.equal(await outcome(heartbeat(s, boxKey)), 'auth');

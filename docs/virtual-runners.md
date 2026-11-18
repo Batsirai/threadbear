@@ -430,6 +430,26 @@ out or the thread is deleted.
 - Boxes waiting for tomorrow's hours could starve those waiting for room:
   they're kept apart (`waitsForHours`, moved across when their day comes).
 
+A fourth look found four more, two of them the same hole at its root: a
+box was given up on errors, timeouts or missed heartbeats. Now only the
+provider saying the box is gone, or has lost its disk (a stopped Fly
+Machine), does that.
+
+- A resume that failed (three 503s) gave the kept box up for an older
+  save. It's now tried again a minute later; the wake's boot timer keeps
+  trying a kept box rather than failing it; and each attempt whose box may
+  hold work newer than the save is listed on the row (`workAttempts`), so
+  the reaper and an archive leave that box alone until a save covers it,
+  the provider says it's gone, or the thread's days run out.
+- Missed heartbeats replaced a live box. Now the box stays awake, marked
+  unreachable (the thread shows its box not answering), its key working
+  and its time counting, while `checkBox` asks the provider: gone means
+  LOST and a new box; paused means resume; running means keep, and ask
+  again in five minutes. A heartbeat clears it.
+- A box kept running counts toward `maxBoxes`.
+- A stretch awake across midnight UTC counts only its part after midnight
+  toward the new day.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

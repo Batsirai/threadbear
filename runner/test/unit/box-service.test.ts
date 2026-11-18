@@ -22,7 +22,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'reapBoxes', 'reapService']);
+const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'checkBox', 'reapBoxes', 'reapService']);
 // What run() runs of what's scheduled: the service's steps, and a move's rehoming.
 const RUNS = new Set(['boxes.wakeFor', 'boxes.archiveIfStill', 'boxes.wakeWaiting', 'boxes.wakeAllWaiting', 'boxes.failExpired', 'moves.rehomeRows']);
 const REPO = { origin: 'https://github.com/mikecann/threadbear.git', subfolder: '', baseBranch: 'main' };
@@ -246,22 +246,24 @@ test('two quick messages to a sleeping box make one wake', async () => {
   assert.deepEqual(await s.run(), []);
 });
 
-test("a message while it's saving keeps it up, and a lost box's lease wakes a new one by itself", async () => {
+test("a message while it's saving keeps it up, and a box gone silent that the provider says is gone is replaced by itself", async () => {
   const s = await setup(2048);
   const { runnerId } = await s.start('T2');
   await s.run();
-  await s.boot('T2', s.fly.live()[0]!.id);
+  const m = s.fly.live()[0]!;
+  await s.boot('T2', m.id);
   await s.sleepIdle(11 * MINUTE);
   assert.equal(s.stateOf('T2'), 'saving');
   await s.send(runnerId, 'T2');
   assert.deepEqual(await s.run(), ['wakeFor']);
   assert.equal(s.stateOf('T2'), 'awake');
-  // No heartbeat for the lease: lost, and the machine schedules a new box.
+  // No heartbeat for the lease, and the provider no longer has the box: lost, and a new box comes by itself.
+  s.fly.lose(m.id);
   await s.fireTimers(Date.now() + 30 * MINUTE);
-  assert.equal(s.stateOf('T2'), 'waking');
-  assert.deepEqual(await s.run(), ['wakeBox']);
+  assert.equal(s.stateOf('T2'), 'awake', 'not on missed heartbeats alone');
+  assert.deepEqual(await s.run(), ['checkBox', 'wakeBox']);
   assert.equal(s.stateOf('T2'), 'starting');
-  assert.equal(s.fly.live().length, 2, 'the old one is the reaper\'s');
+  assert.equal(s.fly.live().length, 1);
 });
 
 test('a virtual runner past maxBoxes refuses a new thread at once, saying so, and writes nothing', async () => {
@@ -1223,4 +1225,128 @@ test("boxes waiting for room wake though many waiting for tomorrow's hours came 
   await call(s.ctx, boxes.wakeWaiting, { serviceId: s.serviceId });
   assert.equal(s.stateOf('E1'), 'waking');
   assert.ok(capped.every((_, i) => s.stateOf(`C${i}`) === 'asleep'));
+});
+
+// ------------------------------------------------------------ Codex's fourth round (18 Nov 2026)
+// A box is only given up when the provider says it's gone (or has lost its disk).
+
+// A sleeping box (paused, 2 GB) with its key, and a message for it.
+async function pausedWithMessage(s: Awaited<ReturnType<typeof setup>>) {
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.sleepWith('T2', got.boxKey);
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  return { runnerId, m, got };
+}
+
+// 1. A resume that failed for a while gave the kept box up.
+test("a resume that fails for a while keeps the box and tries again; it's replaced only once the provider says it's gone", async () => {
+  const s = await setup();
+  const { runnerId, m } = await pausedWithMessage(s);
+  s.fly.failNext('POST', '/start', 503, 3);
+  await s.send(runnerId, 'T2');
+  s.skip();
+  await call(s.ctx, boxes.wakeFor, { runnerId });
+  await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  assert.equal(s.stateOf('T2'), 'waking');
+  assert.equal(s.rowOf('T2').boxAttempt, 1, 'no new box');
+  assert.ok(s.rowOf('T2').boxKeyHash, 'its key kept');
+  // The retry the wake scheduled: the provider's back, and it resumes.
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  assert.equal(s.fly.live().length, 1);
+});
+
+test("a kept box's wake keeps trying past its boot timer, and the reaper leaves the box alone", async () => {
+  const s = await setup();
+  const { runnerId, m } = await pausedWithMessage(s);
+  s.fly.failNext('POST', '/start', 503, 30);
+  await s.send(runnerId, 'T2');
+  s.skip();
+  await call(s.ctx, boxes.wakeFor, { runnerId });
+  await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'waking', 'still trying the kept box');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  s.skip();
+  await s.reap();
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended', 'not reaped');
+});
+
+test("the reaper keeps an older box that may hold work newer than the save, until a save covers it", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  // Slept unsaved (its day's hours, no save came): paused with work newer than any save.
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'IDLE', attempt: 1, capped: true } });
+  await later(9 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'asleep');
+  await s.run();
+  // A newer attempt is asked for (the Mac's own way) while the first may hold that work.
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
+  s.skip();
+  const newer = await call(s.a, boxes.mintBootToken, { key: OWNER, threadId: 'T2' });
+  assert.equal(newer.attempt, 2);
+  assert.ok(s.rowOf('T2').workAttempts.includes(1));
+  await s.reap();
+  assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed', 'kept: it may hold work newer than the save');
+  assert.ok(got);
+});
+
+// 2. Missed heartbeats alone gave a live box up.
+test("a box that stops heartbeating but is still running is kept, marked unreachable, its key working", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.fireTimers(Date.now() + 6 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.ok(s.rowOf('T2').unreachableSince);
+  assert.deepEqual(await s.run(), ['checkBox']);
+  assert.equal(s.stateOf('T2'), 'awake', 'the provider has it running: kept');
+  assert.equal(s.rowOf('T2').boxAttempt, 1);
+  const listed = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: 'main-mac' })).find((r: { runnerId: string }) => r.runnerId === runnerId);
+  assert.deepEqual(listed.box, { state: 'awake', unreachable: true });
+  // It's back: heartbeating clears it.
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+  assert.equal(s.rowOf('T2').unreachableSince, undefined);
+  // A suspended one is resumed.
+  s.fly.byId(m.id)!.state = 'suspended';
+  await s.fireTimers(Date.now() + 20 * MINUTE);
+  await s.run();
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  assert.equal(s.stateOf('T2'), 'awake');
+});
+
+// 3. Kept-running boxes didn't count toward maxBoxes.
+test('a box kept running counts toward maxBoxes', async () => {
+  const s = await setup(4096);
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: 'T2', runnerId, title: 't', view: 'den', needsYou: false }] });
+  await s.run();
+  await later(9 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  await s.run();
+  assert.ok(s.rowOf('T2').keptRunningSince);
+  // The helper's own box failed its boot timer meanwhile; T2's kept one is one of one.
+  assert.equal(s.stateOf(THREAD), 'failed');
+  await setLimits(s, { maxBoxes: 1 }, 4096);
+  assert.equal(await outcome(s.start('T3')), 'limit');
+});
+
+// 4. A stretch across midnight UTC was all charged to the new day.
+test('awake time across midnight UTC counts only its part after midnight toward the new day', () => {
+  const { awakeAdded } = load('boxMachine') as { awakeAdded: (row: unknown, since: number, now: number) => { awakeToday: { day: string; ms: number } } };
+  const midnight = Date.parse('2026-11-19T00:00:00.000Z');
+  const got = awakeAdded({ awakeToday: { day: '2026-11-18', ms: 5 * 60 * MINUTE } }, midnight - 30 * MINUTE, midnight + 30 * MINUTE);
+  assert.deepEqual(got.awakeToday, { day: '2026-11-19', ms: 30 * MINUTE });
 });

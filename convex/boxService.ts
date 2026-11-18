@@ -112,6 +112,8 @@ const seenV = v.object({
   unpausable: v.boolean(),
   // Kept running though asleep or shelved (keepRunning).
   keptRunning: v.boolean(),
+  // Attempts whose boxes may hold work newer than the last save (boxMachine.ts holdsWork).
+  workAttempts: v.array(v.number()),
 });
 type Seen = Infer<typeof seenV>;
 
@@ -138,6 +140,7 @@ export const boxFor = internalQuery({
       unsaved: row.boxState.kind === 'shelved' || (row.boxState.kind === 'asleep' && row.boxState.unsaved === true),
       unpausable: row.unpausable === true,
       keptRunning: row.keptRunningSince !== undefined,
+      workAttempts: row.workAttempts ?? [],
     };
   },
 });
@@ -154,7 +157,7 @@ function provider(name: string | null, memoryMb: number): BoxProvider | null {
 
 // ------------------------------------------------------------ one provider call at a time per box
 
-type OpName = 'createBox' | 'wakeBox' | 'sleepBox' | 'destroyBox';
+type OpName = 'createBox' | 'wakeBox' | 'sleepBox' | 'destroyBox' | 'checkBox';
 
 /** The box's op lease for this action run, unless another run holds it. */
 export const claimOp = internalMutation({
@@ -335,8 +338,14 @@ async function bringBack(op: Op): Promise<void> {
       taken = await report(ctx, seen.threadId, { type: 'RESUMED', attempt }, op.id);
     } catch (e) {
       if (e instanceof LeaseLost) throw e;
-      // Gone, or it won't come back: its key goes, and a new box restores the save.
       console.warn('a paused box did not resume', message(e));
+      // Only the provider saying it's gone (or has lost its disk) gives it up:
+      // anything else, and it may still hold work newer than the save, so
+      // the wake tries it again shortly (and the boot timer keeps trying).
+      if (!notFound(e) && (await providerState(paused, boxId, id)) !== 'gone') {
+        await ctx.scheduler.runAfter(WAKE_RETRY_MS, internal.boxService.wakeBox, { boxId });
+        return;
+      }
       await report(ctx, seen.threadId, { type: 'LOST', attempt }, op.id);
     }
     if (taken) {
@@ -496,6 +505,52 @@ export const retryKeptSaves = internalMutation({
   },
 });
 
+// How soon a wake whose resume failed (not for the box being gone) tries again.
+export const WAKE_RETRY_MS = 60_000;
+
+/**
+ * The provider's word on box `id`: 'gone' if it no longer has it or the box
+ * has lost its disk (a stopped Fly Machine's rootfs is reset), its state if
+ * it has it, or 'unknown' if it couldn't be asked: only 'gone' ever lets a
+ * box be given up.
+ */
+async function providerState(p: BoxProvider, boxId: Id<'boxes'>, id: string): Promise<'gone' | 'running' | 'paused' | 'unknown'> {
+  let listed;
+  try {
+    listed = await retrying(() => p.list({ tb_box: boxId }));
+  } catch (e) {
+    if (e instanceof LeaseLost) throw e;
+    return 'unknown';
+  }
+  const b = listed.find((x) => x.providerBoxId === id);
+  return !b || b.state === 'stopped' ? 'gone' : b.state;
+}
+
+/**
+ * A box that's stopped heartbeating (boxMachine.ts unheard): the provider is
+ * asked. Gone (or its disk lost): LOST, and a new box restores the save.
+ * Paused: resumed. Running: kept as it is, its key working, the row marked
+ * unreachable (until it heartbeats again), and asked again in five minutes.
+ */
+export const checkBox = internalAction({
+  args: { boxId: v.id('boxes') },
+  returns: v.null(),
+  handler: async (ctx, { boxId }) => {
+    await withOp(ctx, boxId, 'checkBox', async (op) => {
+      const seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
+      if (!seen || !['awake', 'saving'].includes(seen.kind) || !seen.providerBoxId) return;
+      const raw = provider(seen.provider, seen.memoryMb);
+      if (!raw) return;
+      const p = fenced(op, raw);
+      const id = seen.providerBoxId;
+      const state = await providerState(p, boxId, id);
+      if (state === 'gone') await report(ctx, seen.threadId, { type: 'LOST', ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
+      else if (state === 'paused' && p.resume) await retrying(() => p.resume!(id)).catch((e) => console.warn("an unreachable box didn't resume", message(e)));
+    });
+    return null;
+  },
+});
+
 async function deleteAsleep(op: Op, p: BoxProvider, seen: Seen, id: string): Promise<void> {
   try {
     await retrying(() => p.destroy(id));
@@ -524,8 +579,11 @@ export const destroyBox = internalAction({
       if (!raw) return;
       const p = fenced(op, raw);
       try {
-        const ids = new Set(seen.providerBoxId ? [seen.providerBoxId] : []);
-        for (const b of await retrying(() => p.list({ tb_box: boxId }))) ids.add(b.providerBoxId);
+        // Not one that may hold work newer than the save (an older attempt's,
+        // kept): the reaper deletes that once the thread's days run out.
+        const keep = (attempt: number | undefined) => seen.kind !== 'expired' && attempt !== undefined && seen.workAttempts.includes(attempt);
+        const ids = new Set(seen.providerBoxId && !keep(seen.providerAttempt) ? [seen.providerBoxId] : []);
+        for (const b of await retrying(() => p.list({ tb_box: boxId }))) if (!keep(Number(b.tags.tb_attempt))) ids.add(b.providerBoxId);
         for (const id of ids) await retrying(() => p.destroy(id));
       } catch (e) {
         if (e instanceof LeaseLost) throw e;
@@ -629,6 +687,10 @@ const sameSnap = (a: Snap, b: Snap) => JSON.stringify(a) === JSON.stringify(b);
  * - asleep but still running (its pause or delete didn't happen): sleep.
  */
 function planFor(row: Doc<'boxes'> | null, serviceId: string, b: Listed): Do {
+  // A box that may hold work newer than the last save is kept, whatever
+  // else is true of it, until a save covers it, the provider says it's
+  // gone, or the thread's days run out (expired).
+  if (row && row.serviceId === serviceId && row.boxState.kind !== 'expired' && row.workAttempts?.includes(b.attempt) && b.state !== 'stopped') return 'keep';
   if (!row || row.serviceId !== serviceId || !Number.isSafeInteger(b.attempt) || b.attempt < 1 || b.attempt !== newestAttempt(row)) return 'destroy';
   const kind = row.boxState.kind;
   if (kind === 'gone' || kind === 'expired' || kind === 'failed') return 'destroy';

@@ -1355,7 +1355,7 @@ export const heartbeat = mutation({
       const { rpcUrl: _rpcUrl, ...rest } = runner;
       runner = rest;
     }
-    if (boxRow) await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now() });
+    if (boxRow) await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now(), unreachableSince: undefined });
     const box = boxRow ? { box: { serviceId: boxRow.serviceId } } : existing?.box ? { box: existing.box } : {};
     const row = { ...runner, name, lastSeenAt: Date.now(), ...(caller.owner ? { byOwner: true } : {}), ...box };
     // Presence is setPresence's to change; a heartbeat keeps it.
@@ -3848,7 +3848,7 @@ export const setThreadIndex = mutation({
 // the runner counts it reachable while it sleeps or starts (decision 6), and
 // `waiting` while a message wants it woken but its virtual runner has
 // maxBoxes up (boxes.ts wakeFor).
-const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()) })) });
+const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()), unreachable: v.optional(v.boolean()) })) });
 
 async function otherRunners(ctx: QueryCtx, runnerId: string) {
   const runners = [];
@@ -3869,7 +3869,7 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
 
 async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean }> {
   const row = await boxOfRunner(ctx, r);
-  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}) };
+  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}), ...(row?.unreachableSince !== undefined ? { unreachable: true } : {}) };
 }
 
 // API 29: the other runners on their own, so a heartbeat re-runs only this

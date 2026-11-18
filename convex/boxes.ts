@@ -210,6 +210,17 @@ const limitsV = v.object({ maxBoxes: v.number(), idleSleepMinutes: v.number(), m
 type BoxKind = Doc<'boxes'>['boxState']['kind'];
 export const RUNNING: readonly BoxKind[] = ['creating', 'starting', 'awake', 'saving', 'archiving', 'waking'];
 
+/**
+ * How many of a virtual runner's boxes are running: up or on the way
+ * (RUNNING), or kept running though asleep or shelved (keptRunningSince,
+ * boxService.ts keepRunning), counting to `upTo` at most: what maxBoxes holds.
+ */
+export async function countRunning(ctx: QueryCtx, serviceId: Id<'runnerServices'>, upTo: number): Promise<number> {
+  const n = await countBoxes(ctx, serviceId, RUNNING, upTo);
+  if (n >= upTo) return n;
+  return n + (await ctx.db.query('boxes').withIndex('by_service_kept', (q) => q.eq('serviceId', serviceId).gt('keptRunningSince', 0)).take(upTo - n)).length;
+}
+
 // How many of a virtual runner's boxes are in these states, counting to `upTo` at most.
 async function countBoxes(ctx: QueryCtx, serviceId: Id<'runnerServices'>, kinds: readonly BoxKind[], upTo: number): Promise<number> {
   let n = 0;
@@ -228,7 +239,7 @@ export const runnerServices = query({
     await runnerAuth(ctx, key, 'runnerServices');
     const out = [];
     for (const s of await ctx.db.query('runnerServices').take(100)) {
-      out.push({ serviceId: s._id, name: s.name, provider: s.provider, image: s.image, box: s.box, ...(s.region !== undefined ? { region: s.region } : {}), limits: s.limits, createdAt: s.createdAt, running: await countBoxes(ctx, s._id, RUNNING, 1000), asleep: await countBoxes(ctx, s._id, ['asleep'], 1000) });
+      out.push({ serviceId: s._id, name: s.name, provider: s.provider, image: s.image, box: s.box, ...(s.region !== undefined ? { region: s.region } : {}), limits: s.limits, createdAt: s.createdAt, running: await countRunning(ctx, s._id, 1000), asleep: await countBoxes(ctx, s._id, ['asleep'], 1000) });
     }
     return out;
   },
@@ -317,7 +328,7 @@ export const beginThread = internalMutation({
     // As relay.ts queueCommand checks a create's, before anything is written.
     const create = commandArgs('create', { text: a.text, model: a.model, effort: a.effort, permissionMode: a.permissionMode, plan: a.plan });
     const max = service.limits.maxBoxes;
-    const running = await countBoxes(ctx, a.serviceId, RUNNING, max);
+    const running = await countRunning(ctx, a.serviceId, max);
     if (running >= max) throw new ConvexError({ kind: 'limit', message: `${service.name} has ${running} boxes up or starting, its limit. One sleeps once its thread has been idle ${service.limits.idleSleepMinutes} minutes, or archive a thread on it.` });
     checkRunnerId(a.runnerId);
     // A new thread: one that's already somewhere moves to a virtual runner (Order, 5), it isn't started there.
@@ -527,7 +538,7 @@ export const archiveBox = mutation({
 
 const serverEvent = v.union(
   v.object({ type: v.literal('CREATED'), providerBoxId: v.string(), attempt: v.optional(v.number()) }),
-  v.object({ type: v.literal('IDLE'), attempt: v.optional(v.number()) }),
+  v.object({ type: v.literal('IDLE'), attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }),
   v.object({ type: v.literal('WAKE') }),
   v.object({ type: v.literal('RESUMED'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('LOST'), attempt: v.optional(v.number()) }),
@@ -603,7 +614,8 @@ async function wakeBlocked(ctx: QueryCtx, row: Doc<'boxes'>): Promise<'hours' | 
   if (s.kind === 'saving' && s.capped) return overHours(row, limits.maxAwakeHoursPerDay) ? 'hours' : null;
   if (s.kind === 'saving' || s.kind === 'archiving') return null;
   if (!(await activeMove(ctx, row.threadId)) && overHours(row, limits.maxAwakeHoursPerDay)) return 'hours';
-  if ((await countBoxes(ctx, row.serviceId, RUNNING, limits.maxBoxes)) >= limits.maxBoxes) return 'room';
+  // One kept running is counted already: waking it takes no more room.
+  if (row.keptRunningSince === undefined && (await countRunning(ctx, row.serviceId, limits.maxBoxes)) >= limits.maxBoxes) return 'room';
   return null;
 }
 

@@ -343,6 +343,11 @@ export const appSchema = defineSchema({
     // to save again on a backoff (`saveAsks`) until it does (boxService.ts).
     keptRunningSince: v.optional(v.number()),
     saveAsks: v.optional(v.object({ n: v.number(), next: v.number() })),
+    // No heartbeat since then, but the provider hasn't said the box is gone
+    // (boxService.ts checkBox): kept, its key working, until it says so.
+    unreachableSince: v.optional(v.number()),
+    // Attempts whose boxes may hold work newer than the last save (boxMachine.ts holdsWork).
+    workAttempts: v.optional(v.array(v.number())),
     createdAt: v.number(),
   })
     .index('by_threadId', ['threadId'])
@@ -354,6 +359,7 @@ export const appSchema = defineSchema({
     .index('by_service_wants', ['serviceId', 'wantsWakeAt'])
     .index('by_service_hours', ['serviceId', 'waitsForHours'])
     .index('by_kept', ['keptRunningSince'])
+    .index('by_service_kept', ['serviceId', 'keptRunningSince'])
     .index('by_save', ['save.storageId']),
 
   // A Claude login's year-long token for boxes (decision 10), made with

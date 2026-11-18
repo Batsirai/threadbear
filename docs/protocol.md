@@ -6153,7 +6153,7 @@ type RemoteRunner = {
                        // a message reaches (box, below)
   lastSeenAt: string
   followProblem?: string
-  box?: { state: string, waiting?: true } // one thread's box on a virtual
+  box?: { state: string, waiting?: true, unreachable?: true } // one thread's box on a virtual
                        // runner (Virtual runners), as its machine has it:
                        // creating, starting, awake, saving, asleep, waking,
                        // failed, destroying, gone (archived, its save kept)
@@ -6161,8 +6161,11 @@ type RemoteRunner = {
                        // destroying and expired, as a message starts or
                        // wakes it. `waiting`: a message wants it woken but
                        // its virtual runner has maxBoxes up, so it waits
-                       // (with the message) for one to sleep. An older
-                       // runner leaves it out.
+                       // (with the message) for one to sleep.
+                       // `unreachable`: it hasn't heartbeated for 5
+                       // minutes, but its provider still has it (show it
+                       // as not answering, not as gone). An older runner
+                       // leaves it out.
 }
 // rpcUrl and tokenFile were the direct link between Macs (step 6 part 2),
 // taken out 13 Nov 2026. An app ignores them if an older runner sends them.
@@ -7752,7 +7755,8 @@ has to be on for it.
   asleep box past its hours). A box is never deleted with work newer than
   its save in it, unless its days run out or the thread is deleted: one
   that can't pause (or whose pause is refused) with unsaved work is kept
-  running, its time counting toward its day's hours, and asked to save
+  running, its time counting toward its day's hours and its runner toward
+  `maxBoxes`, and asked to save
   again on a backoff (10 minutes, doubling, 6 hours at most) until it
   does. Waking it takes it up as it is.
 - **Waking.** Any command queued for a box's runner (`queueCommand`, or
@@ -7785,6 +7789,17 @@ has to be on for it.
   are up (or if it never saved), it's `expired`: everything waiting for
   its runner, and anything sent after, fails at once with a note that the
   thread can't come back.
+- **Given up only on the provider's word.** A box is treated as lost
+  (its key revoked, a new box made from the save) only when the provider
+  says it no longer has it, or that it has lost its disk (a stopped Fly
+  Machine). Not for errors, timeouts or missed heartbeats: a box that
+  stops heartbeating is marked unreachable (`RemoteRunner.box.unreachable`)
+  and keeps its key and its awake time while the provider is asked
+  (`checkBox`: a paused one is resumed); a resume that fails is tried
+  again a minute later, and the boot timer doesn't give up a kept box. A
+  box that may hold work newer than the save (one that has run since)
+  isn't deleted, by the reaper or an archive, until a save covers it, the
+  provider says it's gone, or its thread's days run out.
 - **One provider call at a time.** Each of the service's actions holds
   the box row's `op` lease (3 minutes) while it calls the provider for
   that box, so a sleep's suspend and a wake's start never overlap; another
@@ -7820,7 +7835,7 @@ has to be on for it.
   newest attempt only), `claimOp`, `holdOp`, `releaseOp`, `claimAttempt`,
   `boxFor`, `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`,
   `reapStep`, `servicesToReap`, `serviceProvider`, `stuckDestroying`,
-  `pruneSaves`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
+  `pruneSaves`, `checkBox`, `retryKeptSaves`, `markKept`, `markUnpausable`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
   `wakeAllWaiting`, `failExpired`, `archiveIfStill`. `report` takes the
   reporting run's `op`.
 - **Its first command.** The `create` that `startThread` queues names its
