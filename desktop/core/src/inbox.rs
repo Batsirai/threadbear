@@ -285,10 +285,13 @@ impl ThreadSummary {
     /// (`before` was the same thread before this update): where it was going
     /// and why, from the move's note. The row only says "Couldn't move", with
     /// the why behind a tooltip, which told Mike nothing (18 Nov 2026). None
-    /// when it hasn't just failed: already failed before, or no move.
+    /// when it hasn't just failed: no move, or the same move already failed
+    /// before. Told apart by the move's id, so a second try that also failed
+    /// while the app was away still says so (Codex's review).
     pub fn move_failure(&self, before: &ThreadSummary) -> Option<String> {
-        let failed = |t: &ThreadSummary| t.moving.as_ref().and_then(|m| m.get("state")).and_then(Value::as_str) == Some("failed");
-        if !failed(self) || failed(before) {
+        let failed = |t: &ThreadSummary| t.moving.as_ref().filter(|m| m.get("state").and_then(Value::as_str) == Some("failed")).map(|m| m.get("moveId").and_then(Value::as_str).unwrap_or("").to_owned());
+        let now = failed(self)?;
+        if failed(before).is_some_and(|was| was == now) {
             return None;
         }
         let moving = self.moving.as_ref()?;
@@ -866,6 +869,13 @@ mod tests {
         );
         assert_eq!(moving("failed", None).move_failure(&thread(1, json!({}))).as_deref(), Some("Couldn't move \"Thread 1\" to Hetzner Cloud."));
         assert_eq!(moving("failed", Some(why)).move_failure(&moving("failed", Some(why))), None, "said once, not on every update after");
+        let mut second = moving("failed", Some("Hetzner Cloud has no Claude login."));
+        second.moving.as_mut().unwrap()["moveId"] = json!("m2");
+        assert_eq!(
+            second.move_failure(&moving("failed", Some(why))).as_deref(),
+            Some("Couldn't move \"Thread 1\" to Hetzner Cloud. Hetzner Cloud has no Claude login."),
+            "another move that failed while the app was away"
+        );
         assert_eq!(moving("copying", None).move_failure(&moving("asking", None)), None);
         assert_eq!(moving("cancelled", None).move_failure(&moving("asking", None)), None, "Mike called it off himself");
     }

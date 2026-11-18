@@ -198,6 +198,9 @@ impl Threadbear {
                 reload.insert(summary.id.clone());
             }
             self.note_failed_account(before.as_deref(), &summary);
+            // Another runner's thread whose move failed: its row comes this
+            // way, not through thread.updated (Codex's review, 18 Nov).
+            self.note_failed_move(before.as_deref(), &summary, cx);
         }
         let gone: Vec<String> = self.threads.values().map(|t| &**t).filter(|t| self.remote.index.can_remove_missing() && t.runner_id.is_some() && !listed.contains(&t.id) && !self.remote.made.contains(&t.id)).map(|t| t.id.clone()).collect();
         for id in gone {
