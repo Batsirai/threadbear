@@ -279,6 +279,34 @@ in, and "What the review changed" at the end says what moved and why.
 Everything here goes through the cross-lab review in AGENTS.md before
 it's called done.
 
+## Faster starts
+
+Mike, 18 Nov, after the cold start took 159 s on Fly: "The spin up time is
+annoying, but I guess a lot of companies solve that by having warm boxes".
+He chose to stay on Fly (it's about a seventh of E2B's price for the same
+box). Where the time went, and what takes each part away, cheapest first:
+
+1. **Bake the image** (71 s: installing Claude Code and the runner's
+   packages). The box image carries both. No running cost.
+2. **Find the 30 s** between a new thread and its first text that the
+   setup and the turn don't explain. Read the runner's log in box mode.
+3. **A pool of suspended spare boxes.** The service keeps a few boxes
+   already booted with the runner up but no thread and no secrets, then
+   suspended. On Fly a suspended Machine bills only its root disk ($0.15
+   per GB-month, so cents a month each), and resuming took 1.1 s with a
+   reply 5.3 s after. Starting a thread takes a spare, gives it a boot
+   token by command (decision 5 still holds: nothing reusable is in its
+   environment), and the service makes a new spare behind it. Spares are
+   wiped and replaced, never reused after a thread.
+4. **A spare per repo with the clone already in it** (16 s of clone, 11 s
+   of setup): the spare is made for a repo, cloned and set up, and does a
+   `git fetch` when it's taken. Worth it only for repos used often; the
+   rest take a plain spare.
+5. **Start booting early**: when Cloud is picked in Runs-on, before the
+   message is sent.
+
+1 and 2 belong in box mode. 3 to 5 come after it works end to end.
+
 ## Questions for Mike
 
 - **The login** (answered 17 Nov): a setup token pasted once and kept in
