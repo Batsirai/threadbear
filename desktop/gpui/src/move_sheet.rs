@@ -71,7 +71,7 @@ impl Threadbear {
             let answer = call(client, "threads.movePreview", params).await;
             this.update_in(cx, |this, window, cx| {
                 // Cancelled while it looked: nothing more to do.
-                if !this.starting_moves.is_current(&thread_id, token) {
+                if this.starting_moves.take_cancelled(token) {
                     return;
                 }
                 let preview = answer.as_ref().ok().map(MovePreview::decode);
@@ -139,12 +139,16 @@ impl Threadbear {
             let res = call(client, "threads.move", params).await;
             let started = this
                 .update(cx, |this, cx| {
-                    let current = this.starting_moves.is_current(&thread_id, token);
+                    let cancelled = this.starting_moves.take_cancelled(token);
                     match res {
-                        Ok(_) if !current => {
+                        Ok(v) if cancelled => {
                             // Cancel Move came before the runner had a move
-                            // to cancel: it has one now.
-                            this.cancel_on_runner(thread_id.clone(), cx);
+                            // to cancel: it has one now. Named, so a newer
+                            // move started since is left alone.
+                            let move_id = v.get("moveId").and_then(|m| m.as_str()).map(str::to_owned);
+                            if move_id.is_some() {
+                                this.cancel_on_runner(thread_id.clone(), move_id, cx);
+                            }
                             false
                         }
                         Ok(v) => {
@@ -161,13 +165,17 @@ impl Threadbear {
                                     cx.notify();
                                     false
                                 }
-                                None => true,
+                                // Still the guess's to show (not yet taken
+                                // over by the runner): its wait starts.
+                                None => this.starting_moves.is_current(&thread_id, token),
                             }
                         }
                         Err(e) => {
-                            if current {
-                                this.starting_moves.forget(&thread_id);
+                            if !cancelled {
                                 this.show_error(e.message, cx);
+                            }
+                            if this.starting_moves.is_current(&thread_id, token) {
+                                this.starting_moves.forget(&thread_id);
                                 this.put_move_back(&thread_id, before.as_ref());
                                 cx.notify();
                             }
@@ -200,27 +208,31 @@ impl Threadbear {
         // Still being worked out (the look, or threads.move on its way): the
         // runner has no move to cancel yet, so the app drops the pick, and
         // send_move cancels it on the runner if one starts after all.
-        if self.starting_moves.is_pending(&thread_id) {
-            self.starting_moves.forget(&thread_id);
+        if self.starting_moves.cancel_pending(&thread_id) {
             self.put_move_back(&thread_id, None);
             cx.notify();
             return;
         }
         // Started: the runner speaks for it from here.
         self.starting_moves.forget(&thread_id);
-        self.cancel_on_runner(thread_id, cx);
+        self.cancel_on_runner(thread_id, None, cx);
     }
 
     /// `threads.moveCancel`, with "Cancelling the move…" in the banner until
     /// it answers.
-    fn cancel_on_runner(&mut self, thread_id: String, cx: &mut Context<Self>) {
+    /// `move_id`: only that move (one cancelled before its answer came).
+    fn cancel_on_runner(&mut self, thread_id: String, move_id: Option<String>, cx: &mut Context<Self>) {
         let key = format!("moveThread/{thread_id}");
         if !self.begin_note(&key, "Cancelling the move…", cx) {
             return;
         }
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
-            let res = call(client, "threads.moveCancel", json!({ "threadId": thread_id })).await;
+            let mut params = json!({ "threadId": thread_id });
+            if let Some(move_id) = move_id {
+                params["moveId"] = json!(move_id);
+            }
+            let res = call(client, "threads.moveCancel", params).await;
             this.update(cx, |this, cx| {
                 this.end_note(&key, cx);
                 if let Err(e) = res {

@@ -1157,6 +1157,10 @@ async function main(): Promise<void> {
     const threadId = String(p.threadId ?? '');
     const moveId = moves.movingOf(threadId)?.moveId ?? startedMoves.get(threadId);
     if (!moveId) throw new RpcError(ErrorCode.badParams, "That thread isn't moving.");
+    // The app names the move it means: one cancelled before its threads.move
+    // answered is cancelled once the answer comes, by which time another
+    // may have started (Codex's review, 18 Nov).
+    if (typeof p.moveId === 'string' && p.moveId && p.moveId !== moveId) throw new RpcError(ErrorCode.badParams, 'That move is over; the thread is in another one now.');
     try {
       await sync.cancelMove(moveId);
     } catch (e) {

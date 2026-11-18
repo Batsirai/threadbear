@@ -386,6 +386,8 @@ let lastArchive;
 // mock.releaseMovePreview), as the real one over the relay can take a
 // quarter of a minute (18 Nov 2026).
 let moveHold;
+// Every threads.moveCancel's params, for the specs (mock.moveCancels).
+const moveCancels = [];
 const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
   { id: 'runner_cloud', name: 'Cloud box', icon: 'cloud', online: true, lastSeenAt: new Date().toISOString() },
   { id: 'runner_pixel', name: 'Phone', icon: 'smartphone', online: true, lastSeenAt: new Date().toISOString() },
@@ -630,6 +632,7 @@ async function dispatch(client, method, p) {
       return { moveId: 'mock-move' };
     }
     case 'threads.moveCancel': {
+      moveCancels.push(p);
       const t = threads.get(p.threadId);
       if (t?.summary.moving) {
         t.summary.moving = { ...t.summary.moving, state: 'cancelled' };
@@ -1809,6 +1812,8 @@ async function dispatch(client, method, p) {
       moveHold = { promise, release };
       return { ok: true };
     }
+    case 'mock.moveCancels':
+      return { cancels: moveCancels };
     case 'mock.releaseMovePreview':
       moveHold?.release();
       moveHold = undefined;

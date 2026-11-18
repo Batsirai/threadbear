@@ -173,6 +173,7 @@ Feature: Other runners' threads
     Then the box's machine menu reads "✓ laptop, Move to mac-mini"
     When I pick "Move to mac-mini" from the box's machine menu
     Then the box's machine menu reads "✓ laptop, Cancel Move"
+    And nothing asked the runner to cancel a move
 
   # Mike, 18 Nov: moving a thread back from Hetzner, "Moving to M5" spun
   # for a second, then went with the box open again while his Mac's
@@ -190,6 +191,7 @@ Feature: Other runners' threads
     And the row "Tidy the media drive" says "Moving to laptop" on the right
     When the runner says where it would go
     Then the box is locked, saying "Moving to laptop once this turn ends…"
+    And nothing asked the runner to cancel a move
 
   # Codex's review of that fix: Cancel Move while the runner was still
   # looking reached a runner with no move to cancel, and the move started

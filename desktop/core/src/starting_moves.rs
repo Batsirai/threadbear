@@ -44,6 +44,11 @@ struct Guess {
 pub struct StartingMoves {
     by_thread: HashMap<String, Guess>,
     next_token: u64,
+    /// Picks Mike cancelled before `threads.move` answered. Kept apart from
+    /// the guesses: a guess also goes when the runner shows the move, which
+    /// can come before that answer, and that's no cancel (Codex's second
+    /// review: the app cancelled a move nobody had).
+    cancelled: std::collections::HashSet<u64>,
 }
 
 fn state(moving: &Value) -> &str {
@@ -74,10 +79,30 @@ impl StartingMoves {
         (moving, token)
     }
 
-    /// Whether `token` is still the pick being made for the thread: not
-    /// cancelled, given up on or picked again since.
+    /// Whether `token`'s guess is still on the thread: not cancelled, given
+    /// up on, picked again since or taken over by the runner's own word.
     pub fn is_current(&self, thread_id: &str, token: u64) -> bool {
         self.by_thread.get(thread_id).is_some_and(|g| g.token == token)
+    }
+
+    /// Cancel Move before `threads.move` answered: the guess goes, and the
+    /// pick's calls are to stop (`was_cancelled`). False when there's no
+    /// such pick, so the runner's move is the one to cancel.
+    pub fn cancel_pending(&mut self, thread_id: &str) -> bool {
+        match self.by_thread.get(thread_id) {
+            Some(g) if g.move_id.is_none() => {
+                self.cancelled.insert(g.token);
+                self.by_thread.remove(thread_id);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether Mike cancelled the pick `token` before it started. Asked
+    /// once, by the pick's own continuation, which then forgets it.
+    pub fn take_cancelled(&mut self, token: u64) -> bool {
+        self.cancelled.remove(&token)
     }
 
     /// Picked, but `threads.move` hasn't answered: Cancel Move is the app's
@@ -263,7 +288,7 @@ mod tests {
         let mut s = StartingMoves::default();
         let (_, tok) = s.start("t1", "r-m5", "M5");
         assert!(s.is_pending("t1"));
-        s.forget("t1");
+        assert!(s.cancel_pending("t1"));
         assert!(!s.is_current("t1", tok));
         assert_eq!(s.started("t1", tok, Some("m1"), 1_000), None);
         assert!(!s.is_starting("t1"), "a late answer doesn't bring it back");
@@ -290,5 +315,29 @@ mod tests {
         s.dress(&mut t, 1_000);
         assert!(s.is_starting("t1"));
         assert_eq!(t.moving_line().as_deref(), Some("Moving to M5…"));
+    }
+
+    #[test]
+    fn the_runner_showing_the_move_first_is_no_cancel() {
+        let mut s = StartingMoves::default();
+        let (_, tok) = s.start("t1", "r-m5", "M5");
+        // remoteThreads.updated with the move comes before threads.move's answer
+        let mut t = thread(Some(json!({ "moveId": "m1", "to": "r-m5", "toName": "M5", "state": "asking" })));
+        s.dress(&mut t, 1_000);
+        assert!(!s.is_current("t1", tok), "the runner speaks for it now");
+        assert!(!s.take_cancelled(tok), "but nobody cancelled it");
+    }
+
+    #[test]
+    fn a_cancel_is_told_once_and_only_to_its_own_pick() {
+        let mut s = StartingMoves::default();
+        let (_, a) = s.start("t1", "r-m5", "M5");
+        assert!(s.cancel_pending("t1"));
+        let (_, b) = s.start("t1", "r-m5", "M5");
+        assert!(!s.take_cancelled(b));
+        assert!(s.take_cancelled(a));
+        assert!(!s.take_cancelled(a));
+        s.started("t1", b, Some("m2"), 1_000);
+        assert!(!s.cancel_pending("t1"), "started: the runner's move is the one to cancel");
     }
 }

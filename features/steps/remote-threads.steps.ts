@@ -247,6 +247,14 @@ When("the thread's row comes in again while it looks", async function (this: Thr
   await sleep(500);
 });
 
+Then('nothing asked the runner to cancel a move', async function (this: ThreadbearWorld) {
+  // Long enough for a wrongly sent cancel to have arrived.
+  await sleep(800);
+  const text = await this.app.do({ cmd: 'mock', method: 'moveCancels', params: {} });
+  const r = (typeof text === 'string' ? JSON.parse(text) : text) as { cancels?: unknown[] };
+  assert.deepEqual(r?.cancels ?? [], []);
+});
+
 When('the runner says where it would go', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'mock', method: 'releaseMovePreview', params: {} });
 });
