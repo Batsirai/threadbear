@@ -120,7 +120,7 @@ test('remote builds expose the full live log and still find the built binaries',
   fs.writeFileSync(path.join(config, 'runner.json'), JSON.stringify({ updateBuildHosts: ['build-mac'] }));
   fs.writeFileSync(path.join(bin, 'ssh'), '#!/bin/sh\nprintf "Darwin\\n"\n', { mode: 0o755 });
   // Execute the actual remote build command, with a tiny stand-in for cargo.
-  fs.writeFileSync(path.join(scripts, 'remote.sh'), '#!/bin/sh\ncd "$TEST_CHECKOUT" || exit 1\nshift 2\nexec "$@"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(scripts, 'remote.sh'), '#!/bin/sh\ncd "$TEST_CHECKOUT" || exit 1\n# The host and any options (--build), up to --.\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'cargo'), `#!${process.execPath}
 const fs = require('node:fs'), assert = require('node:assert/strict');
 fs.writeSync(1, 'first stdout\\n');
