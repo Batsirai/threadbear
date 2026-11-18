@@ -54,6 +54,10 @@ export type HelperDeps = {
   command?: string;
   args?: string[];
   timeoutMs?: number;
+  // For questions asked before a new helper has answered anything: PowerShell
+  // starting and importing its modules took over 5 s on GitHub's Windows
+  // machines (18 Nov).
+  startTimeoutMs?: number;
 };
 
 type Pending = { resolve: (text: string) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
@@ -63,6 +67,8 @@ export class Win32Helper {
   private pending = new Map<number, Pending>();
   private nextId = 1;
   private deps: HelperDeps;
+  // Whether the running helper has answered yet.
+  private warm = false;
 
   constructor(deps: HelperDeps = {}) {
     this.deps = deps;
@@ -73,6 +79,7 @@ export class Win32Helper {
     const args = this.deps.args ?? helperArgs();
     const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
     this.child = child;
+    this.warm = false;
     readline.createInterface({ input: child.stdout! }).on('line', (line) => this.answer(line));
     // Only the current helper's end fails what's waiting: one stopped for
     // being slow exits after its replacement has been asked something.
@@ -97,6 +104,7 @@ export class Win32Helper {
     } catch {
       return;
     }
+    this.warm = true;
     const p = typeof msg.id === 'number' ? this.pending.get(msg.id) : undefined;
     if (!p) return;
     this.pending.delete(msg.id as number);
@@ -123,7 +131,7 @@ export class Win32Helper {
         reject(new Error(`the helper didn't answer ${op} in time`));
         // Stuck or too slow: the next question gets a new one.
         this.stop();
-      }, this.deps.timeoutMs ?? 5000);
+      }, this.warm ? (this.deps.timeoutMs ?? 5000) : (this.deps.startTimeoutMs ?? Math.max(20_000, this.deps.timeoutMs ?? 0)));
       this.pending.set(id, { resolve, reject, timer });
       child.stdin!.write(JSON.stringify({ id, op, ...params }) + '\n');
     });

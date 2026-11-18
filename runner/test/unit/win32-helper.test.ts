@@ -26,7 +26,7 @@ rl.on('line', (l) => {
   console.log(JSON.stringify({ id: r.id, ok: true, result: r.op === 'ping' ? 'pong' : r.op + ':' + (r.port ?? '') }));
 });`;
 
-const standIn = (timeoutMs = 2000) => new Win32Helper({ command: process.execPath, args: ['-e', STAND_IN], timeoutMs });
+const standIn = (timeoutMs = 2000, startTimeoutMs = timeoutMs) => new Win32Helper({ command: process.execPath, args: ['-e', STAND_IN], timeoutMs, startTimeoutMs });
 
 test('the helper answers each question by its id, keeps running, and says why when it refuses', async () => {
   const h = standIn();
@@ -46,6 +46,19 @@ test("a question it doesn't answer in time fails, and the next one gets a new he
   try {
     await assert.rejects(h.ask('hang'), /in time/);
     assert.equal(await h.ask('ping'), 'pong');
+  } finally {
+    h.stop();
+  }
+});
+
+// PowerShell starting and importing its modules took over 5 s on GitHub's
+// Windows machines: a new helper's first answer gets longer than the rest.
+test('a new helper gets longer for its first answer than for the ones after', async () => {
+  const slowStart = `setTimeout(() => { ${STAND_IN} }, 600);`;
+  const h = new Win32Helper({ command: process.execPath, args: ['-e', slowStart], timeoutMs: 200, startTimeoutMs: 5000 });
+  try {
+    assert.equal(await h.ask('ping'), 'pong', 'the slow start is waited for');
+    await assert.rejects(h.ask('hang'), /in time/, 'once warm, the short limit');
   } finally {
     h.stop();
   }
