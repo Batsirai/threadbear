@@ -16,18 +16,31 @@ type Group = { pgid: number; lstart: string } & Started;
 // the RPC server asks about (peer.ts).
 // job: on Windows, the Job Object the CLI and everything it starts are in
 // (JobControl), by name.
-type Entry = { pid: number; command: string; startedAt: string; lstart?: string; started?: string; groups?: Group[]; threadId?: string; job?: string };
+// exited: the CLI has gone, and the entry is kept only until its job has
+// been ended (a failure is tried again at the next start).
+type Entry = { pid: number; command: string; startedAt: string; lstart?: string; started?: string; groups?: Group[]; threadId?: string; job?: string; exited?: boolean };
 
 // Windows' stand-in for a CLI's process group: a Job Object, made by the
 // runner's helper (win32-helper.ps1) as the CLI starts. Ending it ends
 // every process still in it, whatever became of their parents, which
 // taskkill /T can't find once a parent has gone. Tests pass a stand-in.
-export type JobControl = { assign(pid: number, name: string): Promise<unknown>; end(name: string): Promise<unknown> };
+// What a CLI starts before it's in its job (Node can't start a process
+// suspended, so the job comes a few milliseconds after the CLI, longer
+// while the helper is busy) isn't in it, and outlives it as before: a gap
+// in clean-up, not a boundary anything relies on (Codex's review).
+// assign answers the start time (a FILETIME) of the process it put in the
+// job, so the runner can tell it was the CLI (Codex's review, 18 Nov:
+// asked asynchronously, the pid could have been reused by then). forget
+// lets go of a job without ending it.
+export type JobControl = { assign(pid: number, name: string): Promise<string>; end(name: string): Promise<unknown>; forget(name: string): Promise<unknown> };
 
 export const helperJobs: JobControl = {
   assign: (pid, name) => win32Helper().ask('jobAssign', { pid, name }),
   end: (name) => win32Helper().ask('jobEnd', { name }),
+  forget: (name) => win32Helper().ask('jobForget', { name }),
 };
+
+const JOB_NAME = /^Local\\threadbear-job-[0-9a-f]{32}$/;
 
 export function newJobName(): string {
   return `Local\\threadbear-job-${crypto.randomBytes(16).toString('hex')}`;
@@ -81,39 +94,86 @@ export class ProcessRegistry {
 
   private save(): void {
     try {
-      atomicWriteFileSync(this.file, JSON.stringify([...this.entries.values()], null, 1));
+      // Exited CLIs whose jobs haven't been ended yet too, for the next start.
+      const left = [...this.lingering].filter((e) => e.job);
+      atomicWriteFileSync(this.file, JSON.stringify([...this.entries.values(), ...left], null, 1));
     } catch (e) {
       this.log.warn('could not save children.json', { error: String(e) });
     }
   }
 
   add(pid: number, command: string, threadId?: string): void {
+    // Asked first, before the probe below holds the runner for a moment, so
+    // as little as possible of what the CLI starts is started before it's
+    // in its job. Never the runner itself (tests register their own process).
+    const job = this.jobs && pid !== process.pid ? newJobName() : undefined;
+    const assigned = job ? this.jobs!.assign(pid, job) : undefined;
     // Taken before the probe, which can take a while: the process was started
     // moments ago, so on Windows this stands in for its start time if
     // PowerShell can't give the real one (approxStartTime).
     const spawnedAt = Date.now();
+    // Synchronous, so the runner hasn't seen the CLI exit yet and the pid is
+    // still the CLI's: what this reads is the CLI's start.
     const info = processInfo(pid);
     const start = info ? startOf(info) : IS_WINDOWS ? { lstart: approxStartTime(spawnedAt) } : {};
-    // Never the runner itself (tests register their own process).
-    const job = this.jobs && pid !== process.pid ? newJobName() : undefined;
-    this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}), ...(job ? { job } : {}) });
+    const entry: Entry = { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}) };
+    this.entries.set(pid, entry);
     this.save();
-    // Straight away, while the runner still holds the child (so the pid is
-    // still this CLI's): what it starts from then on goes in the job too.
-    if (job) this.jobs!.assign(pid, job).catch((e) => this.log.warn("could not put a CLI in a job of its own; taskkill /T still stops it", { pid, error: String(e) }));
+    if (job && assigned) this.settleJob(entry, job, assigned);
     this.scanTimer ??= setInterval(() => void this.scan(), SCAN_MS).unref();
   }
 
+  // The job is the CLI's only once the helper says it put a process that
+  // started when the CLI did in it. Until then it isn't recorded, so a name
+  // the helper refused (someone else's) is never ended, and one that took a
+  // reused pid is let go of without ending it.
+  private settleJob(entry: Entry, job: string, assigned: Promise<string>): void {
+    this.assigning.add(entry);
+    assigned.then(
+      (created) => {
+        this.assigning.delete(entry);
+        if (!/^\d+$/.test(created) || !entry.lstart || !startedAt(entry, BigInt(created))) {
+          this.log.warn("a CLI's job got a process that wasn't the CLI; letting it go", { pid: entry.pid });
+          void (this.jobs ?? helperJobs).forget(job).catch(() => {});
+          return;
+        }
+        entry.job = job;
+        // Gone while it was being put in its job: end the job now.
+        if (entry.exited) this.finishExited(entry);
+        else if (this.entries.get(entry.pid) === entry) this.save();
+      },
+      (e) => {
+        this.assigning.delete(entry);
+        this.log.warn('could not put a CLI in a job of its own; taskkill /T still stops it', { pid: entry.pid, error: String(e) });
+      },
+    );
+  }
+
   remove(pid: number): void {
-    const job = this.entries.get(pid)?.job;
-    if (this.entries.delete(pid)) this.save();
-    // The CLI has exited: whatever it left running goes with its job, as its
-    // process group does on a Mac.
-    if (job) this.endJob(job, pid);
+    const entry = this.entries.get(pid);
+    if (this.entries.delete(pid)) {
+      // The CLI has exited: whatever it left running goes with its job, as
+      // its process group does on a Mac. Kept, marked exited, until that's
+      // done.
+      if (entry && (entry.job || this.assigning.has(entry))) {
+        entry.exited = true;
+        this.lingering.add(entry);
+        if (entry.job) this.finishExited(entry);
+      }
+      this.save();
+    }
     if (this.entries.size === 0 && this.scanTimer) {
       clearInterval(this.scanTimer);
       this.scanTimer = undefined;
     }
+  }
+
+  private finishExited(entry: Entry): void {
+    void this.endJob(entry.job!, entry.pid).then((ok) => {
+      if (!ok) return;
+      this.lingering.delete(entry);
+      this.save();
+    });
   }
 
   pids(): number[] {
@@ -268,20 +328,37 @@ export class ProcessRegistry {
   // random, so ending one can only reach what's in it, never a reused pid.
   jobs?: JobControl = IS_WINDOWS ? helperJobs : undefined;
 
-  private endJob(name: string, pid?: number): Promise<void> {
+  // CLIs being put in their jobs, and exited ones whose jobs haven't been
+  // ended yet.
+  private assigning = new Set<Entry>();
+  private lingering = new Set<Entry>();
+
+  // True once the job has ended (or had nothing left in it).
+  private endJob(name: string, pid?: number): Promise<boolean> {
     return (this.jobs ?? helperJobs).end(name).then(
-      () => undefined,
-      (e) => this.log.warn("could not end a CLI's job", { pid, error: String(e) }),
+      () => true,
+      (e) => {
+        this.log.warn("could not end a CLI's job; it's tried again at the next start", { pid, error: String(e) });
+        return false;
+      },
     );
   }
 
   async sweepOrphans(graceMs = 3000): Promise<number> {
     const previous = readJsonSync<Entry[]>(this.file) ?? [];
-    // What the previous runner's CLIs left, whatever became of the CLIs.
-    await Promise.all(previous.filter((e) => typeof e?.job === 'string').map((e) => this.endJob(e.job!, e.pid)));
+    // What the previous runner's CLIs left, whatever became of the CLIs. A
+    // job that can't be ended now is kept for the next start. The names only
+    // ever reach jobs called threadbear-job-<random>, the runner's own.
+    const jobbed = previous.filter((e) => typeof e?.job === 'string' && JOB_NAME.test(e.job));
+    const ended = await Promise.all(jobbed.map((e) => this.endJob(e.job!, e.pid)));
+    jobbed.forEach((e, i) => {
+      if (!ended[i]) this.lingering.add({ ...e, exited: true });
+    });
     const targets: number[] = [];
     for (const e of previous) {
-      if (!e || typeof e.pid !== 'number') continue;
+      if (!e || typeof e.pid !== 'number' || e.exited) continue;
+      // Its job has ended, and with it the CLI: its pid may be anyone's now.
+      if (IS_WINDOWS && e.job && ended[jobbed.indexOf(e)]) continue;
       if (sameGroup({ pgid: e.pid, lstart: e.lstart ?? '', started: e.started }, e.lstart || e.started ? undefined : path.basename(e.command ?? ''))) targets.push(e.pid);
       for (const g of e.groups ?? []) if (sameGroup(g)) targets.push(g.pgid);
     }
@@ -300,8 +377,12 @@ export class ProcessRegistry {
 
   // SIGTERM every live group, wait up to graceMs, then SIGKILL stragglers.
   async killAll(graceMs = 3000): Promise<void> {
-    const pids = this.pids();
-    await Promise.all([...this.entries.values()].filter((e) => e.job).map((e) => this.endJob(e.job!, e.pid)));
+    const jobbed = [...this.entries.values()].filter((e) => e.job);
+    const ended = await Promise.all(jobbed.map((e) => this.endJob(e.job!, e.pid)));
+    // A CLI whose job has ended is gone, and its pid may be someone else's
+    // by now (Codex's review): only the others get taskkill.
+    const done = new Set(jobbed.filter((_, i) => ended[i]).map((e) => e.pid));
+    const pids = this.pids().filter((p) => !(IS_WINDOWS && done.has(p)));
     const groups = pids.flatMap((pid) => [pid, ...this.toolGroups(pid)]);
     for (const pgid of groups) killGroup(pgid, 'SIGTERM');
     await waitGone(groups, graceMs);

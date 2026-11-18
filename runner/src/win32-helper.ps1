@@ -12,7 +12,9 @@
 #   processes   every process, one "pid ppid created" line each, created
 #               as a FILETIME (100 ns since 1601, UTC; 0 when Windows
 #               won't say)
-#   jobAssign   put pid (a CLI just started) in a new job called name
+#   jobAssign   put pid (a CLI just started) in a new job called name, and
+#               answer when that process started (a FILETIME)
+#   jobForget   let go of the job called name without ending it
 #   jobEnd      end every process still in the job called name
 #   snapshot    for port: every established connection to it, with the
 #               pid holding the client's end, and every process (below),
@@ -54,6 +56,8 @@ Declare 'OpenProcess' ([IntPtr]) @([UInt32], [bool], [UInt32])
 Declare 'AssignProcessToJobObject' ([bool]) @([IntPtr], [IntPtr])
 Declare 'TerminateJobObject' ([bool]) @([IntPtr], [UInt32])
 Declare 'CloseHandle' ([bool]) @([IntPtr])
+$long = [long].MakeByRefType()
+Declare 'GetProcessTimes' ([bool]) @([IntPtr], $long, $long, $long, $long)
 $K = $type.CreateType()
 function LastError { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
 # The job of each CLI this helper has put in one, by name. A helper started
@@ -110,20 +114,28 @@ while ($true) {
         # is in it too, and can't leave.
         $name = [string]$req.name
         if ($name -notmatch '^Local\\threadbear-job-[0-9a-f]{32}$') { throw "not a job name: $name" }
+        # Not one that's there already (someone else's): looked for first, as
+        # PowerShell's own calls can overwrite the error code checked below.
+        $there = $K::OpenJobObjectW(0x0008, $false, $name)
+        if ($there -ne [IntPtr]::Zero) { [void]$K::CloseHandle($there); throw 'a job by that name already exists' }
         $job = $K::CreateJobObjectW([IntPtr]::Zero, $name)
         $err = LastError
         if ($job -eq [IntPtr]::Zero) { throw "CreateJobObject failed ($err)" }
         # 183: there's already one by that name, which isn't ours to use.
         if ($err -eq 183) { [void]$K::CloseHandle($job); throw 'a job by that name already exists' }
-        # PROCESS_SET_QUOTA | PROCESS_TERMINATE
-        $proc = $K::OpenProcess(0x0101, $false, [UInt32]$req.pid)
+        # PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
+        $proc = $K::OpenProcess(0x1101, $false, [UInt32]$req.pid)
         if ($proc -eq [IntPtr]::Zero) { $err = LastError; [void]$K::CloseHandle($job); throw "OpenProcess failed ($err)" }
         $ok = $K::AssignProcessToJobObject($job, $proc)
         $err = LastError
+        # When the process it put in the job started, so the runner can tell
+        # it was the CLI and not a process that got its pid since.
+        $created = [long]0; $exit = [long]0; $kernel = [long]0; $user = [long]0
+        $timed = $K::GetProcessTimes($proc, [ref]$created, [ref]$exit, [ref]$kernel, [ref]$user)
         [void]$K::CloseHandle($proc)
         if (-not $ok) { [void]$K::CloseHandle($job); throw "AssignProcessToJobObject failed ($err)" }
         $jobs[$name] = $job
-        $result = 'ok'
+        $result = if ($timed) { [string]$created } else { '0' }
       }
       'jobEnd' {
         # Ends every process still in the CLI's job. None left: the job has
@@ -141,6 +153,15 @@ while ($true) {
           if (-not $ok) { throw "TerminateJobObject failed ($err)" }
           $result = 'ended'
         }
+      }
+      'jobForget' {
+        # Lets go of a job without ending it (one that got a process that
+        # wasn't the CLI).
+        $name = [string]$req.name
+        $job = $jobs[$name]
+        $jobs.Remove($name)
+        if ($job) { [void]$K::CloseHandle($job) }
+        $result = 'ok'
       }
       default { throw "unknown op: $($req.op)" }
     }
