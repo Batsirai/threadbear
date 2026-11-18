@@ -186,6 +186,8 @@ const scenes: Record<string, Scene> = {
     setup: async (app) => {
       await scenes.archive.setup(app);
       await app.do({ cmd: 'usage', show: true });
+      // Down the panel, which brings alex+3's row into sight.
+      await app.do({ cmd: 'usage', scrollToSettings: true });
       await sleep(600);
     },
     act: async (app) => {
