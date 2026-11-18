@@ -121,7 +121,10 @@ function nextAction(r: () => number, d: Dump, menuItems: string[], size: { w: nu
     [3, () => (rows.length && d.selection ? { cmd: 'scroll-to', row: pick(r, rows).id } : null)],
     [4, () => ({ cmd: 'mode', mode: pick(r, ['inbox', 'inbox', 'scheduled', 'projects', 'librarian', 'archive', 'snoozed']) })],
     [4, () => (rails.length ? { cmd: 'click', title: pick(r, rails) } : null)],
-    [8, () => ({ cmd: 'click-at', x: Math.floor(r() * size.w), y: Math.floor(r() * size.h), right: r() < 0.15, count: r() < 0.1 ? 2 : 1 })],
+    // Left clicks only: a right click opens a native menu, which holds the
+    // main thread in AppKit's menu loop until someone picks from it, so every
+    // command after it times out (18 Nov: two "freezes", both an open menu).
+    [8, () => ({ cmd: 'click-at', x: Math.floor(r() * size.w), y: Math.floor(r() * size.h), count: r() < 0.1 ? 2 : 1 })],
     [3, () => (menuItems.length ? { cmd: 'menu-item', title: pick(r, menuItems) } : null)],
     [2, () => (d.selection ? { cmd: 'archive' } : null)],
     [1, () => (d.archivedNote ? { cmd: 'undo-archive' } : null)],
@@ -332,6 +335,20 @@ function sampleTo(pid: number | undefined, file: string) {
   }
 }
 
+/** Whether the app's main thread is sitting in a native menu's loop. */
+function openMenu(pid: number | undefined): boolean {
+  if (!pid || process.platform !== 'darwin') return false;
+  const file = path.join(os.tmpdir(), `tb-fuzz-menu-${pid}.txt`);
+  sampleTo(pid, file);
+  try {
+    return /popUpMenuPositioningItem|popUpContextMenu|_NSMenuTracking|NSContextMenu/.test(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}
+
 async function keep(app: GpuiDriver | null, dir: string, f: Failure, trace: Step[]) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'trace.json'), JSON.stringify({ seed, failure: f, commands: trace.map((s) => s.cmd), steps: trace }, null, 2));
@@ -346,7 +363,7 @@ async function keep(app: GpuiDriver | null, dir: string, f: Failure, trace: Step
 async function fuzz() {
   const r = rng(seed);
   const until = Date.now() + minutes * 60_000;
-  const summary = { seed, minutes, steps: 0, refused: 0, byCmd: {} as Record<string, number>, refusedByCmd: {} as Record<string, number>, rss: [] as number[], findings: [] as (Failure & { dir: string; repeats?: string })[], restarts: 0 };
+  const summary = { seed, minutes, steps: 0, refused: 0, byCmd: {} as Record<string, number>, refusedByCmd: {} as Record<string, number>, rss: [] as number[], findings: [] as (Failure & { dir: string; repeats?: string })[], restarts: 0, nativeMenus: 0 };
   let n = 0;
   while (Date.now() < until && summary.steps < maxSteps) {
     const app = await startApp();
@@ -392,6 +409,13 @@ async function fuzz() {
         if (summary.steps % 50 === 0) summary.rss.push(rssKb(app.pid));
         // A restart of the walk now and then, so one long session isn't the only shape tried.
         if (trace.length >= 400) break;
+      }
+      if (failure && failure.kind === 'freeze' && openMenu(app.pid)) {
+        // A native menu something else opened (a "..." button, say): not a
+        // freeze, just the app waiting for a pick. A new app and walk on.
+        summary.nativeMenus += 1;
+        console.log(`native menu open at step ${failure.step} (not a bug), after ${JSON.stringify(trace[trace.length - 1]?.cmd).slice(0, 120)}`);
+        failure = null;
       }
       if (failure) {
         n += 1;
