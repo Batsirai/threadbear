@@ -14,7 +14,7 @@ import type { WorktreePatch } from './patches.ts';
 import { inBackground } from './background.ts';
 import { mainCheckoutOf as linkedMainCheckout } from './patch-trust.ts';
 import { untrustedGitArgs } from './safe-git.ts';
-import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, readRunning, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
+import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, readRunning, ridesFree, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
 
 // What a thread's record keeps about its worktree.
 export type WorktreeRecord = {
@@ -1117,15 +1117,18 @@ async function stackWaiting(
   // it out. On 13 Nov a group behind a broken main was halved down three
   // checks, each failing on main's own error, while the one-line repair
   // waited behind it for a group of its own.
+  // Not once main has been shown to pass what a group with it failed
+  // (ordinaryAt): then it's counted and halved like any other.
   const all = waiting(common);
-  const ordered = withFixes ? [...all.filter((e) => e.fix), ...all.filter((e) => !e.fix)] : all.filter((e) => !e.fix);
+  const free = (e: QueueEntry): boolean => ridesFree(e, main);
+  const ordered = withFixes ? [...all.filter(free), ...all.filter((e) => !free(e))] : all.filter((e) => !free(e));
   for (const e of ordered) {
     if (e.pid === process.pid && e.path === t.path) continue; // this one
     if (e.alone) continue; // its own tb checks it by itself
-    const c = e.fix ? Infinity : Math.min(cap, e.limit !== undefined && e.limitAt === main ? e.limit : Infinity);
-    if (!e.fix && counted + 2 > c) continue;
-    if (!e.fix && !includeOthers) continue;
-    if (!e.fix && allowed && !allowed.has(e.id)) continue;
+    const c = free(e) ? Infinity : Math.min(cap, e.limit !== undefined && e.limitAt === main ? e.limit : Infinity);
+    if (!free(e) && counted + 2 > c) continue;
+    if (!free(e) && !includeOthers) continue;
+    if (!free(e) && allowed && !allowed.has(e.id)) continue;
     if (e.path === t.path || e.branch === t.branch) continue;
     if ((e.check ?? null) !== check || (e.checkFrom ?? '') !== checkFrom) continue;
     if (!(await ownerWaiting(common, e))) continue;
@@ -1138,7 +1141,7 @@ async function stackWaiting(
     if (commits === undefined) continue;
     group.push({ entry: e, tip: next, commits });
     tip = next;
-    if (!e.fix) {
+    if (!free(e)) {
       counted++;
       cap = c;
     }
@@ -1216,7 +1219,7 @@ async function findBroken(a: {
   env: NodeJS.ProcessEnv;
   shell?: string[];
   timesFile: string;
-}): Promise<{ own: Alone; ownText: string; failed: Map<string, string>; passed: Set<string>; left: number; only: string; mainFailed: string[] } | undefined> {
+}): Promise<{ own: Alone; ownText: string; failed: Map<string, string>; passed: Set<string>; left: number; only: string; mainFailed: string[] } | 'main fails it' | undefined> {
   const dir = await aloneCheckout(a.common);
   if (!dir) return undefined;
   const started = Date.now();
@@ -1280,7 +1283,7 @@ async function findBroken(a: {
   const okOnMain = new Set(parseCheckTimes(base.text).steps.filter((s) => s.status === 'ok').map((s) => s.name));
   const passedOnMain = (name: string): boolean => ran.has(name) && (base.state === 'passed' || okOnMain.has(name));
   const kept = a.only.split(';').filter((e) => passedOnMain(e.split('=')[0]));
-  if (!kept.length) return undefined;
+  if (!kept.length) return 'main fails it';
   const only = kept.join(';');
   const mainFailed = a.only.split(';').map((e) => e.split('=')[0]).filter((name) => !kept.some((k) => k.split('=')[0] === name));
 
@@ -1302,31 +1305,53 @@ async function findBroken(a: {
   return { own: mine.state, ownText: mine.text, failed, passed, left, only, mainFailed };
 }
 
+// The landings of a group counted against the limit, as their entries are
+// now: not the fixes that ride outside it (ridesFree).
+const countedIn = (common: string, main: string, group: { entry: QueueEntry }[]): number =>
+  group.filter((g) => !ridesFree(readEntry(common, g.entry.id) ?? g.entry, main)).length;
+
 // The limit a failed group check leaves on its landings: half of it,
-// rounded up, the holder counted (fixes ride outside the limit).
-const halvedLimit = (group: { entry: QueueEntry }[]): number =>
-  Math.max(1, Math.ceil((group.filter((g) => !g.entry.fix).length + 1) / 2));
+// rounded up, the holder counted.
+const halvedLimit = (common: string, main: string, group: { entry: QueueEntry }[]): number =>
+  Math.max(1, Math.ceil((countedIn(common, main, group) + 1) / 2));
 
 // A group's check failed: each of its landings may be checked with at most
 // half as many from now on, on this main (it lapses once main moves). Done
-// at once, so it holds whatever happens to the holder's tb next. Returns
-// what puts each entry's limit back as it was, for a failure findBroken
-// then explains by name, where halving would only slow the rest down.
-export function halveGroup(common: string, main: string, group: { entry: QueueEntry }[]): () => void {
-  const limit = halvedLimit(group);
-  const before = new Map<string, Pick<QueueEntry, 'limit' | 'limitAt'>>();
-  for (const g of group) {
-    const now = readEntry(common, g.entry.id);
-    if (!now || now.result) continue;
-    before.set(now.id, { limit: now.limit, limitAt: now.limitAt });
-    writeEntry(common, { ...now, limit: Math.min(now.limitAt === main ? now.limit ?? Infinity : Infinity, limit), limitAt: main });
+// at once, so it holds whatever happens to the holder's tb next: on 18 Nov
+// two holders' tbs were killed just after their groups failed, the halving
+// went with them, and the next holder stacked the same mix again.
+// `fixesToo` counts the fixes in and halves them with the rest
+// (ordinaryAt), so it holds for them too. Returns what puts each entry
+// back as it was, for a failure findBroken then explains by name, where
+// halving would only slow the rest down, or one main fails by itself.
+export function halveGroup(common: string, main: string, group: { entry: QueueEntry }[], fixesToo: boolean): () => void {
+  const before = new Map<string, Pick<QueueEntry, 'limit' | 'limitAt' | 'ordinaryAt'>>();
+  const live = group.map((g) => readEntry(common, g.entry.id)).filter((e): e is QueueEntry => !!e && !e.result);
+  for (const e of live) before.set(e.id, { limit: e.limit, limitAt: e.limitAt, ordinaryAt: e.ordinaryAt });
+  const counted = group.filter((g) => {
+    const e = readEntry(common, g.entry.id) ?? g.entry;
+    return fixesToo || !ridesFree(e, main);
+  }).length;
+  const limit = Math.max(1, Math.ceil((counted + 1) / 2));
+  for (const e of live) {
+    writeEntry(common, {
+      ...e,
+      limit: Math.min(e.limitAt === main ? e.limit ?? Infinity : Infinity, limit),
+      limitAt: main,
+      ...(fixesToo && ridesFree(e, main) ? { ordinaryAt: main } : {}),
+    });
   }
   return () => {
     for (const [id, was] of before) {
       const now = readEntry(common, id);
       if (!now || now.result) continue;
-      const { limit: _l, limitAt: _a, ...rest } = now;
-      writeEntry(common, { ...rest, ...(was.limit !== undefined ? { limit: was.limit } : {}), ...(was.limitAt !== undefined ? { limitAt: was.limitAt } : {}) });
+      const { limit: _l, limitAt: _a, ordinaryAt: _o, ...rest } = now;
+      writeEntry(common, {
+        ...rest,
+        ...(was.limit !== undefined ? { limit: was.limit } : {}),
+        ...(was.limitAt !== undefined ? { limitAt: was.limitAt } : {}),
+        ...(was.ordinaryAt !== undefined ? { ordinaryAt: was.ordinaryAt } : {}),
+      });
     }
   };
 }
@@ -1348,7 +1373,7 @@ export function setAside(common: string, oldMain: string, newMain: string, holde
   const one = rest.length === 1;
   const aside: string[] = [];
   for (const e of rest) {
-    if (one || e.fix) {
+    if (one || ridesFree(e, oldMain)) {
       writeEntry(common, {
         ...e,
         alone: {
@@ -1358,7 +1383,7 @@ export function setAside(common: string, oldMain: string, newMain: string, holde
       });
       aside.push(e.branch);
     } else if (e.limit !== undefined && e.limitAt === oldMain) {
-      writeEntry(common, { ...e, limitAt: newMain });
+      writeEntry(common, { ...e, limitAt: newMain, ...(e.ordinaryAt === oldMain ? { ordinaryAt: newMain } : {}) });
     }
   }
   if (aside.length) out(`Set aside to be checked by ${aside.length > 1 ? 'themselves' : 'itself'}, as the group failed with ${aside.length > 1 ? 'them' : 'it'} and passed without: ${aside.join(', ')}.`);
@@ -1397,6 +1422,10 @@ async function landLocked(
   // the ones that passed, which are all that go into this landing's checks
   // from then on. It's done once; a group that fails after it is halved.
   let lookedAlone = false;
+  // Once findBroken has seen main fail some of what failed by itself: then
+  // a fix may be its repair, so this holder's later halvings leave the
+  // fixes riding free, as before 18 Nov.
+  let mainFailsToo = false;
   let allowed: Set<string> | undefined;
   // The others in this landing's last failed group check. When a later
   // check without some of them passes, those it left out are where the
@@ -1522,7 +1551,8 @@ async function landLocked(
         // next holder stacked the same mix again. Twice that day a group of
         // eight or nine failed feature pairing and nothing was narrowed.
         // Put back below when findBroken explains the failure by name.
-        const unhalve = halveGroup(common, main, group);
+        // Fixes too (fixesToo): see below for when they ride free again.
+        let unhalve = halveGroup(common, main, group, !mainFailsToo);
         // Show the group's failure now: finding the individual landing can
         // take several more checks, and its logs are already available.
         out([
@@ -1553,10 +1583,20 @@ async function landLocked(
             entries: [...(times.entryId ? [times.entryId] : []), ...group.map((g) => g.entry.id)],
           });
           const failedOn = parseCheckTimes(r.text).host;
-          const found = await findBroken({
+          const result = await findBroken({
             t, common, main, own, group, check, only, env: groupEnv, shell: opts.shell, timesFile: times.file,
             ...(failedOn && HOST_NAME.test(failedOn) ? { host: failedOn } : {}),
           });
+          const found = typeof result === 'object' ? result : undefined;
+          // Main fails some of what failed by itself: a fix may be its
+          // repair, so fixes ride in every group again, outside the limit,
+          // as on 13 Nov. Otherwise what failed is in the landings, fixes
+          // as much as any, and they stay halved with the rest.
+          if (result === 'main fails it' || found?.mainFailed.length) {
+            mainFailsToo = true;
+            unhalve();
+            unhalve = halveGroup(common, main, group, false);
+          }
           setRunning(common, undefined);
           const tailOf = (text: string): string => text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES).join('\n').slice(-8000);
           const why = (branch: string, text: string): string => [
@@ -1593,13 +1633,13 @@ async function landLocked(
               continue;
             }
             if (!found.left && found.own === 'passed') out('Each of them passes it alone, so it takes more than one of them (or it fails only now and then).');
+            if (!found.mainFailed.length && group.some((g) => g.entry.fix)) out(`${MAIN} passes what failed by itself, so the fixes (--despite-red) in the group are halved with the rest.`);
           }
         }
-        // Fixes always come along, so once it's down to this one and the
-        // fixes, the fixes are left out next, to see whose it is.
-        const counted = group.filter((g) => !g.entry.fix).length;
-        if (counted === 0) withFixes = false;
-        limit = halvedLimit(group);
+        // Fixes come along outside the limit, so once it's down to this one
+        // and those, they're left out next, to see whose it is.
+        if (countedIn(common, main, group) === 0) withFixes = false;
+        limit = halvedLimit(common, main, group);
         out('Checking them in smaller groups to find which.');
         continue;
       }

@@ -178,6 +178,54 @@ test("a failed group's halving is on everyone's entry before anything slow, and 
   assert.deepEqual(limits, [2, 2], first3);
 });
 
+// The same day most of the line had landed with --despite-red (GitHub's
+// desktop workflow was red), and fixes ride in every group outside the
+// limit, so the halving couldn't split a pair of them: only drop them all,
+// then check each by itself. Once main passes what failed, they're halved
+// like any other.
+test('fixes that only fail together are halved like any other once main passes what failed', async () => {
+  const { root, main } = makeRepo();
+  const [a, b, c, d, e] = branches(main, ['a', 'b', 'c', 'd', 'e']);
+  const body = 'if test -n "${THREADBEAR_CHECK_ONLY:-}"; then echo \'--only ran: "feature pairing"\'; fi; ' +
+    'if test -f b.txt && test -f c.txt; then echo \'To run only what failed again: --only "feature pairing"\'; exit 1; fi';
+  const { first, codes, caps } = await queued(root, main, a, [b, c, d, e].map((t) => ({ t, despiteRed: true })), recorded(root, body));
+  assert.equal(first, 0);
+  assert.equal(codes.filter((x) => x === 1).length, 1, said(caps));
+  assert.deepEqual([codes[2], codes[3]], [0, 0], said(caps));
+  assert.match(said(caps), /main passes what failed by itself, so the fixes \(--despite-red\) in the group are halved with the rest\./);
+  assert.doesNotMatch(said(caps), /Set aside to be checked by themselves/);
+  // Whole checks after a's: none of them by itself four times over.
+  const whole = runs(root).filter((r) => !r.only).map((r) => r.files);
+  assert.ok(whole.length <= 5, JSON.stringify(whole));
+});
+
+// What a holder that died just after its group of fixes failed leaves
+// behind (halveGroup, before anything slow), and the next holder keeps to
+// it: fixes too, which used to ride into every group outside the limit.
+test("the next holder keeps to the halving a dead holder's failed group of fixes left", async () => {
+  const { root, main } = makeRepo();
+  const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
+  const common = path.join(main, '.git');
+  // a's own check fails, so main stays where the dead holder's group failed.
+  const check = recorded(root, '! test -f a.txt');
+  const first = land({ ...a, check }, capture().opts);
+  await until(() => fs.existsSync(path.join(root, 'checking')), "a's check");
+  const caps = [b, c, d].map(() => capture());
+  const rest = [b, c, d].map((t, i) => land({ ...t, check }, { ...caps[i].opts, despiteRed: true }));
+  try {
+    await until(() => caps.every((x) => x.out.some((l) => l.startsWith('Waiting for another landing'))), 'b, c and d waiting');
+    // A holder of their own failed with all three, and was killed.
+    halveGroup(common, sh(main, 'git rev-parse main'), waiting(common).filter((e) => e.fix).map((entry) => ({ entry })), true);
+  } finally {
+    write(root, { release: '' });
+  }
+  assert.equal(await first, 1);
+  assert.deepEqual(await Promise.all(rest), [0, 0, 0], said(caps));
+  // Three and the holder halved to two: the next check has two of them.
+  const whole = runs(root).filter((r) => !r.only).map((r) => r.files);
+  assert.equal(whole[1].split(' ').length, 2, JSON.stringify(whole));
+});
+
 test('halveGroup: halves on this main at once, keeps a smaller limit, skips landed ones, and puts each back as it was', () => {
   const { main } = makeRepo();
   const common = path.join(main, '.git');
@@ -191,11 +239,19 @@ test('halveGroup: halves on this main at once, keeps a smaller limit, skips land
   const fix = { ...es[4], fix: true };
   fs.writeFileSync(path.join(queueDir(common), `${fix.id}.json`), JSON.stringify(fix));
   const group = [es[0], es[1], es[2], es[3], fix].map((entry) => ({ entry }));
-  const put = halveGroup(common, head, group);
-  // Four counted with the holder, plus a fix outside the limit: (4 + 1) / 2.
+  // Without the fixes: four counted with the holder, the fix outside.
+  halveGroup(common, head, group, false)();
+  const put = halveGroup(common, head, group, false);
   assert.deepEqual([0, 1, 2, 4].map((i) => [readEntry(common, es[i].id)?.limit, readEntry(common, es[i].id)?.limitAt]), [[3, head], [1, head], [3, head], [3, head]]);
-  assert.equal(readEntry(common, es[3].id)?.limit, undefined, 'one that has landed is left alone');
+  assert.equal(readEntry(common, es[4].id)?.ordinaryAt, undefined);
   put();
+  // With them: five and the holder, and the fix is halved with the rest.
+  const put2 = halveGroup(common, head, group, true);
+  assert.deepEqual([0, 1, 2, 4].map((i) => [readEntry(common, es[i].id)?.limit, readEntry(common, es[i].id)?.limitAt]), [[3, head], [1, head], [3, head], [3, head]]);
+  assert.equal(readEntry(common, es[4].id)?.ordinaryAt, head);
+  assert.equal(readEntry(common, es[3].id)?.limit, undefined, 'one that has landed is left alone');
+  put2();
+  assert.equal(readEntry(common, es[4].id)?.ordinaryAt, undefined);
   assert.equal(readEntry(common, es[0].id)?.limit, undefined);
   assert.equal(readEntry(common, es[0].id)?.limitAt, undefined);
   assert.deepEqual([readEntry(common, es[1].id)?.limit, readEntry(common, es[1].id)?.limitAt], [1, head]);

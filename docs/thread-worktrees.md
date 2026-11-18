@@ -268,9 +268,15 @@ their own.
   about its files (the others' still are). So a repair queued behind
   groups failing on main's own error goes into the next check with them,
   rather than waiting for the halving to finish (13 Nov: three group
-  checks failed on a broken main while its one-line repair waited). If a
-  group with only fixes and the holder fails, the fixes are left out next,
-  so a broken "fix" is still found.
+  checks failed on a broken main while its one-line repair waited). That
+  holds only while main may be what's broken: a failed group halves its
+  fixes with the rest (`ordinaryAt` in their entries, on that main), and
+  they ride free again only once main is seen to fail some of what failed
+  by itself ("Finding who broke a group"). On 18 Nov GitHub's desktop
+  workflow was red all day, most of a line of fourteen landed with
+  `--despite-red`, and two of them that failed only together were in every
+  group. If a group with only fixes and the holder fails, the fixes are
+  left out next, so a broken "fix" is still found.
 - When the halving narrows a holder's group and a later check without
   some of the failed group passes and lands, those left out are where the
   failure was. One by itself, and any fix among them, is set aside

@@ -50,6 +50,14 @@ export type QueueEntry = {
   // tb land --despite-red: the repair for a red main. Goes first in a
   // group check, outside the limit.
   fix?: boolean;
+  // The main on which this fix is checked like any other landing, inside
+  // the limit (ridesFree): a group check with it failed, and main by itself
+  // passes what failed, so the failure is in the landings and a fix has no
+  // claim to ride in every group. On 18 Nov most of a line of fourteen had
+  // landed with --despite-red (GitHub's desktop workflow was red all day),
+  // so two of them that failed only together were in every group, and the
+  // halving couldn't split them. Lapses once main moves, like `limit`.
+  ordinaryAt?: string;
   // tb land pushes main to GitHub once this lands (worktrees.ts, pushMain).
   push?: boolean;
   // The most landings it may be checked with. Each failed check of a group
@@ -72,6 +80,10 @@ export type QueueEntry = {
   // for over four hours. `why` is what its tb says when it gets there.
   alone?: { why: string; at: number };
 };
+
+// A fix that goes first in every group check and outside the limit, on
+// this main: one not yet shown to be just another landing (ordinaryAt).
+export const ridesFree = (e: Pick<QueueEntry, 'fix' | 'ordinaryAt'>, main: string): boolean => !!e.fix && e.ordinaryAt !== main;
 
 export const queueDir = (common: string): string => path.join(common, 'threadbear-land-queue');
 const runningFile = (common: string): string => path.join(common, 'threadbear-land-running.json');
