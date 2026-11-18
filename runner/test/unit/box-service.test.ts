@@ -22,7 +22,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'checkBox', 'retireBox', 'reapBoxes', 'reapService']);
+const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'checkBox', 'retireBox', 'reapBoxes', 'reapService', 'reapOne', 'driftOne']);
 // What run() runs of what's scheduled: the service's steps, and a move's rehoming.
 const RUNS = new Set(['boxes.wakeFor', 'boxes.archiveIfStill', 'boxes.wakeWaiting', 'boxes.wakeAllWaiting', 'boxes.failExpired', 'moves.rehomeRows']);
 const REPO = { origin: 'https://github.com/mikecann/threadbear.git', subfolder: '', baseBranch: 'main' };
@@ -756,7 +756,10 @@ test("the reaper's loss waits for a wake on the same box, and is dropped when th
   s.skip();
   // The reaper asks the provider again, under the box's op lease: held there while a message comes.
   const held = s.fly.hold((r) => r.query.get('metadata.tb_box') !== null);
-  const reaping = call(s.a, service.reapService, { serviceId: s.serviceId });
+  await call(s.a, service.reapService, { serviceId: s.serviceId });
+  // The loss is a step of its own (reapOne).
+  const step = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).find((j) => j.fn.endsWith('reapOne') && (j.args as { do: string }).do === 'lost')!;
+  const reaping = call(s.a, service.reapOne, step.args);
   await held.arrived;
   await s.send(runnerId, 'T2');
   s.skip();
@@ -1865,4 +1868,97 @@ test('an asleep thread with no box whose archive was missed is archived by the r
   await later(DAYS, () => s.run());
   assert.equal(s.stateOf('T2'), 'gone');
   assert.ok(runnerId);
+});
+
+// ------------------------------------------------------------ Codex's tenth round (18 Nov 2026): scheduling rules
+
+// Rule 1: a step that finds the box's lease taken runs again, with its arguments.
+test("Rule 1: the guard's pause runs again when another run holds the box's lease", async () => {
+  const s = await setup();
+  const { m } = await unsavedPaused(s, false);
+  s.rowOf('T2').op = { id: 'retirement', name: 'retireBox', until: Date.now() + 60 * MINUTE };
+  const args = { serviceId: s.serviceId, box: { providerBoxId: m.id, state: 'running', boxId: boxIdOf(s, 'T2'), attempt: 1 }, do: 'suspend', seen: null, boxId: boxIdOf(s, 'T2') };
+  s.skip();
+  await call(s.a, service.reapOne, args);
+  const again = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).at(-1)!;
+  assert.ok(again.fn.endsWith('reapOne'));
+  assert.deepEqual(again.args, args);
+});
+
+test('Rule 1: a retirement holding the lease pauses a running machine before its delete', async () => {
+  const s = await setup();
+  const failing = s.fly.failWhile((r) => r.path.endsWith('/suspend'), 503);
+  const { m, DAYS } = await retiringStuck(s, false);
+  assert.equal(s.fly.byId(m.id)!.state, 'created');
+  failing.stop();
+  // Its delete still fails, but the retirement paused it on the way.
+  await later(DAYS + 6 * MINUTE, () => call(s.a, service.retireBox, { boxId: boxIdOf(s, 'T2') }));
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  assert.equal(s.stateOf('T2'), 'retiring');
+});
+
+// Rule 2: no run waits on a line of provider calls.
+test("Rule 2: the reaper's provider steps are runs of their own, and a delete that keeps failing backs off", async () => {
+  const s = await setup();
+  for (let i = 0; i < 16; i++) s.fly.machines.push({ id: `orphan${String(i).padStart(2, '0')}`, name: `o${i}`, state: 'started', config: { metadata: { tb_box: 'boxes:999', tb_attempt: '1', tb_service: s.serviceId } } });
+  s.skip();
+  await call(s.a, service.reapService, { serviceId: s.serviceId });
+  assert.equal(s.fly.calls('DELETE', ''), 0, 'the pass itself deletes nothing');
+  assert.equal((s.scheduled as { fn: string }[]).filter((j) => j.fn.endsWith('reapOne')).length, 16);
+  // The first one's delete keeps failing: the rest go, and it waits out a backoff.
+  const stuck = s.fly.failWhile((r) => r.method === 'DELETE' && r.path.endsWith('/orphan00'), 503);
+  await s.run();
+  assert.deepEqual(s.fly.live().filter((x) => x.id.startsWith('orphan')).map((x) => x.id), ['orphan00']);
+  s.skip();
+  await call(s.a, service.reapService, { serviceId: s.serviceId });
+  assert.equal((s.scheduled as { fn: string }[]).filter((j) => j.fn.endsWith('reapOne')).length, 16, 'not planned again while it backs off');
+  stuck.stop();
+});
+
+test('Rule 2: a run out of its time budget stops calling the provider and carries on in a run of its own', async () => {
+  const s = await setup();
+  await s.start('T2');
+  await s.run();
+  const boxId = boxIdOf(s, 'T2');
+  for (let i = 0; i < 4; i++) s.fly.machines.push({ id: `old${i}`, name: `old${i}`, state: 'started', config: { metadata: { tb_box: boxId, tb_attempt: '0', tb_service: s.serviceId } } });
+  await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: 'T2' });
+  s.skip();
+  // Each delete takes a minute and a half (inside a call's deadline and the lease, but they add up).
+  const realNow = Date.now;
+  let offset = 0;
+  const fetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE') offset += 1.5 * MINUTE;
+    return fetch(url, init);
+  }) as typeof fetch;
+  Date.now = () => realNow() + offset;
+  try {
+    await call(s.a, service.destroyBox, { boxId });
+  } finally {
+    Date.now = realNow;
+    globalThis.fetch = fetch;
+  }
+  assert.ok(s.fly.calls('DELETE', '') < 5, 'stopped well inside its time');
+  assert.equal(s.stateOf('T2'), 'destroying');
+  assert.ok((s.scheduled as { fn: string }[]).at(-1)!.fn.endsWith('destroyBox'), 'and carries on');
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'expired');
+});
+
+// Rule 3: the sweep of boxes stuck being deleted pages too.
+test('Rule 3: every box stuck being deleted is tried again, a page at a time', async () => {
+  const s = await setup();
+  for (const t of ['T2', 'T3', 'T4']) await s.start(t);
+  for (const t of ['T2', 'T3', 'T4']) Object.assign(s.rowOf(t), { boxState: { kind: 'destroying', since: Date.now() - 60 * MINUTE }, boxStateTimers: [] });
+  s.skip();
+  await call(s.ctx, service.retryDestroying, { numItems: 1 });
+  for (let i = 0; i < 5; i++) {
+    const next = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('retryDestroying')).at(-1);
+    if (!next?.args.cursor) break;
+    const before = s.scheduled.length;
+    await call(s.ctx, service.retryDestroying, next.args);
+    if (s.scheduled.length === before) break;
+  }
+  const retried = new Set((s.scheduled as { fn: string; args: { boxId?: string } }[]).filter((j) => j.fn.endsWith('destroyBox')).map((j) => j.args.boxId));
+  assert.deepEqual([...retried].sort(), ['T2', 'T3', 'T4'].map((t) => boxIdOf(s, t)).sort());
 });

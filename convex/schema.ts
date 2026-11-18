@@ -375,6 +375,18 @@ export const appSchema = defineSchema({
   // `claude setup-token` and sealed under BOX_SEAL_KEY: a data export or
   // backup doesn't carry it in the clear. Only boxes:exchange unseals it,
   // for a box of a thread on that login.
+  // A provider machine whose delete failed (boxService.ts deleteFailed): it's
+  // tried again after `next`, so one that keeps failing doesn't hold up the
+  // rest. Gone once a delete works or the machine is.
+  boxDeleteBackoff: defineTable({
+    serviceId: v.id('runnerServices'),
+    providerBoxId: v.string(),
+    n: v.number(),
+    next: v.number(),
+  })
+    .index('by_box', ['providerBoxId'])
+    .index('by_service', ['serviceId']),
+
   cloudTokens: defineTable({
     login: v.string(),
     sealed: v.string(),

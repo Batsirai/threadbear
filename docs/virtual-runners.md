@@ -566,6 +566,31 @@ asleep thread with no box keeps its save while its thread lives (it comes
 back from it); one archived or deleted whose box missed the archive is
 archived by the retention sweep, so its save gets its days.
 
+A tenth look was about scheduling, so three rules now hold for every
+sweep and provider step in `boxService.ts` and `boxes.ts`:
+
+1. **No step is lost to lease contention.** Every action that can't get a
+   box's op lease runs again shortly with all its arguments: the ones
+   under `withOp` (create, wake, sleep, delete, check, retire), the
+   guard's and reaper's steps (`reapOne`), and the drift check
+   (`driftOne`). And a lease holder does the guard's part while it holds
+   it: a retirement pauses a running machine before deleting it.
+2. **No action outruns its time.** The reaper's pass only lists, charges
+   and plans; each step that calls the provider (a delete, a pause, a
+   loss, a drift check) is a run of its own. Runs that call the provider
+   several times (`withOp`'s) have a budget (`ACTION_BUDGET_MS`, 6
+   minutes): a call isn't started without its worst case left, and the run
+   carries on in a new one. A machine whose delete failed waits out a
+   backoff (`boxDeleteBackoff`, 5 minutes doubling to an hour) before it's
+   tried again, by the reaper, an archive's delete or a retirement, so a
+   broken one doesn't hold up the rest.
+3. **Every retry sweep pages**: boxes stuck being deleted
+   (`retryDestroying`), retirements (`retryRetiring`), kept boxes' saves,
+   idle checks, retention, drift and the virtual runners themselves. The
+   waiting-to-wake queues and an expired thread's commands are consumed as
+   they're read (each row leaves the queue, or the sweep stops for lack of
+   room), and `countBoxes` only counts.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`
