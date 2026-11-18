@@ -75,10 +75,10 @@ test('unitTests: a break that fails both whole runs still stops the build', () =
   assert.equal(calls.length, 2);
 });
 
-test("unitTests on Windows: test-windows.mjs, which leaves out the files known to fail there", () => {
+test("unitTests on Windows: test-windows.mjs's update gate, the files that cover what only Windows runs", () => {
   const { io, calls } = fakeIo([{ status: 0 }]);
   steps.unitTests({ ...c, platform: 'win32' }, {}, io);
-  assert.deepEqual(calls.map((x) => [x.cmd, ...x.args]), [[c.node, 'scripts/test-windows.mjs']]);
+  assert.deepEqual(calls.map((x) => [x.cmd, ...x.args]), [[c.node, 'scripts/test-windows.mjs', '--gate']]);
 });
 
 test('step: a script (npm-cli.js on Windows) runs on this Node', () => {

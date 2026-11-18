@@ -221,9 +221,10 @@ export function remoteChecks(hosts, root, opts, io = {}) {
 export const TEST_LIMITS = ['--test-timeout=300000', '--test-force-exit'];
 export function unitTests(c, opts, io = {}) {
   const { say = console.log } = io;
-  // On Windows, the files known to fail there are left out
-  // (scripts/test-windows.mjs and test/windows-known-failing.txt).
-  const suite = (c.platform ?? process.platform) === 'win32' ? [c.node ?? process.execPath, ['scripts/test-windows.mjs']] : [c.npm, ['test']];
+  // On Windows, only the files that cover what Windows alone runs
+  // (test/windows-update-gate.txt says why): no landing is checked on
+  // Windows, so the whole suite there is a report on GitHub, not a gate.
+  const suite = (c.platform ?? process.platform) === 'win32' ? [c.node ?? process.execPath, ['scripts/test-windows.mjs', '--gate']] : [c.npm, ['test']];
   try {
     step('Unit tests', ...suite, opts, io);
   } catch (e) {

@@ -6,6 +6,8 @@
 //
 //   node scripts/test-windows.mjs            the files that should pass
 //   node scripts/test-windows.mjs --known    the known-failing files, as a report
+//   node scripts/test-windows.mjs --gate     the files a runner's update must pass
+//                                            (test/windows-update-gate.txt)
 //   node scripts/test-windows.mjs a.test.ts  just those files
 //
 // Each test gets 30 seconds (60 on CI), not the package's five minutes, so a
@@ -23,28 +25,30 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const unit = path.join(root, 'test', 'unit');
-const listFile = path.join(root, 'test', 'windows-known-failing.txt');
-
-const known = new Set(
+const readList = (name) =>
   fs
-    .readFileSync(listFile, 'utf8')
+    .readFileSync(path.join(root, 'test', name), 'utf8')
     .split(/\r?\n/)
     .map((l) => l.replace(/#.*/, '').trim())
-    .filter(Boolean),
-);
+    .filter(Boolean);
+const known = new Set(readList('windows-known-failing.txt'));
+const gate = readList('windows-update-gate.txt');
 const all = fs.globSync('**/*.test.ts', { cwd: unit }).map((f) => f.split(path.sep).join('/')).sort();
 
-for (const k of known) {
-  if (!all.includes(k)) {
-    console.error(`windows-known-failing.txt lists ${k}, which is not a unit test file`);
-    process.exit(2);
+for (const [list, names] of [['windows-known-failing.txt', known], ['windows-update-gate.txt', gate]]) {
+  for (const k of names) {
+    if (!all.includes(k)) {
+      console.error(`${list} lists ${k}, which is not a unit test file`);
+      process.exit(2);
+    }
   }
 }
 
 const args = process.argv.slice(2);
 const wantKnown = args.includes('--known');
+const wantGate = args.includes('--gate');
 const named = args.filter((a) => !a.startsWith('--'));
-const files = named.length ? named : all.filter((f) => known.has(f) === wantKnown);
+const files = named.length ? named : wantGate ? gate : all.filter((f) => known.has(f) === wantKnown);
 
 const perTest = Number(process.env.THREADBEAR_TEST_TIMEOUT_MS) || (process.env.CI ? 60_000 : 30_000);
 // Files run side by side (Node's default is one fewer than the cores). On a
@@ -53,7 +57,7 @@ const perTest = Number(process.env.THREADBEAR_TEST_TIMEOUT_MS) || (process.env.C
 // in five (8 Nov), so CI runs two at a time. THREADBEAR_TEST_CONCURRENCY sets it anywhere.
 const concurrency = Number(process.env.THREADBEAR_TEST_CONCURRENCY) || (process.env.CI ? 2 : 0);
 
-console.log(`${wantKnown ? 'known-failing' : 'expected-to-pass'}: ${files.length} files, ${perTest / 1000} s a test${concurrency ? `, ${concurrency} files at a time` : ''}`);
+console.log(`${wantGate ? 'update gate' : wantKnown ? 'known-failing' : 'expected-to-pass'}: ${files.length} files, ${perTest / 1000} s a test${concurrency ? `, ${concurrency} files at a time` : ''}`);
 // node --test with no files would run whatever it finds in the folder.
 if (!files.length) process.exit(0);
 const r = spawnSync(

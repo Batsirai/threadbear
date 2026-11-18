@@ -229,7 +229,9 @@ test('a binary set by hand, or one that is missing, is spawned as given', () => 
   fs.writeFileSync(f, '#!/bin/sh\n', { mode: 0o755 });
   assert.deepEqual(resolveCodexBinary(f), { command: f, args: [], native: false });
   assert.deepEqual(resolveCodexBinary('/nowhere/codex'), { command: '/nowhere/codex', args: [], native: false });
-  assert.equal(fallbackCodexPath(path.join('/x', 'node', 'bin', 'node')), path.join('/x', 'node', 'bin', 'codex'));
+  // npm's codex link beside node; on Windows the package's codex.js, as its codex.cmd needs a shell.
+  assert.equal(fallbackCodexPath('/x/node/bin/node', 'darwin'), '/x/node/bin/codex');
+  assert.equal(fallbackCodexPath('C:\\node\\node.exe', 'win32'), 'C:\\node\\node_modules\\@openai\\codex\\bin\\codex.js');
 });
 
 // ---- A real process
