@@ -2395,6 +2395,9 @@ export class ConvexSync {
       if (this.flushFails !== fails) throw new Error(`The thread's changes didn't all go up before its save: ${this.lastError ?? 'the sync failed'}.`);
       const pending = this.dirty.size + this.removed.size + this.messages.length + this.dirtyLists.size + this.held.size;
       if (pending) throw new Error(`The thread's changes didn't all go up before its save (${pending} still to send).`);
+      // And the sidebar index's own writer (thread-index.ts), which another
+      // Mac reads the thread's row from.
+      if (this.index) await this.index.flushAll(Math.max(1, end - Date.now()));
       return;
     }
   }
@@ -3377,11 +3380,14 @@ export class ConvexSync {
           this.schedulesRefused = true;
         }
       }
-      if (this.picturesDue && (this.backendApiVersion ?? 0) >= ICONS_API_VERSION) await this.sendPictures();
+      // Projects' pictures: a box has no projects, and its key can't read them (BOX_CALLS).
+      if (this.picturesDue && !this.deps.box && (this.backendApiVersion ?? 0) >= ICONS_API_VERSION) await this.sendPictures();
       if (this.full) {
         // And those finishing on the release before: their rows aren't stale.
         const keep = [...new Set([...this.deps.runner.list(ALL).map((t) => t.id), ...(this.deps.elsewhereIds?.() ?? [])])];
-        await this.post('mutation', 'sync:prune', { key, runnerId: this.runnerId, keep });
+        // Not a box: its key can't prune (BOX_CALLS), and it has one thread,
+        // which the backend keeps to that thread anyway (ownThreadOnly).
+        if (!this.deps.box) await this.post('mutation', 'sync:prune', { key, runnerId: this.runnerId, keep });
         prependAll(messages, await this.catchUp());
         this.full = false;
         this.fullAt = this.deps.clock.now();

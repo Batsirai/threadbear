@@ -166,6 +166,7 @@ export class ThreadIndex {
   private full = true;
   private timer?: TimerHandle;
   private flushing = false;
+  private flushFails = 0;
   private unlisten?: () => void;
   private unsubscribe?: () => void;
   private remote: RemoteThreads = { runners: [], threads: [] };
@@ -486,6 +487,26 @@ export class ThreadIndex {
     }, ms);
   }
 
+  /**
+   * Box mode's save (sync.ts flushAll): this runner's rows all written, for
+   * sure, before boxSaved. Waits for a write going, writes what's left, and
+   * throws if it failed, left anything, or the index hasn't started.
+   */
+  async flushAll(timeoutMs = 60_000): Promise<void> {
+    if (!this.running) throw new Error("The sidebar index hasn't started, so the thread's row can't be written before its save.");
+    const end = Date.now() + timeoutMs;
+    while (this.flushing) {
+      if (Date.now() > end) throw new Error("The sidebar index was still writing, so the thread's row didn't go up before its save.");
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    if (!this.dirty.size && !this.removed.size && !this.full) return;
+    this.timer?.cancel();
+    this.timer = undefined;
+    const fails = this.flushFails;
+    await this.flush();
+    if (this.flushFails !== fails || this.dirty.size || this.removed.size || this.full) throw new Error("The thread's row in the sidebar index didn't go up before its save.");
+  }
+
   private async flush(): Promise<void> {
     if (!this.running || this.flushing) return;
     if (!this.dirty.size && !this.removed.size && !this.full) return;
@@ -521,6 +542,7 @@ export class ThreadIndex {
       for (const r of rows) if (!this.dirty.has(r.threadId) && this.sent.get(r.threadId) !== writeKey(r)) this.dirty.set(r.threadId, r);
       for (const id of this.removing) this.removed.add(id);
       this.removing = [];
+      this.flushFails++;
       this.deps.log.warn('could not write the thread index; trying again', { error: String(e) });
       this.flushing = false;
       this.schedule(15_000);

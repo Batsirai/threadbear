@@ -8054,8 +8054,9 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   main, CLI updates, keep-awake, `followOrigin`, the reinstaller and
   upstream releases, Sentry, the Mac screen watch, schedules, the
   librarian, spare-week threads and the borrow sweep; the sync sends no
-  presence, logins, projects, schedules, pools, shared memory or machine
-  figures (its key can't). It runs one thread: any other `create`, from
+  presence, logins, projects or their pictures, schedules, pools, shared
+  memory or machine figures, and never calls `prune` (its key can't do
+  any of them; a fresh box's first full write goes without it). It runs one thread: any other `create`, from
   anywhere, is refused (`create_thread` asks the main Mac, as from any
   runner key). Claude Code runs as root there, so `IS_SANDBOX=1` is set
   for everything the runner starts. The app port listens on 127.0.0.1
@@ -8098,9 +8099,11 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   files under a `node_modules` folder that the checkout's own index doesn't
   have, which a restore refuses: the worktree's setup makes them again; a
   change there to a tracked or staged file fails the command, saying so.
-  It starts from a copy of the checkout's own index, so what's staged is
-  in it, with every path's assume-unchanged and skip-worktree flags cleared
-  in the copy, so what's saved is the files as they really are), in a move's
+  Its index is built from HEAD, with no stat data to trust, and every file
+  hashed afresh (`core.checkStat` default, `core.trustctime` on, whatever
+  the repo says), plus the paths the checkout's own index has staged that
+  HEAD hasn't (force-added, so an ignored one comes too): what's saved is
+  the files as they really are), in a move's
   archive (`move-pack.ts`) with a `box.json` naming the thread. At most
   100,000 files and 128 MB unpacked, the limits a restore holds it to,
   checked from the sizes on disk before anything is read, and
@@ -8111,7 +8114,8 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   data. Uploaded to the URL `sync:iconUploadUrl` gives the box key, then
   `boxes:boxSaved({ key, storageId, bytes })`, but only once every change
   of the runner's has gone up (the mirror's flush waited for, then one run
-  to the end with nothing left; if it can't, the command fails and the box
+  to the end with nothing left, and the sidebar index's writer the same; if
+  it can't, the command fails and the box
   stays held), so no write after the save marks the box as working; the command finishes
   with `{ bytes }` (and `leftOut`, up to 20 paths left out). A sealed save
   over 10 MB (one upload) fails the command saying so; saves in parts are

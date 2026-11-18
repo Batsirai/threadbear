@@ -595,3 +595,33 @@ test('the mirror must be all up before boxSaved: a flush that fails fails the sa
   await saveThread({ home: a.home, claudeDir: a.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => a.h.runner.quiesceForSave(id), hold: a.hold, beforeSaved: async () => void order.push('flush'), post: watched.post, upload: watched.upload, sleep: async () => {} });
   assert.deepEqual(order, ['sync:iconUploadUrl', 'flush', 'boxes:boxSaved']);
 });
+
+test("an edit that keeps a file's size and mtime is saved, whatever the repo says to trust of stat data", async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const top = a.folder.checkout;
+  sh(top, 'git config core.checkStat minimal && git config core.trustctime false');
+  const file = path.join(top, 'runner', 'a.txt');
+  // An hour old, so the index written after it isn't racy (git hashes a file as new as its index).
+  const old = new Date(Date.now() - 3600_000);
+  fs.writeFileSync(file, 'aaaa\n');
+  fs.utimesSync(file, old, old);
+  sh(top, 'git add runner/a.txt && git commit -qm four && git status --porcelain');
+  // The same size, and its mtime put back: by stat data alone, unchanged.
+  fs.writeFileSync(file, 'bbbb\n');
+  fs.utimesSync(file, old, old);
+  assert.equal(sh(top, 'git status --porcelain runner/a.txt'), '', "git's own status misses it, as the trigger needs");
+  // And one staged under an ignored path, added with -f.
+  fs.mkdirSync(path.join(top, 'build'));
+  fs.writeFileSync(path.join(top, '.gitignore'), 'node_modules\nbuild\n');
+  sh(top, 'git add .gitignore && git commit -qm ignore');
+  fs.writeFileSync(path.join(top, 'build', 'kept.txt'), 'staged\n');
+  sh(top, 'git add -f build/kept.txt');
+  const backend = fakeBackend();
+  await save(a.h, a, backend);
+  const [url, sealed] = [...backend.stored][0]!;
+  const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored);
+  assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'runner', 'a.txt'), 'utf8'), 'bbbb\n');
+  assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'build', 'kept.txt'), 'utf8'), 'staged\n');
+});

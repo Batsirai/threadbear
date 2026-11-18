@@ -785,10 +785,23 @@ A fourth look found three more ways to lose work, and a follow-up:
 - A zombie thread-group leader with live threads was skipped: a process
   is alive while any of its tasks is, and its group is killed.
 - The save's copy of the index kept assume-unchanged and skip-worktree,
-  hiding real changes: they're cleared in the copy (`untrustedGit` runs
-  `update-index` for that alone).
+  hiding real changes (the fifth look replaced the copy altogether, below).
 - The mirror's flush before `boxSaved` wasn't sure: `flushAll` waits for one
   going, runs its own to the end, and fails the save if anything's left.
+
+A fifth look found two more and a follow-up:
+
+- The copied index's stat data let git keep an edit that kept a file's
+  size and mtime (with `core.checkStat` minimal and `core.trustctime`
+  off). The save's index is now built from HEAD, which has no stat data,
+  every file hashed afresh with those settings overridden, plus the
+  checkout's staged paths force-added; `untrustedGit` no longer needs
+  `update-index`.
+- Every fresh box's first flush called `sync:prune`, which a box key can't,
+  so its mirror never finished and no save could: a box skips it (and
+  projects' pictures). The box tests' fake backend now refuses anything
+  not in `BOX_CALLS`, so a call like that can't hide in a fake again.
+- `flushAll` now drains the sidebar index's writer too.
 
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as

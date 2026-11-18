@@ -18,7 +18,24 @@ import { nullLogger } from '../../src/log.ts';
 import { readYearToken } from '../../src/year-token.ts';
 import { ConvexSync, readSyncKey } from '../../src/sync.ts';
 import { paths } from '../../src/config.ts';
+import { load } from '../helpers/convex-memory.ts';
 import { BOOT_ENV, BoxBootRefused, BoxFolderBroken, markSetUp, setBaseline, setSaveHold, MACHINE_ID_ENV, bootBox, boxFile, enterBoxEnv, exchangeBoot, prepareBoxFolder, readBoxBoot, readBoxSecrets, repoFolderName, writeBoxSecrets, type ActionPost, type BoxSecrets, type Cloner } from '../../src/box-mode.ts';
+
+// The backend's gate for a box key (convex/runnerAccess.ts BOX_CALLS, run by
+// lib.ts runnerAuth): a box-mode sync here may call nothing else, so a call
+// the real backend would refuse (sync:prune, 19 Nov) can't hide in a fake.
+const { BOX_CALLS } = load('runnerAccess') as { BOX_CALLS: ReadonlySet<string> };
+const refusedCalls: string[] = [];
+function onlyBoxCalls(post: (kind: 'mutation' | 'query', fn: string, args: Record<string, unknown>) => Promise<unknown>) {
+  return async (kind: 'mutation' | 'query', fn: string, args: Record<string, unknown>) => {
+    const name = fn.split(':')[1] ?? fn;
+    if (!BOX_CALLS.has(name)) {
+      refusedCalls.push(fn);
+      throw Object.assign(new Error(`forbidden: ${fn}`), { data: { kind: 'forbidden', message: `call ${name}: a box's key runs its one thread, and nothing else` } });
+    }
+    return post(kind, fn, args);
+  };
+}
 
 const BOOT = `tbt_${'a'.repeat(64)}`;
 const BOX_KEY = `tbb_${'b'.repeat(64)}`;
@@ -270,11 +287,11 @@ test("a box's heartbeat names its machine; a key the backend turns down means it
     startedAt: '2026-11-19T00:00:00.000Z',
     clock: h.clock,
     log: nullLogger,
-    post: async (_kind, fn, args) => {
+    post: onlyBoxCalls(async (_kind, fn, args) => {
       calls.push({ fn, args });
       if (refuse) throw Object.assign(new Error('bad runner key'), { data: { kind: 'auth', message: 'bad runner key' } });
       return fn === 'sync:heartbeat' ? { apiVersion: 89, box: { state: 'awake' } } : null;
-    },
+    }),
     box: { machineId: 'm-42', superseded: () => void superseded++, heard: (state, sentAt) => void heard.push({ state, sentAt }) },
   });
   sync.start();
@@ -343,12 +360,12 @@ test("the backend's save command goes to the box's save and finishes; a runner t
       startedAt: '2026-11-19T00:00:00.000Z',
       clock: h.clock,
       log: nullLogger,
-      post: async (_kind, fn, args) => {
+      post: (isBox ? onlyBoxCalls : (f: Parameters<typeof onlyBoxCalls>[0]) => f)(async (_kind, fn, args) => {
         if (fn === 'sync:heartbeat') return { apiVersion: 89 };
         if (fn === 'sync:takeCommand') return true;
         if (fn === 'sync:finishCommand') finished.push(args);
         return null;
-      },
+      }),
       subscriber: {
         subscribe: (fn, _args, onUpdate) => {
           if (fn === 'sync:pendingCommands') push = onUpdate;
@@ -606,12 +623,12 @@ test("while a save holds the box, its heartbeats and its save's finish say `held
     startedAt: '2026-11-19T00:00:00.000Z',
     clock: h.clock,
     log: nullLogger,
-    post: async (_kind, fn, args) => {
+    post: onlyBoxCalls(async (_kind, fn, args) => {
       calls.push({ fn, args });
       if (fn === 'sync:heartbeat') return { apiVersion: 89 };
       if (fn === 'sync:takeCommand') return true;
       return null;
-    },
+    }),
     subscriber: { subscribe: (fn, _a, onUpdate) => ((fn === 'sync:pendingCommands' && (push = onUpdate)), () => {}), close: () => {} },
     commands: { send: () => undefined, respondApproval: () => undefined, answerSecret: () => undefined, update: () => undefined, markSeen: () => undefined, create: () => ({ thread: t }), share: () => undefined, quickAsk: () => ({ thread: t }), save: async () => ({ bytes: 1 }) },
     box: { superseded: () => {}, held: () => held },
@@ -646,7 +663,7 @@ test("flushAll waits for a flush already going, runs its own to the end, and fai
     startedAt: '2026-11-19T00:00:00.000Z',
     clock: h.clock,
     log: nullLogger,
-    post: async (_kind, fn) => {
+    post: onlyBoxCalls(async (_kind, fn) => {
       if (fn === 'sync:heartbeat') return { apiVersion: 89 };
       if (fn === 'sync:upsertThreads') {
         upserts.push(Date.now());
@@ -654,7 +671,8 @@ test("flushAll waits for a flush already going, runs its own to the end, and fai
         if (fail) throw new Error('network down');
       }
       return null;
-    },
+    }),
+    box: { superseded: () => {} },
   });
   sync.start();
   await sync.flushNow();
@@ -690,4 +708,46 @@ test("the provider's baseline is kept in box.json, and what else writes box.json
   setSaveHold(home, undefined);
   assert.deepEqual(readBoxSecrets(home)?.baseline, baseline);
   assert.equal(fs.statSync(boxFile(home)).mode & 0o777, 0o600);
+});
+
+
+test("a fresh box's first flush goes all the way under a box key (no prune, which it can't call), its index rows too, and flushAll waits for both", async () => {
+  const h = makeHarness();
+  h.runner.boxThread = THREAD;
+  h.runner.create({ text: 'hi', cwd: h.cfg.defaults.cwd, accountId: 'claude-main', id: THREAD });
+  const calls: string[] = [];
+  let indexFails = 0;
+  const sync = new ConvexSync({
+    config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
+    key: BOX_KEY,
+    home: h.home,
+    runner: h.runner,
+    version: '0.1.0+test',
+    startedAt: '2026-11-19T00:00:00.000Z',
+    clock: h.clock,
+    log: nullLogger,
+    post: onlyBoxCalls(async (_kind, fn) => {
+      calls.push(fn);
+      if (fn === 'sync:heartbeat') return { apiVersion: 89 };
+      if (fn === 'sync:messageHeads') return [];
+      if (fn === 'sync:setThreadIndex' && indexFails-- > 0) throw new Error('network down');
+      return null;
+    }),
+    subscriber: { subscribe: () => () => {}, close: () => {} },
+    box: { superseded: () => {} },
+  });
+  sync.start();
+  await tick(10);
+  await sync.flushAll();
+  assert.deepEqual(refusedCalls.splice(0), [], 'nothing a box key would be refused');
+  assert.ok(!calls.includes('sync:prune'));
+  assert.ok(calls.includes('sync:upsertThreads'));
+  assert.ok(calls.includes('sync:appendMessages'));
+  assert.ok(calls.includes('sync:setThreadIndex'), "the sidebar index's row went up before flushAll resolved");
+  // An index write that fails fails flushAll, so the save does too.
+  indexFails = 1;
+  h.runner.update({ threadId: THREAD, title: 'renamed' });
+  await assert.rejects(sync.flushAll(), /sidebar index didn't go up before its save/);
+  await sync.stop();
+  assert.deepEqual(refusedCalls.splice(0), []);
 });
