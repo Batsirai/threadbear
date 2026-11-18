@@ -116,7 +116,12 @@ export class ProcessRegistry {
   threadOfPid(pid: number, created?: bigint): string | undefined {
     const own = this.entries.get(pid);
     if (own) {
-      if (!startedAt(own, created)) throw new StaleProcess(pid);
+      const exact = this.confirmStart(own, created);
+      if (exact === false) throw new StaleProcess(pid);
+      if (typeof exact === 'string') {
+        own.lstart = exact;
+        this.save();
+      }
       return own.threadId;
     }
     let names: string[];
@@ -130,11 +135,30 @@ export class ProcessRegistry {
       const e = Array.isArray(entries) ? entries.find((x) => x?.pid === pid) : undefined;
       if (!e?.threadId) continue;
       if (created) {
-        if (startedAt(e, created)) return e.threadId;
+        if (this.confirmStart(e, created) !== false) return e.threadId;
         throw new StaleProcess(pid);
       } else if (!(e.lstart || e.started) || sameStart(e, processInfo(pid))) return e.threadId;
     }
     return undefined;
+  }
+
+  // Whether a recorded CLI is the process that started at `created`: true,
+  // false, or the exact start to record in place of an estimate. An
+  // estimate (the probe failed when it started) can't tell two processes
+  // ten seconds apart (Codex's fourth review), so the pid's start is read
+  // again now: it counts only if that exact reading is the snapshot's
+  // process and fits the estimate. A reading that fails is a no. Rare (a
+  // failed probe), and the reading is the same one add() makes.
+  // How confirmStart reads a start again (tests pass a stand-in).
+  readStart: (pid: number) => ProcessInfo | null = processInfo;
+
+  private confirmStart(e: { lstart?: string }, created: bigint | undefined): boolean | string {
+    if (!created || !e.lstart?.startsWith('~')) return startedAt(e, created);
+    const pid = (e as { pid?: number }).pid;
+    const now = pid ? this.readStart(pid)?.lstart : undefined;
+    if (!now || !/^\d+$/.test(now)) return false;
+    if (!startedAt({ lstart: now }, created) || !sameStartTime(e.lstart, now)) return false;
+    return now;
   }
 
   // Groups the CLI's tool commands ran in that are still running.

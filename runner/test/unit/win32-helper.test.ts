@@ -239,3 +239,27 @@ test("on Windows the helper uses Windows' own NetTCPIP, not one planted earlier 
     process.env.PSModulePath = before;
   }
 });
+
+// A CLI whose start probe failed is recorded with an estimate, which can't
+// tell two processes ten seconds apart: its start is read again, exactly,
+// and only that decides (Codex's fourth review).
+test("a CLI recorded with an estimate counts only once an exact reading matches the snapshot", () => {
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  const T = 133761234567890000n;
+  const read = new Map<number, string | undefined>();
+  reg.readStart = (pid) => (read.get(pid) ? { pgid: pid, lstart: read.get(pid)!, command: 'claude' } : null);
+  // add() records an estimate when its own probe fails.
+  reg.add(4242, 'claude', 'thB');
+  (reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(4242)!.lstart = `~${T}`;
+  // The snapshot saw A's CLI, 5 s before B's started with that pid: the exact reading is B's.
+  read.set(4242, String(T + 3n));
+  assert.throws(() => reg.threadOfPid(4242, T - 50_000_000n), StaleProcess, 'within the estimate, but not the process the snapshot saw');
+  // The snapshot's process is the one there now.
+  assert.equal(reg.threadOfPid(4242, T + 3n), 'thB');
+  assert.equal((reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(4242)!.lstart, String(T + 3n), 'the exact start replaces the estimate');
+  // A reading that fails is a no.
+  (reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(4242)!.lstart = `~${T}`;
+  read.set(4242, undefined);
+  assert.throws(() => reg.threadOfPid(4242, T + 3n), StaleProcess);
+  reg.remove(4242);
+});
