@@ -259,7 +259,7 @@ impl SidePane {
             let (open_url, close_url) = (tab.clone(), tab.clone());
             let (open_thread, close_thread) = (thread.clone(), thread_id.clone());
             let hover = p.hover;
-            let close = div()
+            let close = tipped(div()
                 .id(("pr-tab-close", i))
                 .size(px(16.))
                 .flex()
@@ -267,7 +267,7 @@ impl SidePane {
                 .justify_center()
                 .rounded(px(4.))
                 .hover(move |s| s.bg(hover))
-                .child(icon("xmark", 9., p.faint))
+                .child(icon("xmark", 9., p.faint)), "Close this tab")
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.close_pr_tab(&close_thread, &close_url, cx);
@@ -286,9 +286,8 @@ impl SidePane {
                 .hover(move |s| s.bg(hover))
                 .child(icon("arrow.triangle.pull", 11., state.map_or(p.secondary, |s| state_colour(s, cx))))
                 .child(div().text_size(px(style::size::LABEL)).when(front, |d| d.font_semibold()).text_color(if front { p.fg } else { p.secondary }).child(title))
-                .child(close)
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_pr(&open_url, &open_thread, cx)));
-            row = row.child(tipped(tab_el, tip));
+                .child(close);
+            row = row.child(tipped(tab_el, tip).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_pr(&open_url, &open_thread, cx))));
         }
         let mut out = h_flex().flex_1().min_w_0().items_center().child(row);
         let (refresh_url, open_url) = (url.to_owned(), url.to_owned());
@@ -521,7 +520,7 @@ impl SidePane {
         let to_checks = url.to_owned();
         fields = fields.child(field(
             "Checks",
-            div()
+            tipped(div()
                 .id("pr-checks-row")
                 .cursor_pointer()
                 .child(
@@ -529,7 +528,7 @@ impl SidePane {
                         .gap(px(4.))
                         .child(checks_words)
                         .when_some(failed, |d, f| d.child(div().text_color(style::failed_text(cx)).child(format!("· {f}")))),
-                )
+                ), "See each check")
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.prs.ui.entry(to_checks.clone()).or_default().tab = PrTab::Checks;
                     cx.notify();
@@ -670,8 +669,9 @@ impl SidePane {
     fn pr_text(&self, doc: &Entity<TextViewState>, thread: &ThreadSummary, cx: &mut Context<Self>) -> impl IntoElement {
         let side = cx.entity().downgrade();
         let style = crate::rows::reading_style(cx);
-        let _ = thread;
-        gpui_kit::base::TextView::new(doc).selectable(true).style(style).on_link_click(move |url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App| {
+        // Through the open gate's view, its click handler replaced by the
+        // pane's, which still opens only through the gate (or as a PR tab).
+        crate::open_gate::text_view(doc, crate::open_gate::Origin::ThisMac, &thread.cwd).selectable(true).style(style).on_link_click(move |url: &SharedString, _: &ClickEvent, _: &mut Window, cx: &mut App| {
             let url = url.to_string();
             let _ = side.update(cx, |this, cx| this.follow_link(&url, cx));
         })
@@ -691,7 +691,7 @@ impl SidePane {
                 Some(from) => format!("{from} → {}", f.path),
                 None => f.path.clone(),
             };
-            let head = h_flex()
+            let head = tipped(h_flex()
                 .id(("pr-file", i))
                 .gap(px(6.))
                 .py(px(4.))
@@ -700,7 +700,7 @@ impl SidePane {
                 .child(icon(if shut { "chevron.right" } else { "chevron.down" }, 10., p.faint))
                 .child(div().flex_1().min_w_0().truncate().font_family(cx.theme().mono_font_family.clone()).text_size(px(style::size::DETAIL)).child(name))
                 .child(div().text_size(px(style::size::DETAIL)).text_color(style::added_text(cx)).child(format!("+{}", f.additions)))
-                .child(div().text_size(px(style::size::DETAIL)).text_color(style::removed_text(cx)).child(format!("−{}", f.deletions)))
+                .child(div().text_size(px(style::size::DETAIL)).text_color(style::removed_text(cx)).child(format!("−{}", f.deletions))), if shut { "Show this file's changes" } else { "Hide this file's changes" })
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     let ui = this.prs.ui.entry(key.clone()).or_default();
                     if !ui.folded.remove(&path) {
