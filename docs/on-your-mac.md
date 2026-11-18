@@ -282,6 +282,10 @@ File references are where to look.
   status checks whether that process is still alive.
   `threadbear-land-done/` there keeps, for a week, what
   landed for a landing whose `tb` was stopped before it heard.
+  `tb land` runs the landing in a process of its own, so a time limit
+  stopping the `tb` can't stop a check partway: it writes its output to a
+  `tb-land-*` folder under `$TMPDIR`, deleted once the `tb` you ran has
+  shown it (left for macOS to clear if that `tb` was stopped first).
 - **Borrowed worktrees** (`runner/src/borrows.ts`): `borrow-worktree.sh`
   writes a small `threadbear-borrow` file in the borrowed worktree's git
   folder (the borrowing thread's id, a process id for a script's borrow,

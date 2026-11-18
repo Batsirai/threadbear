@@ -121,6 +121,32 @@ The Land chip has an hour for waiting and checking; other command actions
 keep their usual ten-minute limit. In an agent tool with its own shorter
 command limit, run `tb land` in the background and collect its result.
 
+### A landing outlives its tb
+
+The `tb land` you run starts the landing in a process of its own and
+follows it, copying its output and ending with its exit code
+(`runner/src/land-detach.ts`). That process is started through a shell
+that exits at once, so it's in no one's process group or tree: an agent's
+tool time limit, the Land chip's hour or Ctrl-C stopping the `tb land`,
+and everything under it, doesn't reach it. On 18 Nov a landing waited
+1 h 55 min, took the lock and started the group check for nine branches,
+and a few minutes in the agent's two-hour limit killed it, losing the
+check for all nine.
+
+- Stopped (SIGTERM, SIGINT, SIGHUP) before the landing holds the lock,
+  the `tb land` passes the signal on, and the landing leaves the line and
+  says so, as below. Killed outright, the landing notices its `tb` has
+  gone within a second and does the same.
+- Once it holds the lock, its check, the fast-forward and the push finish
+  whatever happens to the `tb land`, which says so as it stops, with the
+  folder its output goes on in (`$TMPDIR/tb-land-*`, `out` and `err`). A
+  `tb land` run again in that worktree waits for it ("Another tb land is
+  running in this worktree"), then says what landed.
+- A landing that has waited 90 minutes or more says, each time it says
+  where it is, that a time limit may stop it before it gets the lock.
+- On Windows there's no `/bin/sh` to start it from, so `tb land` runs the
+  landing itself, as it did before.
+
 After landing, the branch stays and the thread can carry on: the next
 `tb land` lands only what's new. `tb land --dry-run` does steps 1 to 3 and
 says what would land.
@@ -192,7 +218,8 @@ their own.
   landed; each of the others finds its result in its entry when it gets
   the lock, moves its own branch to its commits as they landed, prints
   them and which branches were in the same check, and exits.
-- The group's check runs in the holder's tb, with its environment, so each
+- The group's check runs in the holder's landing process (its tb's, "A
+  landing outlives its tb" above), with its environment, so each
   entry also keeps the check hosts its own tb asked for
   (`THREADBEAR_CHECK_HOST`). The check gets them all, the holder's first, as
   `THREADBEAR_CHECK_PREFER`: `scripts/check-remote.sh` tries those hosts

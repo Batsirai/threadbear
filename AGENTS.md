@@ -371,8 +371,12 @@ if `tb` isn't found (an older runner, or outside a thread), use
   are left out, told why at once (docs/thread-worktrees.md, "Landing
   together"; a failed check ends with the `./check.sh --only "..."`
   that runs just what failed, the quick way to see your fix work), so run it in the
-  background and expect up to two checks' wait. Mike's Land chip does
-  the same. If it refuses, it says why and what to fix: commit your
+  background with the longest timeout and expect up to two checks' wait.
+  A time limit that stops it while it waits for the lock takes it out of
+  the line (it says so; run it again), but once its check has started
+  that finishes and lands by itself, as `tb land` runs it in a process of
+  its own (docs/thread-worktrees.md, "A landing outlives its tb").
+  Mike's Land chip does the same. If it refuses, it says why and what to fix: commit your
   changes, sort out the conflicting files, fix the check, or wait for
   whoever has uncommitted changes in main's checkout. It also holds a
   landing that changes what the Desktop app workflow checks (desktop/,

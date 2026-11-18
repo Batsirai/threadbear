@@ -351,6 +351,9 @@ export type LandOptions = {
   // The CLI's: on SIGTERM, SIGINT or SIGHUP while waiting for the landing
   // lock, leave the line, say so, and exit (land, `stopped`).
   sayWhenStopped?: boolean;
+  // Called once it holds the landing lock (the CLI's worker stops listening
+  // for its follower then: land-detach.ts).
+  onLocked?: () => void;
 };
 
 // The hosts a landing asked for, as check.sh would take them (an ssh host
@@ -477,13 +480,14 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
     if (opts.sayWhenStopped) for (const s of signals) process.once(s, stopped);
     try {
-      release = await lockLanding(path.join(common, 'threadbear-land.lock'), out, () => waitingLine(common, timesFile, entry), () => !!refused());
+      release = await lockLanding(path.join(common, 'threadbear-land.lock'), out, () => waitingLine(common, timesFile, entry) + longWait(asked), () => !!refused());
     } catch (e) {
       err(`Couldn't lock the repo for landing: ${(e as Error).message}`);
       return 1;
     } finally {
       for (const s of signals) process.removeListener(s, stopped);
     }
+    if (release) opts.onLocked?.();
     if (!release) {
       err(refused()?.text ?? `${t.branch} was left out of its group's check, so nothing landed. Run tb land again.`);
       return 1;
@@ -800,12 +804,20 @@ async function lockLanding(file: string, out: (line: string) => void, where: () 
   }
 }
 
+// A wait this long is near an agent's tool time limit (two hours for Claude
+// Code's longest), which stops it and takes it out of the line, so it says so
+// while there's still time to plan for it (18 Nov).
+function longWait(asked: number, now = Date.now()): string {
+  if (now - asked < landLimits.longWaitMs) return '';
+  return ` It has waited ${Math.round((now - asked) / 60_000)} min: if what ran tb land stops it before it gets the lock (an agent's tool time limit), it leaves the line and says so, and needs running again. Once its check starts, that carries on whatever happens to it.`;
+}
+
 // How often a waiting landing says where it is, and looks for having been
 // left out of its group; and the longest a failed group's landings are each
 // run alone for (findBroken; otherwise about one check's time). Tests
 // shorten them.
-export const landLimits: { progressMs: number; goneMs: number; aloneMs?: number; aloneMinMs: number; aloneGraceMs: number } = {
-  progressMs: 3 * 60_000, goneMs: 5_000, aloneMinMs: 60_000, aloneGraceMs: 30_000,
+export const landLimits: { progressMs: number; goneMs: number; aloneMs?: number; aloneMinMs: number; aloneGraceMs: number; longWaitMs: number } = {
+  progressMs: 3 * 60_000, goneMs: 5_000, aloneMinMs: 60_000, aloneGraceMs: 30_000, longWaitMs: 90 * 60_000,
 };
 
 // A passing check prints nothing of its own, so on 9 Nov finding out where

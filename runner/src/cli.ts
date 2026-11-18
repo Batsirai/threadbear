@@ -18,6 +18,7 @@ import { TRUST_ALL } from './patch-trust.ts';
 import { checkoutTop, land, landTargetFromGit, realpath, type LandTarget } from './worktrees.ts';
 import { landRefusal, pushAfterLanding } from './follow-origin.ts';
 import { gateCacheDir, gh, landHold } from './land-gate.ts';
+import { detachable, landInBackground, landWorker } from './land-detach.ts';
 import { activityCommand } from './activity.ts';
 import { runnerKeysCommand } from './runner-keys.ts';
 import { pickRunner } from './moves.ts';
@@ -281,7 +282,13 @@ async function main(argv: string[]): Promise<number> {
   // The app's activity log is files on this Mac: no runner needed.
   if (cmd === 'activity') return activityCommand(cfg, values);
   // Works with no runner too: from any thread/ worktree, by git alone.
-  if (cmd === 'land') return landCommand(cfg, Boolean(values['dry-run']), Boolean(values['despite-red']));
+  // In a process of its own, which a time limit stopping this tb can't
+  // reach once its check has started (land-detach.ts).
+  if (cmd === 'land') {
+    const worker = landWorker();
+    if (!worker && detachable()) return landInBackground(argv);
+    return landCommand(cfg, Boolean(values['dry-run']), Boolean(values['despite-red']), worker?.onLocked);
+  }
   // tb runner uses this Mac's keys straight from disk, so the runner never
   // sees them to refuse them (tb-connect.ts).
   if (cmd === 'runner') {
@@ -336,7 +343,7 @@ type Flags = Record<string, string | boolean | string[] | undefined>;
 // worktrees of their own with its THREADBEAR_THREAD_ID, and went for the
 // parent's (GPUI port thread, 11 Nov). The check is the one in that
 // worktree's own patch, so a branch that changes it lands under its own.
-async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, despiteRed = false): Promise<number> {
+async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, despiteRed = false, onLocked?: () => void): Promise<number> {
   const here = process.cwd();
   let target: Omit<LandTarget, 'check'> | undefined;
   let from = here;
@@ -389,6 +396,7 @@ async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, 
     push: !dryRun && pushAfterLanding(cfg.home, target.mainCheckout),
     // Stopped while it waits, it says it's out of the line, then exits.
     sayWhenStopped: true,
+    ...(onLocked ? { onLocked } : {}),
   });
 }
 

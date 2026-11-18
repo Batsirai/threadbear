@@ -80,34 +80,36 @@ test('land refuses a branch changed by the check instead of merging an unchecked
   assert.equal(sh(main, 'git rev-parse main'), before);
 });
 
-test('land releases its lock when a CLI is killed during the check', async () => {
+// The landing runs in a process of its own (land-detach.ts): on 18 Nov an
+// agent's two-hour limit killed a holder a few minutes into a group check of
+// nine, and all nine were lost. Killing the tb that was run, and everything in
+// its process group, now leaves the check to finish and land, then the lock
+// goes.
+test('a CLI killed during its check still lands, and the lock goes once it has', async () => {
   const { root, main } = makeRepo(PATCH(`{ check: "touch ../checking; ${holdUntil('../release')}" }`));
   const t = makeBranch(main);
   commit(t.path, { 'first.txt': 'first\n' }, 'First');
   const env = { THREADBEAR_HOME: path.join(root, 'no-runner'), THREADBEAR_THREAD_ID: undefined };
   const first = startTb(['land'], t.path, env);
+  let next: Promise<number> | undefined;
   try {
     await until(() => fs.existsSync(path.join(t.path, '../checking')), 'CLI checking');
+    // As a tool's time limit does: a signal first, then the whole group.
+    first.child.kill('SIGTERM');
+    const { code, out } = await first.done;
+    assert.equal(code, 143, out);
+    assert.match(out, /stopped \(SIGTERM\) during its check, which carries on in a process of its own/);
+    try { process.kill(-first.child.pid!, 'SIGKILL'); } catch { /* gone */ }
+    // Waits for it, then has nothing left to land.
+    const c = capture();
+    next = land(t, c.opts);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!fs.existsSync(path.join(main, 'first.txt')), 'not landed before its check passes');
   } finally {
-    first.child.kill('SIGKILL');
-    await first.done;
-  }
-  // Acquire while the orphan check is still alive, so a pipe inherited
-  // by that check cannot make a leaked lock look like a passing test.
-  const next = land(t, capture().opts);
-  // The limit covers the whole landing (lockf, node, a rebase and a dozen
-  // git calls), not just the lock. A leaked lock waits for ever, so a long
-  // limit still catches it; 10s failed a release build on a busy Mac (9 Nov).
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    assert.equal(await Promise.race([next, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Killed CLI kept its landing lock')), 90_000);
-    })]), 0);
-  } finally {
-    clearTimeout(timer);
     write(path.dirname(t.path), { release: '' });
-    await next;
   }
+  assert.equal(await next, 0);
+  assert.ok(fs.existsSync(path.join(main, 'first.txt')), 'landed by the check the killed tb started');
   assert.equal(sh(main, 'git rev-parse main'), sh(t.path, 'git rev-parse HEAD'));
 });
 
