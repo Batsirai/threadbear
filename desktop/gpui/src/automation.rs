@@ -577,6 +577,26 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             });
             Ok(json!(format!("ok {node}")))
         }
+        // Every labelled control on screen, with its role and middle point,
+        // for an agent exploring the app (features/tools/fuzz-agent.mjs):
+        // what it could press, without guessing labels from a picture.
+        "labels" => {
+            window.render_frame(cx);
+            let mut seen = std::collections::HashSet::new();
+            let list: Vec<Value> = window
+                .elements()
+                .into_iter()
+                .filter(|e| e.visible())
+                .filter_map(|e| {
+                    let label = e.label()?.trim().to_owned();
+                    let (x, y) = whole_point(e.visible_bounds())?;
+                    if label.is_empty() || !seen.insert((label.clone(), x, y)) { return None; }
+                    let short: String = label.chars().take(80).collect();
+                    Some(json!({ "label": short, "role": e.role().map(|r| format!("{r:?}")), "x": x, "y": y, "disabled": e.disabled() }))
+                })
+                .collect();
+            Ok(json!(list))
+        }
         "tile-point" => crate::remote_pictures::tile_point_command(app, cmd, window, cx),
         // A picture tile of the transcript, as a click on it (`viewer` says what opened).
         "tile" => {
