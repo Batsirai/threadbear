@@ -32,6 +32,7 @@ mod composer_media;
 #[cfg(target_os = "macos")]
 mod composer_url;
 mod composer;
+mod confetti;
 mod composer_card;
 mod composer_account;
 mod composer_answers;

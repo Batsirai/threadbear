@@ -239,6 +239,19 @@ impl RunnerLogins {
         self.accounts = accounts_from(accounts);
     }
 
+    /// The logins given a year-long token since `before`: a first one, or a
+    /// new one in place of an older. The app throws confetti from their
+    /// Usage rows (confetti.rs). A login new to the list doesn't count, nor
+    /// one whose token went.
+    pub fn new_year_tokens(&self, before: &[Account]) -> Vec<String> {
+        self.accounts
+            .iter()
+            .filter(|a| a.year_token.is_some())
+            .filter(|a| before.iter().any(|b| b.id == a.id && b.year_token != a.year_token))
+            .map(|a| a.id.clone())
+            .collect()
+    }
+
     /// One login as the runner has it now (`accounts.useReset`'s answer),
     /// in its place; a login not in the list is left out.
     pub fn replace_account(&mut self, account: &Value) {
@@ -645,6 +658,21 @@ pub fn short_account_name(id: &str, accounts: &[Account]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_login_given_a_year_long_token_is_new_once() {
+        let list = |tokens: &[(&str, Option<&str>)]| -> Vec<Account> {
+            tokens.iter().map(|(id, made)| Account { id: (*id).into(), year_token: made.map(|m| YearToken { made_at: Some(m.into()) }), ..Default::default() }).collect()
+        };
+        let before = list(&[("a", None), ("b", Some("2026-01-01")), ("c", Some("2026-02-01"))]);
+        let mut logins = RunnerLogins { accounts: list(&[("a", Some("2026-11-18")), ("b", Some("2026-01-01")), ("c", Some("2026-11-18")), ("d", Some("2026-11-18"))]), ..Default::default() };
+        // a got its first, c a new one; b is as it was and d is new to the list.
+        assert_eq!(logins.new_year_tokens(&before), vec!["a".to_string(), "c".to_string()]);
+        let now = logins.accounts.clone();
+        assert!(logins.new_year_tokens(&now).is_empty());
+        logins.accounts = list(&[("a", None)]);
+        assert!(logins.new_year_tokens(&now).is_empty());
+    }
+
     use super::*;
     use serde_json::json;
 

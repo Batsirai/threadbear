@@ -23,3 +23,13 @@ Feature: The small motions
     Given I open the thread "Morning brief"
     When I send "Any follow-ups?"
     Then the card that came settled in
+
+  # Confetti for the rare wins: Mike picked it from three directions on 18
+  # Nov, for the inbox reaching zero and a login's year-long token
+  # (usage.feature). Only the GPUI app has it.
+  @juice.confetti @swift-pending
+  Scenario: Archiving the last thread in the Inbox throws confetti from the empty inbox
+    When I archive every thread in the Inbox but "Compare account picker designs"
+    Then no confetti was thrown
+    When I archive every thread in the Inbox
+    Then confetti popped from the empty inbox

@@ -725,6 +725,7 @@ impl Threadbear {
 
     pub(crate) fn archive_row(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let next = self.neighbour_of(&id, cx, now_ms());
+        let from_inbox = self.in_inbox(&id, cx);
         // The open thread's page drops into the Archived heading, before the
         // thread moves and the next one opens (archive_flight.rs).
         self.launch_flight(&id, crate::archive_flight::Destination::Archive, cx);
@@ -735,6 +736,7 @@ impl Threadbear {
             self.show_archived_note(id.clone(), title, was_open, cx);
         }
         self.update_thread(&id, move |t| t.archived_at = Some(at), json!({ "archived": true, "archivedBy": "mike" }), cx);
+        self.cheer_if_inbox_cleared(from_inbox, cx);
         self.leave_selection(&id, next, window, cx);
     }
 
@@ -758,6 +760,7 @@ impl Threadbear {
     /// Snooze until a moment, moving off it if it's open (`AppModel.snooze`).
     pub(crate) fn snooze_row(&mut self, id: String, until_ms: i64, window: &mut Window, cx: &mut Context<Self>) {
         let next = self.neighbour_of(&id, cx, now_ms());
+        let from_inbox = self.in_inbox(&id, cx);
         // The open thread's page sinks into the moon (archive_flight.rs).
         self.launch_flight(&id, crate::archive_flight::Destination::Hibernate, cx);
         let until = iso_time(until_ms);
@@ -771,6 +774,7 @@ impl Threadbear {
             json!({ "snoozedUntil": until }),
             cx,
         );
+        self.cheer_if_inbox_cleared(from_inbox, cx);
         self.leave_selection(&id, next, window, cx);
     }
 
@@ -1427,7 +1431,9 @@ impl Threadbear {
                 }
                 // Under the empty Inbox heading.
                 if section.key == "inbox" && section.rows.is_empty() && !searching {
-                    let empty = div().pl(px(LEADING)).pt(px(14.)).text_size(px(style::size::SIDEBAR_PREVIEW)).text_color(p.secondary).child("Nothing in the inbox.").into_any_element();
+                    // Confetti pops from here when the last thread leaves (confetti.rs).
+                    let note = div().relative().child("Nothing in the inbox.").child(crate::confetti::anchor("inbox-empty"));
+                    let empty = div().pl(px(LEADING)).pt(px(14.)).text_size(px(style::size::SIDEBAR_PREVIEW)).text_color(p.secondary).child(note).into_any_element();
                     body = place("note:inbox-empty".into(), empty, body);
                 }
                 // Its height as drawn, for a fold to run to or from.

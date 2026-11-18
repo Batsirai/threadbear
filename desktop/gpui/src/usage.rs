@@ -816,7 +816,8 @@ fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, da
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.make_year_token(&account, cx)))
             .child(label)
     });
-    let quiet = login.year_token.clone().filter(|_| !due).map(|words| div().text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).child(words));
+    // Confetti pops from here as a new token lands (confetti.rs).
+    let quiet = login.year_token.clone().filter(|_| !due).map(|words| div().relative().text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).child(words).child(crate::confetti::anchor(format!("token:{}", login.id))));
     let sign_in = (sign_in.is_some() || token.is_some() || quiet.is_some()).then(|| h_flex().gap(px(8.)).items_center().children(ending).children(quiet).child(div().flex_1()).children(sign_in).children(token));
     // The week's chart on its own: the ring says what's left and the line
     // above what to do, so it needs no title. A model's own week keeps its

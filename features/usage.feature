@@ -84,6 +84,7 @@ Feature: The Usage panel and its honey pot
     Then in the "Claude" card, "alex+3@example.com" offers a year-long token
     When "claude-3" runs on a year-long token made today
     Then in the "Claude" card, "alex+3@example.com" says it has a year-long token
+    And confetti was thrown from "claude-3"'s Usage row
     And the honey pot has no dot
 
   # claude-main's cancelled Max ran out on 16 Nov 2026 while its row still

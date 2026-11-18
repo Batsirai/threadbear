@@ -179,6 +179,27 @@ const scenes: Record<string, Scene> = {
     },
     seconds: 4,
   },
+  // A login getting its year-long token while its Usage row's in sight:
+  // confetti pops from the row's new "Year-long token until" line (the
+  // GPUI app only, confetti.rs).
+  'year-token': {
+    setup: async (app) => {
+      await scenes.archive.setup(app);
+      await app.do({ cmd: 'usage', show: true });
+      await app.do({ cmd: 'usage', scrollToSettings: true });
+      await sleep(600);
+    },
+    act: async (app) => {
+      const got = await app.do({ cmd: 'mock', method: 'accounts', params: {} });
+      const { accounts } = JSON.parse(got.slice(got.indexOf('{'))) as { accounts: { id: string; yearToken?: { madeAt: string }; loginEndsAt?: string }[] };
+      const a = accounts.find((x) => x.id === 'claude-4');
+      if (!a) throw new Error('no claude-4 on the mock');
+      const made = new Date();
+      Object.assign(a, { yearToken: { madeAt: made.toISOString() }, loginEndsAt: new Date(made.getTime() + 365 * 86_400_000).toISOString() });
+      await app.do({ cmd: 'mock', method: 'accounts', params: { accounts } });
+    },
+    seconds: 3,
+  },
   // Sending a message: it lifts into the thread, the arrow hops, the bear
   // pops up and waves while the turn runs, and the done card settles in
   // with its tick drawing on.

@@ -288,6 +288,8 @@ pub struct Threadbear {
     pub(crate) swipe_nav: crate::swipe_nav::SwipeNav,
     /// Pages on their way to the Archived and Hibernating headings (archive_flight.rs).
     pub(crate) flight: crate::archive_flight::Flights,
+    /// Confetti for the rare wins (confetti.rs).
+    pub(crate) confetti: crate::confetti::Confetti,
     /// How the next thread opens, and the new-thread page coming up (open_motion.rs).
     pub(crate) opening: crate::open_motion::Openings,
     /// The layer the sidebar's turning arcs are drawn in (spinner.rs).
@@ -599,6 +601,7 @@ impl Threadbear {
             thread_panels: Default::default(),
             swipe_nav: Default::default(),
             flight: Default::default(),
+            confetti: Default::default(),
             opening: Default::default(),
             arc_layer: None,
             tour: crate::tour::TourState::new(),
@@ -986,7 +989,15 @@ impl Threadbear {
                 "settings.updated" => self.runner_settings = Some(params["settings"].clone()),
                 // A login appearing or going, its models once asked, its
                 // usage; and the pools after a save: both replace `hello`'s.
-                "accounts.updated" => self.logins.set_accounts(&params["accounts"]),
+                "accounts.updated" => {
+                    let before = std::mem::take(&mut self.logins.accounts);
+                    self.logins.set_accounts(&params["accounts"]);
+                    // Year-long token… done: confetti from the login's Usage
+                    // row, if it's in sight (confetti.rs).
+                    for id in self.logins.new_year_tokens(&before) {
+                        self.throw_confetti(format!("token:{id}"), threadbear_core::confetti::TOKEN_BURST, cx);
+                    }
+                }
                 "pools.updated" => self.logins.set_pools(&params["pools"]),
                 "instructions.updated" => self.standing_instructions = Some(threadbear_core::runner_settings::StandingInstructions::decode(&params["instructions"])),
                 "projects.updated" => {
@@ -1719,6 +1730,7 @@ impl Threadbear {
         dump["juice"] = json!({
             "slidOff": self.sidebar.gestures.last_slid(),
             "cardArrived": self.composer(cx).and_then(|c| c.read(cx).card_arrival.last),
+            "confetti": self.confetti.dump(cx),
         });
         // ⌘K's box, while it's up (open_anything.rs).
         dump["anything"] = self.open_anything_dump(cx);

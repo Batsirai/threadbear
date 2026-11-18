@@ -1541,6 +1541,8 @@ impl Threadbear {
             // redraw the sidebar (spinner.rs).
             .child(div().absolute().top_0().left_0().size_full().child(arc_layer))
             .child(self.flight.overlay(cx))
+            // Confetti for the rare wins (confetti.rs).
+            .child(self.confetti.overlay(cx))
             .children(self.render_swipe_card(cx).map(|card| deferred(card).with_priority(1)))
             // The tour and the pages' intros, over everything (tour.rs).
             .children(self.render_tour(window, cx))
