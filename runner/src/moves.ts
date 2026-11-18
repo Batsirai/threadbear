@@ -110,7 +110,12 @@ export function moveBinding(p: { threadId: string; to: string; cwd?: string; acc
     p.to,
     p.cwd ?? null,
     p.accountId ?? null,
-    [i.cwd, i.home, i.provider, i.email ?? null, i.origin === undefined ? null : withoutCredentials(i.origin), i.repoTop ?? null, i.subdir ?? null, i.worktree],
+    // An empty field is the same as none: the backend leaves empty strings
+    // out of the description on the move's row (convex/moves.ts
+    // describedThread), while the preview's came over the relay with them,
+    // so a thread at the top of its repo (subdir "") failed every move as
+    // "changed since the Move sheet looked" (18 Nov 2026).
+    [i.cwd, i.home, i.provider, i.email || null, (i.origin && withoutCredentials(i.origin)) || null, i.repoTop || null, i.subdir || null, i.worktree],
     [p.plan.cwd ?? null, p.plan.accountId ?? null, p.plan.worktree === true, p.plan.clone ?? null, p.plan.clone ? (p.plan.cloneFrom ?? null) : null],
   ]);
   return createHash('sha256').update(canonical).digest('hex');

@@ -281,6 +281,25 @@ impl ThreadSummary {
         }
     }
 
+    /// What the error bar says when this thread's move has just failed
+    /// (`before` was the same thread before this update): where it was going
+    /// and why, from the move's note. The row only says "Couldn't move", with
+    /// the why behind a tooltip, which told Mike nothing (18 Nov 2026). None
+    /// when it hasn't just failed: already failed before, or no move.
+    pub fn move_failure(&self, before: &ThreadSummary) -> Option<String> {
+        let failed = |t: &ThreadSummary| t.moving.as_ref().and_then(|m| m.get("state")).and_then(Value::as_str) == Some("failed");
+        if !failed(self) || failed(before) {
+            return None;
+        }
+        let moving = self.moving.as_ref()?;
+        let to = moving.get("toName").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("the other machine");
+        let why = moving.get("note").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+        Some(match why {
+            Some(why) => format!("Couldn't move \"{}\" to {to}. {why}", self.title),
+            None => format!("Couldn't move \"{}\" to {to}.", self.title),
+        })
+    }
+
     /// Newer events than Mike has seen.
     pub fn unread(&self) -> bool {
         self.last_seq > self.last_seen_seq
@@ -831,6 +850,24 @@ mod tests {
         assert_eq!(moving("failed").moving_line(), None, "a failed move gives the box back");
         assert_eq!(moving("cancelled").moving_line(), None);
         assert_eq!(thread(2, json!({})).moving_line(), None);
+    }
+
+    #[test]
+    fn a_move_that_just_failed_says_where_it_was_going_and_why() {
+        let moving = |state: &str, note: Option<&str>| {
+            let mut m = json!({ "moveId": "m1", "to": "r2", "toName": "Hetzner Cloud", "state": state });
+            if let Some(n) = note { m["note"] = json!(n); }
+            thread(1, json!({ "moving": m }))
+        };
+        let why = "The thread or where it would go changed since the Move sheet looked, so it stays where it is.";
+        assert_eq!(
+            moving("failed", Some(why)).move_failure(&moving("asking", None)).as_deref(),
+            Some("Couldn't move \"Thread 1\" to Hetzner Cloud. The thread or where it would go changed since the Move sheet looked, so it stays where it is.")
+        );
+        assert_eq!(moving("failed", None).move_failure(&thread(1, json!({}))).as_deref(), Some("Couldn't move \"Thread 1\" to Hetzner Cloud."));
+        assert_eq!(moving("failed", Some(why)).move_failure(&moving("failed", Some(why))), None, "said once, not on every update after");
+        assert_eq!(moving("copying", None).move_failure(&moving("asking", None)), None);
+        assert_eq!(moving("cancelled", None).move_failure(&moving("asking", None)), None, "Mike called it off himself");
     }
 
     fn thread(n: u32, over: Value) -> ThreadSummary {

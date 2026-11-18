@@ -130,3 +130,20 @@ test('the main Mac vouches only for bindings its own previews gave a move', () =
   now += MovePreviews.VOUCHED_MS + 1;
   assert.equal(previews.vouches(expect, 'm3'), false);
 });
+
+test("a thread at the top of its repo binds the same from the preview and from the move's row", () => {
+  // The preview's description keeps subdir "" (it came over the relay); the
+  // backend leaves empty strings out of the one on the move's row. The same
+  // thread, so the same binding, or every such move fails as changed since
+  // the Move sheet looked (Mike's move to Hetzner Cloud, 18 Nov 2026).
+  const described = { title: 't', cwd: '/Users/alex/dev/x', home: '/Users/alex', provider: 'claude', accountId: 'claude-1', permissionMode: 'full', worktree: false, schedules: 0, email: 'alex@example.com', origin: 'https://github.com/alex/x.git', repoTop: '/Users/alex/dev/x' };
+  const fromPreview = moveInfoFrom({ ...described, subdir: '' })!;
+  const fromRow = moveInfoFrom(described)!;
+  assert.equal(fromPreview.subdir, '');
+  assert.equal(fromRow.subdir, undefined);
+  const picks = { threadId: 'T1', to: 'laptop' };
+  const plan = { cwd: '/home/alex/dev/x', accountId: 'claude-1', worktree: false };
+  assert.equal(moveBinding({ ...picks, info: fromPreview, plan }), moveBinding({ ...picks, info: fromRow, plan }));
+  // A real subdir still counts.
+  assert.notEqual(moveBinding({ ...picks, info: { ...fromRow, subdir: 'app' }, plan }), moveBinding({ ...picks, info: fromRow, plan }));
+});

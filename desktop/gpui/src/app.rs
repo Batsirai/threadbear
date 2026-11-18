@@ -935,6 +935,7 @@ impl Threadbear {
                         }
                         let before = self.threads.insert(t.id.clone(), Arc::new(t.clone()));
                         self.note_failed_account(before.as_deref(), &t);
+                        self.note_failed_move(before.as_deref(), &t, cx);
                         self.thread_changed_outside(before.as_deref(), &t, cx);
                         if t.panel_request.is_some() && self.selected.as_deref() == Some(t.id.as_str()) {
                             self.serve_panel_request(cx);
@@ -1133,6 +1134,13 @@ impl Threadbear {
                         this.sync_thread_panes(&reload, cx);
                         if cleanup { crate::terminal::list_loaded(&this.threads, cx); }
                         this.note_failed_accounts(&before);
+                        // A move that failed while the app only heard of it
+                        // through a new list (another runner's thread, or
+                        // while it was reconnecting) says why as well.
+                        let failed_move = this.threads.values().find_map(|t| before.get(&t.id).and_then(|b| t.move_failure(b)));
+                        if let Some(message) = failed_move {
+                            this.show_error(message, cx);
+                        }
                         // Other runners' rows stay listed beside these (and
                         // kept threads no longer listed go, remote.rs).
                         this.apply_remote_index(cx);

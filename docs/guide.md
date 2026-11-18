@@ -1244,7 +1244,8 @@ message box stays locked, until the other machine has it (a moment after it
 leaves the first), then the thread is listed under the other machine, in the same
 place and still open, and its next message carries on in the same Claude
 session there. If anything goes wrong before it lands, it stays where it
-was and the row says why for a minute, in its tooltip. Its schedules come
+was: the bar at the top of the window says where it was going and why, and
+the row says "Couldn't move" for a minute. Its schedules come
 too, but not a schedule's shell check or the thread's "Always allow"
 answers: set those again on the new machine. A thread moved to your main
 Mac arrives asking before tools run, even if it had Full access or Auto

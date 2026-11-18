@@ -851,6 +851,16 @@ impl Threadbear {
         }
     }
 
+    /// A move of `now` that has just failed says so in the error bar, with
+    /// why (ThreadSummary::move_failure). A thread the app hadn't seen
+    /// before (`before` None) says nothing: that's an old failure, already
+    /// on its row.
+    pub(crate) fn note_failed_move(&mut self, before: Option<&ThreadSummary>, now: &ThreadSummary, cx: &mut Context<Self>) {
+        if let Some(message) = before.and_then(|b| now.move_failure(b)) {
+            self.show_error(message, cx);
+        }
+    }
+
     /// The same over a new list of every thread, against the one before it.
     pub(crate) fn note_failed_accounts(&mut self, before: &std::collections::HashMap<String, std::sync::Arc<ThreadSummary>>) {
         let now: Vec<ThreadSummary> = self.threads.values().map(|t| &**t).cloned().collect();
