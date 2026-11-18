@@ -352,8 +352,9 @@ export type LandOptions = {
   // lock, leave the line, say so, and exit (land, `stopped`).
   sayWhenStopped?: boolean;
   // Called once it holds the landing lock (the CLI's worker stops listening
-  // for its follower then: land-detach.ts).
-  onLocked?: () => void;
+  // for its follower then: land-detach.ts). False: the tb that was run has
+  // gone meanwhile, so it stops before its check, out of the line.
+  onLocked?: () => boolean;
 };
 
 // The hosts a landing asked for, as check.sh would take them (an ssh host
@@ -487,7 +488,11 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     } finally {
       for (const s of signals) process.removeListener(s, stopped);
     }
-    if (release) opts.onLocked?.();
+    if (release && opts.onLocked && !opts.onLocked()) {
+      await release();
+      err(`tb land was stopped just as it got the landing lock, before its check: ${t.branch} is out of the line and nothing of it landed. Run tb land again to rejoin.`);
+      return 129;
+    }
     if (!release) {
       err(refused()?.text ?? `${t.branch} was left out of its group's check, so nothing landed. Run tb land again.`);
       return 1;

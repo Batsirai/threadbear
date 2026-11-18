@@ -343,7 +343,7 @@ type Flags = Record<string, string | boolean | string[] | undefined>;
 // worktrees of their own with its THREADBEAR_THREAD_ID, and went for the
 // parent's (GPUI port thread, 11 Nov). The check is the one in that
 // worktree's own patch, so a branch that changes it lands under its own.
-async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, despiteRed = false, onLocked?: () => void): Promise<number> {
+async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, despiteRed = false, onLocked?: () => boolean): Promise<number> {
   const here = process.cwd();
   let target: Omit<LandTarget, 'check'> | undefined;
   let from = here;

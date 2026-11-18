@@ -55,7 +55,8 @@ function pump(file: string, from: number, to: NodeJS.WriteStream): number {
     for (;;) {
       const n = fs.readSync(fd, buf, 0, buf.length, at);
       if (n <= 0) break;
-      to.write(buf.subarray(0, n));
+      // A copy: a write to a slow pipe is still pending when buf is read into again.
+      to.write(Buffer.from(buf.subarray(0, n)));
       at += n;
     }
     return at;
@@ -118,9 +119,13 @@ export async function landInBackground(argv: string[], pollMs = 200): Promise<nu
     drain();
     let code = 1;
     try {
-      code = Number(fs.readFileSync(files.exit, 'utf8').trim());
+      const said = fs.readFileSync(files.exit, 'utf8').trim();
+      code = said === '' ? 1 : Number(said);
     } catch {
-      process.stderr.write(`The landing's process (pid ${pid}) ended without saying how it went.\n`);
+      // Stopped by the signal passed on before it was listening for one
+      // (still rebasing, say): nothing landed, as before.
+      if (stopping) code = 128 + (os.constants.signals[stopping] ?? 15);
+      else process.stderr.write(`The landing's process (pid ${pid}) ended without saying how it went.\n`);
     }
     fs.rmSync(dir, { recursive: true, force: true });
     return Number.isInteger(code) ? code : 1;
@@ -131,8 +136,9 @@ export async function landInBackground(argv: string[], pollMs = 200): Promise<nu
 
 // The worker's side, or undefined when this tb wasn't started as one.
 // `onLocked` is called once it holds the landing lock: from then on nothing
-// stops it but the landing's own end.
-export function landWorker(): { onLocked: () => void } | undefined {
+// stops it but the landing's own end. False if its follower went in the
+// second since it last looked (Codex's review): it stops before checking.
+export function landWorker(): { onLocked: () => boolean } | undefined {
   const dir = process.env[WORKER_ENV];
   if (!dir || !detachable()) return undefined;
   const follower = Number(process.env[FOLLOWER_ENV]);
@@ -141,7 +147,10 @@ export function landWorker(): { onLocked: () => void } | undefined {
   delete process.env[FOLLOWER_ENV];
   process.on('exit', (code) => {
     try {
-      fs.writeFileSync(path.join(dir, 'exit'), String(code));
+      // Whole or not at all: the follower stops as soon as it's there.
+      const tmp = path.join(dir, `exit.${process.pid}.tmp`);
+      fs.writeFileSync(tmp, String(code));
+      fs.renameSync(tmp, path.join(dir, 'exit'));
     } catch {
       // The follower then says it ended without saying.
     }
@@ -157,12 +166,14 @@ export function landWorker(): { onLocked: () => void } | undefined {
   return {
     onLocked: () => {
       clearInterval(watch);
+      if (Number.isInteger(follower) && follower > 0 && !alive(follower)) return false;
       for (const s of SIGNALS) process.on(s, () => { /* the check carries on */ });
       try {
         fs.writeFileSync(path.join(dir, 'locked'), '');
       } catch {
         // The follower then passes a stop on, which is ignored, and waits.
       }
+      return true;
     },
   };
 }

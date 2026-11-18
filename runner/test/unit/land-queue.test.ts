@@ -199,6 +199,22 @@ for (const signal of ['SIGTERM', 'SIGKILL'] as const) test(`a tb land ${signal =
   assert.ok(!fs.existsSync(path.join(main, 'b.txt')));
 });
 
+// Its tb gone in the second before the landing's process looked again, just
+// as the lock came: it stops there rather than check and land (Codex's review).
+test('a landing whose tb has gone by the time it gets the lock stops before its check', async () => {
+  const { root, main } = makeRepo();
+  const [b] = branches(main, ['b']);
+  const before = sh(main, 'git rev-parse main');
+  const c = capture();
+  assert.equal(await land({ ...b, check: `touch '${root}/checked'` }, { ...c.opts, onLocked: () => false }), 129);
+  assert.match(c.err.join('\n'), /stopped just as it got the landing lock, before its check: thread\/b0000000 is out of the line/);
+  assert.ok(!fs.existsSync(path.join(root, 'checked')));
+  assert.equal(sh(main, 'git rev-parse main'), before);
+  assert.deepEqual(waiting(path.join(main, '.git')), []);
+  // And the lock is free again.
+  assert.equal(await land({ ...b, check: 'true' }, capture().opts), 0);
+});
+
 test('a landing that has waited long says a tool time limit may stop it', async () => {
   const { root, main } = makeRepo();
   const [b] = branches(main, ['b']);
