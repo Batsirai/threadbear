@@ -121,8 +121,8 @@ File references are where to look.
   the task's definition as `runner\task.xml` and `bin\tb.cmd`, whose folder
   goes on the user's PATH (`runner/scripts/install-windows.mjs`).
 - **A one-shot update job:** when the runner's LaunchAgent or
-  Threadbear Runner.app is behind main and you press Update it in the
-  Updates panel (or the `selfReinstall` experiment is on), the runner
+  Threadbear Runner.app is behind main (or you press Update it in the
+  Updates panel after one failed), the runner
   writes `<data folder>/runner/reinstall/<label>.reinstall.plist` and
   loads it with `launchctl bootstrap` (it isn't in `~/Library/LaunchAgents`,
   so it never starts at login). It runs `runner/scripts/install-runner.sh

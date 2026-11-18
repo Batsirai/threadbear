@@ -11,12 +11,12 @@ import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { APP_STAGED_REASON, RUNNING_LIMIT_MS, RUNS_NODE_REASON, Reinstaller, installArgs, jobEnv, jobLabel, jobPlist, launcherKey, reinstallDir, reinstallLogPath, type JobSpec } from '../../src/reinstall.ts';
 
-type Setup = { behind?: { reason: string; key: string }; auto?: boolean; spawnError?: string; alive?: boolean | undefined };
+type Setup = { behind?: { reason: string; key: string }; spawnError?: string; alive?: boolean | undefined };
 
 function setup(s: Setup = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-reinstall-'));
   const clock = new FakeClock();
-  const state = { behind: s.behind ?? { reason: "Threadbear Runner.app was built from older launcher sources than main's.", key: 'k1' } as { reason: string; key: string } | undefined, auto: s.auto ?? false, alive: ('alive' in s ? s.alive : true) as boolean | undefined };
+  const state = { behind: s.behind ?? { reason: "Threadbear Runner.app was built from older launcher sources than main's.", key: 'k1' } as { reason: string; key: string } | undefined, alive: ('alive' in s ? s.alive : true) as boolean | undefined };
   const jobs: JobSpec[] = [];
   let changes = 0;
   let rechecks = 0;
@@ -27,7 +27,6 @@ function setup(s: Setup = {}) {
       clock,
       log: nullLogger,
       behind: () => state.behind,
-      auto: () => state.auto,
       onChange: () => changes++,
       recheck: () => rechecks++,
       env: { HOME: '/Users/me', PATH: '/usr/bin:/bin', XPC_SERVICE_NAME: 'com.mikerosoft.threadbear.runner', THREADBEAR_THREAD_ID: 'nope', THREADBEAR_HOME: '/elsewhere' },
@@ -47,30 +46,25 @@ function setup(s: Setup = {}) {
   return { home, clock, state, jobs, make, finish, changes: () => changes, rechecks: () => rechecks };
 }
 
-test('without the experiment, nothing starts until Update it; then it stages straight away, busy threads or not', () => {
+test('it stages by itself as soon as main is ahead, busy threads or not', () => {
   const t = setup();
   const r = t.make();
   r.consider();
-  assert.equal(t.jobs.length, 0);
-  assert.equal(r.status(), undefined, 'no reinstall field: the app offers Update it');
-  const s = r.request();
   assert.equal(t.jobs.length, 1);
-  assert.equal(s?.state, 'running');
+  assert.equal(r.status()?.state, 'running');
   assert.equal(t.jobs[0].label, 'com.mikerosoft.threadbear.runner.reinstall');
   assert.equal(t.jobs[0].args[0], '/Users/me/dev/threadbear/runner/scripts/install-runner.sh');
   assert.equal(t.jobs[0].args.at(-1), '--stage', 'stages: stops nothing, so it never waits for an idle moment');
 });
 
-test('with the experiment on, it stages by itself as soon as main is ahead', () => {
-  const t = setup({ auto: true });
+test('before it has looked, it says it is about to start by itself', () => {
+  const t = setup();
   const r = t.make();
-  r.consider();
-  assert.equal(t.jobs.length, 1);
-  assert.equal(r.status()?.state, 'running');
+  assert.deepEqual(r.status(), { state: 'waiting', auto: true });
 });
 
 test('staged: when what it checks is up to date the line goes; when the running job is still behind it says it waits for a restart', () => {
-  const t = setup({ auto: true });
+  const t = setup();
   const r = t.make();
   r.consider();
   t.finish(0, 'Staged com.mikerosoft.threadbear.runner');
@@ -98,7 +92,7 @@ test('staged: when what it checks is up to date the line goes; when the running 
 });
 
 test("finished, but the files on disk are still behind (it staged from a checkout that isn't at main): a failure, not staged", () => {
-  const t = setup({ auto: true });
+  const t = setup();
   const r = t.make();
   r.consider();
   t.finish(0);
@@ -111,7 +105,7 @@ test("finished, but the files on disk are still behind (it staged from a checkou
 });
 
 test('a failure shows why, is not retried by itself for the same main, and Try again runs it once more', () => {
-  const t = setup({ auto: true });
+  const t = setup();
   const r = t.make();
   r.consider();
   t.finish(1, "launch.mjs doesn't load, so nothing was changed.");
@@ -123,7 +117,7 @@ test('a failure shows why, is not retried by itself for the same main, and Try a
   t.clock.advance(10 * 60_000);
   r.consider();
   assert.equal(t.jobs.length, 1, 'not tried again by itself');
-  // Main's launcher changes: the experiment tries the new one.
+  // Main's launcher changes: it tries the new one by itself.
   t.state.behind = { reason: 'launch.mjs has changed on main.', key: 'k2' };
   r.consider();
   assert.equal(t.jobs.length, 2);
@@ -175,7 +169,7 @@ test("a job launchd won't take is a failure straight away", () => {
 });
 
 test('nothing to do when the LaunchAgent is up to date, or the runner runs from a checkout', () => {
-  const t = setup({ auto: true });
+  const t = setup();
   t.state.behind = undefined;
   const r = t.make();
   r.consider();

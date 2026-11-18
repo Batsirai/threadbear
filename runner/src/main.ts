@@ -711,7 +711,7 @@ async function main(): Promise<void> {
     },
   });
   // The LaunchAgent updating itself when it's behind main (reinstall.ts):
-  // the Updates panel's Update it, or by itself with selfReinstall on.
+  // by itself, or again from the Updates panel's Update it after a failure.
   const reinstaller = new Reinstaller({
     home: cfg.home,
     checkout: updateRelease?.checkout,
@@ -721,7 +721,6 @@ async function main(): Promise<void> {
       const u = updater.status();
       return u.launcherChanged && u.launcherReason && u.launcherKey ? { reason: u.launcherReason, key: u.launcherKey } : undefined;
     },
-    auto: () => experimentOn(cfg.home, 'selfReinstall'),
     recheck: () => updater.recheckLauncher(),
     onChange: () => publishUpdates(),
   });

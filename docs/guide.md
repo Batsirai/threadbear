@@ -2185,10 +2185,12 @@ you. Right-click it for a quick Restart to Update.
 
 A few parts of the runner (the program that keeps it going, and the small
 Threadbear Runner app macOS names in its privacy prompts) don't come with
-its updates. When one of them is behind, the Updates panel says which and
-has an Update it button. Updating them stops nothing: the new ones are put
-in place and take over the next time your Mac restarts or you log in
-again. If it doesn't work, the panel says why, with Try again and the log.
+its updates. When one of them is behind, the runner updates it by itself,
+in the background. That stops nothing: the new ones are put in place and
+take over the next time your Mac restarts or you log in again, and until
+then the Updates panel says they're waiting for that. If it doesn't work,
+the panel says why, with Try again and the log. A failed one isn't tried
+again by itself until a newer version comes along.
 
 ### Mike's updates
 

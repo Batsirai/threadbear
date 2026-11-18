@@ -993,7 +993,7 @@ export function launcherSourcesHash(dir: string): string | undefined {
 // Releases never change any of it, and the runner can't reinstall the
 // launchd job it runs in from inside it, so install-runner.sh runs as a
 // launchd job of its own (reinstall.ts): from the Updates panel's
-// Reinstall now, or by itself with the selfReinstall experiment. The app is the one
+// by itself, or Update it after a failure. The app is the one
 // install-runner.sh put in the plist (THREADBEAR_RUNNER_APP), else the
 // process that started launch.mjs, for a plist written before that
 // variable; a supervised runner with neither still runs node as the

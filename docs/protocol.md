@@ -1526,8 +1526,8 @@ type RunnerUpdates = {
   checkout?: string
   // What's being done about launcherChanged (runner/src/reinstall.ts). Left
   // out while nothing is: the app offers Update it (runner.reinstall).
-  // waiting: about to start (auto: the runner does it by itself, the
-  // selfReinstall experiment, rather than because it was asked; from a
+  // waiting: about to start (auto: the runner does it by itself, rather
+  // than because Update it was pressed; from a
   // runner of 14 Nov, waiting for busy threads);
   // running: install-runner.sh --stage is going, as a launchd job of its own;
   // staged: in place, but what's running is still behind until launchd next

@@ -3,8 +3,10 @@
 // main's (launchAgentBehind in update.ts). Releases never change those, so
 // until 14 Nov 2026 the Updates panel showed the command for Mike to copy
 // into a terminal, with a path that wasn't even his checkout's. Now the
-// Updates panel's Update it (runner.reinstall) does it, and with the
-// selfReinstall experiment the runner does it by itself.
+// runner does it by itself, and the Updates panel's Update it
+// (runner.reinstall) tries again after a failure. It was the selfReinstall
+// experiment from 14 to 18 Nov 2026, standard once it had staged four times
+// on Mike's Mac without stopping anything.
 //
 // It stages rather than reinstalls (15 Nov): the new app, launch.mjs and
 // plist go in place without stopping anything, and take over the next time
@@ -64,8 +66,8 @@ export type ReinstallStatus = {
   state: 'waiting' | 'running' | 'staged' | 'failed';
   reason?: string;
   logFile?: string;
-  // The runner does it by itself (the selfReinstall experiment), rather
-  // than because someone pressed Reinstall now.
+  // The runner does it by itself, rather than because someone pressed
+  // Update it.
   auto?: true;
 };
 
@@ -74,8 +76,8 @@ type Saved = {
   // launcherKey of what it was reinstalling for, so a failed one isn't
   // tried again by itself until main's launcher changes.
   key?: string;
-  // Reinstall now was pressed, so it goes ahead once threads finish even
-  // with the experiment off.
+  // Update it (Try again) was pressed, so it goes ahead even for a main
+  // it has already tried.
   requested?: boolean;
   startedAt?: string;
   // The job's label, for asking whether it's still going.
@@ -105,8 +107,6 @@ export type ReinstallDeps = {
   // Why the LaunchAgent is behind main, and a key for what main has
   // (updater.status()), or undefined when it isn't.
   behind: () => { reason: string; key: string } | undefined;
-  // The selfReinstall experiment.
-  auto: () => boolean;
   onChange?: () => void;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -409,8 +409,7 @@ export class Reinstaller {
       return { state: 'failed', reason, logFile };
     }
     if (s.requested) return { state: 'waiting' };
-    if (this.deps.auto()) return { state: 'waiting', auto: true };
-    return undefined;
+    return { state: 'waiting', auto: true };
   }
 
   // Update it (runner.reinstall): stages it straight away. Nothing stops,
@@ -450,7 +449,7 @@ export class Reinstaller {
     if (!behind || !this.deps.checkout) return;
     const s = this.saved;
     const triedThis = s.key === behind.key && s.finished !== undefined;
-    const due = s.requested || (this.deps.auto() && !triedThis);
+    const due = s.requested || !triedThis;
     if (!due) return;
     this.begin(behind.key);
     this.timer = this.deps.clock.setTimeout(() => this.consider(), POLL_MS);

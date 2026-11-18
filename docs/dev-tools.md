@@ -134,9 +134,9 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   launch.mjs), and a runner with neither still runs node as the program.
   Any of those sets `launcherChanged` and `launcherReason`, which
   `tb status` and the app's Updates panel show (`launchAgentBehind` in
-  `src/update.ts`). The Updates panel's Update it (`runner.reinstall`)
-  has the runner run `install-runner.sh --stage` itself, or it does so by
-  itself with the `selfReinstall` experiment (`src/reinstall.ts`).
+  `src/update.ts`). The runner then runs `install-runner.sh --stage` by
+  itself (`src/reinstall.ts`); the Updates panel's Update it
+  (`runner.reinstall`) runs it again after a failure.
   `--stage` builds a new app beside the running one
   (`.Threadbear Runner.app.staged`, never over it: macOS refuses every
   privacy grant under a launcher whose bundle was replaced while it runs,

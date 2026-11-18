@@ -63,8 +63,7 @@ pub struct Reinstall {
     pub state: String,
     pub reason: Option<String>,
     pub log_file: Option<String>,
-    /// It does it by itself (the selfReinstall experiment), not because
-    /// Reinstall now was pressed.
+    /// It does it by itself, not because Update it was pressed.
     pub auto: bool,
 }
 
