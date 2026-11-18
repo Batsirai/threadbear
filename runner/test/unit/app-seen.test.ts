@@ -26,6 +26,15 @@ test('app-seen: an app here lately counts, and the file keeps it across a restar
   assert.equal(new AppSeen(home, () => now).recently(), false, 'too long ago');
 });
 
+test('app-seen: an app seen by the runner that took over counts for a draining one', () => {
+  const home = tmpDir();
+  let now = 1_000_000;
+  const draining = new AppSeen(home, () => now);
+  assert.equal(draining.recently(), false);
+  new AppSeen(home, () => now).mark();
+  assert.equal(draining.recently(), true);
+});
+
 test('app-seen: a file that is not one leaves it unseen', () => {
   const home = tmpDir();
   fs.writeFileSync(path.join(home, 'app-seen.json'), '{"at":"yesterday"}');

@@ -911,6 +911,10 @@ impl Threadbear {
                         // claimed, so verify the local list regardless of it.
                         let arriving = t.runner_id.is_none() && self.threads.get(&t.id).is_some_and(|old| old.is_remote() || self.remote.made.contains(&t.id));
                         if let Some(old) = self.threads.get(&t.id) { t.runner_id = old.runner_id.clone(); }
+                        // An older runner's relay leaves another runner's
+                        // mode out, which the composer would read as Full
+                        // access (Codex's review, 18 Nov 2026).
+                        if t.is_remote() && t.permission_mode.is_empty() { t.permission_mode = "unknown".to_owned(); }
                         if arriving {
                             // Relay and local updates share a notification. Verify
                             // ownership with the local list before replacing it.

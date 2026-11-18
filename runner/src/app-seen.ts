@@ -27,8 +27,12 @@ export class AppSeen {
   constructor(home: string, now: () => number) {
     this.now = now;
     this.file = path.join(home, 'app-seen.json');
+    this.read();
+  }
+
+  private read(): void {
     const at = readJsonSync<{ at?: unknown }>(this.file)?.at;
-    if (typeof at === 'number' && Number.isFinite(at)) this.last = this.written = at;
+    if (typeof at === 'number' && Number.isFinite(at) && (this.last === undefined || at > this.last)) this.last = this.written = at;
   }
 
   /** An app said hello, or went: it was here now. */
@@ -46,7 +50,13 @@ export class AppSeen {
 
   /** Whether an app was here in the last APP_SEEN_DAYS. */
   recently(): boolean {
-    return this.last !== undefined && this.now() - this.last < APP_SEEN_DAYS * DAY_MS;
+    const recent = () => this.last !== undefined && this.now() - this.last < APP_SEEN_DAYS * DAY_MS;
+    if (recent()) return true;
+    // Another process may have seen one since: a draining runner's app now
+    // connects to the release that took over, which writes the file
+    // (Codex's review, 18 Nov 2026). Read only when it would say no.
+    this.read();
+    return recent();
   }
 }
 
