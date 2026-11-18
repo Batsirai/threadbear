@@ -101,7 +101,7 @@ async function threadRow(ctx: QueryCtx | MutationCtx, threadId: string) {
 async function ownThread(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string): Promise<'yes' | 'none'> {
   if (caller.owner) return 'yes';
   const row = await threadRow(ctx, threadId);
-  if (!row || !mayTouch(caller, row.runnerId)) return 'none';
+  if (!row || !mayTouch(caller, row.runnerId, threadId)) return 'none';
   // On its way to the owner (threadClears): no longer its runner's to write.
   return (await ctx.db.query('threadClears').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).first()) ? 'none' : 'yes';
 }
@@ -114,7 +114,7 @@ async function claimable(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
   // Only an id of a thread id's shape (runnerAccess.ts isThreadId).
   if (!isThreadId(threadId)) return false;
   const row = await threadRow(ctx, threadId);
-  if (row) return row.runnerId === caller.runnerId;
+  if (row) return mayTouch(caller, row.runnerId, threadId);
   const claimedBy: string[] = [];
   for await (const t of ctx.db.query('threadTombstones').withIndex('by_threadId', (q) => q.eq('threadId', threadId))) claimedBy.push(t.runnerId);
   for await (const t of ctx.db.query('threadIndex').withIndex('by_threadId', (q) => q.eq('threadId', threadId))) claimedBy.push(t.runnerId);
@@ -122,7 +122,7 @@ async function claimable(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
     (await ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).first()) !== null ||
     (await ctx.db.query('shareImages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).first()) !== null ||
     (await ctx.db.query('replyImages').withIndex('by_thread_seq', (q) => q.eq('threadId', threadId)).first()) !== null;
-  return mayClaim(caller, { claimedBy, leftovers });
+  return mayClaim(caller, { claimedBy, leftovers, threadId });
 }
 
 // ------------------------------------------------------------ share links
@@ -165,6 +165,8 @@ export async function storageInUse(ctx: QueryCtx | MutationCtx, storageId: Id<'_
   for (const table of [...PICTURE_TABLES, 'commandFiles'] as const) {
     if (await ctx.db.query(table).withIndex('by_storageId', (q) => q.eq('storageId', storageId)).first()) return true;
   }
+  // A box's save of its thread (boxes.ts boxSaved).
+  if (await ctx.db.query('boxes').withIndex('by_save', (q) => q.eq('save.storageId', storageId)).first()) return true;
   // Until limitsMigration has written commandFiles for commands made before
   // it, those are looked through the old way, up to a few MB: past that the
   // file counts as in use (it goes once they're over, by pruneFiles).
@@ -851,7 +853,8 @@ export const upsertThreads = mutation({
       // A runner key writes only its own threads, and never one that's
       // another runner's: the row says where the phone's commands for it go
       // and carries its secret card's key (docs/protocol.md, "Runner keys").
-      if (!mayWrite(caller, t.runnerId, existing?.runnerId)) throw forbidden(`write thread ${t.threadId}`);
+      // A box key only its one thread (runnerAccess.ts ownThreadOnly).
+      if (!mayWrite(caller, t.runnerId, existing?.runnerId, t.threadId)) throw forbidden(`write thread ${t.threadId}`);
       // Only its own runner's projects (heldElsewhere), and only so many: each
       // is a lookup when the phones read the thread (phone.ts projectOwners).
       if (t.projects?.length && !caller.owner) {
@@ -1053,7 +1056,7 @@ export const removeThreads = mutation({
         .withIndex('by_threadId', (q) => q.eq('threadId', threadId))
         .unique();
       // A runner key leaves alone what isn't its own thread, there or not (ownThread).
-      if (!caller.owner && !(row && mayTouch(caller, row.runnerId))) continue;
+      if (!caller.owner && !(row && mayTouch(caller, row.runnerId, threadId))) continue;
       await dropThread(ctx, threadId, row);
     }
     return null;
@@ -1283,11 +1286,21 @@ export const heartbeat = mutation({
     // The app checks them too, for rows written before this.
     if (!caller.owner) runner = { ...runner, startedAt: isIsoTime(runner.startedAt) ? runner.startedAt : '', threadCount: wholeIn(runner.threadCount, 1_000_000) ? runner.threadCount : 0 };
     const name = caller.owner ? runner.name : await uniqueName(ctx, runner.runnerId, runner.name);
-    const row = { ...runner, name, lastSeenAt: Date.now(), ...(caller.owner ? { byOwner: true } : {}) };
     const existing = await ctx.db
       .query('runners')
       .withIndex('by_runnerId', (q) => q.eq('runnerId', runner.runnerId))
       .unique();
+    // A box's runner is marked as one (docs/virtual-runners.md), whatever
+    // it sends, and its heartbeat renews the box's lease (boxMachine.ts).
+    const boxRow = caller.box ? await ctx.db.get(caller.box.id as Id<'boxes'>) : null;
+    // A box isn't on the tailnet, so no Mac app dials it: it gives no rpcUrl.
+    if (caller.box) {
+      const { rpcUrl: _rpcUrl, ...rest } = runner;
+      runner = rest;
+    }
+    if (boxRow) await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now() });
+    const box = boxRow ? { box: { serviceId: boxRow.serviceId } } : existing?.box ? { box: existing.box } : {};
+    const row = { ...runner, name, lastSeenAt: Date.now(), ...(caller.owner ? { byOwner: true } : {}), ...box };
     // Presence is setPresence's to change; a heartbeat keeps it.
     if (existing) await ctx.db.replace(existing._id, { ...row, wakesSeeded: true, ...(existing.atMac !== undefined ? { atMac: existing.atMac, atMacAt: existing.atMacAt } : {}) });
     else await ctx.db.insert('runners', { ...row, wakesSeeded: true });
@@ -2019,10 +2032,33 @@ export const iconUploadUrl = mutation({
     const bytes = new Uint8Array(24);
     crypto.getRandomValues(bytes);
     const ticket = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-    await ctx.db.insert('uploadTickets', { ticketHash: await sha256(ticket), runnerId: caller.runnerId, ...(caller.keyId ? { keyId: caller.keyId as Id<'runnerKeys'> } : {}), issuedAt: now });
+    await ctx.db.insert('uploadTickets', { ticketHash: await sha256(ticket), runnerId: caller.runnerId, ...ticketKey(caller), issuedAt: now });
     return `${site.replace(/\/+$/, '')}/runner/upload?ticket=${ticket}`;
   },
 });
+
+// What a ticket records of the key that asked for it: a runner key's row,
+// or a box and the hash of its key then.
+export function ticketKey(caller: Caller): { keyId?: Id<'runnerKeys'>; boxId?: Id<'boxes'>; boxKeyHash?: string } {
+  if (caller.owner) return {};
+  if (caller.box) return { boxId: caller.box.id as Id<'boxes'>, boxKeyHash: caller.box.keyHash };
+  return caller.keyId ? { keyId: caller.keyId as Id<'runnerKeys'> } : {};
+}
+
+// Whether the key that asked for a ticket still works: a runner key not
+// revoked, or a box whose key is still that one (a new box's replaces it,
+// and archiving or failing clears it, boxMachine.ts).
+async function ticketKeyLive(ctx: QueryCtx | MutationCtx, row: Doc<'uploadTickets'>): Promise<boolean> {
+  if (row.keyId) {
+    const key = await ctx.db.get(row.keyId);
+    return !!key && !key.revokedAt;
+  }
+  if (row.boxId && row.boxKeyHash) {
+    const box = await ctx.db.get(row.boxId);
+    return !!box && box.boxKeyHash === row.boxKeyHash;
+  }
+  return false;
+}
 
 // Unused, under an hour old, and its key still live: revoking or replacing
 // a key ends the uploads it had started.
@@ -2030,9 +2066,8 @@ async function liveTicket(ctx: QueryCtx | MutationCtx, ticket: string) {
   if (!/^[0-9a-f]{48}$/.test(ticket)) return null;
   const hash = await sha256(ticket);
   const row = await ctx.db.query('uploadTickets').withIndex('by_hash', (q) => q.eq('ticketHash', hash)).first();
-  if (!row || row.usedAt || row.issuedAt <= Date.now() - TICKET_MS || !row.keyId) return null;
-  const key = await ctx.db.get(row.keyId);
-  return key && !key.revokedAt ? row : null;
+  if (!row || row.usedAt || row.issuedAt <= Date.now() - TICKET_MS) return null;
+  return (await ticketKeyLive(ctx, row)) ? row : null;
 }
 
 // A file a runner key uploads: at most this big, and at most this much an
@@ -2101,9 +2136,8 @@ async function claimedTicket(ctx: MutationCtx, ticket: string, claim: string) {
   if (!/^[0-9a-f]{48}$/.test(ticket) || !claim) return null;
   const hash = await sha256(ticket);
   const row = await ctx.db.query('uploadTickets').withIndex('by_hash', (q) => q.eq('ticketHash', hash)).first();
-  if (!row || row.claim !== claim || !row.usedAt || row.usedAt <= Date.now() - UPLOAD_CLAIM_MS || !row.keyId) return null;
-  const key = await ctx.db.get(row.keyId);
-  return key && !key.revokedAt ? row : null;
+  if (!row || row.claim !== claim || !row.usedAt || row.usedAt <= Date.now() - UPLOAD_CLAIM_MS) return null;
+  return (await ticketKeyLive(ctx, row)) ? row : null;
 }
 
 // /runner/upload's last step: the stored file is the claim's runner's.
@@ -2987,6 +3021,8 @@ export const pendingCommands = query({
     // the owner key: its text is whatever Mike said (runnerAccess.ts mayTake).
     for (const target of caller.owner ? [runnerId, 'any'] : [runnerId]) {
       for await (const c of ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', target).eq('state', 'pending'))) {
+        // A box hears of its own thread's only (runnerAccess.ts mayTake).
+        if (caller.box && !mayTake(caller, c)) continue;
         out.push({ commandId: c._id, kind: c.kind, ...(c.threadId ? { threadId: c.threadId } : {}), args: c.args, createdAt: c.createdAt });
       }
     }

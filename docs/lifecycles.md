@@ -18,6 +18,9 @@ reading the code, unless it says it was tested.
 | `threadClears` (`sync.ts` clearThread, dropThreadRows) | clearing, awaitingOwner (a takeover's rows gone), cleared | **Stuck id:** a thread's old rows go in scheduled runs while the id is closed to every write. A run that threw was never started again, so the id stayed closed for good and every write under it was skipped. | 18 Nov 2026: a state machine (`convex/clearMachine.ts`) whose `clearing` state starts the runs again after 10 minutes with none moving it on (`STALLED`, an `at` timer each run moves); rows from before it get their timer from a cron (`armClears`) |
 
 Commands, moves, runner requests and thread clears are now state machines (below).
+A virtual runner's box (`boxes.boxState`, docs/virtual-runners.md) was
+born one on 18 Nov 2026 (`convex/boxMachine.ts`): a new table, so nothing
+to backfill and no stepping stone.
 
 ## Still to do, most worth it first
 
@@ -46,8 +49,9 @@ machines are drawn in [machines.md](machines.md) and on the website's
 Machines page (`/machines`). So far: **commands** (`convex/commandMachine.ts`),
 **moves** (`convex/moveMachine.ts`), **runner requests**
 (`convex/requestMachine.ts`, no timers: a request's card expires on the
-asking runner, which closes it) and **thread clears**
-(`convex/clearMachine.ts`). Next, one at a time, the table above.
+asking runner, which closes it), **thread clears**
+(`convex/clearMachine.ts`) and **boxes** (`convex/boxMachine.ts`, a thread's
+box on a virtual runner, with a boot timeout and a heartbeat lease). Next, one at a time, the table above.
 
 Moves keep each deadline as a time in the state's data (`askBy`,
 `giveUpAt`), not a delay from entering it: the backfill brings a move over

@@ -1,0 +1,217 @@
+// A thread's box on a virtual runner as a state machine (docs/virtual-runners.md,
+// decisions 3, 5, 6 and 7; docs/lifecycles.md). The main Mac starts the
+// thread's box and archives it; the runner in the box says when it has traded its
+// boot token for its key (boxes.ts exchange) and when it has saved the
+// thread; the service's own actions and crons say what the provider did.
+// Boxes authenticate with keys and boot tokens in their args, not ctx.auth,
+// so each function in boxes.ts and sync.ts checks who's asking before it
+// sends: the roles say who sends what, and their checks pass.
+//
+// A box's key (`boxKeyHash` on the row) is good while the row says so: the
+// effects clear it whenever a box is replaced, archived or fails, so a lost
+// box's key is refused from the step that gives up on it.
+import { defineMachine } from '@convex-dev/state-machines';
+import { v } from 'convex/values';
+import { appSchema } from './schema';
+import type { Doc } from './_generated/dataModel';
+import { BOOT_MS, LEASE_MS, SAVE_MS } from './boxStates';
+
+type Box = Doc<'boxes'>;
+const ERROR_CHARS = 500;
+
+export const box = defineMachine(
+  appSchema,
+  {
+    name: 'box',
+    table: 'boxes',
+    field: 'boxState',
+    description: "A thread's box on a virtual runner: made when the thread starts, saved and slept when it's idle, woken for a message (the same box resumed, or a new one from the save), and deleted when the thread is archived. Every box that runs the thread is the same runner, each on a key of its own.",
+    callers: {
+      owner: "Only the main Mac's runner starts or archives a thread's box.",
+      runner: "Only the runner in the thread's own box, on its boot token or key, says it's up or saved.",
+    },
+    events: {
+      owner: { START: {}, ARCHIVE: {} },
+      runner: { READY: {}, SAVED: { storageId: v.id('_storage'), bytes: v.number() } },
+      server: { CREATED: { providerBoxId: v.string() }, IDLE: {}, WAKE: {}, RESUMED: {}, LOST: {}, DESTROYED: {}, FAILED: { error: v.string() } },
+    },
+    guards: {
+      heardFrom: "The box hasn't heartbeated within the lease.",
+      hasKey: "The paused box's key was revoked, so it can't come back as it was: a new box has to start.",
+    },
+    states: {
+      start: {
+        on: { START: { to: 'creating', effect: 'start', description: 'A thread starts on a virtual runner: the service asks the provider for its first box, with a boot token and nothing reusable in its environment.' } },
+      },
+      creating: {
+        description: "The service is asking the provider for the thread's first box.",
+        timers: { BOOT_TIMEOUT: { at: 'bootBy', description: "Ten minutes have passed and no box has traded the thread's boot token for its key." } },
+        on: {
+          CREATED: { to: 'starting', effect: 'created', description: 'The provider has made the box, which boots and starts its runner.' },
+          READY: { to: 'awake', effect: 'ready', description: "The box booted and traded its boot token for its key before the provider's answer came back." },
+          FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't make a box." },
+          BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'No box checked in: the thread waits for the next message to try again.' },
+          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread before its box is up.' },
+        },
+      },
+      starting: {
+        description: 'The box is booting: its runner will trade the boot token for its box key, the login token and the thread key.',
+        timers: { BOOT_TIMEOUT: { at: 'bootBy', description: "Ten minutes have passed since the box was asked for, and it hasn't traded its boot token." } },
+        on: {
+          READY: { to: 'awake', effect: 'ready', description: 'The box traded its boot token: its key is the only one for the thread from now on.' },
+          FAILED: { to: 'failed', effect: 'fail', description: "The provider says the box didn't start." },
+          BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'The box never checked in: the thread waits for the next message to try again.' },
+          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread while its box boots.' },
+        },
+      },
+      awake: {
+        description: "The box's runner is running the thread, on its own box key, and heartbeats every minute.",
+        timers: { LEASE_DUE: { at: 'leaseUntil', description: 'Five minutes since the lease was last renewed: the box must have heartbeated meanwhile.' } },
+        on: {
+          LEASE_DUE: [
+            { guard: 'heardFrom', effect: 'renewLease', description: 'It has heartbeated: the lease runs five minutes from its last heartbeat.' },
+            { to: 'waking', effect: 'lost', description: "No heartbeat for five minutes: the box is lost. Its key is refused from now, and a new box restores the thread from its last save." },
+          ],
+          LOST: { to: 'waking', effect: 'lost', description: "The provider says the box is gone: its key is refused from now, and a new box restores the thread from its last save." },
+          IDLE: { to: 'saving', effect: 'askSave', description: "The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps." },
+          SAVED: { effect: 'saved', description: 'The box saved the thread unasked: the save replaces the last one, and it stays awake.' },
+          CREATED: { effect: 'noteBox', description: "The provider's answer arrives after the box was already up: its id is kept, for pausing and deleting it." },
+          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box is deleted.' },
+        },
+      },
+      saving: {
+        description: 'The box is saving the thread out of itself: committing and pushing its work, and uploading the folder and transcript sealed with the thread key.',
+        timers: {
+          LEASE_DUE: { at: 'leaseUntil', description: 'Five minutes since the lease was last renewed: the box must have heartbeated meanwhile.' },
+          SAVE_TIMEOUT: { at: 'saveBy', description: "Ten minutes have passed and the box hasn't said it saved." },
+        },
+        on: {
+          SAVED: { to: 'asleep', effect: 'sleep', description: 'The save is in: it replaces the last one, and the box is paused if the provider can, else deleted.' },
+          WAKE: { to: 'awake', effect: 'stayUp', description: 'A message came in while it saved: the box stays up.' },
+          SAVE_TIMEOUT: { to: 'awake', effect: 'stayUp', description: "No save came: the box stays up rather than lose work, and it's asked again at the next idle check." },
+          LEASE_DUE: [
+            { guard: 'heardFrom', effect: 'renewLease', description: 'It has heartbeated: the lease runs five minutes from its last heartbeat.' },
+            { to: 'waking', effect: 'lost', description: 'No heartbeat for five minutes: the box is lost, and a new box restores the thread from its last save.' },
+          ],
+          LOST: { to: 'waking', effect: 'lost', description: 'The provider says the box is gone mid-save: a new box restores the thread from its last save.' },
+          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box is deleted.' },
+        },
+      },
+      asleep: {
+        description: "The thread is saved and its box paused or deleted. Nothing is running; it costs a paused box's disk at most.",
+        on: {
+          WAKE: { to: 'waking', effect: 'wake', description: "A message for the thread: the paused box is resumed, or a new one restores the save. Once only: a second message while it's waking doesn't start another." },
+          LOST: { effect: 'forgetBox', description: "The provider lost the paused box: its key goes with it, and as the save is still here, the next wake starts a new box." },
+          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box, if any, is deleted.' },
+        },
+      },
+      waking: {
+        description: 'The thread is coming back for a message: its paused box resuming, or a new box being made that restores the last save.',
+        timers: { BOOT_TIMEOUT: { at: 'bootBy', description: "Ten minutes have passed and the box hasn't come back." } },
+        on: {
+          RESUMED: { to: 'awake', guard: 'hasKey', effect: 'resumed', description: 'The paused box resumed, its runner still holding its key.' },
+          CREATED: { to: 'starting', effect: 'created', description: 'A new box was made: it boots, trades a fresh boot token, and restores the save.' },
+          READY: { to: 'awake', effect: 'ready', description: 'A new box traded its boot token: its key replaces the last box\'s, which is refused from now.' },
+          FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't bring a box back." },
+          BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'No box came back: the thread waits for the next message to try again.' },
+          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread while it wakes.' },
+        },
+      },
+      destroying: {
+        description: "The thread is archived: the provider is deleting its box. No key works for it any more.",
+        on: { DESTROYED: { to: 'gone', effect: 'destroyed', description: 'The provider has deleted the box.' } },
+      },
+      gone: { description: "The box is deleted. The row stays for its save, deleted after the virtual runner's deleteAfterDays." },
+      failed: {
+        description: "A box couldn't be started or brought back. The thread and its last save are kept, and no key works for it.",
+        on: {
+          WAKE: { to: 'waking', effect: 'wake', description: 'A new message tries again with a new box.' },
+          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: any box the provider still has is deleted.' },
+        },
+      },
+    },
+  },
+  {
+    callers: { owner: () => true, runner: () => true },
+    guards: {
+      heardFrom: (_ctx, { row }) => (row.lastHeartbeatAt ?? 0) > Date.now() - LEASE_MS,
+      hasKey: (_ctx, { row }) => row.boxKeyHash !== undefined,
+    },
+    effects: {
+      start: async () => ({ kind: 'creating' as const, bootBy: Date.now() + BOOT_MS }),
+      created: async (ctx, { id, state, event }) => {
+        await patch(ctx, id, { providerBoxId: event.providerBoxId });
+        return { kind: 'starting' as const, bootBy: state.bootBy };
+      },
+      noteBox: async (ctx, { id, state, event }) => {
+        await patch(ctx, id, { providerBoxId: event.providerBoxId });
+        return state;
+      },
+      // boxes.ts claimBoot sets the new key's hash in the same mutation.
+      ready: async (ctx, { id }) => {
+        const now = Date.now();
+        await patch(ctx, id, { lastHeartbeatAt: now, bootTokenHash: undefined, bootExpiresAt: undefined });
+        return { kind: 'awake' as const, since: now, leaseUntil: now + LEASE_MS };
+      },
+      resumed: async (ctx, { id }) => {
+        const now = Date.now();
+        await patch(ctx, id, { lastHeartbeatAt: now, bootTokenHash: undefined, bootExpiresAt: undefined });
+        return { kind: 'awake' as const, since: now, leaseUntil: now + LEASE_MS };
+      },
+      renewLease: async (_ctx, { state, row }) => ({ ...state, leaseUntil: (row.lastHeartbeatAt ?? Date.now()) + LEASE_MS }),
+      lost: async (ctx, { id, row, state }) => {
+        await patch(ctx, id, { ...awakeAdded(row, state.since), ...revoked, providerBoxId: undefined });
+        return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
+      },
+      askSave: async (_ctx, { state }) => ({ kind: 'saving' as const, since: state.since, leaseUntil: state.leaseUntil, saveBy: Date.now() + SAVE_MS }),
+      stayUp: async (_ctx, { state }) => ({ kind: 'awake' as const, since: state.since, leaseUntil: state.leaseUntil }),
+      saved: async (ctx, { id, state, event }) => {
+        await patch(ctx, id, { save: { storageId: event.storageId, bytes: event.bytes, at: Date.now() } });
+        return state;
+      },
+      sleep: async (ctx, { id, row, state, event }) => {
+        const now = Date.now();
+        await patch(ctx, id, { ...awakeAdded(row, state.since), save: { storageId: event.storageId, bytes: event.bytes, at: now } });
+        return { kind: 'asleep' as const, since: now };
+      },
+      wake: async () => ({ kind: 'waking' as const, bootBy: Date.now() + BOOT_MS }),
+      forgetBox: async (ctx, { id, state }) => {
+        await patch(ctx, id, { ...revoked, providerBoxId: undefined });
+        return state;
+      },
+      archive: async (ctx, { id, row, state }) => {
+        await patch(ctx, id, { ...(state.kind === 'awake' || state.kind === 'saving' ? awakeAdded(row, state.since) : {}), ...revoked });
+        return { kind: 'destroying' as const, since: Date.now() };
+      },
+      destroyed: async (ctx, { id }) => {
+        await patch(ctx, id, { providerBoxId: undefined });
+        return { kind: 'gone' as const, at: Date.now() };
+      },
+      fail: async (ctx, { id, event }) => {
+        await patch(ctx, id, revoked);
+        return { kind: 'failed' as const, at: Date.now(), error: event.error.replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, ERROR_CHARS) || 'The box failed.' };
+      },
+      bootTimeout: async (ctx, { id }) => {
+        await patch(ctx, id, revoked);
+        return { kind: 'failed' as const, at: Date.now(), error: 'No box checked in within 10 minutes.' };
+      },
+    },
+  },
+);
+
+// No key and no boot token work for the thread after this step.
+const revoked = { boxKeyHash: undefined, bootTokenHash: undefined, bootExpiresAt: undefined } as const;
+
+type Db = { db: unknown };
+
+// The row's own fields, never its machine's: the guarded db checks that.
+async function patch(ctx: Db, id: unknown, fields: Partial<Box>): Promise<void> {
+  await (ctx.db as { patch(id: unknown, value: object): Promise<void> }).patch(id, fields);
+}
+
+// The awake time since `since`, added to the day's (UTC) count.
+export function awakeAdded(row: Pick<Box, 'awakeToday'>, since: number, now = Date.now()): Pick<Box, 'awakeToday'> {
+  const day = new Date(now).toISOString().slice(0, 10);
+  const ms = Math.max(0, now - since);
+  return { awakeToday: { day, ms: (row.awakeToday?.day === day ? row.awakeToday.ms : 0) + ms } };
+}

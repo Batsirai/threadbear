@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as boxMachine from "../boxMachine.js";
+import type * as boxStates from "../boxStates.js";
+import type * as boxes from "../boxes.js";
 import type * as clearMachine from "../clearMachine.js";
 import type * as clearStates from "../clearStates.js";
 import type * as commandMachine from "../commandMachine.js";
@@ -52,6 +55,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  boxMachine: typeof boxMachine;
+  boxStates: typeof boxStates;
+  boxes: typeof boxes;
   clearMachine: typeof clearMachine;
   clearStates: typeof clearStates;
   commandMachine: typeof commandMachine;

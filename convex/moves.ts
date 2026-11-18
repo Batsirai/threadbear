@@ -21,8 +21,8 @@ import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/s
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { checkRunnerId, forbidden, hasLiveKey, runnerAuth, sha256, withoutCredentials } from './lib';
-import { buryIndexRows, countBodyBytes, countMessageBytes, MAX_RUNNER_UPLOAD_BYTES, moveView, storageInUse, storedBytes } from './sync';
-import { docBytes, type Caller } from './runnerAccess';
+import { buryIndexRows, countBodyBytes, countMessageBytes, MAX_RUNNER_UPLOAD_BYTES, moveView, storageInUse, storedBytes, ticketKey } from './sync';
+import { docBytes, ownThreadOnly, type Caller } from './runnerAccess';
 import { machines, move as moveMachine } from './machines';
 import { dropChunks } from './moveMachine';
 import { moveStateFrom } from './moveStates';
@@ -76,6 +76,8 @@ async function mustBe(ctx: QueryCtx | MutationCtx, caller: Caller, m: Move, side
   const ids = side === 'either' ? [m.from, m.to] : [m[side]];
   if (!caller.owner) {
     if (!ids.includes(caller.runnerId)) throw forbidden(`act on a move ${side === 'from' ? 'from' : side === 'to' ? 'to' : 'between'} other runners`);
+    // A box key: only its own thread's moves (runnerAccess.ts ownThreadOnly).
+    if (!ownThreadOnly(caller, m.threadId)) throw forbidden("act on another thread's move");
     return;
   }
   for (const id of ids) if (!(await hasLiveKey(ctx, id))) return;
@@ -202,7 +204,7 @@ export const moves = query({
       .withIndex('by_to', (q) => q.eq('to', runnerId).gte('updatedAt', since))
       .order('desc')
       .take(LISTED);
-    for (const m of [...fromHere, ...toHere]) out.set(m.moveId, m);
+    for (const m of [...fromHere, ...toHere]) if (ownThreadOnly(caller, m.threadId)) out.set(m.moveId, m);
     return [...out.values()].sort((a, b) => a.createdAt - b.createdAt).map(listed);
   },
 });
@@ -309,7 +311,7 @@ export const moveChunkUrl = mutation({
     const site = process.env.CONVEX_SITE_URL;
     if (!site) throw new ConvexError({ kind: 'config', message: 'CONVEX_SITE_URL is not set' });
     const ticket = randomId() + randomId().slice(0, 16);
-    await ctx.db.insert('uploadTickets', { ticketHash: await sha256(ticket), runnerId: caller.runnerId, ...(caller.keyId ? { keyId: caller.keyId as Id<'runnerKeys'> } : {}), issuedAt: Date.now(), moveId });
+    await ctx.db.insert('uploadTickets', { ticketHash: await sha256(ticket), runnerId: caller.runnerId, ...ticketKey(caller), issuedAt: Date.now(), moveId });
     return `${site.replace(/\/+$/, '')}/runner/upload?ticket=${ticket}`;
   },
 });

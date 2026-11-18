@@ -13,9 +13,13 @@ Code on a shared runner, taken out on 16 Nov) and is the "cloud sandboxes"
 half of step 6 (docs/plan.md). Coordinators are a separate experiment and
 out of scope here.
 
-Status: a plan, not built. A first draft went to a review panel (Fable,
-Opus and Grok, 16 Nov), each reading the code; their changes are folded
-in, and "What the review changed" at the end says what moved and why.
+Status: the spike passed (Order, 1), and the backend's first slice is
+built (18 Nov, "What's built", below): the tables, the box's state
+machine, box keys, cloud tokens and the boot exchange. Nothing calls a
+provider yet, and no runner runs in box mode. A first draft of the plan
+went to a review panel (Fable, Opus and Grok, 16 Nov), each reading the
+code; their changes are folded in, and "What the review changed" at the
+end says what moved and why.
 
 ## What it's like when it's done
 
@@ -91,7 +95,8 @@ in, and "What the review changed" at the end says what moved and why.
    are capped at `MAX_RUNNER_KEYS = 4` (`convex/sync.ts`), budgeted
    for whole machines, and bruce, the Hetzner box, the Pixel and the Dell
    hold all four;
-   a new runner key also drops shared logins (`sync.ts:3520`). A **box
+   a new runner key also drops shared logins (`makeRunnerKey`,
+   `convex/sync.ts` ~:3904, `dropRunnerLogins`). A **box
    key** is scoped in `convex/runnerAccess.ts` to one `runnerId` *and*
    one `threadId`, with caps sized for one thread, outside that limit:
    no new threads (`create_thread` from a box asks Mike with a card, as
@@ -108,15 +113,16 @@ in, and "What the review changed" at the end says what moved and why.
      writes the `runners` row (marked `box: { serviceId }`, hidden from
      the Runs-on menu and Settings' machine list) and the `boxes` row,
      then queues the `create` command and schedules the boot.
-     `queueCommand` needs that row to exist (`convex/relay.ts:301`).
+     `queueCommand` needs that row to exist (`convex/relay.ts` ~:357).
    - The `create` carries what a box can't find on its own disk: the
      repo's `origin`, the subfolder and the base branch, read on the Mac
      the way `moveInfo` does (`withoutCredentials`).
    - A runner whose `boxes` row is `starting`, `asleep` or `waking` counts
      as reachable everywhere one is checked: `mustBeOnline`
-     (`runner/src/relay.ts:1159`), the phone's `ONLINE_MS`
-     (`convex/phone.ts`), `startMove` (`convex/moves.ts:162`).
-   - Both command insert sites (`convex/relay.ts:311`, `convex/phone.ts`)
+     (`runner/src/relay.ts` ~:1514), the phone's `ONLINE_MS`
+     (`convex/phone.ts`), `startMove` (`convex/moves.ts` ~:162).
+   - Both command insert sites (`convex/relay.ts` ~:373, `convex/phone.ts`
+     ~:1350; both go through `queued()` in `convex/machines.ts`)
      schedule a wake when the target box is asleep. The wake is
      idempotent: it moves `asleep → waking` once, so two quick sends make
      one wake.
@@ -222,7 +228,9 @@ in, and "What the review changed" at the end says what moved and why.
       isn't awake (found with `list`);
     - treats a box that's awake but hasn't heartbeated for 5 minutes as
       lost: destroys it, puts any command it had `taken` back to `pending`
-      once (`convex/sync.ts:2749`; today a taken command waits 14 days),
+      once (a taken command now lapses after 3 hours and is never handed
+      out again, `TAKEN_LEASE_MS` in `convex/commandMachine.ts`, so a lost
+      box's is put back by the backend before then),
       and restores the thread from its last save on a new box, with a
       transcript line saying so;
     - records awake seconds, which Settings shows times the provider's
@@ -234,6 +242,73 @@ in, and "What the review changed" at the end says what moved and why.
     to it, which wakes it).
 14. **An experiment**, `virtual-runners`, on for Mike only, until it has
     run a week of his real threads.
+
+## What's built
+
+The backend's first slice (18 Nov 2026), with tests in
+`runner/test/unit/boxes-backend.test.ts` and `box-access.test.ts`:
+
+- **Tables** (`convex/schema.ts`): `runnerServices` (decision 2; limits
+  default to `BOX_LIMITS` in `convex/boxes.ts`: 5 boxes, sleep after 10
+  idle minutes, 8 awake hours a day, saves kept 14 days), `boxes` (one per
+  thread, for life), `cloudTokens` (decision 10), and `runners.box: {
+  serviceId }`, which a box's heartbeat sets and keeps.
+- **The box's state machine** (`convex/boxMachine.ts`, `boxStates.ts`,
+  drawn in docs/machines.md): creating, starting, awake, saving, asleep,
+  waking, destroying, gone and failed. The owner sends START and ARCHIVE;
+  the runner in the box READY (its boot exchange) and SAVED; the service
+  CREATED, IDLE, WAKE, RESUMED, LOST, DESTROYED and FAILED
+  (`boxes:report`, internal). Timers: 10 minutes to boot, a 5-minute
+  heartbeat lease, and 10 minutes for a save, after which the box stays
+  up. A heartbeat only stamps `boxes.lastHeartbeatAt`; the lease's timer
+  reads it and runs on from it, so heartbeats aren't steps in the
+  machine's history. A lost box goes to waking with its key cleared,
+  failing and archiving clear it too, and an asleep box keeps its key so
+  a paused box can resume (unless the provider lost it). WAKE is taken
+  once, so two quick messages make one wake.
+- **Box keys** (decision 4; docs/protocol.md, "Box keys"): a third
+  `Caller`, `{ owner: false, runnerId, box: { id, threadId, keyHash } }`,
+  found by `boxes.boxKeyHash`, never a `runnerKeys` row. `BOX_CALLS` in
+  `convex/runnerAccess.ts` is what it may call, and `ownThreadOnly` holds
+  every row check (`mayWrite`, `mayTouch`, `mayClaim`, `mayTake`, the
+  moves' `mustBe`, `fileRequest`) to its one thread. Its upload URLs die
+  with its key.
+- **Cloud tokens** (decision 10): `boxes:setCloudToken` (owner, an action)
+  seals with AES-GCM under `BOX_SEAL_KEY` (a Convex env var: 32 random
+  bytes in base64, `npx convex env set BOX_SEAL_KEY "$(openssl rand
+  -base64 32)"`), bound to its login, and `boxes:cloudTokens` lists the
+  logins with when each was made and set, never the token.
+- **The boot exchange** (decision 5): `boxes:mintBootToken` (owner) keeps
+  only a boot token's hash, for 10 minutes, a newer one replacing it;
+  `boxes:exchange` (no key) claims it in one mutation (`claimBoot`:
+  unexpired, used up, READY sent, the new box key's hash in place of the
+  last one's), then unseals and returns the box key, runner id, thread id,
+  cloud token, thread key, repo and the last save's URL. The per-thread
+  key is made, sealed, with the box row (`boxes:newBox`, internal, for
+  `startThread`).
+- **Saves** (decision 7): `boxes:boxSaved` (a box key only) takes a file
+  its runner uploaded, replaces the last save and deletes it.
+
+Not built yet, in about the order they're needed:
+
+- TODO `convex/boxProviders/fly.ts` and the actions that call it: create
+  with a boot token (the service's own path to `storeBootToken`), pause or
+  delete on sleep, resume or create on wake, delete on archive, each
+  reporting through `boxes:report`. A save bigger than one upload (10 MB)
+  needs chunks, as a move's do.
+- TODO `boxes:startThread` (owner, from the Mac or the phone): the
+  `runners` row marked `box`, `boxes:newBox`, the `create` command, and
+  `maxBoxes`.
+- TODO the wake hook in `queued()` (`convex/machines.ts`): a command for an
+  asleep box's runner reports WAKE. And a box `starting`, `asleep` or
+  `waking` counting as reachable in `mustBeOnline`, the phone and
+  `startMove` (decision 6).
+- TODO the crons: IDLE after `idleSleepMinutes`, the day's awake cap,
+  reaping provider boxes with no row, a lost box's taken command put back
+  to pending, deleting archived threads' saves after `deleteAfterDays`;
+  and the owner's way to make a `runnerServices` row.
+- TODO the runner's box mode, its image, and the save command it answers.
+- TODO the GPUI app and the phone (Order, 4), and the experiment (14).
 
 ## Order
 
@@ -268,7 +343,9 @@ in, and "What the review changed" at the end says what moved and why.
      under a tenth of a cent paused.
 2. **Box mode, box keys and `boxes:startThread`**: one thread started from
    the Mac app on one provider, runs a turn, saves, sleeps, wakes on a
-   message, archived and deleted.
+   message, archived and deleted. The backend's box keys, boot exchange,
+   cloud tokens and box machine are built ("What's built"); the rest of
+   this step is its TODO list.
 3. **The second provider in the app**, to prove the interface isn't shaped
    like the first.
 4. **The GPUI app**: the Runs-on entry, Starting/Asleep/Waking on rows,

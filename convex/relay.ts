@@ -14,7 +14,7 @@ import type { OrderedQuery } from 'convex/server';
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { DataModel, Doc, Id } from './_generated/dataModel';
 import { checkRunnerId, forbidden, isSeq, MAX_SEQ, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
-import { docBytes, isThreadId } from './runnerAccess';
+import { docBytes, isThreadId, mayTouch } from './runnerAccess';
 import { queued, request as requestMachine } from './machines';
 import { requestStateFrom } from './requestStates';
 import { steppingFor } from './stepping';
@@ -613,7 +613,7 @@ export const fileRequest = mutation({
     if (!isThreadId(threadId)) throw bad("that isn't a thread id");
     // Asked from one of its own threads, so the card and its answer are its own.
     const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
-    if (!t || t.runnerId !== caller.runnerId) throw forbidden("ask for that: the thread isn't this runner's");
+    if (!t || !mayTouch(caller, t.runnerId, threadId)) throw forbidden("ask for that: the thread isn't this runner's");
     if (await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first()) throw bad('that request id is taken');
     const now = Date.now();
     // Oldest first: what's past a week goes, and then the oldest until

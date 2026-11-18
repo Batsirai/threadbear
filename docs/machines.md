@@ -350,3 +350,181 @@ From `awaitingOwner`:
 
 - `OWNER_WROTE (backend)` → `cleared`. The main Mac's write of the thread goes through: it's the main Mac's now.
 - `REMOVED (backend)` → `cleared`. The thread is removed before the main Mac wrote it: the id opens.
+
+## box
+
+A thread's box on a virtual runner: made when the thread starts, saved and slept when it's idle, woken for a message (the same box resumed, or a new one from the save), and deleted when the thread is archived. Every box that runs the thread is the same runner, each on a key of its own.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  state "creating" as creating
+  creating : bootBy
+  note right of creating
+The service is asking the provider for
+the thread's first box.
+  end note
+  state "starting" as starting
+  starting : bootBy
+  note right of starting
+The box is booting: its runner will
+trade the boot token for its box key,
+the login token and the thread key.
+  end note
+  state "awake" as awake
+  awake : since, leaseUntil
+  note right of awake
+The box's runner is running the thread,
+on its own box key, and heartbeats every
+minute.
+  end note
+  state "saving" as saving
+  saving : since, leaseUntil, saveBy
+  note right of saving
+The box is saving the thread out of
+itself: committing and pushing its work,
+and uploading the folder and transcript
+sealed with the thread key.
+  end note
+  state "asleep" as asleep
+  asleep : since
+  note right of asleep
+The thread is saved and its box paused
+or deleted. Nothing is running; it costs
+a paused box's disk at most.
+  end note
+  state "waking" as waking
+  waking : bootBy
+  note right of waking
+The thread is coming back for a message:
+its paused box resuming, or a new box
+being made that restores the last save.
+  end note
+  state "destroying" as destroying
+  destroying : since
+  note right of destroying
+The thread is archived: the provider is
+deleting its box. No key works for it
+any more.
+  end note
+  state "gone" as gone
+  gone : at
+  note right of gone
+The box is deleted. The row stays for
+its save, deleted after the virtual
+runner's deleteAfterDays.
+  end note
+  state "failed" as failed
+  failed : at, error
+  note right of failed
+A box couldn't be started or brought
+back. The thread and its last save are
+kept, and no key works for it.
+  end note
+  [*] --> creating : START (owner) / start
+  creating --> starting : CREATED(providerBoxId) (server) / created
+  creating --> awake : READY (runner) / ready
+  creating --> failed : FAILED(error) (server) / fail
+  creating --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
+  creating --> destroying : ARCHIVE (owner) / archive
+  starting --> awake : READY (runner) / ready
+  starting --> failed : FAILED(error) (server) / fail
+  starting --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
+  starting --> destroying : ARCHIVE (owner) / archive
+  awake --> awake : LEASE_DUE at leaseUntil [1. heardFrom] / renewLease
+  awake --> waking : LEASE_DUE at leaseUntil [else] / lost
+  awake --> waking : LOST (server) / lost
+  awake --> saving : IDLE (server) / askSave
+  awake --> awake : SAVED(storageId, bytes) (runner) / saved
+  awake --> awake : CREATED(providerBoxId) (server) / noteBox
+  awake --> destroying : ARCHIVE (owner) / archive
+  saving --> asleep : SAVED(storageId, bytes) (runner) / sleep
+  saving --> awake : WAKE (server) / stayUp
+  saving --> awake : SAVE_TIMEOUT at saveBy / stayUp
+  saving --> saving : LEASE_DUE at leaseUntil [1. heardFrom] / renewLease
+  saving --> waking : LEASE_DUE at leaseUntil [else] / lost
+  saving --> waking : LOST (server) / lost
+  saving --> destroying : ARCHIVE (owner) / archive
+  asleep --> waking : WAKE (server) / wake
+  asleep --> asleep : LOST (server) / forgetBox
+  asleep --> destroying : ARCHIVE (owner) / archive
+  waking --> awake : RESUMED (server) [hasKey] / resumed
+  waking --> starting : CREATED(providerBoxId) (server) / created
+  waking --> awake : READY (runner) / ready
+  waking --> failed : FAILED(error) (server) / fail
+  waking --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
+  waking --> destroying : ARCHIVE (owner) / archive
+  destroying --> gone : DESTROYED (server) / destroyed
+  failed --> waking : WAKE (server) / wake
+  failed --> destroying : ARCHIVE (owner) / archive
+  gone --> [*]
+```
+
+How a row is born:
+
+- `START (owner)` → `creating`. A thread starts on a virtual runner: the service asks the provider for its first box, with a boot token and nothing reusable in its environment.
+
+From `creating`:
+
+- The clock sends `BOOT_TIMEOUT` at bootBy. Ten minutes have passed and no box has traded the thread's boot token for its key.
+- `CREATED(providerBoxId) (server)` → `starting`. The provider has made the box, which boots and starts its runner.
+- `READY (runner)` → `awake`. The box booted and traded its boot token for its key before the provider's answer came back.
+- `FAILED(error) (server)` → `failed`. The provider couldn't make a box.
+- `BOOT_TIMEOUT at bootBy` → `failed`. No box checked in: the thread waits for the next message to try again.
+- `ARCHIVE (owner)` → `destroying`. Mike archives the thread before its box is up.
+
+From `starting`:
+
+- The clock sends `BOOT_TIMEOUT` at bootBy. Ten minutes have passed since the box was asked for, and it hasn't traded its boot token.
+- `READY (runner)` → `awake`. The box traded its boot token: its key is the only one for the thread from now on.
+- `FAILED(error) (server)` → `failed`. The provider says the box didn't start.
+- `BOOT_TIMEOUT at bootBy` → `failed`. The box never checked in: the thread waits for the next message to try again.
+- `ARCHIVE (owner)` → `destroying`. Mike archives the thread while its box boots.
+
+From `awake`:
+
+- The clock sends `LEASE_DUE` at leaseUntil. Five minutes since the lease was last renewed: the box must have heartbeated meanwhile.
+- `LEASE_DUE at leaseUntil` [1. heardFrom] stays put. It has heartbeated: the lease runs five minutes from its last heartbeat.
+- `LEASE_DUE at leaseUntil` [else] → `waking`. No heartbeat for five minutes: the box is lost. Its key is refused from now, and a new box restores the thread from its last save.
+- `LOST (server)` → `waking`. The provider says the box is gone: its key is refused from now, and a new box restores the thread from its last save.
+- `IDLE (server)` → `saving`. The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps.
+- `SAVED(storageId, bytes) (runner)` stays put. The box saved the thread unasked: the save replaces the last one, and it stays awake.
+- `CREATED(providerBoxId) (server)` stays put. The provider's answer arrives after the box was already up: its id is kept, for pausing and deleting it.
+- `ARCHIVE (owner)` → `destroying`. Mike archives the thread: its box is deleted.
+
+From `saving`:
+
+- The clock sends `LEASE_DUE` at leaseUntil. Five minutes since the lease was last renewed: the box must have heartbeated meanwhile.
+- The clock sends `SAVE_TIMEOUT` at saveBy. Ten minutes have passed and the box hasn't said it saved.
+- `SAVED(storageId, bytes) (runner)` → `asleep`. The save is in: it replaces the last one, and the box is paused if the provider can, else deleted.
+- `WAKE (server)` → `awake`. A message came in while it saved: the box stays up.
+- `SAVE_TIMEOUT at saveBy` → `awake`. No save came: the box stays up rather than lose work, and it's asked again at the next idle check.
+- `LEASE_DUE at leaseUntil` [1. heardFrom] stays put. It has heartbeated: the lease runs five minutes from its last heartbeat.
+- `LEASE_DUE at leaseUntil` [else] → `waking`. No heartbeat for five minutes: the box is lost, and a new box restores the thread from its last save.
+- `LOST (server)` → `waking`. The provider says the box is gone mid-save: a new box restores the thread from its last save.
+- `ARCHIVE (owner)` → `destroying`. Mike archives the thread: its box is deleted.
+
+From `asleep`:
+
+- `WAKE (server)` → `waking`. A message for the thread: the paused box is resumed, or a new one restores the save. Once only: a second message while it's waking doesn't start another.
+- `LOST (server)` stays put. The provider lost the paused box: its key goes with it, and as the save is still here, the next wake starts a new box.
+- `ARCHIVE (owner)` → `destroying`. Mike archives the thread: its box, if any, is deleted.
+
+From `waking`:
+
+- The clock sends `BOOT_TIMEOUT` at bootBy. Ten minutes have passed and the box hasn't come back.
+- `RESUMED (server)` [hasKey] → `awake`. The paused box resumed, its runner still holding its key.
+- `CREATED(providerBoxId) (server)` → `starting`. A new box was made: it boots, trades a fresh boot token, and restores the save.
+- `READY (runner)` → `awake`. A new box traded its boot token: its key replaces the last box's, which is refused from now.
+- `FAILED(error) (server)` → `failed`. The provider couldn't bring a box back.
+- `BOOT_TIMEOUT at bootBy` → `failed`. No box came back: the thread waits for the next message to try again.
+- `ARCHIVE (owner)` → `destroying`. Mike archives the thread while it wakes.
+
+From `destroying`:
+
+- `DESTROYED (server)` → `gone`. The provider has deleted the box.
+
+From `failed`:
+
+- `WAKE (server)` → `waking`. A new message tries again with a new box.
+- `ARCHIVE (owner)` → `destroying`. Mike archives the thread: any box the provider still has is deleted.

@@ -1,7 +1,7 @@
 // Every state machine in the backend (docs/lifecycles.md), checked together
 // when the app loads: a command's (commandMachine.ts), a move's
-// (moveMachine.ts), a runner request's (requestMachine.ts) and a thread
-// id's clear (clearMachine.ts). Functions that
+// (moveMachine.ts), a runner request's (requestMachine.ts), a thread
+// id's clear (clearMachine.ts) and a virtual runner's box (boxMachine.ts). Functions that
 // send `server` events, purge rows or read failed timers are built with this
 // catalog's internalMutation, which carries the brand those need and a db
 // that can't write a machine's state; the rest of the backend stays on
@@ -17,10 +17,11 @@ import { command as commandMachine } from './commandMachine';
 import { move as moveMachine } from './moveMachine';
 import { request as requestMachine } from './requestMachine';
 import { clear as clearMachine } from './clearMachine';
+import { box as boxMachine } from './boxMachine';
 import { steppingFor } from './stepping';
 
 // A machine whose backfill's stepping stone is being deployed is left out (stepping.ts).
-export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [...(steppingFor('commandState') ? [] : [commandMachine]), ...(steppingFor('moveState') ? [] : [moveMachine]), ...(steppingFor('requestState') ? [] : [requestMachine]), ...(steppingFor('clearState') ? [] : [clearMachine])] as never, {
+export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [...(steppingFor('commandState') ? [] : [commandMachine]), ...(steppingFor('moveState') ? [] : [moveMachine]), ...(steppingFor('requestState') ? [] : [requestMachine]), ...(steppingFor('clearState') ? [] : [clearMachine]), boxMachine] as never, {
   mutation,
   internalMutation,
   internalQuery,
@@ -33,6 +34,7 @@ export const command = commandMachine;
 export const move = moveMachine;
 export const request = requestMachine;
 export const clear = clearMachine;
+export const box = boxMachine;
 
 /** A new command, pending for its runner: the machine's QUEUE, which writes its state (and `state`) and arms its timer. */
 export async function queued(ctx: MutationCtx, fields: Omit<WithoutSystemFields<Doc<'commands'>>, 'state' | 'commandState' | 'commandStateTimers'>): Promise<Id<'commands'>> {

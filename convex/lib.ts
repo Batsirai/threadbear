@@ -2,7 +2,7 @@
 import { ConvexError } from 'convex/values';
 import type { QueryCtx, MutationCtx } from './_generated/server';
 import type { Id } from './_generated/dataModel';
-import { callerFrom, FORBIDDEN, forbiddenMessage, isOwnerKey, mayCall, validRunnerId, type Caller } from './runnerAccess';
+import { BOX_KEY_PREFIX, callerFrom, FORBIDDEN, forbiddenMessage, isOwnerKey, mayCall, validRunnerId, type Caller } from './runnerAccess';
 
 // A runner's word that Mike is at its Mac counts while it's still checking
 // in; a Mac that's asleep or offline counts as away (devices.ts
@@ -27,13 +27,18 @@ export async function presentAt(ctx: QueryCtx | MutationCtx, runnerId: string): 
 // runnerAccess.ts ACCESS sorts into owner only, its own runner's, or any
 // runner's; what "its own" is for each, the function checks with the
 // Caller this returns.
+// A box key (boxes.ts, tbb_...) is looked up among boxes instead: it's one
+// box's, for one runner and one thread (runnerAccess.ts BOX_CALLS).
 export async function runnerAuth(ctx: QueryCtx | MutationCtx, key: string, fn: string): Promise<Caller> {
   const owners = [process.env.RUNNER_KEY, process.env.RUNNER_KEY_NEXT];
-  // The owner key needs no lookup; anything else may be a runner key.
-  const row = key && !isOwnerKey(key, owners) ? await runnerKeyRow(ctx, key) : null;
-  const c = callerFrom(key, owners, row);
+  // The owner key needs no lookup; anything else may be a runner key or a box key.
+  const other = Boolean(key) && !isOwnerKey(key, owners);
+  const box = other && key.startsWith(BOX_KEY_PREFIX);
+  const row = other && !box ? await runnerKeyRow(ctx, key) : null;
+  const boxRow = box ? await boxKeyRow(ctx, key) : null;
+  const c = callerFrom(key, owners, row, boxRow ? { ...boxRow, _id: boxRow._id as string } : null);
   if (!c) throw new ConvexError({ kind: 'auth', message: 'bad runner key' });
-  if (!mayCall(c, fn)) throw forbidden(`call ${fn}: only the main Mac's key (the deployment's RUNNER_KEY) can`);
+  if (!mayCall(c, fn)) throw forbidden(`call ${fn}: ${c.box ? "a box's key runs its one thread, and nothing else" : "only the main Mac's key (the deployment's RUNNER_KEY) can"}`);
   return c;
 }
 
@@ -42,6 +47,14 @@ async function runnerKeyRow(ctx: QueryCtx | MutationCtx, key: string) {
   return ctx.db
     .query('runnerKeys')
     .withIndex('by_hash', (q) => q.eq('keyHash', hash))
+    .first();
+}
+
+async function boxKeyRow(ctx: QueryCtx | MutationCtx, key: string) {
+  const hash = await sha256(key);
+  return ctx.db
+    .query('boxes')
+    .withIndex('by_box_key', (q) => q.eq('boxKeyHash', hash))
     .first();
 }
 
@@ -63,6 +76,7 @@ export function checkRunnerId(runnerId: string): void {
 // owner key left on it can't go on acting for it.
 export async function actAs(ctx: QueryCtx | MutationCtx, c: Caller, runnerId: string): Promise<void> {
   checkRunnerId(runnerId);
+  // A box key acts as its box's runner alone, as a runner key does.
   if (!c.owner) {
     if (c.runnerId !== runnerId) throw forbidden(`act as runner ${runnerId}`);
     return;

@@ -10,6 +10,7 @@ import { commandStateV } from './commandStates';
 import { moveStateV } from './moveStates';
 import { requestStateV } from './requestStates';
 import { clearStateV } from './clearStates';
+import { boxStateV } from './boxStates';
 import { requiredUnlessStepping } from './stepping';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
@@ -256,7 +257,83 @@ export const appSchema = defineSchema({
     // Its last heartbeat came with the owner key (docs/protocol.md, "Runner
     // keys"), so it's the main Mac: a phone's new thread goes there first.
     byOwner: v.optional(v.boolean()),
+    // A thread's box on a virtual runner (docs/virtual-runners.md), not a
+    // machine: hidden from the Runs-on menu and Settings' machine list. Set
+    // when the box is made; a heartbeat keeps it.
+    box: v.optional(v.object({ serviceId: v.id('runnerServices') })),
   }).index('by_runnerId', ['runnerId']),
+
+  // Virtual runners (docs/virtual-runners.md, decision 2): one row each, a
+  // service that starts a box per thread on a provider as needed.
+  runnerServices: defineTable({
+    name: v.string(),
+    // Which adapter (convex/boxProviders/<provider>.ts, not built yet): 'fly'.
+    provider: v.string(),
+    box: v.object({ cpus: v.number(), memoryMb: v.number() }),
+    // The OCI image every box starts from (the runner in box mode).
+    image: v.string(),
+    region: v.optional(v.string()),
+    // Defaults in BOX_LIMITS (boxes.ts): 5 boxes awake at once, sleep after
+    // 10 idle minutes, 8 awake hours a box a day, saves of archived threads
+    // kept 14 days.
+    limits: v.object({ maxBoxes: v.number(), idleSleepMinutes: v.number(), maxAwakeHoursPerDay: v.number(), deleteAfterDays: v.number() }),
+    createdAt: v.number(),
+  }),
+
+  // One per thread on a virtual runner, for the thread's life (decision 3):
+  // every box that ever runs the thread uses its runnerId, and each new box
+  // gets a fresh box key that replaces the last one's (boxes.ts exchange).
+  // Its lifecycle is its state machine (boxMachine.ts).
+  boxes: defineTable({
+    serviceId: v.id('runnerServices'),
+    threadId: v.string(),
+    runnerId: v.string(),
+    provider: v.string(),
+    // The provider's id for the box running now, once it has made one.
+    providerBoxId: v.optional(v.string()),
+    boxState: boxStateV,
+    boxStateTimers: machineTimers,
+    // The SHA-256 of the one boot token that may start a box now (single
+    // use, BOOT_MS), and of the box key in use. Never the plain values.
+    bootTokenHash: v.optional(v.string()),
+    bootExpiresAt: v.optional(v.number()),
+    boxKeyHash: v.optional(v.string()),
+    // Its runner's last heartbeat (sync:heartbeat), which renews the lease.
+    lastHeartbeatAt: v.optional(v.number()),
+    // Awake time on `day` (UTC, YYYY-MM-DD), added as it leaves awake.
+    awakeToday: v.optional(v.object({ day: v.string(), ms: v.number() })),
+    // The thread saved out of the box (decision 7), sealed with its thread
+    // key by the box: the last one only.
+    save: v.optional(v.object({ storageId: v.id('_storage'), at: v.number(), bytes: v.number() })),
+    // The per-thread key a box seals its saves with, itself sealed under
+    // BOX_SEAL_KEY (boxes.ts seal). Handed only to this thread's boxes.
+    sealedThreadKey: v.string(),
+    // Fixed by the owner when the thread starts, never from what a box writes
+    // (decision 11): the address without credentials.
+    repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }),
+    // Which Claude login the box runs on: its cloudTokens row's `login`.
+    login: v.string(),
+    createdAt: v.number(),
+  })
+    .index('by_threadId', ['threadId'])
+    .index('by_runnerId', ['runnerId'])
+    .index('by_boot_hash', ['bootTokenHash'])
+    .index('by_box_key', ['boxKeyHash'])
+    .index('by_box_state', ['boxState.kind'])
+    .index('by_service_state', ['serviceId', 'boxState.kind'])
+    .index('by_save', ['save.storageId']),
+
+  // A Claude login's year-long token for boxes (decision 10), made with
+  // `claude setup-token` and sealed under BOX_SEAL_KEY: a data export or
+  // backup doesn't carry it in the clear. Only boxes:exchange unseals it,
+  // for a box of a thread on that login.
+  cloudTokens: defineTable({
+    login: v.string(),
+    sealed: v.string(),
+    // When the token was made (it lasts a year), and when it was set here.
+    madeAt: v.number(),
+    setAt: v.number(),
+  }).index('by_login', ['login']),
 
   // Runner keys (docs/protocol.md, "Runner keys"): each authenticates as its
   // runnerId alone, where the owner key (RUNNER_KEY) can do everything. Only
@@ -362,6 +439,10 @@ export const appSchema = defineSchema({
     runnerId: v.string(),
     // The runnerKeys row that asked: a ticket dies with its key.
     keyId: v.optional(v.id('runnerKeys')),
+    // Or the box whose key asked, and that key's hash: a ticket dies when the
+    // box's key is replaced or revoked (sync.ts ticketKeyLive).
+    boxId: v.optional(v.id('boxes')),
+    boxKeyHash: v.optional(v.string()),
     issuedAt: v.number(),
     usedAt: v.optional(v.number()),
     // What was uploaded with it: the hour's allowance counts these, which

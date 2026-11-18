@@ -7617,12 +7617,80 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `moveDone` | its own | the move's new runner |
 | `moveFailed` | its own | either of the move's runners, before the switch |
 | `moveDropChunks` | owner only | the main Mac's own chunks for a move that ended before it was packed: deletes those no going move names and nothing else uses |
+| `setCloudToken` | owner only | a Claude login's cloud token for boxes, sealed under `BOX_SEAL_KEY` (`convex/boxes.ts`, Box keys) |
+| `cloudTokens` | owner only | which logins have a cloud token, when each was made and set; never the token |
+| `mintBootToken` | owner only | a boot token for a thread's booting box: returned once, only its hash kept, 10 minutes |
+| `archiveBox` | owner only | the thread's box goes to `destroying`, and its key stops working |
+| `boxSaved` | its own | a box's key only: its thread's save, a file its runner uploaded and nothing else uses; replaces the last save |
+
+`boxes:exchange` takes no key: a box's boot token, once (Box keys).
 
 `sync:claimUpload` and `sync:finishUpload` are internal, for
 `/runner/upload` (`phone:claimPhoneUpload`/`finishPhoneUpload` and
 `relay:claimRelayUpload`/`finishRelayUpload` the same for the other two
 routes), and `share:shareImageFile` for `/share/image/`; `moves:rehomeRows` (a moved thread's rows to its new
 runner) and `moves:expireMoves` (the cron) are internal too.
+
+### Box keys
+
+A box on a virtual runner (docs/virtual-runners.md, `convex/boxes.ts`) runs
+one thread as an ordinary runner, on a **box key** (`tbb_` and 64 hex
+characters): a third kind of key, beside the owner key and runner keys,
+for one `runnerId` *and* one thread. It isn't a `runnerKeys` row and
+doesn't count toward their three: the thread's `boxes` row keeps its
+SHA-256 (`boxKeyHash`).
+
+- **Getting one.** The provider starts the box with a boot token (`tbt_`
+  and 64 hex characters) in its environment and nothing else reusable.
+  `boxes:exchange({ bootToken })` trades it, once and within 10 minutes of
+  its minting, for `{ boxKey, runnerId, threadId, claudeToken, threadKey,
+  repo, save }`: the box key, the login's cloud token, the thread's key
+  for sealing its saves (base64, 32 bytes), the repo the owner fixed
+  (`origin` without credentials, `subfolder`, `baseBranch`) and the last
+  save's URL, or null. In the same mutation the boot token is used up, the
+  box's machine goes to `awake` (`READY`), and the new key's hash replaces
+  the last box's, so the last box's key is refused from that moment. A
+  login with no cloud token refuses with `kind: "noCloudToken"` and leaves
+  the boot token as it was. A newer boot token for the thread replaces an
+  older one.
+- **What it reaches.** Only what running its one thread needs (the list
+  below, `BOX_CALLS` in `convex/runnerAccess.ts`), each for its own
+  runner as a runner key's is, and each row checked against its thread
+  too (`ownThreadOnly`): a thread row only under its own thread id, never a
+  new thread; messages, tool output and pictures of that thread; its
+  runner's commands for that thread or for no thread (another thread's are
+  hidden from `pendingCommands` and refused); its thread's moves only.
+  Everything else is refused as `forbidden`: everything owner-only,
+  schedules, Pocket, projects, logins and usage readings (the service sets
+  a box's login), pools, shared memory, presence, `prune` and machine
+  figures. A new thread from a box goes through `fileRequest`, which asks
+  Mike with a card, as from any runner key. An upload URL it asks for
+  dies when its key is replaced.
+- **When it stops working.** The box's state machine (`convex/boxMachine.ts`)
+  clears the hash when the box is lost (no heartbeat for 5 minutes, or the
+  provider says so), fails, or is archived; a key whose row is
+  `destroying`, `gone` or `failed` is refused whatever the row holds. A
+  box that sleeps on a paused machine keeps its key, so it can resume.
+- **Heartbeats.** A box's `heartbeat` marks its `runners` row `box: {
+  serviceId }`, renews the box's lease (`boxes.lastHeartbeatAt`) and
+  drops any `rpcUrl`: no Mac app dials a box.
+- **Internal.** `boxes:authorize` (an action's gate), `storeCloudToken`,
+  `newBox` and `insertBox` (a thread's box row), `storeBootToken`,
+  `claimBoot` (the exchange's one step) and `report` (what the service saw
+  of the provider, as the machine's `server` events).
+
+A box key may call:
+
+<!-- box-calls -->
+`heartbeat`, `bye`, `upsertThreads`, `removeThreads`, `threadsOf`,
+`sharedThreads`, `appendMessages`, `messageHeads`, `appendBodies`,
+`replyImages`, `addReplyImage`, `shareImages`, `addShareImage`,
+`dropShareImages`, `addHeldPicture`, `iconUploadUrl`, `setThreadIndex`,
+`pendingCommands`, `takeCommand`, `finishCommand`, `fileRequest`,
+`runnerRequest`, `closeRequest`, `moves`, `moveInfo`, `moveReady`,
+`moveFrozen`, `moveChunkUrl`, `movePacked`, `moveChunks`, `moveClaim`,
+`moveDone`, `moveFailed`, `boxSaved`
+<!-- /box-calls -->
 
 ## Sharing
 
