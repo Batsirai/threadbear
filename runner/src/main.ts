@@ -345,6 +345,7 @@ async function main(): Promise<void> {
     appRestartAsked: (threadId) => {
       if (!appRestarts.isWatching(threadId)) appRestarts.watch(threadId);
     },
+    awaitingAppRestart: (threadId) => appRestarts.isWatching(threadId),
   });
   // Until it is listening (below): see Runner.holdWaits.
   runner.holdWaits = true;

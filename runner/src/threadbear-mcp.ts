@@ -1769,7 +1769,7 @@ export function buildThreadbearTools(
             },
             handle(async ({ text, commit }) => {
               const { running, waitingFor } = appRestarts.watch(selfId, text, commit);
-              return `You'll get a message here when the app restarts onto a build other than the one running now${running ? ` (${running})` : ''}${waitingFor ? ` that contains ${waitingFor}` : ''}. End your turn when you've nothing else to do.`;
+              return `You'll get a message here when the app restarts onto a build other than the one running now${running ? ` (${running})` : ''}${waitingFor ? ` that contains ${waitingFor}` : ''}. End your turn when you've nothing else to do: a turn that ends needing nothing hibernates until then.`;
             }),
           ),
         ]

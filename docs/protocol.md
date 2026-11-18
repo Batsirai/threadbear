@@ -1831,6 +1831,11 @@ own restarts.
   must contain: `commit` if given, else main's HEAD in the thread's folder
   at that moment (none when that isn't a git repo). Asking again replaces
   its request.
+- A turn that ends needing nothing (no archive, snooze or waitFor) while
+  its thread is on the list hibernates the thread for a day at most
+  (`system.note` "Hibernating until the Threadbear app restarts onto the
+  new build, a day at most."), as it isn't done: the restart's message
+  wakes it. One that needs Mike stays in the inbox.
 - An `end_turn` with `needs: "you"` whose asks mention "Restart to Update"
   (in `action`, `why` or `where`) does the same, unless the thread is already on
   the list, and its reply says so. So does a completed turn whose

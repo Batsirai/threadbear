@@ -109,7 +109,7 @@ import { SERVER_NAME, approvalTitle } from './threadbear-mcp.ts';
 import { PANEL_ACK_WAIT_MS, PANEL_PLACES, resolvePanel } from './panel-requests.ts';
 import { archiveFromTool, bylineFromTool, END_TURN_TOOL, endTurnAccepted, endTurnAddedArchive, endTurnAddedSnooze, snoozeFromTool, waitForFromTool, endTurnAsksForMessage, endTurnIsOneReply, endTurnMessageStands, endTurnOwesReply, endTurnRefusedRepeat, endTurnRefusedUnread, endTurnTaken, endTurnWantsReply, needsFromText, needsFromTool, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, WakeRead } from './needs.ts';
 import type { Needs } from './needs.ts';
-import { asksForAppRestart } from './app-restarts.ts';
+import { asksForAppRestart, MAX_AGE_MS as APP_RESTART_MAX_AGE_MS } from './app-restarts.ts';
 import type { ConnectorsStatus } from './connectors.ts';
 import { isPatchFile, PatchTrust, type ClaudeVerdict, type PatchTrustStore } from './patch-trust.ts';
 import { claudeOptions, claudeSettingsWithoutCommands } from './claude-trust.ts';
@@ -646,6 +646,9 @@ export type RunnerDeps = {
   // A completed turn asked Mike to Restart to Update, by end_turn or in its
   // closing "What I need from you" (app-restarts.ts signs the thread up).
   appRestartAsked?: (threadId: string) => void;
+  // Whether the thread is waiting to hear the app restarted onto a new
+  // build (wait_for_app_restart), so a done turn hibernates until it has.
+  awaitingAppRestart?: (threadId: string) => boolean;
   // Whether Mike is at this Mac, as presence last found it (presence.ts);
   // undefined when it hasn't been checked. Only read for phone messages.
   atMac?: () => boolean | undefined;
@@ -812,6 +815,7 @@ export class Runner {
   probing = false;
   reachable: Reachable;
   appRestartAsked?: (threadId: string) => void;
+  awaitingAppRestart?: (threadId: string) => boolean;
   atMac?: () => boolean | undefined;
 
   private threadKey?: (threadId: string) => string;
@@ -842,6 +846,7 @@ export class Runner {
     this.projects = deps.projects;
     this.standingInstructions = deps.standingInstructions;
     this.appRestartAsked = deps.appRestartAsked;
+    this.awaitingAppRestart = deps.awaitingAppRestart;
     this.atMac = deps.atMac;
     this.adapters = deps.adapters;
     this.accounts = deps.accounts;
@@ -2849,6 +2854,11 @@ export class Runner {
     // Waiting on other threads (end_turn's waitFor), with snooze as the
     // latest it wakes.
     const waitFor = away && !archive ? waitForFromTool(turn.endTurn) : undefined;
+    // Done for now but waiting to hear the app restarted onto its change
+    // (wait_for_app_restart): it hibernates until that message wakes it,
+    // a day at most as the request lapses then, rather than sitting in
+    // Mike's inbox as done when it isn't (18 Nov 2026, 41324bd6).
+    const forApp = away && !archive && !snooze && !waitFor && !!this.awaitingAppRestart?.(rec.id);
     // Done, with nothing left running: any thread waiting on this one hears.
     // Not if it put itself away to wait too, as it hasn't finished. An auto
     // turn counts (the one after a sub-agent or background job ends is
@@ -2865,12 +2875,12 @@ export class Runner {
     // released after endTurn (releaseFailedReview).
     const reviewEnded = !turn.local && outcome === 'completed' && this.awaitedReview(rec) &&
       !waitForFromTool(turn.endTurn) && !snoozeFromTool(turn.endTurn);
-    const finished = (reviewEnded || (outcome === 'completed' && said?.needs === 'nothing' && !archive &&
+    const finished = (reviewEnded || (outcome === 'completed' && said?.needs === 'nothing' && !archive && !forApp &&
       !snoozeFromTool(turn.endTurn) && !waitForFromTool(turn.endTurn))) && !rec.queue.length &&
       !rec.subagents?.some((a) => a.status === 'running') && !rt.tasks.length && !rt.approvals.size &&
       // A job that ended mid-turn: the CLI's turn reading its result is next.
       !rt.taskEndedInTurn && !rt.finished.length;
-    const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor));
+    const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor || forApp));
     const loginBefore = rec.accountId;
     this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue, signedOut);
     // A pool thread refused as signed out that endTurn moved to another
@@ -2942,6 +2952,10 @@ export class Runner {
     }
     if (waitFor && !rt.turn && !rec.archivedAt && !this.stopping) this.waitOn(st, waitFor, snooze, turn.endTurnBy);
     else if (snooze && !rt.turn && !rec.archivedAt && !this.stopping) this.snoozeAfterTurn(st, snooze);
+    else if (forApp && !rt.turn && !rec.archivedAt && !this.stopping) {
+      this.emit(st, { type: 'system.note', text: 'Hibernating until the Threadbear app restarts onto the new build, a day at most.' });
+      this.update({ threadId: rec.id, snoozedUntil: new Date(this.clock.now() + APP_RESTART_MAX_AGE_MS).toISOString() });
+    }
     // An invalid wait may leave the thread awake; do not strand its queue.
     if (holdQueue && !rt.turn && this.bucket(rec) === 'inbox') this.afterTurn(st);
   }

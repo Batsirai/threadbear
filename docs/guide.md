@@ -777,7 +777,10 @@ do ("until it reports the I/O saving"), and then the librarian reads
 that thread after each of its turns and wakes it once it has. On the
 iPhone and the website a hibernating row starts "Until …" when it waits
 for more than a time. A thread can also hibernate until the runner
-updates to a new release (a restart on the same one leaves it asleep). One waiting on a job that will message it does the
+updates to a new release (a restart on the same one leaves it asleep).
+One that has landed a change to the app and is waiting to check it
+hibernates by itself when it's done for now, and wakes once the app has
+restarted onto a build with the change. One waiting on a job that will message it does the
 same until the message comes. Either way it has a time it comes back
 anyway, a day unless it says otherwise.
 

@@ -44,7 +44,7 @@ type Watch = {
 type SavedState = { build?: AppBuild; desktopBuild?: AppBuild; watching: Watch[] };
 
 // After a day the request has likely been forgotten: only the note.
-const MAX_AGE_MS = 24 * 60 * 60_000;
+export const MAX_AGE_MS = 24 * 60 * 60_000;
 
 export function appRestartsPath(home: string): string {
   return path.join(home, 'app-restart.json');

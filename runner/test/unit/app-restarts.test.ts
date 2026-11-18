@@ -376,3 +376,45 @@ test('the Swift app\'s tree is its app and dock folders\' trees', async () => {
   const expected = git('rev-parse', 'HEAD:app', 'HEAD:dock').split('\n').join('+');
   assert.equal(realGit.tree!(repo, git('rev-parse', 'HEAD'), ['app', 'dock']), expected);
 });
+
+test('a done turn waiting on the app restart hibernates until it comes, then wakes', () => {
+  // The draft-box thread sat in Mike's inbox as done while it waited for
+  // the app to pick up its change (18 Nov 2026).
+  let watcher!: AppRestarts;
+  const h = makeHarness(undefined, {}, { awaitingAppRestart: (id) => watcher.isWatching(id) });
+  watcher = new AppRestarts({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger });
+  const { thread } = h.runner.create({ text: 'Add Edit to draft boxes', accountId: 'claude-3' });
+  const s = h.adapter.last;
+  s.init();
+  watcher.appHello(D1, 'desktop');
+  watcher.watch(thread.id, 'Check Edit shows beside Copy.');
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  s.text('m1', 'Landed. The app picks it up once it is idle.');
+  s.result('completed');
+  let t = h.runner.get(thread.id);
+  assert.equal(Date.parse(t.snoozedUntil!), h.clock.now() + 24 * 60 * 60_000);
+  assert.equal(h.events(thread.id).findLast((e) => e.type === 'system.note')?.text, 'Hibernating until the Threadbear app restarts onto the new build, a day at most.');
+  watcher.appHello(D2, 'desktop');
+  t = h.runner.get(thread.id);
+  assert.equal(t.snoozedUntil, undefined);
+  assert.ok(['starting', 'running'].includes(t.status), 'the restart message started a turn');
+  assert.match(said(h, thread.id).message, /Check Edit shows beside Copy\./);
+});
+
+test('a turn that needs Mike, or one not waiting on the app, stays in the inbox', () => {
+  let watching = true;
+  const h = makeHarness(undefined, {}, { awaitingAppRestart: () => watching });
+  const { thread } = h.runner.create({ text: 'Add Edit to draft boxes', accountId: 'claude-3' });
+  const s = h.adapter.last;
+  s.init();
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'you', asks: [{ question: 'Paste the key.' }] } } });
+  s.text('m1', 'Need the key.');
+  s.result('completed');
+  assert.equal(h.runner.get(thread.id).snoozedUntil, undefined);
+  watching = false;
+  h.runner.send(thread.id, 'here');
+  h.adapter.last.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e2', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  h.adapter.last.text('m2', 'Done.');
+  h.adapter.last.result('completed');
+  assert.equal(h.runner.get(thread.id).snoozedUntil, undefined);
+});
