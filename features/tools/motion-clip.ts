@@ -186,14 +186,14 @@ const scenes: Record<string, Scene> = {
     setup: async (app) => {
       await scenes.archive.setup(app);
       await app.do({ cmd: 'usage', show: true });
-      await app.do({ cmd: 'usage', scrollToSettings: true });
       await sleep(600);
     },
     act: async (app) => {
       const got = await app.do({ cmd: 'mock', method: 'accounts', params: {} });
       const { accounts } = JSON.parse(got.slice(got.indexOf('{'))) as { accounts: { id: string; yearToken?: { madeAt: string }; loginEndsAt?: string }[] };
-      const a = accounts.find((x) => x.id === 'claude-4');
-      if (!a) throw new Error('no claude-4 on the mock');
+      // alex+3, whose row is in sight as the panel opens.
+      const a = accounts.find((x) => x.id === 'claude-3');
+      if (!a) throw new Error('no claude-3 on the mock');
       const made = new Date();
       Object.assign(a, { yearToken: { madeAt: made.toISOString() }, loginEndsAt: new Date(made.getTime() + 365 * 86_400_000).toISOString() });
       await app.do({ cmd: 'mock', method: 'accounts', params: { accounts } });
