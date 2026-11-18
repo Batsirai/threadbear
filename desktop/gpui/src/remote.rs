@@ -193,6 +193,8 @@ impl Threadbear {
             }
             listed.insert(summary.id.clone());
             let waiting = self.remote.made.remove(&summary.id);
+            let mut summary = summary;
+            self.starting_moves.dress(&mut summary, crate::now_ms());
             let before = self.threads.insert(summary.id.clone(), std::sync::Arc::new(summary.clone()));
             // Every row comes again with any one's change: only one that
             // changed is that runner's word on it (`thread::AWAITING`).

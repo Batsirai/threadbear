@@ -174,6 +174,23 @@ Feature: Other runners' threads
     When I pick "Move to mac-mini" from the box's machine menu
     Then the box's machine menu reads "✓ laptop, Cancel Move"
 
+  # Mike, 18 Nov: moving a thread back from Hetzner, "Moving to M5" spun
+  # for a second, then went with the box open again while his Mac's
+  # runner asked where it would go, and came back once the move began: the
+  # row coming in meanwhile, without the move, took the app's guess away.
+  @sidebar.move @remote-threads @swift-pending
+  Scenario: The box stays locked while the runner works out where the thread would go
+    Given a move would leave nothing behind
+    And the runner is slow to say where a thread would go
+    When I open the thread "Tidy the media drive"
+    And I pick "Move to laptop" from the box's machine menu
+    Then the box is locked, saying "Moving to laptop…"
+    When the thread's row comes in again while it looks
+    Then the box is locked, saying "Moving to laptop…"
+    And the row "Tidy the media drive" says "Moving to laptop" on the right
+    When the runner says where it would go
+    Then the box is locked, saying "Moving to laptop once this turn ends…"
+
   @sidebar.move @remote-threads
   Scenario: The sheet opens when something won't come with it
     When I ask to move the thread "Morning brief" to "mac-mini"

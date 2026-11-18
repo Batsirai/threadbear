@@ -236,6 +236,21 @@ Then("the box's machine menu reads {string}", async function (this: ThreadbearWo
   assert.fail(`the machine menu read ${JSON.stringify(last)}, not "${lines}"`);
 });
 
+Given('the runner is slow to say where a thread would go', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'mock', method: 'holdMovePreview', params: {} });
+});
+
+When("the thread's row comes in again while it looks", async function (this: ThreadbearWorld) {
+  const d = await this.app.dump();
+  await this.app.do({ cmd: 'mock', method: 'relist', params: { threadId: d.selection?.id } });
+  // Long enough for the row to have landed in the app.
+  await sleep(500);
+});
+
+When('the runner says where it would go', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'mock', method: 'releaseMovePreview', params: {} });
+});
+
 When("I pick {string} from the box's machine menu", async function (this: ThreadbearWorld, title: string) {
   await this.app.do({ cmd: 'composer-menu', menu: 'machine', click: title });
 });

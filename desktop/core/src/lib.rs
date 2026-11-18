@@ -63,6 +63,7 @@ pub mod runners;
 pub mod schedules;
 pub mod selection_copy;
 pub mod sign_in;
+pub mod starting_moves;
 pub mod spelling;
 pub mod sidebar;
 pub mod slash;

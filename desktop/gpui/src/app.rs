@@ -156,6 +156,10 @@ pub struct Threadbear {
     /// so the composer's chips that show them spin until the runner answers
     /// (`BusyKey.moving`, `BusyKey.movingFolder`).
     pub(crate) chip_busy: std::collections::HashSet<String>,
+    /// Moves picked from the menu that the runner hasn't shown yet: their
+    /// "Moving to …" is put back on every summary that comes in meanwhile
+    /// (threadbear_core::starting_moves).
+    pub(crate) starting_moves: threadbear_core::starting_moves::StartingMoves,
     pub(crate) continuing_refusal: Option<String>,
     /// The runner's website, from `runner.status` (`websiteURL`).
     pub(crate) website_url: Option<String>,
@@ -550,6 +554,7 @@ impl Threadbear {
             anything_panels_shown: Default::default(),
             share_busy: false,
             chip_busy: Default::default(),
+            starting_moves: Default::default(),
             continuing_refusal: None,
             website_url: None,
             schedules_supported: false,
@@ -921,6 +926,10 @@ impl Threadbear {
                             if t.moving.is_none() { t.moving = self.threads.get(&t.id).and_then(|old| old.moving.clone()); }
                             self.load_list(cx);
                         }
+                        // The other runners' list keeps the runner's own
+                        // word; everything shown gets a move just picked.
+                        let from_runner = t.clone();
+                        self.starting_moves.dress(&mut t, crate::now_ms());
                         if let Some(pane) = &self.pane {
                             pane.update(cx, |p, cx| p.summary_changed(&t, cx));
                         }
@@ -937,7 +946,7 @@ impl Threadbear {
                         // put back over these whenever this Mac's own list
                         // comes in (RemoteThreads::take_update).
                         if t.is_remote() {
-                            self.remote.index.take_update(&t);
+                            self.remote.index.take_update(&from_runner);
                             self.remote.recent.note(&t);
                         }
                         // The runner's word on it: a message it just took no
@@ -1148,6 +1157,11 @@ impl Threadbear {
                         }
                         let before = (*this.threads).clone();
                         let cleanup = list.apply(&mut *this.threads);
+                        // A move just picked stays shown over the new list.
+                        let now = crate::now_ms();
+                        for id in this.starting_moves.threads() {
+                            if let Some(t) = this.threads.get_mut(&id).map(Arc::make_mut) { this.starting_moves.dress(t, now); }
+                        }
                         let reload: std::collections::HashSet<_> = confirmed.iter().filter(|id| {
                             this.remote.made.contains(*id) || before.get(*id).is_some_and(|t| t.is_remote())
                         }).cloned().collect();

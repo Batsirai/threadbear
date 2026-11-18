@@ -54,8 +54,12 @@ impl Threadbear {
             self.show_move_sheet(request, None, window, cx);
             return;
         }
+        // Kept over any update of the row until the runner shows the move
+        // (starting_moves): the look below can take a quarter of a minute
+        // for another runner's thread, and the row used to drop it.
+        let guess = self.starting_moves.start(&request.thread_id, &request.runner_id, &request.runner_name);
         if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
-            t.moving = Some(json!({ "moveId": "", "to": request.runner_id, "toName": request.runner_name, "state": "asking" }));
+            t.moving = Some(guess);
         }
         cx.notify();
         let client = self.client.clone();
@@ -71,6 +75,7 @@ impl Threadbear {
                 } else {
                     // The sheet comes up instead; the guess goes back until
                     // Move is pressed there.
+                    this.starting_moves.forget(&thread_id);
                     if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id).map(std::sync::Arc::make_mut), &put_back) {
                         if t.moving.as_ref().is_some_and(|m| m["moveId"] == "") {
                             t.moving = before.moving.clone();
@@ -91,9 +96,13 @@ impl Threadbear {
     /// move does what it showed or nothing (Daybreak 142).
     pub(crate) fn start_move(&mut self, request: MoveRequest, cwd: Option<String>, account: Option<String>, preview_id: Option<String>, cx: &mut Context<Self>) {
         let before = self.threads.get(&request.thread_id).cloned();
-        if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
-            if t.moving.is_none() {
-                t.moving = Some(json!({ "moveId": "", "to": request.runner_id, "toName": request.runner_name, "state": "asking" }));
+        // A move already showing (its runner's own) stays; otherwise the
+        // guess, kept until the runner shows it (starting_moves).
+        let showing = self.threads.get(&request.thread_id).is_some_and(|t| t.moving_line().is_some()) && !self.starting_moves.is_starting(&request.thread_id);
+        if !showing {
+            let guess = self.starting_moves.start(&request.thread_id, &request.runner_id, &request.runner_name);
+            if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
+                t.moving = Some(guess);
             }
         }
         cx.notify();
@@ -112,11 +121,17 @@ impl Threadbear {
         cx.spawn(async move |this, cx| {
             let res = call(client, "threads.move", params).await;
             this.update(cx, |this, cx| {
+                match &res {
+                    Ok(v) => this.starting_moves.started(&thread_id, v.get("moveId").and_then(|m| m.as_str()), crate::now_ms()),
+                    Err(_) => this.starting_moves.forget(&thread_id),
+                }
                 if let Err(e) = res {
                     this.show_error(e.message, cx);
+                    // Back to what the runner last said, never to the guess
+                    // (Move to ▸ put one there before this was called).
                     if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id).map(std::sync::Arc::make_mut), &before) {
                         if t.moving.as_ref().is_some_and(|m| m["moveId"] == "") {
-                            t.moving = before.moving.clone();
+                            t.moving = before.moving.clone().filter(|m| m["moveId"] != "");
                         }
                     }
                 }

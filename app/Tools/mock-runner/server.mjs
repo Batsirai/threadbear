@@ -382,6 +382,10 @@ let moveClone;
 let lastMove;
 // The last archive's thread and verdict, for the specs (mock.lastArchive).
 let lastArchive;
+// A look held until the spec says (mock.holdMovePreview, then
+// mock.releaseMovePreview), as the real one over the relay can take a
+// quarter of a minute (18 Nov 2026).
+let moveHold;
 const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
   { id: 'runner_cloud', name: 'Cloud box', icon: 'cloud', online: true, lastSeenAt: new Date().toISOString() },
   { id: 'runner_pixel', name: 'Phone', icon: 'smartphone', online: true, lastSeenAt: new Date().toISOString() },
@@ -598,6 +602,7 @@ async function dispatch(client, method, p) {
     // Move to menu and sheet.
     case 'threads.movePreview': {
       await sleep(500);
+      if (moveHold) await moveHold.promise;
       const runner = runners.concat(MORE_RUNNERS).find((r) => r.id === p.runnerId);
       const home = runner?.name === 'mac-mini' ? '/Users/alex' : '/home/alex';
       const problems = p.cwd && !String(p.cwd).startsWith(home) ? [`There's no folder ${p.cwd} on ${runner?.name ?? 'it'}.`] : [];
@@ -1798,6 +1803,23 @@ async function dispatch(client, method, p) {
       return { params: lastMove ?? null };
     case 'mock.lastArchive':
       return { params: lastArchive ?? null };
+    case 'mock.holdMovePreview': {
+      let release;
+      const promise = new Promise((r) => { release = r; });
+      moveHold = { promise, release };
+      return { ok: true };
+    }
+    case 'mock.releaseMovePreview':
+      moveHold?.release();
+      moveHold = undefined;
+      return { ok: true };
+    // The thread's row comes in again as it is, without the move the app
+    // has only just asked for: another runner's list, or a thread.updated.
+    case 'mock.relist': {
+      need(p.threadId);
+      broadcastSummary(p.threadId);
+      return { ok: true };
+    }
     case 'mock.slow': {
       slow = { ms: Math.max(0, Number(p.ms ?? 0)), queueMs: Math.max(0, Number(p.queueMs ?? 0)) };
       return slow;
