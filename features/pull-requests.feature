@@ -15,7 +15,7 @@ Feature: Pull requests open beside the thread
     When I follow the PR link "https://github.com/acme/app/pull/72/files" in the thread
     Then the pane shows the PR "Fewer approvals when a fork brings in a release"
     And the PR's status reads "Open"
-    And the PR's checks read "1 of 2 passed" with "Desktop app · Windows failed"
+    And the PR's checks read "1 of 2 passed" with "Windows failed"
     And the PR's activity includes "Thanks, looking now."
 
   @pane.prs @inline-prs @swift-pending

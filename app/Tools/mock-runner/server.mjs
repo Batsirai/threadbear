@@ -446,7 +446,7 @@ const mockPr = {
   body: 'Changes from a fork bringing in a release while switching to the new app.\n\n- A Swift commit that also changed `desktop/` now counts as ported.',
   createdAt: new Date(Date.now() - 3600_000).toISOString(), review: '', mergeable: 'yes', canMerge: true, mergeMethods: ['rebase', 'squash'],
   checks: [
-    { name: 'Desktop app · Windows', state: 'failed', url: 'https://github.com/acme/app/actions/runs/1', seconds: 451 },
+    { name: 'Windows', state: 'failed', url: 'https://github.com/acme/app/actions/runs/1', seconds: 451 },
     { name: 'Quick check', state: 'passed', url: 'https://github.com/acme/app/actions/runs/2', seconds: 64 },
   ],
   activity: [{ kind: 'comment', author: 'mikecann', body: 'Thanks, looking now.', at: new Date(Date.now() - 1800_000).toISOString() }],

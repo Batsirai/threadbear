@@ -394,7 +394,8 @@ impl SidePane {
                 right = right.child(self.menu_button("pr-merge", label, busy == Some("merge"), busy.is_some(), true, &format!("{} (the arrow picks another way)", method.title()), p, cx, move |this, position, window, cx| this.open_merge_menu(&merge_url, position, window, cx)));
             }
         }
-        h_flex().flex_none().px(px(14.)).py(px(8.)).gap(px(8.)).items_center().child(tabs).child(div().flex_1()).child(right)
+        // The buttons go under the views when the pane's too narrow for both.
+        h_flex().flex_none().flex_wrap().px(px(14.)).py(px(8.)).gap(px(8.)).items_center().child(tabs).child(div().flex_1()).child(right)
     }
 
     /// A button that opens its menu below itself; `primary` is Merge's fill.
@@ -438,7 +439,8 @@ impl SidePane {
         let mut items: Vec<crate::highlights::MenuItem> = pr
             .merge_methods
             .iter()
-            .map(|m| crate::highlights::MenuItem::action(m.title(), "arrow.triangle.merge", crate::highlights::MenuAction::PrMerge { url: url.to_owned(), method: m.id().to_owned() }))
+            // The starred one is what the Merge button means.
+            .map(|m| crate::highlights::MenuItem::action(m.title(), if Some(*m) == starred { "star.fill" } else { "arrow.triangle.merge" }, crate::highlights::MenuAction::PrMerge { url: url.to_owned(), method: m.id().to_owned() }))
             .collect();
         // The default, set from the same menu and marked (AGENTS.md's rule
         // for menus that pick one of several).
@@ -539,17 +541,14 @@ impl SidePane {
         // Claude: a thread to review it, or to work on it.
         let starting = self.prs.starting.is_some();
         let (review_pr, work_pr, review_thread, work_thread) = (pr.clone(), pr.clone(), thread.clone(), thread.clone());
+        // Two buttons that wrap onto a second line in a narrow pane, rather
+        // than words saying what they're for: their tips say that.
         col = col.child(
             h_flex()
                 .mt(px(14.))
-                .px(px(12.))
-                .py(px(9.))
+                .flex_wrap()
                 .gap(px(8.))
                 .items_center()
-                .rounded(px(9.))
-                .border_1()
-                .border_color(p.card_border)
-                .child(div().flex_1().text_size(px(style::size::LABEL)).text_color(p.secondary).child("Claude hasn't looked at it here"))
                 .child(crate::push_button::PushButton::new("pr-claude-work", "Start a thread", "A new thread in this folder, with the PR in its message box").small().render(cx, {
                     let side = cx.entity().downgrade();
                     move |_, window, cx| {
