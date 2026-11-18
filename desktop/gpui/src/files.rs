@@ -19,12 +19,11 @@ use crate::file_edit::{FileEdit, SaveFile};
 use crate::file_find::{FindBar, FindNext, FindPrevious};
 use crate::file_watch::FolderWatch;
 use crate::files_store::FilePrefs;
-use crate::highlights::{palette, Palette, PanePreview, SidePane, Target, FILES};
+use crate::highlights::{palette, with_scroll_bar, Palette, PanePreview, SidePane, Target, FILES};
 use crate::{call, icons, style};
 use gpui_kit::base::{TestSupportExt as _, TextViewState, TextViewStyle};
 use gpui_kit::component::input::{Editor, EditorState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Selectable, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -1007,9 +1006,7 @@ impl SidePane {
                 // app's pageWidth however wide the panel is.
                 let page = div()
                     .id("hl-markdown")
-                    .size_full()
                     .overflow_y_scroll()
-                    .track_scroll(&scroll)
                     .child(
                         div()
                             .max_w(px(720.))
@@ -1030,15 +1027,7 @@ impl SidePane {
                                 reveal.set_offset(offset);
                             })),
                     );
-                // The page's scroll bar, over it and only while it scrolls, as
-                // the transcript's and the code editor's: a long file had none,
-                // so nothing said how far down it you were (18 Nov).
-                div()
-                    .relative()
-                    .size_full()
-                    .child(page)
-                    .child(div().absolute().inset_0().child(div().size_full().vertical_scrollbar(&scroll)))
-                    .into_any_element()
+                with_scroll_bar(page, &scroll, "hl-markdown-bar").size_full().into_any_element()
             }
             FileBody::Text { editor: Some(editor), .. } => div()
                 .size_full()

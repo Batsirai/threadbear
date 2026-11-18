@@ -6,7 +6,7 @@
 // draws one if it's asked to anyway, as a placeholder with Open in browser.
 use crate::spinner::Spinner;
 use crate::call;
-use crate::highlights::{icon, palette, tipped, tipped_as, PaneRow, Palette, SidePane, OUTER_INSET};
+use crate::highlights::{icon, palette, tipped, tipped_as, with_scroll_bar, PaneRow, Palette, SidePane, OUTER_INSET};
 use crate::style;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
@@ -35,6 +35,11 @@ pub(crate) struct PanelsState {
     pub trusting: HashSet<String>,
     /// Actions running now, by "<thread>/<action>" (`runningActions`).
     pub running: HashSet<String>,
+    /// The Patches list's scroll, for its scroll bar.
+    scroll: ScrollHandle,
+    /// Each list panel's scroll by panel id, for its scroll bar: two panels
+    /// can show side by side, and one scroll between them would move both.
+    list_scrolls: HashMap<String, ScrollHandle>,
 }
 
 use std::sync::Arc;
@@ -196,7 +201,7 @@ impl SidePane {
                     crate::files::pane_note("Loading…", p).into_any_element()
                 }
                 Some(render) => match render.items.clone().filter(|i| !i.is_empty()) {
-                    Some(items) => self.render_list_panel(thread, items, p, cx),
+                    Some(items) => self.render_list_panel(thread, id, items, p, cx),
                     None => {
                         let note = render.note.clone().unwrap_or_else(|| "Nothing in this list.".to_owned());
                         crate::files::pane_note(&note, p).into_any_element()
@@ -253,7 +258,7 @@ impl SidePane {
             .into_any_element()
     }
 
-    fn render_list_panel(&mut self, thread: &ThreadSummary, items: Vec<PanelItem>, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+    fn render_list_panel(&mut self, thread: &ThreadSummary, id: &str, items: Vec<PanelItem>, p: Palette, cx: &mut Context<Self>) -> AnyElement {
         let reserves = items.iter().any(|i| i.symbol().is_some());
         let headings = PanelItem::headings(&items);
         let mut list = v_flex().py(px(8.));
@@ -263,7 +268,9 @@ impl SidePane {
             }
             list = list.child(self.list_row(item, index, reserves, thread, p, cx));
         }
-        div().id("list-panel").size_full().overflow_y_scroll().child(list).into_any_element()
+        let scroll = self.panels.list_scrolls.entry(id.to_owned()).or_default().clone();
+        let bar = ElementId::Name(format!("list-panel-bar-{id}").into());
+        with_scroll_bar(div().id("list-panel").overflow_y_scroll().child(list), &scroll, bar).size_full().into_any_element()
     }
 
     /// A row with a link or a file opens it the way a highlight does.
@@ -358,7 +365,7 @@ impl SidePane {
             "A patch is a file in .threadbear/patches (in the thread's folder, a parent folder, a folder of one of its projects, or ~) whose default export lists actions, panels and hooks. Ask the agent for one."
         };
         list = list.child(div().pt(px(6.)).text_size(px(style::size::SMALL)).text_color(p.faint).child(footer));
-        div().id("patches-list").size_full().overflow_y_scroll().child(list).into_any_element()
+        with_scroll_bar(div().id("patches-list").overflow_y_scroll().child(list), &self.panels.scroll, "patches-list-bar").size_full().into_any_element()
     }
 
     fn patch_row(&mut self, patch: &PatchInfo, gives: String, thread: &ThreadSummary, p: Palette, cx: &mut Context<Self>) -> AnyElement {

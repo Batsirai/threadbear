@@ -10,6 +10,7 @@ use crate::app::Threadbear;
 use crate::{call, icons, now_ms, style};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -1050,6 +1051,20 @@ pub(crate) fn icon(name: &str, size: f32, color: Hsla) -> Icon {
     icons::try_symbol(name).unwrap_or_else(|| Icon::new(gpui_kit::assets::IconName::SquareDashed)).with_size(px(size)).text_color(color)
 }
 
+/// One of the pane's scrolling lists or pages with the kit's scroll bar over
+/// its right edge, shown only while it scrolls, as the transcript's is
+/// (rows/list.rs). Mike was reading a long Markdown file in the pane with
+/// nothing to say how far down it he was (18 Nov), and its lists were the
+/// same. The list fills what comes back, which the caller sizes. `bar` is the
+/// bar's own id: two lists side by side share a parent, and so would share a
+/// bar's fade if both took their id from this line.
+pub(crate) fn with_scroll_bar(list: Stateful<Div>, scroll: &ScrollHandle, bar: impl Into<ElementId>) -> Div {
+    div()
+        .relative()
+        .child(list.size_full().track_scroll(scroll))
+        .child(div().id(bar).absolute().inset_0().child(div().size_full().vertical_scrollbar(scroll)))
+}
+
 /// A control's tooltip and the label scripts find it by, as Swift's `.tip`:
 /// a button to VoiceOver. Anything else uses `tipped_as` with its own role.
 pub(crate) fn tipped(el: Stateful<Div>, tip: impl Into<SharedString>) -> gpui_kit::base::ObservedElement<Stateful<Div>> {
@@ -1608,7 +1623,8 @@ impl SidePane {
             }
         }
         let _ = window;
-        div().id("highlights-scroll").size_full().overflow_y_scroll().restrict_scroll_to_axis().track_scroll(&self.scroll).child(list).into_any_element()
+        let list = div().id("highlights-scroll").overflow_y_scroll().restrict_scroll_to_axis().child(list);
+        with_scroll_bar(list, &self.scroll, "highlights-scroll-bar").size_full().into_any_element()
     }
 
     pub(crate) fn schedule_rows(&self, thread: &ThreadSummary, cx: &App) -> Vec<core::ScheduleRow> {
