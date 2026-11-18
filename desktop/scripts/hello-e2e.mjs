@@ -2,9 +2,8 @@
 // a dev runner on a throwaway data folder (runner/scripts/dev-runner.sh) and
 // a scripted GPUI app on it (desktop/scripts/dev-app.sh --home), as a new
 // install opens them. It goes through every card as someone would, checks
-// what each shows and that its switches reach the runner, sends the first
-// thread for real (the dev runner's cheap model, in its temp folder), and
-// saves a dark shot of each card.
+// what each shows and that its switches reach the runner, checks Done
+// leaves a new thread ready to type in, and saves a dark shot of each card.
 //
 //   node desktop/scripts/hello-e2e.mjs [--shots DIR] [--keep] [--no-build]
 //
@@ -74,8 +73,6 @@ async function until(what, test, seconds = 20) {
   }
 }
 
-const threadsIn = (d) => (d.sidebar?.sections ?? []).flatMap((s) => s.threads ?? []);
-const FIRST = 'Make me a patch for this folder that adds a button saying hello, then tell me what you did.';
 
 // The dev runner, in the background, on a temp data folder.
 const runnerLog = path.join(shots, 'dev-runner.out');
@@ -129,29 +126,23 @@ async function main() {
   run({ cmd: 'click', title: 'Stop your Mac sleeping on its own while a thread is working' });
   await until('and back on', () => awake() === true, 10);
 
-  h = go('first');
-  shot('first');
-  const before = threadsIn(dump()).length;
+  // Done on the last card: the cards go and a new thread waits, its box empty.
   run({ cmd: 'hello', do: 'next' });
-  check('Send it puts the cards away', hello() === 'ok off', hello());
-  const sent = await until('the first thread starts with its message', () => {
+  check('Done puts the cards away', hello() === 'ok off', hello());
+  const done = await until('a new thread, ready to type in', () => {
     const d = dump();
-    return threadsIn(d).length > before && d;
-  }, 30);
-  if (sent) {
-    shot('sent');
-    check('Finish setting up opens with what\'s left', sent.setup?.shown === true, JSON.stringify(sent.setup));
+    return !d.selection && d.composer?.draft === 'new' && d;
+  }, 10);
+  if (done) {
+    shot('done');
+    check('its box is empty', !done.composer?.text, done.composer?.text);
+    check('Finish setting up opens with what\'s left', done.setup?.shown === true, JSON.stringify(done.setup));
   }
-  await until('the first thread runs a turn', () => threadsIn(dump()).some((t) => t.status === 'running' || t.status === 'idle'), 60);
   check('the cards don\'t come back by themselves', JSON.parse(fs.readFileSync(path.join(home, 'desktop-settings.json'), 'utf8')).tourSeen === true);
 
-  // Help brings them back, and Not now leaves the message unsent.
+  // Help brings them back.
   run({ cmd: 'menu-item', title: 'Set Up Threadbear' });
   await until('Help > Set Up Threadbear opens them', () => dump().hello?.card === 'welcome', 10);
-  for (let i = 0; i < 6 && dump().hello?.card !== 'first'; i++) run({ cmd: 'hello', do: 'skip' });
-  run({ cmd: 'hello', do: 'skip' });
-  await until('Not now leaves the message in a new thread', () => dump().composer?.text === FIRST, 10);
-  shot('not-now');
 }
 
 try {

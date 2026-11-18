@@ -2431,7 +2431,10 @@ Skip; Esc puts them all away:
   Mac. One that isn't signed in has Sign in…, which opens Terminal on its
   own sign-in. Add makes room for another Claude login (a second
   subscription, say) and opens its sign-in the same way; the row spins
-  until it's signed in. A thread moves to it when the first runs low.
+  until it's signed in. A thread moves to it when the first runs low. For
+  a Claude login, the same Terminal window then makes a year-long token
+  (Year-long token…, below), so you sign in once a year rather than every
+  28 days.
 - **Where threads start** shows the folder new threads open in, with
   Change…, and whether GitHub's CLI (`gh`) is signed in.
 - **Check in from anywhere** shows a code to scan with the iPhone app, and
@@ -2439,10 +2442,7 @@ Skip; Esc puts them all away:
   Threadbear has a Convex deployment for a phone to reach.
 - **A few things worth turning on**: review by another lab, keeping the
   Mac awake while threads work, Connectors (opened once you're done) and
-  the app's look.
-- **Ready when you are** sends your first thread, with its message written
-  for you, asking the agent for a patch with a hello button of your own.
-  Not now leaves the message in a new thread for later.
+  the app's look. Done opens a new thread, ready for your first message.
 
 Help > Set Up Threadbear brings the cards back. Help > Take the Tour shows
 you round the window, one part at a time: the window dims, one part lights

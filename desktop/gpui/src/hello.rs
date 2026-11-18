@@ -13,9 +13,8 @@
 //   Phone            `devices.pair`'s code, drawn as Settings draws it, and
 //                    `devices.list` every two seconds till a phone's paired
 //   Worth turning on Code review and Keep the Mac awake (`settings.update`),
-//                    the app's look, and Connectors opened once it's done
-//   Ready when you   the tour's first message, sent from a new thread
-//     are
+//                    the app's look, and Connectors opened once it's done;
+//                    its Done opens a new thread, ready to type in
 //
 // Every button shows what it's doing at once: a sign-in or a pairing spins
 // until it's there, a switch flips straight away (the runner's answer has the
@@ -101,8 +100,6 @@ pub(crate) struct HelloState {
     poll: Option<Task<()>>,
     /// Connectors, opened once the cards are done.
     open_connectors: bool,
-    /// Send it, while the first thread's on its way.
-    sending: bool,
 }
 
 impl Threadbear {
@@ -143,15 +140,12 @@ impl Threadbear {
 
     pub(crate) fn hello_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(at) = self.hello.at else { return };
-        if at == Card::First {
-            self.hello_send(window, cx);
-            return;
-        }
         let cards = self.hello_cards();
         let next = cards.iter().position(|c| *c == at).and_then(|i| cards.get(i + 1)).copied();
         match next {
             Some(card) => self.hello_go(card, window, cx),
-            None => self.hello_finish(false, window, cx),
+            // Done on the last card: a new thread, ready to type in.
+            None => self.hello_finish(true, window, cx),
         }
     }
 
@@ -164,9 +158,11 @@ impl Threadbear {
     }
 
     /// Done, or put away with Esc: they don't come by themselves again, and
-    /// Finish setting up shows what's left. Skipping the last card leaves
-    /// the first message written in a new thread, unsent.
-    pub(crate) fn hello_finish(&mut self, write_first: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Finish setting up shows what's left. Done on the last card opens a
+    /// new thread with its box ready to type in: no message written for
+    /// them (Mike, 18 Nov, of a last card that sent a patch request from a
+    /// temp folder: "This one is a bit weird").
+    pub(crate) fn hello_finish(&mut self, new_thread: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.hello.at.take().is_none() {
             return;
         }
@@ -177,10 +173,10 @@ impl Threadbear {
         self.hello_drop_unfinished_login();
         self.settings.saved.tour_seen = Some(true);
         self.save_settings_soon(cx);
-        if write_first {
+        if new_thread {
             self.new_thread(cx);
             let composer = self.ensure_new_composer(window, cx);
-            composer.update(cx, |c, cx| c.replace_text(threadbear_core::tour::FIRST_MESSAGE.to_owned(), cx));
+            composer.update(cx, |c, cx| c.focus(window, cx));
         }
         if std::mem::take(&mut self.hello.open_connectors) && !self.activity_panel_showing(crate::shell::CONNECTORS, cx) {
             self.toggle_under_threads(crate::shell::CONNECTORS, cx);
@@ -191,38 +187,21 @@ impl Threadbear {
         cx.notify();
     }
 
-    /// Send it: a new thread with the tour's first message, sent, and the
-    /// cards away. The button spins till the composer has it.
-    fn hello_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.hello.sending {
-            return;
-        }
-        self.hello.sending = true;
-        cx.notify();
-        self.hello_finish(false, window, cx);
-        self.new_thread(cx);
-        // The new-thread page's box with the words in it, then its send: the
-        // app's own, as the box's would call it, since a composer can't
-        // reach back into the app from inside this update. The words stay,
-        // greyed, until the thread exists, and come back on a failure.
-        let composer = self.ensure_new_composer(window, cx);
-        composer.update(cx, |c, cx| c.replace_text(threadbear_core::tour::FIRST_MESSAGE.to_owned(), cx));
-        let text = threadbear_core::tour::FIRST_MESSAGE.to_owned();
-        self.send_new_thread(text.clone(), vec![], text, window, cx);
-        self.hello.sending = false;
-    }
-
     // Your agents.
 
     /// Sign in… on a login that isn't: Terminal on its own sign-in, and the
     /// row spins till the runner sees it signed in.
     fn hello_sign_in(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.logins.account(&id).is_some() {
+        if let Some(a) = self.logins.account(&id).filter(|a| a.provider_id() == "claude") {
+            // A Claude login gets its year-long token in the same go.
+            let account = SignInAccount { id: a.id.clone(), provider: "claude".into(), title: a.title.clone(), config_dir: a.config_dir.clone() };
+            self.sign_in_for_a_year(account, cx);
+        } else if self.logins.account(&id).is_some() {
             self.sign_in_login(&id, cx);
         } else {
             // Nobody's signed in to Claude Code on this Mac yet: its own
             // ~/.claude, which the runner finds once it's there.
-            self.sign_in(SignInAccount { id: id.clone(), provider: "claude".into(), title: "Claude Code".into(), config_dir: String::new() }, cx);
+            self.sign_in_for_a_year(SignInAccount { id: id.clone(), provider: "claude".into(), title: "Claude Code".into(), config_dir: String::new() }, cx);
         }
         self.hello.signing = Some(id.clone());
         self.hello_watch_sign_in(id, cx);
@@ -277,7 +256,7 @@ impl Threadbear {
             cx.notify();
             return;
         }
-        self.sign_in(SignInAccount { id: id.clone(), provider: "claude".into(), title: "another Claude login".into(), config_dir: dir.to_string_lossy().into_owned() }, cx);
+        self.sign_in_for_a_year(SignInAccount { id: id.clone(), provider: "claude".into(), title: "another Claude login".into(), config_dir: dir.to_string_lossy().into_owned() }, cx);
         self.hello.adding = Some(Adding { id: id.clone(), dir });
         self.hello_watch_sign_in(id, cx);
         cx.notify();
@@ -488,7 +467,6 @@ impl Threadbear {
             Card::Folder => self.render_hello_folder(cx),
             Card::Phone => self.render_hello_phone(cx),
             Card::Extras => self.render_hello_extras(window, cx),
-            Card::First => self.render_hello_first(cx),
         };
         // Back, Skip and the card's own button, Return on the last.
         let mut foot = h_flex().items_center().gap(px(14.)).pt(px(6.)).text_size(px(style::size::LABEL));
@@ -497,18 +475,11 @@ impl Threadbear {
         }
         foot = foot.child(div().flex_1());
         if at != Card::Welcome {
-            let (label, tip) = if at == Card::First { ("Not now", "Start without sending it: the message waits in a new thread") } else { ("Skip", "Leave this for now; Finish setting up keeps what's left") };
-            foot = foot.child(link("hello-skip", label, tip, secondary).on_click(cx.listener(move |this, _, window, cx| {
-                if at == Card::First {
-                    this.hello_finish(true, window, cx);
-                } else {
-                    this.hello_next(window, cx);
-                }
-            })));
+            foot = foot.child(link("hello-skip", "Skip", "Leave this for now; Finish setting up keeps what's left", secondary).on_click(cx.listener(|this, _, window, cx| this.hello_next(window, cx))));
         }
         let primary = if at == Card::Phone && self.hello_new_phone().is_none() && rules::paired_phone(&self.hello.devices.devices).is_none() { "Later" } else { at.primary() };
-        let tip = if at == Card::First { "Send it and start (Return)" } else { "On to the next card (Return)" };
-        foot = foot.child(crate::tour::prominent_button("hello-next", primary, tip, !self.hello.sending, cx).child(div().ml(px(8.)).px(px(4.)).rounded(px(3.)).border(gpui_kit::px(1.)).border_color(gpui_kit::white().opacity(0.45)).text_size(px(10.)).child("↵")).on_click(cx.listener(|this, _, window, cx| this.hello_next(window, cx))));
+        let tip = if at == Card::Extras { "Done: start a new thread (Return)" } else { "On to the next card (Return)" };
+        foot = foot.child(crate::tour::prominent_button("hello-next", primary, tip, true, cx).child(div().ml(px(8.)).px(px(4.)).rounded(px(3.)).border(gpui_kit::px(1.)).border_color(gpui_kit::white().opacity(0.45)).text_size(px(10.)).child("↵")).on_click(cx.listener(|this, _, window, cx| this.hello_next(window, cx))));
         let shadow = vec![BoxShadow { color: hsla(0., 0., 0., 0.35), offset: point(gpui_kit::px(0.), gpui_kit::px(18.)), blur_radius: gpui_kit::px(48.), spread_radius: gpui_kit::px(0.), inset: false }];
         let pose = at.pose(signed_in || at != Card::Agents);
         div()
@@ -555,7 +526,7 @@ impl Threadbear {
                 AgentState::SignedOut => {
                     let id = row.id.clone();
                     let busy = self.hello.signing.as_deref() == Some(row.id.as_str());
-                    Some(PushButton::new(SharedString::from(format!("hello-sign-in-{}", row.id)), if busy { "Waiting" } else { "Sign in…" }, if busy { "Finish signing in in Terminal and your browser" } else { "Opens Terminal on this login's own sign-in" }).busy(busy).render(cx, {
+                    Some(PushButton::new(SharedString::from(format!("hello-sign-in-{}", row.id)), if busy { "Waiting" } else { "Sign in…" }, if busy { "Finish signing in in Terminal and your browser" } else if row.id.starts_with("claude") { "Opens Terminal to sign in, then makes it last a year" } else { "Opens Terminal on this login's own sign-in" }).busy(busy).render(cx, {
                         let app = cx.entity().downgrade();
                         move |_, _, cx| {
                             app.update(cx, |this, cx| this.hello_sign_in(id.clone(), cx)).ok();
@@ -569,7 +540,7 @@ impl Threadbear {
         if all.iter().all(|r| r.provider != "claude") {
             // Nothing signed in to Claude Code here yet: its own sign-in.
             let busy = self.hello.signing.as_deref() == Some("claude-main");
-            let button = PushButton::new("hello-sign-in-claude", if busy { "Waiting" } else { "Sign in…" }, if busy { "Finish signing in in Terminal and your browser" } else { "Opens Terminal on Claude Code's sign-in" }).busy(busy).render(cx, {
+            let button = PushButton::new("hello-sign-in-claude", if busy { "Waiting" } else { "Sign in…" }, if busy { "Finish signing in in Terminal and your browser" } else { "Opens Terminal to sign in to Claude Code, then makes it last a year" }).busy(busy).render(cx, {
                 let app = cx.entity().downgrade();
                 move |_, _, cx| {
                     app.update(cx, |this, cx| this.hello_sign_in("claude-main".into(), cx)).ok();
@@ -581,7 +552,7 @@ impl Threadbear {
         // thread to it when the first runs low.
         if all.iter().any(|r| r.provider == "claude" && r.state == AgentState::Ready) || adding.is_some() {
             let busy = adding.is_some();
-            let button = PushButton::new("hello-add-login", if busy { "Waiting" } else { "Add" }, if busy { "Finish signing in in Terminal and your browser" } else { "Sign in to another Claude account, in Terminal" }).busy(busy).render(cx, {
+            let button = PushButton::new("hello-add-login", if busy { "Waiting" } else { "Add" }, if busy { "Finish signing in in Terminal and your browser" } else { "Sign in to another Claude account in Terminal, for a year" }).busy(busy).render(cx, {
                 let app = cx.entity().downgrade();
                 move |_, _, cx| {
                     app.update(cx, |this, cx| this.hello_add_login(cx)).ok();
@@ -698,11 +669,6 @@ impl Threadbear {
         group(rows, cx)
     }
 
-    fn render_hello_first(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let folder = abbreviate_home(self.runner_settings.as_ref().and_then(|s| s["defaultCwd"].as_str()).unwrap_or(""));
-        group(vec![hello_row("square.and.pencil", threadbear_core::tour::FIRST_MESSAGE.into(), None, folder, None, cx)], cx)
-    }
-
     /// The automation's `hello`: {"do": "start"|"next"|"back"|"skip"|"end"};
     /// says the card: "ok 2/6 agents".
     #[cfg(feature = "automation")]
@@ -711,13 +677,7 @@ impl Threadbear {
             Some("start") => self.hello_start(window, cx),
             Some("next") => self.hello_next(window, cx),
             Some("back") => self.hello_back(window, cx),
-            Some("skip") => {
-                if self.hello.at == Some(Card::First) {
-                    self.hello_finish(true, window, cx);
-                } else {
-                    self.hello_next(window, cx);
-                }
-            }
+            Some("skip") => self.hello_next(window, cx),
             Some("end") => self.hello_finish(false, window, cx),
             None => {}
             Some(_) => return Err("do is start, next, back, skip or end".into()),

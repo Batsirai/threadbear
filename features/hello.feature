@@ -28,10 +28,11 @@ Feature: The setup cards on first launch
     Then no setup card shows
 
   @tour.hello @swift-pending
-  Scenario: Not now on the last card leaves the first message written in a new thread
+  Scenario: Done on the last card opens a new thread, ready to type in
     When I choose "Set Up Threadbear" from the menu bar
     And I skip to the last setup card
-    Then the setup cards show "Ready when you are"
-    When I skip the setup card
+    Then the setup cards show "A few things worth turning on"
+    When I go on in the setup cards
     Then no setup card shows
-    And the composer says "Make me a patch for this folder that adds a button saying hello, then tell me what you did."
+    And the new-thread page is open
+    And the composer is empty

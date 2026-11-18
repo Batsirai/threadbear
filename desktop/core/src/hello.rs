@@ -17,7 +17,6 @@ pub enum Card {
     Folder,
     Phone,
     Extras,
-    First,
 }
 
 /// Which of the six bear pictures a card shows (docs/threadbear-design/sprites).
@@ -39,7 +38,6 @@ impl Card {
             Card::Folder => "folder",
             Card::Phone => "phone",
             Card::Extras => "extras",
-            Card::First => "first",
         }
     }
 
@@ -50,7 +48,6 @@ impl Card {
             Card::Folder => "Where threads start",
             Card::Phone => "Check in from anywhere",
             Card::Extras => "A few things worth turning on",
-            Card::First => "Ready when you are",
         }
     }
 
@@ -64,7 +61,6 @@ impl Card {
             Card::Folder => "New threads open in this folder unless you pick another.",
             Card::Phone => "Answer and steer your threads from your phone.",
             Card::Extras => "You can change any of these in Settings later.",
-            Card::First => "Your first thread's message is written for you.",
         }
     }
 
@@ -76,7 +72,6 @@ impl Card {
             Card::Folder => Pose::Cub,
             Card::Phone => Pose::Sleep,
             Card::Extras => Pose::Patch,
-            Card::First => Pose::Wave,
         }
     }
 
@@ -84,7 +79,8 @@ impl Card {
     pub fn primary(self) -> &'static str {
         match self {
             Card::Welcome => "Let's go",
-            Card::First => "Send it",
+            // The last card: Done opens a new thread, ready to type in.
+            Card::Extras => "Done",
             _ => "Continue",
         }
     }
@@ -93,7 +89,7 @@ impl Card {
 /// The cards for this install: Phone only where pairing works (a backend,
 /// not this Mac only).
 pub fn cards(can_pair: bool) -> Vec<Card> {
-    [Card::Welcome, Card::Agents, Card::Folder, Card::Phone, Card::Extras, Card::First].into_iter().filter(|c| *c != Card::Phone || can_pair).collect()
+    [Card::Welcome, Card::Agents, Card::Folder, Card::Phone, Card::Extras].into_iter().filter(|c| *c != Card::Phone || can_pair).collect()
 }
 
 /// The first launch shows the cards, as it showed the tour: never once the
@@ -257,9 +253,9 @@ mod tests {
     fn the_phone_card_only_shows_where_a_phone_can_pair() {
         assert!(cards(true).contains(&Card::Phone));
         assert!(!cards(false).contains(&Card::Phone));
-        assert_eq!(cards(false).len(), 5);
+        assert_eq!(cards(false).len(), 4);
         assert_eq!(cards(true).first(), Some(&Card::Welcome));
-        assert_eq!(cards(true).last(), Some(&Card::First));
+        assert_eq!(cards(true).last(), Some(&Card::Extras));
     }
 
     #[test]

@@ -44,3 +44,7 @@ Then('no setup card shows', async function (this: ThreadbearWorld) {
 Then('the agents card lists {string} as signed in', async function (this: ThreadbearWorld, who: string) {
   await this.until(`"${who}" signed in on the agents card`, (d) => (hello(d)?.agents ?? []).some((a) => a.detail.startsWith(who) && a.ready));
 });
+
+Then('the new-thread page is open', async function (this: ThreadbearWorld) {
+  await this.until('the new-thread page', (d) => !d.selection && d.composer.draft === 'new');
+});

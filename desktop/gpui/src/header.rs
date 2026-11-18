@@ -1139,6 +1139,16 @@ impl Threadbear {
     /// The CLI's path is the runner's (Codex is often Threadbear's own copy,
     /// not on the PATH), asked for now so it's the one in use.
     pub(crate) fn sign_in(&mut self, account: SignInAccount, cx: &mut Context<Self>) {
+        self.sign_in_as(account, false, cx);
+    }
+
+    /// Sign in…, then a year-long token for the same Claude login in the
+    /// same Terminal window: the setup cards' Sign in… and Add.
+    pub(crate) fn sign_in_for_a_year(&mut self, account: SignInAccount, cx: &mut Context<Self>) {
+        self.sign_in_as(account, true, cx);
+    }
+
+    fn sign_in_as(&mut self, account: SignInAccount, year: bool, cx: &mut Context<Self>) {
         let client = self.client.clone();
         let command = self.logins.login_command(&account.provider).to_owned();
         let name = self.logins.provider_title(&account.provider);
@@ -1152,7 +1162,8 @@ impl Threadbear {
                 .unwrap_or("")
                 .to_owned();
             let file = std::env::temp_dir().join(format!("threadbear-sign-in-{}.command", sign_in::file_safe(&account.id)));
-            let written = write_script(&file, &sign_in::script_named(&account, &path, &command, &name));
+            let script = if year { sign_in::sign_in_for_a_year_script(&account, &path, &command, &name) } else { sign_in::script_named(&account, &path, &command, &name) };
+            let written = write_script(&file, &script);
             this.update(cx, |this, cx| match written {
                 // The script this app just wrote, every word of it quoted.
                 Ok(()) => crate::open_gate::open_own(&file, cx),

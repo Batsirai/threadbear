@@ -80,6 +80,8 @@ pub fn script_with_command(account: &SignInAccount, cli_path: &str, command: &st
     script_named(account, cli_path, command, &crate::logins::provider_title(&account.provider))
 }
 
+const DONE_TAIL: &str = "echo\necho \"Done. Go back to Threadbear and press Send again. You can close this window.\"\n";
+
 pub fn script_named(account: &SignInAccount, cli_path: &str, command: &str, name: &str) -> String {
     if !account.can_sign_in() || command.trim().is_empty() {
         return "#!/bin/zsh -l\nprintf '%s\\n' 'Sign-in is unavailable for this login. Refresh the accounts in Threadbear.'\n".into();
@@ -102,7 +104,7 @@ pub fn script_named(account: &SignInAccount, cli_path: &str, command: &str, name
     let binary = if cli_path.is_empty() { argument(program) } else { quoted(cli_path) };
     let first = quoted(&format!("Signing in to {name} for Threadbear ({}).", one_line(&account.title)));
     format!(
-        "#!/bin/zsh -l\nexport PATH=\"$HOME/.local/bin:$PATH\"\nprintf '%s\\n' {first}\necho\n{env}{binary} {command}\necho\necho \"Done. Go back to Threadbear and press Send again. You can close this window.\"\n"
+        "#!/bin/zsh -l\nexport PATH=\"$HOME/.local/bin:$PATH\"\nprintf '%s\\n' {first}\necho\n{env}{binary} {command}\n{DONE_TAIL}"
     )
 }
 
@@ -126,6 +128,23 @@ pub fn token_script(account: &SignInAccount, cli_path: &str) -> String {
         "#!/bin/zsh -l\nexport PATH=\"$HOME/.local/bin:$PATH\"\nprintf '%s\\n' {first} 'Sign in as that account on the page that opens.'\necho\nhelper=$(cat <<'THREADBEAR_PY'\n{}THREADBEAR_PY\n)\n/usr/bin/python3 -I -c \"$helper\" {binary} {folder}/{TOKEN_FILE}\n",
         include_str!("claude_token.py")
     )
+}
+
+/// Sign in, then a year-long token for the same login, in one Terminal
+/// window: the setup cards' Sign in… and Add (Mike, 18 Nov: "Always, at
+/// sign-in"). The sign-in gives the login its address; the token keeps it
+/// running for a year rather than 28 days. Anything but a Claude login
+/// gets the plain sign-in.
+pub fn sign_in_for_a_year_script(account: &SignInAccount, cli_path: &str, command: &str, name: &str) -> String {
+    let sign_in = script_named(account, cli_path, command, name);
+    if !(account.provider == "claude" || account.provider.is_empty()) || !account.can_sign_in() {
+        return sign_in;
+    }
+    let Some(head) = sign_in.strip_suffix(DONE_TAIL) else { return sign_in };
+    let token = token_script(account, cli_path);
+    // The token script without its own first two lines (#! and PATH).
+    let body = token.splitn(3, '\n').nth(2).unwrap_or_default();
+    format!("{head}echo\nprintf '%s\\n' 'Now a token, so this login lasts a year rather than 28 days.'\n{body}echo\necho \"Done. Go back to Threadbear. You can close this window.\"\n")
 }
 
 #[cfg(test)]
@@ -185,5 +204,18 @@ mod tests {
         let main = token_script(&account("claude-main", "claude", "me@example.com", ""), "");
         assert!(main.contains(" claude $HOME/.claude/threadbear-token.json\n"), "{main}");
         assert!(token_script(&account("codex-1", "codex", "c", "/x"), "").contains("only for Claude"));
+    }
+
+    #[test]
+    fn signing_in_for_a_year_signs_in_then_makes_the_token_in_the_same_folder() {
+        let s = sign_in_for_a_year_script(&account("claude-2", "claude", "two", "/x/accounts/claude-2"), "/bin/claude", "claude auth login", "Claude");
+        let login = s.find("CLAUDE_CONFIG_DIR='/x/accounts/claude-2' '/bin/claude' auth login").expect(&s);
+        let token = s.find("'/bin/claude' '/x/accounts/claude-2'/threadbear-token.json").expect(&s);
+        assert!(login < token, "{s}");
+        assert_eq!(s.matches("#!/bin/zsh").count(), 1);
+        assert!(!s.contains("press Send again"));
+        // Codex has no year-long token: just its sign-in.
+        let codex = sign_in_for_a_year_script(&account("codex-main", "codex", "c", "/x/.codex"), "", "codex login", "Codex");
+        assert!(!codex.contains("threadbear-token.json") && codex.contains("codex login"), "{codex}");
     }
 }
