@@ -90,10 +90,10 @@ const message = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 400)
 type Event =
   | { type: 'CREATED'; providerBoxId: string; attempt: number }
   | { type: 'RESUMED'; attempt: number }
-  | { type: 'LOST'; attempt?: number }
+  | { type: 'LOST'; attempt?: number; providerBoxId?: string }
   | { type: 'DESTROYED' }
   | { type: 'FAILED'; error: string; attempt: number }
-  | { type: 'PAUSED'; attempt?: number }
+  | { type: 'PAUSED'; attempt?: number; providerBoxId?: string }
   | { type: 'RETIRED' };
 // `op`: the reporting run's op lease; one that has lost it is told no (boxes.ts report).
 const report = (ctx: ActionCtx, threadId: string, event: Event, op?: string): Promise<boolean> => ctx.runMutation(internal.boxes.report, { threadId, event, ...(op ? { op } : {}) });
@@ -124,8 +124,8 @@ const seenV = v.object({
   retireAttempts: v.array(v.number()),
   // The size the newest attempt was made at (boxes.size), whether or not it's the provider box's.
   size: v.optional(v.object({ attempt: v.number(), memoryMb: v.number() })),
-  // The attempt whose pause is backing off now (suspendFails), if any.
-  suspendBackoff: v.optional(v.number()),
+  // The machine whose pause is backing off now (suspendFails), if any; by attempt for one recorded without its id.
+  suspendBackoff: v.optional(v.object({ attempt: v.number(), providerBoxId: v.optional(v.string()) })),
 });
 type Seen = Infer<typeof seenV>;
 
@@ -155,7 +155,7 @@ export const boxFor = internalQuery({
       workAttempts: row.workAttempts ?? [],
       retireAttempts: row.boxState.kind === 'retiring' ? row.boxState.attempts : [],
       ...(row.size ? { size: { attempt: row.size.attempt, memoryMb: row.size.memoryMb } } : {}),
-      ...(row.suspendFails && row.suspendFails.next > Date.now() ? { suspendBackoff: row.suspendFails.attempt } : {}),
+      ...(row.suspendFails && row.suspendFails.next > Date.now() ? { suspendBackoff: { attempt: row.suspendFails.attempt, ...(row.suspendFails.providerBoxId !== undefined ? { providerBoxId: row.suspendFails.providerBoxId } : {}) } } : {}),
     };
   },
 });
@@ -302,7 +302,7 @@ async function reconcile(op: Op, p: BoxProvider, id: string): Promise<void> {
     if (!have || have === want) return;
     // Resumed only if it may run now; else the row follows the provider (it's paused).
     if (want === 'running' && !row.keptRunning && !(await op.ctx.runQuery(internal.boxService.mayRunNow, { boxId: op.boxId, providerBoxId: id }))) {
-      await report(op.ctx, row.threadId, { type: 'PAUSED', ...(row.providerAttempt !== undefined ? { attempt: row.providerAttempt } : {}) }, op.id);
+      await report(op.ctx, row.threadId, { type: 'PAUSED', providerBoxId: id, ...(row.providerAttempt !== undefined ? { attempt: row.providerAttempt } : {}) }, op.id);
       return;
     }
     if (want === 'running' && p.resume) await retrying(() => p.resume!(id));
@@ -402,7 +402,7 @@ async function bringBack(op: Op): Promise<void> {
         await ctx.scheduler.runAfter(WAKE_RETRY_MS, internal.boxService.wakeBox, { boxId });
         return;
       }
-      await report(ctx, seen.threadId, { type: 'LOST', attempt }, op.id);
+      await report(ctx, seen.threadId, { type: 'LOST', attempt, providerBoxId: id }, op.id);
     }
     if (taken) {
       await reconcile(op, paused, id);
@@ -476,7 +476,7 @@ export const sleepBox = internalAction({
       if (!raw) return;
       const p = fenced(op, raw);
       const id = seen.providerBoxId;
-      const lost = { type: 'LOST' as const, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) };
+      const lost = { type: 'LOST' as const, providerBoxId: id, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) };
       const keyHolder = seen.hasKey && seen.keyAttempt === seen.providerAttempt;
       // Only the box holding the key is paused; any other is no use asleep.
       // Whether it can pause is the size it was made at (boxes.size), never
@@ -484,7 +484,7 @@ export const sleepBox = internalAction({
       // guard's to try again, every pass with a backoff (suspendFailed).
       // While that backoff is on, a sleep (or its continuation) doesn't try.
       if (p.caps.pause && p.pause && p.resume && keyHolder) {
-        if (seen.suspendBackoff === seen.providerAttempt) return;
+        if (seen.suspendBackoff && sameMachine(seen.suspendBackoff, { attempt: seen.providerAttempt ?? 0, providerBoxId: id })) return;
         try {
           await retrying(() => p.pause!(id));
         } catch (e) {
@@ -492,7 +492,7 @@ export const sleepBox = internalAction({
           if (notFound(e)) await report(ctx, seen.threadId, lost, op.id);
           else {
             console.warn('a box did not pause; the billing guard will try again', message(e));
-            await ctx.runMutation(internal.boxService.suspendFailed, { boxId, attempt: seen.providerAttempt ?? 0 });
+            await ctx.runMutation(internal.boxService.suspendFailed, { boxId, attempt: seen.providerAttempt ?? 0, providerBoxId: id });
           }
           return;
         }
@@ -511,13 +511,15 @@ export const sleepBox = internalAction({
 // A pause that failed is tried again by the guard after PASS_MS, doubling, at most an hour.
 export const SUSPEND_BACKOFF_MAX_MS = 60 * 60_000;
 export const suspendFailed = internalMutation({
-  args: { boxId: v.id('boxes'), attempt: v.number() },
+  args: { boxId: v.id('boxes'), attempt: v.number(), providerBoxId: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { boxId, attempt }) => {
+  handler: async (ctx, { boxId, attempt, providerBoxId }) => {
     const row = await ctx.db.get(boxId);
     if (!row) return null;
-    const n = row.suspendFails?.attempt === attempt ? row.suspendFails.n + 1 : 1;
-    await ctx.db.patch(boxId, { suspendFails: { attempt, n, next: Date.now() + Math.min(PASS_MS * 2 ** (n - 1), SUSPEND_BACKOFF_MAX_MS) } });
+    const prev = row.suspendFails;
+    const same = prev !== undefined && (providerBoxId !== undefined ? prev.providerBoxId === providerBoxId : prev.providerBoxId === undefined && prev.attempt === attempt);
+    const n = same ? prev.n + 1 : 1;
+    await ctx.db.patch(boxId, { suspendFails: { attempt, ...(providerBoxId !== undefined ? { providerBoxId } : {}), n, next: Date.now() + Math.min(PASS_MS * 2 ** (n - 1), SUSPEND_BACKOFF_MAX_MS) } });
     return null;
   },
 });
@@ -621,12 +623,12 @@ export const checkBox = internalAction({
       const p = fenced(op, raw);
       const id = seen.providerBoxId;
       const state = await providerState(p, boxId, id);
-      if (state === 'gone') await report(ctx, seen.threadId, { type: 'LOST', ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
+      if (state === 'gone') await report(ctx, seen.threadId, { type: 'LOST', providerBoxId: id, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
       else if (state === 'paused') {
         // Paused (by the guard, its wait lost on the way back, say): resumed
         // only if it may run now; else the row follows the provider.
         if (p.resume && (await ctx.runQuery(internal.boxService.mayRunNow, { boxId, providerBoxId: id }))) await retrying(() => p.resume!(id)).catch((e) => console.warn("an unreachable box didn't resume", message(e)));
-        else await report(ctx, seen.threadId, { type: 'PAUSED', ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
+        else await report(ctx, seen.threadId, { type: 'PAUSED', providerBoxId: id, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
       }
     });
     return null;
@@ -643,7 +645,7 @@ export const checkBox = internalAction({
 // pause is backing off. `pauseTried`: machines a run before this one already
 // tried to pause (its continuation's progress): not tried again, so the
 // delete is always reached.
-async function deleteEach(op: Op, p: BoxProvider, serviceId: Id<'runnerServices'>, machines: ListedBox[], pause?: { attempt: number; memoryMb: number; provider: string; backingOff: boolean } | null, pauseTried: string[] = []): Promise<boolean> {
+async function deleteEach(op: Op, p: BoxProvider, serviceId: Id<'runnerServices'>, machines: ListedBox[], pause?: { attempt: number; memoryMb: number; provider: string; backoff: { attempt: number; providerBoxId?: string } | null } | null, pauseTried: string[] = []): Promise<boolean> {
   let all = true;
   const tried = new Set(pauseTried);
   const waiting = new Set(await op.ctx.runQuery(internal.boxService.backedOff, { providerBoxIds: machines.map((b) => b.providerBoxId) }));
@@ -655,11 +657,11 @@ async function deleteEach(op: Op, p: BoxProvider, serviceId: Id<'runnerServices'
       }
       // One try only, and a failure backs that attempt's pause off (suspendFailed).
       const attempt = Number(b.tags.tb_attempt);
-      if (pause && !pause.backingOff && !tried.has(b.providerBoxId) && b.state === 'running' && p.pause && attempt === pause.attempt && pauseSupported(pause.provider, pause.memoryMb)) {
+      if (pause && !(pause.backoff && sameMachine(pause.backoff, { attempt, providerBoxId: b.providerBoxId })) && !tried.has(b.providerBoxId) && b.state === 'running' && p.pause && attempt === pause.attempt && pauseSupported(pause.provider, pause.memoryMb)) {
         tried.add(b.providerBoxId);
         await p.pause(b.providerBoxId).catch(async (e) => {
           if (e instanceof LeaseLost || e instanceof OutOfTime) throw e;
-          await op.ctx.runMutation(internal.boxService.suspendFailed, { boxId: op.boxId, attempt });
+          await op.ctx.runMutation(internal.boxService.suspendFailed, { boxId: op.boxId, attempt, providerBoxId: b.providerBoxId });
         });
       }
       try {
@@ -726,7 +728,7 @@ async function deleteAsleep(op: Op, p: BoxProvider, seen: Seen, id: string): Pro
     console.warn('a sleeping box was not deleted; the reaper will try again', message(e));
     return;
   }
-  await report(op.ctx, seen.threadId, { type: 'LOST', ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
+  await report(op.ctx, seen.threadId, { type: 'LOST', providerBoxId: id, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
 }
 
 /**
@@ -857,7 +859,8 @@ type Limits = Doc<'runnerServices'>['limits'];
  * moving). Anything else the guard pauses.
  */
 export function entitled(row: Doc<'boxes'>, limits: Limits, b: Listed, moving: boolean, now: number): boolean {
-  if (b.attempt !== newestAttempt(row)) return false;
+  // The row's machine, by its id: a duplicate of the same attempt never is.
+  if (b.attempt !== newestAttempt(row) || (row.providerBoxId !== undefined && row.providerBoxId !== b.providerBoxId)) return false;
   const s = row.boxState;
   const heard = (row.lastHeartbeatAt ?? 0) > now - SILENT_MS;
   const hoursOk = moving || usedTodayMs(row, now) < limits.maxAwakeHoursPerDay * 60 * 60_000 + SAVE_MS || !overHours(row, limits.maxAwakeHoursPerDay, now);
@@ -901,12 +904,25 @@ function planFor(row: Doc<'boxes'> | null, serviceId: string, limits: Limits, pr
   if (kind === 'retiring') return b.state === 'running' && mayTrySuspend(row, provider, b, now) ? 'suspend' : 'keep';
   const work = row.workAttempts?.includes(b.attempt) ?? false;
   const current = b.attempt === newestAttempt(row);
-  if (b.state === 'stopped' && (work || (current && row.keyAttempt === b.attempt && kind !== 'destroying'))) return 'lost';
+  // Machines are told apart by their id: the row's own, or another (an older
+  // attempt's, or a duplicate of its attempt that the provider made twice).
+  const own = row.providerBoxId === b.providerBoxId;
+  const duplicate = !own && row.providerBoxId !== undefined && row.providerAttempt === b.attempt;
+  if (b.state === 'stopped') {
+    // Its disk is gone. The row's own: lost, on the provider's word. Any other holds nothing: deleted.
+    if (own && (work || (current && row.keyAttempt === b.attempt && kind !== 'destroying'))) return 'lost';
+    if (!own && (duplicate || !current || !work)) return 'destroy';
+  }
   // The current attempt's machine the row doesn't know (its CREATED never came): taken in, work or not.
-  // A second machine for an attempt the row knows another of: deleted, unless it may hold work.
-  if (current && row.providerBoxId !== b.providerBoxId) return row.providerAttempt !== b.attempt ? 'adopt' : work ? 'keep' : 'destroy';
+  if (current && !own && !duplicate) return 'adopt';
+  // A duplicate is never entitled to run: paused if it can be, then kept if
+  // its attempt may hold work (which of the two holds it can't be told), else deleted.
+  if (duplicate) {
+    if (b.state === 'running' && mayTrySuspend(row, provider, b, now)) return 'suspend';
+    return work ? 'keep' : 'destroy';
+  }
   // The provider has the current box paused while the row says it's up: the row follows the provider.
-  if (current && b.state === 'paused' && UP.includes(kind) && row.keyAttempt === b.attempt) return 'paused';
+  if (own && current && b.state === 'paused' && UP.includes(kind) && row.keyAttempt === b.attempt) return 'paused';
   if (!work) {
     if (!current) return 'destroy';
     if (kind === 'gone' || kind === 'failed') return 'destroy';
@@ -916,12 +932,15 @@ function planFor(row: Doc<'boxes'> | null, serviceId: string, limits: Limits, pr
   return 'keep';
 }
 
+// A suspend backoff is the machine's (by id; by attempt for one recorded without).
+const sameMachine = (sf: { attempt: number; providerBoxId?: string }, b: { attempt: number; providerBoxId: string }) => (sf.providerBoxId !== undefined ? sf.providerBoxId === b.providerBoxId : sf.attempt === b.attempt);
+
 // Whether the guard pauses a machine it found running: not one that can't
 // pause by the size its attempt was made at (left running, counted by
 // observe), nor one whose last pause failed until its backoff is out.
 function mayTrySuspend(row: Doc<'boxes'>, provider: string, b: Listed, now: number): boolean {
   if (!(row.size?.attempt === b.attempt && pauseSupported(provider, row.size.memoryMb))) return false;
-  return !(row.suspendFails?.attempt === b.attempt && row.suspendFails.next > now);
+  return !(row.suspendFails && sameMachine(row.suspendFails, b) && row.suspendFails.next > now);
 }
 
 async function rowOf(ctx: { db: MutationCtx['db'] }, boxId: string): Promise<Doc<'boxes'> | null> {
@@ -972,12 +991,14 @@ export const reapStep = machines.internalMutation({
       // A delete that failed since the plan was made waits out its backoff.
       const backoff = await ctx.db.query('boxDeleteBackoff').withIndex('by_box', (q) => q.eq('providerBoxId', b.providerBoxId)).first();
       if (backoff && backoff.next > Date.now()) return false;
-      // The fence: a key of the attempt it deletes goes in this same step.
-      if (row && row.keyAttempt === b.attempt) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined });
+      // The fence: the key of the machine it deletes goes in this same step
+      // (the row's own machine's: a duplicate of its attempt doesn't hold it).
+      if (row && row.keyAttempt === b.attempt && row.providerBoxId === b.providerBoxId) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined });
       return true;
     }
     if (!row) return false;
-    if (planned === 'lost') return (await boxMachine.send(machineCtx, row._id, { type: 'LOST', attempt: b.attempt })).status === 'done';
+    // Only the row's own machine's loss: a duplicate's says nothing of it.
+    if (planned === 'lost') return row.providerBoxId === b.providerBoxId && (await boxMachine.send(machineCtx, row._id, { type: 'LOST', attempt: b.attempt })).status === 'done';
     if (planned === 'adopt') await boxMachine.send(machineCtx, row._id, { type: 'CREATED', providerBoxId: b.providerBoxId, attempt: b.attempt });
     if (planned === 'paused') await boxMachine.send(machineCtx, row._id, { type: 'PAUSED', attempt: b.attempt });
     return false;
@@ -1008,21 +1029,21 @@ export const observe = internalMutation({
       const counted = (RUNNING_STATES as readonly string[]).includes(row.boxState.kind);
       // Each machine of the row is charged from its own last observation
       // (observedAt, by attempt), not from a stamp another machine moved.
-      const last = new Map((row.observedAt ?? []).map((o) => [o.attempt, o.at]));
+      const last = new Map((row.observedAt ?? []).map((o) => [o.providerBoxId, o.at]));
       let charge = 0;
       let running = false;
       for (const b of list) {
         if (b.state === 'running' && !(byState && b.attempt === newestAttempt(row))) {
-          charge += Math.max(0, now - Math.max(last.get(b.attempt) ?? now - PASS_MS, now - 2 * PASS_MS, dayStart));
+          charge += Math.max(0, now - Math.max(last.get(b.providerBoxId) ?? now - PASS_MS, now - 2 * PASS_MS, dayStart));
           running = true;
         }
-        last.set(b.attempt, now);
+        last.set(b.providerBoxId, now);
       }
       // A few attempts' worth is all a row ever has running.
-      const observedAt = [...last].sort((a, b) => b[0] - a[0]).slice(0, 8).map(([attempt, at]) => ({ attempt, at }));
+      const observedAt = [...last].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([providerBoxId, at]) => ({ providerBoxId, at }));
       const patchFields: Partial<Doc<'boxes'>> = { observedAt };
       // Not running: nothing for a pause's backoff to wait on.
-      if (row.suspendFails && list.some((b) => b.attempt === row.suspendFails!.attempt && b.state !== 'running')) patchFields.suspendFails = undefined;
+      if (row.suspendFails && list.some((b) => sameMachine(row.suspendFails!, b) && b.state !== 'running')) patchFields.suspendFails = undefined;
       if (charge > 0) patchFields.awakeToday = { day, ms: (row.awakeToday?.day === day ? row.awakeToday.ms : 0) + charge };
       // Counted while seen running; driftPage, which sees the whole listing, stops counting it.
       if (running && !counted) patchFields.seenRunningAt = now;
@@ -1108,8 +1129,11 @@ export const reapService = internalAction({
       else toQueue.push(step);
     }
     // One step a machine at a time: one already queued isn't queued again (queueReaps).
-    const fresh = new Set(await ctx.runMutation(internal.boxService.queueReaps, { providerBoxIds: toQueue.map((st) => st.box.providerBoxId) }));
-    for (const step of toQueue) if (fresh.has(step.box.providerBoxId)) await ctx.scheduler.runAfter(0, internal.boxService.reapOne, { serviceId, box: step.box, do: step.do, seen: step.seen, ...(step.boxId ? { boxId: step.boxId } : {}) });
+    const fresh = new Map((await ctx.runMutation(internal.boxService.queueReaps, { providerBoxIds: toQueue.map((st) => st.box.providerBoxId) })).map((q) => [q.providerBoxId, q.gen]));
+    for (const step of toQueue) {
+      const gen = fresh.get(step.box.providerBoxId);
+      if (gen !== undefined) await ctx.scheduler.runAfter(0, internal.boxService.reapOne, { serviceId, box: step.box, do: step.do, seen: step.seen, gen, ...(step.boxId ? { boxId: step.boxId } : {}) });
+    }
     if (listed.length > size) await ctx.scheduler.runAfter(0, internal.boxService.reapService, { serviceId, after: boxes[boxes.length - 1]!.providerBoxId, chunk: size });
     // Once a pass (its first chunk), the other way round: every row against the whole listing.
     if (after === undefined) await sweepDrift(ctx, serviceId, p, listed.map((b) => ({ providerBoxId: b.providerBoxId, boxId: b.tags.tb_box ?? '', running: b.state === 'running' })));
@@ -1204,35 +1228,41 @@ export const driftLost = machines.internalMutation({
  */
 export const REAP_PENDING_MS = 15 * 60_000;
 
-/** Of these machines, those with no reaper step queued (or only a stale one), now marked queued. */
+/**
+ * Of these machines, those with no reaper step queued (or only a stale
+ * one), now marked queued with a new generation, which their step carries.
+ */
 export const queueReaps = internalMutation({
   args: { providerBoxIds: v.array(v.string()) },
-  returns: v.array(v.string()),
+  returns: v.array(v.object({ providerBoxId: v.string(), gen: v.number() })),
   handler: async (ctx, { providerBoxIds }) => {
     const now = Date.now();
     const out = [];
     for (const id of providerBoxIds) {
       const row = await ctx.db.query('reapQueued').withIndex('by_box', (q) => q.eq('providerBoxId', id)).first();
       if (row && row.at > now - REAP_PENDING_MS) continue;
-      if (row) await ctx.db.patch(row._id, { at: now });
-      else await ctx.db.insert('reapQueued', { providerBoxId: id, at: now });
-      out.push(id);
+      const gen = (row?.gen ?? 0) + 1;
+      if (row) await ctx.db.patch(row._id, { at: now, gen });
+      else await ctx.db.insert('reapQueued', { providerBoxId: id, at: now, gen });
+      out.push({ providerBoxId: id, gen });
     }
     return out;
   },
 });
 
+/** A queued step ended: its mark goes, if it's still that step's (a newer one's isn't touched). */
 export const reapDone = internalMutation({
-  args: { providerBoxId: v.string() },
+  args: { providerBoxId: v.string(), gen: v.optional(v.number()) },
   returns: v.null(),
-  handler: async (ctx, { providerBoxId }) => {
-    for (const r of await ctx.db.query('reapQueued').withIndex('by_box', (q) => q.eq('providerBoxId', providerBoxId)).collect()) await ctx.db.delete(r._id);
+  handler: async (ctx, { providerBoxId, gen }) => {
+    for (const r of await ctx.db.query('reapQueued').withIndex('by_box', (q) => q.eq('providerBoxId', providerBoxId)).collect()) if (gen === undefined || r.gen === gen) await ctx.db.delete(r._id);
     return null;
   },
 });
 
 export const reapOne = internalAction({
-  args: { serviceId: v.id('runnerServices'), box: listedV, do: doV, seen: snapV, boxId: v.optional(v.id('boxes')) },
+  // gen: its queued mark's (queueReaps).
+  args: { serviceId: v.id('runnerServices'), box: listedV, do: doV, seen: snapV, boxId: v.optional(v.id('boxes')), gen: v.optional(v.number()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     // Its queued mark goes when it ends, unless it's run again (it stays queued then).
@@ -1240,14 +1270,14 @@ export const reapOne = internalAction({
     try {
       again = await reapStepRun(ctx, args);
     } finally {
-      if (!again) await ctx.runMutation(internal.boxService.reapDone, { providerBoxId: args.box.providerBoxId });
+      if (!again) await ctx.runMutation(internal.boxService.reapDone, { providerBoxId: args.box.providerBoxId, ...(args.gen !== undefined ? { gen: args.gen } : {}) });
     }
     return null;
   },
 });
 
 // reapOne's work; true if it's run again (lease contention).
-async function reapStepRun(ctx: ActionCtx, args: { serviceId: Id<'runnerServices'>; box: Listed; do: Do; seen: Snap; boxId?: Id<'boxes'> }): Promise<boolean> {
+async function reapStepRun(ctx: ActionCtx, args: { serviceId: Id<'runnerServices'>; box: Listed; do: Do; seen: Snap; boxId?: Id<'boxes'>; gen?: number }): Promise<boolean> {
   {
     const { serviceId, box: b, do: planned, seen, boxId } = args;
     if (planned === 'destroy') {
@@ -1286,10 +1316,10 @@ async function reapStepRun(ctx: ActionCtx, args: { serviceId: Id<'runnerServices
       } catch (e) {
         if (e instanceof LeaseLost || e instanceof OutOfTime || notFound(e)) throw e;
         // Refused or a hiccup alike: tried again after its backoff.
-        await ctx.runMutation(internal.boxService.suspendFailed, { boxId, attempt: b.attempt });
+        await ctx.runMutation(internal.boxService.suspendFailed, { boxId, attempt: b.attempt, providerBoxId: b.providerBoxId });
         throw e;
       }
-      await ctx.runMutation(internal.boxes.report, { threadId: seenRow!.threadId, event: { type: 'PAUSED', attempt: b.attempt }, op: id });
+      await ctx.runMutation(internal.boxes.report, { threadId: seenRow!.threadId, event: { type: 'PAUSED', attempt: b.attempt, providerBoxId: b.providerBoxId }, op: id });
     } catch (e) {
       if (!(e instanceof LeaseLost)) console.warn("a guard step didn't happen; the next pass tries again", message(e));
     } finally {
@@ -1430,7 +1460,7 @@ export const retireBox = internalAction({
         // Rule 1: holding the lease, it does the guard's part too: a running
         // machine is paused before its delete, so a delete that keeps failing
         // doesn't leave it billing.
-        const size = seen.size && seen.provider ? { ...seen.size, provider: seen.provider, backingOff: seen.suspendBackoff === seen.size.attempt } : null;
+        const size = seen.size && seen.provider ? { ...seen.size, provider: seen.provider, backoff: seen.suspendBackoff ?? null } : null;
         if (!(await deleteEach(op, p, seen.serviceId, (await retrying(() => p.list({ tb_box: boxId }))).filter(named), size, pauseTried))) return;
         // Gone, on the provider's word: only then is it asleep again.
         if ((await retrying(() => p.list({ tb_box: boxId }))).some(named)) return;

@@ -560,10 +560,10 @@ const serverEvent = v.union(
   v.object({ type: v.literal('IDLE'), attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }),
   v.object({ type: v.literal('WAKE') }),
   v.object({ type: v.literal('RESUMED'), attempt: v.optional(v.number()) }),
-  v.object({ type: v.literal('LOST'), attempt: v.optional(v.number()) }),
+  v.object({ type: v.literal('LOST'), attempt: v.optional(v.number()), providerBoxId: v.optional(v.string()) }),
   v.object({ type: v.literal('DESTROYED') }),
   v.object({ type: v.literal('FAILED'), error: v.string(), attempt: v.optional(v.number()) }),
-  v.object({ type: v.literal('PAUSED'), attempt: v.optional(v.number()) }),
+  v.object({ type: v.literal('PAUSED'), attempt: v.optional(v.number()), providerBoxId: v.optional(v.string()) }),
   v.object({ type: v.literal('RETIRED') }),
 );
 
@@ -576,12 +576,20 @@ const serverEvent = v.union(
 export const report = machines.internalMutation({
   // op: the reporting action's op lease (boxService.ts withOp). An action
   // that has lost it is told no, and its news changes nothing.
+  // A LOST naming its machine (`providerBoxId`) counts only if that's the
+  // row's machine: two machines can share an attempt, and a duplicate's
+  // loss says nothing of the one the row runs on.
   args: { threadId: v.string(), event: serverEvent, op: v.optional(v.string()) },
   returns: v.boolean(),
   handler: async (ctx, { threadId, event, op }) => {
     const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
     if (!row) throw new ConvexError({ kind: 'notFound', message: 'no box for that thread' });
     if (op !== undefined && !(row.op?.id === op && row.op.until > Date.now())) return false;
+    if ((event.type === 'LOST' || event.type === 'PAUSED') && event.providerBoxId !== undefined) {
+      if (row.providerBoxId !== event.providerBoxId) return false;
+      const { providerBoxId: _id, ...named } = event;
+      return (await boxMachine.send(ctx, row._id, named)).status === 'done';
+    }
     return (await boxMachine.send(ctx, row._id, event)).status === 'done';
   },
 });

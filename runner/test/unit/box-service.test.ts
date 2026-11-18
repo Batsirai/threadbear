@@ -2035,3 +2035,64 @@ test("a queued delete waits out a backoff recorded after it was queued, and a ma
   await later(6 * MINUTE, () => call(s.a, service.reapService, { serviceId: s.serviceId }));
   assert.equal((s.scheduled as { fn: string }[]).filter((j) => j.fn.endsWith('reapOne')).length, 2);
 });
+
+// ------------------------------------------------------------ Codex's twelfth round (18 Nov 2026): duplicates
+
+// A box up on machine A, and a second machine B the provider made for the same attempt.
+async function withDuplicate(s: Awaited<ReturnType<typeof setup>>, state: string) {
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  const got = await s.boot('T2', a.id);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  s.fly.machines.push({ id: 'dup', name: 'dup', state, config: { guest: { memory_mb: 2048 }, metadata: { tb_box: boxIdOf(s, 'T2'), tb_attempt: '1', tb_service: s.serviceId } } });
+  return { runnerId, a, got };
+}
+
+// 1. A stopped duplicate's loss was taken for the live machine's.
+test("a stopped duplicate is deleted, and its loss says nothing of the row's own machine", async () => {
+  const s = await setup();
+  const { runnerId, a, got } = await withDuplicate(s, 'stopped');
+  s.skip();
+  await s.reap();
+  assert.equal(s.fly.byId('dup')!.state, 'destroyed');
+  assert.equal(s.fly.byId(a.id)!.state, 'created', 'the row’s machine untouched');
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+  // A loss naming another machine is refused outright.
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'LOST', attempt: 1, providerBoxId: 'dup' } }), false);
+  assert.ok(s.rowOf('T2').boxKeyHash);
+});
+
+// 2. A running duplicate was never paused.
+test('a running duplicate is never entitled: the guard pauses it, and keeps it while its attempt may hold work', async () => {
+  const s = await setup();
+  const { a } = await withDuplicate(s, 'started');
+  s.skip();
+  await s.reap();
+  assert.equal(s.fly.byId('dup')!.state, 'suspended');
+  assert.equal(s.fly.byId(a.id)!.state, 'created', 'the row’s machine runs on');
+  assert.equal(s.stateOf('T2'), 'awake');
+  await s.reap();
+  assert.equal(s.fly.byId('dup')!.state, 'suspended', 'kept (paused): which of the two holds the work can’t be told');
+});
+
+// 3. An old step ending cleared a newer step's queue mark.
+test("an old reaper step ending leaves a newer step's queue mark alone", async () => {
+  const s = await setup();
+  s.fly.machines.push({ id: 'orphan', name: 'o', state: 'started', config: { metadata: { tb_box: 'boxes:999', tb_attempt: '1', tb_service: s.serviceId } } });
+  s.skip();
+  await call(s.a, service.reapService, { serviceId: s.serviceId });
+  const old = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('reapOne')).at(-1)!;
+  // The old step's mark goes stale; a later pass queues a newer one.
+  await later(16 * MINUTE, () => call(s.a, service.reapService, { serviceId: s.serviceId }));
+  assert.equal((s.scheduled as { fn: string }[]).filter((j) => j.fn.endsWith('reapOne')).length, 2);
+  // The old one ends (its delete fails): the newer one's mark stays.
+  const down = s.fly.failWhile((r) => r.method === 'DELETE', 503);
+  await later(16 * MINUTE, () => call(s.a, service.reapOne, old.args));
+  down.stop();
+  assert.equal(s.rows('reapQueued').length, 1);
+  await later(17 * MINUTE, () => call(s.a, service.reapService, { serviceId: s.serviceId }));
+  assert.equal((s.scheduled as { fn: string }[]).filter((j) => j.fn.endsWith('reapOne')).length, 2, 'no third');
+});

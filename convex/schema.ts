@@ -339,7 +339,8 @@ export const appSchema = defineSchema({
     waitsForHours: v.optional(v.string()),
     // A pause of attempt `attempt`'s box that failed `n` times in a row: the
     // billing guard tries again after `next` (boxService.ts suspendFailed).
-    suspendFails: v.optional(v.object({ attempt: v.number(), n: v.number(), next: v.number() })),
+    // `providerBoxId`: the machine, as two can share an attempt (a duplicate).
+    suspendFails: v.optional(v.object({ attempt: v.number(), providerBoxId: v.optional(v.string()), n: v.number(), next: v.number() })),
     // Asleep or shelved with work newer than its save, and unable to pause:
     // kept running (never deleted with that work in it) since then, and asked
     // to save again on a backoff (`saveAsks`) until it does (boxService.ts).
@@ -355,7 +356,7 @@ export const appSchema = defineSchema({
     // observe), so each is charged from its own last observation; and
     // (seenRunningAt) when it last saw a machine of it running while its row
     // isn't in a running state: it counts toward maxBoxes then (invariant M).
-    observedAt: v.optional(v.array(v.object({ attempt: v.number(), at: v.number() }))),
+    observedAt: v.optional(v.array(v.object({ providerBoxId: v.string(), at: v.number() }))),
     seenRunningAt: v.optional(v.number()),
     createdAt: v.number(),
   })
@@ -390,7 +391,8 @@ export const appSchema = defineSchema({
   // A reaper step queued for a provider machine (boxService.ts reapOne), so
   // the next pass doesn't queue a second for it. Gone when it ends, or
   // taken as stale after REAP_PENDING_MS.
-  reapQueued: defineTable({ providerBoxId: v.string(), at: v.number() }).index('by_box', ['providerBoxId']),
+  // `gen`: which queued step it is, so an older step ending doesn't clear a newer one's mark.
+  reapQueued: defineTable({ providerBoxId: v.string(), at: v.number(), gen: v.optional(v.number()) }).index('by_box', ['providerBoxId']),
 
   cloudTokens: defineTable({
     login: v.string(),

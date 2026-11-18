@@ -605,6 +605,20 @@ one step or repeat harmlessly. And a reaper step queued for a machine
 (`reapQueued`) isn't queued again until it ends, and its delete waits out
 a backoff recorded after it was queued.
 
+A twelfth look found three more, all from **duplicates**: two provider
+machines tagged with the same box and attempt. Machines are now told
+apart by their provider id wherever a loss, keep or guard decision is
+made. A `LOST` or `PAUSED` names its machine (`providerBoxId`), and
+`boxes:report` takes it only if that's the row's own machine. In the
+reaper's plan, a stopped machine that isn't the row's is just deleted (it
+holds nothing the row relies on), and a duplicate is never entitled to run:
+the guard pauses it, then keeps it if its attempt may hold work (which of
+the two holds it can't be told) or deletes it. A delete's fence revokes the
+key only for the row's own machine. A pause's backoff (`suspendFails`) and
+each machine's charge (`observedAt`) are kept by machine id. And a queued
+reaper step's mark has a generation (`reapQueued.gen`), so an old step
+ending doesn't clear a newer one's.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`
