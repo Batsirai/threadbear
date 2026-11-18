@@ -43,6 +43,8 @@ const minutes = Number(opt('minutes', '10'));
 const maxSteps = Number(opt('steps', '100000'));
 // Steps before a fresh app (and a fresh walk); a big number keeps one app all run, to see memory over time.
 const sessionSteps = Number(opt('session-steps', '400'));
+// How often the mock runner misbehaves (restarts, slow replies, failed reads), against 6 by default.
+const mockWeight = Number(opt('mock-weight', '6'));
 const out = path.resolve(opt('out', path.join(os.tmpdir(), 'tb-fuzz')));
 const replayFile = opt('replay', '');
 fs.mkdirSync(out, { recursive: true });
@@ -138,7 +140,7 @@ function nextAction(r: () => number, d: Dump, menuItems: string[], size: { w: nu
     [1, () => ({ cmd: 'appearance', mode: pick(r, ['light', 'dark']) })],
     [2, () => (d.selection ? { cmd: 'panel', show: r() < 0.5 } : null)],
     [1, () => (d.selection ? { cmd: 'rename', title: pick(r, WORDS).slice(0, 60) } : null)],
-    [6, () => MOCK_EVENTS[Math.floor(r() * MOCK_EVENTS.length)](r, ids)],
+    [mockWeight, () => MOCK_EVENTS[Math.floor(r() * MOCK_EVENTS.length)](r, ids)],
   ];
   for (let tries = 0; tries < 20; tries += 1) {
     const total = choices.reduce((n, [w]) => n + w, 0);
