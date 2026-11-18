@@ -105,8 +105,8 @@ case "$cmd" in
       rm -f "$log"
     fi
     # What dev-app.sh needs there, and the recorder.
-    (cd "$root" && rsync -rlpcR --delete -e "${SSH[*]}" --exclude node_modules --exclude fixtures \
-      desktop/scripts runner/scripts/find-node.sh app/Tools/mock-runner site/scripts/record-window.swift "$host:$base/checkout/")
+    (cd "$root" && rsync -rlpcR --delete -e "${SSH[*]}" --exclude node_modules \
+      desktop/scripts runner/scripts/find-node.sh runner/src app/Tools/mock-runner site/scripts/record-window.swift "$host:$base/checkout/")
     for f in "${fix_src[@]+"${fix_src[@]}"}"; do rsync -rlpc --delete -e "${SSH[*]}" "${f%/}/" "$host:$base/fixtures/$(basename "$f")/"; done
     if [ -n "$turns" ]; then scp -q "$turns" "$host:$base/turns.json"; else "${SSH[@]}" "$host" "rm -f $base/turns.json"; fi
     there "[ -d app/Tools/mock-runner/node_modules ] || (. runner/scripts/find-node.sh && n=\"\$(threadbear_find_node)\" && PATH=\"\${n%/*}:\$PATH\" npm ci --silent --prefix app/Tools/mock-runner)
@@ -125,7 +125,7 @@ case "$cmd" in
       there "touch $base/stage.stop"
       die "the app didn't start"
     fi
-    pid="$(there "cat \"\$(find \"\$TMPDIR\" -path '*/film/app.json' | head -1)\"" | sed -E 's/.*"app":([0-9]+).*/\1/')"
+    pid="$(there "cat \"\$(find \"\$TMPDIR\" -path '*/film/app.json' 2>/dev/null | head -1)\"" | sed -E 's/.*"app":([0-9]+).*/\1/')"
     [[ "$pid" =~ ^[0-9]+$ ]] || { there "touch $base/stage.stop"; die "couldn't find the app's pid"; }
     there "echo $pid > $base/go; for i in \$(seq 1 150); do [ -f $base/stage.json ] && break; grep -q '^error' $base/stage.log && break; sleep 0.2; done; cat $base/stage.log"
     there "[ -f $base/stage.json ]" || { there "desktop/scripts/dev-app.sh stop --id film >/dev/null 2>&1; touch $base/stage.stop"; die "the stage didn't come up (above says why)"; }
