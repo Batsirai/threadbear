@@ -48,9 +48,9 @@ Feature: Spelling in the message box
     Then the composer says "I saw the "
     When I undo in the composer
     Then the composer says "I saw teh "
-    When I type "and teh" in the composer
+    When I type "teh" in the composer, replacing what's there
     And I type " " in the composer
-    Then the composer says "I saw teh and teh "
+    Then the composer says "teh "
 
   @composer.spelling @swift-pending @windows-pending @linux-pending
   Scenario: A correction typed back over isn't made again
