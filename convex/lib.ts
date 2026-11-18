@@ -39,7 +39,8 @@ export async function runnerAuth(ctx: QueryCtx | MutationCtx, key: string, fn: s
   const c = callerFrom(key, owners, row, boxRow ? { ...boxRow, _id: boxRow._id as string } : null);
   if (!c) throw new ConvexError({ kind: 'auth', message: 'bad runner key' });
   if (!mayCall(c, fn)) throw forbidden(`call ${fn}: ${c.box ? "a box's key runs its one thread, and nothing else" : "only the main Mac's key (the deployment's RUNNER_KEY) can"}`);
-  if (boxRow && !BOX_READS.has(fn)) await keyUsed(ctx, boxRow);
+  // A save isn't work (its SAVED says what it covers), and a duplicate one mustn't count as any.
+  if (boxRow && !BOX_READS.has(fn) && fn !== 'boxSaved') await keyUsed(ctx, boxRow);
   return c;
 }
 

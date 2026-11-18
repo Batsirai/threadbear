@@ -525,6 +525,26 @@ refusal (a failed pause is tried again by the guard with a backoff from
 5 minutes to an hour, `suspendFails`, per attempt); and a loss while
 archiving goes through `lostBox` like every other.
 
+A seventh look found five more, covered by two rules:
+
+- **The fence.** Anything that deletes a machine or supersedes an attempt
+  first runs one mutation that checks it may, against the row as it is,
+  and revokes the affected key in that same step: `retireFence` before a
+  retirement, `deleteFence` before a sleep's delete, `reapStep` before the
+  reaper's, and `newAttempt` when any new attempt is minted (refused while
+  the older one holds work). With its key gone a box can take nothing and
+  write nothing, so no new work can appear behind the decision.
+- **One record of unsaved work.** `workAttempts` is it: archiving keeps the
+  box (`shelved`) whenever a box may hold work, whatever state it's in,
+  and a box asleep with work saves its way out the same way; nothing reads
+  `asleep.unsaved` any more. A save sent again doesn't count as work, and
+  `DESTROYED` never forgets a machine it kept.
+
+And: a box the guard pauses wakes again for a message already waiting;
+the lease checker and the reconciler resume a box they find paused only if
+it may run now (`mayRunNow`), else the row follows the provider (`PAUSED`);
+and an action waiting for the lease runs again with all its arguments.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

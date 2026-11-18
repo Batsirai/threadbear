@@ -449,14 +449,16 @@ kept, and no key works for it.
   creating --> failed : FAILED(error, attempt?) (server) [notStale] / fail
   creating --> creating : LOST(attempt?) (server) / createAgain
   creating --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
-  creating --> destroying : ARCHIVE (owner) / archive
+  creating --> shelved : ARCHIVE (owner) [1. holdsWork] / shelve
+  creating --> destroying : ARCHIVE (owner) [else] / archive
   starting --> awake : READY (runner) / ready
   starting --> starting : CREATED(providerBoxId, attempt?) (server) [notStale] / created
   starting --> failed : FAILED(error, attempt?) (server) [notStale] / fail
   starting --> waking : LOST(attempt?) (server) [1. notStale] / bootLost
   starting --> starting : LOST(attempt?) (server) [else] / forgetOldBox
   starting --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
-  starting --> destroying : ARCHIVE (owner) / archive
+  starting --> shelved : ARCHIVE (owner) [1. holdsWork] / shelve
+  starting --> destroying : ARCHIVE (owner) [else] / archive
   awake --> awake : LEASE_DUE at leaseUntil [1. heardFrom] / renewLease
   awake --> awake : LEASE_DUE at leaseUntil [else] / unheard
   awake --> waking : LOST(attempt?) (server) [1. notStale] / lost
@@ -480,9 +482,9 @@ kept, and no key works for it.
   asleep --> waking : WAKE (server) / wake
   asleep --> asleep : LOST(attempt?) (server) / forgetBox
   asleep --> asleep : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
-  asleep --> shelved : ARCHIVE (owner) [1. unsavedPaused] / shelve
+  asleep --> shelved : ARCHIVE (owner) [1. holdsWork] / shelve
   asleep --> destroying : ARCHIVE (owner) [else] / archive
-  asleep --> asleep : SAVED(storageId, bytes) (runner) [unsaved] / savedAsleep
+  asleep --> asleep : SAVED(storageId, bytes) (runner) [holdsWork] / savedAsleep
   waking --> awake : RESUMED(attempt?) (server) [resumable] / resumed
   waking --> starting : CREATED(providerBoxId, attempt?) (server) [1. newBox] / created
   waking --> waking : CREATED(providerBoxId, attempt?) (server) [2. notStale] / noteBox
@@ -518,7 +520,8 @@ kept, and no key works for it.
   expired --> expired : DESTROYED (server) / forgetProvider
   failed --> waking : WAKE (server) / wake
   failed --> failed : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
-  failed --> destroying : ARCHIVE (owner) / archive
+  failed --> shelved : ARCHIVE (owner) [1. holdsWork] / shelve
+  failed --> destroying : ARCHIVE (owner) [else] / archive
 ```
 
 How a row is born:
@@ -533,7 +536,8 @@ From `creating`:
 - `FAILED(error, attempt?) (server)` [notStale] → `failed`. The provider couldn't make a box.
 - `LOST(attempt?) (server)` stays put. The provider lost the box it was making: the service makes another before the ten minutes are up.
 - `BOOT_TIMEOUT at bootBy` → `failed`. No box checked in: the thread waits for the next message to try again.
-- `ARCHIVE (owner)` → `destroying`. Mike archives the thread before its box is up.
+- `ARCHIVE (owner)` [1. holdsWork] → `shelved`. Mike archives the thread while a box of it may hold work newer than its save: that box is kept.
+- `ARCHIVE (owner)` [else] → `destroying`. Mike archives the thread before its box is up.
 
 From `starting`:
 
@@ -544,7 +548,8 @@ From `starting`:
 - `LOST(attempt?) (server)` [1. notStale] → `waking`. The box was lost while it booted: no key or boot token of it works, and a new box is made, restoring the last save if there is one.
 - `LOST(attempt?) (server)` [else] stays put. An older box's loss, reported late: only what was that box's goes.
 - `BOOT_TIMEOUT at bootBy` → `failed`. The box never checked in: the thread waits for the next message to try again.
-- `ARCHIVE (owner)` → `destroying`. Mike archives the thread while its box boots.
+- `ARCHIVE (owner)` [1. holdsWork] → `shelved`. Mike archives the thread while a box of it may hold work newer than its save: that box is kept.
+- `ARCHIVE (owner)` [else] → `destroying`. Mike archives the thread while its box boots.
 
 From `awake`:
 
@@ -566,7 +571,7 @@ From `saving`:
 - `SAVED(storageId, bytes) (runner)` → `asleep`. The save is in: it replaces the last one, and the box is paused if the provider can, else deleted.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the box, arriving late: kept, for pausing and deleting it.
 - `WAKE (server)` → `awake`. A message came in while it saved: the box stays up.
-- `SAVE_TIMEOUT at saveBy` [1. capped] → `asleep`. No save came, and it's past its day's hours: it sleeps unsaved, paused if it can be (nothing lost), else deleted, back to its last save.
+- `SAVE_TIMEOUT at saveBy` [1. capped] → `asleep`. No save came, and it's past its day's hours: it sleeps unsaved, paused if it can be (nothing lost), else kept running.
 - `SAVE_TIMEOUT at saveBy` [else] → `awake`. No save came: the box stays up rather than lose work, and it's asked again at the next idle check.
 - `LEASE_DUE at leaseUntil` [1. heardFrom] stays put. It has heartbeated: the lease runs five minutes from its last heartbeat.
 - `LEASE_DUE at leaseUntil` [else] stays put. No heartbeat for five minutes: it's marked unreachable and the provider is asked about the box; only its saying the box is gone replaces it.
@@ -580,9 +585,9 @@ From `asleep`:
 - `WAKE (server)` → `waking`. A message for the thread: the paused box is resumed, or a new one restores the save. Once only: a second message while it's waking doesn't start another.
 - `LOST(attempt?) (server)` stays put. The provider lost the paused box: its key goes with it, and as the save is still here, the next wake starts a new box.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the paused box, arriving late: kept, for resuming and deleting it.
-- `ARCHIVE (owner)` [1. unsavedPaused] → `shelved`. Mike archives the thread, which slept unsaved: its box is kept, as that's where the work is.
+- `ARCHIVE (owner)` [1. holdsWork] → `shelved`. Mike archives the thread while a box of it may hold work newer than its save (it slept unsaved, or wrote after saving): that box is kept.
 - `ARCHIVE (owner)` [else] → `destroying`. Mike archives the thread: its box, if any, is deleted; its save stays.
-- `SAVED(storageId, bytes) (runner)` [unsaved] stays put. A box kept running because it slept unsaved and can't pause saved at last: the save is in, and the box can go.
+- `SAVED(storageId, bytes) (runner)` [holdsWork] stays put. A box asleep with work newer than its save (kept running, as it can't pause) saved at last: the save is in, and the box can go.
 
 From `waking`:
 
@@ -642,4 +647,5 @@ From `failed`:
 
 - `WAKE (server)` → `waking`. A new message tries again with a new box.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for a box that came too late: kept, so it's found and deleted.
-- `ARCHIVE (owner)` → `destroying`. Mike archives the thread: any box the provider still has is deleted.
+- `ARCHIVE (owner)` [1. holdsWork] → `shelved`. Mike archives the thread while a box of it may hold work newer than its save: that box is kept.
+- `ARCHIVE (owner)` [else] → `destroying`. Mike archives the thread: any box the provider still has is deleted.

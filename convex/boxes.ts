@@ -395,6 +395,9 @@ export function mayMintAttempt(row: Pick<Doc<'boxes'>, 'workAttempts'>): boolean
 }
 export async function newAttempt(ctx: MutationCtx, row: Doc<'boxes'>, bootHash: string): Promise<{ expiresAt: number; attempt: number }> {
   if (!mayMintAttempt(row)) throw conflict(`A box of this thread (attempt ${row.workAttempts!.join(', ')}) may hold work newer than its save: it's resumed or waited on, not replaced.`);
+  // The fence: the older box's key is revoked in this same step, so it can
+  // make no work behind the new attempt (it had none since its save).
+  if (row.boxKeyHash !== undefined) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined });
   const expiresAt = Date.now() + BOOT_MS;
   const attempt = (row.boxAttempt ?? 0) + 1;
   await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt, bootAttempt: attempt, boxAttempt: attempt });

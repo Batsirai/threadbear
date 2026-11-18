@@ -7844,7 +7844,8 @@ has to be on for it.
   `boxFor`, `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`,
   `reapStep`, `observe`, `driftPage`, `driftLost`, `servicesToReap`,
   `serviceProvider`, `stuckDestroying`, `pruneSaves`, `retireBox`,
-  `retireDue`, `checkBox`, `retryKeptSaves`, `markKept`, `suspendFailed`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
+  `retireFence`, `deleteFence`, `mayRunNow`, `checkBox`, `retryKeptSaves`,
+  `markKept`, `suspendFailed`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
   `wakeAllWaiting`, `failExpired`, `archiveIfStill`. `report` takes the
   reporting run's `op`.
 - **Its first command.** The `create` that `startThread` queues names its

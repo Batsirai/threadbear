@@ -55,8 +55,6 @@ export const box = defineMachine(
       notStale: 'It names an older attempt at a box than the newest one this thread has: it changes nothing of the newer one.',
       newBox: 'That box has already traded its boot token, or is older than the newest: its news is only its provider id.',
       capped: "It was asked to save because it's been up its day's hours, not for being idle.",
-      unsavedPaused: 'It slept unsaved and its box, holding its key, is kept.',
-      unsaved: 'It slept with no save at its day\'s hours.',
       keptBox: "The box coming back is the one that holds the thread's key: it may hold work newer than the last save.",
       holdsWork: 'A box of the thread may hold work newer than the newest save it made.',
       stillWaking: 'A box of the thread may hold work newer than its save, and the wake has gone on less than fifteen minutes.',
@@ -76,7 +74,10 @@ export const box = defineMachine(
           FAILED: { to: 'failed', guard: 'notStale', effect: 'fail', description: "The provider couldn't make a box." },
           LOST: { effect: 'createAgain', description: 'The provider lost the box it was making: the service makes another before the ten minutes are up.' },
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'No box checked in: the thread waits for the next message to try again.' },
-          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread before its box is up.' },
+          ARCHIVE: [
+            { to: 'shelved', guard: 'holdsWork', effect: 'shelve', description: 'Mike archives the thread while a box of it may hold work newer than its save: that box is kept.' },
+            { to: 'destroying', effect: 'archive', description: 'Mike archives the thread before its box is up.' },
+          ],
         },
       },
       starting: {
@@ -91,7 +92,10 @@ export const box = defineMachine(
             { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
           ],
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'The box never checked in: the thread waits for the next message to try again.' },
-          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread while its box boots.' },
+          ARCHIVE: [
+            { to: 'shelved', guard: 'holdsWork', effect: 'shelve', description: 'Mike archives the thread while a box of it may hold work newer than its save: that box is kept.' },
+            { to: 'destroying', effect: 'archive', description: 'Mike archives the thread while its box boots.' },
+          ],
         },
       },
       awake: {
@@ -159,7 +163,7 @@ export const box = defineMachine(
           CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for the box, arriving late: kept, for pausing and deleting it." },
           WAKE: { to: 'awake', effect: 'stayUp', description: 'A message came in while it saved: the box stays up.' },
           SAVE_TIMEOUT: [
-            { to: 'asleep', guard: 'capped', effect: 'sleepUnsaved', description: "No save came, and it's past its day's hours: it sleeps unsaved, paused if it can be (nothing lost), else deleted, back to its last save." },
+            { to: 'asleep', guard: 'capped', effect: 'sleepUnsaved', description: "No save came, and it's past its day's hours: it sleeps unsaved, paused if it can be (nothing lost), else kept running." },
             { to: 'awake', effect: 'stayUp', description: "No save came: the box stays up rather than lose work, and it's asked again at the next idle check." },
           ],
           LEASE_DUE: [
@@ -181,10 +185,10 @@ export const box = defineMachine(
           LOST: { effect: 'forgetBox', description: "The provider lost the paused box: its key goes with it, and as the save is still here, the next wake starts a new box." },
           CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for the paused box, arriving late: kept, for resuming and deleting it." },
           ARCHIVE: [
-            { to: 'shelved', guard: 'unsavedPaused', effect: 'shelve', description: "Mike archives the thread, which slept unsaved: its box is kept, as that's where the work is." },
+            { to: 'shelved', guard: 'holdsWork', effect: 'shelve', description: "Mike archives the thread while a box of it may hold work newer than its save (it slept unsaved, or wrote after saving): that box is kept." },
             { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box, if any, is deleted; its save stays.' },
           ],
-          SAVED: { guard: 'unsaved', effect: 'savedAsleep', description: "A box kept running because it slept unsaved and can't pause saved at last: the save is in, and the box can go." },
+          SAVED: { guard: 'holdsWork', effect: 'savedAsleep', description: "A box asleep with work newer than its save (kept running, as it can't pause) saved at last: the save is in, and the box can go." },
         },
       },
       waking: {
@@ -237,7 +241,10 @@ export const box = defineMachine(
         on: {
           WAKE: { to: 'waking', effect: 'wake', description: 'A new message tries again with a new box.' },
           CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for a box that came too late: kept, so it's found and deleted." },
-          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: any box the provider still has is deleted.' },
+          ARCHIVE: [
+            { to: 'shelved', guard: 'holdsWork', effect: 'shelve', description: 'Mike archives the thread while a box of it may hold work newer than its save: that box is kept.' },
+            { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: any box the provider still has is deleted.' },
+          ],
         },
       },
     },
@@ -250,12 +257,10 @@ export const box = defineMachine(
       notStale: (_ctx, { row, event }) => !stale(row, event.attempt),
       newBox: (_ctx, { row, event }) => !stale(row, event.attempt) && !(event.attempt !== undefined && event.attempt === row.keyAttempt),
       capped: (_ctx, { row }) => row.boxState.kind === 'saving' && row.boxState.capped === true,
-      unsaved: (_ctx, { row }) => row.boxState.kind === 'asleep' && row.boxState.unsaved === true,
       holdsWork: (_ctx, { row }) => (row.workAttempts?.length ?? 0) > 0,
       stillWaking: (_ctx, { row }) => (row.workAttempts?.length ?? 0) > 0 && row.boxState.kind === 'waking' && Date.now() < (row.boxState.since ?? 0) + WAKE_GRACE_MS,
       wakeOverdue: (_ctx, { row, event }) => !stale(row, event.attempt) && row.boxState.kind === 'waking' && Date.now() >= (row.boxState.since ?? 0) + WAKE_GRACE_MS,
       keptBox: (_ctx, { row }) => row.boxKeyHash !== undefined && row.providerBoxId !== undefined && row.keyAttempt === row.providerAttempt,
-      unsavedPaused: (_ctx, { row }) => row.boxState.kind === 'asleep' && row.boxState.unsaved === true && row.boxKeyHash !== undefined && row.providerBoxId !== undefined,
       hasSave: (_ctx, { row }) => row.save !== undefined,
     },
     effects: {
@@ -314,7 +319,7 @@ export const box = defineMachine(
         await provide(ctx, 'sleepBox', id);
         await freed(ctx, row);
         await wakeIfPending(ctx as never, row.runnerId, 'asleep');
-        return { kind: 'asleep' as const, since: now, unsaved: true };
+        return { kind: 'asleep' as const, since: now };
       },
       stayUp: async (_ctx, { state }) => ({ kind: 'awake' as const, since: state.since, leaseUntil: state.leaseUntil }),
       saved: async (ctx, { id, row, state, event }) => {
@@ -337,7 +342,7 @@ export const box = defineMachine(
       // it's running (boxService.ts). The next message tries again.
       wakeGaveUp: async (ctx, { id }) => {
         await provide(ctx, 'sleepBox', id);
-        return { kind: 'asleep' as const, since: Date.now(), unsaved: true };
+        return { kind: 'asleep' as const, since: Date.now() };
       },
       // The billing guard paused the box (it wasn't entitled to run: past its
       // hours, silent past its lease, or a wake gone on too long): asleep as
@@ -347,7 +352,9 @@ export const box = defineMachine(
         const since = (state as { since?: number }).since;
         if (state.kind !== 'waking' && since !== undefined) await patch(ctx, id, awakeAdded(row, since));
         await freed(ctx, row);
-        return { kind: 'asleep' as const, since: Date.now(), unsaved: true };
+        // A message that came meanwhile wakes it again, if it may run.
+        await wakeIfPending(ctx as never, row.runnerId, 'asleep');
+        return { kind: 'asleep' as const, since: Date.now() };
       },
       sleep: async (ctx, { id, row, state, event }) => {
         const now = Date.now();
@@ -369,7 +376,7 @@ export const box = defineMachine(
       shelve: async (ctx, { id, row, state }) => {
         if (state.kind === 'archiving') await patch(ctx, id, awakeAdded(row, state.since));
         await provide(ctx, 'sleepBox', id);
-        if (state.kind === 'archiving') await freed(ctx, row);
+        if (['creating', 'starting', 'waking', 'archiving'].includes(state.kind)) await freed(ctx, row);
         await wakeIfPending(ctx as never, row.runnerId, 'shelved');
         return { kind: 'shelved' as const, at: Date.now() };
       },
@@ -436,7 +443,9 @@ export const box = defineMachine(
         return { kind: 'destroying' as const, since: Date.now() };
       },
       destroyed: async (ctx, { id, row, to }) => {
-        await patch(ctx, id, { ...revoked, ...noBox });
+        // A machine destroyBox kept (it may hold work) keeps its id on the row.
+        const kept = row.providerAttempt !== undefined && (row.workAttempts?.includes(row.providerAttempt) ?? false);
+        await patch(ctx, id, { ...revoked, ...(kept ? {} : noBox) });
         // An unarchive (or message) sent while it was being deleted brings it back now.
         if (to === 'gone') await wakeIfPending(ctx as never, row.runnerId, 'gone');
         else await expiredNow(ctx, row);

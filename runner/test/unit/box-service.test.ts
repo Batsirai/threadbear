@@ -1471,14 +1471,16 @@ test("M: a box kept running asleep is counted and charged, and is let go after i
 // 5. M: a resume that half worked ran for ever, uncounted.
 test('M: a wake whose box runs but never comes up is charged, and paused once its grace is out', async () => {
   const s = await setup();
-  const { runnerId, m } = await unsavedPaused(s);
+  const { runnerId, m, got } = await unsavedPaused(s);
   const stuck = s.fly.failWhile((r) => r.path.endsWith('/wait') && r.query.get('state') === 'started', 503);
-  await s.send(runnerId, 'T2');
+  const cmd = await s.send(runnerId, 'T2');
   s.skip();
   await call(s.ctx, boxes.wakeFor, { runnerId });
   s.skip();
   await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
   assert.equal(s.fly.byId(m.id)!.state, 'started', 'it runs');
+  // Its runner takes the message (nothing's left waiting to wake it again once it's paused).
+  assert.equal(await call(s.ctx, sync.takeCommand, { key: got.boxKey, commandId: cmd }), true);
   assert.equal(s.stateOf('T2'), 'waking');
   s.skip();
   // Within its grace the guard leaves it running, and charges it.
@@ -1612,4 +1614,102 @@ test('B: a machine gone from the provider is found by the reconciler, its slot f
   assert.deepEqual(s.rowOf('T2').workAttempts, [], 'gone, on the provider’s word');
   await setLimits(s, { maxBoxes: 1 }, 4096);
   assert.equal(await outcome(s.start('T3')), 'ok');
+});
+
+// ------------------------------------------------------------ Codex's seventh round (18 Nov 2026): the fence
+
+// 1. A retirement deleted work its box made after the retirement's check.
+test('the fence: a retirement revokes the box key as it decides, so no new work lands before the delete', async () => {
+  const s = await setup();
+  const { runnerId, m, got } = await pausedWithMessage(s);
+  const DAYS = 15 * 24 * 60 * MINUTE;
+  await later(DAYS, () => call(s.ctx, service.pruneSaves, { kind: 'asleep' }));
+  const job = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('retireBox')).at(-1)!;
+  s.skip();
+  const held = s.fly.hold((r) => r.query.get('metadata.tb_box') !== null);
+  const retiring = later(DAYS, () => call(s.a, service.retireBox, job.args));
+  await held.arrived;
+  // Between its decision and the delete, the box can write nothing.
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'auth');
+  held.release();
+  await retiring;
+  assert.equal(s.fly.byId(m.id)!.state, 'destroyed');
+});
+
+// 2. A write after the save, then an archive: the attempt was kept but its key revoked and its machine forgotten.
+test("work written after the last save makes an archive keep the box, and a repeated save doesn't count as work", async () => {
+  const s = await setup();
+  const { runnerId, m, got } = await pausedWithMessage(s);
+  assert.deepEqual(s.rowOf('T2').workAttempts, []);
+  // The same save sent again isn't work.
+  await call(s.ctx, boxes.boxSaved, { key: got.boxKey, storageId: s.rowOf('T2').save.storageId, bytes: 5000 });
+  assert.deepEqual(s.rowOf('T2').workAttempts, []);
+  // A late heartbeat after the save is: its box may hold work newer than the save.
+  await s.beat(got.boxKey, runnerId);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: 'T2' });
+  assert.equal(s.stateOf('T2'), 'shelved', 'kept, not deleted');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  assert.equal(s.rowOf('T2').providerBoxId, m.id);
+  await s.run();
+  await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { unarchive: true } });
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake', 'the same box resumed');
+  assert.equal(s.rowOf('T2').boxAttempt, 1);
+});
+
+// 3. A newer attempt left the older key able to work.
+test('the fence: minting a newer attempt revokes the older key in the same step', async () => {
+  const s = await setup();
+  const { runnerId, got } = await pausedWithMessage(s);
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } });
+  s.skip();
+  const newer = await call(s.a, boxes.mintBootToken, { key: OWNER, threadId: 'T2' });
+  assert.equal(newer.attempt, 2);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'auth');
+});
+
+// 4. A message waiting when the guard paused the box stayed pending.
+test('a message waiting when the guard pauses a box wakes it again', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  await s.boot('T2', s.fly.live()[0]!.id);
+  await s.send(runnerId, 'T2');
+  s.skip();
+  await later(20 * MINUTE, () => s.reap());
+  assert.equal(s.stateOf('T2'), 'awake', 'paused for its silence, then woken for the message');
+});
+
+// 5. A pause whose wait failed was undone by the lease checker.
+test("the lease checker doesn't resume a box the guard paused if it may not run", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  await s.boot('T2', m.id);
+  const lostWait = s.fly.failWhile((r) => r.path.endsWith('/wait') && r.query.get('state') === 'suspended', 503);
+  s.skip();
+  await later(20 * MINUTE, () => s.reap());
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  assert.equal(s.stateOf('T2'), 'awake', 'the wait failed, so nothing reported');
+  lostWait.stop();
+  await s.fireTimers(Date.now() + 21 * MINUTE);
+  await later(21 * MINUTE, () => s.run());
+  assert.equal(s.fly.calls('POST', '/start'), 0, 'not resumed');
+  assert.equal(s.stateOf('T2'), 'asleep');
+  assert.ok(runnerId);
+});
+
+// 6. A retirement that waited for the lease lost the sleep it was for.
+test('an action that waits for the lease runs again with all of its arguments', async () => {
+  const s = await setup();
+  await pausedWithMessage(s);
+  const boxId = boxIdOf(s, 'T2');
+  s.rowOf('T2').op = { id: 'another-run', name: 'wakeBox', until: Date.now() + 60 * MINUTE };
+  s.skip();
+  await call(s.a, service.retireBox, { boxId, asleepSince: 12345 });
+  const again = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).at(-1)!;
+  assert.ok(again.fn.endsWith('retireBox'));
+  assert.deepEqual(again.args, { boxId, asleepSince: 12345 });
 });

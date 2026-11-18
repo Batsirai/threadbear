@@ -31,8 +31,8 @@ export const boxStateV = v.union(
   // same, unsaved: paused (nothing lost) or, if it can't pause, deleted.
   v.object({ kind: v.literal('saving'), since: v.number(), leaseUntil: v.number(), saveBy: v.number(), capped: v.optional(v.boolean()) }),
   // Saved and slept: the box is paused if the provider can, else deleted.
-  // `unsaved`: slept at its day's hours with no save, so its paused box is
-  // all there is of its latest work (archiving it keeps the box).
+  // Whether its box may hold work newer than its save is the row's
+  // workAttempts, and nothing else (invariant W).
   v.object({ kind: v.literal('asleep'), since: v.number(), unsaved: v.optional(v.boolean()) }),
   // Coming back for a message: the paused box resumed, or a new one
   // restored from the last save.
