@@ -393,20 +393,25 @@ export const dropThreadRows = machines.internalMutation({
 // Clears the backfill brought over (migrations.ts clearState) have no timer
 // yet: each gets the one its state has, so a stalled one's runs start again.
 // The cron, every few minutes; there are a handful at most.
+const ARM_CLEARS = 'arm-clears-cursor';
 export const armClears = machines.internalMutation({
   args: {},
   returns: v.null(),
   handler: async (machineCtx) => {
     const ctx = machineCtx as unknown as MutationCtx;
-    // Every clearing row (a few small ones), not just the first: armed ones
-    // that keep failing mustn't keep a later one from its timer (Codex's
-    // review). At most 100 armed a run; the next run takes the rest.
-    let armed = 0;
-    for await (const c of ctx.db.query('threadClears').withIndex('by_clear_state', (q) => q.eq('clearState.kind', 'clearing'))) {
-      if (c.clearStateTimers.length) continue;
-      await clear.armTimers(machineCtx, c._id);
-      if (++armed >= 100) break;
-    }
+    // A page a run, from where the last left off (backendMarks), round and
+    // round: armed ones that keep failing, however many, mustn't keep a
+    // later one from its timer, nor a run from reading them all (Codex's
+    // review).
+    const mark = await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', ARM_CLEARS)).first();
+    const page = await ctx.db
+      .query('threadClears')
+      .withIndex('by_clear_state', (q) => q.eq('clearState.kind', 'clearing'))
+      .paginate({ numItems: 200, cursor: mark?.cursor ?? null });
+    for (const c of page.page) if (!c.clearStateTimers.length) await clear.armTimers(machineCtx, c._id);
+    const cursor = page.isDone ? undefined : page.continueCursor;
+    if (mark) await ctx.db.patch(mark._id, { cursor });
+    else if (cursor) await ctx.db.insert('backendMarks', { name: ARM_CLEARS, cursor });
     return null;
   },
 });

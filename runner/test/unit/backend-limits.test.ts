@@ -722,10 +722,10 @@ test('the backfill brings clears from before their machine over, and the sweep a
   await call(s.ctx, sync.armClears, {});
   assert.deepEqual(s.pendingTimers().map((t: any) => t.args.event), ['STALLED'], 'armed once, for the clearing one');
   // Past a hundred armed ones that keep failing, a later one still gets its timer.
-  for (let i = 0; i < 101; i++) await s.ctx.db.insert('threadClears', { threadId: `MANY${i}`, runnerId: MINI, clearState: { kind: 'clearing', moving: false, retryAt: Date.now() }, clearStateTimers: [] });
-  await call(s.ctx, sync.armClears, {});
-  await call(s.ctx, sync.armClears, {});
-  assert.equal(s.pendingTimers().length, 102, 'every clearing row armed');
+  // Past a page of them, a run reads one page and the next goes on from there.
+  for (let i = 0; i < 301; i++) await s.ctx.db.insert('threadClears', { threadId: `MANY${i}`, runnerId: MINI, clearState: { kind: 'clearing', moving: false, retryAt: Date.now() }, clearStateTimers: [] });
+  for (let i = 0; i < 4; i++) await call(s.ctx, sync.armClears, {});
+  assert.equal(s.pendingTimers().length, 302, 'every clearing row armed');
 });
 
 // Codex's review: while the deploy's stepping stone has the clear machine
