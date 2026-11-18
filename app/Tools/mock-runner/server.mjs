@@ -589,6 +589,11 @@ async function handle(client, { id, method, params = {} }) {
     // A new thread on mac-mini through this runner, as the relay files it.
     caller = { ...client, as: BRUCE };
   }
+  // THREADBEAR_MOCK_JITTER_MS: every request answered after a random wait up
+  // to this long, so answers can come back in a different order from the
+  // asks, as a busy real runner's can (features/tools/stress.mjs).
+  const jitter = Number(process.env.THREADBEAR_MOCK_JITTER_MS ?? 0);
+  if (jitter > 0 && method !== 'hello') await new Promise((resolve) => setTimeout(resolve, Math.random() * jitter));
   if (slow.ms > 0 && ['threads.send', 'threads.create', 'threads.update'].includes(method)) {
     await new Promise((resolve) => setTimeout(resolve, slow.ms));
   }

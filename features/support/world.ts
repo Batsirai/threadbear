@@ -82,6 +82,18 @@ export function describe(d: Dump): string {
 
 setWorldConstructor(ThreadbearWorld);
 
+// The stress run's slow runner (tools/stress.mjs): every scenario's mock
+// answers late by these, unless the scenario sets its own below. Defined
+// first, so a tagged scenario's own delay wins, and set again each scenario
+// since those After hooks delete theirs.
+Before(() => {
+  for (const [from, to] of [
+    ['TB_STRESS_EVENTS_DELAY_MS', 'THREADBEAR_MOCK_EVENTS_DELAY_MS'],
+    ['TB_STRESS_LIST_DELAY_MS', 'THREADBEAR_MOCK_LIST_DELAY_MS'],
+    ['TB_STRESS_JITTER_MS', 'THREADBEAR_MOCK_JITTER_MS'],
+  ]) if (process.env[from]) process.env[to] = process.env[from];
+});
+
 // A pin request must survive other pane updates while its highlights arrive.
 Before({ tags: '@panel.requests and @highlights.pinned' }, () => {
   process.env.THREADBEAR_MOCK_HIGHLIGHTS_DELAY_MS = '5000';
@@ -173,9 +185,22 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   // The web runtime's folder for this scenario (support/web-runtime.ts).
   if ((await webRuntimeSetup(pickle.tags.map((t) => t.name))) === 'skipped') return 'skipped';
   await this.app.start();
+  // The stress run's window size and look (tools/stress.mjs), before any step.
+  const size = /^(\d+)x(\d+)$/.exec(process.env.TB_STRESS_SIZE ?? '');
+  if (size) await this.app.do({ cmd: 'size', w: Number(size[1]), h: Number(size[2]) });
+  if (process.env.TB_STRESS_APPEARANCE) await this.app.do({ cmd: 'appearance', mode: process.env.TB_STRESS_APPEARANCE });
 });
 
 After(async function (this: ThreadbearWorld, { result, pickle }) {
+  // The stress run's record (tools/stress.mjs): a line per scenario as it
+  // ends, so a round cut short at its time limit still has what it ran.
+  if (process.env.TB_STRESS_LOG) {
+    const message = (result?.message ?? '').split('\n').slice(0, 6).join('\n');
+    fs.appendFileSync(process.env.TB_STRESS_LOG, JSON.stringify({
+      uri: path.basename(pickle.uri), name: pickle.name, tags: pickle.tags.map((t) => t.name),
+      status: result?.status, secs: Number(((Date.now() - scenarioStarted) / 1000).toFixed(1)), message,
+    }) + '\n');
+  }
   if (result?.status === Status.FAILED) {
     const dir = path.resolve('reports/failures');
     fs.mkdirSync(dir, { recursive: true });
