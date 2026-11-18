@@ -2224,9 +2224,12 @@ window stays where it is: the new version opens the same thread underneath
 and takes over, as the Swift app's does.
 
 The Updates icon on the left-hand rail shows what's on its way for the app,
-the runner and the Claude Code and Codex tools. A grey dot means something
-is in progress and will sort itself out, and a coloured dot means it needs
-you. Right-click it for a quick Restart to Update.
+the runner and the Claude Code and Codex tools. While the app's next
+version (or a runner release) is building, a short arc goes round the
+icon; once the app's next version is ready to restart into, the icon turns
+green. A grey dot means something else is in progress and will sort itself
+out, and a coloured dot means it needs you. Right-click it for a quick
+Restart to Update.
 
 A few parts of the runner (the program that keeps it going, and the small
 Threadbear Runner app macOS names in its privacy prompts) don't come with

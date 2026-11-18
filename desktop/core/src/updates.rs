@@ -476,6 +476,42 @@ pub fn needs_you(app: &AppSide, runner: Option<&RunnerUpdates>) -> bool {
     app.not_following.is_some() || runner.is_some_and(launcher_needs_you) || from_mike(runner) || not_following(runner)
 }
 
+/// What the icon itself shows of the next version, so a glance says it
+/// without opening the panel. Mike opened and shut Updates every 40 minutes
+/// or so on 18 Nov to see whether a build had finished; he picked a ring
+/// round the icon while one builds and the icon filled green once it's
+/// ready (review d3ac73e3, 19 Nov).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NextVersion {
+    /// Nothing on its way: the plain icon.
+    None,
+    /// The app's next version is building, or about to (waiting for main to
+    /// settle or for a Mac to build on), or the runner is building a
+    /// release: the ring turns.
+    Coming,
+    /// The app's next version is built and switches in when he's idle (or
+    /// now, from the panel): the icon fills green.
+    Ready,
+}
+
+pub fn next_version(app: &AppSide, runner: Option<&RunnerUpdates>) -> NextVersion {
+    if app.staged.is_some() {
+        NextVersion::Ready
+    } else if app.building || app.settling || app.waiting || runner.is_some_and(|r| r.state == "building") {
+        NextVersion::Coming
+    } else {
+        NextVersion::None
+    }
+}
+
+/// The grey dot: what `shown` and the CLIs count, less what the icon
+/// already shows as its ring or its green (`next_version`).
+pub fn quiet_dot(app: &AppSide, runner: Option<&RunnerUpdates>, clis: &[CliStatus]) -> bool {
+    let app = AppSide { staged: None, building: false, settling: false, waiting: false, ..app.clone() };
+    let runner = runner.map(|r| RunnerUpdates { state: if r.state == "building" { "idle".to_owned() } else { r.state.clone() }, ..r.clone() });
+    shown(&app, runner.as_ref()) || clis.iter().any(cli_pending)
+}
+
 /// A machine that isn't following GitHub's main: nothing fixes that by
 /// itself, and bruce sat three days behind unnoticed (9 Nov).
 fn not_following(runner: Option<&RunnerUpdates>) -> bool {
@@ -1168,6 +1204,36 @@ mod tests {
         let week = zone.timestamp_millis_opt(parse_ms("2026-11-14T01:20:00.000Z").unwrap()).unwrap();
         assert_eq!(checked_line(&clis, &week).as_deref(), Some("Checked Wed 9 am"));
         assert_eq!(checked_line(&[], &Local::now()), None);
+    }
+
+    #[test]
+    fn the_icon_shows_the_next_version_without_a_click() {
+        let app = |f: fn(&mut AppSide)| {
+            let mut a = AppSide { running: Some("abc1234".into()), ..Default::default() };
+            f(&mut a);
+            a
+        };
+        let nothing = app(|_| {});
+        assert_eq!(next_version(&nothing, None), NextVersion::None);
+        assert!(!quiet_dot(&nothing, None, &[]));
+        for coming in [app(|a| a.building = true), app(|a| a.settling = true), app(|a| a.waiting = true)] {
+            assert_eq!(next_version(&coming, None), NextVersion::Coming);
+            assert!(!quiet_dot(&coming, None, &[]), "the ring says it, so no grey dot too");
+        }
+        let runner = RunnerUpdates { state: "building".into(), ..Default::default() };
+        assert_eq!(next_version(&nothing, Some(&runner)), NextVersion::Coming);
+        assert!(!quiet_dot(&nothing, Some(&runner), &[]));
+        let ready = app(|a| {
+            a.staged = Some("def5678".into());
+            a.building = true;
+        });
+        assert_eq!(next_version(&ready, None), NextVersion::Ready, "ready wins over a newer one building");
+        assert!(!quiet_dot(&ready, None, &[]));
+        // What the ring and the green don't cover keeps its grey dot.
+        assert!(quiet_dot(&app(|a| a.failed = true), None, &[]));
+        assert!(quiet_dot(&ready, None, &mock_clis()));
+        let old = RunnerUpdates { state: "idle".into(), old_runners: vec![OldRunner::default()], ..Default::default() };
+        assert!(quiet_dot(&nothing, Some(&old), &[]));
     }
 
     #[test]

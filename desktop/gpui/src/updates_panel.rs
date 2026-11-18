@@ -152,7 +152,12 @@ impl Threadbear {
 
     /// Something on its way for the runner or a CLI: the icon's grey dot.
     pub(crate) fn updates_quiet_dot(&self) -> bool {
-        rules::shown(&self.app_side(), self.updates_panel.runner.as_ref()) || self.updates_panel.clis.iter().any(rules::cli_pending)
+        rules::quiet_dot(&self.app_side(), self.updates_panel.runner.as_ref(), &self.updates_panel.clis)
+    }
+
+    /// The ring while the next version builds, green once it's ready.
+    pub(crate) fn next_version(&self) -> rules::NextVersion {
+        rules::next_version(&self.app_side(), self.updates_panel.runner.as_ref())
     }
 
     /// Something only Mike can do: the accent dot.
