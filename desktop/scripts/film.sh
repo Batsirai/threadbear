@@ -92,9 +92,21 @@ case "$cmd" in
       die "another checkout is filming on $host (one at a time, as there's one stage)"
     fi
     "${SSH[@]}" "$host" "mkdir -p $base/bin $base/rec $base/fixtures"
+    # Desk Runner has to be able to open $base, with a time limit: ssh reads
+    # it while Desk Runner's every open there can sit forever. On 19 Nov an
+    # unanswered "would like to access files on a removable volume" prompt
+    # for another app (bun, 18 Nov 19:23) had macOS hold every later
+    # removable-volume request on Tinker Desk, Desk Runner's included, behind
+    # it, with the screen asleep so nobody saw it, and start waited 20 minutes
+    # on a hold.pl that never ran.
+    # Checked first, so it fails in seconds rather than after the build, and
+    # without desk()'s cd into $base, which nothing could time out.
+    if ! "${SSH[@]}" "$host" "~/.local/bin/desk $(q "perl -e 'alarm 15; exec @ARGV' /bin/sh -c ': > $base/.desk-probe && rm -f $base/.desk-probe'")" >/dev/null 2>&1; then
+      die "Desk Runner on $host can't open $base (gave up after 15 seconds). Most likely macOS has an unanswered \"would like to access files on a removable volume\" prompt on its screen, for Desk Runner or any other app, and every later request for that disk waits behind it. See it with ssh $host '~/.local/bin/desk \"screencapture -x /tmp/s.png\"' and copy /tmp/s.png back, then answer it on $host. Or film from a folder on its own disk, with FILM_DIR=<home there>/threadbear-film on every film.sh command"
+    fi
     # A previous take's app and stage go first, and with them its hold on the
     # lock, which the build below waits for.
-    [ "$("${SSH[@]}" "$host" "[ -d $base/checkout ] && echo yes")" != yes ] || there "desktop/scripts/dev-app.sh stop --id film >/dev/null 2>&1; touch $base/stage.stop; for i in \$(seq 1 20); do pgrep -f '[t]hreadbear-film/$key/stage ' >/dev/null || break; sleep 0.5; done; pkill -f '[h]old.pl $base ' || true; rm -f $base/stage.stop $base/stage.json $base/locked $base/go"
+    [ "$("${SSH[@]}" "$host" "[ -d $base/checkout ] && echo yes")" != yes ] || there "desktop/scripts/dev-app.sh stop --id film >/dev/null 2>&1; touch $base/stage.stop; for i in \$(seq 1 20); do pgrep -f '[t]hreadbear-film/$key/stage ' >/dev/null || break; sleep 0.5; done; pkill -f '^perl desktop/scripts/film/hold.pl $base ' || true; rm -f $base/stage.stop $base/stage.json $base/locked $base/go"
     if [ "$build" = 1 ]; then
       echo "Building on $host..." >&2
       log="$(mktemp -t film-build)"
@@ -114,10 +126,23 @@ case "$cmd" in
     # The host's build-and-measurement lock first (film/hold.pl), so the app's
     # window and the stage never land in another thread's --desk run.
     desk "(perl desktop/scripts/film/hold.pl $base $base/stage $stage_size >$base/stage.log 2>&1 </dev/null &)"
-    said=""
+    # Only the perl itself: the shell Desk Runner started it from has
+    # "hold.pl <base>" in its command line too, and stays if perl never runs.
+    holding="pgrep -f '^perl desktop/scripts/film/hold.pl $base ' >/dev/null"
+    # Whether anyone holds the lock right now (a moment's try for it, let go
+    # at once): if nobody does, hold.pl should have had it already.
+    lock_free="perl -MFcntl=:flock -e 'open(my \$l, q(>>), \"\$ENV{HOME}/.cache/threadbear-perf.lock\") or exit 1; exit(flock(\$l, LOCK_EX|LOCK_NB) ? 0 : 1)'"
+    said="" free=0
     until there "[ -f $base/locked ]"; do
-      there "pgrep -f '[h]old.pl $base ' >/dev/null" || { there "cat $base/stage.log" >&2; die "the lock holder stopped (above says why)"; }
-      note="$("${SSH[@]}" "$host" "sed -n 3p ~/.cache/threadbear-perf.lock.holder 2>/dev/null")"
+      there "$holding" || { there "cat $base/stage.log" >&2; die "the lock holder stopped (above says why)"; }
+      # Free for 30 seconds while hold.pl hasn't said it has it: it's stuck
+      # on something else (opening $base, say), not waiting its turn.
+      if there "$lock_free"; then free=$((free + 1)); else free=0; fi
+      if [ "$free" -ge 6 ]; then
+        there "pkill -f '^perl desktop/scripts/film/hold.pl $base ' || true; cat $base/stage.log 2>/dev/null || true" >&2
+        die "hold.pl on $host hasn't taken the build-and-measurement lock in 30 seconds though nobody holds it, so it's stuck, not waiting (stopped it). Check Desk Runner can open $base: desk \"ls $base\" there should answer at once"
+      fi
+      note="$("${SSH[@]}" "$host" "sed -n 3p ~/.cache/threadbear-perf.lock.holder 2>/dev/null || true")"
       [ "$note" = "$said" ] || { echo "Waiting for $host's build-and-measurement lock, held by: ${note:-someone}" >&2; said="$note"; }
       sleep 5
     done
