@@ -74,7 +74,8 @@ const failuresDir = path.join(root, 'features/reports/failures');
 for (let i = 0; i < repeat && Date.now() < deadline - 30_000; i++) {
   const roundSeed = seed + i;
   fs.rmSync(failuresDir, { recursive: true, force: true });
-  const before = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').length : 0;
+  const lines = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+  const before = lines();
   const cucumber = spawn(path.join(root, 'features/node_modules/.bin/cucumber-js'), ['--order', `random:${roundSeed}`, ...files], {
     cwd: path.join(root, 'features'),
     env: {
@@ -96,7 +97,7 @@ for (let i = 0; i < repeat && Date.now() < deadline - 30_000; i++) {
   for (const f of fs.existsSync(failuresDir) ? fs.readdirSync(failuresDir) : []) {
     fs.renameSync(path.join(failuresDir, f), path.join(out, 'failures', `r${i}-${f}`));
   }
-  const ran = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').length - before : 0;
+  const ran = lines() - before;
   meta.rounds.push({ seed: roundSeed, code, cut, scenarios: ran });
   console.log(`stress: round ${i + 1}/${repeat} seed ${roundSeed}: ${ran} scenarios, exit ${code}${cut ? ' (cut at the time limit)' : ''}`);
   if (cut) break;
