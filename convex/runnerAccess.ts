@@ -24,7 +24,7 @@ export type RunnerKeyRow = { _id?: string; runnerId: string; revokedAt?: number 
 // still good: a box being destroyed, gone or failed has none (the machine
 // clears the hash too, boxMachine.ts).
 export type BoxKeyRow = { _id: string; runnerId: string; threadId: string; boxKeyHash?: string; boxState: { kind: string } };
-export const BOX_KEY_DEAD: readonly string[] = ['destroying', 'gone', 'failed'];
+export const BOX_KEY_DEAD: readonly string[] = ['destroying', 'gone', 'expired', 'failed'];
 // What a box key looks like (boxes.ts newBoxKey): only keys with this start
 // are looked up among boxes, so a runner key never is.
 export const BOX_KEY_PREFIX = 'tbb_';

@@ -8,9 +8,10 @@ import type { MutationCtx } from './_generated/server';
 import { internal } from './_generated/api';
 
 // The states a command for the box's runner wakes it from: asleep (resume
-// it, or a new box from the save), failed (try a new box) and saving (it
-// stays up, boxMachine.ts).
-export const WAKES_FROM: readonly string[] = ['asleep', 'failed', 'saving'];
+// it, or a new box from the save), failed (try a new box), saving (it
+// stays up, boxMachine.ts) and gone (unarchived: a new box from the save).
+// From expired the command fails, saying the thread can't come back.
+export const WAKES_FROM: readonly string[] = ['asleep', 'failed', 'saving', 'gone', 'expired'];
 
 // Long enough for the box's runner to finish the command that archived its
 // thread before its key stops working.
@@ -23,13 +24,22 @@ export const ARCHIVE_GRACE_MS = 60_000;
  * taken, so they make one wake. A box's `save` (boxService.ts askToSave)
  * isn't a reason to wake it.
  */
-export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: string): Promise<void> {
+export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: string, args?: unknown): Promise<void> {
   if (kind === 'save') return;
   const row = await ctx.db
     .query('boxes')
     .withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))
     .first();
-  if (row && WAKES_FROM.includes(row.boxState.kind)) await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId });
+  if (!row || !WAKES_FROM.includes(row.boxState.kind)) return;
+  // An archived one comes back only for what needs it running (unarchiving
+  // it, a message), not for marking it seen or a title.
+  if (row.boxState.kind === 'gone' && !wakesArchived(kind, args)) return;
+  await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId });
+}
+
+function wakesArchived(kind: string, args: unknown): boolean {
+  if (kind === 'update') return (args as { unarchive?: unknown } | null)?.unarchive === true;
+  return ['send', 'respond', 'press', 'move'].includes(kind);
 }
 
 /**
@@ -42,5 +52,5 @@ export async function archiveSoon(ctx: MutationCtx, threadId: string): Promise<v
     .query('boxes')
     .withIndex('by_threadId', (q) => q.eq('threadId', threadId))
     .first();
-  if (row && row.boxState.kind !== 'destroying' && row.boxState.kind !== 'gone') await ctx.scheduler.runAfter(ARCHIVE_GRACE_MS, internal.boxes.archiveIfStill, { threadId });
+  if (row && !['destroying', 'gone', 'expired'].includes(row.boxState.kind)) await ctx.scheduler.runAfter(ARCHIVE_GRACE_MS, internal.boxes.archiveIfStill, { threadId });
 }

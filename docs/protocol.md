@@ -6153,12 +6153,16 @@ type RemoteRunner = {
                        // a message reaches (box, below)
   lastSeenAt: string
   followProblem?: string
-  box?: { state: string } // one thread's box on a virtual runner (Virtual
-                       // runners), as its machine has it: creating,
-                       // starting, awake, saving, asleep, waking, failed,
-                       // destroying or gone. Online in all but the last two,
-                       // as a message starts or wakes it. An older runner
-                       // leaves it out.
+  box?: { state: string, waiting?: true } // one thread's box on a virtual
+                       // runner (Virtual runners), as its machine has it:
+                       // creating, starting, awake, saving, asleep, waking,
+                       // failed, destroying, gone (archived, its save kept)
+                       // or expired (it can't come back). Online in all but
+                       // destroying and expired, as a message starts or
+                       // wakes it. `waiting`: a message wants it woken but
+                       // its virtual runner has maxBoxes up, so it waits
+                       // (with the message) for one to sleep. An older
+                       // runner leaves it out.
 }
 // rpcUrl and tokenFile were the direct link between Macs (step 6 part 2),
 // taken out 13 Nov 2026. An app ignores them if an older runner sends them.
@@ -7738,16 +7742,33 @@ has to be on for it.
   `idleSleepMinutes`, or that has been up `maxAwakeHoursPerDay` today, is
   sent a `save` command for its thread (never by a client), unless a
   command waits for it. Its runner saves the thread and calls `boxSaved`;
-  the box is then paused if the provider can (Fly up to 2 GB), else
-  deleted.
+  the box is then paused if it can be (Fly up to 2 GB, by the size it was
+  made at, not the virtual runner's size now), else deleted. One past its
+  day's hours that hasn't saved in 10 minutes sleeps anyway: paused with
+  its memory, or deleted (back to its last save) if it can't pause. A
+  pause the provider refuses deletes it instead.
 - **Waking.** Any command queued for a box's runner (`queueCommand`, or
-  any of the phone's) while its box is asleep, saving or failed wakes
-  it: the same box resumed if it was paused, else a new box that restores
-  the last save. Two quick messages make one wake. The command waits in
-  the queue meanwhile.
+  any of the phone's), or a move to or from it (`startMove`), while its
+  box is asleep, saving or failed wakes it: the same box resumed if it
+  was paused, else a new box that restores the last save. Two quick
+  messages make one wake. The command waits in the queue meanwhile. A
+  wake that would take its virtual runner past `maxBoxes` waits instead
+  (`RemoteRunner.box.waiting`); the oldest waiting wakes when a box
+  sleeps, fails or is archived, or at the next idle check.
+- **Archived threads.** An archived thread's box is `gone`, its save kept
+  for `deleteAfterDays`: unarchiving it (an `update` with `unarchive`), a
+  message, a reply to a card or a move brings it back on a new box from
+  that save; marking it seen or renaming it doesn't. Once the save is
+  deleted, or if it never saved, the box is `expired`: anything sent to
+  its runner fails at once with a note that the thread can't come back.
+- **One provider call at a time.** Each of the service's actions holds
+  the box row's `op` lease while it calls the provider for that box, so a
+  sleep's suspend and a wake's start never overlap; another waits 5
+  seconds and tries again. After its calls it reads the row again and
+  puts the machine right (a box woken while it paused is resumed).
 - **Reachable.** A box's runner counts as online wherever that's checked
   (`startMove`, and a runner's `RemoteRunner.online`, Other runners'
-  threads) in every state but `destroying` and `gone`, as a message
+  threads) in every state but `destroying` and `expired`, as a message
   starts or wakes it; `otherRunnersList` gives its `box: { state }`. A box
   takes only its own thread: `queueCommand` and `phone:create` refuse a
   `create` for its runner (`kind: "badArgs"`), the phone never picks one
@@ -7758,15 +7779,23 @@ has to be on for it.
   `archiveBox` does it at once.
 - **The crons** (`convex/crons.ts`): sleep idle boxes every 2 minutes;
   every 10, reap what the provider has that nobody wants (no row, an older
-  attempt than the row's, an archived or failed thread's), take in a box
-  whose create never reported, sleep an asleep box still running, and
-  delete again one stuck being deleted; every 6 hours, delete archived
-  threads' saves and box rows past `deleteAfterDays`.
+  attempt than the row's, an archived, expired or failed thread's), take
+  in a box whose create never reported, sleep an asleep box still running,
+  lose one that stopped (under its op lease, asking the provider again),
+  and delete again one stuck being deleted; every 6 hours, delete archived
+  threads' saves past `deleteAfterDays`. Each goes through its rows or
+  the provider's boxes a page at a time, carrying on in a run of its own
+  from where it stopped. A reaper step is checked again against its row
+  as it is when it runs, and dropped if the row has moved on.
 - **Internal.** `boxService:createBox`, `wakeBox`, `sleepBox`,
   `destroyBox` (the actions; each reads the row again and acts on its
-  newest attempt only), `claimAttempt`, `boxFor`, `sleepIdleBoxes`,
-  `reapBoxes`, `reapPlan`, `servicesToReap`, `stuckDestroying`,
-  `pruneSaves`; `boxes:beginThread`, `wakeFor`, `archiveIfStill`.
+  newest attempt only), `claimOp`, `releaseOp`, `claimAttempt`, `boxFor`,
+  `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`, `reapStep`,
+  `servicesToReap`, `serviceProvider`, `stuckDestroying`, `pruneSaves`;
+  `boxes:beginThread`, `wakeFor`, `wakeWaiting`, `archiveIfStill`.
+- **Its first command.** The `create` that `startThread` queues names its
+  thread, which has no row until the box's runner writes it: the box's
+  key, and only for its own thread's `create`, takes it all the same.
 
 ### Box keys
 

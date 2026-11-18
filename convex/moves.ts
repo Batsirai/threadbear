@@ -27,6 +27,7 @@ import { machines, move as moveMachine } from './machines';
 import { dropChunks } from './moveMachine';
 import { moveStateFrom } from './moveStates';
 import { steppingFor } from './stepping';
+import { wakeIfAsleep } from './boxHooks';
 
 // A runner heard from this recently is online (as phone.ts has it).
 const ONLINE_MS = 3 * 60_000;
@@ -172,6 +173,8 @@ export const startMove = mutation({
     const fields: Omit<WithoutSystemFields<Move>, 'moveState' | 'moveStateTimers'> = { moveId, threadId: a.threadId, from: t.runnerId, to: a.to, state: 'asking', ...(cwd ? { cwd } : {}), ...(accountId ? { accountId } : {}), ...(a.expect ? { expect: a.expect } : {}), createdAt: now, updatedAt: now };
     const made = await moveMachine.create(ctx, fields as never, { type: 'START' });
     if (made.status !== 'done') throw conflict(`The move couldn't be started: ${made.reasons.join(' ')}`);
+    // A sleeping box on either side takes its part once it's woken (within its maxBoxes).
+    for (const runnerId of [t.runnerId, a.to]) await wakeIfAsleep(ctx, runnerId, 'move');
     return { moveId };
   },
 });

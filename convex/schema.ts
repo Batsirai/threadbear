@@ -321,6 +321,16 @@ export const appSchema = defineSchema({
     repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }),
     // Which Claude login the box runs on: its cloudTokens row's `login`.
     login: v.string(),
+    // The size the newest attempt's box was made at (boxService.ts
+    // claimAttempt), which says whether it can pause: the virtual runner's
+    // size may change after.
+    size: v.optional(v.object({ attempt: v.number(), cpus: v.number(), memoryMb: v.number() })),
+    // A message wants it awake, but its virtual runner has maxBoxes up: it
+    // wakes, oldest first, when one sleeps or goes (boxes.ts wakeWaiting).
+    wantsWakeAt: v.optional(v.number()),
+    // The service's action calling the provider for this box now, so two
+    // never overlap (a sleep's suspend and a wake's start); another waits.
+    op: v.optional(v.object({ id: v.string(), name: v.string(), until: v.number() })),
     createdAt: v.number(),
   })
     .index('by_threadId', ['threadId'])
@@ -329,6 +339,7 @@ export const appSchema = defineSchema({
     .index('by_box_key', ['boxKeyHash'])
     .index('by_box_state', ['boxState.kind'])
     .index('by_service_state', ['serviceId', 'boxState.kind'])
+    .index('by_service_wants', ['serviceId', 'wantsWakeAt'])
     .index('by_save', ['save.storageId']),
 
   // A Claude login's year-long token for boxes (decision 10), made with

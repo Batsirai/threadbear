@@ -379,7 +379,7 @@ on its own box key, and heartbeats every
 minute.
   end note
   state "saving" as saving
-  saving : since, leaseUntil, saveBy
+  saving : since, leaseUntil, saveBy, capped?
   note right of saving
 The box is saving the thread out of
 itself: committing and pushing its work,
@@ -410,9 +410,16 @@ any more.
   state "gone" as gone
   gone : at
   note right of gone
-The box is deleted. The row stays for
-its save, deleted after the virtual
-runner's deleteAfterDays.
+Archived and its box deleted. The row
+stays for its save, deleted after the
+virtual runner's deleteAfterDays.
+  end note
+  state "expired" as expired
+  expired : at
+  note right of expired
+Its box and its save are gone: the
+thread can't come back, and what's sent
+to it fails saying so.
   end note
   state "failed" as failed
   failed : at, error
@@ -439,14 +446,15 @@ kept, and no key works for it.
   awake --> waking : LEASE_DUE at leaseUntil [else] / lost
   awake --> waking : LOST(attempt?) (server) [1. notStale] / lost
   awake --> awake : LOST(attempt?) (server) [else] / forgetOldBox
-  awake --> saving : IDLE(attempt?) (server) [notStale] / askSave
+  awake --> saving : IDLE(attempt?, capped?) (server) [notStale] / askSave
   awake --> awake : SAVED(storageId, bytes) (runner) / saved
   awake --> awake : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   awake --> destroying : ARCHIVE (owner) / archive
   saving --> asleep : SAVED(storageId, bytes) (runner) / sleep
   saving --> saving : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   saving --> awake : WAKE (server) / stayUp
-  saving --> awake : SAVE_TIMEOUT at saveBy / stayUp
+  saving --> asleep : SAVE_TIMEOUT at saveBy [1. capped] / sleepUnsaved
+  saving --> awake : SAVE_TIMEOUT at saveBy [else] / stayUp
   saving --> saving : LEASE_DUE at leaseUntil [1. heardFrom] / renewLease
   saving --> waking : LEASE_DUE at leaseUntil [else] / lost
   saving --> waking : LOST(attempt?) (server) [1. notStale] / lost
@@ -464,12 +472,15 @@ kept, and no key works for it.
   waking --> failed : FAILED(error, attempt?) (server) [notStale] / fail
   waking --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
   waking --> destroying : ARCHIVE (owner) / archive
-  destroying --> gone : DESTROYED (server) / destroyed
+  destroying --> gone : DESTROYED (server) [1. hasSave] / destroyed
+  destroying --> expired : DESTROYED (server) [else] / destroyed
   destroying --> destroying : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
+  gone --> waking : WAKE (server) / wake
+  gone --> expired : EXPIRE (server) / expire
   failed --> waking : WAKE (server) / wake
   failed --> failed : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   failed --> destroying : ARCHIVE (owner) / archive
-  gone --> [*]
+  expired --> [*]
 ```
 
 How a row is born:
@@ -504,7 +515,7 @@ From `awake`:
 - `LEASE_DUE at leaseUntil` [else] → `waking`. No heartbeat for five minutes: the box is lost. Its key is refused from now, and a new box restores the thread from its last save.
 - `LOST(attempt?) (server)` [1. notStale] → `waking`. The provider says the box is gone: its key is refused from now, and a new box restores the thread from its last save.
 - `LOST(attempt?) (server)` [else] stays put. An older box's loss, reported late: only what was that box's goes.
-- `IDLE(attempt?) (server)` [notStale] → `saving`. The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps.
+- `IDLE(attempt?, capped?) (server)` [notStale] → `saving`. The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps.
 - `SAVED(storageId, bytes) (runner)` stays put. The box saved the thread unasked: the save replaces the last one, and it stays awake.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the box that's up, arriving late: kept, for pausing and deleting it.
 - `ARCHIVE (owner)` → `destroying`. Mike archives the thread: its box is deleted.
@@ -516,7 +527,8 @@ From `saving`:
 - `SAVED(storageId, bytes) (runner)` → `asleep`. The save is in: it replaces the last one, and the box is paused if the provider can, else deleted.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the box, arriving late: kept, for pausing and deleting it.
 - `WAKE (server)` → `awake`. A message came in while it saved: the box stays up.
-- `SAVE_TIMEOUT at saveBy` → `awake`. No save came: the box stays up rather than lose work, and it's asked again at the next idle check.
+- `SAVE_TIMEOUT at saveBy` [1. capped] → `asleep`. No save came, and it's past its day's hours: it sleeps unsaved, paused if it can be (nothing lost), else deleted, back to its last save.
+- `SAVE_TIMEOUT at saveBy` [else] → `awake`. No save came: the box stays up rather than lose work, and it's asked again at the next idle check.
 - `LEASE_DUE at leaseUntil` [1. heardFrom] stays put. It has heartbeated: the lease runs five minutes from its last heartbeat.
 - `LEASE_DUE at leaseUntil` [else] → `waking`. No heartbeat for five minutes: the box is lost, and a new box restores the thread from its last save.
 - `LOST(attempt?) (server)` [1. notStale] → `waking`. The provider says the box is gone mid-save: a new box restores the thread from its last save.
@@ -544,8 +556,14 @@ From `waking`:
 
 From `destroying`:
 
-- `DESTROYED (server)` → `gone`. The provider has deleted the box.
+- `DESTROYED (server)` [1. hasSave] → `gone`. The provider has deleted the box; its save stays, so it can come back.
+- `DESTROYED (server)` [else] → `expired`. The provider has deleted the box, and with nothing saved the thread can never come back.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for a box made just before the archive: kept, so it's deleted too.
+
+From `gone`:
+
+- `WAKE (server)` → `waking`. Unarchived, or a message: a new box restores the last save.
+- `EXPIRE (server)` → `expired`. deleteAfterDays have passed: its save is deleted, and the thread can't come back.
 
 From `failed`:
 

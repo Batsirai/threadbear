@@ -329,16 +329,16 @@ API, never the real one), `box-fly.test.ts` (the adapter) and
   saving or waking); then `createBox`. `boxes:setRunnerService` and
   `runnerServices` make and list virtual runners.
 - **Waking** (decision 6): `queued()` (both insert sites) schedules
-  `boxes:wakeFor` for a command to a box that's asleep, saving or failed,
-  which sends `WAKE` once. A box's own `save` command doesn't wake it.
-- **Reachable** (decision 6): in every state but `destroying` and `gone`
-  (`failed` too, as a message tries a new box): `startMove` lets a box's
+  `boxes:wakeFor` for a command to a box that's asleep, saving, failed or
+  gone, which sends `WAKE` once, room allowing. A box's own `save` command doesn't wake it.
+- **Reachable** (decision 6): in every state but `destroying` and `expired`
+  (`failed` and `gone` too, as a message tries a new box): `startMove` lets a box's
   own thread move to it, and `otherRunnersList` gives each box's state,
   which the runner's `thread-index.ts` counts as online, so `mustBeOnline`
   lets a message through. The phone's online checks pick a runner for a
   *new* thread, which a box never is: `mainRunner` and `mainOwnerRunner`
   skip boxes, and `phone:create`, `quickAsk` and `queueCommand`'s
-  `create` refuse a box's runner.
+  `create` refuse a box's runner. A move to or from a sleeping box wakes it.
 - **The crons**: every 2 minutes, an awake box idle `idleSleepMinutes`
   (no command waiting, its thread not starting, running or waiting on an
   answer) or up `maxAwakeHoursPerDay` today (busy or not, unless a
@@ -348,7 +348,38 @@ API, never the real one), `box-fly.test.ts` (the adapter) and
 - **Archiving**: a box's thread put in the den or removed has its box
   deleted after a minute (`boxHooks.ts archiveSoon`), unless it's out of
   the den again; `archiveBox` at once. An archive command for a sleeping
-  box wakes it to do it.
+  box wakes it to do it. The box is then `gone`, its save kept for
+  `deleteAfterDays`: unarchiving it (or a message) brings it back on a
+  new box from the save. After that, or if it never saved, it's
+  `expired`, and what's sent to it fails saying it can't come back.
+
+Codex's review of the second slice (18 Nov 2026) found nine holes, fixed
+with a test each in `box-service.test.ts` (the fake Fly API can hold a
+request, so a test runs one action in the middle of another):
+
+- The day's hours cap needed the box to save: one that never did stayed
+  up. A capped save that doesn't come in 10 minutes now sleeps it anyway
+  (`saving.capped`, `sleepUnsaved`): paused, or deleted if it can't pause.
+- Waking ignored `maxBoxes`. A wake past it now waits (`boxes.wantsWakeAt`,
+  `RemoteRunner.box.waiting`), with its message pending, and the oldest
+  waiting wakes when a box sleeps, fails or is archived (`wakeWaiting`).
+- A sleep's slow suspend could land after a wake had resumed the box.
+  One action at a time calls the provider for a box (`boxes.op`, a lease
+  claimed in a mutation; another waits and runs again), and a sleep that
+  finds the thread woken when its suspend returns resumes the box.
+- Pause support came from the virtual runner's size now. It's the size
+  each attempt was made at (`boxes.size`), and a refused suspend deletes
+  the box (LOST: the save's already in).
+- A new thread's `create` was refused, as its thread had no row yet: a
+  box's key now takes its own thread's `create` before then.
+- An archived thread couldn't come back (above).
+- The reaper acted on a plan the row had moved on from. Each step is
+  checked against the row in the mutation that takes it (`reapStep`), and
+  a loss is only reported under the box's op lease after asking the
+  provider again. A resume the machine didn't take goes on to a new box.
+- A move to or from a sleeping box never woke it: `startMove` does now.
+- The crons' bounded scans saw the same first rows each run: they page,
+  carrying on from where they stopped (the reaper by provider id).
 
 Not built yet, in about the order they're needed:
 
@@ -358,7 +389,8 @@ Not built yet, in about the order they're needed:
 - TODO a lost box's taken command put back to pending once (decision 12).
 - TODO starting and waking from the phone (`startThread` takes the owner
   key only), and archiving a sleeping box's thread without waking it.
-- TODO `maxBoxes` for a wake: today only a start is refused past it.
+- TODO save before archiving: archiving deletes the box at once, so an
+  unarchive comes back to the last save, not to where it was.
 - TODO the GPUI app and the phone (Order, 4), and the experiment (14).
 
 ## Order

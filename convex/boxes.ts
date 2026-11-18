@@ -16,14 +16,14 @@ import { ConvexError, v, type Infer } from 'convex/values';
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { box as boxMachine, machines, queued } from './machines';
+import { box as boxMachine, command as commandMachine, machines, queued } from './machines';
 import { BOOT_MS } from './boxStates';
 import { checkRunnerId, forbidden, runnerAuth, sha256, withoutCredentials } from './lib';
 import { commandArgs } from './relay';
 import { PROVIDERS } from './boxProviders/types';
 import { WAKES_FROM } from './boxHooks';
 import { BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runnerAccess';
-import { deleteIfUnused, MAX_RUNNER_UPLOAD_BYTES, uploadedBy } from './sync';
+import { deleteIfUnused, endCommandFiles, finishedArgs, MAX_RUNNER_UPLOAD_BYTES, uploadedBy } from './sync';
 
 // A virtual runner's limits when it's made (runnerServices.limits).
 export const BOX_LIMITS = { maxBoxes: 5, idleSleepMinutes: 10, maxAwakeHoursPerDay: 8, deleteAfterDays: 14 } as const;
@@ -554,12 +554,63 @@ export const report = machines.internalMutation({
 export const wakeFor = machines.internalMutation({
   args: { runnerId: v.string() },
   returns: v.boolean(),
-  handler: async (ctx, { runnerId }) => {
+  handler: async (machineCtx, { runnerId }) => {
+    const ctx = machineCtx as unknown as MutationCtx;
     const row = await ctx.db.query('boxes').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first();
     if (!row || !WAKES_FROM.includes(row.boxState.kind)) return false;
-    return (await boxMachine.send(ctx, row._id, { type: 'WAKE' })).status === 'done';
+    if (row.boxState.kind === 'expired') {
+      await failWaiting(ctx, runnerId, EXPIRED_NOTE);
+      return false;
+    }
+    // A saving box is up already; any other needs room under maxBoxes, or waits for it.
+    if (row.boxState.kind !== 'saving' && !(await hasRoom(ctx, row.serviceId))) {
+      if (row.wantsWakeAt === undefined) await ctx.db.patch(row._id, { wantsWakeAt: Date.now() });
+      return false;
+    }
+    return (await boxMachine.send(machineCtx, row._id, { type: 'WAKE' })).status === 'done';
   },
 });
+
+// Whether a virtual runner has room for one more box up under its maxBoxes.
+async function hasRoom(ctx: QueryCtx, serviceId: Id<'runnerServices'>): Promise<boolean> {
+  const max = (await ctx.db.get(serviceId))?.limits.maxBoxes ?? BOX_LIMITS.maxBoxes;
+  return (await countBoxes(ctx, serviceId, RUNNING, max)) < max;
+}
+
+/**
+ * A box of this virtual runner stopped counting toward maxBoxes (it slept,
+ * failed or was archived; boxMachine.ts freed): the ones waiting to wake
+ * (wakeFor) wake, oldest first, while there's room. The idle cron runs it
+ * too, so a slot freed some other way isn't missed.
+ */
+export const wakeWaiting = machines.internalMutation({
+  args: { serviceId: v.id('runnerServices') },
+  returns: v.number(),
+  handler: async (machineCtx, { serviceId }) => {
+    const ctx = machineCtx as unknown as MutationCtx;
+    let woken = 0;
+    for (let i = 0; i < 20; i++) {
+      const row = await ctx.db.query('boxes').withIndex('by_service_wants', (q) => q.eq('serviceId', serviceId).gt('wantsWakeAt', 0)).first();
+      if (!row) break;
+      if (!(await hasRoom(ctx, serviceId))) break;
+      // wake clears wantsWakeAt; a row that's moved on is let go of.
+      if ((await boxMachine.send(machineCtx, row._id, { type: 'WAKE' })).status === 'done') woken++;
+      else await ctx.db.patch(row._id, { wantsWakeAt: undefined });
+    }
+    return woken;
+  },
+});
+
+const EXPIRED_NOTE = "This thread's machine and its last save have been deleted since it was archived, so it can't come back.";
+
+// The commands waiting for a box's runner that will never run, failed with why.
+async function failWaiting(ctx: MutationCtx, runnerId: string, note: string): Promise<void> {
+  for (const c of await ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', 'pending')).take(50)) {
+    await commandMachine.send(ctx, c._id, { type: 'THREAD_ELSEWHERE' });
+    await ctx.db.patch(c._id, { args: finishedArgs(c.args), note });
+    await endCommandFiles(ctx, c._id);
+  }
+}
 
 /** The thread was archived or deleted a while ago (boxHooks.ts archiveSoon): its box goes, unless it's back out. */
 export const archiveIfStill = internalMutation({
@@ -569,7 +620,7 @@ export const archiveIfStill = internalMutation({
     const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
     if (t && t.view !== 'den') return null;
     const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
-    if (!row || row.boxState.kind === 'destroying' || row.boxState.kind === 'gone') return null;
+    if (!row || ['destroying', 'gone', 'expired'].includes(row.boxState.kind)) return null;
     await boxMachine.send(ctx, row._id, { type: 'ARCHIVE' });
     return null;
   },

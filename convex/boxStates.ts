@@ -23,8 +23,10 @@ export const boxStateV = v.union(
   // awake time. `leaseUntil`: when it's lost unless it has heartbeated.
   v.object({ kind: v.literal('awake'), since: v.number(), leaseUntil: v.number() }),
   // Asked to save the thread out of the box before it sleeps (decision 7).
-  // `saveBy`: when it stays awake again if no save came.
-  v.object({ kind: v.literal('saving'), since: v.number(), leaseUntil: v.number(), saveBy: v.number() }),
+  // `saveBy`: when it stays awake again if no save came. `capped`: asked
+  // because it's been up its day's hours, so by then it sleeps all the
+  // same, unsaved: paused (nothing lost) or, if it can't pause, deleted.
+  v.object({ kind: v.literal('saving'), since: v.number(), leaseUntil: v.number(), saveBy: v.number(), capped: v.optional(v.boolean()) }),
   // Saved and slept: the box is paused if the provider can, else deleted.
   v.object({ kind: v.literal('asleep'), since: v.number() }),
   // Coming back for a message: the paused box resumed, or a new one
@@ -32,8 +34,12 @@ export const boxStateV = v.union(
   v.object({ kind: v.literal('waking'), bootBy: v.number() }),
   // Archived: the provider is deleting the box.
   v.object({ kind: v.literal('destroying'), since: v.number() }),
-  // Its box is deleted. The row stays for its save until deleteAfterDays.
+  // Archived and its box deleted. The row stays for its save until
+  // deleteAfterDays: a message (unarchiving it) brings it back on a new box.
   v.object({ kind: v.literal('gone'), at: v.number() }),
+  // Archived with no save, or its save deleted after deleteAfterDays: the
+  // thread can't come back. What's sent to it fails, saying so.
+  v.object({ kind: v.literal('expired'), at: v.number() }),
   // A box couldn't be started or brought back. The thread and its save are
   // kept; the next message tries again.
   v.object({ kind: v.literal('failed'), at: v.number(), error: v.string() }),

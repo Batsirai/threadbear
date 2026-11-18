@@ -3127,7 +3127,10 @@ export const takeCommand = mutation({
     // applied by the runner that had it, which may keep a copy.
     if (c.threadId !== undefined && c.runnerId !== 'any') {
       const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', c.threadId!)).unique();
-      if (!t || t.runnerId !== c.runnerId) {
+      // A thread's box takes the create that makes its thread before the
+      // thread has a row (boxes.ts beginThread names it): that's its row's start.
+      const boxStart = !t && c.kind === 'create' && caller.box?.threadId === c.threadId;
+      if (!boxStart && (!t || t.runnerId !== c.runnerId)) {
         await command.send(ctx, commandId, { type: 'THREAD_ELSEWHERE' });
         await ctx.db.patch(commandId, { args: finishedArgs(c.args), note: t ? 'That thread is on another runner now.' : 'That thread has gone.' });
         await endCommandFiles(ctx, commandId);
@@ -3842,8 +3845,10 @@ export const setThreadIndex = mutation({
 });
 
 // box: a thread's box on a virtual runner, with its state (boxMachine.ts), so
-// the runner counts it reachable while it sleeps or starts (decision 6).
-const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string() })) });
+// the runner counts it reachable while it sleeps or starts (decision 6), and
+// `waiting` while a message wants it woken but its virtual runner has
+// maxBoxes up (boxes.ts wakeFor).
+const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()) })) });
 
 async function otherRunners(ctx: QueryCtx, runnerId: string) {
   const runners = [];
@@ -3856,10 +3861,15 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
       ...(r.icon !== undefined ? { icon: r.icon } : {}),
       ...(r.rpcUrl !== undefined ? { rpcUrl: r.rpcUrl } : {}),
       ...(r.followProblem !== undefined ? { followProblem: r.followProblem } : {}),
-      ...(r.box ? { box: { state: (await boxOfRunner(ctx, r))?.boxState.kind ?? 'gone' } } : {}),
+      ...(r.box ? { box: await boxSummary(ctx, r) } : {}),
     });
   }
   return runners;
+}
+
+async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean }> {
+  const row = await boxOfRunner(ctx, r);
+  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined ? { waiting: true } : {}) };
 }
 
 // API 29: the other runners on their own, so a heartbeat re-runs only this

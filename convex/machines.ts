@@ -46,7 +46,7 @@ export const box = boxMachine;
 export async function queued(ctx: MutationCtx, fields: Omit<WithoutSystemFields<Doc<'commands'>>, 'state' | 'commandState' | 'commandStateTimers'>): Promise<Id<'commands'>> {
   const r = await command.create(ctx, { ...fields, state: 'pending' } as never, { type: 'QUEUE' });
   if (r.status !== 'done') throw new ConvexError({ kind: 'conflict', message: `the command couldn't be queued: ${r.reasons.join(' ')}` });
-  await wakeIfAsleep(ctx, fields.runnerId, fields.kind);
+  await wakeIfAsleep(ctx, fields.runnerId, fields.kind, fields.args);
   return r.id as Id<'commands'>;
 }
 

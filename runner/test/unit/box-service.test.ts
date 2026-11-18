@@ -22,7 +22,9 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'reapBoxes']);
+const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'reapBoxes', 'reapService']);
+// What run() runs of what's scheduled: the service's steps, and a move's rehoming.
+const RUNS = new Set(['boxes.wakeFor', 'boxes.archiveIfStill', 'boxes.wakeWaiting', 'moves.rehomeRows']);
 const REPO = { origin: 'https://github.com/mikecann/threadbear.git', subfolder: '', baseBranch: 'main' };
 const AT = new Date().toISOString();
 const MINUTE = 60_000;
@@ -38,36 +40,45 @@ async function setup(memoryMb = 2048) {
   // The helper's own box (THREAD) was made before any of this: its create isn't run here.
   let cursor = s.scheduled.length;
   await call(s.ctx, boxes.setRunnerService, { key: OWNER, serviceId: s.serviceId, name: 'Cloud (Fly)', provider: 'fly', image: 'registry.fly.io/threadbear-box:1', box: { cpus: 2, memoryMb } });
-  // Runs the service's scheduled steps as Convex's scheduler would, in order, until none are left. Returns their names.
+  // Runs the service's scheduled steps as Convex's scheduler would, in order (delays aside), until none are left. Returns their names.
   const run = async (): Promise<string[]> => {
     const ran: string[] = [];
+    let steps = 0;
     while (cursor < s.scheduled.length) {
       const job = s.scheduled[cursor++] as { fn: string; args: Record<string, unknown> };
       const [, mod, name] = job.fn.split('.') as [string, string, string];
-      if (mod !== 'boxService' && !(mod === 'boxes' && (name === 'wakeFor' || name === 'archiveIfStill'))) continue;
-      ran.push(name);
+      if (mod !== 'boxService' && !RUNS.has(`${mod}.${name}`)) continue;
+      // wakeWaiting runs from the idle cron every time: not listed, to keep the lists to the point.
+      if (name !== 'wakeWaiting') ran.push(name);
+      if (++steps > 200) throw new Error(`run(): still going after 200 steps: ${ran.slice(-5).join(', ')}`);
       await call(ACTIONS.has(name) ? s.a : s.ctx, load(mod)[name], job.args);
     }
     return ran;
+  };
+  // Skips what's scheduled so far, for a test that runs steps by hand.
+  const skip = () => {
+    cursor = s.scheduled.length;
   };
   const start = (threadId: string, text = 'hello') => call(s.a, boxes.startThread, { key: OWNER, serviceId: s.serviceId, threadId, repo: REPO, login: LOGIN, text, permissionMode: 'ask' });
   const rowOf = (threadId: string) => s.rows('boxes').find((r) => r.threadId === threadId)!;
   const stateOf = (threadId: string): string => rowOf(threadId).boxState.kind;
   // The boot token the provider was given for a machine: only there, in its environment.
   const bootOf = (machineId: string): string => fly.byId(machineId)!.config.env.THREADBEAR_BOX_BOOT;
-  // What the box's runner does once booted: its exchange, a heartbeat, and its thread's row.
+  // What the box's runner does once booted: its exchange, a heartbeat,
+  // what's waiting for it (the create that makes its thread, first), then its thread's row.
   const boot = async (threadId: string, machineId: string) => {
     const got = await s.exchange(bootOf(machineId));
-    await call(s.ctx, sync.heartbeat, { key: got.boxKey, runner: { runnerId: got.runnerId, name: 'box', version: 'v', startedAt: AT, draining: false, threadCount: 1 } });
-    await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId, runnerId: got.runnerId, title: 't', view: 'inbox', needsYou: false }] });
+    await beat(got.boxKey, got.runnerId);
     await takeAll(got.boxKey, got.runnerId);
+    await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId, runnerId: got.runnerId, title: 't', view: 'inbox', needsYou: false }] });
     return got;
   };
-  // The box's runner takes and finishes what's waiting for it (its create, a message).
+  const beat = (boxKey: string, runnerId: string) => call(s.ctx, sync.heartbeat, { key: boxKey, runner: { runnerId, name: 'box', version: 'v', startedAt: AT, draining: false, threadCount: 1 } });
+  // The box's runner takes and finishes what's waiting for it (its create, a message). Each take must work.
   const takeAll = async (boxKey: string, runnerId: string) => {
     for (const c of await call(s.ctx, sync.pendingCommands, { key: boxKey, runnerId })) {
       if (c.kind === 'save') continue;
-      await call(s.ctx, sync.takeCommand, { key: boxKey, commandId: c.commandId });
+      assert.equal(await call(s.ctx, sync.takeCommand, { key: boxKey, commandId: c.commandId }), true, `the box takes its ${c.kind}`);
       await call(s.ctx, sync.finishCommand, { key: boxKey, commandId: c.commandId, ok: true });
     }
   };
@@ -80,8 +91,19 @@ async function setup(memoryMb = 2048) {
   };
   const send = (runnerId: string, threadId: string, text = 'more') => call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId, kind: 'send', args: { text } });
   const sleepIdle = (ms: number) => later(ms, () => call(s.ctx, service.sleepIdleBoxes, {}));
-  const reap = () => call(s.a, service.reapBoxes, {});
-  return { ...s, fly, run, start, rowOf, stateOf, bootOf, boot, takeAll, save, send, sleepIdle, reap };
+  // The reaper's cron: it schedules a run per virtual runner, which run() runs.
+  const reap = async () => {
+    await call(s.a, service.reapBoxes, {});
+    return run();
+  };
+  // A box past its idle minutes, asked to save, saves, and is slept.
+  const sleepWith = async (threadId: string, boxKey: string, name = `save-${threadId}`) => {
+    assert.ok((await sleepIdle(11 * MINUTE)) >= 1);
+    await save(boxKey, name);
+    assert.equal(stateOf(threadId), 'asleep');
+    await run();
+  };
+  return { ...s, fly, run, skip, start, rowOf, stateOf, bootOf, boot, beat, takeAll, save, send, sleepIdle, reap, sleepWith };
 }
 
 test('a thread starts on a virtual runner: its runner, its box and its create, then the service makes one box', async () => {
@@ -268,7 +290,7 @@ test('the service action run twice, or its create retried after a lost answer, m
   const fresh = await s.start('T3');
   const b3 = s.rowOf('T3')._id;
   assert.ok(fresh);
-  assert.deepEqual(await call(s.ctx, service.claimAttempt, { boxId: b3, bootHash: 'a'.repeat(64) }), { attempt: 1 });
+  assert.equal((await call(s.ctx, service.claimAttempt, { boxId: b3, bootHash: 'a'.repeat(64) })).attempt, 1);
   assert.equal(await call(s.ctx, service.claimAttempt, { boxId: b3, bootHash: 'b'.repeat(64) }), null);
 });
 
@@ -363,8 +385,7 @@ test("the reaper sleeps an asleep box that's still running, and loses one that s
   s.fly.failNext('POST', '/suspend', 500, 3);
   await s.run();
   assert.equal(s.fly.byId(m.id)!.state, 'created');
-  await s.reap();
-  assert.deepEqual(await s.run(), ['sleepBox']);
+  assert.ok((await s.reap()).includes('sleepBox'));
   assert.equal(s.fly.byId(m.id)!.state, 'suspended');
   // Stopped while asleep (its snapshot gone): lost, and the next wake starts a new box.
   s.fly.byId(m.id)!.state = 'stopped';
@@ -386,7 +407,8 @@ test('a box stuck being deleted is deleted again by the reaper', async () => {
   assert.equal(s.stateOf('T2'), 'destroying');
   await later(11 * MINUTE, () => s.reap());
   await s.run();
-  assert.equal(s.stateOf('T2'), 'gone');
+  // Never saved: it can't come back.
+  assert.equal(s.stateOf('T2'), 'expired');
   assert.equal(s.fly.live().length, 0);
 });
 
@@ -409,7 +431,7 @@ test("a box past its day's hours is asked to save even with a dev server running
   assert.equal(s.stateOf('T2'), 'saving');
 }));
 
-test("archived threads' saves go after the virtual runner's days, and their rows with them", async () => {
+test("archived threads' saves go after the virtual runner's days, and the thread then can't come back", async () => {
   const s = await setup();
   await s.start('T2');
   await s.run();
@@ -422,7 +444,8 @@ test("archived threads' saves go after the virtual runner's days, and their rows
   assert.ok(s.hasFile('save1'));
   assert.equal(await later(15 * 24 * 60 * MINUTE, () => call(s.ctx, service.pruneSaves, {})), 1);
   assert.equal(s.hasFile('save1'), false);
-  assert.equal(s.rows('boxes').some((r) => r.threadId === 'T2'), false);
+  assert.equal(s.stateOf('T2'), 'expired');
+  assert.equal(s.rowOf('T2').save, undefined);
 });
 
 test("deleting a box's thread deletes its box; one taken back out of the den within the grace keeps it", async () => {
@@ -437,7 +460,8 @@ test("deleting a box's thread deletes its box; one taken back out of the den wit
   assert.equal(s.stateOf('T2'), 'awake');
   await call(s.ctx, sync.removeThreads, { key: got.boxKey, threadIds: ['T2'] });
   assert.deepEqual(await s.run(), ['archiveIfStill', 'destroyBox']);
-  assert.equal(s.stateOf('T2'), 'gone');
+  // Never saved: it can't come back.
+  assert.equal(s.stateOf('T2'), 'expired');
 });
 
 test('a box asleep, starting or failed counts as reachable: listed with its state, and a move to it is let through', async () => {
@@ -507,4 +531,303 @@ test('only the owner makes, changes and lists virtual runners, and the values ar
   assert.equal(await outcome(s.start('T7')), 'conflict');
   assert.equal(await outcome(s.start('T2')), 'conflict');
   assert.equal(s.rows('runners').filter((r) => r.box).length, 1, "T2's runner only: a refused start writes none");
+});
+
+// ------------------------------------------------------------ Codex's review of 66ccfc1c4 (18 Nov 2026)
+
+const boxIdOf = (s: Awaited<ReturnType<typeof setup>>, threadId: string) => s.rowOf(threadId)._id;
+const setLimits = (s: Awaited<ReturnType<typeof setup>>, limits: Record<string, number>, memoryMb = 2048) =>
+  call(s.ctx, boxes.setRunnerService, { key: OWNER, serviceId: s.serviceId, name: 'Cloud (Fly)', provider: 'fly', image: 'registry.fly.io/threadbear-box:1', box: { cpus: 2, memoryMb }, limits });
+
+// 1. The day's cap didn't depend on the box: one that never saved stayed up for ever.
+for (const memoryMb of [2048, 4096]) {
+  test(`past its day's hours, a ${memoryMb} MB box whose save never comes sleeps anyway (${memoryMb > 2048 ? 'deleted' : 'paused'})`, () => atNoon(async () => {
+    const s = await setup(memoryMb);
+    const { runnerId } = await s.start('T2');
+    await s.run();
+    const m = s.fly.live()[0]!;
+    const got = await s.boot('T2', m.id);
+    await setLimits(s, { maxAwakeHoursPerDay: 1, idleSleepMinutes: 600 }, memoryMb);
+    await later(60 * MINUTE, () => s.beat(got.boxKey, runnerId));
+    assert.equal(await s.sleepIdle(61 * MINUTE), 1);
+    assert.equal(s.rowOf('T2').boxState.capped, true);
+    // It heartbeats, but never saves.
+    await later(70 * MINUTE, () => s.beat(got.boxKey, runnerId));
+    await s.fireTimers(Date.now() + 72 * MINUTE);
+    assert.equal(s.stateOf('T2'), 'asleep');
+    await s.run();
+    if (memoryMb <= 2048) {
+      assert.equal(s.fly.byId(m.id)!.state, 'suspended', 'paused with its memory: nothing lost');
+      assert.ok(s.rowOf('T2').boxKeyHash, 'its key kept, to resume');
+    } else {
+      assert.equal(s.fly.live().length, 0, "deleted, as it can't pause");
+      assert.equal(s.rowOf('T2').boxKeyHash, undefined);
+    }
+  }));
+}
+
+// 2. A wake went past maxBoxes.
+test('a wake past maxBoxes waits, its message pending, and wakes when another box sleeps', async () => {
+  const s = await setup();
+  // The helper's own box is creating: one of two.
+  await setLimits(s, { maxBoxes: 2 });
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await s.sleepWith('T2', got.boxKey);
+  const { runnerId: r3 } = await s.start('T3');
+  await s.run();
+  const got3 = await s.boot('T3', s.fly.live().find((m) => m.config.metadata.tb_box === boxIdOf(s, 'T3'))!.id);
+  const cmd = await s.send(runnerId, 'T2');
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'asleep', 'no room: it waits');
+  assert.ok(s.rowOf('T2').wantsWakeAt);
+  assert.equal(s.rows('commands').find((c) => c._id === cmd)!.state, 'pending');
+  const listed = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: 'main-mac' })).find((r: { runnerId: string }) => r.runnerId === runnerId);
+  assert.deepEqual(listed.box, { state: 'asleep', waiting: true });
+  // T3 sleeps: T2 wakes in its place.
+  await s.sleepWith('T3', got3.boxKey);
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(s.rowOf('T2').wantsWakeAt, undefined);
+  assert.ok(r3);
+});
+
+// 3. A sleep's slow suspend finished after a wake had resumed the box.
+test('a wake while the box is pausing waits for the pause, and the box ends up running', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.sleepIdle(11 * MINUTE);
+  await s.save(got.boxKey, 'save1');
+  s.skip();
+  const boxId = boxIdOf(s, 'T2');
+  const held = s.fly.hold((r) => r.path.endsWith('/suspend'));
+  const sleeping = call(s.a, service.sleepBox, { boxId });
+  await held.arrived;
+  // A message comes while the suspend is on its way.
+  await s.send(runnerId, 'T2');
+  s.skip();
+  assert.equal(await call(s.ctx, boxes.wakeFor, { runnerId }), true);
+  assert.equal(s.stateOf('T2'), 'waking');
+  await call(s.a, service.wakeBox, { boxId });
+  assert.equal(s.stateOf('T2'), 'waking', 'the wake waits for the pause');
+  assert.equal(s.fly.calls('POST', '/start'), 0);
+  held.release();
+  await sleeping;
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(s.fly.byId(m.id)!.state, 'started', 'running, as the row says');
+});
+
+// 4. A box's pause support came from its virtual runner's size now, not the size it was made at.
+test('a box made at 4096 MB is deleted on sleep after its virtual runner is made 2 GB, and a refused pause deletes it too', async () => {
+  const s = await setup(4096);
+  await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await setLimits(s, {}, 2048);
+  await s.sleepWith('T2', got.boxKey);
+  assert.equal(s.fly.calls('POST', '/suspend'), 0, 'not tried');
+  assert.equal(s.fly.live().length, 0);
+  assert.equal(s.rowOf('T2').boxKeyHash, undefined);
+  // A 2 GB box whose suspend Fly refuses outright.
+  const { runnerId } = await s.start('T3');
+  await s.run();
+  const m3 = s.fly.live()[0]!;
+  const got3 = await s.boot('T3', m3.id);
+  s.fly.failNext('POST', '/suspend', 400);
+  await s.sleepWith('T3', got3.boxKey);
+  assert.equal(s.fly.byId(m3.id)!.state, 'destroyed');
+  assert.equal(s.rowOf('T3').boxKeyHash, undefined, 'lost: the next wake makes a new box from the save');
+  assert.ok(runnerId);
+});
+
+// 5. A fresh thread's create was refused as THREAD_ELSEWHERE: no thread row yet.
+test("a new thread's box takes its create before the thread has a row, and nothing else of another thread", async () => {
+  const s = await setup();
+  const { runnerId, commandId } = await s.start('T2');
+  await s.run();
+  const got = await s.exchange(s.bootOf(s.fly.live()[0]!.id));
+  assert.equal(s.rows('threads').some((t) => t.threadId === 'T2'), false);
+  assert.equal(await call(s.ctx, sync.takeCommand, { key: got.boxKey, commandId }), true);
+  assert.equal(s.rows('commands').find((c) => c._id === commandId)!.state, 'taken');
+  assert.ok(runnerId);
+});
+
+// 6. An archived box thread couldn't be unarchived.
+test('an archived thread comes back on a new box from its save when unarchived', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await s.save(got.boxKey, 'save1');
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: 'T2', runnerId, title: 't', view: 'den', needsYou: false }] });
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'gone');
+  // Unarchived from the Mac (or the phone, through the same queue).
+  const cmd = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { unarchive: true } });
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'starting');
+  const m = s.fly.live()[0]!;
+  assert.equal(m.config.metadata.tb_attempt, '2');
+  const back = await s.exchange(s.bootOf(m.id));
+  assert.equal(back.save.url, 'https://files.example/save1');
+  assert.equal(await call(s.ctx, sync.takeCommand, { key: back.boxKey, commandId: cmd }), true);
+});
+
+test("once an archived thread's save is deleted, what's sent to it fails saying it can't come back", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await s.save(got.boxKey, 'save1');
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: 'T2', runnerId, title: 't', view: 'den', needsYou: false }] });
+  await s.run();
+  await later(15 * 24 * 60 * MINUTE, () => call(s.ctx, service.pruneSaves, {}));
+  assert.equal(s.stateOf('T2'), 'expired');
+  const cmd = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { unarchive: true } });
+  await s.run();
+  const c = s.rows('commands').find((x) => x._id === cmd)!;
+  assert.equal(c.state, 'failed');
+  assert.match(c.note, /can't come back/);
+  assert.equal(s.fly.live().length, 0);
+  assert.deepEqual((await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: 'main-mac' })).find((r: { runnerId: string }) => r.runnerId === runnerId).box, { state: 'expired' });
+});
+
+// 7. The reaper acted on a plan the row had moved on from, and a refused RESUMED stopped the wake.
+test("a reaper step planned before a wake resumed the box does nothing", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.sleepWith('T2', got.boxKey);
+  // Its snapshot went: stopped. The reaper plans a loss.
+  s.fly.byId(m.id)!.state = 'stopped';
+  const box = { providerBoxId: m.id, state: 'stopped', boxId: boxIdOf(s, 'T2'), attempt: 1 };
+  const [step] = await call(s.ctx, service.reapPlan, { serviceId: s.serviceId, boxes: [box] });
+  assert.equal(step.do, 'lost');
+  // Meanwhile a message wakes it, and it comes back on the same box.
+  await s.send(runnerId, 'T2');
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(await call(s.ctx, service.reapStep, { serviceId: s.serviceId, box: step.box, do: step.do, seen: step.seen }), false);
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+});
+
+test("the reaper's loss waits for a wake on the same box, and is dropped when the row has moved on", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.sleepWith('T2', got.boxKey);
+  s.fly.byId(m.id)!.state = 'stopped';
+  s.skip();
+  // The reaper asks the provider again, under the box's op lease: held there while a message comes.
+  const held = s.fly.hold((r) => r.query.get('metadata.tb_box') !== null);
+  const reaping = call(s.a, service.reapService, { serviceId: s.serviceId });
+  await held.arrived;
+  await s.send(runnerId, 'T2');
+  s.skip();
+  await call(s.ctx, boxes.wakeFor, { runnerId });
+  await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  assert.equal(s.stateOf('T2'), 'waking', 'the wake waits for the reaper');
+  held.release();
+  await reaping;
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  assert.equal(s.rowOf('T2').boxAttempt, 1, 'the same box');
+});
+
+test("a resume that isn't taken (its key went meanwhile) goes on to a new box", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.sleepWith('T2', got.boxKey);
+  await s.send(runnerId, 'T2');
+  s.skip();
+  await call(s.ctx, boxes.wakeFor, { runnerId });
+  const held = s.fly.hold((r) => r.path.endsWith('/start'));
+  const waking = call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  await held.arrived;
+  // The paused box is reported lost while it starts: its key goes.
+  await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'LOST', attempt: 1 } });
+  held.release();
+  await waking;
+  assert.equal(s.stateOf('T2'), 'starting');
+  assert.ok(s.fly.live().some((x) => x.config.metadata.tb_attempt === '2'));
+});
+
+// 8. A move to or from a sleeping box never woke it.
+test('a move off a sleeping box wakes it, and runs to the end', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.sleepWith('T2', got.boxKey);
+  await s.ctx.db.insert('runners', { runnerId: 'main-mac', name: 'main', version: 'v', startedAt: AT, draining: false, threadCount: 0, lastSeenAt: Date.now() });
+  const { moveId } = await call(s.ctx, moves.startMove, { key: OWNER, threadId: 'T2', to: 'main-mac' });
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'awake', 'woken to take its part');
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  const box = got.boxKey;
+  await call(s.ctx, moves.moveInfo, { key: box, moveId, info: { cwd: '/x' } });
+  await call(s.ctx, moves.moveReady, { key: OWNER, moveId, plan: { cwd: '/x' }, sealKey: `${'A'.repeat(43)}=` });
+  await call(s.ctx, moves.moveFrozen, { key: box, moveId });
+  const url: string = await call(s.ctx, moves.moveChunkUrl, { key: box, moveId });
+  const ticket = new URL(url).searchParams.get('ticket');
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: s.file('chunk1'), bytes: 1000 }), true);
+  await call(s.ctx, moves.movePacked, { key: box, moveId, chunks: ['chunk1'], sha256: 'a'.repeat(64), bytes: 1000 });
+  assert.deepEqual(await call(s.ctx, moves.moveChunks, { key: OWNER, moveId }), ['https://files.example/chunk1']);
+  await call(s.ctx, moves.moveClaim, { key: OWNER, moveId });
+  await s.run();
+  await call(s.ctx, moves.moveDone, { key: OWNER, moveId });
+  assert.equal(s.rows('threadMoves').find((x) => x.moveId === moveId)!.state, 'done');
+  assert.equal(s.rows('threads').find((t) => t.threadId === 'T2')!.runnerId, 'main-mac');
+});
+
+// 9. The crons' bounded scans saw the same first rows every run.
+test('the idle cron and the reaper reach every box, a page at a time', async () => {
+  const s = await setup();
+  await setLimits(s, { maxBoxes: 10 });
+  for (const t of ['T2', 'T3', 'T4']) {
+    await s.start(t);
+    await s.run();
+    await s.boot(t, s.fly.live().find((m) => m.config.metadata.tb_box === boxIdOf(s, t))!.id);
+  }
+  assert.equal(await later(11 * MINUTE, () => call(s.ctx, service.sleepIdleBoxes, { numItems: 1 })), 1);
+  await later(11 * MINUTE, () => s.run());
+  assert.deepEqual(['T2', 'T3', 'T4'].map((t) => s.stateOf(t)), ['saving', 'saving', 'saving']);
+  // Five machines nobody wants, two a run.
+  for (let i = 0; i < 5; i++) s.fly.machines.push({ id: `orphan${i}`, name: `orphan${i}`, state: 'started', config: { metadata: { tb_box: 'boxes:999', tb_attempt: '1', tb_service: s.serviceId } } });
+  s.skip();
+  await call(s.a, service.reapService, { serviceId: s.serviceId, chunk: 2 });
+  await s.run();
+  assert.equal(s.fly.live().filter((m) => m.id.startsWith('orphan')).length, 0);
+  assert.equal(s.fly.live().length, 3, 'the three boxes stay');
+});
+
+test("an archived thread isn't woken for marking it seen, only for unarchiving or a message", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await s.save(got.boxKey, 'save1');
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: 'T2', runnerId, title: 't', view: 'den', needsYou: false }] });
+  await s.run();
+  await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { markSeen: true } });
+  assert.deepEqual(await s.run(), []);
+  assert.equal(s.stateOf('T2'), 'gone');
+  await s.send(runnerId, 'T2');
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'starting');
 });

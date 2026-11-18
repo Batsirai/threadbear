@@ -16,6 +16,8 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
   const failures: { method: string; ends: string; status: number }[] = [];
   // Do the next matching call, then answer with a failure: an answer lost on the way back.
   const lostAnswers: { method: string; ends: string; status: number }[] = [];
+  // Requests held before they're answered, so a test can run something else in between.
+  const holds: { match: (r: Seen) => boolean; reached: () => void; gate: Promise<void> }[] = [];
   const state = {
     apps,
     machines,
@@ -25,6 +27,15 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
     conflictOnCreate: false,
     failNext(method: string, ends: string, status: number, times = 1) {
       for (let i = 0; i < times; i++) failures.push({ method, ends, status });
+    },
+    // The next request `match` takes waits until release(); `reached` resolves when it arrives.
+    hold(match: (r: Seen) => boolean) {
+      let reached!: () => void;
+      let release!: () => void;
+      const arrived = new Promise<void>((r) => (reached = r));
+      const gate = new Promise<void>((r) => (release = r));
+      holds.push({ match, reached, gate });
+      return { arrived, release };
     },
     loseAnswerNext(method: string, ends: string, status: number) {
       lostAnswers.push({ method, ends, status });
@@ -70,6 +81,8 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
       if (r.method === 'GET' && !action) return reply(200, mc);
       if (r.method === 'POST' && action === '/suspend') {
         if (mc.state === 'suspended') return reply(412, 'not started');
+        // As Fly: a machine with more than 2 GB can't suspend.
+        if ((mc.config.guest?.memory_mb ?? 0) > 2048) return reply(400, 'machine memory too large to suspend');
         mc.state = 'suspended';
       } else if (r.method === 'POST' && action === '/start') {
         if (mc.state === 'started') return reply(412, 'already started');
@@ -89,6 +102,12 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
     const body = typeof init.body === 'string' ? init.body : '';
     const r: Seen = { method: init.method ?? 'GET', path: u.pathname, query: u.searchParams, headers, ...(body ? { json: JSON.parse(body) } : {}) };
     seen.push(r);
+    const h = holds.findIndex((x) => x.match(r));
+    if (h >= 0) {
+      const [held] = holds.splice(h, 1);
+      held!.reached();
+      await held!.gate;
+    }
     const answer = await handle(r);
     const lost = lostAnswers.findIndex((x) => x.method === r.method && r.path.endsWith(x.ends));
     return lost >= 0 ? reply(lostAnswers.splice(lost, 1)[0]!.status, 'answer lost') : answer;

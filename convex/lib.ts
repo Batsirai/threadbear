@@ -211,9 +211,10 @@ export function withoutCredentials(url: string): string {
 // A thread's box on a virtual runner (docs/virtual-runners.md, decision 6):
 // its runner counts as reachable, wherever a runner's being online is
 // checked, in every state but these, as a message for it wakes or starts a
-// box (boxHooks.ts wakeIfAsleep). A failed one too: the next message tries
-// a new box. Its runner only heartbeats while its box is up.
-export const BOX_UNREACHABLE: readonly string[] = ['destroying', 'gone'];
+// box (boxHooks.ts wakeIfAsleep). A failed one too (the next message tries
+// a new box), and an archived one with its save (it comes back from it).
+// Its runner only heartbeats while its box is up.
+export const BOX_UNREACHABLE: readonly string[] = ['destroying', 'expired'];
 export function boxStateReachable(kind: string | undefined): boolean {
   return kind !== undefined && !BOX_UNREACHABLE.includes(kind);
 }

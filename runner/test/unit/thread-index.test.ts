@@ -85,15 +85,17 @@ test('the first write has every thread and prunes the rest; later ones only what
 // docs/virtual-runners.md, decision 6: a thread's box on a virtual runner
 // heartbeats only while it's up, and a message for it starts or wakes it,
 // so it counts as online (relay.ts mustBeOnline reads this) unless it's
-// being deleted or gone. Listed before its first heartbeat too.
-test("a thread's box is online while it starts, sleeps or wakes, and not once it's archived", async () => {
+// being deleted, or expired (archived, its save gone, so it can't come
+// back). Archived with its save it's online: a message brings it back.
+// Listed before its first heartbeat too.
+test("a thread's box is online while it starts, sleeps or wakes, and not once it can't come back", async () => {
   const { index, heard, remote, h } = setup();
   index.start();
   const long = h.clock.now() - 60 * 60_000;
   const box = (runnerId: string, state: string, lastSeenAt = long) => ({ runnerId, name: 'Cloud (Fly)', lastSeenAt, box: { state } });
-  remote({ runners: [box('b-new', 'creating', 0), box('b-asleep', 'asleep'), box('b-waking', 'waking'), box('b-failed', 'failed'), box('b-gone', 'gone'), box('b-going', 'destroying'), { runnerId: 'r-mini', name: 'mini', lastSeenAt: long }], threads: [] });
+  remote({ runners: [box('b-new', 'creating', 0), box('b-asleep', 'asleep'), box('b-waking', 'waking'), box('b-failed', 'failed'), box('b-gone', 'gone'), box('b-expired', 'expired'), box('b-going', 'destroying'), { runnerId: 'r-mini', name: 'mini', lastSeenAt: long }], threads: [] });
   const online = Object.fromEntries(heard.at(-1)!.runners.map((r) => [r.id, r.online]));
-  assert.deepEqual(online, { 'b-new': true, 'b-asleep': true, 'b-waking': true, 'b-failed': true, 'b-gone': false, 'b-going': false, 'r-mini': false });
+  assert.deepEqual(online, { 'b-new': true, 'b-asleep': true, 'b-waking': true, 'b-failed': true, 'b-gone': true, 'b-expired': false, 'b-going': false, 'r-mini': false });
   assert.deepEqual(heard.at(-1)!.runners.find((r) => r.id === 'b-asleep')!.box, { state: 'asleep' });
   assert.equal(heard.at(-1)!.runners.find((r) => r.id === 'r-mini')!.box, undefined);
   index.stop();
