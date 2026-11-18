@@ -225,7 +225,8 @@ test('a box goes creating, starting, awake, saving, asleep, waking and awake aga
 // Codex's second review (18 Nov 2026): a paused box lost, or replaced, while
 // the thread wakes kept its key working.
 test("a box lost or replaced while the thread wakes loses its key at once", async () => {
-  for (const event of [{ type: 'LOST' }, { type: 'CREATED', providerBoxId: 'fly-2' }]) {
+  // The paused box was attempt 1; the new one is attempt 2.
+  for (const event of [{ type: 'LOST', attempt: 1 }, { type: 'CREATED', providerBoxId: 'fly-2', attempt: 2 }, { type: 'CREATED', providerBoxId: 'fly-2' }]) {
     const s = await boxBackend();
     const { boxKey } = await s.boot();
     await s.report({ type: 'IDLE' });
@@ -235,6 +236,7 @@ test("a box lost or replaced while the thread wakes loses its key at once", asyn
     // The new box's boot token, minted before the news came, still works after it.
     const bootToken = await s.mint();
     assert.equal(await s.report(event), true, event.type);
+    assert.equal(s.box().bootAttempt, 2);
     assert.equal(s.box().boxKeyHash, undefined, event.type);
     assert.equal(await outcome(call(s.ctx, sync.threadsOf, { key: boxKey, runnerId: BOX_RUNNER })), 'auth', event.type);
     assert.equal(await outcome(call(s.ctx, sync.iconUploadUrl, { key: boxKey })), 'auth', event.type);
@@ -242,6 +244,65 @@ test("a box lost or replaced while the thread wakes loses its key at once", asyn
     const got = await s.exchange(bootToken);
     assert.equal(s.state(), 'awake');
     assert.equal(await outcome(heartbeat(s, got.boxKey)), 'ok');
+  }
+});
+
+// Codex's third review (18 Nov 2026): a box reported lost kept the boot
+// token minted for it, and could still trade it for a key and secrets. A
+// boot token is one attempt's: LOST of that attempt (or an older one) ends
+// it, while a token minted for the replacement lives on.
+test("a lost box's unused boot token dies with it; the replacement's lives", async () => {
+  const mintAttempt = async (s: Awaited<ReturnType<typeof boxBackend>>) => call(s.a, boxes.mintBootToken, { key: OWNER, threadId: THREAD });
+  // creating: the first box's token, then the box is lost before CREATED.
+  {
+    const s = await boxBackend();
+    await s.setToken();
+    const first = await mintAttempt(s);
+    assert.equal(await s.report({ type: 'LOST', attempt: first.attempt }), true);
+    assert.equal(await outcome(s.exchange(first.bootToken)), 'auth');
+    // The replacement's token, minted before a late LOST for the first, survives it.
+    const second = await mintAttempt(s);
+    assert.ok(second.attempt > first.attempt);
+    assert.equal(await s.report({ type: 'LOST', attempt: first.attempt }), true);
+    assert.equal((await s.exchange(second.bootToken)).claudeToken, CLAUDE_TOKEN);
+  }
+  // waking: a new box's token is lost with it, and the next one works.
+  {
+    const s = await boxBackend();
+    const { boxKey } = await s.boot();
+    await s.report({ type: 'IDLE' });
+    await save(s, boxKey, 'save1');
+    await s.report({ type: 'WAKE' });
+    const fresh = await mintAttempt(s);
+    await s.report({ type: 'CREATED', providerBoxId: 'fly-2', attempt: fresh.attempt });
+    assert.equal(await s.report({ type: 'LOST', attempt: fresh.attempt }), true);
+    assert.equal(s.state(), 'waking');
+    assert.equal(await outcome(s.exchange(fresh.bootToken)), 'auth');
+    assert.equal(await outcome(heartbeat(s, boxKey)), 'auth');
+    const next = await mintAttempt(s);
+    assert.equal(await outcome(s.exchange(next.bootToken)), 'ok');
+  }
+  // An older box's loss, reported late, leaves the box awake now alone.
+  {
+    const s = await boxBackend();
+    await s.setToken();
+    const old = await mintAttempt(s);
+    const now = await mintAttempt(s);
+    const { boxKey } = await s.exchange(now.bootToken);
+    assert.equal(await s.report({ type: 'LOST', attempt: old.attempt }), true);
+    assert.equal(s.state(), 'awake');
+    assert.equal(await outcome(heartbeat(s, boxKey)), 'ok');
+    assert.equal(await s.report({ type: 'LOST', attempt: now.attempt }), true);
+    assert.equal(s.state(), 'waking');
+    assert.equal(await outcome(heartbeat(s, boxKey)), 'auth');
+  }
+  // A LOST that doesn't say which box ends every token and key.
+  {
+    const s = await boxBackend();
+    await s.setToken();
+    const t = await mintAttempt(s);
+    await s.report({ type: 'LOST' });
+    assert.equal(await outcome(s.exchange(t.bootToken)), 'auth');
   }
 });
 

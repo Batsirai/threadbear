@@ -33,11 +33,14 @@ export const box = defineMachine(
     events: {
       owner: { START: {}, ARCHIVE: {} },
       runner: { READY: {}, SAVED: { storageId: v.id('_storage'), bytes: v.number() } },
-      server: { CREATED: { providerBoxId: v.string() }, IDLE: {}, WAKE: {}, RESUMED: {}, LOST: {}, DESTROYED: {}, FAILED: { error: v.string() } },
+      // `attempt`: which box (boxes.ts mintBootToken numbers each). Without one,
+      // a loss is taken to be every box's so far.
+      server: { CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: {}, WAKE: {}, RESUMED: {}, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string() } },
     },
     guards: {
       heardFrom: "The box hasn't heartbeated within the lease.",
       hasKey: "The paused box's key was revoked, so it can't come back as it was: a new box has to start.",
+      currentBox: 'The loss is of an older box than the one there now.',
     },
     states: {
       start: {
@@ -61,7 +64,10 @@ export const box = defineMachine(
         on: {
           READY: { to: 'awake', effect: 'ready', description: 'The box traded its boot token: its key is the only one for the thread from now on.' },
           FAILED: { to: 'failed', effect: 'fail', description: "The provider says the box didn't start." },
-          LOST: { to: 'waking', effect: 'bootLost', description: 'The box was lost while it booted: no key works for it, and a new box is made, restoring the last save if there is one.' },
+          LOST: [
+            { to: 'waking', guard: 'currentBox', effect: 'bootLost', description: 'The box was lost while it booted: no key or boot token of it works, and a new box is made, restoring the last save if there is one.' },
+            { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
+          ],
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'The box never checked in: the thread waits for the next message to try again.' },
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread while its box boots.' },
         },
@@ -74,7 +80,10 @@ export const box = defineMachine(
             { guard: 'heardFrom', effect: 'renewLease', description: 'It has heartbeated: the lease runs five minutes from its last heartbeat.' },
             { to: 'waking', effect: 'lost', description: "No heartbeat for five minutes: the box is lost. Its key is refused from now, and a new box restores the thread from its last save." },
           ],
-          LOST: { to: 'waking', effect: 'lost', description: "The provider says the box is gone: its key is refused from now, and a new box restores the thread from its last save." },
+          LOST: [
+            { to: 'waking', guard: 'currentBox', effect: 'lost', description: "The provider says the box is gone: its key is refused from now, and a new box restores the thread from its last save." },
+            { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
+          ],
           IDLE: { to: 'saving', effect: 'askSave', description: "The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps." },
           SAVED: { effect: 'saved', description: 'The box saved the thread unasked: the save replaces the last one, and it stays awake.' },
           CREATED: { effect: 'noteBox', description: "The provider's answer arrives after the box was already up: its id is kept, for pausing and deleting it." },
@@ -95,7 +104,10 @@ export const box = defineMachine(
             { guard: 'heardFrom', effect: 'renewLease', description: 'It has heartbeated: the lease runs five minutes from its last heartbeat.' },
             { to: 'waking', effect: 'lost', description: 'No heartbeat for five minutes: the box is lost, and a new box restores the thread from its last save.' },
           ],
-          LOST: { to: 'waking', effect: 'lost', description: 'The provider says the box is gone mid-save: a new box restores the thread from its last save.' },
+          LOST: [
+            { to: 'waking', guard: 'currentBox', effect: 'lost', description: 'The provider says the box is gone mid-save: a new box restores the thread from its last save.' },
+            { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
+          ],
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box is deleted.' },
         },
       },
@@ -139,22 +151,24 @@ export const box = defineMachine(
     guards: {
       heardFrom: (_ctx, { row }) => (row.lastHeartbeatAt ?? 0) > Date.now() - LEASE_MS,
       hasKey: (_ctx, { row }) => row.boxKeyHash !== undefined,
+      currentBox: (_ctx, { row, event }) => event.attempt === undefined || event.attempt >= Math.max(row.keyAttempt ?? 0, row.providerAttempt ?? 0),
     },
     effects: {
       start: async () => ({ kind: 'creating' as const, bootBy: Date.now() + BOOT_MS }),
       // A new box: whatever box held the key before is done with. Its own key comes at its exchange.
-      created: async (ctx, { id, state, event }) => {
-        await patch(ctx, id, { boxKeyHash: undefined, providerBoxId: event.providerBoxId });
+      created: async (ctx, { id, row, state, event }) => {
+        const older = event.attempt === undefined || (row.keyAttempt ?? 0) < event.attempt;
+        await patch(ctx, id, { ...(older ? { boxKeyHash: undefined, keyAttempt: undefined } : {}), providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
         return { kind: 'starting' as const, bootBy: state.bootBy };
       },
       noteBox: async (ctx, { id, state, event }) => {
-        await patch(ctx, id, { providerBoxId: event.providerBoxId });
+        await patch(ctx, id, { providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
         return state;
       },
       // boxes.ts claimBoot sets the new key's hash in the same mutation.
-      ready: async (ctx, { id }) => {
+      ready: async (ctx, { id, row }) => {
         const now = Date.now();
-        await patch(ctx, id, { lastHeartbeatAt: now, bootTokenHash: undefined, bootExpiresAt: undefined });
+        await patch(ctx, id, { lastHeartbeatAt: now, bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined, keyAttempt: row.bootAttempt });
         return { kind: 'awake' as const, since: now, leaseUntil: now + LEASE_MS };
       },
       resumed: async (ctx, { id }) => {
@@ -164,7 +178,7 @@ export const box = defineMachine(
       },
       renewLease: async (_ctx, { state, row }) => ({ ...state, leaseUntil: (row.lastHeartbeatAt ?? Date.now()) + LEASE_MS }),
       lost: async (ctx, { id, row, state }) => {
-        await patch(ctx, id, { ...awakeAdded(row, state.since), ...revoked, providerBoxId: undefined });
+        await patch(ctx, id, { ...awakeAdded(row, state.since), ...revoked, ...noBox });
         return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
       },
       askSave: async (_ctx, { state }) => ({ kind: 'saving' as const, since: state.since, leaseUntil: state.leaseUntil, saveBy: Date.now() + SAVE_MS }),
@@ -180,16 +194,17 @@ export const box = defineMachine(
       },
       wake: async () => ({ kind: 'waking' as const, bootBy: Date.now() + BOOT_MS }),
       bootLost: async (ctx, { id }) => {
-        await patch(ctx, id, { ...revoked, providerBoxId: undefined });
+        await patch(ctx, id, { ...revoked, ...noBox });
         return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
       },
-      // The box that's gone, not the boot token a new one may already be starting with.
-      forgetOldBox: async (ctx, { id, state }) => {
-        await patch(ctx, id, { boxKeyHash: undefined, providerBoxId: undefined });
+      // What was the lost box's (its attempt's or older), not the boot token
+      // or box of a newer attempt.
+      forgetOldBox: async (ctx, { id, row, state, event }) => {
+        await patch(ctx, id, lostBox(row, event.attempt));
         return state;
       },
-      forgetBox: async (ctx, { id, state }) => {
-        await patch(ctx, id, { ...revoked, providerBoxId: undefined });
+      forgetBox: async (ctx, { id, row, state, event }) => {
+        await patch(ctx, id, lostBox(row, event.attempt));
         return state;
       },
       archive: async (ctx, { id, row, state }) => {
@@ -197,7 +212,7 @@ export const box = defineMachine(
         return { kind: 'destroying' as const, since: Date.now() };
       },
       destroyed: async (ctx, { id }) => {
-        await patch(ctx, id, { ...revoked, providerBoxId: undefined });
+        await patch(ctx, id, { ...revoked, ...noBox });
         return { kind: 'gone' as const, at: Date.now() };
       },
       fail: async (ctx, { id, event }) => {
@@ -213,7 +228,20 @@ export const box = defineMachine(
 );
 
 // No key and no boot token work for the thread after this step.
-const revoked = { boxKeyHash: undefined, bootTokenHash: undefined, bootExpiresAt: undefined } as const;
+const revoked = { boxKeyHash: undefined, keyAttempt: undefined, bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } as const;
+const noBox = { providerBoxId: undefined, providerAttempt: undefined } as const;
+
+// What goes when attempt `attempt`'s box is lost: its key, its unused boot
+// token and the provider's id for it, and any older attempt's. Without an
+// attempt, all of them.
+function lostBox(row: Box, attempt: number | undefined): Partial<Box> {
+  const gone = (a: number | undefined) => attempt === undefined || (a ?? 0) <= attempt;
+  return {
+    ...(gone(row.keyAttempt) ? { boxKeyHash: undefined, keyAttempt: undefined } : {}),
+    ...(gone(row.bootAttempt) ? { bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } : {}),
+    ...(gone(row.providerAttempt) ? noBox : {}),
+  };
+}
 
 type Db = { db: unknown };
 

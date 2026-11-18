@@ -199,3 +199,37 @@ test("a credential in a box's message turn isn't stored", async () => {
   await call(s.ctx, sync.appendMessages, { key: s.boxKey, messages: [{ threadId: THREAD, seq: 1, role: 'assistant', text: 'hi', turn: s.boxKey, at: AT }] });
   assert.ok(!JSON.stringify(s.rows('messages')).includes(s.boxKey.slice(4, 30)));
 });
+
+// Codex's third review (18 Nov 2026): a box could put another thread's
+// retired share link (one that thread had under the same runner id) on its
+// own thread, showing it to that link's holders.
+test("a box can't take another thread's retired share link under its runner id", async () => {
+  const s = await setup();
+  const U = 'owner-thread-u';
+  const L = 'retiredLinkOfThreadU';
+  await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [{ ...THREAD_BASICS, threadId: U, runnerId: BOX_RUNNER, title: 'u', view: 'inbox', needsYou: false, share: { access: 'link', slug: L } }] });
+  await call(s.ctx, sync.removeThreads, { key: OWNER, threadIds: [U] });
+  assert.ok(s.rows('threadTombstones').some((t) => t.slug === L));
+  const shared = { ...THREAD_BASICS, threadId: THREAD, runnerId: BOX_RUNNER, title: 't', view: 'inbox' as const, needsYou: false, share: { access: 'link' as const, slug: L } };
+  assert.equal(await outcome(call(s.ctx, sync.upsertThreads, { key: s.boxKey, threads: [shared] })), 'forbidden');
+  // A link of its own is fine, and so is keeping it.
+  const own = { ...shared, share: { access: 'link' as const, slug: 'aBoxsOwnLink1234567890' } };
+  assert.equal(await outcome(call(s.ctx, sync.upsertThreads, { key: s.boxKey, threads: [own] })), 'ok');
+  assert.equal(await outcome(call(s.ctx, sync.upsertThreads, { key: s.boxKey, threads: [{ ...own, share: { access: 'off' as const, slug: 'aBoxsOwnLink1234567890' } }] })), 'ok');
+});
+
+// Codex's third review: a message's turn and time are a box's to fill, and
+// share:view hands them to anyone with the link, so they must be what a
+// runner sends: a short turn id and an ISO time.
+test("a box's message turn and time are held to their real shapes", async () => {
+  const s = await setup();
+  await s.write(THREAD);
+  const key = JSON.stringify({ threadKey: 'q8Zr3vT1yLmN0pXc5bWd7eFa9gH=' });
+  await call(s.ctx, sync.appendMessages, { key: s.boxKey, messages: [{ threadId: THREAD, seq: 1, role: 'assistant', text: 'hi', turn: key, at: key }, { threadId: THREAD, seq: 2, role: 'assistant', text: 'ok', turn: 'ae376077', at: AT }] });
+  const [one, two] = s.rows('messages').sort((a, b) => a.seq - b.seq);
+  assert.ok(!JSON.stringify(s.rows('messages')).includes('q8Zr3vT1'));
+  assert.equal(one!.turn, undefined);
+  assert.ok(!Number.isNaN(Date.parse(one!.at)));
+  assert.equal(two!.turn, 'ae376077');
+  assert.equal(two!.at, AT);
+});

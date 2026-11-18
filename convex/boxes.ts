@@ -199,24 +199,27 @@ const BOOTING: readonly string[] = ['creating', 'starting', 'waking'];
  */
 export const mintBootToken = action({
   args: { key: v.string(), threadId: v.string() },
-  returns: v.object({ bootToken: v.string(), expiresAt: v.number() }),
-  handler: async (ctx, { key, threadId }): Promise<{ bootToken: string; expiresAt: number }> => {
+  // attempt: the box this token is for, which the service's CREATED and LOST name.
+  returns: v.object({ bootToken: v.string(), expiresAt: v.number(), attempt: v.number() }),
+  handler: async (ctx, { key, threadId }): Promise<{ bootToken: string; expiresAt: number; attempt: number }> => {
     await actionAuth(ctx, key, 'mintBootToken');
     const bootToken = BOOT_PREFIX + randomHex(32);
-    const expiresAt: number = await ctx.runMutation(internal.boxes.storeBootToken, { threadId, bootHash: await sha256(bootToken) });
-    return { bootToken, expiresAt };
+    const stored: { expiresAt: number; attempt: number } = await ctx.runMutation(internal.boxes.storeBootToken, { threadId, bootHash: await sha256(bootToken) });
+    return { bootToken, ...stored };
   },
 });
 
 export const storeBootToken = internalMutation({
   args: { threadId: v.string(), bootHash: v.string() },
-  returns: v.number(),
+  returns: v.object({ expiresAt: v.number(), attempt: v.number() }),
   handler: async (ctx, { threadId, bootHash }) => {
     const row = await boxOf(ctx, threadId);
     if (!BOOTING.includes(row.boxState.kind)) throw conflict(`The box is ${row.boxState.kind}, so it isn't booting.`);
     const expiresAt = Date.now() + BOOT_MS;
-    await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt });
-    return expiresAt;
+    // A new attempt at a box, numbered after every one before.
+    const attempt = (row.boxAttempt ?? 0) + 1;
+    await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt, bootAttempt: attempt, boxAttempt: attempt });
+    return { expiresAt, attempt };
   },
 });
 
@@ -369,11 +372,11 @@ export const archiveBox = mutation({
 });
 
 const serverEvent = v.union(
-  v.object({ type: v.literal('CREATED'), providerBoxId: v.string() }),
+  v.object({ type: v.literal('CREATED'), providerBoxId: v.string(), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('IDLE') }),
   v.object({ type: v.literal('WAKE') }),
   v.object({ type: v.literal('RESUMED') }),
-  v.object({ type: v.literal('LOST') }),
+  v.object({ type: v.literal('LOST'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('DESTROYED') }),
   v.object({ type: v.literal('FAILED'), error: v.string() }),
 );

@@ -7654,11 +7654,20 @@ SHA-256 (`boxKeyHash`).
   (`READY`), and the new key's hash replaces the last box's, so the last
   box's key is refused from that moment. A login with no cloud token
   refuses with `kind: "noCloudToken"` and leaves the boot token as it was.
-  A newer boot token for the thread replaces an older one. Box keys and
+  A newer boot token for the thread replaces an older one. Each is for one
+  attempt at a box (`mintBootToken` returns its `attempt`, numbered from
+  1), which the service's `CREATED` and `LOST` name: a loss ends the key,
+  unused boot token and provider id of that attempt and older ones, and
+  leaves a newer attempt's alone (a `LOST` naming none ends them all). Box keys and
   boot tokens (`tbb_`, `tbt_`) are redacted from transcripts like runner
   keys, and so is a value under a name like `threadKey`, `boxKey` or
   `sealed`; a message's `turn` (or a picture's name, a claim's holder, a
-  move's digest) with a credential's prefix is stored as `[REDACTED]`.
+  move's digest) with a credential's prefix is stored as `[REDACTED]`. A
+  message's `turn` must be a turn id's first characters (1 to 8 letters,
+  digits, `-` or `_`, from any key) and a runner or box key's `at` an ISO
+  time, as `share:view` hands both out unscrubbed; anything else is dropped
+  (`turn`) or made now (`at`). A box can't put a share link another thread
+  had under its runner id on its own thread.
 - **What it reaches.** Only what running its one thread needs (the list
   below, `BOX_CALLS` in `convex/runnerAccess.ts`), each for its own
   runner as a runner key's is, and each row checked against its thread

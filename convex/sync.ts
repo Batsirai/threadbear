@@ -135,7 +135,8 @@ async function claimable(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
 async function slugFree(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string, slug: string): Promise<boolean> {
   if (caller.owner) return true;
   for await (const t of ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug))) if (t.threadId !== threadId) return false;
-  for await (const t of ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug))) if (t.runnerId !== caller.runnerId) return false;
+  // A box: only a link its own thread had, not another thread's under its runner id.
+  for await (const t of ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug))) if (t.runnerId !== caller.runnerId || !ownThreadOnly(caller, t.threadId)) return false;
   return true;
 }
 
@@ -635,11 +636,28 @@ function isPlanRow(m: Record<string, any>): boolean {
 
 // A runner key's message cut to fit whole (CAP.messageDoc): its text, and
 // every other field too.
+// A message's turn: the first 8 characters of its turn's id (a UUID), as
+// every runner writes it. The main Mac's too: anything else is dropped.
+const TURN_ID = /^[A-Za-z0-9_-]{1,8}$/;
+export function isTurnId(turn: unknown): boolean {
+  return typeof turn === 'string' && TURN_ID.test(turn);
+}
+
+function withoutTurn<T extends { turn?: string }>(m: T): T {
+  const { turn: _turn, ...rest } = m;
+  return rest as T;
+}
+
 function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
   // Only an agent's text can be a plan: a tool row's line never gets the room.
   const plan = isPlanRow(m);
-  const out: Record<string, any> = { ...m, text: cutBytes(String(m.text ?? ''), plan ? CAP.planMessage : CAP.message), at: cutBytes(String(m.at ?? ''), 64) };
-  for (const f of ['origin', 'toolKind', 'turn']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 100);
+  // Its time is an ISO time and its turn a turn id's first characters, as a
+  // runner sends them (runner/src/sync.ts toMessageDoc): both go out whole,
+  // unscrubbed, to anyone with a shared thread's link (share:view), so
+  // anything else in them goes (Codex's review, 18 Nov 2026).
+  const out: Record<string, any> = { ...m, text: cutBytes(String(m.text ?? ''), plan ? CAP.planMessage : CAP.message), at: isIsoTime(m.at) ? m.at : new Date().toISOString() };
+  if (out.turn !== undefined && !isTurnId(out.turn)) delete out.turn;
+  for (const f of ['origin', 'toolKind']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 100);
   if (Array.isArray(out.wokeBy)) out.wokeBy = out.wokeBy.slice(0, 5).map((w: any) => ({ kind: cutBytes(String(w?.kind ?? ''), 40), description: cutBytes(String(w?.description ?? ''), 200) }));
   if (Array.isArray(out.buttons)) out.buttons = out.buttons.slice(0, MESSAGE_BUTTONS).map((b: any) => fitButton(b));
   return docBytes(out) <= (plan ? CAP.planDoc : CAP.messageDoc) ? (out as T) : undefined;
@@ -1631,7 +1649,8 @@ export const appendMessages = mutation({
       // A seq that's no whole number in range is dropped (isSeq), from any key.
       if (!isSeq(given.seq)) continue;
       // Cut to fit whole rather than refused (CAP): the runner cuts text at 8,000 characters itself.
-      const m = caller.owner ? given : fitMessage(given);
+      // The main Mac's too keeps a turn only of a turn id's shape (isTurnId).
+      const m = caller.owner ? (given.turn === undefined || isTurnId(given.turn) ? given : withoutTurn(given)) : fitMessage(given);
       if (!m) continue;
       let existing = await ctx.db
         .query('messages')

@@ -298,6 +298,14 @@ export const appSchema = defineSchema({
     bootTokenHash: v.optional(v.string()),
     bootExpiresAt: v.optional(v.number()),
     boxKeyHash: v.optional(v.string()),
+    // Each boot token is for one attempt at a box, numbered from 1
+    // (`boxAttempt`, the newest minted): the token's, the key's (the box
+    // that traded it) and the provider box's. A loss reported for an
+    // attempt ends what was that attempt's or older (boxMachine.ts lostBox).
+    boxAttempt: v.optional(v.number()),
+    bootAttempt: v.optional(v.number()),
+    keyAttempt: v.optional(v.number()),
+    providerAttempt: v.optional(v.number()),
     // Its runner's last heartbeat (sync:heartbeat), which renews the lease.
     lastHeartbeatAt: v.optional(v.number()),
     // Awake time on `day` (UTC, YYYY-MM-DD), added as it leaves awake.
