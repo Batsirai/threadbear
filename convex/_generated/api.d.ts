@@ -20,6 +20,8 @@ import type * as migrations from "../migrations.js";
 import type * as moveMachine from "../moveMachine.js";
 import type * as moveStates from "../moveStates.js";
 import type * as moves from "../moves.js";
+import type * as requestMachine from "../requestMachine.js";
+import type * as requestStates from "../requestStates.js";
 import type * as phone from "../phone.js";
 import type * as projectHeads from "../projectHeads.js";
 import type * as projectNotes from "../projectNotes.js";
@@ -60,6 +62,8 @@ declare const fullApi: ApiFromModules<{
   moveMachine: typeof moveMachine;
   moveStates: typeof moveStates;
   moves: typeof moves;
+  requestMachine: typeof requestMachine;
+  requestStates: typeof requestStates;
   phone: typeof phone;
   projectHeads: typeof projectHeads;
   projectNotes: typeof projectNotes;

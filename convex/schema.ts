@@ -8,6 +8,7 @@ import { v } from 'convex/values';
 import { machineTimers } from '@convex-dev/state-machines';
 import { commandStateV } from './commandStates';
 import { moveStateV } from './moveStates';
+import { requestStateV } from './requestStates';
 import { requiredUnlessStepping } from './stepping';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
@@ -657,6 +658,12 @@ export const appSchema = defineSchema({
     // a second); closed: the asking runner gave up on it (its card expired,
     // or was declined there), so it no longer counts against its cap.
     state: v.union(v.literal('pending'), v.literal('claimed'), v.literal('allowed'), v.literal('denied'), v.literal('closed')),
+    // The same, as its state machine has it (requestMachine.ts), which writes
+    // `state`, `claim`, `result` and `decidedAt` on every move. Required, once
+    // the backfill has given every row one (migrations.ts,
+    // convex/migrations.json); optional only in the deploy that runs it
+    // (stepping.ts). It has no timers.
+    requestState: requiredUnlessStepping('requestState', requestStateV),
     // Once allowed: where it was started.
     result: v.optional(v.object({ runnerId: v.string(), runnerName: v.string(), threadId: v.string() })),
     decidedAt: v.optional(v.number()),
@@ -666,7 +673,9 @@ export const appSchema = defineSchema({
   })
     .index('by_requestId', ['requestId'])
     .index('by_runnerId', ['runnerId'])
-    .index('by_runner_state', ['runnerId', 'state']),
+    .index('by_runner_state', ['runnerId', 'state'])
+    // The Machines page's counts and lists of requests in a state (viewer.ts).
+    .index('by_request_state', ['requestState.kind']),
 
   // Full sync (API 52, docs/full-convex.md step 4; sync.full in runner.json).
   // One row per tool call, under the seq of its one-line `messages` row, with

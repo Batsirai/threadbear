@@ -13,6 +13,7 @@ import { ConvexError, v } from 'convex/values';
 import { internalMutation, internalQuery, type MutationCtx } from './_generated/server';
 import { commandStateFrom } from './commandStates';
 import { moveStateFrom } from './moveStates';
+import { requestStateFrom } from './requestStates';
 
 // Rows per run: each is a small patch, and a command's row can be a few hundred KB.
 const PAGE = 100;
@@ -43,7 +44,14 @@ const moveState: Step = async (ctx, cursor) => {
   return { cursor: page.continueCursor, done: page.isDone };
 };
 
-const BACKFILLS: Record<string, Step> = { commandState, moveState };
+// runnerRequests.requestState, from `state` and its fields (requestStates.ts).
+const requestState: Step = async (ctx, cursor) => {
+  const page = await ctx.db.query('runnerRequests').paginate({ numItems: PAGE, cursor, maximumBytesRead: PAGE_BYTES });
+  for (const r of page.page) if (r.requestState === undefined) await ctx.db.patch(r._id, { requestState: requestStateFrom(r) });
+  return { cursor: page.continueCursor, done: page.isDone };
+};
+
+const BACKFILLS: Record<string, Step> = { commandState, moveState, requestState };
 const mark = (name: string) => `backfill-${name}-done`;
 
 /** One run of a backfill from where the last left off. Run it until it says done. */

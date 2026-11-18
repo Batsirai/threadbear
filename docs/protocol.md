@@ -6342,6 +6342,11 @@ runner that's this one is the usual create.
 What a tampered runner can do with this is put a card in front of Mike:
 the most it can start is what he read and allowed.
 
+In the backend a request is a state machine (`convex/requestMachine.ts`,
+[machines.md](machines.md)) on its own field, `requestState`;
+`relay:decideRequest`'s `state` is that machine's event, and `state`,
+`claim`, `result` and `decidedAt` stay on the row as runners read them.
+
 ## Moving a thread to another runner
 
 Added 8 Nov 2026 (docs/move-plan.md) as the experiment `moveToRunner`, on

@@ -15,7 +15,7 @@ import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } fr
 import type { DataModel, Doc, Id } from './_generated/dataModel';
 import { checkRunnerId, forbidden, isSeq, MAX_SEQ, pageLimit, runnerAuth, sha256, withoutCredentials } from './lib';
 import { docBytes, isThreadId } from './runnerAccess';
-import { queued } from './machines';
+import { queued, request as requestMachine } from './machines';
 import { messageButton } from './schema';
 import { deleteIfUnused, MAX_COMMAND_FILES, MAX_RUNNER_UPLOAD_BYTES, storageInUse } from './sync';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
@@ -571,7 +571,8 @@ export const fileRequest = mutation({
     const waiting = await ctx.db.query('runnerRequests').withIndex('by_runner_state', (q) => q.eq('runnerId', caller.runnerId).eq('state', 'pending')).take(REQUESTS_KEPT_MAX);
     const pending = waiting.filter((r) => now - r.createdAt < PENDING_LIVE_MS).length;
     if (pending >= REQUESTS_PENDING_MAX) throw new ConvexError({ kind: 'tooMany', message: `A runner key may have at most ${REQUESTS_PENDING_MAX} requests waiting` });
-    await ctx.db.insert('runnerRequests', { requestId, runnerId: caller.runnerId, threadId, target, ...request, createdAt: now, state: 'pending' });
+    const made = await requestMachine.create(ctx, { requestId, runnerId: caller.runnerId, threadId, target, ...request, createdAt: now, state: 'pending' } as never, { type: 'FILE' });
+    if (made.status !== 'done') throw new ConvexError({ kind: 'conflict', message: `the request couldn't be filed: ${made.reasons.join(' ')}` });
     return null;
   },
 });
@@ -584,16 +585,18 @@ export const runnerRequest = query({
     const caller = await runnerAuth(ctx, key, 'runnerRequest');
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
     if (!r || (!caller.owner && r.runnerId !== caller.runnerId)) return null;
-    const { _id, _creationTime, ...rest } = r;
+    const { _id, _creationTime, requestState: _s, ...rest } = r;
     return { ...rest, docId: String(_id), runnerName: await runnerNameOf(ctx, r.runnerId) };
   },
 });
 
-// What the main Mac's runner may move a request to, from where: it claims
-// one before starting it (so a retry, or another click, can't start a
-// second), then marks it allowed with where it started; it hands a claim
-// back only when starting failed here; it says no only to a pending one.
-const MOVES: Record<string, string[]> = { claimed: ['pending'], allowed: ['claimed'], pending: ['claimed'], denied: ['pending'] };
+// What the main Mac's runner may move a request to, from where, is the
+// request machine's (requestMachine.ts): it claims one before starting it
+// (so a retry, or another click, can't start a second), then marks it
+// allowed with where it started; it hands a claim back only when starting
+// failed here; it says no only to a pending one. Each `state` it asks for
+// is that machine's event.
+const EVENTS = { claimed: 'CLAIM', allowed: 'ALLOW', pending: 'HAND_BACK', denied: 'DENY' } as const;
 const CLAIM = /^[A-Za-z0-9_-]{8,64}$/;
 
 /** Mike's answer, recorded by the main Mac's runner as it starts the thread (or he said no). */
@@ -616,11 +619,13 @@ export const decideRequest = mutation({
     if (claim !== undefined && !CLAIM.test(claim)) throw new ConvexError({ kind: 'badArgs', message: 'claim must be 8 to 64 letters, digits, - or _' });
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
     if (!r || String(r._id) !== docId) throw new ConvexError({ kind: 'notFound', message: 'no such request' });
-    if (state === 'claimed' && r.state === 'claimed' && claim !== undefined && r.claim === claim) return null;
-    if (!MOVES[state]!.includes(r.state)) throw new ConvexError({ kind: 'badArgs', message: `that request is ${r.state}` });
-    if (state === 'allowed' && !result) throw new ConvexError({ kind: 'badArgs', message: 'an allowed request says where it started' });
-    // A claim handed back (pending) loses its id: the next one is a new claim.
-    await ctx.db.patch(r._id, { state, ...(state === 'allowed' && result ? { result } : {}), ...(state === 'claimed' ? { claim } : state === 'pending' ? { claim: undefined } : {}), decidedAt: Date.now() });
+    if (state === 'allowed' && !result && r.state === 'claimed') throw new ConvexError({ kind: 'badArgs', message: 'an allowed request says where it started' });
+    const type = EVENTS[state];
+    const event = type === 'CLAIM' ? { type, ...(claim !== undefined ? { claim } : {}) } : type === 'ALLOW' ? { type, result: result ?? { runnerId: '', runnerName: '', threadId: '' } } : { type };
+    // The same claim asking again stays claimed and is told yes; anything
+    // the request's state doesn't take is refused as it always was.
+    const r2 = await requestMachine.send(ctx, r._id, event);
+    if (r2.status !== 'done') throw new ConvexError({ kind: 'badArgs', message: `that request is ${r.state}` });
     return null;
   },
 });
@@ -634,7 +639,7 @@ export const closeRequest = mutation({
     const r = await ctx.db.query('runnerRequests').withIndex('by_requestId', (q) => q.eq('requestId', requestId)).first();
     if (!r || (!caller.owner && r.runnerId !== caller.runnerId)) throw new ConvexError({ kind: 'notFound', message: 'no such request' });
     // Only one nobody has started: a claimed one may be starting now.
-    if (r.state === 'pending') await ctx.db.patch(r._id, { state: 'closed', decidedAt: Date.now() });
+    if (r.state === 'pending') await requestMachine.send(ctx, r._id, { type: 'CLOSE' });
     return null;
   },
 });

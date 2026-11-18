@@ -213,6 +213,54 @@ test("a runner request's claim: the same claim asked again is told yes, any othe
   assert.equal((await call(s.ctx, relay.runnerRequest, { key: OWNER, requestId: 'req-00001' })).claim, 'second-claim-id');
 });
 
+test("a runner request's machine: allowed with where it started, denied or closed only while pending, and requestState always agrees with state", async () => {
+  const s = await setup();
+  const file = (requestId: string) => call(s.ctx, relay.fileRequest, { key: MINI_KEY, requestId, threadId: 'B', target: 'main', request: { text: 'start one' } });
+  const row = (requestId: string) => s.rows('runnerRequests').find((r) => r.requestId === requestId)!;
+  const decide = (requestId: string, state: string, extra: Record<string, unknown> = {}) => call(s.ctx, relay.decideRequest, { key: OWNER, requestId, docId: String(row(requestId)._id), state, ...extra });
+  const close = (requestId: string) => call(s.ctx, relay.closeRequest, { key: MINI_KEY, requestId });
+  const where = { runnerId: 'laptop000001', runnerName: 'Laptop', threadId: 'new-thread' };
+  for (const id of ['req-allow1', 'req-deny01', 'req-close1']) await file(id);
+  assert.deepEqual(row('req-allow1').requestState, { kind: 'pending' });
+
+  // Allowed: claimed first, and it has to say where it started.
+  assert.equal(await outcome(decide('req-allow1', 'allowed', { result: where })), 'badArgs', 'not before a claim');
+  await decide('req-allow1', 'claimed', { claim: ATTEMPT });
+  assert.equal(await outcome(decide('req-allow1', 'allowed')), 'badArgs');
+  // The asking runner can't close one that may be starting: nothing changes.
+  await close('req-allow1');
+  assert.equal(row('req-allow1').state, 'claimed');
+  assert.equal(await outcome(decide('req-allow1', 'denied')), 'badArgs');
+  await decide('req-allow1', 'allowed', { result: where });
+  assert.deepEqual([row('req-allow1').state, row('req-allow1').result], ['allowed', where]);
+  assert.equal(await outcome(decide('req-allow1', 'pending')), 'badArgs', 'an allowed one is never handed back');
+
+  await decide('req-deny01', 'denied');
+  assert.equal(row('req-deny01').state, 'denied');
+  await close('req-close1');
+  await close('req-close1'); // again is fine
+  assert.equal(row('req-close1').state, 'closed');
+  assert.equal(await outcome(decide('req-close1', 'claimed', { claim: ATTEMPT })), 'badArgs');
+  for (const r of s.rows('runnerRequests')) assert.equal(r.requestState.kind, r.state, JSON.stringify(r));
+  // None of the machine's own fields reach the runners.
+  assert.ok(!('requestState' in (await call(s.ctx, relay.runnerRequest, { key: OWNER, requestId: 'req-allow1' }))));
+});
+
+test('the backfill gives runner requests from before requestState theirs', async () => {
+  const s = await setup();
+  const now = Date.now();
+  const old = [
+    { requestId: 'req-old-p', state: 'pending', want: { kind: 'pending' } },
+    { requestId: 'req-old-c', state: 'claimed', claim: ATTEMPT, decidedAt: now - 5, want: { kind: 'claimed', claimedAt: now - 5, claim: ATTEMPT } },
+    { requestId: 'req-old-a', state: 'allowed', decidedAt: now - 3, want: { kind: 'allowed', decidedAt: now - 3 } },
+    { requestId: 'req-old-x', state: 'closed', want: { kind: 'closed', decidedAt: now - 10 } },
+  ];
+  for (const { want: _, ...r } of old) await s.ctx.db.insert('runnerRequests', { runnerId: MINI, threadId: 'B', target: 'main', text: 't', createdAt: now - 10, ...r, requestState: undefined });
+  while (!(await call(s.ctx, migrations.run, { name: 'requestState' })).done);
+  assert.equal(await call(s.ctx, migrations.done, { name: 'requestState' }), true);
+  assert.deepEqual(old.map((o) => s.rows('runnerRequests').find((r) => r.requestId === o.requestId)!.requestState), old.map((o) => o.want));
+});
+
 // ------------------------------------------------------------ the widen (commandState)
 
 const migrations = load('migrations');
@@ -324,7 +372,7 @@ test("the Machines page's queries answer only one of this deployment's tokens", 
     assert.equal(await call(s.ctx, viewer.row, { token, table: 'commands', id }), null);
   }
   const overview = await call(s.ctx, viewer.overview, { token: TOKEN });
-  assert.deepEqual(overview.machines.map((m: { name: string }) => m.name), ['command', 'move']);
+  assert.deepEqual(overview.machines.map((m: { name: string }) => m.name), ['command', 'move', 'request']);
   assert.equal((await call(s.ctx, viewer.counts, { token: TOKEN, machine: 'command' })).counts.taken, 1);
   const row = await call(s.ctx, viewer.row, { token: TOKEN, table: 'commands', id });
   assert.equal(row.summary.states.command.kind, 'taken');

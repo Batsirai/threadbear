@@ -14,8 +14,7 @@ reading the code, unless it says it was tested.
 | `threadMoves.state` (`convex/moves.ts`) | asking, ready, packing, unpacking, claimed (and handedOver, shown as claimed), done, failed, cancelled | A move left `ready` (its source runner gone) was never ended, so the thread could never move again. A `moveDone` that didn't go through (a network blip) was never sent again, so the move stayed claimed and the thread couldn't move again until T restarted. | `expireMoves` fails a ready move once its source has been gone 10 minutes, or after 12 hours. The runner tries T's adopt and done again (runner/src/moves.ts `retry`), and any step the backend refuses while it's being updated |
 | `runnerRequests.state` (`convex/relay.ts`) | pending, claimed, allowed, denied, closed | A claim that went through but whose answer was lost left the request "being started" with nothing started. | API 85: `decideRequest`'s `claim`, one answer per request at a time. Still open: a lost claim followed by a runner restart stays claimed until the asking card expires (an hour); handing it back on a timer could start the thread twice, as a claimed request may already be starting elsewhere |
 
-Commands and moves are now state machines (below). Runner requests still
-have their moves written by hand in one place (`MOVES` in `relay.ts`).
+Commands, moves and runner requests are now state machines (below).
 
 ## Still to do, most worth it first
 
@@ -45,8 +44,9 @@ Mike's apps put lifecycles on his state machines library, vendored in
 `vendor/` (he OK'd publishing it in this public repo on 17 Nov 2026). The
 machines are drawn in [machines.md](machines.md) and on the website's
 Machines page (`/machines`). So far: **commands** (`convex/commandMachine.ts`)
-and **moves** (`convex/moveMachine.ts`). Next, one at a time:
-`runnerRequests`, then the table above.
+**moves** (`convex/moveMachine.ts`) and **runner requests**
+(`convex/requestMachine.ts`, no timers: a request's card expires on the
+asking runner, which closes it). Next, one at a time, the table above.
 
 Moves keep each deadline as a time in the state's data (`askBy`,
 `giveUpAt`), not a delay from entering it: the backfill brings a move over
@@ -60,7 +60,7 @@ Two things are particular to Threadbear, and each machine follows them:
   and older runners read `state` as plain strings (`phone:command`,
   `phone:waiting`, `relay:commandState`, `moves:moves`). A machine's state is
   a `{ kind, ... }` union, so it goes on a field of its own (`commandState`,
-  `moveState`; then `requestState`), and the machine's effects write the old
+  `moveState`, `requestState`), and the machine's effects write the old
   string from it on every move, so functions keep answering with the strings
   and the old indexes keep working.
 - **Every deployment upgrades itself, from whatever it last ran.** Each

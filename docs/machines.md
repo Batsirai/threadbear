@@ -230,3 +230,68 @@ From `claimed`:
 From `handedOver`:
 
 - `DONE (runner)` → `done`. T says it's running the thread.
+
+## request
+
+A runner on a runner key asking for a new thread on another runner. It can't start one there itself, so Mike sees exactly what it asked for on the main Mac, whose runner starts it if he allows it.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  state "pending" as pending
+  note right of pending
+Mike hasn't answered. The asking
+thread's card waits up to an hour.
+  end note
+  state "claimed" as claimed
+  claimed : claimedAt, claim?
+  note right of claimed
+The main Mac's runner is starting the
+thread. Nobody else can claim it, and
+the asking runner can't close it, as it
+may be starting now.
+  end note
+  state "allowed" as allowed
+  allowed : decidedAt
+  note right of allowed
+The thread was started, on the runner
+`result` names.
+  end note
+  state "denied" as denied
+  denied : decidedAt
+  note right of denied
+Mike said no.
+  end note
+  state "closed" as closed
+  closed : decidedAt
+  note right of closed
+The asking runner gave up on it before
+anyone started it.
+  end note
+  [*] --> pending : FILE (asker) / file
+  pending --> claimed : CLAIM(claim?) (owner) / claim
+  pending --> denied : DENY (owner) / deny
+  pending --> closed : CLOSE (asker) / close
+  claimed --> claimed : CLAIM(claim?) (owner) [sameClaim]
+  claimed --> allowed : ALLOW(result) (owner) / allow
+  claimed --> pending : HAND_BACK (owner) / handBack
+  allowed --> [*]
+  denied --> [*]
+  closed --> [*]
+```
+
+How a row is born:
+
+- `FILE (asker)` → `pending`. A runner files a request from one of its own threads, which shows a card for it there.
+
+From `pending`:
+
+- `CLAIM(claim?) (owner)` → `claimed`. Mike allowed it: the main Mac's runner claims it before starting the thread, so a retry or another click can't start a second.
+- `DENY (owner)` → `denied`. Mike said no.
+- `CLOSE (asker)` → `closed`. The asking runner gave up on it: its card expired, or was declined there. It stops counting against that runner's limit.
+
+From `claimed`:
+
+- `CLAIM(claim?) (owner)` [sameClaim] stays put. The same claim asking again after its answer was lost: told yes, and nothing changes.
+- `ALLOW(result) (owner)` → `allowed`. The thread started: the request says where.
+- `HAND_BACK (owner)` → `pending`. Starting it failed on the main Mac: it waits for Mike again, and the next claim is a new one.

@@ -1834,7 +1834,9 @@ address, for whoever's signed in there: it draws each of the backend's
 state machines (so far, how a message or request from your phone or the
 Mac travels to a runner: waiting, taken, done or failed, and lapsed when a
 runner never says how it went; and how a thread moves to another Mac, from
-asking through packing and unpacking to done), with how many are in each state right now,
+asking through packing and unpacking to done; and another Mac's request
+for a new thread, waiting for you, being started, allowed, denied or
+closed), with how many are in each state right now,
 and any one's history. It's for looking into something that seems stuck; it
 changes nothing.
 
