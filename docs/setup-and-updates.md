@@ -14,7 +14,9 @@ Mike, since it's his app first and other people patch their own copy.
 
 How it works today (file references are in the research notes at the bottom):
 
-- **Install** is two hand-run scripts: `app/install.sh` builds the Mac app, and
+- **Install** is two hand-run scripts: `app/install.sh` builds the Mac app (since
+  18 Nov 2026 setup builds the GPUI app instead, with
+  `desktop/scripts/switch-from-swift.sh`), and
   `runner/scripts/install-runner.sh` installs the runner's LaunchAgent. Node was pinned
   to Mike's nvm path (since 9 Nov, the node on PATH or nvm's newest), and some defaults are his (`~/dev/me/misc`, `claude-2` for
   Convex work, Token Stats for account limits).

@@ -1,8 +1,10 @@
 #!/bin/bash
-# Installs the GPUI app beside the Swift one and opens it. The Swift app's
-# "Start using the new app" starts a thread that runs this (NewApp.swift's
-# brief): first with --no-open, fixing whatever stops it, then without once
-# the person says Switch now. The Swift app stays and keeps working.
+# Installs the GPUI app and opens it. `./threadbear setup` runs it for a new
+# install (scripts/setup.mjs, step 8: the Mac app is this one now, never the
+# Swift app). The Swift app's "Start using the new app" starts a thread that
+# runs it too (NewApp.swift's brief): first with --no-open, fixing whatever
+# stops it, then without once the person says Switch now. There the Swift
+# app stays and keeps working.
 #
 #   desktop/scripts/switch-from-swift.sh <checkout> [--no-open]
 #

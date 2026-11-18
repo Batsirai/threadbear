@@ -54,8 +54,9 @@
 //      One this makes also starts new threads on Auto (defaults.permissionMode)
 //   7. the backend and the website, deployed
 //   8. the runner (its LaunchAgent, with Threadbear Runner.app as the
-//      program, so macOS's privacy prompts name it) and the Mac app, built
-//      and installed
+//      program, so macOS's privacy prompts name it) and the Mac app (the
+//      GPUI one in desktop/, with Rust if there's none), built, installed
+//      and opened
 //   9. where to pair your iPhone and sign a browser in (the app's Settings)
 //
 // Node built-ins only, so it runs before the repo's packages are installed.
@@ -997,15 +998,30 @@ function install() {
     if (plan?.from || plan?.readdressed) note('The backend moved, so restart the runner to pick up its new address: tb restart, or run setup again without --skip-install.');
     return;
   }
-  if (dry) return todo('runner/scripts/install-runner.sh, then app/install.sh');
+  if (dry) return todo('runner/scripts/install-runner.sh, then desktop/scripts/switch-from-swift.sh (the Mac app)');
   if (!desktopSession()) throw new Fail("Nobody is logged in to this Mac's desktop, and macOS only starts the runner (a login agent) for someone who is. Log in, in person or with Screen Sharing, then run setup again.");
   const env = { ...process.env, THREADBEAR_NODE: process.execPath };
   const homeArgs = path.resolve(home) === DEFAULT_HOME ? [] : ['--home', home];
   runOrFail('Installing the runner', 'bash', [path.join(repo, 'runner', 'scripts', 'install-runner.sh'), ...homeArgs], { env });
-  runOrFail('Installing the Mac app', 'bash', [path.join(repo, 'app', 'install.sh')], { env });
   // A Mac joining a Threadbear you already use: you know your way round,
-  // so the app's first-run tour stays away (Help > Take the Tour still has it).
-  if (joining) run('defaults', ['write', 'com.mikerosoft.threadbear', 'tourSeen', '-bool', 'YES']);
+  // so the app's setup cards stay away (Help > Set Up Threadbear and Take
+  // the Tour still have them). Written before the app first opens, which
+  // keeps a tourSeen it finds there (swift_import.rs, fill_missing).
+  if (joining) {
+    const file = path.join(home, 'desktop-settings.json');
+    writeJson(file, { ...readJson(file), tourSeen: true });
+  }
+  // The GPUI app (desktop/), not the frozen Swift one in app/: Mike, 18 Nov,
+  // "we should definitely be retiring the Swift app. It should not be
+  // recommended on the install path". The same installer as the Swift
+  // app's Start using the new app: Rust if there's none, a build of main
+  // (20 to 40 minutes the first time; its updates then follow main by
+  // themselves, app_update.rs), ~/Applications/Threadbear GPUI.app,
+  // threadbear:// links pointed at it, and the app opened on its setup cards.
+  note('Building the Mac app: the first build takes 20 to 40 minutes.');
+  // THREADBEAR_HOME: it reads that runner.json for where to build (an
+  // updateBuildHosts Mac), not the default folder's.
+  runOrFail('Installing the Mac app', 'bash', [path.join(repo, 'desktop', 'scripts', 'switch-from-swift.sh'), repo], { env: { ...env, THREADBEAR_HOME: home } });
   ok('runner and app installed');
 }
 

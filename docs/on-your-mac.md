@@ -48,11 +48,13 @@ File references are where to look.
   your proxy, and stops if one does. Setup never deletes it, as from this
   Mac it can't prove your proxy is gone: delete it yourself once those
   addresses are gone for good, and setup stops asking.
-- **Apps:** `~/Applications/Threadbear.app` and
+- **Apps:** `~/Applications/Threadbear GPUI.app` (the Mac app, which
+  `./threadbear setup` builds and installs with
+  `desktop/scripts/switch-from-swift.sh`) and
   `~/Applications/Threadbear Runner.app`, both built and signed on your Mac.
-  If you press Start using the new app in the Swift app (or run
-  `desktop/scripts/install-app.sh`), also `~/Applications/Threadbear GPUI.app`,
-  which keeps its window and panel layout in `desktop-settings.json` and
+  A Mac set up before 18 Nov 2026 has the old Swift app instead,
+  `~/Applications/Threadbear.app`, until you press its Start using the new
+  app (or run `desktop/scripts/install-app.sh`). The new app keeps its window and panel layout in `desktop-settings.json` and
   `gpui-prefs.json` in the data folder (with the local pages you chose
   Run them for, a digest of each), what a click on a link in a reply
   does (its menu's Default) in `desktop-links.json` there, the side pane's
@@ -66,11 +68,11 @@ File references are where to look.
   Open thread pill), so install-app.sh makes the GPUI app the one macOS opens
   them with (`--keep-links` leaves them where they are), and
   `desktop/scripts/thread-links.sh swift` gives them back to the Swift app.
-- **Rust, only if you start using the new app** (the Swift app's Start
-  using the new app, which starts a thread that runs
-  `desktop/scripts/switch-from-swift.sh`; that thread is an agent on your
-  own login, so it uses your Claude or Codex tokens like any other thread):
-  the new app is built on your Mac from your checkout's `main` with the
+- **Rust, for building the Mac app** (`./threadbear setup` runs
+  `desktop/scripts/switch-from-swift.sh`, and so does the thread the old
+  Swift app's Start using the new app starts; that thread is an agent on
+  your own login, so it uses your Claude or Codex tokens like any other
+  thread): the new app is built on your Mac from your checkout's `main` with the
   newest stable Rust, so if there's no `rustup` (even with Homebrew's
   `rust`) it installs Rust first, with rustup's own installer from
   `https://sh.rustup.rs` (the minimal profile, about 1 GB with the crates
@@ -80,7 +82,7 @@ File references are where to look.
   2026), and keeps about 2.3 GB in
   `~/Library/Caches/Threadbear/update-desktop`, which its updates reuse. It
   checks there's room for all that before it starts. Its
-  output is in that thread. `rustup self uninstall` takes Rust off again.
+  output is in setup's terminal, or that thread. `rustup self uninstall` takes Rust off again.
 - **The GPUI app's web runtime, only if you install it** (its Install web
   runtime button, or Settings > General > Web runtime; nothing is fetched
   until you press one): Chromium, as CEF's official minimal build 156.0.26,

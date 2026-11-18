@@ -2271,6 +2271,10 @@ turn it off, in Settings (⌘,) > General > Updates from Mike.
 
 ### Moving to the new desktop app
 
+A new install gets the new desktop app straight away: `./threadbear setup`
+builds and installs it (`~/Applications/Threadbear GPUI.app`), never the old
+Mac app. This part is for a Mac that already has the old one.
+
 The Mac app is being replaced by a new desktop app that looks and works the
 same and runs on Windows and Linux too. The Mac app is frozen now: it no
 longer gets new features, and everything new goes into the new app. There's

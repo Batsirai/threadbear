@@ -127,7 +127,9 @@ New threads start in `~/ThreadbearThreads`, which setup makes (not
 They can change it in the app's Settings, and pick a folder for each
 thread as they start it.
 
-It takes a few minutes (it builds the Mac app). Along the way:
+The first run takes 30 to 45 minutes, most of it building the Mac app
+(installing Rust first if there's no `rustup`), and needs about 5 GB free.
+Tell them, so they can leave it running. Along the way:
 
 - If they aren't logged in to Convex, it opens a Convex page in the browser
   and waits. **Ask** them to approve it (and to make a free account if they
@@ -137,8 +139,10 @@ It takes a few minutes (it builds the Mac app). Along the way:
 - Any other stop says what's wrong; fix it and run the same command again. It
   carries on from where it got to.
 
-It finishes with "Threadbear is set up." Then open the app:
-`open ~/Applications/Threadbear.app`.
+It opens the app once it's built (`~/Applications/Threadbear GPUI.app`) and
+finishes with "Threadbear is set up." The app starts with a few setup cards:
+their agents, where threads start, the phone, and a few things worth turning
+on. **Ask** them to go through them.
 
 Setup also puts `Threadbear Runner.app` in `~/Applications`. It's the small
 program that runs the runner in the background; it isn't for opening. When
