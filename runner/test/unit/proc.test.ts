@@ -258,11 +258,13 @@ test("a CLI added while PowerShell can't be run is recorded with a start time, a
     const noPs = withoutPowerShell();
     const key = Object.keys(noPs).find((k) => k.toLowerCase() === 'path')!;
     process.env[key] = noPs[key];
+    if (noPs.THREADBEAR_NO_POWERSHELL) process.env.THREADBEAR_NO_POWERSHELL = noPs.THREADBEAR_NO_POWERSHELL;
     const reg = new ProcessRegistry(run, nullLogger);
     try {
       reg.add(cli.pid!, process.execPath);
     } finally {
       process.env[key] = was;
+      delete process.env.THREADBEAR_NO_POWERSHELL;
     }
     const saved = JSON.parse(fs.readFileSync(path.join(run, 'children.json'), 'utf8')) as { pid: number; lstart?: string }[];
     assert.match(saved[0].lstart ?? '', /^~\d+$/, 'the entry kept a start time');

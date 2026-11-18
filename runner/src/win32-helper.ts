@@ -30,7 +30,12 @@ function helperArgs(): string[] {
   return ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded];
 }
 
+// THREADBEAR_NO_POWERSHELL=1 makes it a path that isn't there, for tests of
+// a machine where PowerShell can't run (test/helpers/platform.ts,
+// withoutPowerShell). It can only turn PowerShell off, never point it at
+// another program.
 export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.THREADBEAR_NO_POWERSHELL === '1') return path.win32.join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'no-powershell', 'powershell.exe');
   return path.win32.join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 

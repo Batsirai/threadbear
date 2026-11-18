@@ -108,5 +108,6 @@ export function withoutPowerShell(env: NodeJS.ProcessEnv = process.env): NodeJS.
   const kept = (env[key] ?? '')
     .split(path.delimiter)
     .filter((dir) => dir && !fs.existsSync(path.join(dir, 'powershell.exe')) && !fs.existsSync(path.join(dir, 'pwsh.exe')));
-  return { ...env, [key]: kept.join(path.delimiter) };
+  // The runner runs PowerShell by its full path (win32-helper.ts), so the PATH alone doesn't hide it.
+  return { ...env, [key]: kept.join(path.delimiter), THREADBEAR_NO_POWERSHELL: '1' };
 }
