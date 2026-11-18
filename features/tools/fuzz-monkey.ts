@@ -166,7 +166,7 @@ function rssKb(pid: number | undefined): number {
 }
 
 /** Invariants that hold whatever was clicked. Returns what broke, if anything. */
-async function check(app: GpuiDriver, before: { panics: number; stalls: number }, recentMock: boolean): Promise<{ kind: string; detail: string } | null> {
+async function check(app: GpuiDriver, before: { panics: number; stalls: number; error?: string | null }, recentMock: boolean): Promise<{ kind: string; detail: string } | null> {
   const pid = app.pid;
   if (pid) {
     try {
@@ -216,7 +216,10 @@ async function check(app: GpuiDriver, before: { panics: number; stalls: number }
   }
   // An error bar the fuzzer didn't cause through the mock (a runner going
   // away, a failed read, its own notice) is worth a look.
-  if (d.error && !recentMock && !/fuzzer/.test(d.error)) return { kind: 'error-bar', detail: d.error.slice(0, 300) };
+  // Only a new one: a runner restart's message can stay up long after.
+  const fresh = d.error && d.error !== before.error;
+  before.error = d.error ?? null;
+  if (fresh && !recentMock && !/fuzzer/.test(d.error!)) return { kind: 'error-bar', detail: d.error!.slice(0, 300) };
   return null;
 }
 
@@ -243,7 +246,7 @@ async function menuItems(app: GpuiDriver): Promise<string[]> {
 /** Runs a fixed list of commands on a fresh app; the first failure, if any. */
 async function replay(cmds: Cmd[]): Promise<Failure | null> {
   const app = await startApp();
-  const before = { panics: 0, stalls: 0 };
+  const before: { panics: number; stalls: number; error?: string | null } = { panics: 0, stalls: 0 };
   let lastMock = -99;
   try {
     for (let i = 0; i < cmds.length; i += 1) {
@@ -311,7 +314,7 @@ async function fuzz() {
     const app = await startApp();
     const items = await menuItems(app);
     let size = { w: 1240, h: 820 };
-    const before = { panics: 0, stalls: 0 };
+    const before: { panics: number; stalls: number; error?: string | null } = { panics: 0, stalls: 0 };
     const trace: Step[] = [];
     let lastMock = -99;
     let failure: Failure | null = null;
