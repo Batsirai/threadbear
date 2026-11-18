@@ -416,7 +416,7 @@ impl Composer {
             .into_any_element()
     }
 
-    fn render_permission_chip(&self, mode: String, composer: &Entity<Composer>, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_permission_chip(&self, mode: String, composer: &Entity<Composer>, cx: &mut Context<Self>) -> AnyElement {
         let title = permission_title(&mode);
         let help = permission_help(&mode);
         let icon = permission_icon(&mode);
@@ -424,6 +424,13 @@ impl Composer {
         let data = self.chip_data(cx);
         let provider = data.summary.as_ref().map(|t| t.provider.as_str()).unwrap_or_default();
         let has_auto = data.logins.has_auto_mode(provider);
+        // Another runner's thread: what it really has (its row's
+        // permissionMode), with no menu, as a mode can't be changed from
+        // here (relay.ts refuses it): a pick would only fail.
+        if let (false, Some(away)) = (data.is_new, data.away.as_ref()) {
+            let tip = format!("{help}. Its access can only be changed in the Threadbear app on {}", away.name);
+            return ChipTrigger { busy: false, badge: None, id: "composer-permission-chip".into(), kind: TriggerKind::Chip, title: title.into(), icon: Some(if mode == "full" { crate::icons::symbol("lock.open") } else { Icon::from(icon) }), tip: tip.into(), selected: false }.into_any_element();
+        }
         style::menu::popover(Popover::new("composer-permission"), cx)
             // Its chip's title may shrink to fit a narrow box.
             .trigger_style(StyleRefinement::default().min_w_0())
@@ -443,6 +450,7 @@ impl Composer {
                     })
                 }))
             })
+            .into_any_element()
     }
 
     fn render_account_chip(&self, data: &ChipData, cx: &mut Context<Self>) -> impl IntoElement {

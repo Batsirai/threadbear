@@ -36,7 +36,7 @@ import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { agentsStillWorking, ARCHIVE_VERDICTS, ErrorCode, isEffortLevel, remoteCreateModeOf } from './protocol.ts';
 import type { Account, ArchiveVerdict, ApprovalDecision, ApprovalOption, AskAnswer, DesignReview, EffortLevel, ReviewDraft, ImageRef, LabReviewLedger, OpenAsk, PermissionMode, PersistedEvent, Project, Question, ReplyButton, Schedule, ThreadSummary } from './protocol.ts';
-import { REMOTE_ALLOW_REFUSED, remoteCardShowsAll, summaryField } from './tools.ts';
+import { REMOTE_ALLOW_REFUSED, remoteAllowRefused, remoteCardShowsAll, summaryField } from './tools.ts';
 import type { Notification } from './runner.ts';
 import type { ScheduleBackend, StoredSchedule } from './schedules.ts';
 import { followSchedules } from './schedule-follow.ts';
@@ -157,7 +157,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 87;
+export const BACKEND_API_VERSION = 88;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -371,6 +371,11 @@ const PLAN_LOOKBACK = 20_000;
 // every message's text. An older backend's validator would turn the row
 // down, so it goes without.
 export const KEYWORDS_API_VERSION = 74;
+// From this one a threadIndex row carries the thread's `permissionMode`, so
+// another Mac's composer shows its real access (it showed Full access for
+// every other runner's thread, 18 Nov 2026). An older backend's validator
+// would turn the row down, so it goes without.
+export const INDEX_MODE_API_VERSION = 88;
 // How far back a start looks for pictures, as new ones go up as they come.
 // Reading a whole log for each thread is too much to do for all of them on
 // every start, and it's the threads in use that Mike opens on the phone.
@@ -915,11 +920,11 @@ function threadView(t: Pick<ThreadSummary, 'archivedAt' | 'snoozedUntil' | 'star
 // A thread row whose approval card offers Allow off the Mac, with that
 // option taken away when scrubbing would change the card's line: what the
 // phone shows then isn't all of what Allow allows.
-export function holdAllowIfScrubbed(doc: ThreadDoc, scrub: (text: string) => string): ThreadDoc {
+export function holdAllowIfScrubbed(doc: ThreadDoc, scrub: (text: string) => string, runnerName?: string): ThreadDoc {
   const p = doc.pendingApproval;
   if (!p || p.kind !== 'approval' || p.inputSummary === undefined || !p.options.some((o) => o === 'allow' || o === 'allowAlways')) return doc;
   if (scrub(p.inputSummary) === p.inputSummary) return doc;
-  return { ...doc, pendingApproval: { ...p, title: `${p.title}. ${REMOTE_ALLOW_REFUSED}`, options: p.options.filter((o) => o !== 'allow' && o !== 'allowAlways') } };
+  return { ...doc, pendingApproval: { ...p, title: `${p.title}. ${remoteAllowRefused(runnerName)}`, options: p.options.filter((o) => o !== 'allow' && o !== 'allowAlways') } };
 }
 
 export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pending?: PendingApproval, earliestSeq?: number, next?: string[], scrub?: (text: string) => string, review?: LabReviewLedger, cardTurn?: string): ThreadDoc {
@@ -1581,7 +1586,7 @@ export class ConvexSync {
         args = {
           ...args,
           threads: (args.threads as ThreadDoc[]).map((t) => {
-            const held = holdAllowIfScrubbed(t, this.scrubber.safeText);
+            const held = holdAllowIfScrubbed(t, this.scrubber.safeText, this.name);
             // And the card an answer from there is checked against, so an
             // allow sent anyway is refused (the respond command, below).
             const card = held.pendingApproval;
@@ -1610,6 +1615,7 @@ export class ConvexSync {
         takesStars: () => (this.backendApiVersion ?? 0) >= STARS_API_VERSION,
         takesAsked: () => (this.backendApiVersion ?? 0) >= INDEX_ASKED_API_VERSION,
         takesKeywords: () => (this.backendApiVersion ?? 0) >= KEYWORDS_API_VERSION,
+        takesMode: () => (this.backendApiVersion ?? 0) >= INDEX_MODE_API_VERSION,
         takesSince: () => (this.backendApiVersion ?? 0) >= INDEX_SINCE_API_VERSION,
         takesOrder: () => (this.backendApiVersion ?? 0) >= RUNNER_ORDER_API_VERSION,
         seed: () => {
@@ -2442,7 +2448,7 @@ export class ConvexSync {
       const planSeq = e.name === 'ExitPlanMode' && e.itemId ? this.planSeqs.get(`${threadId} ${e.itemId}`) : undefined;
       this.addCard(threadId, {
         approvalId: e.approvalId, kind: 'approval', seq: e.seq, name: e.name,
-        title: whole ? e.title : `${e.title}. ${REMOTE_ALLOW_REFUSED}`,
+        title: whole ? e.title : `${e.title}. ${remoteAllowRefused(this.name)}`,
         options: whole ? e.options : e.options.filter((o) => o !== 'allow' && o !== 'allowAlways'),
         ...(summary ? { inputSummary: summary } : {}),
         ...(planSeq !== undefined ? { planSeq } : {}),

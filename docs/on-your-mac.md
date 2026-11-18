@@ -262,7 +262,9 @@ File references are where to look.
   older than 5 Nov 2026, it runs `lsof` on that runner's pid once, to check
   the connection it's about to send the token over is really that runner's.
   `mac-screen.json` in the data folder
-  remembers what it's said about dialogs on the screen (below).
+  remembers what it's said about dialogs on the screen (below), and
+  `app-seen.json` when a Threadbear app last connected to this runner, so
+  a card only that app could allow isn't put up on a machine without one.
 
 ## What runs in the background
 

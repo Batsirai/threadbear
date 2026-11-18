@@ -421,4 +421,8 @@
 //    remoteMessages pass on. The main Mac's runner shows them in another
 //    runner's thread and answers the app's files.read for them; a runner
 //    sends `pictures` and asks for them only from a backend of 87.
-export const API_VERSION = 87;
+// 88: a threadIndex row can carry the thread's `permissionMode`, which
+//    sync:threadIndexSince and sync:otherRunnersThreads pass on, so another
+//    Mac's composer shows a thread's real access. A runner sends it only to
+//    a backend of 88 or later.
+export const API_VERSION = 88;

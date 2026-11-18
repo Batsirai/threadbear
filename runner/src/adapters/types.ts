@@ -210,7 +210,9 @@ export type ToolApprovalRequest = {
 // phone), as opposed to one that closed unanswered for any other reason. Only then may an agent be told
 // the user stopped it (docs/protocol.md, "Who stopped it").
 // queued: Mike's answers to the queued calls, answered in the same click.
-export type ToolApprovalAnswer = { decision: 'allow' | 'allowAlways' | 'deny' | 'expired'; message?: string; mode?: PermissionMode; stopped?: boolean; queued?: QueuedAnswers };
+// noApp: no card was put up, as only an app of this runner's own could allow
+// it and it has none (app-seen.ts); `message` says what to do instead.
+export type ToolApprovalAnswer = { decision: 'allow' | 'allowAlways' | 'deny' | 'expired'; message?: string; mode?: PermissionMode; stopped?: boolean; queued?: QueuedAnswers; noApp?: true };
 
 export type QuestionRequest = {
   toolUseId?: string;

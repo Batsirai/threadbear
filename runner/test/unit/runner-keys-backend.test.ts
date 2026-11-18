@@ -1304,3 +1304,15 @@ test('scheduleRan keeps the holder’s claim while the run it recorded leaves th
   await ran('u');
   assert.deepEqual([row().runs, row().nextRunAt, row().claim], [1, '2026-11-19T09:00:00.000Z', undefined]);
 });
+
+// A sidebar row's mode (API 88) reaches the main Mac's watch as written, and
+// a runner key's is cut to a mode's length (18 Nov 2026: another Mac's
+// composer showed Full access for every other runner's thread).
+test("a sidebar row's mode is kept, and a runner key's is cut short", async () => {
+  const s = await setup();
+  const row = (threadId: string, permissionMode: string) => ({ threadId, title: 'x', cwd: '/', accountId: 'a', provider: 'claude', status: 'idle', needsYou: false, unread: false, preview: '', createdAt: 'c', lastActivityAt: 'l', permissionMode });
+  await call(s.ctx, sync.setThreadIndex, { key: MINI_KEY, runnerId: MINI, rows: [row('A', 'auto'), row('B', 'x'.repeat(5000))], removed: [] });
+  const got = await call(s.ctx, sync.threadIndexSince, { key: OWNER, runners: [{ runnerId: MINI }] });
+  const modes = Object.fromEntries((got as { threadId: string; permissionMode?: string }[]).map((r) => [r.threadId, r.permissionMode]));
+  assert.deepEqual(modes, { A: 'auto', B: 'x'.repeat(16) });
+});

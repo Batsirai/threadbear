@@ -6058,8 +6058,15 @@ other, and the app never connects to another Mac.
 - **The sidebar table.** With a backend of API 12, each runner keeps one
   `threadIndex` row per thread there: `threadId, title, cwd, accountId,
   provider, model?, status, needsYou, unread, preview, createdAt,
-  lastActivityAt, snoozedUntil?, archivedAt?, startedBy?, asked?, keywords?`
-  (`startedBy` from API 23, without its `threadId`; `asked` from API 32; `keywords` from API 74). It writes a row when any
+  lastActivityAt, snoozedUntil?, archivedAt?, startedBy?, asked?, keywords?,
+  permissionMode?`
+  (`startedBy` from API 23, without its `threadId`; `asked` from API 32; `keywords` from API 74;
+  `permissionMode` from API 88, which the backend cuts to 16 bytes for a
+  runner key). Another Mac's composer shows a thread's `permissionMode` as
+  it is, read-only (a mode can't be changed through the backend), and
+  "Access unknown" for a row without one, never Full access. The relay's
+  summary of an open thread always has `permissionMode`: the row's, or
+  `"unknown"`. It writes a row when any
   of those but `preview` and `lastActivityAt` changes (those two go along
   but never cause a write), and on its first write after starting it
   drops rows for threads it no longer has. A deleted thread's row goes.
@@ -6883,10 +6890,18 @@ the mirror back as state. The Mac app doesn't use it.
   changed (checked again as the row goes up, after any value found since),
   an MCP tool with more than one short thing to read, any file edit (it
   shows only its path there, and Allow writes all of it), a threadbear tool's own card, Codex asking for more access) has
-  only its non-allow options there, and its title says it can only be
-  allowed in the Mac app connected straight to its runner; the runner
+  only its non-allow options there, and its title names the runner whose
+  app can allow it ("only the Threadbear app on bruce can allow it"); the runner
   refuses an allow or allowAlways that comes through the backend for one
-  (Daybreak, 7 Nov 2026); a
+  (Daybreak, 7 Nov 2026). Such a card goes up only on a runner with an
+  app of its own: one connected now, or one that was in the last 14 days
+  (`<home>/app-seen.json`, written on an app's hello and as it goes,
+  `runner/src/app-seen.ts`). Elsewhere (a runner nobody runs an app on)
+  it could only be denied, so no card is put up: the call is denied at
+  once (`ToolApprovalAnswer.noApp`), a `system.note` says "Not asked:
+  ...", and the agent is told to do it a way that doesn't need the OK.
+  A plan's card (ExitPlanMode) still goes up, as it's also where a plan
+  is sent back to be revised; a
   `question.requested` puts `{ approvalId, kind: "question", questions }`.
   `approval.resolved`, or the thread no longer waiting, takes it off.
 - **End-of-turn cards** (API 14, 30 Oct 2026). The open card of asks

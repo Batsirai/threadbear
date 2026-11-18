@@ -36,6 +36,9 @@ export type IndexRow = {
   startedBy?: { kind: string; label: string; icon?: string; threadTitle?: string; why?: string };
   asked?: string;
   keywords?: string;
+  // Its access mode (API 88), so another Mac's composer shows what it
+  // really is; left out by an older runner, and that Mac says it can't tell.
+  permissionMode?: string;
 };
 
 // What the Mac app gets (docs/protocol.md, "Other runners' threads").
@@ -63,7 +66,7 @@ const ONLINE_MS = 3 * 60_000;
 const WATCH_CHECK_MS = 15_000;
 const UNWATCH_AFTER_MS = 2 * 60_000;
 
-export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true, withKeywords = true): IndexRow {
+export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true, withKeywords = true, withMode = true): IndexRow {
   const row: IndexRow = {
     threadId: t.id,
     title: t.title,
@@ -86,6 +89,8 @@ export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = t
   if (withAsked && t.asked) row.asked = t.asked;
   // Changes after a look or once from the keyword sweep, so rarely.
   if (withKeywords && t.keywords) row.keywords = t.keywords;
+  // Changes only when Mike picks another (or a plan ends), so rarely.
+  if (withMode && t.permissionMode) row.permissionMode = t.permissionMode;
   if (withStartedBy && t.startedBy) {
     // Not the thread's id: only the row's tooltip uses this, by that title.
     const { kind, label, icon, threadTitle, why } = t.startedBy;
@@ -119,6 +124,8 @@ export class ThreadIndex {
     takesAsked?: () => boolean;
     // Whether it knows `keywords` (API 74).
     takesKeywords?: () => boolean;
+    // Whether it knows `permissionMode` (API 88).
+    takesMode?: () => boolean;
     // Whether the backend can answer with only the rows changed since the
     // last answer (API 29). Without it, every re-run reads every row.
     takesSince?: () => boolean;
@@ -446,7 +453,7 @@ export class ThreadIndex {
   }
 
   private mark(t: ThreadSummary): void {
-    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true, this.deps.takesKeywords?.() ?? true);
+    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true, this.deps.takesKeywords?.() ?? true, this.deps.takesMode?.() ?? true);
     if (this.sent.get(t.id) === writeKey(row)) {
       this.dirty.delete(t.id);
       return;

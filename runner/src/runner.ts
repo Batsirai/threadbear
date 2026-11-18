@@ -773,6 +773,12 @@ export class Runner {
   movedInAtMostAsk?: () => boolean;
   // A login's week going unused (spare-week.ts; main.ts sets it).
   spareWeek?: SpareWeek;
+  // Whether a Threadbear app of this runner's own is here or was lately
+  // (app-seen.ts): without one, a card only it could allow is refused at
+  // once rather than put up (approvals.ts). Left out (tests), there is one.
+  appCanAllow?: () => boolean;
+  // This runner's name, for what such a refusal says (main.ts sets it).
+  ownName?: string;
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;

@@ -1443,3 +1443,16 @@ test("an older runner's new message is watched and asked about again like any ot
   const said = page.events.find((e) => e.seq === 161)!;
   assert.deepEqual([said.text, said.images], ['Look', [shown(20, 1)]]);
 });
+
+// The app reads a summary with no mode as Full access, so one is always
+// given: the row's own (API 88), or "unknown" from a runner that doesn't say
+// (18 Nov 2026: an Auto thread on the Dell XPS showed as Full access).
+test("an open thread's summary carries its row's mode, or unknown", async () => {
+  const h = harness({ row: () => ({ ...idle, share: { access: 'link', slug: 'abc' } }) });
+  const said = () => h.published.filter((n) => (n as { method: string }).method === 'thread.updated').map((n) => (n as { params: { thread: { permissionMode?: string } } }).params.thread.permissionMode);
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 0 });
+  assert.deepEqual(said(), ['unknown']);
+  h.remote.threads[0]!.permissionMode = 'auto';
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 0 });
+  assert.deepEqual(said(), ['unknown', 'auto']);
+});

@@ -526,6 +526,7 @@ export function buildThreadbearTools(
     if (card.tooLong) throw new Error(`${reasons.join('; ')}: that needs the user's OK. ${tooLongForCard(card.tooLong)}`);
     const a = await ask(selfId, { name: `mcp__${SERVER_NAME}__${tool}`, title: reasons.join('; '), input: card.input, ...(signal ? { signal } : {}) });
     if (a.decision === 'allow' || a.decision === 'allowAlways') return;
+    if (a.noApp) throw new Error(a.message ?? 'No card could be put up for this, so nothing changed.');
     if (a.decision === 'expired') throw new Error(`No answer from the user${a.message ? ` (${a.message})` : ''}, so nothing changed.`);
     throw new Error(`The user said no${a.message ? `: ${a.message}` : ''}. Nothing changed; ask them how to proceed.`);
   };

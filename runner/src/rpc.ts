@@ -167,6 +167,8 @@ export type RpcServerOptions = {
   appHello?: (build: { commit: string; short: string; tree: string }, app: 'mac' | 'desktop') => void;
   // Any hello from the GPUI app, built or not (swift-changes.ts's first look).
   desktopHello?: () => void;
+  // Either Mac app said hello or went, a dev build too (app-seen.ts).
+  appSeen?: () => void;
   // What a connection that belongs to a thread may do (rpc-gate.ts).
   gate?: CallerGate;
   // The thread whose CLI the process at the client's end of this exact
@@ -411,6 +413,7 @@ export class RpcServer {
       conn.authTimer?.clear();
       conn.queue.length = 0;
       this.conns.delete(conn);
+      if (conn.authed && (conn.client === 'threadbear-mac' || conn.client === 'threadbear-desktop')) this.opts.appSeen?.();
     });
     // A protocol error (a frame over the limit, bad UTF-8): ws closes with
     // 1009 or 1002 and waits up to 30 s for the other side to answer. Cut it
@@ -657,6 +660,7 @@ export class RpcServer {
           this.opts.appHello?.({ commit: build.commit, short: build.short, tree: build.tree }, app);
         }
         if (app === 'desktop') this.opts.desktopHello?.();
+        if (app) this.opts.appSeen?.();
         const updates = this.opts.updates?.();
         // The experiments on here, for the app to show what's theirs (the
         // Move to menu). Read at each hello: a switch takes effect on the

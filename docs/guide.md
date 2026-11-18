@@ -491,8 +491,17 @@ A card shows the whole command. On the phone, one that's too long to read
 there in full, one with anything but plain ASCII in it (an accent, an
 emoji, an invisible or text-reversing character), one asking for more
 access, or any file edit (the phone shows only its path) has only Deny:
-allow it in the Mac app, which shows every line an edit writes and
-writes an invisible character out by name (like `⟨U+2028⟩`).
+allow it in the Threadbear app on the machine the thread runs on (the
+card names it), which shows every line an edit writes and writes an
+invisible character out by name (like `⟨U+2028⟩`). On a machine with no
+Threadbear app of its own (none has connected in two weeks), such a card
+couldn't be allowed anywhere, so it isn't put up: the agent is told to
+do it another way, and a note in the thread says so.
+
+A thread on another machine shows its real access in the composer
+(Auto, Ask before edits and so on), or "Access unknown" while that
+machine runs a Threadbear from before 18 Nov 2026. It can only be
+changed in the app on that machine.
 
 ### When an agent needs a password or a key
 

@@ -68,6 +68,7 @@ import { TokenTally } from './token-tally.ts';
 import { usageStatsMethods } from './usage-stats.ts';
 import { Relay } from './relay.ts';
 import { RpcServer } from './rpc.ts';
+import { AppSeen } from './app-seen.ts';
 import { realClock } from './clock.ts';
 import { acquireLock } from './lock.ts';
 import { isDirectory, removeTempFiles } from './fsutil.ts';
@@ -475,6 +476,8 @@ async function main(): Promise<void> {
   // effort: off without a URL and key, and never in the way of a turn.
   // The RPC server is made further down; presence asks it once it's there.
   let rpcServer: RpcServer | undefined;
+  // Whether this runner has an app of its own lately (app-seen.ts).
+  const appSeen = new AppSeen(cfg.home, () => Date.now());
   // Pools shared with the other runners through the backend, once it has
   // them (docs/protocol.md, "Pools"); the last list seen is kept on disk.
   const sharedPools = new SharedPools({
@@ -974,6 +977,10 @@ async function main(): Promise<void> {
   runner.runnerNames = (id) => runnerNames.get(id);
   // The main Mac takes moved threads in at most Ask (runner/moves.ts).
   runner.movedInAtMostAsk = () => Boolean(sync.ownerKey());
+  // A card only this runner's own app can allow is put up only while it
+  // has one (app-seen.ts).
+  runner.appCanAllow = () => (rpcServer?.appConnected() ?? false) || appSeen.recently();
+  runner.ownName = cfg.sync.name ?? defaultRunnerName();
   // Previews shown (the Move sheet, tb move, move_thread), by the one-use
   // id threads.move takes (moves.ts MovePreviews; docs/protocol.md,
   // "Preview binding").
@@ -1179,6 +1186,7 @@ async function main(): Promise<void> {
     callerOf: (sock) => threadOfSocket(sock, { registry, known: (id) => runner.has(id) || peers.owns(id), log }),
     updates: () => (draining ? undefined : runnerUpdates()),
     appHello: (build, app) => appRestarts.appHello(build, app),
+    appSeen: () => appSeen.mark(),
     desktopHello: () => void swiftChanges.desktopHello().catch((e) => log.warn('swift changes: first look failed', { error: String(e) })),
     helloNotices: () => {
       // Like a missing claude: said to every client, until it's there.

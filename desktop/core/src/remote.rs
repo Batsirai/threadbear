@@ -102,7 +102,10 @@ fn summary(row: &Value) -> Option<ThreadSummary> {
         last_seq: if unread { 1 } else { 0 },
         last_seen_seq: 0,
         runner_id: Some(runner_id),
-        permission_mode: "full".to_owned(),
+        // Its real access (API 88). A runner from before it doesn't say, and
+        // guessing Full access showed every other runner's thread as that,
+        // even ones on Auto (18 Nov 2026), so it's "unknown".
+        permission_mode: row["permissionMode"].as_str().filter(|s| matches!(*s, "full" | "ask" | "auto" | "plan")).unwrap_or("unknown").to_owned(),
         // The done card's loose ends, which this Mac's runner adds to the row
         // of a thread it's watching (relay.ts `overlay`): the sidebar's own
         // rows don't carry them, and this summary replaces the last one.
@@ -349,6 +352,24 @@ mod tests {
         // No activity time falls back to its creation.
         assert_eq!(list.threads[1].last_activity_at, "2026-11-09T01:00:00.000Z");
         assert!(list.threads[1].busy());
+    }
+
+    // A row's own mode (API 88), never a guess of Full access: a runner that
+    // doesn't say, or says something no app knows, is "unknown" (18 Nov
+    // 2026, an Auto thread on the Dell XPS showed as Full access).
+    #[test]
+    fn a_rows_access_mode_is_its_own_or_unknown() {
+        let list = decode_remote_threads(&json!({
+            "runners": [{ "id": "r", "name": "Dell XPS" }],
+            "threads": [
+                { "runnerId": "r", "threadId": "t1", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z", "permissionMode": "auto" },
+                { "runnerId": "r", "threadId": "t2", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z" },
+                { "runnerId": "r", "threadId": "t3", "status": "idle", "createdAt": "2026-11-09T01:00:00.000Z", "permissionMode": "root" },
+            ],
+        }));
+        let modes: Vec<_> = list.threads.iter().map(|t| t.permission_mode.as_str()).collect();
+        assert_eq!(modes, vec!["auto", "unknown", "unknown"]);
+        assert_eq!(crate::logins::permission_title("unknown"), "Access unknown");
     }
 
     // The relay puts a watched thread's done-card loose ends on its row

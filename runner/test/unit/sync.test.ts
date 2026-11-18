@@ -727,7 +727,7 @@ test('the uploader never follows a redirect with the bytes, nor posts them in th
 // ------------------------------------------------------------ step 2 and 3
 
 import { BUTTONS_API_VERSION, COMMAND_ATTEMPT_API_VERSION, LOGIN_NOTES_API_VERSION, MESSAGE_CHARS, PLAN_API_VERSION, PLAN_CHARS, toMessageDoc, toolLine, inputSummary, WokeRows, WOKE_BY_API_VERSION, type Command, type MessageDoc } from '../../src/sync.ts';
-import { REMOTE_ALLOW_REFUSED, remoteCardShowsAll } from '../../src/tools.ts';
+import { REMOTE_ALLOW_REFUSED, remoteAllowRefused, remoteCardShowsAll } from '../../src/tools.ts';
 
 type Fake = { h: ReturnType<typeof makeHarness>; sync: ConvexSync; calls: Call[]; push: (value: unknown) => void; applied: string[]; landed: Call[] };
 
@@ -1006,7 +1006,7 @@ test('approvals: the row carries what the thread waits on until it is answered',
   await tick();
   let last = docs().filter((d) => d.threadId === t.id).at(-1)!;
   // Its line shows only the first of two: Deny only there (Daybreak, 7 Nov 2026).
-  assert.deepEqual(last.pendingApproval, { approvalId: 'ap1', kind: 'approval', name: 'Bash', title: `Run a command. ${REMOTE_ALLOW_REFUSED}`, options: ['deny'], inputSummary: 'rm -rf build' });
+  assert.deepEqual(last.pendingApproval, { approvalId: 'ap1', kind: 'approval', name: 'Bash', title: `Run a command. ${remoteAllowRefused('TestMac')}`, options: ['deny'], inputSummary: 'rm -rf build' });
   // Answered (the fake session plays the CLI's part: the resolved event).
   s.out({ kind: 'event', event: { type: 'approval.resolved', approvalId: 'ap1', decision: 'allow' } as never });
   h.clock.advance(SYNC_COALESCE_MS);
@@ -3749,7 +3749,7 @@ test('approvals: a card whose line a value found since would change loses Allow 
   await tick();
   const card = docs().filter((d) => d.threadId === t.id && d.pendingApproval).at(-1)!.pendingApproval as { approvalId: string; options: string[]; title: string };
   assert.deepEqual(card.options, ['deny']);
-  assert.equal(card.title, `Run. ${REMOTE_ALLOW_REFUSED}`);
+  assert.equal(card.title, `Run. ${remoteAllowRefused('TestMac')}`);
   const respond = async (id: string, decision: string) => {
     push([{ commandId: id, kind: 'respond', threadId: t.id, args: { approvalId: card.approvalId, decision }, createdAt: Date.now() }]);
     await tick(10);

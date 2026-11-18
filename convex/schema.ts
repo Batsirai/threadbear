@@ -406,6 +406,8 @@ export const appSchema = defineSchema({
     asked: v.optional(v.string()),
     recap: v.optional(v.string()), // the recap box's, gone 11 Nov; kept so old rows load
     keywords: v.optional(v.string()), // the librarian's search words, since API 74
+    // Its access mode, so another Mac's composer shows it. Since API 88.
+    permissionMode: v.optional(v.string()),
     // Since API 29: when the backend last wrote the row, so a watching
     // runner reads only rows changed since its last answer
     // (sync:threadIndexSince), and `deleted` marks a thread that's gone,
