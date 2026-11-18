@@ -30,6 +30,39 @@ Feature: Spelling in the message box
     And I type " " in the composer
     Then the composer says "I saw the "
 
+  # Wayne's recording (17 Nov): the Mac's checker turned "threadbear" into
+  # "threadbare" every time it was typed.
+  @composer.spelling @swift-pending @windows-pending @linux-pending
+  Scenario: The app's own name is never corrected or marked
+    Given "Spelling and Grammar › Correct Spelling Automatically" is ticked in the composer's right-click menu
+    When I type "I use threadbear" in the composer
+    And I type " " in the composer
+    Then the composer says "I use threadbear "
+    And the composer marks nothing as misspelled
+
+  @composer.spelling @swift-pending @windows-pending @linux-pending
+  Scenario: A correction put back with Undo isn't made again
+    Given "Spelling and Grammar › Correct Spelling Automatically" is ticked in the composer's right-click menu
+    When I type "I saw teh" in the composer
+    And I type " " in the composer
+    Then the composer says "I saw the "
+    When I undo in the composer
+    Then the composer says "I saw teh "
+    When I type "and teh" in the composer
+    And I type " " in the composer
+    Then the composer says "I saw teh and teh "
+
+  @composer.spelling @swift-pending @windows-pending @linux-pending
+  Scenario: A correction typed back over isn't made again
+    Given "Spelling and Grammar › Correct Spelling Automatically" is ticked in the composer's right-click menu
+    When I type "I saw teh" in the composer
+    And I type " " in the composer
+    Then the composer says "I saw the "
+    When I press Backspace 3 times on the keyboard
+    And I type "eh" in the composer
+    And I type " " in the composer
+    Then the composer says "I saw teh "
+
   @composer.spelling @swift-pending @windows-pending @linux-pending
   Scenario: Transformations change the word the cursor is in
     When I type "make it loud" in the composer
