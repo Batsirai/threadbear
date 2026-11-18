@@ -1219,7 +1219,7 @@ async function findBroken(a: {
   env: NodeJS.ProcessEnv;
   shell?: string[];
   timesFile: string;
-}): Promise<{ own: Alone; ownText: string; failed: Map<string, string>; passed: Set<string>; left: number; only: string; mainFailed: string[] } | 'main fails it' | undefined> {
+}): Promise<{ own: Alone; ownText: string; failed: Map<string, string>; passed: Set<string>; left: number; only: string; mainFailed: string[]; brokeOnMain: boolean } | 'main fails it' | undefined> {
   const dir = await aloneCheckout(a.common);
   if (!dir) return undefined;
   const started = Date.now();
@@ -1282,8 +1282,12 @@ async function findBroken(a: {
   // A main that failed says which steps it passed in check.sh's own lines.
   const okOnMain = new Set(parseCheckTimes(base.text).steps.filter((s) => s.status === 'ok').map((s) => s.name));
   const passedOnMain = (name: string): boolean => ran.has(name) && (base.state === 'passed' || okOnMain.has(name));
+  // Failed, not just skipped: what says main itself is broken, so a fix in
+  // the line may be its repair (landLocked lets the fixes ride free again).
+  const failOnMain = new Set(parseCheckTimes(base.text).steps.filter((s) => s.status === 'FAIL').map((s) => s.name));
+  const brokeOnMain = base.state === 'failed' && a.only.split(';').some((e) => ran.has(e.split('=')[0]) && failOnMain.has(e.split('=')[0]));
   const kept = a.only.split(';').filter((e) => passedOnMain(e.split('=')[0]));
-  if (!kept.length) return 'main fails it';
+  if (!kept.length) return brokeOnMain ? 'main fails it' : undefined;
   const only = kept.join(';');
   const mainFailed = a.only.split(';').map((e) => e.split('=')[0]).filter((name) => !kept.some((k) => k.split('=')[0] === name));
 
@@ -1302,7 +1306,7 @@ async function findBroken(a: {
     else if (r.state === 'passed') passed.add(g.entry.id);
     else left++;
   }
-  return { own: mine.state, ownText: mine.text, failed, passed, left, only, mainFailed };
+  return { own: mine.state, ownText: mine.text, failed, passed, left, only, mainFailed, brokeOnMain };
 }
 
 // The landings of a group counted against the limit, as their entries are
@@ -1354,6 +1358,16 @@ export function halveGroup(common: string, main: string, group: { entry: QueueEn
       });
     }
   };
+}
+
+// Main is seen to fail by itself some of what a group failed: every fix
+// waiting rides free again on it, so a repair goes into the next check.
+export function freeFixes(common: string, main: string): void {
+  for (const e of waiting(common)) {
+    if (e.ordinaryAt !== main || e.result) continue;
+    const { ordinaryAt: _o, ...rest } = e;
+    writeEntry(common, rest);
+  }
 }
 
 // A landing passed after a group check of it failed (landLocked): those of
@@ -1592,9 +1606,12 @@ async function landLocked(
           // repair, so fixes ride in every group again, outside the limit,
           // as on 13 Nov. Otherwise what failed is in the landings, fixes
           // as much as any, and they stay halved with the rest.
-          if (result === 'main fails it' || found?.mainFailed.length) {
+          if (result === 'main fails it' || found?.brokeOnMain) {
             mainFailsToo = true;
             unhalve();
+            // Every fix in the line, not only this group's: an earlier
+            // holder that died may have halved one this group left out.
+            freeFixes(common, main);
             unhalve = halveGroup(common, main, group, false);
           }
           setRunning(common, undefined);
@@ -1633,7 +1650,7 @@ async function landLocked(
               continue;
             }
             if (!found.left && found.own === 'passed') out('Each of them passes it alone, so it takes more than one of them (or it fails only now and then).');
-            if (!found.mainFailed.length && group.some((g) => g.entry.fix)) out(`${MAIN} passes what failed by itself, so the fixes (--despite-red) in the group are halved with the rest.`);
+            if (!found.brokeOnMain && group.some((g) => g.entry.fix)) out(`${MAIN} passes what failed by itself, so the fixes (--despite-red) in the group are halved with the rest.`);
           }
         }
         // Fixes come along outside the limit, so once it's down to this one

@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { halveGroup, land, landLimits, setAside, type LandTarget } from '../../src/worktrees.ts';
+import { freeFixes, halveGroup, land, landLimits, setAside, type LandTarget } from '../../src/worktrees.ts';
 import { joinQueue, queueDir, readEntry, setRunning, waiting, waitingLine } from '../../src/land-queue.ts';
 import { capture, commit, holdUntil, makeBranch, makeRepo, sh, until, write } from '../helpers/worktrees-harness.ts';
 
@@ -134,8 +134,11 @@ test('a group halved down to its holder sets aside the one it was narrowed to, a
     // itself, and the rest land in one check without it. Which comes first
     // is whichever tb takes the lock first: a busy Linux follower saw its
     // own check before the rest's, 1 run in 4 (18 Nov).
+    // Halved like any other since 18 Nov (ordinaryAt), it may first be in
+    // one more group with another left out with it, before it's the only
+    // one left out and set aside.
     const holderAlone = all.findIndex((x, i) => i > 0 && !x.includes('bad.txt'));
-    assert.equal(all.slice(holderAlone + 1).filter((x) => x.includes('bad.txt')).length, 1, JSON.stringify(all));
+    assert.ok(all.slice(holderAlone + 1).filter((x) => x.includes('bad.txt')).length <= 2, JSON.stringify(all));
     const rest = all.findLast((x) => !x.includes('bad.txt'))!;
     assert.ok(['b', 'c', 'd'].every((n) => rest.includes(`${n}.txt`)), JSON.stringify(all));
   }
@@ -194,9 +197,11 @@ test('fixes that only fail together are halved like any other once main passes w
   assert.deepEqual([codes[2], codes[3]], [0, 0], said(caps));
   assert.match(said(caps), /main passes what failed by itself, so the fixes \(--despite-red\) in the group are halved with the rest\./);
   assert.doesNotMatch(said(caps), /Set aside to be checked by themselves/);
-  // Whole checks after a's: none of them by itself four times over.
+  // a's, the group, halved to the holder and one, then at worst the
+  // holder alone, the other of the pair alone, and the rest: six. Before,
+  // the fixes were left out together and each checked by itself.
   const whole = runs(root).filter((r) => !r.only).map((r) => r.files);
-  assert.ok(whole.length <= 5, JSON.stringify(whole));
+  assert.ok(whole.length <= 6, JSON.stringify(whole));
 });
 
 // What a holder that died just after its group of fixes failed leaves
@@ -224,6 +229,36 @@ test("the next holder keeps to the halving a dead holder's failed group of fixes
   // Three and the holder halved to two: the next check has two of them.
   const whole = runs(root).filter((r) => !r.only).map((r) => r.files);
   assert.equal(whole[1].split(' ').length, 2, JSON.stringify(whole));
+});
+
+// Codex's second review: a main that skipped what failed (ran nothing of
+// it) hasn't failed it, so the fixes stay halved with the rest.
+test("fixes stay halved when main only skipped what failed, rather than failed it", async () => {
+  const { root, main } = makeRepo();
+  const [a, b, c, d, e] = branches(main, ['a', 'b', 'c', 'd', 'e']);
+  const body = 'if test -n "${THREADBEAR_CHECK_ONLY:-}"; then ' +
+    'if test -f b.txt || test -f c.txt; then echo \'--only ran: "feature pairing"\'; else echo \'--only ran: ""\'; fi; fi; ' +
+    'if test -f b.txt && test -f c.txt; then echo \'To run only what failed again: --only "feature pairing"\'; exit 1; fi';
+  const { first, codes, caps } = await queued(root, main, a, [b, c, d, e].map((t) => ({ t, despiteRed: true })), recorded(root, body));
+  assert.equal(first, 0);
+  assert.equal(codes.filter((x) => x === 1).length, 1, said(caps));
+  assert.doesNotMatch(said(caps), /Set aside to be checked by themselves/);
+  const whole = runs(root).filter((r) => !r.only).map((r) => r.files);
+  assert.ok(whole.length <= 6, JSON.stringify(whole));
+});
+
+test('freeFixes: every fix waiting rides free again on that main, not only one group', () => {
+  const { main } = makeRepo();
+  const common = path.join(main, '.git');
+  const t = makeBranch(main, 'q0000000');
+  const head = sh(main, 'git rev-parse main');
+  const es = [1, 2, 3].map((n) => joinQueue(common, { branch: `thread/x${n}`, path: t.path, base: head, commit: head, fix: true }));
+  fs.writeFileSync(path.join(queueDir(common), `${es[0].id}.json`), JSON.stringify({ ...es[0], ordinaryAt: head, limit: 2, limitAt: head }));
+  fs.writeFileSync(path.join(queueDir(common), `${es[1].id}.json`), JSON.stringify({ ...es[1], ordinaryAt: 'an-old-main' }));
+  freeFixes(common, head);
+  assert.equal(readEntry(common, es[0].id)?.ordinaryAt, undefined);
+  assert.equal(readEntry(common, es[0].id)?.limit, 2, 'its limit stays');
+  assert.equal(readEntry(common, es[1].id)?.ordinaryAt, 'an-old-main');
 });
 
 test('halveGroup: halves on this main at once, keeps a smaller limit, skips landed ones, and puts each back as it was', () => {
