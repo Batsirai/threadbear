@@ -154,6 +154,10 @@ When('{string} is signed out', async function (this: ThreadbearWorld, account: s
   await setSignIn(this, account, { signedOut: true });
 });
 
+When('{string} is signed in again', async function (this: ThreadbearWorld, account: string) {
+  await setSignIn(this, account, { signedOut: false });
+});
+
 When("{string}'s plan has ended", async function (this: ThreadbearWorld, account: string) {
   await setSignIn(this, account, { planEnded: true });
 });

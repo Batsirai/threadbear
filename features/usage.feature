@@ -98,6 +98,8 @@ Feature: The Usage panel and its honey pot
     When "claude-4" is signed out
     Then in the "Claude" card, "alex+4@example.com" says "Signed out"
     And the honey pot's tooltip says "claude-4 (alex+4@example.com) is signed out"
+    When "claude-4" is signed in again
+    Then confetti was thrown for "claude-4" signing back in
 
   # A Claude sign-in lasts 28 days; `claude setup-token` makes a token that
   # lasts a year. Mike, 17 Nov 2026: let each login opt in. The frozen Swift

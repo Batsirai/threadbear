@@ -3,7 +3,8 @@
 // from three directions on 18 Nov (a quiet tick and glow, a paw stamp,
 // confetti), for the year-long token landing on a login's Usage row and
 // the inbox reaching zero, and only for wins that rare: on every thread
-// finishing it would soon be noise.
+// finishing it would soon be noise. The same day he added a thread
+// milestone, a login signed back in and Finish setting up's last tick.
 //
 // Everything here is a function of the time since the burst started, so a
 // frame the main thread misses is skipped rather than slowing it down, and
@@ -25,6 +26,19 @@ pub struct Burst {
 pub const TOKEN_BURST: Burst = Burst { count: 46, spread: 0.75 };
 /// The last thread leaving the inbox: a bigger one from the empty inbox.
 pub const INBOX_BURST: Burst = Burst { count: 90, spread: 1.1 };
+/// A thread milestone (100 threads, then each thousand): from its note.
+pub const MILESTONE_BURST: Burst = INBOX_BURST;
+/// A login signed back in after being signed out: from its row, as a token.
+pub const SIGNED_IN_BURST: Burst = TOKEN_BURST;
+/// The last item of Finish setting up ticking itself: from "All set."
+pub const SETUP_BURST: Burst = INBOX_BURST;
+
+/// Whether Finish setting up has just been finished: something was left the
+/// last time it was looked at and nothing is now. Never when it was already
+/// done the first time it's seen (someone long set up opening the list).
+pub fn setup_finished(before: Option<usize>, left: usize) -> bool {
+    left == 0 && before.is_some_and(|b| b > 0)
+}
 
 /// The colours a bit can be, as hex: the accent blue, green, honey, pink,
 /// purple and yellow (the mockup's).
@@ -136,6 +150,14 @@ mod tests {
         let falling = all.iter().filter(|b| b.vy + b.gravity * b.life * 0.9 > 0.).count();
         assert_eq!(falling, all.len());
         assert!(!going(CONFETTI.as_secs_f32()));
+    }
+
+    #[test]
+    fn setup_is_finished_only_when_something_was_left_before() {
+        assert!(setup_finished(Some(1), 0));
+        assert!(!setup_finished(None, 0));
+        assert!(!setup_finished(Some(0), 0));
+        assert!(!setup_finished(Some(2), 1));
     }
 
     #[test]

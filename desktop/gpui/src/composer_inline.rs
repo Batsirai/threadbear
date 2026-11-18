@@ -197,7 +197,7 @@ impl Composer {
                     let start = words.len();
                     words.push_str(threadbear_core::composer::PICTURE_MARK_STR);
                     tokens.push((start..words.len(), crate::composer::picture_token(&id)));
-                    self.pictures.insert(id, PictureChip { source: PathBuf::from(&image.path), image: Some(image) });
+                    self.pictures.insert(id, PictureChip { source: PathBuf::from(&image.path), image: Some(image), added: None });
                 }
                 DraftPiece::Mention(mention, link) => {
                     let token = self.mention_token(&mention, &link);
@@ -233,7 +233,7 @@ impl Composer {
                 DraftPiece::Picture(index) => {
                     let image = images[*index].clone();
                     let id = self.fresh_picture_id();
-                    self.pictures.insert(id.clone(), PictureChip { source: PathBuf::from(&image.path), image: Some(image) });
+                    self.pictures.insert(id.clone(), PictureChip { source: PathBuf::from(&image.path), image: Some(image), added: None });
                     Some(crate::composer::picture_token(&id))
                 }
                 DraftPiece::Mention(mention, link) => Some(self.mention_token(mention, link)),

@@ -767,7 +767,7 @@ fn login_row(key: &str, login: &LoginRow, accounts: &[Account], finding: bool, c
         .gap(px(10.))
         .items_center()
         .child(icons::provider_mark(&login.provider).with_size(px(18.)).text_color(p.secondary))
-        .child(v_flex().flex_1().min_w_0().gap(px(1.)).child(name).children(line))
+        .child(v_flex().flex_1().min_w_0().gap(px(1.)).child(div().relative().min_w_0().child(name).child(crate::confetti::anchor(format!("signed-in:{}", login.id)))).children(line))
         .child(ring);
     // Signed out, or its sign-in ending within days: say so, with the same
     // Sign in… as the thread's signed-out line (header.rs), so a scheduled

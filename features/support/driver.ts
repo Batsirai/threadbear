@@ -141,7 +141,17 @@ export type Dump = {
   /** The small motions as last seen (GPUI only): the row a click last slid
    * off, and the card that last arrived while its thread was on screen. */
   /** `confetti`: the last burst asked for, from which anchor, and whether it's popped (its anchor was drawn). */
-  juice?: { slidOff: string | null; cardArrived: number | null; confetti?: { anchor: string; popped: boolean } | null } | null;
+  juice?: {
+    slidOff: string | null;
+    cardArrived: number | null;
+    confetti?: { anchor: string; popped: boolean } | null;
+    /** The answer whose button last filled, as "ask:option" from 0. */
+    answerFilled?: string | null;
+    /** How many pictures have dropped into the box. */
+    picturesDropped?: number | null;
+    /** How long a streaming reply's new words take to fade in; 0 under Reduce Motion. */
+    replyFadeMs?: number;
+  } | null;
   /** The last time the panels moved with their glide: where each panel was
    * drawn and where it is (or, in the GPUI app, is going), by panel
    * ("thread", "terminal"), and whether it's still moving (GPUI only). */

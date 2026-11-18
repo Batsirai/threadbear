@@ -252,6 +252,12 @@ impl RunnerLogins {
             .collect()
     }
 
+    /// The logins signed back in since `before`: signed out then, not now.
+    /// The app throws confetti for them too.
+    pub fn signed_back_in(&self, before: &[Account]) -> Vec<String> {
+        self.accounts.iter().filter(|a| !a.signed_out).filter(|a| before.iter().any(|b| b.id == a.id && b.signed_out)).map(|a| a.id.clone()).collect()
+    }
+
     /// One login as the runner has it now (`accounts.useReset`'s answer),
     /// in its place; a login not in the list is left out.
     pub fn replace_account(&mut self, account: &Value) {
@@ -658,6 +664,15 @@ pub fn short_account_name(id: &str, accounts: &[Account]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_login_signed_back_in_is_one_that_was_signed_out() {
+        let list = |logins: &[(&str, bool)]| -> Vec<Account> { logins.iter().map(|(id, out)| Account { id: (*id).into(), signed_out: *out, ..Default::default() }).collect() };
+        let before = list(&[("a", true), ("b", false), ("c", true)]);
+        let logins = RunnerLogins { accounts: list(&[("a", false), ("b", false), ("c", true), ("d", false)]), ..Default::default() };
+        assert_eq!(logins.signed_back_in(&before), vec!["a".to_string()]);
+        assert!(logins.signed_back_in(&logins.accounts.clone()).is_empty());
+    }
+
     #[test]
     fn a_login_given_a_year_long_token_is_new_once() {
         let list = |tokens: &[(&str, Option<&str>)]| -> Vec<Account> {

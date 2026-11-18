@@ -251,6 +251,80 @@ pub fn tick_drawn(elapsed: Duration) -> f32 {
     cubic_bezier(0.3, 0., 0.2, 1., progress(elapsed.saturating_sub(TICK_DRAW_DELAY), TICK_DRAW))
 }
 
+// MARK: Picking an answer
+
+/// An answer picked on a card: its button fills with the accent from the
+/// left, the tick with it, then hops (Mike picked this from clips on 18 Nov:
+/// it's the button he presses most, and it only changed colour). The fill
+/// is over before the hop peaks, and both before a paged card moves on to
+/// its next ask (300 ms after the click). Not under Reduce Motion.
+pub const PICK_FILL: Duration = Duration::from_millis(160);
+pub const PICK_HOP_DELAY: Duration = Duration::from_millis(110);
+pub const PICK: Duration = Duration::from_millis(270);
+
+/// How much of the button is filled, 0 to 1, from its left edge.
+pub fn pick_fill(elapsed: Duration) -> f32 {
+    cubic_bezier(0.3, 0., 0.2, 1., progress(elapsed, PICK_FILL))
+}
+
+/// The button's offset (negative is up): up 3 points and back.
+pub fn pick_hop(elapsed: Duration) -> f32 {
+    Track { start: 0., keys: &[(0.06, -3.), (0.09, 0.)] }.at(elapsed.saturating_sub(PICK_HOP_DELAY).as_secs_f32())
+}
+
+/// A row's circle ticked (an answer in a list of rows, a follow-up on the
+/// done card): its ring pops, a little over its size and back, as the tick
+/// draws itself in.
+pub const TICK_POP: Duration = Duration::from_millis(240);
+
+/// The ring's size against its own (1 at rest) and how much of the tick is
+/// drawn, 0 to 1.
+pub fn tick_pop(elapsed: Duration) -> (f32, f32) {
+    let t = elapsed.as_secs_f32();
+    let scale = timed(&[(0., 0.55), (0.12, 1.18), (0.24, 1.)], t);
+    let drawn = cubic_bezier(0.3, 0., 0.2, 1., ((t - 0.05) / 0.16).clamp(0., 1.));
+    (scale, drawn)
+}
+
+// MARK: A picture pasted or dropped in the box
+
+/// A picture arriving in the message box: the strip over the words opens
+/// to its height, and the picture drops into it from above, a touch past
+/// its place and back, fading in as it comes (18 Nov, with the answer's
+/// fill). Under Reduce Motion it's there at once.
+pub const STRIP_OPEN: Duration = Duration::from_millis(150);
+pub const PICTURE_DROP_DELAY: Duration = Duration::from_millis(60);
+pub const PICTURE_DROP: Duration = Duration::from_millis(320);
+pub const PICTURE_DROP_FROM: f32 = -22.;
+
+/// How open the strip is, 0 to 1, when its first picture arrives.
+pub fn strip_open(elapsed: Duration) -> f32 {
+    ease_out_settle(progress(elapsed, STRIP_OPEN))
+}
+
+/// The arriving picture's (opacity, offset from its place; negative is up).
+pub fn picture_drop(elapsed: Duration) -> (f32, f32) {
+    let t = elapsed.saturating_sub(PICTURE_DROP_DELAY).as_secs_f32();
+    if elapsed < PICTURE_DROP_DELAY {
+        return (0., PICTURE_DROP_FROM);
+    }
+    let offset = timed(&[(0., PICTURE_DROP_FROM), (0.17, 3.), (0.25, -1.), (0.32, 0.)], t);
+    ((t / 0.12).clamp(0., 1.), offset)
+}
+
+pub fn picture_dropping(elapsed: Duration) -> bool {
+    elapsed < PICTURE_DROP_DELAY + PICTURE_DROP
+}
+
+// MARK: A reply streaming in
+
+/// Each piece of a reply fades in as it lands rather than popping onto the
+/// page: over `REPLY_FADE`, each further word of a piece starting
+/// `REPLY_FADE_WORD` after the one before (the text view's own stream fade,
+/// rows/markdown.rs; 18 Nov). Not under Reduce Motion.
+pub const REPLY_FADE: Duration = Duration::from_millis(170);
+pub const REPLY_FADE_WORD: Duration = Duration::from_millis(14);
+
 // MARK: The working line's paw
 
 /// While a turn runs, the paw by "Bear with me" does something every
@@ -605,6 +679,31 @@ mod tests {
         assert_eq!(view_settle(0., false), (0., VIEW_SETTLE_RISE));
         assert!(view_settle(VIEW_SETTLE.as_secs_f32(), false).1.abs() < 0.1);
         assert_eq!(view_settle(1., true), (1., 0.));
+    }
+
+    #[test]
+    fn a_picked_answer_fills_then_hops_before_the_card_moves_on() {
+        assert_eq!(pick_fill(Duration::ZERO), 0.);
+        assert_eq!(pick_fill(PICK_FILL), 1.);
+        assert_eq!(pick_hop(PICK_HOP_DELAY), 0.);
+        assert!((pick_hop(PICK_HOP_DELAY + Duration::from_millis(60)) + 3.).abs() < 1e-3);
+        assert_eq!(pick_hop(PICK), 0.);
+        // The card pages on 300 ms after the click.
+        assert!(PICK < Duration::from_millis(300));
+        let (scale, drawn) = tick_pop(Duration::ZERO);
+        assert!(scale < 0.6 && drawn == 0.);
+        assert!((0..24).any(|i| tick_pop(Duration::from_millis(i * 10)).0 > 1.1));
+        assert_eq!(tick_pop(TICK_POP), (1., 1.));
+    }
+
+    #[test]
+    fn a_pasted_picture_drops_in_past_its_place_and_back() {
+        assert_eq!(strip_open(Duration::ZERO), 0.);
+        assert_eq!(strip_open(STRIP_OPEN), 1.);
+        assert_eq!(picture_drop(Duration::ZERO), (0., PICTURE_DROP_FROM));
+        assert!((0..32).any(|i| picture_drop(PICTURE_DROP_DELAY + Duration::from_millis(i * 10)).1 > 1.));
+        assert_eq!(picture_drop(PICTURE_DROP_DELAY + PICTURE_DROP), (1., 0.));
+        assert!(picture_dropping(Duration::from_millis(100)) && !picture_dropping(PICTURE_DROP_DELAY + PICTURE_DROP));
     }
 
     #[test]

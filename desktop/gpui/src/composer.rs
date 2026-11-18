@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use threadbear_client::runner::Client;
 use threadbear_core::composer::{self, BOX_MAX_LINES, BOX_MIN_LINES, PICTURE_MARK, PICTURE_MARK_STR};
 use threadbear_core::reducer::ImageRef;
@@ -42,6 +43,10 @@ pub(crate) struct PictureChip {
     pub(crate) source: PathBuf,
     /// None while the runner is still copying it in.
     pub(crate) image: Option<ImageRef>,
+    /// When it was pasted, dropped or chosen, for its drop into the strip
+    /// (juice::picture_drop); None for one that came with a draft, and
+    /// under Reduce Motion.
+    pub(crate) added: Option<Instant>,
 }
 
 pub struct Composer {
@@ -84,6 +89,11 @@ pub struct Composer {
     pub(crate) card: CardState,
     /// Which card was last seen arriving, for it to settle in (composer_card.rs).
     pub(crate) card_arrival: crate::composer_card::CardArrival,
+    /// When the strip over the words last opened for a first picture, for
+    /// its height easing open (juice::strip_open).
+    strip_opened: Option<Instant>,
+    /// How many pictures have dropped in, for scripts (`dump`'s `juice`).
+    pub(crate) pictures_dropped: usize,
     /// The card's text style, one per appearance (`card_reading_style`).
     pub(crate) card_style: Option<(crate::style::ReadingStyleKey, gpui_kit::base::TextViewStyle)>,
     shown_placeholder: SharedString,
@@ -224,6 +234,8 @@ impl Composer {
             model_picker: None,
             card: CardState::default(),
             card_arrival: Default::default(),
+            strip_opened: None,
+            pictures_dropped: 0,
             card_style: None,
             shown_placeholder: "Message".into(),
             editing: None,
@@ -993,7 +1005,13 @@ impl Composer {
             }
         });
         for (id, path) in ids.into_iter().zip(paths) {
-            self.pictures.insert(id.clone(), PictureChip { source: path.clone(), image: None });
+            let added = (!cx.reduce_motion()).then(Instant::now);
+            // The first picture in opens the strip for itself.
+            if added.is_some() && self.pictures.is_empty() {
+                self.strip_opened = added;
+            }
+            self.pictures_dropped += added.is_some() as usize;
+            self.pictures.insert(id.clone(), PictureChip { source: path.clone(), image: None, added });
             self.import_picture(id, path, target.downgrade(), window, cx);
         }
         cx.notify();
@@ -1310,7 +1328,7 @@ impl Composer {
     /// The strip over the words (AttachmentStrip): a thumbnail for each
     /// picture that's in, with × on hover, and a placeholder for each still
     /// being copied in, so the strip doesn't jump when it arrives.
-    fn render_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_strip(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let chips = self.chips(cx);
         if chips.is_empty() {
             return None;
@@ -1327,6 +1345,10 @@ impl Composer {
                 Some(image) => tile.child(img(PathBuf::from(&image.path)).size(side).rounded(radius).object_fit(ObjectFit::Cover)),
                 None => tile.flex().items_center().justify_center().child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.))),
             };
+            let dropping = chip.and_then(|c| c.added).map(|at| at.elapsed()).filter(|e| threadbear_core::juice::picture_dropping(*e));
+            if dropping.is_some() {
+                window.request_animation_frame();
+            }
             let (remove_id, open_id) = (id.clone(), id.clone());
             let remove = remove_badge(("remove-picture", index)).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 // Not the thumbnail's click under it, which opens the picture.
@@ -1342,6 +1364,12 @@ impl Composer {
                 .role(Role::Button).aria_label(SharedString::from(format!("Picture {}", index + 1)))
                 .group("tile")
                 .relative()
+                // Just pasted or dropped: it comes down into its place from
+                // above, a touch past and back, fading in (18 Nov).
+                .when_some(dropping, |tile, since| {
+                    let (fade, offset) = threadbear_core::juice::picture_drop(since);
+                    tile.top(px(offset)).opacity(fade)
+                })
                 .cursor_pointer()
                 .child(tile)
                 // Over the thumbnail's top right corner, 4 in, while the
@@ -1357,6 +1385,14 @@ impl Composer {
                     this.open_picture(&input, &open_id, window, cx);
                 }));
             row = row.child(tile);
+        }
+        // The strip's first picture: its height eases open, so the box grows
+        // to take it rather than jumping. The row keeps its own height and
+        // shows past the opening strip; its picture is still fading in.
+        if let Some(since) = self.strip_opened.map(|at| at.elapsed()).filter(|e| *e < threadbear_core::juice::STRIP_OPEN) {
+            window.request_animation_frame();
+            let open = threadbear_core::juice::strip_open(since);
+            return Some(div().h(px(style::size::THUMBNAIL * open)).child(row).into_any_element());
         }
         Some(row.into_any_element())
     }
@@ -1630,7 +1666,7 @@ impl Render for Composer {
         if !running || !threadbear_core::composer::still_stopping(self.stopping, crate::now_ms()) {
             self.stopping = None;
         }
-        let strip = self.render_strip(cx);
+        let strip = self.render_strip(window, cx);
         let creating = self.creating(cx);
         // Typing, answering and sending wait while the thread moves.
         let locked = creating || moving.is_some();

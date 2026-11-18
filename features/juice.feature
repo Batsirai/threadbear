@@ -33,3 +33,30 @@ Feature: The small motions
     Then no confetti was thrown
     When I archive every thread in the Inbox
     Then confetti popped from the empty inbox
+
+  # Mike picked these from clips on 18 Nov: picking an answer is the button
+  # he presses most, and it only changed colour.
+  @juice.pickfill @swift-pending
+  Scenario: An answer I pick fills its button
+    Given I open the thread "Ship the beta to TestFlight"
+    When I pick the first answer on the card
+    Then the answer's button filled
+
+  @juice.picturedrop @swift-pending
+  Scenario: A picture I paste drops into the box
+    Given I open the thread "Morning brief"
+    When I paste a picture into the box
+    Then the picture dropped into the box
+
+  @juice.replyfade @swift-pending
+  Scenario: A reply fades in as it streams
+    Given I open the thread "Morning brief"
+    When I send "Any follow-ups?"
+    Then a reply's new words fade in as they stream
+    And the card that came settled in
+
+  @juice.confetti @swift-pending
+  Scenario: A thread milestone throws confetti from its note
+    When the thread count reaches 1000 with 100 already remembered
+    Then the milestone says "That's 1,000 threads"
+    And confetti popped from the milestone note

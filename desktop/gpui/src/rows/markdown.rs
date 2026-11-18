@@ -709,7 +709,14 @@ impl ThreadPane {
         let state = match self.rows.documents.get(key) {
             Some(state) => state.clone(),
             None => {
-                let state = cx.new(|cx| TextViewState::markdown(text, cx));
+                // What a streaming reply adds fades in, word after word,
+                // rather than popping onto the page (the kit's stream fade,
+                // off unless asked for; Mike picked it from clips on 18 Nov).
+                // Only text added to what's there fades: a row drawn whole,
+                // or replaced, is there at once, and none of it under Reduce
+                // Motion.
+                let motion = gpui_kit::base::TextViewMotion::default().with_stream_fade(threadbear_core::juice::REPLY_FADE).with_stream_fade_stagger(threadbear_core::juice::REPLY_FADE_WORD);
+                let state = cx.new(|cx| TextViewState::markdown(text, cx).motion(motion));
                 if self.rows.documents.len() >= DOCUMENTS_KEPT {
                     // Far more than a screen's worth; the oldest are the least
                     // likely to come back soon.

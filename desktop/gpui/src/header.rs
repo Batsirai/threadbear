@@ -1112,6 +1112,9 @@ impl Threadbear {
         let hairline = style::hairline(cx);
         let orange = style::needs_you(cx);
         let id = thread.id.clone();
+        // Where this login's confetti pops from once it's signed back in,
+        // if the line's still up (confetti.rs).
+        let anchor = account.as_ref().map(|a| crate::confetti::anchor(format!("sign-in-line:{}", a.id)));
         let provider = account.as_ref().map_or(thread.provider.as_str(), |a| a.provider.as_str());
         let fallback = threadbear_core::logins::RunnerLogins::default();
         let logins = match thread.runner_id.as_deref() {
@@ -1148,7 +1151,7 @@ impl Threadbear {
             .border_color(hairline)
             .text_size(px(style::size::LABEL))
             .child(icon("person.crop.circle.badge.exclamationmark", 13., orange))
-            .child(tipped!(div().id("signin-text").flex_1().min_w_0().truncate(), tip, gpui_kit::Role::GenericContainer).child(text))
+            .child(tipped!(div().id("signin-text").relative().flex_1().min_w_0().truncate(), tip, gpui_kit::Role::GenericContainer).child(text).children(anchor))
             // Another Mac's login is signed in on that Mac: Terminal here would
             // sign in this Mac's CLI.
             .when_some(account, |s, account| {

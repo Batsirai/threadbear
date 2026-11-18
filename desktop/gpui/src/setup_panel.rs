@@ -32,6 +32,9 @@ pub(crate) struct SetupState {
     /// Open signed in, while its token is on its way.
     pub(crate) opening: bool,
     pub(crate) view: Option<Entity<crate::activity_panels::PanelView>>,
+    /// How many items were left the last time the panel was drawn: the
+    /// last one ticking itself throws confetti (confetti.rs).
+    last_left: Option<usize>,
 }
 
 impl Threadbear {
@@ -132,9 +135,20 @@ impl Threadbear {
         let fg = style::label_text(cx);
         let secondary = style::secondary_text(cx);
         let mut children: Vec<AnyElement> = vec![];
+        // The last item just ticked itself while the list's open: confetti
+        // from "All set.", once this frame has drawn it.
+        let left = list.left();
+        if threadbear_core::confetti::setup_finished(self.setup.last_left.replace(left), left) {
+            cx.spawn(async move |this, cx| {
+                this.update(cx, |this, cx| this.throw_confetti("setup-done", threadbear_core::confetti::SETUP_BURST, cx)).ok();
+            })
+            .detach();
+        }
         if list.left() == 0 {
             children.push(
                 h_flex()
+                    .relative()
+                    .child(crate::confetti::anchor("setup-done"))
                     .items_center()
                     .gap(px(10.))
                     .child(crate::tour::waving_bear(36., secondary))

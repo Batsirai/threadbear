@@ -32,6 +32,14 @@ pub(crate) struct CardState {
     pub(crate) explain: BTreeSet<i64>,
     /// Folded to its heading (ComposerCard's chevron).
     pub(crate) collapsed: bool,
+    /// The answer just picked with a click, and when: its button fills and
+    /// hops, or its row's circle pops (juice::pick_fill). Never set under
+    /// Reduce Motion.
+    picked_at: Option<(usize, i64, Instant)>,
+    /// The follow-up just ticked on the done card, the same.
+    ticked_at: Option<(usize, Instant)>,
+    /// The last answer that filled, for scripts (`dump`'s `juice`).
+    pub(crate) last_fill: Option<(usize, i64)>,
     /// The ask a paged card is showing.
     pub(crate) page: usize,
     /// The slide between two pages while it's going (CardDeck).
@@ -123,8 +131,13 @@ impl Composer {
         let picked = self.card.picks.get(&key) == Some(&option);
         if picked {
             self.card.picks.remove(&key);
+            self.card.picked_at = None;
         } else {
             self.card.picks.insert(key, option);
+            if !cx.reduce_motion() {
+                self.card.picked_at = Some((ask, option, Instant::now()));
+                self.card.last_fill = Some((ask, option));
+            }
         }
         self.push_card_state(cx);
         cx.notify();
@@ -181,6 +194,9 @@ impl Composer {
         let key = index as i64;
         if !self.card.next_picks.remove(&key) {
             self.card.next_picks.insert(key);
+            if !cx.reduce_motion() {
+                self.card.ticked_at = Some((index, Instant::now()));
+            }
         }
         self.push_card_state(cx);
         cx.notify();
@@ -474,6 +490,11 @@ impl Composer {
             column = column.child(small_label("Or carry on", cx));
             for (index, follow_up) in card.next.iter().enumerate() {
                 let (ticked, explained) = (self.card.next_picks.contains(&(index as i64)), self.card.explain.contains(&(index as i64)));
+                // Just ticked: its circle pops as the tick draws in.
+                let popping = self.card.ticked_at.filter(|(i, at)| ticked && *i == index && at.elapsed() < threadbear_core::juice::TICK_POP).map(|(_, at)| at.elapsed());
+                if popping.is_some() {
+                    window.request_animation_frame();
+                }
                 let this2 = this.clone();
                 let this3 = this.clone();
                 // A row is a body line, 8 over and 8 under; its hover fill
@@ -496,7 +517,7 @@ impl Composer {
                                 this.update(cx, |this, cx| this.toggle_follow_up(index, window, cx));
                             }
                         })
-                        .child(div().flex_none().w(px(metrics::ROW_WORDS - metrics::ROW_INSET)).h(px(style::size::BODY_LINE)).flex().items_center().child(tick_circle(ticked, cx)))
+                        .child(div().flex_none().w(px(metrics::ROW_WORDS - metrics::ROW_INSET)).h(px(style::size::BODY_LINE)).flex().items_center().child(tick_circle(ticked, popping, cx)))
                         .child(div().flex_1().min_w_0().text_size(px(style::size::BODY)).line_height(px(style::size::BODY_LINE)).text_color(style::label_text(cx)).child(follow_up.clone()))
                         .child(
                             div()
@@ -687,6 +708,12 @@ pub(crate) trait AskHost: Sized + 'static {
     fn ask_place(&self, cx: &App) -> (crate::open_gate::Origin, String);
     fn ask_reading_style(&mut self, cx: &App) -> gpui_kit::base::TextViewStyle;
     fn ask_pick_answer(&mut self, ask: usize, option: i64, window: &mut Window, cx: &mut Context<Self>);
+    /// When this answer was picked, if that was a click a moment ago: its
+    /// button fills and hops, or its row's circle pops. None where a host
+    /// doesn't animate its picks.
+    fn ask_picked_at(&self, _ask: usize, _option: i64) -> Option<Instant> {
+        None
+    }
     fn ask_open_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>);
     /// The card a link button shows while the pointer rests on it (a page's
     /// address, a file's picture or name), and the key its hover is kept
@@ -720,6 +747,11 @@ pub(crate) trait AskHost: Sized + 'static {
     /// links, and its answers as buttons or rows, with Something else's box.
     fn render_ask(&mut self, index: usize, ask: &Ask, numbered: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let picked = self.ask_pick(index);
+        // Picked a moment ago: how long since, while its motion's going.
+        let picking = picked.and_then(|p| self.ask_picked_at(index, p)).map(|at| at.elapsed()).filter(|e| *e < threadbear_core::juice::PICK);
+        if picking.is_some() {
+            window.request_animation_frame();
+        }
         let choices = composer::choices(ask);
         // A numbered ask's text starts past its number, as in a list in a
         // message; its buttons line up with the text, not the number.
@@ -800,7 +832,11 @@ pub(crate) trait AskHost: Sized + 'static {
                 };
                 let title = if is_picked { format!("✓ {choice}") } else { choice.clone() };
                 let this = this.clone();
-                buttons = buttons.child(card_button(("answer", index * 100 + n), &title, look, "Pick this answer", cx).on_click(move |_, window, cx| {
+                let button = match picking.filter(|_| is_picked) {
+                    Some(since) => picking_button(("answer", index * 100 + n), &title, "Pick this answer", since, cx),
+                    None => card_button(("answer", index * 100 + n), &title, look, "Pick this answer", cx),
+                };
+                buttons = buttons.child(button.on_click(move |_, window, cx| {
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |this, cx| this.ask_pick_answer(index, n as i64, window, cx));
                     }
@@ -808,14 +844,18 @@ pub(crate) trait AskHost: Sized + 'static {
             }
             let own = picked == Some(OWN_ANSWER);
             let this2 = this.clone();
-            buttons = buttons.child(card_button(("answer-own", index), if own { "✓ Something else" } else { "Something else…" }, if own { ButtonLook::Picked } else { ButtonLook::Plain }, "Answer in your own words", cx).on_click(move |_, window, cx| {
+            let own_button = match picking.filter(|_| own) {
+                Some(since) => picking_button(("answer-own", index), "✓ Something else", "Answer in your own words", since, cx),
+                None => card_button(("answer-own", index), if own { "✓ Something else" } else { "Something else…" }, if own { ButtonLook::Picked } else { ButtonLook::Plain }, "Answer in your own words", cx),
+            };
+            buttons = buttons.child(own_button.on_click(move |_, window, cx| {
                 if let Some(this) = this2.upgrade() {
                     this.update(cx, |this, cx| this.ask_pick_answer(index, OWN_ANSWER, window, cx));
                 }
             }));
             block = block.child(buttons);
         } else {
-            block = block.child(self.render_answer_rows(index, ask, picked, indent, cx));
+            block = block.child(self.render_answer_rows(index, ask, picked, picking, indent, cx));
         }
         if picked == Some(OWN_ANSWER) {
             let input = self.ask_answer_box(index, window, cx);
@@ -870,7 +910,7 @@ pub(crate) trait AskHost: Sized + 'static {
 
     /// An ask's answers as rows (RowRenderer.answerRows): a circle, the label,
     /// a star and "Recommended" on the agent's, what it does under it, then "Something else…".
-    fn render_answer_rows(&mut self, index: usize, ask: &Ask, picked: Option<i64>, indent: Pixels, cx: &mut Context<Self>) -> AnyElement {
+    fn render_answer_rows(&mut self, index: usize, ask: &Ask, picked: Option<i64>, picking: Option<Duration>, indent: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let choices = composer::choices(ask);
         let this = cx.entity().downgrade();
         // As the Swift rows are laid out, a paragraph each (measured against
@@ -909,7 +949,7 @@ pub(crate) trait AskHost: Sized + 'static {
                             this.update(cx, |this, cx| this.ask_pick_answer(index, value, window, cx));
                         }
                     })
-                    .child(div().pt(px(1.)).child(tick_circle(is_picked, cx)))
+                    .child(div().pt(px(1.)).child(tick_circle(is_picked, picking.filter(|_| is_picked), cx)))
                     .child(
                         v_flex()
                             .flex_1()
@@ -953,6 +993,10 @@ impl AskHost for Composer {
 
     fn ask_pick_answer(&mut self, ask: usize, option: i64, window: &mut Window, cx: &mut Context<Self>) {
         self.pick_answer(ask, option, window, cx);
+    }
+
+    fn ask_picked_at(&self, ask: usize, option: i64) -> Option<Instant> {
+        self.card.picked_at.filter(|(a, o, _)| *a == ask && *o == option).map(|(_, _, at)| at)
     }
 
     fn ask_open_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -1541,6 +1585,53 @@ pub(crate) fn card_button(id: impl Into<ElementId>, title: &str, look: ButtonLoo
         .child(title.to_owned())
 }
 
+/// A button just picked (`juice::pick_fill`): the plain button with the
+/// accent filling it from the left, under its words, and a hop as the fill
+/// gets there; then it's `card_button`'s Picked. GPUI can't scale a button,
+/// so it answers with a fill and a hop rather than a press.
+fn picking_button(id: impl Into<ElementId>, title: &str, tip: &'static str, since: Duration, cx: &App) -> Stateful<Div> {
+    use threadbear_core::juice;
+    let (filled, hop) = (juice::pick_fill(since), juice::pick_hop(since));
+    let accent = style::control_accent(cx);
+    let radius = px(7.5);
+    let fill_layer = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let across = Bounds { origin: bounds.origin, size: size(bounds.size.width * filled, bounds.size.height) };
+            // Square on its leading edge until it reaches the far side.
+            let lead = if filled >= 1. { radius } else { gpui_kit::px(0.) };
+            window.paint_quad(fill(across, accent).corner_radii(Corners { top_left: radius, bottom_left: radius, top_right: lead, bottom_right: lead }));
+        },
+    )
+    .absolute()
+    .top(gpui_kit::px(-1.))
+    .left(gpui_kit::px(-1.))
+    .right(gpui_kit::px(-1.))
+    .bottom(gpui_kit::px(-1.));
+    div()
+        .id(id.into())
+        .flex_none()
+        .relative()
+        .top(px(hop))
+        .h(px(metrics::BUTTON_HEIGHT))
+        .px(px(metrics::BUTTON_PAD - 1.))
+        .flex()
+        .items_center()
+        .rounded(radius)
+        .border_1()
+        .border_color(gpui_kit::transparent_black())
+        .bg(style::button_fill(cx))
+        .shadow(button_shadow())
+        // The words turn as the fill passes their middle.
+        .text_color(if filled > 0.5 { gpui_kit::white() } else { style::label_text(cx) })
+        .text_size(px(style::size::LABEL))
+        .line_height(px(16.))
+        .cursor_pointer()
+        .when(!tip.is_empty(), |b| b.tip(tip))
+        .child(fill_layer)
+        .child(div().relative().child(title.to_owned()))
+}
+
 /// "2 of 3" between the pager's arrows. While the asks slide the number
 /// rolls, the old one up and out as the new comes up from below (CardDeck).
 fn page_counter(page: usize, count: usize, slide: Option<PageSlide>, cx: &App) -> AnyElement {
@@ -1589,8 +1680,49 @@ fn pager_arrow(glyph: &'static str, enabled: bool, tip: &'static str, id: impl I
         .child(glyph)
 }
 
-fn tick_circle(ticked: bool, cx: &App) -> impl IntoElement {
+fn tick_circle(ticked: bool, popping: Option<Duration>, cx: &App) -> impl IntoElement {
     let side = px(16.);
+    if let Some(since) = popping.filter(|_| ticked) {
+        // Just ticked (`juice::tick_pop`): the ring a little over its size
+        // and back as the tick draws in, on the icon's own 24 grid (a ring
+        // of 10 about the middle, the tick through 9,12 11,14 15,10).
+        let (scale, drawn) = threadbear_core::juice::tick_pop(since);
+        let accent = style::accent(cx);
+        return canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let k = f32::from(bounds.size.width) / 24.;
+                let middle = bounds.center();
+                let at = |x: f32, y: f32| point(middle.x + gpui_kit::px((x - 12.) * k * scale), middle.y + gpui_kit::px((y - 12.) * k * scale));
+                let half = gpui_kit::px(11. * k * scale);
+                let ring = Bounds { origin: point(middle.x - half, middle.y - half), size: size(half * 2., half * 2.) };
+                window.paint_quad(fill(ring, gpui_kit::transparent_black()).corner_radii(half).border_widths(gpui_kit::px(2. * k)).border_color(accent));
+                let points = [(9., 12.), (11., 14.), (15., 10.)];
+                let lengths: Vec<f32> = points.windows(2).map(|w| ((w[1].0 - w[0].0) as f32).hypot(w[1].1 - w[0].1)).collect();
+                let mut left = drawn.clamp(0., 1.) * lengths.iter().sum::<f32>();
+                if left <= 0. {
+                    return;
+                }
+                let mut path = PathBuilder::stroke(gpui_kit::px(2. * k));
+                path.move_to(at(points[0].0, points[0].1));
+                for (i, length) in lengths.iter().enumerate() {
+                    let (a, b) = (points[i], points[i + 1]);
+                    let u = (left / length).min(1.);
+                    path.line_to(at(a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u));
+                    left -= length;
+                    if left <= 0. {
+                        break;
+                    }
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, accent);
+                }
+            },
+        )
+        .size(side)
+        .flex_none()
+        .into_any_element();
+    }
     if ticked {
         Icon::from(IconName::CircleCheck).with_size(side).text_color(style::accent(cx)).into_any_element()
     } else {

@@ -56,7 +56,8 @@ fn anchored(key: &str, since: Instant) -> Option<Bounds<Pixels>> {
 }
 
 struct Thrown {
-    anchor: String,
+    /// Where it may pop from: the first of these that's drawn.
+    anchors: Vec<String>,
     asked: Instant,
     bits: Vec<rules::Bit>,
     /// Where it pops from and when it did, once its anchor's drawn.
@@ -109,16 +110,22 @@ impl Threadbear {
 
     /// A burst from the anchor `key`, unless Reduce Motion is on.
     pub(crate) fn throw_confetti(&mut self, key: impl Into<String>, burst: Burst, cx: &mut Context<Self>) {
-        if cx.reduce_motion() {
+        self.throw_confetti_from(vec![key.into()], burst, cx);
+    }
+
+    /// A burst from the first of these anchors that's on screen (a login's
+    /// Usage row, or the open thread's sign-in line).
+    pub(crate) fn throw_confetti_from(&mut self, anchors: Vec<String>, burst: Burst, cx: &mut Context<Self>) {
+        if cx.reduce_motion() || anchors.is_empty() {
             return;
         }
-        let key = key.into();
+        let key = anchors[0].clone();
         self.confetti.serial += 1;
         let seed = self.confetti.serial.wrapping_mul(0x9e37_79b9) ^ key.bytes().fold(7u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
         let view = self.confetti.view.get_or_insert_with(|| cx.new(|_| ConfettiView::default())).clone();
         view.update(cx, |v, cx| {
             v.last = Some(json!({ "anchor": key, "popped": false }));
-            v.thrown.push(Thrown { anchor: key, asked: Instant::now(), bits: rules::bits(seed, burst), from: None });
+            v.thrown.push(Thrown { anchors, asked: Instant::now(), bits: rules::bits(seed, burst), from: None });
             cx.notify();
         });
     }
@@ -136,9 +143,9 @@ impl Render for ConfettiView {
         let mut popped = None;
         for t in &mut self.thrown {
             if t.from.is_none() {
-                if let Some(b) = anchored(&t.anchor, t.asked) {
+                if let Some((anchor, b)) = t.anchors.iter().find_map(|a| anchored(a, t.asked).map(|b| (a.clone(), b))) {
                     t.from = Some((b.center(), now));
-                    popped = Some((t.anchor.clone(), b));
+                    popped = Some((anchor, b));
                 }
             }
         }

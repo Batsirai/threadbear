@@ -13,7 +13,8 @@
 // threads opening (opening.feature): switch, arrows, new-thread, and the
 // Swift app's small motions beside GPUI's: select, finish, archive-row,
 // inbox-zero, send, bear-hover, woke, background, activity, librarian,
-// milestone. `--busy` blocks each app's
+// milestone, and GPUI's own: year-token, pick-answer, paste-picture,
+// reply-flow. `--busy` blocks each app's
 // main thread for that long straight after the click (the automation's
 // `stall`), as opening a heavy next thread would. Writes <scene>.mp4 at full
 // speed and <scene>-slow.mp4 at a quarter of it, both apps in dark mode.
@@ -179,6 +180,39 @@ const scenes: Record<string, Scene> = {
     },
     seconds: 4,
   },
+  // The small motions of 18 Nov (the GPUI app only). Picking an answer: its
+  // button fills from the left and hops, then the card pages on.
+  'pick-answer': {
+    setup: async (app) => {
+      const t = await until(app, 'Ship the beta', (d) => titled(d, 'Ship the beta to TestFlight'));
+      await app.do({ cmd: 'open', id: t.id });
+      await until(app, 'its transcript', (d) => d.transcript.threadId === t.id && d.transcript.state === 'loaded');
+    },
+    act: async (app) => {
+      await app.do({ cmd: 'ask', action: 'pick:0:0' });
+    },
+    seconds: 3,
+  },
+  // A picture pasted into the box: the strip opens and it drops in.
+  'paste-picture': {
+    setup: async (app) => scenes.archive.setup(app),
+    act: async (app) => {
+      await app.do({ cmd: 'paste-image', path: path.join(root, 'features/support/sample.png') });
+      await sleep(1200);
+      await app.do({ cmd: 'paste-image', path: path.join(root, 'features/support/sample.png') });
+    },
+    seconds: 3.5,
+  },
+  // A reply streaming in: each piece fades in as it lands.
+  'reply-flow': {
+    setup: async (app) => scenes.archive.setup(app),
+    act: async (app) => {
+      await app.do({ cmd: 'send', text: 'Any follow-ups?' });
+    },
+    seconds: 6,
+  },
+    seconds: 3.5,
+  },
   // A login getting its year-long token while its Usage row's in sight:
   // confetti pops from the row's new "Year-long token until" line (the
   // GPUI app only, confetti.rs).
@@ -273,14 +307,15 @@ const scenes: Record<string, Scene> = {
     },
     seconds: 3.5,
   },
-  // The milestone toast dropping in with its bear waving (GPUI has none yet,
-  // so its side shows nothing happening).
+  // The milestone toast: Swift's drops in with its bear waving; GPUI's is
+  // still, with confetti from its paw (`tier` is the Swift command's, `count`
+  // and `shown` the GPUI one's).
   milestone: {
     setup: async (app) => scenes.archive.setup(app),
     act: async (app) => {
-      await app.do({ cmd: 'milestone', tier: 1000 }).catch(() => {});
+      await app.do({ cmd: 'milestone', tier: 1000, count: 1000, shown: 100 }).catch(() => {});
     },
-    seconds: 3,
+    seconds: 3.5,
   },
   hibernate: {
     setup: async (app) => scenes.archive.setup(app),

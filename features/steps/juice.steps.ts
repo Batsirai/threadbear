@@ -1,4 +1,6 @@
 import { Then, When } from '@cucumber/cucumber';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Dump } from '../support/driver.ts';
 import type { ThreadbearWorld } from '../support/world.ts';
 
@@ -47,4 +49,38 @@ Then('confetti popped from the empty inbox', async function (this: ThreadbearWor
 
 Then('confetti was thrown from {string}\'s Usage row', async function (this: ThreadbearWorld, account: string) {
   await this.until(`confetti from ${account}'s token line`, (d) => d.juice?.confetti?.anchor === `token:${account}`);
+});
+
+// The small motions of 18 Nov: the answer's fill, the pasted picture's drop
+// and the reply's fade (composer_card.rs, composer.rs, rows/markdown.rs).
+
+When('I pick the first answer on the card', async function (this: ThreadbearWorld) {
+  await this.until('a card of asks in the box', (d) => (d.composer.card ?? []).some((l) => /^\[ \] 1\./.test(l)));
+  await this.app.do({ cmd: 'ask', action: 'pick:0:0' });
+});
+
+Then('the answer\'s button filled', async function (this: ThreadbearWorld) {
+  await this.until('the first answer filling', (d) => d.juice?.answerFilled === '0:0');
+});
+
+When('I paste a picture into the box', async function (this: ThreadbearWorld) {
+  const sample = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../support/sample.png');
+  await this.app.do({ cmd: 'paste-image', path: sample });
+});
+
+Then('the picture dropped into the box', async function (this: ThreadbearWorld) {
+  await this.until('a picture dropping in', (d) => d.juice?.picturesDropped === 1 && d.composer.images === 1);
+});
+
+Then('a reply\'s new words fade in as they stream', async function (this: ThreadbearWorld) {
+  await this.until('the reply fade on', (d) => (d.juice?.replyFadeMs ?? 0) > 0);
+});
+
+Then('confetti popped from the milestone note', async function (this: ThreadbearWorld) {
+  await this.until('confetti from the milestone', (d) => d.juice?.confetti?.anchor === 'milestone' && d.juice.confetti.popped);
+});
+
+// Thrown, not popped: the login's row may be down the panel, out of sight.
+Then('confetti was thrown for {string} signing back in', async function (this: ThreadbearWorld, account: string) {
+  await this.until(`confetti for ${account} signed back in`, (d) => d.juice?.confetti?.anchor === `signed-in:${account}`);
 });

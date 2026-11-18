@@ -997,8 +997,15 @@ impl Threadbear {
                     self.logins.set_accounts(&params["accounts"]);
                     // Year-long token… done: confetti from the login's Usage
                     // row, if it's in sight (confetti.rs).
-                    for id in self.logins.new_year_tokens(&before) {
+                    let tokens = self.logins.new_year_tokens(&before);
+                    for id in &tokens {
                         self.throw_confetti(format!("token:{id}"), threadbear_core::confetti::TOKEN_BURST, cx);
+                    }
+                    // Signed back in: from its Usage row, or the open
+                    // thread's sign-in line, whichever is in sight. A token
+                    // that signed it in has had its burst.
+                    for id in self.logins.signed_back_in(&before).into_iter().filter(|id| !tokens.contains(id)) {
+                        self.throw_confetti_from(vec![format!("signed-in:{id}"), format!("sign-in-line:{id}")], threadbear_core::confetti::SIGNED_IN_BURST, cx);
                     }
                 }
                 "pools.updated" => self.logins.set_pools(&params["pools"]),
@@ -1741,6 +1748,12 @@ impl Threadbear {
             "slidOff": self.sidebar.gestures.last_slid(),
             "cardArrived": self.composer(cx).and_then(|c| c.read(cx).card_arrival.last),
             "confetti": self.confetti.dump(cx),
+            // The answer whose button last filled, as "ask:option", and how
+            // many pictures have dropped into the box (composer_card.rs,
+            // composer.rs); how long a reply's new words take to fade in.
+            "answerFilled": self.composer(cx).and_then(|c| c.read(cx).card.last_fill).map(|(ask, option)| format!("{ask}:{option}")),
+            "picturesDropped": self.composer(cx).map(|c| c.read(cx).pictures_dropped),
+            "replyFadeMs": if cx.reduce_motion() { 0 } else { threadbear_core::juice::REPLY_FADE.as_millis() as u64 },
         });
         // ⌘K's box, while it's up (open_anything.rs).
         dump["anything"] = self.open_anything_dump(cx);
