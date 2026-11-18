@@ -1136,7 +1136,11 @@ async function dispatch(client, method, p) {
     case 'approvals.respond': {
       const t = need(p.threadId);
       const waiter = t.approvalWaiters?.get(p.approvalId);
-      persist(t.summary.id, { type: 'approval.resolved', approvalId: p.approvalId, decision: p.decision, message: p.message });
+      // The card's own turn, so finishing it ends that turn's working row
+      // rather than a made-up one, which left "Working" under an idle thread
+      // (found by the fuzz experiment, 18 Nov).
+      const card = t.events.find((e) => (e.type === 'approval.requested' || e.type === 'question.requested') && e.approvalId === p.approvalId);
+      persist(t.summary.id, { type: 'approval.resolved', approvalId: p.approvalId, decision: p.decision, message: p.message }, card?.turnId);
       if (waiter) {
         t.approvalWaiters.delete(p.approvalId);
         waiter(p);
@@ -1152,8 +1156,8 @@ async function dispatch(client, method, p) {
       } else {
         // A fixture's approval with no fake turn behind it: finish the turn.
         const text = p.decision === 'deny' ? 'OK, I left it alone.' : p.decision === 'answered' ? `Going with ${Object.values(p.answers ?? {}).join(', ') || 'that'}.` : 'Done.';
-        persist(t.summary.id, { type: 'assistant.text', itemId: 'm_' + crypto.randomBytes(4).toString('hex'), text });
-        persist(t.summary.id, { type: 'turn.completed', turnId: 'turn_resolved', outcome: 'completed', durationMs: 1200 });
+        persist(t.summary.id, { type: 'assistant.text', itemId: 'm_' + crypto.randomBytes(4).toString('hex'), text }, card?.turnId);
+        persist(t.summary.id, { type: 'turn.completed', turnId: card?.turnId ?? 'turn_resolved', outcome: 'completed', durationMs: 1200 }, card?.turnId);
         t.summary.needsYou = true;
         setStatus(t.summary.id, 'idle');
       }
@@ -3947,7 +3951,9 @@ The new hero is shorter, and every page now leads with what the app does.
         h(20, { id: `file:${repo}/docs/resume-design.md`, kind: 'file', title: 'resume-design.md', path: `${repo}/docs/resume-design.md`, how: 'written' }),
         h(12, { id: 'link:https://developer.apple.com/documentation/foundation/urlsession', kind: 'link', title: 'URLSession', url: 'https://developer.apple.com/documentation/foundation/urlsession', how: 'mentioned' }),
       ],
-      edited: [`${repo}/Sources/Upload/UploadTask.swift`, `${repo}/Sources/Upload/ChunkStore.swift`, `${repo}/Tests/UploadTests/ResumeTests.swift`],
+      // The two files its transcript writes and edits, so Changes agrees
+      // with what the thread shows (a made-up list misled the fuzz agent).
+      edited: [`${repo}/Sources/Upload/UploadJournal.swift`, `${repo}/Sources/Upload/UploadTask.swift`],
     });
   }
 }
