@@ -32,14 +32,19 @@ type Entry = { pid: number; command: string; startedAt: string; lstart?: string;
 // job, so the runner can tell it was the CLI (Codex's review, 18 Nov:
 // asked asynchronously, the pid could have been reused by then). forget
 // lets go of a job without ending it.
-export type JobControl = { assign(pid: number, name: string): Promise<string>; end(name: string): Promise<unknown>; forget(name: string): Promise<unknown> };
+// notAfter (a FILETIME, as a string): the helper refuses a process that
+// started later, as it can only be one that got the CLI's pid after the CLI
+// went (Codex's second review: checked after assigning, it was too late to
+// take the process out of the job).
+export type JobControl = { assign(pid: number, name: string, notAfter: string): Promise<string>; end(name: string): Promise<unknown>; forget(name: string): Promise<unknown> };
 
 export const helperJobs: JobControl = {
-  assign: (pid, name) => win32Helper().ask('jobAssign', { pid, name }),
+  assign: (pid, name, notAfter) => win32Helper().ask('jobAssign', { pid, name, notAfter }),
   end: (name) => win32Helper().ask('jobEnd', { name }),
   forget: (name) => win32Helper().ask('jobForget', { name }),
 };
 
+const JOB_LEFTOVERS = 'job-leftovers.json';
 const JOB_NAME = /^Local\\threadbear-job-[0-9a-f]{32}$/;
 
 export function newJobName(): string {
@@ -85,6 +90,18 @@ export class ProcessRegistry {
 
   // Removes the list (a draining runner that has finished).
   removeFile(): void {
+    // Jobs it couldn't end go to a file every runner's start looks at, as
+    // nobody reads a finished draining runner's list.
+    const left = [...this.lingering].filter((e) => e.job);
+    if (left.length) {
+      const file = path.join(path.dirname(this.file), JOB_LEFTOVERS);
+      const had = readJsonSync<Entry[]>(file) ?? [];
+      try {
+        atomicWriteFileSync(file, JSON.stringify([...had, ...left], null, 1));
+      } catch (e) {
+        this.log.warn("could not keep a draining runner's unended jobs", { error: String(e) });
+      }
+    }
     try {
       fs.rmSync(this.file, { force: true });
     } catch {
@@ -107,7 +124,10 @@ export class ProcessRegistry {
     // as little as possible of what the CLI starts is started before it's
     // in its job. Never the runner itself (tests register their own process).
     const job = this.jobs && pid !== process.pid ? newJobName() : undefined;
-    const assigned = job ? this.jobs!.assign(pid, job) : undefined;
+    // The CLI started before now; anything with its pid that started after
+    // isn't it. 50 ms for the two clocks' reading of the same moment.
+    const notAfter = ((BigInt(Date.now()) + 50n + FILETIME_AT_UNIX_EPOCH_MS) * 10_000n).toString();
+    const assigned = job ? this.jobs!.assign(pid, job, notAfter) : undefined;
     // Taken before the probe, which can take a while: the process was started
     // moments ago, so on Windows this stands in for its start time if
     // PowerShell can't give the real one (approxStartTime).
@@ -119,7 +139,7 @@ export class ProcessRegistry {
     const entry: Entry = { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}) };
     this.entries.set(pid, entry);
     this.save();
-    if (job && assigned) this.settleJob(entry, job, assigned);
+    if (job && assigned) this.settleJob(entry, job, assigned, notAfter);
     this.scanTimer ??= setInterval(() => void this.scan(), SCAN_MS).unref();
   }
 
@@ -127,20 +147,22 @@ export class ProcessRegistry {
   // started when the CLI did in it. Until then it isn't recorded, so a name
   // the helper refused (someone else's) is never ended, and one that took a
   // reused pid is let go of without ending it.
-  private settleJob(entry: Entry, job: string, assigned: Promise<string>): void {
+  private settleJob(entry: Entry, job: string, assigned: Promise<string>, notAfter: string): void {
     this.assigning.add(entry);
     assigned.then(
       (created) => {
         this.assigning.delete(entry);
-        if (!/^\d+$/.test(created) || !entry.lstart || !startedAt(entry, BigInt(created))) {
+        if (!/^\d+$/.test(created) || !entry.lstart || !startedAt(entry, BigInt(created)) || BigInt(created) > BigInt(notAfter)) {
           this.log.warn("a CLI's job got a process that wasn't the CLI; letting it go", { pid: entry.pid });
           void (this.jobs ?? helperJobs).forget(job).catch(() => {});
           return;
         }
         entry.job = job;
+        // Saved either way: an exited one stays in the file, marked, until
+        // its job has ended (Codex's second review).
+        this.save();
         // Gone while it was being put in its job: end the job now.
         if (entry.exited) this.finishExited(entry);
-        else if (this.entries.get(entry.pid) === entry) this.save();
       },
       (e) => {
         this.assigning.delete(entry);
@@ -346,6 +368,11 @@ export class ProcessRegistry {
 
   async sweepOrphans(graceMs = 3000): Promise<number> {
     const previous = readJsonSync<Entry[]>(this.file) ?? [];
+    // And the jobs finished draining runners couldn't end.
+    const leftovers = path.join(path.dirname(this.file), JOB_LEFTOVERS);
+    const handed = readJsonSync<Entry[]>(leftovers) ?? [];
+    if (handed.length) fs.rmSync(leftovers, { force: true });
+    for (const e of handed) if (e && typeof e.job === 'string') previous.push({ ...e, exited: true });
     // What the previous runner's CLIs left, whatever became of the CLIs. A
     // job that can't be ended now is kept for the next start. The names only
     // ever reach jobs called threadbear-job-<random>, the runner's own.
@@ -379,6 +406,14 @@ export class ProcessRegistry {
   async killAll(graceMs = 3000): Promise<void> {
     const jobbed = [...this.entries.values()].filter((e) => e.job);
     const ended = await Promise.all(jobbed.map((e) => this.endJob(e.job!, e.pid)));
+    // Ones that couldn't be ended are kept, with those already waiting, for
+    // the next start (Codex's second review).
+    jobbed.forEach((e, i) => {
+      if (!ended[i]) this.lingering.add({ ...e, exited: true });
+    });
+    await Promise.all([...this.lingering].filter((e) => e.job).map(async (e) => {
+      if (await this.endJob(e.job!, e.pid)) this.lingering.delete(e);
+    }));
     // A CLI whose job has ended is gone, and its pid may be someone else's
     // by now (Codex's review): only the others get taskkill.
     const done = new Set(jobbed.filter((_, i) => ended[i]).map((e) => e.pid));

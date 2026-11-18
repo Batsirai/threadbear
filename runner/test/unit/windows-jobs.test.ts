@@ -188,3 +188,90 @@ test('on Windows what a CLI left running ends with its job, even with its parent
     (await import('../../src/win32-helper.ts')).win32Helper().stop();
   }
 });
+
+// Codex's second review.
+test("the helper is told the latest start the CLI can have, and an answer after it isn't the CLI", async () => {
+  const seen: string[] = [];
+  const calls: string[] = [];
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  reg.jobs = {
+    assign: async (_pid, _name, notAfter) => {
+      seen.push(notAfter);
+      return (BigInt(notAfter) + 1n).toString();
+    },
+    end: async (n) => void calls.push(`end ${n}`),
+    forget: async (n) => void calls.push(`forget ${n}`),
+  };
+  const cli = sleeper();
+  try {
+    reg.add(cli.pid!, 'claude', 'th1');
+    const now = (BigInt(Date.now()) + 11_644_473_600_000n) * 10_000n;
+    assert.ok(/^\d+$/.test(seen[0]!) && BigInt(seen[0]!) >= now - 10_000_000n && BigInt(seen[0]!) <= now + 10_000_000n, 'about now, as a FILETIME');
+    await tick();
+    assert.match(calls[0] ?? '', /^forget /);
+    reg.remove(cli.pid!);
+    await tick();
+    assert.ok(!calls.some((c) => c.startsWith('end')));
+  } finally {
+    cli.kill();
+  }
+});
+
+test("a CLI that exited before its job was made keeps its record when the job can't be ended", async () => {
+  let answer!: (s: string) => void;
+  const dir = tmpDir();
+  const reg = new ProcessRegistry(dir, nullLogger);
+  reg.jobs = { assign: () => new Promise((r) => (answer = r)), end: async () => { throw new Error('the helper exited'); }, forget: async () => {} };
+  const cli = sleeper();
+  try {
+    reg.add(cli.pid!, 'claude', 'th1');
+    const l = processInfo(cli.pid!)?.lstart ?? '';
+    reg.remove(cli.pid!);
+    answer(/^\d+$/.test(l) ? l : '1');
+    await tick();
+    await tick();
+    const kept = JSON.parse(fs.readFileSync(path.join(dir, 'children.json'), 'utf8')) as { job?: string; exited?: boolean }[];
+    assert.equal(kept.length, 1);
+    assert.equal(kept[0]!.exited, true);
+    assert.match(kept[0]!.job ?? '', JOB);
+  } finally {
+    cli.kill();
+  }
+});
+
+test("jobs that can't be ended at shutdown are kept, and a draining runner's go where the next start finds them", async () => {
+  const dir = tmpDir();
+  let failing = true;
+  const ended: string[] = [];
+  const jobs: JobControl = {
+    assign: async (pid) => {
+      const l = processInfo(pid)?.lstart ?? '';
+      return /^\d+$/.test(l) ? l : '1';
+    },
+    end: async (n) => {
+      if (failing) throw new Error('the helper exited');
+      ended.push(n);
+    },
+    forget: async () => {},
+  };
+  const draining = new ProcessRegistry(dir, nullLogger, 'children-1234.json');
+  draining.jobs = jobs;
+  const cli = sleeper();
+  try {
+    draining.add(cli.pid!, 'claude', 'th1');
+    await tick();
+    const name = JSON.parse(fs.readFileSync(path.join(dir, 'children-1234.json'), 'utf8'))[0].job as string;
+    cli.kill();
+    await draining.killAll(10);
+    draining.removeFile();
+    assert.equal(fs.existsSync(path.join(dir, 'children-1234.json')), false);
+    failing = false;
+    const next = new ProcessRegistry(dir, nullLogger);
+    next.jobs = jobs;
+    await next.sweepOrphans(10);
+    assert.deepEqual(ended, [name]);
+    assert.equal(fs.existsSync(path.join(dir, 'job-leftovers.json')), false, 'handled, so gone');
+  } finally {
+    cli.kill();
+  }
+});

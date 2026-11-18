@@ -126,12 +126,17 @@ while ($true) {
         # PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
         $proc = $K::OpenProcess(0x1101, $false, [UInt32]$req.pid)
         if ($proc -eq [IntPtr]::Zero) { $err = LastError; [void]$K::CloseHandle($job); throw "OpenProcess failed ($err)" }
-        $ok = $K::AssignProcessToJobObject($job, $proc)
-        $err = LastError
-        # When the process it put in the job started, so the runner can tell
-        # it was the CLI and not a process that got its pid since.
+        # When it started, read before it goes in: one that started after
+        # notAfter got the CLI's pid after the CLI went, and is left alone
+        # (once in a job, a process can't be taken out of it).
         $created = [long]0; $exit = [long]0; $kernel = [long]0; $user = [long]0
         $timed = $K::GetProcessTimes($proc, [ref]$created, [ref]$exit, [ref]$kernel, [ref]$user)
+        if (-not $timed -or $created -gt [long]$req.notAfter) {
+          [void]$K::CloseHandle($proc); [void]$K::CloseHandle($job)
+          throw "process $($req.pid) isn't the one the runner started"
+        }
+        $ok = $K::AssignProcessToJobObject($job, $proc)
+        $err = LastError
         [void]$K::CloseHandle($proc)
         if (-not $ok) { [void]$K::CloseHandle($job); throw "AssignProcessToJobObject failed ($err)" }
         $jobs[$name] = $job
