@@ -137,6 +137,16 @@ dev runner's `--home`, then `do`, `dump`, `shot`, `rebuild`, `log` and
 data folder and its live runner, and copies to a pasteboard of its own
 (`gpui/src/scripted.rs`).
 
+To film it for a clip, run `scripts/film.sh` from the M5 (`--help` has a
+whole take). It starts the same app on Tinker Desk's desktop with `--film`:
+a normal window in front with no test-copy label, on the mock runner with
+your `MOCK_SCRIPTED_TURNS` file, moved onto a 2x virtual display
+(`scripts/film/stage.m`) so the recording is sharp. Then `film.sh do` drives
+it and `film.sh record` records the window with
+`site/scripts/record-window.swift` and copies the `.mov` back. `--film`
+refuses to start anywhere film.sh hasn't set it up, as its window comes to
+the front.
+
 The build runs on an `updateBuildHosts` Mac and comes back here. Its Lucide
 SVGs are embedded in debug builds too (`rust-embed/debug-embed` in
 `gpui/Cargo.toml`), so it needs no files from that Mac's Cargo registry.

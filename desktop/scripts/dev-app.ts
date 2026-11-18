@@ -3,7 +3,7 @@
 //
 //   desktop/scripts/dev-app.sh start [--mock [--fixtures DIR]...] [--home DIR] [--live]
 //                                    [--appearance light|dark] [--size WxH] [--id NAME]
-//                                    [--no-build] [--build-here] [--visible]
+//                                    [--no-build] [--build-here] [--visible | --film]
 //   desktop/scripts/dev-app.sh do '<json>'... [--timeout S]
 //   desktop/scripts/dev-app.sh dump [--json]
 //   desktop/scripts/dev-app.sh shot <file.png>
@@ -25,7 +25,12 @@
 //          on screen: behind everything, with "test copy" in its title and an
 //          orange strip across its top saying what it is (not in shots). It
 //          waits until the app's connected with its thread list, and prints
-//          the id. In ps and Activity Monitor the app is "Threadbear Headless
+//          the id. --film is for filming a clip, and only on a Mac nobody's
+//          working at (desktop/scripts/film.sh runs it on Tinker Desk): a
+//          normal window, in front and drawing, with no label, as the
+//          installed app's. It needs THREADBEAR_FILM_HOST=1, which film.sh
+//          sets there, so it can't come up over Mike's work by mistake.
+//          In ps and Activity Monitor the app is "Threadbear Headless
 //          Tester" (a clone of the build in the instance's folder) and the
 //          mock "threadbear-test-mock-runner".
 //          The build is heavy, so it goes to the first of runner.json's
@@ -105,6 +110,8 @@ export type Instance = {
   size?: string;
   /** --visible: the window on screen (behind everything, labelled), for a test that needs it seen. */
   visible?: boolean;
+  /** --film: a normal window in front, no label (film.sh, on Tinker Desk). */
+  film?: boolean;
   binary: string;
   supervisor?: number;
   app?: number;
@@ -131,6 +138,10 @@ export function refuseHome(home: string, real: string, live: boolean): string | 
   if (resolved(home) !== resolved(real)) return null;
   return `${home} is the real data folder: its runner is the live one, with Mike's real threads. Use --mock or a dev runner's --home (runner/scripts/dev-runner.sh); --live only if Mike has said so.`;
 }
+
+/** Why `start --film` won't run here: its window comes to the front. */
+export const filmRefusal =
+  "--film puts a window in front of whatever's on this screen, so it's for a Mac nobody's working at. Film on Tinker Desk with desktop/scripts/film.sh, which sets THREADBEAR_FILM_HOST=1 there.";
 
 /** An instance's folder: a direct child of the state folder, whatever the id came from. */
 function dirOf(id: string): string {
@@ -443,7 +454,9 @@ async function supervise(id: string): Promise<void> {
         THREADBEAR_AUTOMATION: path.join(dir, 'automation.json'),
         // Out of the Dock and the app switcher, and no window anyone can see
         // unless --visible (scripted.rs).
-        THREADBEAR_KEEP_BEHIND: '1',
+        // --film leaves it a normal app, in front, so its window draws
+        // every frame for the recording, with no label (scripted.rs).
+        ...(current.film ? { THREADBEAR_FILMING: '1' } : { THREADBEAR_KEEP_BEHIND: '1' }),
         ...(current.visible ? { THREADBEAR_SHOW_WINDOW: '1' } : {}),
         THREADBEAR_PASTEBOARD: `com.mikerosoft.threadbear.automation.gpui-${id}`,
         // Not the machine's web runtime in the real data folder, whose
@@ -592,6 +605,8 @@ async function start(a: Args): Promise<void> {
     const why = refuseHome(home, REAL_HOME, live);
     if (why) die(why);
   }
+  if (has(a, '--film') && has(a, '--visible')) die('--film or --visible, not both');
+  if (has(a, '--film') && process.env.THREADBEAR_FILM_HOST !== '1') die(filmRefusal);
   const id = flag(a, '--id') ?? `g${Date.now().toString(36).slice(-5)}`;
   if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) die(`--id is letters, digits, - and _`);
   const existing = readInstance(id);
@@ -623,6 +638,7 @@ async function start(a: Args): Promise<void> {
     appearance,
     size,
     visible: has(a, '--visible'),
+    film: has(a, '--film'),
     binary,
   };
   if (useMock) fs.mkdirSync(i.home, { recursive: true, mode: 0o700 });
