@@ -744,6 +744,11 @@ pub(crate) trait AskHost: Sized + 'static {
     fn ask_box_field(&mut self, _ask: usize, field: Textarea, _cx: &mut Context<Self>) -> Textarea {
         field
     }
+    /// ⌘C or ⌘X in an ask's box, where a host has chips in it: true when
+    /// the host copied it, with what the chips stand for.
+    fn ask_box_copy(&mut self, _ask: usize, _cut: bool, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        false
+    }
     /// The pictures over the box's words and the button that adds them, where
     /// a host takes pictures; None for words alone.
     fn ask_box_pictures(&mut self, _ask: usize, _cx: &mut Context<Self>) -> Option<(Option<AnyElement>, AnyElement)> {
@@ -900,6 +905,28 @@ pub(crate) trait AskHost: Sized + 'static {
                             }
                         }
                     })
+                    // Copying or cutting a picture keeps the picture, as in
+                    // the message box.
+                    .capture_action({
+                        let this = this.clone();
+                        move |_: &gpui_kit::component::input::Copy, window, cx| {
+                            if let Some(this) = this.upgrade() {
+                                if this.update(cx, |this, cx| this.ask_box_copy(index, false, window, cx)) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        }
+                    })
+                    .capture_action({
+                        let this = this.clone();
+                        move |_: &gpui_kit::component::input::Cut, window, cx| {
+                            if let Some(this) = this.upgrade() {
+                                if this.update(cx, |this, cx| this.ask_box_copy(index, true, window, cx)) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        }
+                    })
                     .child(
                         v_flex()
                             .relative()
@@ -1029,6 +1056,11 @@ impl AskHost for Composer {
 
     fn ask_box_return(&mut self, ask: usize, command: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.answer_box_return(ask, command, window, cx);
+    }
+
+    fn ask_box_copy(&mut self, ask: usize, cut: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(input) = self.card.inputs.get(&ask).cloned() else { return false };
+        self.copy_chips_in(&input, cut, window, cx)
     }
 
     /// Pictures pasted in an ask's box go in as chips where the cursor is,

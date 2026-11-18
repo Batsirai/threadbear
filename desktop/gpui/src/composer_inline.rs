@@ -300,15 +300,23 @@ impl Composer {
     /// are any, and a cut takes the selection out. False with no chips in
     /// it, for the box's own copy.
     pub(crate) fn copy_chips(&mut self, cut: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let selection = self.input.read(cx).selected_range();
+        let target = self.input.clone();
+        self.copy_chips_in(&target, cut, window, cx)
+    }
+
+    /// The same for `target`: the box, or a Something else box. Without it
+    /// those boxes copied and cut a picture as a bare marker, and pasting
+    /// it back brought no picture.
+    pub(crate) fn copy_chips_in(&mut self, target: &Entity<TextareaState>, cut: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let selection = target.read(cx).selected_range();
         if selection.is_empty() {
             return false;
         }
-        let chips = self.box_chips(cx);
+        let chips = self.box_chips_in(target, cx);
         if !chips.iter().any(|(range, _)| range.start < selection.end && range.end > selection.start) {
             return false;
         }
-        let text = self.input.read(cx).value().to_string();
+        let text = target.read(cx).value().to_string();
         let (draft, images) = inline::draft_in(&text, &chips, selection);
         if images.is_empty() {
             // Cards alone copy as their links.
@@ -318,7 +326,7 @@ impl Composer {
             cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(clip.plain.clone(), clip.metadata()));
         }
         if cut {
-            self.input.update(cx, |s, cx| s.replace("", window, cx));
+            target.update(cx, |s, cx| s.replace("", window, cx));
             cx.notify();
         }
         true
