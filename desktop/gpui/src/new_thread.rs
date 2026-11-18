@@ -203,7 +203,15 @@ impl Threadbear {
             self.opening.next = Some(crate::open_motion::Opening::FromNewPage { box_top });
         }
         self.consider_milestone(cx);
+        // Still on the new-thread page (nothing else was picked while it
+        // started): the thread takes the page's place in back/forward, so the
+        // mouse's back button goes to where Mike was before ⌘N, not to the
+        // emptied box (`showStartedThread`; missed in the port, 18 Nov).
+        let page = (self.selected.is_none() && self.home_page().is_none() && self.projects.open.is_none()).then(|| self.place());
         self.open(id, window, cx);
+        if let Some(page) = page {
+            self.history.drop_previous_if(&page);
+        }
         self.apply_default_runner(cx);
         cx.notify();
     }
