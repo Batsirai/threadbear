@@ -947,7 +947,7 @@ impl Threadbear {
                         // comes in (RemoteThreads::take_update).
                         if t.is_remote() {
                             self.remote.index.take_update(&from_runner);
-                            self.remote.recent.note(&t);
+                            self.remote.recent.note(&from_runner);
                         }
                         // The runner's word on it: a message it just took no
                         // longer holds it under Running (`thread::AWAITING`).

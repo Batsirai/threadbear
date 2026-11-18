@@ -191,6 +191,22 @@ Feature: Other runners' threads
     When the runner says where it would go
     Then the box is locked, saying "Moving to laptop once this turn ends…"
 
+  # Codex's review of that fix: Cancel Move while the runner was still
+  # looking reached a runner with no move to cancel, and the move started
+  # anyway once the look came back.
+  @sidebar.move @remote-threads @swift-pending
+  Scenario: Cancel Move while the runner is still looking stops the move
+    Given a move would leave nothing behind
+    And the runner is slow to say where a thread would go
+    When I open the thread "Tidy the media drive"
+    And I pick "Move to laptop" from the box's machine menu
+    Then the box is locked, saying "Moving to laptop…"
+    When I pick "Cancel Move" from the box's machine menu
+    Then the box isn't locked
+    When the runner says where it would go
+    Then no move has started
+    And the box isn't locked
+
   @sidebar.move @remote-threads
   Scenario: The sheet opens when something won't come with it
     When I ask to move the thread "Morning brief" to "mac-mini"

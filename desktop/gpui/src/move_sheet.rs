@@ -7,6 +7,7 @@
 use crate::a11y::A11yRole as _;
 use crate::app::Threadbear;
 use crate::call;
+use threadbear_core::inbox::ThreadSummary;
 use crate::style::{self, size};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -57,7 +58,7 @@ impl Threadbear {
         // Kept over any update of the row until the runner shows the move
         // (starting_moves): the look below can take a quarter of a minute
         // for another runner's thread, and the row used to drop it.
-        let guess = self.starting_moves.start(&request.thread_id, &request.runner_id, &request.runner_name);
+        let (guess, token) = self.starting_moves.start(&request.thread_id, &request.runner_id, &request.runner_name);
         if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
             t.moving = Some(guess);
         }
@@ -69,18 +70,18 @@ impl Threadbear {
         cx.spawn_in(window, async move |this, cx| {
             let answer = call(client, "threads.movePreview", params).await;
             this.update_in(cx, |this, window, cx| {
+                // Cancelled while it looked: nothing more to do.
+                if !this.starting_moves.is_current(&thread_id, token) {
+                    return;
+                }
                 let preview = answer.as_ref().ok().map(MovePreview::decode);
                 if let Some(preview_id) = preview.as_ref().filter(|p| p.can_go_as_is()).and_then(|p| p.preview_id.clone()) {
-                    this.start_move(request.clone(), None, None, Some(preview_id), cx);
+                    this.send_move(request.clone(), None, None, Some(preview_id), token, put_back.clone(), cx);
                 } else {
                     // The sheet comes up instead; the guess goes back until
                     // Move is pressed there.
                     this.starting_moves.forget(&thread_id);
-                    if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id).map(std::sync::Arc::make_mut), &put_back) {
-                        if t.moving.as_ref().is_some_and(|m| m["moveId"] == "") {
-                            t.moving = before.moving.clone();
-                        }
-                    }
+                    this.put_move_back(&thread_id, put_back.as_ref());
                     let shown = preview.or_else(|| answer.err().map(|e| MovePreview { problems: vec![e.message], ..Default::default() }));
                     this.show_move_sheet(request.clone(), shown, window, cx);
                 }
@@ -90,22 +91,38 @@ impl Threadbear {
         .detach();
     }
 
+    /// The row's move back to what the runner last said, never to the
+    /// app's own guess.
+    fn put_move_back(&mut self, thread_id: &str, before: Option<&std::sync::Arc<ThreadSummary>>) {
+        if let Some(t) = self.threads.get_mut(thread_id).map(std::sync::Arc::make_mut) {
+            if t.moving.as_ref().is_some_and(threadbear_core::starting_moves::is_guess) {
+                t.moving = before.and_then(|b| b.moving.clone()).filter(|m| !threadbear_core::starting_moves::is_guess(m));
+            }
+        }
+    }
+
     /// `threads.move`, as Move in the sheet does; the row says it's going
     /// at once and goes back if the runner turns it down. `preview_id` is
     /// the look Mike was shown (or the clean one that went by itself): the
     /// move does what it showed or nothing (Daybreak 142).
     pub(crate) fn start_move(&mut self, request: MoveRequest, cwd: Option<String>, account: Option<String>, preview_id: Option<String>, cx: &mut Context<Self>) {
         let before = self.threads.get(&request.thread_id).cloned();
+        let (guess, token) = self.starting_moves.start(&request.thread_id, &request.runner_id, &request.runner_name);
         // A move already showing (its runner's own) stays; otherwise the
         // guess, kept until the runner shows it (starting_moves).
-        let showing = self.threads.get(&request.thread_id).is_some_and(|t| t.moving_line().is_some()) && !self.starting_moves.is_starting(&request.thread_id);
-        if !showing {
-            let guess = self.starting_moves.start(&request.thread_id, &request.runner_id, &request.runner_name);
-            if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
+        if let Some(t) = self.threads.get_mut(&request.thread_id).map(std::sync::Arc::make_mut) {
+            if t.moving_line().is_none() || t.moving.as_ref().is_some_and(threadbear_core::starting_moves::is_guess) {
                 t.moving = Some(guess);
             }
         }
         cx.notify();
+        self.send_move(request, cwd, account, preview_id, token, before, cx);
+    }
+
+    /// `threads.move` for the pick `token`. Its answer starts the short wait
+    /// for the runner to show the move (starting_moves), and a pick Mike
+    /// cancelled meanwhile is cancelled on the runner as soon as it has one.
+    fn send_move(&mut self, request: MoveRequest, cwd: Option<String>, account: Option<String>, preview_id: Option<String>, token: u64, before: Option<std::sync::Arc<ThreadSummary>>, cx: &mut Context<Self>) {
         let client = self.client.clone();
         let mut params = json!({ "threadId": request.thread_id, "runnerId": request.runner_id });
         if let Some(cwd) = cwd {
@@ -120,22 +137,56 @@ impl Threadbear {
         let thread_id = request.thread_id.clone();
         cx.spawn(async move |this, cx| {
             let res = call(client, "threads.move", params).await;
-            this.update(cx, |this, cx| {
-                match &res {
-                    Ok(v) => this.starting_moves.started(&thread_id, v.get("moveId").and_then(|m| m.as_str()), crate::now_ms()),
-                    Err(_) => this.starting_moves.forget(&thread_id),
-                }
-                if let Err(e) = res {
-                    this.show_error(e.message, cx);
-                    // Back to what the runner last said, never to the guess
-                    // (Move to ▸ put one there before this was called).
-                    if let (Some(t), Some(before)) = (this.threads.get_mut(&thread_id).map(std::sync::Arc::make_mut), &before) {
-                        if t.moving.as_ref().is_some_and(|m| m["moveId"] == "") {
-                            t.moving = before.moving.clone().filter(|m| m["moveId"] != "");
+            let started = this
+                .update(cx, |this, cx| {
+                    let current = this.starting_moves.is_current(&thread_id, token);
+                    match res {
+                        Ok(_) if !current => {
+                            // Cancel Move came before the runner had a move
+                            // to cancel: it has one now.
+                            this.cancel_on_runner(thread_id.clone(), cx);
+                            false
+                        }
+                        Ok(v) => {
+                            let before_row = this.threads.get(&thread_id).cloned();
+                            match this.starting_moves.started(&thread_id, token, v.get("moveId").and_then(|m| m.as_str()), crate::now_ms()) {
+                                // It had already failed or been cancelled.
+                                Some(ended) => {
+                                    if let Some(t) = this.threads.get_mut(&thread_id).map(std::sync::Arc::make_mut) {
+                                        t.moving = Some(ended);
+                                    }
+                                    if let Some(now) = this.threads.get(&thread_id).cloned() {
+                                        this.note_failed_move(before_row.as_deref(), &now, cx);
+                                    }
+                                    cx.notify();
+                                    false
+                                }
+                                None => true,
+                            }
+                        }
+                        Err(e) => {
+                            if current {
+                                this.starting_moves.forget(&thread_id);
+                                this.show_error(e.message, cx);
+                                this.put_move_back(&thread_id, before.as_ref());
+                                cx.notify();
+                            }
+                            false
                         }
                     }
+                })
+                .unwrap_or(false);
+            if !started {
+                return;
+            }
+            // The guess goes by itself if the runner never shows the move,
+            // rather than only when the row next comes in (Codex's review).
+            cx.background_executor().timer(std::time::Duration::from_millis(threadbear_core::starting_moves::SHOWN_AFTER_START_MS as u64 + 250)).await;
+            this.update(cx, |this, cx| {
+                if this.starting_moves.expire(&thread_id, token, crate::now_ms()) {
+                    this.put_move_back(&thread_id, None);
+                    cx.notify();
                 }
-                cx.notify();
             })
             .ok();
         })
@@ -146,6 +197,23 @@ impl Threadbear {
     /// The banner says so until the runner answers, as the click came from
     /// a menu, and a second Cancel meanwhile does nothing (`whileBusy(note:)`).
     pub(crate) fn cancel_move(&mut self, thread_id: String, cx: &mut Context<Self>) {
+        // Still being worked out (the look, or threads.move on its way): the
+        // runner has no move to cancel yet, so the app drops the pick, and
+        // send_move cancels it on the runner if one starts after all.
+        if self.starting_moves.is_pending(&thread_id) {
+            self.starting_moves.forget(&thread_id);
+            self.put_move_back(&thread_id, None);
+            cx.notify();
+            return;
+        }
+        // Started: the runner speaks for it from here.
+        self.starting_moves.forget(&thread_id);
+        self.cancel_on_runner(thread_id, cx);
+    }
+
+    /// `threads.moveCancel`, with "Cancelling the move…" in the banner until
+    /// it answers.
+    fn cancel_on_runner(&mut self, thread_id: String, cx: &mut Context<Self>) {
         let key = format!("moveThread/{thread_id}");
         if !self.begin_note(&key, "Cancelling the move…", cx) {
             return;
