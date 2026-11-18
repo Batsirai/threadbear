@@ -34,7 +34,10 @@ case "${1:-}" in
   --install)
     mkdir -p "$base/nights" "$oc_home/bin" "$HOME/Library/LaunchAgents"
     [ -x "$oc_home/bin/opencode" ] || { echo "Put OpenCode's binary at $oc_home/bin/opencode first (copied from a Mac that has it)." >&2; exit 1; }
-    # Fetch main, then run the copy just fetched. The fetch happens here, not
+    # Through Desk Runner (~/.local/bin/desk), not straight from launchd: on
+    # macOS 27 a process launchd starts can't write in the folders remote.sh's
+    # runs made there ("Operation not permitted", 18 Nov), while Desk Runner
+    # and ssh sessions can. Fetch main, then run the copy just fetched. The fetch happens here, not
     # in the script, as bash reads a script while it runs it. A failed fetch
     # (no network) runs last night's copy.
     cat >"$plist" <<PLIST
@@ -45,8 +48,8 @@ case "${1:-}" in
   <key>Label</key><string>$label</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string><string>-c</string>
-    <string>cd "$base/src" &amp;&amp; { git fetch -q origin main &amp;&amp; git reset -q --hard FETCH_HEAD; exec /bin/bash scripts/nightly-fuzz.sh run; }</string>
+    <string>/usr/bin/python3</string><string>$HOME/.local/bin/desk</string>
+    <string>export SHELL=/bin/zsh; cd "$base/src" &amp;&amp; { git fetch -q origin main &amp;&amp; git reset -q --hard FETCH_HEAD; exec /bin/bash scripts/nightly-fuzz.sh run; }</string>
   </array>
   <key>StartCalendarInterval</key><dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
   <key>EnvironmentVariables</key><dict><key>SHELL</key><string>/bin/zsh</string><key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
@@ -128,7 +131,7 @@ stop_opencode() { pkill -f "$oc_home/bin/opencode" 2>/dev/null || true; }
 trap stop_opencode EXIT
 
 # NIGHTLY_FUZZ_START=3 starts the rotation at the monkey, for a try.
-n=${NIGHTLY_FUZZ_START:-0}; stress_n=0; agent_n=0; busy_waits=0
+n=${NIGHTLY_FUZZ_START:-0}; stress_n=0; agent_n=0; busy_waits=0; fast_fails=0
 while [ "$(now)" -lt "$stop" ]; do
   if poddle_busy; then say "Poddle's tests are on: waiting"; sleep 300; continue; fi
   left=$(( (stop - $(now)) / 60 ))
@@ -171,6 +174,16 @@ while [ "$(now)" -lt "$stop" ]; do
     sleep 180; continue
   fi
   say "round $n: $kind ended $rc after $(( ($(now) - started) / 60 )) min"
+  # A round that fails at once is a broken setup, not a finding: three in a
+  # row end the night rather than spin until 6am (18 Nov's first launchd try
+  # ran 28 empty rounds in a minute).
+  if [ "$rc" != 0 ] && [ $(( $(now) - started )) -lt 60 ]; then
+    fast_fails=$((fast_fails + 1))
+    if [ "$fast_fails" -ge 3 ]; then say "three rounds failed at once: stopping (see $dir.log)"; break; fi
+    sleep 60
+  else
+    fast_fails=0
+  fi
   printf '{"n":%d,"kind":"%s","what":"%s","rc":%d,"started":%d,"ended":%d,"dir":"%s"}\n' "$n" "$kind" "$what" "$rc" "$started" "$(now)" "$dir" >>"$out/rounds.jsonl"
   case "$kind" in
     stress) stress_n=$((stress_n + 1)) ;;
