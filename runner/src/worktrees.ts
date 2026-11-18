@@ -1302,6 +1302,35 @@ async function findBroken(a: {
   return { own: mine.state, ownText: mine.text, failed, passed, left, only, mainFailed };
 }
 
+// The limit a failed group check leaves on its landings: half of it,
+// rounded up, the holder counted (fixes ride outside the limit).
+const halvedLimit = (group: { entry: QueueEntry }[]): number =>
+  Math.max(1, Math.ceil((group.filter((g) => !g.entry.fix).length + 1) / 2));
+
+// A group's check failed: each of its landings may be checked with at most
+// half as many from now on, on this main (it lapses once main moves). Done
+// at once, so it holds whatever happens to the holder's tb next. Returns
+// what puts each entry's limit back as it was, for a failure findBroken
+// then explains by name, where halving would only slow the rest down.
+export function halveGroup(common: string, main: string, group: { entry: QueueEntry }[]): () => void {
+  const limit = halvedLimit(group);
+  const before = new Map<string, Pick<QueueEntry, 'limit' | 'limitAt'>>();
+  for (const g of group) {
+    const now = readEntry(common, g.entry.id);
+    if (!now || now.result) continue;
+    before.set(now.id, { limit: now.limit, limitAt: now.limitAt });
+    writeEntry(common, { ...now, limit: Math.min(now.limitAt === main ? now.limit ?? Infinity : Infinity, limit), limitAt: main });
+  }
+  return () => {
+    for (const [id, was] of before) {
+      const now = readEntry(common, id);
+      if (!now || now.result) continue;
+      const { limit: _l, limitAt: _a, ...rest } = now;
+      writeEntry(common, { ...rest, ...(was.limit !== undefined ? { limit: was.limit } : {}), ...(was.limitAt !== undefined ? { limitAt: was.limitAt } : {}) });
+    }
+  };
+}
+
 // A landing passed after a group check of it failed (landLocked): those of
 // that group left out of the passing one are where the failure was. One by
 // itself is set aside to be checked alone, never in anyone's group again;
@@ -1486,6 +1515,14 @@ async function landLocked(
       });
       if (!r.ok && group.length) {
         lastFailed = group.map((g) => g.entry);
+        // The halving goes on the others' entries before anything slow
+        // (findBroken, the output, putting the branch back): a holder whose
+        // tb dies after this (an agent's two-hour command limit, 18 Nov)
+        // otherwise took the only record of the failure with it, and the
+        // next holder stacked the same mix again. Twice that day a group of
+        // eight or nine failed feature pairing and nothing was narrowed.
+        // Put back below when findBroken explains the failure by name.
+        const unhalve = halveGroup(common, main, group);
         // Show the group's failure now: finding the individual landing can
         // take several more checks, and its logs are already available.
         out([
@@ -1541,10 +1578,14 @@ async function landLocked(
               leftOut.push(g.entry.branch);
             }
             if (leftOut.length) out(`Left out, as what failed fails on ${leftOut.length > 1 ? 'each of them' : 'it'} alone: ${leftOut.join(', ')}.`);
-            if (found.own === 'failed') return fail(why(t.branch, found.ownText));
+            if (found.own === 'failed') {
+              unhalve();
+              return fail(why(t.branch, found.ownText));
+            }
             // Someone was left out, or the time ran out with some not yet
             // run: the next check is this one with those known to pass.
             if (found.failed.size || (found.left && found.passed.size)) {
+              unhalve();
               // Found by name, so nobody is left to check alone for it.
               if (found.failed.size) lastFailed = undefined;
               allowed = found.passed;
@@ -1558,11 +1599,7 @@ async function landLocked(
         // fixes, the fixes are left out next, to see whose it is.
         const counted = group.filter((g) => !g.entry.fix).length;
         if (counted === 0) withFixes = false;
-        limit = Math.max(1, Math.ceil((counted + 1) / 2));
-        for (const g of group) {
-          const now = readEntry(common, g.entry.id);
-          if (now && !now.result) writeEntry(common, { ...now, limit: Math.min(now.limitAt === main ? now.limit ?? Infinity : Infinity, limit), limitAt: main });
-        }
+        limit = halvedLimit(group);
         out('Checking them in smaller groups to find which.');
         continue;
       }

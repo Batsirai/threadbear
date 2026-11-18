@@ -289,7 +289,13 @@ their own.
   editing the holder's worktree, which it still uses for retries.
   That is the group's result; an individual landing is
   only refused if its own check fails, so the one that broke it is found
-  in a few checks, and the rest land. Those limits hold only on the main
+  in a few checks, and the rest land. The halved limit goes on the
+  others' entries as soon as the check fails, before anything slow, and
+  is taken off again if the runs below name who broke it: on 18 Nov two
+  holders' tbs were killed by their agents' two-hour command limit just
+  after their groups failed (two landings that each passed feature
+  pairing alone, but not together), the halving went with them, and the
+  next holder stacked the same mix again. Those limits hold only on the main
   they were set on: once main moves, a failure on the old one says nothing
   about the new, and they lapse.
 - While it waits, a landing says where it is: whose check is running and

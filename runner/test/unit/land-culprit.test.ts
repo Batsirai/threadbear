@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { land, landLimits, setAside, type LandTarget } from '../../src/worktrees.ts';
+import { halveGroup, land, landLimits, setAside, type LandTarget } from '../../src/worktrees.ts';
 import { joinQueue, queueDir, readEntry, setRunning, waiting, waitingLine } from '../../src/land-queue.ts';
 import { capture, commit, holdUntil, makeBranch, makeRepo, sh, until, write } from '../helpers/worktrees-harness.ts';
 
@@ -144,6 +144,62 @@ test('a group halved down to its holder sets aside the one it was narrowed to, a
   // and the fix alone. Before, every later holder went through it again.
   assert.ok(all.length <= 7, JSON.stringify(all));
   assert.ok(withBad.length <= 4, JSON.stringify(all));
+});
+
+// 18 Nov: two landings that each passed feature pairing alone failed it
+// together (one added a scenario, the other made verify-pairing ask every
+// scenario for a tag). Groups of eight and nine failed on it at 07:01 and
+// 08:03 and nothing was narrowed: each holder's tb was killed by its
+// agent's two-hour command limit before the halving was written, so the
+// next holder stacked the same mix again. The halving is on the entries
+// before findBroken's first run now, and the pair is still split apart.
+test("a failed group's halving is on everyone's entry before anything slow, and two that only fail together are split", async () => {
+  const { root, main } = makeRepo();
+  const [a, b, c, d] = branches(main, ['a', 'b', 'c', 'd']);
+  const q = queueDir(path.join(main, '.git'));
+  // Fails where b and c are both there. A run of only that (findBroken's)
+  // also writes down the limits on the queue's entries as it starts.
+  const body = `if test -n "\${THREADBEAR_CHECK_ONLY:-}"; then cat '${q}'/*.json 2>/dev/null | tr -d '\\n' >> '${root}/limits'; echo >> '${root}/limits'; ` +
+    'echo \'--only ran: "feature pairing"\'; fi; ' +
+    'if test -f b.txt && test -f c.txt; then echo \'To run only what failed again: --only "feature pairing"\'; exit 1; fi';
+  const { first, codes, caps } = await queued(root, main, a, [{ t: b }, { t: c }, { t: d }], recorded(root, body));
+  assert.equal(first, 0);
+  // Whichever of b and c lands first, the other then fails on that main by
+  // itself and is told so; d lands.
+  assert.deepEqual(codes.filter((x) => x === 1).length, 1, said(caps));
+  assert.equal(codes[2], 0, said(caps));
+  assert.ok(fs.existsSync(path.join(main, 'd.txt')));
+  assert.notEqual(fs.existsSync(path.join(main, 'b.txt')), fs.existsSync(path.join(main, 'c.txt')));
+  assert.match(said(caps), /Each of them passes it alone/);
+  // While main and each landing were run alone after the first failed group
+  // (holder and two others), the two others already had a limit of 2 there.
+  const first3 = fs.readFileSync(path.join(root, 'limits'), 'utf8').trim().split('\n')[0];
+  const limits = [...first3.matchAll(/"limit":(\d+)/g)].map((m) => Number(m[1]));
+  assert.deepEqual(limits, [2, 2], first3);
+});
+
+test('halveGroup: halves on this main at once, keeps a smaller limit, skips landed ones, and puts each back as it was', () => {
+  const { main } = makeRepo();
+  const common = path.join(main, '.git');
+  const t = makeBranch(main, 'q0000000');
+  const head = sh(main, 'git rev-parse main');
+  const mk = (n: number) => joinQueue(common, { branch: `thread/x${n}`, path: t.path, base: head, commit: head });
+  const es = [1, 2, 3, 4, 5].map(mk);
+  fs.writeFileSync(path.join(queueDir(common), `${es[1].id}.json`), JSON.stringify({ ...es[1], limit: 1, limitAt: head }));
+  fs.writeFileSync(path.join(queueDir(common), `${es[2].id}.json`), JSON.stringify({ ...es[2], limit: 1, limitAt: 'an-old-main' }));
+  fs.writeFileSync(path.join(queueDir(common), `${es[3].id}.json`), JSON.stringify({ ...es[3], result: { landed: head, commits: '', together: [] } }));
+  const fix = { ...es[4], fix: true };
+  fs.writeFileSync(path.join(queueDir(common), `${fix.id}.json`), JSON.stringify(fix));
+  const group = [es[0], es[1], es[2], es[3], fix].map((entry) => ({ entry }));
+  const put = halveGroup(common, head, group);
+  // Four counted with the holder, plus a fix outside the limit: (4 + 1) / 2.
+  assert.deepEqual([0, 1, 2, 4].map((i) => [readEntry(common, es[i].id)?.limit, readEntry(common, es[i].id)?.limitAt]), [[3, head], [1, head], [3, head], [3, head]]);
+  assert.equal(readEntry(common, es[3].id)?.limit, undefined, 'one that has landed is left alone');
+  put();
+  assert.equal(readEntry(common, es[0].id)?.limit, undefined);
+  assert.equal(readEntry(common, es[0].id)?.limitAt, undefined);
+  assert.deepEqual([readEntry(common, es[1].id)?.limit, readEntry(common, es[1].id)?.limitAt], [1, head]);
+  assert.deepEqual([readEntry(common, es[2].id)?.limit, readEntry(common, es[2].id)?.limitAt], [1, 'an-old-main']);
 });
 
 test('setAside: one left out of a passing check is set aside, fixes too, and the rest keep their limit on the new main', () => {
