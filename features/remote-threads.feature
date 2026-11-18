@@ -127,6 +127,15 @@ Feature: Other runners' threads
     When I open the thread "Check the photo library backup"
     Then the pictures of my message say "Couldn't get it from mac-mini"
 
+  # Its chip still opens the viewer, which says it couldn't show it rather
+  # than "Loading…" for ever (Codex, 18 Nov).
+  @rich.picturechips @remote-threads @swift-pending
+  Scenario: Another Mac's picture chip says when the picture couldn't be got
+    Given mac-mini's pasted pictures were never put up
+    When I open the thread "Check the photo library backup"
+    And the pictures of my message say "Couldn't get it from mac-mini"
+    Then pressing the picture chip in my message says it couldn't show picture 1 of 1 "backblaze.png"
+
   @sidebar.row.remote @remote-threads
   Scenario: It takes a message like any other thread
     When I open the thread "Tidy the media drive"

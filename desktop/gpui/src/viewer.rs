@@ -21,12 +21,26 @@ use threadbear_core::folders::picture_size;
 use threadbear_core::highlights::{looks_like_picture, runs_code};
 use threadbear_core::reducer::ImageRef;
 
+/// One picture of the message the viewer is on.
+struct Shown {
+    path: String,
+    /// Its bytes once they've been read.
+    image: Option<Arc<Image>>,
+    size: Option<(u32, u32)>,
+    /// Read and found wanting (refused, cut short, not a picture): it says
+    /// "Couldn't show", not "Loading…" for ever (Codex, 18 Nov).
+    failed: bool,
+}
+
 /// What's open in the viewer.
 pub(crate) struct ViewerState {
-    /// Each picture's path in this message, and its bytes once it's been read.
-    pictures: Vec<(String, Option<Arc<Image>>, Option<(u32, u32)>)>,
+    pictures: Vec<Shown>,
     index: usize,
     open: bool,
+    /// Counts the openings, so a read that lands after the viewer has moved
+    /// on (closed, opened on another message or another Mac's same path)
+    /// is dropped, not put in the wrong picture's place (Codex, 18 Nov).
+    opening: u64,
     /// Another Mac's thread: its pictures are that Mac's, asked of it through
     /// this runner (`files.read` with its `runnerId`), never read here.
     runner: Option<String>,
@@ -36,7 +50,7 @@ pub(crate) struct ViewerState {
 
 impl ViewerState {
     pub(crate) fn new(cx: &mut App) -> Self {
-        Self { pictures: vec![], index: 0, open: false, runner: None, focus: cx.focus_handle() }
+        Self { pictures: vec![], index: 0, open: false, opening: 0, runner: None, focus: cx.focus_handle() }
     }
 }
 
@@ -48,18 +62,26 @@ impl ViewerState {
     }
 
     fn current_path(&self) -> Option<&str> {
-        self.pictures.get(self.index).map(|p| p.0.as_str())
+        self.pictures.get(self.index).map(|p| p.path.as_str())
     }
 
     /// For scripts: "" while it's closed, else "<n> of <total> <path>", with
-    /// " (loading)" until the picture's drawn.
+    /// " (loading)" until the picture's drawn, " (couldn't show)" if it won't be.
     #[cfg(feature = "automation")]
     pub(crate) fn describe(&self) -> String {
         if !self.open {
             return String::new();
         }
-        let drawn = self.pictures.get(self.index).is_some_and(|p| p.1.is_some());
-        format!("{} of {} {}{}", self.index + 1, self.pictures.len(), self.current_path().unwrap_or(""), if drawn { "" } else { " (loading)" })
+        format!("{} of {} {}{}", self.index + 1, self.pictures.len(), self.current_path().unwrap_or(""), self.state_words())
+    }
+
+    #[cfg(feature = "automation")]
+    fn state_words(&self) -> &'static str {
+        match self.pictures.get(self.index) {
+            Some(p) if p.image.is_some() => "",
+            Some(p) if p.failed => " (couldn't show)",
+            _ => " (loading)",
+        }
     }
 }
 
@@ -166,9 +188,10 @@ fn open_on<T: HostsViewer>(host: &mut T, paths: Vec<String>, chosen: &str, runne
     let paths: Vec<String> = paths.into_iter().filter(|p| opens_from(p, runner.is_some())).collect();
     let Some(index) = paths.iter().position(|p| p == chosen) else { return };
     let viewer = host.viewer_state();
-    viewer.pictures = paths.into_iter().map(|p| (p, None, None)).collect();
+    viewer.pictures = paths.into_iter().map(|path| Shown { path, image: None, size: None, failed: false }).collect();
     viewer.index = index;
     viewer.open = true;
+    viewer.opening += 1;
     viewer.runner = runner;
     // The overlay holds the keys: Escape closes, the arrows step.
     let focus = viewer.focus.clone();
@@ -200,18 +223,18 @@ pub(crate) fn step<T: HostsViewer>(host: &mut T, delta: i64, cx: &mut Context<T>
 /// picture": the bytes are never handed to another app.
 fn read_picture<T: HostsViewer>(host: &mut T, index: usize, cx: &mut Context<T>) {
     let viewer = host.viewer_state();
-    let runner = viewer.runner.clone();
-    let Some((path, image, size)) = viewer.pictures.get_mut(index) else { return };
-    if image.is_some() {
+    let (runner, opening) = (viewer.runner.clone(), viewer.opening);
+    let Some(shown) = viewer.pictures.get_mut(index) else { return };
+    if shown.image.is_some() || shown.failed {
         return;
     }
     // Another Mac's picture its tile has drawn: the same bytes, not asked again.
-    if let Some(drawn) = runner.as_deref().and_then(|runner| crate::remote_pictures::ready(runner, path, cx)) {
-        *size = picture_size(drawn.bytes());
-        *image = Some(drawn);
+    if let Some(drawn) = runner.as_deref().and_then(|runner| crate::remote_pictures::ready(runner, &shown.path, cx)) {
+        shown.size = picture_size(drawn.bytes());
+        shown.image = Some(drawn);
         return;
     }
-    let path = path.clone();
+    let path = shown.path.clone();
     let params = match &runner {
         Some(runner) => json!({ "path": path, "runnerId": runner, "maxBytes": crate::remote_pictures::MAX_BYTES }),
         None => json!({ "path": path }),
@@ -222,13 +245,18 @@ fn read_picture<T: HostsViewer>(host: &mut T, index: usize, cx: &mut Context<T>)
         // Only its start, from another Mac, won't draw.
         let read = res.ok().as_ref().and_then(threadbear_core::folders::FileRead::decode).filter(|read| runner.is_none() || !read.truncated);
         this.update(cx, |t, cx| {
-            let Some(slot) = t.viewer_state().pictures.iter_mut().find(|p| p.0 == path) else { return };
-            if let Some(read) = read {
-                let format = format_of(&path, &read.data);
-                if let Some(format) = format {
-                    slot.2 = picture_size(&read.data);
-                    slot.1 = Some(Arc::new(Image::from_bytes(format, read.data)));
+            let viewer = t.viewer_state();
+            // Only into the opening that asked for it.
+            if viewer.opening != opening {
+                return;
+            }
+            let Some(slot) = viewer.pictures.iter_mut().find(|p| p.path == path) else { return };
+            match read.and_then(|read| format_of(&path, &read.data).map(|format| (format, read.data))) {
+                Some((format, data)) => {
+                    slot.size = picture_size(&data);
+                    slot.image = Some(Arc::new(Image::from_bytes(format, data)));
                 }
+                None => slot.failed = true,
             }
             cx.notify();
         })
@@ -246,9 +274,9 @@ pub(crate) fn overlay<T: HostsViewer>(host: &mut T, window: &mut Window, cx: &mu
     let bounds = window.viewport_size();
     let (index, total) = (viewer.index, viewer.pictures.len());
     let current = viewer.pictures.get(index)?;
-    let (path, image) = (current.0.clone(), current.1.clone());
+    let (path, image) = (current.path.clone(), current.image.clone());
     // A picture only reads once; "Couldn't" after that means it failed.
-    let loading = image.is_none();
+    let loading = !current.failed;
     let focus = viewer.focus.clone();
     let name = threadbear_core::highlights::last_component(&path).to_owned();
     let backdrop = gpui_kit::hsla(0., 0., 0., 0.82);
@@ -352,9 +380,7 @@ pub(crate) fn viewer_command(side: &Entity<SidePane>, cmd: &Value, cx: &mut App)
     if !viewer.open {
         return Ok(json!("ok closed"));
     }
-    let state = viewer.pictures.get(viewer.index);
-    let drawn = state.is_some_and(|p| p.1.is_some());
-    Ok(json!(format!("ok showing {} of {} {}{}", viewer.index + 1, viewer.pictures.len(), viewer.current_path().unwrap_or(""), if drawn { "" } else { " (loading)" })))
+    Ok(json!(format!("ok showing {} of {} {}{}", viewer.index + 1, viewer.pictures.len(), viewer.current_path().unwrap_or(""), viewer.state_words())))
 }
 
 /// The thread's action chips, for the thread pane to draw over the composer
