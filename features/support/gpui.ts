@@ -26,6 +26,10 @@ const binary = process.env.TB_GPUI_BIN ?? path.join(process.env.CARGO_TARGET_DIR
 // command fits on its line beside it, and no first-run questions.
 let zdotdir: string | undefined;
 function specShell(): NodeJS.ProcessEnv {
+  // The fuzzer (tools/fuzz-monkey.ts) clicks and types at random, so its
+  // Terminal panel gets a shell that runs nothing: random keys and a Return
+  // must never become a command on the machine running it.
+  if (process.env.TB_SPEC_SHELL) return { SHELL: process.env.TB_SPEC_SHELL };
   if (process.platform !== 'darwin' || !fs.existsSync('/bin/zsh')) return {};
   if (!zdotdir) {
     const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tb-spec-zsh-'));
