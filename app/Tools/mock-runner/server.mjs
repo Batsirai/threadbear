@@ -333,7 +333,7 @@ const devicesRefusal = () => {
 
 let mockInstructions = { text: '' };
 const settings = {
-  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, labReviewers: [{ provider: 'codex', model: 'gpt-6.1-sol' }, { provider: 'claude', effort: 'xhigh' }], keepAwake: true, fullSync: false,
+  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, labReviewers: [{ provider: 'codex', model: 'gpt-6.1-sol' }, { provider: 'claude', effort: 'xhigh' }], keepAwake: true, fullSync: false, spareWeek: true,
   models: {
     pool: 'claude',
     privateFolders: ['~/dev/clients/acme'],
@@ -542,6 +542,9 @@ function onConnection(ws, request) {
     });
   });
 }
+
+// accounts.findWork's thread for each login.
+const findWorkThreads = new Map();
 
 async function handle(client, { id, method, params = {} }) {
   // Each runner knows only its own threads: asking this one about one of
@@ -782,6 +785,20 @@ async function dispatch(client, method, p) {
       if (startIn.length) broadcastProjects();
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
       return { thread: summary };
+    }
+    // The Usage panel's Find work for it (protocol `accounts.findWork`): a
+    // thread pinned to that login, or the one already open for it. A moment's
+    // wait, so the button's spinner shows.
+    case 'accounts.findWork': {
+      const accountId = p.accountId;
+      if (!accounts.some((a) => a.id === accountId)) throw rpcError(-32010, `No login ${accountId} on this runner.`);
+      await new Promise((r) => setTimeout(r, 600));
+      const open = findWorkThreads.get(accountId);
+      if (open && threads.has(open) && !threads.get(open).summary.archivedAt) return { threadId: open, started: false, thread: threads.get(open).summary };
+      const email = accounts.find((a) => a.id === accountId)?.email ?? accountId;
+      const { thread } = await dispatch(client, 'threads.create', { text: `I pressed Find work for it on ${email} in Usage. Its week will go partly unused, so suggest worthwhile work to spend it on.`, title: `Ideas for ${email}'s spare week`, accountId });
+      findWorkThreads.set(accountId, thread.id);
+      return { threadId: thread.id, started: true, thread };
     }
     // Update it (protocol "Runner updates"): running at once, and up to
     // date about 2 s later, as staging goes.
@@ -1582,6 +1599,7 @@ async function dispatch(client, method, p) {
       }
       if (p.keepAwake !== undefined) settings.keepAwake = Boolean(p.keepAwake);
       if (p.fullSync !== undefined) settings.fullSync = Boolean(p.fullSync);
+      if (p.spareWeek !== undefined) settings.spareWeek = Boolean(p.spareWeek);
       const m = p.models ?? {};
       if (m.pool !== undefined) {
         if (m.pool !== null && !poolOf(m.pool)) throw rpcError(-32602, `No pool called ${m.pool}`);

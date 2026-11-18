@@ -1011,6 +1011,50 @@ impl Threadbear {
         .detach();
     }
 
+    /// The Usage panel's Find work for it (`accounts.findWork`): the runner
+    /// starts a thread on that login suggesting work for the rest of its
+    /// week, or answers the one it already started, and it opens. The button
+    /// spins and takes no clicks until then.
+    pub(crate) fn find_work(&mut self, account: String, cx: &mut Context<Self>) {
+        if !self.usage.finding_work.insert(account.clone()) {
+            return;
+        }
+        cx.notify();
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "accounts.findWork", json!({ "accountId": account })).await;
+            this.update(cx, |t, cx| {
+                t.usage.finding_work.remove(&account);
+                match res {
+                    Ok(v) => {
+                        let id = v["threadId"].as_str().unwrap_or_default().to_owned();
+                        if id.is_empty() {
+                            t.show_error("The runner didn't say what thread it made.".to_owned(), cx);
+                        } else {
+                            // Listed now, so it opens before threads.created.
+                            if let Ok(thread) = serde_json::from_value::<threadbear_core::inbox::ThreadSummary>(v["thread"].clone()) {
+                                if thread.id == id {
+                                    t.threads.insert(id.clone(), std::sync::Arc::new(thread));
+                                }
+                            }
+                            // Not from inside this update: opening needs the
+                            // window, whose update would come back here.
+                            let (me, window) = (cx.entity().downgrade(), t.main_window);
+                            cx.defer(move |cx| {
+                                window.update(cx, |_, window, cx| me.update(cx, |this, cx| this.open(id, window, cx)).ok()).ok();
+                            });
+                        }
+                    }
+                    Err(e) if e.code == -32601 => t.show_error("This Mac's runner is too old for Find work for it. It updates by itself.".into(), cx),
+                    Err(e) => t.show_error(e.message, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn switch_account(&mut self, thread: &str, account: String, cx: &mut Context<Self>) {
         self.update_thread(thread, |_| {}, json!({ "accountId": account }), cx);
     }

@@ -1890,6 +1890,11 @@ export class ConvexSync {
   // Asking another runner (docs/protocol.md, "Asking another runner";
   // elsewhere.ts). The owner key reads any request and answers it; a runner
   // key files and reads back its own.
+  // A second runner, on a runner key of its own (tbr_): not the main Mac.
+  secondRunner(): boolean {
+    return Boolean(this.deps.key?.startsWith('tbr_'));
+  }
+
   ownerKey(): boolean {
     return Boolean(this.deps.key) && !this.deps.key!.startsWith('tbr_');
   }

@@ -130,6 +130,10 @@ pub struct RunnerSettings {
     /// Full sync (runner.json's sync.full), as it'll be from the runner's next
     /// start. None from a runner from before it, and Settings then hides it.
     pub full_sync: Option<bool>,
+    /// A thread suggesting work when a login's week is about to go unused
+    /// (runner.json `spareWeek`). None from a runner from before it, and
+    /// Settings then hides the switch.
+    pub spare_week: Option<bool>,
     pub bring_in: BringIn,
     pub bring_in_supported: bool,
     /// The pool whose Claude logins answer small jobs (titles, the
@@ -159,6 +163,7 @@ impl RunnerSettings {
             lab_reviewers: v["labReviewers"].as_array().map(|list| list.iter().filter_map(LabReviewer::decode).collect()),
             keep_awake: v["keepAwake"].as_bool(),
             full_sync: v["fullSync"].as_bool(),
+            spare_week: v["spareWeek"].as_bool(),
             bring_in_supported: bring_in.is_some(),
             bring_in: bring_in.unwrap_or(BringIn::STANDARD),
             pool: models["pool"].as_str().filter(|p| !p.is_empty()).map(str::to_owned),
@@ -220,13 +225,14 @@ mod tests {
     #[test]
     fn settings_read_leniently() {
         let s = RunnerSettings::decode(&json!({
-            "defaultCwd": "/Users/alex/code/misc", "labReview": false, "keepAwake": true, "fullSync": false, "bringIn": "important",
+            "defaultCwd": "/Users/alex/code/misc", "labReview": false, "keepAwake": true, "fullSync": false, "spareWeek": false, "bringIn": "important",
             "models": { "pool": "claude", "privateFolders": ["~/private"] },
             "experiments": [{ "id": "gpuiApp", "name": "GPUI app", "does": "The `GPUI`  app.", "on": true }, { "id": "bare" }],
         }));
         assert!(!s.lab_review && s.lab_review_supported);
         assert_eq!(s.keep_awake, Some(true));
         assert_eq!(s.full_sync, Some(false));
+        assert_eq!(s.spare_week, Some(false));
         assert_eq!(s.bring_in, BringIn::Important);
         assert_eq!(s.pool.as_deref(), Some("claude"));
         assert_eq!(s.private_folders, vec!["~/private"]);
@@ -236,6 +242,7 @@ mod tests {
         assert!(old.lab_review && !old.lab_review_supported, "an older runner shows no Code review switch");
         assert!(!old.pool_supported && old.keep_awake.is_none() && !old.bring_in_supported);
         assert!(old.full_sync.is_none(), "an older runner shows no Full sync switch");
+        assert!(old.spare_week.is_none(), "an older runner shows no spare week switch");
         let none = RunnerSettings::decode(&json!({ "models": { "pool": null } }));
         assert!(none.pool_supported && none.pool.is_none(), "null is None, and the runner has the setting");
     }

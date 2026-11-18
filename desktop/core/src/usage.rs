@@ -1548,6 +1548,16 @@ pub fn model_weeks_switch(titles: &[String]) -> String {
     format!("Show {}", titles.join(", "))
 }
 
+/// Whether a login's card offers Find work for it (`accounts.findWork`):
+/// its week will go partly unused (the green line), and it can run a turn.
+/// Mike, 18 Nov: the action next to the number that prompts it.
+pub fn can_find_work(login: &LoginRow) -> bool {
+    login.headline.as_ref().is_some_and(|v| v.tone == Tone::Spare) && !matches!(login.status, Some(LoginStatus::SignedOut) | Some(LoginStatus::PlanEnded))
+}
+
+pub const FIND_WORK: &str = "Find work for it";
+pub const FIND_WORK_TIP: &str = "Start a thread on this login that suggests work to spend the rest of its week on, and asks before starting any";
+
 /// Its tooltip, for someone who never runs that model.
 pub const MODEL_WEEKS_TIP: &str = "A login's own limit on one model. Hide it if you don't use that model";
 
@@ -2184,6 +2194,19 @@ mod tests {
     fn row_for(account: Account, now: i64) -> LoginRow {
         let accounts = [account];
         cards(&[], &accounts, None, true, now, &zone()).remove(0).sections.remove(0).logins.remove(0)
+    }
+
+    #[test]
+    fn find_work_is_on_a_card_whose_week_will_go_unused() {
+        let now = at(13, 0);
+        let mut row = row_for(login("c1", "claude", Some(91.), 39., false, Some(at(15, 40))), now);
+        row.headline = Some(Verdict { text: "About 46% will go unused, resets Mon 11:07 am".into(), tone: Tone::Spare });
+        assert!(can_find_work(&row));
+        row.status = Some(LoginStatus::SignedOut);
+        assert!(!can_find_work(&row), "nothing can run on it");
+        row.status = None;
+        row.headline = Some(Verdict { text: "On track, lasts till Mon".into(), tone: Tone::Fine });
+        assert!(!can_find_work(&row));
     }
 
     #[test]

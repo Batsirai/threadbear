@@ -235,6 +235,15 @@ test('settings: full sync is off until answered, and either answer is saved in r
   assert.throws(() => s.methods['settings.update']({ fullSync: 'yes' }), (e: RpcError) => e.code === ErrorCode.badParams);
 });
 
+test("settings: spareWeek is on until turned off, and saved as runner.json's spareWeek", () => {
+  const s = settingsSetup();
+  assert.equal(s.svc.get().spareWeek, true);
+  const r = s.methods['settings.update']({ spareWeek: false }) as { settings: any };
+  assert.equal(r.settings.spareWeek, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, 'runner.json'), 'utf8')).spareWeek, false);
+  assert.throws(() => s.methods['settings.update']({ spareWeek: 'no' }), (e: RpcError) => e.code === ErrorCode.badParams);
+});
+
 test("settings: bringIn is every 5 days until changed, and keeps the rest of runner.json's releases", () => {
   const s = settingsSetup();
   assert.equal(s.svc.get().bringIn, 5);

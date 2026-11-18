@@ -1473,7 +1473,23 @@ A Claude login with a limit of its own on Fable shows that week too,
 "Weekly Fable", with its own chart beside the others, as Claude Code's
 `/usage` does. Running out of it only stops Fable: the login can still run
 other models, so it never makes a login look full. If you don't use Fable,
-turn it off under Settings at the foot of the panel.
+turn off "Show models' own weeks" in Settings › General › Usage.
+
+When a login's week will go partly unused (the green line), its card has
+**Find work for it**. It starts a thread on that login that looks through
+your projects and threads, suggests 2 to 4 jobs worth spending the rest of
+the week on (a deep review, the tests a report said were missing, rough
+options for something you're exploring), and asks before starting any.
+Each one you say yes to starts on that login, so it spends the week that
+would otherwise go to waste. Pressing it again while that thread is still
+open takes you back to it.
+
+Threadbear also does this by itself, with "Tell me when a week's about to
+go unused" in Settings › General › Usage (on to begin with). A day before
+a login's week resets, if at the rate it's going 30% or more of it would be
+left, the same thread turns up in your inbox, and once more 8 hours before
+the reset as a last call if 20% or more would still be left. It never
+starts the jobs without asking.
 
 ### Review by another lab
 

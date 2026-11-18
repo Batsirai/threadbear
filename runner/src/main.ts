@@ -26,7 +26,8 @@ import { BringIn } from './bring-in.ts';
 import { SwiftChanges } from './swift-changes.ts';
 import { UpdateFixer } from './fix-update.ts';
 import { followOriginOn } from './follow-origin.ts';
-import { bringInSetting } from './settings.ts';
+import { bringInSetting, spareWeekOn } from './settings.ts';
+import { SpareWeek } from './spare-week.ts';
 import { Restarter, restartMethods } from './restart.ts';
 import { AppRestarts } from './app-restarts.ts';
 import { Scheduler, scheduleMethods } from './schedules.ts';
@@ -743,6 +744,24 @@ async function main(): Promise<void> {
     // The app's Bring Them In and Let's Discuss titles (UpdatesPanel).
     openByHand: () => runner.list(['inbox', 'snoozed']).find((t) => /^(Bring in|Discuss) Mike's release /.test(t.title))?.id,
   });
+  // A thread suggesting work when a login's week is about to go unused, and
+  // the Usage panel's Find work for it (spare-week.ts). Only the main Mac's
+  // runner looks by itself, so two runners don't both start one.
+  const spareWeek = new SpareWeek({
+    home: cfg.home,
+    clock: realClock,
+    log,
+    on: () => spareWeekOn(cfg.home),
+    looks: () => !sync.secondRunner(),
+    accounts: () => runner.safeAccounts(),
+    pools: () => runner.pools(),
+    history: (since) => usageHistory.rows(since),
+    start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, accountId: r.accountId, startedBy: { kind: 'runner', label: 'Threadbear', why: r.why } }).thread.id,
+    open: openThread,
+    send: (threadId, text) => void runner.send(threadId, text, [], { queue: true }),
+  });
+  runner.spareWeek = spareWeek;
+  spareWeek.start();
   const upstream = new Upstream({
     home: cfg.home,
     checkout: thisRelease?.checkout,
@@ -1280,6 +1299,7 @@ async function main(): Promise<void> {
     connectors.stop();
     projects.stop();
     usage.stop();
+    spareWeek.stop();
     signIn.stop();
     tally.stop();
     webRuntimeUpdates.stop();

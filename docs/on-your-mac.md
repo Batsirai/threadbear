@@ -534,6 +534,17 @@ File references are where to look.
   `"releases": { "bringIn": 14 }` (or `"important"`, or `"off"`) in
   `runner.json`, changes it. It keeps what it last did in
   `runner/bring-in.json` in the data folder.
+- **A login's week going unused** (`runner/src/spare-week.ts`): every half
+  hour the runner works out, from the usage readings it already has, how
+  much of each login's weekly limit will be left when it resets. When a
+  week resets within a day and 30% or more of it would go unused (20% in
+  the last 8 hours), it starts a thread on that login that suggests work to
+  spend it on and asks you before starting any. At most twice per week per
+  login, and only on the main Mac's runner when there are several.
+  Settings › General › Usage, or `"spareWeek": false` in `runner.json`,
+  turns it off. It keeps what it last said in `runner/spare-week.json` in
+  the data folder. Find work for it in the Usage panel starts the same
+  thread by hand.
 - **Your changes to the old Mac app** (`runner/src/swift-changes.ts`): a
   couple of minutes after the runner starts, then hourly, after each
   release check and when the new desktop app connects, it reads your

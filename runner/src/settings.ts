@@ -40,6 +40,9 @@ export type Settings = {
   // How often a fork's runner starts a thread to bring in Mike's releases
   // (bring-in.ts): every so many days, 'important' or 'off'.
   bringIn: BringInSetting;
+  // A thread suggesting work when a login's week is about to go unused
+  // (spare-week.ts). runner.json `spareWeek`, on unless it's false.
+  spareWeek: boolean;
   // Full sync (docs/full-convex.md): tool output goes to Convex too. What
   // runner.json says, which takes effect when the runner next starts.
   fullSync: boolean;
@@ -62,6 +65,7 @@ export type SettingsUpdate = {
   labReviewers?: LabReviewer[];
   keepAwake?: boolean;
   bringIn?: BringInSetting;
+  spareWeek?: boolean;
   fullSync?: boolean;
   models?: { pool?: string | null; privateFolders?: string[] };
   // Experiment id to on or off, saved under runner.json `experiments`.
@@ -95,6 +99,7 @@ export class SettingsService {
       labReviewers: (this.cfg.labReviewers ?? DEFAULT_LAB_REVIEWERS).map((r) => ({ ...r })),
       ...(process.platform === 'darwin' ? { keepAwake: this.cfg.keepAwake } : {}),
       bringIn: bringInSetting(this.cfg.home),
+      spareWeek: spareWeekOn(this.cfg.home),
       fullSync: peekRunnerJson(this.cfg.home).sync?.full === true,
       models: {
         pool: this.cfg.models.pool,
@@ -151,6 +156,8 @@ export class SettingsService {
     if (u.keepAwake !== undefined) json.keepAwake = this.cfg.keepAwake = u.keepAwake;
     // Read each time it's needed (bring-in.ts), so this takes effect at once.
     if (u.bringIn !== undefined) json.releases = { ...json.releases, bringIn: u.bringIn };
+    // Read at each check (spare-week.ts), so this takes effect at once.
+    if (u.spareWeek !== undefined) json.spareWeek = u.spareWeek;
     // Saved only: the mirror reads it when the runner starts. The once-only
     // offer's notes (taken out 16 Nov 2026) go with any answer.
     if (u.fullSync !== undefined) {
@@ -208,6 +215,10 @@ export function settingsMethods(s: SettingsService): Record<string, (p: Record<s
       if (p.keepAwake !== undefined) {
         if (typeof p.keepAwake !== 'boolean') throw bad('keepAwake must be a boolean');
         u.keepAwake = p.keepAwake;
+      }
+      if (p.spareWeek !== undefined) {
+        if (typeof p.spareWeek !== 'boolean') throw bad('spareWeek must be a boolean');
+        u.spareWeek = p.spareWeek;
       }
       if (p.fullSync !== undefined) {
         if (typeof p.fullSync !== 'boolean') throw bad('fullSync must be a boolean');
@@ -309,4 +320,8 @@ function maxTokens(p: Record<string, unknown>): { maxTokens?: number } {
 // runner.json `releases.bringIn`, or every 5 days.
 export function bringInSetting(home: string): BringInSetting {
   return parseBringIn(peekRunnerJson(home).releases?.bringIn) ?? DEFAULT_BRING_IN_DAYS;
+}
+
+export function spareWeekOn(home: string): boolean {
+  return peekRunnerJson(home).spareWeek !== false;
 }

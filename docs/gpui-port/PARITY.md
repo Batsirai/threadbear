@@ -3488,9 +3488,12 @@ Fixes from Codex's review of the slice before:
   orange dot where it runs out), a model's own week (Weekly Fable), what to
   do about each window, and the lines under it (old numbers, credits, Token
   Stats' notices, the shared part said once at the foot).
-- The Settings card main has had since 368d99d8: Show Weekly Fable, on by
-  default and remembered as `usage.showModelWeeks`, there only while a login
-  has a model's own week.
+- Show Weekly Fable, on by default and remembered as `usage.showModelWeeks`,
+  there only while a login has a model's own week: a card at the panel's foot
+  from 368d99d8, moved to Settings › General › Usage on 18 Nov with the spare
+  week switch (GPUI only; the frozen Swift app keeps its card).
+- Find work for it on a login whose week will go partly unused
+  (`accounts.findWork`), GPUI only.
 - The numbers and words are `desktop/core/src/usage.rs` (UsageStatsMath,
   LimitPace, RollingWeek, UsageGroups, HoneyLevel, the parts of
   AccountUsageText the panel reads, LoginColours), with the Swift tests

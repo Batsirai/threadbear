@@ -665,6 +665,35 @@ impl SettingsWindow {
                 cx,
             ));
         }
+        // The Usage panel's own settings (Mike, 18 Nov: not dumped at the
+        // foot of the panel). The spare week nudge is the runner's; whether
+        // to show a model's own week is this app's, and only while a login
+        // has one.
+        let mut usage_rows = Vec::new();
+        if let Some(on) = settings.spare_week {
+            let switch = self.switch("settings-spare-week", on, "Start a thread with ideas a day before a login's week resets with lots of it unused", cx, |this, on, cx| this.update(json!({ "spareWeek": on }), cx));
+            usage_rows.push(row("Tell me when a week's about to go unused", switch, cx));
+        }
+        if let Some(app) = self.app.upgrade() {
+            let titles = threadbear_core::usage::model_week_titles(&app.read(cx).logins.accounts);
+            if !titles.is_empty() {
+                let on = app.read(cx).usage.show_model_weeks;
+                let switch = self.switch("settings-model-weeks", on, threadbear_core::usage::MODEL_WEEKS_TIP, cx, |this, on, cx| {
+                    this.app.update(cx, |app, cx| app.set_show_model_weeks(on, cx)).ok();
+                });
+                usage_rows.push(row_with(div().child(threadbear_core::usage::model_weeks_switch(&titles)).into_any_element(), switch, cx));
+            }
+        }
+        if !usage_rows.is_empty() {
+            sections.push(section(
+                "settings-usage",
+                "Usage",
+                "A day before a login's week resets, if at the rate it's going 30% or more of it would be left, a thread on that login suggests work to spend it on and asks before starting any. The Usage panel's Find work for it does the same whenever you like.",
+                "suggest work for a login with room left, or turn this off for you.",
+                usage_rows,
+                cx,
+            ));
+        }
         if let Some(on) = settings.full_sync {
             let switch = self.switch("settings-full-sync", on, "Send tool output and diffs to your Convex deployment", cx, |this, on, cx| this.update(json!({ "fullSync": on }), cx));
             sections.push(section("settings-full-sync", "Full sync", FULL_SYNC_ABOUT, FULL_SYNC_ASK, vec![row("Send tool output to Convex", switch, cx)], cx));
@@ -1443,6 +1472,13 @@ impl SettingsWindow {
             "defaultFolder": settings.as_ref().map(|s| s.default_cwd.clone()),
             "keepAwake": settings.as_ref().and_then(|s| s.keep_awake),
             "fullSync": settings.as_ref().and_then(|s| s.full_sync),
+            "spareWeek": settings.as_ref().and_then(|s| s.spare_week),
+            // Usage's switch for a model's own week, while a login has one.
+            "modelWeeks": self.app.upgrade().and_then(|a| {
+                let a = a.read(cx);
+                let titles = threadbear_core::usage::model_week_titles(&a.logins.accounts);
+                (!titles.is_empty()).then(|| json!({ "switch": threadbear_core::usage::model_weeks_switch(&titles), "on": a.usage.show_model_weeks }))
+            }),
             "labReview": settings.as_ref().map(|s| s.lab_review),
             "labReviewers": settings.as_ref().and_then(|s| s.lab_reviewers.as_ref()).map(|l| l.iter().map(|r| r.provider.clone()).collect::<Vec<_>>()),
             "privateFolders": settings.as_ref().map(|s| s.private_folders.clone()),

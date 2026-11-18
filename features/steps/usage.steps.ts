@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import type { Dump } from '../support/driver.ts';
 import type { ThreadbearWorld } from '../support/world.ts';
 
-type Login = { name: string; provider?: string | null; status?: string | null; logo?: string; line?: string | null; ring?: number | null; why?: string | null; signInEnds?: string | null; yearToken?: string | null; tokenButton?: boolean; meters: { title: string; left: string; verdict?: string | null }[]; more: string[] };
+type Login = { name: string; provider?: string | null; status?: string | null; logo?: string; line?: string | null; ring?: number | null; why?: string | null; signInEnds?: string | null; yearToken?: string | null; tokenButton?: boolean; findWork?: boolean; findingWork?: boolean; meters: { title: string; left: string; verdict?: string | null }[]; more: string[] };
 type Usage = {
   shown: boolean;
   icon: { percent: number; login?: string | null; tip: string; dot?: boolean };
@@ -103,13 +103,16 @@ Then("the {string} card names each login's provider: {string}", async function (
   assert.deepEqual(got.map((l) => `${l.provider}: ${l.name}`), list(logins));
 });
 
-Then("the Usage panel's {string} switch is {word}", async function (this: ThreadbearWorld, words: string, state: string) {
-  await this.until(`"${words}" ${state}`, (d) => usage(d)?.settings?.switch === words && usage(d)?.settings?.on === (state === 'on'));
+Then('in the {string} card, {string} offers Find work for it', async function (this: ThreadbearWorld, card: string, name: string) {
+  await this.until(`Find work for it on ${name}`, (d) => login(d, card, name)?.findWork === true);
 });
 
-When('I turn off {string} in the Usage panel', async function (this: ThreadbearWorld, words: string) {
-  await this.until(`a "${words}" switch`, (d) => usage(d)?.settings?.switch === words);
-  await this.app.do({ cmd: 'usage', showModelWeeks: false });
+Then("in the {string} card, {string} doesn't offer Find work for it", async function (this: ThreadbearWorld, card: string, name: string) {
+  await this.until(`no Find work for it on ${name}`, (d) => login(d, card, name)?.findWork === false);
+});
+
+When('I press Find work for it on {string}', async function (this: ThreadbearWorld, account: string) {
+  await this.app.do({ cmd: 'usage', findWork: account });
 });
 
 Then('the honey pot is {int}% full, for {string}', async function (this: ThreadbearWorld, percent: number, account: string) {
@@ -186,4 +189,8 @@ Then('the honey pot has no dot', async function (this: ThreadbearWorld) {
 
 Then("a line of the honey pot's tooltip starts {string}", async function (this: ThreadbearWorld, start: string) {
   await this.until(`a line starting "${start}" in the honey pot's tooltip`, (d) => !!usage(d)?.icon.tip.split('\n').some((l) => l.startsWith(start)));
+});
+
+Then('there is one thread called {string}', async function (this: ThreadbearWorld, title: string) {
+  await this.until(`one "${title}" in the sidebar`, (d) => d.sidebar.sections.flatMap((s) => s.threads).filter((t) => t.title === title).length === 1);
 });

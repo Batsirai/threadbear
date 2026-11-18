@@ -1,3 +1,4 @@
+import type { SpareWeek } from './spare-week.ts';
 import { HELD_EXTRA } from './schedule-check.ts';
 // The thread manager: owns threads, turns, the event log, approvals, idle
 // release and snoozes. Providers plug in through AgentAdapter; the WebSocket
@@ -770,6 +771,8 @@ export class Runner {
   // True on the main Mac (the owner key): a thread moved here from another
   // runner arrives with at most Ask (runner/moves.ts capMovedMode).
   movedInAtMostAsk?: () => boolean;
+  // A login's week going unused (spare-week.ts; main.ts sets it).
+  spareWeek?: SpareWeek;
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;
@@ -1000,6 +1003,16 @@ export class Runner {
   // itself (sendAccounts arms the room timer).
   private resetting = new Set<string>();
   private limitRecheck?: LimitRecheck;
+  // accounts.findWork: the Usage panel's Find work for it (spare-week.ts).
+  // The thread comes back with it, so the app can open it before
+  // threads.created arrives.
+  findWork(accountId: string): { threadId: string; started: boolean; thread: ThreadSummary } {
+    if (!this.spareWeek) throw new RpcError(ErrorCode.methodNotFound, 'This runner has no spare week check.');
+    if (!this.safeAccounts().some((a) => a.id === accountId)) throw new RpcError(ErrorCode.accountNotFound, `No login ${accountId} on this runner.`);
+    const r = this.spareWeek.findWork(accountId);
+    return { ...r, thread: this.get(r.threadId) };
+  }
+
   async useReset(accountId: string): Promise<{ outcome: UseResetOutcome; account?: Account }> {
     const account = this.safeAccounts().find((a) => a.id === accountId);
     if (!account) throw new RpcError(ErrorCode.accountNotFound, `No login ${accountId} on this runner.`);

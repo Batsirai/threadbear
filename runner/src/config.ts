@@ -235,6 +235,9 @@ export type RunnerJson = {
   labReview?: boolean;
   labReviewers?: unknown;
   keepAwake?: boolean;
+  // spareWeek: false stops the runner starting a thread by itself when a
+  // login's week is about to go unused (spare-week.ts). On when absent.
+  spareWeek?: boolean;
   // bringIn: how often a fork's runner starts a thread to bring in Mike's
   // releases (bring-in.ts): every so many days, 'important' or 'off'.
   releases?: { publish?: boolean; signingKey?: string; signingProvider?: string; bringIn?: number | 'important' | 'off' };

@@ -16,8 +16,9 @@ use crate::app::Threadbear;
 use crate::{call, icons, now_ms, shell, style};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use crate::mac_switch::MacSwitch;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use std::collections::HashSet;
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 // The zoom-aware px (style.rs), in place of GPUI's.
@@ -47,10 +48,13 @@ pub(crate) struct UsageState {
     pub(crate) supported: Option<bool>,
     /// The chart's range, remembered as `usage.chartRange`.
     pub(crate) range: Range,
-    /// The Settings card's switch, remembered as `usage.showModelWeeks`: on
-    /// unless it's been turned off, when the logins leave out a model's own
-    /// week ("Weekly Fable").
+    /// Settings › General › Usage's switch, remembered as
+    /// `usage.showModelWeeks`: on unless it's been turned off, when the
+    /// logins leave out a model's own week ("Weekly Fable").
     pub(crate) show_model_weeks: bool,
+    /// Logins a Find work for it is on its way for (`find_work`): their
+    /// button spins and takes no clicks until the runner answers.
+    pub(crate) finding_work: HashSet<String>,
     /// Asking while the panel's on screen.
     poll: Option<Task<()>>,
     /// The chart's slot under the pointer.
@@ -101,6 +105,7 @@ impl UsageState {
             supported: None,
             range: range.and_then(Range::from_name).unwrap_or_default(),
             show_model_weeks: show_model_weeks.unwrap_or(true),
+            finding_work: HashSet::new(),
             poll: None,
             hovered: None,
             plot: Rc::new(Cell::new(None)),
@@ -167,8 +172,8 @@ impl Threadbear {
         cx.notify();
     }
 
-    /// The Settings card's switch: the meters go or come back at once, and
-    /// it's remembered. Nothing goes to the runner.
+    /// Settings › General › Usage's switch: the meters go or come back at
+    /// once, and it's remembered. Nothing goes to the runner.
     pub(crate) fn set_show_model_weeks(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.usage.show_model_weeks == on {
             return;
@@ -240,14 +245,12 @@ impl Threadbear {
             column = column.child(spend);
         }
         let dark = cx.theme().is_dark();
+        // Its settings (whether to show a model's own week, and the spare
+        // week nudges) are in Settings › General › Usage since 18 Nov: Mike
+        // didn't like them dumped at the foot of the panel.
+        let finding = &self.usage.finding_work;
         for card in rules::cards_named(&self.logins.pools, accounts, stats, self.usage.show_model_weeks, now, &zone, |p| self.logins.provider_title(p)) {
-            column = column.child(pool_card(&card, accounts, content, dark, now, &p, cx));
-        }
-        // Only when some login has a model's own week, or the switch would
-        // do nothing.
-        let model_weeks = rules::model_week_titles(accounts);
-        if !model_weeks.is_empty() {
-            column = column.child(settings_card(&model_weeks, self.usage.show_model_weeks, &p, cx));
+            column = column.child(pool_card(&card, accounts, finding, content, dark, now, &p, cx));
         }
         if let Some(footer) = rules::footer(accounts, now, &zone) {
             column = column.child(div().text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).child(footer));
@@ -330,14 +333,16 @@ impl Threadbear {
                     "why": l.unknown.as_ref().map(|u| &u.text),
                     "signInEnds": l.sign_in_ends,
                     "yearToken": l.year_token,
+                    "findWork": rules::can_find_work(l),
+                    "findingWork": self.usage.finding_work.contains(&l.id),
                     "tokenButton": l.can_token && (l.year_token.is_none() || l.status == Some(LoginStatus::SignedOut) || l.sign_in_ends.is_some()),
                     "meters": l.meters.iter().map(|m| json!({ "title": m.title, "left": m.left, "verdict": m.verdict.as_ref().map(|v| &v.text) })).collect::<Vec<_>>(),
                     "more": l.more,
                 }))).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "notes": notes,
-            // The Settings card's switch: what it says and whether it's on,
-            // while some login has a model's own week to switch.
+            // Settings › General › Usage's switch: what it says and whether
+            // it's on, while some login has a model's own week to switch.
             "settings": Some(rules::model_week_titles(accounts)).filter(|t| !t.is_empty()).map(|t| json!({ "switch": rules::model_weeks_switch(&t), "on": self.usage.show_model_weeks })),
             "footer": rules::footer(accounts, now, &zone),
         })
@@ -701,7 +706,7 @@ fn hover_note(chart: &Chart, slot: i64, accounts: &[Account], dark: bool, now: i
 /// for each login in it (option B of the 17 Nov review). Each card carries
 /// its provider's logo, so a pool that mixes providers no longer names them
 /// over its logins.
-fn pool_card(card: &Card, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
+fn pool_card(card: &Card, accounts: &[Account], finding: &HashSet<String>, content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
     let header = h_flex()
         .gap(px(7.))
         .px(px(2.))
@@ -712,39 +717,10 @@ fn pool_card(card: &Card, accounts: &[Account], content: f32, dark: bool, now: i
     let mut column = v_flex().gap(px(8.)).child(header);
     for (s, section) in card.sections.iter().enumerate() {
         for login in &section.logins {
-            column = column.child(login_row(&format!("{}-{s}", card.id), login, accounts, content, dark, now, p, cx));
+            column = column.child(login_row(&format!("{}-{s}", card.id), login, accounts, finding.contains(&login.id), content, dark, now, p, cx));
         }
     }
     column.into_any_element()
-}
-
-/// `UsageSettings`: the panel's own settings, under the cards. For now
-/// whether to show the models' own weeks, for someone who never runs that
-/// model; its header the same as a pool's, the switch at the right edge in
-/// line with the numbers above.
-fn settings_card(model_weeks: &[String], on: bool, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
-    // SF Symbols' gear is a bigger glyph than this icon set's at the same
-    // size: 16 here draws it as wide as the Swift one, and puts the title
-    // where it is there.
-    let header = h_flex()
-        .gap(px(7.))
-        .child(icon("gearshape", 16., p.secondary))
-        .child(div().text_size(px(13.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD).text_color(p.fg).child("Settings"));
-    let switch = crate::highlights::tipped(div().id("usage-model-weeks-holder").flex_none(), rules::MODEL_WEEKS_TIP).child(
-        MacSwitch::new("usage-model-weeks", on).outside_form().on_change({
-            let me = cx.entity().downgrade();
-            move |on, _, cx| { me.update(cx, |this, cx| this.set_show_model_weeks(on, cx)).ok(); }
-        }),
-    );
-    // Keep the Swift card's row height around the shared Mac switch.
-    let row = h_flex()
-        .items_center()
-        .min_h(px(20.))
-        .gap(px(8.))
-        .child(div().min_w_0().text_size(px(12.)).line_height(px(15.)).text_color(p.fg).child(rules::model_weeks_switch(model_weeks)))
-        .child(div().flex_1())
-        .child(switch);
-    card_box(v_flex().gap(px(8.)).px(px(12.)).py(px(10.)), p).child(header).child(row).into_any_element()
 }
 
 fn icon(symbol: &str, size: f32, colour: Hsla) -> Icon {
@@ -772,7 +748,7 @@ fn tone_colour(tone: Tone, p: &Palette) -> (Hsla, bool) {
 /// the week's chart, a model's own week, and at the foot the 5-hour window as
 /// a chip and what it's spent today. A login with no reading is just the top
 /// line, saying why, with a dashed ring.
-fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
+fn login_row(key: &str, login: &LoginRow, accounts: &[Account], finding: bool, content: f32, dark: bool, now: i64, p: &Palette, cx: &mut Context<Threadbear>) -> AnyElement {
     let colour = login_colour(&login.id, accounts, dark);
     let id = |part: &str| SharedString::from(format!("usage-{key}-{}-{part}", login.id));
     let name = crate::highlights::tipped_as(h_flex().id(id("name")).gap(px(6.)).items_center().min_w_0(), login.tip.clone(), gpui_kit::Role::GenericContainer)
@@ -839,7 +815,22 @@ fn login_row(key: &str, login: &LoginRow, accounts: &[Account], content: f32, da
         crate::highlights::tipped_as(div().id(id("five-hour")).flex_none().px(px(7.)).py(px(1.)).rounded(px(8.)).bg(p.bar_track).text_size(px(11.)).line_height(px(15.)).font_features(tabular()).text_color(text), c.tip.clone(), gpui_kit::Role::GenericContainer).child(c.text.clone())
     });
     let today = login.today.as_ref().map(|(words, tip)| today_words(id("today"), words, tip, p));
-    let foot = (chip.is_some() || today.is_some()).then(|| h_flex().gap(px(8.)).items_center().children(chip).children(today));
+    // Find work for it, at the foot's right, on a week that will go partly
+    // unused (option C of Mike's 18 Nov review: the action beside the line
+    // that prompts it). It spins until the runner answers, then the thread
+    // opens.
+    let find_work = rules::can_find_work(login).then(|| {
+        let account = login.id.clone();
+        Button::new(id("find-work"))
+            .label(rules::FIND_WORK)
+            .small()
+            .secondary()
+            .loading(finding)
+            .disabled(finding)
+            .tooltip(rules::FIND_WORK_TIP)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.find_work(account.clone(), cx)))
+    });
+    let foot = (chip.is_some() || today.is_some() || find_work.is_some()).then(|| h_flex().gap(px(8.)).items_center().children(chip).children(today).child(div().flex_1()).children(find_work));
     let more = (!login.more.is_empty()).then(|| v_flex().gap(px(2.)).text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).children(login.more.iter().map(|line| div().child(line.clone()))));
     // A lapsed plan stays listed, so Mike can see it's still there, but
     // faded: it isn't one to act on.
@@ -1328,6 +1319,12 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, cx: &mut App) ->
         let range = Range::from_name(range).ok_or("range is today or week")?;
         app.update(cx, |t, cx| t.set_usage_range(range, cx));
         return Ok(json!(format!("ok {}", range.name())));
+    }
+    // Find work for it on that login's card, as a click does.
+    if let Some(account) = cmd["findWork"].as_str() {
+        let account = account.to_owned();
+        app.update(cx, |t, cx| t.find_work(account, cx));
+        return Ok(json!("ok"));
     }
     if let Some(on) = cmd["showModelWeeks"].as_bool() {
         app.update(cx, |t, cx| t.set_show_model_weeks(on, cx));
