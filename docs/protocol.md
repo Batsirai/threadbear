@@ -6156,7 +6156,7 @@ type RemoteRunner = {
   box?: { state: string, waiting?: true, unreachable?: true } // one thread's box on a virtual
                        // runner (Virtual runners), as its machine has it:
                        // creating, starting, awake, saving, asleep, waking,
-                       // failed, destroying, gone (archived, its save kept)
+                       // retiring, failed, destroying, gone (archived, its save kept)
                        // or expired (it can't come back). Online in all but
                        // destroying and expired, as a message starts or
                        // wakes it. `waiting`: a message wants it woken but
@@ -7827,7 +7827,8 @@ has to be on for it.
   its day's hours), counts and charges any machine it sees running while
   its row isn't up, and the thread of a paused box sleeps as it was.
   Retention ends an asleep thread's box too, `deleteAfterDays` after it
-  slept: the box goes, and the thread comes back from its last save.
+  slept: the thread is `retiring` (a message waits) until the provider
+  confirms its boxes gone, then comes back from its last save.
 - **The crons** (`convex/crons.ts`): sleep idle boxes every 2 minutes;
   every 5, guard and reap what the provider has that nobody wants (no row, an older
   attempt than the row's, an archived, expired or failed thread's), take
@@ -7844,7 +7845,7 @@ has to be on for it.
   `boxFor`, `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`,
   `reapStep`, `observe`, `driftPage`, `driftLost`, `servicesToReap`,
   `serviceProvider`, `stuckDestroying`, `pruneSaves`, `retireBox`,
-  `retireFence`, `deleteFence`, `mayRunNow`, `checkBox`, `retryKeptSaves`,
+  `retireFence`, `stuckRetiring`, `deleteFence`, `mayRunNow`, `checkBox`, `retryKeptSaves`,
   `markKept`, `suspendFailed`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
   `wakeAllWaiting`, `failExpired`, `archiveIfStill`. `report` takes the
   reporting run's `op`.

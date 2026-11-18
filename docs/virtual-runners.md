@@ -545,6 +545,18 @@ the lease checker and the reconciler resume a box they find paused only if
 it may run now (`mayRunNow`), else the row follows the provider (`PAUSED`);
 and an action waiting for the lease runs again with all its arguments.
 
+An eighth look found four more. Retirement is now durable: its fence
+(`RETIRE`) names the attempts whose boxes go and revokes their key in one
+step, and the thread is `retiring` until the provider confirms those
+boxes gone (`RETIRED`, back to asleep with no box); a message waits
+meanwhile, a run cut short is carried on by the reaper (`stuckRetiring`),
+and only the named attempts are deleted or given up. The other fences
+can't strand work: `deleteFence` and the reaper's revoke only an attempt
+holding none, and `newAttempt` refuses while one does. Each machine is
+charged from its own last observation (`observedAt`, by attempt), so one
+machine's pass doesn't shorten another's; and `countRunning` reads the
+boxes seen running until it has counted enough distinct ones.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

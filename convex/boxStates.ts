@@ -48,6 +48,11 @@ export const boxStateV = v.union(
   v.object({ kind: v.literal('shelved'), at: v.number() }),
   // Archived: the provider is deleting the box.
   v.object({ kind: v.literal('destroying'), since: v.number() }),
+  // Asleep past its virtual runner's days: its boxes (`attempts`, named
+  // when retirement began, their key revoked then) are being deleted. A
+  // message waits; once the provider confirms them gone it's asleep again,
+  // with no box, and comes back from its last save (boxService.ts retireBox).
+  v.object({ kind: v.literal('retiring'), since: v.number(), attempts: v.array(v.number()) }),
   // Archived and its box deleted. The row stays for its save until
   // deleteAfterDays: a message (unarchiving it) brings it back on a new box.
   v.object({ kind: v.literal('gone'), at: v.number() }),

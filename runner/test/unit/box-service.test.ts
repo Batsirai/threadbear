@@ -1713,3 +1713,81 @@ test('an action that waits for the lease runs again with all of its arguments', 
   assert.ok(again.fn.endsWith('retireBox'));
   assert.deepEqual(again.args, { boxId, asleepSince: 12345 });
 });
+
+// ------------------------------------------------------------ Codex's eighth round (18 Nov 2026)
+
+// 1. A retirement reported LOST for an attempt it never deleted.
+test('a retirement deletes and gives up only the attempts its fence named', async () => {
+  const s = await setup();
+  const { m } = await pausedWithMessage(s);
+  const DAYS = 15 * 24 * 60 * MINUTE;
+  await later(DAYS, () => call(s.ctx, service.pruneSaves, { kind: 'asleep' }));
+  const job = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('retireBox')).at(-1)!;
+  s.skip();
+  const held = s.fly.hold((r) => r.query.get('metadata.tb_box') !== null);
+  const retiring = later(DAYS, () => call(s.a, service.retireBox, job.args));
+  await held.arrived;
+  assert.deepEqual(s.rowOf('T2').boxState.attempts, [1]);
+  // Meanwhile another attempt's machine turns up holding work (however it came to be).
+  const boxId = boxIdOf(s, 'T2');
+  s.fly.machines.push({ id: 'second', name: 'second', state: 'started', config: { metadata: { tb_box: boxId, tb_attempt: '2', tb_service: s.serviceId } } });
+  s.rowOf('T2').workAttempts = [2];
+  held.release();
+  await retiring;
+  assert.equal(s.fly.byId(m.id)!.state, 'destroyed');
+  assert.equal(s.fly.byId('second')!.state, 'started', 'not one it named');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [2]);
+});
+
+// 2. A retirement cut short left work with no key and no way forward.
+test("a retirement cut short stays retiring, a message waits, and it's finished by the next pass", async () => {
+  const s = await setup();
+  const { runnerId, m } = await pausedWithMessage(s);
+  const DAYS = 15 * 24 * 60 * MINUTE;
+  await later(DAYS, () => call(s.ctx, service.pruneSaves, { kind: 'asleep' }));
+  const job = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('retireBox')).at(-1)!;
+  s.skip();
+  const down = s.fly.failWhile((r) => r.query.get('metadata.tb_box') !== null, 503);
+  await later(DAYS, () => call(s.a, service.retireBox, job.args));
+  assert.equal(s.stateOf('T2'), 'retiring');
+  assert.equal(s.rowOf('T2').boxKeyHash, undefined);
+  // A message waits rather than waking a box that's going.
+  const cmd = await later(DAYS, () => s.send(runnerId, 'T2'));
+  await later(DAYS, () => s.run());
+  assert.equal(s.stateOf('T2'), 'retiring');
+  assert.equal(s.rows('commands').find((c) => c._id === cmd)!.state, 'pending');
+  // The provider's back: the next pass finishes it, and the message brings the thread back from its save.
+  down.stop();
+  await later(DAYS + 5 * MINUTE, () => s.reap());
+  assert.equal(s.fly.byId(m.id)!.state, 'destroyed');
+  assert.equal(s.stateOf('T2'), 'starting');
+  assert.equal(s.rowOf('T2').boxAttempt, 2);
+});
+
+// 3. A row-wide stamp moved by one machine undercharged another.
+test("each machine is charged from its own last observation, not a stamp another machine moved", async () => {
+  const s = await setup();
+  await pausedWithMessage(s);
+  const boxId = boxIdOf(s, 'T2');
+  const before = s.rowOf('T2').awakeToday?.ms ?? 0;
+  // One pass, two chunks: an older machine stopped, then the running one, a second apart.
+  await call(s.ctx, service.observe, { serviceId: s.serviceId, boxes: [{ providerBoxId: 'old', state: 'stopped', boxId, attempt: 1 }] });
+  await later(1000, () => call(s.ctx, service.observe, { serviceId: s.serviceId, boxes: [{ providerBoxId: 'new', state: 'running', boxId, attempt: 2 }] }));
+  assert.ok((s.rowOf('T2').awakeToday?.ms ?? 0) - before >= 4 * MINUTE, 'charged as a whole pass, not a second');
+});
+
+// 4. countRunning could count one row twice and miss another.
+test('maxBoxes counts every box seen running once, whatever order they come in', async () => {
+  const s = await setup();
+  await setLimits(s, { maxBoxes: 10 });
+  for (const t of ['T2', 'T3', 'T4']) await s.start(t);
+  s.skip();
+  // T2 is up (counted by its state) and also seen running first; T3 and T4 are asleep, seen running.
+  Object.assign(s.rowOf('T2'), { boxState: { kind: 'awake', since: Date.now(), leaseUntil: Date.now() + MINUTE }, boxStateTimers: [], seenRunningAt: 1 });
+  for (const [t, at] of [['T3', 2], ['T4', 3]] as const) Object.assign(s.rowOf(t), { boxState: { kind: 'asleep', since: Date.now() }, boxStateTimers: [], seenRunningAt: at });
+  // The helper's own box (creating) and T2 by state, T3 and T4 seen: four.
+  await setLimits(s, { maxBoxes: 4 });
+  assert.equal(await outcome(s.start('T5')), 'limit');
+  await setLimits(s, { maxBoxes: 5 });
+  assert.equal(await outcome(s.start('T5')), 'ok');
+});

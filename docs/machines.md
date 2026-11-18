@@ -422,6 +422,15 @@ The thread is archived: the provider is
 deleting its box. No key works for it
 any more.
   end note
+  state "retiring" as retiring
+  retiring : since, attempts
+  note right of retiring
+Its boxes are being deleted for its
+retention; it can't be woken meanwhile
+(a message waits), and it isn't given up
+on until the provider confirms them
+gone.
+  end note
   state "gone" as gone
   gone : at
   note right of gone
@@ -484,6 +493,7 @@ kept, and no key works for it.
   asleep --> asleep : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   asleep --> shelved : ARCHIVE (owner) [1. holdsWork] / shelve
   asleep --> destroying : ARCHIVE (owner) [else] / archive
+  asleep --> retiring : RETIRE(sleptAt) (server) [sameSleep] / beginRetire
   asleep --> asleep : SAVED(storageId, bytes) (runner) [holdsWork] / savedAsleep
   waking --> awake : RESUMED(attempt?) (server) [resumable] / resumed
   waking --> starting : CREATED(providerBoxId, attempt?) (server) [1. newBox] / created
@@ -515,6 +525,8 @@ kept, and no key works for it.
   destroying --> gone : DESTROYED (server) [1. hasSave] / destroyed
   destroying --> expired : DESTROYED (server) [else] / destroyed
   destroying --> destroying : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
+  retiring --> asleep : RETIRED (server) / retired
+  retiring --> retiring : LOST(attempt?) (server) / forgetBox
   gone --> waking : WAKE (server) / wake
   gone --> expired : EXPIRE (server) / expire
   expired --> expired : DESTROYED (server) / forgetProvider
@@ -587,6 +599,7 @@ From `asleep`:
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for the paused box, arriving late: kept, for resuming and deleting it.
 - `ARCHIVE (owner)` [1. holdsWork] → `shelved`. Mike archives the thread while a box of it may hold work newer than its save (it slept unsaved, or wrote after saving): that box is kept.
 - `ARCHIVE (owner)` [else] → `destroying`. Mike archives the thread: its box, if any, is deleted; its save stays.
+- `RETIRE(sleptAt) (server)` [sameSleep] → `retiring`. Past its virtual runner's days since it slept: its boxes' key is revoked and they're named for deletion, in this one step (the fence).
 - `SAVED(storageId, bytes) (runner)` [holdsWork] stays put. A box asleep with work newer than its save (kept running, as it can't pause) saved at last: the save is in, and the box can go.
 
 From `waking`:
@@ -633,6 +646,11 @@ From `destroying`:
 - `DESTROYED (server)` [1. hasSave] → `gone`. The provider has deleted the box; its save stays, so it can come back.
 - `DESTROYED (server)` [else] → `expired`. The provider has deleted the box, and with nothing saved the thread can never come back.
 - `CREATED(providerBoxId, attempt?) (server)` [notStale] stays put. The provider's id for a box made just before the archive: kept, so it's deleted too.
+
+From `retiring`:
+
+- `RETIRED (server)` → `asleep`. The provider confirms every box it named gone: asleep with no box, and a waiting message brings it back from its last save.
+- `LOST(attempt?) (server)` stays put. One of its boxes is gone, on the provider's word.
 
 From `gone`:
 

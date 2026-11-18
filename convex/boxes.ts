@@ -217,9 +217,13 @@ export const RUNNING: readonly BoxKind[] = ['creating', 'starting', 'awake', 'sa
  * boxService.ts observe), counting to `upTo` at most: what maxBoxes holds.
  */
 export async function countRunning(ctx: QueryCtx, serviceId: Id<'runnerServices'>, upTo: number): Promise<number> {
-  const n = await countBoxes(ctx, serviceId, RUNNING, upTo);
-  if (n >= upTo) return n;
-  return n + (await ctx.db.query('boxes').withIndex('by_service_seen', (q) => q.eq('serviceId', serviceId).gt('seenRunningAt', 0)).take(upTo - n)).filter((r) => !RUNNING.includes(r.boxState.kind)).length;
+  let n = await countBoxes(ctx, serviceId, RUNNING, upTo);
+  // Those in RUNNING are counted already: left out before counting, read until enough.
+  for await (const r of ctx.db.query('boxes').withIndex('by_service_seen', (q) => q.eq('serviceId', serviceId).gt('seenRunningAt', 0))) {
+    if (n >= upTo) break;
+    if (!RUNNING.includes(r.boxState.kind)) n++;
+  }
+  return n;
 }
 
 // How many of a virtual runner's boxes are in these states, counting to `upTo` at most.
@@ -560,6 +564,7 @@ const serverEvent = v.union(
   v.object({ type: v.literal('DESTROYED') }),
   v.object({ type: v.literal('FAILED'), error: v.string(), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('PAUSED'), attempt: v.optional(v.number()) }),
+  v.object({ type: v.literal('RETIRED') }),
 );
 
 /**

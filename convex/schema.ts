@@ -351,10 +351,11 @@ export const appSchema = defineSchema({
     // Attempts whose boxes may hold work newer than the newest save each
     // made (invariant W, boxMachine.ts holdsWork).
     workAttempts: v.optional(v.array(v.number())),
-    // The billing guard's last pass over it (boxService.ts observe), and
-    // when it last saw a machine of it running while its row isn't in a
-    // running state: it counts toward maxBoxes then (invariant M).
-    chargedAt: v.optional(v.number()),
+    // When the billing guard last saw each attempt's machine (boxService.ts
+    // observe), so each is charged from its own last observation; and
+    // (seenRunningAt) when it last saw a machine of it running while its row
+    // isn't in a running state: it counts toward maxBoxes then (invariant M).
+    observedAt: v.optional(v.array(v.object({ attempt: v.number(), at: v.number() }))),
     seenRunningAt: v.optional(v.number()),
     createdAt: v.number(),
   })
