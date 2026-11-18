@@ -169,7 +169,7 @@ test("the helper's script is passed whole and PowerShell is run by its full path
 
 // A CLI that exits can have its pid taken by another thread's new CLI before
 // a lookup reads the registry: the snapshot's start time says which it saw.
-test("a registered CLI counts only for the process that started when it did", () => {
+test("a registered CLI counts only for the process that started when it did", async () => {
   assert.equal(startedAt({ lstart: '133761234567890123' }, 133761234567890120n), true, 'within a microsecond');
   assert.equal(startedAt({ lstart: '133761234567890123' }, 133761234597890123n), false, 'three seconds later: another process');
   assert.equal(startedAt({ lstart: '~133761234567890123' }, 133761234597890123n), true, 'an estimate gets ten seconds');
@@ -180,11 +180,11 @@ test("a registered CLI counts only for the process that started when it did", ()
   reg.add(process.pid, 'claude', 'th1');
   const lstart = processInfo(process.pid)?.lstart;
   if (lstart && /^\d+$/.test(lstart)) {
-    assert.equal(reg.threadOfPid(process.pid, BigInt(lstart)), 'th1');
+    assert.equal(await reg.threadOfPid(process.pid, BigInt(lstart)), 'th1');
     // Not "no thread", which would leave the credential to decide: the lookup fails.
-    assert.throws(() => reg.threadOfPid(process.pid, BigInt(lstart) + 30_000_000n), StaleProcess);
+    await assert.rejects(reg.threadOfPid(process.pid, BigInt(lstart) + 30_000_000n), StaleProcess);
   }
-  assert.equal(reg.threadOfPid(process.pid), 'th1');
+  assert.equal(await reg.threadOfPid(process.pid), 'th1');
   reg.remove(process.pid);
 });
 
@@ -196,7 +196,7 @@ test("on Windows a CLI's recorded start matches the helper's snapshot of it", on
     const snap = parseSnapshot(await win32Helper().ask('snapshot', { port: 1 }));
     const me = snap.processes.find((p) => p.pid === process.pid);
     assert.ok(me && me.created > 0n, 'the snapshot has this process with a start time');
-    assert.equal(reg.threadOfPid(process.pid, me.created), 'th1');
+    assert.equal(await reg.threadOfPid(process.pid, me.created), 'th1');
   } finally {
     reg.remove(process.pid);
     (await import('../../src/win32-helper.ts')).win32Helper().stop();
@@ -243,23 +243,30 @@ test("on Windows the helper uses Windows' own NetTCPIP, not one planted earlier 
 // A CLI whose start probe failed is recorded with an estimate, which can't
 // tell two processes ten seconds apart: its start is read again, exactly,
 // and only that decides (Codex's fourth review).
-test("a CLI recorded with an estimate counts only once an exact reading matches the snapshot", () => {
+test("a CLI recorded with an estimate counts only once an exact reading matches the snapshot", async () => {
   const reg = new ProcessRegistry(tmpDir(), nullLogger);
   const T = 133761234567890000n;
   const read = new Map<number, string | undefined>();
-  reg.readStart = (pid) => (read.get(pid) ? { pgid: pid, lstart: read.get(pid)!, command: 'claude' } : null);
+  let reads = 0;
+  reg.readStart = async (pid) => {
+    reads++;
+    return read.get(pid);
+  };
   // add() records an estimate when its own probe fails.
   reg.add(4242, 'claude', 'thB');
   (reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(4242)!.lstart = `~${T}`;
   // The snapshot saw A's CLI, 5 s before B's started with that pid: the exact reading is B's.
   read.set(4242, String(T + 3n));
-  assert.throws(() => reg.threadOfPid(4242, T - 50_000_000n), StaleProcess, 'within the estimate, but not the process the snapshot saw');
+  await assert.rejects(reg.threadOfPid(4242, T - 50_000_000n), StaleProcess, 'within the estimate, but not the process the snapshot saw');
   // The snapshot's process is the one there now.
-  assert.equal(reg.threadOfPid(4242, T + 3n), 'thB');
+  // Many connections at once share one reading.
+  reads = 0;
+  assert.deepEqual(await Promise.all([1, 2, 3].map(() => reg.threadOfPid(4242, T + 3n))), ['thB', 'thB', 'thB']);
+  assert.equal(reads, 1);
   assert.equal((reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(4242)!.lstart, String(T + 3n), 'the exact start replaces the estimate');
-  // A reading that fails is a no.
-  (reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(4242)!.lstart = `~${T}`;
+  // A reading that fails is a no (another estimate, so nothing confirmed before counts).
+  (reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(4242)!.lstart = `~${T + 1n}`;
   read.set(4242, undefined);
-  assert.throws(() => reg.threadOfPid(4242, T + 3n), StaleProcess);
+  await assert.rejects(reg.threadOfPid(4242, T + 3n), StaleProcess);
   reg.remove(4242);
 });

@@ -570,16 +570,16 @@ test('the registry names a thread only for a live CLI, and sees a draining runne
   try {
     const r = new ProcessRegistry(dir, nullLogger);
     r.add(process.pid, 'test', 'th1');
-    assert.equal(r.threadOfPid(process.pid), 'th1');
+    assert.equal(await r.threadOfPid(process.pid), 'th1');
     r.remove(process.pid);
-    assert.equal(r.threadOfPid(process.pid), undefined);
+    assert.equal(await r.threadOfPid(process.pid), undefined);
     // A draining runner's list is on disk beside this one's.
     const { processInfo } = await import('../../src/proc.ts');
     const lstart = processInfo(process.pid)!.lstart;
     fs.writeFileSync(path.join(dir, 'children-99.json'), JSON.stringify([{ pid: process.pid, command: 'x', startedAt: 'x', lstart, threadId: 'th2' }]));
-    assert.equal(r.threadOfPid(process.pid), 'th2');
+    assert.equal(await r.threadOfPid(process.pid), 'th2');
     fs.writeFileSync(path.join(dir, 'children-99.json'), JSON.stringify([{ pid: process.pid, command: 'x', startedAt: 'x', lstart: 'some other start', threadId: 'th2' }]));
-    assert.equal(r.threadOfPid(process.pid), undefined, 'a recycled pid');
+    assert.equal(await r.threadOfPid(process.pid), undefined, 'a recycled pid');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

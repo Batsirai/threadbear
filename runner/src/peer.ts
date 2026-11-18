@@ -12,7 +12,7 @@ import { parseSnapshot, win32Helper, winAddress, type WinConnection, type WinPro
 export type PeerDeps = {
   // threadOfPid gets the process's start time where the lookup has one
   // (Windows), so a CLI's pid taken by a newer process doesn't count.
-  registry: Pick<ProcessRegistry, 'threadOfPid'> & Partial<Pick<ProcessRegistry, 'threadOfGroup'>>;
+  registry: { threadOfPid(pid: number, created?: bigint): string | undefined | Promise<string | undefined> } & Partial<Pick<ProcessRegistry, 'threadOfGroup'>>;
   // A thread this runner or a draining one really has (a registry entry can
   // be a job's label, like models:<account>).
   known: (threadId: string) => boolean;
@@ -189,19 +189,19 @@ export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<
   if (pids.length === 0) return undefined;
   const threads = new Set<string>();
   for (const peer of pids) {
-    const t = threadOfPid(peer, table, deps);
+    const t = await threadOfPid(peer, table, deps);
     if (t) threads.add(t);
   }
   if (threads.size > 1) throw new AmbiguousPeer(`one connection is held by processes under ${threads.size} threads`);
   return [...threads][0];
 }
 
-function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps): string | undefined {
+async function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps): Promise<string | undefined> {
   const rows = new Map(table.map((r) => [r.pid, r]));
   const seen = new Set<number>();
   for (let p: number | undefined = peer; p !== undefined && p > 1 && !seen.has(p); p = parentOf(rows, p)) {
     seen.add(p);
-    const t = deps.registry.threadOfPid(p, rows.get(p)?.created);
+    const t = await deps.registry.threadOfPid(p, rows.get(p)?.created);
     if (t && deps.known(t)) return t;
   }
   // Left its parents behind (a nohup or a backgrounded subshell), but still

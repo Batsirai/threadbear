@@ -5,7 +5,7 @@ import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sd
 import type { Logger } from './log.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import { IS_WINDOWS } from './platform.ts';
-import { powershellPath } from './win32-helper.ts';
+import { parseProcesses, powershellPath, win32Helper } from './win32-helper.ts';
 
 // A process group, with its leader's start time so a recycled pid is never
 // mistaken for it. lstart is '' when the leader had already exited when the
@@ -113,10 +113,10 @@ export class ProcessRegistry {
   // saying "no thread": the lookup then closes the connection, where "no
   // thread" would leave the credential presented to decide (Codex's third
   // review).
-  threadOfPid(pid: number, created?: bigint): string | undefined {
+  async threadOfPid(pid: number, created?: bigint): Promise<string | undefined> {
     const own = this.entries.get(pid);
     if (own) {
-      const exact = this.confirmStart(own, created);
+      const exact = await this.confirmStart(own, created);
       if (exact === false) throw new StaleProcess(pid);
       if (typeof exact === 'string') {
         own.lstart = exact;
@@ -135,7 +135,7 @@ export class ProcessRegistry {
       const e = Array.isArray(entries) ? entries.find((x) => x?.pid === pid) : undefined;
       if (!e?.threadId) continue;
       if (created) {
-        if (this.confirmStart(e, created) !== false) return e.threadId;
+        if ((await this.confirmStart(e, created)) !== false) return e.threadId;
         throw new StaleProcess(pid);
       } else if (!(e.lstart || e.started) || sameStart(e, processInfo(pid))) return e.threadId;
     }
@@ -149,15 +149,32 @@ export class ProcessRegistry {
   // again now: it counts only if that exact reading is the snapshot's
   // process and fits the estimate. A reading that fails is a no. Rare (a
   // failed probe), and the reading is the same one add() makes.
-  // How confirmStart reads a start again (tests pass a stand-in).
-  readStart: (pid: number) => ProcessInfo | null = processInfo;
+  // How confirmStart reads a start again: the helper's process list on
+  // Windows, never a blocking PowerShell (Codex's fifth review: a hung
+  // probe held the whole runner up to 10 s for each connection). Tests pass
+  // a stand-in.
+  readStart: (pid: number) => Promise<string | undefined> = readStartNow;
+  // Reads in flight, and exact starts confirmed, by pid and estimate: any
+  // number of connections share one read, and a draining runner's entry
+  // (whose file isn't this runner's to rewrite) is read once.
+  private confirming = new Map<string, Promise<string | undefined>>();
+  private confirmed = new Map<string, string>();
 
-  private confirmStart(e: { lstart?: string }, created: bigint | undefined): boolean | string {
-    if (!created || !e.lstart?.startsWith('~')) return startedAt(e, created);
-    const pid = (e as { pid?: number }).pid;
-    const now = pid ? this.readStart(pid)?.lstart : undefined;
+  private async confirmStart(e: { pid?: number; lstart?: string }, created: bigint | undefined): Promise<boolean | string> {
+    if (!created || !e.lstart?.startsWith('~') || !e.pid) return startedAt(e, created);
+    const key = `${e.pid}:${e.lstart}`;
+    let now = this.confirmed.get(key);
+    if (!now) {
+      let reading = this.confirming.get(key);
+      if (!reading) {
+        reading = this.readStart(e.pid).finally(() => this.confirming.delete(key));
+        this.confirming.set(key, reading);
+      }
+      now = await reading.catch(() => undefined);
+    }
     if (!now || !/^\d+$/.test(now)) return false;
     if (!startedAt({ lstart: now }, created) || !sameStartTime(e.lstart, now)) return false;
+    this.confirmed.set(key, now);
     return now;
   }
 
@@ -407,6 +424,14 @@ export function ownStartTime(): string {
 // FILETIME, from Windows' process list, whose times are a microsecond
 // coarser than Get-Process's, so they match to within one). No time to go
 // by on either side: the pid stands, as it did before.
+// A process's exact start now, as a FILETIME string: from the helper on
+// Windows (the only place estimates are made), undefined when it can't say.
+async function readStartNow(pid: number): Promise<string | undefined> {
+  if (process.platform !== 'win32') return processInfo(pid)?.lstart;
+  const row = parseProcesses(await win32Helper().ask('processes')).find((p) => p.pid === pid);
+  return row && row.created > 0n ? String(row.created) : undefined;
+}
+
 export class StaleProcess extends Error {
   constructor(pid: number) {
     super(`process ${pid} isn't the CLI registered with its id any more`);
