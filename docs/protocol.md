@@ -8063,7 +8063,14 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   box arms a schedule's timer, runs its check or reads `schedules.json`.
   Its key isn't the owner's (`ownerKey()` is false for `tbb_`, as for
   `tbr_`), so `create_thread` naming another runner files a request the
-  main Mac asks the user about. It runs one thread: any other `create`, from
+  main Mac asks the user about. A repo's patch code never runs in the
+  box's runner process: each patch file is imported in a short-lived child
+  process (`runner/src/patch-child.ts`) that sends back what's static in it
+  as JSON and exits, so nothing it starts outlives the read. Its functions
+  aren't run at all: an action or panel with a `when`, `badge`, `label` or
+  `summary`, and a list panel (`items`), aren't shown on a box's thread;
+  its static actions, panels, hooks (commands, gated like any process) and
+  `worktree` setup are. It runs one thread: any other `create`, from
   anywhere, is refused (`create_thread` asks the main Mac, as from any
   runner key). Claude Code runs as root there, so `IS_SANDBOX=1` is set
   for everything the runner starts. The app port listens on 127.0.0.1

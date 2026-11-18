@@ -829,6 +829,17 @@ A seventh look found one more and a follow-up:
   and the backend marked a repeated finish as work: finishes now go one
   at a time per command, and a finish that changes nothing is housekeeping.
 
+An eighth look found one more and a follow-up:
+
+- A patch's code runs inside the runner, so a timer or worker it started
+  could write behind a save's copy with no process to stop. In box mode no
+  patch code runs in the runner's process at all: each file is read in a
+  child process that prints what's static in it and exits
+  (`patch-child.ts`), and functions (`when`, `badge`, `items` and the rest)
+  aren't run, so what has one isn't shown on a box's thread.
+- The gate's `exec` and `execFile` lost `util.promisify`'s contract: their
+  replacements carry it now, through the gate.
+
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as
 decision 10 says, so the runner's existing year-long token path carries it

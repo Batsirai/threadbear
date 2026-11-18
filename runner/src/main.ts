@@ -80,6 +80,7 @@ import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunn
 import { BOX_NO_SCHEDULES, BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
 import { BoxProcesses } from './box-procs.ts';
 import { asSave, closeSpawns, installSpawnGate, openSpawns } from './spawn-gate.ts';
+import { isolatePatchCode } from './patches.ts';
 import { SaveHold, saveThread } from './box-save.ts';
 import { ClockJumpWatch } from './clock-jump.ts';
 import { pushFailingText } from './push-failing.ts';
@@ -124,6 +125,8 @@ async function main(): Promise<void> {
     enterBoxEnv(process.env);
     // The one gate on starting processes, closed while a save holds the box (spawn-gate.ts).
     installSpawnGate();
+    // And no repo's patch code in this process: each is read in a child of its own (patches.ts).
+    isolatePatchCode();
   }
   const cfg = loadConfig();
   // A dev runner on a copy of the real data dir (real-copy.ts): whatever

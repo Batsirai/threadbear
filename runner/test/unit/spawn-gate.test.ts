@@ -99,3 +99,20 @@ test('nothing in runner/src starts a process past the gate', () => {
   }
   assert.deepEqual(problems, []);
 });
+
+test("promisify(exec) and promisify(execFile) keep their contract through the gate ({ stdout, stderr }, .child, the error's output), and are refused while it's closed", async () => {
+  installSpawnGate();
+  openSpawns();
+  const { promisify } = await import('node:util');
+  const pFile = promisify(execFile);
+  const pExec = promisify(exec);
+  const got = pFile(process.execPath, ['-e', 'process.stdout.write("out"); process.stderr.write("err")']);
+  assert.ok((got as unknown as { child?: unknown }).child, '.child is there');
+  assert.deepEqual(await got, { stdout: 'out', stderr: 'err' });
+  assert.deepEqual(await pExec('echo hi'), { stdout: 'hi\n', stderr: '' });
+  await assert.rejects(pFile(process.execPath, ['-e', 'process.stdout.write("so far"); process.exit(3)']), (e: { code?: number; stdout?: string }) => e.code === 3 && e.stdout === 'so far');
+  closeSpawns('a save holds the box');
+  await assert.rejects(pFile('true'), SpawnRefused);
+  await assert.rejects(pExec('true'), SpawnRefused);
+  openSpawns();
+});

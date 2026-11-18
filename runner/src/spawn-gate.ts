@@ -14,6 +14,7 @@
 import cp from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { promisify } from 'node:util';
 
 // Every function node:child_process has that starts a process (its other
 // two, ChildProcess and _forkChild, don't: ChildProcess.prototype.spawn,
@@ -31,6 +32,21 @@ function check(name: string): void {
   if (closed !== undefined && save.getStore() !== true) throw new SpawnRefused(`Not starting a process (${name}): ${closed}`);
 }
 
+type Fn = (...args: unknown[]) => unknown;
+function promisified(fn: Fn): Fn {
+  return (...args: unknown[]) => {
+    let child: unknown;
+    const p = new Promise((resolve, reject) => {
+      child = fn(...args, (err: Error | null, stdout: unknown, stderr: unknown) => {
+        if (err) reject(Object.assign(err, { stdout, stderr }));
+        else resolve({ stdout, stderr });
+      });
+    }) as Promise<unknown> & { child?: unknown };
+    p.child = child;
+    return p;
+  };
+}
+
 export function installSpawnGate(): void {
   if (installed) return;
   installed = true;
@@ -42,6 +58,11 @@ export function installSpawnGate(): void {
       return real.apply(this, args);
     };
   }
+  // promisify(execFile) and promisify(exec) resolve with { stdout, stderr }
+  // (and carry .child, and the error's stdout and stderr) by a property on
+  // the function, which the replacement must have too, going through the
+  // gate (as win32-hide.ts does for its own).
+  for (const name of ['exec', 'execFile'] as const) Object.defineProperty(m[name], promisify.custom, { value: promisified(m[name]!), configurable: true });
   // And the class every async start goes through, however it's reached
   // (exec, execFile and fork call the module's own spawn, not the export).
   const proto = cp.ChildProcess.prototype as unknown as { spawn: (...a: unknown[]) => unknown };

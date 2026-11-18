@@ -377,6 +377,78 @@ function patchFiles(dir: string, dirs: FolderCache): string[] {
     .map((n) => path.join(dir, n));
 }
 
+// Box mode (box-mode.ts): a repo's patch code never runs in the runner's
+// process, where a timer or a worker it starts could write behind a save's
+// copy with no process to stop. Each patch file is imported in a child
+// process of its own (patch-child.ts) that sends back what's static in it
+// (its actions, panels, hooks and worktree config, as JSON) and exits: so
+// under the spawn gate and the save's stop like any process. Its
+// functions (when, badge, label, summary, a list panel's items) aren't
+// run at all, and what has one isn't shown: a box's thread has only the
+// patches' static actions and panels.
+let isolated = false;
+export function isolatePatchCode(on = true): void {
+  isolated = on;
+}
+
+const CHILD = path.join(import.meta.dirname, 'patch-child.ts');
+const CHILD_TIMEOUT_MS = 30_000;
+
+export type ChildLoad = {
+  id: string;
+  source: 'home' | 'project';
+  file: string;
+  mtimeMs: number;
+  verified?: { hash: string; root: string; code: Map<string, Buffer>; edges: Map<string, Map<string, string>> };
+};
+
+async function loadInChild(p: ChildLoad): Promise<LoadedPatch> {
+  const input = JSON.stringify({
+    id: p.id,
+    source: p.source,
+    file: p.file,
+    mtimeMs: p.mtimeMs,
+    ...(p.verified
+      ? { verified: { hash: p.verified.hash, root: p.verified.root, code: [...p.verified.code].map(([f, b]) => [f, b.toString('base64')]), edges: [...p.verified.edges].map(([f, m]) => [f, [...m]]) } }
+      : {}),
+  });
+  const out = await new Promise<string>((resolve, reject) => {
+    const child = spawn(process.execPath, [CHILD], { cwd: path.dirname(p.file), stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), CHILD_TIMEOUT_MS);
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`its loader exited ${code ?? 'killed'}: ${stderr.trim().split('\n').pop() ?? ''}`));
+    });
+    child.stdin.end(input);
+  });
+  return JSON.parse(out) as LoadedPatch;
+}
+
+/**
+ * What's static in a loaded patch: everything but what has a function (a
+ * list panel, an action or panel with when, badge, label or summary),
+ * which box mode never runs (patch-child.ts). Read in the process that
+ * imported it, where the functions were kept aside.
+ */
+export function staticPatch(loaded: LoadedPatch): LoadedPatch {
+  const file = loaded.info.file ?? '';
+  const live = (x: { id: string; patch: string }) => liveFunctions.has(listKey(file, x.id.slice(x.patch.length)));
+  return {
+    ...loaded,
+    actions: loaded.actions.filter((a) => !live(a)),
+    panels: loaded.panels.filter((x) => x.kind !== 'list' && !live(x)),
+  };
+}
+
 async function loadPatchFile(file: string, source: 'home' | 'project', cache: PatchCache, dirs: FolderCache = new FolderCache(), gate: PatchGate = TRUST_ALL): Promise<LoadedPatch> {
   const id = path.basename(file, path.extname(file));
   const mtimeMs = dirs.mtimeMs(file);
@@ -412,9 +484,12 @@ async function loadPatchFile(file: string, source: 'home' | 'project', cache: Pa
   try {
     // The query makes Node load the file again after an edit: a module URL
     // is loaded once per process.
-    const url = verified ? verifiedUrl(verified.root, verified.hash, verified.code, verified.edges) : `${pathToFileURL(file).href}?mtime=${mtimeMs}`;
-    const mod = (await import(url)) as { default?: unknown };
-    loaded = readPatchModule(id, source, file, mod.default);
+    if (isolated) loaded = await loadInChild({ id, source, file, mtimeMs, ...(verified ? { verified } : {}) });
+    else {
+      const url = verified ? verifiedUrl(verified.root, verified.hash, verified.code, verified.edges) : `${pathToFileURL(file).href}?mtime=${mtimeMs}`;
+      const mod = (await import(url)) as { default?: unknown };
+      loaded = readPatchModule(id, source, file, mod.default);
+    }
   } catch (e) {
     loaded = { info: { id, source, file, error: firstLine(e) }, panels: [], actions: [], hooks: [] };
   }
