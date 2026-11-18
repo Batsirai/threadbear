@@ -53,15 +53,17 @@ Feature: Spelling in the message box
     Then the composer says "teh "
 
   @composer.spelling @swift-pending @windows-pending @linux-pending
+  # Its own word: one put back stays put back while the app runs, and the
+  # scenario before this one puts back "teh" in the same app.
   Scenario: A correction typed back over isn't made again
     Given "Spelling and Grammar › Correct Spelling Automatically" is ticked in the composer's right-click menu
-    When I type "I saw teh" in the composer
+    When I type "we recieve" in the composer
     And I type " " in the composer
-    Then the composer says "I saw the "
-    When I press Backspace 3 times on the keyboard
-    And I type "eh" in the composer
+    Then the composer says "we receive "
+    When I press Backspace 5 times on the keyboard
+    And I type "ieve" in the composer
     And I type " " in the composer
-    Then the composer says "I saw teh "
+    Then the composer says "we recieve "
 
   @composer.spelling @swift-pending @windows-pending @linux-pending
   Scenario: Transformations change the word the cursor is in
