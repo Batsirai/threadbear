@@ -37,6 +37,18 @@ function specShell(): NodeJS.ProcessEnv {
 }
 
 /** The folders `keepEvidence` makes: its ISO time, then mkdtemp's six characters. */
+/**
+ * Whether a command clicks through the pointer, aiming where its target was
+ * drawn a frame before: `click` and `label-point`, a `chip` or `peek` with
+ * `click` or `press`, a `composer-menu` it opens. A thread arrowed to comes
+ * in 10 points off once its read lands, so on a runner slow to read, a chip
+ * pressed as it landed was missed by that much (stress run, 18 Nov).
+ */
+function clicks(cmd: Record<string, unknown>): boolean {
+  const on = (v: unknown) => v !== undefined && v !== false;
+  return cmd.cmd === 'click' || cmd.cmd === 'label-point' || on(cmd.click) || on(cmd.press) || (cmd.cmd === 'composer-menu' && on(cmd.show));
+}
+
 const KEPT_NAME = /^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z-[A-Za-z0-9]{6}$/;
 
 /**
@@ -251,12 +263,7 @@ export class GpuiDriver implements Driver {
   }
 
   async do(cmd: Record<string, unknown>, timeoutSeconds = 30): Promise<string> {
-    // Any command that clicks through the pointer (`chip`, `peek` and the
-    // rest with a `click`) aims where its target was drawn a frame before.
-    // A thread arrowed to comes in 10 points off once its read lands, so on
-    // a runner slow to read, a chip pressed as it landed was missed by that
-    // much (stress run, 18 Nov).
-    if (cmd.cmd === 'click' || cmd.cmd === 'label-point' || (cmd.click !== undefined && cmd.click !== false)) await this.settle();
+    if (clicks(cmd)) await this.settle();
     const r = await this.ask(cmd, timeoutSeconds);
     if (r.error) throw new Error(`${cmd.cmd}: ${r.error as string}${await this.evidenceFor(r)}`);
     return typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? '');

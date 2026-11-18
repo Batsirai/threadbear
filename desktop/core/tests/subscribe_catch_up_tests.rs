@@ -92,3 +92,46 @@ fn a_reply_streaming_in_the_first_page_belongs_to_its_turn() {
     let _ = model.apply(vec![text(3, "m1", "Hello there"), done(4)]);
     assert_eq!(model.item("a:m1").expect("the reply").turn_id.as_deref(), Some("t1"));
 }
+
+/// Where `item` is drawn: as a row of its own, or in a group's members.
+fn places(model: &TranscriptModel, item: &str) -> usize {
+    model
+        .rows()
+        .iter()
+        .map(|r| match &r.content {
+            RowContent::Group(group) => group.member_ids.iter().filter(|m| *m == item).count(),
+            _ => usize::from(r.id == item),
+        })
+        .sum()
+}
+
+// Two thoughts still streaming with no turn known for either are grouped
+// together; when one takes its turn, the group it leaves is drawn again
+// rather than still listing it (Codex's review of the fix above).
+#[test]
+fn a_row_taking_its_turn_leaves_the_group_it_was_in() {
+    let mut model = TranscriptModel::new(None);
+    let in_progress = [
+        InProgress { item_id: "a".into(), type_: "reasoning".into(), text: "First thought".into() },
+        InProgress { item_id: "b".into(), type_: "reasoning".into(), text: "Second thought".into() },
+    ];
+    model.load(vec![event_turn(1, "turn.started", json!({"turnId": "t0"}), Some("t0")), user(2, "Hi"), done_turn(3, "t0")], &in_progress);
+    assert_eq!(model.item("r:b").expect("b").turn_id, None);
+    let _ = model.apply(vec![event_turn(0, "reasoning.delta", json!({"itemId": "b", "text": " more"}), Some("t2"))]);
+    assert_eq!(model.item("r:b").expect("b").turn_id.as_deref(), Some("t2"));
+    assert_eq!(places(&model, "r:b"), 1, "{:?}", model.rows().iter().map(|r| &r.id).collect::<Vec<_>>());
+    assert_eq!(places(&model, "r:a"), 1);
+}
+
+// A running turn longer than a page: its start is on an older page, so the
+// open turn is worked out from the page, and the reply still streaming is
+// that turn's (Codex's review).
+#[test]
+fn a_reply_streaming_in_a_turn_longer_than_a_page_belongs_to_it() {
+    let mut model = TranscriptModel::new(None);
+    let in_progress = [InProgress { item_id: "m1".into(), type_: "assistant.text".into(), text: "Still going".into() }];
+    model.load(vec![call(500, "c1"), result(501, "c1"), call(502, "c2"), result(503, "c2")], &in_progress);
+    assert!(model.has_older_events());
+    assert_eq!(model.open_turn(), Some("t1"));
+    assert_eq!(model.item("a:m1").expect("the reply").turn_id.as_deref(), Some("t1"));
+}

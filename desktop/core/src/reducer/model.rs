@@ -655,6 +655,20 @@ impl TranscriptModel {
             }
         }
         self.events = events;
+        // A turn whose start is on an older page (a long run of more than a
+        // page of events) still counts as running if nothing in this page
+        // finished it. A page that has the turn's message would have its
+        // start too. Worked out before what's still streaming is put back
+        // below, as that's this turn's.
+        if self.open_turn.is_none() && self.has_older_events() {
+            if let Some(first) = self.events.first().and_then(|e| e.turn_id.clone()) {
+                let last_with_turn = self.events.iter().rev().find_map(|e| e.turn_id.as_deref());
+                let has_user_message = self.events.iter().any(|e| matches!(e.payload, EventPayload::UserMessage { .. }) && e.turn_id.as_deref() == Some(first.as_str()));
+                if last_with_turn == Some(first.as_str()) && !self.completed_turns.contains(&first) && !has_user_message {
+                    self.open_turn = Some(first);
+                }
+            }
+        }
         self.streaming.clear();
         // Re-add anything still streaming, unless the history now has its
         // persisted text. Reducing a delta puts it back in `streaming`.
@@ -678,19 +692,6 @@ impl TranscriptModel {
             if let Some(old) = previous.get(&item.id) {
                 if old.content == item.content {
                     item.version = old.version;
-                }
-            }
-        }
-        // A turn whose start is on an older page (a long run of more than a
-        // page of events) still counts as running if nothing in this page
-        // finished it. A page that has the turn's message would have its
-        // start too.
-        if self.open_turn.is_none() && self.has_older_events() {
-            if let Some(first) = self.events.first().and_then(|e| e.turn_id.clone()) {
-                let last_with_turn = self.events.iter().rev().find_map(|e| e.turn_id.as_deref());
-                let has_user_message = self.events.iter().any(|e| matches!(e.payload, EventPayload::UserMessage { .. }) && e.turn_id.as_deref() == Some(first.as_str()));
-                if last_with_turn == Some(first.as_str()) && !self.completed_turns.contains(&first) && !has_user_message {
-                    self.open_turn = Some(first);
                 }
             }
         }
@@ -759,7 +760,11 @@ impl TranscriptModel {
     fn adopt_turn(&mut self, id: &str, turn_id: Option<&str>) {
         let (Some(&i), Some(turn)) = (self.item_index.get(id), turn_id) else { return };
         if self.items[i].turn_id.is_none() {
+            // The run it was in is drawn again too: it may have been grouped
+            // with other turnless rows before it, a group it leaves now.
+            let was_in = self.run_start(i as isize);
             self.items[i].turn_id = Some(turn.to_owned());
+            self.mark_inserted(was_in);
         }
     }
 
@@ -961,6 +966,8 @@ impl TranscriptModel {
                     // A row with persisted text is final; leave it alone.
                     let still_streaming = matches!(&self.items[i].content, RowContent::Assistant(item) | RowContent::Reasoning(item) if item.is_streaming);
                     if still_streaming {
+                        let turn = turn_id.or_else(|| self.open_turn.clone());
+                        self.adopt_turn(&id, turn.as_deref());
                         self.update(&id, move |c| *c = content);
                         self.streaming.insert(item_id.clone(), (kind, text.clone()));
                     }
