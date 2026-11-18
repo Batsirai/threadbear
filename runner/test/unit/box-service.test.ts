@@ -1817,7 +1817,8 @@ test('the guard pauses a retiring machine that is running', async () => {
   const { m, DAYS } = await retiringStuck(s, false);
   assert.equal(s.fly.byId(m.id)!.state, 'created', 'running, its pause having failed');
   failing.stop();
-  await later(DAYS + 6 * MINUTE, () => s.reap());
+  // Once the failed pause's backoff is out (the retirement's own try failed too, so it's ten minutes).
+  await later(DAYS + 11 * MINUTE, () => s.reap());
   assert.equal(s.fly.byId(m.id)!.state, 'suspended');
   assert.equal(s.stateOf('T2'), 'retiring', 'still the retirement to finish');
 });
@@ -1892,7 +1893,7 @@ test('Rule 1: a retirement holding the lease pauses a running machine before its
   assert.equal(s.fly.byId(m.id)!.state, 'created');
   failing.stop();
   // Its delete still fails, but the retirement paused it on the way.
-  await later(DAYS + 6 * MINUTE, () => call(s.a, service.retireBox, { boxId: boxIdOf(s, 'T2') }));
+  await later(DAYS + 11 * MINUTE, () => call(s.a, service.retireBox, { boxId: boxIdOf(s, 'T2') }));
   assert.equal(s.fly.byId(m.id)!.state, 'suspended');
   assert.equal(s.stateOf('T2'), 'retiring');
 });
@@ -1961,4 +1962,76 @@ test('Rule 3: every box stuck being deleted is tried again, a page at a time', a
   }
   const retried = new Set((s.scheduled as { fn: string; args: { boxId?: string } }[]).filter((j) => j.fn.endsWith('destroyBox')).map((j) => j.args.boxId));
   assert.deepEqual([...retried].sort(), ['T2', 'T3', 'T4'].map((t) => boxIdOf(s, t)).sort());
+});
+
+// ------------------------------------------------------------ Codex's eleventh round (18 Nov 2026)
+
+// Every provider request takes `ms` (of the test's clock) while `f` runs.
+async function slowProvider<T>(ms: number, f: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  const fetch = globalThis.fetch;
+  let offset = 0;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    offset += ms;
+    return fetch(url, init);
+  }) as typeof fetch;
+  Date.now = () => realNow() + offset;
+  try {
+    return await f();
+  } finally {
+    Date.now = realNow;
+    globalThis.fetch = fetch;
+  }
+}
+
+// 1. A continuation kept repeating a failing pause and never reached the delete.
+test("a retirement's continuation picks up where it stopped, so its delete is reached", async () => {
+  const s = await setup();
+  const failing = s.fly.failWhile((r) => r.path.endsWith('/suspend'), 503);
+  const { m, DAYS, down } = await retiringStuck(s, false);
+  down.stop();
+  s.skip();
+  // Slow requests (110 s each), its pause refused: the first run spends its time on the list and the pause.
+  await later(DAYS + 11 * MINUTE, () => slowProvider(110_000, () => call(s.a, service.retireBox, { boxId: boxIdOf(s, 'T2') })));
+  assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed', 'out of time before its delete');
+  const next = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).at(-1)!;
+  assert.ok(next.fn.endsWith('retireBox'));
+  assert.deepEqual(next.args.pauseTried, [m.id], 'it carries on past the pause it tried');
+  await later(DAYS + 20 * MINUTE, () => slowProvider(110_000, () => call(s.a, service.retireBox, next.args)));
+  assert.equal(s.fly.byId(m.id)!.state, 'destroyed');
+  // Three tries as it slept, one by the retirement that got stuck, one by the slow run; none by its continuation.
+  assert.equal(s.fly.calls('POST', '/suspend'), 5);
+  failing.stop();
+});
+
+test('a sleep (or its continuation) doesn\'t try a pause that is backing off', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await s.sleepIdle(11 * MINUTE);
+  await s.save(got.boxKey, 'save1');
+  s.skip();
+  s.rowOf('T2').suspendFails = { attempt: 1, n: 1, next: Date.now() + 10 * MINUTE };
+  await call(s.a, service.sleepBox, { boxId: boxIdOf(s, 'T2') });
+  assert.equal(s.fly.calls('POST', '/suspend'), 0);
+  assert.ok(runnerId);
+});
+
+// 2. A queued delete didn't see a backoff recorded after it was queued, and steps queued twice.
+test("a queued delete waits out a backoff recorded after it was queued, and a machine's step isn't queued twice", async () => {
+  const s = await setup();
+  s.fly.machines.push({ id: 'orphan', name: 'o', state: 'started', config: { metadata: { tb_box: 'boxes:999', tb_attempt: '1', tb_service: s.serviceId } } });
+  s.skip();
+  await call(s.a, service.reapService, { serviceId: s.serviceId });
+  await call(s.a, service.reapService, { serviceId: s.serviceId });
+  const steps = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('reapOne'));
+  assert.equal(steps.length, 1, 'queued once');
+  // A delete failed meanwhile (another path): the queued step waits it out.
+  await call(s.ctx, service.deleteFailed, { serviceId: s.serviceId, providerBoxId: 'orphan' });
+  await call(s.a, service.reapOne, steps[0]!.args);
+  assert.equal(s.fly.calls('DELETE', ''), 0);
+  // Its step over, the next pass may queue another (once the backoff is out).
+  await later(6 * MINUTE, () => call(s.a, service.reapService, { serviceId: s.serviceId }));
+  assert.equal((s.scheduled as { fn: string }[]).filter((j) => j.fn.endsWith('reapOne')).length, 2);
 });

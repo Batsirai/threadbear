@@ -591,6 +591,20 @@ sweep and provider step in `boxService.ts` and `boxes.ts`:
    they're read (each row leaves the queue, or the sweep stops for lack of
    room), and `countBoxes` only counts.
 
+An eleventh look added to rule 2: **a continuation keeps the progress
+of the run before it.** A run out of its budget carries what it got done
+into its continuation's arguments: a retirement's pause is one try, backed
+off on failure (`suspendFails`) and listed as tried (`pauseTried`), so its
+continuation goes straight on to the delete. A try of a provider call is
+started only with its own worst case left (by the requests it makes:
+a pause or resume three, a create four); a sleep doesn't try a pause that's
+backing off; and a new attempt is claimed only with the time left to make
+its box, so a continuation never strands a boot token. Deletes go on in
+their own continuations (each machine done is done), and the others have
+one step or repeat harmlessly. And a reaper step queued for a machine
+(`reapQueued`) isn't queued again until it ends, and its delete waits out
+a backoff recorded after it was queued.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

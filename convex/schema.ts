@@ -387,6 +387,11 @@ export const appSchema = defineSchema({
     .index('by_box', ['providerBoxId'])
     .index('by_service', ['serviceId']),
 
+  // A reaper step queued for a provider machine (boxService.ts reapOne), so
+  // the next pass doesn't queue a second for it. Gone when it ends, or
+  // taken as stale after REAP_PENDING_MS.
+  reapQueued: defineTable({ providerBoxId: v.string(), at: v.number() }).index('by_box', ['providerBoxId']),
+
   cloudTokens: defineTable({
     login: v.string(),
     sealed: v.string(),
