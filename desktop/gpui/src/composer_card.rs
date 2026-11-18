@@ -32,12 +32,16 @@ pub(crate) struct CardState {
     pub(crate) explain: BTreeSet<i64>,
     /// Folded to its heading (ComposerCard's chevron).
     pub(crate) collapsed: bool,
-    /// The answer just picked with a click, and when: its button fills and
-    /// hops, or its row's circle pops (juice::pick_fill). Never set under
-    /// Reduce Motion.
-    picked_at: Option<(usize, i64, Instant)>,
+    /// The answer just picked with a click: its button fills and hops, or
+    /// its row's circle pops (juice::pick_fill). Never set under Reduce
+    /// Motion. Timed from the first frame that draws it (`pick_started`),
+    /// not from the click, so a click that holds the main thread delays the
+    /// motion rather than eating it, as the archive flight's is.
+    picked: Option<(usize, i64)>,
+    pick_started: std::cell::Cell<Option<Instant>>,
     /// The follow-up just ticked on the done card, the same.
-    ticked_at: Option<(usize, Instant)>,
+    ticked: Option<usize>,
+    tick_started: std::cell::Cell<Option<Instant>>,
     /// The last answer that filled, for scripts (`dump`'s `juice`).
     pub(crate) last_fill: Option<(usize, i64)>,
     /// The ask a paged card is showing.
@@ -131,11 +135,12 @@ impl Composer {
         let picked = self.card.picks.get(&key) == Some(&option);
         if picked {
             self.card.picks.remove(&key);
-            self.card.picked_at = None;
+            self.card.picked = None;
         } else {
             self.card.picks.insert(key, option);
             if !cx.reduce_motion() {
-                self.card.picked_at = Some((ask, option, Instant::now()));
+                self.card.picked = Some((ask, option));
+                self.card.pick_started.set(None);
                 self.card.last_fill = Some((ask, option));
             }
         }
@@ -195,7 +200,8 @@ impl Composer {
         if !self.card.next_picks.remove(&key) {
             self.card.next_picks.insert(key);
             if !cx.reduce_motion() {
-                self.card.ticked_at = Some((index, Instant::now()));
+                self.card.ticked = Some(index);
+                self.card.tick_started.set(None);
             }
         }
         self.push_card_state(cx);
@@ -491,7 +497,7 @@ impl Composer {
             for (index, follow_up) in card.next.iter().enumerate() {
                 let (ticked, explained) = (self.card.next_picks.contains(&(index as i64)), self.card.explain.contains(&(index as i64)));
                 // Just ticked: its circle pops as the tick draws in.
-                let popping = self.card.ticked_at.filter(|(i, at)| ticked && *i == index && at.elapsed() < threadbear_core::juice::TICK_POP).map(|(_, at)| at.elapsed());
+                let popping = self.card.ticked.filter(|i| ticked && *i == index).map(|_| first_frame(&self.card.tick_started).elapsed()).filter(|e| *e < threadbear_core::juice::TICK_POP);
                 if popping.is_some() {
                     window.request_animation_frame();
                 }
@@ -996,7 +1002,7 @@ impl AskHost for Composer {
     }
 
     fn ask_picked_at(&self, ask: usize, option: i64) -> Option<Instant> {
-        self.card.picked_at.filter(|(a, o, _)| *a == ask && *o == option).map(|(_, _, at)| at)
+        self.card.picked.filter(|(a, o)| *a == ask && *o == option).map(|_| first_frame(&self.card.pick_started))
     }
 
     fn ask_open_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -1583,6 +1589,15 @@ pub(crate) fn card_button(id: impl Into<ElementId>, title: &str, look: ButtonLoo
         // No tip where the button shows a card of its own instead.
         .when(!tip.is_empty(), |b| b.tip(tip))
         .child(title.to_owned())
+}
+
+/// When a motion's first frame was drawn: now, the first time it's asked.
+pub(crate) fn first_frame(started: &std::cell::Cell<Option<Instant>>) -> Instant {
+    started.get().unwrap_or_else(|| {
+        let now = Instant::now();
+        started.set(Some(now));
+        now
+    })
 }
 
 /// A button just picked (`juice::pick_fill`): the plain button with the

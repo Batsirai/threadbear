@@ -43,10 +43,10 @@ pub(crate) struct PictureChip {
     pub(crate) source: PathBuf,
     /// None while the runner is still copying it in.
     pub(crate) image: Option<ImageRef>,
-    /// When it was pasted, dropped or chosen, for its drop into the strip
-    /// (juice::picture_drop); None for one that came with a draft, and
-    /// under Reduce Motion.
-    pub(crate) added: Option<Instant>,
+    /// Just pasted, dropped or chosen: it drops into the strip
+    /// (juice::picture_drop), timed from the first frame that draws it.
+    /// None for one that came with a draft, and under Reduce Motion.
+    pub(crate) dropping: Option<Cell<Option<Instant>>>,
 }
 
 pub struct Composer {
@@ -89,9 +89,9 @@ pub struct Composer {
     pub(crate) card: CardState,
     /// Which card was last seen arriving, for it to settle in (composer_card.rs).
     pub(crate) card_arrival: crate::composer_card::CardArrival,
-    /// When the strip over the words last opened for a first picture, for
-    /// its height easing open (juice::strip_open).
-    strip_opened: Option<Instant>,
+    /// The strip over the words opening for a first picture: its height
+    /// eases open (juice::strip_open), timed from its first frame.
+    strip_opening: Option<Cell<Option<Instant>>>,
     /// How many pictures have dropped in, for scripts (`dump`'s `juice`).
     pub(crate) pictures_dropped: usize,
     /// The card's text style, one per appearance (`card_reading_style`).
@@ -234,7 +234,7 @@ impl Composer {
             model_picker: None,
             card: CardState::default(),
             card_arrival: Default::default(),
-            strip_opened: None,
+            strip_opening: None,
             pictures_dropped: 0,
             card_style: None,
             shown_placeholder: "Message".into(),
@@ -1005,13 +1005,13 @@ impl Composer {
             }
         });
         for (id, path) in ids.into_iter().zip(paths) {
-            let added = (!cx.reduce_motion()).then(Instant::now);
+            let dropping = (!cx.reduce_motion()).then(|| Cell::new(None));
             // The first picture in opens the strip for itself.
-            if added.is_some() && self.pictures.is_empty() {
-                self.strip_opened = added;
+            if dropping.is_some() && self.pictures.is_empty() {
+                self.strip_opening = Some(Cell::new(None));
             }
-            self.pictures_dropped += added.is_some() as usize;
-            self.pictures.insert(id.clone(), PictureChip { source: path.clone(), image: None, added });
+            self.pictures_dropped += dropping.is_some() as usize;
+            self.pictures.insert(id.clone(), PictureChip { source: path.clone(), image: None, dropping });
             self.import_picture(id, path, target.downgrade(), window, cx);
         }
         cx.notify();
@@ -1345,7 +1345,7 @@ impl Composer {
                 Some(image) => tile.child(img(PathBuf::from(&image.path)).size(side).rounded(radius).object_fit(ObjectFit::Cover)),
                 None => tile.flex().items_center().justify_center().child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.))),
             };
-            let dropping = chip.and_then(|c| c.added).map(|at| at.elapsed()).filter(|e| threadbear_core::juice::picture_dropping(*e));
+            let dropping = chip.and_then(|c| c.dropping.as_ref()).map(|at| crate::composer_card::first_frame(at).elapsed()).filter(|e| threadbear_core::juice::picture_dropping(*e));
             if dropping.is_some() {
                 window.request_animation_frame();
             }
@@ -1389,7 +1389,7 @@ impl Composer {
         // The strip's first picture: its height eases open, so the box grows
         // to take it rather than jumping. The row keeps its own height and
         // shows past the opening strip; its picture is still fading in.
-        if let Some(since) = self.strip_opened.map(|at| at.elapsed()).filter(|e| *e < threadbear_core::juice::STRIP_OPEN) {
+        if let Some(since) = self.strip_opening.as_ref().map(|at| crate::composer_card::first_frame(at).elapsed()).filter(|e| *e < threadbear_core::juice::STRIP_OPEN) {
             window.request_animation_frame();
             let open = threadbear_core::juice::strip_open(since);
             return Some(div().h(px(style::size::THUMBNAIL * open)).child(row).into_any_element());
