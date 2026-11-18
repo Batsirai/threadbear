@@ -8070,7 +8070,9 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   on stdout or stderr is thrown away) and exits. The loader runs in a
   process group of its own: the read ends on that line, the loader's exit
   or 30 seconds, never on its pipes closing, and then the whole group is
-  killed, so nothing the patch starts outlives the read or holds it up. Its functions
+  killed, so nothing the patch starts holds the read up. A process the patch
+  starts in a group of its own (detached, setsid) can outlive the read, but it
+  stays in the box, and a stopping save's sweep kills it. Its functions
   aren't run at all: an action or panel with a `when`, `badge`, `label` or
   `summary`, and a list panel (`items`), aren't shown on a box's thread;
   its static actions, panels, hooks (commands, gated like any process) and
