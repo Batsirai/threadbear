@@ -32,7 +32,11 @@ function recorder(start?: (pid: number) => string) {
 }
 
 const JOB = /^Local\\threadbear-job-[0-9a-f]{32}$/;
-const tick = () => new Promise((r) => setImmediate(r));
+const tick = () => new Promise((r) => setTimeout(r, 50));
+// Until cond holds, or a few seconds: the registry's answers chain a few promises.
+async function until(cond: () => boolean) {
+  for (let i = 0; i < 100 && !cond(); i++) await tick();
+}
 
 // A process to stand for a CLI: real, so its start can be read.
 function sleeper() {
@@ -289,6 +293,54 @@ test('shutdown waits for a job still being made, and ends it', async () => {
     setTimeout(() => answer(/^\d+$/.test(l) ? l : '1'), 100);
     await reg.killAll(10);
     assert.equal(ended.length, 1);
+  } finally {
+    cli.kill();
+  }
+});
+
+// Codex's fourth review.
+test("a job's name is saved as soon as it's asked for, so a runner that stops before the helper answers leaves it", async () => {
+  const dir = tmpDir();
+  const reg = new ProcessRegistry(dir, nullLogger);
+  reg.jobs = { assign: () => new Promise(() => {}), end: async () => {}, forget: async () => {} };
+  const cli = sleeper();
+  try {
+    reg.add(cli.pid!, 'claude', 'th1');
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'children.json'), 'utf8')) as { job?: string }[];
+    assert.match(saved[0]!.job ?? '', JOB);
+  } finally {
+    cli.kill();
+  }
+});
+
+test("a start keeps the leftovers' files when it can't save what's still to do from them", async () => {
+  const dir = tmpDir();
+  const leftover = path.join(dir, 'job-leftovers-abc.json');
+  fs.writeFileSync(leftover, JSON.stringify([{ pid: 999_999_999, command: 'claude', startedAt: '', job: newJobName(), exited: true }]));
+  // Its own list can't be written.
+  fs.mkdirSync(path.join(dir, 'children.json'));
+  const reg = new ProcessRegistry(dir, nullLogger);
+  reg.jobs = { assign: async () => '1', end: async () => { throw new Error('the helper exited'); }, forget: async () => {} };
+  await reg.sweepOrphans(10);
+  assert.ok(fs.existsSync(leftover));
+});
+
+test("a draining runner that can't hand on its unended jobs keeps its list, and says so", { skip: process.platform === 'win32' ? 'chmod does nothing to a folder on Windows' : false }, async () => {
+  const dir = tmpDir();
+  const reg = new ProcessRegistry(dir, nullLogger, 'children-1234.json');
+  reg.jobs = { assign: async (pid) => { const l = processInfo(pid)?.lstart ?? ''; return /^\d+$/.test(l) ? l : '1'; }, end: async () => { throw new Error('the helper exited'); }, forget: async () => {} };
+  const cli = sleeper();
+  try {
+    reg.add(cli.pid!, 'claude', 'th1');
+    await tick();
+    await reg.killAll(10);
+    fs.chmodSync(dir, 0o555);
+    try {
+      assert.equal(reg.removeFile(), false);
+    } finally {
+      fs.chmodSync(dir, 0o755);
+    }
+    assert.ok(fs.existsSync(path.join(dir, 'children-1234.json')));
   } finally {
     cli.kill();
   }

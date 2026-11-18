@@ -1315,8 +1315,9 @@ async function main(): Promise<void> {
       await drainServer?.close().catch(() => {});
       await registry.killAll(3000);
       if (draining) {
-        registry.removeFile();
-        removeDrainInfo(cfg.home, process.pid);
+        // Kept when its unended jobs couldn't be handed on, so the next
+        // start sweeps this runner's list as a draining runner's.
+        if (registry.removeFile()) removeDrainInfo(cfg.home, process.pid);
       }
       await checksDone;
     } finally {

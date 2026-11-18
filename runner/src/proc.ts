@@ -89,7 +89,10 @@ export class ProcessRegistry {
   }
 
   // Removes the list (a draining runner that has finished).
-  removeFile(): void {
+  // False when it kept the list, as its unended jobs couldn't be handed on:
+  // then the caller keeps the draining runner's drain file too, so the next
+  // start sweeps it (Codex's fourth review).
+  removeFile(): boolean {
     // Jobs it couldn't end go to a file every runner's start looks at, as
     // nobody reads a finished draining runner's list.
     // A file of its own (no other runner writes it), and the list is only
@@ -101,7 +104,7 @@ export class ProcessRegistry {
         atomicWriteFileSync(file, JSON.stringify(left, null, 1));
       } catch (e) {
         this.log.warn("could not keep a draining runner's unended jobs; its list stays", { error: String(e) });
-        return;
+        return false;
       }
     }
     try {
@@ -109,15 +112,18 @@ export class ProcessRegistry {
     } catch {
       // gone
     }
+    return true;
   }
 
-  private save(): void {
+  private save(): boolean {
     try {
       // Exited CLIs whose jobs haven't been ended yet too, for the next start.
       const left = [...this.lingering].filter((e) => e.job);
       atomicWriteFileSync(this.file, JSON.stringify([...this.entries.values(), ...left], null, 1));
+      return true;
     } catch (e) {
       this.log.warn('could not save children.json', { error: String(e) });
+      return false;
     }
   }
 
@@ -129,8 +135,10 @@ export class ProcessRegistry {
     // The CLI started before now, and its pid can't have gone to anything
     // else yet: the runner holds the child until it has seen it exit, which
     // can't happen before this returns. So anything with that pid that
-    // started after now isn't it (no slack: Codex's third review).
-    const notAfter = ((BigInt(Date.now()) + FILETIME_AT_UNIX_EPOCH_MS) * 10_000n).toString();
+    // started after now isn't it (no slack: Codex's third review). Now is
+    // rounded up to the next millisecond, as Date.now() rounds down and the
+    // CLI can have started earlier in the same one.
+    const notAfter = ((BigInt(Date.now()) + 1n + FILETIME_AT_UNIX_EPOCH_MS) * 10_000n).toString();
     const assigned = job ? this.jobs!.assign(pid, job, notAfter) : undefined;
     // Taken before the probe, which can take a while: the process was started
     // moments ago, so on Windows this stands in for its start time if
@@ -140,7 +148,12 @@ export class ProcessRegistry {
     // still the CLI's: what this reads is the CLI's start.
     const info = processInfo(pid);
     const start = info ? startOf(info) : IS_WINDOWS ? { lstart: approxStartTime(spawnedAt) } : {};
-    const entry: Entry = { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}) };
+    // The name is recorded straight away, so a runner that stops before the
+    // helper answers still leaves it for the next start (Codex's fourth
+    // review). Safe to end: the helper refuses a process that started after
+    // notAfter before it assigns, so a job only ever holds the CLI and what
+    // it started. Taken off again if the helper refuses.
+    const entry: Entry = { pid, command, startedAt: new Date().toISOString(), ...start, groups: [], ...(threadId ? { threadId } : {}), ...(job ? { job } : {}) };
     this.entries.set(pid, entry);
     this.save();
     if (job && assigned) this.settleJob(entry, job, assigned, notAfter);
@@ -156,25 +169,32 @@ export class ProcessRegistry {
     const settled = assigned.then(
       (created) => {
         this.assigning.delete(entry);
+        // The helper checks this before assigning; checked again here.
         if (!/^\d+$/.test(created) || !entry.lstart || !startedAt(entry, BigInt(created)) || BigInt(created) > BigInt(notAfter)) {
           this.log.warn("a CLI's job got a process that wasn't the CLI; letting it go", { pid: entry.pid });
+          this.dropJob(entry);
           void (this.jobs ?? helperJobs).forget(job).catch(() => {});
           return;
         }
-        entry.job = job;
-        // Saved either way: an exited one stays in the file, marked, until
-        // its job has ended (Codex's second review).
-        this.save();
         // Gone while it was being put in its job: end the job now.
         if (entry.exited) this.finishExited(entry);
       },
       (e) => {
         this.assigning.delete(entry);
         this.log.warn('could not put a CLI in a job of its own; taskkill /T still stops it', { pid: entry.pid, error: String(e) });
+        // Refused (a name someone else made, a process that isn't the CLI):
+        // never ended.
+        this.dropJob(entry);
       },
     );
     this.settling.set(entry, settled);
     void settled.finally(() => this.settling.delete(entry));
+  }
+
+  private dropJob(entry: Entry): void {
+    delete entry.job;
+    this.lingering.delete(entry);
+    this.save();
   }
 
   remove(pid: number): void {
@@ -183,10 +203,11 @@ export class ProcessRegistry {
       // The CLI has exited: whatever it left running goes with its job, as
       // its process group does on a Mac. Kept, marked exited, until that's
       // done.
-      if (entry && (entry.job || this.assigning.has(entry))) {
+      if (entry?.job) {
         entry.exited = true;
         this.lingering.add(entry);
-        if (entry.job) this.finishExited(entry);
+        // Still being made: ended once the helper has answered (settleJob).
+        if (!this.assigning.has(entry)) this.finishExited(entry);
       }
       this.save();
     }
@@ -410,8 +431,8 @@ export class ProcessRegistry {
     for (const pgid of stubborn) killGroup(pgid, 'SIGKILL');
     await waitGone(stubborn, 2000);
     this.entries.clear();
-    this.save();
-    for (const f of handedFiles) fs.rmSync(f, { force: true });
+    // The leftovers' files go only once what's still to do from them is saved.
+    if (this.save()) for (const f of handedFiles) fs.rmSync(f, { force: true });
     return targets.length;
   }
 
