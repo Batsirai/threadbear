@@ -282,7 +282,10 @@ async function replay(cmds: Cmd[]): Promise<Failure | null> {
         }
       }
       const f = await check(app, before, Date.now() - lastMock < MOCK_SETTLE_MS).catch((e) => ({ kind: isHard((e as Error).message) ?? 'check', detail: (e as Error).message.split('\n')[0] }));
-      if (f) return { ...f, step: i };
+      if (f) {
+        if (f.kind === 'freeze') sampleTo(app.pid, path.join(out, `replay-sample-${i}.txt`));
+        return { ...f, step: i };
+      }
     }
     return null;
   } finally {
