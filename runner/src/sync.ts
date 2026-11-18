@@ -728,9 +728,10 @@ export type SyncDeps = {
   // the provider's machine, and a key the backend turns down means a newer
   // box has the thread, so `superseded` is called once and nothing more is
   // tried (docs/protocol.md, "Box mode").
-  // `awake`: a command other than a `save` was taken, so a box frozen after
-  // its save (Runner.quiesceForSave) has been woken and may run again.
-  box?: { machineId?: string; superseded: () => void; awake?: () => void };
+  // `taken`: a command of this kind was taken; `heard`: a heartbeat sent at
+  // `sentAt` (performance.now()) found the box in this state. A box stopped
+  // by its save runs again only on one of those (box-save.ts SaveHold).
+  box?: { machineId?: string; superseded: () => void; taken?: (kind: string) => void; heard?: (state: string, sentAt: number) => void };
 };
 
 // How long a row whose thread isn't here (and that wasn't deleted here) waits
@@ -4050,8 +4051,11 @@ export class ConvexSync {
       // always new enough, and only a box sends it.
       ...(this.deps.box?.machineId ? { machineId: this.deps.box.machineId } : {}),
     };
+    const sentAt = performance.now();
     void this.post('mutation', 'sync:heartbeat', { key: this.deps.key, runner }).then(
       (r) => {
+        const boxState = (r as { box?: { state?: unknown } } | null)?.box?.state;
+        if (typeof boxState === 'string') this.deps.box?.heard?.(boxState, sentAt);
         if (!this.backendHeard && this.startupHeartbeatRetryMs > 1000) this.deps.log.info('convex startup heartbeat recovered');
         this.sawBackend(r);
         // A start whose first flush went before a heartbeat said the
@@ -4517,7 +4521,7 @@ export class ConvexSync {
       return;
     }
     if (taken === true) {
-      if (c.kind !== 'save') this.deps.box?.awake?.();
+      this.deps.box?.taken?.(c.kind);
       await this.runTaken(c);
     }
   }

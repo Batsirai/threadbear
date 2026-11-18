@@ -1350,6 +1350,10 @@ export const heartbeat = mutation({
     ownerKeyRotating: v.optional(v.boolean()),
     pushOff: v.optional(v.boolean()),
     pushFailing: v.optional(v.object({ failure: v.string(), since: v.number(), failed: v.number(), via: v.union(v.literal('apple'), v.literal('relay')) })),
+    // A box's key only: its box's state as this heartbeat found it, which a
+    // box stopped by its save waits on (`awake`) before it runs again
+    // (runner/src/box-save.ts SaveHold).
+    box: v.optional(v.object({ state: v.string() })),
   }),
   handler: async (ctx, { key, runner }) => {
     const caller = await runnerAuth(ctx, key, 'heartbeat');
@@ -1432,7 +1436,7 @@ export const heartbeat = mutation({
       }
     }
     const failing = caller.owner ? pushFailing(await ctx.db.query('pushHealth').first(), Date.now()) : null;
-    return { apiVersion: API_VERSION, ...(existing ? {} : { firstSeen: true }), ...(caller.owner && process.env.RUNNER_KEY_NEXT ? { ownerKeyRotating: true } : {}), ...(caller.owner && pushOff(process.env) ? { pushOff: true } : {}), ...(failing ? { pushFailing: failing } : {}) };
+    return { apiVersion: API_VERSION, ...(existing ? {} : { firstSeen: true }), ...(caller.owner && process.env.RUNNER_KEY_NEXT ? { ownerKeyRotating: true } : {}), ...(caller.owner && pushOff(process.env) ? { pushOff: true } : {}), ...(failing ? { pushFailing: failing } : {}), ...(boxRow ? { box: { state: boxRow.boxState.kind } } : {}) };
   },
 });
 

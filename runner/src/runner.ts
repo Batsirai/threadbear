@@ -412,14 +412,21 @@ export type Turn = {
   wake?: WakeRead;
 };
 
+export type TurnHold = 'save' | 'setup' | 'broken';
+
 type Runtime = {
   // On its way to another runner (runner/moves.ts): no turn starts.
   moving?: ThreadMoving;
   // Box mode (runner/moves.ts holdTurns): no turn starts while any of these
   // holds it: 'save', a box's thread saved to sleep or be archived, until
+  // the backend says it may run again (box-save.ts SaveHold); 'broken', a
+  // box that can't use its folder (box-mode.ts, degraded);
   // the box is resumed or sent something; 'setup', a restored worktree's
   // setup still running. Messages wait in the queue meanwhile.
-  holds?: Set<'save' | 'setup'>;
+  holds?: Set<TurnHold>;
+  // A restored worktree's setup running (setUpRestored): a writer a
+  // stopping save waits for.
+  restoreSetup?: Promise<void>;
   session?: AgentSession;
   generation: number;
   closing?: Promise<void>;
@@ -592,9 +599,11 @@ export type RunnerDeps = {
   // Box mode (src/box-mode.ts): the one thread this runner exists for
   // (Runner.boxThread), known before start loads anything from disk.
   boxThread?: string;
-  // ...whose restored worktree's setup is still to run: its turns are held
-  // from the moment it loads (Runner.setUpRestored lets them go).
-  boxSetupPending?: boolean;
+  // What holds that thread's turns from the moment it loads, before any
+  // recovery or carry-on: 'setup', its restored worktree's setup still to
+  // run (Runner.setUpRestored lets it go); 'broken', a box in its degraded
+  // state (box-mode.ts).
+  boxHolds?: TurnHold[];
   // A message that answers the thread's open card (`answers`, which only
   // the app, the phone and the website send: an agent's are taken out,
   // rpc-gate.ts), with that card's asks. For an answer the runner acts on
@@ -793,7 +802,7 @@ export class Runner {
   // Box mode (src/box-mode.ts): the one thread this runner exists for. Any
   // other new thread is refused (makeThread), and that one only under its id.
   boxThread?: string;
-  boxSetupPending = false;
+  boxHolds: TurnHold[] = [];
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;
@@ -849,7 +858,7 @@ export class Runner {
   private answered?: RunnerDeps['answered'];
   constructor(deps: RunnerDeps) {
     if (deps.boxThread !== undefined) this.boxThread = deps.boxThread;
-    this.boxSetupPending = deps.boxSetupPending === true;
+    this.boxHolds = deps.boxHolds ?? [];
     this.threadKey = deps.threadKey;
     this.answered = deps.answered;
     if ('release' in deps) this.release = deps.release;
@@ -943,7 +952,7 @@ export class Runner {
       const st: ThreadState = { rec, rt: newRuntime(Date.parse(rec.lastActivityAt) || 0) };
       // A box's restored thread: nothing starts (recovery, a carry-on, a
       // wake) until its worktree's setup has run (setUpRestored).
-      if (this.boxSetupPending && rec.id === this.boxThread) st.rt.holds = new Set(['setup']);
+      if (this.boxHolds.length && rec.id === this.boxThread) st.rt.holds = new Set(this.boxHolds);
       this.threads.set(rec.id, st);
       // One thread's record that trips something here (a field another
       // runner wrote wrong: a moved thread's `presses: {}` stopped every

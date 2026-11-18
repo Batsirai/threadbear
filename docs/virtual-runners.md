@@ -726,7 +726,7 @@ follow-ups, fixed with a test each (`box-mode.test.ts`, `box-save.test.ts`,
 - An untracked `node_modules` made an acknowledged save unrestorable: it's
   left out of the save now (`packGit`'s `leaveOut`).
 - The save wasn't held to the restore's limits: it is now (100,000 files,
-  256 MB unpacked, the restore's allowance lowered from a move's 1 GB to
+  128 MB unpacked since the second look, the restore's allowance lowered from a move's 1 GB to
   that), and it's read back before it's uploaded.
 - A box loaded every thread record on its disk: only its own now
   (`Runner.start`, `adopt`).
@@ -735,6 +735,30 @@ follow-ups, fixed with a test each (`box-mode.test.ts`, `box-save.test.ts`,
 - A lost exchange answer couldn't be asked for again: the box makes its
   own key and sends its hash, and the backend replays the answer to the
   same token, machine and hash (`boxes.exchanged`, `peekReplay`).
+
+A second look at those found six more and a follow-up, fixed the same way.
+The rule three of them share: **once a stopping save has started, the box
+runs nothing until the backend says it may** (a command other than a save
+taken after the save's outcome is known, or a heartbeat sent after that
+finding the box `awake`); nothing local lets it go (`SaveHold`).
+
+- A lost `boxSaved` answer let the thread go while the backend might be
+  deleting the box: it's sent again with the same file (the backend takes
+  a repeat as the same save), and an outcome never known keeps it held.
+- A clock jump let a save's hold go: it no longer does.
+- `leaveOut` dropped changes to tracked files under `node_modules`: only
+  untracked ones are left out now; a tracked change fails the save.
+- A restored worktree's setup could write during a save: the save waits for it.
+- A box whose folder had gone exited, and on Fly its disk went with it: an
+  established box now stays up degraded (heartbeating, running nothing,
+  saying why on the thread) for the guard to pause and a person to see to.
+- A save could be bigger than a small replacement box could read: boxes are
+  1024 MB at least (`MIN_BOX_MB`), and a save 128 MB unpacked at most. The
+  restore still gunzips into one buffer (its files are views of it, not
+  copies); streaming it would need a format that names its files before
+  their bytes, which waits for chunked saves.
+- A restored setup that hadn't finished was forgotten on a restart: it's
+  kept apart from `prepared` (`setUp`), and run again, turns held, until it has.
 
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as

@@ -77,8 +77,8 @@ import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
-import { bootBox, enterBoxEnv, prepareBoxFolder, readBoxBoot, type ActionPost, type BoxSecrets } from './box-mode.ts';
-import { saveThread } from './box-save.ts';
+import { BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, type ActionPost, type BoxSecrets } from './box-mode.ts';
+import { SaveHold, saveThread } from './box-save.ts';
 import { ClockJumpWatch } from './clock-jump.ts';
 import { pushFailingText } from './push-failing.ts';
 import { Scrubber } from './scrub.ts';
@@ -160,15 +160,32 @@ async function main(): Promise<void> {
 
   // Box mode's first step, before anything else talks to the backend: the
   // boot exchange, then the thread's folder (a clone, or its last save).
-  const startBox = async (boot: NonNullable<typeof boxBoot>): Promise<{ secrets: BoxSecrets; threadKey: Buffer; checkout: string; cwd: string; restored: boolean; again?: true }> => {
+  // A box that has run (not this start's own exchange), or that finds data
+  // where its folder goes, never exits for a folder it can't use: on Fly an
+  // exited entrypoint stops the machine and its disk is reset. It comes up
+  // degraded (`broken`): heartbeating on its key, running nothing, saying
+  // why on the thread, so the billing guard pauses it with its disk and a
+  // person can see to it. Only a fresh box with nothing to lose exits.
+  type Box = { secrets: BoxSecrets; threadKey: Buffer; checkout: string; cwd: string; restored: boolean; again?: true; broken?: string };
+  const startBox = async (boot: NonNullable<typeof boxBoot>): Promise<Box> => {
+    const workRoot = process.env.THREADBEAR_BOX_WORK || path.join(os.homedir(), 'work');
+    let secrets: BoxSecrets | undefined;
+    let fresh = true;
     try {
       const post = convexPoster(boot.syncUrl) as unknown as ActionPost;
-      const { secrets, fresh } = await bootBox({ boot, home: cfg.home, claudeDir: cfg.claudeMainDir, post, log });
-      const folder = await prepareBoxFolder({ secrets, fresh, home: cfg.home, claudeDir: cfg.claudeMainDir, workRoot: process.env.THREADBEAR_BOX_WORK || path.join(os.homedir(), 'work'), log });
+      ({ secrets, fresh } = await bootBox({ boot, home: cfg.home, claudeDir: cfg.claudeMainDir, post, log }));
+      const folder = await prepareBoxFolder({ secrets, fresh, home: cfg.home, claudeDir: cfg.claudeMainDir, workRoot, log });
       return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), ...folder };
     } catch (e) {
-      log.error('box: could not start', { error: String((e as Error)?.message ?? e) });
-      process.stderr.write(`The box's runner couldn't start: ${(e as Error)?.message ?? e}\n`);
+      const why = String((e as Error)?.message ?? e);
+      if (secrets && (e instanceof BoxFolderBroken || !fresh)) {
+        log.error('box: its folder is unusable; staying up, degraded, running nothing', { error: why });
+        const checkout = secrets.prepared?.checkout ?? path.join(workRoot, repoFolderName(secrets.repo.origin));
+        const cwd = secrets.prepared?.cwd && isDirectory(secrets.prepared.cwd) ? secrets.prepared.cwd : os.homedir();
+        return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), checkout, cwd, restored: false, broken: why.replace(/^\w/, (c) => c.toLowerCase()) };
+      }
+      log.error('box: could not start', { error: why });
+      process.stderr.write(`The box's runner couldn't start: ${why}\n`);
       process.exit(1);
     }
   };
@@ -374,7 +391,8 @@ async function main(): Promise<void> {
   runner = new Runner({
     // A box's one thread, and whether its restored worktree's setup must run
     // before any turn (runner/moves.ts setUpRestored).
-    ...(box ? { boxThread: box.secrets.threadId, boxSetupPending: box.restored && !box.again } : {}),
+    // A restored worktree's setup runs before any turn, on every start until it has (box.json's setUp).
+    ...(box ? { boxThread: box.secrets.threadId, boxHolds: box.broken ? ['broken' as const] : box.restored && !box.secrets.setUp ? ['setup' as const] : [] } : {}),
     threadKey: (id) => makeThreadKey(token, id),
     standingInstructions: () => instructions.given(),
     projects,
@@ -394,7 +412,7 @@ async function main(): Promise<void> {
     log,
     models,
     // A box's clone is its own checkout too: its repo's worktree setup runs as a new thread's would.
-    patchTrust: new PatchTrust({ file: path.join(cfg.home, 'patch-trust.json'), always: [ownCheckout(), ...(box ? [box.checkout] : [])] }),
+    patchTrust: new PatchTrust({ file: path.join(cfg.home, 'patch-trust.json'), always: [ownCheckout(), ...(box && !box.broken ? [box.checkout] : [])] }),
     // Keeps any text end_turn's own sign-up or wait_for_app_restart gave.
     appRestartAsked: (threadId) => {
       if (!appRestarts.isWatching(threadId)) appRestarts.watch(threadId);
@@ -573,12 +591,16 @@ async function main(): Promise<void> {
     log.warn("box: the backend turned this box's key down, so a newer box has the thread; stopping");
     stopRef?.('superseded');
   };
-  // The backend's `save` (box-save.ts): its own calls, on the box key.
+  // The backend's `save` (box-save.ts): its own calls, on the box key. Once
+  // one starts, the thread runs nothing until the backend says it may (SaveHold).
   const boxPost = box ? convexPoster(boxBoot!.syncUrl) : undefined;
+  const saveHold = box ? new SaveHold({ hold: () => runner.holdTurns(box.secrets.threadId, 'save'), release: () => runner.releaseTurns(box.secrets.threadId, 'save') }) : undefined;
   const saveBox = async (threadId: string) => {
-    if (!box || !boxPost || threadId !== box.secrets.threadId) throw new Error("That isn't this box's thread.");
+    if (!box || !boxPost || !saveHold || threadId !== box.secrets.threadId) throw new Error("That isn't this box's thread.");
+    // A degraded box saves nothing: what it has may be all there is of the work.
+    if (box.broken) throw new Error(`This box can't save its thread: ${box.broken}`);
     try {
-      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id), resume: (id) => runner.releaseTurns(id, 'save'), post: boxPost, upload: convexUploader() });
+      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id), hold: saveHold, post: boxPost, upload: convexUploader() });
     } catch (e) {
       if (keyRejected(e)) boxSuperseded();
       throw e;
@@ -683,7 +705,10 @@ async function main(): Promise<void> {
       // A box's one thread, under its own id, in its clone, on its one login.
       ...(box
         ? {
-            create: (p: Parameters<typeof runner.create>[0]) => runner.create({ ...p, id: box.secrets.threadId, cwd: box.cwd, accountId: 'claude-main' }),
+            create: (p: Parameters<typeof runner.create>[0]) => {
+              if (box.broken) throw new Error(`This box can't start its thread: ${box.broken}`);
+              return runner.create({ ...p, id: box.secrets.threadId, cwd: box.cwd, accountId: 'claude-main' });
+            },
             save: saveBox,
           }
         : {}),
@@ -694,8 +719,9 @@ async function main(): Promise<void> {
           box: {
             ...(box.secrets.machineId ? { machineId: box.secrets.machineId } : {}),
             superseded: boxSuperseded,
-            // Sent something after a save: the box is awake again, and its thread may run.
-            awake: () => runner.releaseTurns(box.secrets.threadId, 'save'),
+            // The backend's word that a box stopped by its save may run again.
+            taken: (kind: string) => saveHold?.taken(kind),
+            heard: (state: string, sentAt: number) => saveHold?.heard(state, sentAt),
           },
         }
       : { sample: machineSampler(cfg.home), schedules: scheduler, pools: sharedPools, memory: memorySync, sharedUsage: usage }),
@@ -736,8 +762,7 @@ async function main(): Promise<void> {
     onJump: (gapMs) => {
       log.info('the clock jumped: reconnecting', { gapMs });
       sync.reconnectNow('clock jumped');
-      // A box paused after its save and resumed: its thread may run again.
-      if (box) runner.releaseTurns(box.secrets.threadId, 'save');
+      // Not a box's save hold: only the backend lets that go (box-save.ts SaveHold).
     },
   });
   clockJumps.start();
@@ -1391,7 +1416,14 @@ async function main(): Promise<void> {
   // Reviews a runner that went away owed (runner/lab-review.ts).
   step('owed reviews', () => runner.startOwedReviews());
   // A box restored from a save: its worktree's setup again (box-save.ts).
-  if (box?.restored && !box.again) void runner.setUpRestored(box.secrets.threadId).catch((e) => log.warn("box: couldn't set up the restored worktree", { error: String(e) }));
+  if (box && !box.broken && box.restored && !box.secrets.setUp) {
+    void runner
+      .setUpRestored(box.secrets.threadId)
+      .then(() => markSetUp(cfg.home))
+      .catch((e) => log.warn("box: couldn't set up the restored worktree", { error: String(e) }));
+  }
+  // A degraded box says why on its thread (if it has one here) and runs nothing.
+  if (box?.broken) runner.holdBroken(box.secrets.threadId, box.broken);
 
   let stopping = false;
   const stop = async (signal: string) => {

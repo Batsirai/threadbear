@@ -561,3 +561,15 @@ test("a box's own key: the exchange keeps only its hash, and replays the answer 
   await s.report({ type: 'LOST' });
   assert.equal(await outcome(ask({ machineId: 'm-1', boxKeyHash })), 'auth');
 });
+
+test("a box's heartbeat answers with its box's state, which a box stopped by its save waits on; no other key's does", async () => {
+  const s = await boxBackend();
+  const got = await s.boot();
+  const r = await heartbeat(s, got.boxKey);
+  assert.deepEqual(r.box, { state: 'awake' });
+  await s.report({ type: 'IDLE', attempt: 1 });
+  assert.deepEqual((await heartbeat(s, got.boxKey)).box, { state: s.state() });
+  assert.notEqual(s.state(), 'awake');
+  const owner = await call(s.ctx, sync.heartbeat, { key: OWNER, runner: { runnerId: 'mac1', name: 'Mac', version: 'v', startedAt: new Date().toISOString(), draining: false, threadCount: 0 } });
+  assert.equal(owner.box, undefined);
+});

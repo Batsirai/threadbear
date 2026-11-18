@@ -34,10 +34,12 @@ export const SAVE_MAX_BYTES = 10 * 1024 * 1024;
 // Unpacked, a save is held to this, by the box that writes it (before it's
 // acknowledged) and the box that reads it (as it's gunzipped), the same
 // number on both sides so a save one takes the other can read. A move may
-// grow to 1 GB (move-pack.ts), but a box restores into a small machine's
-// memory (Fly's pausable boxes are 2 GB at most), and a save is gunzipped
-// into one buffer: a quarter of a 1 GB box's memory at most.
-export const SAVE_MAX_UNPACKED_BYTES = 256 * 1024 * 1024;
+// grow to 1 GB (move-pack.ts), but boxes are small: 1024 MB at the least
+// (convex/boxes.ts setRunnerService). Writing a save holds about three
+// copies of it unpacked (the files read, the archive, the read-back), and a
+// restore one (gunzipped into one buffer, its files views of it), so 128 MB
+// keeps the writer under 400 MB and the reader near 150 MB of the smallest box.
+export const SAVE_MAX_UNPACKED_BYTES = 128 * 1024 * 1024;
 const SAVE_VERSION = 1;
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
@@ -195,10 +197,75 @@ export async function restoreSave(o: { home: string; claudeDir: string; threadId
 }
 
 /**
- * The `save` command (docs/protocol.md, "Box mode"): the thread packed,
- * sealed, uploaded through the box key's upload URL (sync:iconUploadUrl)
- * and named in boxes:boxSaved, which replaces the last save. A save past
- * one upload fails the command, saying so.
+ * The rule for a box's save (Codex's review, 19 Nov 2026): once a stopping
+ * save has started, the thread runs nothing until the backend has said it
+ * may, positively: a command other than a save taken after the save's
+ * outcome is known, or a heartbeat sent after that finding the box awake
+ * (and so still holding its key, or it would have been refused). Nothing
+ * local lets it go: not a clock jump, a timeout or an error. An outcome
+ * that can't be known (boxSaved's answer lost, every retry too) leaves it
+ * held until the backend asks for another save.
+ */
+export class SaveHold {
+  private state: 'free' | 'saving' | 'settled' = 'free';
+  private settledAt = -Infinity;
+  private readonly hold: () => void;
+  private readonly release: () => void;
+  private readonly now: () => number;
+
+  constructor(o: { hold: () => void; release: () => void; now?: () => number }) {
+    this.hold = o.hold;
+    this.release = o.release;
+    this.now = o.now ?? (() => performance.now());
+  }
+
+  get held(): boolean {
+    return this.state !== 'free';
+  }
+
+  get saving(): boolean {
+    return this.state === 'saving';
+  }
+
+  begin(): void {
+    this.state = 'saving';
+    this.hold();
+  }
+
+  // The save's outcome is known: in, or refused, or never sent.
+  settled(): void {
+    if (this.state !== 'saving') return;
+    this.state = 'settled';
+    this.settledAt = this.now();
+  }
+
+  // A command taken (sync.ts SyncDeps.box.taken).
+  taken(kind: string): void {
+    if (kind !== 'save' && this.state === 'settled') this.free();
+  }
+
+  // A heartbeat's answer (sync.ts SyncDeps.box.heard), sent at `sentAt`.
+  heard(state: string, sentAt: number): void {
+    if (state === 'awake' && this.state === 'settled' && sentAt > this.settledAt) this.free();
+  }
+
+  private free(): void {
+    this.state = 'free';
+    this.release();
+  }
+}
+
+const kindOf = (e: unknown): unknown => (e as { data?: { kind?: unknown } } | null)?.data?.kind;
+
+/**
+ * The `save` command (docs/protocol.md, "Box mode"): the thread stopped
+ * (Runner.quiesceForSave), packed, sealed, uploaded through the box key's
+ * upload URL (sync:iconUploadUrl) and named in boxes:boxSaved, which
+ * replaces the last save. A save past one upload fails the command, saying
+ * so. A boxSaved whose answer doesn't come (the network, not a refusal) is
+ * sent again with the same file, which the backend takes as the same save,
+ * until it answers or `retryForMs` is up; then the outcome is unknown and
+ * the thread stays held (SaveHold).
  */
 export async function saveThread(o: {
   home: string;
@@ -209,14 +276,18 @@ export async function saveThread(o: {
   // The thread stopped and its record written out (Runner.quiesceForSave):
   // nothing changes its folder from here.
   quiesce: (threadId: string) => Promise<ThreadRecord>;
-  // A save that failed: the thread carries on (Runner.releaseTurns).
-  resume: (threadId: string) => void;
+  hold: SaveHold;
   post: (kind: 'mutation', fn: string, args: Record<string, unknown>) => Promise<unknown>;
   upload: (url: string, bytes: Uint8Array, mediaType: string) => Promise<string>;
   limits?: SaveLimits;
+  sleep?: (ms: number) => Promise<void>;
+  retryForMs?: number;
 }): Promise<{ bytes: number; leftOut?: string[] }> {
-  const rec = await o.quiesce(o.threadId);
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  o.hold.begin();
+  let stored: { storageId: string; bytes: number; leftOut: string[] };
   try {
+    const rec = await o.quiesce(o.threadId);
     const { packed, leftOut } = await packSave({ home: o.home, claudeDir: o.claudeDir, rec, ...(o.limits ? { limits: o.limits } : {}) });
     const sealed = sealSave(o.threadKey, o.threadId, packed);
     if (sealed.length > SAVE_MAX_BYTES) {
@@ -224,12 +295,26 @@ export async function saveThread(o: {
     }
     const url = await o.post('mutation', 'sync:iconUploadUrl', { key: o.boxKey });
     if (typeof url !== 'string') throw new Error("The backend didn't give the box an upload URL.");
-    const storageId = await o.upload(url, sealed, 'application/octet-stream');
-    await o.post('mutation', 'boxes:boxSaved', { key: o.boxKey, storageId, bytes: sealed.length });
-    // Held from here (no turn starts) until the box is resumed or sent something.
-    return { bytes: sealed.length, ...(leftOut.length ? { leftOut: leftOut.slice(0, 20) } : {}) };
+    stored = { storageId: await o.upload(url, sealed, 'application/octet-stream'), bytes: sealed.length, leftOut };
   } catch (e) {
-    o.resume(o.threadId);
+    // Nothing named in boxSaved: the backend has no save of this, for sure.
+    o.hold.settled();
     throw e;
+  }
+  const end = Date.now() + (o.retryForMs ?? 10 * 60_000);
+  for (let wait = 1_000; ; wait = Math.min(wait * 2, 60_000)) {
+    try {
+      await o.post('mutation', 'boxes:boxSaved', { key: o.boxKey, storageId: stored.storageId, bytes: stored.bytes });
+      o.hold.settled();
+      return { bytes: stored.bytes, ...(stored.leftOut.length ? { leftOut: stored.leftOut.slice(0, 20) } : {}) };
+    } catch (e) {
+      // The backend's answer, a refusal: known.
+      if (kindOf(e) !== undefined) {
+        o.hold.settled();
+        throw e;
+      }
+      if (Date.now() + wait > end) throw new Error(`Couldn't tell whether the backend took the thread's save (${String((e as Error)?.message ?? e)}), so the thread stays stopped until the backend says.`);
+      await sleep(wait);
+    }
   }
 }

@@ -536,6 +536,9 @@ test('only the owner makes, changes and lists virtual runners, and the values ar
   const bad = (a: Record<string, unknown>) => outcome(call(s.ctx, boxes.setRunnerService, { key: OWNER, name: 'X', provider: 'fly', image: 'img:1', box: { cpus: 1, memoryMb: 1024 }, ...a }));
   assert.equal(await bad({ provider: 'aws' }), 'badArgs');
   assert.equal(await bad({ box: { cpus: 1, memoryMb: 1000 } }), 'badArgs');
+  // Under 1024 MB, a box may not have the memory to restore its thread's save (box-save.ts).
+  assert.equal(await bad({ box: { cpus: 1, memoryMb: 768 } }), 'badArgs');
+  assert.equal(await bad({ box: { cpus: 1, memoryMb: 256 } }), 'badArgs');
   assert.equal(await bad({ box: { cpus: 0, memoryMb: 1024 } }), 'badArgs');
   assert.equal(await bad({ image: 'has space' }), 'badArgs');
   assert.equal(await bad({ limits: { maxBoxes: 0 } }), 'badArgs');

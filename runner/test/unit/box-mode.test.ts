@@ -12,12 +12,13 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { localClone, originRepo, sh } from '../helpers/box-git.ts';
+import { SaveHold } from '../../src/box-save.ts';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { nullLogger } from '../../src/log.ts';
 import { readYearToken } from '../../src/year-token.ts';
 import { ConvexSync, readSyncKey } from '../../src/sync.ts';
 import { paths } from '../../src/config.ts';
-import { BOOT_ENV, BoxBootRefused, MACHINE_ID_ENV, bootBox, boxFile, enterBoxEnv, exchangeBoot, prepareBoxFolder, readBoxBoot, readBoxSecrets, repoFolderName, writeBoxSecrets, type ActionPost, type BoxSecrets, type Cloner } from '../../src/box-mode.ts';
+import { BOOT_ENV, BoxBootRefused, BoxFolderBroken, markSetUp, MACHINE_ID_ENV, bootBox, boxFile, enterBoxEnv, exchangeBoot, prepareBoxFolder, readBoxBoot, readBoxSecrets, repoFolderName, writeBoxSecrets, type ActionPost, type BoxSecrets, type Cloner } from '../../src/box-mode.ts';
 
 const BOOT = `tbt_${'a'.repeat(64)}`;
 const BOX_KEY = `tbb_${'b'.repeat(64)}`;
@@ -193,7 +194,7 @@ test("an established box whose folder has gone stops, deleting nothing and never
   let clones = 0;
   await assert.rejects(
     prepareBoxFolder({ secrets: kept, fresh: false, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone: async (u, t) => (clones++, localClone(u, t)), download: async () => (downloads++, Buffer.alloc(0)) }),
-    /has gone/,
+    (e: unknown) => e instanceof BoxFolderBroken && /has gone/.test((e as Error).message) && /Found: the clone at .*the thread's record at/.test((e as Error).message),
   );
   assert.equal(downloads, 0);
   assert.equal(clones, 0);
@@ -259,6 +260,8 @@ test("a box's heartbeat names its machine; a key the backend turns down means it
   const calls: { fn: string; args: Record<string, unknown> }[] = [];
   let refuse = false;
   let superseded = 0;
+  const heard: { state: string; sentAt: number }[] = [];
+  const before = performance.now();
   const sync = new ConvexSync({
     config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
     key: BOX_KEY,
@@ -270,15 +273,19 @@ test("a box's heartbeat names its machine; a key the backend turns down means it
     post: async (_kind, fn, args) => {
       calls.push({ fn, args });
       if (refuse) throw Object.assign(new Error('bad runner key'), { data: { kind: 'auth', message: 'bad runner key' } });
-      return fn === 'sync:heartbeat' ? { apiVersion: 89 } : null;
+      return fn === 'sync:heartbeat' ? { apiVersion: 89, box: { state: 'awake' } } : null;
     },
-    box: { machineId: 'm-42', superseded: () => void superseded++ },
+    box: { machineId: 'm-42', superseded: () => void superseded++, heard: (state, sentAt) => void heard.push({ state, sentAt }) },
   });
   sync.start();
   await tick();
   const hb = calls.find((c) => c.fn === 'sync:heartbeat')!;
   assert.equal((hb.args.runner as { machineId?: string }).machineId, 'm-42');
   assert.equal(hb.args.key, BOX_KEY);
+  // What the backend says of the box goes to the save hold, with when the heartbeat was sent.
+  assert.equal(heard.length, 1);
+  assert.equal(heard[0]!.state, 'awake');
+  assert.ok(heard[0]!.sentAt >= before && heard[0]!.sentAt <= performance.now());
   refuse = true;
   h.clock.advance(60_000);
   await tick();
@@ -360,7 +367,7 @@ test("the backend's save command goes to the box's save and finishes; a runner t
         quickAsk: () => ({ thread: t }),
         ...(isBox ? { save: async (id: string) => (saved.push(id), { bytes: 123 }) } : {}),
       },
-      ...(isBox ? { box: { superseded: () => {}, awake: () => void awake++ } } : {}),
+      ...(isBox ? { box: { superseded: () => {}, taken: (kind: string) => void (kind !== 'save' && awake++) } } : {}),
     });
     sync.start();
     await tick();
@@ -466,4 +473,121 @@ test('the real runner in box mode: its kept key, its machine in the heartbeat, a
   assert.equal((hb.args.runner as { machineId?: string }).machineId, machineId);
   // A superseded box says no bye: its key is refused.
   assert.equal(seen.filter((c) => c.path === 'sync:bye').length, 0);
+});
+
+test("a restored worktree's setup is remembered apart from the folder, so a start before it finished runs it again", () => {
+  const home = tmpDir('tb-box-home-');
+  writeBoxSecrets(home, secretsFor('https://github.com/x/proj.git', { prepared: { checkout: '/w/proj', cwd: '/w/proj', restored: true } }));
+  assert.equal(readBoxSecrets(home)?.setUp, undefined);
+  markSetUp(home);
+  assert.equal(readBoxSecrets(home)?.setUp, true);
+  assert.deepEqual(readBoxSecrets(home)?.prepared, { checkout: '/w/proj', cwd: '/w/proj', restored: true });
+  // And a thread loaded with that hold runs nothing until it's let go.
+  const h = makeHarness(tmpDir(), {}, { boxThread: THREAD, boxHolds: ['setup'] });
+  const made = makeHarness(h.home, {}, { boxThread: THREAD });
+  made.runner.create({ text: 'go', cwd: made.cfg.defaults.cwd, accountId: 'claude-main', id: THREAD });
+  made.runner.flush();
+  const again = makeHarness(h.home, {}, { boxThread: THREAD, boxHolds: ['setup'] });
+  const before = again.adapter.sessions.length;
+  again.runner.send(THREAD, 'next', []);
+  assert.equal(again.adapter.sessions.length, before);
+  assert.equal(again.runner.threads.get(THREAD)!.rec.queue.length, 1);
+  again.runner.releaseTurns(THREAD, 'setup');
+  assert.equal(again.adapter.sessions.length, before + 1);
+});
+
+test('the save hold lets go only on the backend\'s word after the outcome: a later command other than a save, or a later heartbeat finding the box awake', () => {
+  let t = 100;
+  const events: string[] = [];
+  const hold = new SaveHold({ hold: () => events.push('hold'), release: () => events.push('release'), now: () => t });
+  hold.begin();
+  // While the save is going: nothing.
+  hold.taken('send');
+  hold.heard('awake', 200);
+  assert.deepEqual(events, ['hold']);
+  t = 300;
+  hold.settled();
+  // A heartbeat sent before the outcome was known, or finding it asleep: nothing.
+  hold.heard('awake', 250);
+  hold.heard('asleep', 400);
+  hold.taken('save');
+  assert.deepEqual(events, ['hold']);
+  hold.heard('awake', 301);
+  assert.deepEqual(events, ['hold', 'release']);
+  assert.equal(hold.held, false);
+});
+
+test('an established box whose folder is gone stays up, degraded: heartbeating on its key, running nothing, saying why on the thread', async () => {
+  const home = tmpDir('tb-box-run-');
+  const claudeDir = path.join(home, 'claude-main');
+  const gone = tmpDir('tb-box-cwd-');
+  // The thread as the box had it, then its folder gone.
+  const h = makeHarness(home, { defaults: { cwd: gone } as never }, { boxThread: THREAD });
+  h.runner.create({ text: 'go', cwd: gone, accountId: 'claude-main', id: THREAD });
+  h.runner.flush();
+  await h.runner.shutdown();
+  fs.rmSync(gone, { recursive: true });
+  fs.mkdirSync(paths.secrets(home), { recursive: true, mode: 0o700 });
+  writeBoxSecrets(home, { ...secretsFor('https://github.com/x/proj.git'), bootHash: crypto.createHash('sha256').update(BOOT).digest('hex'), prepared: { checkout: gone, cwd: gone, restored: false } });
+  fs.writeFileSync(path.join(paths.secrets(home), 'convex-key'), BOX_KEY, { mode: 0o600 });
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'threadbear-token.json'), JSON.stringify({ token: CLAUDE_TOKEN }), { mode: 0o600 });
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      let fn = '';
+      try {
+        fn = (JSON.parse(body) as { path: string }).path;
+        seen.push(fn);
+      } catch {
+        // not a call
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'success', value: fn === 'sync:heartbeat' ? { apiVersion: 89, box: { state: 'awake' } } : null }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as { port: number }).port;
+  let out = '';
+  const proc = spawn(process.execPath, ['src/main.ts'], {
+    cwd: RUNNER_DIR,
+    env: {
+      ...process.env,
+      THREADBEAR_HOME: home,
+      THREADBEAR_PORT: '0',
+      THREADBEAR_LOG: path.join(home, 'runner.log'),
+      THREADBEAR_LOG_STDERR: '1',
+      THREADBEAR_CLAUDE_PATH: '/nonexistent/claude',
+      THREADBEAR_ACCOUNTS_DIR: path.join(home, 'no-accounts'),
+      THREADBEAR_CLAUDE_MAIN_DIR: claudeDir,
+      THREADBEAR_CLAUDE_MAIN_JSON: path.join(home, 'no-main.json'),
+      THREADBEAR_CODEX_MAIN_DIR: path.join(home, 'no-codex-main'),
+      THREADBEAR_TOKEN_STATS_LIMITS: path.join(home, 'no-limits.json'),
+      THREADBEAR_SYNC_URL: `http://127.0.0.1:${port}`,
+      [BOOT_ENV]: BOOT,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let exited: number | null | undefined;
+  proc.stdout!.on('data', (d) => (out += d));
+  proc.stderr!.on('data', (d) => (out += d));
+  proc.once('exit', (c) => (exited = c));
+  try {
+    const end = Date.now() + 60_000;
+    while (!(seen.includes('sync:heartbeat') && /listening on/.test(out)) && exited === undefined && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(exited, undefined, out.slice(-3000));
+    assert.ok(seen.includes('sync:heartbeat'), 'it heartbeats on its key');
+    assert.match(out, /its folder is unusable; staying up, degraded/);
+    // Said on the thread, with what was found.
+    const said = () => fs.readdirSync(paths.thread(home, THREAD)).map((f) => (fs.statSync(path.join(paths.thread(home, THREAD), f)).isFile() ? fs.readFileSync(path.join(paths.thread(home, THREAD), f), 'utf8') : '')).join('');
+    while (!/This thread's machine can't run it: its folder .* has gone/.test(said()) && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+    assert.match(said(), /This thread's machine can't run it: its folder .* has gone/);
+    assert.match(said(), /Found: the thread's record at/);
+  } finally {
+    proc.kill('SIGTERM');
+    await new Promise((r) => (exited !== undefined ? r(null) : proc.once('exit', r)));
+    server.close();
+  }
 });

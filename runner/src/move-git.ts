@@ -184,9 +184,10 @@ export function underNodeModules(file: string): boolean {
   return file.split('/').some((part) => part.toLowerCase() === 'node_modules');
 }
 
-// `leaveOut`: uncommitted and untracked paths kept out of the wip commit,
-// as they are at HEAD (a box's save leaves out what unpackGit refuses,
-// box-save.ts); their names come back in `leftOut`.
+// `leaveOut`: untracked files kept out of the wip commit (a box's save
+// leaves out what unpackGit refuses, box-save.ts); their names come back in
+// `leftOut`. A tracked file there that's changed or deleted can't be left
+// out without losing that change, so it fails the pack instead.
 export async function packGit(worktree: string, cwd: string, bundleFile: string, opts: { leaveOut?: (file: string) => boolean } = {}): Promise<{ ok: true; meta: GitMeta; bundle?: string; leftOut?: string[] } | { ok: false; reason: string }> {
   const top = await repoTop(worktree);
   if (!top) return { ok: false, reason: `${worktree} isn't a git checkout.` };
@@ -210,9 +211,16 @@ export async function packGit(worktree: string, cwd: string, bundleFile: string,
     if (r.ok) r = await run(top, ['add', '-A', '.'], env);
     if (!r.ok) return { ok: false, reason: `Couldn't read the uncommitted changes in ${top}: ${why(r)}` };
     if (opts.leaveOut) {
-      const changed = await run(top, ['diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD'], env);
+      const changed = await run(top, ['diff', '--cached', '--name-status', '-z', '--no-renames', 'HEAD'], env);
       if (!changed.ok) return { ok: false, reason: `Couldn't read the uncommitted changes in ${top}: ${why(changed)}` };
-      leftOut = changed.stdout.split('\0').filter(Boolean).filter(opts.leaveOut);
+      // "<status>\0<path>\0", repeated.
+      const parts = changed.stdout.split('\0');
+      for (let i = 0; i + 1 < parts.length; i += 2) {
+        const [status, file] = [parts[i]!, parts[i + 1]!];
+        if (!file || !opts.leaveOut(file)) continue;
+        if (status !== 'A') return { ok: false, reason: `${file} is tracked and has uncommitted changes, under a folder the thread's save can't carry (installed packages). Commit or undo that change, and it can save.` };
+        leftOut.push(file);
+      }
       // Back to HEAD's (or nothing) in the throwaway index: the commit has none of them.
       for (let i = 0; i < leftOut.length; i += 200) {
         const back = await run(top, ['reset', '-q', 'HEAD', '--', ...leftOut.slice(i, i + 200).map((f) => `:(literal)${f}`)], env);

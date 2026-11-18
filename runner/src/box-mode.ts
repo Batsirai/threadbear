@@ -62,9 +62,23 @@ export type BoxSecrets = {
   save: BoxSaveRef | null;
   // Once the thread's folder is ready (cloned, or restored from the save).
   prepared?: { checkout: string; cwd: string; restored: boolean };
+  // Once a restored worktree's setup has run (passed or not): until then,
+  // every start runs it again before any turn (main.ts, setUpRestored).
+  setUp?: true;
 };
 
 export class BoxBootRefused extends Error {}
+
+// A box that can't use its thread's folder, with what it found there. The
+// runner doesn't exit for it (main.ts): it stays up degraded, holding its
+// key, so the provider keeps its disk and a person can see to it.
+export class BoxFolderBroken extends Error {}
+
+// What's on disk of the thread, in words, for the degraded box's note.
+function foundThere(places: [string, string][]): string {
+  const there = places.filter(([, p]) => fs.existsSync(p)).map(([what, p]) => `${what} at ${p}`);
+  return there.length ? `Found: ${there.join('; ')}.` : 'Nothing of it was found.';
+}
 
 /** The boot, if this process was started as a box: undefined for any other runner. */
 export function readBoxBoot(env: NodeJS.ProcessEnv): BoxBoot | undefined {
@@ -231,6 +245,14 @@ export async function bootBox(o: { boot: BoxBoot; home: string; claudeDir: strin
   return { secrets, fresh: true };
 }
 
+// A restored worktree's setup has run (markSetUp), kept apart from
+// `prepared`, so a runner that stops during it runs it again on its next start.
+export function markSetUp(home: string): void {
+  const s = readBoxSecrets(home);
+  if (!s || s.setUp) return;
+  writeBoxSecrets(home, { ...s, setUp: true });
+}
+
 // The repo's folder name, from its origin ("threadbear" from
 // https://github.com/mikecann/threadbear.git).
 export function repoFolderName(origin: string): string {
@@ -269,14 +291,20 @@ export async function downloadSave(url: string, fetchFn: typeof fetch = fetch): 
  */
 export async function prepareBoxFolder(o: { secrets: BoxSecrets; fresh: boolean; home: string; claudeDir: string; workRoot: string; log: Logger; clone?: Cloner; download?: Downloader }): Promise<{ checkout: string; cwd: string; restored: boolean; again?: true }> {
   const s = o.secrets;
+  const checkout = s.prepared?.checkout ?? path.join(o.workRoot, repoFolderName(s.repo.origin));
+  const found = () =>
+    foundThere([
+      ['the clone', checkout],
+      ['its worktrees', `${checkout}-threads`],
+      ["the thread's record", paths.thread(o.home, s.threadId)],
+    ]);
   if (s.prepared) {
     if (isDirectory(s.prepared.cwd)) return { ...s.prepared, again: true };
-    throw new Error(`This box's thread folder ${s.prepared.cwd} has gone. It won't be cloned or restored again over what's left (its save may be older than the work here): this box stops, and the thread comes back on a new one.`);
+    throw new BoxFolderBroken(`its folder ${s.prepared.cwd} has gone, and it isn't cloned or restored again over what's left (its last save may be older than the work here). ${found()}`);
   }
-  if (!o.fresh) throw new Error("This box's first start didn't finish making the thread's folder, and only that start may clone or restore: this box stops, and the thread comes back on a new one.");
-  const checkout = path.join(o.workRoot, repoFolderName(s.repo.origin));
+  if (!o.fresh) throw new BoxFolderBroken(`its first start didn't finish making the thread's folder, and only that start may clone or restore. ${found()}`);
   const there = [checkout, `${checkout}-threads`, paths.thread(o.home, s.threadId)].filter((p) => fs.existsSync(p));
-  if (there.length) throw new Error(`The box's thread folder isn't empty (${there.join(', ')}), so nothing is cloned or restored over it.`);
+  if (there.length) throw new BoxFolderBroken(`the place for its folder isn't empty, so nothing is cloned or restored over it. ${found()}`);
   fs.mkdirSync(o.workRoot, { recursive: true });
   const cloned = await (o.clone ?? cloneRepo)(s.repo.origin, checkout);
   if (!cloned.ok) throw new Error(cloned.reason);

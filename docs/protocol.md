@@ -7730,7 +7730,8 @@ has to be on for it.
   one, or changes one (its provider can't change), and returns its id;
   limits left out are `BOX_LIMITS` (`maxBoxes` 5, `idleSleepMinutes` 10,
   `maxAwakeHoursPerDay` 8, `deleteAfterDays` 14) or as they were. A Fly
-  box is 2048 MB at most, the most Fly can pause.
+  box is 2048 MB at most, the most Fly can pause, and every box 1024 MB at
+  least (`MIN_BOX_MB`), so a box can restore any save another took.
   `boxes:runnerServices({ key })` lists them, with `running` (boxes
   creating, starting, awake, saving or waking) and `asleep`. Owner key
   only.
@@ -7979,7 +7980,9 @@ SHA-256 (`boxKeyHash`).
   box that sleeps on a paused machine keeps its key, so it can resume.
 - **Heartbeats.** A box's `heartbeat` marks its `runners` row `box: {
   serviceId }`, renews the box's lease (`boxes.lastHeartbeatAt`) and
-  drops any `rpcUrl`: no Mac app dials a box.
+  drops any `rpcUrl`: no Mac app dials a box. Its answer carries `box: {
+  state }`, the box's state as the heartbeat found it (a box stopped by its
+  save runs again on `awake`, Box mode).
 - **The Machines page** (`convex/viewer.ts`) leaves out a box's
   `bootTokenHash`, `boxKeyHash` and `sealedThreadKey`, and any `sealed`.
 - **Internal.** `boxes:authorize` (an action's gate), `storeCloudToken`,
@@ -8038,7 +8041,13 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   empty place; nothing is ever deleted to make room. A box whose folder
   has gone, or whose first start died before its folder was made, stops
   and says so rather than clone or restore over what's there (the
-  exchange's save may be older than its work). Only the box's own thread
+  exchange's save may be older than its work). It doesn't exit, either:
+  on Fly an exited machine's disk is reset. It stays up **degraded**,
+  heartbeating on its key, running nothing (no turn, no `create`, no
+  `save`), with a note on its thread saying what's wrong and what of the
+  thread it found, so the billing guard pauses it with its disk and a
+  person can see to it. The same goes for any failure at the start of a
+  box that has run. Only a fresh box with nothing to lose exits. Only the box's own thread
   is loaded from the data dir: any other record there is left alone and
   logged, and none is taken in by a handover or a move.
 - **What box mode turns off** (decision 1): self-update and following
@@ -8061,17 +8070,22 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   thread). Every save the backend asks for is a stopping one (to sleep, at
   its day's hours, or to be archived), and once it's acknowledged the box
   may be deleted, so the thread stops first: turns are held, a running
-  turn is interrupted, and once it has ended (a minute at most, or the
-  command fails and the thread carries on) its CLI and background jobs are
-  stopped. Then it's packed: the thread's folder in the data dir (its record and events,
+  turn is interrupted, a restored worktree's setup is waited for, and once
+  they've ended (5 minutes at most, or the command fails) its CLI and
+  background jobs are stopped. From the moment a save starts, the thread
+  runs nothing until the backend says it may: a command other than `save`
+  taken after the save's outcome is known, or a heartbeat sent after that
+  whose answer finds the box `awake`. Nothing in the box lets it go: not a
+  clock jump, a timeout or an error. Then it's packed: the thread's folder in the data dir (its record and events,
   not `panels`), its Claude session's transcript and the folder beside
   it, and its git work as a move packs it (`move-git.ts packGit`: the
   commits origin doesn't have and one more of every uncommitted and
-  untracked file, in a git bundle; ignored files stay behind, and so does
-  anything under a `node_modules` folder, which a restore refuses: the
-  worktree's setup makes them again), in a move's
+  untracked file, in a git bundle; ignored files stay behind, and so do
+  untracked files under a `node_modules` folder, which a restore refuses:
+  the worktree's setup makes them again; a change to a tracked file there
+  fails the command, saying so), in a move's
   archive (`move-pack.ts`) with a `box.json` naming the thread. At most
-  100,000 files and 256 MB unpacked, the limits a restore holds it to, and
+  100,000 files and 128 MB unpacked, the limits a restore holds it to, and
   it's read back as a restore will read it before anything is uploaded:
   over a limit or unreadable, the command fails and the thread carries on. Sealed
   AES-256-GCM under the thread key: a 12-byte IV, the ciphertext, the
@@ -8080,12 +8094,13 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   `boxes:boxSaved({ key, storageId, bytes })`, and the command finishes
   with `{ bytes }` (and `leftOut`, up to 20 paths left out). A sealed save
   over 10 MB (one upload) fails the command saying so; saves in parts are
-  a TODO. A save that fails lets the thread carry on. One that succeeds
-  keeps its turns held until the box is woken: its clock jumping (resumed
-  from a pause), or a command other than `save` taken; messages wait in the
-  queue meanwhile.
+  a TODO. A `boxSaved` whose answer is lost (not a refusal) is sent again
+  with the same file, which the backend takes as the same save, for up to
+  10 minutes; past that its outcome is unknown, and the thread stays held
+  until the backend asks for another save. Messages wait in the queue
+  while it's held.
 - **Restoring.** The save is downloaded (https, no redirects, 10 MB at
-  most), gunzipped to 256 MB at most, opened (one that doesn't open with the thread's key, or isn't
+  most), gunzipped to 128 MB at most, opened (one that doesn't open with the thread's key, or isn't
   that thread's, stops the box), the thread's folder written into the data
   dir, its git work put back on the clone (`unpackGit`), in a worktree at
   `<clone>-threads/<the folder name it had>` on `thread/<id8>` if it had
@@ -8093,7 +8108,9 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   now runs in. Once the runner is up, the worktree's setup runs again
   (installed packages weren't saved), and no turn starts in the thread
   (recovery, a carry-on or a message) until it's done; one that fails
-  says so in the thread, and the turns go ahead.
+  says so in the thread, and the turns go ahead. That it has run is kept
+  apart (`box.json`'s `setUp`): a runner that stops before it has runs it
+  again, holding the turns again, on its next start.
 
 ## Sharing
 

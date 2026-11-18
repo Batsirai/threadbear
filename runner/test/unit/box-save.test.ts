@@ -14,7 +14,7 @@ import { localClone, originRepo, sh } from '../helpers/box-git.ts';
 import { nullLogger } from '../../src/log.ts';
 import { paths } from '../../src/config.ts';
 import { projectDirName } from '../../src/transcripts.ts';
-import { openSave, restoreSave, saveThread, sealSave, SAVE_MAX_BYTES, type SaveLimits } from '../../src/box-save.ts';
+import { openSave, restoreSave, SaveHold, saveThread, sealSave, SAVE_MAX_BYTES, type SaveLimits } from '../../src/box-save.ts';
 import { prepareBoxFolder, writeBoxSecrets, type BoxSecrets } from '../../src/box-mode.ts';
 
 const THREAD = 'b0c0ffee-1111-4222-8333-444455556666';
@@ -55,8 +55,10 @@ async function boxOn(origin: string, save: BoxSecrets['save'], stored?: Map<stri
   const s = secretsFor(origin, { save });
   writeBoxSecrets(home, s);
   const folder = await prepareBoxFolder({ secrets: s, fresh: true, home, claudeDir, workRoot, log: nullLogger, clone: localClone, download: async (url) => stored!.get(url)! });
-  const h = makeHarness(home, { defaults: { cwd: folder.cwd } as never }, { actionShell: ['/bin/sh', '-c'], actionTimeoutMs: 10_000, boxThread: THREAD, boxSetupPending: opts.holdForSetup ?? false });
-  return { home, claudeDir, folder, h };
+  const h = makeHarness(home, { defaults: { cwd: folder.cwd } as never }, { actionShell: ['/bin/sh', '-c'], actionTimeoutMs: 10_000, boxThread: THREAD, boxHolds: opts.holdForSetup ? ['setup'] : [] });
+  // As main.ts makes it: the thread held from a save's start until the backend says.
+  const hold = new SaveHold({ hold: () => h.runner.holdTurns(THREAD, 'save'), release: () => h.runner.releaseTurns(THREAD, 'save') });
+  return { home, claudeDir, folder, h, hold };
 }
 
 // The backend's side of a save: an upload URL, the upload, boxSaved.
@@ -80,8 +82,8 @@ function fakeBackend() {
   };
 }
 
-function save(h: Harness, b: { home: string; claudeDir: string }, backend: Pick<ReturnType<typeof fakeBackend>, 'post' | 'upload'>, limits?: SaveLimits) {
-  return saveThread({ home: b.home, claudeDir: b.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => h.runner.quiesceForSave(id), resume: (id) => h.runner.releaseTurns(id, 'save'), post: backend.post, upload: backend.upload, ...(limits ? { limits } : {}) });
+function save(h: Harness, b: { home: string; claudeDir: string; hold: SaveHold }, backend: Pick<ReturnType<typeof fakeBackend>, 'post' | 'upload'>, limits?: SaveLimits, more: { retryForMs?: number } = {}) {
+  return saveThread({ home: b.home, claudeDir: b.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => h.runner.quiesceForSave(id), hold: b.hold, post: backend.post, upload: backend.upload, sleep: async () => {}, ...(limits ? { limits } : {}), ...more });
 }
 
 // The thread's first turn on the fake CLI, ended.
@@ -245,23 +247,77 @@ test('a save stops the thread first: its turn interrupted, its CLI and backgroun
   await tick(10);
   assert.equal(a.h.adapter.sessions.length, 1);
   assert.equal(a.h.runner.threads.get(THREAD)!.rec.queue.length, 1);
-  // Woken (resumed, or sent something): it goes.
-  a.h.runner.releaseTurns(THREAD, 'save');
+  // Only the backend's word lets it go: a heartbeat from before the outcome,
+  // or one finding the box asleep, doesn't; one after, finding it awake, does.
+  a.hold.heard('awake', 0);
+  a.hold.heard('asleep', performance.now() + 1);
+  await tick(10);
+  assert.equal(a.h.adapter.sessions.length, 1);
+  a.hold.heard('awake', performance.now() + 1);
   await until(() => a.h.adapter.sessions.length === 2, 'the queued turn');
 });
 
-test('a save that fails lets the thread carry on', async () => {
+test('a save the backend refused keeps the thread stopped until the backend sends it something after', async () => {
   const origin = originRepo();
   const a = await boxOn(origin, null);
   await firstTurn(a.h, a.folder.cwd);
   const backend = fakeBackend();
+  let saving = true;
   const refusing = { upload: backend.upload, post: async (k: 'mutation', fn: string, args: Record<string, unknown>) => {
-    if (fn === 'boxes:boxSaved') throw new Error('network down');
+    if (fn === 'boxes:boxSaved') {
+      // A message arriving while the save's outcome isn't known yet doesn't count.
+      if (saving) a.hold.taken('send');
+      throw Object.assign(new Error("The box is asleep, so it can't save now."), { data: { kind: 'conflict' } });
+    }
     return backend.post(k, fn, args);
   } };
-  await assert.rejects(save(a.h, a, refusing), /network down/);
+  await assert.rejects(save(a.h, a, refusing), /can't save now/);
+  saving = false;
   a.h.runner.send(THREAD, 'carry on', []);
+  await tick(10);
+  assert.equal(a.h.adapter.sessions.length, 1, 'still stopped after the refusal');
+  // A save sent again doesn't either; anything else from the backend now does.
+  a.hold.taken('save');
+  await tick(10);
+  assert.equal(a.h.adapter.sessions.length, 1);
+  a.hold.taken('send');
   await until(() => a.h.adapter.sessions.length === 2, 'the next turn');
+});
+
+test("a lost boxSaved answer is sent again with the same file; one that never comes leaves the thread stopped", async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const backend = fakeBackend();
+  const saved: unknown[] = [];
+  let lose = 1;
+  const flaky = { upload: backend.upload, post: async (k: 'mutation', fn: string, args: Record<string, unknown>) => {
+    if (fn === 'boxes:boxSaved') {
+      saved.push(args.storageId);
+      // Taken by the backend, the answer lost on the way.
+      if (lose-- > 0) throw new Error('fetch failed: socket hang up');
+    }
+    return backend.post(k, fn, args);
+  } };
+  await save(a.h, a, flaky);
+  assert.deepEqual(saved, ['storage1', 'storage1'], 'the same save, which the backend takes as one');
+  assert.equal(backend.stored.size, 1);
+  assert.equal(a.hold.saving, false);
+  // Never answered: unknown, so held, and nothing local lets it go.
+  a.hold.taken('send');
+  const b = await boxOn(origin, null);
+  await firstTurn(b.h, b.folder.cwd);
+  const silent = { upload: backend.upload, post: async (k: 'mutation', fn: string, args: Record<string, unknown>) => {
+    if (fn === 'boxes:boxSaved') throw new Error('fetch failed');
+    return backend.post(k, fn, args);
+  } };
+  await assert.rejects(save(b.h, b, silent, undefined, { retryForMs: 0 }), /Couldn't tell whether the backend took/);
+  assert.equal(b.hold.saving, true);
+  b.hold.taken('send');
+  b.hold.heard('awake', performance.now() + 1);
+  b.h.runner.send(THREAD, 'go', []);
+  await tick(10);
+  assert.equal(b.h.adapter.sessions.length, 1, 'still stopped');
 });
 
 test('installed packages a restore would refuse are left out of the save, so every acknowledged save restores', async () => {
@@ -278,7 +334,6 @@ test('installed packages a restore would refuse are left out of the save, so eve
   const done = await save(a.h, a, backend);
   assert.deepEqual(done.leftOut, ['runner/node_modules/pkg/index.js']);
   const [url, sealed] = [...backend.stored][0]!;
-  a.h.runner.releaseTurns(THREAD, 'save');
   const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored);
   assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'runner', 'kept.txt'), 'utf8'), 'kept\n');
   assert.equal(fs.existsSync(path.join(b.folder.checkout, 'runner', 'node_modules')), false);
@@ -327,4 +382,48 @@ test("a restored thread's turns wait for its worktree's setup; one that fails sa
     if (passes) assert.ok(!notes.some((n) => /setup failed/.test(n)));
     else assert.ok(notes.some((n) => /setup failed after this thread was restored/.test(n)), notes.join('\n'));
   }
+});
+
+test('a change to a tracked file under node_modules fails the save, saying so, rather than be dropped', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const top = a.folder.checkout;
+  fs.mkdirSync(path.join(top, 'runner', 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'), 'one\n');
+  sh(top, 'git add -f runner/node_modules/pkg/index.js && git commit -qm "vendored"');
+  fs.writeFileSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'), 'patched\n');
+  const backend = fakeBackend();
+  await assert.rejects(save(a.h, a, backend), /runner\/node_modules\/pkg\/index.js is tracked and has uncommitted changes/);
+  assert.deepEqual(backend.calls, []);
+  // The box keeps it as it was.
+  assert.equal(fs.readFileSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'), 'utf8'), 'patched\n');
+  // Deleted, the same.
+  fs.rmSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'));
+  await assert.rejects(save(a.h, a, backend), /is tracked and has uncommitted changes/);
+});
+
+const SLOW_PATCH = 'export default { worktree: { setup: "sleep 1; mkdir -p node_modules && echo done > node_modules/ran" } };\n';
+
+test("a stopping save waits for a restored worktree's setup before it copies anything", async () => {
+  const origin = originRepo({ patch: SLOW_PATCH });
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const w = a.h.runner.get(THREAD).worktree!;
+  await until(() => fs.existsSync(path.join(w.path, 'node_modules', 'ran')), 'its first setup');
+  const backend = fakeBackend();
+  await save(a.h, a, backend);
+  const [url, sealed] = [...backend.stored][0]!;
+  const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored, { holdForSetup: true });
+  const bw = b.h.runner.get(THREAD).worktree!;
+  const setup = b.h.runner.setUpRestored(THREAD);
+  // The save asked for while the setup still runs: nothing is copied until it's done.
+  let doneAtUpload: boolean | undefined;
+  const watching = { post: backend.post, upload: async (u: string, bytes: Uint8Array, t: string) => {
+    doneAtUpload = fs.existsSync(path.join(bw.path, 'node_modules', 'ran'));
+    return backend.upload(u, bytes, t);
+  } };
+  await save(b.h, b, watching);
+  await setup;
+  assert.equal(doneAtUpload, true);
 });

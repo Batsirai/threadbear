@@ -28,6 +28,9 @@ import { BOX_KEY_DEAD, BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runne
 import { deleteIfUnused, endCommandFiles, finishedArgs, MAX_RUNNER_UPLOAD_BYTES, uploadedBy } from './sync';
 
 // A virtual runner's limits when it's made (runnerServices.limits).
+// The smallest box a virtual runner may have (setRunnerService).
+export const MIN_BOX_MB = 1024;
+
 export const BOX_LIMITS = { maxBoxes: 5, idleSleepMinutes: 10, maxAwakeHoursPerDay: 8, deleteAfterDays: 14 } as const;
 
 // A boot token (`tbt_`) and a box key (`tbb_`, runnerAccess.ts
@@ -269,6 +272,10 @@ export const setRunnerService = mutation({
     if (!IMAGE.test(a.image)) throw bad('image must be an image reference, up to 300 characters with no spaces');
     if (!Number.isSafeInteger(a.box.cpus) || a.box.cpus < 1 || a.box.cpus > 16) throw bad('box.cpus must be a whole number from 1 to 16');
     if (!Number.isSafeInteger(a.box.memoryMb) || a.box.memoryMb < 256 || a.box.memoryMb > 65536 || a.box.memoryMb % 256) throw bad('box.memoryMb must be a multiple of 256 from 256 to 65536');
+    // A box's runner holds a save in memory to write it and to restore it
+    // (runner/src/box-save.ts SAVE_MAX_UNPACKED_BYTES), beside Claude Code:
+    // a box smaller than this could take a save its replacement can't read.
+    if (a.box.memoryMb < MIN_BOX_MB) throw bad(`box.memoryMb must be ${MIN_BOX_MB} or more: a smaller box may not have the memory to restore its thread's save.`);
     if (a.region !== undefined && !REGION.test(a.region)) throw bad('region must be a provider region code, like syd');
     const old = serviceId ? await ctx.db.get(serviceId) : null;
     if (serviceId && !old) throw new ConvexError({ kind: 'notFound', message: 'no such virtual runner' });
