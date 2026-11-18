@@ -760,7 +760,7 @@ impl ThreadPane {
     pub(crate) fn with_link_marks(&self, text: String, cx: &App) -> String {
         let Some(app) = self.composer.read(cx).app.upgrade() else { return text };
         let threads = &app.read(cx).threads;
-        match threadbear_core::link_marks::with_marks(&text, &|id| threads.contains_key(id)) {
+        match threadbear_core::link_marks::with_marks(&text, &|id| threadbear_core::link_marks::resolve_in(id, threads.keys())) {
             std::borrow::Cow::Owned(marked) => marked,
             std::borrow::Cow::Borrowed(_) => text,
         }

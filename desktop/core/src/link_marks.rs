@@ -64,10 +64,14 @@ impl LinkMark {
 }
 
 /// `text` with a mark's link before each `[words](thread:<id>)` naming a
-/// thread `known` says the app has, or `text` as it was when there's none.
+/// thread the app has, or `text` as it was when there's none. `resolve` turns
+/// a link's id into that thread's full id: agents often link a thread by the
+/// start of its id (`thread:d0cf502c`), which opens it as the full one does
+/// (`open_thread_link`), so its mark has to find it the same way (see
+/// `resolve_in`).
 /// Links in code (a span or a block) are text, so they're left alone: the
 /// markdown parser finds the links, not a scan of the characters.
-pub fn with_marks<'a>(text: &'a str, known: &dyn Fn(&str) -> bool) -> Cow<'a, str> {
+pub fn with_marks<'a>(text: &'a str, resolve: &dyn Fn(&str) -> Option<String>) -> Cow<'a, str> {
     if !text.contains("](thread:") {
         return Cow::Borrowed(text);
     }
@@ -77,8 +81,13 @@ pub fn with_marks<'a>(text: &'a str, known: &dyn Fn(&str) -> bool) -> Cow<'a, st
         let Some(id) = link.url.strip_prefix("thread:") else { return };
         let id = crate::open_policy::percent_decode(id);
         let Some(start) = link.position.as_ref().map(|p| p.start.offset) else { return };
-        if crate::thread_link::is_thread_id(&id) && known(&id) && text.is_char_boundary(start) {
-            at.push((start, id));
+        if !crate::thread_link::is_thread_id(&id) || !text.is_char_boundary(start) {
+            return;
+        }
+        // The full id goes into the mark's link, so only an id's characters
+        // reach the markdown, as with the link itself.
+        if let Some(full) = resolve(&id).filter(|full| crate::thread_link::is_thread_id(full)) {
+            at.push((start, full));
         }
     });
     if at.is_empty() {
@@ -94,6 +103,25 @@ pub fn with_marks<'a>(text: &'a str, known: &dyn Fn(&str) -> bool) -> Cow<'a, st
     }
     out.push_str(&text[from..]);
     Cow::Owned(out)
+}
+
+/// The one thread of `ids` a link's `id` names: itself, or the only one
+/// starting with it, as clicking the link finds it. None for no match or
+/// several, where the link opens nothing either.
+pub fn resolve_in<'a>(id: &str, ids: impl IntoIterator<Item = &'a String>) -> Option<String> {
+    let mut found: Option<&String> = None;
+    for k in ids {
+        if k == id {
+            return Some(k.clone());
+        }
+        if k.starts_with(id) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(k);
+        }
+    }
+    found.cloned()
 }
 
 fn collect(node: &markdown::mdast::Node, found: &mut impl FnMut(&markdown::mdast::Link)) {
@@ -133,14 +161,14 @@ mod tests {
 
     #[test]
     fn a_mark_goes_before_each_known_threads_link() {
-        let known = |id: &str| id == "abc-1" || id == "def-2";
+        let known = |id: &str| (id == "abc-1" || id == "def-2").then(|| id.to_owned());
         let text = "See [Triage PRs](thread:abc-1) and [Write the guide](thread:def-2).";
         assert_eq!(with_marks(text, &known), "See [\u{2060}](tbmark:abc-1)[Triage PRs](thread:abc-1) and [\u{2060}](tbmark:def-2)[Write the guide](thread:def-2).");
     }
 
     #[test]
     fn unknown_threads_code_and_other_links_are_left_alone() {
-        let known = |id: &str| id == "abc-1";
+        let known = |id: &str| (id == "abc-1").then(|| id.to_owned());
         for text in ["[Gone](thread:zzz-9)", "`[Triage](thread:abc-1)`", "```\n[Triage](thread:abc-1)\n```", "[A page](https://example.com)", "no links at all"] {
             assert!(matches!(with_marks(text, &known), Cow::Borrowed(_)), "{text}");
         }
@@ -148,7 +176,25 @@ mod tests {
 
     #[test]
     fn a_link_after_non_ascii_words_still_gets_its_mark() {
-        let known = |id: &str| id == "abc-1";
+        let known = |id: &str| (id == "abc-1").then(|| id.to_owned());
         assert_eq!(with_marks("Café ✓ [Triage](thread:abc-1)", &known), "Café ✓ [\u{2060}](tbmark:abc-1)[Triage](thread:abc-1)");
+    }
+
+    #[test]
+    fn a_link_by_the_start_of_an_id_gets_the_full_threads_mark() {
+        let ids: Vec<String> = ["d0cf502c-2fb5-417f-a1b5-38a1b453d0ea", "2f9ef0e7-69f8-4691-bd42-599bc71a087a"].map(String::from).to_vec();
+        let resolve = |id: &str| resolve_in(id, &ids);
+        assert_eq!(
+            with_marks("See [sign-ins](thread:d0cf502c).", &resolve),
+            "See [\u{2060}](tbmark:d0cf502c-2fb5-417f-a1b5-38a1b453d0ea)[sign-ins](thread:d0cf502c)."
+        );
+    }
+
+    #[test]
+    fn a_start_shared_by_two_threads_names_neither() {
+        let ids: Vec<String> = ["abc-1", "abc-2"].map(String::from).to_vec();
+        assert_eq!(resolve_in("abc", &ids), None);
+        assert_eq!(resolve_in("abc-2", &ids), Some("abc-2".into()));
+        assert_eq!(resolve_in("zzz", &ids), None);
     }
 }

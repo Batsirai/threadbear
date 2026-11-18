@@ -288,10 +288,10 @@ impl Composer {
             // Another runner's thread before its logins have come: its Mac's
             // name where the chips would be, and send (remoteControls).
             (Some(away), false) if !away.logins_known => {
-                return row.child(div().min_w_0().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(div().flex_1()).child(send_button).into_any_element();
+                return row.child(machine_slot().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(div().flex_1()).child(send_button).into_any_element();
             }
             // Its logins known: the machine's chip in place of "+".
-            (Some(away), false) => row = row.child(div().min_w_0().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(chip_divider(cx)),
+            (Some(away), false) => row = row.child(machine_slot().ml(px(-7.)).child(self.render_machine_chip(&data, away.name.clone(), away.icon, away.place.clone(), &away.cwd, cx))).child(chip_divider(cx)),
             // A new thread for another runner, before it's said what logins
             // it has: the machine chip, and how it's going (draftWaitingControls).
             (Some(away), true) if !away.logins_known => {
@@ -588,15 +588,18 @@ impl Composer {
             None => format!("{place}, in {}. Click to move it to another machine", abbreviate_home(cwd)).into(),
         };
         let app = self.app.clone();
-        h_flex()
+        let mut chip = h_flex()
             .id("composer-runner-name")
             .test_support()
             .role(Role::Button)
             .aria_label(name.clone())
-            // It gives way like the other chips, its name ending "…": as
-            // flex_none it pushed Send out of a 560-point box on Linux,
-            // whose font is wider (composer-chips.feature, 17 Nov).
-            .min_w_0()
+            // It gives way, its name ending "…": as flex_none it pushed Send
+            // out of a 560-point box on Linux, whose font is wider
+            // (composer-chips.feature, 17 Nov). But last, after the model's
+            // and access's chips (MACHINE_SHRINK).
+            .min_w_0();
+        chip.style().flex_shrink = Some(MACHINE_SHRINK);
+        chip
             .gap(px(4.))
             .h(px(26.))
             .px(px(7.))
@@ -713,6 +716,20 @@ impl RenderOnce for ChipTrigger {
                 .into_any_element(),
         }
     }
+}
+
+/// How readily the machine chip shrinks against the other chips' 1: a
+/// machine's name is short and says where the thread is, so "laptop" stays
+/// whole while "Claude · Opus 5.5" gives way to "Claude · Op…" (Mike's
+/// window with Highlights open showed "la…", 18 Nov). Still above 0, so it
+/// shrinks too rather than push Send out of a narrow box.
+const MACHINE_SHRINK: f32 = 0.05;
+
+/// The box another runner's machine chip sits in, giving way as late.
+fn machine_slot() -> Div {
+    let mut d = div().min_w_0();
+    d.style().flex_shrink = Some(MACHINE_SHRINK);
+    d
 }
 
 fn chip_divider(cx: &App) -> impl IntoElement {

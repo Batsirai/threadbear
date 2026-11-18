@@ -110,7 +110,7 @@ fn render(id: &str, tile: AnyElement, state: LinkMark, cx: &App) -> impl IntoEle
 /// the order they're drawn. None when it has none.
 #[cfg(feature = "automation")]
 pub(crate) fn dump(text: &str, app: &crate::app::Threadbear) -> Option<Vec<String>> {
-    let marked = threadbear_core::link_marks::with_marks(text, &|id| app.threads.contains_key(id));
+    let marked = threadbear_core::link_marks::with_marks(text, &|id| threadbear_core::link_marks::resolve_in(id, app.threads.keys()));
     let mut out = Vec::new();
     let mut rest: &str = &marked;
     while let Some(at) = rest.find(SCHEME) {
