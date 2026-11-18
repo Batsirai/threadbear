@@ -284,6 +284,9 @@ impl MenuRow {
 pub(crate) enum MenuAction {
     Star(bool),
     Archive,
+    /// Archive with his answer from the done card's menu, whether he needed
+    /// to see the thread (`threads.update`'s `verdict`; inboxGuess).
+    ArchiveAs(&'static str),
     Unarchive,
     Wake,
     Hibernate(&'static str),
@@ -640,9 +643,34 @@ impl Threadbear {
     /// switch first, as it changes without a new hello, else the hello's
     /// list.
     pub(crate) fn nested_threads_on(&self) -> bool {
-        let id = nested::EXPERIMENT;
+        self.experiment_on(nested::EXPERIMENT)
+    }
+
+    /// Whether an experiment is on for this Mac's runner: Settings' switch
+    /// first, as it changes without a new hello, else the hello's list.
+    fn experiment_on(&self, id: &str) -> bool {
         let switch = self.runner_settings.as_ref().and_then(|s| s["experiments"].as_array()?.iter().find(|e| e["id"] == id).map(|e| e["on"].as_bool() == Some(true)));
         switch.unwrap_or_else(|| self.remote.experiments.iter().any(|e| e == id))
+    }
+
+    /// The done card's Archive. With the inboxGuess experiment on it first
+    /// asks whether he needed to see the thread at all, in a menu at the
+    /// button: the runner keeps his answer beside a model's guess, to find
+    /// out whether threads like it could skip his inbox (Mike, 18 Nov 2026;
+    /// docs/protocol.md, "Inbox guess"). Either answer archives. Only for a
+    /// thread on this Mac's runner: another's wouldn't be sent the answer.
+    /// ⌘E, a row's box and a swipe stay one step.
+    pub(crate) fn archive_from_card(&mut self, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.selected.clone() else { return };
+        // Only where the thread stands finished with nothing for him: an old
+        // done card's Archive, further up a thread that's since asked him
+        // something, isn't an answer about this.
+        let asks = self.experiment_on("inboxGuess") && self.threads.get(&id).is_some_and(|t| !t.is_archived() && t.runner_id.is_none() && t.needs.as_deref() == Some("nothing") && !t.needs_you);
+        if !asks {
+            return self.toggle_archive(window, cx);
+        }
+        let rows = vec![MenuRow::item("Didn't need this", "eye.slash", MenuAction::ArchiveAs("didntNeedToSee")), MenuRow::item("Glad I saw this", "eye", MenuAction::ArchiveAs("gladISaw"))];
+        self.open_menu(Some(id), rows, at, false, window, cx);
     }
 
     /// The line above a thread's transcript saying which thread started it,
@@ -724,6 +752,12 @@ impl Threadbear {
     }
 
     pub(crate) fn archive_row(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.archive_row_as(id, None, window, cx);
+    }
+
+    /// `verdict`: what he picked from the done card's Archive menu, if it
+    /// asked (`archive_from_card`), sent with the archive.
+    pub(crate) fn archive_row_as(&mut self, id: String, verdict: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) {
         let next = self.neighbour_of(&id, cx, now_ms());
         let from_inbox = self.in_inbox(&id, cx);
         // The open thread's page drops into the Archived heading, before the
@@ -735,7 +769,11 @@ impl Threadbear {
             let was_open = self.selected.as_deref() == Some(id.as_str());
             self.show_archived_note(id.clone(), title, was_open, cx);
         }
-        self.update_thread(&id, move |t| t.archived_at = Some(at), json!({ "archived": true, "archivedBy": "mike" }), cx);
+        let mut params = json!({ "archived": true, "archivedBy": "mike" });
+        if let Some(verdict) = verdict {
+            params["verdict"] = json!(verdict);
+        }
+        self.update_thread(&id, move |t| t.archived_at = Some(at), params, cx);
         self.cheer_if_inbox_cleared(from_inbox, cx);
         self.leave_selection(&id, next, window, cx);
     }
@@ -990,6 +1028,7 @@ impl Threadbear {
         match action {
             MenuAction::Star(on) => self.star_row(&id, on, cx),
             MenuAction::Archive => self.archive_row_sliding(id, window, cx),
+            MenuAction::ArchiveAs(verdict) => self.archive_row_as(id, Some(verdict), window, cx),
             MenuAction::Unarchive => self.unarchive_row(&id, cx),
             MenuAction::Wake => self.wake_row(&id, cx),
             MenuAction::Hibernate(preset) => {

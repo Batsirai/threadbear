@@ -165,6 +165,7 @@ import { newThreadsPart, type NewThreadsPart } from './runner/new-threads.ts';
 import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, ledgerCard, openFindings, parseVerdict, type LabReviewPart } from './runner/lab-review.ts';
 import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
+import { inboxGuessPart, type InboxGuessPart } from './runner/inbox-guess.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
 import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
@@ -663,6 +664,8 @@ const ARCHIVE_NOTES: Record<ArchiveVerdict, string> = {
   worked: 'Archived by you: it worked.',
   didntWork: "Archived by you: it didn't work.",
   notNeeded: 'Archived by you: not needed any more.',
+  didntNeedToSee: "Archived by you: didn't need to see this.",
+  gladISaw: 'Archived by you: glad to have seen this.',
 };
 
 const DELTA_INTERVAL_MS = 33; // at most ~30 delta flushes a second per thread
@@ -707,7 +710,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, NestedPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -2956,7 +2959,12 @@ export class Runner {
     // Finished for good, with nothing for Mike: a helper thread with nothing
     // left open archives itself (runner/quiet-inbox.ts). Not one a schedule
     // had out of the archive: the lines above have dealt with it.
-    if (finished && !review && !rec.labReviewOwed && !rt.turn && !rec.archivedAt && !this.stopping) void this.settleQuietly(st, Boolean(said?.next?.length));
+    if (finished && !review && !rec.labReviewOwed && !rt.turn && !rec.archivedAt && !this.stopping) {
+      void this.settleQuietly(st, Boolean(said?.next?.length));
+      // And a guess at whether Mike needed to see it, only written down
+      // (runner/inbox-guess.ts, experiment inboxGuess).
+      void this.guessInbox(st, turn.lastText ?? '', Boolean(said?.next?.length));
+    }
     if (archive && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Archived, as the agent was asked to once it had finished.' });
       this.update({ threadId: rec.id, archived: true, archivedBy: 'agent' });
@@ -3557,6 +3565,9 @@ export class Runner {
         archiving = !rec.archivedAt;
         const by = params.archivedBy ?? 'mike';
         const verdict = by === 'mike' ? params.verdict : undefined;
+        // His putting away a finished thread, with or without a pick from
+        // the Archive menu, is what the inbox guess is scored against.
+        if (archiving && by === 'mike') this.noteInboxArchive(st, this.looseEndsCard(st), verdict);
         // Said in the thread, for the agent or a sweeper reading it later.
         if (verdict && (archiving || verdict !== rec.archiveVerdict)) this.emit(st, { type: 'system.note', text: ARCHIVE_NOTES[verdict] });
         rec.archivedAt = this.isoNow();
@@ -4589,7 +4600,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, nestedPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
+for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }

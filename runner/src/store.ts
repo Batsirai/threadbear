@@ -321,6 +321,9 @@ export type ThreadRecord = {
   worktree?: WorktreeRecord;
   // The done card's loose ends (runner/loose-ends.ts), for the card at seq.
   looseEnds?: { seq: number; ends: LooseEnd[]; at: string };
+  // The inboxGuess experiment's guesses for the done card `seq`
+  // (runner/inbox-guess.ts): written down, never acted on.
+  inboxGuess?: { seq: number; guesses: Array<{ by: string; skip: boolean; why: string }> };
   // Made in a repo that asks for worktrees and not told otherwise: the
   // first turn makes one (and runs its setup) before the CLI starts.
   worktreePending?: boolean;

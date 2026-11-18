@@ -89,6 +89,25 @@ Feature: The open card in the composer
   # The runner's loose-ends check (protocol "Loose ends") comes on the
   # thread's summary: the GPUI app dropped it, so its done card never said
   # "Still open" when the Swift app's did (12 Nov).
+  # Experiment inboxGuess (docs/protocol.md, "Inbox guess"): the GPUI app
+  # only. The Swift app is frozen and archives straight off.
+  @card.done @planned.exp.inboxguess @inbox-guess @swift-pending
+  Scenario: Archive on the done card asks whether I needed to see the thread
+    When I open the thread "Tidy the imports in the uploader"
+    And I press "archive" on the card
+    Then the Archive menu offers "Didn't need this | Glad I saw this"
+    And the "Inbox" section lists "Tidy the imports in the uploader"
+    When I pick "Didn't need this" from the Archive menu
+    Then the "Archived" section lists "Tidy the imports in the uploader"
+    And the runner was told I archived "Tidy the imports in the uploader" as "didntNeedToSee"
+
+  @card.done @planned.exp.inboxguess @swift-pending
+  Scenario: Without the experiment, Archive on the done card archives straight off
+    When I open the thread "Tidy the imports in the uploader"
+    And I press "archive" on the card
+    Then the "Archived" section lists "Tidy the imports in the uploader"
+    And the runner was told I archived "Tidy the imports in the uploader" as ""
+
   @card.done @planned.exp.looseends
   Scenario: A done card lists what the runner found still open
     Given the runner found "4 commits it made in convex-native-v7 aren't pushed" still open on "Tidy the imports in the uploader"

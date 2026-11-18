@@ -380,6 +380,8 @@ let moveLeftBehind = ['1 background job, which gets stopped'];
 // the last threads.move's params, for the specs (mock.moveClone, mock.lastMove).
 let moveClone;
 let lastMove;
+// The last archive's thread and verdict, for the specs (mock.lastArchive).
+let lastArchive;
 const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
   { id: 'runner_cloud', name: 'Cloud box', icon: 'cloud', online: true, lastSeenAt: new Date().toISOString() },
   { id: 'runner_pixel', name: 'Phone', icon: 'smartphone', online: true, lastSeenAt: new Date().toISOString() },
@@ -416,12 +418,14 @@ let connectors = {
 };
 addDemoProjects();
 // The experiments the mock's hello says are on: Decisions on the Projects
-// page with TB_MOCK_DECISIONS, and nested threads with TB_MOCK_NESTED.
+// page with TB_MOCK_DECISIONS, nested threads with TB_MOCK_NESTED, and the
+// done card's Archive menu with TB_MOCK_INBOX_GUESS.
 function mockExperiments() {
   return [
     ...(process.env.TB_MOCK_DECISIONS ? ['projectDecisions'] : []),
     // TB_MOCK_NESTED_OFF keeps its demo threads with the experiment off.
     ...(process.env.TB_MOCK_NESTED && !process.env.TB_MOCK_NESTED_OFF ? ['nestedThreads'] : []),
+    ...(process.env.TB_MOCK_INBOX_GUESS ? ['inboxGuess'] : []),
   ];
 }
 
@@ -916,7 +920,14 @@ async function dispatch(client, method, p) {
       }
       if (p.archived !== undefined) {
         s.archivedAt = p.archived ? iso() : undefined;
-        if (p.archived) s.live = false;
+        if (p.archived) {
+          s.live = false;
+          // Like the runner: his pick from the done card's Archive menu is
+          // kept with the archive, and a plain one clears it.
+          if (p.verdict) s.archiveVerdict = p.verdict;
+          else delete s.archiveVerdict;
+          lastArchive = { threadId: s.id, verdict: p.verdict ?? null };
+        }
       }
       if (p.starred === true) s.starredAt ??= iso();
       else if (p.starred === false) delete s.starredAt;
@@ -1767,6 +1778,8 @@ async function dispatch(client, method, p) {
       return { clone: moveClone ?? null };
     case 'mock.lastMove':
       return { params: lastMove ?? null };
+    case 'mock.lastArchive':
+      return { params: lastArchive ?? null };
     case 'mock.slow': {
       slow = { ms: Math.max(0, Number(p.ms ?? 0)), queueMs: Math.max(0, Number(p.queueMs ?? 0)) };
       return slow;

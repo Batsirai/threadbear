@@ -214,3 +214,29 @@ Then('the done card lists {string} as still open', async function (this: Threadb
 Then('the done card lists nothing as still open', async function (this: ThreadbearWorld) {
   await this.until('nothing still open on the done card', (d) => doneRow(d).includes('loose ends: none'));
 });
+
+// The done card's Archive menu (the inboxGuess experiment): "Didn't need
+// this" or "Glad I saw this", each of which archives with that answer.
+Then('the Archive menu offers {string}', async function (this: ThreadbearWorld, list: string) {
+  const result = String(await this.app.do({ cmd: 'menu-popover' }));
+  assert.match(result, /shown true/, `no menu showing: ${result}`);
+  const shown = JSON.parse(result.slice(result.indexOf('['))) as string[];
+  assert.deepEqual(shown, list.split(' | '));
+});
+
+When('I pick {string} from the Archive menu', async function (this: ThreadbearWorld, title: string) {
+  await this.app.do({ cmd: 'menu-popover', click: title });
+});
+
+// What the runner got with the archive: the verdict, or "" for none.
+Then('the runner was told I archived {string} as {string}', async function (this: ThreadbearWorld, title: string, verdict: string) {
+  let last: { threadId?: string; verdict?: string | null } | null = null;
+  for (let tries = 0; tries < 50 && !last; tries += 1) {
+    const text = await this.app.do({ cmd: 'mock', method: 'lastArchive', params: {} });
+    last = ((typeof text === 'string' ? JSON.parse(text) : text) as { params?: typeof last }).params ?? null;
+    if (!last) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const d = await this.app.dump();
+  assert.equal(last?.threadId, this.thread(d, title)?.id);
+  assert.equal(last?.verdict ?? '', verdict);
+});

@@ -616,9 +616,10 @@ impl ThreadPane {
                     .h(px(metrics::PAGED_HEADING))
                     .justify_between()
                     .child(h_flex().items_center().gap(px(2.5)).child(crate::icons::tall_checkmark().with_size(px(16.)).text_color(style::tick_green(cx))).child(title("Done")))
-                    .child(card_button(("past-done-archive", ix), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click(move |_, window, cx| {
+                    .child(card_button(("past-done-archive", ix), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click(move |ev, window, cx| {
                         if let Some(app) = app.upgrade() {
-                            app.update(cx, |app, cx| app.toggle_archive(window, cx));
+                            let at = ev.position();
+                            app.update(cx, |app, cx| app.archive_from_card(at, window, cx));
                         }
                     })),
             );

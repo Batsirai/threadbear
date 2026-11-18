@@ -82,7 +82,7 @@ export function reviewPrompt(runner: Runner, st: ThreadState, card: CardForRevie
 // The newest message from Mike, and a newer one from anything else (the
 // runner, a schedule, another thread's agent) if there is one, a page at a
 // time from the end, as a long turn can put thousands of events after them.
-function latestMessages(runner: Runner, st: ThreadState): { mike?: string; other?: { text: string; from: string } } {
+export function latestMessages(runner: Runner, st: ThreadState): { mike?: string; other?: { text: string; from: string } } {
   const log = runner.store.log(st.rec.id);
   let other: { text: string; from: string } | undefined;
   for (let to = log.lastSeq; to >= 1; to -= 200) {

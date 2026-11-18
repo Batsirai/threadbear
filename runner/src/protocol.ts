@@ -210,8 +210,10 @@ export type ThreadStatus = 'idle' | 'starting' | 'running' | 'waiting' | 'error'
 
 // Who archived a thread, and how Mike said it went (Who archived a thread).
 export type ArchivedBy = 'mike' | 'agent' | 'threadbear';
-export type ArchiveVerdict = 'worked' | 'didntWork' | 'notNeeded';
-export const ARCHIVE_VERDICTS: readonly ArchiveVerdict[] = ['worked', 'didntWork', 'notNeeded'];
+// The last two are the inboxGuess experiment's (runner/inbox-guess.ts):
+// whether he needed to see the thread at all, from the Archive menu.
+export type ArchiveVerdict = 'worked' | 'didntWork' | 'notNeeded' | 'didntNeedToSee' | 'gladISaw';
+export const ARCHIVE_VERDICTS: readonly ArchiveVerdict[] = ['worked', 'didntWork', 'notNeeded', 'didntNeedToSee', 'gladISaw'];
 
 // What fills a thread's context, in Claude's own words (threads.contextUsage,
 // docs/protocol.md "Context breakdown"). Rows are the CLI's /context rows:

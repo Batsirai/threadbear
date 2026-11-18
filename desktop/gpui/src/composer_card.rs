@@ -231,9 +231,11 @@ impl Composer {
         crate::web_panels::keyboard_to_app(window);
     }
 
-    fn archive_thread(&self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `at`: where the click was, for the menu Archive opens while the
+    /// inboxGuess experiment is on (`archive_from_card`).
+    fn archive_thread(&self, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(app) = self.app.upgrade() {
-            app.update(cx, |app, cx| app.toggle_archive(window, cx));
+            app.update(cx, |app, cx| app.archive_from_card(at, window, cx));
         }
     }
 
@@ -426,9 +428,10 @@ impl Composer {
                 .child(card_title(tick, 2.5, "Done", cx))
                 .child(card_button(("done-archive", 0usize), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click({
                     let this = this.clone();
-                    move |_, window, cx| {
+                    move |ev, window, cx| {
                         if let Some(this) = this.upgrade() {
-                            this.update(cx, |this, cx| this.archive_thread(window, cx));
+                            let at = ev.position();
+                            this.update(cx, |this, cx| this.archive_thread(at, window, cx));
                         }
                     }
                 })),
@@ -1227,7 +1230,7 @@ impl Composer {
         self.sync_card(&card);
         let parts: Vec<&str> = action.split(':').collect();
         match parts.as_slice() {
-            ["archive"] => self.archive_thread(window, cx),
+            ["archive"] => self.archive_thread(window.mouse_position(), window, cx),
             ["collapse"] => self.toggle_collapsed(window, cx),
             ["page", n] => self.set_page(n.parse().map_err(|_| "bad page")?, cx),
             ["next", n] => self.toggle_follow_up(n.parse().map_err(|_| "bad index")?, window, cx),

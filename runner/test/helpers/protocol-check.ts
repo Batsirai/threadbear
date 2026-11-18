@@ -183,7 +183,7 @@ export function checkSummary(t: Obj): string[] {
   if (t.title.length > 200) problems.push('title');
   for (const k of ['model', 'modelInUse', 'snoozedUntil', 'archivedAt', 'nativeSessionId']) if (t[k] !== undefined && !isStr(t[k])) problems.push(k);
   if (t.archivedBy !== undefined && (!['mike', 'agent', 'threadbear'].includes(t.archivedBy as string) || t.archivedAt === undefined)) problems.push('archivedBy');
-  if (t.archiveVerdict !== undefined && (!['worked', 'didntWork', 'notNeeded'].includes(t.archiveVerdict as string) || t.archivedAt === undefined)) problems.push('archiveVerdict');
+  if (t.archiveVerdict !== undefined && (!['worked', 'didntWork', 'notNeeded', 'didntNeedToSee', 'gladISaw'].includes(t.archiveVerdict as string) || t.archivedAt === undefined)) problems.push('archiveVerdict');
   if (t.poolId !== undefined && (!isStr(t.poolId) || !t.poolId)) problems.push('poolId');
   if (t.carryOnAtReset !== undefined && t.carryOnAtReset !== false) problems.push('carryOnAtReset');
   if (t.waitingForRoom !== undefined) {
