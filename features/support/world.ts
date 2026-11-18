@@ -207,6 +207,11 @@ After(async function (this: ThreadbearWorld, { result, pickle }) {
     const name = pickle.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
     const file = path.join(dir, `${this.app.name}-${name}.png`);
     await this.app.shot(file).catch(() => {});
+    // The stress run also keeps what the app said it showed (tools/stress.mjs).
+    if (process.env.TB_STRESS_LOG) {
+      const dump = await this.app.dump().catch((e: Error) => ({ error: e.message }));
+      fs.writeFileSync(file.replace(/\.png$/, '.dump.json'), JSON.stringify(dump, null, 1));
+    }
     if (fs.existsSync(file)) this.attach(fs.readFileSync(file), 'image/png');
   }
   await this.app.stop();
