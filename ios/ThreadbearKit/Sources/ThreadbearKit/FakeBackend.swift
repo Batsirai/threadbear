@@ -550,9 +550,9 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         return id
     }
 
-    private func append(_ threadId: String, role: PhoneMessage.Role, text: String, origin: String? = nil) {
+    private func append(_ threadId: String, role: PhoneMessage.Role, text: String, origin: String? = nil, answers: [AskAnswer] = []) {
         var list = messagesById[threadId] ?? []
-        list.append(PhoneMessage(seq: (list.last?.seq ?? 0) + 1, role: role, text: text, origin: origin, at: .now))
+        list.append(PhoneMessage(seq: (list.last?.seq ?? 0) + 1, role: role, text: text, origin: origin, answers: answers.isEmpty ? nil : answers, at: .now))
         messagesById[threadId] = list
     }
 
@@ -600,7 +600,7 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         let id = answered { fake in
             fake.mutate { s in
                 s.waitingByThread[threadId] = nil
-                s.append(threadId, role: .user, text: text, origin: "phone")
+                s.append(threadId, role: .user, text: text, origin: "phone", answers: answers)
                 // The next turn closes the card, as on the runner.
                 s.threadsById[threadId]?.asks = nil
                 s.threadsById[threadId]?.asksSeq = nil

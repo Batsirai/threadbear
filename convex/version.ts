@@ -425,4 +425,9 @@
 //    sync:threadIndexSince and sync:otherRunnersThreads pass on, so another
 //    Mac's composer shows a thread's real access. A runner sends it only to
 //    a backend of 88 or later.
-export const API_VERSION = 88;
+// 89: a user's message row can carry `answers`, the open card's asks it
+//    answered (each its question, `action`, and the pick, `answer`), and
+//    phone:messages passes them on, so the phone draws them as the Mac
+//    does: the question small, the answer as his words. A runner sends
+//    `answers` only to a backend of 89 or later.
+export const API_VERSION = 89;

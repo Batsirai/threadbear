@@ -636,6 +636,9 @@ export const appSchema = defineSchema({
     wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))), // what finished and woke this turn, on its first row (since API 33)
     buttons: v.optional(v.array(messageButton)), // the reply buttons its text links, as they are now (since API 59)
     pictures: v.optional(v.number()), // how many pictures a user's message came with (since API 87), for another Mac's relay
+    // The open card's asks a user's message answered, each its question and
+    // the pick (since API 89), so the phone draws them as answers, as the Mac does.
+    answers: v.optional(v.array(v.object({ action: v.string(), answer: v.string() }))),
     at: v.string(),
     pagedAt: v.optional(v.number()),
     // The runner key's runner that wrote it, so past its message budget its

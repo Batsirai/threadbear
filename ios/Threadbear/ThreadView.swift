@@ -969,6 +969,19 @@ struct MessageView: View {
                     }
                 }
             }
+        } else if let answers = message.answers, let extra = AskAnswer.extra(text: message.text, answers: answers) {
+            // Answers to the card's asks read as the Mac shows them: each
+            // question small and quiet, the pick as his words, then anything
+            // else he wrote (Mike, 18 Nov: the phone showed them as one run).
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(answers.enumerated()), id: \.offset) { _, answer in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(answer.action).font(.footnote).foregroundStyle(.secondary)
+                        Text(answer.answer)
+                    }
+                }
+                if !extra.isEmpty { Text(extra) }
+            }
         } else {
             // Its [Picture N] markers as chips, as the Mac draws them.
             PhotoChip.text(shownText, font: .preferredFont(forTextStyle: .body), traits: UITraitCollection { traits in

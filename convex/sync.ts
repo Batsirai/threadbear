@@ -662,6 +662,9 @@ function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
   for (const f of ['origin', 'toolKind']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 100);
   if (Array.isArray(out.wokeBy)) out.wokeBy = out.wokeBy.slice(0, 5).map((w: any) => ({ kind: cutBytes(String(w?.kind ?? ''), 40), description: cutBytes(String(w?.description ?? ''), 200) }));
   if (Array.isArray(out.buttons)) out.buttons = out.buttons.slice(0, MESSAGE_BUTTONS).map((b: any) => fitButton(b));
+  // Only a user's message answers asks; a card has at most a handful.
+  if (out.role !== 'user' || !Array.isArray(out.answers)) delete out.answers;
+  else out.answers = out.answers.slice(0, 20).map((a: any) => ({ action: cutBytes(String(a?.action ?? ''), 2000), answer: cutBytes(String(a?.answer ?? ''), 2000) }));
   return docBytes(out) <= (plan ? CAP.planDoc : CAP.messageDoc) ? (out as T) : undefined;
 }
 
@@ -1617,6 +1620,7 @@ const messageDoc = v.object({
   wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))), // API 33
   buttons: v.optional(v.array(messageButton)), // API 59
   pictures: v.optional(v.number()), // API 87: how many pictures a user's message came with
+  answers: v.optional(v.array(v.object({ action: v.string(), answer: v.string() }))), // API 89: the asks a user's message answered
   at: v.string(),
   pagedAt: v.optional(v.number()), // an old phone asked for it (loadEarlier): phone:thread shows it for a day
 });

@@ -6234,6 +6234,11 @@ only way the app opens another runner's thread.
   old runner's card has those; any more files are named in the result. The app fills
   the row in by `itemId`. Withheld, the result says why. Otherwise the stub stands.
   Reasoning, sub-agents and tools' pictures stay on that runner from here.
+- **Answers in messages** (backend API 89). A user's message row from a
+  `user.message` with `answers` carries them (`[{ action, answer }]`, scrubbed
+  as the text is), and `remoteTail` and `remoteMessages` pass them on, so the
+  relay's event has them and another Mac's bubble shows the asks as answers.
+  A runner sends them only to a backend of 89 or later.
 - **Pictures in messages** (backend API 87). From API 87 a user's message
   row carries `pictures`, how many pictures the message came with (the owning
   runner's `toMessageDoc`; `remoteTail` and `remoteMessages` pass on a whole

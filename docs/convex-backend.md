@@ -574,7 +574,11 @@ Queries:
   API 78: the line a thread writes when its login runs out) is in a page
   only when it's asked for with `notes: true` (API 79), as the website and
   iPhone app builds after 1.0.4 do; an app built before can't read the role.
-  `phone:thread` never has them. It reads Convex alone, so it works
+  `phone:thread` never has them. A user's message that answered the open
+  card's asks carries `answers` (API 89), `[{ action, answer }]`: each ask's
+  question and the pick, which its text starts with as the Mac wrote them
+  (`AskAnswer.message`), so the iPhone draws the question small over the
+  answer, as the Mac's bubble does. It reads Convex alone, so it works
   while the Mac is asleep. The website watches only the newest 30 with it and
   reads older pages once, with `beforeSeq` (`web/src/transcript.ts`). The
   iPhone does the same with an 80-row live page and chunks of 200

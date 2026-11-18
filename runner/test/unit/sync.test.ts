@@ -964,6 +964,16 @@ test('a tool call becomes one line: the description, the file, the search, else 
   assert.deepEqual(doc, { threadId: 't1', seq: 7, role: 'tool', text: 'Ran ls', toolKind: 'command', at: '2026-10-28T00:00:00.000Z' });
 });
 
+test("answers: a message that answered asks says them on its row, scrubbed as its words are", () => {
+  const at = '2026-11-18T00:00:00.000Z';
+  const scrub = (t: string) => t.replace('sk-secret', '[key]');
+  const answers = [{ action: 'Paste sk-secret?', answer: 'Refuse it' }];
+  const doc = toMessageDoc('t1', { type: 'user.message', seq: 4, ts: at, text: 'Paste sk-secret?\nRefuse it', images: [], answers } as never, scrub)!;
+  assert.deepEqual(doc.answers, [{ action: 'Paste [key]?', answer: 'Refuse it' }]);
+  assert.equal(doc.text, 'Paste [key]?\nRefuse it');
+  assert.equal(toMessageDoc('t1', { type: 'user.message', seq: 5, ts: at, text: 'hi', images: [] } as never)!.answers, undefined);
+});
+
 test('plans: a Plan first plan goes to the phone whole, as a plan row', () => {
   const at = '2026-11-10T00:00:00.000Z';
   const plan = (text: string) => toMessageDoc('t1', { type: 'plan.proposed', seq: 9, ts: at, itemId: 'p', text, turnId: 'abcdef1234' } as never, (t) => t.replace('sk-secret', '[key]'));

@@ -45,7 +45,7 @@ import type { Notification } from './runner.ts';
 import type { RemoteThread, RemoteThreads } from './thread-index.ts';
 import type { Download, Post, Subscribe, Upload } from './sync.ts';
 import { picturesSaid, withoutCountLine } from './pictures.ts';
-import { ErrorCode, RpcError, remoteCreateMode, type LabReviewLedger } from './protocol.ts';
+import { ErrorCode, RpcError, remoteCreateMode, type AskAnswer, type LabReviewLedger } from './protocol.ts';
 import { seal } from './secrets.ts';
 
 export const SCALE = 8;
@@ -204,6 +204,8 @@ export type RelayRow = {
   // How many pictures a user's message came with (API 87, from a runner
   // that says): without it, they're counted from the words (saidOf).
   pictures?: number;
+  // The asks a user's message answered (API 89).
+  answers?: AskAnswer[];
   at: string;
 };
 export type RowButton = { id: string; title: string; kind: 'start' | 'send'; target?: string; pressedThreadId?: string; failed?: string };
@@ -438,7 +440,7 @@ export function relayEvents(threadId: string, rows: RelayRow[], row: RelayThread
     if (r.role === 'user') {
       // Without the pictures read (an older backend), as that runner's words alone.
       const { text, images } = pictures ? messageWithPictures(threadId, r, pictures.get(r.seq)) : { text: r.text, images: [] };
-      out.push(env(base + 1, r, { type: 'user.message', text, images, ...(r.origin === 'phone' || r.origin === 'runner' || r.origin === 'schedule' ? { origin: r.origin } : {}) }));
+      out.push(env(base + 1, r, { type: 'user.message', text, images, ...(r.answers?.length ? { answers: r.answers.map((a) => ({ action: a.action, answer: a.answer })) } : {}), ...(r.origin === 'phone' || r.origin === 'runner' || r.origin === 'schedule' ? { origin: r.origin } : {}) }));
     } else if (r.role === 'assistant' && r.plan) {
       // A Plan first plan: its card, as that runner's own Mac draws it. As a
       // reply it folded into the turn's work and nothing showed (12 Nov).

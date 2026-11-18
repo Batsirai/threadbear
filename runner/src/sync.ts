@@ -157,7 +157,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 88;
+export const BACKEND_API_VERSION = 89;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -183,6 +183,9 @@ export const RELAY_PICTURES_API_VERSION = 63;
 // (`pictures`), and the main Mac's relay reads them (relay:picturesAtSeqs),
 // so another Mac shows them without guessing from the words.
 export const MESSAGE_PICTURES_API_VERSION = 87;
+// From this one a user's message row carries the asks it answered
+// (`answers`), so the phone draws them as answers, as the Mac does.
+export const MESSAGE_ANSWERS_API_VERSION = 89;
 // From this one the Mac app's Runners panel can ask for every runner's machine
 // figures (runners.stats): sync:watchRunnersFromMac and sync:runnerStatsList,
 // on top of the website's runnerStats rows (API 45).
@@ -493,7 +496,7 @@ export type PhoneAsk = { action: string; why?: string; reply?: string; options?:
 // A text message, or one line for a tool call (role "tool", since backend
 // API 2): what the phone and the website show of a thread.
 export type WokeByDoc = { kind: string; description: string };
-export type MessageDoc = { threadId: string; seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: true; plan?: true; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: WokeByDoc[]; buttons?: MessageButton[]; pictures?: number; at: string; pagedAt?: number };
+export type MessageDoc = { threadId: string; seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: true; plan?: true; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: WokeByDoc[]; buttons?: MessageButton[]; pictures?: number; answers?: AskAnswer[]; at: string; pagedAt?: number };
 // A reply button as a message row carries it (API 59): enough to draw it
 // and say where it goes, never its brief or message, which stay on the Mac.
 // target: the new thread's folder name, or the title of the thread it messages.
@@ -1162,6 +1165,9 @@ export function toMessageDoc(threadId: string, e: PersistedEvent, scrub: (text: 
   // the words: a typed "[Picture 2]" isn't one, and the cut above can take
   // the only marker (Codex's review, 18 Nov).
   if (e.type === 'user.message' && e.images?.length) doc.pictures = e.images.length;
+  // The asks it answered, scrubbed as its words are, so the phone draws
+  // them as the Mac does (it finds them at the start of the text).
+  if (e.type === 'user.message' && e.answers?.length) doc.answers = e.answers.map((a) => ({ action: scrub(a.action), answer: scrub(a.answer) }));
   if (e.type === 'assistant.text' && e.summary) doc.summary = true;
   return doc;
 }
@@ -3672,6 +3678,8 @@ export class ConvexSync {
     if (v === undefined || v < RELAY_CARDS_API_VERSION) messages = messages.map((m) => (m.planDecision ? (({ planDecision, ...rest }) => rest)(m) : m));
     // Before API 87 the validator has no `pictures`; the count line still says them.
     if (v === undefined || v < MESSAGE_PICTURES_API_VERSION) messages = messages.map((m) => (m.pictures ? (({ pictures, ...rest }) => rest)(m) : m));
+    // Before API 89 the validator has no `answers`; the text still says them.
+    if (v === undefined || v < MESSAGE_ANSWERS_API_VERSION) messages = messages.map((m) => (m.answers ? (({ answers, ...rest }) => rest)(m) : m));
     // The buttons' state as it is now, not when the row was made: a press
     // while the row waited would otherwise go up stale.
     if (v !== undefined && v >= BUTTONS_API_VERSION) messages = messages.map((m) => this.withButtons(m));
