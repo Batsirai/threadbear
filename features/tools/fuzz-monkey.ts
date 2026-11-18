@@ -276,7 +276,10 @@ async function replay(cmds: Cmd[]): Promise<Failure | null> {
         await app.do(c, 20);
       } catch (e) {
         const hard = isHard((e as Error).message);
-        if (hard) return { kind: hard, detail: (e as Error).message.split('\n')[0], step: i };
+        if (hard) {
+          if (hard === 'freeze') sampleTo(app.pid, path.join(out, `replay-sample-${i}.txt`));
+          return { kind: hard, detail: (e as Error).message.split('\n')[0], step: i };
+        }
       }
       const f = await check(app, before, Date.now() - lastMock < MOCK_SETTLE_MS).catch((e) => ({ kind: isHard((e as Error).message) ?? 'check', detail: (e as Error).message.split('\n')[0] }));
       if (f) return { ...f, step: i };
@@ -315,10 +318,22 @@ async function shrink(cmds: Cmd[], kind: string, budgetMs: number): Promise<Cmd[
   return best;
 }
 
+/** Where the app's main thread is while it doesn't answer: macOS's `sample`,
+ * read from outside, as the app can't answer for itself then. */
+function sampleTo(pid: number | undefined, file: string) {
+  if (!pid || process.platform !== 'darwin') return;
+  try {
+    execFileSync('/usr/bin/sample', [String(pid), '2', '-file', file], { stdio: 'ignore', timeout: 30_000 });
+  } catch {
+    // The process went, or sample couldn't attach: the log says the rest.
+  }
+}
+
 async function keep(app: GpuiDriver | null, dir: string, f: Failure, trace: Step[]) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'trace.json'), JSON.stringify({ seed, failure: f, commands: trace.map((s) => s.cmd), steps: trace }, null, 2));
   if (app) {
+    if (f.kind === 'freeze') sampleTo(app.pid, path.join(dir, 'sample.txt'));
     await app.shot(path.join(dir, 'shot.png')).catch(() => {});
     fs.writeFileSync(path.join(dir, 'app.log'), await app.appLog().catch(() => ''));
     fs.writeFileSync(path.join(dir, 'evidence.txt'), await app.evidence(false).catch((e) => String(e)));
