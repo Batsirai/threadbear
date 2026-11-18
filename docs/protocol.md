@@ -7910,7 +7910,8 @@ SHA-256 (`boxKeyHash`).
   machine, which the row then takes as its own. A refused `CREATED` deletes
   its machine only if the reaper's plan and fence would delete it then.
   A machine a delete fence decides to delete is condemned in that same step
-  (`boxes.condemned`) until the provider has it no more: an exchange naming
+  (a `boxCondemned` row, with when, no cap) until its delete succeeds or a
+  listing asked for after that no longer has it: an exchange naming
   it is refused, as is one naming no machine while any of its attempt is
   condemned (the boot token stays for the kept machine), and a heartbeat
   naming it never makes it the key holder's.

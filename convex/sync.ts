@@ -1302,17 +1302,17 @@ export const sharedThreads = query({
  * heartbeat sent before it isn't taken for its).
  */
 const HEARD_AFTER_MS = 30_000;
-function heardFrom(row: Doc<'boxes'>, machineId: string | undefined): Partial<Doc<'boxes'>> {
+async function heardFrom(ctx: MutationCtx, row: Doc<'boxes'>, machineId: string | undefined): Promise<Partial<Doc<'boxes'>>> {
   if (row.keyAttempt === undefined) return {};
   // A machine being deleted is never named the key holder's.
-  const condemned = (id: string) => (row.condemned ?? []).some((c) => c.providerBoxId === id);
-  if (machineId !== undefined && condemned(machineId)) return {};
+  const condemned = async (id: string) => (await ctx.db.query('boxCondemned').withIndex('by_machine', (q) => q.eq('providerBoxId', id)).first()) !== null;
+  if (machineId !== undefined && (await condemned(machineId))) return {};
   if (machineId !== undefined && MACHINE_ID.test(machineId)) {
     if (row.keyMachineId === undefined) return { keyMachineId: machineId, unsure: undefined };
     return row.keyMachineId === machineId && row.unsure ? { unsure: undefined } : {};
   }
   const r = row.unsure?.resumed;
-  if (r && !condemned(r.machine) && r.machine === row.providerBoxId && row.providerAttempt === row.keyAttempt && Date.now() >= r.at + HEARD_AFTER_MS && (row.keyMachineId === undefined || row.keyMachineId === r.machine)) return { keyMachineId: r.machine, unsure: undefined };
+  if (r && r.machine === row.providerBoxId && !(await condemned(r.machine)) && row.providerAttempt === row.keyAttempt && Date.now() >= r.at + HEARD_AFTER_MS && (row.keyMachineId === undefined || row.keyMachineId === r.machine)) return { keyMachineId: r.machine, unsure: undefined };
   return {};
 }
 
@@ -1382,7 +1382,7 @@ export const heartbeat = mutation({
       runner = rest;
     }
     if (boxRow) {
-      const heard = heardFrom(boxRow, machineId);
+      const heard = await heardFrom(ctx, boxRow, machineId);
       await ctx.db.patch(boxRow._id, { lastHeartbeatAt: Date.now(), unreachableSince: undefined, ...heard });
       // A trial's wake (boxService.ts bringBack) waits for this: it's woken again to finish.
       if (heard.keyMachineId !== undefined && boxRow.boxState.kind === 'waking') await ctx.scheduler.runAfter(0, internal.boxService.wakeBox, { boxId: boxRow._id });

@@ -362,11 +362,6 @@ export const appSchema = defineSchema({
     // that says it's the holder, sync.ts heartbeat), and `surfaced` once a
     // wake or its resumed box ended with it still unresolved (shown on the
     // thread, RemoteRunner.box.unsure).
-    // Machines a delete fence has decided to delete (boxService.ts reapStep,
-    // deleteFence), by provider id and attempt, until the provider has them
-    // no more: none of them may take the key (boxes.ts claimBoot), nor be
-    // named the key holder's by a heartbeat (sync.ts heartFrom).
-    condemned: v.optional(v.array(v.object({ providerBoxId: v.string(), attempt: v.number() }))),
     unsure: v.optional(v.object({ since: v.number(), tried: v.array(v.string()), pickedFor: v.optional(v.number()), resumed: v.optional(v.object({ machine: v.string(), at: v.number() })), surfaced: v.optional(v.boolean()) })),
     // Attempts whose boxes may hold work newer than the newest save each
     // made (invariant W, boxMachine.ts holdsWork).
@@ -411,6 +406,14 @@ export const appSchema = defineSchema({
   // the next pass doesn't queue a second for it. Gone when it ends, or
   // taken as stale after REAP_PENDING_MS.
   // `job`: which queued step it is (unique, made by the pass that queued it), so an older step ending doesn't clear a newer one's mark.
+  // Machines a delete fence has decided to delete (boxService.ts reapStep,
+  // deleteFence), one row each, `at` when it was decided, until the
+  // provider's delete succeeds or a listing taken after `at` has it no
+  // more: none may take the key (boxes.ts claimBoot), nor be named the key
+  // holder's by a heartbeat (sync.ts heardFrom).
+  boxCondemned: defineTable({ boxId: v.id('boxes'), providerBoxId: v.string(), attempt: v.number(), at: v.number() })
+    .index('by_box_attempt', ['boxId', 'attempt'])
+    .index('by_machine', ['providerBoxId']),
   reapQueued: defineTable({ providerBoxId: v.string(), at: v.number(), job: v.optional(v.string()) }).index('by_box', ['providerBoxId']),
 
   cloudTokens: defineTable({

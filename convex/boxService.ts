@@ -944,23 +944,22 @@ export const deleteFailed = internalMutation({
 });
 
 export const deleteDone = internalMutation({
-  // boxId: its row's, whose condemned list it leaves (the provider has it no more).
+  // boxId: kept for callers; the provider's delete succeeded, so its condemned mark goes (boxCondemned).
   args: { providerBoxId: v.string(), boxId: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { providerBoxId, boxId }) => {
+  handler: async (ctx, { providerBoxId }) => {
     for (const r of await ctx.db.query('boxDeleteBackoff').withIndex('by_box', (q) => q.eq('providerBoxId', providerBoxId)).collect()) await ctx.db.delete(r._id);
-    const row = boxId !== undefined ? await rowOf(ctx, boxId) : null;
-    if (row?.condemned?.some((c) => c.providerBoxId === providerBoxId)) await ctx.db.patch(row._id, { condemned: row.condemned.filter((c) => c.providerBoxId !== providerBoxId) });
+    for (const r of await ctx.db.query('boxCondemned').withIndex('by_machine', (q) => q.eq('providerBoxId', providerBoxId)).collect()) await ctx.db.delete(r._id);
     return null;
   },
 });
 
-// A machine a fence decided to delete, recorded on its row in that same step (boxes.condemned).
+// A machine a fence decided to delete, marked in that same step (boxCondemned), with when.
 async function condemn(ctx: MutationCtx, row: Doc<'boxes'>, providerBoxId: string, attempt: number): Promise<void> {
-  const fresh = await ctx.db.get(row._id);
-  if (!fresh || fresh.condemned?.some((c) => c.providerBoxId === providerBoxId)) return;
-  // A few at most ever: the oldest go first past 16.
-  await ctx.db.patch(row._id, { condemned: [...(fresh.condemned ?? []), { providerBoxId, attempt }].slice(-16) });
+  const marks = await ctx.db.query('boxCondemned').withIndex('by_machine', (q) => q.eq('providerBoxId', providerBoxId)).collect();
+  // Decided again: `at` moves on, so no listing older than this decision clears it.
+  for (const m of marks) if (m.boxId === row._id) return void (await ctx.db.patch(m._id, { at: Date.now() }));
+  await ctx.db.insert('boxCondemned', { boxId: row._id, providerBoxId, attempt, at: Date.now() });
 }
 
 /** Of these machines, those whose last delete failed and whose backoff isn't out. */
@@ -1404,6 +1403,8 @@ export const reapService = internalAction({
     const p = provider(await ctx.runQuery(internal.boxService.serviceProvider, { serviceId }), UNKNOWN_MB);
     if (!p) return null;
     let listed;
+    // When the listing was asked for: it clears only marks made before (driftPage).
+    const listedAt = Date.now();
     try {
       listed = (await retrying(() => p.list({ tb_service: serviceId }))).filter((b) => after === undefined || b.providerBoxId > after).sort((a, b) => (a.providerBoxId < b.providerBoxId ? -1 : 1));
     } catch (e) {
@@ -1430,7 +1431,7 @@ export const reapService = internalAction({
     }
     if (listed.length > size) await ctx.scheduler.runAfter(0, internal.boxService.reapService, { serviceId, after: boxes[boxes.length - 1]!.providerBoxId, chunk: size });
     // Once a pass (its first chunk), the other way round: every row against the whole listing.
-    if (after === undefined) await sweepDrift(ctx, serviceId, p, listed.map((b) => ({ providerBoxId: b.providerBoxId, boxId: b.tags.tb_box ?? '', running: b.state === 'running' })));
+    if (after === undefined) await sweepDrift(ctx, serviceId, p, listed.map((b) => ({ providerBoxId: b.providerBoxId, boxId: b.tags.tb_box ?? '', running: b.state === 'running' })), listedAt);
     return null;
   },
 });
@@ -1447,9 +1448,10 @@ const LOSABLE: readonly string[] = ['creating', 'starting', 'awake', 'saving', '
  * more. A page of rows a call.
  */
 export const driftPage = internalMutation({
-  args: { serviceId: v.id('runnerServices'), listed: v.array(v.object({ providerBoxId: v.string(), boxId: v.string(), running: v.boolean() })), cursor: v.union(v.string(), v.null()) },
+  // listedAt: when the listing was asked for (a condemned mark made after it isn't cleared by it).
+  args: { serviceId: v.id('runnerServices'), listed: v.array(v.object({ providerBoxId: v.string(), boxId: v.string(), running: v.boolean() })), cursor: v.union(v.string(), v.null()), listedAt: v.optional(v.number()) },
   returns: v.object({ missing: v.array(v.object({ boxId: v.id('boxes'), providerBoxId: v.string(), attempt: v.number() })), next: v.union(v.string(), v.null()) }),
-  handler: async (ctx, { serviceId, listed, cursor }) => {
+  handler: async (ctx, { serviceId, listed, cursor, listedAt }) => {
     const byId = new Map(listed.map((b) => [b.providerBoxId, b.running]));
     const runningRows = new Set(listed.filter((b) => b.running).map((b) => b.boxId));
     const page = await ctx.db.query('boxes').withIndex('by_service_state', (q) => q.eq('serviceId', serviceId)).paginate({ numItems: PRUNE_BATCH, cursor });
@@ -1457,8 +1459,8 @@ export const driftPage = internalMutation({
     for (const row of page.page) {
       // Counted while any machine of it runs in the whole listing; none: not counted.
       if (row.seenRunningAt !== undefined && !runningRows.has(row._id)) await ctx.db.patch(row._id, { seenRunningAt: undefined });
-      // Condemned machines the provider has no more (the whole listing): dropped.
-      if (row.condemned?.some((c) => !byId.has(c.providerBoxId))) await ctx.db.patch(row._id, { condemned: row.condemned.filter((c) => byId.has(c.providerBoxId)) });
+      // Condemned machines the provider has no more, by a whole listing taken after they were condemned: unmarked.
+      if (listedAt !== undefined) for (const c of await ctx.db.query('boxCondemned').withIndex('by_box_attempt', (q) => q.eq('boxId', row._id)).collect()) if (c.at < listedAt && !byId.has(c.providerBoxId)) await ctx.db.delete(c._id);
       if (row.providerBoxId && !byId.has(row.providerBoxId) && LOSABLE.includes(row.boxState.kind)) missing.push({ boxId: row._id, providerBoxId: row.providerBoxId, attempt: row.providerAttempt ?? newestAttempt(row) });
       // The key holder's machine, not the row's (not taken in yet), missing too.
       else if (row.keyMachineId !== undefined && row.keyAttempt !== undefined && row.keyMachineId !== row.providerBoxId && !byId.has(row.keyMachineId) && LOSABLE.includes(row.boxState.kind)) missing.push({ boxId: row._id, providerBoxId: row.keyMachineId, attempt: row.keyAttempt });
@@ -1467,10 +1469,10 @@ export const driftPage = internalMutation({
   },
 });
 
-async function sweepDrift(ctx: ActionCtx, serviceId: Id<'runnerServices'>, _raw: BoxProvider, listed: { providerBoxId: string; boxId: string; running: boolean }[]): Promise<void> {
+async function sweepDrift(ctx: ActionCtx, serviceId: Id<'runnerServices'>, _raw: BoxProvider, listed: { providerBoxId: string; boxId: string; running: boolean }[], listedAt: number): Promise<void> {
   let cursor: string | null = null;
   do {
-    const page: { missing: { boxId: Id<'boxes'>; providerBoxId: string; attempt: number }[]; next: string | null } = await ctx.runMutation(internal.boxService.driftPage, { serviceId, listed, cursor });
+    const page: { missing: { boxId: Id<'boxes'>; providerBoxId: string; attempt: number }[]; next: string | null } = await ctx.runMutation(internal.boxService.driftPage, { serviceId, listed, cursor, listedAt });
     for (const m of page.missing) await ctx.scheduler.runAfter(0, internal.boxService.driftOne, m);
     cursor = page.next;
   } while (cursor);

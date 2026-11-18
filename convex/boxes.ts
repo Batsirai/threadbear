@@ -506,8 +506,13 @@ export const claimBoot = internalMutation({
     // A machine being deleted never takes the key: one that says it's that
     // machine, or (it can't be told) one that doesn't say while any of its
     // attempt is being deleted. The token stays for the machine that's kept.
-    const condemned = row.condemned ?? [];
-    if (machineId !== undefined ? condemned.some((c) => c.providerBoxId === machineId) : condemned.some((c) => c.attempt === row.bootAttempt)) return null;
+    const condemned =
+      machineId !== undefined
+        ? await ctx.db.query('boxCondemned').withIndex('by_machine', (q) => q.eq('providerBoxId', machineId)).first()
+        : row.bootAttempt !== undefined
+          ? await ctx.db.query('boxCondemned').withIndex('by_box_attempt', (q) => q.eq('boxId', row._id).eq('attempt', row.bootAttempt!)).first()
+          : null;
+    if (condemned) return null;
     const token = await cloudToken(ctx, row.login);
     if (token.sealed !== sealedToken || row.sealedThreadKey !== sealedThreadKey) throw conflict("The login's cloud token changed while the box started: try again.");
     const r = await boxMachine.send(ctx, row._id, { type: 'READY' });

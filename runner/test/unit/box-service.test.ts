@@ -2509,14 +2509,14 @@ test("a machine the fence decides to delete can't take the key before its delete
   const step = (await call(s.ctx, service.reapPlan, { serviceId: s.serviceId, boxes: listed })).find((x: { box: { providerBoxId: string } }) => x.box.providerBoxId === 'dup');
   assert.equal(step.do, 'destroy');
   assert.equal(await call(s.ctx, service.reapStep, { serviceId: s.serviceId, box: step.box, do: 'destroy', seen: step.seen, siblings: 1 }), true);
-  assert.deepEqual(s.rowOf('T2').condemned, [{ providerBoxId: 'dup', attempt: 1 }]);
+  assert.deepEqual(s.rows('boxCondemned').map((c) => [c.providerBoxId, c.attempt]), [['dup', 1]]);
   // Before its delete, the condemned machine's exchange is refused, and so is one that doesn't say which it is.
   assert.notEqual(await outcome(call(s.a, boxes.exchange, { bootToken: s.bootOf(a.id), machineId: 'dup' })), 'ok');
   assert.notEqual(await outcome(s.exchange(s.bootOf(a.id))), 'ok');
   assert.equal(s.rowOf('T2').boxKeyHash, undefined);
   // The delete done, the kept machine trades the token as ever.
   await call(s.ctx, service.deleteDone, { providerBoxId: 'dup', boxId });
-  assert.equal(s.rowOf('T2').condemned?.length ?? 0, 0);
+  assert.equal(s.rows('boxCondemned').length, 0);
   const got = await s.exchange(s.bootOf(a.id));
   assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
 });
@@ -2527,7 +2527,33 @@ test('a heartbeat naming a condemned machine gives it no key holder status', asy
   await s.run();
   const a = s.fly.live()[0]!;
   const got = await s.boot('T2', a.id);
-  s.rowOf('T2').condemned = [{ providerBoxId: 'dup', attempt: 1 }];
+  await s.ctx.db.insert('boxCondemned', { boxId: boxIdOf(s, 'T2'), providerBoxId: 'dup', attempt: 1, at: Date.now() });
   await call(s.ctx, sync.heartbeat, { key: got.boxKey, runner: { runnerId, name: 'box', version: 'v', startedAt: new Date().toISOString(), draining: false, threadCount: 1, machineId: 'dup' } });
   assert.equal(s.rowOf('T2').keyMachineId, undefined);
+});
+
+// Codex's review of it: an older listing cleared a live mark, and a cap evicted one.
+test('a condemned mark is cleared only by its delete or a listing taken after it, and none is ever evicted', async () => {
+  const s = await setup();
+  await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  const boxId = boxIdOf(s, 'T2');
+  const dups = Array.from({ length: 17 }, (_, i) => `d${i + 1}`);
+  for (const id of dups) twinOf(s, a, id, 'stopped');
+  const listed = [{ providerBoxId: a.id, state: 'running', boxId, attempt: 1 }, ...dups.map((id) => ({ providerBoxId: id, state: 'stopped', boxId, attempt: 1 }))];
+  const before = Date.now() - 1000;
+  for (const step of await call(s.ctx, service.reapPlan, { serviceId: s.serviceId, boxes: listed })) {
+    if (step.do === 'destroy') assert.equal(await call(s.ctx, service.reapStep, { serviceId: s.serviceId, box: step.box, do: 'destroy', seen: step.seen, siblings: 17 }), true);
+  }
+  // All 17 marked, the first still refused its exchange.
+  assert.equal(s.rows('boxCondemned').length, 17);
+  assert.notEqual(await outcome(call(s.a, boxes.exchange, { bootToken: s.bootOf(a.id), machineId: 'd1' })), 'ok');
+  // A listing asked for before they were marked, without them: clears nothing.
+  const rows = [{ providerBoxId: a.id, boxId, running: true }];
+  await call(s.ctx, service.driftPage, { serviceId: s.serviceId, listed: rows, cursor: null, listedAt: before });
+  assert.equal(s.rows('boxCondemned').length, 17);
+  // One asked for after: they're gone, unmarked.
+  await later(1000, () => call(s.ctx, service.driftPage, { serviceId: s.serviceId, listed: rows, cursor: null, listedAt: Date.now() }));
+  assert.equal(s.rows('boxCondemned').length, 0);
 });
