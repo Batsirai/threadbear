@@ -18,7 +18,8 @@ Commands (JSON objects):
 - {"cmd":"click","title":"<label>"}: press the control with exactly that label (from the list).
 - {"cmd":"click-at","x":120,"y":340}: click a point; add "right":true for a right click, "count":2 for a double click.
 - {"cmd":"open","id":"<thread id or the start of one>"}: open a thread from the sidebar (ids are in the dump).
-- {"cmd":"type","text":"hello"}: type into the message box. {"cmd":"send","text":"hello"} types and sends.
+- {"cmd":"type","text":"hello"}: ALWAYS types into the message box at the bottom, wherever you clicked. {"cmd":"send","text":"hello"} types there and sends.
+- {"cmd":"type","here":true,"text":"hello"}: types wherever the cursor is (a field you just clicked or opened, like a title being renamed).
 - {"cmd":"return"}, {"cmd":"escape"}, {"cmd":"tab"}, {"cmd":"arrow","dir":"up"|"down"}: keys.
 - {"cmd":"menu-key","key":"n","modifiers":["cmd"]}: a shortcut (cmd, shift, opt, ctrl).
 - {"cmd":"search","text":"dark"}: type in the sidebar's thread search ("" clears it).
@@ -26,7 +27,7 @@ Commands (JSON objects):
 - {"cmd":"expand","row":"<row id>"} / {"cmd":"collapse","row":"<row id>"}: open or fold a row.
 - {"cmd":"archive"}, {"cmd":"undo-archive"}, {"cmd":"open-archived"}: archive the open thread, undo, show archived threads.
 - {"cmd":"settings","tab":"<name>"} opens Settings (a wrong name answers with the list); {"cmd":"settings","close":true}.
-- {"cmd":"appearance","mode":"dark"|"light"}, {"cmd":"resize","width":900,"height":600}: change the window.
+- {"cmd":"appearance","mode":"dark"|"light"}, {"cmd":"resize","w":900,"h":600}: change the window's size.
 - {"cmd":"context-menus"}: list the menus open right now.
 
 Use the app like a real person exploring your area: open things, read what's there, press the controls you find, type, go back, try the obvious next thing, and also try a few odd but reasonable things (resize small, search for something that isn't there, press Escape midway, archive and undo).
@@ -41,7 +42,7 @@ What counts as a bug:
 - text that is wrong, garbled, duplicated, contradictory or cut off in a way a person would notice;
 - state that doesn't add up (a thread in two sections, a count that doesn't match the rows, an archived thread still in the Inbox).
 
-Things that are how this test copy works, not bugs: the window is always behind other windows, so opening a thread does not mark it read (unread marks stay) and it never counts as "in front"; "Undo" for an archive only lasts a few seconds; the fake runner's threads don't really work, so a sent message gets a canned reply or none.
+Things that are how this test copy works, not bugs: the window is always behind other windows, so opening a thread does not mark it read (unread marks stay) and it never counts as "in front"; "Undo" for an archive only lasts a few seconds; the fake runner's threads don't really work, so a sent message gets a canned reply or none; the demo data doesn't always agree with itself (a panel's file list may not match the transcript); some buttons open a separate window (an options review, Settings) that the dump of the main window doesn't show, so "nothing happened" there may not be true. A command answering with an error about its own arguments is a mistake in how you called it, not an app bug.
 
 What is NOT a bug: an error caused by your own malformed command or a label you guessed that isn't in the list; a control missing from the list (not everything has a label); demo content that is simply odd; something you can't see because the dump doesn't show it. When unsure, don't report it: look again first. A false report costs more than a missed one.
 
