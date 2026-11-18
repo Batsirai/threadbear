@@ -7845,7 +7845,7 @@ has to be on for it.
   `boxFor`, `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`,
   `reapStep`, `observe`, `driftPage`, `driftLost`, `servicesToReap`,
   `serviceProvider`, `stuckDestroying`, `pruneSaves`, `retireBox`,
-  `retireFence`, `stuckRetiring`, `deleteFence`, `mayRunNow`, `checkBox`, `retryKeptSaves`,
+  `retireFence`, `retryRetiring`, `deleteFence`, `mayRunNow`, `checkBox`, `retryKeptSaves`,
   `markKept`, `suspendFailed`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
   `wakeAllWaiting`, `failExpired`, `archiveIfStill`. `report` takes the
   reporting run's `op`.

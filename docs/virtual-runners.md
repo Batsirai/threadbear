@@ -549,13 +549,22 @@ An eighth look found four more. Retirement is now durable: its fence
 (`RETIRE`) names the attempts whose boxes go and revokes their key in one
 step, and the thread is `retiring` until the provider confirms those
 boxes gone (`RETIRED`, back to asleep with no box); a message waits
-meanwhile, a run cut short is carried on by the reaper (`stuckRetiring`),
+meanwhile, a run cut short is carried on by the reaper (`retryRetiring`, a page at a time),
 and only the named attempts are deleted or given up. The other fences
 can't strand work: `deleteFence` and the reaper's revoke only an attempt
 holding none, and `newAttempt` refuses while one does. Each machine is
 charged from its own last observation (`observedAt`, by attempt), so one
 machine's pass doesn't shorten another's; and `countRunning` reads the
 boxes seen running until it has counted enough distinct ones.
+
+A ninth look found three more, all in retirement: the guard pauses a
+retiring machine that's running (retirement still owns its deletion); the
+sweep that carries retirements on pages through them all; and archiving
+or deleting a retiring thread is kept (`retiring.archived`) and takes
+effect once its boxes are gone (to `gone`, or `expired` with no save). An
+asleep thread with no box keeps its save while its thread lives (it comes
+back from it); one archived or deleted whose box missed the archive is
+archived by the retention sweep, so its save gets its days.
 
 Not built yet, in about the order they're needed:
 

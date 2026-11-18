@@ -1791,3 +1791,78 @@ test('maxBoxes counts every box seen running once, whatever order they come in',
   await setLimits(s, { maxBoxes: 5 });
   assert.equal(await outcome(s.start('T5')), 'ok');
 });
+
+// ------------------------------------------------------------ Codex's ninth round (18 Nov 2026): retirement
+
+// A box retiring while the provider's deletes fail (503): it stays retiring.
+async function retiringStuck(s: Awaited<ReturnType<typeof setup>>, paused = true) {
+  const r = paused ? await pausedWithMessage(s) : await unsavedPaused(s, false);
+  const DAYS = 15 * 24 * 60 * MINUTE;
+  await later(DAYS, () => call(s.ctx, service.pruneSaves, { kind: 'asleep' }));
+  const job = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('retireBox')).at(-1)!;
+  s.skip();
+  const down = s.fly.failWhile((q) => q.method === 'DELETE', 503);
+  await later(DAYS, () => call(s.a, service.retireBox, job.args));
+  assert.equal(s.stateOf('T2'), 'retiring');
+  return { ...r, down, DAYS };
+}
+
+// 1. A retiring machine that was running kept billing.
+test('the guard pauses a retiring machine that is running', async () => {
+  const s = await setup();
+  const failing = s.fly.failWhile((r) => r.path.endsWith('/suspend'), 503);
+  const { m, DAYS } = await retiringStuck(s, false);
+  assert.equal(s.fly.byId(m.id)!.state, 'created', 'running, its pause having failed');
+  failing.stop();
+  await later(DAYS + 6 * MINUTE, () => s.reap());
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  assert.equal(s.stateOf('T2'), 'retiring', 'still the retirement to finish');
+});
+
+// 2. The retry sweep took the same first rows every time.
+test('every retiring box is tried again, a page at a time', async () => {
+  const s = await setup();
+  for (const t of ['T2', 'T3', 'T4']) await s.start(t);
+  for (const t of ['T2', 'T3', 'T4']) Object.assign(s.rowOf(t), { boxState: { kind: 'retiring', since: Date.now(), attempts: [] }, boxStateTimers: [] });
+  s.skip();
+  await call(s.ctx, service.retryRetiring, { numItems: 1 });
+  for (let i = 0; i < 5; i++) {
+    const next = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('retryRetiring')).at(-1);
+    if (!next || !next.args.cursor) break;
+    const before = s.scheduled.length;
+    await call(s.ctx, service.retryRetiring, next.args);
+    if (s.scheduled.length === before) break;
+  }
+  const retried = new Set((s.scheduled as { fn: string; args: { boxId?: string } }[]).filter((j) => j.fn.endsWith('retireBox')).map((j) => j.args.boxId));
+  assert.deepEqual([...retried].sort(), ['T2', 'T3', 'T4'].map((t) => boxIdOf(s, t)).sort());
+});
+
+// 3. An archive while retiring was lost, and its save never expired.
+test("archiving a retiring thread takes effect once its boxes are gone, and its save then has its days", async () => {
+  const s = await setup();
+  const { down, DAYS } = await retiringStuck(s);
+  await later(DAYS, () => call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: 'T2' }));
+  assert.equal(s.stateOf('T2'), 'retiring');
+  assert.equal(s.rowOf('T2').boxState.archived, true);
+  down.stop();
+  await later(DAYS + 5 * MINUTE, () => s.reap());
+  assert.equal(s.stateOf('T2'), 'gone', 'archived, its save kept for its days');
+  await later(2 * DAYS, () => call(s.ctx, service.pruneSaves, {}));
+  assert.equal(s.stateOf('T2'), 'expired');
+});
+
+test('an asleep thread with no box whose archive was missed is archived by the retention sweep', async () => {
+  const s = await setup(4096);
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await s.sleepWith('T2', got.boxKey);
+  assert.equal(s.rowOf('T2').providerBoxId, undefined, 'its box deleted as it slept');
+  // Its thread went to the den, but the box never heard.
+  s.rows('threads').find((t) => t.threadId === 'T2')!.view = 'den';
+  const DAYS = 15 * 24 * 60 * MINUTE;
+  await later(DAYS, () => call(s.ctx, service.pruneSaves, { kind: 'asleep' }));
+  await later(DAYS, () => s.run());
+  assert.equal(s.stateOf('T2'), 'gone');
+  assert.ok(runnerId);
+});

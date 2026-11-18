@@ -29,7 +29,7 @@ import { internal } from './_generated/api';
 import { box as boxMachine, machines, queued } from './machines';
 import { newestAttempt } from './boxMachine';
 import { SAVE_MS, WAKE_GRACE_MS } from './boxStates';
-import { activeMove, askToSave, BOOT_PREFIX, BOX_LIMITS, mayMintAttempt, newAttempt, overHours, randomHex, usedTodayMs } from './boxes';
+import { activeMove, archive, askToSave, BOOT_PREFIX, BOX_LIMITS, mayMintAttempt, newAttempt, overHours, randomHex, usedTodayMs } from './boxes';
 import { sha256 } from './lib';
 import { deleteIfUnused } from './sync';
 import { FLY_SUSPEND_MAX_MB, flyFromEnv } from './boxProviders/fly';
@@ -776,8 +776,9 @@ export function entitled(row: Doc<'boxes'>, limits: Limits, b: Listed, moving: b
 function planFor(row: Doc<'boxes'> | null, serviceId: string, limits: Limits, provider: string, b: Listed, moving: boolean, now: number): Do {
   if (!row || row.serviceId !== serviceId || !Number.isSafeInteger(b.attempt) || b.attempt < 1 || b.attempt > newestAttempt(row) || row.boxState.kind === 'expired') return 'destroy';
   const kind = row.boxState.kind;
-  // Its retirement deletes the machines it named (retireBox).
-  if (kind === 'retiring') return 'keep';
+  // Its retirement deletes the machines it named (retireBox); but one running
+  // meanwhile is never entitled to, so the guard pauses it as any other.
+  if (kind === 'retiring') return b.state === 'running' && mayTrySuspend(row, provider, b, now) ? 'suspend' : 'keep';
   const work = row.workAttempts?.includes(b.attempt) ?? false;
   const current = b.attempt === newestAttempt(row);
   if (b.state === 'stopped' && (work || (current && row.keyAttempt === b.attempt && kind !== 'destroying'))) return 'lost';
@@ -791,14 +792,16 @@ function planFor(row: Doc<'boxes'> | null, serviceId: string, limits: Limits, pr
     if (kind === 'gone' || kind === 'failed') return 'destroy';
     if ((kind === 'asleep' || kind === 'shelved') && row.keyAttempt !== b.attempt) return 'destroy';
   }
-  if (b.state === 'running' && !entitled(row, limits, b, moving, now)) {
-    // One that can't pause by the size its attempt was made at is left running, counted (observe).
-    if (!(row.size?.attempt === b.attempt && pauseSupported(provider, row.size.memoryMb))) return 'keep';
-    // A pause that failed waits out its backoff (suspendFailed).
-    if (row.suspendFails?.attempt === b.attempt && row.suspendFails.next > now) return 'keep';
-    return 'suspend';
-  }
+  if (b.state === 'running' && !entitled(row, limits, b, moving, now)) return mayTrySuspend(row, provider, b, now) ? 'suspend' : 'keep';
   return 'keep';
+}
+
+// Whether the guard pauses a machine it found running: not one that can't
+// pause by the size its attempt was made at (left running, counted by
+// observe), nor one whose last pause failed until its backoff is out.
+function mayTrySuspend(row: Doc<'boxes'>, provider: string, b: Listed, now: number): boolean {
+  if (!(row.size?.attempt === b.attempt && pauseSupported(provider, row.size.memoryMb))) return false;
+  return !(row.suspendFails?.attempt === b.attempt && row.suspendFails.next > now);
 }
 
 async function rowOf(ctx: { db: MutationCtx['db'] }, boxId: string): Promise<Doc<'boxes'> | null> {
@@ -938,7 +941,7 @@ export const reapBoxes = internalAction({
     if (next) await ctx.scheduler.runAfter(0, internal.boxService.reapBoxes, { cursor: next, ...(numItems ? { numItems } : {}) });
     if (!cursor) {
       for (const boxId of await ctx.runQuery(internal.boxService.stuckDestroying, {})) await ctx.scheduler.runAfter(0, internal.boxService.destroyBox, { boxId });
-      for (const boxId of await ctx.runQuery(internal.boxService.stuckRetiring, {})) await ctx.scheduler.runAfter(0, internal.boxService.retireBox, { boxId });
+      await ctx.scheduler.runAfter(0, internal.boxService.retryRetiring, {});
     }
     return null;
   },
@@ -1102,10 +1105,16 @@ export const retireFence = machines.internalMutation({
   },
 });
 
-export const stuckRetiring = internalQuery({
-  args: {},
-  returns: v.array(v.id('boxes')),
-  handler: async (ctx) => (await ctx.db.query('boxes').withIndex('by_box_state', (q) => q.eq('boxState.kind', 'retiring')).take(PRUNE_BATCH)).map((r) => r._id),
+/** Every retiring box's retirement run again (retireBox), a page a run, carrying on from `cursor`, so none waits behind others that are stuck. */
+export const retryRetiring = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())), numItems: v.optional(v.number()) },
+  returns: v.null(),
+  handler: async (ctx, { cursor, numItems }) => {
+    const page = await ctx.db.query('boxes').withIndex('by_box_state', (q) => q.eq('boxState.kind', 'retiring')).paginate({ numItems: numItems ?? PRUNE_BATCH, cursor: cursor ?? null });
+    for (const r of page.page) await ctx.scheduler.runAfter(0, internal.boxService.retireBox, { boxId: r._id });
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.boxService.retryRetiring, { cursor: page.continueCursor, ...(numItems ? { numItems } : {}) });
+    return null;
+  },
 });
 
 /**
@@ -1157,7 +1166,17 @@ export const pruneSaves = machines.internalMutation({
       const days = (await ctx.db.get(row.serviceId))?.limits.deleteAfterDays ?? BOX_LIMITS.deleteAfterDays;
       if (at > now - days * DAY_MS) continue;
       if (s.kind === 'asleep') {
-        if (row.providerBoxId === undefined && !row.workAttempts?.length) continue;
+        if (row.providerBoxId === undefined && !row.workAttempts?.length) {
+          // No box to retire: its save is all it has. Kept while its thread
+          // lives (it comes back from it); one archived or deleted whose box
+          // missed it is archived now, so its save gets its days.
+          const thread = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', row.threadId)).unique();
+          if (!thread || thread.view === 'den') {
+            await archive(ctx, row);
+            pruned++;
+          }
+          continue;
+        }
         // With the sleep it's for: retireBox checks it's still that sleep, still past its days.
         await ctx.scheduler.runAfter(0, internal.boxService.retireBox, { boxId: row._id, asleepSince: s.since });
         pruned++;
@@ -1183,7 +1202,7 @@ export const pruneSaves = machines.internalMutation({
  * message doesn't wake (it waits). Then only the named attempts' machines
  * are deleted, and once the provider shows none of them, RETIRED: asleep
  * with no box, back to its last save. A run that fails part way is run
- * again by the reaper (stuckRetiring) until it's done.
+ * again by the reaper (retryRetiring) until it's done.
  */
 export const retireBox = internalAction({
   args: { boxId: v.id('boxes'), asleepSince: v.optional(v.number()) },

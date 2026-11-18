@@ -423,7 +423,7 @@ deleting its box. No key works for it
 any more.
   end note
   state "retiring" as retiring
-  retiring : since, attempts
+  retiring : since, attempts, archived?
   note right of retiring
 Its boxes are being deleted for its
 retention; it can't be woken meanwhile
@@ -525,7 +525,10 @@ kept, and no key works for it.
   destroying --> gone : DESTROYED (server) [1. hasSave] / destroyed
   destroying --> expired : DESTROYED (server) [else] / destroyed
   destroying --> destroying : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
-  retiring --> asleep : RETIRED (server) / retired
+  retiring --> gone : RETIRED (server) [1. archivedWithSave] / retired
+  retiring --> expired : RETIRED (server) [2. archivedRetiring] / retired
+  retiring --> asleep : RETIRED (server) [else] / retired
+  retiring --> retiring : ARCHIVE (owner) / retireThenArchive
   retiring --> retiring : LOST(attempt?) (server) / forgetBox
   gone --> waking : WAKE (server) / wake
   gone --> expired : EXPIRE (server) / expire
@@ -649,7 +652,10 @@ From `destroying`:
 
 From `retiring`:
 
-- `RETIRED (server)` → `asleep`. The provider confirms every box it named gone: asleep with no box, and a waiting message brings it back from its last save.
+- `RETIRED (server)` [1. archivedWithSave] → `gone`. Its boxes are gone, and it was archived meanwhile: archived, its save kept for its days.
+- `RETIRED (server)` [2. archivedRetiring] → `expired`. Its boxes are gone, and it was archived meanwhile with no save: it can't come back.
+- `RETIRED (server)` [else] → `asleep`. The provider confirms every box it named gone: asleep with no box, and a waiting message brings it back from its last save.
+- `ARCHIVE (owner)` stays put. Mike archives (or deletes) the thread while its boxes go: it goes on to archived once they have.
 - `LOST(attempt?) (server)` stays put. One of its boxes is gone, on the provider's word.
 
 From `gone`:

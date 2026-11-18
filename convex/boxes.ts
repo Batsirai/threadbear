@@ -772,7 +772,7 @@ async function failExpiredRun(ctx: MutationCtx, runnerId: string, commandId?: Id
 }
 
 // Archiving a box that's up asks it to save first (boxMachine.ts archiving).
-async function archive(ctx: MutationCtx, row: Doc<'boxes'>): Promise<boolean> {
+export async function archive(ctx: MutationCtx, row: Doc<'boxes'>): Promise<boolean> {
   const r = await boxMachine.send(ctx, row._id, { type: 'ARCHIVE' });
   if (r.status !== 'done') return false;
   if (r.to === 'archiving') await askToSave(ctx, row);

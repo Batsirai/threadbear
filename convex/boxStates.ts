@@ -52,7 +52,8 @@ export const boxStateV = v.union(
   // when retirement began, their key revoked then) are being deleted. A
   // message waits; once the provider confirms them gone it's asleep again,
   // with no box, and comes back from its last save (boxService.ts retireBox).
-  v.object({ kind: v.literal('retiring'), since: v.number(), attempts: v.array(v.number()) }),
+  // `archived`: archived or deleted meanwhile, which it goes on to once done.
+  v.object({ kind: v.literal('retiring'), since: v.number(), attempts: v.array(v.number()), archived: v.optional(v.boolean()) }),
   // Archived and its box deleted. The row stays for its save until
   // deleteAfterDays: a message (unarchiving it) brings it back on a new box.
   v.object({ kind: v.literal('gone'), at: v.number() }),
