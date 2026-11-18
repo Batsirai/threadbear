@@ -25,7 +25,7 @@ use threadbear_client::runner::Client;
 use threadbear_core::folders::FileRead;
 
 /// Biggest picture asked for whole (`files.read`'s own default).
-const MAX_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) enum Picture {
@@ -75,6 +75,21 @@ pub(crate) fn picture(runner: &str, path: &str, client: &Arc<Client>, redraw: An
     })
     .detach();
     Picture::Loading
+}
+
+/// Drawn already: its bytes, for the viewer (viewer.rs), which shows the
+/// picture a tile's click opens without asking that Mac again.
+pub(crate) fn ready(runner: &str, path: &str, cx: &App) -> Option<Arc<Image>> {
+    match cx.try_global::<RemotePictures>()?.pictures.get(&(runner.to_owned(), path.to_owned()))? {
+        Picture::Ready(image) => Some(image.clone()),
+        _ => None,
+    }
+}
+
+/// A picture the other Mac hasn't put up (yet): the runner's place for it,
+/// `threadbear-relay:<thread>/<seq>/Picture N` (runner/src/relay.ts).
+pub(crate) fn not_up_yet(path: &str) -> bool {
+    path.starts_with("threadbear-relay:")
 }
 
 /// A click on one that couldn't be got: asked for again on the next draw.

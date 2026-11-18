@@ -27,13 +27,16 @@ pub(crate) struct ViewerState {
     pictures: Vec<(String, Option<Arc<Image>>, Option<(u32, u32)>)>,
     index: usize,
     open: bool,
+    /// Another Mac's thread: its pictures are that Mac's, asked of it through
+    /// this runner (`files.read` with its `runnerId`), never read here.
+    runner: Option<String>,
     /// Holds the keys while it's up: Escape and the arrows.
     focus: FocusHandle,
 }
 
 impl ViewerState {
     pub(crate) fn new(cx: &mut App) -> Self {
-        Self { pictures: vec![], index: 0, open: false, focus: cx.focus_handle() }
+        Self { pictures: vec![], index: 0, open: false, runner: None, focus: cx.focus_handle() }
     }
 }
 
@@ -72,15 +75,26 @@ fn opens_here(path: &str) -> bool {
     looks_like_picture(path) && !runs_code(path)
 }
 
-/// A click on a tile: the viewer on that picture, stepping through the
-/// message's other real pictures.
-pub(crate) fn open_from_tile(images: &[ImageRef], index: usize, window: &mut Window, cx: &mut App) {
+/// The same for another Mac's picture, which also may be one that Mac hasn't
+/// put up yet (a `threadbear-relay:` place, remote_pictures.rs): the viewer
+/// asks for it and says if it couldn't be got. Its bytes are decoded here,
+/// never handed to an app, as this Mac's are.
+fn opens_from(path: &str, remote: bool) -> bool {
+    opens_here(path) || (remote && crate::remote_pictures::not_up_yet(path))
+}
+
+/// A click on a tile or a picture's chip in a message: the viewer on that
+/// picture, stepping through the message's other real pictures. `runner`
+/// is the thread's when it's another Mac's (Mike, 18 Nov: its pictures
+/// showed, but a click on one opened nothing).
+pub(crate) fn open_from_tile(images: &[ImageRef], index: usize, runner: Option<&str>, window: &mut Window, cx: &mut App) {
     let Some(handle) = cx.try_global::<ViewerHandle>().cloned() else { return };
-    let paths: Vec<String> = images.iter().map(|i| i.path.clone()).filter(|p| opens_here(p)).collect();
+    let paths: Vec<String> = images.iter().map(|i| i.path.clone()).filter(|p| opens_from(p, runner.is_some())).collect();
     let Some(chosen) = images.get(index).map(|i| i.path.clone()).filter(|p| paths.contains(p)) else { return };
+    let runner = runner.map(str::to_owned);
     handle
         .0
-        .update(cx, |pane, cx| pane.open_viewer(paths, &chosen, window, cx))
+        .update(cx, |pane, cx| open_on(pane, paths, &chosen, runner, window, cx))
         .ok();
 }
 
@@ -144,12 +158,18 @@ impl SidePane {
 /// The viewer on `chosen`, stepping through `paths`, in `host`'s window.
 /// Only paths named like pictures that don't run code (`opens_here`).
 pub(crate) fn open<T: HostsViewer>(host: &mut T, paths: Vec<String>, chosen: &str, window: &mut Window, cx: &mut Context<T>) {
-    let paths: Vec<String> = paths.into_iter().filter(|p| opens_here(p)).collect();
+    open_on(host, paths, chosen, None, window, cx);
+}
+
+/// `open`, for pictures on `runner` when it's another Mac.
+fn open_on<T: HostsViewer>(host: &mut T, paths: Vec<String>, chosen: &str, runner: Option<String>, window: &mut Window, cx: &mut Context<T>) {
+    let paths: Vec<String> = paths.into_iter().filter(|p| opens_from(p, runner.is_some())).collect();
     let Some(index) = paths.iter().position(|p| p == chosen) else { return };
     let viewer = host.viewer_state();
     viewer.pictures = paths.into_iter().map(|p| (p, None, None)).collect();
     viewer.index = index;
     viewer.open = true;
+    viewer.runner = runner;
     // The overlay holds the keys: Escape closes, the arrows step.
     let focus = viewer.focus.clone();
     window.focus(&focus, cx);
@@ -175,19 +195,32 @@ pub(crate) fn step<T: HostsViewer>(host: &mut T, delta: i64, cx: &mut Context<T>
     cx.notify();
 }
 
-/// Reads the picture through the runner, so another Mac's works the same.
-/// Anything that doesn't decode just shows "Couldn't show this picture":
-/// the bytes are never handed to another app.
+/// Reads the picture through the runner, and another Mac's through it from
+/// that Mac. Anything that doesn't decode just shows "Couldn't show this
+/// picture": the bytes are never handed to another app.
 fn read_picture<T: HostsViewer>(host: &mut T, index: usize, cx: &mut Context<T>) {
-    let Some((path, image, _)) = host.viewer_state().pictures.get(index) else { return };
+    let viewer = host.viewer_state();
+    let runner = viewer.runner.clone();
+    let Some((path, image, size)) = viewer.pictures.get_mut(index) else { return };
     if image.is_some() {
         return;
     }
+    // Another Mac's picture its tile has drawn: the same bytes, not asked again.
+    if let Some(drawn) = runner.as_deref().and_then(|runner| crate::remote_pictures::ready(runner, path, cx)) {
+        *size = picture_size(drawn.bytes());
+        *image = Some(drawn);
+        return;
+    }
     let path = path.clone();
+    let params = match &runner {
+        Some(runner) => json!({ "path": path, "runnerId": runner, "maxBytes": crate::remote_pictures::MAX_BYTES }),
+        None => json!({ "path": path }),
+    };
     let client = host.viewer_client();
     cx.spawn(async move |this, cx| {
-        let res = crate::call(client, "files.read", json!({ "path": path })).await;
-        let read = res.ok().as_ref().and_then(threadbear_core::folders::FileRead::decode);
+        let res = crate::call(client, "files.read", params).await;
+        // Only its start, from another Mac, won't draw.
+        let read = res.ok().as_ref().and_then(threadbear_core::folders::FileRead::decode).filter(|read| runner.is_none() || !read.truncated);
         this.update(cx, |t, cx| {
             let Some(slot) = t.viewer_state().pictures.iter_mut().find(|p| p.0 == path) else { return };
             if let Some(read) = read {

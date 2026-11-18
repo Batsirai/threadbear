@@ -602,8 +602,8 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         "tile" => {
             let index = cmd["index"].as_u64().unwrap_or(0) as usize;
             let count = cmd["count"].as_u64().unwrap_or(1) as usize;
-            let images = app.update(cx, |t, cx| t.update_pane(cx, |p, _| p.last_row_images(count)))??;
-            crate::viewer::open_from_tile(&images, index, window, cx);
+            let (images, runner) = app.update(cx, |t, cx| t.update_pane(cx, |p, _| p.last_row_images(count).map(|images| (images, p.summary.runner_id.clone()))))??;
+            crate::viewer::open_from_tile(&images, index, runner.as_deref(), window, cx);
             let side = app.read(cx).side.clone();
             crate::viewer::viewer_command(&side, &json!({}), cx)
         }

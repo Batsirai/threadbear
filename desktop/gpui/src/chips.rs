@@ -393,14 +393,14 @@ impl ThreadPane {
         let name = kind.label();
         let chip = match kind {
             // Another Mac's picture: its path names a file on that Mac, and
-            // read here it's whatever this Mac has at that path, so it opens
-            // no card and no viewer (Codex's review of the drags, 12 Nov). The
-            // picture itself is in the tile over the words, which the runner
-            // sends (remote_pictures.rs); the chip says where it is.
-            ChipKind::Picture(_) if origin != Origin::ThisMac => {
-                let runner = self.summary.runner_id.clone().unwrap_or_default();
-                let mac = self.composer.read(cx).app.upgrade().map_or_else(|| "another Mac".to_owned(), |app| app.read(cx).runner_name_of(&runner));
-                chip.cursor_default().tip(format!("This picture is on {mac}: it shows above"))
+            // read here it's whatever this Mac has at that path (Codex's review
+            // of the drags, 12 Nov), so it opens no card. The viewer asks that
+            // Mac for it through the runner, as the tile over the words does
+            // (remote_pictures.rs), so a click opens that (Mike, 18 Nov).
+            ChipKind::Picture(index) if origin != Origin::ThisMac => {
+                let runner = self.summary.runner_id.clone();
+                let images = images.to_vec();
+                chip.tip(crate::viewer::TILE_TIP).on_click(move |_, window, cx| crate::viewer::open_from_tile(&images, index, runner.as_deref(), window, cx))
             }
             ChipKind::Picture(index) => {
                 let picture = images.get(index);
@@ -409,7 +409,7 @@ impl ThreadPane {
                 let hover_key = key.clone();
                 chip.on_hover(move |on, window, cx| hover(&hover_key, *on, QUICK, window, cx))
                     // The in-app viewer, as a click on the picture over the words does.
-                    .on_click(move |_, window, cx| crate::viewer::open_from_tile(&images, index, window, cx))
+                    .on_click(move |_, window, cx| crate::viewer::open_from_tile(&images, index, None, window, cx))
                     .children(shown)
             }
             ChipKind::Card { title, url } => {

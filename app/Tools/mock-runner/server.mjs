@@ -402,6 +402,10 @@ const BRUCE_FILES = {
   blob: '/Users/alex/Library/Application Support/Threadbear/threads/mini_media/blobs/mini_media_c0_0.txt',
 };
 const bruceModifiedAt = new Date(Date.now() - 3600_000).toISOString();
+// Whether mac-mini's pasted pictures are up for this Mac to get (mock.remotePictures).
+let remotePicturesUp = true;
+// A picture pasted into a message of one of `runnerId`'s threads.
+const pastedOn = (runnerId, file) => [...threads.values()].some((t) => t.runnerId === runnerId && t.events.some((e) => e.type === 'user.message' && e.images?.some((i) => i.path === file)));
 if (!process.env.TB_MOCK_NO_REMOTE) addRemoteDemo();
 /** The schedules (docs/protocol.md, "Schedules"), soonest first. */
 let schedules = [];
@@ -669,9 +673,18 @@ async function dispatch(client, method, p) {
       // Slow enough on mac-mini that the app's loading state shows.
       if (client.as) await sleep(400);
       // Another runner's file asked of this one, as the GPUI app asks for
-      // mac-mini's pictures: refused as the real runner refuses it
+      // mac-mini's pictures. One pasted into a message there comes, as the
+      // real runner gets it from the backend (backend API 87, readFile in
+      // runner/src/relay.ts), unless mock.remotePictures plays it as never
+      // put up; anything else is refused as the real runner refuses it
       // (runner/src/rpc.ts), never this Mac's file at the same path.
-      if (!client.as && typeof p.runnerId === 'string') throw rpcError(-32000, 'Files on another runner are kept there for now.');
+      if (!client.as && typeof p.runnerId === 'string') {
+        if (remotePicturesUp && p.runnerId === BRUCE && pastedOn(BRUCE, p.path)) {
+          await sleep(400);
+          return readFile({ as: BRUCE }, p);
+        }
+        throw rpcError(-32000, 'Files on another runner are kept there for now.');
+      }
       return readFile(client, p);
     case 'files.list':
       if (client.as) await sleep(400);
@@ -1447,6 +1460,12 @@ async function dispatch(client, method, p) {
       t.summary.panelRequest = { id: 'pr_' + crypto.randomBytes(4).toString('hex'), panel: String(p.panel), title, ...(p.where ? { where: p.where } : {}), ...(p.reload ? { reload: true } : {}), at: iso() };
       broadcastSummary(t.summary.id);
       return { request: t.summary.panelRequest };
+    }
+    // mac-mini's pasted pictures as an older runner's, never put up: the
+    // app's tile says it couldn't get them.
+    case 'mock.remotePictures': {
+      remotePicturesUp = p.up !== false;
+      return {};
     }
     case 'mock.failHighlights': {
       need(p.threadId).highlightsFailures = Number(p.count ?? 1);
