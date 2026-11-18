@@ -158,6 +158,8 @@ enum ChipKind {
     Picture(usize),
     Card { title: String, url: String },
     Thread { title: String, id: String },
+    /// A file on the Mac that isn't uploaded, by its path (`find_files`).
+    File { name: String, path: String },
 }
 
 impl ChipKind {
@@ -165,6 +167,7 @@ impl ChipKind {
         match self {
             ChipKind::Picture(index) => format!("Picture {}", index + 1),
             ChipKind::Card { title, .. } | ChipKind::Thread { title, .. } => title.clone(),
+            ChipKind::File { name, .. } => name.clone(),
         }
     }
 
@@ -175,6 +178,7 @@ impl ChipKind {
             ChipKind::Picture(_) => "photo",
             ChipKind::Card { .. } => "square.text.square",
             ChipKind::Thread { .. } => "bubble.left",
+            ChipKind::File { name, .. } => crate::composer_inline::file_symbol(name),
         }
     }
 
@@ -185,6 +189,7 @@ impl ChipKind {
             ChipKind::Picture(_) => "picture",
             ChipKind::Card { .. } => "card",
             ChipKind::Thread { .. } => "thread",
+            ChipKind::File { .. } => "file",
         };
         format!("{kind}: {}", self.label())
     }
@@ -199,6 +204,7 @@ enum Token {
 fn chip_kind(mention: &Mention) -> ChipKind {
     match (mention.kind, mention.thread_id()) {
         (MentionKind::Thread, Some(id)) => ChipKind::Thread { title: mention.title.clone(), id: id.to_owned() },
+        (MentionKind::File, _) => ChipKind::File { name: mention.title.clone(), path: mention.url.clone() },
         _ => ChipKind::Card { title: mention.title.clone(), url: mention.url.clone() },
     }
 }
@@ -233,7 +239,9 @@ fn chip_width(kind: &ChipKind, window: &Window) -> Pixels {
     if !matches!(kind, ChipKind::Picture(_)) {
         label = label.min(px(CARD_LABEL_MAX));
     }
-    px(CHIP_INSET + CHIP_ICON + CHIP_GAP + CHIP_TRAILING) + label
+    // A file's dot, after the same gap.
+    let dot = if matches!(kind, ChipKind::File { .. }) { CHIP_GAP + crate::composer_inline::FILE_DOT } else { 0. };
+    px(CHIP_INSET + CHIP_ICON + CHIP_GAP + CHIP_TRAILING + dot) + label
 }
 
 /// The bubble's lines, broken where the words would wrap at `max` with each
@@ -378,6 +386,7 @@ impl ThreadPane {
             .cursor_pointer()
             .child(symbol)
             .child(label)
+            .when(matches!(kind, ChipKind::File { .. }), |d| d.child(crate::composer_inline::file_dot(cx)))
             // Not the start of a selection in the words round it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         let origin = self.origin();
@@ -410,6 +419,20 @@ impl ThreadPane {
                 chip.on_hover(move |on, window, cx| hover(&hover_key, *on, SLOWER, window, cx))
                     // Through the open gate, as the reply's links go.
                     .on_click(move |_, _, cx| open_gate::open_link(&url, origin, &cwd, cx))
+                    .children(shown)
+            }
+            // Another Mac's file is on that Mac, so it opens nothing here.
+            ChipKind::File { .. } if origin != Origin::ThisMac => {
+                let runner = self.summary.runner_id.clone().unwrap_or_default();
+                let mac = self.composer.read(cx).app.upgrade().map_or_else(|| "another Mac".to_owned(), |app| app.read(cx).runner_name_of(&runner));
+                chip.cursor_default().tip(format!("Not uploaded: this file is on {mac}"))
+            }
+            ChipKind::File { path, .. } => {
+                let path = threadbear_core::reducer::text::expanding_tilde(&path);
+                let shown = card_shown(&key, SLOWER).then(|| under_chip(words_card(&name, &crate::composer_inline::short_path(&path), cx)));
+                let hover_key = key.clone();
+                chip.on_hover(move |on, window, cx| hover(&hover_key, *on, SLOWER, window, cx))
+                    .on_click(move |_, _, cx| open_gate::open_file(&path, origin, cx))
                     .children(shown)
             }
             ChipKind::Thread { id, .. } => {
@@ -500,6 +523,7 @@ pub(crate) fn peek_command(app: &Entity<crate::app::Threadbear>, cmd: &serde_jso
             .filter_map(|kind| match kind {
                 ChipKind::Picture(i) => message.images.get(*i).map(|image| format!("{}={}", kind.label(), image.path)),
                 ChipKind::Card { url, .. } => Some(format!("{}={url}", kind.label())),
+                ChipKind::File { path, .. } => Some(format!("{}={path}", kind.label())),
                 ChipKind::Thread { .. } => None,
             })
             .collect();

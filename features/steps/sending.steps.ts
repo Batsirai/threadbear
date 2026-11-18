@@ -110,6 +110,11 @@ Then('the composer starts with the dropped file\'s path, then {string}', async f
   await this.until(`the path, then "${rest}"`, (d) => d.composer.text.trim() === `\`${sampleFile}\` ${rest}`);
 });
 
+// The message still says the file's path for the agent; the bubble draws it as the file's chip.
+Then('the transcript shows my message with the dropped file\'s path and the chip {string}', async function (this: ThreadbearWorld, chip: string) {
+  await this.until(`my message with the path and the chip "${chip}"`, (d) => d.transcript.rows.some((r) => r.kind === 'user' && r.text.startsWith(`\`${sampleFile}\``) && (r.chips ?? []).includes(chip)));
+});
+
 Then('the composer holds {int} picture(s)', async function (this: ThreadbearWorld, count: number) {
   await this.until(`${count} picture(s) in the composer`, (d) => d.composer.images === count);
 });

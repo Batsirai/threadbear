@@ -48,6 +48,10 @@ pub enum MentionKind {
     Card,
     /// Another thread, as a `thread:<id>` link, which opens in the app.
     Thread,
+    /// A file on the runner's Mac that isn't a picture (a video, a PDF, a
+    /// folder), as its full path in backticks: it isn't uploaded, the agent
+    /// opens it where it is (`find_files`).
+    File,
 }
 
 /// A Notion card or another thread mentioned in a message. A message always
@@ -352,6 +356,83 @@ pub fn web_links(text: &str) -> Vec<Range<usize>> {
     found
 }
 
+// ---------------------------------------------------------------- files
+
+/// Where a path a file dropped or pasted into the box can start. The
+/// composer writes such a file as its full path in backticks
+/// (`composer::path_text`), and only those read back as a chip: a code span
+/// that merely starts with `/` (`/api/users`, `/help`) is words, so a path
+/// has to start in one of the folders local files live in, or a drive.
+const FILE_ROOTS: &[&str] = &[
+    "~/", "/Users/", "/Volumes/", "/home/", "/root/", "/private/", "/tmp/", "/var/", "/mnt/", "/media/", "/opt/", "/srv/", "/Applications/", "/Library/", "/System/",
+];
+
+/// The file's name if `path` reads as a local file's full path: one of
+/// `FILE_ROOTS`, or a Windows drive (`C:\`) or share (`\\host\`), with no
+/// space either end and a name after its last separator.
+fn local_file_name(path: &str) -> Option<String> {
+    if path.trim() != path || path.contains('\n') {
+        return None;
+    }
+    let bytes = path.as_bytes();
+    let drive = bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/');
+    let rest = if drive {
+        &path[3..]
+    } else if let Some(share) = path.strip_prefix("\\\\") {
+        share
+    } else {
+        let root = FILE_ROOTS.iter().find(|root| path.starts_with(*root))?;
+        &path[root.len()..]
+    };
+    // A root on its own (`/Users/`) is no file.
+    if rest.trim_matches(['/', '\\']).is_empty() {
+        return None;
+    }
+    let name = path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()?;
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// Files among `text`: each local path in backticks, as the composer writes
+/// a dropped or pasted file that isn't a picture, a chip with the file's
+/// name (its `url` is the path). The words stay the path, so the agent, the
+/// phone and the archive read just what they did before.
+pub fn find_files(text: &str) -> Vec<Mention> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(open) = text[at..].find('`').map(|i| at + i) {
+        let Some(len) = text[open + 1..].find(['`', '\n']) else { break };
+        let close = open + 1 + len;
+        if text.as_bytes()[close] == b'\n' {
+            at = close + 1;
+            continue;
+        }
+        let path = &text[open + 1..close];
+        if let Some(title) = local_file_name(path) {
+            found.push(Mention { range: open..close + 1, title, url: path.to_owned(), kind: MentionKind::File });
+        }
+        at = close + 1;
+    }
+    found
+}
+
+/// Cards, threads and files in `text`, in order. A file inside a link's
+/// words is left to the link.
+pub fn find_chips(text: &str) -> Vec<Mention> {
+    let mut all = find_mentions(text);
+    let files = find_files(text);
+    if files.is_empty() {
+        return all;
+    }
+    let links = all.len();
+    for file in files {
+        if !all[..links].iter().any(|m| m.range.start < file.range.end && file.range.start < m.range.end) {
+            all.push(file);
+        }
+    }
+    all.sort_by_key(|m| m.range.start);
+    all
+}
+
 // ---------------------------------------------------------------- a message's pieces
 
 /// A message's words cut where its chips go, in order: Mike's bubble draws
@@ -374,7 +455,7 @@ pub fn message_pieces(text: &str, image_count: usize) -> Vec<Piece> {
             return;
         }
         let mut at = 0;
-        for mention in find_mentions(piece) {
+        for mention in find_chips(piece) {
             if mention.range.start > at {
                 pieces.push(Piece::Words(piece[at..mention.range.start].to_owned()));
             }
@@ -536,5 +617,28 @@ mod tests {
         assert!(has_chips("see [Picture 1]", 1));
         assert!(!has_chips("see [Picture 1]", 0));
         assert!(!has_chips("plain words", 0));
+    }
+
+    #[test]
+    fn a_local_path_in_backticks_is_a_file() {
+        let text = "watch `/Users/mike/Screen Recording 2026.mp4` and `C:\\Users\\m\\clip.mov` then `~/dev/notes/`";
+        let found = find_files(text);
+        assert_eq!(found.iter().map(|m| m.title.as_str()).collect::<Vec<_>>(), ["Screen Recording 2026.mp4", "clip.mov", "notes"]);
+        assert_eq!(found[0].url, "/Users/mike/Screen Recording 2026.mp4");
+        assert_eq!(&text[found[0].range.clone()], "`/Users/mike/Screen Recording 2026.mp4`");
+        assert!(found.iter().all(|m| m.kind == MentionKind::File));
+        // Code that isn't a local file stays words.
+        assert!(find_files("`/api/users` `/help` `npm test` `/Users/` ` /Users/a/b` `/Users/a\nb`").is_empty());
+        assert!(find_files("an odd ` then /Users/a/b.mp4").is_empty());
+    }
+
+    #[test]
+    fn a_message_draws_its_files_as_chips() {
+        let pieces = message_pieces("see `/Users/m/a.mp4` and [Card](https://www.notion.so/a)", 0);
+        assert_eq!(pieces.len(), 4);
+        assert!(matches!(&pieces[1], Piece::Mention(m) if m.kind == MentionKind::File && m.title == "a.mp4"));
+        assert!(matches!(&pieces[3], Piece::Mention(m) if m.kind == MentionKind::Card));
+        // A path in a link's words is the link's.
+        assert_eq!(find_chips("[`/Users/m/a.mp4`](thread:abc)").len(), 1);
     }
 }

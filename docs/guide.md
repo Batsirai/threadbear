@@ -568,7 +568,9 @@ internet addresses only. For a picture on a local or private-network server,
 copy the picture itself.
 Any other file you paste or drop in (a video, a PDF, a folder) goes in as
 its full path where you drop it, for the agent to open where it is.
-Nothing's copied, so a big one is fine.
+Nothing's copied, so a big one is fine. On the Mac app it shows as a chip
+with the file's name and a small dot, which means it isn't uploaded: only
+an agent on that Mac can open it. Click the chip to open the file.
 
 Paste a thread's id (Copy thread id in its ... menu or its right-click
 menu in the sidebar), or drag its row from the sidebar onto the open

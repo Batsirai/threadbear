@@ -113,6 +113,19 @@ Feature: Sending a message
     And I drop a file on the first letter of the composer's words
     Then the composer starts with the dropped file's path, then "and the rest"
 
+  # A file that isn't a picture isn't uploaded (a video can be gigabytes):
+  # it goes in as its path in backticks for the agent to open where it is,
+  # drawn in the box and the bubble as a chip with its name and a dot that
+  # says it stays on the Mac. The Swift app is frozen with plain paths.
+  @composer.filedrop @swift-pending
+  Scenario: A dropped file that isn't a picture shows as its chip and sends its path
+    When I type "and the rest" in the composer
+    And I drop a file on the first letter of the composer's words
+    Then the composer's chips are "file: driver.ts"
+    And the composer starts with the dropped file's path, then "and the rest"
+    When I press Return
+    Then the transcript shows my message with the dropped file's path and the chip "file: driver.ts"
+
   @composer.filedrop @swift-pending
   Scenario Outline: A file dropped among existing words keeps the words on both sides
     When I paste "<words>" into the composer

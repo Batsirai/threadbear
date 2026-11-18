@@ -928,15 +928,19 @@ impl Composer {
     pub(crate) fn take_paths_in(&mut self, target: &Entity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let (images, others): (Vec<_>, Vec<_>) = paths.into_iter().map(keep_picture).partition(|p| is_picture(p));
         if !others.is_empty() {
-            Self::insert_paths(target, others, window, cx);
+            self.insert_paths(target, others, window, cx);
         }
         if !images.is_empty() {
             self.insert_pictures_in(target, images, window, cx);
         }
     }
 
-    /// ComposerTextView.insertPaths: the paths with a space either side.
-    fn insert_paths(target: &Entity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+    /// ComposerTextView.insertPaths: the paths with a space either side,
+    /// each drawn as a file's chip (its name, and a dot for "not uploaded":
+    /// the agent opens it where it is). The chip's text is still the path in
+    /// backticks, so the message says just what it did before; a path that
+    /// doesn't read as a local file's (`chips::find_files`) stays words.
+    fn insert_paths(&mut self, target: &Entity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let (text, selection) = Self::text_and_selection(target, cx);
         let mut piece = composer::path_text(&paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>());
         if text[..selection.start].chars().next_back().is_some_and(|c| !c.is_whitespace()) {
@@ -945,11 +949,7 @@ impl Composer {
         if !text[selection.end..].chars().next().is_some_and(char::is_whitespace) {
             piece.push(' ');
         }
-        target.update(cx, |s, cx| {
-            s.replace(piece, window, cx);
-            s.focus(window, cx);
-            crate::web_panels::keyboard_to_app(window);
-        });
+        self.insert_pieces_in(target, threadbear_core::inline_chips::draft_pieces(&piece, 0), &[], window, cx);
     }
 
     pub(crate) fn text_and_selection(target: &Entity<TextareaState>, cx: &App) -> (String, Range<usize>) {
@@ -1547,6 +1547,9 @@ impl Composer {
                     .on_token_click(move |event, window, cx| {
                         if let Some(this) = click_target.upgrade() {
                             this.update(cx, |this, cx| {
+                                if this.open_file_chip(event.token().id(), cx) {
+                                    return;
+                                }
                                 let input = this.input.clone();
                                 this.open_picture(&input, event.token().id(), window, cx);
                             });
