@@ -315,6 +315,10 @@ type Step =
   | ['mint', string] // a boot token for a new attempt, named
   | ['created', number, string] // the provider made box (id) for that attempt
   | ['lost', number] // the provider lost that attempt's box
+  | ['resumed', number] // the provider resumed that attempt's paused box
+  | ['idle', number] // the service asks that attempt's box to save
+  | ['save', string] // the box holding the named token's key saves
+  | ['wake']
   | ['exchange', string, 'ok' | 'auth'] // a box trades the named token
   | ['expect', { state?: string; provider?: string | null; key?: string | null; works?: string[]; dead?: string[] }];
 const ORDERS: { name: string; steps: Step[] }[] = [
@@ -338,6 +342,23 @@ const ORDERS: { name: string; steps: Step[] }[] = [
     name: 'three attempts: a token minted for the third survives losses of the first two, in any order',
     steps: [['mint', 'A'], ['created', 1, 'box-1'], ['mint', 'B'], ['lost', 1], ['expect', { state: 'starting', provider: null }], ['mint', 'C'], ['lost', 2], ['lost', 1], ['expect', { state: 'starting' }], ['exchange', 'B', 'auth'], ['exchange', 'C', 'ok'], ['expect', { state: 'awake', key: 'C', works: ['C'] }]],
   },
+  // Codex's fifth review (18 Nov 2026):
+  {
+    name: "a late RESUMED of an older box leaves its replacement's token, and the older key still goes (case 1)",
+    steps: [['mint', 'A'], ['exchange', 'A', 'ok'], ['created', 1, 'box-1'], ['idle', 1], ['save', 'A'], ['wake'], ['mint', 'B'], ['resumed', 1], ['expect', { state: 'waking' }], ['created', 2, 'box-2'], ['expect', { state: 'starting', provider: 'box-2', dead: ['A'] }], ['exchange', 'B', 'ok'], ['expect', { state: 'awake', key: 'B', works: ['B'] }]],
+  },
+  {
+    name: 'a replayed CREATED for a box that already exchanged is only its metadata, so it can still resume (case 2)',
+    steps: [['mint', 'A'], ['created', 1, 'box-1'], ['exchange', 'A', 'ok'], ['idle', 1], ['save', 'A'], ['wake'], ['created', 1, 'box-1'], ['expect', { state: 'waking', provider: 'box-1', works: ['A'] }], ['resumed', 1], ['expect', { state: 'awake', key: 'A', works: ['A'] }]],
+  },
+  {
+    name: 'the current box\'s CREATED is recorded in any state, saving and asleep too (case 3)',
+    steps: [['mint', 'A'], ['exchange', 'A', 'ok'], ['idle', 1], ['created', 1, 'box-1'], ['expect', { state: 'saving', provider: 'box-1', key: 'A' }], ['save', 'A'], ['created', 1, 'box-1b'], ['expect', { state: 'asleep', provider: 'box-1b', works: ['A'] }]],
+  },
+  {
+    name: "an older box's IDLE or RESUMED changes nothing",
+    steps: [['mint', 'A'], ['mint', 'B'], ['exchange', 'B', 'ok'], ['idle', 1], ['resumed', 1], ['expect', { state: 'awake', key: 'B' }], ['idle', 2], ['expect', { state: 'saving' }]],
+  },
 ];
 
 for (const order of ORDERS) {
@@ -351,6 +372,10 @@ for (const order of ORDERS) {
       if (step[0] === 'mint') tokens.set(step[1], await call(s.a, boxes.mintBootToken, { key: OWNER, threadId: THREAD }));
       else if (step[0] === 'created') await s.report({ type: 'CREATED', attempt: step[1], providerBoxId: step[2] });
       else if (step[0] === 'lost') await s.report({ type: 'LOST', attempt: step[1] });
+      else if (step[0] === 'resumed') await s.report({ type: 'RESUMED', attempt: step[1] });
+      else if (step[0] === 'idle') await s.report({ type: 'IDLE', attempt: step[1] });
+      else if (step[0] === 'wake') await s.report({ type: 'WAKE' });
+      else if (step[0] === 'save') await save(s, keys.get(step[1])!, `save-${i}`);
       else if (step[0] === 'exchange') {
         const r = await outcome(s.exchange(tokens.get(step[1])!.bootToken).then((g) => keys.set(step[1], g.boxKey)));
         assert.equal(r, step[2], at);

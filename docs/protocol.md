@@ -7661,7 +7661,11 @@ SHA-256 (`boxKeyHash`).
   leaves a newer attempt's alone (a `LOST` naming none ends them all). An
   event naming an older attempt than the newest the thread has changes
   neither its state nor its provider box: a late `CREATED` is refused
-  (`boxMachine.ts` `stale`, one rule for every event). Box keys and
+  (`boxMachine.ts` `stale`, one rule for every event). `CREATED`, `IDLE`,
+  `RESUMED` and `LOST` each name their attempt. The newest attempt's
+  `CREATED` records its provider id in any state, and only starts a box
+  that hasn't traded its token yet; `RESUMED` is only the key holder's,
+  while no newer attempt has been minted. Box keys and
   boot tokens (`tbb_`, `tbt_`) are redacted from transcripts like runner
   keys, and so is a value under a name like `threadKey`, `boxKey` or
   `sealed`; a message's `turn` (or a picture's name, a claim's holder, a

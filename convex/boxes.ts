@@ -373,9 +373,9 @@ export const archiveBox = mutation({
 
 const serverEvent = v.union(
   v.object({ type: v.literal('CREATED'), providerBoxId: v.string(), attempt: v.optional(v.number()) }),
-  v.object({ type: v.literal('IDLE') }),
+  v.object({ type: v.literal('IDLE'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('WAKE') }),
-  v.object({ type: v.literal('RESUMED') }),
+  v.object({ type: v.literal('RESUMED'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('LOST'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('DESTROYED') }),
   v.object({ type: v.literal('FAILED'), error: v.string() }),
