@@ -110,3 +110,9 @@ Then('the row {string} says when its schedule messages it', async function (this
   const pattern = /^([A-Z][a-z]{2} )?\d{1,2}[:.]\d{2}(\s?[ap]\.?m\.?)?$/i;
   await this.until(`"${title}" saying when its schedule runs`, (d) => pattern.test(this.thread(d, title)?.trailing ?? ''));
 });
+
+// The real right click, with the menu left up (`keep`) for what comes next.
+When('I right-click the row {string} and leave its menu open', async function (this: ThreadbearWorld, title: string) {
+  await this.until(`a thread called "${title}"`, (d) => this.thread(d, title));
+  await this.app.do({ cmd: 'realMenu', tipPrefix: `${title}\n`, right: true, keep: true });
+});

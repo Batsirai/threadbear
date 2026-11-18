@@ -1227,15 +1227,43 @@ impl Threadbear {
         }
         Ok(())
     }
+}
 
+/// Gives a menu opened by hand (`PopupMenu::build`, not the kit's
+/// `context_menu`) the keyboard, as the kit's own context menus do, so its
+/// Escape binding (the kit's `Cancel`) closes it. Without this Escape went
+/// nowhere and a row's menu stayed up (the fuzzing run, 18 Nov). Returns the
+/// menu's focus and what had the keyboard before (not a menu this one
+/// replaces), for `give_back_focus` when it closes.
+pub(crate) fn focus_menu(view: &Entity<PopupMenu>, replacing: Option<&Entity<PopupMenu>>, window: &mut Window, cx: &mut App) -> (FocusHandle, Option<FocusHandle>) {
+    let replaced = replacing.map(|m| m.focus_handle(cx));
+    let before = window.focused(cx).filter(|f| replaced.as_ref() != Some(f));
+    let menu_focus = view.focus_handle(cx);
+    window.focus(&menu_focus, cx);
+    (menu_focus, before)
+}
+
+/// When a menu closes with the keyboard still on it, hands the keyboard back
+/// to what had it before; a choice that moved it on (a rename field) keeps it.
+pub(crate) fn give_back_focus(menu_focus: &FocusHandle, before: Option<&FocusHandle>, window: &mut Window, cx: &mut App) {
+    if menu_focus.is_focused(window) || menu_focus.contains_focused(window, cx) {
+        if let Some(before) = before {
+            window.focus(before, cx);
+        }
+    }
+}
+
+impl Threadbear {
     /// Opens `rows` as a popup menu at `position`, for a row or a heading.
     pub(crate) fn open_menu(&mut self, thread: Option<String>, menu_rows: Vec<MenuRow>, position: Point<Pixels>, confirm_busy: bool, window: &mut Window, cx: &mut Context<Self>) {
         let entity = cx.entity().downgrade();
         let (build_rows, build_thread) = (menu_rows.clone(), thread.clone());
         let view = PopupMenu::build(window, cx, move |menu, window, cx| fill_menu(menu, &build_rows, entity.clone(), build_thread.clone(), window, cx));
+        let (menu_focus, before) = focus_menu(&view, self.sidebar.menu.as_ref().map(|m| &m.view), window, cx);
         // The menu closes itself on Escape, a click outside or a choice.
-        let dismissed = cx.subscribe(&view, |this, _, _: &DismissEvent, cx| {
+        let dismissed = cx.subscribe_in(&view, window, move |this, _, _: &DismissEvent, window, cx| {
             this.sidebar.menu = None;
+            give_back_focus(&menu_focus, before.as_ref(), window, cx);
             cx.notify();
         });
         self.sidebar.menu = Some(OpenMenu { thread, position, view, rows: menu_rows, confirm_busy, _dismissed: dismissed });

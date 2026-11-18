@@ -1303,9 +1303,10 @@ fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &m
                 app.update(cx, |t, cx| t.set_share(id2, &access, false, cx));
             }
             if let Some(open) = cmd["open"].as_bool() {
-                app.update(cx, |t, cx| {
-                    t.share_popover = open.then(|| id.clone());
-                    cx.notify();
+                app.update(cx, |t, cx| match (open, t.share_popover.is_some()) {
+                    (true, _) if t.share_popover.as_deref() != Some(id.as_str()) => t.toggle_share_popover(id.clone(), window, cx),
+                    (false, true) => t.close_share_popover(window, cx),
+                    _ => {}
                 });
             }
             Ok(json!(app.read(cx).share_status()))

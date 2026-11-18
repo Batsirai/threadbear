@@ -918,9 +918,11 @@ impl SidePane {
         let entity = cx.entity().downgrade();
         let build = items.clone();
         let view = PopupMenu::build(window, cx, move |menu, window, cx| fill_menu(menu, &build, entity.clone(), window, cx));
+        let (menu_focus, before) = crate::sidebar::focus_menu(&view, self.menu.as_ref().map(|m| &m.view), window, cx);
         // The menu closes itself on Escape, a click outside or a choice.
-        let dismissed = cx.subscribe(&view, |this, _, _: &DismissEvent, cx| {
+        let dismissed = cx.subscribe_in(&view, window, move |this, _, _: &DismissEvent, window, cx| {
             this.menu = None;
+            crate::sidebar::give_back_focus(&menu_focus, before.as_ref(), window, cx);
             cx.notify();
         });
         self.menu = Some(OpenMenu { position, view, _dismissed: dismissed });

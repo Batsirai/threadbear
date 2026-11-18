@@ -59,6 +59,16 @@ Feature: The thread's bar, banners and notes
     And I make a share link for the open thread
     Then the share popover says the thread is shared with a link
 
+  # The Swift app's is an NSPopover, which closes on Escape by itself; its
+  # script can't press a key into one.
+  @header.share @swift-pending
+  Scenario: Escape closes the share popover
+    When I open the thread "Morning brief"
+    And I click the share button
+    Then the share popover is open
+    When I press Escape
+    Then the share popover is closed
+
   @banner.error
   Scenario: An error shows in a bar until it's dismissed
     When an error "Thread not found" happens

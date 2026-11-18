@@ -394,15 +394,35 @@ impl Threadbear {
         let hover = style::sidebar_hover(cx);
         let mut button = tipped!(div().id("header-share").relative().w(px(26.)).h(px(26.)).flex().items_center().justify_center().rounded(px(6.)).hover(move |s| s.bg(hover)), tip)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.share_popover = if this.share_popover.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
-                cx.notify();
-            }))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.toggle_share_popover(id.clone(), window, cx)))
             .child(icon("square.and.arrow.up", style::size::LABEL, color));
         if open {
             button = button.child(self.render_share_popover(thread, cx));
         }
         button.into_any_element()
+    }
+
+    /// Opens the share popover on `id`, or closes it if it's up. Open, it
+    /// has the keyboard, so Escape closes it as the Swift app's NSPopover
+    /// does by itself (the fuzzing run found it didn't, 18 Nov).
+    pub(crate) fn toggle_share_popover(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.share_popover.as_deref() == Some(id.as_str()) {
+            self.close_share_popover(window, cx);
+            return;
+        }
+        if self.share_popover.is_none() {
+            self.share_before = window.focused(cx).filter(|f| *f != self.share_focus);
+        }
+        self.share_popover = Some(id);
+        window.focus(&self.share_focus, cx);
+        cx.notify();
+    }
+
+    /// Puts the share popover away, giving the keyboard back if it still has it.
+    pub(crate) fn close_share_popover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.share_popover = None;
+        crate::sidebar::give_back_focus(&self.share_focus, self.share_before.take().as_ref(), window, cx);
+        cx.notify();
     }
 
     /// Who can read the thread, the link, and Copy (`SharePopover`).
@@ -412,8 +432,24 @@ impl Threadbear {
         let id = thread.id.clone();
         let busy = self.share_busy;
         let (secondary, bg, border) = (style::secondary_text(cx), cx.theme().popover, cx.theme().border);
-        let option = |label: &'static str, access: &'static str, selected: bool, id: String, cx: &mut Context<Self>| {
-            tipped!(div().id(label).flex_1().flex().justify_center().px(px(8.)).py(px(4.)).rounded(px(6.)).when(selected, |s| s.bg(style::primary_opacity(cx, 0.08))).text_size(px(style::size::LABEL)), "Who can read it")
+        // Each choice is named by its own words to a screen reader, and says
+        // whether it's the one chosen (both were "Who can read it" until 18 Nov).
+        let option = |label: &'static str, tip: &'static str, access: &'static str, selected: bool, id: String, cx: &mut Context<Self>| {
+            div()
+                .id(label)
+                .test_support()
+                .role(Role::RadioButton)
+                .aria_toggled(if selected { Toggled::True } else { Toggled::False })
+                .aria_label(label)
+                .tip(tip)
+                .flex_1()
+                .flex()
+                .justify_center()
+                .px(px(8.))
+                .py(px(4.))
+                .rounded(px(6.))
+                .when(selected, |s| s.bg(style::primary_opacity(cx, 0.08)))
+                .text_size(px(style::size::LABEL))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if !this.share_busy {
                         this.set_share(id.clone(), access, false, cx);
@@ -421,7 +457,10 @@ impl Threadbear {
                 }))
                 .child(label)
         };
-        let rows = vec![option("Only you", "off", !on, id.clone(), cx).into_any_element(), option("Anyone with the link", "link", on, id.clone(), cx).into_any_element()];
+        let rows = vec![
+            option("Only you", "Only you can read it", "off", !on, id.clone(), cx).into_any_element(),
+            option("Anyone with the link", "Anyone with the link can read it", "link", on, id.clone(), cx).into_any_element(),
+        ];
         let id_for_new = id.clone();
         let link_row = link.clone().map(|link| {
             let (copy, open) = (link.clone(), link.clone());
@@ -445,15 +484,19 @@ impl Threadbear {
                     .border_1()
                     .border_color(border)
                     .shadow_lg()
-                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.share_popover = None;
-                        cx.notify();
+                    .track_focus(&self.share_focus)
+                    .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                        if ev.keystroke.key == "escape" {
+                            this.close_share_popover(window, cx);
+                            cx.stop_propagation();
+                        }
                     }))
+                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, window, cx| this.close_share_popover(window, cx)))
                     .child(
                         v_flex()
                             .gap(px(12.))
                             .child(div().font_weight(FontWeight::SEMIBOLD).text_size(px(style::size::LABEL)).child("Share this thread"))
-                            .child(h_flex().gap(px(4.)).children(rows))
+                            .child(h_flex().id("share-who").test_support().role(Role::RadioGroup).aria_label("Who can read it").gap(px(4.)).children(rows))
                             .when(busy, |s| s.child(div().size(px(14.)).child(Spinner::new().icon(IconName::LoaderCircle).color(secondary).with_size(px(14.)))))
                             .when_some(link_row, |s, l| s.child(l)),
                     ),

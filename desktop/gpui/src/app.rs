@@ -145,6 +145,9 @@ pub struct Threadbear {
     pub(crate) renaming: Option<String>,
     pub(crate) rename_field: Option<(Entity<InputState>, Subscription)>,
     pub(crate) share_popover: Option<String>,
+    /// The share popover's keyboard focus, and what had it before it opened.
+    pub(crate) share_focus: FocusHandle,
+    pub(crate) share_before: Option<FocusHandle>,
     /// ⌘K's box while it's up (open_anything.rs), what it calls Recent,
     /// and the patch panels showing last time the layout changed.
     pub(crate) anything: Option<crate::open_anything::OpenAnything>,
@@ -549,6 +552,8 @@ impl Threadbear {
             renaming: None,
             rename_field: None,
             share_popover: None,
+            share_focus: cx.focus_handle(),
+            share_before: None,
             anything: None,
             anything_recent,
             anything_panels_shown: Default::default(),
