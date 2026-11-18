@@ -154,3 +154,41 @@ baked in; the turn itself took 1.8 s.
 only), valid a year. When it can open a real browser, claude.ai hands the
 code back to a localhost callback by itself, so Threadbear can make the
 token for the user with one click and an Authorize, no pasting.
+
+## Losing a box (18 Nov 2026)
+
+`lose-box.ts`, with `convex/lose.ts` and `box/lose.mjs`: a thread outlives
+its box (docs/virtual-runners.md, decisions 3 and 7).
+
+1. Box A trades its boot token for a box key scoped to the thread (which
+   replaces any earlier box's key in the same mutation), the Claude token,
+   the thread's own key and the thread's session id. It runs a Haiku turn
+   with `--session-id` that writes `notes.txt` (left uncommitted) and is
+   told a number to remember but not write down.
+2. The driver asks for a save. Box A tars the folder and
+   `~/.claude/projects`, seals it with AES-256-GCM under the thread key and
+   puts it in Convex file storage. The driver pauses box A, then destroys
+   it.
+3. Box B starts for the same thread, restores the save and runs
+   `claude --resume <session id>`, asking for the codeword and the number
+   from memory.
+
+```sh
+CLAUDE_TOKEN_FILE=~/.config/threadbear-box-spike/claude-token node lose-box.ts
+```
+
+Every check passed on the first run: box B answered "pelican-42 7319" in
+the same session, `notes.txt` was still there and still uncommitted (one
+commit, as before), box B's key worked and box A's was refused. The save
+was 57 KB and took 4 s from request to stored.
+
+| | Box A | Box B |
+|---|---|---|
+| Create to answer | 58 s | 54 s |
+| of which installing git and Claude Code | 43 s | 45 s |
+| Restore from the save | | 1 s after the exchange |
+
+The installs would be baked into a real image, which puts a cold wake from
+a save at roughly 10 s plus the turn. Not tested here: pushing
+`refs/threadbear/save` to the repo's origin (that needs the GitHub tokens of
+decision 11), and the real runner's own save and restore.

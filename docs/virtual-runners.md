@@ -251,9 +251,13 @@ in, and "What the review changed" at the end says what moved and why.
      with uncommitted work: a new box restores the save, resumes the same
      Claude session with the work intact, and the old credential is
      refused.
+     Passed 18 Nov on Fly with a stand-in for the runner
+     (`runner/box/spike/lose-box.ts`); the git push of the save ref waits
+     for GitHub tokens.
    - **Claude Code runs on the setup token from Convex**: one real turn on
      the cheapest model, with the token reaching the box only through the
      boot exchange, and absent from the provider's machine config.
+     Passed 17 Nov (`runner/box/spike/claude-turn.ts`).
    - The numbers: cold start to first reply including clone and worktree
      setup on threadbear itself, warm wake to first reply, and the cost of
      an hour awake, paused and saved.

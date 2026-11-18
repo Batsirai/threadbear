@@ -81,6 +81,8 @@ export default defineSchema({
     expiresAt: v.number(),
     usedAt: v.optional(v.number()),
     reportKeyHash: v.optional(v.string()),
+    // The lose-a-box test: a boot token for a box that runs this thread.
+    thread: v.optional(v.string()),
   })
     .index("by_hash", ["hash"])
     .index("by_report_key", ["reportKeyHash"]),
@@ -91,4 +93,21 @@ export default defineSchema({
     at: v.number(),
     report: v.any(),
   }).index("by_box", ["box"]),
+
+  // --- The lose-a-box test (lose-box.ts) --------------------------------
+
+  // One thread that outlives its boxes (docs/virtual-runners.md, 3 and 7).
+  threads: defineTable({
+    name: v.string(),
+    // The per-thread key that seals saves, itself sealed under SEAL_KEY.
+    sealedThreadKey: v.string(),
+    sessionId: v.string(),
+    // The one live box credential: a new box's replaces the last box's.
+    box: v.optional(v.string()),
+    boxKeyHash: v.optional(v.string()),
+    saveRequestedAt: v.optional(v.number()),
+    save: v.optional(v.object({ storageId: v.id("_storage"), at: v.number(), bytes: v.number(), box: v.string() })),
+  })
+    .index("by_name", ["name"])
+    .index("by_box_key", ["boxKeyHash"]),
 });

@@ -9,6 +9,7 @@
  */
 
 import type * as login from "../login.js";
+import type * as lose from "../lose.js";
 import type * as spike from "../spike.js";
 
 import type {
@@ -19,6 +20,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   login: typeof login;
+  lose: typeof lose;
   spike: typeof spike;
 }>;
 
