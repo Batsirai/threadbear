@@ -7864,8 +7864,8 @@ SHA-256 (`boxKeyHash`).
 
 - **Getting one.** The provider starts the box with a boot token (`tbt_`
   and 64 hex characters) in its environment and nothing else reusable.
-  `boxes:exchange({ bootToken })` trades it, once and within 10 minutes of
-  its minting, for `{ boxKey, runnerId, threadId, claudeToken, threadKey,
+  `boxes:exchange({ bootToken, machineId? })` trades it, once and within
+  10 minutes of its minting, for `{ boxKey, runnerId, threadId, claudeToken, threadKey,
   repo, save }`: the box key, the login's cloud token, the thread's key
   for sealing its saves (base64, 32 bytes), the repo the owner fixed
   (`origin` without credentials, `subfolder`, `baseBranch`) and the last
@@ -7876,6 +7876,16 @@ SHA-256 (`boxKeyHash`).
   (`READY`), and the new key's hash replaces the last box's, so the last
   box's key is refused from that moment. A login with no cloud token
   refuses with `kind: "noCloudToken"` and leaves the boot token as it was.
+  `machineId` is the provider's id for the machine the box runs on, which
+  each provider says how a box learns (`BoxProvider.machineIdEnv`: Fly's
+  `FLY_MACHINE_ID`); letters, digits, `_` and `-`, at most 64. The
+  exchange records it as the key holder's machine (`boxes.keyMachineId`),
+  so where a provider made two machines for one attempt, only that one is
+  the row's: the reaper takes it in and deletes the other, and a
+  `CREATED`, `LOST` or `PAUSED` naming the other changes nothing. The box
+  runner sends it from slice 3; an exchange without it is taken, its
+  machine unknown, and then no machine of that attempt is reported lost,
+  taken in or deleted for the key while another of it is listed.
   A newer boot token for the thread replaces an older one. Each is for one
   attempt at a box (`mintBootToken` returns its `attempt`, numbered from
   1), which the service's `CREATED` and `LOST` name: a loss ends the key,

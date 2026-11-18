@@ -349,6 +349,11 @@ export const appSchema = defineSchema({
     // No heartbeat since then, but the provider hasn't said the box is gone
     // (boxService.ts checkBox): kept, its key working, until it says so.
     unreachableSince: v.optional(v.number()),
+    // The provider's id for the machine that traded the key holder's boot
+    // token (boxes.ts exchange, `machineId`): the key holder's machine,
+    // whatever else is tagged with its attempt. Unknown for a box that
+    // didn't say, which keeps every machine of its attempt protected.
+    keyMachineId: v.optional(v.string()),
     // Attempts whose boxes may hold work newer than the newest save each
     // made (invariant W, boxMachine.ts holdsWork).
     workAttempts: v.optional(v.array(v.number())),
@@ -391,8 +396,8 @@ export const appSchema = defineSchema({
   // A reaper step queued for a provider machine (boxService.ts reapOne), so
   // the next pass doesn't queue a second for it. Gone when it ends, or
   // taken as stale after REAP_PENDING_MS.
-  // `gen`: which queued step it is, so an older step ending doesn't clear a newer one's mark.
-  reapQueued: defineTable({ providerBoxId: v.string(), at: v.number(), gen: v.optional(v.number()) }).index('by_box', ['providerBoxId']),
+  // `job`: which queued step it is (unique, made by the pass that queued it), so an older step ending doesn't clear a newer one's mark.
+  reapQueued: defineTable({ providerBoxId: v.string(), at: v.number(), job: v.optional(v.string()) }).index('by_box', ['providerBoxId']),
 
   cloudTokens: defineTable({
     login: v.string(),

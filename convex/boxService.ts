@@ -29,7 +29,7 @@ import { internal } from './_generated/api';
 import { box as boxMachine, machines, queued } from './machines';
 import { newestAttempt } from './boxMachine';
 import { SAVE_MS, WAKE_GRACE_MS } from './boxStates';
-import { activeMove, archive, askToSave, BOOT_PREFIX, BOX_LIMITS, mayMintAttempt, newAttempt, overHours, randomHex, usedTodayMs } from './boxes';
+import { activeMove, archive, askToSave, BOOT_PREFIX, BOX_LIMITS, isKeyMachine, mayMintAttempt, newAttempt, overHours, randomHex, usedTodayMs } from './boxes';
 import { sha256 } from './lib';
 import { deleteIfUnused } from './sync';
 import { FLY_SUSPEND_MAX_MB, flyFromEnv } from './boxProviders/fly';
@@ -108,6 +108,8 @@ const seenV = v.object({
   newest: v.number(),
   hasKey: v.boolean(),
   keyAttempt: v.optional(v.number()),
+  // The key holder's machine, if its exchange said (boxes.ts claimBoot).
+  keyMachineId: v.optional(v.string()),
   providerBoxId: v.optional(v.string()),
   providerAttempt: v.optional(v.number()),
   // The provider box's memory, as made (boxes.size), if it's that attempt's.
@@ -145,6 +147,7 @@ export const boxFor = internalQuery({
       newest: newestAttempt(row),
       hasKey: row.boxKeyHash !== undefined,
       ...(row.keyAttempt !== undefined ? { keyAttempt: row.keyAttempt } : {}),
+      ...(row.keyMachineId !== undefined ? { keyMachineId: row.keyMachineId } : {}),
       ...(row.providerBoxId !== undefined ? { providerBoxId: row.providerBoxId } : {}),
       ...(row.providerAttempt !== undefined ? { providerAttempt: row.providerAttempt } : {}),
       memoryMb: row.size && row.size.attempt === row.providerAttempt ? row.size.memoryMb : UNKNOWN_MB,
@@ -159,6 +162,23 @@ export const boxFor = internalQuery({
     };
   },
 });
+
+/**
+ * Whether the row's machine of this attempt may be reported lost: always,
+ * unless it's the key holder's attempt and the exchange didn't say which
+ * machine took the key, while another of that attempt is listed (it may be
+ * the one holding the key's work, so the attempt's protection stays).
+ */
+function lossMayBeReported(seen: Seen, attempt: number | undefined, listed: ListedBox[], id?: string): boolean {
+  if (attempt === undefined || attempt !== seen.keyAttempt || seen.keyMachineId !== undefined) return true;
+  return !listed.some((b) => b.providerBoxId !== (id ?? seen.providerBoxId) && Number(b.tags.tb_attempt) === attempt);
+}
+
+// lossMayBeReported, listing the box's machines only when it needs to.
+async function mayReportLoss(p: BoxProvider, boxId: string, seen: Seen, attempt: number | undefined, id: string): Promise<boolean> {
+  if (attempt === undefined || attempt !== seen.keyAttempt || seen.keyMachineId !== undefined) return true;
+  return lossMayBeReported(seen, attempt, await retrying(() => p.list({ tb_box: boxId })), id);
+}
 
 function provider(name: string | null, memoryMb: number): BoxProvider | null {
   if (!name) return null;
@@ -402,6 +422,12 @@ async function bringBack(op: Op): Promise<void> {
         await ctx.scheduler.runAfter(WAKE_RETRY_MS, internal.boxService.wakeBox, { boxId });
         return;
       }
+      // Another machine of its attempt may be the one holding the key (the
+      // exchange didn't say): the wake waits instead, as for any hiccup.
+      if (!(await mayReportLoss(paused, boxId, seen, attempt, id))) {
+        await ctx.scheduler.runAfter(WAKE_RETRY_MS, internal.boxService.wakeBox, { boxId });
+        return;
+      }
       await report(ctx, seen.threadId, { type: 'LOST', attempt, providerBoxId: id }, op.id);
     }
     if (taken) {
@@ -489,7 +515,9 @@ export const sleepBox = internalAction({
           await retrying(() => p.pause!(id));
         } catch (e) {
           if (e instanceof LeaseLost) throw e;
-          if (notFound(e)) await report(ctx, seen.threadId, lost, op.id);
+          if (notFound(e)) {
+            if (await mayReportLoss(p, boxId, seen, seen.providerAttempt, id)) await report(ctx, seen.threadId, lost, op.id);
+          }
           else {
             console.warn('a box did not pause; the billing guard will try again', message(e));
             await ctx.runMutation(internal.boxService.suspendFailed, { boxId, attempt: seen.providerAttempt ?? 0, providerBoxId: id });
@@ -623,7 +651,9 @@ export const checkBox = internalAction({
       const p = fenced(op, raw);
       const id = seen.providerBoxId;
       const state = await providerState(p, boxId, id);
-      if (state === 'gone') await report(ctx, seen.threadId, { type: 'LOST', providerBoxId: id, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
+      if (state === 'gone') {
+        if (await mayReportLoss(p, boxId, seen, seen.providerAttempt, id)) await report(ctx, seen.threadId, { type: 'LOST', providerBoxId: id, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
+      }
       else if (state === 'paused') {
         // Paused (by the guard, its wait lost on the way back, say): resumed
         // only if it may run now; else the row follows the provider.
@@ -896,7 +926,8 @@ export function entitled(row: Doc<'boxes'>, limits: Limits, b: Listed, moving: b
  *   not to pause is left running and counted (observe);
  * - anything else, one that may hold work newer than its save among them: kept.
  */
-function planFor(row: Doc<'boxes'> | null, serviceId: string, limits: Limits, provider: string, b: Listed, moving: boolean, now: number): Do {
+// `siblings`: how many other listed machines carry this one's box and attempt.
+function planFor(row: Doc<'boxes'> | null, serviceId: string, limits: Limits, provider: string, b: Listed, moving: boolean, now: number, siblings = 0): Do {
   if (!row || row.serviceId !== serviceId || !Number.isSafeInteger(b.attempt) || b.attempt < 1 || b.attempt > newestAttempt(row) || row.boxState.kind === 'expired') return 'destroy';
   const kind = row.boxState.kind;
   // Its retirement deletes the machines it named (retireBox); but one running
@@ -906,6 +937,26 @@ function planFor(row: Doc<'boxes'> | null, serviceId: string, limits: Limits, pr
   const current = b.attempt === newestAttempt(row);
   // Machines are told apart by their id: the row's own, or another (an older
   // attempt's, or a duplicate of its attempt that the provider made twice).
+  // For the key holder's attempt, its own is the machine that traded the key
+  // (keyMachineId). Not known (it didn't say) with several of that attempt
+  // listed: none can be told for the key holder's, so all are kept, and a
+  // stopped one (its disk gone) deleted without a loss.
+  if (b.attempt === row.keyAttempt && row.keyMachineId !== undefined) {
+    // Known: the key holder's machine is the row's (taken in if it was
+    // recorded as another); any other of its attempt never had the key, so
+    // holds nothing, and is deleted.
+    if (b.providerBoxId !== row.keyMachineId) return 'destroy';
+    if (row.providerBoxId !== b.providerBoxId) return 'adopt';
+  } else if (b.attempt === row.keyAttempt && siblings > 0) {
+    // Not known, with others of its attempt: any of them may hold the key's
+    // work, so none is lost, taken in or deleted (a stopped one that isn't
+    // the row's has no disk, so holds nothing). Pausing loses nothing: the
+    // row's own as any machine, the others as duplicates.
+    if (b.state === 'stopped') return row.providerBoxId === b.providerBoxId ? 'keep' : 'destroy';
+    if (b.state !== 'running') return 'keep';
+    const mayRun = row.providerBoxId === b.providerBoxId && entitled(row, limits, b, moving, now);
+    return !mayRun && mayTrySuspend(row, provider, b, now) ? 'suspend' : 'keep';
+  }
   const own = row.providerBoxId === b.providerBoxId;
   const duplicate = !own && row.providerBoxId !== undefined && row.providerAttempt === b.attempt;
   if (b.state === 'stopped') {
@@ -948,12 +999,15 @@ async function rowOf(ctx: { db: MutationCtx['db'] }, boxId: string): Promise<Doc
   return id ? await ctx.db.get(id) : null;
 }
 
-async function planOf(ctx: QueryCtx, serviceId: Id<'runnerServices'>, b: Listed, now: number): Promise<{ row: Doc<'boxes'> | null; do: Do }> {
+async function planOf(ctx: QueryCtx, serviceId: Id<'runnerServices'>, b: Listed, now: number, siblings = 0): Promise<{ row: Doc<'boxes'> | null; do: Do }> {
   const row = await rowOf(ctx as never, b.boxId);
   const service = await ctx.db.get(serviceId);
   const moving = row ? await activeMove(ctx, row.threadId, now) : false;
-  return { row, do: planFor(row, serviceId, service?.limits ?? BOX_LIMITS, service?.provider ?? '', b, moving, now) };
+  return { row, do: planFor(row, serviceId, service?.limits ?? BOX_LIMITS, service?.provider ?? '', b, moving, now, siblings) };
 }
+
+// Other listed machines with this one's box and attempt.
+const siblingsOf = (boxes: Listed[], b: Listed) => boxes.filter((x) => x.boxId === b.boxId && x.attempt === b.attempt && x.providerBoxId !== b.providerBoxId).length;
 
 /** The plan for a page of listed machines, with each row as it is now. */
 export const reapPlan = internalQuery({
@@ -963,7 +1017,7 @@ export const reapPlan = internalQuery({
     const out = [];
     const now = Date.now();
     for (const b of boxes) {
-      const { row, do: planned } = await planOf(ctx, serviceId, b, now);
+      const { row, do: planned } = await planOf(ctx, serviceId, b, now, siblingsOf(boxes, b));
       // A machine whose delete failed lately waits out its backoff.
       const backoff = planned === 'destroy' ? await ctx.db.query('boxDeleteBackoff').withIndex('by_box', (q) => q.eq('providerBoxId', b.providerBoxId)).first() : null;
       out.push({ box: b, do: backoff && backoff.next > now ? ('keep' as const) : planned, seen: snapOf(row), ...(row ? { boxId: row._id } : {}) });
@@ -980,11 +1034,12 @@ export const reapPlan = internalQuery({
  * now do the provider's part (destroy, or suspend).
  */
 export const reapStep = machines.internalMutation({
-  args: { serviceId: v.id('runnerServices'), box: listedV, do: doV, seen: snapV },
+  // siblings: other machines of its box and attempt, as the caller's listing showed them.
+  args: { serviceId: v.id('runnerServices'), box: listedV, do: doV, seen: snapV, siblings: v.optional(v.number()) },
   returns: v.boolean(),
-  handler: async (machineCtx, { serviceId, box: b, do: planned, seen }) => {
+  handler: async (machineCtx, { serviceId, box: b, do: planned, seen, siblings }) => {
     const ctx = machineCtx as unknown as MutationCtx;
-    const { row, do: now } = await planOf(ctx, serviceId, b, Date.now());
+    const { row, do: now } = await planOf(ctx, serviceId, b, Date.now(), siblings ?? 0);
     if (!sameSnap(snapOf(row), seen) || now !== planned) return false;
     if (planned === 'suspend') return true;
     if (planned === 'destroy') {
@@ -992,13 +1047,13 @@ export const reapStep = machines.internalMutation({
       const backoff = await ctx.db.query('boxDeleteBackoff').withIndex('by_box', (q) => q.eq('providerBoxId', b.providerBoxId)).first();
       if (backoff && backoff.next > Date.now()) return false;
       // The fence: the key of the machine it deletes goes in this same step
-      // (the row's own machine's: a duplicate of its attempt doesn't hold it).
-      if (row && row.keyAttempt === b.attempt && row.providerBoxId === b.providerBoxId) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined });
+      // (the key holder's machine's: a duplicate of its attempt doesn't hold it).
+      if (row && row.keyAttempt === b.attempt && (row.keyMachineId ?? row.providerBoxId) === b.providerBoxId) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined });
       return true;
     }
     if (!row) return false;
     // Only the row's own machine's loss: a duplicate's says nothing of it.
-    if (planned === 'lost') return row.providerBoxId === b.providerBoxId && (await boxMachine.send(machineCtx, row._id, { type: 'LOST', attempt: b.attempt })).status === 'done';
+    if (planned === 'lost') return row.providerBoxId === b.providerBoxId && isKeyMachine(row, b.attempt, b.providerBoxId) && (await boxMachine.send(machineCtx, row._id, { type: 'LOST', attempt: b.attempt })).status === 'done';
     if (planned === 'adopt') await boxMachine.send(machineCtx, row._id, { type: 'CREATED', providerBoxId: b.providerBoxId, attempt: b.attempt });
     if (planned === 'paused') await boxMachine.send(machineCtx, row._id, { type: 'PAUSED', attempt: b.attempt });
     return false;
@@ -1030,10 +1085,14 @@ export const observe = internalMutation({
       // Each machine of the row is charged from its own last observation
       // (observedAt, by attempt), not from a stamp another machine moved.
       const last = new Map((row.observedAt ?? []).map((o) => [o.providerBoxId, o.at]));
+      // The one machine whose time the row's state charges: the row's own
+      // (the key holder's, if the exchange said; before its id is known, the
+      // first of its newest attempt). Every other is charged by observation.
+      const rowMachine = byState ? (row.keyAttempt === newestAttempt(row) ? row.keyMachineId : undefined) ?? row.providerBoxId ?? list.find((b) => b.state === 'running' && b.attempt === newestAttempt(row))?.providerBoxId : undefined;
       let charge = 0;
       let running = false;
       for (const b of list) {
-        if (b.state === 'running' && !(byState && b.attempt === newestAttempt(row))) {
+        if (b.state === 'running' && b.providerBoxId !== rowMachine) {
           charge += Math.max(0, now - Math.max(last.get(b.providerBoxId) ?? now - PASS_MS, now - 2 * PASS_MS, dayStart));
           running = true;
         }
@@ -1125,14 +1184,16 @@ export const reapService = internalAction({
     const toQueue = [];
     for (const step of await ctx.runQuery(internal.boxService.reapPlan, { serviceId, boxes })) {
       if (step.do === 'keep') continue;
-      if (step.do === 'adopt' || step.do === 'paused') await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: step.box, do: step.do, seen: step.seen });
+      if (step.do === 'adopt' || step.do === 'paused') await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: step.box, do: step.do, seen: step.seen, siblings: siblingsOf(boxes, step.box) });
       else toQueue.push(step);
     }
     // One step a machine at a time: one already queued isn't queued again (queueReaps).
-    const fresh = new Map((await ctx.runMutation(internal.boxService.queueReaps, { providerBoxIds: toQueue.map((st) => st.box.providerBoxId) })).map((q) => [q.providerBoxId, q.gen]));
-    for (const step of toQueue) {
-      const gen = fresh.get(step.box.providerBoxId);
-      if (gen !== undefined) await ctx.scheduler.runAfter(0, internal.boxService.reapOne, { serviceId, box: step.box, do: step.do, seen: step.seen, gen, ...(step.boxId ? { boxId: step.boxId } : {}) });
+    // Each step a job id of its own, which its queue mark keeps (a counter could repeat once a mark's gone).
+    const jobs = toQueue.map((st) => ({ providerBoxId: st.box.providerBoxId, job: randomHex(8) }));
+    const fresh = new Set(await ctx.runMutation(internal.boxService.queueReaps, { jobs }));
+    for (const [i, step] of toQueue.entries()) {
+      const { job } = jobs[i]!;
+      if (fresh.has(job)) await ctx.scheduler.runAfter(0, internal.boxService.reapOne, { serviceId, box: step.box, do: step.do, seen: step.seen, job, siblings: siblingsOf(boxes, step.box), ...(step.boxId ? { boxId: step.boxId } : {}) });
     }
     if (listed.length > size) await ctx.scheduler.runAfter(0, internal.boxService.reapService, { serviceId, after: boxes[boxes.length - 1]!.providerBoxId, chunk: size });
     // Once a pass (its first chunk), the other way round: every row against the whole listing.
@@ -1195,7 +1256,9 @@ export const driftOne = internalAction({
     }
     const p = fenced(newOp(ctx, m.boxId, id), raw);
     try {
-      if ((await retrying(() => p.list({ tb_box: m.boxId }))).some((b) => b.providerBoxId === m.providerBoxId)) return null;
+      const listed = await retrying(() => p.list({ tb_box: m.boxId }));
+      if (listed.some((b) => b.providerBoxId === m.providerBoxId)) return null;
+      if (!lossMayBeReported(seen!, m.attempt, listed)) return null;
       await ctx.runMutation(internal.boxService.driftLost, { ...m, op: id });
     } catch (e) {
       if (!(e instanceof LeaseLost)) console.warn("a drift check didn't happen; the next pass tries again", message(e));
@@ -1212,7 +1275,7 @@ export const driftLost = machines.internalMutation({
   handler: async (machineCtx, { boxId, providerBoxId, attempt, op }) => {
     const ctx = machineCtx as unknown as MutationCtx;
     const row = await ctx.db.get(boxId);
-    if (!row || row.op?.id !== op || row.providerBoxId !== providerBoxId || (row.providerAttempt ?? newestAttempt(row)) !== attempt) return false;
+    if (!row || row.op?.id !== op || row.providerBoxId !== providerBoxId || (row.providerAttempt ?? newestAttempt(row)) !== attempt || !isKeyMachine(row, attempt, providerBoxId)) return false;
     return (await boxMachine.send(machineCtx, boxId, { type: 'LOST', attempt })).status === 'done';
   },
 });
@@ -1229,22 +1292,21 @@ export const driftLost = machines.internalMutation({
 export const REAP_PENDING_MS = 15 * 60_000;
 
 /**
- * Of these machines, those with no reaper step queued (or only a stale
- * one), now marked queued with a new generation, which their step carries.
+ * Of these steps, those whose machine has no step queued (or only a stale
+ * one), now marked queued with the step's own job id. Returns their jobs.
  */
 export const queueReaps = internalMutation({
-  args: { providerBoxIds: v.array(v.string()) },
-  returns: v.array(v.object({ providerBoxId: v.string(), gen: v.number() })),
-  handler: async (ctx, { providerBoxIds }) => {
+  args: { jobs: v.array(v.object({ providerBoxId: v.string(), job: v.string() })) },
+  returns: v.array(v.string()),
+  handler: async (ctx, { jobs }) => {
     const now = Date.now();
     const out = [];
-    for (const id of providerBoxIds) {
-      const row = await ctx.db.query('reapQueued').withIndex('by_box', (q) => q.eq('providerBoxId', id)).first();
+    for (const { providerBoxId, job } of jobs) {
+      const row = await ctx.db.query('reapQueued').withIndex('by_box', (q) => q.eq('providerBoxId', providerBoxId)).first();
       if (row && row.at > now - REAP_PENDING_MS) continue;
-      const gen = (row?.gen ?? 0) + 1;
-      if (row) await ctx.db.patch(row._id, { at: now, gen });
-      else await ctx.db.insert('reapQueued', { providerBoxId: id, at: now, gen });
-      out.push({ providerBoxId: id, gen });
+      if (row) await ctx.db.patch(row._id, { at: now, job });
+      else await ctx.db.insert('reapQueued', { providerBoxId, at: now, job });
+      out.push(job);
     }
     return out;
   },
@@ -1252,17 +1314,17 @@ export const queueReaps = internalMutation({
 
 /** A queued step ended: its mark goes, if it's still that step's (a newer one's isn't touched). */
 export const reapDone = internalMutation({
-  args: { providerBoxId: v.string(), gen: v.optional(v.number()) },
+  args: { providerBoxId: v.string(), job: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { providerBoxId, gen }) => {
-    for (const r of await ctx.db.query('reapQueued').withIndex('by_box', (q) => q.eq('providerBoxId', providerBoxId)).collect()) if (gen === undefined || r.gen === gen) await ctx.db.delete(r._id);
+  handler: async (ctx, { providerBoxId, job }) => {
+    for (const r of await ctx.db.query('reapQueued').withIndex('by_box', (q) => q.eq('providerBoxId', providerBoxId)).collect()) if (job === undefined || r.job === job) await ctx.db.delete(r._id);
     return null;
   },
 });
 
 export const reapOne = internalAction({
-  // gen: its queued mark's (queueReaps).
-  args: { serviceId: v.id('runnerServices'), box: listedV, do: doV, seen: snapV, boxId: v.optional(v.id('boxes')), gen: v.optional(v.number()) },
+  // job: its queued mark's (queueReaps). siblings: other machines of its box and attempt in the pass's listing.
+  args: { serviceId: v.id('runnerServices'), box: listedV, do: doV, seen: snapV, boxId: v.optional(v.id('boxes')), job: v.optional(v.string()), siblings: v.optional(v.number()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     // Its queued mark goes when it ends, unless it's run again (it stays queued then).
@@ -1270,19 +1332,19 @@ export const reapOne = internalAction({
     try {
       again = await reapStepRun(ctx, args);
     } finally {
-      if (!again) await ctx.runMutation(internal.boxService.reapDone, { providerBoxId: args.box.providerBoxId, ...(args.gen !== undefined ? { gen: args.gen } : {}) });
+      if (!again) await ctx.runMutation(internal.boxService.reapDone, { providerBoxId: args.box.providerBoxId, ...(args.job !== undefined ? { job: args.job } : {}) });
     }
     return null;
   },
 });
 
 // reapOne's work; true if it's run again (lease contention).
-async function reapStepRun(ctx: ActionCtx, args: { serviceId: Id<'runnerServices'>; box: Listed; do: Do; seen: Snap; boxId?: Id<'boxes'>; gen?: number }): Promise<boolean> {
+async function reapStepRun(ctx: ActionCtx, args: { serviceId: Id<'runnerServices'>; box: Listed; do: Do; seen: Snap; boxId?: Id<'boxes'>; job?: string; siblings?: number }): Promise<boolean> {
   {
     const { serviceId, box: b, do: planned, seen, boxId } = args;
     if (planned === 'destroy') {
       const p = provider(await ctx.runQuery(internal.boxService.serviceProvider, { serviceId }), UNKNOWN_MB);
-      if (!p || !(await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: b, do: planned, seen }))) return false;
+      if (!p || !(await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: b, do: planned, seen, siblings: args.siblings ?? 0 }))) return false;
       try {
         await retrying(() => p.destroy(b.providerBoxId));
         await ctx.runMutation(internal.boxService.deleteDone, { providerBoxId: b.providerBoxId });
@@ -1303,9 +1365,11 @@ async function reapStepRun(ctx: ActionCtx, args: { serviceId: Id<'runnerServices
     }
     const p = fenced(newOp(ctx, boxId, id), raw);
     try {
-      const now = (await retrying(() => p.list({ tb_box: boxId }))).find((x) => x.providerBoxId === b.providerBoxId);
+      const listed = await retrying(() => p.list({ tb_box: boxId }));
+      const now = listed.find((x) => x.providerBoxId === b.providerBoxId);
       if (!now || now.state !== b.state) return false;
-      if (!(await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: b, do: planned, seen }))) return false;
+      const siblings = listed.filter((x) => x.providerBoxId !== b.providerBoxId && Number(x.tags.tb_attempt) === b.attempt).length;
+      if (!(await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: b, do: planned, seen, siblings }))) return false;
       if (planned === 'lost') {
         await p.destroy(b.providerBoxId);
         return false;
@@ -1368,7 +1432,7 @@ export const deleteFence = internalMutation({
     const row = await ctx.db.get(boxId);
     if (!row || row.op?.id !== op || row.boxState.kind !== 'asleep' || row.providerBoxId !== providerBoxId) return false;
     if (row.providerAttempt !== undefined && row.workAttempts?.includes(row.providerAttempt)) return false;
-    if (row.keyAttempt !== undefined && row.keyAttempt === row.providerAttempt) await ctx.db.patch(boxId, { boxKeyHash: undefined, keyAttempt: undefined });
+    if (row.keyAttempt !== undefined && row.keyAttempt === row.providerAttempt) await ctx.db.patch(boxId, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined });
     return true;
   },
 });

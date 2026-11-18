@@ -401,7 +401,7 @@ export async function newAttempt(ctx: MutationCtx, row: Doc<'boxes'>, bootHash: 
   if (!mayMintAttempt(row)) throw conflict(`A box of this thread (attempt ${row.workAttempts!.join(', ')}) may hold work newer than its save: it's resumed or waited on, not replaced.`);
   // The fence: the older box's key is revoked in this same step, so it can
   // make no work behind the new attempt (it had none since its save).
-  if (row.boxKeyHash !== undefined) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined });
+  if (row.boxKeyHash !== undefined) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined });
   const expiresAt = Date.now() + BOOT_MS;
   const attempt = (row.boxAttempt ?? 0) + 1;
   await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt, bootAttempt: attempt, boxAttempt: attempt });
@@ -438,9 +438,13 @@ const refusedBoot = () => new ConvexError({ kind: 'auth', message: 'boot token u
  * claimBoot use the token up, in one step that checks it again.
  */
 export const exchange = action({
-  args: { bootToken: v.string() },
+  // machineId: the provider's id for the box's own machine (BoxProvider
+  // machineIdEnv; FLY_MACHINE_ID on Fly). Without it, the key holder's
+  // machine is unknown, and every machine of its attempt stays protected.
+  args: { bootToken: v.string(), machineId: v.optional(v.string()) },
   returns: exchanged,
-  handler: async (ctx, { bootToken }): Promise<Exchanged> => {
+  handler: async (ctx, { bootToken, machineId }): Promise<Exchanged> => {
+    if (machineId !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(machineId)) throw bad('machineId must be the provider id of the box’s own machine');
     if (!BOOT_TOKEN.test(bootToken)) throw refusedBoot();
     const key = await sealKey();
     const bootHash = await sha256(bootToken);
@@ -455,7 +459,7 @@ export const exchange = action({
       throw new ConvexError({ kind: 'config', message: "The box's secrets can't be unsealed with this deployment's BOX_SEAL_KEY. The boot token still works once that's fixed." });
     }
     const boxKey = BOX_KEY_PREFIX + randomHex(32);
-    const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash, boxKeyHash: await sha256(boxKey), sealedToken: peeked.sealedToken, sealedThreadKey: peeked.sealedThreadKey });
+    const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash, boxKeyHash: await sha256(boxKey), sealedToken: peeked.sealedToken, sealedThreadKey: peeked.sealedThreadKey, ...(machineId !== undefined ? { machineId } : {}) });
     if (!got) throw refusedBoot();
     return { boxKey, runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save };
   },
@@ -494,16 +498,16 @@ export const peekBoot = internalQuery({
  * exchanges racing with one token, exactly one gets here first.
  */
 export const claimBoot = internalMutation({
-  args: { bootHash: v.string(), boxKeyHash: v.string(), sealedToken: v.string(), sealedThreadKey: v.string() },
+  args: { bootHash: v.string(), boxKeyHash: v.string(), sealedToken: v.string(), sealedThreadKey: v.string(), machineId: v.optional(v.string()) },
   returns: v.union(v.null(), v.object({ runnerId: v.string(), threadId: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }), save: v.union(v.null(), v.object({ url: v.string(), at: v.number(), bytes: v.number() })) })),
-  handler: async (ctx, { bootHash, boxKeyHash, sealedToken, sealedThreadKey }) => {
+  handler: async (ctx, { bootHash, boxKeyHash, sealedToken, sealedThreadKey, machineId }) => {
     const row = await bootBox(ctx, bootHash);
     if (!row) return null;
     const token = await cloudToken(ctx, row.login);
     if (token.sealed !== sealedToken || row.sealedThreadKey !== sealedThreadKey) throw conflict("The login's cloud token changed while the box started: try again.");
     const r = await boxMachine.send(ctx, row._id, { type: 'READY' });
     if (r.status !== 'done') return null;
-    await ctx.db.patch(row._id, { boxKeyHash });
+    await ctx.db.patch(row._id, { boxKeyHash, keyMachineId: machineId });
     const url = row.save ? await ctx.storage.getUrl(row.save.storageId) : null;
     return {
       runnerId: row.runnerId,
@@ -555,6 +559,17 @@ export const archiveBox = mutation({
   },
 });
 
+/**
+ * Whether machine `id` of `attempt` may be taken for the key holder's: yes
+ * for an attempt that isn't the key holder's, or when it's the machine that
+ * traded the key (keyMachineId). Not when that isn't known (a box that
+ * didn't say): the caller must have seen no other machine of the attempt.
+ */
+export function isKeyMachine(row: Pick<Doc<'boxes'>, 'keyAttempt' | 'keyMachineId'>, attempt: number | undefined, id: string): boolean {
+  if (attempt === undefined || attempt !== row.keyAttempt) return true;
+  return row.keyMachineId === undefined || row.keyMachineId === id;
+}
+
 const serverEvent = v.union(
   v.object({ type: v.literal('CREATED'), providerBoxId: v.string(), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('IDLE'), attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }),
@@ -587,9 +602,13 @@ export const report = machines.internalMutation({
     if (op !== undefined && !(row.op?.id === op && row.op.until > Date.now())) return false;
     if ((event.type === 'LOST' || event.type === 'PAUSED') && event.providerBoxId !== undefined) {
       if (row.providerBoxId !== event.providerBoxId) return false;
+      // Never the key holder's key or protection for another machine of its attempt.
+      if (!isKeyMachine(row, event.attempt ?? row.providerAttempt, event.providerBoxId)) return false;
       const { providerBoxId: _id, ...named } = event;
       return (await boxMachine.send(ctx, row._id, named)).status === 'done';
     }
+    // A machine of the key holder's attempt that isn't the key holder's is a duplicate, not the row's machine.
+    if (event.type === 'CREATED' && event.attempt !== undefined && event.attempt === row.keyAttempt && row.keyMachineId !== undefined && row.keyMachineId !== event.providerBoxId) return false;
     return (await boxMachine.send(ctx, row._id, event)).status === 'done';
   },
 });

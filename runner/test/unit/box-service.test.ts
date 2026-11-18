@@ -68,8 +68,9 @@ async function setup(memoryMb = 2048) {
   const bootOf = (machineId: string): string => fly.byId(machineId)!.config.env.THREADBEAR_BOX_BOOT;
   // What the box's runner does once booted: its exchange, a heartbeat,
   // what's waiting for it (the create that makes its thread, first), then its thread's row.
-  const boot = async (threadId: string, machineId: string) => {
-    const got = await s.exchange(bootOf(machineId));
+  // said: the machine id the box sends with its exchange (FLY_MACHINE_ID), if any.
+  const boot = async (threadId: string, machineId: string, said?: string) => {
+    const got = said === undefined ? await s.exchange(bootOf(machineId)) : await call(s.a, boxes.exchange, { bootToken: bootOf(machineId), machineId: said });
     await beat(got.boxKey, got.runnerId);
     await takeAll(got.boxKey, got.runnerId);
     await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId, runnerId: got.runnerId, title: 't', view: 'inbox', needsYou: false }] });
@@ -2095,4 +2096,99 @@ test("an old reaper step ending leaves a newer step's queue mark alone", async (
   assert.equal(s.rows('reapQueued').length, 1);
   await later(17 * MINUTE, () => call(s.a, service.reapService, { serviceId: s.serviceId }));
   assert.equal((s.scheduled as { fn: string }[]).filter((j) => j.fn.endsWith('reapOne')).length, 2, 'no third');
+});
+
+// ------------------------------------------------------------ Codex's thirteenth round (18 Nov 2026): machine identity
+
+// Twins: the provider made machine A and machine B for one attempt; the row
+// took A (its CREATED), but B booted and traded the key (saying it's B, or
+// not). Then A stops.
+async function withTwins(s: Awaited<ReturnType<typeof setup>>, said: boolean) {
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  s.fly.machines.push({ id: 'twin', name: 'twin', state: 'started', config: structuredClone(a.config) });
+  const got = await s.boot('T2', a.id, said ? 'twin' : undefined);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  a.state = 'stopped';
+  return { runnerId, a, got };
+}
+
+// 1. Adoption picked the wrong twin: A's stop was taken for the key holder's loss.
+test("the exchange names the key holder's machine: the reaper deletes its stopped twin and takes it in, its key and work kept", async () => {
+  const s = await setup();
+  const { runnerId, a, got } = await withTwins(s, true);
+  assert.equal(s.rowOf('T2').keyMachineId, 'twin');
+  // The other machine of its attempt is a duplicate: no CREATED, LOST or PAUSED of it counts.
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'CREATED', providerBoxId: 'm9', attempt: 1 } }), false);
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'LOST', attempt: 1, providerBoxId: a.id } }), false);
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'PAUSED', attempt: 1, providerBoxId: a.id } }), false);
+  s.skip();
+  await s.reap();
+  await s.reap();
+  assert.equal(s.fly.byId(a.id)!.state, 'destroyed');
+  assert.equal(s.fly.byId('twin')!.state, 'started', 'the key holder runs on');
+  assert.equal(s.rowOf('T2').providerBoxId, 'twin');
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+});
+
+test("an exchange that doesn't name its machine keeps every machine of its attempt: none is lost, taken in or deleted for the key", async () => {
+  const s = await setup();
+  const { runnerId, a, got } = await withTwins(s, false);
+  assert.equal(s.rowOf('T2').keyMachineId, undefined);
+  s.skip();
+  await s.reap();
+  assert.notEqual(s.fly.byId(a.id)!.state, 'destroyed', 'the row’s own is kept');
+  assert.equal(s.rowOf('T2').providerBoxId, a.id, 'nothing taken in');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+  // The row's machine gone from the provider: the drift check doesn't report it lost while its twin is there.
+  s.fly.lose(a.id);
+  await s.reap();
+  await s.reap();
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+});
+
+test('the exchange takes a machine id only of the shape a provider gives', async () => {
+  const s = await setup();
+  await s.start('T2');
+  await s.run();
+  await assert.rejects(call(s.a, boxes.exchange, { bootToken: s.bootOf(s.fly.live()[0]!.id), machineId: 'a b/c' }));
+});
+
+// 2. A duplicate's running time went uncharged because its attempt was the row's.
+test("a running duplicate is charged by observation while the row's own machine is charged by its state", async () => {
+  const s = await setup();
+  const { a } = await withDuplicate(s, 'started');
+  const boxId = boxIdOf(s, 'T2');
+  const before = s.rowOf('T2').awakeToday?.ms ?? 0;
+  await call(s.ctx, service.observe, { serviceId: s.serviceId, boxes: [{ providerBoxId: a.id, state: 'running', boxId, attempt: 1 }, { providerBoxId: 'dup', state: 'running', boxId, attempt: 1 }] });
+  const charged = (s.rowOf('T2').awakeToday?.ms ?? 0) - before;
+  assert.ok(charged >= 4 * MINUTE && charged <= 6 * MINUTE, `one pass, for the duplicate only (${charged})`);
+});
+
+// 3. A queue mark made after another was deleted could be cleared by an old step.
+test("an old reaper step leaves alone a mark queued after its own was deleted", async () => {
+  const s = await setup();
+  s.fly.machines.push({ id: 'orphan', name: 'o', state: 'started', config: { metadata: { tb_box: 'boxes:999', tb_attempt: '1', tb_service: s.serviceId } } });
+  s.skip();
+  const steps = () => (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('reapOne'));
+  await call(s.a, service.reapService, { serviceId: s.serviceId });
+  const old = steps().at(-1)!;
+  // Its mark goes stale; a second step is queued, runs, fails its delete and ends, its mark gone.
+  await later(16 * MINUTE, () => call(s.a, service.reapService, { serviceId: s.serviceId }));
+  const down = s.fly.failWhile((r) => r.method === 'DELETE', 503);
+  await later(16 * MINUTE, () => call(s.a, service.reapOne, steps().at(-1)!.args));
+  assert.equal(s.rows('reapQueued').length, 0);
+  // Its backoff out, a third is queued; then the first, long delayed, ends.
+  await later(30 * MINUTE, () => call(s.a, service.reapService, { serviceId: s.serviceId }));
+  assert.equal(steps().length, 3);
+  await later(31 * MINUTE, () => call(s.a, service.reapOne, old.args));
+  down.stop();
+  assert.equal(s.rows('reapQueued').length, 1, "the third's mark stays");
 });

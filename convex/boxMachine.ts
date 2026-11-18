@@ -288,7 +288,7 @@ export const box = defineMachine(
       created: async (ctx, { id, row, state, event }) => {
         // A key of an older attempt than this box's goes; this box's own (or a newer one's) can't be here yet.
         const olderKey = event.attempt === undefined || (row.keyAttempt ?? 0) < event.attempt;
-        await patch(ctx, id, { ...(olderKey ? { boxKeyHash: undefined, keyAttempt: undefined } : {}), providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
+        await patch(ctx, id, { ...(olderKey ? { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined } : {}), providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
         return { kind: 'starting' as const, bootBy: state.bootBy };
       },
       noteBox: async (ctx, { id, state, event }) => {
@@ -453,7 +453,7 @@ export const box = defineMachine(
       // and their key revoked, so nothing new is made in them meanwhile.
       beginRetire: async (ctx, { id, row }) => {
         const attempts = [...new Set([...(row.workAttempts ?? []), row.providerAttempt, row.keyAttempt].filter((a): a is number => a !== undefined))];
-        await patch(ctx, id, { boxKeyHash: undefined, keyAttempt: undefined, wantsWakeAt: undefined, waitsForHours: undefined });
+        await patch(ctx, id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, wantsWakeAt: undefined, waitsForHours: undefined });
         return { kind: 'retiring' as const, since: Date.now(), attempts };
       },
       // Only the attempts it named go: one minted meanwhile isn't touched.
@@ -513,7 +513,7 @@ export const box = defineMachine(
 );
 
 // No key and no boot token work for the thread after this step.
-const revoked = { boxKeyHash: undefined, keyAttempt: undefined, bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } as const;
+const revoked = { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } as const;
 const noBox = { providerBoxId: undefined, providerAttempt: undefined } as const;
 
 // Attempt ordering, the one rule every event naming an attempt goes by
@@ -545,7 +545,7 @@ function lostBox(row: Box, attempt: number | undefined): Partial<Box> {
     // service reports LOST only then), with whatever was in it: only N stops
     // being kept. Naming none means every box so far.
     ...(row.workAttempts?.length ? { workAttempts: row.workAttempts.filter((a) => attempt !== undefined && a !== attempt) } : {}),
-    ...(gone(row.keyAttempt) ? { boxKeyHash: undefined, keyAttempt: undefined } : {}),
+    ...(gone(row.keyAttempt) ? { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined } : {}),
     ...(gone(row.bootAttempt) ? { bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } : {}),
     // Its box gone, whatever kept it running or counted it goes with it.
     ...(gone(row.providerAttempt) ? { ...noBox, keptRunningSince: undefined, saveAsks: undefined, seenRunningAt: undefined } : {}),

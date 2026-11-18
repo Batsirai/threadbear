@@ -102,6 +102,8 @@ export function flyProvider(opts: FlyOptions): BoxProvider {
   return {
     name: 'fly',
     caps: { pause: opts.memoryMb <= FLY_SUSPEND_MAX_MB },
+    // Fly sets it in every Machine (https://fly.io/docs/machines/runtime-environment/).
+    machineIdEnv: 'FLY_MACHINE_ID',
 
     async create(spec: CreateSpec) {
       const idem = { [IDEMPOTENCY_TAG]: spec.idempotencyKey };

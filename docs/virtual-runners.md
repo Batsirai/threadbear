@@ -619,6 +619,22 @@ each machine's charge (`observedAt`) are kept by machine id. And a queued
 reaper step's mark has a generation (`reapQueued.gen`), so an old step
 ending doesn't clear a newer one's.
 
+A thirteenth look found that the row couldn't tell which duplicate held
+the key: the row took whichever machine's `CREATED` came, so the other's
+stop could be taken for the key holder's loss. The exchange now names its
+machine (`machineId`, from `FLY_MACHINE_ID`; the runner sends it from
+slice 3) and the row records it (`keyMachineId`). For the key holder's
+attempt, that machine is the row's: the reaper takes it in and deletes
+the other, and no `CREATED`, `LOST` or `PAUSED` of the other counts. With
+no id said, every machine of that attempt is kept while another is
+listed: none is reported lost (reaper, drift, lease check, sleep or wake),
+taken in or deleted for the key; one that's stopped and not the row's is
+deleted, and a wake waits. Observed charging leaves out only the machine
+whose time the row's state charges, so a running duplicate is charged by
+its own observation. And a reaper step's queue mark carries a random job
+id (`reapQueued.job`), not a generation, which started again at 1 once a
+mark was deleted.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

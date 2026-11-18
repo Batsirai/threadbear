@@ -38,6 +38,10 @@ export type ListedBox = { providerBoxId: string; state: ProviderBoxState; tags: 
 export interface BoxProvider {
   name: string;
   caps: BoxCaps;
+  // The environment variable inside a box that holds the provider's id for
+  // its own machine, which the box sends with its boot exchange
+  // (`machineId`), so the key holder's machine is known among duplicates.
+  machineIdEnv?: string;
   create(spec: CreateSpec): Promise<{ providerBoxId: string }>;
   // Every box with all of these tags, with its own tags, for the reaper.
   list(tags: Record<string, string>): Promise<ListedBox[]>;
