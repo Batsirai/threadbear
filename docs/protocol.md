@@ -7689,6 +7689,7 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `runnerServices` | owner only | the virtual runners (`convex/boxes.ts`, Virtual runners), each with how many boxes are up or starting and asleep |
 | `setRunnerService` | owner only | makes a virtual runner, or changes one's name, image, box size, region and limits; its provider is its own for life |
 | `startThread` | owner only | a thread on a virtual runner: its runner, box and `create` command in one step, refused past `maxBoxes` (Virtual runners) |
+| `wakePastHours` | owner only | wakes a thread's box that's waiting for tomorrow's hours, and lets it run the rest of today (Virtual runners) |
 | `setCloudToken` | owner only | a Claude login's cloud token for boxes, sealed under `BOX_SEAL_KEY` (`convex/boxes.ts`, Box keys) |
 | `cloudTokens` | owner only | which logins have a cloud token, when each was made and set; never the token |
 | `mintBootToken` | owner only | a boot token for a thread's booting box: returned once, only its hash kept, 10 minutes |
@@ -7739,9 +7740,10 @@ has to be on for it.
   create is one attempt, made once however often it's tried. Its state
   is its machine's (docs/machines.md, `box`).
 - **Sleeping and saving.** A box whose thread has been idle
-  `idleSleepMinutes`, or that has been up `maxAwakeHoursPerDay` today, is
-  sent a `save` command for its thread (never by a client), unless a
-  command waits for it. Its runner saves the thread and calls `boxSaved`;
+  `idleSleepMinutes` with no command waiting for it, or that has been up
+  `maxAwakeHoursPerDay` today whatever's waiting, is sent a `save` command
+  for its thread (never by a client); a thread that's moving is neither.
+  Its runner saves the thread and calls `boxSaved`;
   the box is then paused if it can be (Fly up to 2 GB, by the size it was
   made at, not the virtual runner's size now), else deleted. One past its
   day's hours that hasn't saved in 10 minutes sleeps anyway: paused with
@@ -7752,20 +7754,36 @@ has to be on for it.
   box is asleep, saving or failed wakes it: the same box resumed if it
   was paused, else a new box that restores the last save. Two quick
   messages make one wake. The command waits in the queue meanwhile. A
-  wake that would take its virtual runner past `maxBoxes` waits instead
-  (`RemoteRunner.box.waiting`); the oldest waiting wakes when a box
-  sleeps, fails or is archived, or at the next idle check.
-- **Archived threads.** An archived thread's box is `gone`, its save kept
-  for `deleteAfterDays`: unarchiving it (an `update` with `unarchive`), a
-  message, a reply to a card or a move brings it back on a new box from
-  that save; marking it seen or renaming it doesn't. Once the save is
-  deleted, or if it never saved, the box is `expired`: anything sent to
-  its runner fails at once with a note that the thread can't come back.
+  wake that would take its virtual runner past `maxBoxes`, or a box past
+  its day's hours, waits instead (`RemoteRunner.box.waiting`): the oldest
+  waiting wakes when a box sleeps, fails or is archived, or at an idle
+  check once there's room and hours (a past-hours one the next UTC day).
+  `boxes:wakePastHours({ key, threadId })` (owner) wakes one past its
+  hours now, for the rest of the day. A thread that's moving wakes past
+  its hours, and each step of a move wakes a sleeping box on either side.
+  A box that goes asleep, gone or shelved with a waking command already
+  waiting (one sent while it was being deleted) wakes then.
+- **Archived threads.** Archiving a box that's up asks it to save first
+  (`archiving`, with a `save` command, 10 minutes), so unarchiving comes
+  back to where it was; the box is then deleted and the thread is `gone`,
+  its save kept for `deleteAfterDays`. If the save doesn't come, the box
+  is kept, paused (`shelved`; deleted if it can't pause), until then. One
+  that slept unsaved at its day's hours is shelved the same way.
+  Unarchiving it (an `update` with `unarchive`), a message, a reply to a
+  card or a move brings it back: a shelved box resumed, else a new box
+  from the save; marking it seen or renaming it doesn't. Once its days
+  are up (or if it never saved), it's `expired`: everything waiting for
+  its runner, and anything sent after, fails at once with a note that the
+  thread can't come back.
 - **One provider call at a time.** Each of the service's actions holds
-  the box row's `op` lease while it calls the provider for that box, so a
-  sleep's suspend and a wake's start never overlap; another waits 5
-  seconds and tries again. After its calls it reads the row again and
-  puts the machine right (a box woken while it paused is resumed).
+  the box row's `op` lease (3 minutes) while it calls the provider for
+  that box, so a sleep's suspend and a wake's start never overlap; another
+  waits 5 seconds and tries again. Every provider call checks and renews
+  the lease before and after it and is given up after 40 seconds, and
+  every report it makes is refused once it has lost the lease, so a run
+  that lost it does nothing more. After its calls it reads the row and
+  the provider again, putting the machine right (a box woken while it
+  paused is resumed), until they match or the lease goes.
 - **Reachable.** A box's runner counts as online wherever that's checked
   (`startMove`, and a runner's `RemoteRunner.online`, Other runners'
   threads) in every state but `destroying` and `expired`, as a message
@@ -7789,10 +7807,12 @@ has to be on for it.
   as it is when it runs, and dropped if the row has moved on.
 - **Internal.** `boxService:createBox`, `wakeBox`, `sleepBox`,
   `destroyBox` (the actions; each reads the row again and acts on its
-  newest attempt only), `claimOp`, `releaseOp`, `claimAttempt`, `boxFor`,
-  `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`, `reapStep`,
-  `servicesToReap`, `serviceProvider`, `stuckDestroying`, `pruneSaves`;
-  `boxes:beginThread`, `wakeFor`, `wakeWaiting`, `archiveIfStill`.
+  newest attempt only), `claimOp`, `holdOp`, `releaseOp`, `claimAttempt`,
+  `boxFor`, `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`,
+  `reapStep`, `servicesToReap`, `serviceProvider`, `stuckDestroying`,
+  `pruneSaves`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
+  `wakeAllWaiting`, `failExpired`, `archiveIfStill`. `report` takes the
+  reporting run's `op`.
 - **Its first command.** The `create` that `startThread` queues names its
   thread, which has no row until the box's runner writes it: the box's
   key, and only for its own thread's `create`, takes it all the same.

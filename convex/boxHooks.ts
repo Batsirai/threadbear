@@ -5,13 +5,17 @@
 // internal mutation of boxes.ts: the functions that call these are plain
 // mutations, which can't send a box's `server` events.
 import type { MutationCtx } from './_generated/server';
+import type { Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 
 // The states a command for the box's runner wakes it from: asleep (resume
-// it, or a new box from the save), failed (try a new box), saving (it
-// stays up, boxMachine.ts) and gone (unarchived: a new box from the save).
-// From expired the command fails, saying the thread can't come back.
-export const WAKES_FROM: readonly string[] = ['asleep', 'failed', 'saving', 'gone', 'expired'];
+// it, or a new box from the save), failed (try a new box), saving and
+// archiving (it stays up, boxMachine.ts), gone (unarchived: a new box from
+// the save) and shelved (unarchived: its kept box resumed). From expired
+// the command fails, saying the thread can't come back.
+export const WAKES_FROM: readonly string[] = ['asleep', 'failed', 'saving', 'archiving', 'gone', 'shelved', 'expired'];
+// Archived: woken only for what needs it running (wakesArchived).
+const ARCHIVED: readonly string[] = ['gone', 'shelved', 'archiving'];
 
 // Long enough for the box's runner to finish the command that archived its
 // thread before its key stops working.
@@ -24,7 +28,7 @@ export const ARCHIVE_GRACE_MS = 60_000;
  * taken, so they make one wake. A box's `save` (boxService.ts askToSave)
  * isn't a reason to wake it.
  */
-export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: string, args?: unknown): Promise<void> {
+export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: string, args?: unknown, commandId?: Id<'commands'>): Promise<void> {
   if (kind === 'save') return;
   const row = await ctx.db
     .query('boxes')
@@ -33,11 +37,24 @@ export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: str
   if (!row || !WAKES_FROM.includes(row.boxState.kind)) return;
   // An archived one comes back only for what needs it running (unarchiving
   // it, a message), not for marking it seen or a title.
-  if (row.boxState.kind === 'gone' && !wakesArchived(kind, args)) return;
-  await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId });
+  if (ARCHIVED.includes(row.boxState.kind) && !wakesArchived(kind, args)) return;
+  await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId, ...(commandId ? { commandId } : {}) });
 }
 
-function wakesArchived(kind: string, args: unknown): boolean {
+/**
+ * A box just went to a state a command wakes it from (asleep, gone,
+ * shelved): if a command that would have woken it is already waiting (an
+ * unarchive sent while it was being deleted), it wakes now.
+ */
+export async function wakeIfPending(ctx: MutationCtx, runnerId: string, as: 'asleep' | 'gone' | 'shelved'): Promise<void> {
+  for (const c of await ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', 'pending')).take(50)) {
+    if (c.kind === 'save' || (as !== 'asleep' && !wakesArchived(c.kind, c.args))) continue;
+    await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId });
+    return;
+  }
+}
+
+export function wakesArchived(kind: string, args: unknown): boolean {
   if (kind === 'update') return (args as { unarchive?: unknown } | null)?.unarchive === true;
   return ['send', 'respond', 'press', 'move'].includes(kind);
 }
@@ -52,5 +69,5 @@ export async function archiveSoon(ctx: MutationCtx, threadId: string): Promise<v
     .query('boxes')
     .withIndex('by_threadId', (q) => q.eq('threadId', threadId))
     .first();
-  if (row && !['destroying', 'gone', 'expired'].includes(row.boxState.kind)) await ctx.scheduler.runAfter(ARCHIVE_GRACE_MS, internal.boxes.archiveIfStill, { threadId });
+  if (row && !['archiving', 'shelved', 'destroying', 'gone', 'expired'].includes(row.boxState.kind)) await ctx.scheduler.runAfter(ARCHIVE_GRACE_MS, internal.boxes.archiveIfStill, { threadId });
 }

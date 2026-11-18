@@ -320,6 +320,7 @@ export const ACCESS: Record<string, Access> = {
   runnerServices: 'owner',
   setRunnerService: 'owner',
   startThread: 'owner',
+  wakePastHours: 'owner',
   setCloudToken: 'owner',
   cloudTokens: 'owner',
   mintBootToken: 'owner',

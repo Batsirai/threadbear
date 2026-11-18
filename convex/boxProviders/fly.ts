@@ -43,6 +43,8 @@ export type FlyOptions = {
   memoryMb: number;
   baseUrl?: string;
   fetch?: Fetch;
+  // Each call's deadline: it's aborted after this (types.ts call).
+  timeoutMs?: number;
 };
 
 type FlyMachine = { id: string; name?: string; state: string; config?: { metadata?: Record<string, string> } };
@@ -58,11 +60,11 @@ export function flyState(state: string): ProviderBoxState {
 const enc = encodeURIComponent;
 
 /** The Fly adapter from a deployment's environment: FLY_API_TOKEN, FLY_APP, FLY_ORG. */
-export function flyFromEnv(env: Record<string, string | undefined>, memoryMb: number, fetchImpl?: Fetch): BoxProvider {
+export function flyFromEnv(env: Record<string, string | undefined>, memoryMb: number, fetchImpl?: Fetch, timeoutMs?: number): BoxProvider {
   const token = env.FLY_API_TOKEN?.trim();
   const app = env.FLY_APP?.trim();
   if (!token || !app) throw new Error('FLY_API_TOKEN and FLY_APP must be set on this deployment for a Fly virtual runner');
-  return flyProvider({ token, app, org: env.FLY_ORG?.trim() || 'personal', memoryMb, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+  return flyProvider({ token, app, org: env.FLY_ORG?.trim() || 'personal', memoryMb, ...(fetchImpl ? { fetch: fetchImpl } : {}), ...(timeoutMs ? { timeoutMs } : {}) });
 }
 
 export function flyProvider(opts: FlyOptions): BoxProvider {
@@ -72,7 +74,7 @@ export function flyProvider(opts: FlyOptions): BoxProvider {
   const org = opts.org ?? 'personal';
   const app = enc(opts.app);
   const headers = { authorization: `Bearer ${opts.token}` };
-  const api = <T>(method: string, path: string, body?: unknown) => call<T>(fetchImpl, method, base, path, headers, body);
+  const api = <T>(method: string, path: string, body?: unknown) => call<T>(fetchImpl, method, base, path, headers, body, opts.timeoutMs);
 
   async function machines(tags: Record<string, string>, makeApp = false): Promise<FlyMachine[]> {
     const q = Object.entries(tags)
@@ -94,7 +96,8 @@ export function flyProvider(opts: FlyOptions): BoxProvider {
     return (await api<FlyMachine>('GET', `/apps/${app}/machines/${enc(id)}`)).state;
   }
 
-  const wait = (id: string, state: string) => api('GET', `/apps/${app}/machines/${enc(id)}/wait?state=${state}&timeout=60`);
+  // Fly's own wait, shorter than a call's deadline (CALL_MS in boxService.ts).
+  const wait = (id: string, state: string) => api('GET', `/apps/${app}/machines/${enc(id)}/wait?state=${state}&timeout=30`);
 
   return {
     name: 'fly',

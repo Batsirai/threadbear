@@ -209,17 +209,22 @@ test('a box goes creating, starting, awake, saving, asleep, waking and awake aga
   assert.equal(await s.report({ type: 'RESUMED' }), true);
   assert.equal(s.state(), 'awake');
   assert.equal(await outcome(heartbeat(s, boxKey)), 'ok');
+  // Archived while it's up: it saves first (Codex's second review of the second slice).
   await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: THREAD });
+  assert.equal(s.state(), 'archiving');
+  assert.equal(await outcome(heartbeat(s, boxKey)), 'ok', 'its key works to save');
+  await save(s, boxKey, 'save2');
   assert.equal(s.state(), 'destroying');
   assert.equal(s.box().boxKeyHash, undefined);
   assert.equal(await outcome(heartbeat(s, boxKey)), 'auth');
-  // Archiving again is nothing; a box can't come back from it.
+  // Archiving again is nothing; it comes back only once it's gone, from its save.
   await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: THREAD });
   assert.equal(await s.report({ type: 'WAKE' }), false);
   assert.equal(await s.report({ type: 'DESTROYED' }), true);
   assert.equal(s.state(), 'gone');
-  // Its save stays, for deleteAfterDays.
-  assert.ok(s.hasFile('save1'));
+  // Its save stays, for deleteAfterDays: the one it made as it was archived.
+  assert.ok(s.hasFile('save2'));
+  assert.equal(s.hasFile('save1'), false);
 });
 
 // Codex's second review (18 Nov 2026): a paused box lost, or replaced, while

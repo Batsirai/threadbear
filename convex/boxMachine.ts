@@ -25,6 +25,7 @@ import { appSchema } from './schema';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { BOOT_MS, LEASE_MS, SAVE_MS } from './boxStates';
+import { wakeIfPending } from './boxHooks';
 
 type Box = Doc<'boxes'>;
 const ERROR_CHARS = 500;
@@ -54,6 +55,7 @@ export const box = defineMachine(
       notStale: 'It names an older attempt at a box than the newest one this thread has: it changes nothing of the newer one.',
       newBox: 'That box has already traded its boot token, or is older than the newest: its news is only its provider id.',
       capped: "It was asked to save because it's been up its day's hours, not for being idle.",
+      unsavedPaused: 'It slept unsaved and its box, holding its key, is kept.',
       hasSave: 'The thread has a save to come back from.',
     },
     states: {
@@ -102,7 +104,40 @@ export const box = defineMachine(
           IDLE: { to: 'saving', guard: 'notStale', effect: 'askSave', description: "The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps." },
           SAVED: { effect: 'saved', description: 'The box saved the thread unasked: the save replaces the last one, and it stays awake.' },
           CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for the box that's up, arriving late: kept, for pausing and deleting it." },
-          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box is deleted.' },
+          ARCHIVE: { to: 'archiving', effect: 'askArchiveSave', description: 'Mike archives the thread: the box is asked to save it first, so unarchiving comes back to where it was.' },
+        },
+      },
+      archiving: {
+        description: 'The thread is archived while its box is up: the box is saving it before it goes, as it would to sleep.',
+        timers: {
+          LEASE_DUE: { at: 'leaseUntil', description: 'Five minutes since the lease was last renewed: the box must have heartbeated meanwhile.' },
+          SAVE_TIMEOUT: { at: 'saveBy', description: "Ten minutes have passed and the box hasn't said it saved." },
+        },
+        on: {
+          SAVED: { to: 'destroying', effect: 'savedAndGo', description: 'The save is in: the box is deleted, and the save stays for unarchiving.' },
+          SAVE_TIMEOUT: { to: 'shelved', effect: 'shelve', description: "No save came: the box is kept, paused if it can be, as it's where the work is." },
+          LEASE_DUE: [
+            { guard: 'heardFrom', effect: 'renewLease', description: 'It has heartbeated: the lease runs five minutes from its last heartbeat.' },
+            { to: 'destroying', effect: 'archive', description: 'No heartbeat for five minutes: the box is lost, so there is nothing left to save; what remains of it is deleted.' },
+          ],
+          LOST: [
+            { to: 'destroying', guard: 'notStale', effect: 'archive', description: 'The provider lost the box mid-save: what remains of it is deleted, and the last save stays.' },
+            { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
+          ],
+          CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for the box, arriving late: kept, for deleting it." },
+          WAKE: { to: 'awake', effect: 'stayUp', description: 'Unarchived, or a message, while it saved: the box stays up.' },
+        },
+      },
+      shelved: {
+        description: "Archived, its save never came: its box is kept, paused if it can be, until deleteAfterDays, as that's where the work is.",
+        on: {
+          WAKE: { to: 'waking', effect: 'wake', description: 'Unarchived, or a message: the kept box is resumed.' },
+          LOST: [
+            { to: 'gone', guard: 'hasSave', effect: 'shelfLost', description: "The kept box is gone (or couldn't pause, so it was deleted): only the last save is left." },
+            { to: 'expired', effect: 'shelfLost', description: "The kept box is gone, and there's no save: the thread can't come back." },
+          ],
+          EXPIRE: { to: 'expired', effect: 'expireShelf', description: 'deleteAfterDays have passed: the kept box and any save are deleted.' },
+          CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for the kept box, arriving late: kept, to resume or delete it." },
         },
       },
       saving: {
@@ -127,7 +162,7 @@ export const box = defineMachine(
             { to: 'waking', guard: 'notStale', effect: 'lost', description: 'The provider says the box is gone mid-save: a new box restores the thread from its last save.' },
             { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
           ],
-          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box is deleted.' },
+          ARCHIVE: { to: 'archiving', effect: 'askArchiveSave', description: 'Mike archives the thread while it saves: the save is for the archive now.' },
         },
       },
       asleep: {
@@ -136,7 +171,10 @@ export const box = defineMachine(
           WAKE: { to: 'waking', effect: 'wake', description: "A message for the thread: the paused box is resumed, or a new one restores the save. Once only: a second message while it's waking doesn't start another." },
           LOST: { effect: 'forgetBox', description: "The provider lost the paused box: its key goes with it, and as the save is still here, the next wake starts a new box." },
           CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for the paused box, arriving late: kept, for resuming and deleting it." },
-          ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box, if any, is deleted.' },
+          ARCHIVE: [
+            { to: 'shelved', guard: 'unsavedPaused', effect: 'shelve', description: "Mike archives the thread, which slept unsaved: its paused box is kept, as that's where the work is." },
+            { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box, if any, is deleted; its save stays.' },
+          ],
         },
       },
       waking: {
@@ -172,7 +210,10 @@ export const box = defineMachine(
           EXPIRE: { to: 'expired', effect: 'expire', description: "deleteAfterDays have passed: its save is deleted, and the thread can't come back." },
         },
       },
-      expired: { description: "Its box and its save are gone: the thread can't come back, and what's sent to it fails saying so." },
+      expired: {
+        description: "Its box and its save are gone: the thread can't come back, and what's sent to it fails saying so.",
+        on: { DESTROYED: { effect: 'forgetProvider', description: 'A kept box it had is deleted too.' } },
+      },
       failed: {
         description: "A box couldn't be started or brought back. The thread and its last save are kept, and no key works for it.",
         on: {
@@ -191,6 +232,7 @@ export const box = defineMachine(
       notStale: (_ctx, { row, event }) => !stale(row, event.attempt),
       newBox: (_ctx, { row, event }) => !stale(row, event.attempt) && !(event.attempt !== undefined && event.attempt === row.keyAttempt),
       capped: (_ctx, { row }) => row.boxState.kind === 'saving' && row.boxState.capped === true,
+      unsavedPaused: (_ctx, { row }) => row.boxState.kind === 'asleep' && row.boxState.unsaved === true && row.boxKeyHash !== undefined && row.providerBoxId !== undefined,
       hasSave: (_ctx, { row }) => row.save !== undefined,
     },
     effects: {
@@ -233,7 +275,8 @@ export const box = defineMachine(
         await patch(ctx, id, awakeAdded(row, state.since));
         await provide(ctx, 'sleepBox', id);
         await freed(ctx, row);
-        return { kind: 'asleep' as const, since: now };
+        await wakeIfPending(ctx as never, row.runnerId, 'asleep');
+        return { kind: 'asleep' as const, since: now, unsaved: true };
       },
       stayUp: async (_ctx, { state }) => ({ kind: 'awake' as const, since: state.since, leaseUntil: state.leaseUntil }),
       saved: async (ctx, { id, state, event }) => {
@@ -245,16 +288,51 @@ export const box = defineMachine(
         await patch(ctx, id, { ...awakeAdded(row, state.since), save: { storageId: event.storageId, bytes: event.bytes, at: now } });
         await provide(ctx, 'sleepBox', id);
         await freed(ctx, row);
+        await wakeIfPending(ctx as never, row.runnerId, 'asleep');
         return { kind: 'asleep' as const, since: now };
+      },
+      askArchiveSave: async (_ctx, { state }) => ({ kind: 'archiving' as const, since: state.since, leaseUntil: state.leaseUntil, saveBy: Date.now() + SAVE_MS }),
+      savedAndGo: async (ctx, { id, row, state, event }) => {
+        await patch(ctx, id, { ...awakeAdded(row, state.since), save: { storageId: event.storageId, bytes: event.bytes, at: Date.now() }, ...revoked, wantsWakeAt: undefined });
+        await provide(ctx, 'destroyBox', id);
+        await freed(ctx, row);
+        return { kind: 'destroying' as const, since: Date.now() };
+      },
+      // Archived with no save to show for it: its box is kept (sleepBox
+      // pauses it, or deletes it and says LOST if it can't pause).
+      shelve: async (ctx, { id, row, state }) => {
+        if (state.kind === 'archiving') await patch(ctx, id, awakeAdded(row, state.since));
+        await provide(ctx, 'sleepBox', id);
+        if (state.kind === 'archiving') await freed(ctx, row);
+        await wakeIfPending(ctx as never, row.runnerId, 'shelved');
+        return { kind: 'shelved' as const, at: Date.now() };
+      },
+      shelfLost: async (ctx, { id, row, event, to }) => {
+        await patch(ctx, id, { ...lostBox(row, event.attempt), ...revoked });
+        if (to === 'expired') await expiredNow(ctx, row);
+        else await wakeIfPending(ctx as never, row.runnerId, 'gone');
+        return { kind: to, at: Date.now() };
+      },
+      expireShelf: async (ctx, { id, row }) => {
+        // boxService.ts pruneSaves deletes the save in the same step; destroyBox the kept box.
+        await patch(ctx, id, { ...revoked, save: undefined, wantsWakeAt: undefined });
+        await provide(ctx, 'destroyBox', id);
+        await expiredNow(ctx, row);
+        return { kind: 'expired' as const, at: Date.now() };
+      },
+      forgetProvider: async (ctx, { id, state }) => {
+        await patch(ctx, id, noBox);
+        return state;
       },
       wake: async (ctx, { id }) => {
         await patch(ctx, id, { wantsWakeAt: undefined });
         await provide(ctx, 'wakeBox', id);
         return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
       },
-      expire: async (ctx, { id }) => {
+      expire: async (ctx, { id, row }) => {
         // boxService.ts pruneSaves deletes the file in the same step.
         await patch(ctx, id, { save: undefined, wantsWakeAt: undefined });
+        await expiredNow(ctx, row);
         return { kind: 'expired' as const, at: Date.now() };
       },
       bootLost: async (ctx, { id, row, event }) => {
@@ -279,13 +357,16 @@ export const box = defineMachine(
         return state;
       },
       archive: async (ctx, { id, row, state }) => {
-        await patch(ctx, id, { ...(state.kind === 'awake' || state.kind === 'saving' ? awakeAdded(row, state.since) : {}), ...revoked, wantsWakeAt: undefined });
+        await patch(ctx, id, { ...(state.kind === 'archiving' ? awakeAdded(row, state.since) : {}), ...revoked, wantsWakeAt: undefined });
         await provide(ctx, 'destroyBox', id);
         await freed(ctx, row);
         return { kind: 'destroying' as const, since: Date.now() };
       },
-      destroyed: async (ctx, { id, to }) => {
+      destroyed: async (ctx, { id, row, to }) => {
         await patch(ctx, id, { ...revoked, ...noBox });
+        // An unarchive (or message) sent while it was being deleted brings it back now.
+        if (to === 'gone') await wakeIfPending(ctx as never, row.runnerId, 'gone');
+        else await expiredNow(ctx, row);
         return { kind: to, at: Date.now() };
       },
       fail: async (ctx, { id, row, event }) => {
@@ -338,6 +419,11 @@ function lostBox(row: Box, attempt: number | undefined): Partial<Box> {
 }
 
 type Db = { db: unknown };
+
+// It can't come back: what's waiting for its runner fails, saying so (boxes.ts failExpired).
+async function expiredNow(ctx: { scheduler: { runAfter(ms: number, fn: never, args: never): Promise<unknown> } }, row: Box): Promise<void> {
+  await ctx.scheduler.runAfter(0, internal.boxes.failExpired as never, { runnerId: row.runnerId } as never);
+}
 
 // A box stopped counting toward its virtual runner's maxBoxes: one waiting
 // to wake can now (boxes.ts wakeWaiting).

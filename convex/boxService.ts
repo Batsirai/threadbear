@@ -28,7 +28,7 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { box as boxMachine, machines, queued } from './machines';
 import { newestAttempt } from './boxMachine';
-import { BOOT_PREFIX, BOX_LIMITS, newAttempt, randomHex } from './boxes';
+import { activeMove, askToSave, BOOT_PREFIX, BOX_LIMITS, newAttempt, overHours, randomHex } from './boxes';
 import { sha256 } from './lib';
 import { deleteIfUnused } from './sync';
 import { flyFromEnv } from './boxProviders/fly';
@@ -38,8 +38,11 @@ import type { BoxProvider } from './boxProviders/types';
 export const RETRY_MS = [300, 1500];
 // How long an action may hold a box's op lease (a Fly wait is 60 s at most,
 // tried three times), and how soon one that found it held tries again.
-export const OP_LEASE_MS = 4 * 60_000;
+// Each provider call checks and renews it, and has a deadline of its own
+// (CALL_MS) well inside it, so a lease can only lapse under a run that's died.
+export const OP_LEASE_MS = 3 * 60_000;
 export const OP_RETRY_MS = 5_000;
+export const CALL_MS = 40_000;
 // A box being deleted this long is deleted again by the reaper.
 export const DESTROY_AGAIN_MS = 10 * 60_000;
 // Each cron's work per run, so none outgrows a function's limits; what's
@@ -56,9 +59,11 @@ const UNKNOWN_MB = Number.MAX_SAFE_INTEGER;
 
 /** The provider for a virtual runner's box of `memoryMb` (its pause support), from this deployment's environment (docs/forking.md lists them). */
 export function providerFor(provider: string, memoryMb: number): BoxProvider {
+  // BOX_CALL_TIMEOUT_MS: a shorter deadline per call, for tests; never longer than CALL_MS.
+  const timeoutMs = Math.min(CALL_MS, Number(process.env.BOX_CALL_TIMEOUT_MS) || CALL_MS);
   switch (provider) {
     case 'fly':
-      return flyFromEnv(process.env, memoryMb);
+      return flyFromEnv(process.env, memoryMb, undefined, timeoutMs);
   }
   throw new Error(`There's no provider called ${provider}.`);
 }
@@ -68,7 +73,7 @@ async function retrying<T>(f: () => Promise<T>): Promise<T> {
     try {
       return await f();
     } catch (e) {
-      if (i >= RETRY_MS.length || !transient(e)) throw e;
+      if (e instanceof LeaseLost || i >= RETRY_MS.length || !transient(e)) throw e;
       await new Promise((r) => setTimeout(r, RETRY_MS[i]));
     }
   }
@@ -82,7 +87,8 @@ type Event =
   | { type: 'LOST'; attempt?: number }
   | { type: 'DESTROYED' }
   | { type: 'FAILED'; error: string; attempt: number };
-const report = (ctx: ActionCtx, threadId: string, event: Event): Promise<boolean> => ctx.runMutation(internal.boxes.report, { threadId, event });
+// `op`: the reporting run's op lease; one that has lost it is told no (boxes.ts report).
+const report = (ctx: ActionCtx, threadId: string, event: Event, op?: string): Promise<boolean> => ctx.runMutation(internal.boxes.report, { threadId, event, ...(op ? { op } : {}) });
 
 // ------------------------------------------------------------ reading a box
 
@@ -153,6 +159,18 @@ export const claimOp = internalMutation({
   },
 });
 
+/** Whether this run still holds the box's op lease; if so it runs OP_LEASE_MS from now. */
+export const holdOp = internalMutation({
+  args: { boxId: v.id('boxes'), id: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, { boxId, id }) => {
+    const row = await ctx.db.get(boxId);
+    if (!row || row.op?.id !== id || row.op.until <= Date.now()) return false;
+    await ctx.db.patch(boxId, { op: { ...row.op, until: Date.now() + OP_LEASE_MS } });
+    return true;
+  },
+});
+
 export const releaseOp = internalMutation({
   args: { boxId: v.id('boxes'), id: v.string() },
   returns: v.null(),
@@ -163,36 +181,93 @@ export const releaseOp = internalMutation({
   },
 });
 
+// This run's lease went (it ran past OP_LEASE_MS between checks): it stops, acting on nothing more.
+class LeaseLost extends Error {}
+
+type Op = { ctx: ActionCtx; boxId: Id<'boxes'>; id: string };
+
+async function stillHeld(op: Op): Promise<void> {
+  if (!(await op.ctx.runMutation(internal.boxService.holdOp, { boxId: op.boxId, id: op.id }))) throw new LeaseLost();
+}
+
+/**
+ * The provider, fenced by the op lease: each call checks (and renews) the
+ * lease before and after it, and each call has its own deadline well
+ * inside the lease (providerFor), so a run that has lost the lease never
+ * calls the provider again, nor reports what it saw.
+ */
+function fenced(op: Op, p: BoxProvider): BoxProvider {
+  const wrap = <A extends unknown[], R>(f: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => {
+    await stillHeld(op);
+    const out = await f(...a);
+    await stillHeld(op);
+    return out;
+  };
+  return {
+    name: p.name,
+    caps: p.caps,
+    create: wrap(p.create.bind(p)),
+    list: wrap(p.list.bind(p)),
+    destroy: wrap(p.destroy.bind(p)),
+    ...(p.pause ? { pause: wrap(p.pause.bind(p)) } : {}),
+    ...(p.resume ? { resume: wrap(p.resume.bind(p)) } : {}),
+  };
+}
+
 // Runs `f` holding the box's op lease, or runs this action again shortly if another holds it.
-async function withOp(ctx: ActionCtx, boxId: Id<'boxes'>, name: OpName, f: () => Promise<void>): Promise<void> {
+async function withOp(ctx: ActionCtx, boxId: Id<'boxes'>, name: OpName, f: (op: Op) => Promise<void>): Promise<void> {
   const id = randomHex(8);
   if (!(await ctx.runMutation(internal.boxService.claimOp, { boxId, id, name }))) {
     await ctx.scheduler.runAfter(OP_RETRY_MS, internal.boxService[name], { boxId });
     return;
   }
   try {
-    await f();
+    await f({ ctx, boxId, id });
+  } catch (e) {
+    if (!(e instanceof LeaseLost)) throw e;
+    console.warn(`${name} lost its op lease, so it stopped`);
   } finally {
     await ctx.runMutation(internal.boxService.releaseOp, { boxId, id });
+  }
+}
+
+/**
+ * The provider's box `id` brought in line with the row: running while the
+ * thread is up, paused while it's asleep or shelved (if it can pause).
+ * Asked again after each call, a few times, since the row may move on
+ * while one is on its way; it stops when they match or the lease goes.
+ */
+async function reconcile(op: Op, p: BoxProvider, id: string): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    const row = await op.ctx.runQuery(internal.boxService.boxFor, { boxId: op.boxId });
+    if (!row || row.providerBoxId !== id) return;
+    const want = ['waking', 'awake', 'saving', 'archiving'].includes(row.kind) ? 'running' : ['asleep', 'shelved'].includes(row.kind) && row.hasKey && p.caps.pause ? 'paused' : null;
+    if (!want) return;
+    const have = (await retrying(() => p.list({ tb_box: op.boxId }))).find((b) => b.providerBoxId === id)?.state;
+    if (!have || have === want) return;
+    if (want === 'running' && p.resume) await retrying(() => p.resume!(id));
+    else if (want === 'paused' && p.pause) await retrying(() => p.pause!(id));
+    else return;
   }
 }
 
 // ------------------------------------------------------------ making and waking a box
 
 /**
- * A new attempt at a box, if the row still wants one (creating or waking)
- * and none is on its way: an attempt whose boot token is still live is,
- * so of two runs at once only the first makes a box. A run that dies after
- * this leaves its token to lapse, and the box machine's boot timer then
- * fails the box; the next message tries again. The size it's made at is
- * kept for the attempt (boxes.size), as the virtual runner's may change.
+ * A new attempt at a box, if the row still wants one (creating or waking),
+ * none is on its way (an attempt whose boot token is still live is), and
+ * this run still holds the op lease. A run that dies after this leaves its
+ * token to lapse, and the box machine's boot timer then fails the box; the
+ * next message tries again. The size it's made at is kept for the attempt
+ * (boxes.size), as the virtual runner's may change.
  */
 export const claimAttempt = internalMutation({
-  args: { boxId: v.id('boxes'), bootHash: v.string() },
+  args: { boxId: v.id('boxes'), bootHash: v.string(), op: v.optional(v.string()) },
   returns: v.union(v.null(), v.object({ attempt: v.number(), image: v.string(), cpus: v.number(), memoryMb: v.number(), region: v.optional(v.string()) })),
-  handler: async (ctx, { boxId, bootHash }) => {
+  handler: async (ctx, { boxId, bootHash, op }) => {
     const row = await ctx.db.get(boxId);
     if (!row || (row.boxState.kind !== 'creating' && row.boxState.kind !== 'waking')) return null;
+    if (op !== undefined && !(row.op?.id === op && row.op.until > Date.now())) return null;
     if (row.bootTokenHash && row.bootAttempt === newestAttempt(row) && (row.bootExpiresAt ?? 0) > Date.now()) return null;
     const service = await ctx.db.get(row.serviceId);
     if (!service) return null;
@@ -207,7 +282,7 @@ export const createBox = internalAction({
   args: { boxId: v.id('boxes') },
   returns: v.null(),
   handler: async (ctx, { boxId }) => {
-    await withOp(ctx, boxId, 'createBox', () => bringBack(ctx, boxId));
+    await withOp(ctx, boxId, 'createBox', (op) => bringBack(op));
     return null;
   },
 });
@@ -222,30 +297,36 @@ export const wakeBox = internalAction({
   args: { boxId: v.id('boxes') },
   returns: v.null(),
   handler: async (ctx, { boxId }) => {
-    await withOp(ctx, boxId, 'wakeBox', () => bringBack(ctx, boxId));
+    await withOp(ctx, boxId, 'wakeBox', (op) => bringBack(op));
     return null;
   },
 });
 
-async function bringBack(ctx: ActionCtx, boxId: Id<'boxes'>): Promise<void> {
+async function bringBack(op: Op): Promise<void> {
+  const { ctx, boxId } = op;
   let seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
   if (!seen || (seen.kind !== 'creating' && seen.kind !== 'waking')) return;
   // The box that slept, still holding the thread's key: resume it.
   const keyHolder = seen.hasKey && seen.keyAttempt !== undefined && seen.keyAttempt === seen.newest && seen.providerAttempt === seen.keyAttempt;
-  const paused = provider(seen.provider, seen.memoryMb);
-  if (seen.kind === 'waking' && keyHolder && seen.providerBoxId && paused?.caps.pause && paused.resume) {
+  const raw = provider(seen.provider, seen.memoryMb);
+  if (seen.kind === 'waking' && keyHolder && seen.providerBoxId && raw?.caps.pause && raw.resume) {
+    const paused = fenced(op, raw);
     const attempt = seen.keyAttempt!;
     const id = seen.providerBoxId;
     let taken = false;
     try {
       await retrying(() => paused.resume!(id));
-      taken = await report(ctx, seen.threadId, { type: 'RESUMED', attempt });
+      taken = await report(ctx, seen.threadId, { type: 'RESUMED', attempt }, op.id);
     } catch (e) {
+      if (e instanceof LeaseLost) throw e;
       // Gone, or it won't come back: its key goes, and a new box restores the save.
       console.warn('a paused box did not resume', message(e));
-      await report(ctx, seen.threadId, { type: 'LOST', attempt });
+      await report(ctx, seen.threadId, { type: 'LOST', attempt }, op.id);
     }
-    if (taken) return;
+    if (taken) {
+      await reconcile(op, paused, id);
+      return;
+    }
     // Not resumed (it was lost, or its key went meanwhile): if the thread
     // still wants a box, it gets a new one, here and now.
     seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
@@ -253,16 +334,17 @@ async function bringBack(ctx: ActionCtx, boxId: Id<'boxes'>): Promise<void> {
   }
   const site = process.env.CONVEX_CLOUD_URL;
   const bootToken = BOOT_PREFIX + randomHex(32);
-  const claim = await ctx.runMutation(internal.boxService.claimAttempt, { boxId, bootHash: await sha256(bootToken) });
+  const claim = await ctx.runMutation(internal.boxService.claimAttempt, { boxId, bootHash: await sha256(bootToken), op: op.id });
   if (!claim) return;
   const { attempt } = claim;
-  const p = provider(seen.provider, claim.memoryMb);
-  if (!p) {
-    await report(ctx, seen.threadId, { type: 'FAILED', error: `The ${seen.provider ?? 'box'} provider isn't set up on this deployment (docs/forking.md, Virtual runners).`, attempt });
+  const made = provider(seen.provider, claim.memoryMb);
+  if (!made) {
+    await report(ctx, seen.threadId, { type: 'FAILED', error: `The ${seen.provider ?? 'box'} provider isn't set up on this deployment (docs/forking.md, Virtual runners).`, attempt }, op.id);
     return;
   }
+  const p = fenced(op, made);
   if (!site) {
-    await report(ctx, seen.threadId, { type: 'FAILED', error: "CONVEX_CLOUD_URL isn't set, so a box can't be told where to sync.", attempt });
+    await report(ctx, seen.threadId, { type: 'FAILED', error: "CONVEX_CLOUD_URL isn't set, so a box can't be told where to sync.", attempt }, op.id);
     return;
   }
   let providerBoxId: string;
@@ -282,33 +364,36 @@ async function bringBack(ctx: ActionCtx, boxId: Id<'boxes'>): Promise<void> {
       }),
     ));
   } catch (e) {
-    await report(ctx, seen.threadId, { type: 'FAILED', error: `${p.name}: ${message(e)}`, attempt });
+    if (e instanceof LeaseLost) throw e;
+    await report(ctx, seen.threadId, { type: 'FAILED', error: `${made.name}: ${message(e)}`, attempt }, op.id);
     return;
   }
   // Not taken: the thread was archived meanwhile, or a newer attempt has
   // its box. This one isn't wanted.
-  if (!(await report(ctx, seen.threadId, { type: 'CREATED', providerBoxId, attempt }))) await p.destroy(providerBoxId).catch((e) => console.warn('an unwanted box was not deleted; the reaper will', message(e)));
+  if (!(await report(ctx, seen.threadId, { type: 'CREATED', providerBoxId, attempt }, op.id))) await p.destroy(providerBoxId).catch((e) => console.warn('an unwanted box was not deleted; the reaper will', message(e)));
 }
 
 // ------------------------------------------------------------ sleeping and deleting
 
 /**
- * The thread is asleep (boxMachine.ts sleep, sleepUnsaved): pause its box
- * if that box can pause (by the size it was made at) and holds the key,
- * else delete it and report it LOST, so the next wake makes a new box from
- * the save. A box the provider no longer has is LOST too, and one whose
- * pause is refused is deleted instead. If the thread was woken while it
- * paused, the box is resumed again before the lease goes.
+ * The thread is asleep or shelved (boxMachine.ts sleep, sleepUnsaved,
+ * shelve): pause its box if that box can pause (by the size it was made
+ * at) and holds the key, else delete it and report it LOST, so the next
+ * wake makes a new box from the save. A box the provider no longer has is
+ * LOST too, and one whose pause is refused is deleted instead. Then the
+ * box is brought in line with the row (reconcile): one woken while it
+ * paused is resumed.
  */
 export const sleepBox = internalAction({
   args: { boxId: v.id('boxes') },
   returns: v.null(),
   handler: async (ctx, { boxId }) => {
-    await withOp(ctx, boxId, 'sleepBox', async () => {
+    await withOp(ctx, boxId, 'sleepBox', async (op) => {
       const seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
-      if (!seen || seen.kind !== 'asleep' || !seen.providerBoxId) return;
-      const p = provider(seen.provider, seen.memoryMb);
-      if (!p) return;
+      if (!seen || (seen.kind !== 'asleep' && seen.kind !== 'shelved') || !seen.providerBoxId) return;
+      const raw = provider(seen.provider, seen.memoryMb);
+      if (!raw) return;
+      const p = fenced(op, raw);
       const id = seen.providerBoxId;
       const lost = { type: 'LOST' as const, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) };
       // Only the box that saved, holding the key, is paused; any other is no use asleep.
@@ -316,56 +401,59 @@ export const sleepBox = internalAction({
         try {
           await retrying(() => p.pause!(id));
         } catch (e) {
-          if (notFound(e)) await report(ctx, seen.threadId, lost);
+          if (e instanceof LeaseLost) throw e;
+          if (notFound(e)) await report(ctx, seen.threadId, lost, op.id);
           // Refused (not a hiccup): it can't pause, so it's deleted, as a box that can't is.
-          else if (e instanceof ProviderError && !transient(e)) await deleteAsleep(ctx, p, seen, id);
+          else if (e instanceof ProviderError && !transient(e)) await deleteAsleep(op, p, seen, id);
           else console.warn('a box did not pause; the reaper will try again', message(e));
           return;
         }
-        // Woken while it paused: it's wanted after all.
-        const now = await ctx.runQuery(internal.boxService.boxFor, { boxId });
-        if (now && ['waking', 'awake', 'saving'].includes(now.kind) && now.providerBoxId === id) await retrying(() => p.resume!(id)).catch((e) => console.warn('a box woken while it paused did not resume', message(e)));
+        await reconcile(op, p, id);
         return;
       }
-      await deleteAsleep(ctx, p, seen, id);
+      await deleteAsleep(op, p, seen, id);
     });
     return null;
   },
 });
 
-async function deleteAsleep(ctx: ActionCtx, p: BoxProvider, seen: Seen, id: string): Promise<void> {
+async function deleteAsleep(op: Op, p: BoxProvider, seen: Seen, id: string): Promise<void> {
   try {
     await retrying(() => p.destroy(id));
   } catch (e) {
+    if (e instanceof LeaseLost) throw e;
     console.warn('a sleeping box was not deleted; the reaper will try again', message(e));
     return;
   }
-  await report(ctx, seen.threadId, { type: 'LOST', ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) });
+  await report(op.ctx, seen.threadId, { type: 'LOST', ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
 }
 
 /**
- * The thread is archived (boxMachine.ts archive): every box the provider
- * has for it is deleted, older attempts' too, then DESTROYED. One that
- * fails stays `destroying`, and the reaper runs this again.
+ * The thread is archived (boxMachine.ts archive, savedAndGo), or its kept
+ * box's days are up (expireShelf): every box the provider has for it is
+ * deleted, older attempts' too, then DESTROYED. One that fails stays as it
+ * is, and the reaper runs this again.
  */
 export const destroyBox = internalAction({
   args: { boxId: v.id('boxes') },
   returns: v.null(),
   handler: async (ctx, { boxId }) => {
-    await withOp(ctx, boxId, 'destroyBox', async () => {
+    await withOp(ctx, boxId, 'destroyBox', async (op) => {
       const seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
-      if (!seen || seen.kind !== 'destroying') return;
-      const p = provider(seen.provider, seen.memoryMb);
-      if (!p) return;
+      if (!seen || !(seen.kind === 'destroying' || (seen.kind === 'expired' && seen.providerBoxId))) return;
+      const raw = provider(seen.provider, seen.memoryMb);
+      if (!raw) return;
+      const p = fenced(op, raw);
       try {
         const ids = new Set(seen.providerBoxId ? [seen.providerBoxId] : []);
         for (const b of await retrying(() => p.list({ tb_box: boxId }))) ids.add(b.providerBoxId);
         for (const id of ids) await retrying(() => p.destroy(id));
       } catch (e) {
+        if (e instanceof LeaseLost) throw e;
         console.warn('a box was not deleted; the reaper will try again', message(e));
         return;
       }
-      await report(ctx, seen.threadId, { type: 'DESTROYED' });
+      await report(ctx, seen.threadId, { type: 'DESTROYED' }, op.id);
     });
     return null;
   },
@@ -374,15 +462,16 @@ export const destroyBox = internalAction({
 // ------------------------------------------------------------ the crons
 
 /**
- * Sleeps awake boxes (decisions 7 and 12): one whose thread has been idle
- * the virtual runner's idleSleepMinutes, or that has been up its
- * maxAwakeHoursPerDay today, is sent IDLE (`capped` for the second) and a
- * `save` command; the box saves and says so (boxes.ts boxSaved), and
- * sleepBox pauses or deletes it. A capped one that never saves sleeps all
- * the same (boxMachine.ts sleepUnsaved). Not while a command waits for it,
- * so a message that woke it past its hours still gets taken. A page of
- * `numItems` a run, the rest in a run of its own from `cursor`; the first
- * page also wakes any box waiting for room (boxes.ts wakeWaiting).
+ * Sleeps awake boxes (decisions 7 and 12). Its day's hours come first: one
+ * up its maxAwakeHoursPerDay today is sent IDLE `capped` and a `save`
+ * command whatever's waiting for it (what's waiting waits for tomorrow's
+ * hours, or Mike's wakePastHours), and sleeps all the same if no save comes
+ * (boxMachine.ts sleepUnsaved). Otherwise one whose thread has been idle
+ * the virtual runner's idleSleepMinutes, with no command waiting, gets IDLE
+ * and a `save`. A thread moving (a move going, either way) is neither: the
+ * cap waits for the move to end. A page of `numItems` a run, the rest in a
+ * run of its own from `cursor`; the first page also wakes any box waiting
+ * for room or a new day (boxes.ts wakeAllWaiting).
  */
 export const sleepIdleBoxes = machines.internalMutation({
   args: { cursor: v.optional(v.union(v.string(), v.null())), numItems: v.optional(v.number()) },
@@ -398,19 +487,21 @@ export const sleepIdleBoxes = machines.internalMutation({
       if (row.boxState.kind !== 'awake') continue;
       if (!services.has(row.serviceId)) services.set(row.serviceId, await ctx.db.get(row.serviceId));
       const limits = services.get(row.serviceId)?.limits ?? BOX_LIMITS;
-      if (await waitingFor(ctx, row.runnerId)) continue;
-      const thread = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', row.threadId)).unique();
-      const last = Math.max(row.boxState.since, thread?.lastActivityMs ?? 0);
-      const idle = !(thread && BUSY.includes(thread.status)) && now - last >= limits.idleSleepMinutes * 60_000;
-      const overHours = awakeTodayMs(row, row.boxState.since, now) >= limits.maxAwakeHoursPerDay * 60 * 60_000;
-      if (!idle && !overHours) continue;
-      const r = await boxMachine.send(machineCtx, row._id, { type: 'IDLE', ...(row.keyAttempt !== undefined ? { attempt: row.keyAttempt } : {}), ...(overHours ? { capped: true } : {}) });
+      if (await activeMove(ctx, row.threadId)) continue;
+      const capped = overHours(row, limits.maxAwakeHoursPerDay, now);
+      if (!capped) {
+        if (await waitingFor(ctx, row.runnerId)) continue;
+        const thread = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', row.threadId)).unique();
+        const last = Math.max(row.boxState.since, thread?.lastActivityMs ?? 0);
+        if ((thread && BUSY.includes(thread.status)) || now - last < limits.idleSleepMinutes * 60_000) continue;
+      }
+      const r = await boxMachine.send(machineCtx, row._id, { type: 'IDLE', ...(row.keyAttempt !== undefined ? { attempt: row.keyAttempt } : {}), ...(capped ? { capped: true } : {}) });
       if (r.status !== 'done') continue;
       await askToSave(ctx, row);
       asked++;
     }
     if (!page.isDone) await ctx.scheduler.runAfter(0, internal.boxService.sleepIdleBoxes, { cursor: page.continueCursor, numItems: batch });
-    if (!cursor) for (const s of await ctx.db.query('runnerServices').take(100)) await ctx.scheduler.runAfter(0, internal.boxes.wakeWaiting, { serviceId: s._id });
+    if (!cursor) await ctx.scheduler.runAfter(0, internal.boxes.wakeAllWaiting, {});
     return asked;
   },
 });
@@ -421,20 +512,6 @@ async function waitingFor(ctx: MutationCtx, runnerId: string): Promise<boolean> 
     for await (const c of ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', state))) if (c.kind !== 'save') return true;
   }
   return false;
-}
-
-// Today's (UTC) awake time: what it had before this stretch, and this stretch's part of today.
-export function awakeTodayMs(row: Pick<Doc<'boxes'>, 'awakeToday'>, since: number, now = Date.now()): number {
-  const day = new Date(now).toISOString().slice(0, 10);
-  const dayStart = Date.parse(`${day}T00:00:00.000Z`);
-  return (row.awakeToday?.day === day ? row.awakeToday.ms : 0) + Math.max(0, now - Math.max(since, dayStart));
-}
-
-// The box's runner is asked to save its thread (decision 7): a `save`
-// command for its thread, one at a time.
-async function askToSave(ctx: MutationCtx, row: Doc<'boxes'>): Promise<void> {
-  for await (const c of ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', row.runnerId).eq('state', 'pending'))) if (c.kind === 'save') return;
-  await queued(ctx, { runnerId: row.runnerId, threadId: row.threadId, kind: 'save', args: {}, createdAt: Date.now() });
 }
 
 // ------------------------------------------------------------ the reaper
@@ -460,9 +537,8 @@ const sameSnap = (a: Snap, b: Snap) => JSON.stringify(a) === JSON.stringify(b);
  * - no row for it, another virtual runner's row, or an attempt other than
  *   the row's newest (an older one's, or not one at all): destroy;
  * - its row archived and gone or expired, or failed (no key works for it): destroy;
+ * - asleep or shelved, its box is the key holder's and kept; any other: destroy;
  * - its row being deleted: destroyBox's (one stuck is run again, stuckDestroying);
- * - asleep, but not the box holding the thread's key (that one's lost,
- *   and the next wake makes a new box): destroy;
  * - the current attempt's box the row doesn't know yet (its CREATED never
  *   came): adopt, reporting CREATED; a second box for the same attempt:
  *   destroy;
@@ -475,10 +551,11 @@ function planFor(row: Doc<'boxes'> | null, serviceId: string, b: Listed): Do {
   const kind = row.boxState.kind;
   if (kind === 'gone' || kind === 'expired' || kind === 'failed') return 'destroy';
   if (kind === 'destroying') return 'keep';
-  if (kind === 'asleep' && row.keyAttempt !== b.attempt) return 'destroy';
+  const resting = kind === 'asleep' || kind === 'shelved';
+  if (resting && row.keyAttempt !== b.attempt) return 'destroy';
   if (row.providerBoxId !== b.providerBoxId) return row.providerAttempt === b.attempt ? 'destroy' : 'adopt';
-  if (b.state === 'stopped' && ['awake', 'saving', 'asleep'].includes(kind) && row.keyAttempt === b.attempt) return 'lost';
-  if (kind === 'asleep' && b.state === 'running') return 'sleep';
+  if (b.state === 'stopped' && ['awake', 'saving', 'archiving', 'asleep', 'shelved'].includes(kind) && row.keyAttempt === b.attempt) return 'lost';
+  if (resting && b.state === 'running') return 'sleep';
   return 'keep';
 }
 
@@ -526,9 +603,12 @@ export const reapStep = machines.internalMutation({
 });
 
 export const servicesToReap = internalQuery({
-  args: {},
-  returns: v.array(v.id('runnerServices')),
-  handler: async (ctx) => (await ctx.db.query('runnerServices').take(100)).map((s) => s._id),
+  args: { cursor: v.union(v.string(), v.null()), numItems: v.number() },
+  returns: v.object({ ids: v.array(v.id('runnerServices')), next: v.union(v.string(), v.null()) }),
+  handler: async (ctx, { cursor, numItems }) => {
+    const page = await ctx.db.query('runnerServices').paginate({ numItems, cursor });
+    return { ids: page.page.map((s) => s._id), next: page.isDone ? null : page.continueCursor };
+  },
 });
 
 export const stuckDestroying = internalQuery({
@@ -541,13 +621,19 @@ export const stuckDestroying = internalQuery({
   },
 });
 
-/** The reaper (planFor), a run per virtual runner, and boxes stuck being deleted. */
+/**
+ * The reaper (planFor): a run per virtual runner, a page of virtual runners
+ * at a time carrying on from `cursor`; and, on the first page, boxes stuck
+ * being deleted.
+ */
 export const reapBoxes = internalAction({
-  args: {},
+  args: { cursor: v.optional(v.string()), numItems: v.optional(v.number()) },
   returns: v.null(),
-  handler: async (ctx) => {
-    for (const serviceId of await ctx.runQuery(internal.boxService.servicesToReap, {})) await ctx.scheduler.runAfter(0, internal.boxService.reapService, { serviceId });
-    for (const boxId of await ctx.runQuery(internal.boxService.stuckDestroying, {})) await ctx.scheduler.runAfter(0, internal.boxService.destroyBox, { boxId });
+  handler: async (ctx, { cursor, numItems }) => {
+    const { ids, next } = await ctx.runQuery(internal.boxService.servicesToReap, { cursor: cursor ?? null, numItems: numItems ?? 50 });
+    for (const serviceId of ids) await ctx.scheduler.runAfter(0, internal.boxService.reapService, { serviceId });
+    if (next) await ctx.scheduler.runAfter(0, internal.boxService.reapBoxes, { cursor: next, ...(numItems ? { numItems } : {}) });
+    if (!cursor) for (const boxId of await ctx.runQuery(internal.boxService.stuckDestroying, {})) await ctx.scheduler.runAfter(0, internal.boxService.destroyBox, { boxId });
     return null;
   },
 });
@@ -590,13 +676,16 @@ export const reapService = internalAction({
 
 // A stopped box's loss: under the op lease (no wake or sleep is calling the
 // provider for it), and only if the provider still says it's stopped.
-async function reapLost(ctx: ActionCtx, serviceId: Id<'runnerServices'>, p: BoxProvider, boxId: Id<'boxes'>, b: Listed, seen: Snap): Promise<void> {
+async function reapLost(ctx: ActionCtx, serviceId: Id<'runnerServices'>, raw: BoxProvider, boxId: Id<'boxes'>, b: Listed, seen: Snap): Promise<void> {
   const id = randomHex(8);
   if (!(await ctx.runMutation(internal.boxService.claimOp, { boxId, id, name: 'reap' }))) return;
+  const p = fenced({ ctx, boxId, id }, raw);
   try {
     const now = (await retrying(() => p.list({ tb_box: boxId }))).find((x) => x.providerBoxId === b.providerBoxId);
     if (!now || now.state !== 'stopped') return;
     if (await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: { ...b, state: now.state }, do: 'lost', seen })) await p.destroy(b.providerBoxId);
+  } catch (e) {
+    if (!(e instanceof LeaseLost)) throw e;
   } finally {
     await ctx.runMutation(internal.boxService.releaseOp, { boxId, id });
   }
@@ -609,21 +698,22 @@ export const serviceProvider = internalQuery({
 });
 
 /**
- * An archived thread's save after its virtual runner's deleteAfterDays
- * (decision 12): deleted, and the box `expired`, so the thread says it
- * can't come back rather than wait for ever. At most PRUNE_BATCH a run, the
- * rest in a run of its own.
+ * An archived thread's save, and its kept box if it was shelved, after its
+ * virtual runner's deleteAfterDays (decision 12): deleted, and the box
+ * `expired`, so the thread says it can't come back rather than wait for
+ * ever (what's waiting for it fails, boxes.ts failExpired). `gone` rows,
+ * then `shelved` ones, at most PRUNE_BATCH a run, the rest in a run of its own.
  */
 export const pruneSaves = machines.internalMutation({
-  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  args: { cursor: v.optional(v.union(v.string(), v.null())), kind: v.optional(v.union(v.literal('gone'), v.literal('shelved'))) },
   returns: v.number(),
-  handler: async (machineCtx, { cursor }) => {
+  handler: async (machineCtx, { cursor, kind = 'gone' }) => {
     const ctx = machineCtx as unknown as MutationCtx;
     const now = Date.now();
     let pruned = 0;
-    const page = await ctx.db.query('boxes').withIndex('by_box_state', (q) => q.eq('boxState.kind', 'gone')).paginate({ numItems: PRUNE_BATCH, cursor: cursor ?? null });
+    const page = await ctx.db.query('boxes').withIndex('by_box_state', (q) => q.eq('boxState.kind', kind)).paginate({ numItems: PRUNE_BATCH, cursor: cursor ?? null });
     for (const row of page.page) {
-      if (row.boxState.kind !== 'gone') continue;
+      if (row.boxState.kind !== 'gone' && row.boxState.kind !== 'shelved') continue;
       const days = (await ctx.db.get(row.serviceId))?.limits.deleteAfterDays ?? BOX_LIMITS.deleteAfterDays;
       if (row.boxState.at > now - days * DAY_MS) continue;
       const save = row.save?.storageId;
@@ -631,7 +721,8 @@ export const pruneSaves = machines.internalMutation({
       if (save) await deleteIfUnused(ctx, save);
       pruned++;
     }
-    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.boxService.pruneSaves, { cursor: page.continueCursor });
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.boxService.pruneSaves, { cursor: page.continueCursor, kind });
+    else if (kind === 'gone') await ctx.scheduler.runAfter(0, internal.boxService.pruneSaves, { kind: 'shelved' });
     return pruned;
   },
 });

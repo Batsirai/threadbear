@@ -331,6 +331,8 @@ export const appSchema = defineSchema({
     // The service's action calling the provider for this box now, so two
     // never overlap (a sleep's suspend and a wake's start); another waits.
     op: v.optional(v.object({ id: v.string(), name: v.string(), until: v.number() })),
+    // Mike woke it past its day's hours on this day (UTC, boxes.ts wakePastHours).
+    hoursWaivedOn: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index('by_threadId', ['threadId'])

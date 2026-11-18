@@ -77,17 +77,23 @@ export function notFound(e: unknown): boolean {
   return e instanceof ProviderError && e.status === 404;
 }
 
-// One JSON-over-HTTPS call. Undefined for an empty body.
-export async function call<T>(fetchImpl: Fetch, method: string, base: string, path: string, headers: Record<string, string>, body?: unknown): Promise<T> {
-  const init: RequestInit = { method, headers: { ...headers, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) } };
+// One JSON-over-HTTPS call, given up (aborted) after `timeoutMs`: a caller
+// holding a lease must never have a call outlive it. Undefined for an empty body.
+export async function call<T>(fetchImpl: Fetch, method: string, base: string, path: string, headers: Record<string, string>, body?: unknown, timeoutMs?: number): Promise<T> {
+  const abort = new AbortController();
+  const init: RequestInit = { method, headers: { ...headers, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) }, signal: abort.signal };
   if (body !== undefined) init.body = JSON.stringify(body);
+  const timer = timeoutMs ? setTimeout(() => abort.abort(), timeoutMs) : undefined;
   let res: Response;
+  let text: string;
   try {
     res = await fetchImpl(`${base}${path}`, init);
+    text = await res.text();
   } catch (e) {
-    throw new ProviderError(method, path.split('?')[0]!, 0, String((e as Error)?.message ?? e));
+    throw new ProviderError(method, path.split('?')[0]!, 0, abort.signal.aborted ? `no answer in ${timeoutMs} ms` : String((e as Error)?.message ?? e));
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  const text = await res.text();
   if (!res.ok) throw new ProviderError(method, path.split('?')[0]!, res.status, text);
   return (text ? JSON.parse(text) : undefined) as T;
 }

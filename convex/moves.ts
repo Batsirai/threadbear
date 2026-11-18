@@ -58,6 +58,8 @@ const REHOME_STUCK_MS = 10 * 60_000;
 type Move = Doc<'threadMoves'>;
 type MoveState = Move['state'];
 const GOING: readonly MoveState[] = ['asking', 'ready', 'packing', 'unpacking', 'claimed'];
+// A move still going, for a box's thread (boxes.ts activeMove).
+export const MOVE_GOING: readonly string[] = GOING;
 
 const bad = (message: string) => new ConvexError({ kind: 'badArgs', message });
 const conflict = (message: string) => new ConvexError({ kind: 'conflict', message });
@@ -91,7 +93,11 @@ type MoveEvent = Parameters<typeof moveMachine.send>[2];
 // move's state doesn't take it (the guard's reason, if one refused it).
 async function step(ctx: MutationCtx, m: Move, event: MoveEvent, what: string) {
   const r = await moveMachine.send(ctx, m._id, event);
-  if (r.status === 'done') return r;
+  if (r.status === 'done') {
+    // The other side's turn: a sleeping box there wakes to take it.
+    for (const runnerId of [m.from, m.to]) await wakeIfAsleep(ctx, runnerId, 'move');
+    return r;
+  }
   if (r.code === 'GUARD_BLOCKED') throw conflict(r.reasons.join(' '));
   throw conflict(`The move is ${m.state}, so it can't ${what}.`);
 }

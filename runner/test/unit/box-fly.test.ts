@@ -135,3 +135,18 @@ test('from the environment: FLY_API_TOKEN and FLY_APP are needed, FLY_ORG defaul
   assert.ok(seen[0]!.startsWith('https://api.machines.dev/v1/apps/tb-boxes/machines'));
   assert.equal(fly.seen.find((r) => r.path === '/v1/apps')!.json.org_slug, 'personal');
 });
+
+// Codex's second review of the fixes: a call has a deadline well inside the op lease.
+test('a call that gets no answer by its deadline is given up, and never reaches the provider', async () => {
+  const fly = fakeFly({ apps: ['tb-boxes'] });
+  const p = flyProvider({ token: 'fly-token', app: 'tb-boxes', memoryMb: 1024, baseUrl: fly.url, fetch: fly.fetch, timeoutMs: 50 });
+  const held = fly.hold((r) => r.method === 'POST' && r.path.endsWith('/machines'));
+  const e = await p.create({ ...spec, idempotencyKey: 'slow' }).catch((x: unknown) => x);
+  await held.arrived;
+  assert.ok(e instanceof ProviderError);
+  assert.equal(e.status, 0);
+  assert.match(e.message, /no answer in 50 ms/);
+  assert.equal(transient(e), true);
+  held.release();
+  assert.equal(fly.machines.length, 0, 'the held create was never handled');
+});

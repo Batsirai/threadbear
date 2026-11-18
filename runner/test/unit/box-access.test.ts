@@ -5,7 +5,7 @@
 // the real functions.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
+import { call, claimAndFinish, load, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 import { BOX_RUNNER, boxBackend, OWNER, THREAD } from '../helpers/box-backend.ts';
 
 const sync = load('sync');
@@ -132,7 +132,13 @@ test('a box asks for a new thread from its own thread only', async () => {
 
 test('an archived box key, or one that never was, is refused everywhere', async () => {
   const s = await setup();
+  // Archived: it's asked to save first; the save in, its box goes.
   await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: THREAD });
+  assert.equal(s.state(), 'archiving');
+  const url: string = await call(s.ctx, sync.iconUploadUrl, { key: s.boxKey });
+  assert.equal(await claimAndFinish(s.ctx, sync.claimUpload, sync.finishUpload, { ticket: new URL(url).searchParams.get('ticket'), storageId: s.file('save1'), bytes: 100 }), true);
+  await call(s.ctx, boxes.boxSaved, { key: s.boxKey, storageId: 'save1', bytes: 100 });
+  assert.equal(s.state(), 'destroying');
   assert.equal(await outcome(s.beat()), 'auth');
   assert.equal(await outcome(call(s.ctx, sync.pendingCommands, { key: s.boxKey, runnerId: BOX_RUNNER })), 'auth');
   assert.equal(await outcome(call(s.ctx, sync.heartbeat, { key: `tbb_${'0'.repeat(64)}`, runner: { runnerId: BOX_RUNNER, name: 'b', version: 'v', startedAt: AT, draining: false, threadCount: 1 } })), 'auth');

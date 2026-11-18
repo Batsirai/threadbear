@@ -106,7 +106,12 @@ export function fakeFly(opts: { token?: string; apps?: string[] } = {}) {
     if (h >= 0) {
       const [held] = holds.splice(h, 1);
       held!.reached();
-      await held!.gate;
+      // A caller that gives up (its deadline) gets an abort, and the request is never handled.
+      const signal = init.signal;
+      await new Promise<void>((resolve, reject) => {
+        held!.gate.then(resolve);
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
     }
     const answer = await handle(r);
     const lost = lostAnswers.findIndex((x) => x.method === r.method && r.path.endsWith(x.ends));

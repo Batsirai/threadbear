@@ -22,6 +22,7 @@ import { checkRunnerId, forbidden, runnerAuth, sha256, withoutCredentials } from
 import { commandArgs } from './relay';
 import { PROVIDERS } from './boxProviders/types';
 import { WAKES_FROM } from './boxHooks';
+import { MOVE_GOING } from './moves';
 import { BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runnerAccess';
 import { deleteIfUnused, endCommandFiles, finishedArgs, MAX_RUNNER_UPLOAD_BYTES, uploadedBy } from './sync';
 
@@ -206,7 +207,7 @@ const limitsV = v.object({ maxBoxes: v.number(), idleSleepMinutes: v.number(), m
 
 // The states a box counts toward maxBoxes in: up, or on its way up.
 type BoxKind = Doc<'boxes'>['boxState']['kind'];
-export const RUNNING: readonly BoxKind[] = ['creating', 'starting', 'awake', 'saving', 'waking'];
+export const RUNNING: readonly BoxKind[] = ['creating', 'starting', 'awake', 'saving', 'archiving', 'waking'];
 
 // How many of a virtual runner's boxes are in these states, counting to `upTo` at most.
 async function countBoxes(ctx: QueryCtx, serviceId: Id<'runnerServices'>, kinds: readonly BoxKind[], upTo: number): Promise<number> {
@@ -506,16 +507,15 @@ export const boxSaved = mutation({
   },
 });
 
-/** Mike archived the thread: its box is deleted (boxService.ts destroyBox). */
+/** Mike archived the thread: its box saves it if it's up, then is deleted (boxService.ts destroyBox). */
 export const archiveBox = mutation({
   args: { key: v.string(), threadId: v.string() },
   returns: v.null(),
   handler: async (ctx, { key, threadId }) => {
     await runnerAuth(ctx, key, 'archiveBox');
     const row = await boxOf(ctx, threadId);
-    if (row.boxState.kind === 'destroying' || row.boxState.kind === 'gone') return null;
-    const r = await boxMachine.send(ctx, row._id, { type: 'ARCHIVE' });
-    if (r.status !== 'done') throw conflict(`The box is ${row.boxState.kind}, so it can't be archived.`);
+    if (ARCHIVED_ALREADY.includes(row.boxState.kind)) return null;
+    if (!(await archive(ctx, row))) throw conflict(`The box is ${row.boxState.kind}, so it can't be archived.`);
     return null;
   },
 });
@@ -537,33 +537,41 @@ const serverEvent = v.union(
  * caller that can race (a second wake) takes as already done.
  */
 export const report = machines.internalMutation({
-  args: { threadId: v.string(), event: serverEvent },
+  // op: the reporting action's op lease (boxService.ts withOp). An action
+  // that has lost it is told no, and its news changes nothing.
+  args: { threadId: v.string(), event: serverEvent, op: v.optional(v.string()) },
   returns: v.boolean(),
-  handler: async (ctx, { threadId, event }) => {
+  handler: async (ctx, { threadId, event, op }) => {
     const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
     if (!row) throw new ConvexError({ kind: 'notFound', message: 'no box for that thread' });
+    if (op !== undefined && !(row.op?.id === op && row.op.until > Date.now())) return false;
     return (await boxMachine.send(ctx, row._id, event)).status === 'done';
   },
 });
 
 
 /**
- * A command was queued for a box's runner (boxHooks.ts wakeIfAsleep): WAKE,
- * once. A second, for a box already waking or awake, isn't taken.
+ * A command was queued for a box's runner (boxHooks.ts wakeIfAsleep), or one
+ * was already waiting when it slept or was archived (wakeIfPending): WAKE,
+ * once. A second, for a box already waking or awake, isn't taken. A box
+ * that would take its virtual runner past maxBoxes, or that's been up its
+ * day's hours, waits instead (`wantsWakeAt`; the message stays pending)
+ * until there's room or tomorrow's hours (wakeWaiting), unless its thread
+ * is moving (a move can't wait) or Mike woke it past its hours
+ * (wakePastHours). An expired one fails what's waiting, saying why.
  */
 export const wakeFor = machines.internalMutation({
-  args: { runnerId: v.string() },
+  args: { runnerId: v.string(), commandId: v.optional(v.id('commands')) },
   returns: v.boolean(),
-  handler: async (machineCtx, { runnerId }) => {
+  handler: async (machineCtx, { runnerId, commandId }) => {
     const ctx = machineCtx as unknown as MutationCtx;
     const row = await ctx.db.query('boxes').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first();
     if (!row || !WAKES_FROM.includes(row.boxState.kind)) return false;
     if (row.boxState.kind === 'expired') {
-      await failWaiting(ctx, runnerId, EXPIRED_NOTE);
+      await failExpiredRun(ctx, runnerId, commandId);
       return false;
     }
-    // A saving box is up already; any other needs room under maxBoxes, or waits for it.
-    if (row.boxState.kind !== 'saving' && !(await hasRoom(ctx, row.serviceId))) {
+    if (!(await mayWakeNow(ctx, row))) {
       if (row.wantsWakeAt === undefined) await ctx.db.patch(row._id, { wantsWakeAt: Date.now() });
       return false;
     }
@@ -571,17 +579,62 @@ export const wakeFor = machines.internalMutation({
   },
 });
 
-// Whether a virtual runner has room for one more box up under its maxBoxes.
-async function hasRoom(ctx: QueryCtx, serviceId: Id<'runnerServices'>): Promise<boolean> {
-  const max = (await ctx.db.get(serviceId))?.limits.maxBoxes ?? BOX_LIMITS.maxBoxes;
-  return (await countBoxes(ctx, serviceId, RUNNING, max)) < max;
+// A box up already (saving, archiving) stays up; any other needs room under
+// maxBoxes and some of its day's hours left, or its thread to be moving.
+async function mayWakeNow(ctx: QueryCtx, row: Doc<'boxes'>): Promise<boolean> {
+  if (row.boxState.kind === 'saving' || row.boxState.kind === 'archiving') return true;
+  const service = await ctx.db.get(row.serviceId);
+  const limits = service?.limits ?? BOX_LIMITS;
+  if ((await countBoxes(ctx, row.serviceId, RUNNING, limits.maxBoxes)) >= limits.maxBoxes) return false;
+  if (await activeMove(ctx, row.threadId)) return true;
+  return !overHours(row, limits.maxAwakeHoursPerDay);
+}
+
+const day = (now: number) => new Date(now).toISOString().slice(0, 10);
+
+/** Today's (UTC) awake time: what it had, and the part of today it's been up since `since` if it's up now. */
+export function usedTodayMs(row: Pick<Doc<'boxes'>, 'awakeToday' | 'boxState'>, now = Date.now()): number {
+  const today = day(now);
+  const had = row.awakeToday?.day === today ? row.awakeToday.ms : 0;
+  const s = row.boxState as { kind: string; since?: number };
+  if (!['awake', 'saving', 'archiving'].includes(s.kind) || s.since === undefined) return had;
+  return had + Math.max(0, now - Math.max(s.since, Date.parse(`${today}T00:00:00.000Z`)));
+}
+
+/** Up its day's hours, unless Mike woke it past them today (wakePastHours). */
+export function overHours(row: Doc<'boxes'>, maxHours: number, now = Date.now()): boolean {
+  return row.hoursWaivedOn !== day(now) && usedTodayMs(row, now) >= maxHours * 60 * 60_000;
+}
+
+/** Whether a thread is moving: a box can't sleep, or wait to wake, mid-move. */
+export async function activeMove(ctx: QueryCtx, threadId: string): Promise<boolean> {
+  for (const m of await ctx.db.query('threadMoves').withIndex('by_thread', (q) => q.eq('threadId', threadId)).collect()) if (MOVE_GOING.includes(m.state)) return true;
+  return false;
 }
 
 /**
+ * Mike's own word, from the Mac (or later the phone's): wake a thread's box
+ * now though it's been up its day's hours, and let it run the rest of
+ * today. It still waits for room under maxBoxes.
+ */
+export const wakePastHours = mutation({
+  args: { key: v.string(), threadId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { key, threadId }) => {
+    await runnerAuth(ctx, key, 'wakePastHours');
+    const row = await boxOf(ctx, threadId);
+    await ctx.db.patch(row._id, { hoursWaivedOn: day(Date.now()) });
+    await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId: row.runnerId });
+    return null;
+  },
+});
+
+/**
  * A box of this virtual runner stopped counting toward maxBoxes (it slept,
- * failed or was archived; boxMachine.ts freed): the ones waiting to wake
- * (wakeFor) wake, oldest first, while there's room. The idle cron runs it
- * too, so a slot freed some other way isn't missed.
+ * failed or was archived; boxMachine.ts freed), or a new day began: the
+ * ones waiting to wake (wakeFor) wake, oldest first, while there's room. One
+ * still past its day's hours is passed over until tomorrow. The idle cron
+ * runs it for every virtual runner too (wakeAllWaiting).
  */
 export const wakeWaiting = machines.internalMutation({
   args: { serviceId: v.id('runnerServices') },
@@ -589,28 +642,81 @@ export const wakeWaiting = machines.internalMutation({
   handler: async (machineCtx, { serviceId }) => {
     const ctx = machineCtx as unknown as MutationCtx;
     let woken = 0;
-    for (let i = 0; i < 20; i++) {
-      const row = await ctx.db.query('boxes').withIndex('by_service_wants', (q) => q.eq('serviceId', serviceId).gt('wantsWakeAt', 0)).first();
-      if (!row) break;
-      if (!(await hasRoom(ctx, serviceId))) break;
-      // wake clears wantsWakeAt; a row that's moved on is let go of.
+    for (const row of await ctx.db.query('boxes').withIndex('by_service_wants', (q) => q.eq('serviceId', serviceId).gt('wantsWakeAt', 0)).take(WAKE_BATCH)) {
+      if (!WAKES_FROM.includes(row.boxState.kind) || row.boxState.kind === 'expired') {
+        await ctx.db.patch(row._id, { wantsWakeAt: undefined });
+        continue;
+      }
+      if (!(await mayWakeNow(ctx, row))) continue;
+      // wake clears wantsWakeAt.
       if ((await boxMachine.send(machineCtx, row._id, { type: 'WAKE' })).status === 'done') woken++;
       else await ctx.db.patch(row._id, { wantsWakeAt: undefined });
     }
     return woken;
   },
 });
+const WAKE_BATCH = 50;
+
+/** Every virtual runner's waiting boxes (wakeWaiting), a page of virtual runners a run, carrying on from `cursor`. */
+export const wakeAllWaiting = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())), numItems: v.optional(v.number()) },
+  returns: v.null(),
+  handler: async (ctx, { cursor, numItems }) => {
+    const page = await ctx.db.query('runnerServices').paginate({ numItems: numItems ?? 50, cursor: cursor ?? null });
+    for (const s of page.page) await ctx.scheduler.runAfter(0, internal.boxes.wakeWaiting, { serviceId: s._id });
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.boxes.wakeAllWaiting, { cursor: page.continueCursor, numItems });
+    return null;
+  },
+});
 
 const EXPIRED_NOTE = "This thread's machine and its last save have been deleted since it was archived, so it can't come back.";
+const FAIL_BATCH = 50;
 
-// The commands waiting for a box's runner that will never run, failed with why.
-async function failWaiting(ctx: MutationCtx, runnerId: string, note: string): Promise<void> {
-  for (const c of await ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', 'pending')).take(50)) {
+/**
+ * An expired box's runner (it can't come back): every command waiting for
+ * it fails with EXPIRED_NOTE, `commandId` first (the one that asked), a
+ * batch a run, carrying on until none are left.
+ */
+export const failExpired = internalMutation({
+  args: { runnerId: v.string(), commandId: v.optional(v.id('commands')) },
+  returns: v.null(),
+  handler: async (ctx, { runnerId, commandId }) => {
+    await failExpiredRun(ctx, runnerId, commandId);
+    return null;
+  },
+});
+
+async function failExpiredRun(ctx: MutationCtx, runnerId: string, commandId?: Id<'commands'>): Promise<void> {
+  const first = commandId ? await ctx.db.get(commandId) : null;
+  const batch = await ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', 'pending')).take(FAIL_BATCH + 1);
+  const todo = [...(first && first.runnerId === runnerId && first.state === 'pending' ? [first] : []), ...batch.filter((c) => c._id !== commandId)].slice(0, FAIL_BATCH);
+  for (const c of todo) {
     await commandMachine.send(ctx, c._id, { type: 'THREAD_ELSEWHERE' });
-    await ctx.db.patch(c._id, { args: finishedArgs(c.args), note });
+    await ctx.db.patch(c._id, { args: finishedArgs(c.args), note: EXPIRED_NOTE });
     await endCommandFiles(ctx, c._id);
   }
+  if (batch.length > todo.length || batch.length > FAIL_BATCH) await ctx.scheduler.runAfter(0, internal.boxes.failExpired, { runnerId });
 }
+
+// Archiving a box that's up asks it to save first (boxMachine.ts archiving).
+async function archive(ctx: MutationCtx, row: Doc<'boxes'>): Promise<boolean> {
+  const r = await boxMachine.send(ctx, row._id, { type: 'ARCHIVE' });
+  if (r.status !== 'done') return false;
+  if (r.to === 'archiving') await askToSave(ctx, row);
+  return true;
+}
+
+/**
+ * The box's runner is asked to save its thread (decision 7), to sleep or
+ * to be archived: a `save` command for its thread, one at a time.
+ */
+export async function askToSave(ctx: MutationCtx, row: Pick<Doc<'boxes'>, 'runnerId' | 'threadId'>): Promise<void> {
+  for await (const c of ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', row.runnerId).eq('state', 'pending'))) if (c.kind === 'save') return;
+  await queued(ctx, { runnerId: row.runnerId, threadId: row.threadId, kind: 'save', args: {}, createdAt: Date.now() });
+}
+
+// The states archiving does nothing more in.
+const ARCHIVED_ALREADY: readonly string[] = ['archiving', 'shelved', 'destroying', 'gone', 'expired'];
 
 /** The thread was archived or deleted a while ago (boxHooks.ts archiveSoon): its box goes, unless it's back out. */
 export const archiveIfStill = internalMutation({
@@ -620,8 +726,8 @@ export const archiveIfStill = internalMutation({
     const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
     if (t && t.view !== 'den') return null;
     const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
-    if (!row || ['destroying', 'gone', 'expired'].includes(row.boxState.kind)) return null;
-    await boxMachine.send(ctx, row._id, { type: 'ARCHIVE' });
+    if (!row || ARCHIVED_ALREADY.includes(row.boxState.kind)) return null;
+    await archive(ctx, row);
     return null;
   },
 });

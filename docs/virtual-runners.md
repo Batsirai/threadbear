@@ -381,6 +381,30 @@ request, so a test runs one action in the middle of another):
 - The crons' bounded scans saw the same first rows each run: they page,
   carrying on from where they stopped (the reaper by provider id).
 
+Its second look at those fixes found eight more, fixed the same way:
+
+- A command waiting for the box kept it from its day's cap. The cap now
+  comes first: at its hours a box saves and sleeps whatever's waiting,
+  and what's waiting waits for tomorrow's hours, or for Mike to wake it
+  past them (`boxes:wakePastHours`, owner).
+- Archiving deleted the box unsaved. A box that's up now saves first
+  (`archiving`); if no save comes it's kept paused (`shelved`) until
+  `deleteAfterDays`, and unarchiving resumes it.
+- An unarchive sent while the box was being deleted waited for ever. A box
+  that goes asleep, gone or shelved with a waking command waiting wakes.
+- A run whose op lease had lapsed could still act. Every provider call now
+  has a 40-second deadline inside the 3-minute lease, checks and renews
+  the lease before and after, and the run's reports carry its lease, so
+  one that lost it does nothing more; its reconciling loops until the
+  provider matches the row.
+- Expiring a save left waiting commands pending, and failing them stopped
+  at 50: everything waiting for an expired box now fails, a batch at a
+  time, the command that asked first.
+- A box could sleep mid-move: a move going counts as activity (no idle
+  sleep, and the cap waits for it), and each move step wakes a sleeping
+  box on either side, past its hours if need be.
+- The crons read only the first 100 virtual runners: those page too.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`
@@ -389,8 +413,6 @@ Not built yet, in about the order they're needed:
 - TODO a lost box's taken command put back to pending once (decision 12).
 - TODO starting and waking from the phone (`startThread` takes the owner
   key only), and archiving a sleeping box's thread without waking it.
-- TODO save before archiving: archiving deletes the box at once, so an
-  unarchive comes back to the last save, not to where it was.
 - TODO the GPUI app and the phone (Order, 4), and the experiment (14).
 
 ## Order

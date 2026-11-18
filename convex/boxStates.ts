@@ -28,10 +28,19 @@ export const boxStateV = v.union(
   // same, unsaved: paused (nothing lost) or, if it can't pause, deleted.
   v.object({ kind: v.literal('saving'), since: v.number(), leaseUntil: v.number(), saveBy: v.number(), capped: v.optional(v.boolean()) }),
   // Saved and slept: the box is paused if the provider can, else deleted.
-  v.object({ kind: v.literal('asleep'), since: v.number() }),
+  // `unsaved`: slept at its day's hours with no save, so its paused box is
+  // all there is of its latest work (archiving it keeps the box).
+  v.object({ kind: v.literal('asleep'), since: v.number(), unsaved: v.optional(v.boolean()) }),
   // Coming back for a message: the paused box resumed, or a new one
   // restored from the last save.
   v.object({ kind: v.literal('waking'), bootBy: v.number() }),
+  // Archived while up: the box is asked to save first, so unarchiving
+  // comes back to where it was. `since`, `leaseUntil` as awake's; `saveBy`:
+  // when it's shelved (paused, kept) if no save came.
+  v.object({ kind: v.literal('archiving'), since: v.number(), leaseUntil: v.number(), saveBy: v.number() }),
+  // Archived, but its save didn't come: its box is kept paused, as that's
+  // where its work is, until deleteAfterDays. Unarchiving resumes it.
+  v.object({ kind: v.literal('shelved'), at: v.number() }),
   // Archived: the provider is deleting the box.
   v.object({ kind: v.literal('destroying'), since: v.number() }),
   // Archived and its box deleted. The row stays for its save until
