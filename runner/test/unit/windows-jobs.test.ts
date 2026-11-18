@@ -265,12 +265,30 @@ test("jobs that can't be ended at shutdown are kept, and a draining runner's go 
     await draining.killAll(10);
     draining.removeFile();
     assert.equal(fs.existsSync(path.join(dir, 'children-1234.json')), false);
+    assert.equal(fs.readdirSync(dir).filter((n) => n.startsWith('job-leftovers-')).length, 1, 'a file of its own');
     failing = false;
     const next = new ProcessRegistry(dir, nullLogger);
     next.jobs = jobs;
     await next.sweepOrphans(10);
     assert.deepEqual(ended, [name]);
-    assert.equal(fs.existsSync(path.join(dir, 'job-leftovers.json')), false, 'handled, so gone');
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.startsWith('job-leftovers-')), [], 'handled, so gone');
+  } finally {
+    cli.kill();
+  }
+});
+
+test('shutdown waits for a job still being made, and ends it', async () => {
+  let answer!: (s: string) => void;
+  const ended: string[] = [];
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  reg.jobs = { assign: () => new Promise((r) => (answer = r)), end: async (n) => void ended.push(n), forget: async () => {} };
+  const cli = sleeper();
+  try {
+    reg.add(cli.pid!, 'claude', 'th1');
+    const l = processInfo(cli.pid!)?.lstart ?? '';
+    setTimeout(() => answer(/^\d+$/.test(l) ? l : '1'), 100);
+    await reg.killAll(10);
+    assert.equal(ended.length, 1);
   } finally {
     cli.kill();
   }
