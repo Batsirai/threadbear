@@ -7658,7 +7658,10 @@ SHA-256 (`boxKeyHash`).
   attempt at a box (`mintBootToken` returns its `attempt`, numbered from
   1), which the service's `CREATED` and `LOST` name: a loss ends the key,
   unused boot token and provider id of that attempt and older ones, and
-  leaves a newer attempt's alone (a `LOST` naming none ends them all). Box keys and
+  leaves a newer attempt's alone (a `LOST` naming none ends them all). An
+  event naming an older attempt than the newest the thread has changes
+  neither its state nor its provider box: a late `CREATED` is refused
+  (`boxMachine.ts` `stale`, one rule for every event). Box keys and
   boot tokens (`tbb_`, `tbt_`) are redacted from transcripts like runner
   keys, and so is a value under a name like `threadKey`, `boxKey` or
   `sealed`; a message's `turn` (or a picture's name, a claim's holder, a

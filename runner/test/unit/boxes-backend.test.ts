@@ -306,6 +306,66 @@ test("a lost box's unused boot token dies with it; the replacement's lives", asy
   }
 });
 
+// Codex's fourth review (18 Nov 2026): attempt ordering is one rule. An
+// event naming attempt N touches only what's attempt N's or older, never a
+// newer attempt's boot token, key or provider box; and one older than the
+// newest attempt the row knows doesn't change its state or provider box.
+// Each line: a step, then what must hold after it.
+type Step =
+  | ['mint', string] // a boot token for a new attempt, named
+  | ['created', number, string] // the provider made box (id) for that attempt
+  | ['lost', number] // the provider lost that attempt's box
+  | ['exchange', string, 'ok' | 'auth'] // a box trades the named token
+  | ['expect', { state?: string; provider?: string | null; key?: string | null; works?: string[]; dead?: string[] }];
+const ORDERS: { name: string; steps: Step[] }[] = [
+  {
+    name: "an older box's loss leaves its replacement's boot token (case 1)",
+    steps: [['mint', 'A'], ['created', 1, 'box-1'], ['expect', { state: 'starting', provider: 'box-1' }], ['mint', 'B'], ['lost', 1], ['expect', { state: 'starting', provider: null }], ['created', 2, 'box-2'], ['expect', { state: 'starting', provider: 'box-2' }], ['exchange', 'B', 'ok'], ['expect', { state: 'awake', provider: 'box-2', key: 'B' }]],
+  },
+  {
+    name: "a late CREATED doesn't take the live box's provider id (case 2)",
+    steps: [['mint', 'A'], ['mint', 'B'], ['exchange', 'B', 'ok'], ['created', 2, 'box-2'], ['created', 1, 'box-1'], ['expect', { state: 'awake', provider: 'box-2', key: 'B' }], ['lost', 1], ['expect', { state: 'awake', provider: 'box-2', works: ['B'] }]],
+  },
+  {
+    name: 'the newest box lost ends it, and only it',
+    steps: [['mint', 'A'], ['created', 1, 'box-1'], ['exchange', 'A', 'ok'], ['lost', 1], ['expect', { state: 'waking', provider: null, key: null, dead: ['A'] }], ['mint', 'B'], ['created', 2, 'box-2'], ['exchange', 'B', 'ok'], ['expect', { state: 'awake', provider: 'box-2', works: ['B'] }]],
+  },
+  {
+    name: 'three attempts: late news of the first two changes nothing of the third',
+    steps: [['mint', 'A'], ['mint', 'B'], ['mint', 'C'], ['created', 3, 'box-3'], ['created', 1, 'box-1'], ['created', 2, 'box-2'], ['expect', { state: 'starting', provider: 'box-3' }], ['lost', 2], ['lost', 1], ['expect', { state: 'starting', provider: 'box-3' }], ['exchange', 'A', 'auth'], ['exchange', 'B', 'auth'], ['exchange', 'C', 'ok'], ['expect', { state: 'awake', provider: 'box-3', key: 'C' }]],
+  },
+  {
+    name: 'three attempts: a token minted for the third survives losses of the first two, in any order',
+    steps: [['mint', 'A'], ['created', 1, 'box-1'], ['mint', 'B'], ['lost', 1], ['expect', { state: 'starting', provider: null }], ['mint', 'C'], ['lost', 2], ['lost', 1], ['expect', { state: 'starting' }], ['exchange', 'B', 'auth'], ['exchange', 'C', 'ok'], ['expect', { state: 'awake', key: 'C', works: ['C'] }]],
+  },
+];
+
+for (const order of ORDERS) {
+  test(`attempt ordering: ${order.name}`, async () => {
+    const s = await boxBackend();
+    await s.setToken();
+    const tokens = new Map<string, { bootToken: string; attempt: number }>();
+    const keys = new Map<string, string>();
+    for (const [i, step] of order.steps.entries()) {
+      const at = `step ${i + 1} ${JSON.stringify(step)}`;
+      if (step[0] === 'mint') tokens.set(step[1], await call(s.a, boxes.mintBootToken, { key: OWNER, threadId: THREAD }));
+      else if (step[0] === 'created') await s.report({ type: 'CREATED', attempt: step[1], providerBoxId: step[2] });
+      else if (step[0] === 'lost') await s.report({ type: 'LOST', attempt: step[1] });
+      else if (step[0] === 'exchange') {
+        const r = await outcome(s.exchange(tokens.get(step[1])!.bootToken).then((g) => keys.set(step[1], g.boxKey)));
+        assert.equal(r, step[2], at);
+      } else {
+        const want = step[1];
+        if (want.state) assert.equal(s.state(), want.state, at);
+        if (want.provider !== undefined) assert.equal(s.box().providerBoxId ?? null, want.provider, at);
+        if (want.key !== undefined) assert.equal(s.box().boxKeyHash ?? null, want.key === null ? null : await sha256(keys.get(want.key)!), at);
+        for (const k of want.works ?? []) assert.equal(await outcome(heartbeat(s, keys.get(k)!)), 'ok', `${at}: ${k} works`);
+        for (const k of want.dead ?? []) assert.equal(await outcome(heartbeat(s, keys.get(k)!)), 'auth', `${at}: ${k} is dead`);
+      }
+    }
+  });
+}
+
 test('a box lost while it boots goes back to waking for another', async () => {
   const s = await boxBackend();
   await s.report({ type: 'CREATED', providerBoxId: 'fly-1' });

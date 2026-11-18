@@ -40,7 +40,7 @@ export const box = defineMachine(
     guards: {
       heardFrom: "The box hasn't heartbeated within the lease.",
       hasKey: "The paused box's key was revoked, so it can't come back as it was: a new box has to start.",
-      currentBox: 'The loss is of an older box than the one there now.',
+      notStale: 'It names an older attempt at a box than the newest one this thread has: it changes nothing of the newer one.',
     },
     states: {
       start: {
@@ -50,7 +50,7 @@ export const box = defineMachine(
         description: "The service is asking the provider for the thread's first box.",
         timers: { BOOT_TIMEOUT: { at: 'bootBy', description: "Ten minutes have passed and no box has traded the thread's boot token for its key." } },
         on: {
-          CREATED: { to: 'starting', effect: 'created', description: 'The provider has made the box, which boots and starts its runner.' },
+          CREATED: { to: 'starting', guard: 'notStale', effect: 'created', description: 'The provider has made the box, which boots and starts its runner.' },
           READY: { to: 'awake', effect: 'ready', description: "The box booted and traded its boot token for its key before the provider's answer came back." },
           FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't make a box." },
           LOST: { effect: 'forgetOldBox', description: 'The provider lost the box it was making: the service makes another before the ten minutes are up.' },
@@ -63,9 +63,10 @@ export const box = defineMachine(
         timers: { BOOT_TIMEOUT: { at: 'bootBy', description: "Ten minutes have passed since the box was asked for, and it hasn't traded its boot token." } },
         on: {
           READY: { to: 'awake', effect: 'ready', description: 'The box traded its boot token: its key is the only one for the thread from now on.' },
+          CREATED: { guard: 'notStale', effect: 'created', description: 'The provider has made the box for a newer attempt (the last was lost or given up on): it boots in its place.' },
           FAILED: { to: 'failed', effect: 'fail', description: "The provider says the box didn't start." },
           LOST: [
-            { to: 'waking', guard: 'currentBox', effect: 'bootLost', description: 'The box was lost while it booted: no key or boot token of it works, and a new box is made, restoring the last save if there is one.' },
+            { to: 'waking', guard: 'notStale', effect: 'bootLost', description: 'The box was lost while it booted: no key or boot token of it works, and a new box is made, restoring the last save if there is one.' },
             { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
           ],
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'The box never checked in: the thread waits for the next message to try again.' },
@@ -81,12 +82,12 @@ export const box = defineMachine(
             { to: 'waking', effect: 'lost', description: "No heartbeat for five minutes: the box is lost. Its key is refused from now, and a new box restores the thread from its last save." },
           ],
           LOST: [
-            { to: 'waking', guard: 'currentBox', effect: 'lost', description: "The provider says the box is gone: its key is refused from now, and a new box restores the thread from its last save." },
+            { to: 'waking', guard: 'notStale', effect: 'lost', description: "The provider says the box is gone: its key is refused from now, and a new box restores the thread from its last save." },
             { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
           ],
           IDLE: { to: 'saving', effect: 'askSave', description: "The thread has been idle a while (or the box has been up its day's hours): the box is asked to save the thread before it sleeps." },
           SAVED: { effect: 'saved', description: 'The box saved the thread unasked: the save replaces the last one, and it stays awake.' },
-          CREATED: { effect: 'noteBox', description: "The provider's answer arrives after the box was already up: its id is kept, for pausing and deleting it." },
+          CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's answer arrives after the box was already up: its id is kept, for pausing and deleting it." },
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box is deleted.' },
         },
       },
@@ -105,7 +106,7 @@ export const box = defineMachine(
             { to: 'waking', effect: 'lost', description: 'No heartbeat for five minutes: the box is lost, and a new box restores the thread from its last save.' },
           ],
           LOST: [
-            { to: 'waking', guard: 'currentBox', effect: 'lost', description: 'The provider says the box is gone mid-save: a new box restores the thread from its last save.' },
+            { to: 'waking', guard: 'notStale', effect: 'lost', description: 'The provider says the box is gone mid-save: a new box restores the thread from its last save.' },
             { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
           ],
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread: its box is deleted.' },
@@ -124,7 +125,7 @@ export const box = defineMachine(
         timers: { BOOT_TIMEOUT: { at: 'bootBy', description: "Ten minutes have passed and the box hasn't come back." } },
         on: {
           RESUMED: { to: 'awake', guard: 'hasKey', effect: 'resumed', description: 'The paused box resumed, its runner still holding its key.' },
-          CREATED: { to: 'starting', effect: 'created', description: "A new box was made: the last box's key stops working, and the new one boots, trades a fresh boot token, and restores the save." },
+          CREATED: { to: 'starting', guard: 'notStale', effect: 'created', description: "A new box was made: the last box's key stops working, and the new one boots, trades a fresh boot token, and restores the save." },
           LOST: { effect: 'forgetOldBox', description: "The paused box was lost before it resumed: its key stops working, and a new box restores the save instead." },
           READY: { to: 'awake', effect: 'ready', description: 'A new box traded its boot token: its key replaces the last box\'s, which is refused from now.' },
           FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't bring a box back." },
@@ -151,14 +152,15 @@ export const box = defineMachine(
     guards: {
       heardFrom: (_ctx, { row }) => (row.lastHeartbeatAt ?? 0) > Date.now() - LEASE_MS,
       hasKey: (_ctx, { row }) => row.boxKeyHash !== undefined,
-      currentBox: (_ctx, { row, event }) => event.attempt === undefined || event.attempt >= Math.max(row.keyAttempt ?? 0, row.providerAttempt ?? 0),
+      notStale: (_ctx, { row, event }) => !stale(row, event.attempt),
     },
     effects: {
       start: async () => ({ kind: 'creating' as const, bootBy: Date.now() + BOOT_MS }),
       // A new box: whatever box held the key before is done with. Its own key comes at its exchange.
       created: async (ctx, { id, row, state, event }) => {
-        const older = event.attempt === undefined || (row.keyAttempt ?? 0) < event.attempt;
-        await patch(ctx, id, { ...(older ? { boxKeyHash: undefined, keyAttempt: undefined } : {}), providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
+        // A key of an older attempt than this box's goes; this box's own (or a newer one's) can't be here yet.
+        const olderKey = event.attempt === undefined || (row.keyAttempt ?? 0) < event.attempt;
+        await patch(ctx, id, { ...(olderKey ? { boxKeyHash: undefined, keyAttempt: undefined } : {}), providerBoxId: event.providerBoxId, providerAttempt: event.attempt });
         return { kind: 'starting' as const, bootBy: state.bootBy };
       },
       noteBox: async (ctx, { id, state, event }) => {
@@ -177,8 +179,9 @@ export const box = defineMachine(
         return { kind: 'awake' as const, since: now, leaseUntil: now + LEASE_MS };
       },
       renewLease: async (_ctx, { state, row }) => ({ ...state, leaseUntil: (row.lastHeartbeatAt ?? Date.now()) + LEASE_MS }),
-      lost: async (ctx, { id, row, state }) => {
-        await patch(ctx, id, { ...awakeAdded(row, state.since), ...revoked, ...noBox });
+      // Through the one rule (lostBox): the lease's own lapse names no attempt, so it ends them all.
+      lost: async (ctx, { id, row, state, event }) => {
+        await patch(ctx, id, { ...awakeAdded(row, state.since), ...lostBox(row, attemptOf(event)) });
         return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
       },
       askSave: async (_ctx, { state }) => ({ kind: 'saving' as const, since: state.since, leaseUntil: state.leaseUntil, saveBy: Date.now() + SAVE_MS }),
@@ -193,8 +196,8 @@ export const box = defineMachine(
         return { kind: 'asleep' as const, since: now };
       },
       wake: async () => ({ kind: 'waking' as const, bootBy: Date.now() + BOOT_MS }),
-      bootLost: async (ctx, { id }) => {
-        await patch(ctx, id, { ...revoked, ...noBox });
+      bootLost: async (ctx, { id, row, event }) => {
+        await patch(ctx, id, lostBox(row, event.attempt));
         return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
       },
       // What was the lost box's (its attempt's or older), not the boot token
@@ -230,6 +233,22 @@ export const box = defineMachine(
 // No key and no boot token work for the thread after this step.
 const revoked = { boxKeyHash: undefined, keyAttempt: undefined, bootTokenHash: undefined, bootExpiresAt: undefined, bootAttempt: undefined } as const;
 const noBox = { providerBoxId: undefined, providerAttempt: undefined } as const;
+
+// Attempt ordering, the one rule every event naming an attempt goes by
+// (Codex's fourth review, 18 Nov 2026). Each boot token is one attempt at a
+// box (boxes.ts storeBootToken numbers them); the row knows the newest it
+// has minted (boxAttempt) and whose its token, key and provider box are.
+// An event naming attempt N touches only what's N's or older (lostBox), and
+// one naming an attempt older than the newest changes neither the state
+// nor the provider box (the notStale guard). One naming none is taken to
+// be about every attempt so far.
+export function newestAttempt(row: Pick<Box, 'boxAttempt' | 'bootAttempt' | 'keyAttempt' | 'providerAttempt'>): number {
+  return Math.max(row.boxAttempt ?? 0, row.bootAttempt ?? 0, row.keyAttempt ?? 0, row.providerAttempt ?? 0);
+}
+export function stale(row: Pick<Box, 'boxAttempt' | 'bootAttempt' | 'keyAttempt' | 'providerAttempt'>, attempt: number | undefined): boolean {
+  return attempt !== undefined && attempt < newestAttempt(row);
+}
+const attemptOf = (event: unknown): number | undefined => (event as { attempt?: number }).attempt;
 
 // What goes when attempt `attempt`'s box is lost: its key, its unused boot
 // token and the provider's id for it, and any older attempt's. Without an
