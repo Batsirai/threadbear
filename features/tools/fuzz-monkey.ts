@@ -25,6 +25,10 @@ import { sleep, type Dump } from '../support/driver.ts';
 import { ensurePerfLock } from './perf-lock.ts';
 
 type Cmd = Record<string, unknown>;
+// How long after a mock event (a runner restart, a failed read) its error
+// messages count as caused by it: the longest restart is 2.8 s, and the app
+// waits a moment before it tries again.
+const MOCK_SETTLE_MS = 10_000;
 type Step = { cmd: Cmd; ms: number; result: string; refused?: boolean };
 type Failure = { kind: string; detail: string; step: number };
 
@@ -64,9 +68,13 @@ function rng(s: number) {
 const WORDS = [
   'fix the build', 'can you check this', 'yes', 'no', 'ok go ahead', '/', '/mo', '@', '#', '```js\nconsole.log(1)\n```',
   '**bold** _it_ `code`', 'line one\nline two\nline three', '🙂🐻🍯', 'مرحبا بالعالم', 'עברית', '日本語のテキスト',
-  'a'.repeat(400), 'word '.repeat(300), '<script>alert(1)</script>', 'https://example.com/a?b=c', '~/dev/me/misc/file.ts:12',
+  '<script>alert(1)</script>', 'https://example.com/a?b=c', '~/dev/me/misc/file.ts:12',
   '   ', '\t', '[link](https://x.dev)', '- [ ] task\n- [x] done', '| a | b |\n|---|---|\n| 1 | 2 |', '$(echo hi)', '%s%s%n',
 ];
+// Long text goes in by paste: `type` presses each character as its own key
+// and draws a frame after it (gpui-kit's input_text), so 1,500 characters
+// took 24 s in a debug build, which reads as a freeze and isn't one.
+const LONG = ['a'.repeat(400), 'word '.repeat(300), 'line of a log 0123456789\n'.repeat(800), '🐻'.repeat(500), '```\n' + 'x = 1\n'.repeat(2000) + '```'];
 // Keys with ⌘ that a person uses here. Not ⌘Q or ⌘W: the run needs its window.
 const CMD_KEYS = ['1', '2', '3', '4', '5', 'k', '/', '[', ']', 'n', 'f', '=', '-', '0', 'e', 'j', 'l', 'i', 'b', ',', '.', 'backspace', 'up', 'down', 'enter', 't', 'g', 'shift-a', 'shift-d', 'shift-n'];
 const PLAIN_KEYS = ['up', 'down', 'left', 'right', 'pageup', 'pagedown', 'home', 'end', 'space', 'backspace', 'delete', 'escape', 'tab'];
@@ -102,6 +110,7 @@ function nextAction(r: () => number, d: Dump, menuItems: string[], size: { w: nu
   const choices: [number, () => Cmd | null][] = [
     [14, () => (ids.length ? { cmd: 'open', id: pick(r, ids) } : null)],
     [6, () => ({ cmd: 'type', text: pick(r, WORDS), replace: r() < 0.3 })],
+    [2, () => ({ cmd: 'paste', text: r() < 0.5 ? pick(r, LONG) : pick(r, WORDS) })],
     [2, () => (d.selection ? { cmd: 'send', text: pick(r, WORDS) } : null)],
     [4, () => ({ cmd: 'menu-key', modifiers: ['cmd'], key: pick(r, CMD_KEYS) })],
     [4, () => ({ cmd: 'menu-key', modifiers: [], key: pick(r, PLAIN_KEYS) })],
@@ -203,8 +212,9 @@ async function check(app: GpuiDriver, before: { panics: number; stalls: number; 
   const d = await app.dump();
   const dumpMs = Date.now() - started;
   if (dumpMs > 5000) return { kind: 'slow', detail: `dump took ${dumpMs} ms` };
-  // Each thread once per section, and each transcript row once.
-  for (const s of d.sidebar.sections) {
+  // Each thread once per section, and each transcript row once. Not the
+  // Librarian's: its Recent lists what it did, so a thread can be there twice.
+  for (const s of d.sidebar.mode === 'librarian' ? [] : d.sidebar.sections) {
     const seen = new Set<string>();
     for (const t of s.threads) {
       if (seen.has(t.id)) return { kind: 'state', detail: `thread ${t.id} listed twice in ${s.name}` };
@@ -229,7 +239,7 @@ async function check(app: GpuiDriver, before: { panics: number; stalls: number; 
   // Only a new one: a runner restart's message can stay up long after.
   const fresh = d.error && d.error !== before.error;
   before.error = d.error ?? null;
-  if (fresh && !recentMock && !/fuzzer/.test(d.error!)) return { kind: 'error-bar', detail: d.error!.slice(0, 300) };
+  if (fresh && !recentMock && d.connection === 'connected' && !/fuzzer/.test(d.error!)) return { kind: 'error-bar', detail: d.error!.slice(0, 300) };
   return null;
 }
 
@@ -257,18 +267,18 @@ async function menuItems(app: GpuiDriver): Promise<string[]> {
 async function replay(cmds: Cmd[]): Promise<Failure | null> {
   const app = await startApp();
   const before: { panics: number; stalls: number; error?: string | null } = { panics: 0, stalls: 0 };
-  let lastMock = -99;
+  let lastMock = 0;
   try {
     for (let i = 0; i < cmds.length; i += 1) {
       const c = cmds[i];
-      if (c.cmd === 'mock') lastMock = i;
+      if (c.cmd === 'mock') lastMock = Date.now();
       try {
         await app.do(c, 20);
       } catch (e) {
         const hard = isHard((e as Error).message);
         if (hard) return { kind: hard, detail: (e as Error).message.split('\n')[0], step: i };
       }
-      const f = await check(app, before, i - lastMock < 6).catch((e) => ({ kind: isHard((e as Error).message) ?? 'check', detail: (e as Error).message.split('\n')[0] }));
+      const f = await check(app, before, Date.now() - lastMock < MOCK_SETTLE_MS).catch((e) => ({ kind: isHard((e as Error).message) ?? 'check', detail: (e as Error).message.split('\n')[0] }));
       if (f) return { ...f, step: i };
     }
     return null;
@@ -326,14 +336,14 @@ async function fuzz() {
     let size = { w: 1240, h: 820 };
     const before: { panics: number; stalls: number; error?: string | null } = { panics: 0, stalls: 0 };
     const trace: Step[] = [];
-    let lastMock = -99;
+    let lastMock = 0;
     let failure: Failure | null = null;
     try {
       while (Date.now() < until && summary.steps < maxSteps) {
         const d = await app.dump();
         const c = nextAction(r, d, items, size);
         if (c.cmd === 'resize') size = { w: c.w as number, h: c.h as number };
-        if (c.cmd === 'mock') lastMock = trace.length;
+        if (c.cmd === 'mock') lastMock = Date.now();
         const t0 = Date.now();
         let result = '';
         let refused = false;
@@ -356,7 +366,7 @@ async function fuzz() {
           summary.refusedByCmd[String(c.cmd)] = (summary.refusedByCmd[String(c.cmd)] ?? 0) + 1;
         }
         if (failure) break;
-        const f = await check(app, before, trace.length - 1 - lastMock < 6).catch((e) => ({ kind: isHard((e as Error).message) ?? 'check', detail: (e as Error).message.split('\n')[0] }));
+        const f = await check(app, before, Date.now() - lastMock < MOCK_SETTLE_MS).catch((e) => ({ kind: isHard((e as Error).message) ?? 'check', detail: (e as Error).message.split('\n')[0] }));
         if (f) {
           failure = { ...f, step: trace.length - 1 };
           break;
