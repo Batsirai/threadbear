@@ -1556,6 +1556,7 @@ pub fn can_find_work(login: &LoginRow) -> bool {
 }
 
 pub const FIND_WORK: &str = "Find work for it";
+pub const FINDING_WORK: &str = "Finding work…";
 pub const FIND_WORK_TIP: &str = "Start a thread on this login that suggests work to spend the rest of its week on, and asks before starting any";
 
 /// Its tooltip, for someone who never runs that model.

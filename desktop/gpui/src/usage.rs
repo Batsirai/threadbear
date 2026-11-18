@@ -16,9 +16,8 @@ use crate::app::Threadbear;
 use crate::{call, icons, now_ms, shell, style};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use std::collections::HashSet;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Disableable as _, Icon, Sizable as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 // The zoom-aware px (style.rs), in place of GPUI's.
@@ -819,16 +818,19 @@ fn login_row(key: &str, login: &LoginRow, accounts: &[Account], finding: bool, c
     // unused (option C of Mike's 18 Nov review: the action beside the line
     // that prompts it). It spins until the runner answers, then the thread
     // opens.
+    // The same chip as Sign in… and Year-long token…, so the card's
+    // actions look alike; while it's on its way it spins, says so and
+    // takes no clicks.
     let find_work = rules::can_find_work(login).then(|| {
-        let account = login.id.clone();
-        Button::new(id("find-work"))
-            .label(rules::FIND_WORK)
-            .small()
-            .secondary()
-            .loading(finding)
-            .disabled(finding)
-            .tooltip(rules::FIND_WORK_TIP)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.find_work(account.clone(), cx)))
+        let chip = small("find-work", rules::FIND_WORK_TIP);
+        if finding {
+            chip.opacity(0.7)
+                .child(h_flex().gap(px(5.)).items_center().child(crate::spinner::Spinner::new().with_size(px(10.)).color(p.secondary)).child(rules::FINDING_WORK))
+                .into_any_element()
+        } else {
+            let account = login.id.clone();
+            chip.cursor_pointer().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.find_work(account.clone(), cx))).child(rules::FIND_WORK).into_any_element()
+        }
     });
     let foot = (chip.is_some() || today.is_some() || find_work.is_some()).then(|| h_flex().gap(px(8.)).items_center().children(chip).children(today).child(div().flex_1()).children(find_work));
     let more = (!login.more.is_empty()).then(|| v_flex().gap(px(2.)).text_size(px(11.)).line_height(px(14.)).text_color(p.tertiary).children(login.more.iter().map(|line| div().child(line.clone()))));
