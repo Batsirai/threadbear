@@ -6149,9 +6149,16 @@ type RemoteThreads = {
 }
 type RemoteRunner = {
   id: string, name: string, icon?: string  // as RunnerInfo
-  online: boolean      // heard from in the last 3 minutes
+  online: boolean      // heard from in the last 3 minutes, or a box that
+                       // a message reaches (box, below)
   lastSeenAt: string
   followProblem?: string
+  box?: { state: string } // one thread's box on a virtual runner (Virtual
+                       // runners), as its machine has it: creating,
+                       // starting, awake, saving, asleep, waking, failed,
+                       // destroying or gone. Online in all but the last two,
+                       // as a message starts or wakes it. An older runner
+                       // leaves it out.
 }
 // rpcUrl and tokenFile were the direct link between Macs (step 6 part 2),
 // taken out 13 Nov 2026. An app ignores them if an older runner sends them.
@@ -7675,6 +7682,9 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `moveDone` | its own | the move's new runner |
 | `moveFailed` | its own | either of the move's runners, before the switch |
 | `moveDropChunks` | owner only | the main Mac's own chunks for a move that ended before it was packed: deletes those no going move names and nothing else uses |
+| `runnerServices` | owner only | the virtual runners (`convex/boxes.ts`, Virtual runners), each with how many boxes are up or starting and asleep |
+| `setRunnerService` | owner only | makes a virtual runner, or changes one's name, image, box size, region and limits; its provider is its own for life |
+| `startThread` | owner only | a thread on a virtual runner: its runner, box and `create` command in one step, refused past `maxBoxes` (Virtual runners) |
 | `setCloudToken` | owner only | a Claude login's cloud token for boxes, sealed under `BOX_SEAL_KEY` (`convex/boxes.ts`, Box keys) |
 | `cloudTokens` | owner only | which logins have a cloud token, when each was made and set; never the token |
 | `mintBootToken` | owner only | a boot token for a thread's booting box: returned once, only its hash kept, 10 minutes |
@@ -7682,12 +7692,81 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `boxSaved` | its own | a box's key only: its thread's save, a file its runner uploaded and nothing else uses; replaces the last save |
 
 `boxes:exchange` takes no key: a box's boot token, once (Box keys).
+`boxes:startThread`, `setRunnerService` and `runnerServices` are in
+Virtual runners.
 
 `sync:claimUpload` and `sync:finishUpload` are internal, for
 `/runner/upload` (`phone:claimPhoneUpload`/`finishPhoneUpload` and
 `relay:claimRelayUpload`/`finishRelayUpload` the same for the other two
 routes), and `share:shareImageFile` for `/share/image/`; `moves:rehomeRows` (a moved thread's rows to its new
 runner) and `moves:expireMoves` (the cron) are internal too.
+
+### Virtual runners
+
+A virtual runner (docs/virtual-runners.md) is a `runnerServices` row:
+a provider (`fly`, `convex/boxProviders/`), an image, a box size, a
+region and limits. Each thread on it has a **box** of its own, run by
+the service's Convex actions (`convex/boxService.ts`); nothing on a Mac
+has to be on for it.
+
+- **Making one.** `boxes:setRunnerService({ key, serviceId?, name,
+  provider, image, box: { cpus, memoryMb }, region?, limits? })` makes
+  one, or changes one (its provider can't change), and returns its id;
+  limits left out are `BOX_LIMITS` (`maxBoxes` 5, `idleSleepMinutes` 10,
+  `maxAwakeHoursPerDay` 8, `deleteAfterDays` 14) or as they were.
+  `boxes:runnerServices({ key })` lists them, with `running` (boxes
+  creating, starting, awake, saving or waking) and `asleep`. Owner key
+  only.
+- **Starting a thread on one.** `boxes:startThread({ key, serviceId,
+  threadId, repo: { origin, subfolder, baseBranch }, login, text, model?,
+  effort?, permissionMode?, plan? })` (an action, owner key) makes, in one
+  mutation, the thread's runner (a `runners` row marked `box: { serviceId
+  }`, with a runner id of its own for life, 12 hex characters, and
+  `lastSeenAt` 0 until its box heartbeats), its `boxes` row and its
+  `create` command for that runner, naming the thread, with what
+  `queueCommand`'s `create` takes and `from: "mac"`; then the service
+  makes its box. It answers `{ runnerId, commandId }`. Past the virtual
+  runner's `maxBoxes` it's refused at once (`kind: "limit"`, saying how
+  many are up), and nothing is written.
+- **The box.** The provider starts it from the image with only
+  `THREADBEAR_SYNC_URL` (the deployment's address) and
+  `THREADBEAR_BOX_BOOT` (its boot token, Box keys) in its environment,
+  tagged `tb_box` (its `boxes` row), `tb_attempt` and `tb_service`. Each
+  create is one attempt, made once however often it's tried. Its state
+  is its machine's (docs/machines.md, `box`).
+- **Sleeping and saving.** A box whose thread has been idle
+  `idleSleepMinutes`, or that has been up `maxAwakeHoursPerDay` today, is
+  sent a `save` command for its thread (never by a client), unless a
+  command waits for it. Its runner saves the thread and calls `boxSaved`;
+  the box is then paused if the provider can (Fly up to 2 GB), else
+  deleted.
+- **Waking.** Any command queued for a box's runner (`queueCommand`, or
+  any of the phone's) while its box is asleep, saving or failed wakes
+  it: the same box resumed if it was paused, else a new box that restores
+  the last save. Two quick messages make one wake. The command waits in
+  the queue meanwhile.
+- **Reachable.** A box's runner counts as online wherever that's checked
+  (`startMove`, and a runner's `RemoteRunner.online`, Other runners'
+  threads) in every state but `destroying` and `gone`, as a message
+  starts or wakes it; `otherRunnersList` gives its `box: { state }`. A box
+  takes only its own thread: `queueCommand` and `phone:create` refuse a
+  `create` for its runner (`kind: "badArgs"`), the phone never picks one
+  for a new thread, and `startMove` moves only its own thread to it.
+- **Archiving.** A thread with a box that goes to the den or is
+  removed has its box deleted a minute later (unless it's back out of the
+  den), every box the provider has for it, older attempts' too.
+  `archiveBox` does it at once.
+- **The crons** (`convex/crons.ts`): sleep idle boxes every 2 minutes;
+  every 10, reap what the provider has that nobody wants (no row, an older
+  attempt than the row's, an archived or failed thread's), take in a box
+  whose create never reported, sleep an asleep box still running, and
+  delete again one stuck being deleted; every 6 hours, delete archived
+  threads' saves and box rows past `deleteAfterDays`.
+- **Internal.** `boxService:createBox`, `wakeBox`, `sleepBox`,
+  `destroyBox` (the actions; each reads the row again and acts on its
+  newest attempt only), `claimAttempt`, `boxFor`, `sleepIdleBoxes`,
+  `reapBoxes`, `reapPlan`, `servicesToReap`, `stuckDestroying`,
+  `pruneSaves`; `boxes:beginThread`, `wakeFor`, `archiveIfStill`.
 
 ### Box keys
 
@@ -7764,7 +7843,8 @@ SHA-256 (`boxKeyHash`).
 - **Internal.** `boxes:authorize` (an action's gate), `storeCloudToken`,
   `newBox` and `insertBox` (a thread's box row), `storeBootToken`,
   `peekBoot` (the exchange's read), `claimBoot` (its one step) and `report` (what the service saw
-  of the provider, as the machine's `server` events).
+  of the provider, as the machine's `server` events; `FAILED` names its
+  attempt too, and one for an older attempt changes nothing).
 
 A box key may call:
 

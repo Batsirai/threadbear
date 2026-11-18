@@ -19,6 +19,7 @@ import { request as requestMachine } from './requestMachine';
 import { clear as clearMachine } from './clearMachine';
 import { box as boxMachine } from './boxMachine';
 import { steppingFor } from './stepping';
+import { wakeIfAsleep } from './boxHooks';
 
 // A machine whose backfill's stepping stone is being deployed is left out (stepping.ts).
 export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [...(steppingFor('commandState') ? [] : [commandMachine]), ...(steppingFor('moveState') ? [] : [moveMachine]), ...(steppingFor('requestState') ? [] : [requestMachine]), ...(steppingFor('clearState') ? [] : [clearMachine]), boxMachine] as never, {
@@ -36,10 +37,16 @@ export const request = requestMachine;
 export const clear = clearMachine;
 export const box = boxMachine;
 
-/** A new command, pending for its runner: the machine's QUEUE, which writes its state (and `state`) and arms its timer. */
+/**
+ * A new command, pending for its runner: the machine's QUEUE, which writes
+ * its state (and `state`) and arms its timer. Both insert sites (relay.ts
+ * queueCommand, phone.ts queue) come through here, so a command for a
+ * sleeping box's runner wakes the box (boxHooks.ts wakeIfAsleep).
+ */
 export async function queued(ctx: MutationCtx, fields: Omit<WithoutSystemFields<Doc<'commands'>>, 'state' | 'commandState' | 'commandStateTimers'>): Promise<Id<'commands'>> {
   const r = await command.create(ctx, { ...fields, state: 'pending' } as never, { type: 'QUEUE' });
   if (r.status !== 'done') throw new ConvexError({ kind: 'conflict', message: `the command couldn't be queued: ${r.reasons.join(' ')}` });
+  await wakeIfAsleep(ctx, fields.runnerId, fields.kind);
   return r.id as Id<'commands'>;
 }
 

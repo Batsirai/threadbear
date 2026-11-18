@@ -1199,10 +1199,13 @@ export const quickAsk = mutation({
 // another, by name or by putting it in his order.
 // (Going by the latest heartbeat once sent half of them to Bruce; going by
 // most threads alone let a runner key claim a million threads to get them.)
+// A thread's box on a virtual runner (runners.box) is never one: it runs
+// its one thread, reachable or not (lib.ts boxStateReachable), and a new
+// thread on a virtual runner is boxes:startThread's.
 async function mainRunner(ctx: QueryCtx): Promise<string> {
   const all: Doc<'runners'>[] = [];
   for await (const r of ctx.db.query('runners')) all.push(r);
-  const online = (r: Doc<'runners'>) => !r.draining && Date.now() - r.lastSeenAt <= ONLINE_MS;
+  const online = (r: Doc<'runners'>) => !r.box && !r.draining && Date.now() - r.lastSeenAt <= ONLINE_MS;
   for (const id of await readRunnerOrder(ctx)) {
     const r = all.find((x) => x.runnerId === id);
     if (r && online(r)) return r.runnerId;
@@ -1218,7 +1221,7 @@ async function mainRunner(ctx: QueryCtx): Promise<string> {
 async function mainOwnerRunner(ctx: QueryCtx, runners: Doc<'runners'>[], onlineOnly: boolean): Promise<string | undefined> {
   let best: Doc<'runners'> | undefined;
   for (const r of runners) {
-    if (!r.byOwner || (onlineOnly && (r.draining || Date.now() - r.lastSeenAt > ONLINE_MS)) || (await hasLiveKey(ctx, r.runnerId))) continue;
+    if (!r.byOwner || r.box || (onlineOnly && (r.draining || Date.now() - r.lastSeenAt > ONLINE_MS)) || (await hasLiveKey(ctx, r.runnerId))) continue;
     if (!best || r.threadCount > best.threadCount || (r.threadCount === best.threadCount && r.lastSeenAt > best.lastSeenAt)) best = r;
   }
   return best?.runnerId;
@@ -1329,9 +1332,12 @@ async function commandImages(ctx: QueryCtx, tokenId: Id<'tokens'>, images: Id<'_
 
 // A runner the phone named for a new thread: one that has heartbeated here
 // (runners), or "any". Anything else would wait for ever, as nothing takes it.
+// Not a thread's box on a virtual runner: that runs its one thread only.
 async function knownRunner(ctx: QueryCtx, runnerId: string): Promise<string> {
   if (runnerId === 'any') return runnerId;
-  if (runnerId.length > 100 || !(await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first())) throw new ConvexError({ kind: 'notFound', message: 'no such runner' });
+  const r = runnerId.length > 100 ? null : await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first();
+  if (!r) throw new ConvexError({ kind: 'notFound', message: 'no such runner' });
+  if (r.box) throw new ConvexError({ kind: 'badArgs', message: "That runner is one thread's box on a virtual runner: it takes no new threads." });
   return runnerId;
 }
 

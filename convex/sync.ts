@@ -12,7 +12,7 @@ import { clear, command, machines } from './machines';
 import { CLEAR_RETRY_MS, clearStateFrom } from './clearStates';
 import { steppingFor } from './stepping';
 import { COMMAND_KEEP_MS as KEEP_MS, TAKEN_LEASE_MS as LEASE_MS } from './commandMachine';
-import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
+import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor, boxOfRunner } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
@@ -20,6 +20,7 @@ import { badRunnerStats, cutBytes, docBytes, fitUsage, holdReviewNumbers, holdTh
 import { dropWake, seedWakes, syncWake } from './wakes';
 import { badMemoryFile, batchBytes, bumpOfferCount, MAX_BATCH_BYTES, MAX_MEMORY_BATCH, MAX_OFFERS_PER_RUNNER, memoryAfter, offerCount, OFFER_PAGE, putMemoryFiles } from './memorySync';
 import { pushFailing, pushOff } from './pushHealth';
+import { archiveSoon } from './boxHooks';
 import { UPLOAD_CLAIM_MS, newClaim } from './uploads';
 import { issueToken as makeToken, issuePairingCode as makePairingCode, listTokens as allTokens, revokeToken as revokeOne, tokenInfo, tokenKind, MAX_DAYS } from './tokens';
 
@@ -994,6 +995,8 @@ export const upsertThreads = mutation({
         // It left a capped list: an overflowed one takes the room.
         if (was && was.view !== row.view && !caller.box) await refill(ctx, t.runnerId, was.view);
       }
+      // Archived (the den): a thread's box on a virtual runner is deleted (boxHooks.ts).
+      if (row.view === 'den' && was?.view !== 'den') await archiveSoon(ctx, t.threadId);
       // Most writes are a status flip in the same projects: only a new
       // thread, one taken over, or one whose projects changed reads its links.
       if (!existing || transfer || projectKey(existing) !== projectKey(row)) await linkThread(ctx, t.threadId, row);
@@ -1109,6 +1112,7 @@ export const removeThreads = mutation({
         .unique();
       // A runner key leaves alone what isn't its own thread, there or not (ownThread).
       if (!caller.owner && !(row && mayTouch(caller, row.runnerId, threadId))) continue;
+      await archiveSoon(ctx, threadId);
       await dropThread(ctx, threadId, row, !caller.box);
     }
     return null;
@@ -3837,7 +3841,9 @@ export const setThreadIndex = mutation({
   },
 });
 
-const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()) });
+// box: a thread's box on a virtual runner, with its state (boxMachine.ts), so
+// the runner counts it reachable while it sleeps or starts (decision 6).
+const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string() })) });
 
 async function otherRunners(ctx: QueryCtx, runnerId: string) {
   const runners = [];
@@ -3850,6 +3856,7 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
       ...(r.icon !== undefined ? { icon: r.icon } : {}),
       ...(r.rpcUrl !== undefined ? { rpcUrl: r.rpcUrl } : {}),
       ...(r.followProblem !== undefined ? { followProblem: r.followProblem } : {}),
+      ...(r.box ? { box: { state: (await boxOfRunner(ctx, r))?.boxState.kind ?? 'gone' } } : {}),
     });
   }
   return runners;

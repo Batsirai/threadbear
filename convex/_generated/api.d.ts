@@ -8,7 +8,11 @@
  * @module
  */
 
+import type * as boxHooks from "../boxHooks.js";
 import type * as boxMachine from "../boxMachine.js";
+import type * as boxProviders_fly from "../boxProviders/fly.js";
+import type * as boxProviders_types from "../boxProviders/types.js";
+import type * as boxService from "../boxService.js";
 import type * as boxStates from "../boxStates.js";
 import type * as boxes from "../boxes.js";
 import type * as clearMachine from "../clearMachine.js";
@@ -55,7 +59,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  boxHooks: typeof boxHooks;
   boxMachine: typeof boxMachine;
+  "boxProviders/fly": typeof boxProviders_fly;
+  "boxProviders/types": typeof boxProviders_types;
+  boxService: typeof boxService;
   boxStates: typeof boxStates;
   boxes: typeof boxes;
   clearMachine: typeof clearMachine;

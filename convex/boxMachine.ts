@@ -10,10 +10,20 @@
 // A box's key (`boxKeyHash` on the row) is good while the row says so: the
 // effects clear it whenever a box is replaced, archived or fails, so a lost
 // box's key is refused from the step that gives up on it.
+//
+// Every step that needs the provider schedules the service's action for it
+// (boxService.ts): a box to wake or replace (wakeBox), one to pause or
+// delete once it has saved (sleepBox), and one to delete when the thread is
+// archived (destroyBox), and another create for a box lost while it was
+// being made (createBox). The first box's create is scheduled by boxes.ts
+// addBox, as the row has no id while its START runs. Each
+// action reads the row again and acts on its newest attempt only, so one
+// scheduled twice, or late, does nothing more.
 import { defineMachine } from '@convex-dev/state-machines';
 import { v } from 'convex/values';
 import { appSchema } from './schema';
-import type { Doc } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
+import { internal } from './_generated/api';
 import { BOOT_MS, LEASE_MS, SAVE_MS } from './boxStates';
 
 type Box = Doc<'boxes'>;
@@ -36,7 +46,7 @@ export const box = defineMachine(
       // `attempt`: which box the event is about (boxes.ts mintBootToken numbers
       // each), on every event about one box. Without one, it's taken to be
       // about the newest (a loss: every box's so far). WAKE is the thread's.
-      server: { CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()) }, WAKE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string() } },
+      server: { CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()) }, WAKE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string(), attempt: v.optional(v.number()) } },
     },
     guards: {
       heardFrom: "The box hasn't heartbeated within the lease.",
@@ -54,8 +64,8 @@ export const box = defineMachine(
         on: {
           CREATED: { to: 'starting', guard: 'newBox', effect: 'created', description: 'The provider has made the box, which boots and starts its runner.' },
           READY: { to: 'awake', effect: 'ready', description: "The box booted and traded its boot token for its key before the provider's answer came back." },
-          FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't make a box." },
-          LOST: { effect: 'forgetOldBox', description: 'The provider lost the box it was making: the service makes another before the ten minutes are up.' },
+          FAILED: { to: 'failed', guard: 'notStale', effect: 'fail', description: "The provider couldn't make a box." },
+          LOST: { effect: 'createAgain', description: 'The provider lost the box it was making: the service makes another before the ten minutes are up.' },
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'No box checked in: the thread waits for the next message to try again.' },
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread before its box is up.' },
         },
@@ -66,7 +76,7 @@ export const box = defineMachine(
         on: {
           READY: { to: 'awake', effect: 'ready', description: 'The box traded its boot token: its key is the only one for the thread from now on.' },
           CREATED: { guard: 'notStale', effect: 'created', description: "The provider's id for the booting box, or for a newer attempt's box (the last was lost or given up on), which boots in its place." },
-          FAILED: { to: 'failed', effect: 'fail', description: "The provider says the box didn't start." },
+          FAILED: { to: 'failed', guard: 'notStale', effect: 'fail', description: "The provider says the box didn't start." },
           LOST: [
             { to: 'waking', guard: 'notStale', effect: 'bootLost', description: 'The box was lost while it booted: no key or boot token of it works, and a new box is made, restoring the last save if there is one.' },
             { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
@@ -135,7 +145,7 @@ export const box = defineMachine(
           ],
           LOST: { effect: 'forgetOldBox', description: "The paused box was lost before it resumed: its key stops working, and a new box restores the save instead." },
           READY: { to: 'awake', effect: 'ready', description: 'A new box traded its boot token: its key replaces the last box\'s, which is refused from now.' },
-          FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't bring a box back." },
+          FAILED: { to: 'failed', guard: 'notStale', effect: 'fail', description: "The provider couldn't bring a box back." },
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'No box came back: the thread waits for the next message to try again.' },
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread while it wakes.' },
         },
@@ -195,6 +205,7 @@ export const box = defineMachine(
       // Through the one rule (lostBox): the lease's own lapse names no attempt, so it ends them all.
       lost: async (ctx, { id, row, state, event }) => {
         await patch(ctx, id, { ...awakeAdded(row, state.since), ...lostBox(row, attemptOf(event)) });
+        await provide(ctx, 'wakeBox', id);
         return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
       },
       askSave: async (_ctx, { state }) => ({ kind: 'saving' as const, since: state.since, leaseUntil: state.leaseUntil, saveBy: Date.now() + SAVE_MS }),
@@ -206,11 +217,16 @@ export const box = defineMachine(
       sleep: async (ctx, { id, row, state, event }) => {
         const now = Date.now();
         await patch(ctx, id, { ...awakeAdded(row, state.since), save: { storageId: event.storageId, bytes: event.bytes, at: now } });
+        await provide(ctx, 'sleepBox', id);
         return { kind: 'asleep' as const, since: now };
       },
-      wake: async () => ({ kind: 'waking' as const, bootBy: Date.now() + BOOT_MS }),
+      wake: async (ctx, { id }) => {
+        await provide(ctx, 'wakeBox', id);
+        return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
+      },
       bootLost: async (ctx, { id, row, event }) => {
         await patch(ctx, id, lostBox(row, event.attempt));
+        await provide(ctx, 'wakeBox', id);
         return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
       },
       // What was the lost box's (its attempt's or older), not the boot token
@@ -219,12 +235,19 @@ export const box = defineMachine(
         await patch(ctx, id, lostBox(row, event.attempt));
         return state;
       },
+      // Another attempt, unless a newer one is on its way (boxService.ts claimAttempt).
+      createAgain: async (ctx, { id, row, state, event }) => {
+        await patch(ctx, id, lostBox(row, event.attempt));
+        await provide(ctx, 'createBox', id);
+        return state;
+      },
       forgetBox: async (ctx, { id, row, state, event }) => {
         await patch(ctx, id, lostBox(row, event.attempt));
         return state;
       },
       archive: async (ctx, { id, row, state }) => {
         await patch(ctx, id, { ...(state.kind === 'awake' || state.kind === 'saving' ? awakeAdded(row, state.since) : {}), ...revoked });
+        await provide(ctx, 'destroyBox', id);
         return { kind: 'destroying' as const, since: Date.now() };
       },
       destroyed: async (ctx, { id }) => {
@@ -279,6 +302,11 @@ function lostBox(row: Box, attempt: number | undefined): Partial<Box> {
 }
 
 type Db = { db: unknown };
+
+// The service's action for a step that needs the provider, at once.
+async function provide(ctx: { scheduler: { runAfter(ms: number, fn: never, args: never): Promise<unknown> } }, action: 'createBox' | 'wakeBox' | 'sleepBox' | 'destroyBox', id: unknown): Promise<void> {
+  await ctx.scheduler.runAfter(0, internal.boxService[action] as never, { boxId: id as Id<'boxes'> } as never);
+}
 
 // The row's own fields, never its machine's: the guarded db checks that.
 async function patch(ctx: Db, id: unknown, fields: Partial<Box>): Promise<void> {

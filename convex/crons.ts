@@ -20,4 +20,11 @@ crons.interval('send stale held pushes', { minutes: 2 }, internal.sync.sendStale
 crons.interval('arm thread clears', { minutes: 10 }, internal.sync.armClears, {});
 // The state machines' history past two weeks (machines.ts).
 crons.interval('prune machine history', { hours: 24 }, internal.machines.pruneHistory, {});
+// Virtual runners' boxes (boxService.ts, docs/virtual-runners.md): sleep the
+// idle and the ones up their day's hours; reap boxes the provider has that
+// nobody wants (a call to the provider per virtual runner, none without
+// one); delete archived threads' saves past their days.
+crons.interval('sleep idle boxes', { minutes: 2 }, internal.boxService.sleepIdleBoxes, {});
+crons.interval('reap boxes', { minutes: 10 }, internal.boxService.reapBoxes, {});
+crons.interval('prune box saves', { hours: 6 }, internal.boxService.pruneSaves, {});
 export default crons;

@@ -1,23 +1,27 @@
-// Virtual runners' boxes (docs/virtual-runners.md): the cloud tokens boxes
-// run Claude Code on, a box's boot token, the exchange that trades it for
-// the box's key and secrets, and the steps a box and the service report.
-// A box's lifecycle is its state machine (boxMachine.ts).
+// Virtual runners' boxes (docs/virtual-runners.md): the virtual runners
+// themselves (runnerServices), starting a thread on one, the cloud tokens
+// boxes run Claude Code on, a box's boot token, the exchange that trades it
+// for the box's key and secrets, and the steps a box and the service
+// report. A box's lifecycle is its state machine (boxMachine.ts); the
+// service's actions that call the provider are in boxService.ts.
 //
 // Randomness and sealing happen in actions only: Convex seeds Math.random
 // and crypto.getRandomValues inside queries and mutations so they replay
 // the same, which is wrong for keys, tokens and IVs. Mutations only store
 // hashes and sealed values, and change state atomically.
 //
-// Not built yet (docs/virtual-runners.md, "This slice"): calling a
-// provider, boxes:startThread, the wake hook in machines.ts queued(), the
-// crons, a runner's box mode and its image.
+// Not built yet (docs/virtual-runners.md, "What's built"): a runner's box
+// mode and its image, and starting or waking one from the phone.
 import { ConvexError, v, type Infer } from 'convex/values';
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { box as boxMachine, machines } from './machines';
+import { box as boxMachine, machines, queued } from './machines';
 import { BOOT_MS } from './boxStates';
 import { checkRunnerId, forbidden, runnerAuth, sha256, withoutCredentials } from './lib';
+import { commandArgs } from './relay';
+import { PROVIDERS } from './boxProviders/types';
+import { WAKES_FROM } from './boxHooks';
 import { BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runnerAccess';
 import { deleteIfUnused, MAX_RUNNER_UPLOAD_BYTES, uploadedBy } from './sync';
 
@@ -26,7 +30,7 @@ export const BOX_LIMITS = { maxBoxes: 5, idleSleepMinutes: 10, maxAwakeHoursPerD
 
 // A boot token (`tbt_`) and a box key (`tbb_`, runnerAccess.ts
 // BOX_KEY_PREFIX): 32 random bytes in hex each.
-const BOOT_PREFIX = 'tbt_';
+export const BOOT_PREFIX = 'tbt_';
 const BOOT_TOKEN = /^tbt_[0-9a-f]{64}$/;
 // A login as boxes and cloudTokens name it, and a setup token as Claude
 // Code prints it: printable, no spaces, of a sane length.
@@ -42,7 +46,7 @@ const conflict = (message: string) => new ConvexError({ kind: 'conflict', messag
 const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-function randomHex(bytes: number): string {
+export function randomHex(bytes: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -141,9 +145,9 @@ export const cloudTokens = query({
 // ------------------------------------------------------------ a thread's box row
 
 /**
- * A thread's box row, with a fresh per-thread key sealed here (decision 7):
- * for boxes:startThread, which writes the runners row and queues the
- * create beside it (not built yet). Returns the row's id.
+ * A thread's box row, with a fresh per-thread key sealed here (decision 7).
+ * Returns the row's id. boxes:startThread does the same with the thread's
+ * runners row and its create beside it, in one step (beginThread).
  */
 export const newBox = internalAction({
   args: { serviceId: v.id('runnerServices'), threadId: v.string(), runnerId: v.string(), login: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }) },
@@ -157,27 +161,167 @@ export const newBox = internalAction({
 export const insertBox = internalMutation({
   args: { serviceId: v.id('runnerServices'), threadId: v.string(), runnerId: v.string(), login: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }), sealedThreadKey: v.string() },
   returns: v.id('boxes'),
-  handler: async (ctx, a): Promise<Id<'boxes'>> => {
-    checkRunnerId(a.runnerId);
-    if (!isThreadId(a.threadId)) throw bad("that isn't a thread id");
-    if (!LOGIN.test(a.login)) throw bad('login must be 1 to 200 characters with no spaces or control characters');
-    for (const f of ['origin', 'subfolder', 'baseBranch'] as const) if (a.repo[f].length > REPO_CHARS || /[\u0000-\u001f]/.test(a.repo[f])) throw bad(`repo.${f} is too long or has control characters`);
+  handler: async (ctx, a): Promise<Id<'boxes'>> => addBox(ctx, a),
+});
+
+type NewBox = { serviceId: Id<'runnerServices'>; threadId: string; runnerId: string; login: string; repo: { origin: string; subfolder: string; baseBranch: string }; sealedThreadKey: string };
+
+// The row, its machine started (START), and the service's create scheduled
+// (boxService.ts createBox): the row has no id while its START runs, so
+// the step can't schedule it itself.
+async function addBox(ctx: MutationCtx, a: NewBox): Promise<Id<'boxes'>> {
+  checkRunnerId(a.runnerId);
+  if (!isThreadId(a.threadId)) throw bad("that isn't a thread id");
+  if (!LOGIN.test(a.login)) throw bad('login must be 1 to 200 characters with no spaces or control characters');
+  for (const f of ['origin', 'subfolder', 'baseBranch'] as const) if (a.repo[f].length > REPO_CHARS || /[\u0000-\u001f]/.test(a.repo[f])) throw bad(`repo.${f} is too long or has control characters`);
+  const service = await ctx.db.get(a.serviceId);
+  if (!service) throw new ConvexError({ kind: 'notFound', message: 'no such virtual runner' });
+  if (await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', a.threadId)).first()) throw conflict('That thread has a box already.');
+  // A box's runner id is its own, for life (decision 3): never a machine's
+  // or another box's, so nothing it writes lands on another runner.
+  if (await ctx.db.query('boxes').withIndex('by_runnerId', (q) => q.eq('runnerId', a.runnerId)).first()) throw conflict("That runner id is another box's.");
+  if (await ctx.db.query('runnerKeys').withIndex('by_runnerId', (q) => q.eq('runnerId', a.runnerId)).first()) throw conflict('That runner id has a runner key.');
+  const existing = await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', a.runnerId)).unique();
+  if (existing && !existing.box) throw conflict("That runner id is a machine's.");
+  const made = await boxMachine.create(
+    ctx,
+    { serviceId: a.serviceId, threadId: a.threadId, runnerId: a.runnerId, provider: service.provider, login: a.login, repo: { ...a.repo, origin: withoutCredentials(a.repo.origin) }, sealedThreadKey: a.sealedThreadKey, createdAt: Date.now() } as never,
+    { type: 'START' },
+  );
+  if (made.status !== 'done') throw conflict(`The box couldn't be made: ${made.reasons.join(' ')}`);
+  await ctx.scheduler.runAfter(0, internal.boxService.createBox, { boxId: made.id as Id<'boxes'> });
+  return made.id as Id<'boxes'>;
+}
+
+// ------------------------------------------------------------ virtual runners (decision 2)
+
+const SERVICE_NAME = /^[^\u0000-\u001f\u007f]{1,80}$/;
+const IMAGE = /^[\x21-\x7e]{1,300}$/;
+const REGION = /^[a-z0-9-]{1,20}$/;
+// Each limit's whole-number range.
+const LIMIT_RANGE = { maxBoxes: [1, 100], idleSleepMinutes: [1, 24 * 60], maxAwakeHoursPerDay: [1, 24], deleteAfterDays: [1, 365] } as const;
+type Limits = { maxBoxes: number; idleSleepMinutes: number; maxAwakeHoursPerDay: number; deleteAfterDays: number };
+const limitsArg = v.object({ maxBoxes: v.optional(v.number()), idleSleepMinutes: v.optional(v.number()), maxAwakeHoursPerDay: v.optional(v.number()), deleteAfterDays: v.optional(v.number()) });
+const limitsV = v.object({ maxBoxes: v.number(), idleSleepMinutes: v.number(), maxAwakeHoursPerDay: v.number(), deleteAfterDays: v.number() });
+
+// The states a box counts toward maxBoxes in: up, or on its way up.
+type BoxKind = Doc<'boxes'>['boxState']['kind'];
+export const RUNNING: readonly BoxKind[] = ['creating', 'starting', 'awake', 'saving', 'waking'];
+
+// How many of a virtual runner's boxes are in these states, counting to `upTo` at most.
+async function countBoxes(ctx: QueryCtx, serviceId: Id<'runnerServices'>, kinds: readonly BoxKind[], upTo: number): Promise<number> {
+  let n = 0;
+  for (const kind of kinds) {
+    if (n >= upTo) break;
+    n += (await ctx.db.query('boxes').withIndex('by_service_state', (q) => q.eq('serviceId', serviceId).eq('boxState.kind', kind)).take(upTo - n)).length;
+  }
+  return n;
+}
+
+/** Mike's virtual runners, each with how many boxes are up (or on the way) and asleep. */
+export const runnerServices = query({
+  args: { key: v.string() },
+  returns: v.array(v.object({ serviceId: v.id('runnerServices'), name: v.string(), provider: v.string(), image: v.string(), box: v.object({ cpus: v.number(), memoryMb: v.number() }), region: v.optional(v.string()), limits: limitsV, createdAt: v.number(), running: v.number(), asleep: v.number() })),
+  handler: async (ctx, { key }) => {
+    await runnerAuth(ctx, key, 'runnerServices');
+    const out = [];
+    for (const s of await ctx.db.query('runnerServices').take(100)) {
+      out.push({ serviceId: s._id, name: s.name, provider: s.provider, image: s.image, box: s.box, ...(s.region !== undefined ? { region: s.region } : {}), limits: s.limits, createdAt: s.createdAt, running: await countBoxes(ctx, s._id, RUNNING, 1000), asleep: await countBoxes(ctx, s._id, ['asleep'], 1000) });
+    }
+    return out;
+  },
+});
+
+/**
+ * Makes a virtual runner, or changes one (`serviceId`): its name, image,
+ * box size, region and limits (any left out: BOX_LIMITS, or as they were).
+ * A provider is a virtual runner's for life: another one is a new runner.
+ */
+export const setRunnerService = mutation({
+  args: { key: v.string(), serviceId: v.optional(v.id('runnerServices')), name: v.string(), provider: v.string(), image: v.string(), box: v.object({ cpus: v.number(), memoryMb: v.number() }), region: v.optional(v.string()), limits: v.optional(limitsArg) },
+  returns: v.id('runnerServices'),
+  handler: async (ctx, { key, serviceId, ...a }) => {
+    await runnerAuth(ctx, key, 'setRunnerService');
+    if (!SERVICE_NAME.test(a.name.trim())) throw bad('name must be 1 to 80 characters with no control characters');
+    if (!PROVIDERS.includes(a.provider)) throw bad(`provider must be one of ${PROVIDERS.join(', ')}`);
+    if (!IMAGE.test(a.image)) throw bad('image must be an image reference, up to 300 characters with no spaces');
+    if (!Number.isSafeInteger(a.box.cpus) || a.box.cpus < 1 || a.box.cpus > 16) throw bad('box.cpus must be a whole number from 1 to 16');
+    if (!Number.isSafeInteger(a.box.memoryMb) || a.box.memoryMb < 256 || a.box.memoryMb > 65536 || a.box.memoryMb % 256) throw bad('box.memoryMb must be a multiple of 256 from 256 to 65536');
+    if (a.region !== undefined && !REGION.test(a.region)) throw bad('region must be a provider region code, like syd');
+    const old = serviceId ? await ctx.db.get(serviceId) : null;
+    if (serviceId && !old) throw new ConvexError({ kind: 'notFound', message: 'no such virtual runner' });
+    if (old && old.provider !== a.provider) throw bad("A virtual runner's provider can't change: make a new one.");
+    const limits: Limits = { ...(old?.limits ?? BOX_LIMITS) };
+    for (const [k, [lo, hi]] of Object.entries(LIMIT_RANGE) as [keyof Limits, readonly [number, number]][]) {
+      const x = a.limits?.[k];
+      if (x === undefined) continue;
+      if (!Number.isSafeInteger(x) || x < lo || x > hi) throw bad(`limits.${k} must be a whole number from ${lo} to ${hi}`);
+      limits[k] = x;
+    }
+    const fields = { name: a.name.trim(), provider: a.provider, image: a.image, box: { cpus: a.box.cpus, memoryMb: a.box.memoryMb }, limits };
+    if (old) {
+      // A region left out goes: the provider picks one.
+      await ctx.db.patch(old._id, { ...fields, region: a.region });
+      return old._id;
+    }
+    return await ctx.db.insert('runnerServices', { ...fields, ...(a.region !== undefined ? { region: a.region } : {}), createdAt: Date.now() });
+  },
+});
+
+const startArgs = {
+  serviceId: v.id('runnerServices'),
+  threadId: v.string(),
+  // Read on the Mac as moveInfo does, credentials taken out here too (decision 11).
+  repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }),
+  // The Claude login the box runs on: a cloudTokens row's.
+  login: v.string(),
+  // The thread's first message, and how it starts, as a `create` carries them.
+  text: v.string(),
+  model: v.optional(v.string()),
+  effort: v.optional(v.string()),
+  permissionMode: v.optional(v.string()),
+  plan: v.optional(v.boolean()),
+};
+
+/**
+ * Starts a thread on a virtual runner (decision 6): its runner (a runners
+ * row marked `box`, with a runner id of its own for life, decision 3), its
+ * box row, and its `create` command, queued for that runner, in one step;
+ * then the service makes its first box (boxService.ts createBox). Refused
+ * at once past the virtual runner's maxBoxes, saying so.
+ */
+export const startThread = action({
+  args: { key: v.string(), ...startArgs },
+  returns: v.object({ runnerId: v.string(), commandId: v.id('commands') }),
+  handler: async (ctx, { key, ...a }): Promise<{ runnerId: string; commandId: Id<'commands'> }> => {
+    await actionAuth(ctx, key, 'startThread');
+    const sealedThreadKey = await seal(await sealKey(), crypto.getRandomValues(new Uint8Array(32)), threadKeyPurpose(a.threadId));
+    // Shaped as a runner's own (runner.json's sync.runnerId): 12 hex.
+    const runnerId = randomHex(6);
+    return await ctx.runMutation(internal.boxes.beginThread, { ...a, runnerId, sealedThreadKey });
+  },
+});
+
+export const beginThread = internalMutation({
+  args: { ...startArgs, runnerId: v.string(), sealedThreadKey: v.string() },
+  returns: v.object({ runnerId: v.string(), commandId: v.id('commands') }),
+  handler: async (ctx, a) => {
     const service = await ctx.db.get(a.serviceId);
     if (!service) throw new ConvexError({ kind: 'notFound', message: 'no such virtual runner' });
-    if (await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', a.threadId)).first()) throw conflict('That thread has a box already.');
-    // A box's runner id is its own, for life (decision 3): never a machine's
-    // or another box's, so nothing it writes lands on another runner.
-    if (await ctx.db.query('boxes').withIndex('by_runnerId', (q) => q.eq('runnerId', a.runnerId)).first()) throw conflict("That runner id is another box's.");
-    if (await ctx.db.query('runnerKeys').withIndex('by_runnerId', (q) => q.eq('runnerId', a.runnerId)).first()) throw conflict('That runner id has a runner key.');
-    const existing = await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', a.runnerId)).unique();
-    if (existing && !existing.box) throw conflict("That runner id is a machine's.");
-    const made = await boxMachine.create(
-      ctx,
-      { serviceId: a.serviceId, threadId: a.threadId, runnerId: a.runnerId, provider: service.provider, login: a.login, repo: { ...a.repo, origin: withoutCredentials(a.repo.origin) }, sealedThreadKey: a.sealedThreadKey, createdAt: Date.now() } as never,
-      { type: 'START' },
-    );
-    if (made.status !== 'done') throw conflict(`The box couldn't be made: ${made.reasons.join(' ')}`);
-    return made.id as Id<'boxes'>;
+    // As relay.ts queueCommand checks a create's, before anything is written.
+    const create = commandArgs('create', { text: a.text, model: a.model, effort: a.effort, permissionMode: a.permissionMode, plan: a.plan });
+    const max = service.limits.maxBoxes;
+    const running = await countBoxes(ctx, a.serviceId, RUNNING, max);
+    if (running >= max) throw new ConvexError({ kind: 'limit', message: `${service.name} has ${running} boxes up or starting, its limit. One sleeps once its thread has been idle ${service.limits.idleSleepMinutes} minutes, or archive a thread on it.` });
+    checkRunnerId(a.runnerId);
+    // A new thread: one that's already somewhere moves to a virtual runner (Order, 5), it isn't started there.
+    if (await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', a.threadId)).first()) throw conflict('That thread exists already.');
+    if (await ctx.db.query('runners').withIndex('by_runnerId', (q) => q.eq('runnerId', a.runnerId)).first()) throw conflict('That runner id is taken: start it again.');
+    await ctx.db.insert('runners', { runnerId: a.runnerId, name: service.name, version: '', startedAt: '', draining: false, threadCount: 0, lastSeenAt: 0, box: { serviceId: a.serviceId } });
+    await addBox(ctx, { serviceId: a.serviceId, threadId: a.threadId, runnerId: a.runnerId, login: a.login, repo: a.repo, sealedThreadKey: a.sealedThreadKey });
+    // For its own thread (the box takes only that), from the main Mac.
+    const commandId = await queued(ctx, { runnerId: a.runnerId, threadId: a.threadId, kind: 'create', args: { ...create, from: 'mac' }, createdAt: Date.now() });
+    return { runnerId: a.runnerId, commandId };
   },
 });
 
@@ -193,9 +337,10 @@ async function boxOf(ctx: MutationCtx, threadId: string): Promise<Doc<'boxes'>> 
 const BOOTING: readonly string[] = ['creating', 'starting', 'waking'];
 
 /**
- * A boot token for the thread's next box: the main Mac's, or (with the same
- * steps, once it's built) the service's own create. Returned once; only its
- * hash is kept, it lasts BOOT_MS, and a newer one replaces it.
+ * A boot token for the thread's next box, for a box the main Mac starts
+ * itself. The service's own create (boxService.ts claimAttempt) takes the
+ * same step, newAttempt. Returned once; only its hash is kept, it lasts
+ * BOOT_MS, and a newer one replaces it.
  */
 export const mintBootToken = action({
   args: { key: v.string(), threadId: v.string() },
@@ -215,13 +360,17 @@ export const storeBootToken = internalMutation({
   handler: async (ctx, { threadId, bootHash }) => {
     const row = await boxOf(ctx, threadId);
     if (!BOOTING.includes(row.boxState.kind)) throw conflict(`The box is ${row.boxState.kind}, so it isn't booting.`);
-    const expiresAt = Date.now() + BOOT_MS;
-    // A new attempt at a box, numbered after every one before.
-    const attempt = (row.boxAttempt ?? 0) + 1;
-    await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt, bootAttempt: attempt, boxAttempt: attempt });
-    return { expiresAt, attempt };
+    return newAttempt(ctx, row, bootHash);
   },
 });
+
+/** A new attempt at a box, numbered after every one before, with its boot token's hash (BOOT_MS). */
+export async function newAttempt(ctx: MutationCtx, row: Doc<'boxes'>, bootHash: string): Promise<{ expiresAt: number; attempt: number }> {
+  const expiresAt = Date.now() + BOOT_MS;
+  const attempt = (row.boxAttempt ?? 0) + 1;
+  await ctx.db.patch(row._id, { bootTokenHash: bootHash, bootExpiresAt: expiresAt, bootAttempt: attempt, boxAttempt: attempt });
+  return { expiresAt, attempt };
+}
 
 const exchanged = v.object({
   boxKey: v.string(),
@@ -357,7 +506,7 @@ export const boxSaved = mutation({
   },
 });
 
-/** Mike archived the thread: its box is deleted (the provider's delete comes with the service's actions). */
+/** Mike archived the thread: its box is deleted (boxService.ts destroyBox). */
 export const archiveBox = mutation({
   args: { key: v.string(), threadId: v.string() },
   returns: v.null(),
@@ -378,7 +527,7 @@ const serverEvent = v.union(
   v.object({ type: v.literal('RESUMED'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('LOST'), attempt: v.optional(v.number()) }),
   v.object({ type: v.literal('DESTROYED') }),
-  v.object({ type: v.literal('FAILED'), error: v.string() }),
+  v.object({ type: v.literal('FAILED'), error: v.string(), attempt: v.optional(v.number()) }),
 );
 
 /**
@@ -394,5 +543,34 @@ export const report = machines.internalMutation({
     const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
     if (!row) throw new ConvexError({ kind: 'notFound', message: 'no box for that thread' });
     return (await boxMachine.send(ctx, row._id, event)).status === 'done';
+  },
+});
+
+
+/**
+ * A command was queued for a box's runner (boxHooks.ts wakeIfAsleep): WAKE,
+ * once. A second, for a box already waking or awake, isn't taken.
+ */
+export const wakeFor = machines.internalMutation({
+  args: { runnerId: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, { runnerId }) => {
+    const row = await ctx.db.query('boxes').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first();
+    if (!row || !WAKES_FROM.includes(row.boxState.kind)) return false;
+    return (await boxMachine.send(ctx, row._id, { type: 'WAKE' })).status === 'done';
+  },
+});
+
+/** The thread was archived or deleted a while ago (boxHooks.ts archiveSoon): its box goes, unless it's back out. */
+export const archiveIfStill = internalMutation({
+  args: { threadId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { threadId }) => {
+    const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
+    if (t && t.view !== 'den') return null;
+    const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
+    if (!row || row.boxState.kind === 'destroying' || row.boxState.kind === 'gone') return null;
+    await boxMachine.send(ctx, row._id, { type: 'ARCHIVE' });
+    return null;
   },
 });

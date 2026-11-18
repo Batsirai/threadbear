@@ -372,6 +372,9 @@ export const queueCommand = mutation({
       if (t.runnerId !== runnerId) throw forbidden("queue that: the thread isn't that runner's");
     } else if (kind !== 'create' && kind !== 'call') {
       throw new ConvexError({ kind: 'badArgs', message: `a ${kind} needs a thread` });
+    } else if (kind === 'create' && runner.box) {
+      // A box runs its one thread: a new one on a virtual runner is boxes:startThread's.
+      throw new ConvexError({ kind: 'badArgs', message: "That runner is one thread's box on a virtual runner: it takes no new threads." });
     }
     const images = kind === 'send' || kind === 'create' ? await commandPictures(ctx, (args as { images?: unknown } | null)?.images) : [];
     const commandId = await queued(ctx, { runnerId, ...(threadId !== undefined ? { threadId } : {}), kind, args: { ...commandArgs(kind, args), ...(images.length ? { images } : {}), from: 'mac' }, createdAt: Date.now() });

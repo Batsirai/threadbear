@@ -20,7 +20,7 @@ import type { WithoutSystemFields } from 'convex/server';
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { checkRunnerId, forbidden, hasLiveKey, runnerAuth, sha256, withoutCredentials } from './lib';
+import { boxOfRunner, boxStateReachable, checkRunnerId, forbidden, hasLiveKey, runnerAuth, sha256, withoutCredentials } from './lib';
 import { buryIndexRows, countBodyBytes, countMessageBytes, MAX_RUNNER_UPLOAD_BYTES, moveView, storageInUse, storedBytes, ticketKey } from './sync';
 import { docBytes, ownThreadOnly, type Caller } from './runnerAccess';
 import { machines, move as moveMachine } from './machines';
@@ -159,7 +159,12 @@ export const startMove = mutation({
       .unique();
     if (!r) throw new ConvexError({ kind: 'notFound', message: 'no such runner' });
     const now = Date.now();
-    if (r.draining || now - r.lastSeenAt > ONLINE_MS) throw conflict(`${r.name} is offline.`);
+    // A thread's box on a virtual runner takes only its own thread, and is
+    // reachable while it starts or sleeps, as its first message wakes it
+    // (docs/virtual-runners.md, decision 6).
+    const box = await boxOfRunner(ctx, r);
+    if (r.box && box?.threadId !== a.threadId) throw conflict(`${r.name} is another thread's box.`);
+    if ((r.draining || now - r.lastSeenAt > ONLINE_MS) && !boxStateReachable(box?.boxState.kind)) throw conflict(`${r.name} is offline.`);
     for (const m of await ctx.db.query('threadMoves').withIndex('by_thread', (q) => q.eq('threadId', a.threadId)).collect()) {
       if (GOING.includes(m.state)) throw conflict('This thread is already moving.');
     }

@@ -95,7 +95,8 @@ export function load(name: string, root = CONVEX): Record<string, any> {
   for (const m of raw.matchAll(/^import (type )?\{([^}]*)\} from '([^']+)';$/gm)) {
     if (m[1]) continue;
     const from = m[3]!;
-    const mod = fakes[from] ?? (from.startsWith('./') ? load(from.slice(2), root) : undefined);
+    // Relative to the importing file, as a bundler has it (boxProviders/fly.ts's './types').
+    const mod = fakes[from] ?? (from.startsWith('./') ? load(path.posix.join(path.posix.dirname(name), from.slice(2)), root) : undefined);
     if (!mod) throw new Error(`convex-memory: no fake for ${from} (in ${name}.ts)`);
     for (const spec of m[2]!.split(',').map((s) => s.trim()).filter(Boolean)) {
       if (spec.startsWith('type ')) continue;

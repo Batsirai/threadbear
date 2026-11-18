@@ -207,3 +207,22 @@ export function withoutCredentials(url: string): string {
   // host:path with no user, or a folder: nothing in it is a login.
   return s;
 }
+
+// A thread's box on a virtual runner (docs/virtual-runners.md, decision 6):
+// its runner counts as reachable, wherever a runner's being online is
+// checked, in every state but these, as a message for it wakes or starts a
+// box (boxHooks.ts wakeIfAsleep). A failed one too: the next message tries
+// a new box. Its runner only heartbeats while its box is up.
+export const BOX_UNREACHABLE: readonly string[] = ['destroying', 'gone'];
+export function boxStateReachable(kind: string | undefined): boolean {
+  return kind !== undefined && !BOX_UNREACHABLE.includes(kind);
+}
+
+/** The box row of a box's runner, or null for a machine's. */
+export async function boxOfRunner(ctx: QueryCtx | MutationCtx, runner: { runnerId: string; box?: unknown }) {
+  if (!runner.box) return null;
+  return ctx.db
+    .query('boxes')
+    .withIndex('by_runnerId', (q) => q.eq('runnerId', runner.runnerId))
+    .first();
+}

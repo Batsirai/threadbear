@@ -134,8 +134,8 @@ test('the owner key can do everything', () => {
 // boxes:exchange is a box's first call: it has a boot token, not a key.
 const KEYLESS = ['exchange'];
 
-test('every function in convex/sync.ts, relay.ts, moves.ts and boxes.ts is sorted, and asks the gate under its own name', () => {
-  const src = ['sync.ts', 'relay.ts', 'moves.ts', 'boxes.ts'].map((f) => fs.readFileSync(path.join(import.meta.dirname, '../../../convex', f), 'utf8')).join('\n');
+test('every function in convex/sync.ts, relay.ts, moves.ts, boxes.ts and boxService.ts is sorted, and asks the gate under its own name', () => {
+  const src = ['sync.ts', 'relay.ts', 'moves.ts', 'boxes.ts', 'boxService.ts'].map((f) => fs.readFileSync(path.join(import.meta.dirname, '../../../convex', f), 'utf8')).join('\n');
   const exported = [...src.matchAll(/^export const (\w+) = (?:mutation|query|action)\(/gm)].map((m) => m[1]!);
   assert.ok(exported.length > 40, 'found the functions');
   assert.deepEqual([...exported].sort(), [...Object.keys(ACCESS), ...KEYLESS].sort());

@@ -42,7 +42,9 @@ export type IndexRow = {
 };
 
 // What the Mac app gets (docs/protocol.md, "Other runners' threads").
-export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; followProblem?: string };
+// `box`: a thread's box on a virtual runner (docs/virtual-runners.md), with
+// its state, which counts as online while it starts or sleeps (decision 6).
+export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; followProblem?: string; box?: { state: string } };
 // `moving`: set by the main Mac's runner for a move it knows of (main.ts
 // remoteMoving), never by the backend's rows.
 export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./moves.ts').ThreadMoving };
@@ -50,13 +52,22 @@ export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./mov
 // one's too, for the app's Settings > Runners. Left out before it's heard.
 export type RemoteThreads = { runners: RemoteRunner[]; threads: RemoteThread[]; order?: string[]; ready?: boolean };
 
-type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; followProblem?: string };
+type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; followProblem?: string; box?: { state?: unknown } };
 type SinceRow = RemoteThread & { updatedMs?: number; deleted?: boolean };
 
 const FLUSH_MS = 1000;
 const BATCH = 50;
 // As on the phone: not heard from for this long is offline.
 const ONLINE_MS = 3 * 60_000;
+
+/**
+ * A thread's box on a virtual runner is reachable in every state but these
+ * (convex/lib.ts boxStateReachable, the same rule): a message for it starts
+ * or wakes a box, so its runner not heartbeating isn't it being offline.
+ */
+export function boxReachable(state: unknown): boolean {
+  return typeof state === 'string' && state !== 'destroying' && state !== 'gone';
+}
 // The other runners' threads are watched only while a Mac app is
 // connected, and for a while after it goes, so an app relaunching doesn't
 // start the watch again. Each re-run of that watch reads every one of the
@@ -520,12 +531,13 @@ export class ThreadIndex {
     const now = this.deps.clock.now();
     this.remote = {
       runners: (value?.runners ?? [])
-        .filter((r) => r.lastSeenAt > 0 || (value?.threads ?? []).some((t) => t.runnerId === r.runnerId))
+        .filter((r) => r.lastSeenAt > 0 || r.box || (value?.threads ?? []).some((t) => t.runnerId === r.runnerId))
         .map((r) => ({
           id: r.runnerId,
           name: r.name,
           ...(r.icon ? { icon: r.icon } : {}),
-          online: now - r.lastSeenAt < ONLINE_MS,
+          online: now - r.lastSeenAt < ONLINE_MS || boxReachable(r.box?.state),
+          ...(r.box ? { box: { state: typeof r.box.state === 'string' ? r.box.state : 'gone' } } : {}),
           lastSeenAt: new Date(r.lastSeenAt).toISOString(),
           ...(r.followProblem ? { followProblem: r.followProblem } : {}),
         })),

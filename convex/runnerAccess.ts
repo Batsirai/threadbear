@@ -313,9 +313,13 @@ export const ACCESS: Record<string, Access> = {
   moveFailed: 'own',
   // The main Mac's own uploads for a move that ended first (moves.ts).
   moveDropChunks: 'owner',
-  // boxes.ts (docs/virtual-runners.md): the main Mac sets a login's cloud
-  // token, mints a box's boot token and archives a box; a box says it has
-  // saved its thread. boxes:exchange takes a boot token, not a key.
+  // boxes.ts (docs/virtual-runners.md): the main Mac makes and lists the
+  // virtual runners, starts a thread on one, sets a login's cloud token,
+  // mints a box's boot token and archives a box; a box says it has saved
+  // its thread. boxes:exchange takes a boot token, not a key.
+  runnerServices: 'owner',
+  setRunnerService: 'owner',
+  startThread: 'owner',
   setCloudToken: 'owner',
   cloudTokens: 'owner',
   mintBootToken: 'owner',

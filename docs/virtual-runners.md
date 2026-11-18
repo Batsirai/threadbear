@@ -13,10 +13,12 @@ Code on a shared runner, taken out on 16 Nov) and is the "cloud sandboxes"
 half of step 6 (docs/plan.md). Coordinators are a separate experiment and
 out of scope here.
 
-Status: the spike passed (Order, 1), and the backend's first slice is
-built (18 Nov, "What's built", below): the tables, the box's state
-machine, box keys, cloud tokens and the boot exchange. Nothing calls a
-provider yet, and no runner runs in box mode. A first draft of the plan
+Status: the spike passed (Order, 1), and the backend is built in two
+slices (18 Nov, "What's built", below): the tables, the box's state
+machine, box keys, cloud tokens and the boot exchange; then the Fly
+adapter, the service's actions, starting a thread, waking, reachable
+boxes and the crons. No runner runs in box mode yet, and there's no box
+image, so nothing has made a real box through the app. A first draft of the plan
 went to a review panel (Fable, Opus and Grok, 16 Nov), each reading the
 code; their changes are folded in, and "What the review changed" at the
 end says what moved and why.
@@ -292,25 +294,71 @@ The backend's first slice (18 Nov 2026), with tests in
 - **Saves** (decision 7): `boxes:boxSaved` (a box key only) takes a file
   its runner uploaded, replaces the last save and deletes it.
 
+The second slice (18 Nov 2026), with tests in
+`runner/test/unit/box-service.test.ts` (the service against a fake Fly
+API, never the real one), `box-fly.test.ts` (the adapter) and
+`thread-index.test.ts`:
+
+- **The Fly adapter** (`convex/boxProviders/fly.ts`, the interface in
+  `types.ts`), ported from the spike to plain `fetch` in a Convex action:
+  `FLY_API_TOKEN`, `FLY_APP` (made in `FLY_ORG`, default `personal`, the
+  first time a box is), idempotent creates by a `tb_idem` tag, `restart:
+  no`, nothing injected (the image's entrypoint is the runner in box
+  mode). `caps.pause` only for a box of 2 GB or less, as Fly can't
+  suspend bigger. `list` gives each box's tags too, for the reaper, and
+  `CreateSpec` takes a `region`; `diskGb` is optional, as Fly has none.
+- **The service's actions** (`convex/boxService.ts`), each told only a
+  box row's id, reading it again and acting on its newest attempt only:
+  `createBox` (a new attempt: its boot token minted through
+  `claimAttempt`, which hands out one attempt at a time, then the
+  provider's create keyed `<boxId>-<attempt>`, reporting `CREATED` or
+  `FAILED` for that attempt, and deleting a box nobody took);
+  `wakeBox` (`RESUMED` for the paused key holder, or `LOST` and a new
+  attempt); `sleepBox` (pause, or delete and `LOST`); `destroyBox` (every
+  box tagged for the row, then `DESTROYED`). The box's machine schedules
+  them from its steps (a wake, a loss, a save, an archive), so a box lost
+  to its lease comes back by itself. A provider error is tried twice more
+  in the action when it's worth it (unreachable, 429, 5xx); then a box
+  that couldn't be made or woken is `failed` with the error, and the next
+  message tries again, and a sleep or delete that didn't happen is left
+  for the reaper. `FAILED` now names its attempt, so a late one can't fail
+  a newer box.
+- **`boxes:startThread`** (owner): the thread's runner (marked `box`, a
+  fresh 12-hex id), its box row and its `create` (naming its thread) in one
+  mutation, refused past `maxBoxes` (boxes creating, starting, awake,
+  saving or waking); then `createBox`. `boxes:setRunnerService` and
+  `runnerServices` make and list virtual runners.
+- **Waking** (decision 6): `queued()` (both insert sites) schedules
+  `boxes:wakeFor` for a command to a box that's asleep, saving or failed,
+  which sends `WAKE` once. A box's own `save` command doesn't wake it.
+- **Reachable** (decision 6): in every state but `destroying` and `gone`
+  (`failed` too, as a message tries a new box): `startMove` lets a box's
+  own thread move to it, and `otherRunnersList` gives each box's state,
+  which the runner's `thread-index.ts` counts as online, so `mustBeOnline`
+  lets a message through. The phone's online checks pick a runner for a
+  *new* thread, which a box never is: `mainRunner` and `mainOwnerRunner`
+  skip boxes, and `phone:create`, `quickAsk` and `queueCommand`'s
+  `create` refuse a box's runner.
+- **The crons**: every 2 minutes, an awake box idle `idleSleepMinutes`
+  (no command waiting, its thread not starting, running or waiting on an
+  answer) or up `maxAwakeHoursPerDay` today (busy or not, unless a
+  command waits) gets `IDLE` and a `save` command; every 10, the reaper
+  (above, and protocol.md "Virtual runners"); every 6 hours, archived
+  threads' saves and box rows past `deleteAfterDays`.
+- **Archiving**: a box's thread put in the den or removed has its box
+  deleted after a minute (`boxHooks.ts archiveSoon`), unless it's out of
+  the den again; `archiveBox` at once. An archive command for a sleeping
+  box wakes it to do it.
+
 Not built yet, in about the order they're needed:
 
-- TODO `convex/boxProviders/fly.ts` and the actions that call it: create
-  with a boot token (the service's own path to `storeBootToken`), pause or
-  delete on sleep, resume or create on wake, delete on archive, each
-  reporting through `boxes:report`. A save bigger than one upload (10 MB)
-  needs chunks, as a move's do.
-- TODO `boxes:startThread` (owner, from the Mac or the phone): the
-  `runners` row marked `box`, `boxes:newBox`, the `create` command, and
-  `maxBoxes`.
-- TODO the wake hook in `queued()` (`convex/machines.ts`): a command for an
-  asleep box's runner reports WAKE. And a box `starting`, `asleep` or
-  `waking` counting as reachable in `mustBeOnline`, the phone and
-  `startMove` (decision 6).
-- TODO the crons: IDLE after `idleSleepMinutes`, the day's awake cap,
-  reaping provider boxes with no row, a lost box's taken command put back
-  to pending, deleting archived threads' saves after `deleteAfterDays`;
-  and the owner's way to make a `runnerServices` row.
-- TODO the runner's box mode, its image, and the save command it answers.
+- TODO the runner's box mode and its image: the exchange, the `create`
+  for its named thread, the `save` command (and a save bigger than one
+  upload, 10 MB, in chunks, as a move's are), `IS_SANDBOX` in the image.
+- TODO a lost box's taken command put back to pending once (decision 12).
+- TODO starting and waking from the phone (`startThread` takes the owner
+  key only), and archiving a sleeping box's thread without waking it.
+- TODO `maxBoxes` for a wake: today only a start is refused past it.
 - TODO the GPUI app and the phone (Order, 4), and the experiment (14).
 
 ## Order

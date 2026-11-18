@@ -267,7 +267,7 @@ export const appSchema = defineSchema({
   // service that starts a box per thread on a provider as needed.
   runnerServices: defineTable({
     name: v.string(),
-    // Which adapter (convex/boxProviders/<provider>.ts, not built yet): 'fly'.
+    // Which adapter (convex/boxProviders/<provider>.ts, boxService.ts PROVIDERS): 'fly'.
     provider: v.string(),
     box: v.object({ cpus: v.number(), memoryMb: v.number() }),
     // The OCI image every box starts from (the runner in box mode).
@@ -661,7 +661,8 @@ export const appSchema = defineSchema({
     runnerId: v.string(), // or "any"
     threadId: v.optional(v.string()),
     // interrupt and call (API 44) come only from the main Mac's runner (relay.ts queueCommand).
-    kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press'), v.literal('slashCommands'), v.literal('designReviews'), v.literal('respondReview')),
+    // save only from the backend, for a thread's box before it sleeps (boxService.ts askToSave).
+    kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press'), v.literal('slashCommands'), v.literal('designReviews'), v.literal('respondReview'), v.literal('save')),
     args: v.any(),
     state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')),
     // The same, as its state machine has it (commandMachine.ts), which writes

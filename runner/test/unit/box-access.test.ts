@@ -67,7 +67,10 @@ test("a box hears and takes its own thread's commands, never another thread's or
   const s = await setup();
   await s.write(THREAD);
   const mine = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: BOX_RUNNER, threadId: THREAD, kind: 'send', args: { text: 'hello' } });
-  const create = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: BOX_RUNNER, kind: 'create', args: { text: 'go', cwd: '/w' } });
+  // A create for no thread, as one queued before boxes:startThread named its thread. The
+  // main Mac can't ask a box for a new thread any more (relay.ts), but a call it can.
+  assert.equal(await outcome(call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: BOX_RUNNER, kind: 'create', args: { text: 'go', cwd: '/w' } })), 'badArgs');
+  const create = await machinesModule.queued(s.ctx, { runnerId: BOX_RUNNER, kind: 'create', args: { text: 'go', cwd: '/w' }, createdAt: Date.now() });
   // Only the owner or the phone queue for a box's runner; one naming another thread is hidden and refused.
   const other = await machinesModule.queued(s.ctx, { runnerId: BOX_RUNNER, threadId: 'B', kind: 'send', args: { text: 'x' }, createdAt: Date.now() });
   const minis = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: MINI, threadId: 'B', kind: 'send', args: { text: 'y' } });
@@ -89,7 +92,7 @@ test('every function a box key has no business with is refused, owner-only ones 
     const mod = modules.find((m) => m[fn]);
     assert.ok(mod, `found ${fn}`);
     // Actions ask the gate through a query; the rest at their first line.
-    const ctx = fn === 'setCloudToken' || fn === 'mintBootToken' ? s.a : s.ctx;
+    const ctx = fn === 'setCloudToken' || fn === 'mintBootToken' || fn === 'startThread' ? s.a : s.ctx;
     const err = await mod[fn].handler(ctx, { key: s.boxKey }).then(
       () => null,
       (e: { data?: { kind?: string; message?: string } }) => e,
@@ -98,14 +101,17 @@ test('every function a box key has no business with is refused, owner-only ones 
     assert.match(err.data.message, /a box's key runs its one thread/, fn);
     refused.push(fn);
   }
-  for (const fn of ['issueToken', 'addRunnerKey', 'runnersList', 'queueCommand', 'startMove', 'saveSchedule', 'savePocketCard', 'setAccounts', 'sharedUsage', 'pools', 'memorySince', 'setPresence', 'prune', 'setCloudToken', 'mintBootToken', 'archiveBox']) assert.ok(refused.includes(fn), fn);
+  for (const fn of ['issueToken', 'addRunnerKey', 'runnersList', 'queueCommand', 'startMove', 'saveSchedule', 'savePocketCard', 'setAccounts', 'sharedUsage', 'pools', 'memorySince', 'setPresence', 'prune', 'setCloudToken', 'mintBootToken', 'archiveBox', 'startThread', 'setRunnerService', 'runnerServices']) assert.ok(refused.includes(fn), fn);
 });
 
 test("a box's moves are its own thread's only", async () => {
   const s = await setup();
   await s.write(THREAD);
-  // The main Mac moves the mini's thread to the box's runner: not the box's thread, so not its move.
-  const { moveId: theirs } = await call(s.ctx, moves.startMove, { key: OWNER, threadId: 'B', to: BOX_RUNNER });
+  // The main Mac can't move the mini's thread to the box's runner: it's another thread's box.
+  assert.equal(await outcome(call(s.ctx, moves.startMove, { key: OWNER, threadId: 'B', to: BOX_RUNNER })), 'conflict');
+  // One made before that check: not the box's thread, so not its move.
+  const theirs = 'move-of-thread-b';
+  await machinesModule.move.create(s.ctx, { moveId: theirs, threadId: 'B', from: MINI, to: BOX_RUNNER, state: 'asking', createdAt: Date.now(), updatedAt: Date.now() }, { type: 'START' });
   assert.deepEqual(await call(s.ctx, moves.moves, { key: s.boxKey, runnerId: BOX_RUNNER }), []);
   assert.equal(await outcome(call(s.ctx, moves.moveReady, { key: s.boxKey, moveId: theirs, plan: {}, sealKey: `${'A'.repeat(43)}=` })), 'forbidden');
   assert.equal(await outcome(call(s.ctx, moves.moveFailed, { key: s.boxKey, moveId: theirs, note: 'no' })), 'forbidden');
@@ -162,7 +168,7 @@ test("a box neither sees nor touches another thread's rows under its own runner 
   const uRow = s.rows('threadIndex').find((r) => r.threadId === U && r.runnerId === BOX_RUNNER)!;
   assert.equal(uRow.deleted, undefined, "U's sidebar row stands");
   // A create it finishes can't name U as the thread it made.
-  const create = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: BOX_RUNNER, kind: 'create', args: { text: 'go', cwd: '/w' } });
+  const create = await machinesModule.queued(s.ctx, { runnerId: BOX_RUNNER, kind: 'create', args: { text: 'go', cwd: '/w' }, createdAt: Date.now() });
   await call(s.ctx, sync.takeCommand, { key: s.boxKey, commandId: create });
   await call(s.ctx, sync.finishCommand, { key: s.boxKey, commandId: create, ok: true, resultThreadId: U });
   assert.equal(s.rows('commands').find((c) => c._id === create)!.resultThreadId, undefined);
