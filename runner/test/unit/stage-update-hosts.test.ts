@@ -36,7 +36,7 @@ function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy
   write(path.join(checkout, 'desktop', 'scripts', 'remote.sh'), `${note('remote')}
 cat >/dev/null
 echo "try=\${THREADBEAR_REMOTE_TRY-unset}" >> '${marks}/remote'
-${remote === 'busy' ? '[ "$1" = free.invalid ] || exit 75' : ''}
+${remote === 'busy' ? '[ "$1" = free.invalid ] || [ "${THREADBEAR_REMOTE_TRY-}" != 1 ] || exit 75' : ''}
 ${remote === 'legacy' ? '[ "$2" = -- ] || exit 127' : ''}
 echo BUILT_IN=/mock-target
 `, 0o755);
@@ -54,19 +54,20 @@ echo BUILT_IN=/mock-target
   const data = path.join(root, 'data');
   fs.mkdirSync(data, { recursive: true });
   if (config) fs.writeFileSync(path.join(data, 'runner.json'), JSON.stringify(config));
-  const run = () => {
+  const run = (extra: Record<string, string> = {}) => {
     const r = spawnSync('bash', [SCRIPT, checkout, '--next', path.join(root, 'next.app')], {
       encoding: 'utf8',
       timeout: 60_000,
       // Only the system's tools beside the stand-ins: a real rustup on the
       // test machine's PATH would really install Rust.
-      env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, THREADBEAR_HOME: data,
+      env: { ...process.env, ...extra, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, THREADBEAR_HOME: data,
         // Bash imports this stand-in even though stage-update sets a system PATH.
         ...(remote ? { 'BASH_FUNC_ssh%%': '() { cat >/dev/null; echo Darwin; }', 'BASH_FUNC_ioreg%%': '() { :; }', 'BASH_FUNC_scp%%': '() { touch "${@: -1}"; }' } : {}),
       },
     });
     const marked = (what: string) => (fs.existsSync(path.join(marks, what)) ? fs.readFileSync(path.join(marks, what), 'utf8') : '');
-    return { status: r.status, out: `${r.stdout}${r.stderr}`, marked, root };
+    const deferred = path.join(home, 'Library', 'Caches', 'Threadbear', 'update-desktop', 'deferred-since');
+    return { status: r.status, out: `${r.stdout}${r.stderr}`, marked, root, deferred };
   };
   return run;
 }
@@ -88,6 +89,28 @@ test('a busy update host defers without staging or marking main as broken', () =
   assert.equal(r.marked('bundle'), '');
   assert.equal(r.marked('cargo'), '');
   assert.match(r.out, /busy|queued/i);
+});
+
+// Agents kept Tinker Desk busy all day on 18 Nov, and 63 tries built
+// nothing while fixes sat on main. Busy for long enough, it queues.
+test('busy hosts for long enough: the update queues for the lease instead of trying again', () => {
+  const run = setup({ updateBuildHosts: ['builder.invalid'] }, 'busy');
+  const first = run();
+  assert.equal(first.status, 4, first.out);
+  const since = fs.readFileSync(first.deferred, 'utf8').trim();
+  assert.match(since, /^\d+$/);
+  // Still inside the grace: tries again later, and keeps when it started.
+  const second = run();
+  assert.equal(second.status, 4, second.out);
+  assert.equal(fs.readFileSync(second.deferred, 'utf8').trim(), since);
+  assert.doesNotMatch(second.marked('remote'), /try=0/);
+  // Past it: one try, then queued on the busy host, built and staged.
+  const third = run({ THREADBEAR_UPDATE_QUEUE_AFTER: '0' });
+  assert.equal(third.status, 0, third.out);
+  assert.match(third.out, /waits its turn on builder\.invalid/);
+  assert.match(third.marked('remote'), /try=1\n[^]*builder\.invalid --[^]*try=0\n$/);
+  assert.match(third.marked('bundle'), /^builtOn=builder\.invalid$/m);
+  assert.ok(!fs.existsSync(third.deferred), 'a build clears the deferral');
 });
 
 test('a busy trusted host leaves the next trusted host a chance to build', () => {

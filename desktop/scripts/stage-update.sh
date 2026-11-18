@@ -31,7 +31,13 @@
 # of disk), 5 if no host is trusted to build it and this Mac doesn't build,
 # 1 on a failed build (an earlier staged bundle is left as it was).
 # A busy build host (or one with queued measurements) also exits 4: update
-# builds try the leases without queueing, so screen tests can go first.
+# builds try the leases without queueing, so screen tests can go first. But
+# not for ever: with agents keeping Tinker Desk busy all day there was never
+# a free moment, and 63 tries over a day built nothing while fixes waited on
+# main (18 Nov). Once tries have found every host busy for QUEUE_AFTER (45
+# minutes; THREADBEAR_UPDATE_QUEUE_AFTER in seconds), the next run queues
+# for the first busy host's lease like any other run and builds when its
+# turn comes.
 set -euo pipefail
 
 CHECKOUT=""
@@ -99,6 +105,11 @@ HOSTS="$(hosts_in updateBuildHosts)"
 CHECK_HOSTS="$(hosts_in checkHosts)"
 [[ -n "$CHECK_HOSTS" ]] || CHECK_HOSTS="$(hosts_in checkHost)"
 
+# When tries first found every trusted host busy, kept until one builds.
+DEFERRED="$CACHE/deferred-since"
+QUEUE_AFTER="${THREADBEAR_UPDATE_QUEUE_AFTER:-2700}"
+[[ "$QUEUE_AFTER" =~ ^[0-9]+$ ]] || QUEUE_AFTER=2700
+
 BINS="$CACHE/bins"
 rm -rf "$BINS"
 mkdir -p "$BINS"
@@ -133,25 +144,45 @@ if [[ -n "$HOSTS" ]]; then
   # Request it by environment, so rolling main back to an older remote.sh
   # still builds (it ignores the request) instead of running an unknown flag.
   BUILT_ON=""
+  BUSY_HOST=""
+  # build_on <host> <try>: 1 tries the leases and gives up (75) if busy, 0
+  # queues for them. Sets rc.
+  build_on() {
+    echo "Building on $1$([[ "$2" == 1 ]] || echo ", queued behind whatever it's running")"
+    rc=0
+    THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; cd desktop && nice cargo build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 || rc=$?
+    cat "$out"
+  }
   while IFS= read -r HOST; do
     # A Mac that answers within a few seconds, with no prompt to wait on.
     [[ "$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" uname -s </dev/null 2>/dev/null || true)" == Darwin ]] || continue
-    echo "Building on $HOST"
-    rc=0
-    THREADBEAR_REMOTE_TRY=1 "$SRC/desktop/scripts/remote.sh" "$HOST" -- bash -c "set -o pipefail; cd desktop && nice cargo build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 || rc=$?
-    cat "$out"
+    build_on "$HOST" 1
     if [[ "$rc" == 75 ]]; then
       echo "$HOST is busy or has work queued; trying the next trusted build host." >&2
+      [[ -n "$BUSY_HOST" ]] || BUSY_HOST="$HOST"
       continue
     fi
-    [[ "$rc" == 0 ]] || remote_failed "$rc"
+    [[ "$rc" == 0 ]] || { rm -f "$DEFERRED"; remote_failed "$rc"; }
     BUILT_ON="$HOST"
     break
   done <<<"$HOSTS"
+  if [[ -z "$BUILT_ON" && -n "$BUSY_HOST" ]]; then
+    now="$(date +%s)"
+    since="$(cat "$DEFERRED" 2>/dev/null || true)"
+    [[ "$since" =~ ^[0-9]+$ && "$since" -le "$now" ]] || { since="$now"; echo "$now" >"$DEFERRED"; }
+    if (( now - since >= QUEUE_AFTER )); then
+      echo "Every trusted build host has been busy for $(( (now - since) / 60 )) minutes, so this build waits its turn on $BUSY_HOST rather than trying again later." >&2
+      HOST="$BUSY_HOST"
+      build_on "$HOST" 0
+      [[ "$rc" == 0 ]] || { [[ "$rc" == 3 || "$rc" == 255 ]] || rm -f "$DEFERRED"; remote_failed "$rc"; }
+      BUILT_ON="$HOST"
+    fi
+  fi
   if [[ -z "$BUILT_ON" ]]; then
     echo "None of the update build hosts ($(tr '\n' ' ' <<<"$HOSTS")) is a Mac that answered and was free, so nothing was built; the app tries again later." >&2
     exit 4
   fi
+  rm -f "$DEFERRED"
   built_in="$(sed -n 's/^BUILT_IN=//p' "$out" | tail -1)"
   [[ "$built_in" == /* ]] || { echo "The build on $HOST didn't say where it built." >&2; exit 1; }
   for bin in threadbear-gpui threadbear-web-helper; do

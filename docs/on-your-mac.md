@@ -385,7 +385,11 @@ File references are where to look.
   Automatic update builds try both locks without waiting, and leave a host
   with live measurement waiters alone. A busy host makes the app try again
   at a later look, reading the latest main then; a build already running
-  finishes with both locks held. The first has a note beside it
+  finishes with both locks held. Once every trusted host has been busy
+  for 45 minutes, the next update build queues for the lease like any
+  other run, so a host kept busy all day can't hold the app back for good
+  (`~/Library/Caches/Threadbear/update-desktop/deferred-since` holds when
+  that began, and goes once a build runs). The first has a note beside it
   (`threadbear-perf.lock.holder`: its pid, when
   it took the lock and what it's running) so a waiting run can say who it's
   waiting for. The holder deletes it when it finishes. Each waiting run keeps
