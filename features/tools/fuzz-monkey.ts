@@ -165,6 +165,16 @@ function rssKb(pid: number | undefined): number {
   }
 }
 
+/** The app's own crash or hang record; an app that keeps none says so, which isn't a failure. */
+async function report(app: GpuiDriver, cmd: 'crashes' | 'hangs'): Promise<string> {
+  try {
+    return await app.do({ cmd }, 15);
+  } catch (e) {
+    if (isHard((e as Error).message)) throw e;
+    return 'ok {}';
+  }
+}
+
 /** Invariants that hold whatever was clicked. Returns what broke, if anything. */
 async function check(app: GpuiDriver, before: { panics: number; stalls: number; error?: string | null }, recentMock: boolean): Promise<{ kind: string; detail: string } | null> {
   const pid = app.pid;
@@ -175,14 +185,14 @@ async function check(app: GpuiDriver, before: { panics: number; stalls: number; 
       return { kind: 'crash', detail: 'the app process is gone' };
     }
   }
-  const crashes = okJson(await app.do({ cmd: 'crashes' }, 15));
+  const crashes = okJson(await report(app, 'crashes'));
   const panics = (crashes.panics as unknown[] | undefined) ?? [];
   if (panics.length > before.panics) {
     const p = panics[panics.length - 1] as { message?: string; location?: string };
     before.panics = panics.length;
     return { kind: 'panic', detail: `${p.location ?? '?'}: ${(p.message ?? '').slice(0, 300)}` };
   }
-  const hangs = okJson(await app.do({ cmd: 'hangs' }, 15));
+  const hangs = okJson(await report(app, 'hangs'));
   const stalls = (hangs.stalls as { name: string; stuckIn?: string; recoveredAfter?: number }[] | undefined) ?? [];
   if (stalls.length > before.stalls) {
     const s = stalls[stalls.length - 1];
