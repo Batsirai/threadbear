@@ -415,6 +415,7 @@ impl Threadbear {
         }
         self.share_popover = Some(id);
         window.focus(&self.share_focus, cx);
+        crate::web_panels::keyboard_to_app(window);
         cx.notify();
     }
 

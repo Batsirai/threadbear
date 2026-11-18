@@ -1240,6 +1240,7 @@ pub(crate) fn focus_menu(view: &Entity<PopupMenu>, replacing: Option<&Entity<Pop
     let before = window.focused(cx).filter(|f| replaced.as_ref() != Some(f));
     let menu_focus = view.focus_handle(cx);
     window.focus(&menu_focus, cx);
+    crate::web_panels::keyboard_to_app(window);
     (menu_focus, before)
 }
 
@@ -1249,6 +1250,7 @@ pub(crate) fn give_back_focus(menu_focus: &FocusHandle, before: Option<&FocusHan
     if menu_focus.is_focused(window) || menu_focus.contains_focused(window, cx) {
         if let Some(before) = before {
             window.focus(before, cx);
+            crate::web_panels::keyboard_to_app(window);
         }
     }
 }
