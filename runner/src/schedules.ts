@@ -105,6 +105,9 @@ type UnrecordedRun = RanParams & { since: number; slot?: string };
 // that's been warned of, and whether the backend has said yes (it's
 // forgotten once a row shows it, as a yes can come with the row edited).
 type HeldRun = UnrecordedRun & { tries?: number; warned?: boolean; acked?: boolean };
+type Hold = { kind: 'due' | 'request'; expect: string; lost: boolean; timer?: TimerHandle };
+// convex/sync.ts claimSchedule's claim lasts 2 minutes; renewed well inside it.
+const CLAIM_RENEW_MS = 45_000;
 const runKey = (r: RanParams) => `${r.scheduleId}\n${r.lastRun.at}\n${r.lastRun.outcome}\n${r.lastRun.threadId ?? ''}`;
 // The same run: two can share a millisecond (a run now straight after one
 // that failed), so the time alone doesn't say.
@@ -251,6 +254,10 @@ export class Scheduler {
   // until it lands.
   private unrecorded = new Map<string, HeldRun>();
   private recording = new Set<string>();
+  // Claims this process holds while it checks, sends and records a run, by
+  // schedule (hold): renewed before they lapse, as a check can run longer
+  // than a claim lasts.
+  private holds = new Map<string, Hold>();
   // One file a run, so two runner processes in a handover never write over
   // each other's (a list in one file would need a lock).
   private runsDir: string;
@@ -350,6 +357,7 @@ export class Scheduler {
     this.stopped = true;
     this.timer?.cancel();
     this.saveRetry?.cancel();
+    for (const id of [...this.holds.keys()]) this.letGo(id);
     this.unlisten?.();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
@@ -862,6 +870,8 @@ export class Scheduler {
         // A yes for what was sent: if an edit came in meanwhile and the run
         // took its updatedAt (overlayUnrecorded), it's told again with that.
         if (run.expectUpdatedAt === p.expectUpdatedAt) run.acked = true;
+        // Recorded: the backend let the claim go with it.
+        if (run.acked && ![...this.unrecorded.values()].some((r) => r.scheduleId === scheduleId && !r.acked)) this.letGo(scheduleId);
         if (run.tries) this.log.info('recorded a schedule run in the backend after retrying', { scheduleId, tries: run.tries });
       } catch (e) {
         run.tries = (run.tries ?? 0) + 1;
@@ -922,6 +932,60 @@ export class Scheduler {
   // recorded: it's never claimed again.
   private slotRan(scheduleId: string, slot: string): boolean {
     for (const r of this.unrecorded.values()) if (r.scheduleId === scheduleId && r.slot === slot) return true;
+    return false;
+  }
+
+  // A claim held for a schedule (backendTick, runRequested), renewed every
+  // CLAIM_RENEW_MS until it's let go: once its run is recorded, when it's
+  // released, or when a renewal says it isn't ours any more (the run was
+  // recorded, so the schedule's next time has moved, or another holder has
+  // it). Kept through a record that hasn't got through, so the run isn't
+  // claimed and sent again by another process meanwhile.
+  private hold(backend: ScheduleBackend, scheduleId: string, kind: 'due' | 'request', expect: string): void {
+    this.letGo(scheduleId);
+    const h: Hold = { kind, expect, lost: false };
+    this.holds.set(scheduleId, h);
+    const renew = () => {
+      h.timer = this.clock.setTimeout(() => {
+        if (this.holds.get(scheduleId) !== h || this.stopped) return;
+        void backend
+          .claim(scheduleId, kind, expect)
+          .then((ok) => {
+            if (ok) return;
+            h.lost = true;
+            if (this.holds.get(scheduleId) === h) this.holds.delete(scheduleId);
+          })
+          // Not heard: kept, and tried again (confirmed asks before a send).
+          .catch(() => {})
+          .finally(() => {
+            if (this.holds.get(scheduleId) === h) renew();
+          });
+      }, CLAIM_RENEW_MS);
+    };
+    renew();
+  }
+
+  private letGo(scheduleId: string): void {
+    const h = this.holds.get(scheduleId);
+    if (!h) return;
+    h.timer?.cancel();
+    this.holds.delete(scheduleId);
+  }
+
+  private async release(backend: ScheduleBackend, scheduleId: string): Promise<void> {
+    this.letGo(scheduleId);
+    await backend.release(scheduleId).catch(() => {});
+  }
+
+  // Whether the claim held for a schedule is still this process's, asked
+  // of the backend just before a send. No (or no answer): it's let go and
+  // the run waits for the next tick, where it's claimed afresh.
+  private async confirmed(backend: ScheduleBackend, scheduleId: string): Promise<boolean> {
+    const h = this.holds.get(scheduleId);
+    if (!h || h.lost) return false;
+    const ok = await backend.claim(scheduleId, h.kind, h.expect).catch(() => false);
+    if (ok && this.holds.get(scheduleId) === h) return true;
+    if (this.holds.get(scheduleId) === h) await this.release(backend, scheduleId);
     return false;
   }
 
@@ -1079,6 +1143,7 @@ export class Scheduler {
           return false;
         });
         if (!claimed || this.stopped) continue;
+        this.hold(backend, rec.id, 'due', due);
         // The record as it is now: the subscription may have brought a
         // newer one (its check changed) or none (deleted, maybe by another
         // runner) while the claim was out, and again while it checked.
@@ -1091,15 +1156,18 @@ export class Scheduler {
         if (!after) continue;
         rec = after;
         if (checked === 'later') {
-          await backend.release(rec.id).catch(() => {});
+          await this.release(backend, rec.id);
           continue;
         }
         const slot = rec.nextRunAt;
+        // Still ours, just before it goes: the check may have outlasted a
+        // renewal that didn't get through.
+        if (!(await this.confirmed(backend, rec.id))) continue;
         if (rec.threadId && this.elsewhere(rec.threadId)) {
           this.dispatching.add(rec.id);
           void this.send(rec, false, checked).then(async (res) => {
             if (res.outcome === 'retry') {
-              await backend.release(rec.id).catch(() => {});
+              await this.release(backend, rec.id);
               return;
             }
             if (rec.at) this.finish(rec);
@@ -1112,7 +1180,7 @@ export class Scheduler {
         }
         const res = await this.send(rec, false, checked);
         if (res.outcome === 'retry') {
-          await backend.release(rec.id).catch(() => {});
+          await this.release(backend, rec.id);
           continue;
         }
         if (rec.at) this.finish(rec);
@@ -1144,10 +1212,12 @@ export class Scheduler {
     const request = row.runRequestedAt!;
     const claimed = await backend.claim(row.id, 'request', request).catch(() => false);
     if (!claimed || this.stopped) return;
+    this.hold(backend, row.id, 'request', request);
     // As it is now (backendTick says why): deleted meanwhile, or no longer
     // the one claimed, it isn't sent.
     const rec = this.stillClaimed(backend, row);
     if (!rec) return;
+    if (!(await this.confirmed(backend, rec.id))) return;
     let res: Awaited<ReturnType<Scheduler['send']>>;
     try {
       this.notMidCheck(rec);
@@ -1156,7 +1226,7 @@ export class Scheduler {
       // Busy (a restart, or its thread finishing on the old runner): leave
       // the request for the next look.
       if (e instanceof RpcError && e.code === ErrorCode.busy) {
-        await backend.release(rec.id).catch(() => {});
+        await this.release(backend, rec.id);
         return;
       }
       throw e;
@@ -1172,7 +1242,7 @@ export class Scheduler {
     if (!rec) return undefined;
     if (!rec.paused && !rec.finishedAt && rec.nextRunAt === slot) return rec;
     // Run now or an edit can consume this slot while its claim/check waits.
-    void backend.release(rec.id).catch(() => {});
+    void this.release(backend, rec.id);
     return undefined;
   }
 
@@ -1193,8 +1263,11 @@ export class Scheduler {
     if (now && this.mine(now) && now.createdAt === claimed.createdAt) return now;
     // Let go, in case the claim is still on a row of ours (moved away keeps
     // it): only the holder's is cleared.
-    if (now) void backend.release(claimed.id).catch(() => {});
-    else this.dropKept(claimed.id);
+    if (now) void this.release(backend, claimed.id);
+    else {
+      this.letGo(claimed.id);
+      this.dropKept(claimed.id);
+    }
     return undefined;
   }
 

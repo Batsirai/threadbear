@@ -8,6 +8,7 @@ import { SAVE_RETRY_MS, Scheduler, scheduleMethods, type ScheduleBackend, type S
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { ErrorCode, RpcError } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
+import type { CheckResult } from '../../src/schedule-check.ts';
 import { readRunnerJson } from '../../src/config.ts';
 import { convexPoster, toOwnedScheduleDoc, SCHEDULE_POOLS_API_VERSION } from '../../src/sync.ts';
 import { keptCheckFile } from '../../src/schedule-check.ts';
@@ -1147,6 +1148,89 @@ test('a due run is claimed, so two runner processes under one id send it once', 
   assert.equal(row.finishedAt, '2026-10-26T12:10:00.000Z');
   assert.equal(row.nextRunAt, undefined);
   assert.equal(row.claim, undefined, 'the claim is let go once it ran');
+  old.stop();
+  now.stop();
+});
+
+// A claim lasts two minutes and a check can take five (checkTimeoutSecs):
+// the claim is renewed while its holder checks, sends and records the run,
+// and confirmed just before the send, so another process of the same runner
+// (a restart's handover) can't take the lapsed claim and send it again.
+test('a run whose check outlasts the claim is renewed, so a second runner process never sends it too', async () => {
+  const h = makeHarness();
+  const { thread } = idleThread(h);
+  const b = fakeBackend(h.clock, [LAPTOP]);
+  let finishCheck!: () => void;
+  const slow = (p: { command: string }) => new Promise<CheckResult>((done) => (finishCheck = () => done({ ok: true, output: `news from ${p.command}` })));
+  const quick = async () => ({ ok: true as const, output: 'news' });
+  const make = (home: string, runCheck: (p: { command: string }) => Promise<CheckResult>) => {
+    fs.mkdirSync(home, { recursive: true });
+    const s = new Scheduler({ runner: h.runner, home, clock: h.clock, log: nullLogger, zone: () => 'UTC', self: LAPTOP, syncOn: true, runCheck });
+    s.start();
+    return s;
+  };
+  const old = make(path.join(h.home, 'old'), slow);
+  await old.attach(b.for('laptop-old', LAPTOP.id));
+  const sc = await old.create({ text: 'Look', title: 'Slow check', at: iso(h.clock.now() + MIN), threadId: thread.id, check: 'slow' });
+  await tick();
+  h.clock.advance(MIN);
+  for (let i = 0; i < 5; i++) await tick();
+  assert.ok(finishCheck, 'the old process is checking');
+  // The new process starts while the check runs on past the claim's two minutes.
+  const now = make(path.join(h.home, 'new'), quick);
+  await now.attach(b.for('laptop-new', LAPTOP.id));
+  for (let i = 0; i < 8; i++) {
+    h.clock.advance(MIN / 2);
+    for (let j = 0; j < 5; j++) await tick();
+  }
+  assert.equal(h.events(thread.id).filter((e) => e.type === 'user.message' && e.scheduleId === sc.id).length, 0, 'the new process left it alone');
+  finishCheck();
+  for (let i = 0; i < 10; i++) await tick();
+  h.clock.advance(MIN);
+  for (let i = 0; i < 10; i++) await tick();
+  assert.equal(h.events(thread.id).filter((e) => e.type === 'user.message' && e.scheduleId === sc.id).length, 1, 'sent once');
+  assert.equal(b.rows.get(sc.id)!.runs, 1);
+  assert.equal(b.rows.get(sc.id)!.claim, undefined, 'let go once recorded');
+  old.stop();
+  now.stop();
+});
+
+// The run went out but the backend can't be told yet (its answer lost, a
+// blip on that call): the claim is kept until it is, so another process
+// doesn't find the run still due and send it again.
+test('a sent run whose record keeps failing keeps its claim, so a second runner process never sends it too', async () => {
+  const h = makeHarness();
+  const { thread } = idleThread(h);
+  const b = fakeBackend(h.clock, [LAPTOP]);
+  let recordFails = true;
+  const oldBe = b.for('laptop-old', LAPTOP.id);
+  const old = backendScheduler(h, LAPTOP, path.join(h.home, 'old'));
+  await old.attach({ ...oldBe, ran: async (p) => {
+    if (recordFails) throw new Error('fetch failed');
+    return oldBe.ran(p);
+  } });
+  const sc = await old.create({ text: 'Ping', at: iso(h.clock.now() + MIN), threadId: thread.id });
+  await tick();
+  h.clock.advance(MIN);
+  for (let i = 0; i < 5; i++) await tick();
+  // What the new process sends it records: none, while the old one holds it.
+  const newBe = b.for('laptop-new', LAPTOP.id);
+  let newRan = 0;
+  const now = backendScheduler(h, LAPTOP, path.join(h.home, 'new'));
+  await now.attach({ ...newBe, ran: async (p) => (newRan++, newBe.ran(p)) });
+  for (let i = 0; i < 10; i++) {
+    h.clock.advance(MIN / 2);
+    for (let j = 0; j < 5; j++) await tick();
+  }
+  assert.equal(newRan, 0, 'not sent again while its record waited');
+  recordFails = false;
+  for (let i = 0; i < 4; i++) {
+    h.clock.advance(MIN / 2);
+    for (let j = 0; j < 5; j++) await tick();
+  }
+  assert.equal(newRan, 0);
+  assert.equal(b.rows.get(sc.id)!.runs, 1);
+  assert.equal(b.rows.get(sc.id)!.claim, undefined, 'let go once recorded');
   old.stop();
   now.stop();
 });

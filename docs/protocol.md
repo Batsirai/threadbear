@@ -5895,7 +5895,12 @@ kept in `schedules.json` in the data dir.
   as above; before sending it takes the run with `sync:claimSchedule`,
   which says no unless the row is still due at that `nextRunAt` and
   nobody holds it (a claim lasts 2 minutes), so a run is sent once even
-  while two runner processes share a `runnerId` in a handover. What it
+  while two runner processes share a `runnerId` in a handover. The
+  holder takes it again every 45 seconds while it checks, sends and
+  records the run (a check can run 5 minutes), asks once more just before
+  the send and sends nothing if it's no longer its, and keeps it until
+  `sync:scheduleRan` gets through: a lapsed claim let the other process
+  send the same run again. What it
   sends is the claimed schedule as it is once the claim (and its check)
   come back: still there, still this runner's, and the same schedule
   (`createdAt`), or nothing is sent and the claim is let go. The main Mac
