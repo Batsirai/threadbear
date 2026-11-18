@@ -53,7 +53,8 @@ export function keptCheckFile(home: string, scheduleId: string, check: string): 
 
 // What a check printed that hasn't reached a thread yet, and the command
 // that printed it.
-export type KeptCheck = { check: string; at: string; extra: string };
+// `cwd`: the folder it ran in, as only that folder's run may carry it (older files have none).
+export type KeptCheck = { check: string; at: string; extra: string; cwd?: string };
 
 export function readKeptCheck(home: string, scheduleId: string, check: string): KeptCheck | undefined {
   let kept: KeptCheck;

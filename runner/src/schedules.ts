@@ -1352,7 +1352,7 @@ export class Scheduler {
         if (!now) return 'later' as const;
         let res: typeof out | Carried = out;
         if ('extra' in out) {
-          const kept = { check: command, at: this.iso(), extra: out.extra };
+          const kept = { check: command, at: this.iso(), extra: out.extra, cwd };
           try {
             keepCheck(this.home, id, kept);
           } catch (e) {
@@ -1439,6 +1439,9 @@ export class Scheduler {
     if (!rec.check) return undefined;
     const kept = this.memKept.get(`${rec.id}\n${rec.check}`) ?? readKeptCheck(this.home, rec.id, rec.check);
     if (!kept || this.delivered.has(`${rec.id}\n${kept.check}\n${kept.at}`)) return undefined;
+    // What it printed in another folder isn't this run's (the schedule was
+    // moved since): it's checked afresh where it is now (Codex's review).
+    if (kept.cwd !== undefined && kept.cwd !== this.checkFolder(rec)) return undefined;
     return { extra: kept.extra, kept: kept.at, check: kept.check };
   }
 

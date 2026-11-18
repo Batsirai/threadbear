@@ -1316,7 +1316,8 @@ test('a schedule paused while its claim is confirmed just before the send isn’
   sched.stop();
 });
 
-// Codex's review: a check's result is for the folder it ran in. One moved
+// Codex's review: a check's result, and the output kept from it, is for
+// the folder it ran in. One moved
 // to another folder while its claim was confirmed is checked again there.
 test('a schedule moved to another folder while its claim is confirmed is checked again there before it goes', async () => {
   const h = makeHarness();
@@ -1393,6 +1394,57 @@ test('a schedule moved to another folder while its check runs is checked again t
     for (let j = 0; j < 5; j++) await tick();
     h.clock.advance(MIN / 2);
   }
+  assert.equal(checkedIn[0], path.resolve(a));
+  assert.equal(checkedWhenSent, path.resolve(other), 'sent only after a check in its new folder');
+  assert.equal(b.rows.get(sc.id)!.runs, 1);
+  sched.stop();
+});
+
+test('a schedule moved while its check runs, whose confirmation then fails, is checked again in its new folder', async () => {
+  const h = makeHarness();
+  const b = fakeBackend(h.clock, [LAPTOP]);
+  const a = tmpDir();
+  const other = tmpDir();
+  const checkedIn: string[] = [];
+  let checkedWhenSent: string | undefined;
+  let finish: (() => void) | undefined;
+  const sched = new Scheduler({
+    runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, zone: () => 'UTC', self: LAPTOP, syncOn: true,
+    runCheck: (p) => {
+      checkedIn.push(p.cwd);
+      // The first waits until the move; any after answers at once.
+      if (checkedIn.length > 1) return Promise.resolve({ ok: true, output: 'news' });
+      return new Promise((done) => (finish = () => done({ ok: true, output: 'news' })));
+    },
+  });
+  sched.start();
+  const be = b.for('laptop-a', LAPTOP.id);
+  let claims = 0;
+  await sched.attach({
+    ...be,
+    // The second claim, the confirmation, doesn't get through.
+    claim: async (...args) => {
+      if (++claims === 2) throw new Error('fetch failed');
+      return be.claim(...args);
+    },
+    ran: async (p) => {
+      if (p.sent) checkedWhenSent ??= checkedIn.at(-1);
+      return be.ran(p);
+    },
+  });
+  const sc = await sched.create({ text: 'build', title: 'Build', at: iso(h.clock.now() + MIN), cwd: a, accountId: 'claude-3', check: 'ready' });
+  await tick();
+  h.clock.advance(MIN);
+  for (let j = 0; j < 5; j++) await tick();
+  assert.ok(finish, 'checking in the first folder');
+  await sched.update({ scheduleId: sc.id, cwd: other });
+  await tick();
+  finish!();
+  for (let i = 0; i < 6; i++) {
+    for (let j = 0; j < 5; j++) await tick();
+    h.clock.advance(MIN / 2);
+  }
+  assert.ok(claims >= 3, 'tried again after the failed confirmation');
   assert.equal(checkedIn[0], path.resolve(a));
   assert.equal(checkedWhenSent, path.resolve(other), 'sent only after a check in its new folder');
   assert.equal(b.rows.get(sc.id)!.runs, 1);
