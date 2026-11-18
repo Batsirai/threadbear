@@ -211,6 +211,7 @@ After(async function (this: ThreadbearWorld, { result, pickle }) {
     if (process.env.TB_STRESS_LOG) {
       const dump = await this.app.dump().catch((e: Error) => ({ error: e.message }));
       fs.writeFileSync(file.replace(/\.png$/, '.dump.json'), JSON.stringify(dump, null, 1));
+      fs.writeFileSync(file.replace(/\.png$/, '.log'), await this.app.appLog().catch(() => ''));
     }
     if (fs.existsSync(file)) this.attach(fs.readFileSync(file), 'image/png');
   }

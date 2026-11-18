@@ -670,7 +670,8 @@ impl TranscriptModel {
             } else {
                 EventPayload::AssistantTextDelta { item_id, text }
             };
-            let event = Event::new(self.last_seq, "", "", None, "", payload);
+            // Still streaming, so the open turn's (`inProgress` has no turn).
+            let event = Event::new(self.last_seq, "", "", self.open_turn.clone().as_deref(), "", payload);
             self.reduce(&event);
         }
         for item in &mut self.items {
@@ -750,6 +751,16 @@ impl TranscriptModel {
             self.item_index.insert(self.items[i].id.clone(), i);
         }
         self.mark_inserted(anchor + 1);
+    }
+
+    /// A row made before its turn was known (from a subscribe's
+    /// `inProgress`, which has none) takes the turn of the first event for
+    /// it that says one. Its version moves with the `update` that follows.
+    fn adopt_turn(&mut self, id: &str, turn_id: Option<&str>) {
+        let (Some(&i), Some(turn)) = (self.item_index.get(id), turn_id) else { return };
+        if self.items[i].turn_id.is_none() {
+            self.items[i].turn_id = Some(turn.to_owned());
+        }
     }
 
     fn update(&mut self, id: &str, body: impl FnOnce(&mut RowContent)) {
@@ -854,13 +865,14 @@ impl TranscriptModel {
                     // A reply the CLI sent as a thinking block signed as
                     // narration (runner: isNarration in normalize.ts) streams
                     // as reasoning and lands as text: it takes that row's place.
-                    let mut row = Row::new(&id, self.items[i].seq, self.items[i].turn_id.clone(), RowContent::Assistant(make(item_id, text)));
+                    let mut row = Row::new(&id, self.items[i].seq, self.items[i].turn_id.clone().or_else(|| turn_id.clone()), RowContent::Assistant(make(item_id, text)));
                     row.version = next_row_version();
                     self.items[i] = row;
                     self.item_index.remove(&thought);
                     self.item_index.insert(id, i);
                     self.mark_inserted(i);
                 } else if self.item_index.contains_key(&id) {
+                    self.adopt_turn(&id, turn_id.as_deref());
                     let item = make(item_id, text);
                     self.update(&id, move |content| *content = RowContent::Assistant(item));
                 } else if !text.is_empty() {
@@ -874,6 +886,7 @@ impl TranscriptModel {
                 let id = format!("r:{item_id}");
                 let item = TextItem::new(item_id, text);
                 if self.item_index.contains_key(&id) {
+                    self.adopt_turn(&id, turn_id.as_deref());
                     self.update(&id, move |content| *content = RowContent::Reasoning(item));
                 } else if !super::text::trim_ws_nl(text).is_empty() {
                     self.append(Row::new(&id, seq, turn_id, RowContent::Reasoning(item)));
@@ -889,6 +902,7 @@ impl TranscriptModel {
                     return;
                 }
                 if self.item_index.contains_key(&id) {
+                    self.adopt_turn(&id, turn_id.as_deref());
                     let delta = text.clone();
                     self.update(&id, move |content| {
                         if let RowContent::Assistant(item) = content {
@@ -920,6 +934,7 @@ impl TranscriptModel {
                     return;
                 }
                 if self.item_index.contains_key(&id) {
+                    self.adopt_turn(&id, turn_id.as_deref());
                     let delta = text.clone();
                     self.update(&id, move |content| {
                         if let RowContent::Reasoning(item) = content {
@@ -950,7 +965,10 @@ impl TranscriptModel {
                         self.streaming.insert(item_id.clone(), (kind, text.clone()));
                     }
                 } else if !text.is_empty() {
-                    self.append(Row::new(&id, seq, turn_id, content));
+                    // The runner's `inProgress` says no turn: what's still
+                    // streaming is the open turn's.
+                    let turn = turn_id.or_else(|| self.open_turn.clone());
+                    self.append(Row::new(&id, seq, turn, content));
                     self.streaming.insert(item_id.clone(), (kind, text.clone()));
                 }
             }

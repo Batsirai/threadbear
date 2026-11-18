@@ -59,3 +59,36 @@ fn a_held_reasoning_delta_after_narration_landed_adds_no_row() {
     let _ = model.apply(vec![reasoning_delta(0, "n1", " more")]);
     assert_eq!(ids(&model), before);
 }
+
+// A reply that was already streaming when the subscribe answered (a runner
+// slow to answer it, so its turn started and its first words went out
+// before the app was listening): the reply's `inProgress` text has no turn,
+// but the row is still the open turn's, so it groups and ends with it
+// (stress run, 18 Nov: `turn: null` on the streamed reply).
+#[test]
+fn a_reply_streaming_before_the_subscribe_belongs_to_its_turn() {
+    let mut model = TranscriptModel::new(None);
+    model.load(vec![event_turn(1, "turn.started", json!({"turnId": "t0"}), Some("t0")), user(2, "Hi"), event_turn(3, "turn.completed", json!({"turnId": "t0", "outcome": "completed"}), Some("t0"))], &[]);
+    let mut feed = ThreadFeed::new(model);
+    feed.begin_subscribe();
+    let _ = feed.receive(delta(0, "m1", " there"));
+    let in_progress = [InProgress { item_id: "m1".into(), type_: "assistant.text".into(), text: "Hello".into() }];
+    let _ = feed.finish_subscribe(vec![event(4, "turn.started", json!({"turnId": "t1"}))], &in_progress);
+    let _ = feed.flush();
+    assert_eq!(feed.model().item("a:m1").expect("the reply").turn_id.as_deref(), Some("t1"), "while it streams");
+    let _ = feed.receive(text(5, "m1", "Hello there"));
+    let _ = feed.receive(done(6));
+    let _ = feed.flush();
+    assert_eq!(feed.model().item("a:m1").expect("the reply").turn_id.as_deref(), Some("t1"), "once it's finished");
+}
+
+// The same, read in the first page: `threads.events`' own `inProgress`.
+#[test]
+fn a_reply_streaming_in_the_first_page_belongs_to_its_turn() {
+    let mut model = TranscriptModel::new(None);
+    let in_progress = [InProgress { item_id: "m1".into(), type_: "assistant.text".into(), text: "Hello".into() }];
+    model.load(vec![event(1, "turn.started", json!({"turnId": "t1"})), user(2, "Hi")], &in_progress);
+    assert_eq!(model.item("a:m1").expect("the reply").turn_id.as_deref(), Some("t1"));
+    let _ = model.apply(vec![text(3, "m1", "Hello there"), done(4)]);
+    assert_eq!(model.item("a:m1").expect("the reply").turn_id.as_deref(), Some("t1"));
+}

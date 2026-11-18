@@ -251,7 +251,12 @@ export class GpuiDriver implements Driver {
   }
 
   async do(cmd: Record<string, unknown>, timeoutSeconds = 30): Promise<string> {
-    if (cmd.cmd === 'click' || cmd.cmd === 'label-point') await this.settle();
+    // Any command that clicks through the pointer (`chip`, `peek` and the
+    // rest with a `click`) aims where its target was drawn a frame before.
+    // A thread arrowed to comes in 10 points off once its read lands, so on
+    // a runner slow to read, a chip pressed as it landed was missed by that
+    // much (stress run, 18 Nov).
+    if (cmd.cmd === 'click' || cmd.cmd === 'label-point' || (cmd.click !== undefined && cmd.click !== false)) await this.settle();
     const r = await this.ask(cmd, timeoutSeconds);
     if (r.error) throw new Error(`${cmd.cmd}: ${r.error as string}${await this.evidenceFor(r)}`);
     return typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? '');
