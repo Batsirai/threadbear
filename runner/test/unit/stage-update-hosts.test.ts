@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpDir } from '../helpers/fakes.ts';
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', '..', 'desktop', 'scripts', 'stage-update.sh');
@@ -26,7 +26,7 @@ function write(file: string, text: string, mode = 0o644) {
 // rust: 'rustup' has a stand-in rustup beside cargo, whose `run stable`
 // runs that cargo; 'none' is a Mac with only a cargo (Homebrew's rust).
 // cargoFails: the build fails.
-function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy', rust: 'rustup' | 'none' = 'rustup', cargoFails = false) {
+function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy' | 'slow', rust: 'rustup' | 'none' = 'rustup', cargoFails = false) {
   const root = tmpDir();
   const home = path.join(root, 'home');
   const marks = path.join(root, 'marks');
@@ -36,7 +36,9 @@ function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy
   write(path.join(checkout, 'desktop', 'scripts', 'remote.sh'), `${note('remote')}
 cat >/dev/null
 echo "try=\${THREADBEAR_REMOTE_TRY-unset}" >> '${marks}/remote'
+[ "$1" != gone.invalid ] || exit 3
 ${remote === 'busy' ? '[ "$1" = free.invalid ] || [ "${THREADBEAR_REMOTE_TRY-}" != 1 ] || exit 75' : ''}
+${remote === 'slow' ? `echo $$ > '${marks}/remote-pid'; trap 'echo stopped >> "${marks}/remote"; exit 143' TERM; sleep 30 & wait` : ''}
 ${remote === 'legacy' ? '[ "$2" = -- ] || exit 127' : ''}
 echo BUILT_IN=/mock-target
 `, 0o755);
@@ -54,21 +56,24 @@ echo BUILT_IN=/mock-target
   const data = path.join(root, 'data');
   fs.mkdirSync(data, { recursive: true });
   if (config) fs.writeFileSync(path.join(data, 'runner.json'), JSON.stringify(config));
-  const run = (extra: Record<string, string> = {}) => {
-    const r = spawnSync('bash', [SCRIPT, checkout, '--next', path.join(root, 'next.app')], {
+  const args = [SCRIPT, checkout, '--next', path.join(root, 'next.app')];
+  const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({ ...process.env, ...extra, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, THREADBEAR_HOME: data,
+    ...(remote ? { 'BASH_FUNC_ssh%%': '() { cat >/dev/null; echo Darwin; }', 'BASH_FUNC_ioreg%%': '() { :; }', 'BASH_FUNC_scp%%': '() { touch "${@: -1}"; }' } : {}),
+  });
+  const run = Object.assign((extra: Record<string, string> = {}) => {
+    const r = spawnSync('bash', args, {
       encoding: 'utf8',
       timeout: 60_000,
       // Only the system's tools beside the stand-ins: a real rustup on the
       // test machine's PATH would really install Rust.
-      env: { ...process.env, ...extra, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, THREADBEAR_HOME: data,
-        // Bash imports this stand-in even though stage-update sets a system PATH.
-        ...(remote ? { 'BASH_FUNC_ssh%%': '() { cat >/dev/null; echo Darwin; }', 'BASH_FUNC_ioreg%%': '() { :; }', 'BASH_FUNC_scp%%': '() { touch "${@: -1}"; }' } : {}),
-      },
+      // Only the system's tools beside the stand-ins; bash imports the ssh
+      // stand-in even though stage-update sets a system PATH.
+      env: env(extra),
     });
     const marked = (what: string) => (fs.existsSync(path.join(marks, what)) ? fs.readFileSync(path.join(marks, what), 'utf8') : '');
     const deferred = path.join(home, 'Library', 'Caches', 'Threadbear', 'update-desktop', 'deferred-since');
     return { status: r.status, out: `${r.stdout}${r.stderr}`, marked, root, deferred };
-  };
+  }, { start: () => ({ child: spawn('bash', args, { env: env(), stdio: 'ignore' }), marks }) });
   return run;
 }
 
@@ -111,6 +116,30 @@ test('busy hosts for long enough: the update queues for the lease instead of try
   assert.match(third.marked('remote'), /try=1\n[^]*builder\.invalid --[^]*try=0\n$/);
   assert.match(third.marked('bundle'), /^builtOn=builder\.invalid$/m);
   assert.ok(!fs.existsSync(third.deferred), 'a build clears the deferral');
+});
+
+test('a host that went away after a busy one neither resets the busy clock nor stops the queueing', () => {
+  const run = setup({ updateBuildHosts: ['busy.invalid', 'gone.invalid'] }, 'busy');
+  const first = run();
+  assert.equal(first.status, 4, first.out);
+  const since = fs.readFileSync(first.deferred, 'utf8').trim();
+  const later = run({ THREADBEAR_UPDATE_QUEUE_AFTER: '0' });
+  assert.equal(later.status, 0, later.out);
+  assert.match(later.out, /waits its turn on busy\.invalid/);
+  assert.match(later.marked('bundle'), /^builtOn=busy\.invalid$/m);
+  assert.ok(since && !fs.existsSync(later.deferred));
+});
+
+test("the app's SIGTERM at quit stops remote.sh too, not just the script", async () => {
+  const { child, marks } = setup({ updateBuildHosts: ['builder.invalid'] }, 'slow').start();
+  const pidFile = path.join(marks, 'remote-pid');
+  for (let i = 0; i < 200 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50));
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  child.kill('SIGTERM');
+  const code = await new Promise<number | null>((r) => child.on('exit', (c) => r(c)));
+  assert.equal(code, 143);
+  assert.match(fs.readFileSync(path.join(marks, 'remote'), 'utf8'), /stopped/);
+  assert.throws(() => process.kill(pid, 0), 'remote.sh is gone when the script has exited');
 });
 
 test('a busy trusted host leaves the next trusted host a chance to build', () => {

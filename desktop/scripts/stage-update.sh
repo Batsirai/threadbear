@@ -118,16 +118,22 @@ if [[ -n "$HOSTS" ]]; then
   # A run the host couldn't finish (it went away, ssh's own 255, or remote.sh's
   # disk check said no with 3) is tried again later, as when none answered. One
   # it finished and failed is a broken main: not tried again until main moves.
+  # host_gone <rc>: the host couldn't finish, rather than main failing.
+  host_gone() {
+    [[ "$1" == 3 || "$1" == 255 || "$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" uname -s </dev/null 2>/dev/null || true)" != Darwin ]]
+  }
   remote_failed() {
     local rc="$1"
     if [[ "$rc" == 75 ]]; then
       echo "$HOST is busy or has work queued; the app tries the latest main again later." >&2
       exit 4
     fi
-    if [[ "$rc" == 3 || "$rc" == 255 || "$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" uname -s 2>/dev/null || true)" != Darwin ]]; then
+    if host_gone "$rc"; then
       echo "$HOST couldn't finish the build (exit $rc: it went away or is short of disk); the app tries again later." >&2
       exit 4
     fi
+    # Main is broken: the next try, once main moves, starts the busy clock afresh.
+    rm -f "$DEFERRED"
     echo "The build on $HOST failed (exit $rc)." >&2
     exit 1
   }
@@ -150,9 +156,18 @@ if [[ -n "$HOSTS" ]]; then
   build_on() {
     echo "Building on $1$([[ "$2" == 1 ]] || echo ", queued behind whatever it's running")"
     rc=0
-    THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; cd desktop && nice cargo build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 || rc=$?
+    # In the background and waited on, so the app's SIGTERM at quit reaches
+    # remote.sh too (its trap stops the run on the host and leaves the
+    # lease): bash holds a trap until a foreground child ends, and the lock
+    # here would go while an orphan still queued for a build nobody stages.
+    THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; cd desktop && nice cargo build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 &
+    REMOTE_PID=$!
+    wait "$REMOTE_PID" || rc=$?
+    REMOTE_PID=""
     cat "$out"
   }
+  REMOTE_PID=""
+  trap '[[ -z "$REMOTE_PID" ]] || { kill -TERM "$REMOTE_PID" 2>/dev/null; wait "$REMOTE_PID" 2>/dev/null; }; exit 143' TERM
   while IFS= read -r HOST; do
     # A Mac that answers within a few seconds, with no prompt to wait on.
     [[ "$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" uname -s </dev/null 2>/dev/null || true)" == Darwin ]] || continue
@@ -162,7 +177,13 @@ if [[ -n "$HOSTS" ]]; then
       [[ -n "$BUSY_HOST" ]] || BUSY_HOST="$HOST"
       continue
     fi
-    [[ "$rc" == 0 ]] || { rm -f "$DEFERRED"; remote_failed "$rc"; }
+    # One that went away or is short of disk leaves the rest a chance, and
+    # doesn't reset how long the busy ones have been busy.
+    if [[ "$rc" != 0 ]] && host_gone "$rc"; then
+      echo "$HOST couldn't finish the build (exit $rc: it went away or is short of disk); trying the next trusted build host." >&2
+      continue
+    fi
+    [[ "$rc" == 0 ]] || remote_failed "$rc"
     BUILT_ON="$HOST"
     break
   done <<<"$HOSTS"
@@ -174,7 +195,7 @@ if [[ -n "$HOSTS" ]]; then
       echo "Every trusted build host has been busy for $(( (now - since) / 60 )) minutes, so this build waits its turn on $BUSY_HOST rather than trying again later." >&2
       HOST="$BUSY_HOST"
       build_on "$HOST" 0
-      [[ "$rc" == 0 ]] || { [[ "$rc" == 3 || "$rc" == 255 ]] || rm -f "$DEFERRED"; remote_failed "$rc"; }
+      [[ "$rc" == 0 ]] || remote_failed "$rc"
       BUILT_ON="$HOST"
     fi
   fi
