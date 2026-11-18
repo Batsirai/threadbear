@@ -1148,27 +1148,80 @@ export const movesPart = {
     return this.runnerNames?.(runnerId) ?? runnerId;
   },
 
-  // Box mode's save (src/box-save.ts): the thread's record as it is now,
-  // written out with its events, so a copy of its folder is whole. Its CLI
-  // keeps running (a move releases it; a save is only a copy).
-  snapshotForSave(this: Runner, threadId: string): ThreadRecord {
+  // Box mode: no turn starts in the thread while `reason` holds it
+  // (Runtime.holds); messages wait in its queue.
+  holdTurns(this: Runner, threadId: string, reason: 'save' | 'setup'): void {
+    const st = this.threads.get(threadId);
+    if (!st) return;
+    (st.rt.holds ??= new Set()).add(reason);
+  },
+
+  // The hold lifted; what waited in the queue goes on.
+  releaseTurns(this: Runner, threadId: string, reason: 'save' | 'setup'): void {
+    const st = this.threads.get(threadId);
+    if (!st?.rt.holds?.delete(reason)) return;
+    if (!st.rt.holds.size) st.rt.holds = undefined;
+    this.kickQueue(st);
+  },
+
+  // Box mode's save (src/box-save.ts). Every save the backend asks for is a
+  // stopping one (to sleep, at its day's hours, or to be archived), and
+  // once it's acknowledged the backend may delete the box: so nothing may
+  // change the thread's folder after the copy is taken. Turns are held
+  // (and stay held after the save, until the box is resumed or sent
+  // something: releaseTurns), a running turn is interrupted, and its CLI
+  // and background jobs stopped, before the record is written out and
+  // returned. Throws, letting go of the hold, if the work doesn't stop in
+  // `waitMs`.
+  async quiesceForSave(this: Runner, threadId: string, waitMs = 60_000): Promise<ThreadRecord> {
     const st = this.threads.get(threadId);
     if (!st) throw new Error("The box's thread isn't here, so there's nothing to save.");
-    this.flushDeltas(st);
-    this.store.save(st.rec);
-    return structuredClone(st.rec);
+    const { rt } = st;
+    this.holdTurns(threadId, 'save');
+    try {
+      if (rt.turn || rt.approvals.size) this.interrupt(threadId);
+      const busy = () => Boolean(rt.turn || rt.hooksRunning || rt.runningActions?.size || rt.editing || rt.cleaning || rt.preparing);
+      for (const end = Date.now() + waitMs; busy(); ) {
+        if (Date.now() > end) throw new Error("The thread's work didn't stop in time, so it wasn't saved: it carries on, and the save is asked for again.");
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      this.flushDeltas(st);
+      if (rt.session && !rt.closing) {
+        this.rememberStoppedWork(st);
+        this.releaseSession(st);
+      }
+      if (rt.closing) await rt.closing;
+      this.store.save(st.rec);
+      return structuredClone(st.rec);
+    } catch (e) {
+      this.releaseTurns(threadId, 'save');
+      throw e;
+    }
   },
 
   // Box mode, after a box restored its thread from a save (box-save.ts): the
-  // worktree's setup again, as the save carries no installed packages
-  // (unpackGit leaves node_modules behind). The checkout is the box's own
-  // clone, trusted as the runner's own checkout is.
+  // worktree's setup again, as the save carries no installed packages. The
+  // thread's turns are held ('setup', set as it loaded: RunnerDeps
+  // boxSetupPending) until it's done; a setup that fails says so, and the
+  // turns go ahead all the same. The checkout is the box's own clone,
+  // trusted as the runner's own checkout is.
   async setUpRestored(this: Runner, threadId: string): Promise<void> {
     const st = this.threads.get(threadId);
-    const w = st?.rec.worktree;
-    if (!st || !w || w.removedAt || !w.patchFile) return;
-    const patch = await findWorktreePatch(w.mainCheckout, this.panelsRoot, this.patchCache, undefined, this.patchTrust).catch(() => undefined);
-    if (patch) await this.setUpWorktree(st, { worktree: w, patchFile: path.join(w.path, w.patchFile) }, patch);
+    try {
+      const w = st?.rec.worktree;
+      if (!st || !w || w.removedAt || !w.patchFile) return;
+      const patch = await findWorktreePatch(w.mainCheckout, this.panelsRoot, this.patchCache, undefined, this.patchTrust).catch(() => undefined);
+      if (!patch) {
+        this.emit(st, { type: 'system.note', text: "Couldn't find the worktree's patch after restoring this thread, so its setup didn't run again. Run it yourself if the thread needs it." });
+        return;
+      }
+      const ok = await this.setUpWorktree(st, { worktree: w, patchFile: path.join(w.path, w.patchFile) }, patch);
+      if (ok === false) this.emit(st, { type: 'system.note', text: "The worktree's setup failed after this thread was restored on a new machine. The thread carries on; run the setup yourself if it needs it." });
+    } catch (e) {
+      if (st) this.emit(st, { type: 'system.note', text: `The worktree's setup couldn't run after this thread was restored: ${String((e as Error)?.message ?? e)}. The thread carries on.` });
+    } finally {
+      this.releaseTurns(threadId, 'setup');
+    }
   },
 };
 

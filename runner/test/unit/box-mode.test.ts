@@ -67,8 +67,11 @@ test('the exchange names the machine, and its secrets land 0600: box.json, the b
     calls.push({ kind, fn, args });
     return exchanged();
   };
-  const s = await bootBox({ boot: { bootToken: BOOT, syncUrl: URL, machineId: 'm-42' }, home, claudeDir, post, log: nullLogger });
-  assert.deepEqual(calls, [{ kind: 'action', fn: 'boxes:exchange', args: { bootToken: BOOT, machineId: 'm-42' } }]);
+  const { secrets: s, fresh } = await bootBox({ boot: { bootToken: BOOT, syncUrl: URL, machineId: 'm-42' }, home, claudeDir, post, log: nullLogger });
+  assert.equal(fresh, true);
+  // Only the hash of a key: a backend from before boxKeyHash hands back a key of its own (this one does).
+  assert.match(String(calls[0]!.args.boxKeyHash), /^[0-9a-f]{64}$/);
+  assert.deepEqual(calls, [{ kind: 'action', fn: 'boxes:exchange', args: { bootToken: BOOT, machineId: 'm-42', boxKeyHash: calls[0]!.args.boxKeyHash } }]);
   assert.equal(s.boxKey, BOX_KEY);
   assert.equal(s.runnerId, 'box0thread01');
   assert.equal(s.threadId, THREAD);
@@ -93,11 +96,12 @@ test('the exchange names the machine, and its secrets land 0600: box.json, the b
   // Started again on the same machine (same boot token): no second exchange, as it works once.
   const again = await bootBox({ boot: { bootToken: BOOT, syncUrl: URL, machineId: 'm-42' }, home, claudeDir, post, log: nullLogger });
   assert.equal(calls.length, 1);
-  assert.equal(again.boxKey, BOX_KEY);
+  assert.equal(again.secrets.boxKey, BOX_KEY);
+  assert.equal(again.fresh, false);
   // A new boot token (a new attempt) trades again.
   await bootBox({ boot: { bootToken: `tbt_${'c'.repeat(64)}`, syncUrl: URL }, home, claudeDir, post, log: nullLogger });
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1]!.args, { bootToken: `tbt_${'c'.repeat(64)}` });
+  assert.deepEqual(Object.keys(calls[1]!.args).sort(), ['bootToken', 'boxKeyHash']);
 });
 
 test('a refused boot token stops the box at once; an outage or a deployment not ready yet is tried again, until the token would be dead', async () => {
@@ -123,6 +127,25 @@ test('a refused boot token stops the box at once; an outage or a deployment not 
   await assert.rejects(exchangeBoot({ boot, log: nullLogger, post: async () => exchanged({ repo: { origin: 'x', subfolder: '', baseBranch: '--upload-pack=x' } }) }), /base branch/);
 });
 
+test('the box makes its own key and sends only its hash; an answer lost on the way is asked for again with the same hash', async () => {
+  const sent: Record<string, unknown>[] = [];
+  let n = 0;
+  const post: ActionPost = async (_kind, _fn, args) => {
+    sent.push(args);
+    // The first answer is lost after the backend took the token.
+    if (n++ === 0) throw new Error('fetch failed: socket hang up');
+    // A replay: no key in it, as the box has its own.
+    const { boxKey: _, ...rest } = exchanged();
+    return rest;
+  };
+  const got = await exchangeBoot({ boot: { bootToken: BOOT, syncUrl: URL, machineId: 'm-42' }, post, log: nullLogger, sleep: async () => {} });
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[0], sent[1], 'the same token, machine and key hash both times');
+  assert.match(got.boxKey, /^tbb_[0-9a-f]{64}$/);
+  assert.equal(crypto.createHash('sha256').update(got.boxKey).digest('hex'), sent[0]!.boxKeyHash);
+  assert.ok(!JSON.stringify(sent).includes(got.boxKey), 'the key itself never went');
+});
+
 function secretsFor(origin: string, over: Partial<BoxSecrets> = {}): BoxSecrets {
   return { version: 1, bootHash: 'h', syncUrl: URL, boxKey: BOX_KEY, runnerId: 'box0thread01', threadId: THREAD, threadKey: THREAD_KEY, repo: { origin, subfolder: 'runner', baseBranch: 'main' }, save: null, ...over };
 }
@@ -137,7 +160,7 @@ test('with no save, the box clones its repo on the base branch and the thread st
   const clone: Cloner = async (u, to) => (clones++, localClone(u, to));
   const s = secretsFor(origin, { repo: { origin, subfolder: 'runner', baseBranch: 'dev' } });
   writeBoxSecrets(home, s);
-  const got = await prepareBoxFolder({ secrets: s, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone });
+  const got = await prepareBoxFolder({ secrets: s, fresh: true, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone });
   const checkout = fs.realpathSync(path.join(workRoot, 'proj'));
   assert.deepEqual(got, { checkout, cwd: path.join(checkout, 'runner'), restored: false });
   assert.equal(sh(checkout, 'git rev-parse --abbrev-ref HEAD'), 'dev');
@@ -145,12 +168,75 @@ test('with no save, the box clones its repo on the base branch and the thread st
   // Kept, so a runner that starts again doesn't clone over the thread's work.
   assert.deepEqual(readBoxSecrets(home)?.prepared, got);
   fs.writeFileSync(path.join(checkout, 'runner', 'work.txt'), 'uncommitted');
-  assert.deepEqual(await prepareBoxFolder({ secrets: readBoxSecrets(home)!, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone }), { ...got, again: true });
+  assert.deepEqual(await prepareBoxFolder({ secrets: readBoxSecrets(home)!, fresh: false, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone }), { ...got, again: true });
   assert.equal(clones, 1);
   assert.ok(fs.existsSync(path.join(checkout, 'runner', 'work.txt')));
   // A subfolder the repo doesn't have says so.
   const missing = secretsFor(origin, { repo: { origin, subfolder: 'nope', baseBranch: 'main' } });
-  await assert.rejects(prepareBoxFolder({ secrets: missing, home: tmpDir(), claudeDir: tmpDir(), workRoot: tmpDir(), log: nullLogger, clone: localClone }), /nope isn't a folder/);
+  await assert.rejects(prepareBoxFolder({ secrets: missing, fresh: true, home: tmpDir(), claudeDir: tmpDir(), workRoot: tmpDir(), log: nullLogger, clone: localClone }), /nope isn't a folder/);
+});
+
+test("an established box whose folder has gone stops, deleting nothing and never restoring its exchange's save over the work", async () => {
+  const origin = originRepo();
+  const home = tmpDir('tb-box-home-');
+  const workRoot = tmpDir('tb-box-work-');
+  const s = secretsFor(origin);
+  writeBoxSecrets(home, s);
+  const got = await prepareBoxFolder({ secrets: s, fresh: true, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone: localClone });
+  // The thread's work, then its subfolder gone (an agent's rm -rf), and a stale save the exchange once gave.
+  fs.mkdirSync(paths.thread(home, THREAD), { recursive: true });
+  fs.writeFileSync(path.join(paths.thread(home, THREAD), 'thread.json'), '{"id":"keep"}');
+  fs.writeFileSync(path.join(got.checkout, 'README.md'), 'newer work\n');
+  fs.rmSync(got.cwd, { recursive: true });
+  const kept = { ...readBoxSecrets(home)!, save: { url: 'https://dep.convex.cloud/api/storage/old', at: 1, bytes: 10 } };
+  let downloads = 0;
+  let clones = 0;
+  await assert.rejects(
+    prepareBoxFolder({ secrets: kept, fresh: false, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone: async (u, t) => (clones++, localClone(u, t)), download: async () => (downloads++, Buffer.alloc(0)) }),
+    /has gone/,
+  );
+  assert.equal(downloads, 0);
+  assert.equal(clones, 0);
+  assert.equal(fs.readFileSync(path.join(got.checkout, 'README.md'), 'utf8'), 'newer work\n');
+  assert.equal(fs.readFileSync(path.join(paths.thread(home, THREAD), 'thread.json'), 'utf8'), '{"id":"keep"}');
+});
+
+test('only the start that traded the token makes the folder, and only into an empty place', async () => {
+  const origin = originRepo();
+  // A first start that died before its folder was made: the next start (no fresh exchange) won't make it.
+  const home = tmpDir('tb-box-home-');
+  const workRoot = tmpDir('tb-box-work-');
+  const s = secretsFor(origin);
+  writeBoxSecrets(home, s);
+  fs.mkdirSync(path.join(workRoot, 'proj'));
+  fs.writeFileSync(path.join(workRoot, 'proj', 'half.txt'), 'half made');
+  let clones = 0;
+  const clone: Cloner = async (u, t) => (clones++, localClone(u, t));
+  await assert.rejects(prepareBoxFolder({ secrets: s, fresh: false, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone }), /first start didn't finish/);
+  // Nor does a fresh exchange over something that's there.
+  await assert.rejects(prepareBoxFolder({ secrets: s, fresh: true, home, claudeDir: tmpDir(), workRoot, log: nullLogger, clone }), /isn't empty/);
+  assert.equal(clones, 0);
+  assert.equal(fs.readFileSync(path.join(workRoot, 'proj', 'half.txt'), 'utf8'), 'half made');
+});
+
+test("a box loads only its own thread from disk: other records are left alone, not recovered, carried on or taken in", async () => {
+  const home = tmpDir('tb-box-home-');
+  const first = makeHarness(home);
+  const cwd = first.cfg.defaults.cwd;
+  const mine = first.runner.create({ text: 'mine', cwd, accountId: 'claude-main' }).thread.id;
+  const other = first.runner.create({ text: 'other', cwd, accountId: 'claude-main' }).thread.id;
+  // The other one mid-turn, as a crash would leave it, and a broken record too.
+  first.runner.flush();
+  fs.mkdirSync(paths.thread(home, 'broken-thread'), { recursive: true });
+  fs.writeFileSync(path.join(paths.thread(home, 'broken-thread'), 'events.jsonl'), '');
+  const box = makeHarness(home, {}, { boxThread: mine });
+  assert.deepEqual([...box.runner.threads.keys()], [mine]);
+  assert.throws(() => box.runner.get(other));
+  box.runner.carryOnStopped();
+  assert.equal(box.adapter.sessions.filter((x) => x.opts.sessionId === first.runner.threads.get(other)!.rec.nativeSessionId).length, 0);
+  // A handover or move can't bring another in either.
+  assert.equal(box.runner.adopt(other), undefined);
+  assert.equal(box.runner.threads.has(other), false);
 });
 
 test('a box runs one thread: its create under the id the backend gave, and nothing else', () => {
@@ -241,6 +327,7 @@ test("the backend's save command goes to the box's save and finishes; a runner t
     const finished: Record<string, unknown>[] = [];
     let push!: (v: unknown) => void;
     const saved: string[] = [];
+    let awake = 0;
     const sync = new ConvexSync({
       config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
       key: BOX_KEY,
@@ -273,17 +360,23 @@ test("the backend's save command goes to the box's save and finishes; a runner t
         quickAsk: () => ({ thread: t }),
         ...(isBox ? { save: async (id: string) => (saved.push(id), { bytes: 123 }) } : {}),
       },
-      ...(isBox ? { box: { superseded: () => {} } } : {}),
+      ...(isBox ? { box: { superseded: () => {}, awake: () => void awake++ } } : {}),
     });
     sync.start();
     await tick();
     push([{ commandId: 'c1', kind: 'save', threadId: t.id, args: {}, createdAt: 1 }]);
     await tick(10);
-    assert.equal(finished.length, 1);
+    assert.equal(finished.filter((f) => f.commandId === 'c1').length, 1);
     if (isBox) {
+      // A save doesn't wake a box frozen by its save; anything else taken does (Runner.releaseTurns).
+      assert.equal(awake, 0);
+      push([{ commandId: 'c2', kind: 'send', threadId: t.id, args: { text: 'hi' }, createdAt: 2 }]);
+      await tick(10);
+      assert.equal(awake, 1);
       assert.deepEqual(saved, [t.id]);
-      assert.equal(finished[0]!.ok, true);
-      assert.equal(finished[0]!.result, JSON.stringify({ bytes: 123 }));
+      const c1 = finished.find((f) => f.commandId === 'c1')!;
+      assert.equal(c1.ok, true);
+      assert.equal(c1.result, JSON.stringify({ bytes: 123 }));
     } else {
       assert.equal(finished[0]!.ok, false);
       assert.match(String(finished[0]!.note), /isn't a box/);

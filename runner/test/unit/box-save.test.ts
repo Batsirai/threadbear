@@ -9,12 +9,12 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeHarness, tmpDir, type Harness } from '../helpers/fakes.ts';
+import { makeHarness, tick, tmpDir, type Harness } from '../helpers/fakes.ts';
 import { localClone, originRepo, sh } from '../helpers/box-git.ts';
 import { nullLogger } from '../../src/log.ts';
 import { paths } from '../../src/config.ts';
 import { projectDirName } from '../../src/transcripts.ts';
-import { openSave, saveThread, sealSave, SAVE_MAX_BYTES } from '../../src/box-save.ts';
+import { openSave, restoreSave, saveThread, sealSave, SAVE_MAX_BYTES, type SaveLimits } from '../../src/box-save.ts';
 import { prepareBoxFolder, writeBoxSecrets, type BoxSecrets } from '../../src/box-mode.ts';
 
 const THREAD = 'b0c0ffee-1111-4222-8333-444455556666';
@@ -48,15 +48,14 @@ function secretsFor(origin: string, over: Partial<BoxSecrets> = {}): BoxSecrets 
 }
 
 // A box: its data dir, its claude-main folder, its clone, and a runner on it.
-async function boxOn(origin: string, save: BoxSecrets['save'], stored?: Map<string, Buffer>) {
+async function boxOn(origin: string, save: BoxSecrets['save'], stored?: Map<string, Buffer>, opts: { holdForSetup?: boolean } = {}) {
   const home = tmpDir('tb-box-home-');
   const claudeDir = path.join(tmpDir('tb-box-claude-'), '.claude');
   const workRoot = tmpDir('tb-box-work-');
   const s = secretsFor(origin, { save });
   writeBoxSecrets(home, s);
-  const folder = await prepareBoxFolder({ secrets: s, home, claudeDir, workRoot, log: nullLogger, clone: localClone, download: async (url) => stored!.get(url)! });
-  const h = makeHarness(home, { defaults: { cwd: folder.cwd } as never }, { actionShell: ['/bin/sh', '-c'], actionTimeoutMs: 10_000 });
-  h.runner.boxThread = THREAD;
+  const folder = await prepareBoxFolder({ secrets: s, fresh: true, home, claudeDir, workRoot, log: nullLogger, clone: localClone, download: async (url) => stored!.get(url)! });
+  const h = makeHarness(home, { defaults: { cwd: folder.cwd } as never }, { actionShell: ['/bin/sh', '-c'], actionTimeoutMs: 10_000, boxThread: THREAD, boxSetupPending: opts.holdForSetup ?? false });
   return { home, claudeDir, folder, h };
 }
 
@@ -81,8 +80,8 @@ function fakeBackend() {
   };
 }
 
-function save(h: Harness, b: { home: string; claudeDir: string }, backend: ReturnType<typeof fakeBackend>) {
-  return saveThread({ home: b.home, claudeDir: b.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, snapshot: (id) => h.runner.snapshotForSave(id), post: backend.post, upload: backend.upload });
+function save(h: Harness, b: { home: string; claudeDir: string }, backend: Pick<ReturnType<typeof fakeBackend>, 'post' | 'upload'>, limits?: SaveLimits) {
+  return saveThread({ home: b.home, claudeDir: b.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => h.runner.quiesceForSave(id), resume: (id) => h.runner.releaseTurns(id, 'save'), post: backend.post, upload: backend.upload, ...(limits ? { limits } : {}) });
 }
 
 // The thread's first turn on the fake CLI, ended.
@@ -217,6 +216,115 @@ test("a save the backend refuses fails the command, and one for a thread that is
   const wrong = secretsFor(origin, { threadKey: crypto.randomBytes(32).toString('base64'), save: { url, at: 1, bytes: sealed.length } });
   const home = tmpDir();
   writeBoxSecrets(home, wrong);
-  await assert.rejects(prepareBoxFolder({ secrets: wrong, home, claudeDir: tmpDir(), workRoot: tmpDir(), log: nullLogger, clone: localClone, download: async () => sealed }), /doesn't open/);
+  await assert.rejects(prepareBoxFolder({ secrets: wrong, fresh: true, home, claudeDir: tmpDir(), workRoot: tmpDir(), log: nullLogger, clone: localClone, download: async () => sealed }), /doesn't open/);
   assert.equal(fs.existsSync(paths.thread(home, THREAD)), false);
+});
+
+test('a save stops the thread first: its turn interrupted, its CLI and background jobs stopped, and no turn starts after it until the box is woken', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  // A turn running when the save comes (one past its day's hours, or archived).
+  a.h.runner.send(THREAD, 'Keep going', []);
+  await until(() => a.h.adapter.sessions.length === 1 && Boolean(a.h.runner.threads.get(THREAD)!.rt.turn), 'the second turn');
+  const s = a.h.adapter.last;
+  const backend = fakeBackend();
+  let saving = true;
+  const done = save(a.h, a, backend).finally(() => (saving = false));
+  await until(() => s.interrupts === 1, 'the interrupt');
+  // Nothing goes up while the turn is still going.
+  await tick(10);
+  assert.equal(saving, true);
+  assert.equal(backend.calls.length, 0);
+  s.result('interrupted');
+  await done;
+  assert.equal(s.ended, true, 'the CLI is stopped before the copy is taken');
+  assert.deepEqual(backend.calls.map((c) => c.fn), ['sync:iconUploadUrl', 'boxes:boxSaved']);
+  // Frozen: a message waits rather than changing the folder behind the acknowledged save.
+  a.h.runner.send(THREAD, 'after the save', []);
+  await tick(10);
+  assert.equal(a.h.adapter.sessions.length, 1);
+  assert.equal(a.h.runner.threads.get(THREAD)!.rec.queue.length, 1);
+  // Woken (resumed, or sent something): it goes.
+  a.h.runner.releaseTurns(THREAD, 'save');
+  await until(() => a.h.adapter.sessions.length === 2, 'the queued turn');
+});
+
+test('a save that fails lets the thread carry on', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const backend = fakeBackend();
+  const refusing = { upload: backend.upload, post: async (k: 'mutation', fn: string, args: Record<string, unknown>) => {
+    if (fn === 'boxes:boxSaved') throw new Error('network down');
+    return backend.post(k, fn, args);
+  } };
+  await assert.rejects(save(a.h, a, refusing), /network down/);
+  a.h.runner.send(THREAD, 'carry on', []);
+  await until(() => a.h.adapter.sessions.length === 2, 'the next turn');
+});
+
+test('installed packages a restore would refuse are left out of the save, so every acknowledged save restores', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const top = a.folder.checkout;
+  // node_modules no longer ignored, and one installed under runner/: untracked, as unpackGit refuses.
+  sh(top, 'git rm -q .gitignore && git commit -qm "no ignores"');
+  fs.mkdirSync(path.join(top, 'runner', 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+  fs.writeFileSync(path.join(top, 'runner', 'kept.txt'), 'kept\n');
+  const backend = fakeBackend();
+  const done = await save(a.h, a, backend);
+  assert.deepEqual(done.leftOut, ['runner/node_modules/pkg/index.js']);
+  const [url, sealed] = [...backend.stored][0]!;
+  a.h.runner.releaseTurns(THREAD, 'save');
+  const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored);
+  assert.equal(fs.readFileSync(path.join(b.folder.checkout, 'runner', 'kept.txt'), 'utf8'), 'kept\n');
+  assert.equal(fs.existsSync(path.join(b.folder.checkout, 'runner', 'node_modules')), false);
+  // The box's own copy still has them.
+  assert.ok(fs.existsSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js')));
+});
+
+test("a save past what a restore takes (files, or size unpacked) fails before it's uploaded, and a restore holds to its own limit", async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const backend = fakeBackend();
+  await assert.rejects(save(a.h, a, backend, { maxEntries: 3 }), /files, more than a restore takes \(3\)/);
+  await assert.rejects(save(a.h, a, backend, { maxUnpacked: 1000 }), /before it's compressed, more than a restore takes/);
+  assert.deepEqual(backend.calls, []);
+  // One within the writer's limits, read by a box allowing less: refused, nothing written.
+  await save(a.h, a, backend);
+  const sealed = [...backend.stored.values()][0]!;
+  const home = tmpDir();
+  await assert.rejects(restoreSave({ home, claudeDir: tmpDir(), threadId: THREAD, checkout: a.folder.checkout, packed: openSave(KEY, THREAD, sealed), limits: { maxUnpacked: 1000 } }), /not a gzip, or too big/);
+  assert.equal(fs.existsSync(paths.thread(home, THREAD)), false);
+});
+
+const FAILING_PATCH = 'export default { worktree: { setup: "test -f runner/ok.txt || exit 3; mkdir -p node_modules" } };\n';
+
+test("a restored thread's turns wait for its worktree's setup; one that fails says so, and the turn goes ahead", async () => {
+  for (const passes of [true, false]) {
+    const origin = originRepo({ patch: passes ? WORKTREE_PATCH : FAILING_PATCH });
+    const a = await boxOn(origin, null);
+    a.h.runner.create({ text: 'Go', accountId: 'claude-main', cwd: a.folder.cwd, id: THREAD });
+    await until(() => a.h.adapter.sessions.length === 1, 'the CLI to start');
+    a.h.adapter.last.init();
+    a.h.adapter.last.result();
+    const backend = fakeBackend();
+    await save(a.h, a, backend);
+    const [url, sealed] = [...backend.stored][0]!;
+    const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored, { holdForSetup: true });
+    // Held: recovery, a carry-on or a message can't start a turn before the setup.
+    b.h.runner.carryOnStopped();
+    b.h.runner.send(THREAD, 'next', []);
+    await tick(10);
+    assert.equal(b.h.adapter.sessions.length, 0);
+    await b.h.runner.setUpRestored(THREAD);
+    await until(() => b.h.adapter.sessions.length === 1, 'the turn after the setup');
+    const notes = b.h.events(THREAD).filter((e) => e.type === 'system.note').map((e) => String(e.text));
+    if (passes) assert.ok(!notes.some((n) => /setup failed/.test(n)));
+    else assert.ok(notes.some((n) => /setup failed after this thread was restored/.test(n)), notes.join('\n'));
+  }
 });

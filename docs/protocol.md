@@ -7874,13 +7874,23 @@ SHA-256 (`boxKeyHash`).
 
 - **Getting one.** The provider starts the box with a boot token (`tbt_`
   and 64 hex characters) in its environment and nothing else reusable.
-  `boxes:exchange({ bootToken, machineId? })` trades it, once and within
+  `boxes:exchange({ bootToken, machineId?, boxKeyHash? })` trades it, once and within
   10 minutes of its minting, for `{ boxKey, runnerId, threadId, claudeToken, threadKey,
   repo, save, login }`: the box key, the login's cloud token, the thread's key
   for sealing its saves (base64, 32 bytes), the repo the owner fixed
   (`origin` without credentials, `subfolder`, `baseBranch`), the last
   save's URL, or null, and the login the box runs on (as its cloud token
-  is kept, an email), which a token login can't read from `.claude.json`. It unseals first, from a read that uses nothing
+  is kept, an email), which a token login can't read from `.claude.json`.
+  With `boxKeyHash` (the SHA-256, in hex, of a box key the box made itself,
+  as the runner's box mode does) that hash is the box's key and no `boxKey`
+  comes back, so the key never crosses the network. The exchange then
+  records the token's hash and when it would have expired
+  (`boxes.exchanged`), and the same `bootToken`, `machineId` and
+  `boxKeyHash` asked again, while that key is still the thread's (not
+  replaced, revoked or dead) and within the token's 10 minutes, get the
+  same answer and change nothing: a box whose answer was lost tries again.
+  Anything else with a spent token (another machine, another hash, no
+  machine or no hash) is refused (`auth`). It unseals first, from a read that uses nothing
   up, so a deployment that can't unseal (`kind: "config"`) leaves the
   boot token and the box as they were. Then, in one mutation that checks
   the token again, it's used up, the box's machine goes to `awake`
@@ -7998,12 +8008,15 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
 
 - **Starting.** Before anything else it reads the boot token and takes it
   out of its own environment, so nothing it starts (Claude Code, its
-  shells, a worktree's setup) inherits it. Then `boxes:exchange` at
+  shells, a worktree's setup) inherits it. It makes its own box key and
+  sends only its hash (`boxKeyHash`). Then `boxes:exchange` at
   `THREADBEAR_SYNC_URL`, with `machineId` from the variable
   `THREADBEAR_MACHINE_ID_ENV` names (`FLY_MACHINE_ID` when it names none;
   left out if it isn't an id the backend takes). A network failure, or
   `config`, `noCloudToken` or `conflict` (each leaves the token as it was),
-  is tried again, 2 s doubling to 15 s, for up to the token's 10 minutes;
+  is tried again, 2 s doubling to 15 s, for up to the token's 10 minutes,
+  with the same key hash (so an answer lost after the backend took the
+  token comes back as a replay);
   `auth` (used, expired, unknown) stops the box at once, as does an answer
   it can't use. What it got is kept in the data dir's secrets, 0600:
   `box.json` (the box key, runner id, thread id, thread key, repo, login,
@@ -8021,7 +8034,13 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   repo would, its patch trusted as the runner's own checkout is. With a
   save, it's restored on top of the clone (below), and the thread's next
   turn resumes the same Claude session. Done once per box (`box.json`'s
-  `prepared`).
+  `prepared`), only by the start that traded the token and only into an
+  empty place; nothing is ever deleted to make room. A box whose folder
+  has gone, or whose first start died before its folder was made, stops
+  and says so rather than clone or restore over what's there (the
+  exchange's save may be older than its work). Only the box's own thread
+  is loaded from the data dir: any other record there is left alone and
+  logged, and none is taken in by a handover or a move.
 - **What box mode turns off** (decision 1): self-update and following
   main, CLI updates, keep-awake, `followOrigin`, the reinstaller and
   upstream releases, Sentry, the Mac screen watch, schedules, the
@@ -8039,26 +8058,42 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   thread. It sends nothing more, stops its CLIs and exits with no `bye`,
   so the provider's machine stops for the service to clean up.
 - **The `save` command** (only the backend sends it, for the box's own
-  thread): the thread's folder in the data dir (its record and events,
+  thread). Every save the backend asks for is a stopping one (to sleep, at
+  its day's hours, or to be archived), and once it's acknowledged the box
+  may be deleted, so the thread stops first: turns are held, a running
+  turn is interrupted, and once it has ended (a minute at most, or the
+  command fails and the thread carries on) its CLI and background jobs are
+  stopped. Then it's packed: the thread's folder in the data dir (its record and events,
   not `panels`), its Claude session's transcript and the folder beside
   it, and its git work as a move packs it (`move-git.ts packGit`: the
   commits origin doesn't have and one more of every uncommitted and
-  untracked file, in a git bundle; ignored files stay behind), in a move's
-  archive (`move-pack.ts`) with a `box.json` naming the thread. Sealed
+  untracked file, in a git bundle; ignored files stay behind, and so does
+  anything under a `node_modules` folder, which a restore refuses: the
+  worktree's setup makes them again), in a move's
+  archive (`move-pack.ts`) with a `box.json` naming the thread. At most
+  100,000 files and 256 MB unpacked, the limits a restore holds it to, and
+  it's read back as a restore will read it before anything is uploaded:
+  over a limit or unreadable, the command fails and the thread carries on. Sealed
   AES-256-GCM under the thread key: a 12-byte IV, the ciphertext, the
   16-byte tag, bound to `threadbear box save v1 <threadId>` as associated
   data. Uploaded to the URL `sync:iconUploadUrl` gives the box key, then
   `boxes:boxSaved({ key, storageId, bytes })`, and the command finishes
-  with `{ bytes }`. A sealed save over 10 MB (one upload) fails the command
-  saying so; saves in parts are a TODO. The thread's CLI keeps running.
+  with `{ bytes }` (and `leftOut`, up to 20 paths left out). A sealed save
+  over 10 MB (one upload) fails the command saying so; saves in parts are
+  a TODO. A save that fails lets the thread carry on. One that succeeds
+  keeps its turns held until the box is woken: its clock jumping (resumed
+  from a pause), or a command other than `save` taken; messages wait in the
+  queue meanwhile.
 - **Restoring.** The save is downloaded (https, no redirects, 10 MB at
-  most), opened (one that doesn't open with the thread's key, or isn't
+  most), gunzipped to 256 MB at most, opened (one that doesn't open with the thread's key, or isn't
   that thread's, stops the box), the thread's folder written into the data
   dir, its git work put back on the clone (`unpackGit`), in a worktree at
   `<clone>-threads/<the folder name it had>` on `thread/<id8>` if it had
   one, and its transcript put where Claude Code looks for the folder it
   now runs in. Once the runner is up, the worktree's setup runs again
-  (installed packages weren't saved).
+  (installed packages weren't saved), and no turn starts in the thread
+  (recovery, a carry-on or a message) until it's done; one that fails
+  says so in the thread, and the turns go ahead.
 
 ## Sharing
 

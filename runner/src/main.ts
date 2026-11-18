@@ -163,8 +163,8 @@ async function main(): Promise<void> {
   const startBox = async (boot: NonNullable<typeof boxBoot>): Promise<{ secrets: BoxSecrets; threadKey: Buffer; checkout: string; cwd: string; restored: boolean; again?: true }> => {
     try {
       const post = convexPoster(boot.syncUrl) as unknown as ActionPost;
-      const secrets = await bootBox({ boot, home: cfg.home, claudeDir: cfg.claudeMainDir, post, log });
-      const folder = await prepareBoxFolder({ secrets, home: cfg.home, claudeDir: cfg.claudeMainDir, workRoot: process.env.THREADBEAR_BOX_WORK || path.join(os.homedir(), 'work'), log });
+      const { secrets, fresh } = await bootBox({ boot, home: cfg.home, claudeDir: cfg.claudeMainDir, post, log });
+      const folder = await prepareBoxFolder({ secrets, fresh, home: cfg.home, claudeDir: cfg.claudeMainDir, workRoot: process.env.THREADBEAR_BOX_WORK || path.join(os.homedir(), 'work'), log });
       return { secrets, threadKey: Buffer.from(secrets.threadKey, 'base64'), ...folder };
     } catch (e) {
       log.error('box: could not start', { error: String((e as Error)?.message ?? e) });
@@ -372,6 +372,9 @@ async function main(): Promise<void> {
   let atMac: boolean | undefined;
   const instructions = new InstructionsStore({ home: cfg.home, token, publish: (n) => runner.publish(n) });
   runner = new Runner({
+    // A box's one thread, and whether its restored worktree's setup must run
+    // before any turn (runner/moves.ts setUpRestored).
+    ...(box ? { boxThread: box.secrets.threadId, boxSetupPending: box.restored && !box.again } : {}),
     threadKey: (id) => makeThreadKey(token, id),
     standingInstructions: () => instructions.given(),
     projects,
@@ -400,7 +403,6 @@ async function main(): Promise<void> {
   });
   // Until it is listening (below): see Runner.holdWaits.
   runner.holdWaits = true;
-  if (box) runner.boxThread = box.secrets.threadId;
   const settings = new SettingsService({ config: cfg, publish: (n) => runner.publish(n), poolIds: () => runner.listPools().pools.map((p) => p.id) });
   // Runners still finishing turns after a handover: connected before the
   // threads load, so the ones they have are left to them. Nothing after the
@@ -576,7 +578,7 @@ async function main(): Promise<void> {
   const saveBox = async (threadId: string) => {
     if (!box || !boxPost || threadId !== box.secrets.threadId) throw new Error("That isn't this box's thread.");
     try {
-      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, snapshot: (id) => runner.snapshotForSave(id), post: boxPost, upload: convexUploader() });
+      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id), resume: (id) => runner.releaseTurns(id, 'save'), post: boxPost, upload: convexUploader() });
     } catch (e) {
       if (keyRejected(e)) boxSuperseded();
       throw e;
@@ -688,7 +690,14 @@ async function main(): Promise<void> {
     },
     secretBox: runner.secrets,
     ...(box
-      ? { box: { ...(box.secrets.machineId ? { machineId: box.secrets.machineId } : {}), superseded: boxSuperseded } }
+      ? {
+          box: {
+            ...(box.secrets.machineId ? { machineId: box.secrets.machineId } : {}),
+            superseded: boxSuperseded,
+            // Sent something after a save: the box is awake again, and its thread may run.
+            awake: () => runner.releaseTurns(box.secrets.threadId, 'save'),
+          },
+        }
       : { sample: machineSampler(cfg.home), schedules: scheduler, pools: sharedPools, memory: memorySync, sharedUsage: usage }),
     // The sidebar's list carries what the relay has changed that the
     // backend's rows don't show yet (relay.ts overlay); made below.
@@ -727,6 +736,8 @@ async function main(): Promise<void> {
     onJump: (gapMs) => {
       log.info('the clock jumped: reconnecting', { gapMs });
       sync.reconnectNow('clock jumped');
+      // A box paused after its save and resumed: its thread may run again.
+      if (box) runner.releaseTurns(box.secrets.threadId, 'save');
     },
   });
   clockJumps.start();

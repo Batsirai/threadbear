@@ -728,7 +728,9 @@ export type SyncDeps = {
   // the provider's machine, and a key the backend turns down means a newer
   // box has the thread, so `superseded` is called once and nothing more is
   // tried (docs/protocol.md, "Box mode").
-  box?: { machineId?: string; superseded: () => void };
+  // `awake`: a command other than a `save` was taken, so a box frozen after
+  // its save (Runner.quiesceForSave) has been woken and may run again.
+  box?: { machineId?: string; superseded: () => void; awake?: () => void };
 };
 
 // How long a row whose thread isn't here (and that wasn't deleted here) waits
@@ -4514,7 +4516,10 @@ export class ConvexSync {
       this.deps.log.debug('phone command not taken', { commandId: c.commandId, error: String(e) });
       return;
     }
-    if (taken === true) await this.runTaken(c);
+    if (taken === true) {
+      if (c.kind !== 'save') this.deps.box?.awake?.();
+      await this.runTaken(c);
+    }
   }
 
   private async runTaken(c: Command): Promise<void> {

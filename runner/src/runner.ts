@@ -415,6 +415,11 @@ export type Turn = {
 type Runtime = {
   // On its way to another runner (runner/moves.ts): no turn starts.
   moving?: ThreadMoving;
+  // Box mode (runner/moves.ts holdTurns): no turn starts while any of these
+  // holds it: 'save', a box's thread saved to sleep or be archived, until
+  // the box is resumed or sent something; 'setup', a restored worktree's
+  // setup still running. Messages wait in the queue meanwhile.
+  holds?: Set<'save' | 'setup'>;
   session?: AgentSession;
   generation: number;
   closing?: Promise<void>;
@@ -584,6 +589,12 @@ export const DRAIN_AGENT_MS = 4 * 60 * 60_000;
 export const SAVE_RETRY_MS = 5000;
 
 export type RunnerDeps = {
+  // Box mode (src/box-mode.ts): the one thread this runner exists for
+  // (Runner.boxThread), known before start loads anything from disk.
+  boxThread?: string;
+  // ...whose restored worktree's setup is still to run: its turns are held
+  // from the moment it loads (Runner.setUpRestored lets them go).
+  boxSetupPending?: boolean;
   // A message that answers the thread's open card (`answers`, which only
   // the app, the phone and the website send: an agent's are taken out,
   // rpc-gate.ts), with that card's asks. For an answer the runner acts on
@@ -782,6 +793,7 @@ export class Runner {
   // Box mode (src/box-mode.ts): the one thread this runner exists for. Any
   // other new thread is refused (makeThread), and that one only under its id.
   boxThread?: string;
+  boxSetupPending = false;
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;
@@ -836,6 +848,8 @@ export class Runner {
   private threadKey?: (threadId: string) => string;
   private answered?: RunnerDeps['answered'];
   constructor(deps: RunnerDeps) {
+    if (deps.boxThread !== undefined) this.boxThread = deps.boxThread;
+    this.boxSetupPending = deps.boxSetupPending === true;
     this.threadKey = deps.threadKey;
     this.answered = deps.answered;
     if ('release' in deps) this.release = deps.release;
@@ -891,7 +905,16 @@ export class Runner {
       this.limitRecheck = new LimitRecheck({ clock: this.clock, log: this.log, accounts: () => this.safeAccounts(), adapters: this.adapters, record: (id, r) => usage.record(id, r) });
       this.limitRecheck.start();
     }
-    const { records, broken } = this.store.loadAll();
+    let { records, broken } = this.store.loadAll();
+    // A box runs its one thread: any other record on disk is left alone
+    // (not loaded, recovered, carried on or rebuilt), and said.
+    if (this.boxThread !== undefined) {
+      const mine = (id: string) => id === this.boxThread;
+      const others = [...records.map((r) => r.id), ...broken].filter((id) => !mine(id));
+      if (others.length) this.log.warn("box: left alone thread records that aren't its own", { threads: others });
+      records = records.filter((r) => mine(r.id));
+      broken = broken.filter(mine);
+    }
     // Which worktrees the always-trust doesn't reach, before anything below
     // can read a patch or start a CLI (runner/moves.ts): every thread on
     // disk, a draining runner's included, and before a record that can't be
@@ -918,6 +941,9 @@ export class Runner {
       // is the truth for seq.
       rec.lastSeq = this.store.log(rec.id).lastSeq;
       const st: ThreadState = { rec, rt: newRuntime(Date.parse(rec.lastActivityAt) || 0) };
+      // A box's restored thread: nothing starts (recovery, a carry-on, a
+      // wake) until its worktree's setup has run (setUpRestored).
+      if (this.boxSetupPending && rec.id === this.boxThread) st.rt.holds = new Set(['setup']);
       this.threads.set(rec.id, st);
       // One thread's record that trips something here (a field another
       // runner wrote wrong: a moved thread's `presses: {}` stopped every
@@ -1897,7 +1923,7 @@ export class Runner {
       return rt.turn.turnId;
     }
     // Moving to another runner (runner/moves.ts): it waits, and goes with the thread.
-    if (rt.turn || rec.queue.length || this.draining || rt.editing || rt.moving || (rec.interruptedMessages?.length && isAutomaticInput(msg))) {
+    if (rt.turn || rec.queue.length || this.draining || rt.editing || rt.moving || rt.holds?.size || (rec.interruptedMessages?.length && isAutomaticInput(msg))) {
       // Behind a running turn, or behind messages that couldn't start
       // earlier: they go first. On a draining runner a thread with no turn
       // is usually about to move across, and the message goes with it
@@ -3973,7 +3999,7 @@ export class Runner {
   // Starts the next queued message if nothing is running. Returns true if
   // one started. One that can't be written (disk full) stays at the front.
   kickQueue(st: ThreadState): boolean {
-    if (this.stopping || st.rt.editing || st.rt.moving) return false;
+    if (this.stopping || st.rt.editing || st.rt.moving || st.rt.holds?.size) return false;
     try {
       this.prepareQueue(st);
     } catch (e) {

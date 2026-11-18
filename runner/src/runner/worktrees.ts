@@ -98,7 +98,8 @@ export const worktreesPart = {
   // A new worktree's setup (the patch's `setup`), run from the worktree's
   // own copy of the patch once that's trusted. A moved thread's worktree
   // (runner/moves.ts) runs it too.
-  async setUpWorktree(this: Runner, st: ThreadState, made: { worktree: WorktreeRecord; patchFile: string }, patch: WorktreePatch, turnId?: string): Promise<void> {
+  // Whether the setup ran and passed: undefined when it didn't run.
+  async setUpWorktree(this: Runner, st: ThreadState, made: { worktree: WorktreeRecord; patchFile: string }, patch: WorktreePatch, turnId?: string): Promise<boolean | undefined> {
     const { rec, rt } = st;
     if (!patch.setup) return;
     const copy = await this.worktreeCopy(made.patchFile, patch.patch, 'setup');
@@ -143,6 +144,7 @@ export const worktreesPart = {
     if (outcome.exitCode !== undefined) body.exitCode = outcome.exitCode;
     this.emit(st, body, rt.turn?.turnId ?? turnId);
     this.markDirty(st);
+    return outcome.ok;
   },
 
   // The worktree's own copy of the patch, for its setup or teardown. The

@@ -712,6 +712,30 @@ runner entry point among them), `box-save.test.ts` and
   client again at once and heartbeats, at most every 30 s. The spike
   measured 60 s to 3.3 s on Fly.
 
+Codex's review of the third slice (19 Nov 2026) found five holes and two
+follow-ups, fixed with a test each (`box-mode.test.ts`, `box-save.test.ts`,
+`boxes-backend.test.ts`):
+
+- A save left the thread working, so work after the copy was lost once
+  `SAVED` let the box go. Every save now stops the thread first (turn
+  interrupted, CLI and background jobs stopped) and keeps its turns held
+  until the box is woken (`Runner.quiesceForSave`, `releaseTurns`).
+- An established box whose folder had gone deleted what was left and
+  restored the exchange's (older) save over it. Now only the start that
+  traded the token makes the folder, into an empty place, deleting nothing.
+- An untracked `node_modules` made an acknowledged save unrestorable: it's
+  left out of the save now (`packGit`'s `leaveOut`).
+- The save wasn't held to the restore's limits: it is now (100,000 files,
+  256 MB unpacked, the restore's allowance lowered from a move's 1 GB to
+  that), and it's read back before it's uploaded.
+- A box loaded every thread record on its disk: only its own now
+  (`Runner.start`, `adopt`).
+- A restored thread's turns could start before its worktree's setup had
+  run: they're held until it has (`boxSetupPending`, `setUpRestored`).
+- A lost exchange answer couldn't be asked for again: the box makes its
+  own key and sends its hash, and the backend replays the answer to the
+  same token, machine and hash (`boxes.exchanged`, `peekReplay`).
+
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as
 decision 10 says, so the runner's existing year-long token path carries it

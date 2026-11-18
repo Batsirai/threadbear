@@ -298,6 +298,10 @@ export const appSchema = defineSchema({
     bootTokenHash: v.optional(v.string()),
     bootExpiresAt: v.optional(v.number()),
     boxKeyHash: v.optional(v.string()),
+    // The last exchange (boxes.ts exchange): its boot token's hash and when
+    // that token would have expired, so the same box asking again (its
+    // answer lost) gets the same answer, never another box.
+    exchanged: v.optional(v.object({ bootHash: v.string(), until: v.number() })),
     // Each boot token is for one attempt at a box, numbered from 1
     // (`boxAttempt`, the newest minted): the token's, the key's (the box
     // that traded it) and the provider box's. A loss reported for an

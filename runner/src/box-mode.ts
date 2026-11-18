@@ -121,11 +121,14 @@ export function writeBoxSecrets(home: string, s: BoxSecrets): void {
 
 // What the exchange gave, checked: it's the backend's word, but each value
 // lands in a file name, a git argument or a credential.
-function checkExchanged(v: unknown): Exchanged {
+// `ownKey`: the key the box made and sent the hash of; a backend from
+// before that hands back one of its own.
+function checkExchanged(v: unknown, ownKey: string): Exchanged {
   const g = v as Partial<Exchanged> | null;
   const bad = (what: string) => new BoxBootRefused(`The boot exchange gave a ${what} this runner can't use.`);
   if (!g || typeof g !== 'object') throw bad('reply');
-  if (typeof g.boxKey !== 'string' || !BOX_KEY.test(g.boxKey)) throw bad('box key');
+  const boxKey = g.boxKey ?? ownKey;
+  if (typeof boxKey !== 'string' || !BOX_KEY.test(boxKey)) throw bad('box key');
   if (typeof g.runnerId !== 'string' || !RUNNER_ID.test(g.runnerId)) throw bad('runner id');
   if (!isThreadIdShape(g.threadId)) throw bad('thread id');
   if (typeof g.claudeToken !== 'string' || !CLAUDE_TOKEN.test(g.claudeToken)) throw bad('Claude token (not a setup token)');
@@ -137,7 +140,7 @@ function checkExchanged(v: unknown): Exchanged {
   const save = g.save;
   if (save !== null && (!save || typeof save.url !== 'string' || typeof save.bytes !== 'number')) throw bad('save');
   return {
-    boxKey: g.boxKey,
+    boxKey,
     runnerId: g.runnerId,
     threadId: g.threadId,
     claudeToken: g.claudeToken,
@@ -159,14 +162,21 @@ const kindOf = (e: unknown): unknown => (e as { data?: { kind?: unknown } } | nu
  * the boot token as it was. A refusal (`auth`: used, expired or unknown)
  * never changes, and nor does past the boot token's 10 minutes.
  */
+//
+// The box makes its own key and sends only its hash, with its machine's id:
+// the key never crosses the network, and an answer lost on the way can be
+// asked for again (the backend gives the same answer to the same token,
+// machine and key hash, and refuses anyone else).
 export async function exchangeBoot(o: { boot: BoxBoot; post: ActionPost; log: Logger; sleep?: (ms: number) => Promise<void>; now?: () => number; giveUpAfterMs?: number }): Promise<Exchanged> {
   const now = o.now ?? Date.now;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const until = now() + (o.giveUpAfterMs ?? 10 * 60_000);
+  const ownKey = `tbb_${crypto.randomBytes(32).toString('hex')}`;
+  const boxKeyHash = sha256(ownKey);
   let wait = 2_000;
   for (;;) {
     try {
-      return checkExchanged(await o.post('action', 'boxes:exchange', { bootToken: o.boot.bootToken, ...(o.boot.machineId ? { machineId: o.boot.machineId } : {}) }));
+      return checkExchanged(await o.post('action', 'boxes:exchange', { bootToken: o.boot.bootToken, ...(o.boot.machineId ? { machineId: o.boot.machineId } : {}), boxKeyHash }), ownKey);
     } catch (e) {
       if (e instanceof BoxBootRefused) throw e;
       const kind = kindOf(e);
@@ -190,12 +200,14 @@ export async function exchangeBoot(o: { boot: BoxBoot; post: ActionPost; log: Lo
  * threadbear-token.json, which the runner already passes to that login's
  * CLI (year-token.ts). Each 0600.
  */
-export async function bootBox(o: { boot: BoxBoot; home: string; claudeDir: string; post: ActionPost; log: Logger; sleep?: (ms: number) => Promise<void>; now?: () => number; giveUpAfterMs?: number }): Promise<BoxSecrets> {
+// `fresh`: this start traded the token, rather than finding what an
+// earlier start on this machine had (prepareBoxFolder needs to know).
+export async function bootBox(o: { boot: BoxBoot; home: string; claudeDir: string; post: ActionPost; log: Logger; sleep?: (ms: number) => Promise<void>; now?: () => number; giveUpAfterMs?: number }): Promise<{ secrets: BoxSecrets; fresh: boolean }> {
   const bootHash = sha256(o.boot.bootToken);
   const kept = readBoxSecrets(o.home);
   if (kept?.bootHash === bootHash) {
     o.log.info('box: started again on the key it already has', { runnerId: kept.runnerId, threadId: kept.threadId });
-    return kept;
+    return { secrets: kept, fresh: false };
   }
   const got = await exchangeBoot(o);
   const secrets: BoxSecrets = {
@@ -216,7 +228,7 @@ export async function bootBox(o: { boot: BoxBoot; home: string; claudeDir: strin
   writePrivate(path.join(paths.secrets(o.home), 'convex-key'), got.boxKey + '\n');
   writeBoxSecrets(o.home, secrets);
   o.log.info('box: traded its boot token', { runnerId: got.runnerId, threadId: got.threadId, machineId: o.boot.machineId, restoring: Boolean(got.save) });
-  return secrets;
+  return { secrets, fresh: true };
 }
 
 // The repo's folder name, from its origin ("threadbear" from
@@ -247,17 +259,24 @@ export async function downloadSave(url: string, fetchFn: typeof fetch = fetch): 
  * (and, with no save, that's all: the thread's `create` makes its worktree
  * as a new thread in that repo would, the repo's own patch trusted as the
  * runner's own checkout is), or the last save restored on top of the clone.
- * Done once per box: a runner that starts again finds it done.
+ *
+ * Done once per box, and only by the start that traded the boot token
+ * (`fresh`), into an empty place: a runner that starts again finds it done
+ * (`again`). It never deletes anything, and never restores the exchange's
+ * save over what's there: once the box has run, its folder may hold work
+ * newer than that save. An established box whose folder has gone, or a
+ * start that finds one half made, stops and says so instead.
  */
-// `again`: done by an earlier start of this runner on the same machine.
-export async function prepareBoxFolder(o: { secrets: BoxSecrets; home: string; claudeDir: string; workRoot: string; log: Logger; clone?: Cloner; download?: Downloader }): Promise<{ checkout: string; cwd: string; restored: boolean; again?: true }> {
+export async function prepareBoxFolder(o: { secrets: BoxSecrets; fresh: boolean; home: string; claudeDir: string; workRoot: string; log: Logger; clone?: Cloner; download?: Downloader }): Promise<{ checkout: string; cwd: string; restored: boolean; again?: true }> {
   const s = o.secrets;
-  if (s.prepared && isDirectory(s.prepared.cwd)) return { ...s.prepared, again: true };
+  if (s.prepared) {
+    if (isDirectory(s.prepared.cwd)) return { ...s.prepared, again: true };
+    throw new Error(`This box's thread folder ${s.prepared.cwd} has gone. It won't be cloned or restored again over what's left (its save may be older than the work here): this box stops, and the thread comes back on a new one.`);
+  }
+  if (!o.fresh) throw new Error("This box's first start didn't finish making the thread's folder, and only that start may clone or restore: this box stops, and the thread comes back on a new one.");
   const checkout = path.join(o.workRoot, repoFolderName(s.repo.origin));
-  // What a start that didn't finish left: made again from the start.
-  fs.rmSync(checkout, { recursive: true, force: true });
-  fs.rmSync(`${checkout}-threads`, { recursive: true, force: true });
-  fs.rmSync(paths.thread(o.home, s.threadId), { recursive: true, force: true });
+  const there = [checkout, `${checkout}-threads`, paths.thread(o.home, s.threadId)].filter((p) => fs.existsSync(p));
+  if (there.length) throw new Error(`The box's thread folder isn't empty (${there.join(', ')}), so nothing is cloned or restored over it.`);
   fs.mkdirSync(o.workRoot, { recursive: true });
   const cloned = await (o.clone ?? cloneRepo)(s.repo.origin, checkout);
   if (!cloned.ok) throw new Error(cloned.reason);

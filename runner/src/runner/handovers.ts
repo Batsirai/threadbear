@@ -218,6 +218,11 @@ export const handoversPart = {
   adopt(this: Runner, threadId: string, opts: { crashed?: boolean } = {}): ThreadSummary | undefined {
     const had = this.threads.get(threadId);
     if (had) return this.summary(had);
+    // A box takes in no thread but its own (box-mode.ts).
+    if (this.boxThread !== undefined && threadId !== this.boxThread) {
+      this.log.warn("box: won't take in a thread that isn't its own", { threadId });
+      return undefined;
+    }
     // A thread handed over while this runner is still connecting to the old
     // one comes before start: which worktrees are held is worked out first,
     // from every thread on disk, and before this one's record, if it can't

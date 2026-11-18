@@ -526,3 +526,38 @@ test('no query hands back a sealed token, a thread key or a key hash', async () 
   const text = JSON.stringify(answers);
   for (const x of [...sealed, CLAUDE_TOKEN, got.threadKey]) assert.ok(!text.includes(x), 'nothing secret in what queries return');
 });
+
+// Slice 3's exchange (docs/protocol.md, "Box keys"): the box makes its own
+// key and sends its hash, so an answer lost on the way can be asked for
+// again, by that machine with that key, and by nobody else.
+test("a box's own key: the exchange keeps only its hash, and replays the answer to the same machine and key, never to anyone else", async () => {
+  const s = await boxBackend();
+  await s.setToken();
+  const token = await s.mint();
+  const boxKey = `tbb_${'d'.repeat(64)}`;
+  const boxKeyHash = await sha256(boxKey);
+  const ask = (a: Record<string, unknown>) => call(s.a, boxes.exchange, { bootToken: token, ...a });
+  const got = await ask({ machineId: 'm-1', boxKeyHash });
+  // No key made here: the box has its own, which now works.
+  assert.equal(got.boxKey, undefined);
+  assert.equal(s.box().boxKeyHash, boxKeyHash);
+  assert.equal(s.box().keyMachineId, 'm-1');
+  assert.equal(await outcome(heartbeat(s, boxKey)), 'ok');
+  // The same machine and key, its answer lost: the same answer, nothing changed.
+  const again = await ask({ machineId: 'm-1', boxKeyHash });
+  assert.deepEqual({ ...again }, { ...got });
+  assert.equal(s.box().boxKeyHash, boxKeyHash);
+  assert.equal(s.box().boxState.kind, 'awake');
+  // Anyone else with the spent token: refused.
+  assert.equal(await outcome(ask({ machineId: 'm-2', boxKeyHash })), 'auth');
+  assert.equal(await outcome(ask({ machineId: 'm-1', boxKeyHash: await sha256(`tbb_${'e'.repeat(64)}`) })), 'auth');
+  assert.equal(await outcome(ask({ boxKeyHash })), 'auth');
+  assert.equal(await outcome(ask({ machineId: 'm-1' })), 'auth');
+  assert.equal(await outcome(ask({})), 'auth');
+  assert.equal(await outcome(ask({ machineId: 'm-1', boxKeyHash: 'not-a-hash' })), 'badArgs');
+  // Past the token's 10 minutes: refused, the key still working.
+  assert.equal(await outcome(later(11 * 60_000, () => ask({ machineId: 'm-1', boxKeyHash }))), 'auth');
+  // Once the key isn't the thread's any more (a newer box), refused too.
+  await s.report({ type: 'LOST' });
+  assert.equal(await outcome(ask({ machineId: 'm-1', boxKeyHash })), 'auth');
+});

@@ -20,8 +20,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { archive, readTree, safeEntryPath, unarchive, writeTree, type PackEntry } from './move-pack.ts';
-import { packGit, unpackGit, type GitMeta } from './move-git.ts';
+import { archive, MAX_ENTRIES, readTree, safeEntryPath, unarchive, unpackedSize, writeTree, type PackEntry } from './move-pack.ts';
+import { packGit, underNodeModules, unpackGit, type GitMeta } from './move-git.ts';
 import { paths } from './config.ts';
 import { projectDirName, sessionTranscriptPath } from './transcripts.ts';
 import { git, realpath, threadBranch } from './worktrees.ts';
@@ -31,6 +31,13 @@ import type { ThreadRecord } from './store.ts';
 // (convex/sync.ts MAX_RUNNER_UPLOAD_BYTES). A save bigger than that, in
 // parts as a move's chunks are, is a TODO (docs/virtual-runners.md).
 export const SAVE_MAX_BYTES = 10 * 1024 * 1024;
+// Unpacked, a save is held to this, by the box that writes it (before it's
+// acknowledged) and the box that reads it (as it's gunzipped), the same
+// number on both sides so a save one takes the other can read. A move may
+// grow to 1 GB (move-pack.ts), but a box restores into a small machine's
+// memory (Fly's pausable boxes are 2 GB at most), and a save is gunzipped
+// into one buffer: a quarter of a 1 GB box's memory at most.
+export const SAVE_MAX_UNPACKED_BYTES = 256 * 1024 * 1024;
 const SAVE_VERSION = 1;
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
@@ -63,8 +70,19 @@ export function openSave(threadKey: Buffer, threadId: string, sealed: Buffer): B
 
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 
-/** The thread packed for a save: its folder, its transcript, its git work. */
-export async function packSave(o: { home: string; claudeDir: string; rec: ThreadRecord }): Promise<Buffer> {
+/**
+ * The thread packed for a save: its folder, its transcript, its git work.
+ * Installed packages (anything under node_modules), which a restore won't
+ * bring in, are left out of the git work (the worktree's setup makes them
+ * again, setUpRestored), and named in `leftOut`. Throws, before anything is
+ * uploaded, for a save a restore would refuse: too many files, too big
+ * unpacked, or a bundle that doesn't read back.
+ */
+// `limits`: smaller ones, for tests.
+export type SaveLimits = { maxEntries?: number; maxUnpacked?: number };
+export async function packSave(o: { home: string; claudeDir: string; rec: ThreadRecord; limits?: SaveLimits }): Promise<{ packed: Buffer; leftOut: string[] }> {
+  const maxEntries = o.limits?.maxEntries ?? MAX_ENTRIES;
+  const maxUnpacked = o.limits?.maxUnpacked ?? SAVE_MAX_UNPACKED_BYTES;
   const { rec } = o;
   const entries: PackEntry[] = readTree(paths.thread(o.home, rec.id), 'thread', ['panels']);
   if (rec.provider === 'claude' && rec.sessionUsed && rec.nativeSessionId) {
@@ -76,16 +94,46 @@ export async function packSave(o: { home: string; claudeDir: string; rec: Thread
   }
   const work = rec.worktree && !rec.worktree.removedAt ? rec.worktree.path : rec.cwd;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-save-'));
+  let leftOut: string[] = [];
   try {
-    const g = await packGit(work, rec.cwd, path.join(scratch, 'save.bundle'));
+    const g = await packGit(work, rec.cwd, path.join(scratch, 'save.bundle'), { leaveOut: underNodeModules });
     if (!g.ok) throw new Error(`Couldn't save the thread's git work: ${g.reason}`);
+    leftOut = g.leftOut ?? [];
     entries.push({ path: 'git/meta.json', data: Buffer.from(JSON.stringify(g.meta)) });
     if (g.bundle) entries.push({ path: 'git/save.bundle', data: fs.readFileSync(g.bundle) });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
   entries.push({ path: 'box.json', data: Buffer.from(JSON.stringify({ version: SAVE_VERSION, threadId: rec.id, savedAt: new Date().toISOString() })) });
-  return archive(entries);
+  // The reader's limits, checked here first.
+  if (entries.length > maxEntries) throw new Error(`The thread's save has ${entries.length} files, more than a restore takes (${maxEntries}).`);
+  const size = unpackedSize(entries);
+  if (size > maxUnpacked) throw new Error(`The thread's save is ${mb(size)} before it's compressed, more than a restore takes (${mb(maxUnpacked)}).`);
+  const packed = archive(entries);
+  // And read back as a restore will: never acknowledge a save it would refuse.
+  checkRestorable(unarchive(packed, { maxUnpacked }), rec.id);
+  return { packed, leftOut };
+}
+
+// What restoreSave needs before it changes anything, checked by the writer
+// too: its manifest, the thread's record, and git work it can put back.
+function checkRestorable(entries: PackEntry[], threadId: string): { rec: ThreadRecord & Record<string, unknown>; meta: GitMeta } {
+  const json = (p: string): any => {
+    const e = entries.find((x) => x.path === p);
+    if (!e) return undefined;
+    try {
+      return JSON.parse(e.data.toString('utf8'));
+    } catch {
+      throw new Error(`The thread's save has a damaged ${p}.`);
+    }
+  };
+  const box = json('box.json');
+  if (!box || box.version !== SAVE_VERSION || box.threadId !== threadId) throw new Error("The save isn't one of this thread's that this runner can read.");
+  const rec = json('thread/thread.json') as (ThreadRecord & Record<string, unknown>) | undefined;
+  if (!rec || rec.id !== threadId) throw new Error("The save's thread record is missing or another thread's.");
+  const meta = json('git/meta.json') as GitMeta | undefined;
+  if (!meta) throw new Error("The save has no git work in it.");
+  return { rec, meta };
 }
 
 // `rel` under `top`, or `top` when it's empty, leads out or isn't there.
@@ -103,23 +151,9 @@ function under(top: string, rel: string | undefined): string {
  * The thread's record keeps its session id, so its next turn resumes the
  * same session.
  */
-export async function restoreSave(o: { home: string; claudeDir: string; threadId: string; checkout: string; packed: Buffer }): Promise<{ cwd: string; worktree: boolean }> {
-  const entries = unarchive(o.packed);
-  const json = (p: string): any => {
-    const e = entries.find((x) => x.path === p);
-    if (!e) return undefined;
-    try {
-      return JSON.parse(e.data.toString('utf8'));
-    } catch {
-      throw new Error(`The thread's save has a damaged ${p}.`);
-    }
-  };
-  const box = json('box.json');
-  if (!box || box.version !== SAVE_VERSION || box.threadId !== o.threadId) throw new Error("The save isn't one of this thread's that this runner can read.");
-  const rec = json('thread/thread.json') as (ThreadRecord & Record<string, unknown>) | undefined;
-  if (!rec || rec.id !== o.threadId) throw new Error("The save's thread record is missing or another thread's.");
-  const meta = json('git/meta.json') as GitMeta | undefined;
-  if (!meta) throw new Error("The save has no git work in it.");
+export async function restoreSave(o: { home: string; claudeDir: string; threadId: string; checkout: string; packed: Buffer; limits?: SaveLimits }): Promise<{ cwd: string; worktree: boolean }> {
+  const entries = unarchive(o.packed, { maxUnpacked: o.limits?.maxUnpacked ?? SAVE_MAX_UNPACKED_BYTES });
+  const { rec, meta } = checkRestorable(entries, o.threadId);
   const checkout = realpath(o.checkout);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-restore-'));
   let cwd: string;
@@ -172,18 +206,30 @@ export async function saveThread(o: {
   threadId: string;
   threadKey: Buffer;
   boxKey: string;
-  snapshot: (threadId: string) => ThreadRecord;
+  // The thread stopped and its record written out (Runner.quiesceForSave):
+  // nothing changes its folder from here.
+  quiesce: (threadId: string) => Promise<ThreadRecord>;
+  // A save that failed: the thread carries on (Runner.releaseTurns).
+  resume: (threadId: string) => void;
   post: (kind: 'mutation', fn: string, args: Record<string, unknown>) => Promise<unknown>;
   upload: (url: string, bytes: Uint8Array, mediaType: string) => Promise<string>;
-}): Promise<{ bytes: number }> {
-  const rec = o.snapshot(o.threadId);
-  const sealed = sealSave(o.threadKey, o.threadId, await packSave({ home: o.home, claudeDir: o.claudeDir, rec }));
-  if (sealed.length > SAVE_MAX_BYTES) {
-    throw new Error(`The thread's save is ${mb(sealed.length)}, more than one upload takes (${mb(SAVE_MAX_BYTES)}), and saves in parts aren't built yet. Commit less, or take big untracked files out of its folder, and it can save.`);
+  limits?: SaveLimits;
+}): Promise<{ bytes: number; leftOut?: string[] }> {
+  const rec = await o.quiesce(o.threadId);
+  try {
+    const { packed, leftOut } = await packSave({ home: o.home, claudeDir: o.claudeDir, rec, ...(o.limits ? { limits: o.limits } : {}) });
+    const sealed = sealSave(o.threadKey, o.threadId, packed);
+    if (sealed.length > SAVE_MAX_BYTES) {
+      throw new Error(`The thread's save is ${mb(sealed.length)}, more than one upload takes (${mb(SAVE_MAX_BYTES)}), and saves in parts aren't built yet. Commit less, or take big untracked files out of its folder, and it can save.`);
+    }
+    const url = await o.post('mutation', 'sync:iconUploadUrl', { key: o.boxKey });
+    if (typeof url !== 'string') throw new Error("The backend didn't give the box an upload URL.");
+    const storageId = await o.upload(url, sealed, 'application/octet-stream');
+    await o.post('mutation', 'boxes:boxSaved', { key: o.boxKey, storageId, bytes: sealed.length });
+    // Held from here (no turn starts) until the box is resumed or sent something.
+    return { bytes: sealed.length, ...(leftOut.length ? { leftOut: leftOut.slice(0, 20) } : {}) };
+  } catch (e) {
+    o.resume(o.threadId);
+    throw e;
   }
-  const url = await o.post('mutation', 'sync:iconUploadUrl', { key: o.boxKey });
-  if (typeof url !== 'string') throw new Error("The backend didn't give the box an upload URL.");
-  const storageId = await o.upload(url, sealed, 'application/octet-stream');
-  await o.post('mutation', 'boxes:boxSaved', { key: o.boxKey, storageId, bytes: sealed.length });
-  return { bytes: sealed.length };
 }

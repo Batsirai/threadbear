@@ -24,7 +24,7 @@ import { PROVIDERS } from './boxProviders/types';
 import { FLY_SUSPEND_MAX_MB } from './boxProviders/fly';
 import { WAKES_FROM } from './boxHooks';
 import { MOVE_GOING } from './moves';
-import { BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runnerAccess';
+import { BOX_KEY_DEAD, BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runnerAccess';
 import { deleteIfUnused, endCommandFiles, finishedArgs, MAX_RUNNER_UPLOAD_BYTES, uploadedBy } from './sync';
 
 // A virtual runner's limits when it's made (runnerServices.limits).
@@ -409,7 +409,8 @@ export async function newAttempt(ctx: MutationCtx, row: Doc<'boxes'>, bootHash: 
 }
 
 const exchanged = v.object({
-  boxKey: v.string(),
+  // Made here only for a box that sent no boxKeyHash (made its own key).
+  boxKey: v.optional(v.string()),
   runnerId: v.string(),
   threadId: v.string(),
   claudeToken: v.string(),
@@ -426,6 +427,8 @@ const exchanged = v.object({
 type Exchanged = Infer<typeof exchanged>;
 type Peeked = { login: string; threadId: string; sealedToken: string; sealedThreadKey: string };
 type Claimed = { runnerId: string; threadId: string; repo: Exchanged['repo']; save: Exchanged['save'] };
+type Replayed = Peeked & Claimed;
+const KEY_HASH = /^[0-9a-f]{64}$/;
 const refusedBoot = () => new ConvexError({ kind: 'auth', message: 'boot token unknown, used or expired' });
 
 /**
@@ -444,15 +447,34 @@ export const exchange = action({
   // machineId: the provider's id for the box's own machine (BoxProvider
   // machineIdEnv; FLY_MACHINE_ID on Fly). Without it, the key holder's
   // machine is unknown, and every machine of its attempt stays protected.
-  args: { bootToken: v.string(), machineId: v.optional(v.string()) },
+  // boxKeyHash: the SHA-256 of a box key the box made itself, which then
+  // never crosses the network. With it and machineId, the exchange can be
+  // asked again: the same boot token, machine and key hash, while that key
+  // is still the thread's and within the token's 10 minutes, get the same
+  // answer (a box whose answer was lost); anything else is refused.
+  args: { bootToken: v.string(), machineId: v.optional(v.string()), boxKeyHash: v.optional(v.string()) },
   returns: exchanged,
-  handler: async (ctx, { bootToken, machineId }): Promise<Exchanged> => {
+  handler: async (ctx, { bootToken, machineId, boxKeyHash }): Promise<Exchanged> => {
     if (machineId !== undefined && !MACHINE_ID.test(machineId)) throw bad('machineId must be the provider id of the box’s own machine');
+    if (boxKeyHash !== undefined && !KEY_HASH.test(boxKeyHash)) throw bad('boxKeyHash must be a SHA-256 in hex');
     if (!BOOT_TOKEN.test(bootToken)) throw refusedBoot();
     const key = await sealKey();
     const bootHash = await sha256(bootToken);
     const peeked: Peeked | null = await ctx.runQuery(internal.boxes.peekBoot, { bootHash });
-    if (!peeked) throw refusedBoot();
+    if (!peeked) {
+      // Used already: only by this very machine and key, asking again.
+      const again: Replayed | null = boxKeyHash !== undefined && machineId !== undefined ? await ctx.runQuery(internal.boxes.peekReplay, { bootHash, boxKeyHash, machineId }) : null;
+      if (!again) throw refusedBoot();
+      let claudeToken: string;
+      let threadKey: string;
+      try {
+        claudeToken = new TextDecoder().decode(await unseal(key, again.sealedToken, tokenPurpose(again.login)));
+        threadKey = b64(await unseal(key, again.sealedThreadKey, threadKeyPurpose(again.threadId)));
+      } catch {
+        throw new ConvexError({ kind: 'config', message: "The box's secrets can't be unsealed with this deployment's BOX_SEAL_KEY." });
+      }
+      return { runnerId: again.runnerId, threadId: again.threadId, claudeToken, threadKey, repo: again.repo, save: again.save, login: again.login };
+    }
     let claudeToken: string;
     let threadKey: string;
     try {
@@ -461,10 +483,10 @@ export const exchange = action({
     } catch {
       throw new ConvexError({ kind: 'config', message: "The box's secrets can't be unsealed with this deployment's BOX_SEAL_KEY. The boot token still works once that's fixed." });
     }
-    const boxKey = BOX_KEY_PREFIX + randomHex(32);
-    const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash, boxKeyHash: await sha256(boxKey), sealedToken: peeked.sealedToken, sealedThreadKey: peeked.sealedThreadKey, ...(machineId !== undefined ? { machineId } : {}) });
+    const boxKey = boxKeyHash === undefined ? BOX_KEY_PREFIX + randomHex(32) : undefined;
+    const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash, boxKeyHash: boxKeyHash ?? (await sha256(boxKey!)), sealedToken: peeked.sealedToken, sealedThreadKey: peeked.sealedThreadKey, ...(machineId !== undefined ? { machineId } : {}) });
     if (!got) throw refusedBoot();
-    return { boxKey, runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save, login: peeked.login };
+    return { ...(boxKey ? { boxKey } : {}), runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save, login: peeked.login };
   },
 });
 
@@ -480,6 +502,28 @@ async function cloudToken(ctx: QueryCtx, login: string): Promise<Doc<'cloudToken
   if (!token) throw new ConvexError({ kind: 'noCloudToken', message: `There's no cloud token for ${login} yet: set one in Threadbear, then start the box again.` });
   return token;
 }
+
+/**
+ * An exchange asked again by the box that made it (its answer lost on the
+ * way): the boot token it used, its own machine and the hash of the key it
+ * made, while that key is still the thread's (not replaced, revoked or
+ * dead) and the token would still have been good. Null for anything else.
+ */
+export const peekReplay = internalQuery({
+  args: { bootHash: v.string(), boxKeyHash: v.string(), machineId: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({ login: v.string(), threadId: v.string(), sealedToken: v.string(), sealedThreadKey: v.string(), runnerId: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }), save: v.union(v.null(), v.object({ url: v.string(), at: v.number(), bytes: v.number() })) }),
+  ),
+  handler: async (ctx, { bootHash, boxKeyHash, machineId }) => {
+    const row = await ctx.db.query('boxes').withIndex('by_box_key', (q) => q.eq('boxKeyHash', boxKeyHash)).first();
+    if (!row || row.boxKeyHash !== boxKeyHash || BOX_KEY_DEAD.includes(row.boxState.kind)) return null;
+    if (!row.exchanged || row.exchanged.bootHash !== bootHash || row.exchanged.until <= Date.now() || row.keyMachineId !== machineId) return null;
+    const token = await cloudToken(ctx, row.login);
+    const url = row.save ? await ctx.storage.getUrl(row.save.storageId) : null;
+    return { login: row.login, threadId: row.threadId, sealedToken: token.sealed, sealedThreadKey: row.sealedThreadKey, runnerId: row.runnerId, repo: row.repo, save: row.save && url ? { url, at: row.save.at, bytes: row.save.bytes } : null };
+  },
+});
 
 /** What the exchange unseals, read without using the boot token up. A login with no cloud token refuses here. */
 export const peekBoot = internalQuery({
@@ -518,9 +562,11 @@ export const claimBoot = internalMutation({
     if (condemned) return null;
     const token = await cloudToken(ctx, row.login);
     if (token.sealed !== sealedToken || row.sealedThreadKey !== sealedThreadKey) throw conflict("The login's cloud token changed while the box started: try again.");
+    // Taken before READY clears it: how long a lost answer may be asked for again.
+    const until = row.bootExpiresAt ?? Date.now();
     const r = await boxMachine.send(ctx, row._id, { type: 'READY' });
     if (r.status !== 'done') return null;
-    await ctx.db.patch(row._id, { boxKeyHash, keyMachineId: machineId, unsure: undefined });
+    await ctx.db.patch(row._id, { boxKeyHash, keyMachineId: machineId, unsure: undefined, exchanged: { bootHash, until } });
     const url = row.save ? await ctx.storage.getUrl(row.save.storageId) : null;
     return {
       runnerId: row.runnerId,
