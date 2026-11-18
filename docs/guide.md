@@ -598,7 +598,10 @@ On a Mac the composer checks your spelling as the Mac's own text boxes do. A
 misspelled word gets a red wavy line once you've finished typing it, and
 with Correct Spelling Automatically on (it starts as your Mac's Keyboard
 settings have it) the Mac's correction and your text replacements go in as
-you start the next word; ⌘Z puts back what you typed. Right-click a marked
+you start the next word; ⌘Z puts back what you typed. A correction you
+take back (⌘Z straight after it, or deleting into the word and typing it
+your way again) isn't made again while the app runs, and the word stops
+being marked. "Threadbear" is never marked or corrected. Right-click a marked
 word for the Mac's guesses, Ignore Spelling and Learn Spelling. The same
 menu has Spelling and Grammar (a green line under grammar, off until you
 turn it on), Substitutions (smart quotes and dashes, off to start with, and
