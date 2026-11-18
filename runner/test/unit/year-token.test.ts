@@ -12,7 +12,7 @@ import { nullLogger } from '../../src/log.ts';
 import { SignInState, ENDING_SOON_MS } from '../../src/sign-in-state.ts';
 import { TOKEN_FILE, TOKEN_LIFETIME_MS, readYearToken } from '../../src/year-token.ts';
 import { cliEnv } from '../../src/adapters/claude/adapter.ts';
-import { discoverAccounts } from '../../src/accounts.ts';
+import { AccountRegistry, discoverAccounts } from '../../src/accounts.ts';
 import type { Account } from '../../src/protocol.ts';
 import { FakeAccounts, makeHarness, tick } from '../helpers/fakes.ts';
 import { onYearToken } from '../../src/year-token.ts';
@@ -59,6 +59,29 @@ test('the account says it has a token and when it was made, never the token', ()
   assert.deepEqual(byId['claude-1'].yearToken, { madeAt: MADE });
   assert.equal(byId['claude-2'].yearToken, undefined);
   assert.ok(!JSON.stringify(list).includes(TOKEN));
+});
+
+// Mike, 18 Nov: the row took about 10 seconds to change after Year-long
+// token… finished, the registry's rescan interval. The file landing in the
+// login's folder is news at once.
+test('a token made for a login is news straight away, not at the next rescan', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-year-watch-'));
+  const one = path.join(root, 'claude-1');
+  fs.mkdirSync(one);
+  const main = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-year-main-'));
+  const registry = new AccountRegistry({ claudeMainDir: main, claudeMainJson: path.join(main, 'none.json'), tokenStatsAccountsDir: root, userHome: os.tmpdir(), pathEnv: '' } as never);
+  try {
+    assert.equal(registry.list().find((a) => a.id === 'claude-1')?.yearToken, undefined);
+    const heard = new Promise<Account[]>((resolve) => registry.onChange(resolve));
+    // As the helper writes it: a temp file, then a rename onto the name.
+    const tmp = path.join(one, `${TOKEN_FILE}.123`);
+    fs.writeFileSync(tmp, JSON.stringify({ token: TOKEN, madeAt: MADE }), { mode: 0o600 });
+    fs.renameSync(tmp, path.join(one, TOKEN_FILE));
+    const list = await Promise.race([heard, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('not heard within 3 s')), 3000))]);
+    assert.deepEqual(list.find((a) => a.id === 'claude-1')?.yearToken, { madeAt: MADE });
+  } finally {
+    registry.close();
+  }
 });
 
 test("a token login isn't asked the CLI; its end is a year from when it was made, and a new token takes a refusal back", async () => {

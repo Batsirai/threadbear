@@ -302,7 +302,8 @@ File references are where to look.
   setup-token` for that login, run by a small Python helper inside the app
   (`/usr/bin/python3`). It writes `threadbear-token.json` in that login's own
   folder (only you can read it), with the token and when it was made. The
-  runner reads that file and gives the token to that login's Claude Code as
+  runner watches each Claude login's folder for that one file, so the row
+  changes as soon as it's made, and reads it and gives the token to that login's Claude Code as
   `CLAUDE_CODE_OAUTH_TOKEN`, and to nothing else. Delete the file to go back
   to the login's normal sign-in.
 - **A pinned file being shown** (`desktop/gpui/src/highlights.rs`): if its

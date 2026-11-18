@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { readYearToken } from './year-token.ts';
+import { TOKEN_FILE, readYearToken } from './year-token.ts';
 import { acpAccounts } from './adapters/acp/agents.ts';
 import path from 'node:path';
 import { isEffortLevel, type Account, type EffortLevel, type ModelChoice } from './protocol.ts';
@@ -200,6 +200,8 @@ export class AccountRegistry {
   private at = 0;
   private learned = new Map<string, LearnedAccountInfo>();
   private listeners = new Set<(accounts: Account[]) => void>();
+  // One per Claude login's folder, for its threadbear-token.json.
+  private tokenWatchers = new Map<string, fs.FSWatcher>();
 
   constructor(cfg: DiscoveryConfig, usage?: AccountUsageSource) {
     this.cfg = cfg;
@@ -224,12 +226,46 @@ export class AccountRegistry {
       this.scanned = key;
       this.cache = found.map((a) => this.enrich(a));
       this.at = Date.now();
+      this.watchTokens(found);
       if (changed) {
         const list = this.cache.map((a) => this.withUsage(a));
         for (const fn of this.listeners) fn(list);
       }
     }
     return this.cache.map((a) => this.withUsage(a));
+  }
+
+  // A year-long token made, renewed or deleted shows at once, rather than
+  // at the next rescan: Mike watched the row sit for about 10 seconds
+  // after Year-long token… finished (18 Nov). Only the folder's top level
+  // is watched, and only that file's name counts; the helper renames it
+  // into place, which is one event.
+  private watchTokens(found: Account[]): void {
+    for (const a of found) {
+      const dir = a.provider === 'claude' ? a.configDir : undefined;
+      if (!dir || this.tokenWatchers.has(dir)) continue;
+      try {
+        const w = fs.watch(dir, { persistent: false }, (_event, file) => {
+          if (file != null && String(file) !== TOKEN_FILE) return;
+          this.at = 0;
+          this.list();
+        });
+        // A folder taken away: stop, and the next scan that finds it again
+        // watches it again.
+        w.on('error', () => {
+          w.close();
+          this.tokenWatchers.delete(dir);
+        });
+        this.tokenWatchers.set(dir, w);
+      } catch {
+        // Not watchable here: the 10-second rescan still sees it.
+      }
+    }
+  }
+
+  close(): void {
+    for (const w of this.tokenWatchers.values()) w.close();
+    this.tokenWatchers.clear();
   }
 
   // Keeps what a probe or a turn showed about an account. Returns whether

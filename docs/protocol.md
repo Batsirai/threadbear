@@ -2527,8 +2527,9 @@ thread to another login when the one it's on runs out of room.
   runs `claude setup-token` for that login and writes
   `threadbear-token.json` in the login's folder (0600: `{ token, madeAt }`).
   Not settings.json's `env`, which Mike's logins share through symlinks.
-  The runner sees the file on its next look at the logins, sets
-  `yearToken`, and passes the token to that login's CLI as
+  The runner watches each Claude login's folder for that file, so it
+  sees it as soon as it lands (or at its 10-second rescan where a folder
+  can't be watched), sets `yearToken`, and passes the token to that login's CLI as
   `CLAUDE_CODE_OAUTH_TOKEN` (cliEnv), where it takes over from the
   Keychain sign-in; never to another login, a client, Convex or the log,
   and Claude Code keeps it out of its tools' shells. `claude auth status`
