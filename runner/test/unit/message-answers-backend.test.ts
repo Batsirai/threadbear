@@ -66,3 +66,15 @@ test("a runner key's long answered message is kept without its answers when they
   assert.equal(rows[0]!.text, `Why?\n${answer}`);
   assert.equal(rows[0]!.answers, undefined);
 });
+
+test('the stored-rows scrub drops answers its text no longer says, even when nothing else changed, and only when applied', async () => {
+  const s = await setup();
+  // A row from before the check, its answer saying what the text hid.
+  const id = await s.ctx.db.insert('messages', { threadId: 'A', seq: 9, role: 'user', text: 'password:\n[redacted]', answers: [{ action: 'password:', answer: 'hunter2hunter2!' }], at: 'now' });
+  const dry = await call(s.ctx, sync.scrubStoredBatch, { key: OWNER, table: 'messages', cursor: null, apply: false });
+  assert.deepEqual(dry.changed, [String(id)]);
+  assert.ok(JSON.stringify(s.rows('messages')).includes('hunter2'));
+  await call(s.ctx, sync.scrubStoredBatch, { key: OWNER, table: 'messages', cursor: null, apply: true });
+  assert.ok(!JSON.stringify(s.rows('messages')).includes('hunter2'));
+  assert.equal(s.rows('messages').find((r) => r._id === id)?.text, 'password:\n[redacted]');
+});

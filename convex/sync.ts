@@ -4329,14 +4329,18 @@ export const scrubStoredBatch = mutation({
       if (table === 'commands' && (row.state === 'pending' || row.state === 'taken')) continue;
       const { _id, _creationTime, ...doc } = row;
       // Tool output's input and diffs are JSON text, to be scrubbed as JSON.
-      const scrubbed: Record<string, any> = table === 'eventBodies' ? sameOr(doc, cleanBody(doc)) : clean(doc);
-      if (scrubbed === doc) continue;
-      // A message's answers stay only if its scrubbed text still says them.
+      let scrubbed: Record<string, any> = table === 'eventBodies' ? sameOr(doc, cleanBody(doc)) : clean(doc);
+      // A message's answers stay only if its scrubbed text still says them,
+      // checked even when nothing else changed (a new copy, so a dry run
+      // changes nothing).
       if (table === 'messages' && scrubbed.answers) {
         const kept = answersInText(String(scrubbed.text ?? ''), scrubbed.answers);
-        if (kept) scrubbed.answers = kept;
-        else delete scrubbed.answers;
+        if (!kept) {
+          const { answers: _gone, ...rest } = scrubbed;
+          scrubbed = rest;
+        }
       }
+      if (scrubbed === doc) continue;
       changed.push(String(_id));
       if (!apply) continue;
       const next = { ...scrubbed };

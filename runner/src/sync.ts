@@ -1628,7 +1628,19 @@ export class ConvexSync {
           }),
         };
       }
-      return send(kind, fn, this.scrubber.doc(args));
+      const clean = this.scrubber.doc(args);
+      // The last scrub can know a secret toMessageDoc's didn't (a .env read
+      // since): a message's answers go only as that text still says them
+      // (Codex's review, 18 Nov).
+      if (fn === 'sync:appendMessages' && Array.isArray(clean.messages)) {
+        clean.messages = (clean.messages as MessageDoc[]).map((m) => {
+          if (!m.answers) return m;
+          const { answers, ...rest } = m;
+          const kept = answersInText(m.text, answers);
+          return kept ? { ...rest, answers: kept } : rest;
+        });
+      }
+      return send(kind, fn, clean);
     };
     this.upload = deps.upload ?? convexUploader();
     if (!this.off) this.subscriber = deps.subscriber ?? (url ? convexSubscriber(url) : undefined);
