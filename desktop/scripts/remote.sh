@@ -88,6 +88,9 @@ target="$base/target-$key"
 # An array, not a function: a background function is a subshell, and its $!
 # isn't the ssh the signal trap has to kill.
 SSH=(ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
+# "local" is the machine this runs on, for a job on a check host itself
+# (scripts/nightly-fuzz.sh): local-ssh.sh says how.
+[ "$host" != local ] || SSH=("$root/desktop/scripts/local-ssh.sh")
 # wait_run: waits for the background ssh, and says when it was ssh itself that
 # failed (255: the connection dropped, or never came up), so a drop doesn't
 # read as the lock wait or build step that was last printed.

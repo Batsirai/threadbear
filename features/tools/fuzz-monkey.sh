@@ -19,7 +19,7 @@ trap 'rm -rf "$private"' EXIT
 cp "${CARGO_TARGET_DIR:-desktop/target}/debug/threadbear-gpui" "$private/threadbear-gpui"
 cp "${CARGO_TARGET_DIR:-desktop/target}/debug/threadbear-web-helper" "$private/threadbear-web-helper" 2>/dev/null || true
 export TB_GPUI_BIN="$private/threadbear-gpui"
-out="$HOME/.cache/threadbear-check/fuzz/$seed"
+out="${FUZZ_OUT:-$HOME/.cache/threadbear-check/fuzz/$seed}"   # FUZZ_OUT: the nightly run's own folder
 mkdir -p "$out"
 cd features
 node tools/fuzz-monkey.ts --seed "$seed" --minutes "$minutes" --out "$out" "$@"

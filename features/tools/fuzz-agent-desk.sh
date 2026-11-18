@@ -18,7 +18,7 @@ cd "$root"
 export PATH="$HOME/.local/bin:$PATH"
 (cd desktop && cargo build -p threadbear-gpui --features automation 2>&1 | tail -2)
 export TB_GPUI_BIN="${CARGO_TARGET_DIR:-desktop/target}/debug/threadbear-gpui"
-out="$HOME/.cache/threadbear-check/fuzz-agent/$(date +%Y%m%d-%H%M%S)"
+out="${FUZZ_OUT:-$HOME/.cache/threadbear-check/fuzz-agent/$(date +%Y%m%d-%H%M%S)}"   # FUZZ_OUT: the nightly run's own folder
 mkdir -p "$out"
 end=$(( $(date +%s) + minutes * 60 ))
 n=0
