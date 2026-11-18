@@ -14,7 +14,8 @@ import { loadConfig, paths, readRunnerJson } from '../../src/config.ts';
 import { downgradeFetch, redirectTrap } from '../helpers/redirect-trap.ts';
 import { scrubText } from '../../src/redaction.ts';
 import { Scrubber } from '../../src/scrub.ts';
-import { SCRUB_API_VERSION, isConvexCloud } from '../../src/sync.ts';
+import { SCRUB_API_VERSION, isConvexCloud, MESSAGE_PICTURES_API_VERSION } from '../../src/sync.ts';
+import { makePng } from '../helpers/png.ts';
 import { ConvexUseTally } from '../../src/convex-use.ts';
 
 
@@ -4202,4 +4203,33 @@ test("handover: an entry with no events doesn't stop the cards after it", async 
   assert.equal(pending.get('drain-bad'), undefined);
   f.sync.release();
   await f.sync.stop();
+});
+
+// Another Mac's relay shows a message's pictures (API 87). It went by the
+// words alone, which a literal "[Picture 2]" fooled into a picture that
+// never was, and an 8,000-character cut hid the only marker of (Codex's
+// review, 18 Nov): the row now says how many pictures the message came with.
+test('a message row says how many pictures it came with, and goes with it from API 87', async () => {
+  const sent = (text: string, n: number) => toMessageDoc('t', { type: 'user.message', seq: 4, ts: 'x', threadId: 't', text, images: Array.from({ length: n }, (_, i) => ({ path: `/m/${i}.png`, mediaType: 'image/png' })) } as never)!;
+  assert.equal(sent('hi', 0).pictures, undefined);
+  assert.deepEqual([sent('like [Picture 2]', 2).pictures, sent('like [Picture 2]', 2).text], [2, 'like [Picture 2]\n\n[1 picture]']);
+  assert.equal(sent('[Picture 1] and the literal token [Picture 2]', 1).pictures, 1);
+  // The only marker past the cut: the count still says there's one.
+  const long = sent(`${'x'.repeat(8001)} [Picture 1]`, 1);
+  assert.equal(long.pictures, 1);
+  assert.doesNotMatch(long.text, /\[Picture 1\]/);
+  for (const [backend, says] of [[MESSAGE_PICTURES_API_VERSION, true], [MESSAGE_PICTURES_API_VERSION - 1, false]] as const) {
+    const f = setupFull({ apiVersion: backend });
+    const rows = () => f.calls.filter((c) => c.fn === 'sync:appendMessages').flatMap((c) => c.args.messages as MessageDoc[]);
+    f.sync.start();
+    await f.sync.flushNow();
+    const file = path.join(tmpDir('tb-pic-'), 'a.png');
+    fs.writeFileSync(file, makePng(4, 4));
+    const t = f.h.runner.create({ text: 'go', cwd: f.h.cfg.defaults.cwd, accountId: 'claude-3', images: [{ path: file, mediaType: 'image/png' }] }).thread;
+    f.h.clock.advance(SYNC_COALESCE_MS);
+    await tick();
+    const first = rows().find((m) => m.threadId === t.id && m.role === 'user')!;
+    assert.equal(first.pictures, says ? 1 : undefined, `backend ${backend}`);
+    await f.sync.stop();
+  }
 });

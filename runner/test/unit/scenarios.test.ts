@@ -111,12 +111,17 @@ test("another Mac gets a message's pictures, and each file from the backend", as
     p.send('like [Picture 2] please', files.map((f) => ({ path: f, mediaType: 'image/png' })));
     p.say('Done.');
     p.endTurn({ needs: 'nothing' });
+    // One picture, and a marker that is only words (Codex's review, 18 Nov).
+    p.send('[Picture 1] and the literal token [Picture 2]', [{ path: files[0]!, mediaType: 'image/png' }]);
+    p.say('Seen.');
+    p.endTurn({ needs: 'nothing' });
   });
   assert.deepEqual(refused, []);
   const said = relayEvents.find((e) => e.type === 'user.message' && String(e.text).includes('please'))!;
   // The words as on the Mac that has the thread: no line counting the pictures.
   assert.equal(said.text, 'like [Picture 2] please');
   assert.deepEqual(views.relay.messages, views.here.messages);
+  assert.deepEqual(views.relay.messages.map((m) => m.pictures), views.here.messages.map((m) => m.pictures));
   assert.deepEqual(said.images.map((i: { mediaType: string; width?: number; height?: number }) => [i.mediaType, i.width, i.height]), [['image/png', 6, 4], ['image/png', 6, 4]]);
   for (const image of said.images as { path: string }[]) {
     const read = await relay.readFile(runnerId, image.path);

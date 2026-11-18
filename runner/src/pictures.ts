@@ -54,7 +54,8 @@ const COUNT_LINE = /(?:^|\n\n)\[(?:1 picture|(\d{1,3}) pictures)\]$/;
 
 /**
  * What a mirrored message's words say of its pictures, for a reader that
- * has only the words (relay.ts, another runner's thread): how many it came
+ * has only the words (relay.ts, a row from a runner from before API 87,
+ * which doesn't say its count): how many it came
  * with, and the words without the line counting the unplaced ones. Words
  * alone can't tell a typed "[Picture 1]" from a picture, so this is the
  * most that fits: the count c for which the unplaced ones plus the markers
@@ -70,6 +71,19 @@ export function picturesSaid(text: string): { count: number; words: string } {
     if (unplaced + named.filter((n) => n >= 1 && n <= count).length === count) return { count, words };
   }
   return { count: unplaced, words };
+}
+
+/**
+ * A mirrored message's words without the line the owning runner added for
+ * its `count` pictures (a row that says its count, API 87). Only that line:
+ * one whose number isn't how many of `count` no marker places was typed,
+ * not added, and stays.
+ */
+export function withoutCountLine(text: string, count: number): string {
+  const line = COUNT_LINE.exec(text);
+  if (!line) return text;
+  const words = text.slice(0, line.index);
+  return Number(line[1] ?? 1) === unplacedPictures(words, count) ? words : text;
 }
 
 // The Claude API turns down a text block of nothing but whitespace, as

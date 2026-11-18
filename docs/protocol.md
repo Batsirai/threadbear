@@ -6135,40 +6135,46 @@ only way the app opens another runner's thread.
   old runner's card has those; any more files are named in the result. The app fills
   the row in by `itemId`. Withheld, the result says why. Otherwise the stub stands.
   Reasoning, sub-agents and tools' pictures stay on that runner from here.
-- **Pictures in messages** (backend API 87). A `user.message` whose row's
-  words say it came with pictures (`[Picture N]` markers, or the `[N pictures]`
-  line the owning runner adds for ones no marker places) gets its `images` from
-  that runner's uploads (`replyImages` rows with `src` `picture:N`, which it
-  writes unless its `sync.pastedPictures` is false), read once by
-  `relay:picturesAtSeqs { key, threadId, seqs }` → `[{ seq, n, path, url,
-  mediaType, width?, height? }]` (at most 50 seqs a read and 30 pictures a seq,
-  owner only). A message with `origin` `runner` or `schedule` is never read for
-  pictures: it may quote another thread's markers. With at least one picture
-  held, `images[N-1]` is picture N, `{ path, mediaType, width?, height? }`,
-  `path` being the file's path on that runner's Mac; one that isn't up has the
-  path `threadbear-relay:<threadId>/<seq>/Picture <N>`; and the `[N pictures]`
-  line is taken off `text`, so `text` and the count of `images` are the
-  sender's (how the app knows its own sent message). With none held, `text` and
-  `images: []` are as before: words alone can name a picture that never was.
-  A message whose row arrived within 20 seconds of being sent and whose pictures
-  aren't all up is held back, its pictures watched through the same query, and
-  sent late (at `8s+1`) once they're up or the 20 seconds end; a row a live
-  tail brings waits from when it came, if its time is within 5 minutes of now.
-  Such a late message is replayed to a subscriber, with or without `relaySeen`,
-  as a late result is. A backend older than 87 is never asked, and messages show
-  as their words. A read that fails is tried again for that thread 30 seconds
-  later. `files.read { path, runnerId, maxBytes? }` answers `{ path, size,
-  modifiedAt, mediaType, data, truncated }` (as `files.read`) for a path held this
-  way for a thread the sidebar lists on that runner, with the bytes from the
-  backend's file storage (25 MB at most, held in memory, never written to
-  disk); a not-up path is asked of the backend again first, and is `-32000`
-  saying it didn't reach Convex if it still isn't there. The same path held
-  for two threads answers from the one used last. A path in this runner's own
-  inbox (a picture the app has just sent to that runner, drawn in the bubble
-  it keeps until the message shows) answers with that file. Any other path is
-  `-32000`, `Files on another runner are kept there for now.` Pictures in
-  replies and pinned ones stay as they were: only the phone and the website
-  show them.
+- **Pictures in messages** (backend API 87). From API 87 a user's message
+  row carries `pictures`, how many pictures the message came with (the owning
+  runner's `toMessageDoc`; `remoteTail` and `remoteMessages` pass on a whole
+  number from 1 to 999). Its pictures come from that runner's uploads
+  (`replyImages` rows with `src` `picture:N`, which it writes unless its
+  `sync.pastedPictures` is false), read by `relay:picturesAtSeqs { key,
+  threadId, seqs }` → `[{ seq, n, path, url, mediaType, width?, height? }]`
+  (at most 50 seqs a read and 30 pictures a seq, owner only). With `pictures`,
+  `images` has exactly that many (at most 50): `images[N-1]` is picture N,
+  `{ path, mediaType, width?, height? }`, `path` being the file's path on that
+  runner's Mac, or `threadbear-relay:<threadId>/<seq>/Picture <N>` for one not
+  up yet; and the `[N pictures]` line the owning runner added is taken off
+  `text` (only when its number is how many of them no marker places, so a typed
+  one stays). So `text` and the count of `images` are the sender's, which is
+  how the app knows its own sent message, and words that only look like a
+  marker or the line never make a picture. A row without `pictures` (an older
+  runner's) is read only if its words say it came with some (`[Picture N]`
+  markers or the line), never one with `origin` `runner` or `schedule`; it gets
+  only the pictures held (with a place for one missing before the last held),
+  and its line goes only once every picture its words count is held. No
+  message is held back for its pictures: the event goes out in order with a
+  place for each one not up. A new one's (a row that arrived within 20 seconds
+  of being sent, or a live tail brought with a time within 5 minutes of now,
+  counted from then) are watched through the same query for 20 seconds. A row
+  whose pictures aren't all up is asked about again by the thread's later reads,
+  at most once a minute, for 10 minutes after its first read. A backend older
+  than 87 is never asked, and messages show as their words. A read that fails
+  is tried again for that thread 30 seconds later. `files.read { path,
+  runnerId, maxBytes? }` answers `{ path, size, modifiedAt, mediaType, data,
+  truncated }` (as `files.read`) for a path held this way for a thread the
+  sidebar lists on that runner, with the bytes from the backend's file storage
+  (25 MB at most, held in memory, never written to disk). A place for one not
+  up waits while it's watched, then is asked of the backend again, and is
+  `-32000` saying it didn't reach Convex if it still isn't there (asking again
+  later can find it). The same path held for two threads answers from the one
+  used last. A path in this runner's own inbox (a picture the app has just
+  sent to that runner, drawn in the bubble it keeps until the message shows)
+  answers with that file. Any other path is `-32000`, `Files on another runner
+  are kept there for now.` Pictures in replies and pinned ones stay as they
+  were: only the phone and the website show them.
 - **Reads.** A thread is watched only while a client is subscribed to it,
   through `relay:remoteTail` (its newest 15 rows) and `relay:remoteThread`
   (its one row); a minute after the last subscriber goes, both stop. Older
@@ -6176,8 +6182,8 @@ only way the app opens another runner's thread.
   in this runner for half an hour. A tail that starts past the newest row
   held (the Mac slept) reads the rows between once, by `afterSeq`, rather
   than leave a hole. Pictures are read by row seq, only for held messages
-  that say they have some, 50 messages a read; a held-back message's are
-  watched live until it's sent. `runner.status` has `relay: { watching, held, reads, bytes }`:
+  that have some, 50 messages a read; a new message's are watched live for
+  20 seconds. `runner.status` has `relay: { watching, held, reads, bytes }`:
   threads watched now, rows held, and since start the reads (and live
   updates) and the JSON bytes they brought back, to measure what it costs.
 - **Acting.** `threads.update` takes `archivedBy: "agent"` with an

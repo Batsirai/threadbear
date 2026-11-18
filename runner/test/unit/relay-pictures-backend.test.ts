@@ -230,3 +230,18 @@ test('at most fifty messages are read in one call, and thirty pictures of each',
   const many = (await call(s.ctx, relay.picturesAtSeqs, { key: OWNER, threadId: 'B', seqs: [100] })) as { n: number }[];
   assert.equal(many.length, 30);
 });
+
+// The row says how many pictures its message came with (API 87), so the
+// relay doesn't guess from the words, and the relay's reads carry it.
+test("a message row's picture count is kept and read back by the relay, and a bad one is left off", async () => {
+  const s = await setup();
+  await call(s.ctx, sync.appendMessages, { key: MINI_KEY, messages: [
+    { threadId: 'B', seq: 3, role: 'user', text: 'Look\n\n[2 pictures]', pictures: 2, at: 'x' },
+    { threadId: 'B', seq: 4, role: 'user', text: 'odd', pictures: 1.5, at: 'x' },
+    { threadId: 'B', seq: 5, role: 'assistant', text: 'ok', at: 'x' },
+  ] });
+  const tail = (await call(s.ctx, relay.remoteTail, { key: OWNER, threadId: 'B' })) as { messages: { seq: number; pictures?: number }[] };
+  assert.deepEqual(tail.messages.map((m) => [m.seq, m.pictures]), [[3, 2], [4, undefined], [5, undefined]]);
+  const page = (await call(s.ctx, relay.remoteMessages, { key: OWNER, threadId: 'B' })) as { messages: { seq: number; pictures?: number }[] };
+  assert.equal(page.messages.find((m) => m.seq === 3)!.pictures, 2);
+});

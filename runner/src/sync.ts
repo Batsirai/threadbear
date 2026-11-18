@@ -165,6 +165,10 @@ export const ARCHIVED_INDEX_API_VERSION = 54;
 export const RELAY_API_VERSION = 44;
 // Pictures in a message to another runner's thread (relay.ts, relay:queueCommand's images).
 export const RELAY_PICTURES_API_VERSION = 63;
+// From this one a user's message row says how many pictures it came with
+// (`pictures`), and the main Mac's relay reads them (relay:picturesAtSeqs),
+// so another Mac shows them without guessing from the words.
+export const MESSAGE_PICTURES_API_VERSION = 87;
 // From this one the Mac app's Runners panel can ask for every runner's machine
 // figures (runners.stats): sync:watchRunnersFromMac and sync:runnerStatsList,
 // on top of the website's runnerStats rows (API 45).
@@ -470,7 +474,7 @@ export type PhoneAsk = { action: string; why?: string; reply?: string; options?:
 // A text message, or one line for a tool call (role "tool", since backend
 // API 2): what the phone and the website show of a thread.
 export type WokeByDoc = { kind: string; description: string };
-export type MessageDoc = { threadId: string; seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: true; plan?: true; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: WokeByDoc[]; buttons?: MessageButton[]; at: string; pagedAt?: number };
+export type MessageDoc = { threadId: string; seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: true; plan?: true; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: WokeByDoc[]; buttons?: MessageButton[]; pictures?: number; at: string; pagedAt?: number };
 // A reply button as a message row carries it (API 59): enough to draw it
 // and say where it goes, never its brief or message, which stay on the Mac.
 // target: the new thread's folder name, or the title of the thread it messages.
@@ -1135,6 +1139,10 @@ export function toMessageDoc(threadId: string, e: PersistedEvent, scrub: (text: 
   const text = note ? (cut ? `${cut}\n\n${note}` : note) : cut;
   const doc: MessageDoc = { threadId, seq: e.seq, role: e.type === 'user.message' ? 'user' : 'assistant', text, ...turn, at: e.ts };
   if (e.type === 'user.message' && e.origin) doc.origin = e.origin;
+  // How many it came with, so another Mac's relay never counts them from
+  // the words: a typed "[Picture 2]" isn't one, and the cut above can take
+  // the only marker (Codex's review, 18 Nov).
+  if (e.type === 'user.message' && e.images?.length) doc.pictures = e.images.length;
   if (e.type === 'assistant.text' && e.summary) doc.summary = true;
   return doc;
 }
@@ -3636,6 +3644,8 @@ export class ConvexSync {
     if (v === undefined || v < PLAN_API_VERSION) messages = messages.map((m) => (m.plan ? (({ plan, ...rest }) => rest)(m) : m));
     // Before API 76 a plan's row says nothing of what became of it.
     if (v === undefined || v < RELAY_CARDS_API_VERSION) messages = messages.map((m) => (m.planDecision ? (({ planDecision, ...rest }) => rest)(m) : m));
+    // Before API 87 the validator has no `pictures`; the count line still says them.
+    if (v === undefined || v < MESSAGE_PICTURES_API_VERSION) messages = messages.map((m) => (m.pictures ? (({ pictures, ...rest }) => rest)(m) : m));
     // The buttons' state as it is now, not when the row was made: a press
     // while the row waited would otherwise go up stale.
     if (v !== undefined && v >= BUTTONS_API_VERSION) messages = messages.map((m) => this.withButtons(m));

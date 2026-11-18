@@ -416,7 +416,9 @@
 //    which the runner puts up only once the phone has asked for that review.
 // 87: relay:picturesAtSeqs (owner only) reads the pictures pasted into
 //    another runner's messages, by seq, with their URLs: what that runner
-//    put up for the phone (replyImages, src "picture:N"). The main Mac's
-//    runner shows them in another runner's thread and answers the app's
-//    files.read for them; it asks only a backend of 87 or later.
+//    put up for the phone (replyImages, src "picture:N"). A user's message
+//    row can carry `pictures`, how many it came with, which remoteTail and
+//    remoteMessages pass on. The main Mac's runner shows them in another
+//    runner's thread and answers the app's files.read for them; a runner
+//    sends `pictures` and asks for them only from a backend of 87.
 export const API_VERSION = 87;

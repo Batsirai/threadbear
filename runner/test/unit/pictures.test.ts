@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { picturesSaid, placePictures, unplacedPictures } from '../../src/pictures.ts';
+import { picturesSaid, placePictures, unplacedPictures, withoutCountLine } from '../../src/pictures.ts';
 import type { ImageRef } from '../../src/protocol.ts';
 
 const red: ImageRef = { path: '/media/red.png', mediaType: 'image/png' };
@@ -99,4 +99,18 @@ test('what the words say agrees with what the sending runner counted', () => {
     const mirrored = note ? (text ? `${text}\n\n${note}` : note) : text;
     assert.deepEqual(picturesSaid(mirrored), { count: images, words: text }, mirrored);
   }
+});
+
+// A row that says how many pictures it came with (API 87): the line comes
+// off only when it's the one the owning runner added for that count, never
+// a paragraph Mike typed that happens to look like one.
+test('the counting line comes off a message whose count is known, and only that line', () => {
+  assert.equal(withoutCountLine('Look\n\n[2 pictures]', 2), 'Look');
+  assert.equal(withoutCountLine('[1 picture]', 1), '');
+  assert.equal(withoutCountLine('like [Picture 2] please\n\n[1 picture]', 2), 'like [Picture 2] please');
+  // Every picture placed: no line was added, so a typed one stays.
+  assert.equal(withoutCountLine('[Picture 1] see\n\n[300 pictures]', 1), '[Picture 1] see\n\n[300 pictures]');
+  // A literal marker past the count is words, and changes nothing.
+  assert.equal(withoutCountLine('[Picture 1] and the literal token [Picture 2]', 1), '[Picture 1] and the literal token [Picture 2]');
+  assert.equal(withoutCountLine('Fix it', 0), 'Fix it');
 });

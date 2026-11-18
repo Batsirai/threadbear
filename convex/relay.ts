@@ -44,11 +44,14 @@ const relayRow = v.object({
   // The reply buttons its text links (API 59), as the phone gets them; the
   // relay answers buttons.list from them (API 68).
   buttons: v.optional(v.array(messageButton)),
+  // How many pictures a user's message came with (API 87), so the relay
+  // shows them without counting from the words.
+  pictures: v.optional(v.number()),
   at: v.string(),
 });
 
 type Button = { id: string; title: string; kind: 'start' | 'send'; target?: string; pressedThreadId?: string; failed?: string };
-type Row = { seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: boolean; plan?: boolean; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: { kind: string; description: string }[]; buttons?: Button[]; at: string };
+type Row = { seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: boolean; plan?: boolean; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: { kind: string; description: string }[]; buttons?: Button[]; pictures?: number; at: string };
 function toRow(m: Row): Row {
   return {
     seq: m.seq,
@@ -64,6 +67,8 @@ function toRow(m: Row): Row {
     ...(m.turn ? { turn: m.turn } : {}),
     ...(m.wokeBy ? { wokeBy: m.wokeBy } : {}),
     ...(m.buttons?.length ? { buttons: m.buttons } : {}),
+    // Only a count a message could have: a runner key writes what it likes.
+    ...(m.role === 'user' && Number.isSafeInteger(m.pictures) && m.pictures! >= 1 && m.pictures! <= 999 ? { pictures: m.pictures } : {}),
     at: m.at,
   };
 }
