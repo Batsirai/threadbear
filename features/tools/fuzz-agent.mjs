@@ -122,7 +122,10 @@ function opencodeBackend(name, system) {
   const oc = process.env.OPENCODE_BIN ?? path.join(os.homedir(), '.opencode/bin/opencode');
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-oc-'));
   const config = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-oc-config-'));
-  const cfg = JSON.stringify({ permission: { '*': 'deny' }, mcp: {}, plugins: ['-*', 'opencode.*'] });
+  // Each tool by name: a blanket `"*": "deny"` makes OpenCode's free models
+  // answer FreeUsageLimitError (18 Nov), though named denials don't.
+  const deny = Object.fromEntries(['bash', 'edit', 'write', 'read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'task', 'todowrite', 'skill', 'external_directory'].map((t) => [t, 'deny']));
+  const cfg = JSON.stringify({ permission: deny, mcp: {}, plugins: ['-*', 'opencode.*'] });
   let session = null;
   let first = true;
   return {
@@ -205,7 +208,10 @@ try {
       log({ kind: 'cmd', step: i, cmd, ok: r.ok, timedOut: r.timedOut, out: r.out.slice(0, 1000) });
     }
     const h = health();
-    if (!h.responsive || /panic|crash/i.test(h.crashes.replace(/^crashes\s+(ok\s+)?\[\]\s*$/, ''))) log({ kind: 'harness', step: i, health: h });
+    // `hangs ok {"stalls":[]}` and `crashes ok {"panics":[]}` are the quiet answers.
+    const stalled = !/"stalls":\[\]/.test(h.hangs);
+    const panicked = !/"panics":\[\]/.test(h.crashes);
+    if (!h.responsive || stalled || panicked) { log({ kind: 'harness', step: i, health: h, stalled, panicked }); totals.harness = (totals.harness ?? 0) + 1; }
     feedback = `Your note: ${j.note ?? ''}\n\nWhat your commands said:\n${results.join('\n') || '(none sent)'}`;
     if (j.done) break;
     if (totals.input > maxInput) { log({ kind: 'stop', why: 'input token cap' }); break; }

@@ -41,6 +41,8 @@ What counts as a bug:
 - text that is wrong, garbled, duplicated, contradictory or cut off in a way a person would notice;
 - state that doesn't add up (a thread in two sections, a count that doesn't match the rows, an archived thread still in the Inbox).
 
+Things that are how this test copy works, not bugs: the window is always behind other windows, so opening a thread does not mark it read (unread marks stay) and it never counts as "in front"; "Undo" for an archive only lasts a few seconds; the fake runner's threads don't really work, so a sent message gets a canned reply or none.
+
 What is NOT a bug: an error caused by your own malformed command or a label you guessed that isn't in the list; a control missing from the list (not everything has a label); demo content that is simply odd; something you can't see because the dump doesn't show it. When unsure, don't report it: look again first. A false report costs more than a missed one.
 
 Set "done": true when you have covered your area. Keep notes short.
