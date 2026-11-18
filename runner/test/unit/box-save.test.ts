@@ -17,6 +17,9 @@ import { projectDirName } from '../../src/transcripts.ts';
 import { openSave, restoreSave, SaveHold, saveThread, sealSave, SAVE_MAX_BYTES, type SaveLimits } from '../../src/box-save.ts';
 import { prepareBoxFolder, readBoxSecrets, setSaveHold, writeBoxSecrets, type BoxSecrets } from '../../src/box-mode.ts';
 import { spawn, spawnSync } from 'node:child_process';
+import { PatchTrust, patchHash } from '../../src/patch-trust.ts';
+import { SHELL } from '../helpers/platform.ts';
+import { LIVE_POLL_MS, LIVE_SHARE_MS } from '../../src/runner.ts';
 
 const THREAD = 'b0c0ffee-1111-4222-8333-444455556666';
 const KEY = crypto.randomBytes(32);
@@ -642,4 +645,53 @@ test('a symlink staged with -f under an ignored path, whose target is missing, i
   const [url, sealed] = [...backend.stored][0]!;
   const b = await boxOn(origin, { url, at: Date.now(), bytes: sealed.length }, backend.stored);
   assert.equal(fs.readlinkSync(path.join(b.folder.checkout, 'build', 'link')), '../nowhere/target.txt');
+});
+
+test("a save's hold stops a patch's live poll from running its functions and their commands, and the save waits for one already going", async () => {
+  // A folder whose patch has a live badge that runs a command writing into the folder.
+  const dir = fs.realpathSync(tmpDir('tb-box-live-'));
+  const file = path.join(dir, '.threadbear', 'patches', 'live.ts');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'export default { panels: [{ title: "Live", url: "http://127.0.0.1:1/", badge: async ({ sh }) => Number(await sh("node ./poll.mjs")) }] };\n');
+  fs.writeFileSync(path.join(dir, 'poll.mjs'), "import fs from 'node:fs';\nfs.appendFileSync('polled.log', 'x\\n');\nconsole.log(1);\n");
+  const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
+  assert.ok(trust.trust(file, patchHash(file).hash));
+  const h = makeHarness(undefined, {}, { panelsRoot: fs.realpathSync(tmpDir()), patchTrust: trust, actionShell: SHELL, actionTimeoutMs: 5000, boxThread: THREAD });
+  h.runner.create({ text: 'go', accountId: 'claude-main', cwd: dir, id: THREAD });
+  await until(() => h.adapter.sessions.length === 1, 'the CLI to start');
+  h.adapter.last.init();
+  h.adapter.last.result();
+  const polls = () => (fs.existsSync(path.join(dir, 'polled.log')) ? fs.readFileSync(path.join(dir, 'polled.log'), 'utf8').length / 2 : 0);
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) {
+      await tick();
+      await h.runner.patchesIdle();
+    }
+  };
+  h.runner.get(THREAD);
+  await settle();
+  await until(() => polls() >= 1, 'the first live read');
+  // Polling, as it does every LIVE_POLL_MS.
+  const before = polls();
+  h.clock.advance(LIVE_POLL_MS + LIVE_SHARE_MS);
+  await settle();
+  await until(() => polls() > before, 'a poll');
+  // Held by a save: polls come round, and nothing runs.
+  h.runner.holdTurns(THREAD, 'save');
+  const held = polls();
+  for (let i = 0; i < 3; i++) {
+    h.clock.advance(LIVE_POLL_MS + LIVE_SHARE_MS);
+    h.runner.get(THREAD);
+    await settle();
+  }
+  assert.equal(polls(), held, 'no live function ran while held');
+  h.runner.releaseTurns(THREAD, 'save');
+  // A read already going when a save starts: the save's stop waits for it.
+  h.clock.advance(LIVE_POLL_MS + LIVE_SHARE_MS);
+  let quiesced = false;
+  const reading = h.runner['patchReads'].size;
+  const q = h.runner.quiesceForSave(THREAD, { waitMs: 30_000 }).then(() => (quiesced = true));
+  if (reading) assert.equal(quiesced, false);
+  await q;
+  assert.equal(h.runner['patchReads'].size, 0, 'no read of its patches outlives the stop');
 });

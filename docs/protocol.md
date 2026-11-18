@@ -8089,7 +8089,13 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   ones), and its whole thread group is killed. The runner's own work waited
   for (a minute at most, or the command fails), and it looks again that
   nothing new started. A worktree cleanup or teardown an archive would
-  start meanwhile is owed instead (`cleanupOwed`). From the moment a save starts, the thread
+  start meanwhile is owed instead (`cleanupOwed`). And from the save's
+  start, no process starts in the runner at all: in box mode,
+  `node:child_process` is gated (`runner/src/spawn-gate.ts`: every function
+  of it that starts a process, and `ChildProcess.prototype.spawn`, for the
+  runner and its libraries alike), and only the save's own git and packing
+  are let by. A patch's live functions aren't read while it's held, and a
+  read already going is waited for. From the moment a save starts, the thread
   runs nothing until the backend says it may: a command other than `save`
   taken after the save's outcome is known, or a heartbeat sent after that
   whose answer finds the box `awake`. Nothing in the box lets it go: not a
@@ -8099,7 +8105,10 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
   heartbeats and its save's `finishCommand` send `held: true`, and
   don't mark the box as holding work (`runnerAuth`'s housekeeping; only a
   `save` command's finish counts), and a finish of any other command taken
-  while the save goes waits until its outcome is known. Then it's packed: the thread's folder in the data dir (its record and events,
+  while the save goes waits until its outcome is known. A command's finish
+  goes once at a time (a retry waits for one on its way), and the backend
+  takes a finish that changes nothing (its command already ended) as
+  housekeeping too. Then it's packed: the thread's folder in the data dir (its record and events,
   not `panels`), its Claude session's transcript and the folder beside
   it, and its git work as a move packs it (`move-git.ts packGit`: the
   commits origin doesn't have and one more of every uncommitted and

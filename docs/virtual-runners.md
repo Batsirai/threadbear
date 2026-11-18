@@ -816,6 +816,19 @@ A sixth look found two more and two follow-ups:
 - A box key counted as the owner's, so `create_thread` on another runner
   tried to start it directly: a box files the request, as any runner key.
 
+A seventh look found one more and a follow-up:
+
+- A patch's live poll ran its functions, and the commands they run, while
+  a save held the box. Now one gate stops every process start in the
+  runner while a save holds it (`spawn-gate.ts`, on `node:child_process`
+  itself, with a test that it covers every way the module starts one and
+  that nothing in `runner/src` goes round it), the save's own git let by;
+  the live poll doesn't read the thread's patches while it's held, and the
+  save waits for a read already going.
+- The save's barrier could race a heartbeat's retry of the same finish,
+  and the backend marked a repeated finish as work: finishes now go one
+  at a time per command, and a finish that changes nothing is housekeeping.
+
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as
 decision 10 says, so the runner's existing year-long token path carries it

@@ -4,7 +4,7 @@
 // secrets, a new box's key replacing the last one's, and the box's states.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, claimAndFinish, load, outcome } from '../helpers/convex-memory.ts';
+import { call, claimAndFinish, load, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 import { BOX_RUNNER, boxBackend, CLAUDE_TOKEN, later, LOGIN, OWNER, SEAL_KEY, THREAD } from '../helpers/box-backend.ts';
 
 const sync = load('sync');
@@ -593,5 +593,24 @@ test("a box held by its save: its heartbeats and its save's finish, sent `held`,
   assert.deepEqual(s.box().workAttempts ?? [], []);
   // Without it, a heartbeat is the box at work again.
   await beat();
+  assert.deepEqual(s.box().workAttempts, [1]);
+});
+
+test("a box's repeated finish of a command already ended (a retry racing the first) doesn't mark it as working", async () => {
+  const s = await boxBackend();
+  const got = await s.boot();
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: THREAD, runnerId: BOX_RUNNER, title: 't', view: 'inbox', needsYou: false }] });
+  await s.report({ type: 'IDLE', attempt: 1 });
+  await boxes.askToSave(s.ctx, s.box());
+  const cmd = s.rows('commands').find((c) => c.kind === 'save')!;
+  assert.equal(await call(s.ctx, sync.takeCommand, { key: got.boxKey, commandId: cmd._id }), true);
+  await call(s.ctx, sync.finishCommand, { key: got.boxKey, commandId: cmd._id, ok: true, held: true });
+  await save(s, got.boxKey, 'save1');
+  assert.deepEqual(s.box().workAttempts ?? [], []);
+  // The same finish again, without `held` (a heartbeat's retry of a finish whose answer was lost).
+  await call(s.ctx, sync.finishCommand, { key: got.boxKey, commandId: cmd._id, ok: true });
+  assert.deepEqual(s.box().workAttempts ?? [], [], 'a finish that changes nothing makes no work');
+  // Anything else from the box is work again, as before.
+  await call(s.ctx, sync.heartbeat, { key: got.boxKey, runner: { runnerId: BOX_RUNNER, name: 'box', version: 'v', startedAt: new Date().toISOString(), draining: false, threadCount: 1 } });
   assert.deepEqual(s.box().workAttempts, [1]);
 });

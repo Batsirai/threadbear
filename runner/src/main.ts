@@ -79,6 +79,7 @@ import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
 import { BOX_NO_SCHEDULES, BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
 import { BoxProcesses } from './box-procs.ts';
+import { asSave, closeSpawns, installSpawnGate, openSpawns } from './spawn-gate.ts';
 import { SaveHold, saveThread } from './box-save.ts';
 import { ClockJumpWatch } from './clock-jump.ts';
 import { pushFailingText } from './push-failing.ts';
@@ -103,6 +104,9 @@ import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel,
 // it may stop one that hasn't started listening in time.
 export const REPORTS_LISTENING = true;
 
+// What a process start says while a box's save holds it (spawn-gate.ts).
+const SAVE_HOLDS_SPAWNS = "this box's save holds it, so nothing starts until the backend says it may run again.";
+
 async function main(): Promise<void> {
   // How long each part of a start takes, said once listening ('started in'),
   // so a slow restart shows where the time went.
@@ -116,7 +120,11 @@ async function main(): Promise<void> {
   // thread. Its boot token is read and taken out of the environment before
   // anything else, so nothing the runner starts inherits it.
   const boxBoot = readBoxBoot(process.env);
-  if (boxBoot) enterBoxEnv(process.env);
+  if (boxBoot) {
+    enterBoxEnv(process.env);
+    // The one gate on starting processes, closed while a save holds the box (spawn-gate.ts).
+    installSpawnGate();
+  }
   const cfg = loadConfig();
   // A dev runner on a copy of the real data dir (real-copy.ts): whatever
   // came with the copy, it never syncs as Mike's runner (nor relays or
@@ -623,8 +631,14 @@ async function main(): Promise<void> {
   const boxPost = box ? convexPoster(boxBoot!.syncUrl) : undefined;
   const saveHold = box
     ? new SaveHold({
-        hold: () => runner.holdTurns(box.secrets.threadId, 'save'),
-        release: () => runner.releaseTurns(box.secrets.threadId, 'save'),
+        hold: () => {
+          runner.holdTurns(box.secrets.threadId, 'save');
+          closeSpawns(SAVE_HOLDS_SPAWNS);
+        },
+        release: () => {
+          openSpawns();
+          runner.releaseTurns(box.secrets.threadId, 'save');
+        },
         ...(box.secrets.saveHold ? { initial: box.secrets.saveHold } : {}),
         persist: (state) => setSaveHold(cfg.home, state),
       })
@@ -640,7 +654,7 @@ async function main(): Promise<void> {
     // A degraded box saves nothing: what it has may be all there is of the work.
     if (box.broken) throw new Error(`This box can't save its thread: ${box.broken}`);
     try {
-      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id, { stopOthers }), hold: saveHold, beforeSaved: () => sync.flushAll(), post: boxPost, upload: convexUploader() });
+      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id, { stopOthers }), hold: saveHold, asSave, beforeSaved: () => sync.flushAll(), post: boxPost, upload: convexUploader() });
     } catch (e) {
       if (keyRejected(e)) boxSuperseded();
       throw e;
@@ -1465,6 +1479,9 @@ async function main(): Promise<void> {
       .then(() => markSetUp(cfg.home))
       .catch((e) => log.warn("box: couldn't set up the restored worktree", { error: String(e) }));
   }
+  // A save that was holding the box when it stopped holds it again: no
+  // process starts (the turns and patches were held as the thread loaded).
+  if (box?.secrets.saveHold) closeSpawns(SAVE_HOLDS_SPAWNS);
   // A degraded box says why on its thread (if it has one here) and runs nothing.
   if (box?.broken) runner.holdBroken(box.secrets.threadId, box.broken);
 

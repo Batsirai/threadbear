@@ -2405,9 +2405,13 @@ export class ConvexSync {
       if (this.index) await this.index.flushAll(Math.max(1, end - Date.now()));
       // And commands' finishes still to send from before the save (those it
       // held back wait for its outcome).
+      // First any send already going (a first try, or a heartbeat's retry),
+      // then each still waiting, one at a time per command (finishCommand),
+      // so the barrier never races another send of the same finish.
+      await Promise.all([...this.finishing.values()]);
       for (const [commandId, u] of [...this.unfinished]) {
         if (u.deferred) continue;
-        await this.finishCommand(commandId, u.args);
+        await this.finishCommand(commandId, u.args, { retry: true });
         if (this.unfinished.has(commandId)) throw new Error("A command's finish didn't go up before the thread's save.");
       }
       return;
@@ -4626,7 +4630,21 @@ export class ConvexSync {
     return run;
   }
 
-  private async finishCommand(commandId: string, args: Record<string, unknown>): Promise<void> {
+  // One finish of a command at a time: a retry (a heartbeat's, or a save's
+  // barrier) waits for one already going, and doesn't send again if it
+  // went. `retry`: sent only while it's still waiting to go.
+  private finishing = new Map<string, Promise<void>>();
+  private finishCommand(commandId: string, args: Record<string, unknown>, opts: { retry?: boolean } = {}): Promise<void> {
+    const before = this.finishing.get(commandId);
+    const run = (before ?? Promise.resolve()).then(() => (opts.retry && !this.unfinished.has(commandId) ? undefined : this.finishOnce(commandId, args)));
+    this.finishing.set(commandId, run);
+    void run.finally(() => {
+      if (this.finishing.get(commandId) === run) this.finishing.delete(commandId);
+    });
+    return run;
+  }
+
+  private async finishOnce(commandId: string, args: Record<string, unknown>): Promise<void> {
     try {
       await this.post('mutation', 'sync:finishCommand', args);
       this.unfinished.delete(commandId);
@@ -4647,10 +4665,9 @@ export class ConvexSync {
   // With each heartbeat that got through: the backend is answering again.
   private retryCommands(): void {
     for (const [commandId, { args, deferred }] of [...this.unfinished]) {
-      if (this.inFlight.has(commandId)) continue;
+      if (this.inFlight.has(commandId) || this.finishing.has(commandId)) continue;
       if (deferred && this.deps.box?.saving?.()) continue;
-      this.inFlight.add(commandId);
-      void this.finishCommand(commandId, args).finally(() => this.inFlight.delete(commandId));
+      void this.finishCommand(commandId, args, { retry: true });
     }
     if (this.untaken.size && this.deps.commands) {
       const again = [...this.untaken.values()].sort((a, b) => a.createdAt - b.createdAt);

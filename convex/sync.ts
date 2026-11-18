@@ -3192,8 +3192,12 @@ export const finishCommand = mutation({
   args: { key: v.string(), commandId: v.id('commands'), ok: v.boolean(), note: v.optional(v.string()), resultThreadId: v.optional(v.string()), result: v.optional(v.string()), held: v.optional(v.boolean()) },
   returns: v.null(),
   handler: async (ctx, { key, commandId, ok, note, resultThreadId, result, held }) => {
-    const caller = await runnerAuth(ctx, key, 'finishCommand', { housekeeping: held === true && (await ctx.db.get(commandId))?.kind === 'save' });
+    // Read before the gate, which marks a box's call as work: a finish that
+    // changes nothing (its command already ended, or never taken: a repeat,
+    // a retry racing the first) makes none, nor does a held box's save's.
     const c = await ctx.db.get(commandId);
+    const ends = c !== null && (c.commandState.kind === 'taken' || c.commandState.kind === 'lapsed');
+    const caller = await runnerAuth(ctx, key, 'finishCommand', { housekeeping: !ends || (held === true && c?.kind === 'save') });
     if (!c) return null;
     if (!mayFinish(caller, c)) throw forbidden("finish that command: it isn't for its runner");
     // Only a taken command finishes, or one whose lease ran out, which its

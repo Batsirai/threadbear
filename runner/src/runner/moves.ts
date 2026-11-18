@@ -1197,7 +1197,9 @@ export const movesPart = {
     }
     await opts.stopOthers?.();
     if (rt.closing) await rt.closing;
-    const busy = () => Boolean(rt.turn || rt.restoreSetup || rt.hooksRunning || rt.runningActions?.size || rt.editing || rt.cleaning || rt.preparing);
+    // And the patches' functions already being read (a live poll): no new
+    // one starts while the save holds it (readPatches).
+    const busy = () => Boolean(rt.turn || rt.restoreSetup || rt.hooksRunning || rt.runningActions?.size || rt.editing || rt.cleaning || rt.preparing || this.patchReads.size);
     if (!(await waitFor(busy, opts.waitMs ?? 60_000))) throw new Error("The thread's work didn't stop in time, so it wasn't saved. It stays stopped until the backend wakes it.");
     // Nothing new since: whatever the waits above let finish may have started something.
     await opts.stopOthers?.();

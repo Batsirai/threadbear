@@ -322,6 +322,9 @@ export const patchesPart = {
     const { rec, rt } = st;
     const entry = rt.patches;
     if (!entry || entry.refreshing) return;
+    // A box's save holds the thread: its patches' functions (and the live
+    // commands they run) wait, as they could write behind the save's copy.
+    if (rt.holds?.has('save')) return;
     entry.refreshing = true;
     const cwd = rec.cwd;
     const key = entry.key;

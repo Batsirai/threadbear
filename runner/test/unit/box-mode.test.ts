@@ -884,3 +884,57 @@ test("while a box's save goes, any other command's finish waits; ones from befor
   assert.deepEqual(refusedCalls.splice(0), []);
   await sync.stop();
 });
+
+test("a command's finish goes once at a time: the save's barrier waits for one already on its way rather than send it again beside it", async () => {
+  const h = makeHarness();
+  const t = h.runner.create({ text: 'hi', cwd: h.cfg.defaults.cwd, accountId: 'claude-main' }).thread;
+  const sent: string[] = [];
+  let push!: (v: unknown) => void;
+  let gate: Promise<void> | undefined;
+  let open!: () => void;
+  let fail = true;
+  const sync = new ConvexSync({
+    config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
+    key: BOX_KEY,
+    runner: h.runner,
+    version: '0.1.0+test',
+    startedAt: '2026-11-19T00:00:00.000Z',
+    clock: h.clock,
+    log: nullLogger,
+    post: onlyBoxCalls(async (_kind, fn, args) => {
+      if (fn === 'sync:heartbeat') return { apiVersion: 89 };
+      if (fn === 'sync:takeCommand') return true;
+      if (fn === 'sync:messageHeads') return [];
+      if (fn === 'sync:finishCommand') {
+        sent.push(String(args.commandId));
+        if (gate) await gate;
+        if (fail) throw new Error('network down');
+      }
+      return null;
+    }),
+    subscriber: { subscribe: (fn, _a, onUpdate) => ((fn === 'sync:pendingCommands' && (push = onUpdate)), () => {}), close: () => {} },
+    commands: { send: () => undefined, respondApproval: () => undefined, answerSecret: () => undefined, update: () => undefined, markSeen: () => undefined, create: () => ({ thread: t }), share: () => undefined, quickAsk: () => ({ thread: t }) },
+    box: { superseded: () => {} },
+  });
+  sync.start();
+  await tick();
+  // Its first try fails; a heartbeat's retry is then held up on its way.
+  push([{ commandId: 'c1', kind: 'send', threadId: t.id, args: { text: 'a' }, createdAt: 1 }]);
+  await tick(10);
+  assert.deepEqual(sent, ['c1']);
+  fail = false;
+  gate = new Promise((r) => (open = r));
+  h.clock.advance(60_000);
+  await tick(10);
+  assert.deepEqual(sent, ['c1', 'c1'], 'the retry is on its way');
+  // The barrier starts meanwhile: it waits for that one and, as it went, sends none of its own.
+  const barrier = sync.flushAll();
+  await tick(10);
+  assert.deepEqual(sent, ['c1', 'c1']);
+  gate = undefined;
+  open();
+  await barrier;
+  assert.deepEqual(sent, ['c1', 'c1']);
+  assert.deepEqual(refusedCalls.splice(0), []);
+  await sync.stop();
+});

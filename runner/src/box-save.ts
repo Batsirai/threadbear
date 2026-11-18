@@ -318,13 +318,17 @@ export async function saveThread(o: {
   limits?: SaveLimits;
   sleep?: (ms: number) => Promise<void>;
   retryForMs?: number;
+  // Box mode's spawn gate (spawn-gate.ts): the packing's own git, let by
+  // while every other process start is refused.
+  asSave?: <T>(fn: () => Promise<T>) => Promise<T>;
 }): Promise<{ bytes: number; leftOut?: string[] }> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   o.hold.begin();
   let stored: { storageId: string; bytes: number; leftOut: string[] };
   try {
     const rec = await o.quiesce(o.threadId);
-    const { packed, leftOut } = await packSave({ home: o.home, claudeDir: o.claudeDir, rec, ...(o.limits ? { limits: o.limits } : {}) });
+    const pack = () => packSave({ home: o.home, claudeDir: o.claudeDir, rec, ...(o.limits ? { limits: o.limits } : {}) });
+    const { packed, leftOut } = await (o.asSave ? o.asSave(pack) : pack());
     const sealed = sealSave(o.threadKey, o.threadId, packed);
     if (sealed.length > SAVE_MAX_BYTES) {
       throw new Error(`The thread's save is ${mb(sealed.length)}, more than one upload takes (${mb(SAVE_MAX_BYTES)}), and saves in parts aren't built yet. Commit less, or take big untracked files out of its folder, and it can save.`);
