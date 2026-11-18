@@ -222,6 +222,37 @@ test('a box goes creating, starting, awake, saving, asleep, waking and awake aga
   assert.ok(s.hasFile('save1'));
 });
 
+// Codex's second review (18 Nov 2026): a paused box lost, or replaced, while
+// the thread wakes kept its key working.
+test("a box lost or replaced while the thread wakes loses its key at once", async () => {
+  for (const event of [{ type: 'LOST' }, { type: 'CREATED', providerBoxId: 'fly-2' }]) {
+    const s = await boxBackend();
+    const { boxKey } = await s.boot();
+    await s.report({ type: 'IDLE' });
+    await save(s, boxKey, 'save1');
+    await s.report({ type: 'WAKE' });
+    assert.equal(await outcome(call(s.ctx, sync.threadsOf, { key: boxKey, runnerId: BOX_RUNNER })), 'ok');
+    // The new box's boot token, minted before the news came, still works after it.
+    const bootToken = await s.mint();
+    assert.equal(await s.report(event), true, event.type);
+    assert.equal(s.box().boxKeyHash, undefined, event.type);
+    assert.equal(await outcome(call(s.ctx, sync.threadsOf, { key: boxKey, runnerId: BOX_RUNNER })), 'auth', event.type);
+    assert.equal(await outcome(call(s.ctx, sync.iconUploadUrl, { key: boxKey })), 'auth', event.type);
+    // The thread still wakes, on a new box with a key of its own.
+    const got = await s.exchange(bootToken);
+    assert.equal(s.state(), 'awake');
+    assert.equal(await outcome(heartbeat(s, got.boxKey)), 'ok');
+  }
+});
+
+test('a box lost while it boots goes back to waking for another', async () => {
+  const s = await boxBackend();
+  await s.report({ type: 'CREATED', providerBoxId: 'fly-1' });
+  assert.equal(await s.report({ type: 'LOST' }), true);
+  assert.equal(s.state(), 'waking');
+  assert.equal(s.box().providerBoxId, undefined);
+});
+
 test('a save replaces the last one, and a new box gets the last save to restore', async () => {
   const s = await boxBackend();
   const { boxKey } = await s.boot();

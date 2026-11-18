@@ -425,6 +425,26 @@ test("scrubDoc scrubs free text at any depth and leaves identity fields", () => 
   assert.equal(doc.title, `see ${secret}`, "the original isn't touched");
 });
 
+// Codex's second review of the virtual runners slice (18 Nov 2026): a box's
+// secrets by name, and a credential put in a field that's otherwise left
+// alone (a message's `turn`), which share:view hands to anyone with the link.
+test("a box's secrets are redacted by name, and a credential in an identity field goes whole", async () => {
+  const backend = (await import("../../../convex/redaction.ts")) as { scrubText: typeof scrubText; scrubDoc: typeof scrubDoc };
+  const value = "q8Zr3vT1yLmN0pXc5bWd7eFa9gHk2jQs4uVo6iRt8w0=";
+  for (const [scrubT, scrubD] of [[scrubText, scrubDoc], [backend.scrubText, backend.scrubDoc]] as const) {
+    for (const name of ["threadKey", "boxKey", "bootToken", "claudeToken", "sealedThreadKey", "sealed"]) {
+      assert.equal(scrubT(JSON.stringify({ [name]: value })).includes(value), false, name);
+    }
+    const key = "tbb_" + "0f9e".repeat(16);
+    const msg = { threadId: "t1", seq: 1, role: "assistant", text: "hi", turn: key, at: "x" };
+    const out = scrubD(msg);
+    assert.equal(JSON.stringify(out).includes(key.slice(4, 30)), false, "turn");
+    // An ordinary turn id, and the other identity fields, stay as they are.
+    const plain = { ...msg, turn: "7f3c2a10-1b2c-4d5e-8f90-123456789abc" };
+    assert.equal(scrubD(plain), plain);
+  }
+});
+
 test("scrubDoc hands back the same object when nothing changed", () => {
   const doc = { title: "an ordinary title", asks: [{ action: "merge it please" }] };
   assert.equal(scrubDoc(doc), doc);

@@ -50,6 +50,7 @@ export const box = defineMachine(
           CREATED: { to: 'starting', effect: 'created', description: 'The provider has made the box, which boots and starts its runner.' },
           READY: { to: 'awake', effect: 'ready', description: "The box booted and traded its boot token for its key before the provider's answer came back." },
           FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't make a box." },
+          LOST: { effect: 'forgetOldBox', description: 'The provider lost the box it was making: the service makes another before the ten minutes are up.' },
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'No box checked in: the thread waits for the next message to try again.' },
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread before its box is up.' },
         },
@@ -60,6 +61,7 @@ export const box = defineMachine(
         on: {
           READY: { to: 'awake', effect: 'ready', description: 'The box traded its boot token: its key is the only one for the thread from now on.' },
           FAILED: { to: 'failed', effect: 'fail', description: "The provider says the box didn't start." },
+          LOST: { to: 'waking', effect: 'bootLost', description: 'The box was lost while it booted: no key works for it, and a new box is made, restoring the last save if there is one.' },
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'The box never checked in: the thread waits for the next message to try again.' },
           ARCHIVE: { to: 'destroying', effect: 'archive', description: 'Mike archives the thread while its box boots.' },
         },
@@ -110,7 +112,8 @@ export const box = defineMachine(
         timers: { BOOT_TIMEOUT: { at: 'bootBy', description: "Ten minutes have passed and the box hasn't come back." } },
         on: {
           RESUMED: { to: 'awake', guard: 'hasKey', effect: 'resumed', description: 'The paused box resumed, its runner still holding its key.' },
-          CREATED: { to: 'starting', effect: 'created', description: 'A new box was made: it boots, trades a fresh boot token, and restores the save.' },
+          CREATED: { to: 'starting', effect: 'created', description: "A new box was made: the last box's key stops working, and the new one boots, trades a fresh boot token, and restores the save." },
+          LOST: { effect: 'forgetOldBox', description: "The paused box was lost before it resumed: its key stops working, and a new box restores the save instead." },
           READY: { to: 'awake', effect: 'ready', description: 'A new box traded its boot token: its key replaces the last box\'s, which is refused from now.' },
           FAILED: { to: 'failed', effect: 'fail', description: "The provider couldn't bring a box back." },
           BOOT_TIMEOUT: { to: 'failed', effect: 'bootTimeout', description: 'No box came back: the thread waits for the next message to try again.' },
@@ -139,8 +142,9 @@ export const box = defineMachine(
     },
     effects: {
       start: async () => ({ kind: 'creating' as const, bootBy: Date.now() + BOOT_MS }),
+      // A new box: whatever box held the key before is done with. Its own key comes at its exchange.
       created: async (ctx, { id, state, event }) => {
-        await patch(ctx, id, { providerBoxId: event.providerBoxId });
+        await patch(ctx, id, { boxKeyHash: undefined, providerBoxId: event.providerBoxId });
         return { kind: 'starting' as const, bootBy: state.bootBy };
       },
       noteBox: async (ctx, { id, state, event }) => {
@@ -175,6 +179,15 @@ export const box = defineMachine(
         return { kind: 'asleep' as const, since: now };
       },
       wake: async () => ({ kind: 'waking' as const, bootBy: Date.now() + BOOT_MS }),
+      bootLost: async (ctx, { id }) => {
+        await patch(ctx, id, { ...revoked, providerBoxId: undefined });
+        return { kind: 'waking' as const, bootBy: Date.now() + BOOT_MS };
+      },
+      // The box that's gone, not the boot token a new one may already be starting with.
+      forgetOldBox: async (ctx, { id, state }) => {
+        await patch(ctx, id, { boxKeyHash: undefined, providerBoxId: undefined });
+        return state;
+      },
       forgetBox: async (ctx, { id, state }) => {
         await patch(ctx, id, { ...revoked, providerBoxId: undefined });
         return state;
@@ -184,7 +197,7 @@ export const box = defineMachine(
         return { kind: 'destroying' as const, since: Date.now() };
       },
       destroyed: async (ctx, { id }) => {
-        await patch(ctx, id, { providerBoxId: undefined });
+        await patch(ctx, id, { ...revoked, providerBoxId: undefined });
         return { kind: 'gone' as const, at: Date.now() };
       },
       fail: async (ctx, { id, event }) => {

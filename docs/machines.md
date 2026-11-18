@@ -425,10 +425,12 @@ kept, and no key works for it.
   creating --> starting : CREATED(providerBoxId) (server) / created
   creating --> awake : READY (runner) / ready
   creating --> failed : FAILED(error) (server) / fail
+  creating --> creating : LOST (server) / forgetOldBox
   creating --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
   creating --> destroying : ARCHIVE (owner) / archive
   starting --> awake : READY (runner) / ready
   starting --> failed : FAILED(error) (server) / fail
+  starting --> waking : LOST (server) / bootLost
   starting --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
   starting --> destroying : ARCHIVE (owner) / archive
   awake --> awake : LEASE_DUE at leaseUntil [1. heardFrom] / renewLease
@@ -450,6 +452,7 @@ kept, and no key works for it.
   asleep --> destroying : ARCHIVE (owner) / archive
   waking --> awake : RESUMED (server) [hasKey] / resumed
   waking --> starting : CREATED(providerBoxId) (server) / created
+  waking --> waking : LOST (server) / forgetOldBox
   waking --> awake : READY (runner) / ready
   waking --> failed : FAILED(error) (server) / fail
   waking --> failed : BOOT_TIMEOUT at bootBy / bootTimeout
@@ -470,6 +473,7 @@ From `creating`:
 - `CREATED(providerBoxId) (server)` → `starting`. The provider has made the box, which boots and starts its runner.
 - `READY (runner)` → `awake`. The box booted and traded its boot token for its key before the provider's answer came back.
 - `FAILED(error) (server)` → `failed`. The provider couldn't make a box.
+- `LOST (server)` stays put. The provider lost the box it was making: the service makes another before the ten minutes are up.
 - `BOOT_TIMEOUT at bootBy` → `failed`. No box checked in: the thread waits for the next message to try again.
 - `ARCHIVE (owner)` → `destroying`. Mike archives the thread before its box is up.
 
@@ -478,6 +482,7 @@ From `starting`:
 - The clock sends `BOOT_TIMEOUT` at bootBy. Ten minutes have passed since the box was asked for, and it hasn't traded its boot token.
 - `READY (runner)` → `awake`. The box traded its boot token: its key is the only one for the thread from now on.
 - `FAILED(error) (server)` → `failed`. The provider says the box didn't start.
+- `LOST (server)` → `waking`. The box was lost while it booted: no key works for it, and a new box is made, restoring the last save if there is one.
 - `BOOT_TIMEOUT at bootBy` → `failed`. The box never checked in: the thread waits for the next message to try again.
 - `ARCHIVE (owner)` → `destroying`. Mike archives the thread while its box boots.
 
@@ -514,7 +519,8 @@ From `waking`:
 
 - The clock sends `BOOT_TIMEOUT` at bootBy. Ten minutes have passed and the box hasn't come back.
 - `RESUMED (server)` [hasKey] → `awake`. The paused box resumed, its runner still holding its key.
-- `CREATED(providerBoxId) (server)` → `starting`. A new box was made: it boots, trades a fresh boot token, and restores the save.
+- `CREATED(providerBoxId) (server)` → `starting`. A new box was made: the last box's key stops working, and the new one boots, trades a fresh boot token, and restores the save.
+- `LOST (server)` stays put. The paused box was lost before it resumed: its key stops working, and a new box restores the save instead.
 - `READY (runner)` → `awake`. A new box traded its boot token: its key replaces the last box's, which is refused from now.
 - `FAILED(error) (server)` → `failed`. The provider couldn't bring a box back.
 - `BOOT_TIMEOUT at bootBy` → `failed`. No box came back: the thread waits for the next message to try again.

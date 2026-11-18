@@ -7656,15 +7656,17 @@ SHA-256 (`boxKeyHash`).
   refuses with `kind: "noCloudToken"` and leaves the boot token as it was.
   A newer boot token for the thread replaces an older one. Box keys and
   boot tokens (`tbb_`, `tbt_`) are redacted from transcripts like runner
-  keys.
+  keys, and so is a value under a name like `threadKey`, `boxKey` or
+  `sealed`; a message's `turn` (or a picture's name, a claim's holder, a
+  move's digest) with a credential's prefix is stored as `[REDACTED]`.
 - **What it reaches.** Only what running its one thread needs (the list
   below, `BOX_CALLS` in `convex/runnerAccess.ts`), each for its own
   runner as a runner key's is, and each row checked against its thread
   too (`ownThreadOnly`): a thread row only under its own thread id, never a
   new thread. Every list and write by runner id (`threadsOf`,
   `sharedThreads`, `messageHeads`, `setThreadIndex`'s `removed` and `keep`,
-  its requests, making room under its caps) leaves out any other thread
-  the owner key put under its runner id. Messages, tool output and pictures of that thread; its
+  its requests, making room under its caps, removing its thread) leaves
+  out any other thread the owner key put under its runner id. Messages, tool output and pictures of that thread; its
   runner's commands for that thread or for no thread (another thread's are
   hidden from `pendingCommands` and refused); its thread's moves only.
   Everything else is refused as `forbidden`: everything owner-only,
@@ -7675,7 +7677,9 @@ SHA-256 (`boxKeyHash`).
   dies when its key is replaced.
 - **When it stops working.** The box's state machine (`convex/boxMachine.ts`)
   clears the hash when the box is lost (no heartbeat for 5 minutes, or the
-  provider says so), fails, or is archived; a key whose row is
+  provider says so, in any state, waking included), when the provider
+  makes a new box for the thread, and when it fails, is archived or
+  deleted; a key whose row is
   `destroying`, `gone` or `failed` is refused whatever the row holds. A
   box that sleeps on a paused machine keeps its key, so it can resume.
 - **Heartbeats.** A box's `heartbeat` marks its `runners` row `box: {

@@ -421,12 +421,14 @@ export const armClears = machines.internalMutation({
 // A thread's row and everything under it, with a tombstone so a runner key
 // can't take the id or its link later (claimable, slugFree). removeThreads
 // and prune; a runner key only ever reaches its own (their callers check).
-async function dropThread(ctx: MutationCtx, threadId: string, row: Doc<'threads'> | null): Promise<void> {
+// `refillView` false: a box's removal, which brings no other thread under
+// its runner id back into a list (it touches its own thread only).
+async function dropThread(ctx: MutationCtx, threadId: string, row: Doc<'threads'> | null, refillView = true): Promise<void> {
   if (row) {
     await ctx.db.delete(row._id);
     await ctx.db.insert('threadGone', { threadId, at: Date.now() });
     await moveView(ctx, row.runnerId, row.view, undefined);
-    await refill(ctx, row.runnerId, row.view);
+    if (refillView) await refill(ctx, row.runnerId, row.view);
   }
   // Its project links go with it (removeThreads, prune, purge).
   await linkThread(ctx, threadId, null);
@@ -1058,7 +1060,7 @@ export const removeThreads = mutation({
         .unique();
       // A runner key leaves alone what isn't its own thread, there or not (ownThread).
       if (!caller.owner && !(row && mayTouch(caller, row.runnerId, threadId))) continue;
-      await dropThread(ctx, threadId, row);
+      await dropThread(ctx, threadId, row, !caller.box);
     }
     return null;
   },

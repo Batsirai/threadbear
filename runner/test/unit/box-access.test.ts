@@ -178,3 +178,24 @@ test("a box neither sees nor touches another thread's rows under its own runner 
   assert.ok(s.rows('messages').some((x) => x.threadId === U && x.seq === 0));
   assert.ok(s.rows('eventBodies').some((x) => x.threadId === U && x.seq === 0));
 });
+
+// Codex's second review (18 Nov 2026): removing its own thread brought
+// another thread under its runner id back into the inbox; and a box key
+// put in a message's `turn` was stored whole, for share:view to show.
+test("removing a box's thread leaves other threads under its runner id as they were", async () => {
+  const s = await setup();
+  await s.write(THREAD);
+  const U = 'owner-thread-u';
+  await s.ctx.db.insert('threads', { ...THREAD_BASICS, threadId: U, runnerId: BOX_RUNNER, title: 'u', view: 'overflow', wantView: 'inbox', needsYou: false, updatedMs: 1 });
+  await call(s.ctx, sync.removeThreads, { key: s.boxKey, threadIds: [THREAD] });
+  assert.ok(!s.rows('threads').some((t) => t.threadId === THREAD));
+  const u = s.rows('threads').find((t) => t.threadId === U)!;
+  assert.deepEqual({ view: u.view, wantView: u.wantView, updatedMs: u.updatedMs }, { view: 'overflow', wantView: 'inbox', updatedMs: 1 });
+});
+
+test("a credential in a box's message turn isn't stored", async () => {
+  const s = await setup();
+  await s.write(THREAD);
+  await call(s.ctx, sync.appendMessages, { key: s.boxKey, messages: [{ threadId: THREAD, seq: 1, role: 'assistant', text: 'hi', turn: s.boxKey, at: AT }] });
+  assert.ok(!JSON.stringify(s.rows('messages')).includes(s.boxKey.slice(4, 30)));
+});
