@@ -7842,9 +7842,9 @@ has to be on for it.
   `destroyBox` (the actions; each reads the row again and acts on its
   newest attempt only), `claimOp`, `holdOp`, `releaseOp`, `claimAttempt`,
   `boxFor`, `sleepIdleBoxes`, `reapBoxes`, `reapService`, `reapPlan`,
-  `reapStep`, `observe`, `servicesToReap`, `serviceProvider`,
-  `stuckDestroying`, `pruneSaves`, `retireBox`, `checkBox`,
-  `retryKeptSaves`, `markKept`, `markUnpausable`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
+  `reapStep`, `observe`, `driftPage`, `driftLost`, `servicesToReap`,
+  `serviceProvider`, `stuckDestroying`, `pruneSaves`, `retireBox`,
+  `retireDue`, `checkBox`, `retryKeptSaves`, `markKept`, `suspendFailed`; `boxes:beginThread`, `wakeFor`, `wakeWaiting`,
   `wakeAllWaiting`, `failExpired`, `archiveIfStill`. `report` takes the
   reporting run's `op`.
 - **Its first command.** The `create` that `startThread` queues names its

@@ -499,7 +499,7 @@ kept, and no key works for it.
   archiving --> shelved : SAVE_TIMEOUT at saveBy / shelve
   archiving --> archiving : LEASE_DUE at leaseUntil [1. heardFrom] / renewLease
   archiving --> shelved : LEASE_DUE at leaseUntil [else] / shelve
-  archiving --> destroying : LOST(attempt?) (server) [1. notStale] / archive
+  archiving --> destroying : LOST(attempt?) (server) [1. notStale] / archiveLost
   archiving --> archiving : LOST(attempt?) (server) [else] / forgetOldBox
   archiving --> archiving : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   archiving --> awake : WAKE (server) / stayUp

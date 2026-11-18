@@ -609,6 +609,14 @@ export const BOX_CALLS: ReadonlySet<string> = new Set([
   'boxSaved',
 ]);
 
+/**
+ * The box calls that only read (queries): every other box call can make
+ * work, so the box's attempt joins those that may hold work newer than its
+ * save (lib.ts keyUsed). runner-access.test.ts checks this against the
+ * functions themselves.
+ */
+export const BOX_READS: ReadonlySet<string> = new Set(['threadsOf', 'sharedThreads', 'messageHeads', 'replyImages', 'shareImages', 'pendingCommands', 'runnerRequest', 'moves', 'moveChunks']);
+
 /** The gate at the top of every function. One not in ACCESS is owner-only; a box key has BOX_CALLS alone. */
 export function mayCall(c: Caller, fn: string): boolean {
   if (c.owner) return true;

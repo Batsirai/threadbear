@@ -337,8 +337,9 @@ export const appSchema = defineSchema({
     // A message wants it awake but it's been up its day's hours: it waits
     // for the day after this one (UTC), apart from those waiting for room.
     waitsForHours: v.optional(v.string()),
-    // Its suspend was refused: it can't pause, whatever its size says.
-    unpausable: v.optional(v.boolean()),
+    // A pause of attempt `attempt`'s box that failed `n` times in a row: the
+    // billing guard tries again after `next` (boxService.ts suspendFailed).
+    suspendFails: v.optional(v.object({ attempt: v.number(), n: v.number(), next: v.number() })),
     // Asleep or shelved with work newer than its save, and unable to pause:
     // kept running (never deleted with that work in it) since then, and asked
     // to save again on a backoff (`saveAsks`) until it does (boxService.ts).

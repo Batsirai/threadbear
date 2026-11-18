@@ -402,7 +402,8 @@ test("the billing guard pauses an asleep box that's still running, and the reape
   s.fly.failNext('POST', '/suspend', 500, 3);
   await s.run();
   assert.equal(s.fly.byId(m.id)!.state, 'created');
-  await s.reap();
+  // The guard tries again once the failed pause's backoff is out.
+  await later(6 * MINUTE, () => s.reap());
   assert.equal(s.fly.byId(m.id)!.state, 'suspended');
   // Stopped while asleep (its snapshot gone): lost, and the next wake starts a new box.
   s.fly.byId(m.id)!.state = 'stopped';
@@ -650,7 +651,7 @@ test('a wake while the box is pausing waits for the pause, and the box ends up r
 });
 
 // 4. A box's pause support came from its virtual runner's size now, not the size it was made at.
-test('a box made at 4096 MB is deleted on sleep after its virtual runner is made 2 GB, and a refused pause deletes it too', async () => {
+test('a box made at 4096 MB is deleted on sleep after its virtual runner is made 2 GB; a refused pause is only tried again', async () => {
   const s = await setup(4096);
   await s.start('T2');
   await s.run();
@@ -660,15 +661,17 @@ test('a box made at 4096 MB is deleted on sleep after its virtual runner is made
   assert.equal(s.fly.calls('POST', '/suspend'), 0, 'not tried');
   assert.equal(s.fly.live().length, 0);
   assert.equal(s.rowOf('T2').boxKeyHash, undefined);
-  // A 2 GB box whose suspend Fly refuses outright.
+  // A 2 GB box whose suspend Fly refuses once: not deleted, and not taken as one that can't pause (Codex's sixth round).
   const { runnerId } = await s.start('T3');
   await s.run();
   const m3 = s.fly.live()[0]!;
   const got3 = await s.boot('T3', m3.id);
   s.fly.failNext('POST', '/suspend', 400);
   await s.sleepWith('T3', got3.boxKey);
-  assert.equal(s.fly.byId(m3.id)!.state, 'destroyed');
-  assert.equal(s.rowOf('T3').boxKeyHash, undefined, 'lost: the next wake makes a new box from the save');
+  assert.notEqual(s.fly.byId(m3.id)!.state, 'destroyed');
+  assert.ok(s.rowOf('T3').boxKeyHash);
+  await later(6 * MINUTE, () => s.reap());
+  assert.equal(s.fly.byId(m3.id)!.state, 'suspended', 'the guard paused it next time');
   assert.ok(runnerId);
 });
 
@@ -1114,7 +1117,7 @@ test("an archived box that can't pause and never saved is kept running and asked
   assert.equal(s.fly.live().length, 0);
 });
 
-test("a refused suspend keeps a box with unsaved work running, and its wake takes it up as it is", () => atNoon(async () => {
+test("a refused suspend leaves a box with unsaved work running for the guard to try again, and its wake takes it up as it is", () => atNoon(async () => {
   const s = await setup();
   const { runnerId } = await s.start('T2');
   await s.run();
@@ -1129,14 +1132,13 @@ test("a refused suspend keeps a box with unsaved work running, and its wake take
   s.fly.failNext('POST', '/suspend', 400);
   await later(72 * MINUTE, () => s.run());
   assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed');
-  assert.equal(s.rowOf('T2').unpausable, true);
-  assert.ok(s.rowOf('T2').keptRunningSince);
-  // Mike wakes it: it's up already, so the same box carries on, nothing made.
+  assert.ok(s.rowOf('T2').suspendFails, 'its pause is tried again after a backoff');
+  // Mike wakes it: the same box carries on, nothing made.
   await later(73 * MINUTE, () => call(s.ctx, boxes.wakePastHours, { key: OWNER, threadId: 'T2' }));
   await later(73 * MINUTE, () => s.run());
   assert.equal(s.stateOf('T2'), 'awake');
   assert.equal(s.fly.live().length, 1);
-  assert.equal(s.rowOf('T2').keptRunningSince, undefined);
+  assert.equal(s.rowOf('T2').boxAttempt, 1);
   assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
 }));
 
@@ -1431,17 +1433,22 @@ test('M: the billing guard pauses a running box that should be asleep, every pas
   assert.ok(s.rowOf('T2').seenRunningAt, 'seen running: counted');
   await setLimits(s, { maxBoxes: 1 });
   assert.equal(await outcome(s.start('T3')), 'limit');
+  // Tried again each pass once its backoff is out; still failing, backing off further.
+  await later(6 * MINUTE, () => s.reap());
+  assert.equal(s.rowOf('T2').suspendFails.n, 2);
   failing.stop();
-  await s.reap();
+  await later(20 * MINUTE, () => s.reap());
   assert.equal(s.fly.byId(m.id)!.state, 'suspended');
-  await s.reap();
+  await later(21 * MINUTE, () => s.reap());
   assert.equal(s.rowOf('T2').seenRunningAt, undefined);
+  assert.equal(s.rowOf('T2').suspendFails, undefined);
 });
 
 // 4. M: a capped box kept running billed for ever.
 test("M: a box kept running asleep is counted and charged, and is let go after its virtual runner's days", async () => {
-  const s = await setup();
-  const refuse = s.fly.failWhile((r) => r.path.endsWith('/suspend'), 400);
+  // Too big to pause (a virtual runner from before 2 GB was the most): its size says so.
+  const s = await setup(4096);
+  const refuse = s.fly.failWhile(() => false, 400);
   const { runnerId, m } = await unsavedPaused(s, false);
   assert.ok(s.rowOf('T2').keptRunningSince, 'kept running: it holds unsaved work and cannot pause');
   const before = s.rowOf('T2').awakeToday?.ms ?? 0;
@@ -1486,4 +1493,123 @@ test('M: a wake whose box runs but never comes up is charged, and paused once it
   assert.equal(s.stateOf('T2'), 'asleep');
   assert.ok(s.rowOf('T2').boxKeyHash);
   stuck.stop();
+});
+
+// ------------------------------------------------------------ Codex's sixth round (18 Nov 2026)
+
+// 1. Framing A: a box whose resume half worked made work, unknown to the row, and lost it.
+test('A: a key that takes a command joins the boxes that may hold work, so a half-resumed box is kept', async () => {
+  const s = await setup();
+  const { runnerId, m, got } = await pausedWithMessage(s);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [], 'saved as it slept');
+  const stuck = s.fly.failWhile((r) => r.path.endsWith('/wait') && r.query.get('state') === 'started', 503);
+  const cmd = await s.send(runnerId, 'T2');
+  s.skip();
+  await call(s.ctx, boxes.wakeFor, { runnerId });
+  s.skip();
+  await call(s.a, service.wakeBox, { boxId: boxIdOf(s, 'T2') });
+  assert.equal(s.fly.byId(m.id)!.state, 'started');
+  // Its runner is up after all, and takes the message: it may now hold work newer than the save.
+  assert.equal(await call(s.ctx, sync.takeCommand, { key: got.boxKey, commandId: cmd }), true);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.equal(await outcome(call(s.a, boxes.mintBootToken, { key: OWNER, threadId: 'T2' })), 'conflict');
+  // Its boot timer doesn't revoke a used key.
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'waking');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  await s.fireTimers(Date.now() + 22 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'asleep');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+  s.skip();
+  await later(22 * MINUTE, () => s.reap());
+  assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed');
+  stuck.stop();
+});
+
+// 2. A retirement planned on one sleep deleted the box of the next.
+test("a retirement planned on one sleep does nothing once the thread has woken and slept again", async () => {
+  const s = await setup();
+  const { runnerId, m, got } = await pausedWithMessage(s);
+  const DAYS = 15 * 24 * 60 * MINUTE;
+  await later(DAYS, () => call(s.ctx, service.pruneSaves, { kind: 'asleep' }));
+  const job = (s.scheduled as { fn: string; args: Record<string, unknown> }[]).filter((j) => j.fn.endsWith('retireBox')).at(-1)!;
+  s.skip();
+  // Woken and slept again, fresh.
+  await later(DAYS, async () => {
+    await s.send(runnerId, 'T2');
+    await s.run();
+    assert.equal(s.stateOf('T2'), 'awake');
+    await s.takeAll(got.boxKey, runnerId);
+  });
+  await later(DAYS + 11 * MINUTE, async () => {
+    await call(s.ctx, service.sleepIdleBoxes, {});
+    await s.save(got.boxKey, 'fresh');
+    await s.run();
+  });
+  assert.equal(s.stateOf('T2'), 'asleep');
+  await later(DAYS + 12 * MINUTE, () => call(s.a, service.retireBox, job.args));
+  assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+});
+
+// 3. A guard pause dropped the time the box had been up.
+test('a box the guard pauses is charged the time it was up', () => atNoon(async () => {
+  const s = await setup();
+  await s.start('T2');
+  await s.run();
+  await s.boot('T2', s.fly.live()[0]!.id);
+  // Silent twenty minutes (the provider still runs it): the guard pauses it.
+  s.skip();
+  await later(20 * MINUTE, () => s.reap());
+  assert.equal(s.stateOf('T2'), 'asleep');
+  assert.ok(s.rowOf('T2').awakeToday.ms >= 19 * MINUTE, 'its twenty minutes up are counted');
+}));
+
+// 5. A loss mid-archive left its attempt blocking the thread's recovery.
+test("a box lost mid-archive stops holding the thread's work, so unarchiving makes a new box", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await s.save(got.boxKey, 'S1');
+  await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: 'T2' });
+  assert.equal(s.stateOf('T2'), 'archiving');
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'LOST', attempt: 1 } }), true);
+  assert.equal(s.stateOf('T2'), 'destroying');
+  assert.deepEqual(s.rowOf('T2').workAttempts, []);
+  await s.run();
+  await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { unarchive: true } });
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'starting');
+});
+
+// 6. Framing B: a box that traded its token before its create reported was never taken in.
+test('B: the reaper takes in the current attempt’s machine though it already holds work', async () => {
+  const s = await setup();
+  await s.start('T2');
+  s.skip();
+  const { bootToken, attempt } = await call(s.a, boxes.mintBootToken, { key: OWNER, threadId: 'T2' });
+  const boxId = boxIdOf(s, 'T2');
+  s.fly.machines.push({ id: 'unreported', name: 'u', state: 'started', config: { guest: { memory_mb: 2048 }, env: { THREADBEAR_BOX_BOOT: bootToken }, metadata: { tb_box: boxId, tb_attempt: String(attempt), tb_service: s.serviceId } } });
+  const got = await s.exchange(bootToken);
+  await s.beat(got.boxKey, got.runnerId);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [1]);
+  assert.equal(s.rowOf('T2').providerBoxId, undefined);
+  await s.reap();
+  assert.equal(s.rowOf('T2').providerBoxId, 'unreported');
+  assert.equal(s.stateOf('T2'), 'awake');
+});
+
+// 7. Framing B: a machine gone from the provider kept its maxBoxes slot.
+test('B: a machine gone from the provider is found by the reconciler, its slot freed', async () => {
+  const s = await setup(4096);
+  const { m } = await unsavedPaused(s, false);
+  assert.ok(s.rowOf('T2').seenRunningAt, 'kept running, counted');
+  s.fly.lose(m.id);
+  await s.reap();
+  assert.equal(s.rowOf('T2').seenRunningAt, undefined);
+  assert.equal(s.rowOf('T2').providerBoxId, undefined);
+  assert.deepEqual(s.rowOf('T2').workAttempts, [], 'gone, on the provider’s word');
+  await setLimits(s, { maxBoxes: 1 }, 4096);
+  assert.equal(await outcome(s.start('T3')), 'ok');
 });

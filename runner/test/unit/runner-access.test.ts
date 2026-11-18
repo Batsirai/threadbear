@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { convexPoster, forbiddenText } from '../../src/sync.ts';
-import { ACCESS, actsAs, badRunnerStats, BOX_CALLS, callerFrom, isIsoTime, mayCall, mayClaim, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, ownsCard, sameKey, wholeIn, type Caller } from '../../../convex/runnerAccess.ts';
+import { ACCESS, actsAs, badRunnerStats, BOX_CALLS, BOX_READS, callerFrom, isIsoTime, mayCall, mayClaim, mayFinish, mayTake, mayTouch, mayUseStorage, mayWrite, ownsCard, sameKey, wholeIn, type Caller } from '../../../convex/runnerAccess.ts';
 
 const OWNER_KEY = 'owner-key-of-the-deployment';
 const LAPTOP = 'laptop000001';
@@ -148,6 +148,13 @@ test('every function in convex/sync.ts, relay.ts, moves.ts, boxes.ts and boxServ
     assert.match(body, new RegExp(`(runnerAuth|actionAuth)\\(ctx, key, '${name}'\\)`), `${name} asks runnerAuth as '${name}'`);
     assert.doesNotMatch(body, /checkRunnerKey/, `${name} doesn't use the old check`);
   }
+});
+
+// A box call that can write can make work (lib.ts keyUsed): BOX_READS is exactly its queries.
+test("BOX_READS is exactly the box calls that are queries", () => {
+  const src = ['sync.ts', 'relay.ts', 'moves.ts', 'boxes.ts'].map((f) => fs.readFileSync(path.join(import.meta.dirname, '../../../convex', f), 'utf8')).join('\n');
+  const queries = new Set([...src.matchAll(/^export const (\w+) = query\(/gm)].map((m) => m[1]!));
+  assert.deepEqual([...BOX_CALLS].filter((f) => queries.has(f)).sort(), [...BOX_READS].sort());
 });
 
 test("docs/protocol.md's table lists every function as ACCESS sorts it", () => {

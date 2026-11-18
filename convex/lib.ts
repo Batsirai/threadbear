@@ -2,7 +2,7 @@
 import { ConvexError } from 'convex/values';
 import type { QueryCtx, MutationCtx } from './_generated/server';
 import type { Id } from './_generated/dataModel';
-import { BOX_KEY_PREFIX, callerFrom, FORBIDDEN, forbiddenMessage, isOwnerKey, mayCall, validRunnerId, type Caller } from './runnerAccess';
+import { BOX_KEY_PREFIX, BOX_READS, callerFrom, FORBIDDEN, forbiddenMessage, isOwnerKey, mayCall, validRunnerId, type Caller } from './runnerAccess';
 
 // A runner's word that Mike is at its Mac counts while it's still checking
 // in; a Mac that's asleep or offline counts as away (devices.ts
@@ -39,7 +39,21 @@ export async function runnerAuth(ctx: QueryCtx | MutationCtx, key: string, fn: s
   const c = callerFrom(key, owners, row, boxRow ? { ...boxRow, _id: boxRow._id as string } : null);
   if (!c) throw new ConvexError({ kind: 'auth', message: 'bad runner key' });
   if (!mayCall(c, fn)) throw forbidden(`call ${fn}: ${c.box ? "a box's key runs its one thread, and nothing else" : "only the main Mac's key (the deployment's RUNNER_KEY) can"}`);
+  if (boxRow && !BOX_READS.has(fn)) await keyUsed(ctx, boxRow);
   return c;
+}
+
+/**
+ * Invariant W, where an attempt joins the boxes that may hold work newer
+ * than its save: as soon as its key does anything that can make work (any
+ * call it makes that can write: a heartbeat, a take, an append, an
+ * upload), not only when its box is up by the machine's word. Every box
+ * call comes through runnerAuth, so this is the one place. A query can't
+ * write, and a query makes no work.
+ */
+async function keyUsed(ctx: QueryCtx | MutationCtx, row: { _id: unknown; keyAttempt?: number; workAttempts?: number[] }): Promise<void> {
+  if (row.keyAttempt === undefined || row.workAttempts?.includes(row.keyAttempt)) return;
+  await (ctx as MutationCtx).db.patch(row._id as never, { workAttempts: [...(row.workAttempts ?? []), row.keyAttempt] });
 }
 
 async function runnerKeyRow(ctx: QueryCtx | MutationCtx, key: string) {

@@ -127,7 +127,7 @@ export const box = defineMachine(
             { to: 'shelved', effect: 'shelve', description: "No heartbeat for five minutes: no save will come, but the box may still hold the work, so it's kept." },
           ],
           LOST: [
-            { to: 'destroying', guard: 'notStale', effect: 'archive', description: 'The provider lost the box mid-save: what remains of it is deleted, and the last save stays.' },
+            { to: 'destroying', guard: 'notStale', effect: 'archiveLost', description: 'The provider lost the box mid-save: what remains of it is deleted, and the last save stays.' },
             { effect: 'forgetOldBox', description: "An older box's loss, reported late: only what was that box's goes." },
           ],
           CREATED: { guard: 'notStale', effect: 'noteBox', description: "The provider's id for the box, arriving late: kept, for deleting it." },
@@ -342,7 +342,10 @@ export const box = defineMachine(
       // The billing guard paused the box (it wasn't entitled to run: past its
       // hours, silent past its lease, or a wake gone on too long): asleep as
       // it is, its key kept, so a wake resumes it with nothing lost.
-      pausedByGuard: async (ctx, { id, row }) => {
+      pausedByGuard: async (ctx, { id, row, state }) => {
+        // Up until now by its state: that stretch goes on the day's count (split at midnight).
+        const since = (state as { since?: number }).since;
+        if (state.kind !== 'waking' && since !== undefined) await patch(ctx, id, awakeAdded(row, since));
         await freed(ctx, row);
         return { kind: 'asleep' as const, since: Date.now(), unsaved: true };
       },
@@ -419,8 +422,15 @@ export const box = defineMachine(
         await patch(ctx, id, lostBox(row, event.attempt));
         return state;
       },
-      archive: async (ctx, { id, row, state }) => {
-        await patch(ctx, id, { ...(state.kind === 'archiving' ? awakeAdded(row, state.since) : {}), ...revoked, wantsWakeAt: undefined, waitsForHours: undefined });
+      // Lost mid-save, on the provider's word: through lostBox (invariant W(b)), then archived.
+      archiveLost: async (ctx, { id, row, state, event }) => {
+        await patch(ctx, id, { ...lostBox(row, event.attempt), ...(state.kind === 'archiving' ? awakeAdded(row, state.since) : {}), ...revoked, wantsWakeAt: undefined, waitsForHours: undefined });
+        await provide(ctx, 'destroyBox', id);
+        await freed(ctx, row);
+        return { kind: 'destroying' as const, since: Date.now() };
+      },
+      archive: async (ctx, { id, row }) => {
+        await patch(ctx, id, { ...revoked, wantsWakeAt: undefined, waitsForHours: undefined });
         await provide(ctx, 'destroyBox', id);
         await freed(ctx, row);
         return { kind: 'destroying' as const, since: Date.now() };

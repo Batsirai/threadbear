@@ -414,7 +414,8 @@ out or the thread is deleted.
   hours (the cap can't delete it: it waits there, costing a running box,
   until a save comes or its archive's days run out), and asked to save on
   a backoff (`retryKeptSaves`); a refused suspend marks the box
-  `unpausable` and does the same. Waking it takes it up as it is. And
+  `unpausable` and does the same (since replaced: one refusal no longer
+  does, see the sixth look below). Waking it takes it up as it is. And
   `setRunnerService` now refuses a Fly box over 2048 MB, so it only
   happens to a box whose suspend is refused or one made before.
 - Archiving a kept box while it woke deleted it. It now saves first
@@ -497,6 +498,32 @@ unpausable) after `deleteAfterDays` from when it slept (`retireBox`): the
 box is deleted and the thread comes back from its last save, losing any
 work newer than that. A wake whose box hasn't come up in 15 minutes stops
 (`wakeGaveUp`): the thread sleeps as it was until the next message.
+
+A sixth look found seven more, where the row's view drifted from the
+provider's and from what the box's key had done. Two changes of framing:
+
+- **A key that's been used holds work.** An attempt joins `workAttempts`
+  the moment its box key makes any call that can write (a heartbeat, a
+  take, an append, an upload: `lib.ts keyUsed`, in `runnerAuth`, the one
+  gate every box call goes through; `BOX_READS` are the read-only ones),
+  not only when the machine says it's up. So a box that half resumed and
+  took a message is kept, its key isn't revoked by a timer, and no newer
+  attempt can be minted.
+- **The reaper reconciles both ways, every pass.** Besides the listing
+  against the rows, every row against the listing (`driftPage`): a row
+  counted as running whose machine isn't listed running stops being
+  counted, and one whose machine is missing is asked about directly and
+  reported LOST if the provider has it no more. It takes in the current
+  attempt's machine id even when that machine holds work. Delayed actions
+  carry what they planned on: `retireBox` takes the sleep it was for, and
+  does nothing if the thread has woken and slept since or its days have
+  changed.
+
+And: a pause by the guard charges the time the box was up; a box can't
+pause only if the size its attempt was made at says so, never from one
+refusal (a failed pause is tried again by the guard with a backoff from
+5 minutes to an hour, `suspendFails`, per attempt); and a loss while
+archiving goes through `lostBox` like every other.
 
 Not built yet, in about the order they're needed:
 
