@@ -1391,3 +1391,55 @@ test('the same path in two threads of one runner answers from the thread read la
   const read = await h.relay.readFile('mac-mini', '/Users/b/inbox/same.png');
   assert.equal(Buffer.from(read.data, 'base64').toString(), 'bytes at https://files.example/second');
 });
+
+// Codex's second review (18 Nov): the message can go out (a thread row's
+// update emits) while its first lookup is still out, and the app reads its
+// place at once; that read waited for nothing and failed, and the app keeps
+// a failure until clicked.
+test("the app's read of a place made while the first lookup is still out waits for the upload too", async () => {
+  let answer!: (v: unknown) => void;
+  let first = true;
+  let up: unknown[] = [];
+  const h = harness({ apiVersion: PICTURES, pictures: () => {
+    if (!first) return up;
+    first = false;
+    return new Promise((r) => (answer = r));
+  } });
+  await h.relay.call(T, 'threads.events', { threadId: T });
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 119 });
+  newMessage(h, [{ seq: 20, role: 'user', text: '[1 picture]', pictures: 1, turn: 'cccc3333', at: ago(0) }]);
+  await settle();
+  h.subs.get('relay:remoteThread')![0]!.onUpdate({ runnerId: 'mac-mini', status: 'running' });
+  assert.deepEqual(publishedEvents(h).find((e) => e.seq === 161)?.images, [place(20, 1)]);
+  let got: string | undefined;
+  const reading = h.relay.readFile('mac-mini', place(20, 1).path).then((f) => (got = Buffer.from(f.data, 'base64').toString()), (e: Error) => (got = `failed: ${e.message}`));
+  await settle();
+  answer([]);
+  await settle();
+  await settle();
+  assert.equal(got, undefined, 'still waiting for the upload');
+  up = [pic(20, 1)];
+  h.subs.get('relay:picturesAtSeqs')![0]!.onUpdate(up);
+  await reading;
+  assert.equal(got, 'bytes at https://files.example/p20-1');
+});
+
+// An older runner's row says no count, so its words decide whether to look,
+// and it shows only what's up; pictures that go up after its first lookup
+// are still found, the same bounded way (Codex's second review, 18 Nov).
+test("an older runner's new message is watched and asked about again like any other, without places from its words", async () => {
+  let up: unknown[] = [];
+  const h = harness({ apiVersion: PICTURES, pictures: () => up });
+  await h.relay.call(T, 'threads.events', { threadId: T });
+  await h.relay.call(T, 'threads.subscribe', { threadId: T, afterSeq: 119 });
+  newMessage(h, [{ seq: 20, role: 'user', text: 'Look\n\n[1 picture]', turn: 'cccc3333', at: ago(0) }]);
+  await settle();
+  assert.deepEqual(publishedEvents(h).find((e) => e.seq === 161)?.images, []);
+  assert.deepEqual(h.subs.get('relay:picturesAtSeqs')?.[0]?.args.seqs, [20]);
+  h.clock.advance(PICTURE_WAIT_MS);
+  up = [pic(20, 1)];
+  h.clock.advance(41_000);
+  const page = (await h.relay.call(T, 'threads.events', { threadId: T })) as { events: Shown[] };
+  const said = page.events.find((e) => e.seq === 161)!;
+  assert.deepEqual([said.text, said.images], ['Look', [shown(20, 1)]]);
+});

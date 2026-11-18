@@ -114,3 +114,15 @@ test('the counting line comes off a message whose count is known, and only that 
   assert.equal(withoutCountLine('[Picture 1] and the literal token [Picture 2]', 1), '[Picture 1] and the literal token [Picture 2]');
   assert.equal(withoutCountLine('Fix it', 0), 'Fix it');
 });
+
+// The owning runner writes "[1 picture]" or "[N pictures]" for N of 2 or
+// more, never "[0 pictures]" or "[1 pictures]": a paragraph like those was
+// typed, and stays (Codex's second review, 18 Nov).
+test('a count line the runner never writes is words', () => {
+  for (const text of ['[Picture 1]\n\n[0 pictures]', '[Picture 1]\n\n[1 pictures]', '[Picture 1]\n\n[02 pictures]']) {
+    assert.equal(withoutCountLine(text, 1), text);
+    assert.deepEqual(picturesSaid(text), { count: 1, words: text });
+  }
+  assert.deepEqual(picturesSaid('[0 pictures]'), { count: 0, words: '[0 pictures]' });
+  assert.deepEqual(picturesSaid('a\n\n[10 pictures]'), { count: 10, words: 'a' });
+});

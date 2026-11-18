@@ -1210,10 +1210,12 @@ export class Relay {
 
   /**
    * Held messages whose pictures to read: ones not read yet that say they
-   * came with some, and, once a PICTURE_RETRY_MS, ones whose runner said
-   * how many and not all are up, for PICTURE_RETRY_FOR_MS after the first
-   * read. One that went up after its watch ended (Codex's review, 18 Nov)
-   * is found that way, or when the app asks for it (readFile).
+   * came with some, and, once a PICTURE_RETRY_MS, ones not all up, for
+   * PICTURE_RETRY_FOR_MS after the first read. One that went up after its
+   * watch ended (Codex's review, 18 Nov) is found that way, or when the app
+   * asks for its place (readFile). An older runner's row, counted from its
+   * words, is asked about the same way: its words may name a picture that
+   * never was, so it costs at most those few reads, and makes no places.
    */
   private picturesWanted(w: Watch): number[] {
     const now = this.deps.clock.now();
@@ -1225,7 +1227,7 @@ export class Relay {
       const said = saidOf(r);
       if (!said.count) continue;
       const first = w.pictureAsked.get(r.seq);
-      if (first === undefined || (again && said.known && now - first < PICTURE_RETRY_FOR_MS && !w.pictureWait.has(r.seq) && !this.hasItsPictures(w, r.seq))) seqs.push(r.seq);
+      if (first === undefined || (again && now - first < PICTURE_RETRY_FOR_MS && !w.pictureWait.has(r.seq) && !this.hasItsPictures(w, r.seq))) seqs.push(r.seq);
     }
     return seqs.sort((a, b) => a - b);
   }
@@ -1234,7 +1236,7 @@ export class Relay {
     const r = w.rows.get(seq);
     if (!r) return true;
     const held = w.pictures.get(seq) ?? [];
-    for (let n = 1; n <= saidOf(r).count; n++) if (!held.some((p) => p.n === n)) return false;
+    for (let n = 1; n <= Math.min(saidOf(r).count, MOST_PLACES); n++) if (!held.some((p) => p.n === n)) return false;
     return true;
   }
 
@@ -1256,9 +1258,9 @@ export class Relay {
 
   /**
    * Reads the pictures of the messages picturesWanted names. A message that
-   * has only just arrived and whose runner said how many it has, not all up
-   * yet, has them watched live (pictureWait); its event goes out meanwhile
-   * with a place for each. A read that fails is tried again for that thread
+   * has only just arrived, its pictures not all up yet, has them watched
+   * live (pictureWait); its event goes out meanwhile with a place for each
+   * its runner said it has. A read that fails is tried again for that thread
    * after PICTURES_AGAIN_MS.
    */
   private async readPictures(w: Watch): Promise<void> {
@@ -1276,7 +1278,7 @@ export class Relay {
             const fresh = w.pictureFresh.get(seq);
             w.pictureFresh.delete(seq);
             const r = w.rows.get(seq);
-            if (!r || !saidOf(r).known || this.hasItsPictures(w, seq)) continue;
+            if (!r || this.hasItsPictures(w, seq)) continue;
             // From when a live tail brought it, else from when it was sent by
             // that runner's clock, and never longer than the watch itself.
             const at = Date.parse(r.at);
@@ -1388,6 +1390,10 @@ export class Relay {
       const n = Number(m[3]);
       if (!w || !row || !this.picturesOn() || n < 1 || n > (saidOf(row).known ? saidOf(row).count : MOST_PLACES)) throw new RpcError(ErrorCode.other, KEPT_THERE);
       const held = () => w.pictures.get(row.seq)?.find((p) => p.n === n);
+      // The message can go out while its first lookup is still out (a thread
+      // row's update emits), and its watch starts only once that's back
+      // (Codex's second review, 18 Nov): that lookup first, then the watch.
+      await this.readPictures(w);
       if (!held() && w.pictureWait.has(row.seq)) await this.untilPicture(w, row.seq, n);
       if (!held()) {
         try {

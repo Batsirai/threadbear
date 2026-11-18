@@ -50,7 +50,9 @@ export function unplacedPictures(text: string, count: number): number {
 
 // The line a mirrored message ends with for the pictures no marker places
 // (sync.ts toMessageDoc): "[1 picture]", "[3 pictures]".
-const COUNT_LINE = /(?:^|\n\n)\[(?:1 picture|(\d{1,3}) pictures)\]$/;
+// Only those it writes: never "[0 pictures]", "[1 pictures]" or a leading
+// zero, which were typed (Codex's second review, 18 Nov).
+const COUNT_LINE = /(?:^|\n\n)\[(?:1 picture|([2-9]|[1-9]\d{1,2}) pictures)\]$/;
 
 /**
  * What a mirrored message's words say of its pictures, for a reader that

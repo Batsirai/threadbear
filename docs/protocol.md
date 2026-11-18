@@ -6147,8 +6147,8 @@ only way the app opens another runner's thread.
   `{ path, mediaType, width?, height? }`, `path` being the file's path on that
   runner's Mac, or `threadbear-relay:<threadId>/<seq>/Picture <N>` for one not
   up yet; and the `[N pictures]` line the owning runner added is taken off
-  `text` (only when its number is how many of them no marker places, so a typed
-  one stays). So `text` and the count of `images` are the sender's, which is
+  `text` (only `[1 picture]`, or `[N pictures]` for N of 2 or more, and only
+  when its number is how many of them no marker places, so a typed one stays). So `text` and the count of `images` are the sender's, which is
   how the app knows its own sent message, and words that only look like a
   marker or the line never make a picture. A row without `pictures` (an older
   runner's) is read only if its words say it came with some (`[Picture N]`
@@ -6159,15 +6159,17 @@ only way the app opens another runner's thread.
   place for each one not up. A new one's (a row that arrived within 20 seconds
   of being sent, or a live tail brought with a time within 5 minutes of now,
   counted from then) are watched through the same query for 20 seconds. A row
-  whose pictures aren't all up is asked about again by the thread's later reads,
-  at most once a minute, for 10 minutes after its first read. A backend older
+  whose pictures aren't all up (an older runner's too, by its words' count)
+  is asked about again by the thread's later reads, at most once a minute,
+  for 10 minutes after its first read. A backend older
   than 87 is never asked, and messages show as their words. A read that fails
   is tried again for that thread 30 seconds later. `files.read { path,
   runnerId, maxBytes? }` answers `{ path, size, modifiedAt, mediaType, data,
   truncated }` (as `files.read`) for a path held this way for a thread the
   sidebar lists on that runner, with the bytes from the backend's file storage
   (25 MB at most, held in memory, never written to disk). A place for one not
-  up waits while it's watched, then is asked of the backend again, and is
+  up waits for its message's first lookup if that's still out, then while
+  it's watched, then is asked of the backend again, and is
   `-32000` saying it didn't reach Convex if it still isn't there (asking again
   later can find it). The same path held for two threads answers from the one
   used last. A path in this runner's own inbox (a picture the app has just
