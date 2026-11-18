@@ -7909,6 +7909,11 @@ SHA-256 (`boxKeyHash`).
   attempt the row already names one for, unless it names the key holder's
   machine, which the row then takes as its own. A refused `CREATED` deletes
   its machine only if the reaper's plan and fence would delete it then.
+  A machine a delete fence decides to delete is condemned in that same step
+  (`boxes.condemned`) until the provider has it no more: an exchange naming
+  it is refused, as is one naming no machine while any of its attempt is
+  condemned (the boot token stays for the kept machine), and a heartbeat
+  naming it never makes it the key holder's.
   A newer boot token for the thread replaces an older one. Each is for one
   attempt at a box (`mintBootToken` returns its `attempt`, numbered from
   1), which the service's `CREATED` and `LOST` name: a loss ends the key,

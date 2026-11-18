@@ -2493,3 +2493,41 @@ test("a refused CREATED for a machine the reaper would delete is still deleted a
   await making;
   assert.equal(s.fly.byId('m1')!.state, 'destroyed');
 });
+
+// ------------------------------------------------------------ the delete fence condemns (19 Nov 2026)
+
+// A duplicate that hasn't traded the token yet, planned for deletion: it
+// could exchange between the reaper's step and the provider's delete.
+test("a machine the fence decides to delete can't take the key before its delete, said or not; the kept one can after", async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  twinOf(s, a, 'dup', 'stopped');
+  const boxId = boxIdOf(s, 'T2');
+  const listed = [{ providerBoxId: a.id, state: 'running', boxId, attempt: 1 }, { providerBoxId: 'dup', state: 'stopped', boxId, attempt: 1 }];
+  const step = (await call(s.ctx, service.reapPlan, { serviceId: s.serviceId, boxes: listed })).find((x: { box: { providerBoxId: string } }) => x.box.providerBoxId === 'dup');
+  assert.equal(step.do, 'destroy');
+  assert.equal(await call(s.ctx, service.reapStep, { serviceId: s.serviceId, box: step.box, do: 'destroy', seen: step.seen, siblings: 1 }), true);
+  assert.deepEqual(s.rowOf('T2').condemned, [{ providerBoxId: 'dup', attempt: 1 }]);
+  // Before its delete, the condemned machine's exchange is refused, and so is one that doesn't say which it is.
+  assert.notEqual(await outcome(call(s.a, boxes.exchange, { bootToken: s.bootOf(a.id), machineId: 'dup' })), 'ok');
+  assert.notEqual(await outcome(s.exchange(s.bootOf(a.id))), 'ok');
+  assert.equal(s.rowOf('T2').boxKeyHash, undefined);
+  // The delete done, the kept machine trades the token as ever.
+  await call(s.ctx, service.deleteDone, { providerBoxId: 'dup', boxId });
+  assert.equal(s.rowOf('T2').condemned?.length ?? 0, 0);
+  const got = await s.exchange(s.bootOf(a.id));
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+});
+
+test('a heartbeat naming a condemned machine gives it no key holder status', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const a = s.fly.live()[0]!;
+  const got = await s.boot('T2', a.id);
+  s.rowOf('T2').condemned = [{ providerBoxId: 'dup', attempt: 1 }];
+  await call(s.ctx, sync.heartbeat, { key: got.boxKey, runner: { runnerId, name: 'box', version: 'v', startedAt: new Date().toISOString(), draining: false, threadCount: 1, machineId: 'dup' } });
+  assert.equal(s.rowOf('T2').keyMachineId, undefined);
+});

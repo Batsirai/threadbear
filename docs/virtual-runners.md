@@ -669,6 +669,13 @@ if the reaper's plan and fence would, in the same check
 (`deleteIfReaperWould`). The reaper doesn't take a machine in while an
 action holds the box's lease.
 
+That left one gap, closed the next day: a machine the reaper decides to
+delete that hadn't traded the token yet could trade it between that step
+and the provider's delete. The fence now condemns it in the same step
+(`condemned`, dropped once the provider has it no more): its exchange is
+refused, as is any exchange that doesn't name its machine while one of its
+attempt is condemned, and a heartbeat naming it gives it nothing.
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

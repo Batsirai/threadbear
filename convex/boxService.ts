@@ -687,6 +687,7 @@ async function deleteIfReaperWould(ctx: ActionCtx, serviceId: Id<'runnerServices
   if (step?.do !== 'destroy') return;
   if (!(await ctx.runMutation(internal.boxService.reapStep, { serviceId, box, do: 'destroy', seen: step.seen, siblings: siblingsOf(listed, box) }))) return;
   await retrying(() => p.destroy(id));
+  await ctx.runMutation(internal.boxService.deleteDone, { providerBoxId: id, boxId });
 }
 
 // ------------------------------------------------------------ sleeping and deleting
@@ -913,7 +914,7 @@ async function deleteEach(op: Op, p: BoxProvider, serviceId: Id<'runnerServices'
       }
       try {
         await retrying(() => p.destroy(b.providerBoxId));
-        await op.ctx.runMutation(internal.boxService.deleteDone, { providerBoxId: b.providerBoxId });
+        await op.ctx.runMutation(internal.boxService.deleteDone, { providerBoxId: b.providerBoxId, boxId: op.boxId });
       } catch (e) {
         if (e instanceof LeaseLost || e instanceof OutOfTime) throw e;
         console.warn('a machine was not deleted; tried again after a backoff', message(e));
@@ -943,13 +944,24 @@ export const deleteFailed = internalMutation({
 });
 
 export const deleteDone = internalMutation({
-  args: { providerBoxId: v.string() },
+  // boxId: its row's, whose condemned list it leaves (the provider has it no more).
+  args: { providerBoxId: v.string(), boxId: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { providerBoxId }) => {
+  handler: async (ctx, { providerBoxId, boxId }) => {
     for (const r of await ctx.db.query('boxDeleteBackoff').withIndex('by_box', (q) => q.eq('providerBoxId', providerBoxId)).collect()) await ctx.db.delete(r._id);
+    const row = boxId !== undefined ? await rowOf(ctx, boxId) : null;
+    if (row?.condemned?.some((c) => c.providerBoxId === providerBoxId)) await ctx.db.patch(row._id, { condemned: row.condemned.filter((c) => c.providerBoxId !== providerBoxId) });
     return null;
   },
 });
+
+// A machine a fence decided to delete, recorded on its row in that same step (boxes.condemned).
+async function condemn(ctx: MutationCtx, row: Doc<'boxes'>, providerBoxId: string, attempt: number): Promise<void> {
+  const fresh = await ctx.db.get(row._id);
+  if (!fresh || fresh.condemned?.some((c) => c.providerBoxId === providerBoxId)) return;
+  // A few at most ever: the oldest go first past 16.
+  await ctx.db.patch(row._id, { condemned: [...(fresh.condemned ?? []), { providerBoxId, attempt }].slice(-16) });
+}
 
 /** Of these machines, those whose last delete failed and whose backoff isn't out. */
 export const backedOff = internalQuery({
@@ -975,6 +987,7 @@ async function deleteAsleep(op: Op, p: BoxProvider, seen: Seen, id: string): Pro
     console.warn('a sleeping box was not deleted; the reaper will try again', message(e));
     return;
   }
+  await op.ctx.runMutation(internal.boxService.deleteDone, { providerBoxId: id, boxId: op.boxId });
   await report(op.ctx, seen.threadId, { type: 'LOST', providerBoxId: id, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) }, op.id);
 }
 
@@ -1266,6 +1279,8 @@ export const reapStep = machines.internalMutation({
       // The fence: the key of the machine it deletes goes in this same step
       // (the key holder's machine's: a duplicate of its attempt doesn't hold it).
       if (row && row.keyAttempt === b.attempt && (row.keyMachineId ?? row.providerBoxId) === b.providerBoxId) await ctx.db.patch(row._id, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined });
+      // And it's condemned, so it can't take the key between this step and its delete.
+      if (row) await condemn(ctx, row, b.providerBoxId, b.attempt);
       return true;
     }
     if (!row) return false;
@@ -1442,6 +1457,8 @@ export const driftPage = internalMutation({
     for (const row of page.page) {
       // Counted while any machine of it runs in the whole listing; none: not counted.
       if (row.seenRunningAt !== undefined && !runningRows.has(row._id)) await ctx.db.patch(row._id, { seenRunningAt: undefined });
+      // Condemned machines the provider has no more (the whole listing): dropped.
+      if (row.condemned?.some((c) => !byId.has(c.providerBoxId))) await ctx.db.patch(row._id, { condemned: row.condemned.filter((c) => byId.has(c.providerBoxId)) });
       if (row.providerBoxId && !byId.has(row.providerBoxId) && LOSABLE.includes(row.boxState.kind)) missing.push({ boxId: row._id, providerBoxId: row.providerBoxId, attempt: row.providerAttempt ?? newestAttempt(row) });
       // The key holder's machine, not the row's (not taken in yet), missing too.
       else if (row.keyMachineId !== undefined && row.keyAttempt !== undefined && row.keyMachineId !== row.providerBoxId && !byId.has(row.keyMachineId) && LOSABLE.includes(row.boxState.kind)) missing.push({ boxId: row._id, providerBoxId: row.keyMachineId, attempt: row.keyAttempt });
@@ -1574,7 +1591,7 @@ async function reapStepRun(ctx: ActionCtx, args: { serviceId: Id<'runnerServices
       if (!p || !(await ctx.runMutation(internal.boxService.reapStep, { serviceId, box: b, do: planned, seen, siblings: args.siblings ?? 0 }))) return false;
       try {
         await retrying(() => p.destroy(b.providerBoxId));
-        await ctx.runMutation(internal.boxService.deleteDone, { providerBoxId: b.providerBoxId });
+        await ctx.runMutation(internal.boxService.deleteDone, { providerBoxId: b.providerBoxId, boxId: b.boxId });
       } catch (e) {
         console.warn('a machine was not deleted; tried again after a backoff', message(e));
         await ctx.runMutation(internal.boxService.deleteFailed, { serviceId, providerBoxId: b.providerBoxId });
@@ -1660,6 +1677,7 @@ export const deleteFence = internalMutation({
     if (!row || row.op?.id !== op || row.boxState.kind !== 'asleep' || row.providerBoxId !== providerBoxId) return false;
     if (row.providerAttempt !== undefined && row.workAttempts?.includes(row.providerAttempt)) return false;
     if (row.keyAttempt !== undefined && row.keyAttempt === row.providerAttempt) await ctx.db.patch(boxId, { boxKeyHash: undefined, keyAttempt: undefined, keyMachineId: undefined, unsure: undefined });
+    await condemn(ctx, row, providerBoxId, row.providerAttempt ?? newestAttempt(row));
     return true;
   },
 });
