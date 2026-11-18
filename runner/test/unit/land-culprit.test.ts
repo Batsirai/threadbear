@@ -130,9 +130,14 @@ test('a group halved down to its holder sets aside the one it was narrowed to, a
   const withBad = all.filter((x) => x.includes('bad.txt'));
   if (asideAt) {
     assert.match(caps[0].out.join('\n'), /Checking thread\/f0000000 by itself: a group check with it and thread\/\w+ failed/);
-    // Its own check comes last, on a main that has the others by then,
-    // and the one before it landed them without it.
-    assert.ok(all.at(-1)!.includes('bad.txt') && !all.at(-2)!.includes('bad.txt'), JSON.stringify(all));
+    // After the holder's check without it, it's checked once more, by
+    // itself, and the rest land in one check without it. Which comes first
+    // is whichever tb takes the lock first: a busy Linux follower saw its
+    // own check before the rest's, 1 run in 4 (18 Nov).
+    const holderAlone = all.findIndex((x, i) => i > 0 && !x.includes('bad.txt'));
+    assert.equal(all.slice(holderAlone + 1).filter((x) => x.includes('bad.txt')).length, 1, JSON.stringify(all));
+    const rest = all.findLast((x) => !x.includes('bad.txt'))!;
+    assert.ok(['b', 'c', 'd'].every((n) => rest.includes(`${n}.txt`)), JSON.stringify(all));
   }
   // At most: the group (fbcd), halved to two with the fix (f + one + the
   // holder), the holder and the fix, the holder alone, then the rest in one,
