@@ -8,7 +8,8 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { messageButton, threadFields, views } from './schema';
 import { API_VERSION } from './version';
-import { command, machines } from './machines';
+import { clear, command, machines } from './machines';
+import { clearStateFrom } from './clearStates';
 import { COMMAND_KEEP_MS as KEEP_MS, TAKEN_LEASE_MS as LEASE_MS } from './commandMachine';
 import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
@@ -232,13 +233,22 @@ async function clearThread(ctx: MutationCtx, threadId: string, runnerId: string 
   const clearing = await clearingOf(ctx, threadId);
   // A takeover goes on waiting for its rows. A removal while they go (a
   // takeover's or an earlier removal's) leaves them to it, and the id opens
-  // when they've gone, as there's no takeover left to finish.
-  if (clearing && !clearing.done && mode === 'moving') return false;
-  if (clearing && !clearing.done) {
-    if (clearing.moving) await ctx.db.patch(clearing._id, { moving: undefined });
-  } else if (clearing) await ctx.db.delete(clearing._id);
-  else if (await clearRows(ctx, threadId, clearBudget(ctx))) {
-    await ctx.db.insert('threadClears', { threadId, runnerId: runnerId ?? '', ...(mode === 'moving' ? { moving: true } : {}) });
+  // when they've gone, as there's no takeover left to finish. The clear's
+  // machine (clearMachine.ts) holds which it is.
+  // A row from before the machine (only while the deploy's stepping stone
+  // runs its backfill) reads from its old fields.
+  const state = clearing ? (clearing.clearState ?? clearStateFrom(clearing, Date.now())) : undefined;
+  const going = state?.kind === 'clearing';
+  if (going && mode === 'moving') return false;
+  if (clearing && going) {
+    if (state.kind === 'clearing' && state.moving) await clear.send(ctx, clearing._id, { type: 'REMOVED' });
+  } else if (clearing) {
+    // Its rows are gone: the takeover's write (or a removal) finishes it.
+    await clear.send(ctx, clearing._id, { type: mode === 'moving' ? 'OWNER_WROTE' : 'REMOVED' });
+    await ctx.db.delete(clearing._id);
+  } else if (await clearRows(ctx, threadId, clearBudget(ctx))) {
+    const made = await clear.create(ctx, { threadId, runnerId: runnerId ?? '' } as never, { type: 'CLEAR', moving: mode === 'moving' });
+    if (made.status !== 'done') throw new ConvexError({ kind: 'conflict', message: `the thread's rows couldn't be cleared: ${made.reasons.join(' ')}` });
     await ctx.scheduler.runAfter(0, internal.sync.dropThreadRows, { threadId });
     if (mode === 'moving') return false;
   }
@@ -335,16 +345,40 @@ async function clearRows(ctx: MutationCtx, threadId: string, budget: Budget): Pr
 
 // The rest of a thread clearThread couldn't finish, a run at a time. Once
 // it's all gone the id opens again; for a takeover the row stays closed to
-// its old runner (done) until the owner's next write of it goes through.
-export const dropThreadRows = internalMutation({
+// its old runner (awaitingOwner) until the owner's next write of it goes
+// through. A run that throws is started again by the clear's timer
+// (clearMachine.ts STALLED), so the id can't stay closed for good. Built
+// with the machines' catalog, as PROGRESS and DRAINED are the server's.
+export const dropThreadRows = machines.internalMutation({
   args: { threadId: v.string() },
   returns: v.null(),
-  handler: async (ctx, { threadId }) => {
+  handler: async (machineCtx, { threadId }) => {
+    const ctx = machineCtx as unknown as MutationCtx;
     const clearing = await clearingOf(ctx, threadId);
-    if (!clearing || clearing.done) return null;
-    if (await clearRows(ctx, threadId, { bytes: 0 })) await ctx.scheduler.runAfter(0, internal.sync.dropThreadRows, { threadId });
-    else if (clearing.moving) await ctx.db.patch(clearing._id, { done: true });
-    else await ctx.db.delete(clearing._id);
+    // Gone, or a second run of the same clear (a restart while one was queued) that finds it drained.
+    if (!clearing || clearing.clearState?.kind !== 'clearing') return null;
+    if (await clearRows(ctx, threadId, { bytes: 0 })) {
+      await clear.send(machineCtx, clearing._id, { type: 'PROGRESS' });
+      await ctx.scheduler.runAfter(0, internal.sync.dropThreadRows, { threadId });
+      return null;
+    }
+    const r = await clear.send(machineCtx, clearing._id, { type: 'DRAINED' });
+    if (r.status === 'done' && r.to === 'cleared') await clear.purge(machineCtx, clearing._id);
+    return null;
+  },
+});
+
+// Clears the backfill brought over (migrations.ts clearState) have no timer
+// yet: each gets the one its state has, so a stalled one's runs start again.
+// The cron, every few minutes; there are a handful at most.
+export const armClears = machines.internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (machineCtx) => {
+    const ctx = machineCtx as unknown as MutationCtx;
+    for (const c of await ctx.db.query('threadClears').withIndex('by_clear_state', (q) => q.eq('clearState.kind', 'clearing')).take(100)) {
+      if (!c.clearStateTimers.length) await clear.armTimers(machineCtx, c._id);
+    }
     return null;
   },
 });

@@ -674,6 +674,51 @@ test("a removed thread's id stays closed until its rows have gone, so a thread m
   assert.equal(s.rows('messages').filter((m) => m.threadId === 'R').length, 0);
 });
 
+// The clear's own timer (clearMachine.ts): a run of a thread's rows that
+// threw, or was lost, left the id closed for good before it, and every
+// write under the id was skipped from then on.
+test("a removed thread's clear whose run threw starts again by itself, and the id opens", async () => {
+  const s = await setup();
+  const machinesModule = load('machines');
+  await call(s.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [thread('X', MINI)] });
+  for (let seq = 1; seq <= 600; seq++) await call(s.ctx, sync.appendMessages, { key: MINI_KEY, messages: [{ threadId: 'X', seq, role: 'assistant', text: 'x'.repeat(9_000), at: 'now' }] });
+  await call(s.ctx, sync.removeThreads, { key: MINI_KEY, threadIds: ['X'] });
+  // Its first run is lost (it threw: Convex doesn't run it again).
+  s.scheduled.splice(s.scheduled.findIndex((x: any) => /dropThreadRows/.test(x.fn)), 1);
+  assert.equal(s.rows('threadClears')[0].clearState.kind, 'clearing');
+  assert.deepEqual((await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread('X', LAPTOP)] })).skipped, ['X'], 'closed');
+  // Ten minutes on, the clear's timer starts its runs again.
+  const timer = s.pendingTimers().find((t: any) => t.args.event === 'STALLED')!;
+  assert.ok(timer, 'a timer is waiting');
+  const realNow = Date.now;
+  Date.now = () => timer.at + 1;
+  try {
+    await call(s.ctx, machinesModule.deliver, timer.args);
+  } finally {
+    Date.now = realNow;
+  }
+  s.timerRan(timer.id);
+  assert.ok((await drain(s, 'dropThreadRows', sync.dropThreadRows)) >= 1);
+  assert.equal(s.rows('threadClears').length, 0, 'the id opens');
+  assert.equal(s.rows('messages').filter((m) => m.threadId === 'X').length, 0);
+  assert.deepEqual((await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread('X', LAPTOP)] })).skipped, []);
+  // And no timer is left behind.
+  assert.deepEqual(s.pendingTimers().filter((t: any) => t.args.machine === 'clear'), []);
+});
+
+test('the backfill brings clears from before their machine over, and the sweep arms a stalled one', async () => {
+  const s = await setup();
+  const migrations = load('migrations');
+  await s.ctx.db.insert('threadClears', { threadId: 'OLD1', runnerId: MINI, clearState: undefined });
+  await s.ctx.db.insert('threadClears', { threadId: 'OLD2', runnerId: MINI, moving: true, done: true, clearState: undefined });
+  while (!(await call(s.ctx, migrations.run, { name: 'clearState' })).done);
+  const kinds = Object.fromEntries(s.rows('threadClears').map((c) => [c.threadId, c.clearState.kind]));
+  assert.deepEqual(kinds, { OLD1: 'clearing', OLD2: 'awaitingOwner' });
+  await call(s.ctx, sync.armClears, {});
+  await call(s.ctx, sync.armClears, {});
+  assert.deepEqual(s.pendingTimers().map((t: any) => t.args.event), ['STALLED'], 'armed once, for the clearing one');
+});
+
 test('removing many threads with big tool output together stays under the read limit', async () => {
   const s = await setup();
   const ids = Array.from({ length: 40 }, (_, i) => `E${i}`);

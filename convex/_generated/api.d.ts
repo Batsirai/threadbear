@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as clearMachine from "../clearMachine.js";
+import type * as clearStates from "../clearStates.js";
 import type * as commandMachine from "../commandMachine.js";
 import type * as commandStates from "../commandStates.js";
 import type * as crons from "../crons.js";
@@ -50,6 +52,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  clearMachine: typeof clearMachine;
+  clearStates: typeof clearStates;
   commandMachine: typeof commandMachine;
   commandStates: typeof commandStates;
   crons: typeof crons;

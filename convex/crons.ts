@@ -16,6 +16,8 @@ crons.interval('prune old tool output', { minutes: 15 }, internal.sync.pruneBodi
 crons.interval('expire moves', { minutes: 5 }, internal.moves.expireMoves, {});
 // Pushes held for a Mac that went to sleep with Mike at it (sync.ts).
 crons.interval('send stale held pushes', { minutes: 2 }, internal.sync.sendStaleHeldPushes, {});
+// Thread clears from before their machine get its timer (sync.ts armClears).
+crons.interval('arm thread clears', { minutes: 10 }, internal.sync.armClears, {});
 // The state machines' history past two weeks (machines.ts).
 crons.interval('prune machine history', { hours: 24 }, internal.machines.pruneHistory, {});
 export default crons;

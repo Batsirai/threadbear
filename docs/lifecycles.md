@@ -15,20 +15,20 @@ reading the code, unless it says it was tested.
 | `runnerRequests.state` (`convex/relay.ts`) | pending, claimed, allowed, denied, closed | A claim that went through but whose answer was lost left the request "being started" with nothing started. | API 85: `decideRequest`'s `claim`, one answer per request at a time. Still open: a lost claim followed by a runner restart stays claimed until the asking card expires (an hour); handing it back on a timer could start the thread twice, as a claimed request may already be starting elsewhere |
 | `threads.pushHeldAt` / `pushedAt` with `runners.atMac` (`devices.ts` holdPush, `sync.ts` setPresence, sendHeldPushes, sendStaleHeldPushes) | none, held, sent or dropped | **Race:** `push.notify` read Mike at the Mac, he left and the drain ran with nothing held, then `holdPush` held the push anyway, and the stale-push cron only looked at runners still at the Mac: a missed "needs you" until he next sat down and left again. | Daybreak 148, 17 Nov 2026 (6ac6f8554 and the two before it): `holdPush` asks again in the same transaction and sends it to the away phones if he's gone (once; a second bounce is held), and the cron sends anything held for a runner that's away. `runner/test/unit/push-hold.test.ts` plays each order. Not a machine: it lives on the runner-mirrored `threads` row. One edge left as designed: the main Mac taking a thread over from another runner starts it clean, held push included |
 | `schedules.claim` (`{ holder, until }`, 2-minute lease) with `nextRunAt`, `lastRun` (`sync.ts` claimSchedule, scheduleRan; `runner/src/schedules.ts`) | due, claimed, ran or released | **Double run:** the claim was never renewed. A check can run 5 minutes, and a run whose record didn't get through kept the row due, so in a restart's handover the other runner process took the lapsed claim and sent the run again (tested). | 18 Nov 2026: the runner holds the claim (`hold`), taking it again every 45 seconds while it checks, sends and records the run, confirms it just before the send, and keeps it until `scheduleRan` lands. Runner-only: the backend already let the same holder take its claim again. Not a machine: schedules are the runners' own rows (`adoptSchedules`) |
+| `threadClears` (`sync.ts` clearThread, dropThreadRows) | clearing, awaitingOwner (a takeover's rows gone), cleared | **Stuck id:** a thread's old rows go in scheduled runs while the id is closed to every write. A run that threw was never started again, so the id stayed closed for good and every write under it was skipped. | 18 Nov 2026: a state machine (`convex/clearMachine.ts`) whose `clearing` state starts the runs again after 10 minutes with none moving it on (`STALLED`, an `at` timer each run moves); rows from before it get their timer from a cron (`armClears`) |
 
-Commands, moves and runner requests are now state machines (below).
+Commands, moves, runner requests and thread clears are now state machines (below).
 
 ## Still to do, most worth it first
 
 | # | Lifecycle | Stages | What's wrong (by reading) | Size |
 |---|---|---|---|---|
-| 1 | `threadClears.moving` / `done` (`sync.ts` clearThread, dropThreadRows) | clearing, done (awaiting the owner's write), gone | **Possible stuck id:** no sweep. A `dropThreadRows` run that throws leaves the row not done, and every write under that thread id is skipped (`closedId`). The rows have no timestamp, so a sweep needs one added. | M |
-| 2 | `relayInstall` and `relayChecks` (`push.ts`, `devices.ts`) | none, checking, registered, cleared on 401 | **Possible race:** two `notify` actions register at once; the relay rotates the key each time and the last save wins, so a push can 401 and register again (1 of 20 a day). | S |
-| 3 | `uploadTickets`, `phoneUploads`, `relayUploads` (`usedAt`, `claim`) | issued, claimed, finished or refused | Sound. Three copies of the same claim and finish could share one machine. | S |
-| 4 | `storageOwners.attachedAt` | unattached, attached, deleted | None found. | S |
-| 5 | `tokens.revokedAt` / `expiresAt`, `pairingCodes.usedAt` | issued, used or expired; live, revoked or expired | None found. | S |
-| 6 | `runnerKeys.revokedAt` | live, revoked | None. | S |
-| 7 | relay `installs` (`relay/convex/relay.ts`) | registered, active, expired, registered again | Only the rotation race in 2. | S |
+| 1 | `relayInstall` and `relayChecks` (`push.ts`, `devices.ts`) | none, checking, registered, cleared on 401 | **Possible race:** two `notify` actions register at once; the relay rotates the key each time and the last save wins, so a push can 401 and register again (1 of 20 a day). | S |
+| 2 | `uploadTickets`, `phoneUploads`, `relayUploads` (`usedAt`, `claim`) | issued, claimed, finished or refused | Sound. Three copies of the same claim and finish could share one machine. | S |
+| 3 | `storageOwners.attachedAt` | unattached, attached, deleted | None found. | S |
+| 4 | `tokens.revokedAt` / `expiresAt`, `pairingCodes.usedAt` | issued, used or expired; live, revoked or expired | None found. | S |
+| 5 | `runnerKeys.revokedAt` | live, revoked | None. | S |
+| 6 | relay `installs` (`relay/convex/relay.ts`) | registered, active, expired, registered again | Only the rotation race in 1. | S |
 
 Simple expiry, not worth a machine: `messages.pagedAt`, `heldPictures.at`,
 `eventBodies.at`, and the `threadTombstones`, `threadGone` and `scheduleGone`
@@ -43,10 +43,11 @@ their source of truth; the backend only mirrors them.
 Mike's apps put lifecycles on his state machines library, vendored in
 `vendor/` (he OK'd publishing it in this public repo on 17 Nov 2026). The
 machines are drawn in [machines.md](machines.md) and on the website's
-Machines page (`/machines`). So far: **commands** (`convex/commandMachine.ts`)
-**moves** (`convex/moveMachine.ts`) and **runner requests**
+Machines page (`/machines`). So far: **commands** (`convex/commandMachine.ts`),
+**moves** (`convex/moveMachine.ts`), **runner requests**
 (`convex/requestMachine.ts`, no timers: a request's card expires on the
-asking runner, which closes it). Next, one at a time, the table above.
+asking runner, which closes it) and **thread clears**
+(`convex/clearMachine.ts`). Next, one at a time, the table above.
 
 Moves keep each deadline as a time in the state's data (`askBy`,
 `giveUpAt`), not a delay from entering it: the backfill brings a move over

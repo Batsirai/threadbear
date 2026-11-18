@@ -14,6 +14,7 @@ import { internalMutation, internalQuery, type MutationCtx } from './_generated/
 import { commandStateFrom } from './commandStates';
 import { moveStateFrom } from './moveStates';
 import { requestStateFrom } from './requestStates';
+import { clearStateFrom } from './clearStates';
 
 // Rows per run: each is a small patch, and a command's row can be a few hundred KB.
 const PAGE = 100;
@@ -51,7 +52,16 @@ const requestState: Step = async (ctx, cursor) => {
   return { cursor: page.continueCursor, done: page.isDone };
 };
 
-const BACKFILLS: Record<string, Step> = { commandState, moveState, requestState };
+// threadClears.clearState and clearStateTimers, from `moving` and `done`
+// (clearStates.ts). A clearing row's timer is armed once the machine is
+// live (sync.ts armClears): its runs start again then.
+const clearState: Step = async (ctx, cursor) => {
+  const page = await ctx.db.query('threadClears').paginate({ numItems: PAGE, cursor, maximumBytesRead: PAGE_BYTES });
+  for (const c of page.page) if (c.clearState === undefined) await ctx.db.patch(c._id, { clearState: clearStateFrom(c, Date.now()), clearStateTimers: c.clearStateTimers ?? [] });
+  return { cursor: page.continueCursor, done: page.isDone };
+};
+
+const BACKFILLS: Record<string, Step> = { commandState, moveState, requestState, clearState };
 const mark = (name: string) => `backfill-${name}-done`;
 
 /** One run of a backfill from where the last left off. Run it until it says done. */

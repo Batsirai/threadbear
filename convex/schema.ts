@@ -9,6 +9,7 @@ import { machineTimers } from '@convex-dev/state-machines';
 import { commandStateV } from './commandStates';
 import { moveStateV } from './moveStates';
 import { requestStateV } from './requestStates';
+import { clearStateV } from './clearStates';
 import { requiredUnlessStepping } from './stepping';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
@@ -467,9 +468,18 @@ export const appSchema = defineSchema({
   threadClears: defineTable({
     threadId: v.string(),
     runnerId: v.string(),
+    // Rows from before clearState: the backfill reads them. Nothing writes them now.
     moving: v.optional(v.boolean()),
     done: v.optional(v.boolean()),
-  }).index('by_threadId', ['threadId']),
+    // Its state machine (clearMachine.ts). Required, once the backfill has
+    // given every row one (migrations.ts); optional only in the deploy
+    // that runs it (stepping.ts).
+    clearState: requiredUnlessStepping('clearState', clearStateV),
+    clearStateTimers: requiredUnlessStepping('clearState', machineTimers),
+  })
+    .index('by_threadId', ['threadId'])
+    // The Machines page, and the sweep that arms backfilled rows' timers.
+    .index('by_clear_state', ['clearState.kind']),
 
   commandFiles: defineTable({
     storageId: v.id('_storage'),

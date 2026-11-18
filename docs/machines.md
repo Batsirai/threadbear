@@ -295,3 +295,58 @@ From `claimed`:
 - `CLAIM(claim?) (owner)` [sameClaim] stays put. The same claim asking again after its answer was lost: told yes, and nothing changes.
 - `ALLOW(result) (owner)` → `allowed`. The thread started: the request says where.
 - `HAND_BACK (owner)` → `pending`. Starting it failed on the main Mac: it waits for Mike again, and the next claim is a new one.
+
+## clear
+
+A thread id's old rows going a run at a time, after the thread was removed or taken over by the main Mac. Nothing is written under the id until they've gone.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  state "clearing" as clearing
+  clearing : moving, retryAt
+  note right of clearing
+Its rows going, a run at a time. Every
+write under the id is skipped meanwhile
+(the main Mac sends its again).
+  end note
+  state "awaitingOwner" as awaitingOwner
+  note right of awaitingOwner
+Its old rows are gone. The id stays
+closed to the runner that had it until
+the main Mac's write of the thread takes
+it over.
+  end note
+  state "cleared" as cleared
+  note right of cleared
+Done with: the row goes in the same
+mutation, and the id opens.
+  end note
+  [*] --> clearing : CLEAR(moving) (backend) / start
+  clearing --> clearing : PROGRESS (server) / progress
+  clearing --> clearing : STALLED at retryAt / restart
+  clearing --> clearing : REMOVED (backend) / removed
+  clearing --> awaitingOwner : DRAINED (server) [1. moving] / awaiting
+  clearing --> cleared : DRAINED (server) [else]
+  awaitingOwner --> cleared : OWNER_WROTE (backend)
+  awaitingOwner --> cleared : REMOVED (backend)
+  cleared --> [*]
+```
+
+How a row is born:
+
+- `CLEAR(moving) (backend)` → `clearing`. A thread removed, or taken over by the main Mac, with more rows than one mutation may read: the rest go in runs of their own.
+
+From `clearing`:
+
+- The clock sends `STALLED` at retryAt. Ten minutes with no run moving it on: a run threw, or was lost.
+- `PROGRESS (server)` stays put. A run deleted what it could read; another follows, and the ten minutes start again.
+- `STALLED at retryAt` stays put. The runs start again from where the rows are: each deletes what it reads.
+- `REMOVED (backend)` stays put. The thread is removed while its rows go: no takeover to finish, so the id opens once they have.
+- `DRAINED (server)` [1. moving] → `awaitingOwner`. All gone, for a takeover: the main Mac's next write of the thread goes through.
+- `DRAINED (server)` [else] → `cleared`. All gone: the id opens again.
+
+From `awaitingOwner`:
+
+- `OWNER_WROTE (backend)` → `cleared`. The main Mac's write of the thread goes through: it's the main Mac's now.
+- `REMOVED (backend)` → `cleared`. The thread is removed before the main Mac wrote it: the id opens.
