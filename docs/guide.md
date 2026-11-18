@@ -41,7 +41,9 @@ the threads, and Esc in the Scheduled, Projects or Librarian view goes back
 to the Inbox. The list scrolls to keep the open thread's row in sight,
 whether you got there by the arrows, ⌥⌘↓ or a thread named in a reply. When your threads pass 100, and each thousand after (archived ones
 count), a note says so once, the next time you're at the app. Running holds threads whose agent is
-working now. A thread that
+working now, and one you've just sent a message to: while your message
+still has its spinner (a busy Mac can take a while to pick it up), the
+thread has already left the Inbox. If the message can't go, it comes back. A thread that
 asks you something keeps its place in the inbox, wake-up or not, and so does
 one that has left a job running while it waits for you: a small grey
 arc turning by its time says the job is still going, and hovering it says what it is. Sub-agents are

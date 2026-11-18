@@ -1818,17 +1818,27 @@ impl Threadbear {
         let query = self.search.read(cx).value().trim().to_lowercase();
         let wakes = inbox::wakes(&self.scheduled.list);
         let changes = self.threads.changes();
+        // A thread with a message on its way sorts under Running
+        // (`inbox::as_sending`), so the outbox changing counts too.
+        let outbox = crate::thread::outbox_changes();
         // Nested threads (nested.rs) only with the experiment on, and not
         // while searching: a search lists what it found, each on its own row.
         let nested = query.is_empty() && self.nested_threads_on();
         if let Some(c) = self.sections_cache.borrow().as_ref() {
-            if c.changes == changes && c.query == query && c.order == self.sidebar.order && c.wakes == wakes && c.nested == nested && c.from <= now && now < c.until {
+            if c.changes == changes && c.outbox == outbox && c.query == query && c.order == self.sidebar.order && c.wakes == wakes && c.nested == nested && c.from <= now && now < c.until {
                 return c.sections.clone();
             }
         }
-        let nesting = nested.then(|| Rc::new(threadbear_core::nested::Nesting::build(self.threads.values(), now, &wakes)));
-        // Shared rows: working them out again copies pointers (thread_map.rs).
-        let shown = self.threads.values().filter(|t| query.is_empty() || inbox::matches(t, &query));
+        // A thread Mike has just sent a message to sorts as starting its turn
+        // while the message is on its way, so a slow runner doesn't leave it
+        // in the Inbox with a spinner on its bubble. Only these few are
+        // copied; the rest are shared rows, so working them out again copies
+        // pointers (thread_map.rs).
+        let sending: Vec<Arc<ThreadSummary>> = crate::thread::sending().iter().filter_map(|id| self.threads.get(id)).map(|t| Arc::new(inbox::as_sending(t))).collect();
+        let all = || self.threads.values().filter(|t| !sending.iter().any(|s| s.id == t.id)).chain(sending.iter());
+        // Groups sort by their members as the sections do, guesses included.
+        let nesting = nested.then(|| Rc::new(threadbear_core::nested::Nesting::build(all(), now, &wakes)));
+        let shown = all().filter(|t| query.is_empty() || inbox::matches(t, &query));
         let sections = Rc::new(match &nesting {
             Some(n) => inbox::sections_nested(shown, now, self.sidebar.order, &wakes, n),
             None => inbox::sections_ordered(shown, now, self.sidebar.order, &wakes),
@@ -1836,7 +1846,7 @@ impl Threadbear {
         // Until the next snooze runs out, when a thread moves out of
         // Hibernating; nothing else in the sorting goes by the clock.
         let until = self.threads.values().map(|t| &**t).filter_map(|t| t.snoozed_until_ms()).filter(|at| *at > now).min().unwrap_or(i64::MAX);
-        *self.sections_cache.borrow_mut() = Some(SectionsCache { changes, query, order: self.sidebar.order, wakes, nested, from: now, until, sections: sections.clone(), nesting });
+        *self.sections_cache.borrow_mut() = Some(SectionsCache { changes, outbox, query, order: self.sidebar.order, wakes, nested, from: now, until, sections: sections.clone(), nesting });
         sections
     }
 
@@ -1963,6 +1973,8 @@ impl Render for Threadbear {
 /// What `shown_sections` last worked out, and from what.
 struct SectionsCache {
     changes: u64,
+    /// `thread::outbox_changes` when they were worked out.
+    outbox: u64,
     query: String,
     order: inbox::InboxOrder,
     wakes: HashMap<String, inbox::Wake>,

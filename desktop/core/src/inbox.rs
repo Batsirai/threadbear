@@ -650,6 +650,24 @@ pub fn section_of(t: &ThreadSummary, now_ms: i64, wakes: &HashMap<String, Wake>)
     }
 }
 
+/// A thread as the sidebar sorts it while a message Mike sent it is still on
+/// its way (the faded bubble with the spinner): starting a turn, as the
+/// runner will say once it takes it. Until then the runner's summary still
+/// has the last turn's "needs you", so on a busy Mac the thread sat in the
+/// Inbox, bold, for as long as the send took (18 Nov). Only the sorting
+/// guesses: the runner's next summary replaces the row as usual.
+pub fn as_sending(t: &ThreadSummary) -> ThreadSummary {
+    let mut t = t.clone();
+    // Waiting on a permission card counts as busy, but it sorts into the
+    // Inbox: a message sent instead of answering it moves the thread on too.
+    if !matches!(t.status.as_str(), "running" | "starting") {
+        t.status = "starting".into();
+    }
+    t.needs_you = false;
+    t.needs = None;
+    t
+}
+
 /// The summary behind a row, whatever it's kept in: named, as `.borrow()`
 /// alone could mean the row itself.
 pub(crate) fn summary<T: Borrow<ThreadSummary>>(row: &T) -> &ThreadSummary {
@@ -894,6 +912,24 @@ mod tests {
     }
     fn now() -> i64 {
         parse_ms("2026-11-06T12:00:00Z").unwrap()
+    }
+
+    #[test]
+    fn a_thread_with_a_message_on_its_way_is_running_not_in_the_inbox() {
+        let waiting = thread(1, json!({ "needs": "you", "needsYou": true, "lastSeenSeq": 3, "asks": [{ "action": "Send the reply?" }] }));
+        assert_eq!(section_of(&waiting, now(), &HashMap::new()), "inbox");
+        let sending = as_sending(&waiting);
+        assert_eq!(section_of(&sending, now(), &HashMap::new()), "running");
+        assert_eq!(ids(&sections([&sending], now()), "running"), ["t1"]);
+        // A starred one stays where Mike put it, and one already working
+        // keeps what it's doing.
+        let starred = as_sending(&thread(2, json!({ "needsYou": true, "starredAt": "2026-11-06T09:00:00Z" })));
+        assert_eq!(section_of(&starred, now(), &HashMap::new()), "starred");
+        assert_eq!(as_sending(&thread(3, json!({ "status": "running" }))).status, "running");
+        // Written instead of answering a permission card.
+        let card = thread(4, json!({ "status": "waiting", "needsYou": true }));
+        assert_eq!(section_of(&card, now(), &HashMap::new()), "inbox");
+        assert_eq!(section_of(&as_sending(&card), now(), &HashMap::new()), "running");
     }
 
     #[test]

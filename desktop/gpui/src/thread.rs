@@ -175,7 +175,30 @@ fn outbox(thread_id: &str) -> Vec<PendingMessage> {
     OUTBOX.with(|o| o.borrow().get(thread_id).cloned().unwrap_or_default())
 }
 
+thread_local! {
+    /// Goes up whenever any thread's outbox changes, so the sidebar's
+    /// sections, which sort a thread with a message on its way under Running
+    /// (`sending`), are worked out again.
+    static OUTBOX_CHANGES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times the outbox has changed, for the sidebar's cache.
+pub(crate) fn outbox_changes() -> u64 {
+    OUTBOX_CHANGES.with(|c| c.get())
+}
+
+/// The threads with a message the runner hasn't taken yet (the spinner by
+/// its bubble): the sidebar has them under Running rather than in the Inbox
+/// (`inbox::as_sending`). A queued one is left out: the runner has it, and
+/// its summary says what the thread is doing. That also bounds the guess to
+/// the send's own call, whose task marks it queued or takes it out whether
+/// or not a pane is open, so no bubble left behind keeps a thread in Running.
+pub(crate) fn sending() -> Vec<String> {
+    OUTBOX.with(|o| o.borrow().iter().filter(|(_, list)| list.iter().any(|m| !m.queued)).map(|(id, _)| id.clone()).collect())
+}
+
 fn set_outbox(thread_id: &str, list: Vec<PendingMessage>) {
+    OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
     OUTBOX.with(|o| {
         let mut o = o.borrow_mut();
         if list.is_empty() {
@@ -1041,6 +1064,9 @@ impl ThreadPane {
             OUTBOX_DRAFTS.with(|d| d.borrow_mut().insert(pending_id.clone(), (thread_id.clone(), draft.clone(), held.clone())));
         }
         self.show_outbox(cx);
+        // The sidebar watches the app, not this pane: it moves the thread out
+        // of the Inbox now (`thread::sending`).
+        self.app.update(cx, |_, cx| cx.notify()).ok();
         self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
 
         // The runner it's shown on (null for this Mac's), so this Mac's
@@ -1972,8 +1998,13 @@ fn change_outbox(app: &WeakEntity<crate::app::Threadbear>, thread_id: &str, cx: 
         pane.update(cx, |p, cx| p.show_outbox(cx));
     }
     // A held message is in the drafts file while it's held, and out of it
-    // once it's gone or come back to the box (`held_drafts`).
-    app.update(cx, |app, cx| app.drafts_changed(cx)).ok();
+    // once it's gone or come back to the box (`held_drafts`). The sidebar
+    // redraws too: a thread whose send failed goes back to the Inbox.
+    app.update(cx, |app, cx| {
+        app.drafts_changed(cx);
+        cx.notify();
+    })
+    .ok();
 }
 
 /// A thread's id as the log names it: the first eight characters, as a
