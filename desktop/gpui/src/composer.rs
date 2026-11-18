@@ -1052,15 +1052,25 @@ impl Composer {
     }
 
     /// ComposerTextView.settle: a chip's picture is in, or couldn't be read.
-    /// Gone from the words by then (undone, deleted, its box gone), it's
-    /// dropped.
+    /// With its box gone, it's dropped. Gone from the words by then (undone,
+    /// deleted), it's kept all the same, as an undo or redo can put the
+    /// chip back (`remove_picture_in`).
     fn settle_picture(&mut self, id: SharedString, result: Result<Value, threadbear_client::runner::RpcError>, target: WeakEntity<TextareaState>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = target.upgrade() else {
             self.pictures.remove(&id);
             return;
         };
         let Some(range) = Self::chip_range(&target, &id, cx) else {
-            self.pictures.remove(&id);
+            match result.ok().and_then(|v| ImageRef::decode(&v["image"])) {
+                Some(image) => {
+                    if let Some(chip) = self.pictures.get_mut(&id) {
+                        chip.image = Some(image);
+                    }
+                }
+                None => {
+                    self.pictures.remove(&id);
+                }
+            }
             return;
         };
         match result {
@@ -1132,7 +1142,10 @@ impl Composer {
         if let Some(range) = Self::chip_range(target, &id, cx) {
             Self::remove_chip_range(target, range, window, cx);
         }
-        self.pictures.remove(&id);
+        // The picture itself stays in `pictures`: ⌘Z puts the chip back in
+        // the words, and without its entry the chip would show a spinner and
+        // the message go out without the picture. Entries go when the box
+        // is cleared (sent, or another draft put in it).
         cx.notify();
     }
 
