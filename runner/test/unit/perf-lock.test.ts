@@ -1019,3 +1019,25 @@ test('an update build joins a shared host without queueing, and defers when it w
   assert.equal(await a.done, 0);
   assert.equal(await b.done, 0);
 });
+
+test("a measurement from an older perf-lock.pl, waiting without the gate, still goes before new builds", async (t) => {
+  // Its note has no "gate" line: it waits on the perf lock itself.
+  const { h, build, end } = builds(t, 2);
+  const waiting = path.join(h.home, '.cache/threadbear-perf.lock.waiting');
+  fs.mkdirSync(waiting, { recursive: true });
+  const note = path.join(waiting, String(process.pid));
+  fs.writeFileSync(note, `${Math.floor(Date.now() / 1000)}\n`);
+  const a = build('a');
+  await until(() => a.output.includes('older checkout go first'), 'a did not let the older measurement go first');
+  assert.doesNotMatch(a.output, /a started/);
+  fs.rmSync(note);
+  await until(() => a.output.includes('a started'), 'a did not start once it had gone');
+  // A note from this version (through the gate) doesn't hold a build up.
+  fs.writeFileSync(note, `${Math.floor(Date.now() / 1000)}\ngate\n`);
+  const b = build('b');
+  await until(() => b.output.includes('b started'), 'b waited for a gated note');
+  fs.rmSync(note);
+  end('a'); end('b');
+  assert.equal(await a.done, 0, a.output);
+  assert.equal(await b.done, 0, b.output);
+});

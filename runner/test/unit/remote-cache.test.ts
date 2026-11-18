@@ -387,6 +387,18 @@ test('a shared target a build holds stays, however low the disk', (t) => {
 test("a checkout with no build of its own isn't cold when a shared target is warm", (t) => {
   const h = host(t, 5, { 'target-aaa': -1 });
   assert.equal(h.trim().status, 3);
+  // The one folder a host with one slot builds in (shared-cargo/cargo).
+  sharedSlot(h, 1, true);
+  const r = h.trim();
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('on a host running builds side by side, one warm shared folder beside a cold one is still a cold build', (t) => {
+  // Build A in warm shared-1 leaves this build shared-2, from nothing.
+  const h = host(t, 6, { 'target-aaa': -1 });
+  fs.writeFileSync(path.join(h.base, '..', 'builds-at-once'), '2\n');
+  sharedSlot(h, 1, true);
+  assert.equal(h.trim().status, 3, 'started cold with 6 GiB');
   sharedSlot(h, 2, true);
   const r = h.trim();
   assert.equal(r.status, 0, r.stderr);

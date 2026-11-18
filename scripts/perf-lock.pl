@@ -135,15 +135,18 @@ my $wrote_holder = 0;
 my $main_pid = $$;
 my $waiting_dir = "$holder_file" =~ s/\.holder$/.waiting/r;
 my $waiting_since;
-# Updaters never join the queue, and must not jump ahead of a waiter whose
-# blocking locker hasn't been scheduled yet. Stale notes don't hold it up.
-sub defer_to_waiters {
-    return unless $try && opendir(my $dir, $waiting_dir);
+# The live waiters' notes: pid => [when it started waiting, came through the
+# gate]. A note from a perf-lock.pl from before the gate (an older checkout's
+# run) has no second line: it waits on the perf lock itself, where a build's
+# shared lock would go in ahead of it.
+sub live_waiters {
+    my %live;
+    opendir(my $dir, $waiting_dir) or return %live;
     my @pids = grep { /^\d+$/ && $_ > 0 && $_ != $$ && kill(0, $_) } readdir $dir;
     closedir $dir;
     for my $pid (@pids) {
         open(my $in, '<', "$waiting_dir/$pid") or next;
-        my $since = <$in>; close $in;
+        my ($since, $gated) = (<$in>, <$in>); close $in;
         next unless defined($since) && $since =~ /^(\d+)\s*$/;
         $since = $1;
         # A killed waiter's note can outlast a reboot and pid reuse. A
@@ -163,15 +166,24 @@ sub defer_to_waiters {
         }
         # If ps couldn't say, leave the live waiter ahead rather than guess.
         next unless kill(0, $pid);
-        print STDERR "Host has queued work; deferring the update build.\n";
-        exit 75;
+        $live{$pid} = [$since, defined($gated) && $gated =~ /^gate\s*$/ ? 1 : 0];
     }
+    return %live;
+}
+# Updaters never join the queue, and must not jump ahead of a waiter whose
+# blocking locker hasn't been scheduled yet. Stale notes don't hold it up.
+sub defer_to_waiters {
+    return unless $try;
+    my %live = live_waiters();
+    return unless %live;
+    print STDERR "Host has queued work; deferring the update build.\n";
+    exit 75;
 }
 sub start_waiting {
     make_path($waiting_dir);
     $waiting_since = time;
     open(my $out, '>', "$waiting_dir/$$") or return;
-    print {$out} "$waiting_since\n";
+    print {$out} "$waiting_since\ngate\n";
     close $out;
 }
 sub stop_waiting { unlink("$waiting_dir/$main_pid") if defined $waiting_since; }
@@ -315,6 +327,19 @@ if ($shared) {
         select(undef, undef, undef, 0.2);
     }
     push @locks, $lane;
+    # An older perf-lock.pl's measurement waiting for the perf lock alone
+    # never meets the gate, and macOS would let this build's shared lock in
+    # ahead of it, every time. Until those are gone, it goes first.
+    ($said, $next_note) = (0, time + 300);
+    while (grep { !$_->[1] } values %{{ live_waiters() }}) {
+        exit $cancelled if stopping();
+        if ($try) {
+            print STDERR "Host has queued work; deferring the update build.\n";
+            exit 75;
+        }
+        print STDERR "Letting a measurement from an older checkout go first on $host...\n" unless $said++;
+        select(undef, undef, undef, 0.2);
+    }
     push @locks, take($perf_lock, LOCK_SH, 'a measurement or Desk Runner run', 1, $gate, @locks);
     push @locks, take("$home/.cache/threadbear-check/lock", LOCK_SH, 'a check', 0, $gate, @locks);
     # In: the next build can come through the gate and join.
