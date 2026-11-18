@@ -382,10 +382,10 @@ So a failed check says what failed, and that alone is run on each landing:
 - A run that says nothing either way (no host could take it, it was
   stopped) refuses nobody. If each passes alone, it takes two of them
   together, or it's a test that fails now and then: the group is halved.
-- It's done once per landing for each step that failed (a later failure of
-  another step is looked into again: halving can leave a repair out and
-  show main's own failure there), and for no longer than about one check
-  takes. Each run is held to the time that's left
+- It's done once per landing for each step (or test file) that failed (a
+  later failure of another step is looked into again: halving can leave a
+  repair out and show main's own failure there), and for no longer than
+  about one check takes. Each run is held to the time that's left
   (`THREADBEAR_CHECK_MAX_SECS`, which covers its wait in the host's line,
   and a stop of its whole process group after that), with a minute at
   least. When the time runs out, the ones seen to pass go into the next

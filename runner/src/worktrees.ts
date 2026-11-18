@@ -1360,6 +1360,14 @@ export function halveGroup(common: string, main: string, group: { entry: QueueEn
   };
 }
 
+// What an --only names, each step's files one by one ("runner unit
+// tests=a.ts b.ts" is two), or the step by itself where it names none.
+export const lookedFor = (only: string): string[] =>
+  only.split(';').flatMap((e) => {
+    const [name, files] = [e.split('=')[0], e.split('=').slice(1).join('=')];
+    return files.trim() ? files.trim().split(/\s+/).map((f) => `${name}=${f}`) : [name];
+  });
+
 // Main is seen to fail by itself some of what a group failed: every fix
 // waiting rides free again on it, so a repair goes into the next check.
 export function freeFixes(common: string, main: string): void {
@@ -1593,10 +1601,12 @@ async function landLocked(
         // --despite-red, so no failed group was ever looked into alone, and
         // a broken fix at the front of it failed every group for hours.
         const said = opts.checkFrom ? undefined : onlyFailed(r.text);
-        const steps = said?.split(';').map((e) => e.split('=')[0]) ?? [];
-        const only = steps.some((name) => !looked.has(name)) ? said : undefined;
+        // By file where it names them (the runner's unit tests): main may
+        // fail one file of a step and a pair of landings another.
+        const parts = said ? lookedFor(said) : [];
+        const only = parts.some((k) => !looked.has(k)) ? said : undefined;
         if (only) {
-          for (const name of steps) looked.add(name);
+          for (const k of parts) looked.add(k);
           out('Running only what failed on each of them by itself, to find which broke it.');
           setRunning(common, {
             startedAt: Date.now(), branches: [t.branch, ...together], pid: process.pid,

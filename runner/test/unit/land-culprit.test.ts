@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { freeFixes, halveGroup, land, landLimits, setAside, type LandTarget } from '../../src/worktrees.ts';
+import { freeFixes, halveGroup, land, lookedFor, landLimits, setAside, type LandTarget } from '../../src/worktrees.ts';
 import { joinQueue, queueDir, readEntry, setRunning, waiting, waitingLine } from '../../src/land-queue.ts';
 import { capture, commit, holdUntil, makeBranch, makeRepo, sh, until, write } from '../helpers/worktrees-harness.ts';
 
@@ -284,6 +284,15 @@ test('a step that fails only once halving leaves the repair out is looked into, 
   assert.equal(codes[2], 0, said(caps));
   assert.ok(fs.existsSync(path.join(main, 'r.txt')));
   assert.equal(codes.filter((x) => x === 0).length, 2, said(caps));
+});
+
+test('lookedFor: what an --only names, file by file within a step', () => {
+  assert.deepEqual(lookedFor('lint;runner unit tests=test/unit/x.test.ts test/unit/y.test.ts'), ['lint', 'runner unit tests=test/unit/x.test.ts', 'runner unit tests=test/unit/y.test.ts']);
+  assert.deepEqual(lookedFor('runner unit tests'), ['runner unit tests']);
+  // So a later failure of y in the same step is new, and is looked into.
+  const looked = new Set(lookedFor('runner unit tests=test/unit/x.test.ts'));
+  assert.ok(lookedFor('runner unit tests=test/unit/x.test.ts test/unit/y.test.ts').some((k) => !looked.has(k)));
+  assert.ok(!lookedFor('runner unit tests=test/unit/x.test.ts').some((k) => !looked.has(k)));
 });
 
 test('halveGroup: halves on this main at once, keeps a smaller limit, skips landed ones, and puts each back as it was', () => {
