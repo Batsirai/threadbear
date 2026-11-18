@@ -573,3 +573,25 @@ test("a box's heartbeat answers with its box's state, which a box stopped by its
   const owner = await call(s.ctx, sync.heartbeat, { key: OWNER, runner: { runnerId: 'mac1', name: 'Mac', version: 'v', startedAt: new Date().toISOString(), draining: false, threadCount: 0 } });
   assert.equal(owner.box, undefined);
 });
+
+test("a box held by its save: its heartbeats and its save's finish, sent `held`, don't mark it as holding work again", async () => {
+  const s = await boxBackend();
+  const got = await s.boot();
+  await heartbeat(s, got.boxKey);
+  assert.deepEqual(s.box().workAttempts, [1]);
+  await s.report({ type: 'IDLE', attempt: 1 });
+  // As the idle cron does (boxService.ts sleepIdleBoxes).
+  await boxes.askToSave(s.ctx, s.box());
+  const cmd = s.rows('commands').find((c) => c.kind === 'save')!;
+  assert.ok(cmd, 'a save asked for');
+  await save(s, got.boxKey, 'save1');
+  assert.deepEqual(s.box().workAttempts ?? [], [], 'the save covers the work');
+  const beat = (held?: boolean) => call(s.ctx, sync.heartbeat, { key: got.boxKey, runner: { runnerId: BOX_RUNNER, name: 'box', version: 'v', startedAt: new Date().toISOString(), draining: false, threadCount: 1 }, ...(held ? { held } : {}) });
+  await beat(true);
+  // Its finish (whatever the command's own state makes of it, its key is checked first).
+  await outcome(call(s.ctx, sync.finishCommand, { key: got.boxKey, commandId: cmd._id, ok: true, held: true }));
+  assert.deepEqual(s.box().workAttempts ?? [], []);
+  // Without it, a heartbeat is the box at work again.
+  await beat();
+  assert.deepEqual(s.box().workAttempts, [1]);
+});

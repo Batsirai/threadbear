@@ -1334,6 +1334,9 @@ export const heartbeat = mutation({
       // A box's: the provider's id for the machine it runs on (boxes.ts exchange's `machineId`).
       machineId: v.optional(v.string()),
     }),
+    // A box stopped by its save (runner/src/box-save.ts SaveHold): this
+    // heartbeat makes no work, so it doesn't mark the box as holding any.
+    held: v.optional(v.boolean()),
   },
   // The backend's API version (version.ts), so the runner can tell when it's
   // talking to an older backend than it was built for. firstSeen (API 37):
@@ -1355,8 +1358,8 @@ export const heartbeat = mutation({
     // (runner/src/box-save.ts SaveHold).
     box: v.optional(v.object({ state: v.string() })),
   }),
-  handler: async (ctx, { key, runner }) => {
-    const caller = await runnerAuth(ctx, key, 'heartbeat');
+  handler: async (ctx, { key, runner, held }) => {
+    const caller = await runnerAuth(ctx, key, 'heartbeat', { housekeeping: held === true });
     runner = clean(runner);
     // A runner key heartbeats as its own runner only: the row has the
     // rpcUrl other Macs' apps dial.
@@ -3184,10 +3187,12 @@ const NOTE_MAX = 4_000;
 export const finishCommand = mutation({
   // result (API 44): a `call`'s answer as JSON text, kept only for one
   // (relay.ts), at most RESULT_MAX_BYTES. Text, so its size is what's stored.
-  args: { key: v.string(), commandId: v.id('commands'), ok: v.boolean(), note: v.optional(v.string()), resultThreadId: v.optional(v.string()), result: v.optional(v.string()) },
+  // held: a box finishing its `save` while the save holds it, which makes no
+  // work (lib.ts runnerAuth housekeeping); only for a `save` command.
+  args: { key: v.string(), commandId: v.id('commands'), ok: v.boolean(), note: v.optional(v.string()), resultThreadId: v.optional(v.string()), result: v.optional(v.string()), held: v.optional(v.boolean()) },
   returns: v.null(),
-  handler: async (ctx, { key, commandId, ok, note, resultThreadId, result }) => {
-    const caller = await runnerAuth(ctx, key, 'finishCommand');
+  handler: async (ctx, { key, commandId, ok, note, resultThreadId, result, held }) => {
+    const caller = await runnerAuth(ctx, key, 'finishCommand', { housekeeping: held === true && (await ctx.db.get(commandId))?.kind === 'save' });
     const c = await ctx.db.get(commandId);
     if (!c) return null;
     if (!mayFinish(caller, c)) throw forbidden("finish that command: it isn't for its runner");

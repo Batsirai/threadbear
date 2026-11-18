@@ -1168,27 +1168,40 @@ export const movesPart = {
   // stopping one (to sleep, at its day's hours, or to be archived), and
   // once it's acknowledged the backend may delete the box: so nothing may
   // change the thread's folder after the copy is taken. Turns are held, a
-  // running turn is interrupted, a restored worktree's setup waited for,
-  // and the CLI and background jobs stopped, before the record is written
-  // out and returned. The hold stays whatever happens, a failure here
-  // included: only the backend lets it go (box-save.ts SaveHold).
-  async quiesceForSave(this: Runner, threadId: string, waitMs = 5 * 60_000): Promise<ThreadRecord> {
+  // running turn is interrupted (`turnGraceMs` to end), and the CLI closed;
+  // then `stopOthers` (box-procs.ts) kills every other process the box
+  // started, whatever it is (a setup's background children, a teardown,
+  // anything the agent left running), the runner's own work is waited for,
+  // and it looks once more that nothing new started, before the record is
+  // written out and returned. The hold stays whatever happens, a failure
+  // here included: only the backend lets it go (box-save.ts SaveHold).
+  async quiesceForSave(this: Runner, threadId: string, opts: { stopOthers?: () => Promise<unknown>; turnGraceMs?: number; waitMs?: number } = {}): Promise<ThreadRecord> {
     const st = this.threads.get(threadId);
     if (!st) throw new Error("The box's thread isn't here, so there's nothing to save.");
     const { rt } = st;
     this.holdTurns(threadId, 'save');
     if (rt.turn || rt.approvals.size) this.interrupt(threadId);
-    const busy = () => Boolean(rt.turn || rt.restoreSetup || rt.hooksRunning || rt.runningActions?.size || rt.editing || rt.cleaning || rt.preparing);
-    for (const end = Date.now() + waitMs; busy(); ) {
-      if (Date.now() > end) throw new Error("The thread's work didn't stop in time, so it wasn't saved. It stays stopped until the backend wakes it.");
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    const waitFor = async (busy: () => boolean, ms: number) => {
+      for (const end = Date.now() + ms; busy(); ) {
+        if (Date.now() > end) return false;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return true;
+    };
+    // The turn ends by itself if it can; if not, closing its CLI ends it.
+    await waitFor(() => Boolean(rt.turn), opts.turnGraceMs ?? 30_000);
     this.flushDeltas(st);
     if (rt.session && !rt.closing) {
       this.rememberStoppedWork(st);
       this.releaseSession(st);
     }
+    await opts.stopOthers?.();
     if (rt.closing) await rt.closing;
+    const busy = () => Boolean(rt.turn || rt.restoreSetup || rt.hooksRunning || rt.runningActions?.size || rt.editing || rt.cleaning || rt.preparing);
+    if (!(await waitFor(busy, opts.waitMs ?? 60_000))) throw new Error("The thread's work didn't stop in time, so it wasn't saved. It stays stopped until the backend wakes it.");
+    // Nothing new since: whatever the waits above let finish may have started something.
+    await opts.stopOthers?.();
+    this.flushDeltas(st);
     this.store.save(st.rec);
     return structuredClone(st.rec);
   },

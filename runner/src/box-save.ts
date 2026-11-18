@@ -20,7 +20,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { archive, MAX_ENTRIES, readTree, safeEntryPath, unarchive, unpackedSize, writeTree, type PackEntry } from './move-pack.ts';
+import { archive, MAX_ENTRIES, readTree, safeEntryPath, treeStats, unarchive, unpackedSize, writeTree, type PackEntry } from './move-pack.ts';
 import { packGit, underNodeModules, unpackGit, type GitMeta } from './move-git.ts';
 import { paths } from './config.ts';
 import { projectDirName, sessionTranscriptPath } from './transcripts.ts';
@@ -86,22 +86,42 @@ export async function packSave(o: { home: string; claudeDir: string; rec: Thread
   const maxEntries = o.limits?.maxEntries ?? MAX_ENTRIES;
   const maxUnpacked = o.limits?.maxUnpacked ?? SAVE_MAX_UNPACKED_BYTES;
   const { rec } = o;
-  const entries: PackEntry[] = readTree(paths.thread(o.home, rec.id), 'thread', ['panels']);
-  if (rec.provider === 'claude' && rec.sessionUsed && rec.nativeSessionId) {
-    const file = sessionTranscriptPath(o.claudeDir, rec.cwd, rec.nativeSessionId);
-    if (file) {
-      entries.push({ path: `transcript/${rec.nativeSessionId}.jsonl`, data: fs.readFileSync(file) });
-      entries.push(...readTree(path.join(path.dirname(file), rec.nativeSessionId), `transcript/${rec.nativeSessionId}`));
-    }
+  // The reader's limits, checked from sizes on disk before anything is read
+  // into memory: a save over them is refused without allocating it.
+  const budget = { files: 1, bytes: 0, header: 64 }; // box.json, and the archive's own
+  const add = (t: { files: number; bytes: number; header: number }) => {
+    budget.files += t.files;
+    budget.bytes += t.bytes;
+    budget.header += t.header;
+    if (budget.files > maxEntries) throw new Error(`The thread's save has more than ${maxEntries} files, more than a restore takes.`);
+    if (budget.bytes + budget.header > maxUnpacked) throw new Error(`The thread's save is more than ${mb(maxUnpacked)} before it's compressed, more than a restore takes.`);
+  };
+  const threadDir = paths.thread(o.home, rec.id);
+  add(treeStats(threadDir, 'thread', ['panels']));
+  const sid = rec.nativeSessionId;
+  const transcript = rec.provider === 'claude' && rec.sessionUsed && sid ? sessionTranscriptPath(o.claudeDir, rec.cwd, sid) : null;
+  const transcriptDir = transcript && sid ? path.join(path.dirname(transcript), sid) : undefined;
+  if (transcript && sid && transcriptDir) {
+    add({ files: 1, bytes: fs.statSync(transcript).size, header: sid.length + 60 });
+    add(treeStats(transcriptDir, `transcript/${sid}`));
   }
   const work = rec.worktree && !rec.worktree.removedAt ? rec.worktree.path : rec.cwd;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-save-'));
   let leftOut: string[] = [];
+  const entries: PackEntry[] = [];
   try {
     const g = await packGit(work, rec.cwd, path.join(scratch, 'save.bundle'), { leaveOut: underNodeModules });
     if (!g.ok) throw new Error(`Couldn't save the thread's git work: ${g.reason}`);
     leftOut = g.leftOut ?? [];
-    entries.push({ path: 'git/meta.json', data: Buffer.from(JSON.stringify(g.meta)) });
+    const meta = Buffer.from(JSON.stringify(g.meta));
+    add({ files: g.bundle ? 2 : 1, bytes: meta.length + (g.bundle ? fs.statSync(g.bundle).size : 0), header: 120 });
+    // Within budget: read.
+    entries.push(...readTree(threadDir, 'thread', ['panels']));
+    if (transcript && sid && transcriptDir) {
+      entries.push({ path: `transcript/${sid}.jsonl`, data: fs.readFileSync(transcript) });
+      entries.push(...readTree(transcriptDir, `transcript/${sid}`));
+    }
+    entries.push({ path: 'git/meta.json', data: meta });
     if (g.bundle) entries.push({ path: 'git/save.bundle', data: fs.readFileSync(g.bundle) });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
@@ -206,17 +226,26 @@ export async function restoreSave(o: { home: string; claudeDir: string; threadId
  * that can't be known (boxSaved's answer lost, every retry too) leaves it
  * held until the backend asks for another save.
  */
+//
+// It's kept on disk too (`persist`, box.json's `saveHold`), written before
+// the thread is touched, so a runner that restarts mid-save, or after one
+// whose outcome it never learned, starts held (`initial`): a heartbeat from
+// the new process counts as after the outcome, as it is.
+export type SaveHoldState = 'saving' | 'settled';
 export class SaveHold {
-  private state: 'free' | 'saving' | 'settled' = 'free';
+  private state: 'free' | SaveHoldState;
   private settledAt = -Infinity;
   private readonly hold: () => void;
   private readonly release: () => void;
   private readonly now: () => number;
+  private readonly persist: (state: SaveHoldState | undefined) => void;
 
-  constructor(o: { hold: () => void; release: () => void; now?: () => number }) {
+  constructor(o: { hold: () => void; release: () => void; now?: () => number; initial?: SaveHoldState; persist?: (state: SaveHoldState | undefined) => void }) {
     this.hold = o.hold;
     this.release = o.release;
     this.now = o.now ?? (() => performance.now());
+    this.persist = o.persist ?? (() => {});
+    this.state = o.initial ?? 'free';
   }
 
   get held(): boolean {
@@ -228,6 +257,7 @@ export class SaveHold {
   }
 
   begin(): void {
+    this.persist('saving');
     this.state = 'saving';
     this.hold();
   }
@@ -235,6 +265,7 @@ export class SaveHold {
   // The save's outcome is known: in, or refused, or never sent.
   settled(): void {
     if (this.state !== 'saving') return;
+    this.persist('settled');
     this.state = 'settled';
     this.settledAt = this.now();
   }
@@ -250,6 +281,7 @@ export class SaveHold {
   }
 
   private free(): void {
+    this.persist(undefined);
     this.state = 'free';
     this.release();
   }
@@ -277,6 +309,9 @@ export async function saveThread(o: {
   // nothing changes its folder from here.
   quiesce: (threadId: string) => Promise<ThreadRecord>;
   hold: SaveHold;
+  // Before boxSaved: what the thread's stop wrote (its notes, its row) goes
+  // up first, so nothing sent after the save marks the box as working again.
+  beforeSaved?: () => Promise<void>;
   post: (kind: 'mutation', fn: string, args: Record<string, unknown>) => Promise<unknown>;
   upload: (url: string, bytes: Uint8Array, mediaType: string) => Promise<string>;
   limits?: SaveLimits;
@@ -296,6 +331,7 @@ export async function saveThread(o: {
     const url = await o.post('mutation', 'sync:iconUploadUrl', { key: o.boxKey });
     if (typeof url !== 'string') throw new Error("The backend didn't give the box an upload URL.");
     stored = { storageId: await o.upload(url, sealed, 'application/octet-stream'), bytes: sealed.length, leftOut };
+    await o.beforeSaved?.().catch(() => undefined);
   } catch (e) {
     // Nothing named in boxSaved: the backend has no save of this, for sure.
     o.hold.settled();

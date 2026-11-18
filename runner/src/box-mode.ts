@@ -65,6 +65,10 @@ export type BoxSecrets = {
   // Once a restored worktree's setup has run (passed or not): until then,
   // every start runs it again before any turn (main.ts, setUpRestored).
   setUp?: true;
+  // A stopping save under way, or its outcome known but the backend not
+  // yet heard to say the box may run (box-save.ts SaveHold): a start that
+  // finds it holds the thread before loading it.
+  saveHold?: 'saving' | 'settled';
 };
 
 export class BoxBootRefused extends Error {}
@@ -251,6 +255,14 @@ export function markSetUp(home: string): void {
   const s = readBoxSecrets(home);
   if (!s || s.setUp) return;
   writeBoxSecrets(home, { ...s, setUp: true });
+}
+
+// The save hold, kept with the box's secrets (SaveHold's persist).
+export function setSaveHold(home: string, state: 'saving' | 'settled' | undefined): void {
+  const s = readBoxSecrets(home);
+  if (!s) throw new Error("This box's secrets are gone, so its save can't be kept track of.");
+  const { saveHold: _, ...rest } = s;
+  writeBoxSecrets(home, state ? { ...rest, saveHold: state } : rest);
 }
 
 // The repo's folder name, from its origin ("threadbear" from

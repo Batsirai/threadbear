@@ -15,7 +15,8 @@ import { nullLogger } from '../../src/log.ts';
 import { paths } from '../../src/config.ts';
 import { projectDirName } from '../../src/transcripts.ts';
 import { openSave, restoreSave, SaveHold, saveThread, sealSave, SAVE_MAX_BYTES, type SaveLimits } from '../../src/box-save.ts';
-import { prepareBoxFolder, writeBoxSecrets, type BoxSecrets } from '../../src/box-mode.ts';
+import { prepareBoxFolder, readBoxSecrets, setSaveHold, writeBoxSecrets, type BoxSecrets } from '../../src/box-mode.ts';
+import { spawn, spawnSync } from 'node:child_process';
 
 const THREAD = 'b0c0ffee-1111-4222-8333-444455556666';
 const KEY = crypto.randomBytes(32);
@@ -346,7 +347,7 @@ test("a save past what a restore takes (files, or size unpacked) fails before it
   const a = await boxOn(origin, null);
   await firstTurn(a.h, a.folder.cwd);
   const backend = fakeBackend();
-  await assert.rejects(save(a.h, a, backend, { maxEntries: 3 }), /files, more than a restore takes \(3\)/);
+  await assert.rejects(save(a.h, a, backend, { maxEntries: 3 }), /more than 3 files, more than a restore takes/);
   await assert.rejects(save(a.h, a, backend, { maxUnpacked: 1000 }), /before it's compressed, more than a restore takes/);
   assert.deepEqual(backend.calls, []);
   // One within the writer's limits, read by a box allowing less: refused, nothing written.
@@ -394,13 +395,13 @@ test('a change to a tracked file under node_modules fails the save, saying so, r
   sh(top, 'git add -f runner/node_modules/pkg/index.js && git commit -qm "vendored"');
   fs.writeFileSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'), 'patched\n');
   const backend = fakeBackend();
-  await assert.rejects(save(a.h, a, backend), /runner\/node_modules\/pkg\/index.js is tracked and has uncommitted changes/);
+  await assert.rejects(save(a.h, a, backend), /runner\/node_modules\/pkg\/index.js is tracked or staged, with changes/);
   assert.deepEqual(backend.calls, []);
   // The box keeps it as it was.
   assert.equal(fs.readFileSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'), 'utf8'), 'patched\n');
   // Deleted, the same.
   fs.rmSync(path.join(top, 'runner', 'node_modules', 'pkg', 'index.js'));
-  await assert.rejects(save(a.h, a, backend), /is tracked and has uncommitted changes/);
+  await assert.rejects(save(a.h, a, backend), /is tracked or staged, with changes/);
 });
 
 const SLOW_PATCH = 'export default { worktree: { setup: "sleep 1; mkdir -p node_modules && echo done > node_modules/ran" } };\n';
@@ -426,4 +427,123 @@ test("a stopping save waits for a restored worktree's setup before it copies any
   await save(b.h, b, watching);
   await setup;
   assert.equal(doneAtUpload, true);
+});
+
+test('a stopping save kills the rest of the box once the CLI is closed, and looks again before it copies anything', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  // Something left running that writes into the folder (a setup's background child, an agent's job).
+  const marker = `tb-box-writer-${crypto.randomBytes(6).toString('hex')}`;
+  const log = path.join(a.folder.checkout, 'runner', 'writer.log');
+  const writer = spawn('/bin/sh', ['-c', `: ${marker}; while true; do echo x >> "$0"; sleep 0.05; done`, log], { detached: true, stdio: 'ignore' });
+  writer.unref();
+  await until(() => fs.existsSync(log), 'the writer');
+  const calls: { cliEnded: boolean }[] = [];
+  const stopOthers = async () => {
+    calls.push({ cliEnded: a.h.adapter.last.ended });
+    // In a box this is every process but the runner's own (box-procs.ts); here, only the test's.
+    spawnSync('pkill', ['-KILL', '-f', marker]);
+    return 1;
+  };
+  const backend = fakeBackend();
+  await saveThread({ home: a.home, claudeDir: a.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => a.h.runner.quiesceForSave(id, { stopOthers }), hold: a.hold, post: backend.post, upload: backend.upload });
+  assert.deepEqual(calls, [{ cliEnded: true }, { cliEnded: true }], 'after the CLI is closed, and once more before the copy');
+  await until(() => spawnSync('pgrep', ['-f', marker]).status === 1, 'the writer to be gone');
+  const size = fs.statSync(log).size;
+  await tick(20);
+  assert.equal(fs.statSync(log).size, size);
+});
+
+test("a save that can't stop the rest of the box saves nothing, and stays held", async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const backend = fakeBackend();
+  await assert.rejects(
+    saveThread({ home: a.home, claudeDir: a.claudeDir, threadId: THREAD, threadKey: KEY, boxKey: BOX_KEY, quiesce: (id) => a.h.runner.quiesceForSave(id, { stopOthers: async () => { throw new Error("2 of the box's processes wouldn't stop"); } }), hold: a.hold, post: backend.post, upload: backend.upload }),
+    /wouldn't stop/,
+  );
+  assert.deepEqual(backend.calls, []);
+  assert.equal(a.hold.held, true);
+});
+
+test("an archive while a save holds the thread doesn't tear its worktree down under the copy: the cleanup is owed", async () => {
+  const origin = originRepo({ patch: WORKTREE_PATCH });
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const w = a.h.runner.get(THREAD).worktree!;
+  a.h.runner.holdTurns(THREAD, 'save');
+  a.h.runner.update({ threadId: THREAD, archived: true });
+  await tick(20);
+  const rec = a.h.runner.threads.get(THREAD)!.rec;
+  assert.ok(fs.existsSync(w.path));
+  assert.equal(rec.worktree?.removedAt, undefined);
+  assert.equal(rec.worktree?.cleanupOwed, true);
+});
+
+test("a save's size is checked from the disk before anything is read: one too big is refused without reading it", async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  // A 4 GB file in the thread's folder that takes no disk (sparse): reading it would take 4 GB of memory.
+  const big = path.join(paths.thread(a.home, THREAD), 'big.bin');
+  fs.closeSync(fs.openSync(big, 'w'));
+  fs.truncateSync(big, 4 * 1024 * 1024 * 1024);
+  const before = process.memoryUsage().arrayBuffers;
+  const backend = fakeBackend();
+  await assert.rejects(save(a.h, a, backend), /more than 128\.0 MB before it's compressed/);
+  assert.ok(process.memoryUsage().arrayBuffers - before < 64 * 1024 * 1024, 'nothing like it was read');
+  assert.deepEqual(backend.calls, []);
+});
+
+test('a file staged under node_modules is the thread\'s work: the save fails rather than drop it', async () => {
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  await firstTurn(a.h, a.folder.cwd);
+  const top = a.folder.checkout;
+  fs.mkdirSync(path.join(top, 'runner', 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(top, 'runner', 'node_modules', 'pkg', 'patched.js'), 'mine\n');
+  sh(top, 'git add -f runner/node_modules/pkg/patched.js');
+  const backend = fakeBackend();
+  await assert.rejects(save(a.h, a, backend), /runner\/node_modules\/pkg\/patched\.js is tracked or staged, with changes/);
+  assert.deepEqual(backend.calls, []);
+});
+
+test('a save hold is kept on disk from before the thread is touched until the backend lets it go, and a start that finds it holds the thread before it loads', async () => {
+  const states: (string | undefined)[] = [];
+  const order: string[] = [];
+  const hold = new SaveHold({ hold: () => order.push('hold'), release: () => order.push('release'), persist: (st) => (states.push(st), order.push(`persist ${st}`)) });
+  hold.begin();
+  hold.settled();
+  hold.heard('awake', performance.now() + 1);
+  assert.deepEqual(order, ['persist saving', 'hold', 'persist settled', 'persist undefined', 'release']);
+  // A restart in the middle: held from the start, let go only on the backend's word.
+  const restarted: string[] = [];
+  const again = new SaveHold({ initial: 'saving', hold: () => {}, release: () => restarted.push('release') });
+  assert.equal(again.held, true);
+  again.taken('send');
+  again.heard('awake', performance.now() + 1);
+  assert.equal(restarted.length, 0, 'an outcome never learned stays held');
+  const settled = new SaveHold({ initial: 'settled', hold: () => {}, release: () => restarted.push('release') });
+  settled.heard('awake', 0);
+  assert.deepEqual(restarted, ['release'], "any heartbeat of the new process's is after the outcome");
+  // In box.json, written and cleared.
+  const home = tmpDir();
+  writeBoxSecrets(home, secretsFor('https://github.com/x/proj.git'));
+  setSaveHold(home, 'saving');
+  assert.equal(readBoxSecrets(home)?.saveHold, 'saving');
+  setSaveHold(home, undefined);
+  assert.equal(readBoxSecrets(home)?.saveHold, undefined);
+  // A thread stopped mid-turn, loaded under the hold: no carry-on, no message starts.
+  const origin = originRepo();
+  const a = await boxOn(origin, null);
+  a.h.runner.create({ text: 'Go', accountId: 'claude-main', cwd: a.folder.cwd, id: THREAD });
+  await until(() => a.h.adapter.sessions.length === 1, 'the CLI to start');
+  a.h.runner.flush();
+  const b = makeHarness(a.home, { defaults: { cwd: a.folder.cwd } as never }, { boxThread: THREAD, boxHolds: ['save'] });
+  b.runner.carryOnStopped();
+  b.runner.send(THREAD, 'next', []);
+  await tick(10);
+  assert.equal(b.adapter.sessions.length, 0);
 });

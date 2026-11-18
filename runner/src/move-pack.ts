@@ -106,6 +106,38 @@ export function readTree(dir: string, prefix: string, skip: string[] = []): Pack
 }
 
 /**
+ * What readTree(dir, prefix, skip) would read, without reading it: how
+ * many files, their bytes, and the header bytes their entries take (an
+ * entry's JSON is its path and about 40 more). From lstat alone, so a
+ * caller can refuse a tree too big before it allocates any of it.
+ */
+export function treeStats(dir: string, prefix: string, skip: string[] = []): { files: number; bytes: number; header: number } {
+  const out = { files: 0, bytes: 0, header: 0 };
+  const walk = (abs: string, rel: string, top: boolean) => {
+    let names: fs.Dirent[];
+    try {
+      names = fs.readdirSync(abs, { withFileTypes: true });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw e;
+    }
+    for (const d of names) {
+      if (top && skip.includes(d.name)) continue;
+      const a = path.join(abs, d.name);
+      const r = rel ? `${rel}/${d.name}` : d.name;
+      if (d.isDirectory()) walk(a, r, false);
+      else if (d.isFile()) {
+        out.files++;
+        out.bytes += fs.lstatSync(a).size;
+        out.header += Buffer.byteLength(`${prefix}/${r}`) + 40;
+      }
+    }
+  };
+  walk(dir, '', true);
+  return out;
+}
+
+/**
  * Writes the entries under `prefix` into `dir`, the prefix taken off.
  * Never writes through a symlink or outside `dir`; an existing file is
  * replaced. Returns how many it wrote.

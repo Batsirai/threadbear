@@ -760,6 +760,23 @@ finding the box `awake`); nothing local lets it go (`SaveHold`).
 - A restored setup that hadn't finished was forgotten on a restart: it's
   kept apart from `prepared` (`setUp`), and run again, turns held, until it has.
 
+A third look found five more and a follow-up. A save now stops the box
+**categorically**: once the CLI is closed, every other process in the box
+is killed (`box-procs.ts`: all but the runner, its ancestors, PID 1 and
+what the provider was running when the box booted), the runner's own work
+is waited for, and it looks again before anything is copied; an archive's
+cleanup meanwhile is owed instead. That covers a restored setup's
+background children and a teardown starting after the CLI closed. And:
+
+- The save hold is kept in `box.json` (`saveHold`) before the thread is
+  touched, so a restart mid-save, or with its outcome unknown, starts held.
+- A save's size is checked from the disk before anything is read.
+- A file staged under `node_modules` was dropped: the save starts from the
+  checkout's own index now, and only files that index doesn't have are
+  left out; a staged or tracked change there fails the save.
+- Heartbeats and the save's finish while held marked the box as working
+  again: they send `held`, which `runnerAuth` takes as housekeeping.
+
 Where it differs from the plan: the Claude token is on the box's disk, in
 `threadbear-token.json`, rather than only in the runner's memory as
 decision 10 says, so the runner's existing year-long token path carries it

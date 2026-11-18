@@ -77,7 +77,8 @@ import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
-import { BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, type ActionPost, type BoxSecrets } from './box-mode.ts';
+import { BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
+import { BoxProcesses } from './box-procs.ts';
 import { SaveHold, saveThread } from './box-save.ts';
 import { ClockJumpWatch } from './clock-jump.ts';
 import { pushFailingText } from './push-failing.ts';
@@ -190,6 +191,11 @@ async function main(): Promise<void> {
     }
   };
   const box = boxBoot ? await startBox(boxBoot) : undefined;
+  // What was running as the box booted (the provider's), spared when a
+  // stopping save kills everything else in the box (box-procs.ts). Linux's
+  // /proc only: a box without it can't stop its processes, so it can't save.
+  const boxProcs = box && fs.existsSync('/proc/self/stat') ? new BoxProcesses() : undefined;
+  boxProcs?.boot();
   if (box) {
     // Decision 1: its sync on the box key, the one login given, no
     // following main or keep-awake (the rest is boxEnv and the checks below).
@@ -392,7 +398,13 @@ async function main(): Promise<void> {
     // A box's one thread, and whether its restored worktree's setup must run
     // before any turn (runner/moves.ts setUpRestored).
     // A restored worktree's setup runs before any turn, on every start until it has (box.json's setUp).
-    ...(box ? { boxThread: box.secrets.threadId, boxHolds: box.broken ? ['broken' as const] : box.restored && !box.secrets.setUp ? ['setup' as const] : [] } : {}),
+    // A save under way or unresolved when it stopped holds it too, before anything loads (box-save.ts SaveHold).
+    ...(box
+      ? {
+          boxThread: box.secrets.threadId,
+          boxHolds: [...(box.broken ? ['broken' as const] : box.restored && !box.secrets.setUp ? ['setup' as const] : []), ...(box.secrets.saveHold ? ['save' as const] : [])],
+        }
+      : {}),
     threadKey: (id) => makeThreadKey(token, id),
     standingInstructions: () => instructions.given(),
     projects,
@@ -594,13 +606,26 @@ async function main(): Promise<void> {
   // The backend's `save` (box-save.ts): its own calls, on the box key. Once
   // one starts, the thread runs nothing until the backend says it may (SaveHold).
   const boxPost = box ? convexPoster(boxBoot!.syncUrl) : undefined;
-  const saveHold = box ? new SaveHold({ hold: () => runner.holdTurns(box.secrets.threadId, 'save'), release: () => runner.releaseTurns(box.secrets.threadId, 'save') }) : undefined;
+  const saveHold = box
+    ? new SaveHold({
+        hold: () => runner.holdTurns(box.secrets.threadId, 'save'),
+        release: () => runner.releaseTurns(box.secrets.threadId, 'save'),
+        ...(box.secrets.saveHold ? { initial: box.secrets.saveHold } : {}),
+        persist: (state) => setSaveHold(cfg.home, state),
+      })
+    : undefined;
+  // The rest of the box stopped, categorically, before a save copies anything.
+  const stopOthers = async () => {
+    if (!boxProcs) throw new Error("This box can't see its processes (no /proc), so it can't stop them to save.");
+    const n = await boxProcs.stopOthers();
+    if (n) log.info("box: stopped the box's other processes for its save", { killed: n });
+  };
   const saveBox = async (threadId: string) => {
     if (!box || !boxPost || !saveHold || threadId !== box.secrets.threadId) throw new Error("That isn't this box's thread.");
     // A degraded box saves nothing: what it has may be all there is of the work.
     if (box.broken) throw new Error(`This box can't save its thread: ${box.broken}`);
     try {
-      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id), hold: saveHold, post: boxPost, upload: convexUploader() });
+      return await saveThread({ home: cfg.home, claudeDir: cfg.claudeMainDir, threadId, threadKey: box.threadKey, boxKey: box.secrets.boxKey, quiesce: (id) => runner.quiesceForSave(id, { stopOthers }), hold: saveHold, beforeSaved: () => sync.flushNow(), post: boxPost, upload: convexUploader() });
     } catch (e) {
       if (keyRejected(e)) boxSuperseded();
       throw e;
@@ -722,6 +747,8 @@ async function main(): Promise<void> {
             // The backend's word that a box stopped by its save may run again.
             taken: (kind: string) => saveHold?.taken(kind),
             heard: (state: string, sentAt: number) => saveHold?.heard(state, sentAt),
+            // Held by its save: its heartbeats and the save's finish make no work.
+            held: () => saveHold?.held ?? false,
           },
         }
       : { sample: machineSampler(cfg.home), schedules: scheduler, pools: sharedPools, memory: memorySync, sharedUsage: usage }),

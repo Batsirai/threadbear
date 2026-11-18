@@ -591,3 +591,42 @@ test('an established box whose folder is gone stays up, degraded: heartbeating o
     server.close();
   }
 });
+
+test("while a save holds the box, its heartbeats and its save's finish say `held`; other finishes and a free box's calls don't", async () => {
+  const h = makeHarness();
+  const t = h.runner.create({ text: 'hi', cwd: h.cfg.defaults.cwd, accountId: 'claude-main' }).thread;
+  const calls: { fn: string; args: Record<string, unknown> }[] = [];
+  let push!: (v: unknown) => void;
+  let held = true;
+  const sync = new ConvexSync({
+    config: { enabled: true, url: URL, name: 'box', runnerId: 'box0thread01' },
+    key: BOX_KEY,
+    runner: h.runner,
+    version: '0.1.0+test',
+    startedAt: '2026-11-19T00:00:00.000Z',
+    clock: h.clock,
+    log: nullLogger,
+    post: async (_kind, fn, args) => {
+      calls.push({ fn, args });
+      if (fn === 'sync:heartbeat') return { apiVersion: 89 };
+      if (fn === 'sync:takeCommand') return true;
+      return null;
+    },
+    subscriber: { subscribe: (fn, _a, onUpdate) => ((fn === 'sync:pendingCommands' && (push = onUpdate)), () => {}), close: () => {} },
+    commands: { send: () => undefined, respondApproval: () => undefined, answerSecret: () => undefined, update: () => undefined, markSeen: () => undefined, create: () => ({ thread: t }), share: () => undefined, quickAsk: () => ({ thread: t }), save: async () => ({ bytes: 1 }) },
+    box: { superseded: () => {}, held: () => held },
+  });
+  sync.start();
+  await tick();
+  push([{ commandId: 'c1', kind: 'save', threadId: t.id, args: {}, createdAt: 1 }, { commandId: 'c2', kind: 'send', threadId: t.id, args: { text: 'x' }, createdAt: 2 }]);
+  await tick(10);
+  const finish = (id: string) => calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === id)!.args;
+  assert.equal(calls.find((c) => c.fn === 'sync:heartbeat')!.args.held, true);
+  assert.equal(finish('c1').held, true);
+  assert.equal(finish('c2').held, undefined, 'only a save is housekeeping');
+  held = false;
+  h.clock.advance(60_000);
+  await tick();
+  assert.equal(calls.filter((c) => c.fn === 'sync:heartbeat').at(-1)!.args.held, undefined);
+  await sync.stop();
+});

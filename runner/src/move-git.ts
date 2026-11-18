@@ -186,8 +186,8 @@ export function underNodeModules(file: string): boolean {
 
 // `leaveOut`: untracked files kept out of the wip commit (a box's save
 // leaves out what unpackGit refuses, box-save.ts); their names come back in
-// `leftOut`. A tracked file there that's changed or deleted can't be left
-// out without losing that change, so it fails the pack instead.
+// `leftOut`. A file there that's tracked or staged and changed can't be
+// left out without losing that change, so it fails the pack instead.
 export async function packGit(worktree: string, cwd: string, bundleFile: string, opts: { leaveOut?: (file: string) => boolean } = {}): Promise<{ ok: true; meta: GitMeta; bundle?: string; leftOut?: string[] } | { ok: false; reason: string }> {
   const top = await repoTop(worktree);
   if (!top) return { ok: false, reason: `${worktree} isn't a git checkout.` };
@@ -207,18 +207,34 @@ export async function packGit(worktree: string, cwd: string, bundleFile: string,
   let leftOut: string[] = [];
   try {
     const env = { GIT_INDEX_FILE: path.join(tmp, 'index'), ...AUTHOR };
-    let r = await run(top, ['read-tree', 'HEAD'], env);
+    // A box's save starts from the checkout's own index, so what's staged
+    // there (an ignored path added with -f included) is in it, as is; a move
+    // from HEAD, as it always has.
+    let r: Run;
+    if (opts.leaveOut) {
+      const real = await out(top, ['rev-parse', '--git-path', 'index']);
+      const file = real ? path.resolve(top, real) : undefined;
+      if (file && fs.existsSync(file)) {
+        fs.copyFileSync(file, path.join(tmp, 'index'));
+        r = { ok: true, stdout: '', stderr: '' };
+      } else r = await run(top, ['read-tree', 'HEAD'], env);
+    } else r = await run(top, ['read-tree', 'HEAD'], env);
     if (r.ok) r = await run(top, ['add', '-A', '.'], env);
     if (!r.ok) return { ok: false, reason: `Couldn't read the uncommitted changes in ${top}: ${why(r)}` };
     if (opts.leaveOut) {
       const changed = await run(top, ['diff', '--cached', '--name-status', '-z', '--no-renames', 'HEAD'], env);
       if (!changed.ok) return { ok: false, reason: `Couldn't read the uncommitted changes in ${top}: ${why(changed)}` };
+      // Untracked by the checkout's own index, not by HEAD: a file staged
+      // there (git add) is the thread's work, not a leftover install.
+      const others = await run(top, ['ls-files', '-z', '--others', '--exclude-standard']);
+      if (!others.ok) return { ok: false, reason: `Couldn't read the untracked files in ${top}: ${why(others)}` };
+      const untracked = new Set(others.stdout.split('\0').filter(Boolean));
       // "<status>\0<path>\0", repeated.
       const parts = changed.stdout.split('\0');
       for (let i = 0; i + 1 < parts.length; i += 2) {
         const [status, file] = [parts[i]!, parts[i + 1]!];
         if (!file || !opts.leaveOut(file)) continue;
-        if (status !== 'A') return { ok: false, reason: `${file} is tracked and has uncommitted changes, under a folder the thread's save can't carry (installed packages). Commit or undo that change, and it can save.` };
+        if (status !== 'A' || !untracked.has(file)) return { ok: false, reason: `${file} is tracked or staged, with changes, under a folder the thread's save can't carry (installed packages). Commit or undo that change, and it can save.` };
         leftOut.push(file);
       }
       // Back to HEAD's (or nothing) in the throwaway index: the commit has none of them.

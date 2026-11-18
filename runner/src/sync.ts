@@ -731,7 +731,9 @@ export type SyncDeps = {
   // `taken`: a command of this kind was taken; `heard`: a heartbeat sent at
   // `sentAt` (performance.now()) found the box in this state. A box stopped
   // by its save runs again only on one of those (box-save.ts SaveHold).
-  box?: { machineId?: string; superseded: () => void; taken?: (kind: string) => void; heard?: (state: string, sentAt: number) => void };
+  // `held`: a save holds the box (box-save.ts), so its heartbeats and its
+  // save's finish say `held` and don't mark it as working (convex/lib.ts).
+  box?: { machineId?: string; superseded: () => void; taken?: (kind: string) => void; heard?: (state: string, sentAt: number) => void; held?: () => boolean };
 };
 
 // How long a row whose thread isn't here (and that wasn't deleted here) waits
@@ -4052,7 +4054,7 @@ export class ConvexSync {
       ...(this.deps.box?.machineId ? { machineId: this.deps.box.machineId } : {}),
     };
     const sentAt = performance.now();
-    void this.post('mutation', 'sync:heartbeat', { key: this.deps.key, runner }).then(
+    void this.post('mutation', 'sync:heartbeat', { key: this.deps.key, runner, ...(this.deps.box?.held?.() ? { held: true } : {}) }).then(
       (r) => {
         const boxState = (r as { box?: { state?: unknown } } | null)?.box?.state;
         if (typeof boxState === 'string') this.deps.box?.heard?.(boxState, sentAt);
@@ -4548,7 +4550,8 @@ export class ConvexSync {
     // that can't be written now goes with the next flush, and the
     // command is finished either way.
     if (resultThreadId) await this.writeRowNow(resultThreadId).catch((e) => this.deps.log.debug('could not write the row of a command thread yet', { threadId: resultThreadId, error: String(e) }));
-    await this.finishCommand(c.commandId, { key: this.deps.key, commandId: c.commandId, ok, ...(note ? { note } : {}), ...(resultThreadId ? { resultThreadId } : {}), ...(result !== undefined ? { result: JSON.stringify(result) } : {}) });
+    const held = c.kind === 'save' && this.deps.box?.held?.() ? { held: true } : {};
+    await this.finishCommand(c.commandId, { key: this.deps.key, commandId: c.commandId, ok, ...(note ? { note } : {}), ...(resultThreadId ? { resultThreadId } : {}), ...(result !== undefined ? { result: JSON.stringify(result) } : {}), ...held });
   }
 
   // A thread's commands run one after another, in the order they were

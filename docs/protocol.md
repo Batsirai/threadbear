@@ -8069,23 +8069,34 @@ runner for one thread, started by the image with `THREADBEAR_BOX_BOOT` set.
 - **The `save` command** (only the backend sends it, for the box's own
   thread). Every save the backend asks for is a stopping one (to sleep, at
   its day's hours, or to be archived), and once it's acknowledged the box
-  may be deleted, so the thread stops first: turns are held, a running
-  turn is interrupted, a restored worktree's setup is waited for, and once
-  they've ended (5 minutes at most, or the command fails) its CLI and
-  background jobs are stopped. From the moment a save starts, the thread
+  may be deleted, so the box stops first, categorically: turns are held, a
+  running turn is interrupted (30 s to end) and the CLI closed, then every
+  other process in the box is killed (all but the runner, its ancestors,
+  PID 1 and what was running when the box booted, the provider's own:
+  `runner/src/box-procs.ts`, from `/proc`), the runner's own work waited
+  for (a minute at most, or the command fails), and it looks again that
+  nothing new started. A worktree cleanup or teardown an archive would
+  start meanwhile is owed instead (`cleanupOwed`). From the moment a save starts, the thread
   runs nothing until the backend says it may: a command other than `save`
   taken after the save's outcome is known, or a heartbeat sent after that
   whose answer finds the box `awake`. Nothing in the box lets it go: not a
-  clock jump, a timeout or an error. Then it's packed: the thread's folder in the data dir (its record and events,
+  clock jump, a timeout or an error, nor a restart: the hold is written to
+  `box.json` (`saveHold`) before the thread is touched, and a start that
+  finds it holds the thread before loading it. While it's held, the box's
+  heartbeats and its save's `finishCommand` send `held: true`, and
+  don't mark the box as holding work (`runnerAuth`'s housekeeping; only a
+  `save` command's finish counts). Then it's packed: the thread's folder in the data dir (its record and events,
   not `panels`), its Claude session's transcript and the folder beside
   it, and its git work as a move packs it (`move-git.ts packGit`: the
   commits origin doesn't have and one more of every uncommitted and
   untracked file, in a git bundle; ignored files stay behind, and so do
-  untracked files under a `node_modules` folder, which a restore refuses:
-  the worktree's setup makes them again; a change to a tracked file there
-  fails the command, saying so), in a move's
+  files under a `node_modules` folder that the checkout's own index doesn't
+  have, which a restore refuses: the worktree's setup makes them again; a
+  change there to a tracked or staged file fails the command, saying so.
+  It starts from the checkout's own index, so what's staged is in it), in a move's
   archive (`move-pack.ts`) with a `box.json` naming the thread. At most
-  100,000 files and 128 MB unpacked, the limits a restore holds it to, and
+  100,000 files and 128 MB unpacked, the limits a restore holds it to,
+  checked from the sizes on disk before anything is read, and
   it's read back as a restore will read it before anything is uploaded:
   over a limit or unreadable, the command fails and the thread carries on. Sealed
   AES-256-GCM under the thread key: a 12-byte IV, the ciphertext, the

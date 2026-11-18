@@ -516,6 +516,15 @@ export const worktreesPart = {
     const { rec } = st;
     const w = rec.worktree;
     if (!w || w.removedAt) return;
+    // A box's stopping save holds the thread (box-save.ts): its teardown and
+    // cleanup would change the folder under the copy, so it's owed instead,
+    // for the next start (settleLostCleanups).
+    if (st.rt.holds?.has('save')) {
+      w.cleanupOwed = true;
+      this.markDirty(st);
+      this.log.info("worktree cleanup owed: the box's save holds the thread", { threadId: rec.id });
+      return;
+    }
     const stillOurs = () => deleted || !st.rt.deleted;
     try {
       await this.tearDownWorktree(st, deleted, stillOurs);
