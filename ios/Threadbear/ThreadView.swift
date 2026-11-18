@@ -969,7 +969,7 @@ struct MessageView: View {
                     }
                 }
             }
-        } else if let answers = message.answers, let extra = AskAnswer.extra(text: message.text, answers: answers) {
+        } else if let answers = message.answers, let extra = AskAnswer.extra(text: shownText, answers: answers) {
             // Answers to the card's asks read as the Mac shows them: each
             // question small and quiet, the pick as his words, then anything
             // else he wrote (Mike, 18 Nov: the phone showed them as one run).
@@ -980,15 +980,19 @@ struct MessageView: View {
                         Text(answer.answer)
                     }
                 }
-                if !extra.isEmpty { Text(extra) }
+                if !extra.isEmpty { withChips(extra) }
             }
         } else {
-            // Its [Picture N] markers as chips, as the Mac draws them.
-            PhotoChip.text(shownText, font: .preferredFont(forTextStyle: .body), traits: UITraitCollection { traits in
-                traits.userInterfaceStyle = colorScheme == .dark ? .dark : .light
-                traits.displayScale = displayScale
-            })
+            withChips(shownText)
         }
+    }
+
+    /// Words with their [Picture N] markers as chips, as the Mac draws them.
+    private func withChips(_ text: String) -> Text {
+        PhotoChip.text(text, font: .preferredFont(forTextStyle: .body), traits: UITraitCollection { traits in
+            traits.userInterfaceStyle = colorScheme == .dark ? .dark : .light
+            traits.displayScale = displayScale
+        })
     }
 
     /// Without the "[2 pictures]" line once the photos are over it.

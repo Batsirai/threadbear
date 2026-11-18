@@ -1167,9 +1167,36 @@ export function toMessageDoc(threadId: string, e: PersistedEvent, scrub: (text: 
   if (e.type === 'user.message' && e.images?.length) doc.pictures = e.images.length;
   // The asks it answered, scrubbed as its words are, so the phone draws
   // them as the Mac does (it finds them at the start of the text).
-  if (e.type === 'user.message' && e.answers?.length) doc.answers = e.answers.map((a) => ({ action: scrub(a.action), answer: scrub(a.answer) }));
+  if (e.type === 'user.message' && e.answers?.length) {
+    const answers = answersInText(text, e.answers.map((a) => ({ action: scrub(a.action), answer: scrub(a.answer) })));
+    if (answers) doc.answers = answers;
+  }
   if (e.type === 'assistant.text' && e.summary) doc.summary = true;
   return doc;
+}
+
+// A message's `answers` (API 89) only when its text starts with them, as the
+// Mac writes an answer to a card (desktop/core/src/composer.rs answer_block):
+// "question\nanswer", or "N. question\n   answer" when the card had several,
+// each followed by a blank line or the end. Then they say nothing the text
+// doesn't, however each was scrubbed: a secret the whole text's scrub caught
+// that the halves' didn't makes them differ, and they're dropped (Codex's
+// review, 18 Nov).
+// The same check as convex/sync.ts answersInText, so a runner never sends
+// answers its own scrub would have hidden in the text.
+export function answersInText<A extends { action: string; answer: string }>(text: string, answers: A[] | undefined): A[] | undefined {
+  if (!answers?.length) return undefined;
+  let rest = text;
+  for (const a of answers) {
+    const dot = rest.indexOf('.');
+    const n = dot > 0 && /^\d+$/.test(rest.slice(0, dot)) && rest[dot + 1] === ' ' ? Number(rest.slice(0, dot)) : undefined;
+    const block = n === undefined ? `${a.action}\n${a.answer}` : `${n}. ${a.action}\n   ${a.answer.replaceAll('\n', '\n   ')}`;
+    if (!rest.startsWith(block)) return undefined;
+    rest = rest.slice(block.length);
+    if (rest.startsWith('\n\n')) rest = rest.slice(2);
+    else if (rest) return undefined;
+  }
+  return answers.map((a) => ({ action: a.action, answer: a.answer }) as A);
 }
 
 // A tool call in one line, for the phone and the website (the output stays

@@ -650,6 +650,28 @@ function withoutTurn<T extends { turn?: string }>(m: T): T {
   return rest as T;
 }
 
+// A message's `answers` (API 89) only when its text starts with them, as the
+// Mac writes an answer to a card (desktop/core/src/composer.rs answer_block):
+// "question\nanswer", or "N. question\n   answer" when the card had several,
+// each followed by a blank line or the end. Then they say nothing the text
+// doesn't, however each was scrubbed: a secret the whole text's scrub caught
+// that the halves' didn't makes them differ, and they're dropped (Codex's
+// review, 18 Nov).
+export function answersInText<A extends { action: string; answer: string }>(text: string, answers: A[] | undefined): A[] | undefined {
+  if (!answers?.length) return undefined;
+  let rest = text;
+  for (const a of answers) {
+    const dot = rest.indexOf('.');
+    const n = dot > 0 && /^\d+$/.test(rest.slice(0, dot)) && rest[dot + 1] === ' ' ? Number(rest.slice(0, dot)) : undefined;
+    const block = n === undefined ? `${a.action}\n${a.answer}` : `${n}. ${a.action}\n   ${a.answer.replaceAll('\n', '\n   ')}`;
+    if (!rest.startsWith(block)) return undefined;
+    rest = rest.slice(block.length);
+    if (rest.startsWith('\n\n')) rest = rest.slice(2);
+    else if (rest) return undefined;
+  }
+  return answers.map((a) => ({ action: a.action, answer: a.answer }) as A);
+}
+
 function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
   // Only an agent's text can be a plan: a tool row's line never gets the room.
   const plan = isPlanRow(m);
@@ -663,9 +685,11 @@ function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
   if (Array.isArray(out.wokeBy)) out.wokeBy = out.wokeBy.slice(0, 5).map((w: any) => ({ kind: cutBytes(String(w?.kind ?? ''), 40), description: cutBytes(String(w?.description ?? ''), 200) }));
   if (Array.isArray(out.buttons)) out.buttons = out.buttons.slice(0, MESSAGE_BUTTONS).map((b: any) => fitButton(b));
   // Only a user's message answers asks; a card has at most a handful.
-  if (out.role !== 'user' || !Array.isArray(out.answers)) delete out.answers;
-  else out.answers = out.answers.slice(0, 20).map((a: any) => ({ action: cutBytes(String(a?.action ?? ''), 2000), answer: cutBytes(String(a?.answer ?? ''), 2000) }));
-  return docBytes(out) <= (plan ? CAP.planDoc : CAP.messageDoc) ? (out as T) : undefined;
+  const cap = plan ? CAP.planDoc : CAP.messageDoc;
+  // They repeat the start of the text, so they're what goes when the row
+  // wouldn't fit with them: the message is kept, drawn as plain text.
+  if (out.answers && docBytes(out) > cap) delete out.answers;
+  return docBytes(out) <= cap ? (out as T) : undefined;
 }
 
 // A message links at most this many buttons that the mirror keeps.
@@ -1636,7 +1660,13 @@ export const appendMessages = mutation({
   returns: v.object({ skipped: v.array(v.string()), closed: v.optional(v.array(v.string())) }),
   handler: async (ctx, { key, messages }) => {
     const caller = await runnerAuth(ctx, key, 'appendMessages');
-    messages = clean(messages);
+    // Answers only as the scrubbed text says them (answersInText), and only on his messages.
+    messages = clean(messages).map((m) => {
+      if (m.answers === undefined) return m;
+      const { answers, ...rest } = m;
+      const kept = m.role === 'user' ? answersInText(m.text, answers) : undefined;
+      return kept ? { ...rest, answers: kept } : rest;
+    });
     const checked = new Map<string, 'yes' | 'none'>();
     const skipped: string[] = [];
     const closed = new Set<string>();
@@ -4301,6 +4331,12 @@ export const scrubStoredBatch = mutation({
       // Tool output's input and diffs are JSON text, to be scrubbed as JSON.
       const scrubbed: Record<string, any> = table === 'eventBodies' ? sameOr(doc, cleanBody(doc)) : clean(doc);
       if (scrubbed === doc) continue;
+      // A message's answers stay only if its scrubbed text still says them.
+      if (table === 'messages' && scrubbed.answers) {
+        const kept = answersInText(String(scrubbed.text ?? ''), scrubbed.answers);
+        if (kept) scrubbed.answers = kept;
+        else delete scrubbed.answers;
+      }
       changed.push(String(_id));
       if (!apply) continue;
       const next = { ...scrubbed };

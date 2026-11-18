@@ -972,6 +972,13 @@ test("answers: a message that answered asks says them on its row, scrubbed as it
   assert.deepEqual(doc.answers, [{ action: 'Paste [key]?', answer: 'Refuse it' }]);
   assert.equal(doc.text, 'Paste [key]?\nRefuse it');
   assert.equal(toMessageDoc('t1', { type: 'user.message', seq: 5, ts: at, text: 'hi', images: [] } as never)!.answers, undefined);
+  // A secret only the whole text's scrub finds: the halves would keep it, so they don't go.
+  const whole = (t: string) => t.replace(/password:\nhunter2/, 'password:\n[redacted]');
+  const leak = toMessageDoc('t1', { type: 'user.message', seq: 6, ts: at, text: 'password:\nhunter2', images: [], answers: [{ action: 'password:', answer: 'hunter2' }] } as never, whole)!;
+  assert.equal(leak.text, 'password:\n[redacted]');
+  assert.equal(leak.answers, undefined);
+  // The pictures line after them is fine.
+  assert.ok(toMessageDoc('t1', { type: 'user.message', seq: 7, ts: at, text: 'Ok?\nYes', images: [{ path: '/p.png', mediaType: 'image/png' }], answers: [{ action: 'Ok?', answer: 'Yes' }] } as never)!.answers);
 });
 
 test('plans: a Plan first plan goes to the phone whole, as a plan row', () => {
