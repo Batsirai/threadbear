@@ -1027,8 +1027,9 @@ function fakeBackend(clock: { now(): number }, runners: { id: string; name: stri
         r.lastRun = p.lastRun;
         r.runs += p.sent ? 1 : 0;
       }
-      if (r.claim?.holder === holder) delete r.claim;
       if (p.request !== undefined && r.runRequestedAt === p.request) delete r.runRequestedAt;
+      // As convex/sync.ts: the claim stays while the run leaves the slot due.
+      if (r.claim?.holder === holder && ((r.updatedAt === p.expectUpdatedAt && !older) || p.request !== undefined)) delete r.claim;
       if (r.updatedAt === p.expectUpdatedAt && !older) {
         if (p.nextRunAt) r.nextRunAt = p.nextRunAt;
         else delete r.nextRunAt;
@@ -1233,6 +1234,86 @@ test('a sent run whose record keeps failing keeps its claim, so a second runner 
   assert.equal(b.rows.get(sc.id)!.claim, undefined, 'let go once recorded');
   old.stop();
   now.stop();
+});
+
+// Codex's review: the old process can't renew (asleep past the claim, or
+// its calls failing) and can't record, so the claim lapses. The new one
+// shares its data folder, where the old one wrote the run down before
+// telling the backend: it sees the run went and doesn't send it again.
+test('a run another process sent and wrote down is never sent again, even once its claim has lapsed', async () => {
+  const h = makeHarness();
+  const { thread } = idleThread(h);
+  const b = fakeBackend(h.clock, [LAPTOP]);
+  const oldBe = b.for('laptop-old', LAPTOP.id);
+  let cut = false;
+  const old = backendScheduler(h, LAPTOP, h.home);
+  await old.attach({
+    ...oldBe,
+    claim: async (...a) => {
+      if (cut) throw new Error('fetch failed');
+      return oldBe.claim(...a);
+    },
+    ran: async () => {
+      throw new Error('fetch failed');
+    },
+  });
+  // The new process has started (and read the data folder) before the run.
+  const now = backendScheduler(h, LAPTOP, h.home);
+  const sc = await old.create({ text: 'Ping', at: iso(h.clock.now() + MIN), threadId: thread.id });
+  await tick();
+  h.clock.advance(MIN);
+  for (let i = 0; i < 5; i++) await tick();
+  assert.equal(b.rows.get(sc.id)!.claim?.holder, 'laptop-old', 'the old process sent it');
+  // Then the old one can't reach the backend, and its claim lapses.
+  cut = true;
+  const newBe = b.for('laptop-new', LAPTOP.id);
+  let newRan = 0;
+  await now.attach({ ...newBe, ran: async (p) => (newRan++, newBe.ran(p)) });
+  for (let i = 0; i < 10; i++) {
+    h.clock.advance(MIN / 2);
+    for (let j = 0; j < 5; j++) await tick();
+  }
+  // The new process told the backend of the old one's run rather than sending its own.
+  assert.ok(newRan >= 1);
+  assert.equal(b.rows.get(sc.id)!.runs, 1);
+  assert.equal(b.rows.get(sc.id)!.lastRun!.at, '2026-10-26T12:01:00.000Z', 'the old process’s run, not a second one');
+  old.stop();
+  now.stop();
+});
+
+// Codex's review: the schedule paused while the last check of the claim
+// was on its way back isn't sent.
+test('a schedule paused while its claim is confirmed just before the send isn’t sent', async () => {
+  const h = makeHarness();
+  const { thread } = idleThread(h);
+  const b = fakeBackend(h.clock, [LAPTOP]);
+  const be = b.for('laptop-a', LAPTOP.id);
+  let claims = 0;
+  let paused!: Promise<unknown>;
+  const sched = backendScheduler(h, LAPTOP, h.home);
+  await sched.attach({
+    ...be,
+    claim: async (...a) => {
+      const ok = await be.claim(...a);
+      // The second: the confirmation, which the backend says yes to and
+      // whose answer a pause overtakes on its way back.
+      if (++claims === 2) {
+        paused = sched.update({ scheduleId: a[0], paused: true });
+        await paused;
+        await tick();
+      }
+      return ok;
+    },
+  });
+  const before = h.events(thread.id).filter((e) => e.type === 'user.message').length;
+  const sc = await sched.create({ text: 'Ping', at: iso(h.clock.now() + MIN), threadId: thread.id });
+  await tick();
+  h.clock.advance(MIN);
+  for (let i = 0; i < 8; i++) await tick();
+  assert.ok(claims >= 2, 'it was confirmed');
+  assert.equal(h.events(thread.id).filter((e) => e.type === 'user.message').length - before, 0, 'not sent');
+  assert.equal(b.rows.get(sc.id)!.paused, true);
+  sched.stop();
 });
 
 test('a check\'s output survives a handover in the backend too, and is sent once by the next runner', async () => {

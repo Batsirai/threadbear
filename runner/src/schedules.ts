@@ -870,8 +870,6 @@ export class Scheduler {
         // A yes for what was sent: if an edit came in meanwhile and the run
         // took its updatedAt (overlayUnrecorded), it's told again with that.
         if (run.expectUpdatedAt === p.expectUpdatedAt) run.acked = true;
-        // Recorded: the backend let the claim go with it.
-        if (run.acked && ![...this.unrecorded.values()].some((r) => r.scheduleId === scheduleId && !r.acked)) this.letGo(scheduleId);
         if (run.tries) this.log.info('recorded a schedule run in the backend after retrying', { scheduleId, tries: run.tries });
       } catch (e) {
         run.tries = (run.tries ?? 0) + 1;
@@ -936,11 +934,12 @@ export class Scheduler {
   }
 
   // A claim held for a schedule (backendTick, runRequested), renewed every
-  // CLAIM_RENEW_MS until it's let go: once its run is recorded, when it's
-  // released, or when a renewal says it isn't ours any more (the run was
-  // recorded, so the schedule's next time has moved, or another holder has
-  // it). Kept through a record that hasn't got through, so the run isn't
-  // claimed and sent again by another process meanwhile.
+  // CLAIM_RENEW_MS until it's released or a renewal says it isn't ours any
+  // more: the run is recorded and its slot has moved on (or its request
+  // gone), or another holder has it. Kept through a record that hasn't got
+  // through, or one that left the slot due (an edit came in meanwhile, and
+  // it's told again), so another process can't claim the run and send it
+  // again meanwhile.
   private hold(backend: ScheduleBackend, scheduleId: string, kind: 'due' | 'request', expect: string): void {
     this.letGo(scheduleId);
     const h: Hold = { kind, expect, lost: false };
@@ -987,6 +986,20 @@ export class Scheduler {
     if (ok && this.holds.get(scheduleId) === h) return true;
     if (this.holds.get(scheduleId) === h) await this.release(backend, scheduleId);
     return false;
+  }
+
+  // Whether another process of this runner (the other side of a handover,
+  // sharing this data folder) has already sent that run and is still
+  // telling the backend: its saved run is taken on here too, so this one
+  // doesn't send it again and helps record it (scheduleRan counts it once).
+  private ranElsewhere(scheduleId: string, same: (r: UnrecordedRun) => boolean): boolean {
+    let found = false;
+    for (const r of this.readRuns()) {
+      if (r.scheduleId !== scheduleId || !same(r)) continue;
+      if (!this.unrecorded.has(runKey(r))) this.unrecorded.set(runKey(r), r);
+      found = true;
+    }
+    return found;
   }
 
   private hasUnrecorded(scheduleId: string): boolean {
@@ -1136,7 +1149,7 @@ export class Scheduler {
           await this.runRequested(backend, rec);
         }
         if (rec.paused || !rec.nextRunAt || Date.parse(rec.nextRunAt) > now) continue;
-        if (this.slotRan(rec.id, rec.nextRunAt)) continue;
+        if (this.slotRan(rec.id, rec.nextRunAt) || this.ranElsewhere(rec.id, (r) => r.slot === rec.nextRunAt)) continue;
         const due = rec.nextRunAt;
         const claimed = await backend.claim(rec.id, 'due', due).catch((e) => {
           this.log.warn('could not claim a schedule run', { scheduleId: rec.id, error: String(e) });
@@ -1163,6 +1176,15 @@ export class Scheduler {
         // Still ours, just before it goes: the check may have outlasted a
         // renewal that didn't get through.
         if (!(await this.confirmed(backend, rec.id))) continue;
+        // And the row as it is after that wait: paused, deleted or its
+        // check changed meanwhile, it isn't sent (Codex's review).
+        const sending = this.stillDue(backend, rec, due);
+        if (!sending) continue;
+        if (sending.check !== rec.check) {
+          await this.release(backend, rec.id);
+          continue;
+        }
+        rec = sending;
         if (rec.threadId && this.elsewhere(rec.threadId)) {
           this.dispatching.add(rec.id);
           void this.send(rec, false, checked).then(async (res) => {
@@ -1210,14 +1232,22 @@ export class Scheduler {
   // A schedules.run another runner asked for: sent as if run here.
   private async runRequested(backend: ScheduleBackend, row: ScheduleRecord): Promise<void> {
     const request = row.runRequestedAt!;
+    if (this.ranElsewhere(row.id, (r) => r.request === request)) return;
     const claimed = await backend.claim(row.id, 'request', request).catch(() => false);
     if (!claimed || this.stopped) return;
     this.hold(backend, row.id, 'request', request);
     // As it is now (backendTick says why): deleted meanwhile, or no longer
     // the one claimed, it isn't sent.
-    const rec = this.stillClaimed(backend, row);
+    let rec = this.stillClaimed(backend, row);
     if (!rec) return;
     if (!(await this.confirmed(backend, rec.id))) return;
+    // As it is after that wait (backendTick says why).
+    const sending = this.stillClaimed(backend, rec);
+    if (!sending || sending.runRequestedAt !== request) {
+      if (sending) await this.release(backend, rec.id);
+      return;
+    }
+    rec = sending;
     let res: Awaited<ReturnType<Scheduler['send']>>;
     try {
       this.notMidCheck(rec);

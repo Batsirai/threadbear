@@ -1282,3 +1282,25 @@ test('a lab review already stored with numbers that would stop a phone reaches i
   // What's stored is left alone; only what the phone gets is held.
   assert.equal(s.rows('threads').find((t) => t.threadId === UUID(11))!.review.rounds, 1e20);
 });
+
+// Codex's review of the schedule claim fix (18 Nov 2026): a run recorded
+// while the schedule was edited elsewhere keeps its old nextRunAt (the
+// runner tells it again with the new updatedAt), so its holder's claim stays
+// until then. Cleared, another process of the runner (a handover) could
+// claim the slot that just ran and send it again.
+test('scheduleRan keeps the holder’s claim while the run it recorded leaves the slot due', async () => {
+  const s = await setup();
+  const at = '2026-11-18T09:00:00.000Z';
+  await call(s.ctx, sync.saveSchedule, { key: MINI_KEY, schedule: sched(UUID(9), MINI, { threadId: 'T', nextRunAt: at }) });
+  const claim = (holder: string) => call(s.ctx, sync.claimSchedule, { key: MINI_KEY, runnerId: MINI, scheduleId: UUID(9), holder, kind: 'due', expect: at });
+  const ran = (expectUpdatedAt: string) => call(s.ctx, sync.scheduleRan, { key: MINI_KEY, scheduleId: UUID(9), holder: 'old', lastRun: { at: 'a', outcome: 'sent' }, sent: true, expectUpdatedAt, nextRunAt: '2026-11-19T09:00:00.000Z' });
+  assert.equal(await claim('old'), true);
+  // Edited meanwhile: the run counts, the slot stays, and so does the claim.
+  await ran('an older edit');
+  const row = () => s.rows('schedules').find((r) => r.id === UUID(9))!;
+  assert.deepEqual([row().runs, row().nextRunAt, row().claim?.holder], [1, at, 'old']);
+  assert.equal(await claim('new'), false, 'the other process can’t take it');
+  // Told again with the edit's updatedAt: the slot moves on and the claim goes.
+  await ran('u');
+  assert.deepEqual([row().runs, row().nextRunAt, row().claim], [1, '2026-11-19T09:00:00.000Z', undefined]);
+});

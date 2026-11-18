@@ -2459,9 +2459,14 @@ export const scheduleRan = mutation({
     // read whole with every other schedule (CAP).
     const run = caller.owner ? lastRun : { ...lastRun, at: cutBytes(lastRun.at, 64), outcome: cutBytes(lastRun.outcome, 64), ...(lastRun.threadId !== undefined ? { threadId: cutBytes(lastRun.threadId, 100) } : {}), ...(lastRun.note !== undefined ? { note: cutBytes(lastRun.note, CAP.note) } : {}) };
     const patch: Record<string, unknown> = seen ? { updatedMs: Date.now() } : { lastRun: run, runs: row.runs + (sent ? 1 : 0), updatedMs: Date.now() };
-    if (row.claim?.holder === holder) patch.claim = undefined;
     if (request !== undefined && row.runRequestedAt === request) patch.runRequestedAt = undefined;
     const timing = row.updatedAt === expectUpdatedAt && !older;
+    // The holder's claim goes once the run is done with: its request taken
+    // off, or its next time put in. A row edited meanwhile keeps the old
+    // nextRunAt (the runner tells the run again with the new updatedAt), so
+    // the claim stays, or another process of the runner (a handover) could
+    // claim the slot that just ran and send it again (Codex's review).
+    if (row.claim?.holder === holder && (timing || request !== undefined)) patch.claim = undefined;
     if (timing) {
       patch.nextRunAt = caller.owner || nextRunAt === undefined ? nextRunAt : cutBytes(nextRunAt, 64);
       patch.finishedAt = caller.owner || finishedAt === undefined ? finishedAt : cutBytes(finishedAt, 64);
