@@ -59,6 +59,8 @@ const PROBE_BUTTON: MouseButton = MouseButton::Navigate(NavigationDirection::For
 struct LinkPrefs {
     file_link_click: Option<String>,
     web_link_click: Option<String>,
+    /// The PR tab's Merge, as its menu's Default set it (pr_view.rs).
+    pr_merge_method: Option<String>,
 }
 
 static PREFS: Mutex<Option<LinkPrefs>> = Mutex::new(None);
@@ -101,6 +103,15 @@ pub(crate) fn set_file_click(action: FileLinkAction) {
 
 pub(crate) fn set_web_click(action: WebLinkAction) {
     save_prefs(|p| p.web_link_click = Some(action.key().to_owned()));
+}
+
+/// The merge method Mike starred in a PR tab's Merge menu, if he has.
+pub(crate) fn pr_merge_method() -> Option<threadbear_core::pull_requests::MergeMethod> {
+    with_prefs(|p| p.pr_merge_method.as_deref().and_then(threadbear_core::pull_requests::MergeMethod::parse))
+}
+
+pub(crate) fn set_pr_merge_method(method: threadbear_core::pull_requests::MergeMethod) {
+    save_prefs(|p| p.pr_merge_method = Some(method.id().to_owned()));
 }
 
 // ---------------------------------------------------------------- Chrome's profiles
@@ -306,6 +317,9 @@ impl ThreadPane {
                 let name = hl::last_component(&file_refs::strip_line(url).replace("tbpath:?p=", "")).to_owned();
                 self.show_error(format!("Couldn't find {}.", crate::rows::markdown::percent_decode(&name)), cx);
             }
+            // A PR opens as a tab in the pane with the inlinePrs experiment;
+            // ⌘-click still takes it to the browser.
+            Some(LinkTarget::Web(web)) if !command && crate::pr_view::pr_url(&web).is_some() && self.opens_prs_here(cx) => self.open_pr_link(&web, cx),
             Some(LinkTarget::Web(web)) => self.open_web_link(&web, WebLinkAction::for_click(command, web_click()), cx),
             None => open_gate::open_link(url, self.origin(), &self.summary.cwd, cx),
         }
@@ -345,6 +359,22 @@ impl ThreadPane {
             // project page's link goes to its app.
             _ => open_gate::open_file(&path, Origin::ThisMac, cx),
         }
+    }
+
+    fn opens_prs_here(&self, cx: &App) -> bool {
+        self.owns_pane(cx) && self.composer.read(cx).app.upgrade().is_some_and(|app| crate::pr_view::on(app.read(cx)))
+    }
+
+    /// A PR's tab in the pane beside this thread, opening the pane if it's shut.
+    fn open_pr_link(&mut self, url: &str, cx: &mut Context<Self>) {
+        let thread = self.summary.clone();
+        let Some(app) = self.composer.read(cx).app.upgrade() else { return };
+        let side = app.read(cx).side.clone();
+        let section = side.update(cx, |side, cx| {
+            side.open_pr(url, &thread, cx);
+            side.section_for(&thread)
+        });
+        show_pane(&app, &section, cx);
     }
 
     /// A web page where `action` says: the browser, or the pane (only the

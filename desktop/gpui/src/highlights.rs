@@ -50,6 +50,8 @@ pub(crate) enum Target {
     File(String),
     Folder(String),
     Page(String),
+    /// A GitHub pull request's tab, by its own URL (pr_view.rs).
+    Pr(String),
 }
 
 /// A folder's selection and open rows, kept so coming Back to it finds it as
@@ -98,7 +100,8 @@ fn remembered_open(p: &PanePreview) -> Option<crate::pane_store::Open> {
     let (path, folder) = match &p.target {
         Target::File(path) => (path.clone(), false),
         Target::Folder(path) => (path.clone(), true),
-        Target::Page(_) => return None,
+        // A PR is read from GitHub again each launch, so isn't kept.
+        Target::Page(_) | Target::Pr(_) => return None,
     };
     let back = p.back.iter().filter_map(remembered_open).collect();
     Some(crate::pane_store::Open { path, folder, title: p.title.clone(), from: p.from.clone(), back })
@@ -228,6 +231,10 @@ pub(crate) enum MenuAction {
     // A row of Threads it started (`startedRow`'s menu).
     OpenThread { id: String },
     OpenThreadInPanel { id: String },
+    // A PR tab's Merge and Review menus (pr_view.rs).
+    PrMerge { url: String, method: String },
+    PrMergeDefault { method: String },
+    PrReview { url: String, action: String },
 }
 
 /// The app's window of files read so far and folders looked at lives in
@@ -281,6 +288,8 @@ pub(crate) struct SidePane {
     pub(crate) explain: crate::explain_pane::ExplainState,
     /// The Browser pane's address bar (agent_browser.rs).
     pub(crate) browser: crate::agent_browser::BrowserPaneState,
+    /// The PRs open as tabs (pr_view.rs).
+    pub(crate) prs: crate::pr_view::PrPanes,
     _subs: Vec<Subscription>,
 }
 
@@ -319,6 +328,7 @@ impl SidePane {
             drawn: HashMap::new(),
             explain: Default::default(),
             browser: Default::default(),
+            prs: Default::default(),
             _subs: vec![],
         };
         pane.chosen = pane.places.iter().filter_map(|(id, p)| Some((id.clone(), p.section.clone()?))).collect();
@@ -678,6 +688,13 @@ impl SidePane {
             }
             return;
         }
+        // A PR opens as its own tab here, with the inlinePrs experiment.
+        if let (Some(_), Some(thread)) = (crate::pr_view::pr_url(url), self.thread(cx)) {
+            if self.app.upgrade().is_some_and(|app| crate::pr_view::on(app.read(cx))) {
+                self.open_pr(url, &thread, cx);
+                return;
+            }
+        }
         if core::is_web_page(url) {
             // Where Default says, as a web link in a reply goes: the browser
             // unless Mike picked the pane (`openLink`).
@@ -880,6 +897,13 @@ impl SidePane {
                     app.update(cx, |app, cx| app.open(id, window, cx));
                 }
             }
+            MenuAction::PrMerge { url, method } => self.pr_menu_action(&url, "merge", Some(&method), window, cx),
+            MenuAction::PrMergeDefault { method } => {
+                if let Some(m) = threadbear_core::pull_requests::MergeMethod::parse(&method) {
+                    crate::reply_links::set_pr_merge_method(m);
+                }
+            }
+            MenuAction::PrReview { url, action } => self.pr_menu_action(&url, &action, None, window, cx),
             MenuAction::OpenThreadInPanel { id } => {
                 if let Some(app) = self.app.upgrade() {
                     app.update(cx, |app, cx| app.open_thread_in_panel(id, cx));
@@ -1396,8 +1420,14 @@ impl SidePane {
         };
         // A pin says why in its note; the rest say how they turned up.
         let how = if item.is_pinned() || is_commit { None } else { Some(item.how.word()).filter(|w| !w.is_empty()).map(str::to_owned) };
+        // A PR's symbol in its state's colour, with the inlinePrs experiment.
+        let pr_tint = match (&item.url, item.kind == HighlightKind::Pr && self.app.upgrade().is_some_and(|app| crate::pr_view::on(app.read(cx)))) {
+            (Some(url), true) => self.pr_link_state(url, cx).map(|s| crate::pr_view::state_colour(s, cx)),
+            _ => None,
+        };
         let mut pr = PaneRow::new(SharedString::from(format!("hl-row-{index}-{}", item.id)), item.title.clone())
             .icon(core::highlight_symbol(item))
+            .tinted(pr_tint)
             .lead(is_commit.then(|| item.sha.clone()).flatten())
             .trailing(how)
             .note(item.note.clone())
@@ -1749,6 +1779,9 @@ impl SidePane {
         if let Some(preview) = &preview {
             let thread_id = thread.id.clone();
             let back_to = preview.back.last().map_or_else(|| self.section_title(thread, &preview.from), |b| b.title.clone());
+            if let Target::Pr(url) = &preview.target {
+                return row.child(self.render_pr_header(thread, url, back_to, p, cx));
+            }
             row = row.child(self.header_button("hl-back", "chevron.left", format!("Back to {back_to}"), p, cx, move |this, cx| this.preview_back(&thread_id.clone(), cx)));
             row = row.child(div().flex_1().min_w_0().truncate().text_size(px(style::size::LABEL)).font_semibold().child(preview.title.clone()));
             row = row.child(self.preview_buttons(preview, thread, p, cx));

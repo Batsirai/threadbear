@@ -65,6 +65,7 @@ mod handover;
 mod input_probe;
 mod header;
 mod highlights;
+mod pr_view;
 mod highlights_board;
 mod highlights_project;
 mod highlights_store;

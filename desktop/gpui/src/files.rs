@@ -382,6 +382,7 @@ impl SidePane {
                 cx.notify();
             }
             Target::Folder(_) => self.load_folder_for_preview(thread, cx),
+            Target::Pr(url) => self.begin_pr(url, cx),
         }
     }
 
@@ -884,6 +885,7 @@ impl SidePane {
             Target::File(path) => self.render_file(thread, path, preview.editing, window, cx),
             Target::Page(url) => pane_note(&format!("{url} opened in your browser."), p).into_any_element(),
             Target::Folder(path) => self.render_folder(thread, path, preview, window, cx),
+            Target::Pr(url) => self.render_pr(thread, url, window, cx),
         }
     }
 
@@ -1102,6 +1104,7 @@ impl SidePane {
             Target::File(path) => format!("file {path}{}", if preview.editing { " (editing)" } else { "" }),
             Target::Folder(path) => format!("folder {path}"),
             Target::Page(url) => format!("page {url}"),
+            Target::Pr(url) => format!("pr {url}"),
         }
     }
 
@@ -1111,6 +1114,11 @@ impl SidePane {
             Target::Page(url) => {
                 pane.insert("previewKind".into(), json!("page"));
                 pane.insert("previewText".into(), json!(url));
+            }
+            Target::Pr(url) => {
+                pane.insert("previewKind".into(), json!("pr"));
+                pane.insert("previewText".into(), json!(url));
+                pane.insert("pr".into(), self.prs.describe(url));
             }
             Target::Folder(path) => {
                 pane.insert("previewKind".into(), json!("folder"));

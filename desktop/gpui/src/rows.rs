@@ -3,7 +3,7 @@
 // order RowContent lists them. The work lines are in work.rs, diffs in diff.rs,
 // cards in cards.rs and pictures in images.rs.
 mod cards;
-mod diff;
+pub(crate) mod diff;
 mod export;
 mod images;
 mod lab_review;

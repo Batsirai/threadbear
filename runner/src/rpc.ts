@@ -16,6 +16,7 @@ import type { CallerGate } from './rpc-gate.ts';
 import type { PeerSocket } from './peer.ts';
 import { cutSafely } from './safe-cut.ts';
 import { wellFormedJson } from './well-formed-json.ts';
+import { fetchPr, forgetStates, parsePrUrl, prAct, prStates, type PrAction, type PrRef } from './github-pr.ts';
 
 type Conn = {
   id: number;
@@ -950,6 +951,26 @@ export class RpcServer {
       // The app's, after its Sign in… (never a thread's: the gate refuses it).
       case 'accounts.recheck':
         return r.recheckAccounts(optString(p, 'accountId'));
+      // A GitHub PR for the app's PR tab (github-pr.ts). Mike's clicks only:
+      // not in rpc-gate's reads, so a thread's key can't merge or comment.
+      case 'github.pr':
+        return ghCall(() => fetchPr(reqPrRef(p)));
+      case 'github.prStates': {
+        if (!Array.isArray(p.urls) || p.urls.some((u) => typeof u !== 'string')) throw bad('urls must be an array of strings');
+        return ghCall(async () => ({ states: await prStates(p.urls as string[]) }));
+      }
+      case 'github.prAct': {
+        const ref = reqPrRef(p);
+        const action = { action: reqString(p, 'action'), method: optString(p, 'method'), body: optString(p, 'body') } as PrAction;
+        return ghCall(async () => {
+          try {
+            await prAct(ref, action);
+          } finally {
+            forgetStates(ref);
+          }
+          return {};
+        });
+      }
       // Each starts its work and answers at once; progress comes through
       // clis.updated.
       case 'clis.list':
@@ -1002,6 +1023,22 @@ export class RpcServer {
 function reqProvider(p: Record<string, unknown>): Provider {
   if (!isProvider(p.provider)) throw bad(`provider must be one of ${PROVIDERS.join(', ')}`);
   return p.provider;
+}
+
+function reqPrRef(p: Record<string, unknown>): PrRef {
+  const ref = parsePrUrl(reqString(p, 'url'));
+  if (!ref) throw bad('url must be a github.com pull request link');
+  return ref;
+}
+
+// gh's own words come back as the error (not signed in, not mergeable, ...).
+async function ghCall<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (e instanceof RpcError) throw e;
+    throw new RpcError(ErrorCode.other, (e as Error).message || 'gh failed');
+  }
 }
 
 function bad(message: string): RpcError {

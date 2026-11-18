@@ -432,8 +432,26 @@ function mockExperiments() {
     // TB_MOCK_NESTED_OFF keeps its demo threads with the experiment off.
     ...(process.env.TB_MOCK_NESTED && !process.env.TB_MOCK_NESTED_OFF ? ['nestedThreads'] : []),
     ...(process.env.TB_MOCK_INBOX_GUESS ? ['inboxGuess'] : []),
+    // PR links opening as a tab in the pane, with TB_MOCK_PRS.
+    ...(process.env.TB_MOCK_PRS ? ['inlinePrs'] : []),
   ];
 }
+
+// The inlinePrs experiment's GitHub, made up: one open PR whose checks
+// have a failure, which Close turns closed a moment later, as gh would.
+const MOCK_PR_URL = 'https://github.com/acme/app/pull/72';
+const mockPr = {
+  url: MOCK_PR_URL, owner: 'acme', repo: 'app', number: 72, title: 'Fewer approvals when a fork brings in a release', author: 'ianmacartney',
+  state: 'open', head: 'approvals-fixes', base: 'main', additions: 33, deletions: 11, changedFiles: 2,
+  body: 'Changes from a fork bringing in a release while switching to the new app.\n\n- A Swift commit that also changed `desktop/` now counts as ported.',
+  createdAt: new Date(Date.now() - 3600_000).toISOString(), review: '', mergeable: 'yes', canMerge: true, mergeMethods: ['rebase', 'squash'],
+  checks: [
+    { name: 'Desktop app · Windows', state: 'failed', url: 'https://github.com/acme/app/actions/runs/1', seconds: 451 },
+    { name: 'Quick check', state: 'passed', url: 'https://github.com/acme/app/actions/runs/2', seconds: 64 },
+  ],
+  activity: [{ kind: 'comment', author: 'mikecann', body: 'Thanks, looking now.', at: new Date(Date.now() - 1800_000).toISOString() }],
+  files: [{ path: 'runner/src/swift-changes.ts', additions: 3, deletions: 1, hunks: [{ oldStart: 41, oldLines: 3, newStart: 41, newLines: 5, lines: ['   const touched = files.filter(isSwift)', "-  if (touched.length) return 'port'", "+  if (!touched.length) return 'none'", "+  if (files.some((f) => f.startsWith('desktop/'))) return 'ported'", "+  return 'port'"] }] }],
+};
 
 // Decisions on the Projects page (the projectDecisions experiment): three of
 // Threadbear's threads waiting on a card of asks, with what they're for. Only
@@ -1576,6 +1594,19 @@ async function dispatch(client, method, p) {
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       if (p.refresh) connectors = { ...connectors, checkedAt: iso() };
       return { connectors };
+    case 'github.pr':
+      if (!String(p.url ?? '').startsWith(MOCK_PR_URL)) throw rpcError(-32000, 'GraphQL: Could not resolve to a PullRequest');
+      return mockPr;
+    case 'github.prStates':
+      return { states: Object.fromEntries((p.urls ?? []).filter((u) => String(u).startsWith(MOCK_PR_URL)).map((u) => [u, mockPr.state])) };
+    case 'github.prAct': {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      if (p.action === 'close') mockPr.state = 'closed';
+      else if (p.action === 'reopen') mockPr.state = 'open';
+      else if (p.action === 'merge') mockPr.state = 'merged';
+      else if (p.action === 'comment') mockPr.activity = [...mockPr.activity, { kind: 'comment', author: 'mikecann', body: String(p.body ?? ''), at: iso() }];
+      return {};
+    }
     case 'instructions.get':
       return { instructions: mockInstructions };
     case 'instructions.set':
