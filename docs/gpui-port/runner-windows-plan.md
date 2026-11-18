@@ -86,6 +86,10 @@ fresh PC), which is what you want gone.
    Then the secrets guard's Windows
    forms, Keith's trust fixes, git hooks off `/dev/null`, ACLs on
    `secrets\`. Another lab tries to break each before it's called done.
+   *18 Nov: the guard's Windows forms (from Keith's fork), the ACL (set by
+   the helper, before the token is written) and hooks off `/dev/null`
+   (plus hooks named in a repo's config, on every platform) are in, after
+   five rounds of Codex's review. Keith's trust fixes are what's left.*
 6. **Polish.** Codex on Windows, pictures, stuck-job detection, a Windows
    check host, client path display (`C:\Users\...` shown as `~`).
 
