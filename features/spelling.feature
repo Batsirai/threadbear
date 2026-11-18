@@ -52,9 +52,9 @@ Feature: Spelling in the message box
     And I type " " in the composer
     Then the composer says "teh "
 
-  @composer.spelling @swift-pending @windows-pending @linux-pending
   # Its own word: one put back stays put back while the app runs, and the
   # scenario before this one puts back "teh" in the same app.
+  @composer.spelling @swift-pending @windows-pending @linux-pending
   Scenario: A correction typed back over isn't made again
     Given "Spelling and Grammar › Correct Spelling Automatically" is ticked in the composer's right-click menu
     When I type "we recieve" in the composer
