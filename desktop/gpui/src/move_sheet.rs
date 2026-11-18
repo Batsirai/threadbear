@@ -228,6 +228,7 @@ impl Threadbear {
         }
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
+            let named = move_id.is_some();
             let mut params = json!({ "threadId": thread_id });
             if let Some(move_id) = move_id {
                 params["moveId"] = json!(move_id);
@@ -235,7 +236,9 @@ impl Threadbear {
             let res = call(client, "threads.moveCancel", params).await;
             this.update(cx, |this, cx| {
                 this.end_note(&key, cx);
-                if let Err(e) = res {
+                // A named move refused is one already over (it failed, or
+                // ended, before the late cancel came): nothing to say.
+                if let (Err(e), false) = (res, named) {
                     this.show_error(e.message, cx);
                 }
                 cx.notify();

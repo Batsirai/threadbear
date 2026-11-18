@@ -1155,18 +1155,21 @@ async function main(): Promise<void> {
     moveOn();
     // One this runner is in, or one it started between two others.
     const threadId = String(p.threadId ?? '');
-    const moveId = moves.movingOf(threadId)?.moveId ?? startedMoves.get(threadId);
+    // The app names the move it means when it cancelled one before its
+    // threads.move answered: by the time the answer comes another may have
+    // started, and this runner's view of which is under way can lag the
+    // backend's, so that move itself is cancelled, by its id, and the backend
+    // refuses if it's already over (Codex's reviews, 18 Nov).
+    const named = typeof p.moveId === 'string' && p.moveId ? p.moveId : undefined;
+    const moveId = named ?? moves.movingOf(threadId)?.moveId ?? startedMoves.get(threadId);
     if (!moveId) throw new RpcError(ErrorCode.badParams, "That thread isn't moving.");
-    // The app names the move it means: one cancelled before its threads.move
-    // answered is cancelled once the answer comes, by which time another
-    // may have started (Codex's review, 18 Nov).
-    if (typeof p.moveId === 'string' && p.moveId && p.moveId !== moveId) throw new RpcError(ErrorCode.badParams, 'That move is over; the thread is in another one now.');
     try {
       await sync.cancelMove(moveId);
     } catch (e) {
       throw new RpcError(ErrorCode.badParams, e instanceof Error ? e.message : String(e));
     }
-    if (remoteMoving.delete(threadId)) republishRemote();
+    // Only this move's row: a named one may be over, with another showing.
+    if (remoteMoving.get(threadId)?.moving.moveId === moveId && remoteMoving.delete(threadId)) republishRemote();
     return {};
   };
   methods['requests.get'] = (p) => cross.get(String(p.threadId ?? ''), String(p.approvalId ?? ''));
