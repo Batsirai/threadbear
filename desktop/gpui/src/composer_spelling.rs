@@ -92,8 +92,12 @@ impl Composer {
         }
         let input = self.input.clone();
         let (text, selection) = Self::text_and_selection(&input, cx);
-        let old = std::mem::replace(&mut self.spell.last, text.clone());
-        self.new_value_check(cx);
+        let mut old = std::mem::replace(&mut self.spell.last, text.clone());
+        // After a value set whole, the text before it isn't what was typed
+        // onto: no word was just ended.
+        if self.new_value_check(cx) {
+            old = text.clone();
+        }
         // Undo straight after a correction, or the original typed back over
         // it: that word is left alone from now on, as NSTextView does.
         if let Some(outcome) = self.spell.autocorrect.edited(&text) {
@@ -164,14 +168,16 @@ impl Composer {
 
     /// A value set whole since last time (a send, a draft put back) is a
     /// new message: the last correction is done with.
-    fn new_value_check(&mut self, cx: &mut Context<Self>) {
+    fn new_value_check(&mut self, cx: &mut Context<Self>) -> bool {
         let values_set = self.input.read(cx).values_set();
-        if values_set != self.spell.values_set {
-            self.spell.values_set = values_set;
-            if let Some(outcome) = self.spell.autocorrect.reset() {
-                text_services::record_response(&outcome);
-            }
+        if values_set == self.spell.values_set {
+            return false;
         }
+        self.spell.values_set = values_set;
+        if let Some(outcome) = self.spell.autocorrect.reset() {
+            text_services::record_response(&outcome);
+        }
+        true
     }
 
     fn draw_spelling_marks(&mut self, cx: &mut Context<Self>) {

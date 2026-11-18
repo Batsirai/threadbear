@@ -52,7 +52,7 @@ pub fn typed_boundary(old: &str, new: &str, caret: usize) -> Option<char> {
     }
     let typed = new[..caret].chars().next_back()?;
     let start = caret - typed.len_utf8();
-    if new.len() - old.len() != typed.len_utf8() || new[..start] != old[..start] || new[caret..] != old[start..] {
+    if new.len() - old.len() != typed.len_utf8() || new.get(..start) != old.get(..start) || new.get(caret..) != old.get(start..) {
         return None;
     }
     ends_word(typed).then_some(typed)
@@ -266,7 +266,10 @@ impl Autocorrect {
         made.now = new[made.word.start..end].to_owned();
         made.after = ((made.after as isize + grew) as usize).max(end);
         made.touched = true;
-        if made.now.to_lowercase() == made.original.to_lowercase() {
+        // The original back, or in another case so long as it isn't the
+        // correction itself ("i" made "I" is still corrected with only the
+        // space after it deleted).
+        if made.now == made.original || (made.now != made.corrected && made.now.to_lowercase() == made.original.to_lowercase()) {
             let made = self.last.take()?;
             self.declined.insert(made.original.to_lowercase());
             return Some(Outcome { response: Response::Reverted, word: made.original, correction: made.corrected });
@@ -413,6 +416,9 @@ mod tests {
         assert_eq!(typed_boundary("teh end", "teh  end", 4), Some(' '));
         assert_eq!(typed_boundary("abc", "abc", 3), None);
         assert_eq!(typed_boundary("é", "é ", 3), Some(' '));
+        // A whole new value since (a draft put back) with a different start:
+        // no slice inside "é".
+        assert_eq!(typed_boundary("é the ", "h ello x", 2), None);
     }
 
     #[test]
@@ -590,6 +596,19 @@ mod tests {
         ac.made("the ", 0..3, 4, "teh", "the");
         assert_eq!(type_through(&mut ac, &["s", "so", "so ", "so t", "so te", "so teh"]).len(), 1);
         assert!(!ac.declined("teh"));
+    }
+
+    #[test]
+    fn a_case_only_correction_kept_isnt_declined() {
+        let mut ac = Autocorrect::default();
+        ac.made("I ", 0..1, 2, "i", "I");
+        assert_eq!(type_through(&mut ac, &["I"]), vec![]);
+        assert!(!ac.declined("i"));
+        assert_eq!(type_through(&mut ac, &["", "i"]), vec![reverted("i", "I")]);
+        // Retyped in another case than it was first typed still counts.
+        let mut ac = Autocorrect::default();
+        ac.made("threadbare ", 0..10, 11, "threadbear", "threadbare");
+        assert_eq!(type_through(&mut ac, &["threadbare", "threadbar", "threadba", "threadbEar"]).len(), 1);
     }
 
     #[test]
