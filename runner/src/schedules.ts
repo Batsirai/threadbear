@@ -1173,6 +1173,9 @@ export class Scheduler {
           continue;
         }
         const slot = rec.nextRunAt;
+        // What the check ran as: the record can change in place while the
+        // claim is confirmed below.
+        const checkedAs = { command: rec.check, folder: rec.check ? this.checkFolder(rec) : undefined };
         // Still ours, just before it goes: the check may have outlasted a
         // renewal that didn't get through.
         if (!(await this.confirmed(backend, rec.id))) continue;
@@ -1180,7 +1183,12 @@ export class Scheduler {
         // check changed meanwhile, it isn't sent (Codex's review).
         const sending = this.stillDue(backend, rec, due);
         if (!sending) continue;
-        if (sending.check !== rec.check) {
+        // Checked in one folder with one command: either changed, its
+        // result isn't this run's (Codex's review).
+        if (sending.check !== checkedAs.command || (sending.check && this.checkFolder(sending) !== checkedAs.folder)) {
+          // What it printed was for that command in that folder: the next
+          // try checks afresh rather than carry it.
+          if (sending.check === checkedAs.command) this.dropKept(rec.id);
           await this.release(backend, rec.id);
           continue;
         }
