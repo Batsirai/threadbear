@@ -105,6 +105,13 @@ const seenV = v.object({
   // The provider box's memory, as made (boxes.size), if it's that attempt's.
   memoryMb: v.number(),
   provider: v.union(v.null(), v.string()),
+  // Asleep or shelved with work newer than its save (slept unsaved at its
+  // day's hours, or archived and its save never came).
+  unsaved: v.boolean(),
+  // Its suspend was refused once: it can't pause, whatever its size says.
+  unpausable: v.boolean(),
+  // Kept running though asleep or shelved (keepRunning).
+  keptRunning: v.boolean(),
 });
 type Seen = Infer<typeof seenV>;
 
@@ -128,6 +135,9 @@ export const boxFor = internalQuery({
       ...(row.providerAttempt !== undefined ? { providerAttempt: row.providerAttempt } : {}),
       memoryMb: row.size && row.size.attempt === row.providerAttempt ? row.size.memoryMb : UNKNOWN_MB,
       provider: s ? s.provider : null,
+      unsaved: row.boxState.kind === 'shelved' || (row.boxState.kind === 'asleep' && row.boxState.unsaved === true),
+      unpausable: row.unpausable === true,
+      keptRunning: row.keptRunningSince !== undefined,
     };
   },
 });
@@ -241,7 +251,7 @@ async function reconcile(op: Op, p: BoxProvider, id: string): Promise<void> {
   for (let i = 0; i < 3; i++) {
     const row = await op.ctx.runQuery(internal.boxService.boxFor, { boxId: op.boxId });
     if (!row || row.providerBoxId !== id) return;
-    const want = ['waking', 'awake', 'saving', 'archiving'].includes(row.kind) ? 'running' : ['asleep', 'shelved'].includes(row.kind) && row.hasKey && p.caps.pause ? 'paused' : null;
+    const want = ['waking', 'awake', 'saving', 'archiving'].includes(row.kind) || row.keptRunning ? 'running' : ['asleep', 'shelved'].includes(row.kind) && row.hasKey && p.caps.pause && !row.unpausable ? 'paused' : null;
     if (!want) return;
     const have = (await retrying(() => p.list({ tb_box: op.boxId }))).find((b) => b.providerBoxId === id)?.state;
     if (!have || have === want) return;
@@ -309,7 +319,13 @@ async function bringBack(op: Op): Promise<void> {
   // The box that slept, still holding the thread's key: resume it.
   const keyHolder = seen.hasKey && seen.keyAttempt !== undefined && seen.keyAttempt === seen.newest && seen.providerAttempt === seen.keyAttempt;
   const raw = provider(seen.provider, seen.memoryMb);
-  if (seen.kind === 'waking' && keyHolder && seen.providerBoxId && raw?.caps.pause && raw.resume) {
+  // Kept running (it couldn't pause with unsaved work in it): it's up already.
+  if (seen.kind === 'waking' && keyHolder && seen.keptRunning) {
+    if (await report(ctx, seen.threadId, { type: 'RESUMED', attempt: seen.keyAttempt! }, op.id)) return;
+    seen = await ctx.runQuery(internal.boxService.boxFor, { boxId });
+    if (!seen || seen.kind !== 'waking') return;
+  }
+  if (seen.kind === 'waking' && keyHolder && seen.providerBoxId && raw?.caps.pause && !seen.unpausable && raw.resume) {
     const paused = fenced(op, raw);
     const attempt = seen.keyAttempt!;
     const id = seen.providerBoxId;
@@ -396,24 +412,87 @@ export const sleepBox = internalAction({
       const p = fenced(op, raw);
       const id = seen.providerBoxId;
       const lost = { type: 'LOST' as const, ...(seen.providerAttempt !== undefined ? { attempt: seen.providerAttempt } : {}) };
-      // Only the box that saved, holding the key, is paused; any other is no use asleep.
-      if (p.caps.pause && p.pause && p.resume && seen.hasKey && seen.keyAttempt === seen.providerAttempt) {
+      const keyHolder = seen.hasKey && seen.keyAttempt === seen.providerAttempt;
+      // Only the box holding the key is paused; any other is no use asleep.
+      if (p.caps.pause && !seen.unpausable && p.pause && p.resume && keyHolder) {
         try {
           await retrying(() => p.pause!(id));
         } catch (e) {
           if (e instanceof LeaseLost) throw e;
           if (notFound(e)) await report(ctx, seen.threadId, lost, op.id);
-          // Refused (not a hiccup): it can't pause, so it's deleted, as a box that can't is.
-          else if (e instanceof ProviderError && !transient(e)) await deleteAsleep(op, p, seen, id);
-          else console.warn('a box did not pause; the reaper will try again', message(e));
+          else if (e instanceof ProviderError && !transient(e)) {
+            // Refused (not a hiccup): it can't pause. Kept running if it holds
+            // unsaved work, else deleted, as a box that can't pause is.
+            await ctx.runMutation(internal.boxService.markUnpausable, { boxId });
+            if (seen.unsaved) await keepRunning(op);
+            else await deleteAsleep(op, p, seen, id);
+          } else console.warn('a box did not pause; the reaper will try again', message(e));
           return;
         }
         await reconcile(op, p, id);
         return;
       }
-      await deleteAsleep(op, p, seen, id);
+      // Work newer than its save is never deleted with the box (only once
+      // its days are up, or the thread is): it's kept running, asked to save.
+      if (seen.unsaved && keyHolder) await keepRunning(op);
+      else await deleteAsleep(op, p, seen, id);
     });
     return null;
+  },
+});
+
+export const markUnpausable = internalMutation({
+  args: { boxId: v.id('boxes') },
+  returns: v.null(),
+  handler: async (ctx, { boxId }) => {
+    await ctx.db.patch(boxId, { unpausable: true });
+    return null;
+  },
+});
+
+// A box that can't pause, asleep or shelved with unsaved work: kept running
+// (its time counts toward its day's hours) and asked to save again on a
+// backoff (retryKeptSaves) until it does, or its days run out.
+async function keepRunning(op: Op): Promise<void> {
+  await op.ctx.runMutation(internal.boxService.markKept, { boxId: op.boxId, op: op.id });
+}
+
+export const markKept = internalMutation({
+  args: { boxId: v.id('boxes'), op: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { boxId, op }) => {
+    const row = await ctx.db.get(boxId);
+    if (!row || row.op?.id !== op || row.keptRunningSince !== undefined) return null;
+    const now = Date.now();
+    await ctx.db.patch(boxId, { keptRunningSince: now, saveAsks: { n: 0, next: now } });
+    return null;
+  },
+});
+
+// The backoff between asking a kept-running box to save: 10 minutes, doubling, at most 6 hours.
+export const SAVE_ASK_MS = 10 * 60_000;
+export const SAVE_ASK_MAX_MS = 6 * 60 * 60_000;
+
+/**
+ * Boxes kept running with unsaved work (keepRunning): each is asked to save
+ * again once its backoff is up. A page a run, the rest in a run of its own.
+ */
+export const retryKeptSaves = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.number(),
+  handler: async (ctx, { cursor }) => {
+    const now = Date.now();
+    let asked = 0;
+    const page = await ctx.db.query('boxes').withIndex('by_kept', (q) => q.gt('keptRunningSince', 0)).paginate({ numItems: IDLE_BATCH, cursor: cursor ?? null });
+    for (const row of page.page) {
+      const asks = row.saveAsks ?? { n: 0, next: now };
+      if (asks.next > now) continue;
+      await askToSave(ctx, row);
+      await ctx.db.patch(row._id, { saveAsks: { n: asks.n + 1, next: now + Math.min(SAVE_ASK_MS * 2 ** asks.n, SAVE_ASK_MAX_MS) } });
+      asked++;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.boxService.retryKeptSaves, { cursor: page.continueCursor });
+    return asked;
   },
 });
 
@@ -501,7 +580,10 @@ export const sleepIdleBoxes = machines.internalMutation({
       asked++;
     }
     if (!page.isDone) await ctx.scheduler.runAfter(0, internal.boxService.sleepIdleBoxes, { cursor: page.continueCursor, numItems: batch });
-    if (!cursor) await ctx.scheduler.runAfter(0, internal.boxes.wakeAllWaiting, {});
+    if (!cursor) {
+      await ctx.scheduler.runAfter(0, internal.boxes.wakeAllWaiting, {});
+      await ctx.scheduler.runAfter(0, internal.boxService.retryKeptSaves, {});
+    }
     return asked;
   },
 });
@@ -555,7 +637,8 @@ function planFor(row: Doc<'boxes'> | null, serviceId: string, b: Listed): Do {
   if (resting && row.keyAttempt !== b.attempt) return 'destroy';
   if (row.providerBoxId !== b.providerBoxId) return row.providerAttempt === b.attempt ? 'destroy' : 'adopt';
   if (b.state === 'stopped' && ['awake', 'saving', 'archiving', 'asleep', 'shelved'].includes(kind) && row.keyAttempt === b.attempt) return 'lost';
-  if (resting && b.state === 'running') return 'sleep';
+  // Running though resting: its pause or delete didn't happen, unless it's kept running on purpose (keepRunning).
+  if (resting && b.state === 'running' && row.keptRunningSince === undefined) return 'sleep';
   return 'keep';
 }
 

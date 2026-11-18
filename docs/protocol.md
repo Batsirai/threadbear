@@ -7718,7 +7718,8 @@ has to be on for it.
   provider, image, box: { cpus, memoryMb }, region?, limits? })` makes
   one, or changes one (its provider can't change), and returns its id;
   limits left out are `BOX_LIMITS` (`maxBoxes` 5, `idleSleepMinutes` 10,
-  `maxAwakeHoursPerDay` 8, `deleteAfterDays` 14) or as they were.
+  `maxAwakeHoursPerDay` 8, `deleteAfterDays` 14) or as they were. A Fly
+  box is 2048 MB at most, the most Fly can pause.
   `boxes:runnerServices({ key })` lists them, with `running` (boxes
   creating, starting, awake, saving or waking) and `asleep`. Owner key
   only.
@@ -7746,28 +7747,37 @@ has to be on for it.
   Its runner saves the thread and calls `boxSaved`;
   the box is then paused if it can be (Fly up to 2 GB, by the size it was
   made at, not the virtual runner's size now), else deleted. One past its
-  day's hours that hasn't saved in 10 minutes sleeps anyway: paused with
-  its memory, or deleted (back to its last save) if it can't pause. A
-  pause the provider refuses deletes it instead.
+  day's hours that hasn't saved in 10 minutes sleeps anyway, paused with
+  its memory; a message meanwhile doesn't stop that (it waits, as for an
+  asleep box past its hours). A box is never deleted with work newer than
+  its save in it, unless its days run out or the thread is deleted: one
+  that can't pause (or whose pause is refused) with unsaved work is kept
+  running, its time counting toward its day's hours, and asked to save
+  again on a backoff (10 minutes, doubling, 6 hours at most) until it
+  does. Waking it takes it up as it is.
 - **Waking.** Any command queued for a box's runner (`queueCommand`, or
   any of the phone's), or a move to or from it (`startMove`), while its
   box is asleep, saving or failed wakes it: the same box resumed if it
   was paused, else a new box that restores the last save. Two quick
   messages make one wake. The command waits in the queue meanwhile. A
-  wake that would take its virtual runner past `maxBoxes`, or a box past
-  its day's hours, waits instead (`RemoteRunner.box.waiting`): the oldest
-  waiting wakes when a box sleeps, fails or is archived, or at an idle
-  check once there's room and hours (a past-hours one the next UTC day).
+  wake past its day's hours waits for the next UTC day, and one that
+  would take its virtual runner past `maxBoxes` waits for room
+  (`RemoteRunner.box.waiting` for either; they're kept apart, so one
+  waiting for room is never stuck behind those waiting for tomorrow): the
+  oldest waiting for room wakes when a box sleeps, fails or is archived,
+  or at an idle check.
   `boxes:wakePastHours({ key, threadId })` (owner) wakes one past its
   hours now, for the rest of the day. A thread that's moving wakes past
-  its hours, and each step of a move wakes a sleeping box on either side.
+  its hours, and each step of a move wakes a sleeping box on either side;
+  a move with no step for an hour no longer counts as moving.
   A box that goes asleep, gone or shelved with a waking command already
   waiting (one sent while it was being deleted) wakes then.
-- **Archived threads.** Archiving a box that's up asks it to save first
-  (`archiving`, with a `save` command, 10 minutes), so unarchiving comes
-  back to where it was; the box is then deleted and the thread is `gone`,
-  its save kept for `deleteAfterDays`. If the save doesn't come, the box
-  is kept, paused (`shelved`; deleted if it can't pause), until then. One
+- **Archived threads.** Archiving a box that's up, or a kept box that's
+  waking, asks it to save first (`archiving`, with a `save` command, 10
+  minutes), so unarchiving comes back to where it was; the box is then
+  deleted and the thread is `gone`, its save kept for `deleteAfterDays`.
+  If the save doesn't come (or the box stops heartbeating), the box is
+  kept (`shelved`: paused, or kept running if it can't pause) until then. One
   that slept unsaved at its day's hours is shelved the same way.
   Unarchiving it (an `update` with `unarchive`), a message, a reply to a
   card or a move brings it back: a shelved box resumed, else a new box

@@ -333,6 +333,16 @@ export const appSchema = defineSchema({
     op: v.optional(v.object({ id: v.string(), name: v.string(), until: v.number() })),
     // Mike woke it past its day's hours on this day (UTC, boxes.ts wakePastHours).
     hoursWaivedOn: v.optional(v.string()),
+    // A message wants it awake but it's been up its day's hours: it waits
+    // for the day after this one (UTC), apart from those waiting for room.
+    waitsForHours: v.optional(v.string()),
+    // Its suspend was refused: it can't pause, whatever its size says.
+    unpausable: v.optional(v.boolean()),
+    // Asleep or shelved with work newer than its save, and unable to pause:
+    // kept running (never deleted with that work in it) since then, and asked
+    // to save again on a backoff (`saveAsks`) until it does (boxService.ts).
+    keptRunningSince: v.optional(v.number()),
+    saveAsks: v.optional(v.object({ n: v.number(), next: v.number() })),
     createdAt: v.number(),
   })
     .index('by_threadId', ['threadId'])
@@ -342,6 +352,8 @@ export const appSchema = defineSchema({
     .index('by_box_state', ['boxState.kind'])
     .index('by_service_state', ['serviceId', 'boxState.kind'])
     .index('by_service_wants', ['serviceId', 'wantsWakeAt'])
+    .index('by_service_hours', ['serviceId', 'waitsForHours'])
+    .index('by_kept', ['keptRunningSince'])
     .index('by_save', ['save.storageId']),
 
   // A Claude login's year-long token for boxes (decision 10), made with
@@ -697,8 +709,12 @@ export const appSchema = defineSchema({
     lapsedAt: v.optional(v.number()),
     resultThreadId: v.optional(v.string()), // for create, once it lands
     result: v.optional(v.string()), // a call's answer as JSON text (API 44), from an allow-listed method (relay.ts CALLS); a slashCommands list (API 62); a design review for the phone (API 86)
+    // What it wakes of a sleeping box (boxHooks.ts wakeLevelOf): 1 an asleep
+    // one, 2 an archived one too. None for a box's own save.
+    wakeLevel: v.optional(v.number()),
   })
     .index('by_runner_state', ['runnerId', 'state'])
+    .index('by_runner_wake', ['runnerId', 'state', 'wakeLevel'])
     .index('by_state', ['state'])
     // phone:waiting (API 57): a thread's messages its runner hasn't taken yet.
     .index('by_thread_state', ['threadId', 'state'])

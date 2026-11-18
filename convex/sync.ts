@@ -3869,7 +3869,7 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
 
 async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean }> {
   const row = await boxOfRunner(ctx, r);
-  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined ? { waiting: true } : {}) };
+  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}) };
 }
 
 // API 29: the other runners on their own, so a heartbeat re-runs only this

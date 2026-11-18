@@ -405,6 +405,31 @@ Its second look at those fixes found eight more, fixed the same way:
   box on either side, past its hours if need be.
 - The crons read only the first 100 virtual runners: those page too.
 
+A third look found six more. The rule they share: a box that may hold
+work newer than its last save is never deleted, except when its days run
+out or the thread is deleted.
+
+- A box that couldn't pause was deleted with unsaved work in it. Now it's
+  kept running (`keptRunningSince`), its time counting toward its day's
+  hours (the cap can't delete it: it waits there, costing a running box,
+  until a save comes or its archive's days run out), and asked to save on
+  a backoff (`retryKeptSaves`); a refused suspend marks the box
+  `unpausable` and does the same. Waking it takes it up as it is. And
+  `setRunnerService` now refuses a Fly box over 2048 MB, so it only
+  happens to a box whose suspend is refused or one made before.
+- Archiving a kept box while it woke deleted it. It now saves first
+  (`archiving`), and is kept (`shelved`) if no save comes; an `archiving`
+  box that stops heartbeating is kept too.
+- A message cancelled a save its day's hours asked for: it now waits.
+- A move left claimed with no last word kept its box up for ever: a move
+  counts as going only while it has had a step in the last hour (the
+  move machine's handedOver has no timer of its own, as by then the thread
+  is the target's and it holds up nothing but another move of it).
+- A waking command behind fifty others went unseen: commands carry what
+  they'd wake (`wakeLevel`), found by an index.
+- Boxes waiting for tomorrow's hours could starve those waiting for room:
+  they're kept apart (`waitsForHours`, moved across when their day comes).
+
 Not built yet, in about the order they're needed:
 
 - TODO the runner's box mode and its image: the exchange, the `create`

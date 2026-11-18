@@ -47,11 +47,16 @@ export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: str
  * unarchive sent while it was being deleted), it wakes now.
  */
 export async function wakeIfPending(ctx: MutationCtx, runnerId: string, as: 'asleep' | 'gone' | 'shelved'): Promise<void> {
-  for (const c of await ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', 'pending')).take(50)) {
-    if (c.kind === 'save' || (as !== 'asleep' && !wakesArchived(c.kind, c.args))) continue;
-    await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId });
-    return;
-  }
+  // Found by what each would wake (wakeLevelOf), however many are waiting.
+  const need = as === 'asleep' ? 1 : 2;
+  const waking = await ctx.db.query('commands').withIndex('by_runner_wake', (q) => q.eq('runnerId', runnerId).eq('state', 'pending').gte('wakeLevel', need)).first();
+  if (waking) await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId });
+}
+
+/** What a command wakes of a sleeping box: 1 an asleep one, 2 an archived one too; nothing for a box's own save. */
+export function wakeLevelOf(kind: string, args: unknown): number | undefined {
+  if (kind === 'save') return undefined;
+  return wakesArchived(kind, args) ? 2 : 1;
 }
 
 export function wakesArchived(kind: string, args: unknown): boolean {

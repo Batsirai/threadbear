@@ -39,7 +39,9 @@ async function setup(memoryMb = 2048) {
   await s.setToken();
   // The helper's own box (THREAD) was made before any of this: its create isn't run here.
   let cursor = s.scheduled.length;
-  await call(s.ctx, boxes.setRunnerService, { key: OWNER, serviceId: s.serviceId, name: 'Cloud (Fly)', provider: 'fly', image: 'registry.fly.io/threadbear-box:1', box: { cpus: 2, memoryMb } });
+  // Bigger than Fly can pause: a virtual runner from before setRunnerService refused that.
+  if (memoryMb > 2048) s.rows('runnerServices')[0].box = { cpus: 2, memoryMb };
+  else await call(s.ctx, boxes.setRunnerService, { key: OWNER, serviceId: s.serviceId, name: 'Cloud (Fly)', provider: 'fly', image: 'registry.fly.io/threadbear-box:1', box: { cpus: 2, memoryMb } });
   // Runs the service's scheduled steps as Convex's scheduler would, in order (delays aside), until none are left. Returns their names.
   const run = async (): Promise<string[]> => {
     const ran: string[] = [];
@@ -49,7 +51,7 @@ async function setup(memoryMb = 2048) {
       const [, mod, name] = job.fn.split('.') as [string, string, string];
       if (mod !== 'boxService' && !RUNS.has(`${mod}.${name}`)) continue;
       // The idle cron's sweep runs every time: not listed, to keep the lists to the point.
-      if (name !== 'wakeWaiting' && name !== 'wakeAllWaiting') ran.push(name);
+      if (!['wakeWaiting', 'wakeAllWaiting', 'retryKeptSaves'].includes(name)) ran.push(name);
       if (++steps > 200) throw new Error(`run(): still going after 200 steps: ${ran.slice(-5).join(', ')}`);
       await call(ACTIONS.has(name) ? s.a : s.ctx, load(mod)[name], job.args);
     }
@@ -510,7 +512,9 @@ test("the phone never picks a box's runner for a new thread, and can't name one"
 
 test('only the owner makes, changes and lists virtual runners, and the values are checked', async () => {
   const s = await setup();
-  const made = await call(s.ctx, boxes.setRunnerService, { key: OWNER, name: 'Big', provider: 'fly', image: 'img:1', box: { cpus: 4, memoryMb: 8192 }, region: 'syd', limits: { maxBoxes: 3 } });
+  // Fly can't pause a box over 2 GB, so for now none is made.
+  assert.equal(await outcome(call(s.ctx, boxes.setRunnerService, { key: OWNER, name: 'Huge', provider: 'fly', image: 'img:1', box: { cpus: 4, memoryMb: 8192 } })), 'badArgs');
+  const made = await call(s.ctx, boxes.setRunnerService, { key: OWNER, name: 'Big', provider: 'fly', image: 'img:1', box: { cpus: 4, memoryMb: 2048 }, region: 'syd', limits: { maxBoxes: 3 } });
   const listed = await call(s.ctx, boxes.runnerServices, { key: OWNER });
   const big = listed.find((x: { serviceId: string }) => x.serviceId === made);
   assert.deepEqual(big.limits, { maxBoxes: 3, idleSleepMinutes: 10, maxAwakeHoursPerDay: 8, deleteAfterDays: 14 });
@@ -544,12 +548,15 @@ test('only the owner makes, changes and lists virtual runners, and the values ar
 // ------------------------------------------------------------ Codex's review of 66ccfc1c4 (18 Nov 2026)
 
 const boxIdOf = (s: Awaited<ReturnType<typeof setup>>, threadId: string) => s.rowOf(threadId)._id;
-const setLimits = (s: Awaited<ReturnType<typeof setup>>, limits: Record<string, number>, memoryMb = 2048) =>
-  call(s.ctx, boxes.setRunnerService, { key: OWNER, serviceId: s.serviceId, name: 'Cloud (Fly)', provider: 'fly', image: 'registry.fly.io/threadbear-box:1', box: { cpus: 2, memoryMb }, limits });
+// The virtual runner's limits (and size, past what setRunnerService now allows, as an older one's could be).
+const setLimits = async (s: Awaited<ReturnType<typeof setup>>, limits: Record<string, number>, memoryMb = 2048) => {
+  const row = s.rows('runnerServices').find((r) => r._id === s.serviceId)!;
+  Object.assign(row, { box: { cpus: 2, memoryMb }, limits: { ...row.limits, ...limits } });
+};
 
 // 1. The day's cap didn't depend on the box: one that never saved stayed up for ever.
 for (const memoryMb of [2048, 4096]) {
-  test(`past its day's hours, a ${memoryMb} MB box whose save never comes sleeps anyway (${memoryMb > 2048 ? 'deleted' : 'paused'})`, () => atNoon(async () => {
+  test(`past its day's hours, a ${memoryMb} MB box whose save never comes sleeps anyway (${memoryMb > 2048 ? 'kept running, asked again' : 'paused'})`, () => atNoon(async () => {
     const s = await setup(memoryMb);
     const { runnerId } = await s.start('T2');
     await s.run();
@@ -568,8 +575,14 @@ for (const memoryMb of [2048, 4096]) {
       assert.equal(s.fly.byId(m.id)!.state, 'suspended', 'paused with its memory: nothing lost');
       assert.ok(s.rowOf('T2').boxKeyHash, 'its key kept, to resume');
     } else {
-      assert.equal(s.fly.live().length, 0, "deleted, as it can't pause");
-      assert.equal(s.rowOf('T2').boxKeyHash, undefined);
+      // Codex's third round: it can't pause, and deleting it would lose its work.
+      assert.equal(s.fly.byId(m.id)!.state, 'created', 'kept running');
+      assert.ok(s.rowOf('T2').boxKeyHash);
+      assert.ok(s.rowOf('T2').keptRunningSince);
+      const asks = () => s.rows('commands').filter((c) => c.runnerId === runnerId && c.kind === 'save').length;
+      const before = asks();
+      await later(72 * MINUTE, () => call(s.ctx, service.retryKeptSaves, {}));
+      assert.equal(asks(), before, 'one save asked for at a time');
     }
   }));
 }
@@ -855,7 +868,8 @@ test("a box that never takes its create is capped all the same; what's waiting w
   assert.equal(s.fly.byId(m.id)!.state, 'suspended');
   // Its create still waits, and so does the box: today's hours are used.
   assert.equal(s.rows('commands').find((c) => c._id === commandId)!.state, 'pending');
-  assert.ok(s.rowOf('T2').wantsWakeAt, 'waiting to wake');
+  assert.ok(s.rowOf('T2').waitsForHours, "waiting for tomorrow's hours");
+  assert.equal(s.rowOf('T2').wantsWakeAt, undefined, 'not with those waiting for room');
   assert.equal(await later(80 * MINUTE, () => call(s.ctx, boxes.wakeWaiting, { serviceId: s.serviceId })), 0);
   // Tomorrow it wakes.
   assert.equal(await later(24 * 60 * MINUTE, () => call(s.ctx, boxes.wakeWaiting, { serviceId: s.serviceId })), 1);
@@ -1027,16 +1041,19 @@ test("a moving box isn't slept, idle or past its hours, and a later move step wa
   await call(s.ctx, moves.moveInfo, { key: got.boxKey, moveId, info: { cwd: '/x' } });
   assert.equal(await s.sleepIdle(11 * MINUTE), 0, 'not idle while it moves');
   await setLimits(s, { maxAwakeHoursPerDay: 1 });
+  // Slept anyway (as a box could before): the next step of the move wakes it, past its hours.
+  await later(40 * MINUTE, () => call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'IDLE', attempt: 1 } }));
+  await later(40 * MINUTE, () => s.save(got.boxKey, 'save1'));
+  await later(40 * MINUTE, () => s.run());
+  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
+  await later(41 * MINUTE, () => call(s.ctx, moves.moveReady, { key: OWNER, moveId, plan: { cwd: '/x' }, sealKey: `${'A'.repeat(43)}=` }));
+  await later(41 * MINUTE, () => s.run());
+  assert.equal(s.stateOf('T2'), 'awake', 'woken, as it moves');
   await later(60 * MINUTE, () => s.beat(got.boxKey, runnerId));
   assert.equal(await s.sleepIdle(61 * MINUTE), 0, 'the cap waits for the move');
-  // Slept anyway (as a box could before): the next step of the move wakes it.
-  await later(61 * MINUTE, () => call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'IDLE', attempt: 1 } }));
-  await later(61 * MINUTE, () => s.save(got.boxKey, 'save1'));
-  await later(61 * MINUTE, () => s.run());
-  assert.equal(s.fly.byId(m.id)!.state, 'suspended');
-  await later(62 * MINUTE, () => call(s.ctx, moves.moveReady, { key: OWNER, moveId, plan: { cwd: '/x' }, sealKey: `${'A'.repeat(43)}=` }));
-  await later(62 * MINUTE, () => s.run());
-  assert.equal(s.stateOf('T2'), 'awake', 'woken past its hours, as it moves');
+  // A move with no step for an hour no longer holds it up.
+  await later(110 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  assert.equal(await s.sleepIdle(112 * MINUTE), 1, 'past its hours, the move gone quiet: it sleeps');
 }));
 
 // 8. The crons read only the first 100 virtual runners.
@@ -1058,4 +1075,152 @@ test('the reaper and the waiting-wake sweep reach every virtual runner, a page a
   }
   const swept = (s.scheduled.slice(before) as { fn: string; args: { serviceId?: string } }[]).filter((j) => j.fn.endsWith('wakeWaiting')).map((j) => j.args.serviceId);
   assert.deepEqual(swept.sort(), [...ids].sort());
+});
+
+// ------------------------------------------------------------ Codex's third round (18 Nov 2026)
+
+// 1. A box that can't pause was deleted with work newer than its save.
+test("an archived box that can't pause and never saved is kept running and asked to save until it does", async () => {
+  const s = await setup(4096);
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await s.save(got.boxKey, 'old');
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: 'T2', runnerId, title: 't', view: 'den', needsYou: false }] });
+  await s.run();
+  await later(9 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'shelved');
+  await s.run();
+  assert.equal(s.fly.byId(m.id)!.state, 'created', "kept running: it can't pause, and it holds work newer than its save");
+  assert.ok(s.rowOf('T2').keptRunningSince);
+  // Asked to save again; it does, and only then does the box go.
+  for (const c of s.rows('commands').filter((c) => c.runnerId === runnerId && c.kind === 'save' && c.state === 'pending')) Object.assign(c, { state: 'done', commandState: { kind: 'done', at: Date.now() } });
+  assert.equal(await call(s.ctx, service.retryKeptSaves, {}), 1);
+  assert.equal(s.rows('commands').filter((c) => c.runnerId === runnerId && c.kind === 'save' && c.state === 'pending').length, 1);
+  assert.equal(await call(s.ctx, service.retryKeptSaves, {}), 0, 'backing off');
+  await s.save(got.boxKey, 'newest');
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'gone');
+  assert.equal(s.rowOf('T2').save.storageId, 'newest');
+  assert.equal(s.fly.live().length, 0);
+});
+
+test("a refused suspend keeps a box with unsaved work running, and its wake takes it up as it is", () => atNoon(async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await setLimits(s, { maxAwakeHoursPerDay: 1, idleSleepMinutes: 600 });
+  await later(60 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.sleepIdle(61 * MINUTE);
+  await later(70 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.fireTimers(Date.now() + 72 * MINUTE);
+  assert.equal(s.stateOf('T2'), 'asleep');
+  s.fly.failNext('POST', '/suspend', 400);
+  await later(72 * MINUTE, () => s.run());
+  assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed');
+  assert.equal(s.rowOf('T2').unpausable, true);
+  assert.ok(s.rowOf('T2').keptRunningSince);
+  // Mike wakes it: it's up already, so the same box carries on, nothing made.
+  await later(73 * MINUTE, () => call(s.ctx, boxes.wakePastHours, { key: OWNER, threadId: 'T2' }));
+  await later(73 * MINUTE, () => s.run());
+  assert.equal(s.stateOf('T2'), 'awake');
+  assert.equal(s.fly.live().length, 1);
+  assert.equal(s.rowOf('T2').keptRunningSince, undefined);
+  assert.equal(await outcome(s.beat(got.boxKey, runnerId)), 'ok');
+}));
+
+// 2. Archiving a kept box while it woke deleted its only copy.
+test('archiving a kept box while it wakes saves first, or keeps it, rather than deleting it', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const m = s.fly.live()[0]!;
+  const got = await s.boot('T2', m.id);
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: 'T2', runnerId, title: 't', view: 'den', needsYou: false }] });
+  await s.run();
+  await later(9 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'shelved');
+  // It starts to wake (a message); archived again before it's up.
+  s.skip();
+  assert.equal(await call(s.ctx, boxes.report, { threadId: 'T2', event: { type: 'WAKE' } }), true);
+  assert.equal(s.stateOf('T2'), 'waking');
+  await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: 'T2' });
+  assert.equal(s.stateOf('T2'), 'archiving');
+  assert.ok(s.rows('commands').some((c) => c.runnerId === runnerId && c.kind === 'save' && c.state === 'pending'));
+  await s.run();
+  // No save comes: kept again, not deleted.
+  await s.fireTimers(Date.now() + 11 * MINUTE);
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'shelved');
+  assert.notEqual(s.fly.byId(m.id)!.state, 'destroyed');
+  assert.ok(s.rowOf('T2').boxKeyHash);
+});
+
+// 3. A message cancelled a capped save.
+test("a message doesn't cancel a save its day's hours asked for: it waits, unless Mike says", () => atNoon(async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await setLimits(s, { maxAwakeHoursPerDay: 1, idleSleepMinutes: 600 });
+  await later(60 * MINUTE, () => s.beat(got.boxKey, runnerId));
+  await s.sleepIdle(61 * MINUTE);
+  assert.equal(s.rowOf('T2').boxState.capped, true);
+  await later(62 * MINUTE, () => s.send(runnerId, 'T2'));
+  await later(62 * MINUTE, () => s.run());
+  assert.equal(s.stateOf('T2'), 'saving');
+  assert.equal(s.rowOf('T2').boxState.capped, true, 'still on its way to sleep');
+  assert.ok(s.rowOf('T2').waitsForHours);
+  await later(63 * MINUTE, () => call(s.ctx, boxes.wakePastHours, { key: OWNER, threadId: 'T2' }));
+  await later(63 * MINUTE, () => s.run());
+  assert.equal(s.stateOf('T2'), 'awake');
+}));
+
+// 5. A waking command past the first 50 pending wasn't seen.
+test('a waking command behind fifty that wake nothing still brings an archived box back', async () => {
+  const s = await setup();
+  const { runnerId } = await s.start('T2');
+  await s.run();
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await call(s.ctx, sync.upsertThreads, { key: got.boxKey, threads: [{ ...THREAD_BASICS, threadId: 'T2', runnerId, title: 't', view: 'den', needsYou: false }] });
+  await s.run();
+  await s.save(got.boxKey, 'final');
+  assert.equal(s.stateOf('T2'), 'destroying');
+  for (let i = 0; i < 60; i++) await load('machines').queued(s.ctx, { runnerId, threadId: 'T2', kind: 'update', args: { markSeen: true }, createdAt: Date.now() });
+  await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { unarchive: true } });
+  await s.run();
+  assert.equal(s.stateOf('T2'), 'starting');
+});
+
+// 6. Fifty boxes waiting for tomorrow's hours kept one waiting for room from waking.
+test("boxes waiting for room wake though many waiting for tomorrow's hours came first", async () => {
+  const s = await setup();
+  await setLimits(s, { maxBoxes: 100, maxAwakeHoursPerDay: 1 });
+  const today = new Date().toISOString().slice(0, 10);
+  const asleepPastHours = (threadId: string) => Object.assign(s.rowOf(threadId), { boxState: { kind: 'asleep', since: Date.now() }, boxStateTimers: [], awakeToday: { day: today, ms: 2 * 60 * MINUTE } });
+  const capped: string[] = [];
+  for (let i = 0; i < 51; i++) {
+    const { runnerId } = await s.start(`C${i}`);
+    asleepPastHours(`C${i}`);
+    capped.push(runnerId);
+  }
+  const { runnerId: eligible } = await s.start('E1');
+  Object.assign(s.rowOf('E1'), { boxState: { kind: 'asleep', since: Date.now() }, boxStateTimers: [] });
+  await setLimits(s, { maxBoxes: 1 });
+  s.skip();
+  // The helper's own box is creating: no room. Each asks to wake.
+  for (const r of capped) await call(s.ctx, boxes.wakeFor, { runnerId: r });
+  await call(s.ctx, boxes.wakeFor, { runnerId: eligible });
+  assert.equal(s.stateOf('E1'), 'asleep');
+  // Room again: the eligible one wakes.
+  await call(s.ctx, boxes.report, { threadId: THREAD, event: { type: 'FAILED', error: 'x' } });
+  await call(s.ctx, boxes.wakeWaiting, { serviceId: s.serviceId });
+  assert.equal(s.stateOf('E1'), 'waking');
+  assert.ok(capped.every((_, i) => s.stateOf(`C${i}`) === 'asleep'));
 });

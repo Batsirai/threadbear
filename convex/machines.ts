@@ -19,7 +19,7 @@ import { request as requestMachine } from './requestMachine';
 import { clear as clearMachine } from './clearMachine';
 import { box as boxMachine } from './boxMachine';
 import { steppingFor } from './stepping';
-import { wakeIfAsleep } from './boxHooks';
+import { wakeIfAsleep, wakeLevelOf } from './boxHooks';
 
 // A machine whose backfill's stepping stone is being deployed is left out (stepping.ts).
 export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [...(steppingFor('commandState') ? [] : [commandMachine]), ...(steppingFor('moveState') ? [] : [moveMachine]), ...(steppingFor('requestState') ? [] : [requestMachine]), ...(steppingFor('clearState') ? [] : [clearMachine]), boxMachine] as never, {
@@ -44,7 +44,8 @@ export const box = boxMachine;
  * sleeping box's runner wakes the box (boxHooks.ts wakeIfAsleep).
  */
 export async function queued(ctx: MutationCtx, fields: Omit<WithoutSystemFields<Doc<'commands'>>, 'state' | 'commandState' | 'commandStateTimers'>): Promise<Id<'commands'>> {
-  const r = await command.create(ctx, { ...fields, state: 'pending' } as never, { type: 'QUEUE' });
+  const wakeLevel = wakeLevelOf(fields.kind, fields.args);
+  const r = await command.create(ctx, { ...fields, state: 'pending', ...(wakeLevel ? { wakeLevel } : {}) } as never, { type: 'QUEUE' });
   if (r.status !== 'done') throw new ConvexError({ kind: 'conflict', message: `the command couldn't be queued: ${r.reasons.join(' ')}` });
   await wakeIfAsleep(ctx, fields.runnerId, fields.kind, fields.args, r.id as Id<'commands'>);
   return r.id as Id<'commands'>;

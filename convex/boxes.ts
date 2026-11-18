@@ -21,6 +21,7 @@ import { BOOT_MS } from './boxStates';
 import { checkRunnerId, forbidden, runnerAuth, sha256, withoutCredentials } from './lib';
 import { commandArgs } from './relay';
 import { PROVIDERS } from './boxProviders/types';
+import { FLY_SUSPEND_MAX_MB } from './boxProviders/fly';
 import { WAKES_FROM } from './boxHooks';
 import { MOVE_GOING } from './moves';
 import { BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runnerAccess';
@@ -245,6 +246,10 @@ export const setRunnerService = mutation({
     await runnerAuth(ctx, key, 'setRunnerService');
     if (!SERVICE_NAME.test(a.name.trim())) throw bad('name must be 1 to 80 characters with no control characters');
     if (!PROVIDERS.includes(a.provider)) throw bad(`provider must be one of ${PROVIDERS.join(', ')}`);
+    // A box that can't pause can't sleep with its memory, and one with work
+    // newer than its save then has to be kept running (boxService.ts): so,
+    // for now, only sizes the provider can pause.
+    if (a.provider === 'fly' && a.box.memoryMb > FLY_SUSPEND_MAX_MB) throw bad(`box.memoryMb must be ${FLY_SUSPEND_MAX_MB} or less: Fly can't pause a bigger box.`);
     if (!IMAGE.test(a.image)) throw bad('image must be an image reference, up to 300 characters with no spaces');
     if (!Number.isSafeInteger(a.box.cpus) || a.box.cpus < 1 || a.box.cpus > 16) throw bad('box.cpus must be a whole number from 1 to 16');
     if (!Number.isSafeInteger(a.box.memoryMb) || a.box.memoryMb < 256 || a.box.memoryMb > 65536 || a.box.memoryMb % 256) throw bad('box.memoryMb must be a multiple of 256 from 256 to 65536');
@@ -571,7 +576,13 @@ export const wakeFor = machines.internalMutation({
       await failExpiredRun(ctx, runnerId, commandId);
       return false;
     }
-    if (!(await mayWakeNow(ctx, row))) {
+    const why = await wakeBlocked(ctx, row);
+    // Past its hours it waits for tomorrow's, apart from those waiting for room (wakeWaiting).
+    if (why === 'hours') {
+      if (row.waitsForHours === undefined) await ctx.db.patch(row._id, { waitsForHours: day(Date.now()) });
+      return false;
+    }
+    if (why === 'room') {
       if (row.wantsWakeAt === undefined) await ctx.db.patch(row._id, { wantsWakeAt: Date.now() });
       return false;
     }
@@ -579,26 +590,38 @@ export const wakeFor = machines.internalMutation({
   },
 });
 
-// A box up already (saving, archiving) stays up; any other needs room under
-// maxBoxes and some of its day's hours left, or its thread to be moving.
-async function mayWakeNow(ctx: QueryCtx, row: Doc<'boxes'>): Promise<boolean> {
-  if (row.boxState.kind === 'saving' || row.boxState.kind === 'archiving') return true;
-  const service = await ctx.db.get(row.serviceId);
-  const limits = service?.limits ?? BOX_LIMITS;
-  if ((await countBoxes(ctx, row.serviceId, RUNNING, limits.maxBoxes)) >= limits.maxBoxes) return false;
-  if (await activeMove(ctx, row.threadId)) return true;
-  return !overHours(row, limits.maxAwakeHoursPerDay);
+/**
+ * What keeps a box from waking now, if anything. One saving because it's
+ * up its day's hours (`capped`) stays on its way to sleep: a message waits
+ * for tomorrow's hours like an asleep box's, unless Mike woke it past them.
+ * Any other saving or archiving box is up already. Otherwise it needs some
+ * of its day's hours left (or its thread moving), and room under maxBoxes.
+ */
+async function wakeBlocked(ctx: QueryCtx, row: Doc<'boxes'>): Promise<'hours' | 'room' | null> {
+  const limits = (await ctx.db.get(row.serviceId))?.limits ?? BOX_LIMITS;
+  const s = row.boxState;
+  if (s.kind === 'saving' && s.capped) return overHours(row, limits.maxAwakeHoursPerDay) ? 'hours' : null;
+  if (s.kind === 'saving' || s.kind === 'archiving') return null;
+  if (!(await activeMove(ctx, row.threadId)) && overHours(row, limits.maxAwakeHoursPerDay)) return 'hours';
+  if ((await countBoxes(ctx, row.serviceId, RUNNING, limits.maxBoxes)) >= limits.maxBoxes) return 'room';
+  return null;
 }
 
 const day = (now: number) => new Date(now).toISOString().slice(0, 10);
 
-/** Today's (UTC) awake time: what it had, and the part of today it's been up since `since` if it's up now. */
-export function usedTodayMs(row: Pick<Doc<'boxes'>, 'awakeToday' | 'boxState'>, now = Date.now()): number {
+/**
+ * Today's (UTC) awake time: what it had, and the part of today it's been
+ * up since `since` if it's up now, or kept running since keptRunningSince
+ * (asleep or shelved but unable to pause with unsaved work, boxService.ts
+ * keepRunning: that counts too).
+ */
+export function usedTodayMs(row: Pick<Doc<'boxes'>, 'awakeToday' | 'boxState' | 'keptRunningSince'>, now = Date.now()): number {
   const today = day(now);
+  const dayStart = Date.parse(`${today}T00:00:00.000Z`);
   const had = row.awakeToday?.day === today ? row.awakeToday.ms : 0;
   const s = row.boxState as { kind: string; since?: number };
-  if (!['awake', 'saving', 'archiving'].includes(s.kind) || s.since === undefined) return had;
-  return had + Math.max(0, now - Math.max(s.since, Date.parse(`${today}T00:00:00.000Z`)));
+  const up = ['awake', 'saving', 'archiving'].includes(s.kind) && s.since !== undefined ? s.since : row.keptRunningSince;
+  return up === undefined ? had : had + Math.max(0, now - Math.max(up, dayStart));
 }
 
 /** Up its day's hours, unless Mike woke it past them today (wakePastHours). */
@@ -606,9 +629,15 @@ export function overHours(row: Doc<'boxes'>, maxHours: number, now = Date.now())
   return row.hoursWaivedOn !== day(now) && usedTodayMs(row, now) >= maxHours * 60 * 60_000;
 }
 
-/** Whether a thread is moving: a box can't sleep, or wait to wake, mid-move. */
-export async function activeMove(ctx: QueryCtx, threadId: string): Promise<boolean> {
-  for (const m of await ctx.db.query('threadMoves').withIndex('by_thread', (q) => q.eq('threadId', threadId)).collect()) if (MOVE_GOING.includes(m.state)) return true;
+// A move with no step for this long no longer keeps its box up: one left
+// claimed with no final word from its target (the move machine's handedOver
+// has no timer: the thread is the target's by then, and all it holds up is
+// another move of that thread) mustn't keep a box from sleeping for ever.
+export const MOVE_ACTIVE_MS = 60 * 60_000;
+
+/** Whether a thread is moving: a box can't sleep, or wait to wake, mid-move (one still making progress). */
+export async function activeMove(ctx: QueryCtx, threadId: string, now = Date.now()): Promise<boolean> {
+  for (const m of await ctx.db.query('threadMoves').withIndex('by_thread', (q) => q.eq('threadId', threadId)).collect()) if (MOVE_GOING.includes(m.state) && m.updatedAt > now - MOVE_ACTIVE_MS) return true;
   return false;
 }
 
@@ -623,7 +652,7 @@ export const wakePastHours = mutation({
   handler: async (ctx, { key, threadId }) => {
     await runnerAuth(ctx, key, 'wakePastHours');
     const row = await boxOf(ctx, threadId);
-    await ctx.db.patch(row._id, { hoursWaivedOn: day(Date.now()) });
+    await ctx.db.patch(row._id, { hoursWaivedOn: day(Date.now()), waitsForHours: undefined });
     await ctx.scheduler.runAfter(0, internal.boxes.wakeFor, { runnerId: row.runnerId });
     return null;
   },
@@ -631,9 +660,10 @@ export const wakePastHours = mutation({
 
 /**
  * A box of this virtual runner stopped counting toward maxBoxes (it slept,
- * failed or was archived; boxMachine.ts freed), or a new day began: the
- * ones waiting to wake (wakeFor) wake, oldest first, while there's room. One
- * still past its day's hours is passed over until tomorrow. The idle cron
+ * failed or was archived; boxMachine.ts freed), or a new day began: those
+ * waiting for tomorrow's hours whose day has passed join those waiting for
+ * room, which wake, oldest first, while there's room. Only boxes that can
+ * wake are in that queue, so none is passed over for long. The idle cron
  * runs it for every virtual runner too (wakeAllWaiting).
  */
 export const wakeWaiting = machines.internalMutation({
@@ -641,13 +671,23 @@ export const wakeWaiting = machines.internalMutation({
   returns: v.number(),
   handler: async (machineCtx, { serviceId }) => {
     const ctx = machineCtx as unknown as MutationCtx;
+    const now = Date.now();
+    for (const row of await ctx.db.query('boxes').withIndex('by_service_hours', (q) => q.eq('serviceId', serviceId).gt('waitsForHours', '').lt('waitsForHours', day(now))).take(WAKE_BATCH)) {
+      await ctx.db.patch(row._id, { waitsForHours: undefined, ...(row.wantsWakeAt === undefined ? { wantsWakeAt: now } : {}) });
+    }
     let woken = 0;
     for (const row of await ctx.db.query('boxes').withIndex('by_service_wants', (q) => q.eq('serviceId', serviceId).gt('wantsWakeAt', 0)).take(WAKE_BATCH)) {
       if (!WAKES_FROM.includes(row.boxState.kind) || row.boxState.kind === 'expired') {
         await ctx.db.patch(row._id, { wantsWakeAt: undefined });
         continue;
       }
-      if (!(await mayWakeNow(ctx, row))) continue;
+      const why = await wakeBlocked(ctx, row);
+      if (why === 'room') break;
+      if (why === 'hours') {
+        // Back past its hours (its waiver ran out): to the other queue.
+        await ctx.db.patch(row._id, { wantsWakeAt: undefined, waitsForHours: day(now) });
+        continue;
+      }
       // wake clears wantsWakeAt.
       if ((await boxMachine.send(machineCtx, row._id, { type: 'WAKE' })).status === 'done') woken++;
       else await ctx.db.patch(row._id, { wantsWakeAt: undefined });
