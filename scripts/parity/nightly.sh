@@ -86,13 +86,28 @@ inner="echo \$\$ >$pidfile; [ ! -e $pidfile.gone ] || exit 129; cd ~/$REMOTE/src
 # the ssh, and with it the run, at once (Codex's review).
 "${SSH[@]}" "$HOST" "perl $REMOTE/src/scripts/perf-lock.pl --desk $pidfile bash -c $(single_quoted "$inner")" <&7 >/dev/null 2>&1 &
 ssh_pid=$!
-trap 'kill $ssh_pid 2>/dev/null; exit 143' TERM
-trap 'kill $ssh_pid 2>/dev/null; exit 129' HUP
-trap 'kill $ssh_pid 2>/dev/null; exit 130' INT
+# A time limit, so a run that hangs gives up the host's build lock. On 18 Nov
+# one sat from 02:10 to 07:10 (behind a macOS prompt nobody was there to
+# answer), and every build and check for that Mac queued behind it. A warm
+# run takes about 3 minutes, a cold GPUI build under load about 40. Stopping
+# the ssh is the usual way out: the host's hangup guard stops the run and
+# frees the locks. THREADBEAR_PARITY_LIMIT is in seconds.
+limit=${THREADBEAR_PARITY_LIMIT:-7200}
+( sleep "$limit" & sleeper=$!
+  trap 'kill $sleeper 2>/dev/null; exit 0' TERM
+  wait $sleeper && kill -0 $ssh_pid 2>/dev/null && touch "$dest/.timed-out" && kill $ssh_pid 2>/dev/null ) &
+watchdog=$!
+trap 'kill $ssh_pid $watchdog 2>/dev/null; exit 143' TERM
+trap 'kill $ssh_pid $watchdog 2>/dev/null; exit 129' HUP
+trap 'kill $ssh_pid $watchdog 2>/dev/null; exit 130' INT
 wait $ssh_pid
+kill $watchdog 2>/dev/null
+wait $watchdog 2>/dev/null
 trap - TERM HUP INT
 rsync -a -e "${SSH[*]}" "$HOST:$REMOTE/out/" "$dest/" >/dev/null 2>&1
 "${SSH[@]}" "$HOST" "grep -v '^dev-app: screencapture' ~/$REMOTE/run.log" >> "$dest/run.log" 2>&1
+# Last, so --check's tail of the log ends with it.
+[ -f "$dest/.timed-out" ] && echo "stopped after $((limit / 60)) minutes, nightly.sh's time limit (THREADBEAR_PARITY_LIMIT), so it gave up $HOST's build lock" >> "$dest/run.log"
 [ -f "$dest/results.json" ] || touch "$dest/.failed"
 # The last 7 runs.
 ls -d "$KEEP"/20* 2>/dev/null | sort -r | tail -n +8 | while read -r old; do rm -rf "$old"; done
