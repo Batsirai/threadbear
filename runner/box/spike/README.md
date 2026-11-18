@@ -192,3 +192,47 @@ The installs would be baked into a real image, which puts a cold wake from
 a save at roughly 10 s plus the turn. Not tested here: pushing
 `refs/threadbear/save` to the repo's origin (that needs the GitHub tokens of
 decision 11), and the real runner's own save and restore.
+
+## Cold start and warm wake of the real runner (18 Nov 2026)
+
+`cold-start.ts` with `box/cold.mjs`: the real runner (`runner/src/main.ts`
+from a fresh clone of threadbear, running on its own as in
+`runner/test/e2e`, no Convex) in a Fly box (`node:24`, shared-cpu-2x,
+2 GB). The Claude token comes by the boot exchange and goes in
+claude-main's `threadbear-token.json`, which the runner reads for
+year-long tokens. A thread opened in the repo gets its own worktree
+(`threadbear-threads/slot-2`), the repo's `worktree-setup.sh` runs, and
+Haiku answers. Then the driver pauses the box for 60 s, resumes it, and
+the box sends a second message on the same thread.
+
+```sh
+CLAUDE_TOKEN_FILE=~/.config/threadbear-box-spike/claude-token node cold-start.ts
+```
+
+Every check passed. Timings, from the box's own clock unless marked:
+
+| Step | Time | In a real box image |
+|---|---|---|
+| Create call to the script starting (driver) | 17 s | |
+| Boot exchange | 2.4 s | |
+| Install Claude Code | 19.5 s | baked in |
+| `git clone --filter=blob:none` threadbear | 15.7 s | per thread |
+| `npm ci` for the runner | 51.7 s | baked in |
+| Runner start to listening | 0.9 s | |
+| New thread to first text | 46 s | per thread |
+| of which worktree setup (`npm ci` at the root) | 11.2 s | per thread |
+| **Create to first reply (driver)** | **159 s** | about 88 s |
+| Pause / resume calls | 1.9 s / 1.1 s | |
+| **Resume to second reply done (driver)** | **5.3 s** | |
+
+About 30 s of "new thread to first text" isn't explained by the setup or
+the turn (Haiku answers in about 2 s, and the CLI starts in a few). The
+box was gone before I could read the runner's log, so that's the first
+thing to look at in box mode. The repo's patches were already trusted:
+the runner trusts its own checkout.
+
+Cost on Fly ([pricing](https://docs.fly.io/about/pricing)):
+shared-cpu-2x with 2 GB is $13.39 a month running, about 1.9 cents an
+hour awake. Paused, only the root disk is billed, at $0.15 per GB-month:
+for a few GB, well under a tenth of a cent an hour. A save in Convex file
+storage is a few MB per thread, so asleep-and-saved costs next to nothing.

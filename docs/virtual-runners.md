@@ -261,6 +261,11 @@ in, and "What the review changed" at the end says what moved and why.
    - The numbers: cold start to first reply including clone and worktree
      setup on threadbear itself, warm wake to first reply, and the cost of
      an hour awake, paused and saved.
+     Measured 18 Nov on Fly with the real runner
+     (`runner/box/spike/cold-start.ts`): 159 s from create to first reply,
+     about 88 s once Claude Code and the runner are baked into the image;
+     5.3 s from resume to a reply; about 1.9 cents an hour awake and well
+     under a tenth of a cent paused.
 2. **Box mode, box keys and `boxes:startThread`**: one thread started from
    the Mac app on one provider, runs a turn, saves, sleeps, wakes on a
    message, archived and deleted.
