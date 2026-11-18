@@ -1133,7 +1133,13 @@ impl Threadbear {
         if self.archive_history.is_empty() {
             return false;
         }
-        let in_text = window.context_stack().iter().any(|c| c.contains("Input"));
+        let stack = window.context_stack();
+        // A terminal panel with the keyboard: its keys are the shell's, and
+        // an archive coming back from under it would be a surprise.
+        if stack.iter().any(|c| c.contains(crate::terminal::KEY_CONTEXT)) {
+            return false;
+        }
+        let in_text = stack.iter().any(|c| c.contains("Input"));
         if !in_text {
             return true;
         }

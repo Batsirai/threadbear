@@ -91,6 +91,45 @@ Feature: The thread's bar, banners and notes
     Then the open thread is "Morning brief"
     And the "Archived" section lists "Morning brief"
 
+  @toast.archived @swift-pending
+  Scenario: The Archived note's x puts it away, leaving the thread archived
+    When I open the thread "Morning brief"
+    And I archive the open thread
+    And I dismiss the Archived note
+    Then there's no Archived note
+    And the "Archived" section lists "Morning brief"
+
+  # ⌘Z outside a text box is bound on a Mac only: elsewhere it would be
+  # Ctrl+Z, which a terminal panel needs for itself (window_menu.rs).
+  @toast.archived @swift-pending @linux-pending @windows-pending
+  Scenario: ⌘Z brings back the last thread archived, after its note has gone
+    When I open the thread "Morning brief"
+    And I archive the open thread
+    And I dismiss the Archived note
+    And I press ⌘Z
+    Then the "Inbox" section lists "Morning brief"
+    And the open thread is "Morning brief"
+
+  @toast.archived @swift-pending @linux-pending @windows-pending
+  Scenario: ⌘Z brings archived threads back newest first
+    When I open the thread "Morning brief"
+    And I archive the open thread
+    And I open the thread "Make a poster for the meetup"
+    And I archive the open thread
+    And I press ⌘Z
+    Then the "Inbox" section lists "Make a poster for the meetup"
+    And the "Archived" section lists "Morning brief"
+    When I press ⌘Z
+    Then the "Inbox" section lists "Morning brief"
+
+  @toast.archived @swift-pending
+  Scenario: ⌘Z in a message box with words in it is for the words
+    When I open the thread "Morning brief"
+    And I archive the open thread
+    And I type "half a thought" in the composer, replacing what's there
+    And I press ⌘Z
+    Then the "Archived" section lists "Morning brief"
+
   @toast.inboxend
   Scenario: Next Inbox Thread says when the inbox has run out
     When I open the last thread in the Inbox

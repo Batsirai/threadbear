@@ -106,6 +106,16 @@ When('I click the Archived note', async function (this: ThreadbearWorld) {
   await this.app.do({ cmd: 'open-archived' });
 });
 
+When('I dismiss the Archived note', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tipPrefix: 'Dismiss' });
+});
+
+// ⌘ on a Mac, Control elsewhere (`menu-key`'s `cmd`), through the keymap as
+// a real key press goes.
+When('I press ⌘Z', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'menu-key', key: 'z', modifiers: ['cmd'] });
+});
+
 When('I open the last thread in the Inbox', async function (this: ThreadbearWorld) {
   const d = await this.app.dump();
   const inbox = d.sidebar.sections.find((s) => s.name === 'Inbox')?.threads ?? [];

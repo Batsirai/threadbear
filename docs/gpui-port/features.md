@@ -137,7 +137,7 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `banner.signin` | Sign-in banner | Sign in… opens Terminal, Send again | Open a terminal per OS: Terminal.app on macOS, and the user's terminal on Windows and Linux. | shim | S | `DetailView`, `Usage` (`SignIn`) |
 | `banner.refusal` | Refusal offer | Continue with Codex Sol after a safeguards refusal | Drawn. | build | S | `RefusalOffer`, `RefusalRecovery` |
 | `header.subagent` | Sub-agent header | Way back, status, no composer | Drawn. | build | S | `SubagentViews` |
-| `toast.archived` | Archived toast | Undo, click to open, stays under the pointer | `Toast` with an Undo action (unverified that it can stay under the pointer). | kit | S | `DetailView` |
+| `toast.archived` | Archived toast | Undo, click to open, stays under the pointer. GPUI only (Wayne Sutton, #77): an x or a sideways swipe puts it away early, and on a Mac ⌘Z brings back the last seven archives, newest first, outside a text box or a terminal, or in an empty message box | `Toast` with an Undo action (unverified that it can stay under the pointer). | kit | S | `DetailView` |
 | `toast.inboxend` | Inbox end toast | Caught up after Next Inbox Thread | `Toast`. | kit | S | `DetailView` |
 | `toast.milestone` | Milestone toast | Thread count passes 100 and each thousand | `Toast`, using time since the last in-app input in place of the system idle time. | kit | S | `DetailView`, `AppModel+Milestones` |
 | `thread.newpage` | New-thread page | Centred composer, heading, project chip, note, room card | Drawn page reusing the composer. | build | M | `DetailView` (`ComposerPlacement`, `NewThreadHeading`, `AccountRoomCard`) |
