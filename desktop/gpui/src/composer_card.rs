@@ -76,6 +76,12 @@ impl CardState {
     pub(crate) fn answer_inputs(&self) -> Vec<Entity<TextareaState>> {
         self.inputs.values().cloned().collect()
     }
+
+    /// The Something else boxes whose words go with the answers: those of
+    /// asks answered that way (`note_images`). Another kept box isn't sent.
+    pub(crate) fn sent_answer_inputs(&self) -> Vec<Entity<TextareaState>> {
+        self.inputs.iter().filter(|(ask, _)| self.picks.get(&(**ask as i64)) == Some(&threadbear_core::composer::OWN_ANSWER)).map(|(_, input)| input.clone()).collect()
+    }
 }
 
 /// A paged card going from one ask to another: the next pushes in from the

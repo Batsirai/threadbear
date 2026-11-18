@@ -434,6 +434,10 @@ impl PrepaintCaretGeometry {
     }
 }
 
+/// A box's undo history, held apart from it by
+/// [`InputBaseState::take_history`].
+pub struct InputHistory(UndoManager);
+
 /// The shared text-editing engine behind [`crate::input::InputState`],
 /// [`crate::input::TextareaState`] and [`crate::input::EditorState`].
 ///
@@ -3410,6 +3414,24 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// `undo_key_is_archive`).
     pub fn can_undo(&self) -> bool {
         self.undo_manager.can_undo()
+    }
+
+    /// Takes the box's undo history out, leaving it none, for
+    /// `restore_history` to put back once the box holds again exactly the
+    /// text and tokens it had (its `content()`). Threadbear's message box
+    /// does this while one of the earlier messages is being edited in it, so
+    /// cancelling the edit still lets ⌘Z go back through what was typed
+    /// before (composer.rs, `start_editing`).
+    pub fn take_history(&mut self) -> InputHistory {
+        self.undo_manager.finish();
+        InputHistory(std::mem::replace(&mut self.undo_manager, UndoManager::new()))
+    }
+
+    /// Puts back a history from `take_history`, in place of whatever this box
+    /// has now. Only sound when the text and tokens are as they were when it
+    /// was taken: undo replays its changes by offset.
+    pub fn restore_history(&mut self, history: InputHistory) {
+        self.undo_manager = history.0;
     }
 
     pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
@@ -8929,6 +8951,39 @@ mod tests {
                 assert!(state.can_undo());
                 state.set_value("", window, cx);
                 assert!(!state.can_undo(), "set_value clears the history");
+            });
+        });
+    }
+
+    /// Threadbear's message box takes its history out while an earlier
+    /// message is edited in it, and puts it back with the words on cancel:
+    /// ⌘Z then still goes back through what was typed before the edit.
+    #[gpui::test]
+    fn test_history_taken_and_restored(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_all("a draft", window, cx);
+                state.replace_all("", window, cx);
+                let content = state.content();
+                let history = state.take_history();
+                assert!(!state.can_undo(), "the history went with take_history");
+
+                // The edit: its own words and typing, then cancelled.
+                state.set_value("the earlier message", window, cx);
+                state.replace_all("the earlier message, changed", window, cx);
+                state.set_value(content, window, cx);
+                state.restore_history(history);
+
+                assert_eq!(state.value(), "");
+                assert!(state.can_undo());
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "a draft", "the draft cleared before the edit comes back");
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.value(), "");
             });
         });
     }

@@ -14,7 +14,7 @@ use crate::composer_chips::ModelPickerView;
 use crate::style;
 use crate::thread::ThreadPane;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::input::{Copy, Cut, Enter, Escape, IndentInline, InlineToken, InlineTokenContext, InlineTokenHoverEvent, InputEvent, MoveDown, MoveUp, Textarea, TextareaState};
+use gpui_kit::component::input::{Copy, Cut, Enter, Escape, IndentInline, InlineToken, InlineTokenContext, InlineTokenHoverEvent, InputContent, InputEvent, InputHistory, MoveDown, MoveUp, Textarea, TextareaState};
 use crate::spinner::Spinner;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::*;
@@ -118,6 +118,12 @@ pub struct Composer {
     /// What the box is to hold at the next render (an edit sent puts back
     /// what was in it before; that needs the window).
     pending_box: Option<(String, Vec<ImageRef>)>,
+    /// The box as it was before an edit that's been sent, to put back at the
+    /// next render with its undo history.
+    pending_saved: Option<SavedBox>,
+    /// Pictures a promise delivered for a chip that's in the box an edit is
+    /// holding, to go in beside it when that box comes back (Codex, 18 Nov).
+    held_extras: Vec<(SharedString, WeakEntity<TextareaState>, Vec<PathBuf>)>,
     /// The box's spelling marks and the text they were found in
     /// (composer_spelling.rs).
     pub(crate) spell: crate::composer_spelling::SpellState,
@@ -130,8 +136,19 @@ pub struct Composer {
 /// whether it's on its way.
 pub(crate) struct MessageEdit {
     pub(crate) seq: i64,
-    before: (String, Vec<ImageRef>),
+    before: SavedBox,
     sending: bool,
+}
+
+/// The box exactly as it was when an edit began: its words and chips (the
+/// same token ids, so `pictures` and `mentions` still answer for them, and a
+/// picture still coming in settles into it), where the cursor was, and its
+/// undo history. Putting back only the words lost the history, so ⌘Z after
+/// Cancel couldn't bring back what was typed before (Codex, 18 Nov).
+pub(crate) struct SavedBox {
+    content: InputContent,
+    selection: Range<usize>,
+    history: InputHistory,
 }
 
 /// What a refused send gives back: the words and pictures, and the picks that
@@ -240,6 +257,8 @@ impl Composer {
             shown_placeholder: "Message".into(),
             editing: None,
             pending_box: None,
+            pending_saved: None,
+            held_extras: Vec::new(),
             pending_mentions: vec![],
             palette: PaletteState::default(),
             palette_asked: None,
@@ -280,8 +299,7 @@ impl Composer {
     pub(crate) fn clear_sent_draft(&mut self, stored: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).value().as_ref() == stored {
             self.input.update(cx, |s, cx| s.set_value("", window, cx));
-            self.pictures.clear();
-            self.mentions.clear();
+            self.forget_chips();
         }
         cx.notify();
     }
@@ -298,8 +316,7 @@ impl Composer {
     pub(crate) fn clear_scheduled_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.chips(cx).is_empty() {
             self.input.update(cx, |s, cx| s.set_value("", window, cx));
-            self.pictures.clear();
-            self.mentions.clear();
+            self.forget_chips();
             cx.notify();
         }
     }
@@ -557,7 +574,7 @@ impl Composer {
     /// at the end of the transcript until the runner has it; it comes back
     /// if the runner doesn't take it.
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.loading_pictures(cx) { return; }
+        if self.loading_pictures(cx) || self.refuse_dead_chip(cx) { return; }
         // The arrow hops as Return lands, when there's something to send
         // (Mike picked it, 13 Nov). None under Reduce Motion.
         if self.can_send(cx) && !cx.reduce_motion() {
@@ -604,8 +621,7 @@ impl Composer {
         }
         let picks = self.saved_picks();
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
-        self.pictures.clear();
-        self.mentions.clear();
+        self.forget_chips();
         self.clear_picks(cx);
         let composer = cx.entity().downgrade();
         let restore = RestoreDraft { text: draft_text, images, card: picks, as_sent: None };
@@ -663,11 +679,13 @@ impl Composer {
     pub(crate) fn start_editing(&mut self, seq: i64, text: &str, images: &[ImageRef], window: &mut Window, cx: &mut Context<Self>) {
         let before = match self.editing.take() {
             Some(edit) => edit.before,
-            None => self.draft(cx),
+            None => self.input.update(cx, |s, _| SavedBox { content: s.content(), selection: s.selected_range(), history: s.take_history() }),
         };
         let (words, order) = composer::edit_draft(text, images.len());
         let pictures = order.iter().filter_map(|i| images.get(*i).cloned()).collect();
-        self.set_box(words, pictures, window, cx);
+        // Not `set_box`: the saved box's chips keep their entries.
+        self.input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.apply_restore(RestoreDraft::plain(words, pictures), window, cx);
         self.editing = Some(MessageEdit { seq, before, sending: false });
         self.focus(window, cx);
         crate::web_panels::keyboard_to_app(window);
@@ -677,9 +695,22 @@ impl Composer {
     /// Leaves the edit (`cancelEditing`): the box gets back what was in it.
     pub(crate) fn cancel_editing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = self.editing.take() else { return };
-        let (text, images) = edit.before;
-        self.set_box(text, images, window, cx);
+        self.restore_box(edit.before, window, cx);
         cx.notify();
+    }
+
+    /// The box back as `start_editing` saved it, history and all.
+    fn restore_box(&mut self, saved: SavedBox, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |s, cx| {
+            s.set_value(saved.content, window, cx);
+            s.restore_history(saved.history);
+            s.set_selected_range(saved.selection, cx);
+        });
+        // Pictures that came for a chip of this box while the edit was in
+        // it go in beside their chip now.
+        for (id, target, paths) in std::mem::take(&mut self.held_extras) {
+            self.insert_promised_extra(&id, &target, paths, window, cx);
+        }
     }
 
     /// Append a board card as its usual chip, preserving pictures (including
@@ -712,8 +743,7 @@ impl Composer {
     /// The box holding exactly `text`, its marks as chips of `images`.
     fn set_box(&mut self, text: String, images: Vec<ImageRef>, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
-        self.pictures.clear();
-        self.mentions.clear();
+        self.forget_chips();
         self.apply_restore(RestoreDraft::plain(text, images), window, cx);
     }
 
@@ -751,7 +781,7 @@ impl Composer {
                             // Done with: the box gets back what was in it before,
                             // at the next render, which has the window.
                             if let Some(edit) = this.editing.take() {
-                                this.pending_box = Some(edit.before);
+                                this.pending_saved = Some(edit.before);
                             }
                             cx.notify();
                         })
@@ -980,6 +1010,20 @@ impl Composer {
     fn insert_pictures(&mut self, target: &Entity<TextareaState>, paths: Vec<PathBuf>, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let ids: Vec<SharedString> = paths.iter().map(|_| self.fresh_picture_id()).collect();
         let tokens: Vec<InlineToken> = ids.iter().map(picture_token).collect();
+        // Each chip's entry before its token, so no chip is ever in the box
+        // without one (`has_dead_chip` would stop it sending).
+        // The first picture in opens the strip for itself. The box's chips,
+        // not `pictures`, say whether it's empty: entries outlive their
+        // chips for Undo.
+        let strip_empty = Self::chips_in(&self.input, cx).is_empty();
+        for (i, (id, path)) in ids.iter().zip(&paths).enumerate() {
+            let dropping = (!cx.reduce_motion()).then(|| Cell::new(None));
+            if dropping.is_some() && strip_empty && i == 0 && *target == self.input {
+                self.strip_opening = Some(Cell::new(None));
+            }
+            self.pictures_dropped += dropping.is_some() as usize;
+            self.pictures.insert(id.clone(), PictureChip { source: path.clone(), image: None, dropping });
+        }
         let (text, selection) = Self::text_and_selection(target, cx);
         let prev_is_space = text[..selection.start].chars().next_back().map_or(true, char::is_whitespace);
         let next_is_space = text[selection.end..].chars().next().is_some_and(char::is_whitespace);
@@ -1005,13 +1049,6 @@ impl Composer {
             }
         });
         for (id, path) in ids.into_iter().zip(paths) {
-            let dropping = (!cx.reduce_motion()).then(|| Cell::new(None));
-            // The first picture in opens the strip for itself.
-            if dropping.is_some() && self.pictures.is_empty() {
-                self.strip_opening = Some(Cell::new(None));
-            }
-            self.pictures_dropped += dropping.is_some() as usize;
-            self.pictures.insert(id.clone(), PictureChip { source: path.clone(), image: None, dropping });
             self.import_picture(id, path, target.downgrade(), window, cx);
         }
         cx.notify();
@@ -1057,6 +1094,13 @@ impl Composer {
     /// and focus; a chip already deleted never makes pictures reappear.
     fn insert_promised_extra(&mut self, id: &SharedString, target: &WeakEntity<TextareaState>, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = target.upgrade().filter(|target| Self::chip_range(target, id, cx).is_some()) else {
+            // Its chip is in the box an edit is holding, or one that's just
+            // ended and puts it back at the next render: they wait for it.
+            let saved = self.editing.as_ref().map(|e| &e.before).or(self.pending_saved.as_ref());
+            if saved.is_some_and(|b| b.content.tokens().iter().any(|t| t.token().id() == id)) {
+                self.held_extras.push((id.clone(), target.clone(), paths));
+                return;
+            }
             for path in paths { unstage(&path); }
             return;
         };
@@ -1070,32 +1114,23 @@ impl Composer {
     }
 
     /// ComposerTextView.settle: a chip's picture is in, or couldn't be read.
-    /// With its box gone, it's dropped. Gone from the words by then (undone,
-    /// deleted), it's kept all the same, as an undo or redo can put the
-    /// chip back (`remove_picture_in`).
+    /// Gone from the words by then (deleted, or the box holding an edit),
+    /// it's kept all the same, as Undo can bring the chip back; only a box
+    /// that's gone drops it.
     fn settle_picture(&mut self, id: SharedString, result: Result<Value, threadbear_client::runner::RpcError>, target: WeakEntity<TextareaState>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = target.upgrade() else {
             self.pictures.remove(&id);
             return;
         };
-        let Some(range) = Self::chip_range(&target, &id, cx) else {
-            match result.ok().and_then(|v| ImageRef::decode(&v["image"])) {
-                Some(image) => {
-                    if let Some(chip) = self.pictures.get_mut(&id) {
-                        chip.image = Some(image);
-                    }
-                }
-                None => {
-                    self.pictures.remove(&id);
-                }
-            }
-            return;
-        };
+        let range = Self::chip_range(&target, &id, cx);
         match result {
             Ok(v) => {
                 let image = ImageRef::decode(&v["image"]);
                 if let (Some(chip), Some(image)) = (self.pictures.get_mut(&id), image) {
                     chip.image = Some(image);
+                }
+                if range.is_none() {
+                    return;
                 }
                 // A Something else box's answer takes it now.
                 if target != self.input {
@@ -1103,9 +1138,13 @@ impl Composer {
                 }
             }
             Err(e) => {
-                // Taken out, with the space that came with it.
-                Self::remove_chip_range(&target, range, window, cx);
+                // Taken out, with the space that came with it. Undo bringing
+                // the chip back finds no picture behind it: its tile says so,
+                // and sending says to take it out (`has_dead_chip`).
                 self.pictures.remove(&id);
+                if let Some(range) = range {
+                    Self::remove_chip_range(&target, range, window, cx);
+                }
                 if let Some(pane) = self.pane() {
                     pane.update(cx, |p, cx| p.show_error(format!("Couldn't add that picture: {}", e.message), cx));
                 }
@@ -1156,15 +1195,48 @@ impl Composer {
         self.remove_picture_in(&target, id, window, cx);
     }
 
+    ///
+    /// The picture stays in `pictures`, as it does for a chip deleted with
+    /// Backspace: the × is an edit Undo takes back, and the chip it brings
+    /// back has to have its picture, or the message went without it (Codex,
+    /// 18 Nov). Sending or a new draft clears them.
     pub(crate) fn remove_picture_in(&mut self, target: &Entity<TextareaState>, id: SharedString, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(range) = Self::chip_range(target, &id, cx) {
             Self::remove_chip_range(target, range, window, cx);
         }
-        // The picture itself stays in `pictures`: ⌘Z puts the chip back in
-        // the words, and without its entry the chip would show a spinner and
-        // the message go out without the picture. Entries go when the box
-        // is cleared (sent, or another draft put in it).
         cx.notify();
+    }
+
+    /// Whether a picture's chip in what would be sent has no picture behind
+    /// it: Undo bringing back one whose picture couldn't be read, say. Sent,
+    /// the message would quietly go without it, so `send` refuses and says
+    /// why. Taking it out again with an edit of its own made a loop Undo
+    /// couldn't get past (Codex, 18 Nov).
+    fn has_dead_chip(&self, cx: &App) -> bool {
+        let mut inputs = if self.editing.is_some() { Vec::new() } else { self.card.sent_answer_inputs() };
+        inputs.push(self.input.clone());
+        inputs.iter().flat_map(|input| Self::chips_in(input, cx)).any(|(_, id)| !self.pictures.contains_key(&id))
+    }
+
+    /// Says a dead chip is in the way, if one is: true when it did.
+    fn refuse_dead_chip(&self, cx: &mut Context<Self>) -> bool {
+        if !self.has_dead_chip(cx) {
+            return false;
+        }
+        if let Some(pane) = self.pane() {
+            pane.update(cx, |p, cx| p.show_error("A picture in your message couldn't be added. Take its chip out to send.".to_owned(), cx));
+        }
+        true
+    }
+
+    /// The box emptied: its chips' pictures and links go too, unless an edit
+    /// is holding the box from before it, whose chips still point at them
+    /// (Schedule… during an edit took them, Codex, 18 Nov).
+    fn forget_chips(&mut self) {
+        if self.editing.is_none() {
+            self.pictures.clear();
+            self.mentions.clear();
+        }
     }
 
     fn renumber_chips(&mut self, cx: &App) {
@@ -1343,6 +1415,7 @@ impl Composer {
             let tile = div().relative().size(side).rounded(radius).border_1().border_color(edge).overflow_hidden().bg(style::chip_fill(cx));
             let tile = match image {
                 Some(image) => tile.child(img(PathBuf::from(&image.path)).size(side).rounded(radius).object_fit(ObjectFit::Cover)),
+                None if chip.is_none() => tile.flex().items_center().justify_center().child(crate::icons::symbol("exclamationmark.triangle").size(px(14.)).text_color(style::quiet_text(cx))),
                 None => tile.flex().items_center().justify_center().child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.))),
             };
             let dropping = chip.and_then(|c| c.dropping.as_ref()).map(|at| crate::composer_card::first_frame(at).elapsed()).filter(|e| threadbear_core::juice::picture_dropping(*e));
@@ -1630,6 +1703,9 @@ impl Render for Composer {
         // replaces what's there, so anything given back goes after it.
         if let Some((text, images)) = self.pending_box.take() {
             self.set_box(text, images, window, cx);
+        }
+        if let Some(saved) = self.pending_saved.take() {
+            self.restore_box(saved, window, cx);
         }
         // While an older message is being edited, what's given back waits
         // for the edit to end, rather than join it and go with it, or be

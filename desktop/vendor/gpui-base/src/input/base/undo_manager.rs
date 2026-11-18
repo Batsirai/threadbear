@@ -309,6 +309,15 @@ impl UndoManager {
         self.coalescing_boundary = true;
     }
 
+    /// Commits whatever's being collected, brackets and all, and stops the
+    /// next edit joining it: `take_history` hands over only finished
+    /// transactions, as an open one taken away from its IME composition
+    /// would gather every later edit into itself.
+    pub(super) fn finish(&mut self) {
+        self.commit_all_transactions();
+        self.coalescing_boundary = true;
+    }
+
     /// Close every open bracket, committing whatever they collected.
     fn commit_all_transactions(&mut self) {
         if self.transaction_depth == 0 {
