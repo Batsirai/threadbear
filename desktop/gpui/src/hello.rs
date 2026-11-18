@@ -86,6 +86,9 @@ pub(crate) struct HelloState {
     /// A login whose Sign in… opened Terminal, till it's signed in.
     signing: Option<String>,
     adding: Option<Adding>,
+    /// Asks the runner about a pending sign-in every few seconds
+    /// (accounts.recheck): its own sweep is ten minutes apart.
+    sign_watch: Option<Task<()>>,
     /// GitHub's CLI: None till asked, then the account or "" for nobody.
     gh: Option<String>,
     // The Phone card.
@@ -170,6 +173,7 @@ impl Threadbear {
         self.hello.poll = None;
         self.hello.qr = None;
         self.hello.signing = None;
+        self.hello.sign_watch = None;
         self.hello_drop_unfinished_login();
         self.settings.saved.tour_seen = Some(true);
         self.save_settings_soon(cx);
@@ -220,8 +224,44 @@ impl Threadbear {
             // ~/.claude, which the runner finds once it's there.
             self.sign_in(SignInAccount { id: id.clone(), provider: "claude".into(), title: "Claude Code".into(), config_dir: String::new() }, cx);
         }
-        self.hello.signing = Some(id);
+        self.hello.signing = Some(id.clone());
+        self.hello_watch_sign_in(id, cx);
         cx.notify();
+    }
+
+    /// While a login's sign-in is open in Terminal, the runner is asked to
+    /// look at it again every 3 s, so the row stops waiting a moment after
+    /// it's done rather than at the runner's next sweep, up to ten minutes
+    /// later (Mike on Tinker Desk, 18 Nov: "it didn't change after I
+    /// connected Claude"). Stops when the row does, or after 15 minutes.
+    fn hello_watch_sign_in(&mut self, id: String, cx: &mut Context<Self>) {
+        let client = self.client.clone();
+        self.hello.sign_watch = Some(cx.spawn(async move |this, cx| {
+            for _ in 0..300 {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                let waiting = this.update(cx, |this, _| this.hello.signing.as_deref() == Some(id.as_str()) || this.hello.adding.as_ref().is_some_and(|a| a.id == id)).unwrap_or(false);
+                if !waiting {
+                    return;
+                }
+                let res = crate::call(client.clone(), "accounts.recheck", json!({ "accountId": id })).await;
+                let go_on = this
+                    .update(cx, |this, cx| match res {
+                        Ok(v) => {
+                            if v["accounts"].is_array() {
+                                this.logins.set_accounts(&v["accounts"]);
+                                cx.notify();
+                            }
+                            true
+                        }
+                        // An older runner: accounts.updated still brings it, later.
+                        Err(e) => e.code != -32601,
+                    })
+                    .unwrap_or(false);
+                if !go_on {
+                    return;
+                }
+            }
+        }));
     }
 
     /// Another Claude login: a claude-N folder in the runner's `accounts`
@@ -238,7 +278,8 @@ impl Threadbear {
             return;
         }
         self.sign_in(SignInAccount { id: id.clone(), provider: "claude".into(), title: "another Claude login".into(), config_dir: dir.to_string_lossy().into_owned() }, cx);
-        self.hello.adding = Some(Adding { id, dir });
+        self.hello.adding = Some(Adding { id: id.clone(), dir });
+        self.hello_watch_sign_in(id, cx);
         cx.notify();
     }
 

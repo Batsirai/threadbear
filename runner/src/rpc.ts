@@ -940,6 +940,9 @@ export class RpcServer {
       // Mike's click on the limit box; never a thread's (rpc-gate refuses it).
       case 'accounts.useReset':
         return r.useReset(reqString(p, 'accountId'));
+      // The app's, after its Sign in… (never a thread's: the gate refuses it).
+      case 'accounts.recheck':
+        return r.recheckAccounts(optString(p, 'accountId'));
       // Each starts its work and answers at once; progress comes through
       // clis.updated.
       case 'clis.list':

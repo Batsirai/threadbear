@@ -181,6 +181,7 @@ for (const mode of MODES) {
         ['devices.pair', {}],
         ['clis.update', { provider: 'claude' }],
         ['accounts.useReset', { accountId: 'codex-main' }],
+        ['accounts.recheck', {}],
         ['panels.convexKey', { threadId: me.id, panelId: 'x' }],
         ['no.such.method', {}],
       ];

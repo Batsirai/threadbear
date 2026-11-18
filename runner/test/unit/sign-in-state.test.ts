@@ -190,3 +190,25 @@ test('a refusal with no reading yet holds its hour even when the first reading s
   assert.equal(state.view(accounts[0]).signedOut, true);
   state.stop();
 });
+
+test('checkNow asks about one login straight away, without waiting for the sweep, and tells listeners', async () => {
+  const clock = new FakeClock(NOW);
+  const answers: Record<string, object> = { 'claude-main': { loggedIn: false }, 'claude-1': { loggedIn: false } };
+  const asked: string[] = [];
+  const accounts = [account('claude-main'), account('claude-1')];
+  const state = new SignInState({ claudePath: 'c', accounts: () => accounts, env: (a) => ({ WHO: a.id }), clock, log: nullLogger, exec: async (_f, _a, env) => (asked.push(env.WHO!), JSON.stringify(answers[env.WHO!])) });
+  await state.checkAll();
+  let changes = 0;
+  state.onChange(() => changes++);
+  // The setup card's Sign in… finished in Terminal a moment ago.
+  answers['claude-main'] = { loggedIn: true, loginExpiresAt: iso(NOW + 28 * DAY) };
+  asked.length = 0;
+  await state.checkNow('claude-main');
+  assert.deepEqual(asked, ['claude-main'], 'only that login');
+  assert.equal(state.view(accounts[0]).signedOut, undefined);
+  assert.equal(changes, 1);
+  asked.length = 0;
+  await state.checkNow();
+  assert.deepEqual(asked, ['claude-main', 'claude-1'], 'every Claude login without an id');
+  state.stop();
+});

@@ -266,7 +266,7 @@ export type AccountPicker = (accounts: Account[], lastUsedId: string | undefined
 // AccountRegistry, plus the onChange D adds (fired when a rescan finds a
 // different list).
 export type AccountSource = Pick<AccountRegistry, 'list' | 'get' | 'learn'> & { onChange?(fn: () => void): () => void };
-export type SignInSink = Pick<SignInState, 'noteRefused' | 'noteWorked' | 'onChange'>;
+export type SignInSink = Pick<SignInState, 'noteRefused' | 'noteWorked' | 'onChange'> & Partial<Pick<SignInState, 'checkNow'>>;
 
 // The Codex adapter reports the binaries its live processes run, so E only
 // deletes version folders nothing uses. Not on AgentAdapter, since only
@@ -1048,6 +1048,17 @@ export class Runner {
       this.rescanAccounts();
       this.armRescan();
     }, ACCOUNT_RESCAN_MS);
+  }
+
+  // accounts.recheck (docs/protocol.md): the app ran Terminal on a login's
+  // sign-in, or made a folder for another. The list is read again (a new
+  // claude-N folder) and the CLI asked about that login's sign-in now,
+  // not at the next sweep (up to 10 minutes), so the setup card stops
+  // spinning as soon as it's done.
+  async recheckAccounts(accountId?: string): Promise<{ accounts: Account[] }> {
+    this.rescanAccounts();
+    await this.signIn?.checkNow?.(accountId);
+    return { accounts: this.safeAccounts() };
   }
 
   rescanAccounts(): void {

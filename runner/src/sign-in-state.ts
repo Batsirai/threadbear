@@ -142,6 +142,19 @@ export class SignInState {
     if (this.refused.delete(accountId)) this.changed();
   }
 
+  // Asked now rather than at the next sweep: the app's Sign in… has just
+  // run Terminal on a login's sign-in (accounts.recheck), and the setup
+  // card spins until the runner sees it. One login, or every Claude one.
+  async checkNow(accountId?: string): Promise<void> {
+    const list = this.o.accounts().filter((a) => a.provider === 'claude' && (accountId === undefined || a.id === accountId));
+    await this.queue(async () => {
+      for (const a of list) {
+        if (this.stopped) return;
+        await this.check(a);
+      }
+    });
+  }
+
   // Every Claude login, one after another, then again in CHECK_MS. A
   // passing end date is a change even with no new reading, so the timer
   // also tells listeners when the views differ.
