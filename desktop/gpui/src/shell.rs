@@ -1119,9 +1119,16 @@ impl Threadbear {
     }
 
     /// Whether ⌘Z is for an archive rather than text: nothing to undo in a
-    /// text box, so outside one, or in the open thread's empty message box
+    /// text box, so outside one, or in an empty message box
     /// (where the key lands after an archive opens the next thread). Words
     /// in a box keep the key for themselves.
+    ///
+    /// Empty isn't enough: a draft cleared by mistake (select all and
+    /// delete, or cut) leaves the box empty with the clearing still to undo,
+    /// and ⌘Z there has to bring the words back, not a thread. So the box
+    /// also has to have no edits to take back (`can_undo`). Sending a message
+    /// or opening a thread empties it with `set_value`, which clears that
+    /// history, so ⌘Z after either still reaches the archives.
     fn undo_key_is_archive(&self, window: &Window, cx: &App) -> bool {
         if self.archive_history.is_empty() {
             return false;
@@ -1130,10 +1137,12 @@ impl Threadbear {
         if !in_text {
             return true;
         }
-        let composer = self.selected.as_ref().and_then(|id| self.composers.get(id));
-        composer.is_some_and(|c| {
+        // Whichever message box has the key: the open thread's, a pinned
+        // one beside it, or the new thread page's.
+        let focused = self.composers.values().chain(self.new_thread.composer.iter()).find(|c| c.read(cx).input.read(cx).focus_handle(cx).is_focused(window));
+        focused.is_some_and(|c| {
             let c = c.read(cx);
-            c.input.read(cx).focus_handle(cx).is_focused(window) && !c.holds_anything(cx)
+            !c.holds_anything(cx) && !c.input.read(cx).can_undo()
         })
     }
 

@@ -3404,6 +3404,14 @@ impl<M: InputModeKind> InputBaseState<M> {
         recorded
     }
 
+    /// Whether Undo would take back an edit in this box. Threadbear asks
+    /// before letting ⌘Z bring back an archived thread instead, so a draft
+    /// cleared by mistake always comes back first (shell.rs,
+    /// `undo_key_is_archive`).
+    pub fn can_undo(&self) -> bool {
+        self.undo_manager.can_undo()
+    }
+
     pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
         self.replay_history(true, window, cx);
     }
@@ -8890,6 +8898,37 @@ mod tests {
                 // Redo reapplies the replacement.
                 state.redo(&Redo, window, cx);
                 assert_eq!(state.value(), "second");
+            });
+        });
+    }
+
+    /// Threadbear's ⌘Z asks `can_undo` before bringing back an archived
+    /// thread: a box emptied by an edit still has that edit to undo, while
+    /// one emptied by `set_value` (a sent message) has none.
+    #[gpui::test]
+    fn test_can_undo_after_clearing_by_hand(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                assert!(!state.can_undo(), "a new box has nothing to undo");
+                state.replace_all("a draft", window, cx);
+                state.replace_all("", window, cx);
+                assert_eq!(state.value(), "");
+                assert!(state.can_undo(), "the clearing edit can be undone");
+
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "a draft");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "");
+                assert!(!state.can_undo(), "everything is undone");
+
+                state.redo(&Redo, window, cx);
+                assert!(state.can_undo());
+                state.set_value("", window, cx);
+                assert!(!state.can_undo(), "set_value clears the history");
             });
         });
     }

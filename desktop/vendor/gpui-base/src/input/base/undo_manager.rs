@@ -364,6 +364,15 @@ impl UndoManager {
         Some(replay)
     }
 
+    /// Whether an undo would take anything back: a committed transaction, or
+    /// one still being collected (`undo` commits that first, as during an
+    /// IME composition). Threadbear's ⌘Z goes to the box's own typing while
+    /// this holds, and only otherwise brings back an archived thread.
+    pub(super) fn can_undo(&self) -> bool {
+        !self.undo_transactions.is_empty()
+            || self.pending.as_ref().is_some_and(|p| !p.changes.is_empty())
+    }
+
     #[cfg(test)]
     pub(super) fn has_undos(&self) -> bool {
         !self.undo_transactions.is_empty()
