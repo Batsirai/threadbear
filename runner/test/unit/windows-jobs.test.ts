@@ -252,6 +252,28 @@ test("a CLI stamped a little after node's now is still the CLI: Windows' clock i
   }
 });
 
+// The slack mustn't let in a process that got the CLI's pid: the runner only
+// lets go of the pid once its event loop has run, so add() holds it until
+// notAfter has passed (Codex's review, 19 Nov).
+test('add() returns only once notAfter has passed, so the pid can only be reused after it', async () => {
+  let notAfter = '';
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  reg.jobs = {
+    assign: async (_pid, _name, n) => ((notAfter = n), '1'),
+    end: async () => {},
+    forget: async () => {},
+  };
+  const cli = sleeper();
+  try {
+    reg.add(cli.pid!, 'claude', 'th1');
+    const back = (BigInt(Date.now()) + 11_644_473_600_000n) * 10_000n;
+    assert.ok(back > BigInt(notAfter), `returned at ${back}, notAfter ${notAfter}`);
+    reg.remove(cli.pid!);
+  } finally {
+    cli.kill();
+  }
+});
+
 test("a CLI that exited before its job was made keeps its record when the job can't be ended", async () => {
   let answer!: (s: string) => void;
   const dir = tmpDir();
