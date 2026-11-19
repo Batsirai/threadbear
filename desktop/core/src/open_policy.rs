@@ -633,12 +633,18 @@ fn runs(file: &Path, meta: &std::fs::Metadata, app: Option<OpeningApp>) -> (Opti
         if app.bundle_id.as_deref().is_some_and(is_code_runner) {
             return (Some(format!("It opens in {}, which runs it.", app.name)), None);
         }
-        // A file (even one named like a document) that a thread pointed at
-        // Finder or an app that mounts or unpacks what it's given: an alias
-        // opens what it points at, an image or archive brings in an app
-        // (Gemini's third look, 19 Nov). A folder going to Finder is shown.
-        if !meta.is_dir() && app.bundle_id.as_deref().is_some_and(|id| OPENS_WHATS_INSIDE.contains(&id.to_ascii_lowercase().as_str())) {
+        // A file (even one named like a document, or a package) that a
+        // thread pointed at Finder or an app that mounts or unpacks what
+        // it's given: an alias opens what it points at, an image or archive
+        // brings in an app (Gemini's third and fourth looks, 19 Nov). A
+        // folder going to Finder is only shown, so that one doesn't ask.
+        let id = app.bundle_id.as_deref().map(str::to_ascii_lowercase).unwrap_or_default();
+        if OPENS_WHATS_INSIDE.contains(&id.as_str()) && !(meta.is_dir() && id == "com.apple.finder") {
             return (Some(format!("It opens in {}, which opens what's inside it.", app.name)), None);
+        }
+        // And one pointed at an app that runs scripts or installs what it's given.
+        if RUNS_WHAT_ITS_GIVEN.contains(&id.as_str()) {
+            return (Some(format!("It opens in {}, which may run it.", app.name)), None);
         }
         // An app in a project folder (or anywhere else a thread can write)
         // can be made a file's opener, with Launch Services' per-file "open
@@ -725,7 +731,7 @@ impl TrustedOpener {
         if extension.is_empty() || app.path == file || NEVER_REMEMBERED_EXTENSIONS.contains(&extension.as_str()) {
             return None;
         }
-        if NEVER_REMEMBERED_APPS.contains(&bundle_id.to_ascii_lowercase().as_str()) || !rememberable_place(&app.path) {
+        if !rememberable_place(&app.path) {
             return None;
         }
         Some(TrustedOpener { extension, bundle_id: bundle_id.to_owned(), app: app.path.clone() })
@@ -755,9 +761,9 @@ const OPENS_WHATS_INSIDE: &[&str] = &[
     "com.aone.keka", "com.macitbetter.betterzip",
 ];
 
-/// Apps never given an Always, besides those: they run what they're given
-/// (the code runners are refused before this).
-const NEVER_REMEMBERED_APPS: &[&str] = &[
+/// Apps that run or install what they're given, past the code runners: a
+/// file going to one always asks too.
+const RUNS_WHAT_ITS_GIVEN: &[&str] = &[
     "com.apple.scripteditor2", "com.apple.automator", "com.apple.installer", "com.apple.shortcuts", "org.python.idle", "com.apple.systemevents",
     "com.apple.applescriptutility",
 ];
@@ -1670,7 +1676,12 @@ mod tests {
         assert!(question.always.is_none() && question.detail.contains("opens what's inside it"));
         let unpacker = |_: &Path| Some(OpeningApp { path: "/System/Library/CoreServices/Applications/Archive Utility.app".into(), bundle_id: Some("com.apple.archiveutility".into()), name: "Archive Utility".into() });
         assert!(matches!(decide_file(&json.to_string_lossy(), Origin::ThisMac, &unpacker), FileVerdict::Ask { .. }));
-        // A folder still goes to Finder.
+        // A document sent to System Events asks too.
+        let events = |_: &Path| Some(OpeningApp { path: "/System/Library/CoreServices/System Events.app".into(), bundle_id: Some("com.apple.systemevents".into()), name: "System Events".into() });
+        assert!(matches!(decide_file(&json.to_string_lossy(), Origin::ThisMac, &events), FileVerdict::Ask { .. }));
+        // A package going to an unpacker asks; a folder still goes to Finder.
+        fs::create_dir_all(s.path("notes.rtfd")).unwrap();
+        assert!(matches!(decide_file(&s.path("notes.rtfd").to_string_lossy(), Origin::ThisMac, &unpacker), FileVerdict::Ask { .. }));
         fs::create_dir_all(s.path("plain")).unwrap();
         assert!(matches!(decide_file(&s.path("plain").to_string_lossy(), Origin::ThisMac, &finder), FileVerdict::Open { .. }));
         // Finder, or an alias or a disk image: no Always.
