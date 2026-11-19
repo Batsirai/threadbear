@@ -51,6 +51,8 @@ const ASPECT: f32 = 0.62;
 /// Short enough to sit whole in the transcript over the composer, as its
 /// view only shows while all of it is in sight.
 const MAX_BODY: f32 = 360.;
+/// The least it shrinks to for a short transcript.
+const MIN_BODY: f32 = 140.;
 
 /// Whether the experiment's on (from the runner's hello), and which page is running.
 #[derive(Default)]
@@ -266,7 +268,10 @@ fn card(page: &LivePage, window: &mut Window, cx: &mut App) -> AnyElement {
         .child(div().flex_none().text_size(px(size::DETAIL)).text_color(secondary).child(threadbear_core::highlights::last_component(&page.path).to_owned()))
         .child(button);
     let width = f32::from(window.viewport_size().width).min(style::MAX_CONTENT_WIDTH);
-    let height = (width * ASPECT).min(MAX_BODY);
+    // Never taller than the transcript has room for, header and a margin
+    // included, or the page would never be wholly in view to show.
+    let room = crate::web_panels::live_room().map_or(MAX_BODY, |h| (h - HEADER - 24.).max(MIN_BODY));
+    let height = (width * ASPECT).min(MAX_BODY).min(room);
     let body = match running {
         Some(r) => {
             let main = cx.try_global::<LivePages>().and_then(|s| s.main) == Some(window.window_handle());

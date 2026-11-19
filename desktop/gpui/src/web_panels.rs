@@ -491,6 +491,16 @@ pub(crate) fn live_page(real: &str, digest: &str, run: u64, main: bool, window: 
     sealed_page(&live_key(real, digest, run), real, Some(digest), true, main, window, cx)
 }
 
+thread_local! {
+    /// The height the transcript last showed a running live page's card in.
+    static LIVE_ROOM: Cell<f32> = const { Cell::new(0.) };
+}
+
+/// How tall the transcript is where a live page last ran, if one has.
+pub(crate) fn live_room() -> Option<f32> {
+    Some(LIVE_ROOM.with(Cell::get)).filter(|h| *h > 0.)
+}
+
 fn live_key(real: &str, digest: &str, run: u64) -> String {
     format!("live:{run}:{digest}:{real}")
 }
@@ -522,6 +532,16 @@ fn placed(drawn: Rc<Cell<(u64, Bounds<Pixels>)>>, clip: bool) -> AnyElement {
     canvas(
         move |bounds, window, _| {
             let mask = window.content_mask().bounds;
+            if clip {
+                // How tall the transcript shows, for the card to fit next frame
+                // (`live_room`): the answer card under the reply can leave less
+                // room than the card's own height, and then it would never show.
+                let room = f32::from(mask.size.height);
+                if (LIVE_ROOM.with(Cell::get) - room).abs() > 1. {
+                    LIVE_ROOM.with(|r| r.set(room));
+                    window.refresh();
+                }
+            }
             if !clip || mask.intersect(&bounds) == bounds {
                 drawn.set((frame_now(), bounds));
             }
