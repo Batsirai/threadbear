@@ -6,6 +6,7 @@ import { makeHarness, tmpDir } from '../helpers/fakes.ts';
 import { loadConfig } from '../../src/config.ts';
 import { downgradeFetch } from '../helpers/redirect-trap.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
+import { TRY_FIRST_NUDGE } from '../../src/needs.ts';
 import {
   CLAUDE_AI_CONNECTORS_URL,
   ConnectorsMonitor,
@@ -428,8 +429,25 @@ test('end_turn: the sign-in ask the sign-in note asked for is taken, with no try
   s.text('m1', "I couldn't search Gmail: it needs signing in again.");
   let r = await call({ needs: 'nothing' }, 'e1');
   assert.ok(r.text.startsWith(SIGN_IN_NUDGE));
-  r = await call({ needs: 'you', asks: [{ action: 'Sign in to Gmail again on claude.ai.', why: 'Then I can search it.', options: ['Signed in'] }] }, 'e2');
+  // An unrelated step on the same card still hears the try-first note.
+  r = await call({ needs: 'you', asks: [{ action: 'Sign in to Gmail again on claude.ai.', why: 'Then I can search it.', options: ['Signed in'] }, { action: 'Allow Desk Runner on removable volumes.', why: 'The test needs the SSD.', options: ['Done', 'Stuck'] }] }, 'e2');
+  assert.ok(r.text.startsWith(TRY_FIRST_NUDGE), r.text);
+  r = await call({ needs: 'you', asks: [{ action: 'Sign in to Gmail again on claude.ai.', why: 'Then I can search it.', options: ['Signed in'] }] }, 'e3');
   assert.equal(r.error, false, r.text);
+
+  // A sign-in ask written first time, with no sign-in note before it, is taken too.
+  const h2 = makeHarness();
+  const t2 = h2.runner.create({ text: 'Find the email from Emily', accountId: 'claude-3' });
+  const s2 = h2.adapter.last;
+  s2.init();
+  const endTurn2 = buildThreadbearTools(h2.runner, t2.thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, sleep: async () => {} }).find((x) => x.name === 'end_turn')!;
+  s2.out({ kind: 'event', event: { type: 'tool.call', itemId: 'g1', name: 'mcp__claude_ai_Gmail__search_threads', kind: 'mcp', title: 'Gmail', input: {} } });
+  s2.out({ kind: 'event', event: { type: 'tool.result', itemId: 'g1', ok: false, text: 'MCP server "claude.ai Gmail" needs you to sign in again', truncated: false, images: [] } });
+  s2.text('m1', 'Gmail needs signing in again.');
+  const args = { needs: 'you', asks: [{ action: 'Sign in to Gmail again on claude.ai.', why: 'Then I can search it.', options: ['Signed in'] }] };
+  s2.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: args } });
+  const r2 = (await endTurn2.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
+  assert.equal(r2.isError, undefined, r2.content[0].text);
 });
 
 test('end_turn takes an ask that covers the sign-in straight away', async () => {

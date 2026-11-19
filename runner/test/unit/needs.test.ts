@@ -508,12 +508,15 @@ test('handsOverAStep knows a step from a choice', () => {
     ['On Tinker Desk, allow Desk Runner to use Removable Volumes (System Settings > Privacy & Security > Files & Folders)', ['Done', 'Land without it']],
     ["Unlock Tinker Desk's screen (Screen Sharing or at the desk) so the Backspace test can click in the app", ['Unlocked', 'Land it anyway']],
     ["Tinker Desk's screen is on the ademark login (locked). Switch it back to mikeysee, or land the fix without the last test?", ['Switched back', 'Land it anyway']],
-    ['In the Google AI Studio tab I brought forward, set up prepay on the Convex billing account and buy US$50 of credit.', undefined],
     ['Skip Apple Account sign-in on Tinker Desk, finish the setup screens. Done?', ['Done', 'Stuck']],
     ['Turn on the setting.', ['Done', 'Can you do it?']],
     ['Please enable Desk Runner’s Removable Volumes access.', ['I’ve enabled it', 'Stuck']],
     ['In [the AI Studio tab](https://aistudio.google.com/billing), set up prepay.', undefined],
     ['**Turn on** the switch.', undefined],
+    ['Can you enable Desk Runner’s Removable Volumes access?', ['Enabled', 'Stuck']],
+    ['Log into Tinker Desk as ademark.', undefined],
+    ['In [Google Cloud Console](https://console.cloud.google.com/apis/credentials?project=app), copy the Gemini API key.', undefined],
+    ['On Tinker Desk, in System Settings, allow Desk Runner on removable volumes.', undefined],
     ['Allow Desk Runner on Tinker Desk to read its files, so I can run the test?', ["I've allowed it", 'Land without it']],
     ['Sign in to the store.', ['Signed in', 'Hold off']],
   ] as const) assert.ok(card(action, options && [...options]), action);
@@ -533,6 +536,13 @@ test('handsOverAStep knows a step from a choice', () => {
     ["Let's decide which plan to use.", ['Credits', 'Plan']],
     ['Delete the old Linux install on the Dell laptop.', ['Delete it', 'Leave it']],
     ['Buy the weather station kit (about A$246).', ['Order it', 'Wait']],
+    ['In the Google AI Studio tab I brought forward, set up prepay on the Convex billing account and buy US$50 of credit.', ['Done']],
+    ['Delete the old Linux install on the Dell laptop.', ['Done', 'Stuck']],
+    ['Click Delete Account to close it for good.', undefined],
+    ['**Install the new Tandem now?**', ['Install now', 'Later']],
+    ['Open PRs #38 and #41 both touch auth. Which should I merge first?', ['#38', '#41']],
+    ['Which apps should this list show?', ['Installed apps', 'All apps']],
+    ['Keep going with the old plan?', ["I've changed my mind", 'Keep going']],
   ] as const) assert.ok(!card(action, options && [...options]), action);
   assert.ok(!card('Turn on one of these', ['Done'], [{ title: 'Review', url: 'review:abc' }]), 'a review is a pick');
   assert.ok(handsOverAStep([{ action: 'Which design?', options: ['A', 'B'], links: [{ title: 'Review', url: 'review:abc' }] }, { action: 'Allow Desk Runner on removable volumes.', options: ['Done'] }]), "a review doesn't hide the card's other asks");

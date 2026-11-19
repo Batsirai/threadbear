@@ -3326,8 +3326,9 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   an answer like "Can you do it?" or "Done", or an ask that opens with an
   instruction rather than a question) is refused once a turn, with an error
   result that starts `Not ended: this card hands the user a step`, asking for
-  a try if there hasn't been one. A choice, or a card that opens a review, is
-  left alone. Called again, it's taken as it is. Nothing reaches the app. It
+  a try if there hasn't been one. A choice, an ask that opens a review, one
+  to delete, remove, buy or pay, and one covering a sign-in the turn needs are
+  left out. Called again, it's taken as it is. Nothing reaches the app. It
   can't tell whether the turn tried, as turns are busy with other work, so it
   asks; and it can't see a hand-over written as plain prose off the card.
 - **A card in plain words.** A card with answers to pick from is refused once

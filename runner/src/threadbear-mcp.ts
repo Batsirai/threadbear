@@ -35,7 +35,7 @@ import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, M
 const WHOLE_JOB = "Done is the whole job, not this step: if the next step to finish it is theirs (a merge, a deploy), it's an ask.";
 import { asksForAppRestart, type AppRestarts } from './app-restarts.ts';
 import { PANEL_PLACES } from './panel-requests.ts';
-import { nudgedThisTurn, signInNudge, turnSignIns, uncovered, type ConnectorService } from './connectors.ts';
+import { notSignIns, nudgedThisTurn, signInNudge, turnSignIns, uncovered, type ConnectorService } from './connectors.ts';
 import type { PanelPlace } from './protocol.ts';
 import { providerName } from './providers.ts';
 import { readRelease, type ReleaseJson } from './release.ts';
@@ -1537,10 +1537,10 @@ export function buildThreadbearTools(
         const repeat = repeatEndTurn(events, input);
         if (repeat) return repeat;
         checkFindings(input, needs, events);
-        const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
+        const signIns = await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth);
+        const missing = uncovered(signIns, needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        // Not after the sign-in note, which asked for the sign-in ask this would question.
-        if (opts.tryFirstNote !== false && needs === 'you' && !nudgedThisTurn(events) && handsOverAStep(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns)) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
@@ -1669,9 +1669,10 @@ export function buildThreadbearTools(
         // than an error buried in a work group (connectors.ts).
         const events = await turnEvents();
         checkFindings(args, needs, events);
-        const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
+        const signIns = await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth);
+        const missing = uncovered(signIns, needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (opts.tryFirstNote !== false && needs === 'you' && !nudgedThisTurn(events) && handsOverAStep(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns)) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
