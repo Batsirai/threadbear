@@ -124,7 +124,7 @@ test('a check-up drafts from the log, then posts that draft once per release', (
   assert.equal(c.note, 'all fine');
   saveDraft(home, c);
 
-  assert.match(postDraft(home, NOW, () => ({ ok: true, out: 'x' }), undefined).message, /hasn't opened/);
+  assert.match(postDraft(home, NOW, () => ({ ok: true, out: 'x' }), 0).message, /hasn't opened/);
 
   const calls: string[][] = [];
   const gh = (args: string[]) => {
