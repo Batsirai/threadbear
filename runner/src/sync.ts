@@ -747,6 +747,9 @@ export type SyncDeps = {
   // full write's prune. Absent in small tests.
   elsewhere?: (threadId: string) => boolean;
   elsewhereIds?: () => string[];
+  // A thread moved from here to another runner (moves.ts gone): its row is
+  // that runner's now, so it's only ever forgotten here, never removed.
+  movedAway?: (threadId: string) => boolean;
   // Box mode (src/box-mode.ts): the key is a box key, the heartbeat names
   // the provider's machine, and a key the backend turns down means a newer
   // box has the thread, so `superseded` is called once and nothing more is
@@ -2467,6 +2470,12 @@ export class ConvexSync {
         break;
       case 'thread.deleted': {
         const id = n.params.threadId;
+        // A move's own delete, after its switch: the row is the other
+        // runner's, and removeThreads with the owner key would take it.
+        if (this.deps.movedAway?.(id)) {
+          this.forgetMoved(id);
+          break;
+        }
         this.dirty.delete(id);
         this.sent.delete(id);
         this.held.delete(id);
@@ -2718,6 +2727,25 @@ export class ConvexSync {
     else this.cardsBehind.delete(threadId);
   }
 
+  /**
+   * A thread moved to another runner: no longer this runner's to write or
+   * remove. Forgotten as sent, so no later start takes it for one deleted
+   * here and removes its row, which the owner key would do whichever runner
+   * has it (David Clark's fork, 16 Nov 2026: two moved threads' rows gone
+   * from raven).
+   */
+  private forgetMoved(threadId: string): void {
+    this.sent.delete(threadId);
+    this.heads.delete(threadId);
+    this.lastWrite.delete(threadId);
+    this.dirty.delete(threadId);
+    this.held.delete(threadId);
+    this.missing.delete(threadId);
+    this.removed.delete(threadId);
+    this.removedFromFile.delete(threadId);
+    this.noteSent();
+  }
+
   private forgetCards(threadId: string): void {
     this.pending.delete(threadId);
     this.cardsBehind.delete(threadId);
@@ -2787,7 +2815,11 @@ export class ConvexSync {
     // prune a full write does, so it goes now (Daybreak, 6 Nov: a shared
     // thread deleted with sync off stayed public).
     const here = new Set(this.deps.runner.list(ALL).map((t) => t.id));
-    for (const id of [...this.sent.keys()]) if (!here.has(id) && !this.deps.elsewhere?.(id)) this.dropRow(id);
+    for (const id of [...this.sent.keys()]) {
+      if (here.has(id)) continue;
+      if (this.deps.movedAway?.(id)) this.forgetMoved(id);
+      else if (!this.deps.elsewhere?.(id)) this.dropRow(id);
+    }
     for (const t of this.deps.runner.list(ALL)) this.mark(t);
     this.scheduleFlush();
   }
@@ -2817,6 +2849,10 @@ export class ConvexSync {
     for (const [id, since] of [...this.missing]) {
       if (here.has(id) || this.deps.elsewhere?.(id)) {
         this.missing.delete(id);
+        continue;
+      }
+      if (this.deps.movedAway?.(id)) {
+        this.forgetMoved(id);
         continue;
       }
       if (now - since < MISSING_GRACE_MS) continue;
@@ -3347,6 +3383,9 @@ export class ConvexSync {
     this.closedIds.clear();
     const docs = [...this.dirty.values()];
     // Not while settling: a thread the file says went may yet come across.
+    // Nor one that moved away since it was marked removed: its row is the
+    // other runner's now.
+    for (const id of [...this.removed]) if (this.deps.movedAway?.(id)) this.forgetMoved(id);
     this.removing = new Set(this.settling ? [] : this.removed);
     let messages = this.messages.splice(0);
     const lists = [...this.dirtyLists];

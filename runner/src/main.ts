@@ -742,7 +742,9 @@ async function main(): Promise<void> {
       onNotification: (fn) =>
         runner.onNotification((n) => {
           const id = (n.params as { threadId?: unknown } | undefined)?.threadId;
-          if (typeof id === 'string' && movesRef?.gone(id)) return;
+          // Its delete still goes through: sync forgets the thread as
+          // sent then, rather than removing the other runner's row.
+          if (typeof id === 'string' && movesRef?.gone(id) && n.method !== 'thread.deleted') return;
           fn(n);
         }),
       list: (include) => runner.list(include).filter((t) => !movesRef?.gone(t.id)),
@@ -820,6 +822,7 @@ async function main(): Promise<void> {
     scrubber,
     elsewhere: (id) => peers.owns(id) || peers.isArriving(id),
     elsewhereIds: () => [...peers.summaries(['inbox', 'snoozed', 'archived']).map((t) => t.id), ...peers.arrivingIds()],
+    movedAway: (id) => movesRef?.gone(id) ?? false,
     version: RUNNER_VERSION,
     release: RELEASE.release,
     startedAt,
