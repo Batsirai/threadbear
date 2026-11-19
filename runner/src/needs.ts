@@ -532,21 +532,27 @@ const END_TURN_SNOOZE =
 export const TRY_IT_FIRST =
   'Before you give the user a step, try it yourself with the tools you have, including any that drive their browser, apps or phone, and if it works there is no ask. ' +
   'Hand it over only when it really needs them (a payment, something physical, an approval that is theirs to give) or after a real attempt, and say in your reply what you tried and what stopped it. ' +
-  'A password, key or code is no reason to stop: ask for it with ask_secret and carry on. ' +
+  'Get a key or password yourself when you can (on a page in a signed-in browser, or one you made); ask with ask_secret only for one only they know, and carry on. ' +
   'If there is still something you could try, offer "Can you do it?" next to Done and say what in its answer: it lets them send the step back to you, and is no reason to skip trying. ';
 
-// What end_turn says, once a turn, to a card offering to take a step back. The
+// What end_turn says, once a turn, to a card handing the user a step. The
 // wording alone didn't get steps tried: in replays of real turns agents still
-// offered the button with no try at the step, and this note brought a real try
-// every time (6 of 6). It came up once in 15 runs on a sign-in or payment card,
-// and forced onto those, agents sent the card again unchanged, paying nothing
-// and signing in to nothing (~/dev/me/misc/end-turn-eval/try-first). Whether
-// a turn tried can't be read from its tool calls, as nearly all of them were
-// busy with something else (29 Oct to 1 Nov 2026), so it asks the agent, and an
-// agent that did try or can't only spends one more call.
-export const TRY_FIRST_NUDGE = 'Not ended: this card offers to have you do a step yourself.';
+// offered "Can you do it?" with no try at the step, and this note brought a
+// real try every time (6 of 6). Forced onto a sign-in or payment card, agents
+// sent the card again unchanged, paying nothing and signing in to nothing
+// (~/dev/me/misc/end-turn-eval/try-first). Whether a turn tried can't be read
+// from its tool calls, as nearly all of them were busy with something else (29
+// Oct to 1 Nov 2026), so it asks the agent, and an agent that did try or can't
+// only spends one more call.
+// Until 20 Nov it came only to a card offering "Can you do it?", which an agent
+// that doesn't think it can do the step never offers: on 19 Nov Mike was handed
+// System Settings switches on a Mac the agent had Screen Sharing on, a long
+// password it had made for him to type, and a removable-volume prompt, each
+// with "Done" and "Stuck" (0b6b183c, 854d950f), and five times told it to do
+// them itself. So it comes to any card that hands over a step (handsOverAStep).
+export const TRY_FIRST_NUDGE = 'Not ended: this card hands the user a step to do.';
 export function tryFirstNudge(): string {
-  return `${TRY_FIRST_NUDGE} If you could try that step and haven't, try it now, then call end_turn again with whatever is left. If you already tried, or it really needs the user (a password or code, a payment, something physical, an approval that is theirs to give), call end_turn again as you were, and say in your reply what you tried or why it needs them: this note comes once a turn.`;
+  return `${TRY_FIRST_NUDGE} If you could do it yourself and haven't tried, try it now with the tools you have (a setting or dialog on a Mac you can reach with ComputerCub or Screen Sharing, a key on a page in a signed-in browser, a password you made, which you can type or make shorter), then call end_turn again with whatever is left. If you already tried, it really needs the user (a password or code only they know, a payment, something physical, an approval that is theirs to give), or it's a choice rather than a step, call end_turn again as you were, and say in your reply what you tried or why it needs them: this note comes once a turn.`;
 }
 
 // An ask about another thread with no answers and no link: "Pick a
@@ -576,6 +582,29 @@ export function deadEndNudged(events: PersistedEvent[]): boolean {
 const TAKES_IT_BACK = /\b(?:can|could|would) you\b.*\b(?:do|try|handle|run)\b|\byou do it\b|\bdo (?:it|them|this|that) for me\b|\btry it yourself\b/i;
 export function offersToTakeItBack(asks: Ask[]): boolean {
   return asks.some((a) => a.options?.some((o) => TAKES_IT_BACK.test(o)));
+}
+
+// A card that hands the user a step, rather than asking them to choose: one
+// offering to take it back, one with an answer saying it's done ("Done",
+// "Unlocked", "Switched back", "Signed in"), or one whose ask opens with an
+// instruction ("Turn on...", "On Tinker Desk, allow...", "In the tab I
+// brought forward, set up prepay..."), as every card Mike was handed a step
+// on did on 19 Nov. A question about what to do ("Should I...?", "How should
+// we...?", "Can I log you out tonight?") is a choice, and a card that opens a
+// review (show_options) is a pick: neither is held up, and nor is an
+// instruction asked as a question ("Delete the old install?", "Install the
+// new Tandem now?"), which asks leave to do it.
+const SAYS_DONE = /^(?:done|all (?:done|set)|did (?:it|that)|i did|it'?s (?:done|on|in)|i(?:'ve| have) \w+ed\b|i(?:'ve| have) done|finished|completed|unlocked|switched|signed|logged|turned|added|allowed|granted|enabled|installed|pasted|typed|entered|connected|reconnected|approved|plugged|restarted|rebooted|clicked|copied|saved|updated|sorted|fixed)\b/i;
+const STEP_VERB = 'add|allow|approve|buy|change|click|connect|copy|create|delete|drag|enable|enter|give|grant|install|let(?! me\\b| us\\b)|log|move|open|paste|pay|plug|press|put|reconnect|remove|restart|reboot|run|save|select|set|sign|switch|tap|tick|turn|type|unlock|unplug';
+// The instruction, maybe after a clause saying where ("On Tinker Desk, ").
+const STARTS_WITH_A_STEP = new RegExp(`^(?:(?:on|in|at|from|over|using|with) [^,.?]{1,80}, )?(?:${STEP_VERB})\\b`, 'i');
+export function handsOverAStep(asks: Ask[]): boolean {
+  if (asks.some((a) => a.links?.some((l) => l.url.startsWith('review:')))) return false;
+  return offersToTakeItBack(asks) || asks.some((a) => a.options?.some((o) => SAYS_DONE.test(o.trim())) || givesAnInstruction(a.action));
+}
+function givesAnInstruction(action: string): boolean {
+  const first = action.trim().split(/(?<=[.?!])\s/)[0];
+  return STARTS_WITH_A_STEP.test(first) && !first.endsWith('?');
 }
 
 // Whether this turn has had the note (connectors.ts, nudgedThisTurn, is the same).

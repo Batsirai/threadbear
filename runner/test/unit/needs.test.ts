@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersistedEvent } from '../../src/protocol.ts';
-import { offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
+import { handsOverAStep, offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
 import { END_TURN_TOOL } from '../../src/needs.ts';
 import { SERVER_NAME } from '../../src/threadbear-mcp.ts';
 import { ClaudeNormalizer, fileContext } from '../../src/adapters/claude/normalize.ts';
@@ -497,6 +497,34 @@ test('offersToTakeItBack knows the answers real cards used, and leaves others al
   for (const o of ['Can you do it?', 'Can you do it in Chrome?', 'Connected, you do it', 'Do it for me later', 'Can you do the copies?', 'Try it yourself']) assert.ok(offers(o), o);
   for (const o of ['Done', 'Signed in', 'Deploy it', "I can't do it", 'Not yet', 'Hold off']) assert.ok(!offers(o), o);
   assert.ok(!offersToTakeItBack([{ action: 'Can you do it?' }]));
+});
+
+// The cards Mike was handed steps on, 19 Nov 2026 (0b6b183c, 854d950f,
+// 2ee8aeec), and the choices from the same threads that aren't steps.
+test('handsOverAStep knows a step from a choice', () => {
+  const card = (action: string, options?: string[], links?: { title: string; url: string }[]) => handsOverAStep([{ action, options, links }]);
+  for (const [action, options] of [
+    ["In the ADEMark user's System Settings on Tinker Desk, turn on the three things in my reply, then tell me.", ['Done', 'Stuck']],
+    ['On Tinker Desk, allow Desk Runner to use Removable Volumes (System Settings > Privacy & Security > Files & Folders)', ['Done', 'Land without it']],
+    ["Unlock Tinker Desk's screen (Screen Sharing or at the desk) so the Backspace test can click in the app", ['Unlocked', 'Land it anyway']],
+    ["Tinker Desk's screen is on the ademark login (locked). Switch it back to mikeysee, or land the fix without the last test?", ['Switched back', 'Land it anyway']],
+    ['In the Google AI Studio tab I brought forward, set up prepay on the Convex billing account and buy US$50 of credit.', undefined],
+    ['Skip Apple Account sign-in on Tinker Desk, finish the setup screens. Done?', ['Done', 'Stuck']],
+    ['Turn on the setting.', ['Done', 'Can you do it?']],
+    ['Allow Desk Runner on Tinker Desk to read its files, so I can run the test?', ["I've allowed it", 'Land without it']],
+    ['Sign in to the store.', ['Signed in', 'Hold off']],
+  ] as const) assert.ok(card(action, options && [...options]), action);
+  for (const [action, options] of [
+    ['What should we do about getting Threadbear onto ADEMark once the GPUI app is out?', ['Private run first', 'Request it now', 'Skip it']],
+    ["Ready to type Tinker Desk's login password into a private card so I can set up the benchmark user myself?", ['Ask me now', "I'll do the steps"]],
+    ["Should I tell you when Tinker Desk's screen is free, so you can switch to the ADEMark user then?", ['Yes, tell me', "I'll just do it"]],
+    ['Can I log your account out of Tinker Desk tonight?', ['Yes, tonight', 'Not yet']],
+    ['Delete the old Linux install on the Dell laptop, now that nothing uses it?', ['Delete it', 'Leave it']],
+    ['Which households should get the portal email?', ['Ever paid + affiliates', 'Paid this or last year']],
+    ['Let me know which name you like', ['Bramble', 'Thicket']],
+    ['Dictate a sentence on your phone and tell me what it typed', undefined],
+  ] as const) assert.ok(!card(action, options && [...options]), action);
+  assert.ok(!card('Turn on one of these', ['Done'], [{ title: 'Review', url: 'review:abc' }]), 'a review is a pick');
 });
 
 // Run on the card was taken out (14 Nov 2026): a session that loaded

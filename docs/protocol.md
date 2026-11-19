@@ -3322,13 +3322,14 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
 - **Trying a step first.** Every form's description tells the agent to try
   a step with its own tools before giving it to the user, and to hand it over
   only when it really needs them or after a real attempt, saying what it
-  tried (`TRY_IT_FIRST`). A card with an answer like "Can you do it?"
-  (`offersToTakeItBack`, by its label) is refused once a turn, with an error
-  result that starts `Not ended: this card offers`, asking for a try if there
-  hasn't been one. Called again, it's taken as it is, button included. Nothing
-  reaches the app. It can't tell whether the turn tried, as turns are busy with
-  other work, so it asks; and it can't see a hand-over written as plain prose
-  or with no such answer on the card.
+  tried (`TRY_IT_FIRST`). A card that hands over a step (`handsOverAStep`:
+  an answer like "Can you do it?" or "Done", or an ask that opens with an
+  instruction rather than a question) is refused once a turn, with an error
+  result that starts `Not ended: this card hands the user a step`, asking for
+  a try if there hasn't been one. A choice, or a card that opens a review, is
+  left alone. Called again, it's taken as it is. Nothing reaches the app. It
+  can't tell whether the turn tried, as turns are busy with other work, so it
+  asks; and it can't see a hand-over written as plain prose off the card.
 - **A card in plain words.** A card with answers to pick from is refused once
   a turn too, with an error result that starts `Not ended: read this card as
   the user will` (`plainCardNudge`), asking the agent to reread its question,

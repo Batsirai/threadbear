@@ -26,7 +26,7 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
+import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -271,6 +271,9 @@ export function buildThreadbearTools(
     // plainCardNudge). Off only in tests about the rest of end_turn, which
     // would otherwise each have to answer it first.
     plainCardNote?: boolean;
+    // The once-a-turn note asking for a try at a step (needs.ts,
+    // tryFirstNudge), off likewise.
+    tryFirstNote?: boolean;
   } = {},
 ) {
   const codex = opts.provider === 'codex';
@@ -793,7 +796,7 @@ export function buildThreadbearTools(
     ? [
         tool(
           'ask_secret',
-          `Asks the user for a secret (a password, an API key, a token, a code) in a private card in Threadbear, on their Mac or their phone, and waits for it. You never see the value, and it stays out of the chat: you get a private file holding it, readable by your commands for 24 hours. Use this whenever a task needs a secret from them, including their Mac administrator password for sudo, instead of asking for it in your reply or stopping to hand the step over. Read the file inside a command and never print it, echo it or put it in a file of your own.`,
+          `Asks the user for a secret (a password, an API key, a token, a code) in a private card in Threadbear, on their Mac or their phone, and waits for it. You never see the value, and it stays out of the chat: you get a private file holding it, readable by your commands for 24 hours. Use this whenever a task needs a secret from them, including their Mac administrator password for sudo, instead of asking for it in your reply or stopping to hand the step over. Not for one you can get yourself, like a key on a page in a signed-in browser. Read the file inside a command and never print it, echo it or put it in a file of your own.`,
           {
             label: z.string().trim().min(1).max(80).describe('The card\'s title, what you need: "Mac administrator password", "Cloudflare API token".'),
             reason: z.string().trim().min(1).max(500).describe('One or two sentences: what it is for, and where to find it if that is not obvious.'),
@@ -1536,7 +1539,7 @@ export function buildThreadbearTools(
         checkFindings(input, needs, events);
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (needs === 'you' && offersToTakeItBack(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
@@ -1667,7 +1670,7 @@ export function buildThreadbearTools(
         checkFindings(args, needs, events);
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (needs === 'you' && offersToTakeItBack(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
