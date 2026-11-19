@@ -11,6 +11,8 @@
 // read as missing, and a FIFO mustn't pass for missing settings that
 // Claude would then read. So the whole call fails, naming the file.
 // Devices are read as before (a hook's /dev/null reads as nothing at once).
+// Only the runner's own reads: git, which the look runs, reads its config
+// itself, and a FIFO there holds it until its time limit (safe-git.ts, 10 s).
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 
