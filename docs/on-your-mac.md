@@ -131,7 +131,12 @@ File references are where to look.
   process group does on a Mac. Each start, before it writes its key there, that
   helper sets `secrets\`'s access list to you and SYSTEM only, inheriting
   nothing from `%LOCALAPPDATA%`, with everything already in it following, in
-  place of the Mac's `chmod 700` (`runner/src/win-acl.ts`).
+  place of the Mac's `chmod 700` (`runner/src/win-acl.ts`). The same
+  helper reads how long since the keyboard or mouse was last used
+  (`GetLastInputInfo`) and the battery (`GetSystemPowerStatus`), and keeps
+  the computer from sleeping by itself while threads work
+  (`SetThreadExecutionState`), in place of `ioreg`, `pmset` and
+  `caffeinate` below.
 - **A one-shot update job:** when the runner's LaunchAgent or
   Threadbear Runner.app is behind main (or you press Update it in the
   Updates panel after one failed), the runner

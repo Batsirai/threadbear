@@ -95,8 +95,12 @@ fresh PC), which is what you want gone.
    on Windows, so there, for now, a project's patch and a folder's Claude
    Code settings run nothing by themselves: buttons run when clicked, and
    hooks, worktree setup and teardown, live functions' commands and
-   Claude's hooks don't run (`clicksOnly` in `runner/src/platform.ts`).
-   Idle time and keep-awake are still to do.*
+   Claude's hooks don't run (`clicksOnly` in `runner/src/platform.ts`).*
+   *19 Nov: idle time and keep-awake are in, from the same helper
+   (`GetLastInputInfo`, `SetThreadExecutionState`, `GetSystemPowerStatus`).
+   Settings still shows the keep-awake switch on a Mac only, as its words
+   say Mac; it's on by default, and `"keepAwake": false` in runner.json
+   turns it off.*
 6. **Polish.** Codex on Windows, pictures, stuck-job detection, a Windows
    check host, client path display (`C:\Users\...` shown as `~`).
 

@@ -4,6 +4,7 @@
 // thread needing him while he's at his desk shows on the Mac alone, and
 // reaches his phone if he walks away without seeing to it.
 import { execFile } from 'node:child_process';
+import { win32Helper } from './win32-helper.ts';
 
 export const AT_MAC_IDLE_MS = 2 * 60_000;
 
@@ -11,7 +12,10 @@ export const AT_MAC_IDLE_MS = 2 * 60_000;
 // (nanoseconds). Undefined if it can't be read. Asynchronous: ioreg walks
 // the IORegistry, which takes a second or two on a Mac busy rendering, and
 // a synchronous run froze the whole runner for that long every 15 seconds.
+// On Windows the runner's helper asks GetLastInputInfo, for the session the
+// runner runs in (win32-helper.ps1, idle).
 export function hidIdleMs(): Promise<number | undefined> {
+  if (process.platform === 'win32') return win32Helper().ask('idle').then(parseIdle, () => undefined);
   // IOKit is a Mac's; a Linux runner has no idle time to read.
   if (process.platform !== 'darwin') return Promise.resolve(undefined);
   return new Promise((resolve) => {
@@ -24,4 +28,9 @@ export function hidIdleMs(): Promise<number | undefined> {
 
 export function isAtMac(appConnected: boolean, idleMs: number | undefined): boolean {
   return appConnected && idleMs !== undefined && idleMs < AT_MAC_IDLE_MS;
+}
+
+// The helper's answer to idle: whole milliseconds, or undefined.
+export function parseIdle(text: string): number | undefined {
+  return /^\d+$/.test(text.trim()) ? Number(text.trim()) : undefined;
 }
