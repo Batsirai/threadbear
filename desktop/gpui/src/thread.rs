@@ -416,6 +416,9 @@ pub struct ThreadPane {
     stale: bool,
     /// The zoom when it was kept (`set_kept`).
     kept_zoom: Option<u64>,
+    /// Its last messages' PRs are still to be read ahead, waiting for the
+    /// reply streaming in to be whole (`preload_recent_prs`).
+    prs_to_preload: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -453,6 +456,7 @@ impl ThreadPane {
             timing: LoadTiming::default(),
             stale: false,
             kept_zoom: None,
+            prs_to_preload: false,
             entering: Default::default(),
             _subs: vec![scrolled],
         };
@@ -498,6 +502,7 @@ impl ThreadPane {
             timing: LoadTiming::default(),
             stale: false,
             kept_zoom: None,
+            prs_to_preload: false,
             entering: Default::default(),
             _subs: vec![],
         };
@@ -775,6 +780,7 @@ impl ThreadPane {
                     this.scroller.update(cx, |s, cx| s.reset(this.feed.model().rows().len(), cx));
                     this.restore_memory(memory, cx);
                     this.mark_seen();
+                    this.prs_to_preload = !this.preload_recent_prs(cx);
                     // Paging older rows in is driven by the view reaching the
                     // top, and a first page shorter than the view can't.
                     this.load_older_if_near_top(cx);
@@ -881,6 +887,56 @@ impl ThreadPane {
         self.mark_seen();
         // What's on its way to it as the outbox has it now.
         self.show_outbox(cx);
+        if self.loaded {
+            self.prs_to_preload = !self.preload_recent_prs(cx);
+        }
+    }
+
+    /// With the inlinePrs experiment, reads ahead the PRs its last few
+    /// messages link to, as the thread shows and as a turn ends: those are
+    /// the ones likely to be clicked, and a read takes a second or more
+    /// (Mike, 19 Nov). Each is read once while the app runs, from the
+    /// cache's copy if an earlier run kept one (pr_view.rs `preload_pr`).
+    /// A reply still streaming in could hold half a link, so nothing is
+    /// read while one is (false: `apply` tries again until it's whole).
+    /// After the update it's
+    /// called in: showing a kept pane again is inside the app's own, and
+    /// reading the app there panics.
+    fn preload_recent_prs(&self, cx: &mut Context<Self>) -> bool {
+        use threadbear_core::pull_requests as prs;
+        if self.subagent_id.is_some() {
+            return true;
+        }
+        let recent: Vec<(&str, bool)> = self
+            .feed
+            .model()
+            .rows()
+            .iter()
+            .rev()
+            .filter_map(|row| match &row.content {
+                RowContent::Assistant(item) => Some((item.text.as_str(), item.is_streaming)),
+                RowContent::User(message) => Some((message.text.as_str(), false)),
+                _ => None,
+            })
+            .take(prs::RECENT_MESSAGES)
+            .collect();
+        if recent.iter().any(|(_, streaming)| *streaming) {
+            return false;
+        }
+        let urls = prs::recent_pr_links(recent.into_iter().map(|(text, _)| text), prs::RECENT_PRS);
+        if urls.is_empty() {
+            return true;
+        }
+        let app = self.app.clone();
+        cx.defer(move |cx| {
+            let Some(app) = app.upgrade() else { return };
+            if !crate::pr_view::on(app.read(cx)) {
+                return;
+            }
+            let side = app.read(cx).side.clone();
+            side.update(cx, |side, cx| urls.iter().for_each(|url| side.preload_pr(url, cx)));
+        });
+        true
     }
 
     /// What happened while it wasn't subscribed, from the last seq it has
@@ -1105,6 +1161,13 @@ impl ThreadPane {
         self.keep_outbox(cx);
         if change.is_empty() {
             return;
+        }
+        // A turn's footer: it's over, its reply whole. The runner's word
+        // that it's idle can come before the reply's row, so not that.
+        // Only the thread on show: a kept one's turns end unwatched.
+        let turn_ended = self.kept_zoom.is_none() && change.inserted.iter().any(|&i| matches!(self.feed.model().rows().get(i).map(|r| &r.content), Some(RowContent::Footer(_))));
+        if self.prs_to_preload || turn_ended {
+            self.prs_to_preload = !self.preload_recent_prs(cx);
         }
         // Kept and not shown (`set_kept`): a busy thread's events don't
         // pile up in it while nobody's looking.

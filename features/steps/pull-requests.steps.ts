@@ -63,10 +63,20 @@ Then("the PR's button {string} is busy", async function (this: ThreadbearWorld, 
 // A PR link in a reply has a mark before it in its state's colour; the
 // dump has each as "<url>: <state>" (`prMarks`).
 type MarkedRow = { kind: string; id: string; prMarks?: string[]; prsRead?: string[] };
+async function streamPrReply(world: ThreadbearWorld, url: string, hold: boolean) {
+  const d = await world.app.dump();
+  await world.app.do({ cmd: 'mock', method: 'stream', params: { threadId: d.selection?.id, text: `It's [#72](${url}) for now.`, hz: 60, hold } });
+  await world.until('the reply with its PR link', (dump) => [...dump.transcript.rows].reverse().some((r) => (r as unknown as MarkedRow).prMarks?.some((m) => m.startsWith(`${url}:`))));
+}
+
 When('a reply linking the PR {string} streams in', async function (this: ThreadbearWorld, url: string) {
-  const d = await this.app.dump();
-  await this.app.do({ cmd: 'mock', method: 'stream', params: { threadId: d.selection?.id, text: `It's [#72](${url}) for now.`, hz: 60 } });
-  await this.until('the reply with its PR link', (dump) => [...dump.transcript.rows].reverse().some((r) => (r as unknown as MarkedRow).prMarks?.some((m) => m.startsWith(`${url}:`))));
+  await streamPrReply(this, url, false);
+});
+
+// The mock's `hold`: the reply's in, and its turn keeps working, so nothing
+// reads its PRs ahead until something else does (a rest, the thread showing).
+When('a reply linking the PR {string} streams in, its turn still going', async function (this: ThreadbearWorld, url: string) {
+  await streamPrReply(this, url, true);
 });
 
 Then('the mark before the PR {string} says {string}', async function (this: ThreadbearWorld, url: string, state: string) {
@@ -83,6 +93,14 @@ When("I rest the pointer on the reply's link {string}", async function (this: Th
 
 Then('the PR {string} is being read', async function (this: ThreadbearWorld, url: string) {
   await this.until(`"${url}" read ahead`, (d) => [...d.transcript.rows].some((r) => (r as unknown as MarkedRow).prsRead?.includes(url)));
+});
+
+Then("the PR {string} isn't read yet", async function (this: ThreadbearWorld, url: string) {
+  // Long enough for a read started by the reply ending to show.
+  await new Promise((done) => setTimeout(done, 1000));
+  const d = await this.app.dump();
+  const read = [...d.transcript.rows].some((r) => (r as unknown as MarkedRow).prsRead?.includes(url));
+  if (read) throw new Error(`"${url}" was read before anything asked for it`);
 });
 
 // The mock's PR files come 3 s after the rest (@slow-pr-files).

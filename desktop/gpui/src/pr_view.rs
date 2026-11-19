@@ -23,7 +23,11 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use threadbear_core::inbox::{ago, parse_ms, ThreadSummary};
-use threadbear_core::pull_requests::{self as rules, CheckState, MergeMethod, PrFiles, PrRef, PrState, PrTab, PrView};
+use threadbear_core::pull_requests::{self as rules, CachedPr, CheckState, MergeMethod, PrFiles, PrRef, PrState, PrTab, PrView};
+
+/// The tip on a PR's buttons while the copy kept from an earlier run is
+/// read again.
+const CHECKING: &str = "Checking GitHub for changes first";
 
 /// GitHub's merged purple: no other colour in the app means merged.
 const MERGED: u32 = 0xa371f7;
@@ -67,6 +71,12 @@ pub(crate) struct PrPanes {
     asked: std::collections::HashSet<String>,
     /// A PR's files that came before the PR itself (`load_pr`).
     early_files: HashMap<String, PrFiles>,
+    /// When each PR showing was read from GitHub, for reading it again
+    /// behind it once that's a while ago (`rules::PR_FRESH_MS`).
+    read_at: HashMap<String, i64>,
+    /// The PRs showing as the cache kept them from an earlier run, until
+    /// GitHub's answer replaces them: their buttons wait for that.
+    from_cache: std::collections::HashSet<String>,
     /// The PR the pane drew last, for a script's click to scroll to a
     /// button below its bottom.
     #[cfg(feature = "automation")]
@@ -89,7 +99,7 @@ impl PrPanes {
             // The words the tab draws, for the specs.
             Some(PrLoad::Ready(pr)) => {
                 let (checks, failed) = rules::checks_summary(&pr.checks);
-                json!({ "title": pr.title, "state": pr.state.words(), "status": rules::status_words(pr), "checks": checks, "failed": failed, "files": pr.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), "filesLater": pr.files_later, "activity": pr.activity.iter().map(|a| a.body.clone()).collect::<Vec<_>>(), "canMerge": pr.can_merge })
+                json!({ "title": pr.title, "state": pr.state.words(), "status": rules::status_words(pr), "checks": checks, "failed": failed, "files": pr.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), "filesLater": pr.files_later, "activity": pr.activity.iter().map(|a| a.body.clone()).collect::<Vec<_>>(), "canMerge": pr.can_merge, "fromCache": self.from_cache.contains(url) })
             }
             Some(PrLoad::Failed(e)) => json!({ "error": e }),
             _ => json!("loading"),
@@ -127,10 +137,15 @@ impl SidePane {
 
     /// From `begin_preview`: read it the first time it shows, or again if
     /// the last read failed (a read started by a hover, say, that the runner
-    /// or GitHub turned down).
+    /// or GitHub turned down), or behind what's showing once that was read
+    /// a while ago.
     pub(crate) fn begin_pr(&mut self, url: &str, cx: &mut Context<Self>) {
-        if matches!(self.prs.loads.get(url), None | Some(PrLoad::Failed(_))) {
-            self.load_pr(url, cx);
+        let stale = self.prs.read_at.get(url).is_some_and(|at| now_ms() - at > rules::PR_FRESH_MS);
+        let refreshing = self.prs.ui.get(url).is_some_and(|u| u.refreshing);
+        match self.prs.loads.get(url) {
+            None | Some(PrLoad::Failed(_)) => self.load_pr(url, cx),
+            Some(PrLoad::Ready(_)) if stale && !refreshing => self.load_pr(url, cx),
+            _ => {}
         }
     }
 
@@ -138,7 +153,9 @@ impl SidePane {
     /// now, so the click that usually follows finds it read or on its way.
     /// A read takes a second or more (three gh calls, behind whatever else
     /// the runner is doing), and Mike found the tab slow to fill (19 Nov).
-    /// Once per PR while the app runs, as an opened one is.
+    /// Once per PR while the app runs, as an opened one is. A thread showing
+    /// reads the PRs its last messages link to the same way (thread.rs
+    /// `preload_recent_prs`).
     pub(crate) fn preload_pr(&mut self, url: &str, cx: &mut Context<Self>) {
         let Some(url) = pr_url(url) else { return };
         if !self.prs.loads.contains_key(&url) {
@@ -149,12 +166,23 @@ impl SidePane {
     /// Reads the PR in two: the PR itself, and its files apart
     /// (`github.prFiles`), as a big PR's diff is the slowest read. The tab
     /// shows the PR once the first answers, its Diff once the second does,
-    /// whichever comes first.
+    /// whichever comes first. One the app hasn't read since it started
+    /// shows as an earlier run kept it (`cache`) while GitHub's is read.
     fn load_pr(&mut self, url: &str, cx: &mut Context<Self>) {
         match self.prs.loads.get(url) {
             Some(PrLoad::Ready(_)) => self.prs.ui.entry(url.to_owned()).or_default().refreshing = true,
             _ => {
                 self.prs.loads.insert(url.to_owned(), PrLoad::Loading);
+                let url = url.to_owned();
+                let read = cx.background_spawn({
+                    let url = url.clone();
+                    async move { cache::read(&url) }
+                });
+                cx.spawn(async move |this, cx| {
+                    let Some(kept) = read.await else { return };
+                    this.update(cx, |this, cx| this.pr_from_cache(&url, kept, cx)).ok();
+                })
+                .detach();
             }
         }
         self.prs.early_files.remove(url);
@@ -198,7 +226,12 @@ impl SidePane {
                 match (load, this.prs.loads.get(&url)) {
                     (PrLoad::Failed(e), Some(PrLoad::Ready(_))) => ui.error = Some(e),
                     (load, _) => {
+                        if matches!(load, PrLoad::Ready(_)) {
+                            this.prs.read_at.insert(url.clone(), now_ms());
+                            this.prs.from_cache.remove(&url);
+                        }
                         this.prs.loads.insert(url.clone(), load);
+                        this.keep_pr(&url, cx);
                     }
                 }
                 cx.notify();
@@ -223,6 +256,7 @@ impl SidePane {
             Some(PrLoad::Ready(pr)) if pr.files_later => {
                 let pr = PrView::clone(pr).with_files(files);
                 self.prs.loads.insert(url.to_owned(), PrLoad::Ready(Arc::new(pr)));
+                self.keep_pr(url, cx);
             }
             // The PR (or a refresh of it) still to come: it takes them.
             Some(PrLoad::Loading) => {
@@ -235,6 +269,34 @@ impl SidePane {
             _ => return,
         }
         cx.notify();
+    }
+
+    /// The cache's copy of a PR, from an earlier run, shown while GitHub's
+    /// is read if that hasn't come first. Its files are kept for GitHub's
+    /// read without them, as a refresh's are.
+    fn pr_from_cache(&mut self, url: &str, kept: CachedPr, cx: &mut Context<Self>) {
+        if !matches!(self.prs.loads.get(url), Some(PrLoad::Loading)) {
+            return;
+        }
+        if self.prs.states.insert(url.to_owned(), kept.pr.state) != Some(kept.pr.state) {
+            cx.refresh_windows();
+        }
+        self.prs.loads.insert(url.to_owned(), PrLoad::Ready(Arc::new(kept.pr)));
+        self.prs.read_at.insert(url.to_owned(), kept.read_at);
+        self.prs.from_cache.insert(url.to_owned());
+        self.prs.ui.entry(url.to_owned()).or_default().refreshing = true;
+        cx.notify();
+    }
+
+    /// A whole read (its files too) goes in the cache for the next run,
+    /// written off the main thread.
+    fn keep_pr(&self, url: &str, cx: &mut Context<Self>) {
+        let Some(PrLoad::Ready(pr)) = self.prs.loads.get(url) else { return };
+        if pr.files_later || pr.files_error.is_some() || self.prs.from_cache.contains(url) {
+            return;
+        }
+        let kept = CachedPr { read_at: self.prs.read_at.get(url).copied().unwrap_or_else(now_ms), pr: PrView::clone(pr) };
+        cx.background_spawn(async move { cache::write(&kept) }).detach();
     }
 
     /// A PR link's state for its row's colour, asked of the runner the first
@@ -381,7 +443,8 @@ impl SidePane {
         let (refresh_url, open_url) = (url.to_owned(), url.to_owned());
         let refreshing = self.prs.ui.get(url).is_some_and(|u| u.refreshing) || matches!(self.prs.loads.get(url), Some(PrLoad::Loading));
         if refreshing {
-            out = out.child(div().size(px(26.)).flex().items_center().justify_center().child(crate::spinner::TurningArc::new(12., p.secondary)));
+            let spinner = div().id("pr-reading").size(px(26.)).flex().items_center().justify_center().child(crate::spinner::TurningArc::new(12., p.secondary));
+            out = out.child(tipped(spinner, "Reading it from GitHub".to_owned()));
         } else {
             out = out.child(self.header_button("pr-refresh", "arrow.clockwise", "Read it again from GitHub".to_owned(), p, cx, move |this, cx| this.load_pr(&refresh_url, cx)));
         }
@@ -394,7 +457,7 @@ impl SidePane {
     pub(crate) fn render_pr(&mut self, thread: &ThreadSummary, url: &str, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let pr = match self.prs.loads.get(url) {
-            None | Some(PrLoad::Loading) => return crate::files::pane_note("Reading the PR from GitHub…", p).into_any_element(),
+            None | Some(PrLoad::Loading) => return pr_skeleton(style::primary_opacity(cx, 0.07)).into_any_element(),
             Some(PrLoad::Failed(e)) => {
                 let (again, open) = (url.to_owned(), url.to_owned());
                 return v_flex()
@@ -442,6 +505,10 @@ impl SidePane {
     fn pr_bar(&mut self, url: &str, pr: &Arc<PrView>, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let ui = &self.prs.ui[url];
         let (tab_now, busy) = (ui.tab, ui.busy);
+        // A copy from an earlier run could say it can merge when it's merged
+        // since: its buttons wait for GitHub's answer.
+        let checking = ui.refreshing && self.prs.from_cache.contains(url);
+        let held = busy.is_some() || checking;
         let mut tabs = h_flex().p(px(2.)).gap(px(2.)).rounded(px(7.)).bg(style::chip_fill(cx));
         for tab in PrTab::ALL {
             let on = tab == tab_now;
@@ -477,16 +544,21 @@ impl SidePane {
         let mut right = h_flex().gap(px(6.)).items_center();
         if pr.can_merge {
             let review_url = url.to_owned();
-            right = right.child(self.menu_button("pr-review", "Review", busy.is_some_and(|b| matches!(b, "approve" | "requestChanges")), busy.is_some(), false, "Approve it, or ask for changes", p, cx, move |this, position, window, cx| this.open_review_menu(&review_url, position, window, cx)));
+            right = right.child(self.menu_button("pr-review", "Review", busy.is_some_and(|b| matches!(b, "approve" | "requestChanges")), held, false, if checking { CHECKING } else { "Approve it, or ask for changes" }, p, cx, move |this, position, window, cx| this.open_review_menu(&review_url, position, window, cx)));
             let method = rules::merge_method(&pr.merge_methods, crate::reply_links::pr_merge_method());
             if let Some(method) = method.filter(|_| pr.state == PrState::Open) {
                 let merge_url = url.to_owned();
                 let label = if busy == Some("merge") { "Merging…" } else { "Merge" };
-                right = right.child(self.menu_button("pr-merge", label, busy == Some("merge"), busy.is_some(), true, &format!("{} (the arrow picks another way)", method.title()), p, cx, move |this, position, window, cx| this.open_merge_menu(&merge_url, position, window, cx)));
+                let tip = if checking { CHECKING.to_owned() } else { format!("{} (the arrow picks another way)", method.title()) };
+                right = right.child(self.menu_button("pr-merge", label, busy == Some("merge"), held, true, &tip, p, cx, move |this, position, window, cx| this.open_merge_menu(&merge_url, position, window, cx)));
             }
         }
         // The buttons go under the views when the pane's too narrow for both.
-        h_flex().flex_none().flex_wrap().px(px(14.)).py(px(8.)).gap(px(8.)).items_center().child(tabs).child(div().flex_1()).child(right)
+        let bar = h_flex().flex_none().flex_wrap().px(px(14.)).py(px(8.)).gap(px(8.)).items_center().child(tabs).child(div().flex_1()).child(right);
+        let read_at = self.prs.read_at.get(url).copied();
+        v_flex().flex_none().child(bar).when_some(read_at.filter(|_| checking), |col, at| {
+            col.child(div().px(px(18.)).pb(px(4.)).text_size(px(style::size::DETAIL)).text_color(p.faint).child(format!("As it was {}. Checking GitHub for changes…", ago_words(at))))
+        })
     }
 
     /// A button that opens its menu below itself; `primary` is Merge's fill.
@@ -771,7 +843,7 @@ impl SidePane {
 
     fn pr_diff(&mut self, url: &str, pr: &Arc<PrView>, p: Palette, cx: &mut Context<Self>) -> AnyElement {
         if pr.files.is_empty() && pr.files_later {
-            return crate::files::pane_note("Reading the changes from GitHub…", p).into_any_element();
+            return files_skeleton(style::primary_opacity(cx, 0.07)).into_any_element();
         }
         if pr.files.is_empty() {
             let note = pr.files_error.clone().map_or_else(|| "No changes.".to_owned(), |e| format!("Couldn't read the diff: {e}"));
@@ -972,10 +1044,6 @@ impl gpui_kit::base::text::MarkdownPlugin for PrMarks {
     }
 }
 
-/// For scripts: each PR link's mark in a reply, as "<url>: <state>" ("Pull
-/// request" until the runner says), in order. None with the experiment off
-/// or no PR links.
-#[cfg(feature = "automation")]
 /// The PR links in a reply already read or being read (`preload_pr`, a
 /// click), for the dump's `prsRead`.
 #[cfg(feature = "automation")]
@@ -988,6 +1056,10 @@ pub(crate) fn dump_read(text: &str, app: &crate::app::Threadbear, cx: &App) -> O
     (!out.is_empty()).then_some(out)
 }
 
+/// For scripts: each PR link's mark in a reply, as "<url>: <state>" ("Pull
+/// request" until the runner says), in order. None with the experiment off
+/// or no PR links.
+#[cfg(feature = "automation")]
 pub(crate) fn dump_marks(text: &str, app: &crate::app::Threadbear, cx: &App) -> Option<Vec<String>> {
     if !on(app) {
         return None;
@@ -995,4 +1067,119 @@ pub(crate) fn dump_marks(text: &str, app: &crate::app::Threadbear, cx: &App) -> 
     let states = &app.side.read(cx).prs.states;
     let out: Vec<String> = rules::pr_links(text).into_iter().map(|u| format!("{u}: {}", states.get(&u).map_or("Pull request", |s| s.words()))).collect();
     (!out.is_empty()).then_some(out)
+}
+
+/// "5m ago", for how old the copy showing is.
+fn ago_words(at: i64) -> String {
+    match ago(at, now_ms()) {
+        now if now == "now" => "just now".to_owned(),
+        short => format!("{short} ago"),
+    }
+}
+
+/// Grey shapes where a PR's bar, title, fields and description go, gently
+/// pulsing, until it's read: the sidebar's loading rows' look
+/// (sidebar.rs `render_loading_rows`). Mike asked for skeletons (19 Nov).
+fn pr_skeleton(fill: Hsla) -> impl IntoElement {
+    // Widths as parts of the pane, as it's often narrow.
+    let bar = |w: f32, h: f32| div().flex_none().w(relative(w)).h(px(h)).rounded_full().bg(fill);
+    let block = |w: f32, h: f32| div().flex_none().w(px(w)).h(px(h)).rounded(px(6.)).bg(fill);
+    let field = move |label: f32, value: f32| h_flex().w_full().gap(px(14.)).items_center().child(div().flex_none().w(px(label)).h(px(8.)).rounded_full().bg(fill)).child(div().flex_1().child(bar(value, 8.)));
+    v_flex()
+        .id("pr-skeleton")
+        .size_full()
+        .min_w_0()
+        .overflow_hidden()
+        .with_animation("pr-skeleton", Animation::new(std::time::Duration::from_millis(1800)).repeat().with_easing(bounce(ease_in_out)), |el, delta| el.opacity(1. - delta * 0.5))
+        // Nothing here may be wider than a narrow pane, or it widens the
+        // whole skeleton past the pane's edge.
+        .child(h_flex().min_w_0().px(px(14.)).py(px(8.)).gap(px(8.)).items_center().child(div().flex_1().min_w_0().child(div().w(relative(0.6)).h(px(26.)).rounded(px(6.)).bg(fill))).child(block(64., 24.)))
+        .child(
+            v_flex()
+                .px(px(18.))
+                .pt(px(12.))
+                .gap(px(14.))
+                .child(v_flex().gap(px(8.)).child(bar(0.85, 13.)).child(bar(0.5, 13.)))
+                .child(field(52., 0.4))
+                .child(field(52., 0.65))
+                .child(field(52., 0.5))
+                .child(v_flex().pt(px(8.)).gap(px(8.)).child(bar(0.95, 8.)).child(bar(0.85, 8.)).child(bar(0.9, 8.)).child(bar(0.55, 8.))),
+        )
+}
+
+/// The Diff tab's rows while the PR's changes are read: a file's name and
+/// its counts each.
+fn files_skeleton(fill: Hsla) -> impl IntoElement {
+    const NAMES: [f32; 4] = [0.6, 0.45, 0.7, 0.4];
+    v_flex()
+        .id("pr-files-skeleton")
+        .w_full()
+        .pt(px(6.))
+        .gap(px(12.))
+        .with_animation("pr-files-skeleton", Animation::new(std::time::Duration::from_millis(1800)).repeat().with_easing(bounce(ease_in_out)), |el, delta| el.opacity(1. - delta * 0.5))
+        .children(NAMES.into_iter().map(move |w| {
+            h_flex()
+                .w_full()
+                .gap(px(8.))
+                .items_center()
+                .child(div().flex_none().size(px(9.)).rounded(px(2.)).bg(fill))
+                .child(div().flex_1().child(div().w(relative(w)).h(px(9.)).rounded_full().bg(fill)))
+                .child(div().flex_none().w(px(46.)).h(px(9.)).rounded_full().bg(fill))
+        }))
+}
+
+/// PRs read before, kept between runs (`CachedPr`), one file each, so one
+/// opened again shows at once while it's read again. A scripted app keeps
+/// its own beside its automation file, never the user's.
+mod cache {
+    use std::path::PathBuf;
+    use threadbear_core::pull_requests::{CachedPr, PrRef};
+
+    /// How many are kept: the oldest go past this.
+    const KEEP: usize = 200;
+
+    fn folder() -> Option<PathBuf> {
+        if crate::scripted::scripted() {
+            let file = PathBuf::from(std::env::var_os("THREADBEAR_AUTOMATION")?);
+            return Some(file.parent()?.join("prs"));
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").filter(|h| !h.is_empty())?);
+        Some(if cfg!(target_os = "macos") { home.join("Library/Caches/Threadbear/prs") } else { home.join(".cache/threadbear/prs") })
+    }
+
+    pub(super) fn read(url: &str) -> Option<CachedPr> {
+        let name = PrRef::parse(url)?.cache_name();
+        let bytes = std::fs::read(folder()?.join(name)).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Written whole and then moved into place, so a read never finds half.
+    pub(super) fn write(kept: &CachedPr) {
+        let (Some(dir), Some(r)) = (folder(), PrRef::parse(&kept.pr.url)) else { return };
+        let Ok(bytes) = serde_json::to_vec(kept) else { return };
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let (to, part) = (dir.join(r.cache_name()), dir.join(format!("{}.part", r.cache_name())));
+        if std::fs::write(&part, bytes).is_ok() && std::fs::rename(&part, &to).is_err() {
+            let _ = std::fs::remove_file(&part);
+        }
+        prune(&dir);
+    }
+
+    fn prune(dir: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+            .collect();
+        if files.len() <= KEEP {
+            return;
+        }
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, path) in files.drain(KEEP..) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }

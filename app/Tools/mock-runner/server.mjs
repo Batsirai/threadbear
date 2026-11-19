@@ -1750,6 +1750,9 @@ async function dispatch(client, method, p) {
       return { connectors };
     case 'github.pr':
       if (!String(p.url ?? '').startsWith(MOCK_PR_URL)) throw rpcError(-32000, 'GraphQL: Could not resolve to a PullRequest');
+      // TB_MOCK_PR_MS: as slow as a busy runner's read, to see the tab's
+      // skeleton, or a copy kept from an earlier run before GitHub's.
+      await new Promise((resolve) => setTimeout(resolve, Number(process.env.TB_MOCK_PR_MS ?? 0)));
       return p.files === false ? { ...mockPr, files: [], filesLater: true } : mockPr;
     case 'github.prFiles':
       if (!String(p.url ?? '').startsWith(MOCK_PR_URL)) throw rpcError(-32000, 'GraphQL: Could not resolve to a PullRequest');
@@ -2671,6 +2674,10 @@ function startStream(threadId, p) {
     if (ticks >= total) {
       clearInterval(timer);
       finishText();
+      // `hold`: the reply's in and the turn goes on working, for a spec
+      // that needs it to stay running (the GPUI app reads a reply's PRs
+      // ahead as its turn ends).
+      if (p.hold) return;
       // `completed`: more of what the turn ended with, as end_turn says it
       // (needs, next, asks, another lab's `review` ledger).
       persist(threadId, { type: 'turn.completed', turnId, outcome: 'completed', durationMs: Date.now() - started, ...(p.completed ?? {}) }, turnId);

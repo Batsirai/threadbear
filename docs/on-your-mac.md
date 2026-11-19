@@ -237,6 +237,11 @@ File references are where to look.
   `%LOCALAPPDATA%\Threadbear\opened` and `~/.cache/threadbear/opened`
   (private, read-only copies of documents and programs you open from a thread, so the app that opens one gets the file the open gate
   checked; cleared after a day when another is opened);
+  `~/Library/Caches/Threadbear/prs`, and `~/.cache/threadbear/prs` on Linux
+  (with the inlinePrs experiment on: the last 200 GitHub pull requests the
+  app read through gh, each as one JSON file with its description,
+  comments, checks and diff, so one opened again shows at once while it's
+  read again);
   `~/Library/Caches/Threadbear/rich` (pictures of the ```` ```mermaid ```` and
   ```` ```html ```` blocks in replies, and each one's page for the side pane,
   newest 900 files kept). They're drawn on this Mac in web views that load
