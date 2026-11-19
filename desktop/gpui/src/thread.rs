@@ -1271,6 +1271,15 @@ impl ThreadPane {
             }
             // Gone or taken: no longer one to keep through a quit.
             OUTBOX_DRAFTS.with(|d| d.borrow_mut().remove(&pending_id));
+            // Already shown in the transcript, as the runner echoed it: it
+            // went, whatever became of the answer (a stalled runner's that
+            // came too late, a lookup that failed after it, a connection
+            // that closed after it arrived).
+            let shown = !outbox(&thread_id).iter().any(|m| m.id == pending_id);
+            if shown && res.as_ref().is_err_and(|e| matches!(e.code, threadbear_client::runner::TIMED_OUT | threadbear_client::runner::CLOSED)) {
+                SENT_AT.with(|s| s.borrow_mut().remove(&pending_id));
+                return;
+            }
             if let Err(e) = res {
                 SENT_AT.with(|s| s.borrow_mut().remove(&pending_id));
                 // Off the end of the transcript and back in the box, and the

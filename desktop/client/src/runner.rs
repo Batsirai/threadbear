@@ -504,8 +504,11 @@ impl Client {
             }
             // No answer in time from a runner that's still there: a stalled
             // one may have taken it all the same, so look before saying it
-            // didn't go (19 Nov: "wasn't sent", and it had been).
-            Err(e) if e.code == TIMED_OUT && method == "threads.send" && resend.is_some() => {
+            // didn't go (19 Nov: "wasn't sent", and it had been). Only for
+            // an idle thread with nothing else on its way: another message
+            // with the same words could otherwise pass for this one, and a
+            // busy thread's runner may have queued it unseen.
+            Err(e) if e.code == TIMED_OUT && method == "threads.send" && resend.is_some_and(|r| r.was_idle) => {
                 let resend = resend.expect("checked");
                 match self.has_landed(resend, None).await {
                     Ok(true) => {

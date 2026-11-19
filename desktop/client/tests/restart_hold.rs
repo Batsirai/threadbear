@@ -750,3 +750,18 @@ async fn a_send_with_no_answer_in_time_that_hasnt_arrived_is_given_back_once() {
     assert_eq!(err.code, TIMED_OUT);
     assert_eq!(fake.sends().len(), 1, "not sent again on a guess: a stalled runner may still take it");
 }
+
+// With another message on its way, or a busy thread, one with the same
+// words could pass for it: no answer in time stays that, and it's given
+// back rather than taken as sent on a guess (Codex's and Gemini's review).
+#[tokio::test]
+async fn a_send_with_no_answer_in_time_isnt_confirmed_by_another_with_the_same_words() {
+    let fake = Fake::start().await;
+    let (client, _rx) = connect(&fake).await;
+    client.set_timeout_cap(Duration::from_millis(300));
+    fake.reply_with(&[Reply::Ok, Reply::Stall { lands: false }]);
+    let (said, _) = progress();
+    client.send_through_restart(client.place("t1"), send("yes"), resend("yes", 10, false), said.clone()).await.unwrap();
+    let err = client.send_through_restart(client.place("t1"), send("yes"), resend("yes", 10, false), said).await.unwrap_err();
+    assert_eq!(err.code, TIMED_OUT);
+}
