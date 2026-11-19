@@ -22,7 +22,12 @@ import { IS_WINDOWS } from './platform.ts';
 // `browserbear handoff <tab> --wait` sits silent with no CPU until he
 // presses Done (5 Nov: two nudges in a row for one). The shell's command
 // lines show it, so it's told apart from a loop that can never end.
-// So is a `tb land`, which waits its turn in the landing line (isLanding).
+// So is a `tb land`, which waits its turn in the landing line (isLanding),
+// and anything else of the same thread's while one is going: a loop polling
+// the landing's log can't be tied to it from ps, but is only waiting for it.
+// On 19 Nov a sub-agent's four copies of `until grep … land2.log; do sleep
+// 15; done` were each told about in turn, 37 minutes old every time, so the
+// one notice seemed to come four times over.
 //
 // Claude only: its jobs write to output files under /tmp/claude-<uid>
 // (a sub-agent's is a link to its transcript), which give the start and
@@ -189,9 +194,7 @@ type Deps = { host: Host; clock: Clock; log: Logger; home: string; probe?: Probe
 type Saved = { nudged: Record<string, string> };
 const NUDGE_MEMORY_MS = 24 * 60 * 60_000;
 
-// landing: another shell of the same thread has a tb land going, so this
-// one may only be waiting for it (a loop polling its log, say).
-type Stuck = { task: BackgroundTask; minutes: number; commands?: string[]; landing?: boolean };
+type Stuck = { task: BackgroundTask; minutes: number; commands?: string[] };
 
 export function stuckJobsPath(home: string): string {
   return path.join(home, 'stuck-jobs.json');
@@ -275,18 +278,33 @@ export class StuckJobs {
       }
     }
 
-    const needShells = [...quiet.entries()].filter(([, l]) => l.some((q) => q.task.kind === 'shell')).map(([s]) => s);
+    // Every session with a quiet job: a sub-agent's is left alone too while
+    // a landing is going in one of the thread's shells.
+    const needShells = [...quiet.keys()];
     const shells = needShells.length ? await this.probe.shells(needShells) : new Map<string, BackgroundShell[]>();
 
     const stuck = new Map<string, Stuck[]>();
     for (const [sessionId, list] of quiet) {
+      const sessionShells = shells.get(sessionId) ?? [];
       for (const { thread, task, minutes } of list) {
         const k = key(thread.threadId, task.id);
+        // Another shell's landing still within its time: this job may only
+        // be waiting for it (a loop polling its log, a sub-agent waiting on
+        // its own tb land), so it's left alone until that landing ends or
+        // runs past its three hours. Its first-seen start counts, as below.
+        const landingElsewhere = sessionShells.some((sh) => {
+          if (sh.taskId === task.id) return false;
+          const started = landingStarted(sh.processes ?? []);
+          if (started === undefined) return false;
+          const since = sh.taskId ? Math.min(this.landingSince.get(key(thread.threadId, sh.taskId)) ?? started, started) : started;
+          return now < since + LAND_WAIT_MS + WAIT_GRACE_MS;
+        });
+        if (landingElsewhere) continue;
         let commands: string[] | undefined;
         if (task.kind === 'shell') {
           // Matched to its process by the output file. Not found: it has
           // exited and the CLI will say so, or it isn't ours to judge.
-          const shell = shells.get(sessionId)?.find((s) => s.taskId === task.id);
+          const shell = sessionShells.find((s) => s.taskId === task.id);
           if (!shell) continue;
           // A landing waiting its turn, or on its check elsewhere: left
           // alone while one is running under it, for LAND_WAIT_MS from the
@@ -312,11 +330,8 @@ export class StuckJobs {
           if (before === undefined || shell.cpuSeconds - before >= IDLE_CPU_SECONDS) continue;
           commands = shell.commands;
         }
-        // Another shell's, never this one's own: a landing past its three
-        // hours is the job being told about, and mustn't be told to stay.
-        const landing = (shells.get(sessionId) ?? []).some((sh) => sh.taskId !== task.id && landingStarted(sh.processes ?? []) !== undefined);
         const l = stuck.get(thread.threadId) ?? [];
-        l.push({ task, minutes, commands, ...(landing ? { landing } : {}) });
+        l.push({ task, minutes, commands });
         stuck.set(thread.threadId, l);
       }
     }
@@ -351,7 +366,9 @@ export function message(jobs: Stuck[]): string {
   const lines = jobs.map((j) => {
     const what = j.task.kind === 'agent' ? 'sub-agent' : j.task.kind === 'shell' ? 'shell' : 'job';
     const running = j.commands?.length ? `, running ${[...new Set(j.commands)].join(', ')}` : '';
-    return `- ${j.task.description || 'a background task'} (${what}, ${j.minutes} min${running})`;
+    // The task id tells apart copies of one job with the same description
+    // (a sub-agent that ran its wait again), and is what TaskStop takes.
+    return `- ${j.task.description || 'a background task'} (${what} ${j.task.id}, ${j.minutes} min${running})`;
   });
   const one = jobs.length === 1;
   return [
@@ -360,12 +377,6 @@ export function message(jobs: Stuck[]): string {
     ...lines,
     '',
     `Check whether ${one ? "it's" : "they're"} still doing anything useful. Stop any that are stuck (a wait loop that can never end, say) and carry on from there. If you can't tell, ask the user in end_turn.`,
-    // The probe can't tell that a quiet loop is waiting on the landing in
-    // another shell, but the agent can, and stopping the landing is the
-    // costly mistake.
-    ...(jobs.some((j) => j.landing)
-      ? ['', "A tb land in another of this thread's shells is still going: it's waiting its turn in the landing line, or on its check on another machine. Leave it running, and anything that's only waiting for it. Stopping a tb land sends it to the back of the line, and loses the check for every thread it was being checked with."]
-      : []),
   ].join('\n');
 }
 

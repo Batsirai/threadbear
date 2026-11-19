@@ -2073,13 +2073,17 @@ check it was running (13 Nov: a dozen threads were told theirs looked
 stuck, and nothing landed for 35 minutes). That's asked at every look
 rather than kept: once the landing has gone, what's left is judged as
 usual, and the three hours count from the first landing seen under the
-job. A quiet shell beside one (a loop polling the landing's log) is still
-told, as nothing ties the two together, with a line saying a `tb land`
-in the thread is still going and to leave it running. Codex's background terminals leave no files,
+job. Any other quiet job of the thread's (a loop polling the landing's
+log, a sub-agent waiting on its own `tb land`) is left alone while that
+landing is within its three hours too: nothing ties the two together, and
+the agent was told once per copy of a sub-agent's repeated wait loop, so
+the same notice seemed to come four times (19 Nov). Once the landing has
+gone or run past its time, they're judged as usual. Codex's background terminals leave no files,
 so Codex threads aren't looked at.
 
 The thread gets one message from the runner (origin `runner`) listing
-its stuck jobs, how long each has run and what's running in it, asking
+its stuck jobs, with each one's task id (copies of one job share a
+description), how long it has run and what's running in it, asking
 the agent to stop any that are stuck and to ask Mike if it can't tell.
 Jobs it has been told about are kept in `stuck-jobs.json` in the data
 dir for a day, so a runner restart doesn't tell it again.
