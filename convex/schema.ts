@@ -1279,8 +1279,13 @@ export const appSchema = defineSchema({
     // (API 4): base64 of 32 bytes, made on the phone and sent only here.
     pushKey: v.optional(v.string()),
     // "android" (API 66): apnsToken is the phone's Firebase token, and a push
-    // goes through the relay to Firebase. Absent: an Apple token.
-    platform: v.optional(v.literal('android')),
+    // goes through the relay to Firebase. "webpush" (API 93, the F-Droid
+    // build): apnsToken is its UnifiedPush endpoint, an https address this
+    // deployment posts to itself (push.ts, webPushEndpoint.ts), with the keys
+    // in webPush. Absent: an Apple token.
+    platform: v.optional(v.union(v.literal('android'), v.literal('webpush'))),
+    // For "webpush": the subscription's p256dh and auth, base64url (RFC 8291).
+    webPush: v.optional(v.object({ p256dh: v.string(), auth: v.string() })),
   })
     .index('by_apnsToken', ['apnsToken'])
     // A token's phones: at most MAX_DEVICES_PER_TOKEN (phone:registerDevice),
@@ -1330,6 +1335,16 @@ export const appSchema = defineSchema({
 
   // This backend's registration with the push relay (docs/push-relay.md),
   // made the first time a push goes that way. One row.
+  // This deployment's VAPID key pair (RFC 8292) for the F-Droid build's
+  // UnifiedPush notifications (API 93): one row, made the first time a
+  // phone asks for it (phone:webPushKey) or a web push goes out. The
+  // private part (d) never leaves the deployment; the phone gets x and y.
+  webPushVapid: defineTable({
+    x: v.string(),
+    y: v.string(),
+    d: v.string(),
+    createdAt: v.number(),
+  }),
   relayInstall: defineTable({
     installId: v.string(),
     installKey: v.string(),

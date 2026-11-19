@@ -6,7 +6,8 @@
 // every send is a logged no-op. Each device row says whether it's a
 // sandbox (Xcode) or production (TestFlight, App Store) install, and
 // goes to the matching APNs host.
-import { createPrivateKey, randomBytes, sign } from 'node:crypto';
+import { createPrivateKey, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import http2 from 'node:http2';
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
@@ -15,6 +16,8 @@ import { failureText } from './pushHealth';
 import { pushText } from './pushText';
 import { seal } from './pushSeal';
 import { API_VERSION } from './version';
+import { encryptWebPush, vapidAuthorization, WEB_PUSH_PLAINTEXT_MAX, type VapidKey } from './webPush';
+import { endpointProblem, isIpLiteral, privateAddress } from './webPushEndpoint';
 
 // The push relay (relay/, docs/push-relay.md): Mike's Convex project that
 // holds his Apple key, for backends that don't have one. A deployment with
@@ -25,7 +28,9 @@ const RELAY_URL = 'https://impartial-hound-393.ap-southeast-2.convex.site';
 // platform "android" (API 66): apnsToken is the phone's Firebase token, and the
 // push goes through the relay to Firebase, even for a backend with an Apple
 // key of its own, which has no use for Android.
-type Target = { apnsToken: string; environment: 'sandbox' | 'production'; notify: 'away' | 'always' | 'off'; pushKey?: string; platform?: 'android' };
+// platform "webpush" (API 93, the F-Droid build): apnsToken is a UnifiedPush
+// endpoint and this deployment posts to it itself (sendWebPush), relay or not.
+type Target = { apnsToken: string; environment: 'sandbox' | 'production'; notify: 'away' | 'always' | 'off'; pushKey?: string; platform?: 'android' | 'webpush'; webPush?: { p256dh: string; auth: string } };
 
 async function relayInstall(ctx: ActionCtx, url: string): Promise<{ installId: string; installKey: string } | { failure: string }> {
   const known = await ctx.runQuery(internal.devices.relayInstall, { url });
@@ -180,10 +185,26 @@ async function sendAlert(ctx: ActionCtx, alert: { title: string; body: string; t
   return r;
 }
 
+// Two sends' summaries as one.
+function both(a: SendSummary, b: SendSummary): SendSummary {
+  const bad = (a.broken ?? 0) + (b.broken ?? 0);
+  const why = a.failure ?? b.failure;
+  return { sent: a.sent + b.sent, failed: a.failed + b.failed, ...(bad ? { broken: bad } : {}), ...(why ? { failure: why } : {}) };
+}
+
 async function deliver(ctx: ActionCtx, alert: { title: string; body: string; threadId: string }, which: (notify: 'away' | 'always' | 'off') => boolean): Promise<SendSummary> {
   const all: Target[] = await ctx.runQuery(internal.devices.targets, {});
-  const targets = all.filter((t) => which(t.notify));
-  if (!targets.length) return { sent: 0, failed: 0, skipped: 'noDevices' };
+  const chosen = all.filter((t) => which(t.notify));
+  if (!chosen.length) return { sent: 0, failed: 0, skipped: 'noDevices' };
+  // UnifiedPush phones are sent to from here, whatever else is set up.
+  const web = chosen.filter((t) => t.platform === 'webpush');
+  const targets = chosen.filter((t) => t.platform !== 'webpush');
+  if (!targets.length) return await sendWebPush(ctx, alert, web);
+  if (web.length) return both(await sendWebPush(ctx, alert, web), await deliverRest(ctx, alert, targets));
+  return await deliverRest(ctx, alert, targets);
+}
+
+async function deliverRest(ctx: ActionCtx, alert: { title: string; body: string; threadId: string }, targets: Target[]): Promise<SendSummary> {
   const cfg = apnsConfig();
   if (!cfg || process.env.PUSH_VIA === 'relay') return await sendViaRelay(ctx, alert, targets);
   // An Apple key is no use for an Android phone: those go through the relay,
@@ -223,10 +244,81 @@ async function deliver(ctx: ActionCtx, alert: { title: string; body: string; thr
   }
   const direct: SendSummary = { sent, failed, broken, ...(failure ? { failure } : {}) };
   if (!android.length) return direct;
-  const relayed = await sendViaRelay(ctx, alert, android);
-  const bad = (direct.broken ?? 0) + (relayed.broken ?? 0);
-  const why = direct.failure ?? relayed.failure;
-  return { sent: direct.sent + relayed.sent, failed: direct.failed + relayed.failed, ...(bad ? { broken: bad } : {}), ...(why ? { failure: why } : {}) };
+  return both(direct, await sendViaRelay(ctx, alert, android));
+}
+
+// This deployment's VAPID key (webPushVapid), made here the first time if a
+// phone never asked for it (phone:webPushKey makes it too).
+async function vapid(ctx: ActionCtx): Promise<VapidKey> {
+  const known = await ctx.runQuery(internal.devices.vapidKey, {});
+  if (known) return known;
+  const jwk = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ format: 'jwk' });
+  return await ctx.runMutation(internal.devices.putVapidKey, { x: jwk.x!, y: jwk.y!, d: jwk.d! });
+}
+
+// Why this endpoint can't be posted to now: its own problem
+// (webPushEndpoint.ts), or a name that resolves to a private address. Looked
+// up just before the post, so a name can't be pointed somewhere private after
+// it was registered. null when it's fine.
+async function unreachable(endpoint: string): Promise<string | null> {
+  const problem = endpointProblem(endpoint);
+  if (problem) return problem;
+  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, '');
+  if (isIpLiteral(host)) return null;
+  const addrs = await lookup(host, { all: true }).catch(() => null);
+  if (!addrs?.length) return "a name that doesn't resolve";
+  return addrs.some((a) => privateAddress(a.address)) ? 'a name with a private address' : null;
+}
+
+// The F-Droid build's notifications (API 93): straight to each phone's
+// UnifiedPush endpoint, encrypted for it (RFC 8291) and signed with this
+// deployment's VAPID key (RFC 8292). What's inside is what the relay's
+// Firebase message carries: the thread id and the title and text sealed with
+// the phone's own key, so its distributor's server sees neither. A 404 or 410
+// means the phone or its distributor dropped the registration, so the row
+// goes, as a gone Apple token's does.
+async function sendWebPush(ctx: ActionCtx, alert: { title: string; body: string; threadId: string }, targets: Target[]): Promise<SendSummary> {
+  if (!targets.length) return { sent: 0, failed: 0 };
+  const key = await vapid(ctx);
+  const subject = process.env.CONVEX_SITE_URL || 'https://threadbear.mikecann.app';
+  let sent = 0;
+  let failed = 0;
+  let broken = 0;
+  let failure: string | undefined;
+  for (const t of targets) {
+    const said = await webPushOne(t, alert, key, subject).catch((e: Error) => ({ status: 0, reason: e.message }));
+    if (said.status >= 200 && said.status < 300) {
+      sent++;
+      continue;
+    }
+    failed++;
+    console.warn(`[webpush] ${failureText(said.status, said.reason)} for …${t.apnsToken.slice(-6)}`);
+    if (said.status === 404 || said.status === 410) await ctx.runMutation(internal.devices.drop, { apnsToken: t.apnsToken });
+    else {
+      broken++;
+      failure ??= failureText(said.status, said.reason);
+    }
+  }
+  return { sent, failed, broken, ...(failure ? { failure } : {}) };
+}
+
+async function webPushOne(t: Target, alert: { title: string; body: string; threadId: string }, key: VapidKey, subject: string): Promise<{ status: number; reason?: string }> {
+  if (!t.webPush) return { status: 0, reason: 'no keys' };
+  const why = await unreachable(t.apnsToken);
+  if (why) return { status: 0, reason: `endpoint is ${why}` };
+  let text = JSON.stringify({ threadId: alert.threadId, ...(t.pushKey ? { e: seal(t.pushKey, JSON.stringify({ title: alert.title, body: alert.body })) } : {}) });
+  // A very long title or text: the phone shows its stand-in rather than nothing.
+  if (Buffer.byteLength(text) > WEB_PUSH_PLAINTEXT_MAX) text = JSON.stringify({ threadId: alert.threadId });
+  const body = encryptWebPush(Buffer.from(text), Buffer.from(t.webPush.p256dh, 'base64url'), Buffer.from(t.webPush.auth, 'base64url'));
+  const res = await fetch(t.apnsToken, {
+    method: 'POST',
+    headers: { TTL: '3600', Urgency: 'high', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', Authorization: vapidAuthorization(t.apnsToken, key, subject) },
+    body: new Uint8Array(body),
+    // A redirect could lead anywhere, private addresses included: not followed.
+    redirect: 'manual',
+    signal: AbortSignal.timeout(10_000),
+  });
+  return { status: res.status, ...(res.ok ? {} : { reason: (await res.text().catch(() => '')).slice(0, 80) || undefined }) };
 }
 
 // Scheduled by sync:upsertThreads when a thread starts needing Mike, and by

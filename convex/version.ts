@@ -446,4 +446,11 @@
 //    restart of the main Mac removed threads it had moved to another Mac,
 //    their rows there and all. A runner sends it only to a backend of 92
 //    or later.
-export const API_VERSION = 92;
+// 93: phone:registerDevice takes platform "webpush" (the Android app's
+//    F-Droid build): apnsToken is its UnifiedPush endpoint and the new
+//    `webPush` ({ p256dh, auth }) its keys; push.ts posts each notification
+//    there itself, encrypted (RFC 8291) and VAPID-signed (webPush.ts). The
+//    action phone:webPushKey ({ token }) gives the phone this deployment's
+//    VAPID public key to register with. The app registers this way only
+//    with a backend of 93 or later.
+export const API_VERSION = 93;

@@ -710,7 +710,14 @@ phone names must be one that has heartbeated (or `"any"`), else
   `platform: "android"` (API 66) says it is instead the phone's Firebase token
   (letters, digits and `_ - :`); the row keeps the name and gets a `platform`,
   and its pushes go through the relay to Firebase, even from a backend with its
-  own Apple key. An iPhone sends no platform. A phone token
+  own Apple key. `platform: "webpush"` (API 93, the Android app's F-Droid
+  build) says `apnsToken` is a UnifiedPush endpoint, a public https address
+  (no credentials, localhost or private ranges: `convex/webPushEndpoint.ts`),
+  with `webPush: { p256dh, auth }` its keys in base64url; this deployment
+  posts its pushes there itself, no relay (docs/push-relay.md, "UnifiedPush").
+  The phone first gets the deployment's VAPID public key from the action
+  `phone:webPushKey({ token })` → `{ vapid }`, made once and kept in
+  `webPushVapid`. An iPhone sends no platform. A phone token
   keeps at most 5 registrations; a new one past that replaces its oldest.
   Revoking a token takes effect in that one small write (its phones get no
   more pushes at once, `devices:targets`); their rows are deleted after, 100

@@ -940,3 +940,53 @@ test('a runner key\'s updateFailed is cut to fit, read by the main key only, and
   const after = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: LAPTOP })) as { runnerId: string; updateFailed?: unknown }[];
   assert.equal(after.find((r) => r.runnerId === MINI)?.updateFailed, undefined);
 });
+
+test('an F-Droid phone registers its UnifiedPush endpoint and keys (API 93), and only a public https one', async () => {
+  const s = await setup();
+  const p256dh = 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4';
+  const auth = 'BTBZMqHH6r4Tts7J_aSIgg';
+  const endpoint = 'https://ntfy.sh/upAbCdEf123?up=1';
+  await call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: endpoint, environment: 'production', platform: 'webpush', webPush: { p256dh, auth }, pushKey: 'A'.repeat(43) + '=' });
+  const targets = await call(s.ctx, devices.targets, {});
+  assert.deepEqual(targets.map((t: any) => [t.apnsToken, t.platform, t.webPush]), [[endpoint, 'webpush', { p256dh, auth }]]);
+  // Its notification setting is keyed on the endpoint, as an Apple token's is.
+  await call(s.ctx, phone.setNotifications, { token: TOKEN, apnsToken: endpoint, notify: 'always' });
+  assert.equal(s.rows('devices')[0].notify, 'always');
+  const reg = (apnsToken: string, webPush?: unknown, platform = 'webpush') => outcome(call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken, environment: 'production', platform, ...(webPush ? { webPush } : {}) }));
+  for (const bad of ['http://ntfy.sh/x', 'https://127.0.0.1/x', 'https://169.254.169.254/latest', 'https://localhost:8080/x', 'https://[::1]/x', 'https://10.0.0.5/up', 'https://u:p@ntfy.sh/x', 'https://ntfy.sh/' + 'x'.repeat(1100)]) {
+    assert.equal(await reg(bad, { p256dh, auth }), 'invalid', bad);
+  }
+  // Keys have to be there and the right size, and only with "webpush".
+  assert.equal(await reg(endpoint), 'invalid');
+  assert.equal(await reg(endpoint, { p256dh: p256dh.slice(1), auth }), 'invalid');
+  assert.equal(await reg(endpoint, { p256dh, auth: auth + 'A' }), 'invalid');
+  assert.equal(await reg('fXyZ1234567890abcdef:APA91bHexample_token-with-dashes_0123456789abcdefghij', { p256dh, auth }, 'android'), 'invalid');
+});
+
+test('phone:webPushKey makes one VAPID key for the deployment and hands every phone the same public half', async () => {
+  const s = await setup();
+  const actx = {
+    runQuery: (fn: unknown, args: any) => {
+      const name = String(fn);
+      if (name.endsWith('phone.phoneTokenOk')) return call(s.ctx, phone.phoneTokenOk, args);
+      if (name.endsWith('devices.vapidKey')) return call(s.ctx, devices.vapidKey, args);
+      throw new Error(`not faked: ${name}`);
+    },
+    runMutation: (fn: unknown, args: any) => {
+      if (String(fn).endsWith('devices.putVapidKey')) return call(s.ctx, devices.putVapidKey, args);
+      throw new Error(`not faked: ${String(fn)}`);
+    },
+  };
+  const one = await call(actx, phone.webPushKey, { token: TOKEN });
+  const two = await call(actx, phone.webPushKey, { token: TOKEN });
+  assert.match(one.vapid, /^[A-Za-z0-9_-]{87}$/);
+  assert.equal(Buffer.from(one.vapid, 'base64url')[0], 4);
+  assert.equal(two.vapid, one.vapid);
+  assert.equal(s.rows('webPushVapid').length, 1);
+  // The public half matches the saved private key.
+  const row = s.rows('webPushVapid')[0];
+  const pub = Buffer.concat([Buffer.from([4]), Buffer.from(row.x, 'base64url'), Buffer.from(row.y, 'base64url')]).toString('base64url');
+  assert.equal(pub, one.vapid);
+  // A bad token gets nothing.
+  assert.notEqual(await outcome(call(actx, phone.webPushKey, { token: 'nope' })), 'ok');
+});
