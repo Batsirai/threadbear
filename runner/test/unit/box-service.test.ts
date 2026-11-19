@@ -1236,7 +1236,7 @@ test('a waking command behind fifty that wake nothing still brings an archived b
 });
 
 // 6. Fifty boxes waiting for tomorrow's hours kept one waiting for room from waking.
-test("boxes waiting for room wake though many waiting for tomorrow's hours came first", async () => {
+test("boxes waiting for room wake though many waiting for tomorrow's hours came first", () => atNoon(async () => {
   const s = await setup();
   await setLimits(s, { maxBoxes: 100, maxAwakeHoursPerDay: 1 });
   const today = new Date().toISOString().slice(0, 10);
@@ -1260,7 +1260,7 @@ test("boxes waiting for room wake though many waiting for tomorrow's hours came 
   await call(s.ctx, boxes.wakeWaiting, { serviceId: s.serviceId });
   assert.equal(s.stateOf('E1'), 'waking');
   assert.ok(capped.every((_, i) => s.stateOf(`C${i}`) === 'asleep'));
-});
+}));
 
 // ------------------------------------------------------------ Codex's fourth round (18 Nov 2026)
 // A box is only given up when the provider says it's gone (or has lost its disk).
@@ -1473,7 +1473,7 @@ test('M: the billing guard pauses a running box that should be asleep, every pas
 });
 
 // 4. M: a capped box kept running billed for ever.
-test("M: a box kept running asleep is counted and charged, and is let go after its virtual runner's days", async () => {
+test("M: a box kept running asleep is counted and charged, and is let go after its virtual runner's days", () => atNoon(async () => {
   // Too big to pause (a virtual runner from before 2 GB was the most): its size says so.
   const s = await setup(4096);
   const refuse = s.fly.failWhile(() => false, 400);
@@ -1494,10 +1494,10 @@ test("M: a box kept running asleep is counted and charged, and is let go after i
   await s.send(runnerId, 'T2');
   await s.run();
   assert.equal(s.stateOf('T2'), 'starting');
-});
+}));
 
 // 5. M: a resume that half worked ran for ever, uncounted.
-test('M: a wake whose box runs but never comes up is charged, and paused once its grace is out', async () => {
+test('M: a wake whose box runs but never comes up is charged, and paused once its grace is out', () => atNoon(async () => {
   const s = await setup();
   const { runnerId, m, got } = await unsavedPaused(s);
   const stuck = s.fly.failWhile((r) => r.path.endsWith('/wait') && r.query.get('state') === 'started', 503);
@@ -1523,7 +1523,7 @@ test('M: a wake whose box runs but never comes up is charged, and paused once it
   assert.equal(s.stateOf('T2'), 'asleep');
   assert.ok(s.rowOf('T2').boxKeyHash);
   stuck.stop();
-});
+}));
 
 // ------------------------------------------------------------ Codex's sixth round (18 Nov 2026)
 
@@ -1793,7 +1793,7 @@ test("a retirement cut short stays retiring, a message waits, and it's finished 
 });
 
 // 3. A row-wide stamp moved by one machine undercharged another.
-test("each machine is charged from its own last observation, not a stamp another machine moved", async () => {
+test("each machine is charged from its own last observation, not a stamp another machine moved", () => atNoon(async () => {
   const s = await setup();
   await pausedWithMessage(s);
   const boxId = boxIdOf(s, 'T2');
@@ -1802,7 +1802,7 @@ test("each machine is charged from its own last observation, not a stamp another
   await call(s.ctx, service.observe, { serviceId: s.serviceId, boxes: [{ providerBoxId: 'old', state: 'stopped', boxId, attempt: 1 }] });
   await later(1000, () => call(s.ctx, service.observe, { serviceId: s.serviceId, boxes: [{ providerBoxId: 'new', state: 'running', boxId, attempt: 2 }] }));
   assert.ok((s.rowOf('T2').awakeToday?.ms ?? 0) - before >= 4 * MINUTE, 'charged as a whole pass, not a second');
-});
+}));
 
 // 4. countRunning could count one row twice and miss another.
 test('maxBoxes counts every box seen running once, whatever order they come in', async () => {
@@ -2190,7 +2190,7 @@ test('the exchange takes a machine id only of the shape a provider gives', async
 });
 
 // 2. A duplicate's running time went uncharged because its attempt was the row's.
-test("a running duplicate is charged by observation while the row's own machine is charged by its state", async () => {
+test("a running duplicate is charged by observation while the row's own machine is charged by its state", () => atNoon(async () => {
   const s = await setup();
   const { a } = await withDuplicate(s, 'started');
   const boxId = boxIdOf(s, 'T2');
@@ -2198,7 +2198,7 @@ test("a running duplicate is charged by observation while the row's own machine 
   await call(s.ctx, service.observe, { serviceId: s.serviceId, boxes: [{ providerBoxId: a.id, state: 'running', boxId, attempt: 1 }, { providerBoxId: 'dup', state: 'running', boxId, attempt: 1 }] });
   const charged = (s.rowOf('T2').awakeToday?.ms ?? 0) - before;
   assert.ok(charged >= 4 * MINUTE && charged <= 6 * MINUTE, `one pass, for the duplicate only (${charged})`);
-});
+}));
 
 // 3. A queue mark made after another was deleted could be cleared by an old step.
 test("an old reaper step leaves alone a mark queued after its own was deleted", async () => {

@@ -600,7 +600,16 @@ test('an established box whose folder is gone stays up, degraded: heartbeating o
     assert.ok(seen.includes('sync:heartbeat'), 'it heartbeats on its key');
     assert.match(out, /its folder is unusable; staying up, degraded/);
     // Said on the thread, with what was found.
-    const said = () => fs.readdirSync(paths.thread(home, THREAD)).map((f) => (fs.statSync(path.join(paths.thread(home, THREAD), f)).isFile() ? fs.readFileSync(path.join(paths.thread(home, THREAD), f), 'utf8') : '')).join('');
+    // A write's temp file can be renamed away between the listing and its read: skip it.
+    const said = () => fs.readdirSync(paths.thread(home, THREAD)).map((f) => {
+      try {
+        const file = path.join(paths.thread(home, THREAD), f);
+        return fs.statSync(file).isFile() ? fs.readFileSync(file, 'utf8') : '';
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return '';
+        throw e;
+      }
+    }).join('');
     while (!/This thread's machine can't run it: its folder .* has gone/.test(said()) && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
     assert.match(said(), /This thread's machine can't run it: its folder .* has gone/);
     assert.match(said(), /Found: the thread's record at/);
