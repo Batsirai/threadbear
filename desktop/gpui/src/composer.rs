@@ -1859,10 +1859,21 @@ impl Render for Composer {
                     // edge (1 pt in the accent, otherwise a 0.5 hairline)
                     // moves nothing. First, so the rest draws over it.
                     .child(div().absolute().inset_0().rounded(px(style::COMPOSER_RADIUS)).border(px(if needs_you { 1. } else { 0.5 })).border_color(if needs_you { style::accent(cx) } else { style::hairline(cx) }))
-                    // Clicking the card's padding puts the cursor in the text.
+                    // Clicking anywhere in the box off the words (its padding,
+                    // the gap over the controls, beside them) puts the cursor
+                    // in the text. Claimed, or the page or pane behind it,
+                    // which tracks a focus of its own, takes the focus back
+                    // on the same press: GPUI focuses every focusable under a
+                    // press that hasn't had prevent_default. Only the words'
+                    // own rows took a click (ADEMark, 19 Nov). A control in
+                    // the box still gets its click, on the let go.
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                        if window.default_prevented() {
+                            return;
+                        }
                         this.focus(window, cx);
                         crate::web_panels::keyboard_to_app(window);
+                        window.prevent_default();
                     }))
                     .children(token_card)
                     .children(limit)

@@ -194,3 +194,29 @@ Then('the composer holds the link to the thread {string}', async function (this:
   await this.until(`the link to "${title}" in the composer`, (d) => d.composer.text === `[${title}](thread:${t.id})`);
 });
 
+
+// Where a labelled control's middle is, from `label-point`.
+async function pointOf(world: ThreadbearWorld, label: string): Promise<{ x: number; y: number }> {
+  const reply = await world.app.do({ cmd: 'label-point', label });
+  const [, x, y] = reply.trim().split(/\s+/);
+  assert.ok(x && y, reply);
+  return { x: Number(x), y: Number(y) };
+}
+
+// Well above the box, over the page or the transcript, which takes the
+// keyboard from the box.
+When('I click away from the message box', async function (this: ThreadbearWorld) {
+  const box = await pointOf(this, 'Message');
+  await this.app.do({ cmd: 'click-at', x: box.x, y: box.y - 150 });
+});
+
+// Off the words: in the controls' row just left of Send, where only the box
+// itself is (ADEMark's click at 860,400 on 19 Nov). Send is 28 wide; the
+// chips end well before it, even in the specs' narrow window.
+When('I click the message box beside its controls', async function (this: ThreadbearWorld) {
+  const send = await pointOf(this, 'Send');
+  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string; x: number; y: number }[];
+  const chips = labels.filter((l) => l.label !== 'Send' && Math.abs(l.y - send.y) < 4 && l.x < send.x).map((l) => l.x);
+  assert.ok(chips.length && send.x - Math.max(...chips) > 70, `no room between the chips and Send: ${JSON.stringify(labels.filter((l) => Math.abs(l.y - send.y) < 4))}`);
+  await this.app.do({ cmd: 'click-at', x: send.x - 24, y: send.y });
+});
