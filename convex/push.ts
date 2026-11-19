@@ -201,8 +201,11 @@ async function deliver(ctx: ActionCtx, alert: { title: string; body: string; thr
   const targets = chosen.filter((t) => t.platform !== 'webpush');
   if (!targets.length) return await sendWebPush(ctx, alert, web);
   if (!web.length) return await deliverRest(ctx, alert, targets);
-  // Side by side, so a slow UnifiedPush server never holds up Apple's or Firebase's.
-  const [w, rest] = await Promise.all([sendWebPush(ctx, alert, web), deliverRest(ctx, alert, targets)]);
+  // Side by side, so a slow UnifiedPush server never holds up Apple's or
+  // Firebase's, and each awaited to the end even if the other throws (a bad
+  // Apple key throws), so neither is cut off when the action returns.
+  const threw = (e: unknown): SendSummary => (console.error(`[push] a send threw: ${(e as Error)?.name ?? 'Error'}`), { sent: 0, failed: 1, broken: 1, failure: '0 send threw' });
+  const [w, rest] = await Promise.all([sendWebPush(ctx, alert, web).catch(threw), deliverRest(ctx, alert, targets).catch(threw)]);
   return both(w, rest);
 }
 

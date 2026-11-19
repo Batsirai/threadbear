@@ -83,7 +83,14 @@ Firebase, so it doesn't use the relay at all (API 93, 19 Nov 2026):
    included. Web pushes go out side by side with each other and with
    Apple's and Firebase's, so a slow server holds up nobody. A 404 or 410
    means the distributor dropped the phone, and keys that aren't a P-256
-   point can never work, so either way the row goes.
+   point can never work, so either way the row goes. Names are looked up
+   through c-ares (`Resolver`), not the system's getaddrinfo, so stalled DNS
+   can't tie up the worker threads Apple's and the relay's lookups need.
+4. Known gap: `pushOff` (`pushHealth.ts`) and the health line's `via` still
+   only know Apple and the relay. A backend with `PUSH_RELAY=off` and no
+   Apple key says push is off even though UnifiedPush works, and a failing
+   web push shows as the relay's. The F-Droid app ignores `pushOff` for that
+   reason; Mike's own setup always has the relay.
 
 ### An Android phone
 

@@ -7,6 +7,7 @@
 // files may import this.
 import { createCipheriv, createECDH, createHmac, createPrivateKey, randomBytes, sign } from 'node:crypto';
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
+import { Resolver } from 'node:dns/promises';
 
 const hmac = (key: Buffer, data: Buffer) => createHmac('sha256', key).update(data).digest();
 
@@ -71,6 +72,28 @@ export function vapidAuthorization(endpoint: string, key: VapidKey, subject: str
 
 type Resolve = (host: string, opts: { all: true }, cb: (err: Error | null, addrs: LookupAddress[]) => void) => void;
 
+// The name's A and AAAA records through c-ares rather than getaddrinfo: the
+// system lookup runs on libuv's four worker threads and can't be cancelled,
+// so a few endpoints whose DNS stalls could hold them all and queue the
+// relay's and Apple's own lookups behind them (Codex's second review). c-ares
+// has its own sockets and gives up by itself (3 s, twice). Only when it can't
+// run at all here (no resolver it can reach) does it fall back to the system
+// lookup.
+const cares: Resolve = (host, opts, cb) => {
+  const r = new Resolver({ timeout: 3000, tries: 2 });
+  Promise.allSettled([r.resolve4(host), r.resolve6(host)]).then(([a, b]) => {
+    const addrs: LookupAddress[] = [
+      ...(a.status === 'fulfilled' ? a.value.map((address) => ({ address, family: 4 })) : []),
+      ...(b.status === 'fulfilled' ? b.value.map((address) => ({ address, family: 6 })) : []),
+    ];
+    if (addrs.length) return cb(null, addrs);
+    const why = [a, b].map((x) => (x.status === 'rejected' ? (x.reason as { code?: string })?.code : undefined));
+    // Both said the name has no such record: there's nothing to connect to.
+    if (why.every((c) => c === 'ENOTFOUND' || c === 'ENODATA')) return cb(Object.assign(new Error(`no address for ${host}`), { code: 'ENOTFOUND' }), []);
+    (dnsLookup as unknown as Resolve)(host, opts, cb);
+  });
+};
+
 /**
  * The `lookup` push.ts gives node:https for a UnifiedPush endpoint: it
  * resolves the name and refuses if any address it gets is private
@@ -79,7 +102,7 @@ type Resolve = (host: string, opts: { all: true }, cb: (err: Error | null, addrs
  * passed in (this file imports nothing of the backend's, so the runner's
  * tests can load it); `resolve` is for tests.
  */
-export function pinnedLookup(isPrivate: (ip: string) => boolean, resolve: Resolve = dnsLookup as unknown as Resolve) {
+export function pinnedLookup(isPrivate: (ip: string) => boolean, resolve: Resolve = cares) {
   return (host: string, opts: { all?: boolean; family?: number }, cb: (...a: unknown[]) => void) => {
     resolve(host, { ...opts, all: true }, (err, addrs) => {
       if (err) return cb(err);
