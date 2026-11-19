@@ -10,6 +10,10 @@ import path from 'node:path';
 import { YearTokenMaker, urlState } from '../../src/year-token-maker.ts';
 import type { Account } from '../../src/protocol.ts';
 
+// Making a token runs setup-token in a pty (python3's pty module), which a
+// Windows runner doesn't do: it says so instead (year-token-maker.ts).
+const NO_PTY = process.platform === 'win32' ? 'setup-token runs in a pty, which Windows has none of' : false;
+
 const STATE = 'Y1Miuwn1u5kKwrI7dwuczDg09inC94FeD8_utBRyPZ0';
 const PAGE = `https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&code_challenge=abc&code_challenge_method=S256&state=${STATE}`;
 const LOCAL = `https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A5555%2Fcallback&state=${STATE}`;
@@ -74,7 +78,7 @@ async function until<T>(f: () => Promise<T>, ok: (t: T) => boolean, ms = 10_000)
   }
 }
 
-test("a code from the page makes the token in the login's folder, and no answer or log has it", async () => {
+test("a code from the page makes the token in the login's folder, and no answer or log has it", { skip: NO_PTY }, async () => {
   const s = setUp();
   try {
     const first = await until(() => s.maker.step(s.account, {}), (a) => a.state !== 'starting');
@@ -97,7 +101,7 @@ test("a code from the page makes the token in the login's folder, and no answer 
   }
 });
 
-test("a code setup-token doesn't take fails rather than waiting out the session", async () => {
+test("a code setup-token doesn't take fails rather than waiting out the session", { skip: NO_PTY }, async () => {
   const s = setUp({ takes: 'something-else#nope', answerWaitMs: 500 });
   try {
     await until(() => s.maker.step(s.account, {}), (a) => a.state === 'waiting');
@@ -132,7 +136,7 @@ test("a pasted code's state is the page's own", () => {
   assert.equal(urlState('not a url'), undefined);
 });
 
-test('a token that comes in two reads is saved whole, not cut at the first', async () => {
+test('a token that comes in two reads is saved whole, not cut at the first', { skip: NO_PTY }, async () => {
   const s = setUp({ split: true });
   try {
     await until(() => s.maker.step(s.account, {}), (a) => a.state === 'waiting');
