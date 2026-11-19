@@ -714,7 +714,10 @@ impl TrustedOpener {
     fn new(file: &Path, app: &OpeningApp) -> Option<TrustedOpener> {
         let extension = extension(file);
         let bundle_id = app.bundle_id.as_deref().map(str::trim).filter(|id| !id.is_empty())?;
-        if extension.is_empty() || app.path == file {
+        if extension.is_empty() || app.path == file || NEVER_REMEMBERED_EXTENSIONS.contains(&extension.as_str()) {
+            return None;
+        }
+        if NEVER_REMEMBERED_APPS.contains(&bundle_id.to_ascii_lowercase().as_str()) || !rememberable_place(&app.path) {
             return None;
         }
         Some(TrustedOpener { extension, bundle_id: bundle_id.to_owned(), app: app.path.clone() })
@@ -722,8 +725,46 @@ impl TrustedOpener {
 
     /// The same kind going to the same app, at the same place.
     pub fn same(&self, other: &TrustedOpener) -> bool {
-        self.extension.eq_ignore_ascii_case(&other.extension) && self.bundle_id.eq_ignore_ascii_case(&other.bundle_id) && self.app == other.app
+        self.extension.to_lowercase() == other.extension.to_lowercase() && self.bundle_id.eq_ignore_ascii_case(&other.bundle_id) && self.app == other.app
     }
+}
+
+/// Kinds of file never given an Always, though they aren't ones that always
+/// ask (`runs_code`): an alias opens what it points at, a disk image or an
+/// archive brings in files (an app among them), and a script may run in
+/// whatever opens it (Gemini's review, 19 Nov).
+const NEVER_REMEMBERED_EXTENSIONS: &[&str] = &[
+    "alias", "dmg", "iso", "img", "cdr", "sparseimage", "toast", "zip", "xip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "ipa",
+    "py", "pyw", "pyc", "rb", "pl", "php", "lua", "js", "mjs", "cjs", "zsh", "bash", "fish", "csh", "ksh", "tcsh", "applescript", "scpt",
+];
+
+/// Apps never given an Always: they open what a file points at, mount or
+/// unpack it, or run it (the code runners are refused before this).
+const NEVER_REMEMBERED_APPS: &[&str] = &[
+    "com.apple.finder", "com.apple.diskimagemounter", "com.apple.archiveutility", "com.apple.scripteditor2", "com.apple.automator",
+    "com.apple.installer", "com.apple.shortcuts", "org.python.idle", "com.apple.systemevents", "com.apple.applescriptutility",
+];
+
+/// Where an app may be for an Always to name it: directly in /Applications,
+/// /System/Applications or ~/Applications (or their Utilities), at its real
+/// path, so a link to it isn't what's remembered. Narrower than
+/// `installed_where_apps_are`: a thread may work in a folder under
+/// ~/Library/Application Support and put an app there (Codex's review,
+/// 19 Nov), and Always is for apps Mike installed himself.
+fn rememberable_place(app: &Path) -> bool {
+    if real_path(app).ok().as_deref() != Some(app) {
+        return false;
+    }
+    let is_app = |c: &std::path::Component| c.as_os_str().to_string_lossy().to_ascii_lowercase().ends_with(".app");
+    let directly_in = |root: &Path| {
+        app.strip_prefix(root).is_ok_and(|rest| match rest.components().collect::<Vec<_>>().as_slice() {
+            [a] => is_app(a),
+            [u, a] => u.as_os_str() == "Utilities" && is_app(a),
+            _ => false,
+        })
+    };
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+    directly_in(Path::new("/Applications")) || directly_in(Path::new("/System/Applications")) || home.is_some_and(|h| directly_in(&h.join("Applications")))
 }
 
 /// Decides about the file at `path`, which must be absolute already, with
@@ -1562,23 +1603,25 @@ mod tests {
     /// own Tandem's projects). Once remembered it opens; the same kind going
     /// to another app, or the same app somewhere else, still asks, and so
     /// does anything that would ask for another reason.
-    #[cfg(unix)]
+    /// TextEdit's real place stands in for Tandem's: an Always only names
+    /// an app at its real path, so the app has to be there.
+    #[cfg(target_os = "macos")]
     #[test]
     fn an_unknown_kind_can_be_trusted_to_its_installed_app() {
         let s = Scratch::new("trust");
         let project = s.file("Workbench Drawers.tandem", "{}");
         let given = project.to_string_lossy().into_owned();
-        let tandem = |_: &Path| Some(OpeningApp { path: "/Applications/Tandem.app".into(), bundle_id: Some("com.mikecann.tandem".into()), name: "Tandem".into() });
+        let tandem = |_: &Path| Some(OpeningApp { path: "/System/Applications/TextEdit.app".into(), bundle_id: Some("com.mikecann.tandem".into()), name: "Tandem".into() });
         let FileVerdict::Ask { question, look, .. } = decide_file(&given, Origin::ThisMac, &tandem) else { panic!() };
         assert_eq!(question.title, "Open in Tandem?");
         assert!(question.detail.starts_with("Workbench Drawers.tandem came from a thread. Threadbear doesn't know .tandem files, and Tandem may run what's in them."), "{}", question.detail);
         assert_eq!(question.always.as_deref(), Some("Always open .tandem in Tandem"));
         let kind = look.trustable.clone().expect("trustable");
-        assert_eq!(kind, TrustedOpener { extension: "tandem".into(), bundle_id: "com.mikecann.tandem".into(), app: "/Applications/Tandem.app".into() });
+        assert_eq!(kind, TrustedOpener { extension: "tandem".into(), bundle_id: "com.mikecann.tandem".into(), app: "/System/Applications/TextEdit.app".into() });
 
         // Remembered: opens, in Tandem, and is still checked as that file.
         let FileVerdict::Open { with, look, .. } = decide_file_trusting(&given, Origin::ThisMac, &tandem, std::slice::from_ref(&kind)) else { panic!("a remembered kind asked") };
-        assert_eq!(with, Opener::App("/Applications/Tandem.app".into()));
+        assert_eq!(with, Opener::App("/System/Applications/TextEdit.app".into()));
         assert!(still_same(&given, &look, &tandem));
         // Its name in capitals is the same kind.
         let shouty = s.file("LOUD.TANDEM", "{}");
@@ -1589,6 +1632,24 @@ mod tests {
         assert!(matches!(decide_file_trusting(&given, Origin::ThisMac, &other, std::slice::from_ref(&kind)), FileVerdict::Ask { .. }));
         let moved = |_: &Path| Some(OpeningApp { path: "/Applications/Copy/Tandem.app".into(), bundle_id: Some("com.mikecann.tandem".into()), name: "Tandem".into() });
         assert!(matches!(decide_file_trusting(&given, Origin::ThisMac, &moved, std::slice::from_ref(&kind)), FileVerdict::Ask { .. }));
+        // Tandem's id from an app under Application Support, where a
+        // thread may work: asks, with no Always.
+        if let Some(home) = std::env::var_os("HOME") {
+            let support = PathBuf::from(home).join("Library/Application Support/Project/Tandem.app");
+            let there = |_: &Path| Some(OpeningApp { path: support.clone(), bundle_id: Some("com.mikecann.tandem".into()), name: "Tandem".into() });
+            let FileVerdict::Ask { question, .. } = decide_file(&given, Origin::ThisMac, &there) else { panic!() };
+            assert!(question.always.is_none());
+        }
+        // Finder, or an alias or a disk image: no Always.
+        let finder = |_: &Path| Some(OpeningApp { path: "/System/Library/CoreServices/Finder.app".into(), bundle_id: Some("com.apple.finder".into()), name: "Finder".into() });
+        let alias = s.file("go.alias", "x");
+        let FileVerdict::Ask { question, .. } = decide_file(&alias.to_string_lossy(), Origin::ThisMac, &finder) else { panic!() };
+        assert!(question.always.is_none());
+        for rel in ["go.alias", "disk.dmg", "build.py", "deploy.zsh"] {
+            let p = s.file(rel, "x");
+            let FileVerdict::Ask { question, .. } = decide_file(&p.to_string_lossy(), Origin::ThisMac, &tandem) else { panic!("{rel}") };
+            assert!(question.always.is_none(), "{rel}");
+        }
         // Tandem's id from an app in the project: asks, with no Always.
         let app_in_project = s.path("Tandem.app");
         let in_project = |_: &Path| Some(OpeningApp { path: app_in_project.clone(), bundle_id: Some("com.mikecann.tandem".into()), name: "Tandem".into() });
@@ -1610,7 +1671,7 @@ mod tests {
         let bare = s.file("Makefile2", "x");
         let FileVerdict::Ask { question, .. } = decide_file(&bare.to_string_lossy(), Origin::ThisMac, &tandem) else { panic!() };
         assert!(question.always.is_none());
-        let unnamed = |_: &Path| Some(OpeningApp { path: "/Applications/Tandem.app".into(), bundle_id: None, name: "Tandem".into() });
+        let unnamed = |_: &Path| Some(OpeningApp { path: "/System/Applications/TextEdit.app".into(), bundle_id: None, name: "Tandem".into() });
         let FileVerdict::Ask { question, .. } = decide_file(&given, Origin::ThisMac, &unnamed) else { panic!() };
         assert!(question.always.is_none());
     }

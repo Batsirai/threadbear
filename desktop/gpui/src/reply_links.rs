@@ -62,8 +62,17 @@ struct LinkPrefs {
     /// The PR tab's Merge, as its menu's Default set it (pr_view.rs).
     pr_merge_method: Option<String>,
     /// Kinds of file Mike said always open in their app, from the open
-    /// gate's question ("Always open .tandem in Tandem").
+    /// gate's question ("Always open .tandem in Tandem"). Read one by one,
+    /// so an entry edited by hand into something else is dropped alone,
+    /// not with every other choice here.
+    #[serde(deserialize_with = "each_opener")]
     trusted_openers: Vec<threadbear_core::open_policy::TrustedOpener>,
+}
+
+fn each_opener<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<threadbear_core::open_policy::TrustedOpener>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let items = value.as_array().cloned().unwrap_or_default();
+    Ok(items.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
 }
 
 static PREFS: Mutex<Option<LinkPrefs>> = Mutex::new(None);

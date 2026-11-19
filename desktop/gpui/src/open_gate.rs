@@ -394,7 +394,9 @@ fn clicked(url: &str, event: &ClickEvent, origin: Origin, base: &str, cx: &mut A
 /// kind in that app. `path` is absolute.
 pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
     match policy::decide_file_trusting(path, origin, &app_for, &crate::reply_links::trusted_openers()) {
-        FileVerdict::Open { url, look, with, .. } => open_checked(path, &look, &with, &url, cx),
+        FileVerdict::Open { url, look, with, .. } => {
+            open_checked(path, &look, &with, &url, cx);
+        }
         FileVerdict::Refuse(why) => refuse(why, cx),
         FileVerdict::Ask { question, url, look, with } => {
             let path = path.to_owned();
@@ -783,12 +785,18 @@ fn ask(question: Question, cx: &mut App, yes: impl FnOnce(&mut App, bool) + 'sta
         }
         answers.push(PromptButton::new(question.yes.clone()));
         let always_at = question.always.is_some().then_some(1);
+        let open_at = answers.len() - 1;
         let Ok(answer) = handle.update(cx, |_, window, cx| window.prompt(PromptLevel::Critical, &question.title, Some(&question.detail), &answers, cx)) else { return };
         cx.spawn(async move |cx| {
-            match answer.await {
-                Ok(0) | Err(_) => {}
-                Ok(i) => cx.update(|cx| yes(cx, Some(i) == always_at)),
-            }
+            // Only a yes button's own index: a sheet ended any other way (its
+            // window closed under it) gives a code that's neither, and that's
+            // a no (Gemini's review, 19 Nov).
+            let always = match answer.await {
+                Ok(i) if i == open_at => false,
+                Ok(i) if Some(i) == always_at => true,
+                _ => return,
+            };
+            cx.update(|cx| yes(cx, always));
         })
         .detach();
     });
@@ -803,7 +811,13 @@ fn app_for(file: &Path) -> Option<OpeningApp> {
     use objc2_foundation::{NSString, NSURL};
     let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
     let app = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url)?;
-    describe_app(&app)
+    // Named and identified as the real app, links followed, so a link in
+    // the project named after one app and pointing at another never shows
+    // the first's name over the second's id (Gemini's review, 19 Nov).
+    match app.path().and_then(|p| policy::real_path(Path::new(&p.to_string())).ok()) {
+        Some(real) => describe_app(&NSURL::fileURLWithPath(&NSString::from_str(&real.to_string_lossy()))),
+        None => describe_app(&app),
+    }
 }
 
 /// Elsewhere nothing says, and the extension rules stand alone.
