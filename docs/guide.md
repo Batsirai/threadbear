@@ -1251,7 +1251,8 @@ Its row says "Starting a machine" while it boots, "Asleep" once it's been
 idle a while, and "Waking" when a message brings it back. The first time a
 login runs there, the thread asks for a cloud token in a card on its
 message box: Make one runs `claude setup-token` for that login and opens
-claude.ai to approve it, Paste a token takes one you made, and Use this
+claude.ai to approve it (not on Windows, where you run it in a terminal
+and paste what it prints), Paste a token takes one you made, and Use this
 Mac's token appears when that login already has a year-long token here.
 The message waits and goes once it's set. If Claude later refuses the
 token, the same card comes back.

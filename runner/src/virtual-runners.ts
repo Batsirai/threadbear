@@ -43,6 +43,8 @@ export type VirtualRunnerDeps = {
   // Tests: the helper run, and its time limit.
   runHelper?: (cli: string, env: NodeJS.ProcessEnv, timeoutMs: number) => Promise<string | undefined>;
   makeTimeoutMs?: number;
+  // Tests: the OS, for Make one's refusal on Windows.
+  platform?: NodeJS.Platform;
 };
 
 const bad = (message: string) => new RpcError(ErrorCode.badParams, message);
@@ -217,6 +219,10 @@ export class VirtualRunners {
   async make(login: string): Promise<Record<string, never>> {
     this.mustBeOn();
     const account = this.loginAccount(login);
+    // The helper runs the CLI in a pseudo-terminal (Python's pty), which Windows hasn't got.
+    if ((this.deps.platform ?? process.platform) === 'win32') {
+      throw new RpcError(ErrorCode.other, "Make one can't run on Windows. Run claude setup-token in a terminal and paste the token it prints.");
+    }
     const going = this.making.get(login);
     if (going) return going;
     const run = (async () => {

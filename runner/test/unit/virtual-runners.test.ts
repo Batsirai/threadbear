@@ -70,6 +70,8 @@ function harness(extra: Partial<VirtualRunnerDeps> = {}) {
     made: (row) => void made.push(row),
     log: logger(lines),
     now: () => Date.parse('2026-11-19T00:00:00Z'),
+    // Make one's own refusal on Windows has a test of its own.
+    platform: 'darwin',
     ...extra,
   };
   return { v: new VirtualRunners(deps), calls, made, lines };
@@ -160,6 +162,9 @@ test('a start is refused for pictures, another provider, a missing login, or wit
   assert.equal(pooled.calls[0]!.args.login, 'two@example.com');
 });
 
+// The helper's pseudo-terminal (Python's pty) and the fake CLI's #! script are Unix only; Make one refuses on Windows.
+const unixOnly = { skip: process.platform === 'win32' && 'no pty on Windows' };
+
 // A fake `claude` that prints what setup-token does: escapes, a box, the token wrapped over two lines, then prose.
 function fakeClaude(body: string): string {
   const dir = tmp('tb-vr-cli-');
@@ -169,7 +174,7 @@ function fakeClaude(body: string): string {
 }
 const wrapped = (t: string) => `printf '\\033[2J\\033[1mYour OAuth token:\\033[0m\\n\\n\\033[32m│ ${t.slice(0, 60)}\\n│ ${t.slice(60)}\\033[0m\\n\\nStore this token securely. You won'"'"'t see it again.\\n'`;
 
-test('the helper reads the token from a pseudo-terminal, escapes and wrapping taken out, and nothing of the prose after it', async () => {
+test('the helper reads the token from a pseudo-terminal, escapes and wrapping taken out, and nothing of the prose after it', unixOnly, async () => {
   const cli = fakeClaude(wrapped(TOKEN));
   assert.equal(await runTokenHelper(cli, { ...process.env }, 20_000), TOKEN);
   // One line, too.
@@ -188,7 +193,7 @@ test('a helper that never finishes is stopped at its time limit', async () => {
   assert.ok(Date.now() - at < 10_000);
 });
 
-test('Make one: the token goes to setCloudToken for that login, the scrubber knows it first, and nothing logs it', async () => {
+test('Make one: the token goes to setCloudToken for that login, the scrubber knows it first, and nothing logs it', unixOnly, async () => {
   const dir = tmp('tb-vr-two-');
   const accounts: Account[] = [{ ...ACCOUNTS[1]!, configDir: dir }];
   const seenEnv: NodeJS.ProcessEnv[] = [];
@@ -231,6 +236,14 @@ test("a failure never carries the token: the backend's refusal is said with the 
   assert.ok(!JSON.stringify(lines).includes(TOKEN.slice(13)), 'not in the log');
   const none = await harness({ runHelper: async () => undefined }).v.make('me@example.com').catch((e: Error) => e);
   assert.match((none as Error).message, /No token came back/);
+});
+
+test("Make one on Windows says to paste a token instead, without running anything", async () => {
+  let ran = false;
+  const { v, calls } = harness({ platform: 'win32', runHelper: async () => ((ran = true), TOKEN) });
+  await assert.rejects(v.make('me@example.com'), /can't run on Windows\. Run claude setup-token in a terminal and paste/);
+  assert.equal(ran, false);
+  assert.equal(calls.length, 0);
 });
 
 test("Paste a token and Use this Mac's: only a token's shape, and only a login that has one here", async () => {
