@@ -283,7 +283,8 @@ pub(crate) fn overlay<T: HostsViewer>(host: &mut T, window: &mut Window, cx: &mu
     let fg = gpui_kit::hsla(0., 0., 1., 0.92);
     let dim = gpui_kit::hsla(0., 0., 1., 0.55);
     let body: AnyElement = match image {
-        Some(image) => img(ImageSource::Image(image)).max_w(bounds.width - px(120.)).max_h(bounds.height - px(120.)).object_fit(ObjectFit::Contain).into_any_element(),
+        // With an id, so a GIF plays (files.rs, the pane's picture).
+        Some(image) => img(ImageSource::Image(image)).id(SharedString::from(format!("viewer-picture-{index}"))).max_w(bounds.width - px(120.)).max_h(bounds.height - px(120.)).object_fit(ObjectFit::Contain).into_any_element(),
         None => div().text_size(px(style::size::LABEL)).text_color(dim).child(if loading { "Loading…".to_owned() } else { format!("Couldn't show {name}") }).into_any_element(),
     };
     let arrow = |id: &'static str, symbol: &'static str, delta: i64, tip: &'static str, cx: &mut Context<T>| {

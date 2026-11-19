@@ -987,7 +987,10 @@ impl SidePane {
                             .update(cx, |this, cx| this.open_picture_menu(path3, position, window, cx))
                             .ok();
                     })
-                    .child(img(source).size_full().object_fit(ObjectFit::Contain))
+                    // An id, which GPUI only plays a GIF's frames with (its
+                    // frame and timing are kept under it). Mike, 19 Nov: "GIFs
+                    // don't play in Threadbear".
+                    .child(img(source).id(SharedString::from(format!("hl-picture-{path}"))).size_full().object_fit(ObjectFit::Contain))
                     // Found by scripts, for a drag from it.
                     .test_support()
                     .into_any_element()
