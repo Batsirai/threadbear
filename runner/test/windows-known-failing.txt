@@ -22,7 +22,6 @@ claude-trust.test.ts
 codex-approvals.test.ts
 contracts.test.ts
 desktop-ci-paths.test.ts
-frozen-cli.test.ts
 gpui-dev-app.test.ts
 gpui-driver-evidence.test.ts
 hangup-guard.test.ts
@@ -60,7 +59,6 @@ release.test.ts
 remote-perf-lock.test.ts
 remote-ssh-drop.test.ts
 remote-turn.test.ts
-restart.test.ts
 rpc.test.ts
 runner-keys.test.ts
 runner.test.ts
@@ -68,7 +66,6 @@ safe-cut.test.ts
 safe-git.test.ts
 schedule-check-writes.test.ts
 script-trust.test.ts
-secrets-guard.test.ts
 self-hosted-plan.test.ts
 share-images.test.ts
 shared-cargo.test.ts
@@ -79,7 +76,6 @@ stage-update-hosts.test.ts
 stuck-jobs.test.ts
 swift-freeze.test.ts
 sync-main.test.ts
-sync.test.ts
 tb-dev.test.ts
 thread-keys.test.ts
 unvouched-upgrade.test.ts

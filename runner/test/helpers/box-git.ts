@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpDir } from './fakes.ts';
 import type { Cloner } from '../../src/box-mode.ts';
+import { SHELL } from './platform.ts';
 
 // Commits need a name, and the user's own git config mustn't reach the temp
 // repos. Each test file runs in its own process.
@@ -19,7 +20,7 @@ Object.assign(process.env, {
 });
 
 export function sh(cwd: string, cmd: string): string {
-  return execFileSync('/bin/sh', ['-c', cmd], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  return execFileSync(SHELL[0], [SHELL[1], cmd], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 // A bare repo at <tmp>/proj.git: main, with a runner/ folder, and a `dev`

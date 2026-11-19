@@ -9,10 +9,11 @@ import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpDir } from '../helpers/fakes.ts';
 import { holdUntil } from '../helpers/patience.ts';
+import { SHELL } from '../helpers/platform.ts';
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', '..', 'scripts', 'sync-main.sh');
 const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
-const sh = (cwd: string, cmd: string) => execFileSync('/bin/sh', ['-c', cmd], { cwd, env, encoding: 'utf8' }).trim();
+const sh = (cwd: string, cmd: string) => execFileSync(SHELL[0], [SHELL[1], cmd], { cwd, env, encoding: 'utf8' }).trim();
 
 function repos() {
   const root = fs.realpathSync(tmpDir('sync-main-'));
