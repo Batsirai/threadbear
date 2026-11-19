@@ -273,10 +273,14 @@ impl ThreadPane {
         // writes for its own threads: only one this Mac could have seen
         // counts (`juice::turn_start`; Daybreak 147).
         let created = self.summary.created_at.as_deref().and_then(threadbear_core::inbox::parse_ms).map(|ms| ms as f64 / 1000.);
-        let started_at = started_at.and_then(|s| threadbear_core::juice::turn_start(s, crate::now_ms() as f64 / 1000., created));
+        // An old transcript's turn, over by now (`shows_old_turn`): no
+        // count and a still paw, till it's caught up.
+        let old = self.shows_old_turn();
+        let started_at = started_at.filter(|_| !old).and_then(|s| threadbear_core::juice::turn_start(s, crate::now_ms() as f64 / 1000., created));
         self.ensure_ticking(started_at.is_some(), cx);
         let quiet = style::quiet_text(cx);
         let text = match started_at {
+            None if old => "Catching up…".to_owned(),
             Some(started) => {
                 let elapsed = (crate::now_ms() as f64 / 1000. - started).max(1.);
                 format!("Bear with me · {}", threadbear_core::reducer::duration(elapsed * 1000.))

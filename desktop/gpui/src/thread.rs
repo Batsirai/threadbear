@@ -790,6 +790,9 @@ impl ThreadPane {
             let sub = call(client, "threads.subscribe", params).await;
             this.update(cx, |this, cx| match sub.ok().and_then(|v| EventsPage::decode(&v)) {
                 Some(page) => {
+                    // Read and subscribed again: up to date, whatever an
+                    // earlier try left (`shows_old_turn`).
+                    this.stale = false;
                     let action = this.feed.finish_subscribe(page.events, &page.in_progress);
                     this.handle(action, cx);
                 }
@@ -832,6 +835,18 @@ impl ThreadPane {
             });
         }
         trim
+    }
+
+    /// Its transcript is from before the connection last went, and the
+    /// thread's summary says the turn it shows running has ended: what it
+    /// shows is old, so its working line says it's catching up rather than
+    /// counting on. A kept thread opened while the runner was restarting
+    /// still showed "Bear with me" ticking from a transcript 30 minutes old,
+    /// a turn that had ended 2 minutes before, while the sidebar rightly had
+    /// it in the Inbox (19 Nov).
+    /// Catching up counts too: what it shows is old till that lands.
+    pub(crate) fn shows_old_turn(&self) -> bool {
+        (self.stale || self.feed.is_catching_up()) && !self.summary.busy()
     }
 
     /// The connection's back while this pane is kept and not shown: it
@@ -896,6 +911,7 @@ impl ThreadPane {
             let sub = call(client, "threads.subscribe", params).await;
             this.update(cx, |this, cx| match sub.ok().and_then(|v| EventsPage::decode(&v)) {
                 Some(page) => {
+                    this.stale = false;
                     crate::reply_buttons::fold(&page.events, &this.summary.id);
                     let action = this.feed.finish_subscribe(page.events, &page.in_progress);
                     this.handle(action, cx);
