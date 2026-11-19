@@ -2,7 +2,7 @@
 # Gradle for this project, kept small enough for the 8 GB Hetzner box:
 # a memory cap on the whole build, no daemon left behind, one build at a time.
 #   ./build.sh :kit:test
-#   ./build.sh :app:assembleDebug
+#   ./build.sh :app:assembleGithubDebug    (or :app:assembleFdroidDebug)
 set -euo pipefail
 self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$self")"

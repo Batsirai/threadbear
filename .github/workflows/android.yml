@@ -75,8 +75,12 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" >/dev/null
-      - name: Kit tests and a debug build
-        run: cd android-native && ./gradlew --no-daemon :kit:test :app:assembleDebug
+      - name: Kit tests, a debug build and the F-Droid build
+        run: cd android-native && ./gradlew --no-daemon :kit:test :app:assembleGithubDebug :app:assembleFdroidRelease
+      # F-Droid takes only free software: no Firebase, Play services or ML Kit
+      # class may get into the fdroid APK (docs/android-native.md, "Flavours").
+      - name: No Google code in the F-Droid build
+        run: cd android-native && ./check-fdroid-apk.sh app/build/outputs/apk/fdroid/release/app-fdroid-release-unsigned.apk
 
   # The release is two jobs, so the signing key never meets the build
   # (Daybreak 123, 15 Nov 2026). `apk` builds an unsigned APK: Gradle, its
@@ -154,9 +158,10 @@ jobs:
           export THREADBEAR_RELEASE="${TAG#release/}"
           cd android-native
           # No key here: with none, the release build comes out unsigned (build.gradle.kts).
-          ./gradlew --no-daemon :kit:test :app:assembleRelease
+          # The github flavour: Firebase push and the update check (docs/android-native.md, "Flavours").
+          ./gradlew --no-daemon :kit:test :app:assembleGithubRelease
           mkdir -p "$RUNNER_TEMP/unsigned"
-          cp app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk"
+          cp app/build/outputs/apk/github/release/app-github-release-unsigned.apk "$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk"
           echo "sha256=$(sha256sum "$RUNNER_TEMP/unsigned/threadbear-android-unsigned.apk" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           rm -f app/google-services.json
 
