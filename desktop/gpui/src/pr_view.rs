@@ -72,18 +72,12 @@ pub(crate) struct PrPanes {
 }
 
 impl PrPanes {
-    /// Scrolls the PR on show so `bounds`, a control drawn out of sight
-    /// in it, comes into view, as a person scrolls down to Close without
-    /// merging (below the bottom on GitHub's 1024 by 768 Macs, 18 Nov).
+    /// The scroll of the PR on show, for a script's click to scroll down
+    /// to Close without merging (below the bottom on GitHub's 1024 by
+    /// 768 Macs, 18 Nov).
     #[cfg(feature = "automation")]
-    pub(crate) fn scroll_into_view(&self, bounds: Bounds<Pixels>) -> bool {
-        let Some(ui) = self.shown.as_ref().and_then(|url| self.ui.get(url)) else { return false };
-        let pane = ui.scroll.bounds();
-        // Only a control in this pane's column.
-        if bounds.center().x < pane.left() || bounds.center().x > pane.right() {
-            return false;
-        }
-        crate::settings_window::scroll_to(&ui.scroll, bounds)
+    pub(crate) fn shown_scroll(&self) -> Option<ScrollHandle> {
+        self.shown.as_ref().and_then(|url| self.ui.get(url)).map(|ui| ui.scroll.clone())
     }
 
     #[cfg(feature = "automation")]

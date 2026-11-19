@@ -2763,16 +2763,35 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Win
             // scrolled to first, as a person would, so the click's middle
             // lands on it (settings_window::scroll_into_view). Partly counts
             // as shown above, with its middle maybe past the pane's edge.
-            // The PR tab's Close without merging is the same, below the
-            // pane's bottom on a small screen.
+            // The same elsewhere, for one wholly out of sight: the PR tab's
+            // Close without merging and the Runners panel's Paste code sit
+            // below their pane's bottom on GitHub's 1024 by 768 Macs. Each
+            // scroll whose column it's in is tried till it shows.
             let settings = cmd["settings"].as_bool() == Some(true);
             if settings || found.is_empty() {
                 let target = found.last().cloned().or_else(|| window.elements().into_iter().filter(|e| e.label().is_some_and(&matches)).last());
-                let scrolled = |t: Bounds<Pixels>| if settings { crate::settings_window::scroll_into_view(app, t, cx) } else { app.read(cx).side.read(cx).prs.scroll_into_view(t) };
-                if target.is_some_and(|t| scrolled(t.bounds())) {
-                    window.refresh();
-                    window.render_frame(cx);
-                    found = shown(window);
+                if let Some(bounds) = target.map(|t| t.bounds()) {
+                    if settings {
+                        if crate::settings_window::scroll_into_view(app, bounds, cx) {
+                            window.refresh();
+                            window.render_frame(cx);
+                            found = shown(window);
+                        }
+                    } else {
+                        let scrolls = app.read(cx).side.read(cx).prs.shown_scroll().into_iter().chain(crate::activity_panels::panel_scrolls());
+                        for scroll in scrolls {
+                            let pane = scroll.bounds();
+                            if bounds.center().x < pane.left() || bounds.center().x > pane.right() || !crate::settings_window::scroll_to(&scroll, bounds) {
+                                continue;
+                            }
+                            window.refresh();
+                            window.render_frame(cx);
+                            found = shown(window);
+                            if !found.is_empty() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             let Some(target) = found.last() else { return Err(format!("no control with the tip {tip:?}")) };
