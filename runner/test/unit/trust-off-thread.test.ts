@@ -13,6 +13,11 @@ import { execFileSync } from 'node:child_process';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { until } from '../helpers/worktrees-harness.ts';
 
+// Windows has no FIFOs in folders (its named pipes live only under \\.\pipe\),
+// so a look there can't get stuck on one: Git Bash's mkfifo makes an
+// ordinary file that only MSYS treats as a pipe.
+const unixOnly = { skip: process.platform === 'win32' && 'no FIFOs in folders on Windows' };
+
 function hooked(folder: string): string {
   fs.mkdirSync(path.join(folder, '.claude', 'hooks'), { recursive: true });
   fs.writeFileSync(path.join(folder, '.claude', 'hooks', 'start.mjs'), 'console.log("hi")\n');
@@ -124,7 +129,7 @@ async function outcome(p: Promise<unknown>): Promise<string> {
   );
 }
 
-test('a folder whose look is stuck in the OS (a FIFO for its settings) fails at once until that worker lets go, without a new worker each time; other folders go on', async (t) => {
+test('a folder whose look is stuck in the OS (a FIFO for its settings) fails at once until that worker lets go, without a new worker each time; other folders go on', unixOnly, async (t) => {
   const root = tmpDir();
   const stuck = path.join(root, 'stuck');
   fs.mkdirSync(path.join(stuck, '.claude'), { recursive: true });
@@ -464,7 +469,7 @@ test('a long queue of looks at a folder that just got stuck all fail at once, on
   assert.deepEqual(await after, ['/x/ok']);
 });
 
-test('once a few looks are stuck in the OS, no more are started anywhere until one lets go', async (t) => {
+test('once a few looks are stuck in the OS, no more are started anywhere until one lets go', unixOnly, async (t) => {
   const root = tmpDir();
   const fifos: string[] = [];
   t.after(async () => {
@@ -499,7 +504,7 @@ test('once a few looks are stuck in the OS, no more are started anywhere until o
   assert.equal(last, 'answered');
 });
 
-test("the real worker refuses a FIFO for the settings at once, failing the look rather than waiting on it, and the process still exits; a hook's /dev/null is read as before", async () => {
+test("the real worker refuses a FIFO for the settings at once, failing the look rather than waiting on it, and the process still exits; a hook's /dev/null is read as before", unixOnly, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-trust-exit-'));
   try {
     const folder = path.join(dir, 'f');

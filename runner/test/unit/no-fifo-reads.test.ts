@@ -10,13 +10,18 @@ import { execFileSync } from 'node:child_process';
 import { noFifoReads } from '../../src/no-fifo-reads.ts';
 import { claudeCommands } from '../../src/claude-trust.ts';
 
+// Windows has no FIFOs in folders (its named pipes live only under \\.\pipe\),
+// so no read there can wait on one: Git Bash's mkfifo makes an ordinary file
+// that only MSYS treats as a pipe. And no /dev/null.
+const unixOnly = { skip: process.platform === 'win32' && 'no FIFOs in folders on Windows' };
+
 function dir(t: { after: (f: () => void) => void }): string {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nofifo-'));
   t.after(() => fs.rmSync(d, { recursive: true, force: true }));
   return d;
 }
 
-test('a FIFO, read whole or opened, by name or through a link, fails the call at once, even when the code catches the error itself', (t) => {
+test('a FIFO, read whole or opened, by name or through a link, fails the call at once, even when the code catches the error itself', unixOnly, (t) => {
   const d = dir(t);
   const fifo = path.join(d, 'f');
   execFileSync('mkfifo', [fifo]);
@@ -42,7 +47,7 @@ test('ordinary files, folders, missing files, /dev/null and writes go on as befo
   const read = fs.readFileSync;
   const open = fs.openSync;
   const got = noFifoReads(() => {
-    const out: unknown[] = [fs.readFileSync(file, 'utf8'), fs.readFileSync(file).length, fs.readFileSync('/dev/null').length, namedRead(file, 'utf8')];
+    const out: unknown[] = [fs.readFileSync(file, 'utf8'), fs.readFileSync(file).length, process.platform === 'win32' ? 0 : fs.readFileSync('/dev/null').length, namedRead(file, 'utf8')];
     for (const p of [d, path.join(d, 'nope')]) {
       try {
         fs.readFileSync(p);
