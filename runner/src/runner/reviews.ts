@@ -225,6 +225,7 @@ export const reviewsPart = {
       delete next.untilRelease;
       delete next.wakeWhen;
       delete next.waitingOn;
+      delete next.hibernatedForApp;
       delete next.archivedAt;
     }
     this.store.save(next);

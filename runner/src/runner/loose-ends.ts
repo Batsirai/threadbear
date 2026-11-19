@@ -52,7 +52,10 @@ export const looseEndsPart = {
       const o = other.rec;
       if (o.startedBy?.threadId !== st.rec.id || o.archivedAt || other.rt.deleted) continue;
       const s = this.summary(other);
-      children.push({ id: o.id, title: o.title, working: o.status === 'running' || o.status === 'starting', needsYou: s.needsYou && s.needs !== 'nothing' });
+      // Hibernating to wait on its own work (other threads, the app
+      // restarting onto what it landed) is still working, as the sidebar has it.
+      const waiting = Boolean(s.waitingOn?.some((w) => !w.done) || s.awaitingAppRestart);
+      children.push({ id: o.id, title: o.title, working: o.status === 'running' || o.status === 'starting' || waiting, needsYou: s.needsYou && s.needs !== 'nothing' });
     }
     return childLooseEnds(children);
   },

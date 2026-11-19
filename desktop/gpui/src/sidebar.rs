@@ -808,6 +808,9 @@ impl Threadbear {
             move |t| {
                 t.snoozed_until = Some(local);
                 t.wake_when = None;
+                // Mike's own snooze replaces a wait on its work, as the runner's does.
+                t.waiting_on = None;
+                t.awaiting_app_restart = None;
             },
             json!({ "snoozedUntil": until }),
             cx,
@@ -872,6 +875,8 @@ impl Threadbear {
             |t| {
                 t.snoozed_until = Some("9999-12-31T00:00:00.000Z".into());
                 t.snoozed_until_restart = Some(true);
+                t.waiting_on = None;
+                t.awaiting_app_restart = None;
             },
             json!({ "snoozedUntil": "restart" }),
             cx,
@@ -890,6 +895,8 @@ impl Threadbear {
             t.snoozed_until = Some("9999-12-31T00:00:00.000Z".into());
             t.snoozed_until_restart = None;
             t.wake_when = Some(json!({ "said": said, "pending": true }));
+            t.waiting_on = None;
+            t.awaiting_app_restart = None;
         }
         let guess = self.threads.get(&id).cloned();
         self.leave_selection(&id, next, window, cx);

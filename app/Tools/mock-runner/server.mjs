@@ -979,6 +979,8 @@ async function dispatch(client, method, p) {
         s.snoozedUntil = untilRestart ? '9999-12-31T00:00:00.000Z' : p.snoozedUntil ?? undefined;
         s.snoozedUntilRestart = untilRestart || undefined;
         delete s.wakeWhen;
+        delete s.waitingOn;
+        delete s.awaitingAppRestart;
         delete s.woke;
         if (s.snoozedUntil && !s.snoozedAt) s.snoozedAt = iso();
         if (!s.snoozedUntil) delete s.snoozedAt;

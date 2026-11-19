@@ -46,6 +46,8 @@ impl LinkMark {
             RowStatus::NeedsYou => LinkMark::NeedsYou,
             RowStatus::Failed => LinkMark::Failed,
             _ if t.needs_you => LinkMark::NeedsYou,
+            // Waiting on its own work: under Running, so not done yet.
+            _ if t.waiting_on_work() => LinkMark::Working,
             RowStatus::Time if t.said_done() => LinkMark::Done,
             _ => LinkMark::Idle,
         }

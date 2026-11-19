@@ -827,7 +827,11 @@ impl Threadbear {
         if let Some(t) = self.threads.get(id) {
             let section = if t.is_archived() {
                 Some("archived")
-            } else if t.snoozed(crate::now_ms()) && !t.is_starred() {
+            } else if t.is_starred() {
+                None
+            } else if t.snoozed(crate::now_ms()) && t.waiting_on_work() {
+                Some("running")
+            } else if t.snoozed(crate::now_ms()) {
                 Some("hibernating")
             } else {
                 None
