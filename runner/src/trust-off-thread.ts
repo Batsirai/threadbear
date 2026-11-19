@@ -19,6 +19,7 @@
 import { SHARE_ENV, Worker } from 'node:worker_threads';
 import { claudeCommands, type ClaudeCommands } from './claude-trust.ts';
 import { codeOfUnhashedPatch, type UnsureWhy } from './unhashed-scan.ts';
+import { noFifoReads } from './no-fifo-reads.ts';
 
 export type TrustRequest = { id: number } & (
   // One look per kind of thread (grants or not), one after the other.
@@ -37,10 +38,13 @@ export type Lane = 'urgent' | 'background';
 export const TRUST_CALL_TIMEOUT_MS = 120_000;
 
 // The same call on this thread: when no worker can be started here at all.
+// Its reads still never wait on a FIFO (no-fifo-reads.ts).
 function inline(ask: Ask): unknown {
-  if (ask.kind === 'claudeCommands') return ask.grants.map((grants) => claudeCommands(ask.cwd, ask.home, { grants }));
-  const scan = codeOfUnhashedPatch(ask.file, ask.from, ask.now);
-  return { all: scan.all, ...(scan.why ? { why: scan.why } : {}) };
+  return noFifoReads(() => {
+    if (ask.kind === 'claudeCommands') return ask.grants.map((grants) => claudeCommands(ask.cwd, ask.home, { grants }));
+    const scan = codeOfUnhashedPatch(ask.file, ask.from, ask.now);
+    return { all: scan.all, ...(scan.why ? { why: scan.why } : {}) };
+  });
 }
 
 type Call = { ask: Ask; resolve: (v: unknown) => void; reject: (e: Error) => void };
@@ -52,7 +56,10 @@ function whatOf(ask: Ask): string {
 }
 
 // At most this many workers stuck in reads the OS won't let go of, both
-// lanes together: each is a thread, for as long as the read lasts.
+// lanes together: each is a thread, for as long as the read lasts. With
+// FIFOs refused (no-fifo-reads.ts) that's a hung disk or network mount,
+// which held the whole runner before; such a worker also holds the
+// runner's exit, as node joins its threads, and nothing here can help that.
 const MAX_STUCK = 4;
 
 // One worker, given one call at a time from a queue here, so a call's time
@@ -73,10 +80,10 @@ class OneWorker {
   // never does, so further looks there fail at once rather than leave
   // another stuck worker each time (Codex's review).
   // Shared by both lanes: a folder stuck in one is stuck in the other.
-  private stuck: Map<string, Worker>;
+  private stuck: Map<string, Set<Worker>>;
   private timeoutMs: number;
   private script: URL;
-  constructor(timeoutMs: number, script: URL, stuck: Map<string, Worker>) {
+  constructor(timeoutMs: number, script: URL, stuck: Map<string, Set<Worker>>) {
     this.timeoutMs = timeoutMs;
     this.script = script;
     this.stuck = stuck;
@@ -132,9 +139,13 @@ class OneWorker {
     const id = this.nextId++;
     const what = whatOf(call.ask);
     const timer = setTimeout(() => {
-      this.stuck.set(what, worker);
+      // Each worker apart: both lanes can be stuck on one folder.
+      const all = this.stuck.get(what) ?? new Set<Worker>();
+      all.add(worker);
+      this.stuck.set(what, all);
       worker.once('exit', () => {
-        if (this.stuck.get(what) === worker) this.stuck.delete(what);
+        all.delete(worker);
+        if (!all.size && this.stuck.get(what) === all) this.stuck.delete(what);
       });
       this.failCurrent(new Error(`Looking at ${what} took over ${Math.round(this.timeoutMs / 1000)} s.`));
     }, this.timeoutMs);
@@ -214,7 +225,8 @@ class OneWorker {
   private stuckOn(ask: Ask): Error | undefined {
     const what = whatOf(ask);
     if (this.stuck.has(what)) return new Error(`An earlier look at ${what} is still stuck, so it can't be looked at yet.`);
-    if (this.stuck.size >= MAX_STUCK) return new Error(`${this.stuck.size} earlier looks are still stuck (${[...this.stuck.keys()].join(', ')}), so no more are started until one lets go.`);
+    const workers = [...this.stuck.values()].reduce((n, all) => n + all.size, 0);
+    if (workers >= MAX_STUCK) return new Error(`${workers} earlier looks are still stuck (${[...this.stuck.keys()].join(', ')}), so no more are started until one lets go.`);
     return undefined;
   }
 
@@ -248,7 +260,7 @@ export class TrustOffThread {
   constructor(o: { timeoutMs?: number; script?: URL } = {}) {
     const ms = o.timeoutMs ?? TRUST_CALL_TIMEOUT_MS;
     const script = o.script ?? new URL('./trust-worker.ts', import.meta.url);
-    const stuck = new Map<string, Worker>();
+    const stuck = new Map<string, Set<Worker>>();
     this.lanes = { urgent: new OneWorker(ms, script, stuck), background: new OneWorker(ms, script, stuck) };
   }
 

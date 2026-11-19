@@ -2,47 +2,15 @@
 // and says why). Runs in a worker thread: each request is one call into the
 // same code the runner would have run on its main thread, answered with a
 // plain object.
-import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
 import { parentPort } from 'node:worker_threads';
 import { claudeCommands } from './claude-trust.ts';
+import { noFifoReads } from './no-fifo-reads.ts';
 import { codeOfUnhashedPatch } from './unhashed-scan.ts';
 import type { TrustRequest, TrustReply } from './trust-off-thread.ts';
 
-// A FIFO or socket where a settings file or script should be: read whole,
-// a FIFO with no writer would hold this thread in the OS for good,
-// past any time limit and even the runner's exit (Codex's review). The
-// trust code reads files with fs.readFileSync, so here, in this worker
-// only, that looks at what the file is first (a stat doesn't wait) and
-// refuses those two. Devices are read as before: a hook's /dev/null is
-// common, and reads as nothing at once. Refusing isn't enough by itself:
-// the trust code takes a file it can't read as missing, which a FIFO
-// mustn't pass for, as Claude would read it. So the look fails whole.
-let special: string | undefined;
-const readFileSync = fs.readFileSync;
-fs.readFileSync = function guarded(this: unknown, ...args: Parameters<typeof readFileSync>) {
-  const p = args[0];
-  if (typeof p === 'string' || p instanceof URL || Buffer.isBuffer(p)) {
-    let st: fs.Stats | undefined;
-    try {
-      st = fs.statSync(p);
-    } catch {
-      // Not there: readFileSync says so itself.
-    }
-    if (st && (st.isFIFO() || st.isSocket())) {
-      special ??= String(p);
-      throw Object.assign(new Error(`${String(p)} isn't a regular file`), { code: 'EINVAL' });
-    }
-  }
-  return readFileSync.apply(this, args);
-} as typeof readFileSync;
-syncBuiltinESMExports();
-
+// No read in a look waits on a FIFO (no-fifo-reads.ts).
 function answer(req: TrustRequest): unknown {
-  special = undefined;
-  const value = look(req);
-  if (special !== undefined) throw new Error(`${special} is a FIFO or socket, not a file, so Threadbear can't tell what it holds.`);
-  return value;
+  return noFifoReads(() => look(req));
 }
 
 function look(req: TrustRequest): unknown {
