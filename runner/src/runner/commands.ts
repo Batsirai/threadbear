@@ -161,7 +161,7 @@ export const commandsPart = {
     // without them (claude-trust.ts), so it's cached apart.
     // The look on the trust worker (trust-off-thread.ts): outside git it's a walk of the folder.
     const opts = claudeOptions({ permissionMode });
-    const look = provider === 'claude' && this.patchTrust.lookClaude ? await this.patchTrust.lookClaude(cwd, opts) : undefined;
+    const look = provider === 'claude' && this.offThread && this.patchTrust.lookClaude ? await this.patchTrust.lookClaude(cwd, opts) : undefined;
     const claude = provider === 'claude' ? this.patchTrust.checkClaude(cwd, opts, look) : undefined;
     const skipped = claude && !claude.trusted ? claude.hash : undefined;
     const untrusted = skipped ? claudeSettingsWithoutCommands(cwd) : undefined;

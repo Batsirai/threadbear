@@ -2198,7 +2198,9 @@ export class Runner {
     // The folder's Claude Code settings as they are now, read on the trust
     // worker: a folder outside git is walked, which held the main thread
     // for seconds at every message (19 Nov).
-    const claude = rec.provider === 'claude' && this.patchTrust.lookClaude ? await this.claudeLooks(st) : undefined;
+    // Only with a worker: without one (tests) the look would be on this
+    // thread anyway, and the turn starts its CLI synchronously as before.
+    const claude = rec.provider === 'claude' && this.offThread && this.patchTrust.lookClaude ? await this.claudeLooks(st) : undefined;
     if (claude && gone()) return;
     // A folder, account or settings change asked for a fresh CLI, or a CLI
     // update came in since this one started.

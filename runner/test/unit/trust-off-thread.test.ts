@@ -111,7 +111,7 @@ test('runner with the worker: an untrusted folder starts its CLI without the set
   assert.equal(h.adapter.last.opts.untrustedProjectSettings, undefined);
 });
 
-test("a message sent while the turn's look at the folder is under way waits for that turn, never reaching the CLI first", async () => {
+test("a message sent while the turn's look at the folder is under way waits for that turn, never reaching the CLI first", async (t) => {
   let hold: Promise<void> | undefined;
   let release = () => {};
   const looks: string[] = [];
@@ -123,7 +123,9 @@ test("a message sent while the turn's look at the folder is under way waits for 
       return { cwd, grants: opts.grants === true, found: undefined };
     },
   };
-  const h = makeHarness(tmpDir(), {}, { patchTrust: trust });
+  const off = new TrustOffThread();
+  t.after(() => off.close());
+  const h = makeHarness(tmpDir(), {}, { patchTrust: trust, offThread: off });
   const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: tmpDir() });
   await until(() => h.adapter.sessions.length === 1, 'the CLI to start');
   const s = h.adapter.last;

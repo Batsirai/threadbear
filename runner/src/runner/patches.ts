@@ -534,7 +534,7 @@ export const patchesPart = {
     if (!hit || this.clock.now() - hit.at >= FOLDER_CACHE_MS) {
       const at = this.clock.now();
       const gen = this.claudeChecksGen;
-      const look = this.patchTrust.lookClaude ? await this.patchTrust.lookClaude(cwd, opts) : undefined;
+      const look = this.offThread && this.patchTrust.lookClaude ? await this.patchTrust.lookClaude(cwd, opts) : undefined;
       hit = { at, look };
       // Not when forgetFolders cleared them meanwhile (the next read looks
       // again), nor over a newer look.
