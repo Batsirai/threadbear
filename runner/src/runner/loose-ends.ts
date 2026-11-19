@@ -54,7 +54,8 @@ export const looseEndsPart = {
       const s = this.summary(other);
       // Hibernating to wait on its own work (other threads, the app
       // restarting onto what it landed) is still working, as the sidebar has it.
-      const waiting = Boolean(s.waitingOn?.some((w) => !w.done) || s.awaitingAppRestart);
+      // So is hibernating until something it watches for with its commits not on main yet.
+      const waiting = Boolean(s.waitingOn?.some((w) => !w.done) || s.awaitingAppRestart || (s.wakeWhen && s.looseEnds?.ends.some((e) => e.kind === 'unlanded')));
       children.push({ id: o.id, title: o.title, working: o.status === 'running' || o.status === 'starting' || waiting, needsYou: s.needsYou && s.needs !== 'nothing' });
     }
     return childLooseEnds(children);

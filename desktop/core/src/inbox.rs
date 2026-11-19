@@ -379,7 +379,14 @@ impl ThreadSummary {
         if self.is_archived() || (self.snoozed_until.is_none() && self.snoozed_until_restart != Some(true)) {
             return false;
         }
-        self.awaiting_app_restart == Some(true) || self.waiting_on.iter().flatten().any(|w| w.get("done").and_then(Value::as_bool) != Some(true))
+        self.awaiting_app_restart == Some(true) || self.waiting_on.iter().flatten().any(|w| w.get("done").and_then(Value::as_bool) != Some(true)) || self.waiting_to_land().is_some()
+    }
+    /// Hibernating until something it's watching for ("when the landing
+    /// finishes") while its own commits aren't on main yet: waiting to land,
+    /// so still working. Gives the loose end's words ("1 commit on … isn't on main").
+    pub fn waiting_to_land(&self) -> Option<String> {
+        self.wake_when.as_ref()?;
+        self.loose_ends_check()?.ends.into_iter().find(|e| e.kind == "unlanded").map(|e| e.text)
     }
     /// Snoozed past `now_ms`. A restart snooze carries a far-off `snoozedUntil` too.
     pub fn snoozed(&self, now_ms: i64) -> bool {
@@ -1068,6 +1075,18 @@ mod tests {
         assert_eq!(ids(&s, "archived"), ["t5"], "archiving it still puts it away");
         let woken = thread(6, json!({ "needs": "nothing", "awaitingAppRestart": true }));
         assert!(!woken.waiting_on_work(), "only while it's hibernating for it");
+    }
+
+    #[test]
+    fn a_thread_hibernating_with_its_commits_not_on_main_stays_under_running() {
+        let unlanded = json!({ "seq": 4, "ends": [{ "kind": "unlanded", "text": "1 commit on thread/x isn't on main" }] });
+        let watching = json!({ "said": "when the landing finishes", "topic": "the landing has finished" });
+        let landing = thread(1, json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00Z", "wakeWhen": watching, "looseEnds": unlanded }));
+        let landed = thread(2, json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00Z", "wakeWhen": watching, "looseEnds": { "seq": 4, "ends": [] } }));
+        let mikes_own = thread(3, json!({ "needs": "nothing", "snoozedUntil": "2026-11-07T00:00:00Z", "looseEnds": unlanded }));
+        let s = sections(&[landing, landed, mikes_own], now());
+        assert_eq!(ids(&s, "running"), ["t1"], "waiting to land is still at its job");
+        assert_eq!(ids(&s, "hibernating"), ["t3", "t2"], "nothing left to land, or Mike hibernated it himself");
     }
 
     #[test]
