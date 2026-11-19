@@ -101,6 +101,12 @@ fresh PC), which is what you want gone.
    Settings still shows the keep-awake switch on a Mac only, as its words
    say Mac; it's on by default, and `"keepAwake": false` in runner.json
    turns it off.*
+   *19 Nov: following on Windows also hashes every file Windows could run
+   by a bare name in the folders commands run from, so a program a pull
+   drops there asks again, and refuses round 4's ways round
+   NoDefaultCurrentDirectoryInExePath. Codex's sixth review still found
+   gaps (a JS subprocess's cwd and package commands, a DLL beside a repo
+   program), so clicks-only stays on for now.*
 6. **Polish.** Codex on Windows, pictures, stuck-job detection, a Windows
    check host, client path display (`C:\Users\...` shown as `~`).
 
