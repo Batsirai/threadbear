@@ -385,6 +385,8 @@ cpSync(join(root, "public"), dist, { recursive: true, filter: (from) => !from.en
 
 const styles = fingerprint("styles.css");
 const siteScript = fingerprint("site.js");
+// The home page hero's live inbox, only on the home page.
+const liveInboxScript = fingerprint("live-inbox.js");
 const layout = readFileSync(join(src, "layout.html"), "utf8");
 const shared = {
   site: SITE_URL, styles, commits: commits.toLocaleString("en-AU"), firstDay,
@@ -416,7 +418,7 @@ function writePage(name, page, content, label = `${name}.html`) {
     docsCurrent: inDocs ? ' aria-current="page"' : "",
     structuredData: name === "index" ? structuredData() : "",
     // The docs pages also get their search box's script (src/docs-search.js), a module.
-    script: `<script src="${siteScript}" defer></script>${inDocs ? `\n  <script type="module" src="${docsSearchScript}"></script>` : ""}`,
+    script: `<script src="${siteScript}" defer></script>${name === "index" ? `\n  <script src="${liveInboxScript}" defer></script>` : ""}${inDocs ? `\n  <script type="module" src="${docsSearchScript}"></script>` : ""}`,
     content,
   });
   if (/\{\{[\w -]+\}\}/.test(out)) throw new Error(`${label} has a {{placeholder}} left over: ${out.match(/\{\{[\w -]+\}\}/)[0]}`);

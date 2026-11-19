@@ -16,7 +16,9 @@
       <!-- Mike picked this from four on 19 Nov (~/dev/me/misc/threadbear-hero-options): decisions
            first, from his launch video, with "you can patch it" moved into the line below. It was
            "The agent app you can patch yourself". -->
-      <h1 id="hero-title" class="hero-title">Get to your next decision fast</h1>
+      <div class="hero-top">
+      <div class="hero-copy">
+      <h1 id="hero-title" class="hero-title">Get to your next decision <span class="fast">fast</span></h1>
       <p class="hero-sub">An app for running all your Claude Code and Codex threads, where each one says just what it needs from you. You also get all the source, so you (or more likely your agent) can patch anything you like.</p>
       <!-- Installing is a prompt for your own agent, so the hero gives you that rather than a
            Fork button (Mike, 5 Nov). The prompt itself is printed once, in #get. Mike took the
@@ -25,6 +27,11 @@
         {{copyButton}}
       </div>
       {{platforms}}
+      </div>
+      <!-- The live inbox acting out the headline (src/live-inbox.js fills it; empty and hidden
+           without JavaScript). Mike picked it on 19 Nov, with the hero on a screen of its own. -->
+      <div class="live"></div>
+      </div>
 
       <!-- The player: a clip per feature in the launch video's order, the list down the left
            (SLIDES in scripts/build.mjs, the playing in site.js). -->
