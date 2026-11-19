@@ -285,8 +285,17 @@ async function main(): Promise<void> {
   let runner!: Runner;
   let scheduler!: Scheduler;
   // Threads waiting to hear the Mac app has restarted onto a new build
-  // (app-restarts.ts); made once the runner is.
-  let appRestarts!: AppRestarts;
+  // (app-restarts.ts). Made before the runner, which asks it while its
+  // start() saves threads (THREADBEAR-2D), so it reaches the runner and
+  // peers lazily; it only uses them once an app says hello.
+  const appRestarts = new AppRestarts({
+    runner: { get: (id) => runner.get(id), has: (id) => runner.has(id), note: (id, text) => runner.note(id, text), send: (...a) => runner.send(...a) },
+    home: cfg.home,
+    clock: realClock,
+    log,
+    away: (threadId) => peers.owns(threadId),
+    appRepo: ownCheckout(),
+  });
   // Asked for per thread, as sync is made after the runner. No tool while sync is off: the Pocket lives in the backend.
   const pocketControl = () => (sync.status().state === 'off' ? undefined : sync);
   let restarter!: Restarter;
@@ -510,7 +519,7 @@ async function main(): Promise<void> {
         // new work, so a finish they replace doesn't count.
         runner.reconcileWaits();
         // Told now if the app restarted while it was over there.
-        if (t) appRestarts?.adopted(threadId);
+        if (t) appRestarts.adopted(threadId);
         return t;
       },
       // A thread here may be waiting on one deleted over there.
@@ -534,9 +543,6 @@ async function main(): Promise<void> {
   bootStep('threads');
   // Answers to ask_secret go after a day (docs/protocol.md, "Secrets").
   runner.secrets.startSweeping((e) => log.warn('secret sweep failed', { error: String(e) }));
-  // After the threads are loaded, so a schedule that came due while the
-  // runner was stopped finds its thread.
-  appRestarts = new AppRestarts({ runner, home: cfg.home, clock: realClock, log, away: (threadId) => peers.owns(threadId), appRepo: ownCheckout() });
   // Its runner id and name are the mirror's (sync.ts), since that's how other
   // runners and the backend know this one (step 6, docs/step6-plan.md).
   const syncRunnerId = cfg.sync.runnerId ?? ensureRunnerId(cfg.home);
