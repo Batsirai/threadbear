@@ -55,11 +55,14 @@ export function randomHex(bytes: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// This file's deployment settings (BOX_SEAL_KEY, FLY_APP), read in one place.
+const setting = (name: 'BOX_SEAL_KEY' | 'FLY_APP'): string | undefined => process.env[name];
+
 // BOX_SEAL_KEY: 32 random bytes in base64, set once per deployment
 // (`npx convex env set BOX_SEAL_KEY "$(openssl rand -base64 32)"`).
 // Changing it makes every sealed token and thread key unreadable.
 async function sealKey(): Promise<CryptoKey> {
-  const raw = process.env.BOX_SEAL_KEY;
+  const raw = setting('BOX_SEAL_KEY');
   let bytes: Uint8Array | undefined;
   try {
     bytes = raw ? unb64(raw.trim()) : undefined;
@@ -209,8 +212,8 @@ const IMAGE = /^[\x21-\x7e]{1,300}$/;
 // as it holds Claude Code, which isn't ours to publish: Fly pulls it for the
 // app's machines with no credentials. A fork's workflow pushes to its own
 // app (docs/forking.md).
-export function defaultBoxImage(provider: string, env: Record<string, string | undefined> = process.env): string {
-  const app = env.FLY_APP?.trim();
+function defaultBoxImage(provider: string): string {
+  const app = setting('FLY_APP')?.trim();
   if (provider !== 'fly' || !app) throw bad("image must be given: there's no default box image without FLY_APP set on this deployment");
   return `registry.fly.io/${app}:latest`;
 }
