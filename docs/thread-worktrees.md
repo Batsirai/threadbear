@@ -344,10 +344,10 @@ a group of eight.
 
 So a failed check says what failed, and that alone is run on each landing:
 
-- A failed `./check.sh` ends with `To run only what failed again: --only
-  "..."`: the steps that failed, and for the runner's unit tests the files
-  (when there are 8 or fewer). `./check.sh --quick --only "<that>"` runs
-  just those, and says `skip ... (--only left it out)` for the rest. It's
+- A failed `./check.sh` ends with `To run only what failed again:
+  ./check.sh --only "..."`: the steps that failed, and for the runner's
+  unit tests the files (when there are 8 or fewer). That command, run from
+  the checkout's top (`tb land` takes no `--only`), runs just those, and says `skip ... (--only left it out)` for the rest. It's
   the quick way to see a fix work, too. A run with `--only` ends with
   `--only ran: "..."`, the steps of those asked for that it ran: exit 0
   alone doesn't tell passing a step from skipping it.

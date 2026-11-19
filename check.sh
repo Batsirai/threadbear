@@ -756,8 +756,10 @@ if [ -n "$FAILED" ]; then
     echo "--- $name: end of $log"
     tail -n 30 "$log"
   done
-  # What failed, as --only takes it: run by hand it's the quick way to see a
-  # fix work, and tb land reads this line off a group's failed check to run
+  # What failed, as a whole ./check.sh --only command: run by hand it's the
+  # quick way to see a fix work. It names check.sh, as tb land takes no
+  # --only and an agent told just "--only" tried it there (19 Nov). tb land
+  # reads this line off a group's failed check to run
   # just that on each of the group's landings alone (worktrees.ts, findBroken).
   AGAIN=""
   while IFS='|' read -r name log; do
@@ -769,7 +771,7 @@ $FAILED
 EOF_FAILED
   if [ -n "$AGAIN" ] && plain "$AGAIN" "$ONLY_CHARS"; then
     echo
-    echo "To run only what failed again: --only \"$AGAIN\""
+    echo "To run only what failed again: ./check.sh --only \"$AGAIN\""
   fi
   [ -z "$ONLY" ] || echo "--only ran: \"$ONLY_RAN\""
   echo

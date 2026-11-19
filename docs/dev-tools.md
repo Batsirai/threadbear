@@ -255,7 +255,7 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   adds the runner's real-model e2e (cheapest model, temp dirs); `--shots`
   runs `app/Tools/screenshots.sh`. `--only "step;step=files"` runs just
   those steps (and, for the runner's unit tests, those files); a failed
-  run ends with the `--only` that runs what failed again, which `tb land`
+  run ends with the `./check.sh --only` that runs what failed again, which `tb land`
   uses to find the landing that broke a group
   (docs/thread-worktrees.md, "Finding who broke a group"). One line per step, nonzero exit if
   anything failed, on the Node `runner/scripts/find-node.sh` picks.

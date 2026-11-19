@@ -1148,11 +1148,11 @@ async function stackWaiting(
   return { tip, group };
 }
 
-// The `--only` a failed check ends with (check.sh): what to run again to see
+// The `./check.sh --only` a failed check ends with: what to run again to see
 // the same failure, as THREADBEAR_CHECK_ONLY takes it. Undefined for a check
 // that says no such thing (another repo's, or one that died before its end).
 export function onlyFailed(text: string): string | undefined {
-  const said = [...text.matchAll(/^To run only what failed again: --only "([A-Za-z0-9 ._/=;()-]{1,4000})"$/gm)].at(-1)?.[1];
+  const said = [...text.matchAll(/^To run only what failed again: (?:\.\/check\.sh )?--only "([A-Za-z0-9 ._/=;()-]{1,4000})"$/gm)].at(-1)?.[1];
   return said && !said.startsWith('-') ? said : undefined;
 }
 
