@@ -75,7 +75,10 @@ die() { echo "film: $*" >&2; exit 1; }
 # it's ours, otherwise why not.
 console_not_ours() {
   local who
-  who="$("${SSH[@]}" "$host" 'echo "$(stat -f %Su /dev/console) $(id -un)"')" || { echo "couldn't ask $host who has its screen"; return; }
+  # The window server's list of sessions, not /dev/console's owner: that
+  # stays on the last user to log in after a fast switch away (19 Nov it
+  # said mikeysee while ademark's session had the screen).
+  who="$("${SSH[@]}" "$host" 'p=$(mktemp) && ioreg -n Root -d1 -a >"$p" && i=0 on= && while u=$(plutil -extract IOConsoleUsers.$i.kCGSSessionUserNameKey raw -o - "$p" 2>/dev/null); do [ "$(plutil -extract IOConsoleUsers.$i.kCGSSessionOnConsoleKey raw -o - "$p" 2>/dev/null)" != true ] || on=$u; i=$((i + 1)); done; rm -f "$p"; echo "${on:-loginwindow} $(id -un)"')" || { echo "couldn't ask $host who has its screen"; return; }
   set -- $who
   [ "${1:-}" != "${2:-}" ] || return 0
   case "${1:-}" in
