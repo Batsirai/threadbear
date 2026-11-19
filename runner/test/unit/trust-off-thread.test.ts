@@ -88,6 +88,23 @@ test('a worker that never answers is given up on, and the next call gets a new o
   assert.match(last, /took over/);
 });
 
+// A worker that reads a folder's settings file raw, as one stuck in the OS
+// on a hung mount would be: a FIFO there holds it in open() for good.
+function rawReader(): URL {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-trust-raw-'));
+  const script = path.join(dir, 'raw.mjs');
+  fs.writeFileSync(
+    script,
+    "import fs from 'node:fs';\nimport { parentPort } from 'node:worker_threads';\n" +
+      "parentPort.postMessage({ ready: true });\n" +
+      "parentPort.on('message', (r) => {\n" +
+      "  try { fs.readFileSync(r.cwd + '/.claude/settings.json'); } catch {}\n" +
+      "  parentPort.postMessage({ id: r.id, ok: true, value: [r.cwd] });\n" +
+      "});\n",
+  );
+  return new URL(`file://${script}`);
+}
+
 // Writes to a FIFO if something has it open to read, without waiting.
 function poke(fifo: string): boolean {
   try {
@@ -122,14 +139,14 @@ test('a folder whose look is stuck in the OS (a FIFO for its settings) fails at 
   });
   const fine = path.join(root, 'fine');
   hooked(fine);
-  const off = new TrustOffThread({ timeoutMs: 500 });
+  const off = new TrustOffThread({ timeoutMs: 500, script: rawReader() });
   t.after(() => off.close());
   // A look that times out inside the read leaves its worker stuck there.
   let last = '';
   for (let i = 0; i < 20 && !/still stuck/.test(last); i++) last = await outcome(off.claudeCommands(stuck, root, [false], 'urgent'));
   assert.match(last, /still stuck/);
   assert.match(await outcome(off.claudeCommands(stuck, root, [false], 'urgent')), /still stuck/);
-  assert.ok((await off.claudeCommands(fine, root, [false], 'urgent'))[0]?.files.length);
+  assert.deepEqual(await off.claudeCommands(fine, root, [false], 'urgent'), [fine]);
   // Something writes to it at last: the stuck worker reads it and goes, and
   // the next look there goes to a worker again rather than failing at once.
   await until(() => poke(fifo), 'the stuck worker to take the write');
@@ -456,7 +473,7 @@ test('once a few looks are stuck in the OS, no more are started anywhere until o
       await new Promise((r) => setTimeout(r, 20));
     }
   });
-  const off = new TrustOffThread({ timeoutMs: 400 });
+  const off = new TrustOffThread({ timeoutMs: 400, script: rawReader() });
   t.after(() => off.close());
   // Four folders, each the same FIFO by another name would be just as bad.
   for (let i = 0; i < 4; i++) {
@@ -480,4 +497,39 @@ test('once a few looks are stuck in the OS, no more are started anywhere until o
     if (last !== 'answered') await new Promise((r) => setTimeout(r, 20));
   }
   assert.equal(last, 'answered');
+});
+
+test("the real worker refuses a FIFO for the settings at once, failing the look rather than waiting on it, and the process still exits; a hook's /dev/null is read as before", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-trust-exit-'));
+  try {
+    const folder = path.join(dir, 'f');
+    fs.mkdirSync(path.join(folder, '.claude'), { recursive: true });
+    execFileSync('mkfifo', [path.join(folder, '.claude', 'settings.json')]);
+    const script = path.join(dir, 'run.ts');
+    const mod = new URL('../../src/trust-off-thread.ts', import.meta.url).href;
+    fs.writeFileSync(
+      script,
+      `import { TrustOffThread } from ${JSON.stringify(mod)};\n` +
+        `const off = new TrustOffThread({ timeoutMs: 20000 });\n` +
+        `const go = () => off.claudeCommands(${JSON.stringify(folder)}, ${JSON.stringify(dir)}, [false], 'urgent').then(() => 'answered', (e) => e.message);\n` +
+        `console.log(await go());\nconsole.log(await go());\n`,
+    );
+    const started = Date.now();
+    const out = execFileSync(process.execPath, [script], { timeout: 30_000 }).toString().trim().split('\n');
+    assert.equal(out.length, 2);
+    for (const line of out) assert.match(line, /settings\.json is a FIFO or socket, not a file/);
+    assert.ok(Date.now() - started < 15_000);
+    // A hook that names /dev/null (a device) is looked at as it always was.
+    const quiet = path.join(dir, 'quiet');
+    fs.mkdirSync(path.join(quiet, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(quiet, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'cat /dev/null' }] }] } }));
+    const off = new TrustOffThread();
+    try {
+      assert.deepEqual(await off.claudeCommands(quiet, dir, [false], 'urgent'), [claudeCommands(quiet, dir, {})]);
+    } finally {
+      off.close();
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

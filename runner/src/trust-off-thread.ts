@@ -51,8 +51,8 @@ function whatOf(ask: Ask): string {
   return ask.kind === 'claudeCommands' ? ask.cwd : `${ask.file} (from ${ask.from})`;
 }
 
-// At most this many workers stuck in reads the OS won't let go of, each
-// lane: each is a thread, for as long as the read lasts.
+// At most this many workers stuck in reads the OS won't let go of, both
+// lanes together: each is a thread, for as long as the read lasts.
 const MAX_STUCK = 4;
 
 // One worker, given one call at a time from a queue here, so a call's time
@@ -72,12 +72,14 @@ class OneWorker {
   // exit. One stuck in a read the OS won't let go of (a FIFO, a hung mount)
   // never does, so further looks there fail at once rather than leave
   // another stuck worker each time (Codex's review).
-  private stuck = new Map<string, Worker>();
+  // Shared by both lanes: a folder stuck in one is stuck in the other.
+  private stuck: Map<string, Worker>;
   private timeoutMs: number;
   private script: URL;
-  constructor(timeoutMs: number, script: URL) {
+  constructor(timeoutMs: number, script: URL, stuck: Map<string, Worker>) {
     this.timeoutMs = timeoutMs;
     this.script = script;
+    this.stuck = stuck;
   }
 
   call(ask: Ask): Promise<unknown> {
@@ -112,7 +114,14 @@ class OneWorker {
       this.worker?.unref();
       return;
     }
-    const worker = this.start();
+    let worker: Worker;
+    try {
+      worker = this.start();
+    } catch (e) {
+      // No worker to be had at all (no threads left): as one that can't load.
+      this.crashed(e instanceof Error ? e : new Error(String(e)));
+      return;
+    }
     // Held open while it has work: an unreferenced worker's reply never
     // comes if nothing else keeps the process going.
     worker.ref();
@@ -182,8 +191,9 @@ class OneWorker {
       this.queue = [];
       this.drop();
       for (const c of calls) {
-        // Never one known to be stuck: on this thread it would hang the runner.
-        const stuck = this.stuckOn(c.ask);
+        // Never while anything is stuck: the same folder by another name, or
+        // one like it, would hang the runner on this thread.
+        const stuck = this.stuckOn(c.ask) ?? (this.stuck.size ? new Error(`An earlier look is still stuck (${[...this.stuck.keys()].join(', ')}), and no worker can be started to look here.`) : undefined);
         if (stuck) {
           c.reject(stuck);
           continue;
@@ -222,7 +232,12 @@ class OneWorker {
     const worker = this.worker;
     this.worker = undefined;
     this.ready = false;
-    if (worker) void worker.terminate().catch(() => undefined);
+    if (!worker) return;
+    void worker.terminate().catch(() => undefined);
+    // After terminate, which holds the process open until the worker has
+    // gone: one stuck in a read the OS won't let go of never goes, and
+    // mustn't keep the runner from exiting.
+    worker.unref();
   }
 }
 
@@ -233,7 +248,8 @@ export class TrustOffThread {
   constructor(o: { timeoutMs?: number; script?: URL } = {}) {
     const ms = o.timeoutMs ?? TRUST_CALL_TIMEOUT_MS;
     const script = o.script ?? new URL('./trust-worker.ts', import.meta.url);
-    this.lanes = { urgent: new OneWorker(ms, script), background: new OneWorker(ms, script) };
+    const stuck = new Map<string, Worker>();
+    this.lanes = { urgent: new OneWorker(ms, script, stuck), background: new OneWorker(ms, script, stuck) };
   }
 
   // What the folder's Claude Code settings run for each kind of thread
