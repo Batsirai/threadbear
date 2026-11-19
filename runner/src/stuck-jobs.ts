@@ -283,6 +283,20 @@ export class StuckJobs {
     const needShells = [...quiet.keys()];
     const shells = needShells.length ? await this.probe.shells(needShells) : new Map<string, BackgroundShell[]>();
 
+    // When each landing seen under a job started, noted for every shell
+    // before any is judged: a shell that keeps starting landings, quiet or
+    // not, holds the thread's other jobs back for three hours from its
+    // first, not for good (Codex's review, 19 Nov).
+    for (const [sessionId, list] of quiet) {
+      const threadId = list[0].thread.threadId;
+      for (const sh of shells.get(sessionId) ?? []) {
+        const started = sh.taskId ? landingStarted(sh.processes ?? []) : undefined;
+        if (started === undefined) continue;
+        const k = key(threadId, sh.taskId!);
+        this.landingSince.set(k, Math.min(this.landingSince.get(k) ?? started, started));
+      }
+    }
+
     const stuck = new Map<string, Stuck[]>();
     for (const [sessionId, list] of quiet) {
       const sessionShells = shells.get(sessionId) ?? [];
@@ -296,7 +310,7 @@ export class StuckJobs {
           if (sh.taskId === task.id) return false;
           const started = landingStarted(sh.processes ?? []);
           if (started === undefined) return false;
-          const since = sh.taskId ? Math.min(this.landingSince.get(key(thread.threadId, sh.taskId)) ?? started, started) : started;
+          const since = sh.taskId ? (this.landingSince.get(key(thread.threadId, sh.taskId)) ?? started) : started;
           return now < since + LAND_WAIT_MS + WAIT_GRACE_MS;
         });
         if (landingElsewhere) continue;
@@ -312,7 +326,6 @@ export class StuckJobs {
           const landing = landingStarted(shell.processes ?? []);
           if (landing !== undefined) {
             const since = this.landingSince.get(k) ?? landing;
-            this.landingSince.set(k, since);
             if (now < since + LAND_WAIT_MS + WAIT_GRACE_MS) continue;
           }
           // Waiting on Mike, and still within the time it said it would,
@@ -336,7 +349,12 @@ export class StuckJobs {
       }
     }
 
-    for (const [threadId, jobs] of stuck) {
+    // The probe takes a while: a job that ended meanwhile, or a thread that
+    // started a turn, isn't told about (Codex's review, 19 Nov).
+    const stillIdle = new Set(host.idleBackground().flatMap((t) => t.tasks.map((task) => key(t.threadId, task.id))));
+    for (const [threadId, all] of stuck) {
+      const jobs = all.filter((j) => stillIdle.has(key(threadId, j.task.id)));
+      if (!jobs.length) continue;
       try {
         host.send(threadId, message(jobs), [], { origin: 'runner', wakeReason: jobs.length === 1 ? 'A background job ran long' : 'Background jobs ran long' });
         for (const j of jobs) nudged[key(threadId, j.task.id)] = new Date(now).toISOString();

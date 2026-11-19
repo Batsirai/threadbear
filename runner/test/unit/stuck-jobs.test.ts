@@ -471,6 +471,49 @@ test('jobs beside a landing past its three hours are told about with it', async 
   assert.doesNotMatch(told[0], /Leave it running/);
 });
 
+// Each shell's landings would otherwise hold the other back before either's
+// first was noted, for good (Codex's review, 19 Nov).
+test('two shells that keep starting landings are judged three hours after the first', async () => {
+  const { h, probe, jobs, thread, s } = setUp();
+  const tasks = ['l1', 'l2'].map((id) => ({ id, type: 'local_bash', kind: 'shell' as const, description: 'Land until it lands' }));
+  s.out({ kind: 'tasks', tasks });
+  s.result('completed');
+  const started = h.clock.now();
+  for (const t of tasks) probe.files.set(t.id, { startedAt: started, lastOutputAt: started });
+  let cpu = 0;
+  const look = async () => {
+    if (!h.runner.idleBackground().length) s.result('completed');
+    probe.shellsBySession.set(session(h), tasks.map((t) => ({ taskId: t.id, cpuSeconds: (cpu += 0.1), commands: ['zsh', 'node'], processes: [{ command: LAND, startedAt: h.clock.now() }] })));
+    h.clock.advance(5 * MIN);
+    await jobs.sweep();
+  };
+  for (let i = 0; i < 41; i++) await look();
+  assert.deepEqual(nudges(h, thread.id), []);
+  for (let i = 0; i < 2; i++) await look();
+  const told = nudges(h, thread.id);
+  assert.equal(told.length, 1);
+  assert.match(told[0], /shell l1/);
+  assert.match(told[0], /shell l2/);
+});
+
+// The probe is slow; a job that ends while it runs isn't named (Codex's
+// review, 19 Nov).
+test('a job that ends while the shells are being looked at is not told about', async () => {
+  const { h, probe, jobs, thread, s } = setUp();
+  s.out({ kind: 'tasks', tasks: [{ id: 'a3', type: 'local_agent', kind: 'agent', description: 'Watch the build' }] });
+  s.result('completed');
+  const started = h.clock.now();
+  probe.files.set('a3', { startedAt: started, lastOutputAt: started });
+  const shells = probe.shells.bind(probe);
+  probe.shells = async (ids: string[]) => {
+    s.out({ kind: 'tasks', tasks: [] });
+    return shells(ids);
+  };
+  h.clock.advance(QUIET_MS + 5 * MIN);
+  await jobs.sweep();
+  assert.deepEqual(nudges(h, thread.id), []);
+});
+
 test('which command lines are a landing', () => {
   // As ps showed them on 13 Nov, the installed tb's path with its space included.
   for (const line of [
