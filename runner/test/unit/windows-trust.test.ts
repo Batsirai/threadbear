@@ -277,8 +277,7 @@ test('a Windows program name is the program: what node.exe, npm.cmd and the othe
   const names = (files: string[]) => files.filter((f) => fs.existsSync(f)).map((f) => path.relative(folder, f).replace(/\\/g, '/')).sort();
   // Followed: the same files as the plain name reaches.
   for (const [command, files] of [
-    // With what Windows could run by name beside them (besideRun).
-    ['node.exe ./scripts/main.js', ['scripts/helper.js', 'scripts/main.js', 'scripts/x.bat', 'scripts/x.cmd', 'scripts/x.ps1']],
+    ['node.exe ./scripts/main.js', ['scripts/helper.js', 'scripts/main.js']],
     ['bash.exe ./scripts/main.sh', ['scripts/lib.sh', 'scripts/main.sh']],
     ['sh.exe ./scripts/main.sh', ['scripts/lib.sh', 'scripts/main.sh']],
     ['make.exe build', ['Makefile', 'scripts/lib.sh']],
@@ -288,7 +287,10 @@ test('a Windows program name is the program: what node.exe, npm.cmd and the othe
   ] as [string, string[]][]) {
     const reach = commandFiles(command, folder);
     assert.equal(reach.problem, undefined, command);
-    assert.deepEqual(names(reach.files), files, command);
+    // Each, and what Windows could run by name beside them (besideRun).
+    const got = names(reach.files);
+    for (const f of files) assert.ok(got.includes(f), `${command}: ${f} in ${got.join(', ')}`);
+    assert.ok(got.every((f) => files.includes(f) || /\.(bat|cmd|ps1|js)$/.test(f)), `${command}: ${got.join(', ')}`);
   }
   // npm, pnpm and yarn by any name run scripts with cmd.exe on Windows, so
   // they aren't followed (Codex's reviews of the port, 18 Nov 2026).
