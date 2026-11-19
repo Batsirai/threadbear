@@ -477,6 +477,35 @@ impl Composer {
         copying(self.box_chips(cx)) || self.card.answer_inputs().iter().any(|input| copying(self.box_chips_in(input, cx)))
     }
 
+    /// What in this box a restart now would lose or change, though its words
+    /// go across in the drafts file: as the end of "It switches in once
+    /// ...", `{t}` the thread's title. Codex's review, 19 Nov.
+    pub(crate) fn restart_hold(&self, cx: &App) -> Option<&'static str> {
+        if self.copying_picture(cx) {
+            return Some("the picture being copied in on “{t}” is in");
+        }
+        // The draft under the edit is kept only in memory, until it's back.
+        if self.editing.is_some() || self.pending_saved.is_some() || self.pending_box.is_some() {
+            return Some("the message you're editing in “{t}” is sent or put back");
+        }
+        // Words half composed (an input method's) would come back as typed.
+        if self.input.read(cx).has_composition() || self.card.answer_inputs().iter().any(|i| i.read(cx).has_composition()) {
+            return Some("the word you're composing in “{t}” is done");
+        }
+        if self.thread_id.as_deref().is_some_and(crate::thread::sending_now) {
+            return Some("the message on its way in “{t}” has gone");
+        }
+        None
+    }
+
+    /// Anything here the drafts file would keep: the box's words or
+    /// pictures, or the card's answers.
+    pub(crate) fn has_draft(&self, cx: &App) -> bool {
+        // Only the card still open: an answered one's state stays behind.
+        let open = self.card.seq.is_some() && self.open_card(cx).is_some_and(|c| !c.is_done() && Some(c.seq) == self.card.seq);
+        self.holds_anything(cx) || (open && (!self.card.picks.is_empty() || self.card.notes.values().any(|n| !n.text.trim().is_empty() || !n.images.is_empty())))
+    }
+
     pub(crate) fn holds_anything(&self, cx: &App) -> bool {
         let text = self.input.read(cx).value().to_string();
         threadbear_core::inline_chips::holds_anything(&text, &self.box_chips(cx))

@@ -143,6 +143,9 @@ pub(crate) struct Drafts {
     /// What the file had, for boxes not made yet this run.
     saved: HashMap<String, Draft>,
     pending: Option<Task<()>>,
+    /// The last write failed: what's typed holds a restart, as it wouldn't
+    /// come back (app_update.rs).
+    pub(crate) failed: bool,
 }
 
 impl Drafts {
@@ -150,7 +153,7 @@ impl Drafts {
         let path = home.join("desktop-drafts.json");
         let saved = read(&path);
         set_saved(&saved);
-        Drafts { saved, path: Some(path), pending: None }
+        Drafts { saved, path: Some(path), pending: None, failed: false }
     }
 }
 
@@ -250,9 +253,7 @@ impl Threadbear {
                 all.insert(key, draft);
             }
         }
-        if let Err(e) = write(&path, &all) {
-            eprintln!("threadbear: couldn't save the drafts: {e}");
-        }
+        self.drafts.failed = write(&path, &all).inspect_err(|e| eprintln!("threadbear: couldn't save the drafts: {e}")).is_err();
         set_saved(&all);
         self.drafts.saved = all;
     }

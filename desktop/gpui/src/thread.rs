@@ -351,6 +351,13 @@ pub(crate) fn held_drafts(thread_id: &str) -> Vec<crate::composer::RestoreDraft>
         .collect()
 }
 
+/// A message of the thread's on its way to the runner and not answered yet:
+/// a refusal would put its words back in a box a restart had already saved.
+pub(crate) fn sending_now(thread_id: &str) -> bool {
+    use std::sync::atomic::Ordering;
+    OUTBOX_DRAFTS.with(|d| d.borrow().values().any(|(t, _, held)| t == thread_id && !held.load(Ordering::SeqCst)))
+}
+
 /// How a send got on, as the connection's task reports it.
 enum SendStep {
     Progress(Progress),

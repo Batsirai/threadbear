@@ -570,16 +570,32 @@ impl Threadbear {
         cx.notify();
     }
 
-    /// Words or pictures in a message box (one still being copied in too), a
+    /// What a thread's message box or card has that the drafts file wouldn't
+    /// carry (`Composer::restart_hold`), the new-thread page's box, a
     /// schedule editor open, or words in any other field that aren't saved
-    /// anywhere yet (unsent.rs: a project's goals
-    /// being edited, a new title, a secret): the Swift app doesn't restart
-    /// under the first two (`hasDrafts`), as Mike may be halfway through.
+    /// anywhere yet (unsent.rs: a project's goals being edited, a new title,
+    /// a secret). Words in a thread's message box don't hold it, unlike the
+    /// Swift app's `hasDrafts`: they go across in the drafts file (19 Nov).
     fn has_unsent_words(&self, cx: &App) -> bool {
-        let boxes = self.composers.values().chain(self.new_thread.composer.iter());
-        // A card's boxes go across in the drafts file, but not a picture
-        // still being copied into one.
-        boxes.into_iter().any(|c| c.read(cx).holds_anything(cx) || c.read(cx).copying_picture(cx)) || self.schedule_editor.is_some() || crate::unsent::any(cx)
+        // A thread's message box and card go across in the drafts file, so
+        // only what that wouldn't carry holds it (`Composer::restart_hold`):
+        // Mike, 19 Nov, "just restart and put the text back in the box". Not
+        // the new-thread page's, whose folder and account picks aren't kept,
+        // nor anything while the drafts file can't be written.
+        self.boxes_hold(cx) || self.schedule_editor.is_some() || crate::unsent::any(cx)
+    }
+
+    /// The live threads' boxes (a deleted thread's composer can't be got
+    /// back to, so it holds nothing): `has_unsent_words`, and a handover's
+    /// go, as the old window takes typing while the new copy loads.
+    fn live_composers<'a>(&'a self) -> impl Iterator<Item = (&'a String, &'a Entity<crate::composer::Composer>)> + 'a {
+        self.composers.iter().filter(|(id, _)| self.threads.contains_key(*id))
+    }
+
+    fn boxes_hold(&self, cx: &App) -> bool {
+        self.live_composers().any(|(_, c)| c.read(cx).restart_hold(cx).is_some())
+            || self.new_thread.composer.as_ref().is_some_and(|c| c.read(cx).holds_anything(cx) || c.read(cx).copying_picture(cx))
+            || (self.drafts.failed && self.live_composers().any(|(_, c)| c.read(cx).has_draft(cx)))
     }
 
     /// Something of the app's own under way that a restart would cut off: a
@@ -604,15 +620,17 @@ impl Threadbear {
 
     /// What holds a restart, as the end of "It switches in once ...", for
     /// the Updates panel and the log: the first of `has_unsent_words`,
-    /// `under_way` and the windows' that holds, with the thread whose
-    /// message box (or card's box) has words in it named, as that's the one
-    /// he can't see, and its id for the panel's button that opens it.
+    /// `under_way` and the windows' that holds, with the thread whose box
+    /// holds it named, as that's the one he can't see, and its id for the
+    /// panel's button that opens it.
     fn restart_hold(&self, windows: WindowsNow, cx: &App) -> (String, Option<String>) {
-        if let Some((id, _)) = self.composers.iter().find(|(_, c)| c.read(cx).holds_anything(cx)) {
-            return (format!("the message box in “{}” is sent or cleared", self.thread_title(id)), Some(id.clone()));
+        if let Some((id, why)) = self.live_composers().find_map(|(id, c)| c.read(cx).restart_hold(cx).map(|why| (id, why))) {
+            return (why.replace("{t}", &self.thread_title(id)), Some(id.clone()));
         }
-        if let Some((id, _)) = self.composers.iter().find(|(_, c)| c.read(cx).copying_picture(cx)) {
-            return (format!("the picture being copied into the card in “{}” is in", self.thread_title(id)), Some(id.clone()));
+        if self.drafts.failed {
+            if let Some((id, _)) = self.live_composers().find(|(_, c)| c.read(cx).has_draft(cx)) {
+                return (format!("the message box in “{}” is sent or cleared, as the drafts couldn't be saved", self.thread_title(id)), Some(id.clone()));
+            }
         }
         if let Some((field, thread)) = crate::unsent::first(cx) {
             let field = match &thread {
@@ -627,7 +645,7 @@ impl Threadbear {
     /// `restart_hold` for the holds that aren't on a thread.
     fn restart_hold_elsewhere(&self, windows: WindowsNow, cx: &App) -> String {
         let s = |text: &str| text.to_owned();
-        if self.new_thread.composer.as_ref().is_some_and(|c| c.read(cx).holds_anything(cx)) {
+        if self.new_thread.composer.as_ref().is_some_and(|c| c.read(cx).holds_anything(cx) || c.read(cx).copying_picture(cx)) {
             return s("the new thread's message box is sent or cleared");
         }
         if self.schedule_editor.is_some() {
@@ -716,7 +734,7 @@ impl Threadbear {
             cx.notify();
         }
         if !self.updater.preview && rules::should_auto_restart(&moment) {
-            note(if moment.active { "restarting into the staged build: nothing typed, and no input for five seconds" } else { "restarting into the staged build: nothing typed, and the app isn't in front" });
+            note(if moment.active { "restarting into the staged build: nothing typed that would be lost, and no input for five seconds" } else { "restarting into the staged build: nothing typed that would be lost, and the app isn't in front" });
             // In front it comes back in front; behind, it stays behind.
             self.updater.auto_restart = true;
             self.restart_for_update(!moment.active, cx);
@@ -832,12 +850,11 @@ impl Threadbear {
 
     /// Something a restart by itself would have waited for, started while a
     /// handover's new copy loaded: it holds the go (handover.rs). Not words
-    /// in a message box, which go across in the drafts file, but a picture
-    /// still being copied into one, which doesn't; and nothing for a Restart
-    /// to Update he chose, which never waited for these.
+    /// in a message box, which go across in the drafts file, but what that
+    /// doesn't carry (`boxes_hold`); and nothing for a Restart to Update he
+    /// chose, which never waited for these.
     pub(crate) fn handover_held(&self, windows: WindowsNow, cx: &App) -> bool {
-        let copying = self.composers.values().chain(self.new_thread.composer.iter()).any(|c| c.read(cx).copying_picture(cx));
-        self.updater.auto_restart && (windows.held || windows.other_window_input || copying || self.under_way(cx) || self.schedule_editor.is_some() || crate::unsent::any(cx))
+        self.updater.auto_restart && (windows.held || windows.other_window_input || self.boxes_hold(cx) || self.under_way(cx) || self.schedule_editor.is_some() || crate::unsent::any(cx))
     }
 
     /// What a restart leaves for the next launch: the list and the thread

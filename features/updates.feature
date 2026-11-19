@@ -91,16 +91,19 @@ Feature: The Updates panel
     And I open the Updates panel
     Then the Updates panel lists "The app's next version (def5678) is ready. It switches in when you're not using the app, or now."
 
-  # Mike, 13 Nov, after one sat staged with no word of why. In front, with
-  # nothing in the way, it counts down from 5 s and starts again at any input
-  # (core's restart_wait tests that, as a scripted app is kept behind).
+  # A message typed and not sent goes across a restart in the drafts file, so
+  # it doesn't hold one off: Mike, 19 Nov, "just restart and put the text
+  # back in the box". In front, it counts down from 5 s and starts again at
+  # any input (core's restart_wait tests that, as a scripted app is kept
+  # behind).
   @system.selfupdate @swift-pending
-  Scenario: The app's next version says what it's waiting for
+  Scenario: A message typed and not sent doesn't hold the next version
     When I open the thread "Morning brief"
     And I type "half a thought" in the composer
     And the app's next version, def5678, is ready
     And I open the Updates panel
-    Then the Updates panel lists "The app's next version (def5678) is ready. It switches in once the message box in “Morning brief” is sent or cleared, or now."
+    Then the Updates panel lists "The app's next version (def5678) is ready. It switches in when you're not using the app, or now."
+    And a restart onto it waits for nothing
 
   # The Swift app's menu bar didn't show the made-up update's item within 5 s
   # of a script making it up (its SwiftUI commands, read by `menus`), so this
@@ -134,17 +137,18 @@ Feature: The Updates panel
 
   # Going in by itself: straight away with another app in front, and in front
   # once it's had five seconds with no input (core's should_auto_restart, with
-  # its tests), but never over words typed or a menu that's open. The GPUI app
+  # its tests), but never over a menu that's open. Words typed in the message
+  # box go across in the drafts file, so they don't hold it. The GPUI app
   # says what its once-a-second look sees (`updates` with `restartCheck`), as
   # a scripted app never restarts. The Swift app restarts in front only when
   # its handover would go unseen, and has no such check.
   @system.selfupdate @swift-pending
-  Scenario: The next version waits to go in while words are typed or a menu is open
+  Scenario: The next version waits to go in while a menu is open, not for words typed
     When the app's next version, def5678, is ready
     And I open the thread "Morning brief"
     Then a restart onto it waits for nothing
     When I type "half a thought" in the composer
-    Then a restart onto it waits for the words typed
+    Then a restart onto it waits for nothing
     When I clear the composer
     Then a restart onto it waits for nothing
     When I open the Hibernate menu for "Morning brief"

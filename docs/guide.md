@@ -2233,13 +2233,16 @@ on `main`, the runner builds it and switches over without cutting off any
 thread that's partway through a turn, and the app builds its new version in
 the background. The app swaps in the new version when you next quit it, when
 you choose Restart to Update in the Threadbear menu, or by itself when you've
-left it alone for a while with nothing typed. The window stays where it is
+left it alone for a few seconds. The window stays where it is
 while it does: the new version opens the same thread underneath and takes
 over, so you shouldn't see it go.
 
 Whatever's typed in a message box and not sent is kept through a quit or a
-restart, and so are your own answers in a card's Something else boxes. Those
-answers don't hold the new version back. When something else typed does (a
+restart, and so are your own answers in a card's Something else boxes, so
+neither holds the new version back: it swaps in and puts them back in their
+boxes. A few things still hold it: a picture still being copied into a box,
+an earlier message you're editing, a message still on its way, and words on
+the new-thread page (its folder and account choices aren't kept). When something else typed does (a
 title being renamed, say), the Updates panel names the box and the thread,
 with a button that opens the thread. While a runner restart waits for threads to finish, a quiet line at
 the top says how many it's waiting for, and hovering it names them. A message
