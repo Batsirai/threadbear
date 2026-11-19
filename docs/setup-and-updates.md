@@ -98,6 +98,11 @@ someone whose work keeps them on its own tailnet: no phone and no second Mac the
    (docs/protocol.md, "Runner keys"). No `.env.local` and no env vars set by hand. With the self-hosted
    option it starts the local backend instead.
 3. Builds and installs the runner and the Mac app (today's two scripts, folded together).
+   The runner's typecheck and unit tests (up to an hour on a busy Mac) only run when
+   HEAD isn't a commit Mike's `main` has, or with `--run-checks`: his main only moves to
+   commits a landing's check passed, so on his code they'd only say it again
+   (`scripts/checked-upstream.mjs`; on Tinker Desk's second account, 19 Nov, they took
+   58 minutes and then failed on something about that Mac).
 4. Opens the Mac app, whose first screen shows a pairing QR code for the phone
    (Settings › Phone, replacing `pair-qr.swift`).
 
