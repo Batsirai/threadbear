@@ -104,8 +104,12 @@ export const realGit: RestartGit = {
 };
 
 // `away`: whether a draining runner still has the thread (handover.ts's
-// Peers), so it isn't here yet but will be.
-type Deps = { runner: Pick<Runner, 'get' | 'note' | 'send' | 'has'>; home: string; clock: Clock; log: Logger; away?: (threadId: string) => boolean; git?: RestartGit };
+// Peers), so it isn't here yet but will be. `appRepo`: the Threadbear
+// checkout the apps are built from (release.ts's ownCheckout). A thread
+// asking from another folder (~/dev/me/misc) named a Threadbear commit
+// its own folder doesn't have, and the wait fell back to any new build,
+// telling it the app had restarted onto one without it (42071b05, 19 Nov).
+type Deps = { runner: Pick<Runner, 'get' | 'note' | 'send' | 'has'>; home: string; clock: Clock; log: Logger; away?: (threadId: string) => boolean; git?: RestartGit; appRepo?: string };
 
 const appName = (app: AppKind) => (app === 'desktop' ? 'Threadbear GPUI app' : 'Threadbear app');
 
@@ -140,17 +144,32 @@ export class AppRestarts {
     return { ...(build ? { build } : {}), ...(running ? { running } : {}), ...(want ? { waitingFor: want.short } : {}) };
   }
 
+  // Looked for in the apps' own checkout first, then the thread's folder
+  // (a dev runner, or one with no checkout to hand). A named commit found
+  // in neither is refused rather than quietly waiting for any build.
   private wanted(threadId: string, commit?: string): Watch['want'] {
     const git = this.deps.git ?? realGit;
-    let repo: string | undefined;
+    let cwd: string | undefined;
     try {
-      repo = this.deps.runner.get(threadId).cwd;
+      cwd = this.deps.runner.get(threadId).cwd;
     } catch {
+      cwd = undefined;
+    }
+    const repos = [...new Set([this.deps.appRepo, cwd].filter((r): r is string => !!r))];
+    const named = commit?.trim();
+    let repo: string | undefined;
+    let full: string | undefined;
+    for (const r of repos) {
+      full = named ? git.resolve(r, named) : (git.resolve(r, 'refs/heads/main') ?? git.resolve(r, 'refs/heads/master'));
+      if (full) {
+        repo = r;
+        break;
+      }
+    }
+    if (!full || !repo) {
+      if (named) throw new Error(`Can't find commit ${named} in ${repos.join(' or ') || 'any repo'}, so can't tell which build has it. Name a commit in the Threadbear repo the app is built from, or leave commit out to wait for its main.`);
       return undefined;
     }
-    if (!repo) return undefined;
-    const full = commit?.trim() ? git.resolve(repo, commit.trim()) : (git.resolve(repo, 'refs/heads/main') ?? git.resolve(repo, 'refs/heads/master'));
-    if (!full) return undefined;
     const trees: Partial<Record<AppKind, string>> = {};
     for (const app of ['mac', 'desktop'] as const) {
       const t = git.tree?.(repo, full, APP_DIRS[app]);

@@ -520,7 +520,7 @@ async function main(): Promise<void> {
   runner.secrets.startSweeping((e) => log.warn('secret sweep failed', { error: String(e) }));
   // After the threads are loaded, so a schedule that came due while the
   // runner was stopped finds its thread.
-  appRestarts = new AppRestarts({ runner, home: cfg.home, clock: realClock, log, away: (threadId) => peers.owns(threadId) });
+  appRestarts = new AppRestarts({ runner, home: cfg.home, clock: realClock, log, away: (threadId) => peers.owns(threadId), appRepo: ownCheckout() });
   // Its runner id and name are the mirror's (sync.ts), since that's how other
   // runners and the backend know this one (step 6, docs/step6-plan.md).
   const syncRunnerId = cfg.sync.runnerId ?? ensureRunnerId(cfg.home);

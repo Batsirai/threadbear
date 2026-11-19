@@ -276,6 +276,42 @@ test('a named commit, and one git can\'t place, fall back sensibly', () => {
   assert.match(said(h, thread.id).message, /restarted onto bbbb222/);
 });
 
+// 42071b05, 19 Nov: a thread in ~/dev/me/misc named a Threadbear commit
+// its folder doesn't have, the watch fell back to any new build, and it was
+// told the GPUI app had restarted onto main from just before its landing.
+test('a commit named from a thread outside the repo is looked for in the apps\' checkout', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const h = makeHarness();
+  const appRepo = fs.mkdtempSync(path.join(h.home, 'app-repo-'));
+  const git = (...a: string[]) => execFileSync('git', ['-C', appRepo, ...a], { encoding: 'utf8' }).trim();
+  git('init', '-q', '-b', 'main');
+  const commit = (msg: string) => {
+    fs.writeFileSync(`${appRepo}/f`, msg);
+    git('add', 'f');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', msg);
+    return git('rev-parse', 'HEAD');
+  };
+  const before = commit('main before the landing');
+  const landed = commit('the settings change');
+  const watcher = new AppRestarts({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, appRepo });
+  const { thread } = h.runner.create({ text: 'Panel of reviewers', accountId: 'claude-3' });
+  h.adapter.last.init();
+  const D = (c: string, tree: string) => ({ commit: c, short: c.slice(0, 9), tree });
+  watcher.appHello(D(before, 'tree-0'), 'desktop');
+  assert.equal(watcher.watch(thread.id, undefined, landed.slice(0, 9)).waitingFor, landed.slice(0, 9));
+  // A restart onto a build without it: still waiting.
+  watcher.appHello(D(before, 'tree-1'), 'desktop');
+  assert.equal(h.events(thread.id).findLast((e) => e.type === 'user.message' && e.origin === 'runner'), undefined);
+  assert.ok(watcher.isWatching(thread.id));
+  watcher.appHello(D(landed, 'tree-2'), 'desktop');
+  assert.match(String(h.events(thread.id).findLast((e) => e.type === 'user.message' && e.origin === 'runner')?.text), new RegExp(`restarted onto ${landed.slice(0, 9)}`));
+  // One found nowhere is refused, not turned into "any new build".
+  assert.throws(() => watcher.watch(thread.id, undefined, 'deadbeef1'), /Can't find commit deadbeef1/);
+  assert.ok(!watcher.isWatching(thread.id));
+});
+
 // Codex's review, 18 Nov: main moved on with only runner changes before
 // the thread asked, so the one build that comes is of an older commit
 // with the same desktop/ folder.

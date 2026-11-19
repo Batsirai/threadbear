@@ -1851,9 +1851,11 @@ own restarts.
 
 - `wait_for_app_restart` (`{ text?, commit? }`) puts the calling thread on
   the list, remembering the build running then and the commit the new build
-  must contain: `commit` if given, else main's HEAD in the thread's folder
-  at that moment (none when that isn't a git repo). Asking again replaces
-  its request.
+  must contain: `commit` if given, else main's HEAD at that moment. Both
+  are looked up in the Threadbear checkout the apps are built from, then
+  the thread's folder (a thread in another repo can name a Threadbear
+  commit). A `commit` found in neither is refused with an error, rather
+  than waiting for any new build. Asking again replaces its request.
 - A turn that ends needing nothing (no archive, snooze or waitFor) while
   its thread is on the list hibernates the thread for a day at most
   (`system.note` "Hibernating until the Threadbear app restarts onto the
@@ -1872,7 +1874,7 @@ own restarts.
   hear." and its `text`, or "Check your change in the running app.". Then
   it's off the list. The same build again (the app reconnecting to a
   restarted runner) changes nothing. A new build whose `commit` doesn't
-  contain the thread's commit (`git merge-base --is-ancestor` in its folder:
+  contain the thread's commit (`git merge-base --is-ancestor` in the repo it was found in:
   a build staged before the thread landed) keeps the thread on the list,
   now from that build, with a `system.note` "<app> restarted onto <short>,
   which doesn't have <commit> yet. Still waiting." A build whose `tree`
