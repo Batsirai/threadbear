@@ -4190,6 +4190,21 @@ export class Runner {
     return true;
   }
 
+  // Takes back a deleted schedule's messages still waiting for the thread,
+  // each with a receipt so a retry or an old runner doesn't send it again.
+  // A thread busy in a long turn otherwise got every tick's copy after
+  // delete_schedule said Deleted (ae88bd2c, 20 Nov). How many it dropped.
+  dropScheduled(threadId: string, scheduleId: string): number {
+    const st = this.threads.get(threadId);
+    if (!st || st.rt.deleted) return 0;
+    const gone = st.rec.queue.filter((q) => isReminder(q) && q.scheduleId === scheduleId);
+    if (!gone.length) return 0;
+    st.rec.queue = st.rec.queue.filter((q) => !gone.includes(q));
+    for (const q of gone) this.emit(st, { type: 'system.note', text: DELETED_REMINDER, supersededReminder: q.turnId }, st.rt.turn?.turnId);
+    this.markDirty(st);
+    return gone.length;
+  }
+
   // A saved user message must be answered before automatic redelivery.
   // This queue remains durable while its idle CLI may be released.
   queueHeld(st: ThreadState): boolean {
@@ -4259,13 +4274,23 @@ export class Runner {
     const queue = st.rec.queue;
     const receipted = new Set(queue.filter(q => isReminder(q) && this.scheduledDelivery(st, q.turnId, q.scheduledSince ?? 0)?.superseded));
     const seen = new Set<string>();
+    const seenText = new Set<string>();
     const superseded = new Set<QueuedSend>();
     for (let i = queue.length - 1; i >= 0; i--) {
       const q = queue[i];
       // Check output may contain new items already removed from the check's
       // storage when it was sent. Old queues have no separate check flag,
       // so preserve every reminder bearing the standard output suffix.
-      if (receipted.has(q) || !isReminder(q) || !q.scheduleId || typeof q.text !== 'string' || (q.preserveSchedule ?? hasCheckOutput(q.text))) continue;
+      if (receipted.has(q) || !isReminder(q) || !q.scheduleId || typeof q.text !== 'string') continue;
+      // A check that keeps printing the same thing while the thread is busy
+      // queued one copy per tick, each delivered as its own turn (ae88bd2c,
+      // 20 Nov): the same words twice say nothing new, so the newest stays.
+      if (q.preserveSchedule ?? hasCheckOutput(q.text)) {
+        const same = `${q.scheduleId}\n${q.text}`;
+        if (seenText.has(same)) superseded.add(q);
+        seenText.add(same);
+        continue;
+      }
       if (seen.has(q.scheduleId)) superseded.add(q);
       seen.add(q.scheduleId);
     }
@@ -4900,6 +4925,7 @@ export type SendOptions = { origin?: MessageOrigin; wakeReason?: string; schedul
 
 type ScheduledDelivery = { seq: number; started: boolean; text: string; images: ImageRef[]; superseded?: false } | { superseded: true; started: true };
 
+const DELETED_REMINDER = 'Dropped a queued reminder because its schedule was deleted.';
 const SUPERSEDED_REMINDER = 'Skipped an older queued reminder because a newer reminder from the same schedule is waiting.';
 
 export function isAutomaticInput(q: Pick<QueuedSend, 'origin' | 'retryAfterInterrupt'>): boolean {

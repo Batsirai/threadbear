@@ -123,7 +123,7 @@ const ONLINE_MS = 3 * 60_000;
 // offered in runners.list: an old install, or a test's.
 const FORGET_MS = 30 * 86_400_000;
 
-export type ScheduleRunner = Pick<Runner, 'create' | 'send' | 'sendScheduled' | 'get' | 'list' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'> & { cfg?: Pick<Runner['cfg'], 'defaults'> };
+export type ScheduleRunner = Pick<Runner, 'create' | 'send' | 'sendScheduled' | 'dropScheduled' | 'get' | 'list' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'> & { cfg?: Pick<Runner['cfg'], 'defaults'> };
 
 export type CreateScheduleParams = {
   // A card's approval of `check` (patch-trust.ts, approveCheck). Not from a client.
@@ -481,6 +481,9 @@ export class Scheduler {
       this.items.set(rec.id, rec);
       if (!this.names.has(rec.runnerId)) this.namesDue = true;
     }
+    // Deleted elsewhere (the phone, the website, another Mac): its
+    // messages still waiting for a busy thread here go too.
+    for (const was of before.values()) if (!this.items.has(was.id) && !was.finishedAt) this.dropQueued(was);
     this.overlayUnrecorded();
     if (this.namesDue) void this.refreshNames();
     this.changed();
@@ -802,8 +805,20 @@ export class Scheduler {
     }
     this.items.delete(rec.id);
     this.dropKept(rec.id);
+    this.dropQueued(rec);
     this.changed();
     return {};
+  }
+
+  // A deleted schedule's messages still waiting behind a busy turn go
+  // with it, rather than arriving after delete_schedule said Deleted.
+  private dropQueued(rec: ScheduleRecord): void {
+    if (!rec.threadId) return;
+    try {
+      this.runner.dropScheduled(rec.threadId, rec.id);
+    } catch (e) {
+      this.log.warn("could not drop a deleted schedule's queued messages", { scheduleId: rec.id, error: String(e) });
+    }
   }
 
   // Runs it now, as if it were due. A repeating one keeps its next time.

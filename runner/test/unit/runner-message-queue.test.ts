@@ -509,3 +509,47 @@ test('a runner notification alone cannot enable archive from a background-opened
   s.result('completed', undefined, undefined, { answered: [...st.rt.turn!.messages] });
   assert.equal(st.rec.archivedAt, undefined);
 });
+
+// ae88bd2c, 20 Nov: a */5 schedule's check kept printing the same line
+// while the thread was busy in a long turn, and the thread deleted the
+// schedule in that turn. Each tick's copy still arrived afterwards, one
+// turn each.
+const sameReport = () => {
+  const out = checkOutcome({ ok: true, output: 'GitHub run 44525978424 finished: completed failure' });
+  assert.ok('extra' in out);
+  return `[Scheduled: "Land slice 1"]\n\nLand it${out.extra}`;
+};
+
+test('a deleted schedule\'s messages queued behind a busy turn never arrive', async () => {
+  const { h, thread, s } = running();
+  const sched = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger });
+  sched.start();
+  try {
+    const sc = await sched.create({ threadId: thread.id, text: 'Land it', cron: '*/5 * * * *' });
+    const other = h.runner.sendScheduled(thread.id, 'Another schedule', 'other', 'slot-1');
+    for (const run of ['t1', 't2', 't3']) h.runner.sendScheduled(thread.id, sameReport(), sc.id, run, h.clock.now(), true);
+    await sched.delete(sc.id);
+    assert.deepEqual(h.runner.mustGet(thread.id).rec.queue.map(q => q.turnId), [other.turnId]);
+    assert.ok(h.events(thread.id).some(e => e.type === 'system.note' && /schedule was deleted/.test(e.text)));
+    // A retry of a dropped slot (an old runner, a lost reply) is answered, not queued again.
+    h.runner.sendScheduled(thread.id, sameReport(), sc.id, 't2', 0, true);
+    assert.equal(h.runner.mustGet(thread.id).rec.queue.length, 1);
+    s.result();
+    await tick(8);
+    assert.deepEqual(s.sent.slice(1).map(m => m.text), ['Another schedule']);
+  } finally { sched.stop(); }
+});
+
+test('the same check report queued on every tick arrives once', () => {
+  const { h, thread, s } = running();
+  for (const run of ['t1', 't2', 't3']) h.runner.sendScheduled(thread.id, sameReport(), 's1', run, h.clock.now(), true);
+  const changed = checkOutcome({ ok: true, output: 'Something new' });
+  assert.ok('extra' in changed);
+  h.runner.sendScheduled(thread.id, `Land it${changed.extra}`, 's1', 't4', h.clock.now(), true);
+  const q = h.runner.mustGet(thread.id).rec.queue;
+  assert.equal(q.length, 2);
+  assert.match(q[0].text, /44525978424/);
+  assert.match(q[1].text, /Something new/);
+  s.result();
+  assert.equal(s.sent.filter(m => /44525978424/.test(m.text)).length, 1);
+});
