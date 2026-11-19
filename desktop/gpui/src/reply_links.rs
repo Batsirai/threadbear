@@ -61,6 +61,9 @@ struct LinkPrefs {
     web_link_click: Option<String>,
     /// The PR tab's Merge, as its menu's Default set it (pr_view.rs).
     pr_merge_method: Option<String>,
+    /// Kinds of file Mike said always open in their app, from the open
+    /// gate's question ("Always open .tandem in Tandem").
+    trusted_openers: Vec<threadbear_core::open_policy::TrustedOpener>,
 }
 
 static PREFS: Mutex<Option<LinkPrefs>> = Mutex::new(None);
@@ -108,6 +111,19 @@ pub(crate) fn set_web_click(action: WebLinkAction) {
 /// The merge method Mike starred in a PR tab's Merge menu, if he has.
 pub(crate) fn pr_merge_method() -> Option<threadbear_core::pull_requests::MergeMethod> {
     with_prefs(|p| p.pr_merge_method.as_deref().and_then(threadbear_core::pull_requests::MergeMethod::parse))
+}
+
+/// The kinds of file that open in their app without asking (open_gate.rs).
+pub(crate) fn trusted_openers() -> Vec<threadbear_core::open_policy::TrustedOpener> {
+    with_prefs(|p| p.trusted_openers.clone())
+}
+
+/// Remembers that `kind` always opens in its app.
+pub(crate) fn trust_opener(kind: threadbear_core::open_policy::TrustedOpener) {
+    save_prefs(|p| {
+        p.trusted_openers.retain(|k| !k.same(&kind));
+        p.trusted_openers.push(kind);
+    });
 }
 
 pub(crate) fn set_pr_merge_method(method: threadbear_core::pull_requests::MergeMethod) {

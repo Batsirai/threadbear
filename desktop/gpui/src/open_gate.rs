@@ -351,7 +351,7 @@ fn open_other(url: &str, cx: &mut App) {
         return;
     };
     let url = url.to_owned();
-    ask(policy::link_question(&url, &app), cx, move |cx| system_open(&url, cx));
+    ask(policy::link_question(&url, &app), cx, move |cx, _| system_open(&url, cx));
 }
 
 // ---------------------------------------------------------------- rich text
@@ -389,17 +389,25 @@ fn clicked(url: &str, event: &ClickEvent, origin: Origin, base: &str, cx: &mut A
 // ---------------------------------------------------------------- files
 
 /// A file in its own app, after its symlinks are followed: a document opens,
-/// a program asks first, another Mac's file never opens here. `path` is
-/// absolute.
+/// a program asks first, another Mac's file never opens here. A kind of file
+/// it can't place opens without asking once Mike has said always open that
+/// kind in that app. `path` is absolute.
 pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
-    match policy::decide_file(path, origin, &app_for) {
+    match policy::decide_file_trusting(path, origin, &app_for, &crate::reply_links::trusted_openers()) {
         FileVerdict::Open { url, look, with, .. } => open_checked(path, &look, &with, &url, cx),
         FileVerdict::Refuse(why) => refuse(why, cx),
         FileVerdict::Ask { question, url, look, with } => {
             let path = path.to_owned();
             // What was said yes to, still: not a file swapped in while the
-            // question was up (`open_checked` looks again).
-            ask(question, cx, move |cx| open_checked(&path, &look, &with, &url, cx));
+            // question was up (`open_checked` looks again). Always is kept
+            // only once that file has passed and opened.
+            ask(question, cx, move |cx, always| {
+                if open_checked(&path, &look, &with, &url, cx) && always {
+                    if let Some(kind) = look.trustable.clone() {
+                        crate::reply_links::trust_opener(kind);
+                    }
+                }
+            });
         }
     }
 }
@@ -412,14 +420,16 @@ pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
 /// Tinker Desk, an app or script moved into the path after the reference was
 /// made never ran, and the one asked about did. Elsewhere a file opens from
 /// a private copy of the checked file.
-fn open_checked(path: &str, look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) {
+fn open_checked(path: &str, look: &policy::Look, with: &policy::Opener, url: &str, cx: &mut App) -> bool {
     if !policy::still_same(path, look, &app_for) {
         refuse(format!("{} changed while Threadbear was opening it, so it didn't open it.", threadbear_core::highlights::last_component(path)), cx);
-        return;
+        return false;
     }
     if let Err(why) = open_the_file(look, with, url, cx) {
         refuse(format!("{} {why}", threadbear_core::highlights::last_component(path)), cx);
+        return false;
     }
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -757,17 +767,27 @@ pub(crate) fn reveal(path: &str, origin: Origin, cx: &mut App) {
 // ---------------------------------------------------------------- asking
 
 /// The question as an alert over the app's window, Cancel first so Return is
-/// no; `yes` runs only on the yes button. Asked once the click that led here
-/// has finished, as the window is busy with it until then. With no window
-/// to ask over, the answer is no.
-fn ask(question: Question, cx: &mut App, yes: impl FnOnce(&mut App) + 'static) {
+/// no; `yes` runs only on a yes button, told whether it was the one that
+/// remembers (`Question::always`). That one sits between Cancel and Open, so
+/// the key focus GPUI gives the last button is on Open, never on Always.
+/// Critical, as only that style draws the caution sign (Warning draws nothing
+/// on a sheet, so it looked like any other question; Mike, 19 Nov). Asked
+/// once the click that led here has finished, as the window is busy with it
+/// until then. With no window to ask over, the answer is no.
+fn ask(question: Question, cx: &mut App, yes: impl FnOnce(&mut App, bool) + 'static) {
     cx.defer(move |cx| {
         let Some(handle) = cx.active_window().or_else(|| cx.windows().into_iter().next()) else { return };
-        let answers = [PromptButton::cancel("Cancel"), PromptButton::new(question.yes.clone())];
-        let Ok(answer) = handle.update(cx, |_, window, cx| window.prompt(PromptLevel::Warning, &question.title, Some(&question.detail), &answers, cx)) else { return };
+        let mut answers = vec![PromptButton::cancel("Cancel")];
+        if let Some(always) = &question.always {
+            answers.push(PromptButton::new(always.clone()));
+        }
+        answers.push(PromptButton::new(question.yes.clone()));
+        let always_at = question.always.is_some().then_some(1);
+        let Ok(answer) = handle.update(cx, |_, window, cx| window.prompt(PromptLevel::Critical, &question.title, Some(&question.detail), &answers, cx)) else { return };
         cx.spawn(async move |cx| {
-            if let Ok(1) = answer.await {
-                cx.update(yes);
+            match answer.await {
+                Ok(0) | Err(_) => {}
+                Ok(i) => cx.update(|cx| yes(cx, Some(i) == always_at)),
             }
         })
         .detach();

@@ -57,7 +57,7 @@ File references are where to look.
   app (or run `desktop/scripts/install-app.sh`). The new app keeps its window and panel layout in `desktop-settings.json` and
   `gpui-prefs.json` in the data folder (with the local pages you chose
   Run them for, a digest of each), what a click on a link in a reply
-  does (its menu's Default) in `desktop-links.json` there, the side pane's
+  does (its menu's Default) and the kinds of file you said always open in their app in `desktop-links.json` there, the side pane's
   folded headings in `desktop-highlights.json`, and how it shows files and
   folders (Preview or Markdown, list or icons, the sort, hidden files) in
   `desktop-files.json`, the section and file or folder each thread's pane

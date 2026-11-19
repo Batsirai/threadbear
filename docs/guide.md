@@ -318,6 +318,10 @@ links to files on the Mac only say so. A link that isn't a web page (one
 that would open Slack, System Settings or another app) asks before it opens,
 naming the app, on the Mac and the phone, and so does a file that isn't a
 plain document (a `.command`, an app, a kind Threadbear can't place).
+For a kind it can't place, the question names the app it opens in and
+offers to always open that kind there ("Always open .tandem in Tandem"),
+so your own apps' files stop asking. To take that back, remove the entry
+from `trustedOpeners` in `desktop-links.json` in the data folder and restart the app.
 Another Mac's program never opens here, and its replies never show
 pictures from this Mac.
 
