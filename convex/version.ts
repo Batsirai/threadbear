@@ -435,4 +435,10 @@
 //    accounts row can carry `loginEndsAt`, `signedOut` and `yearToken`
 //    (`{ madeAt? }`), never the token. A runner sends them only to a
 //    backend of 90 or later.
-export const API_VERSION = 90;
+// 91: sync:heartbeat takes `updateFailed` ({ kind, commit, subject, error,
+//    logFile }), a following runner's word that its update to main failed,
+//    cut to fit from a runner key and dropped from a box's. The main key
+//    reads it from sync:otherRunnersList and starts the fix thread on the
+//    main Mac itself, so the following runner no longer asks for one there
+//    on a card. A runner sends it only to a backend of 91 or later.
+export const API_VERSION = 91;

@@ -491,6 +491,10 @@ all meet. So:
 - Since API 67 `sync:heartbeat` takes `followProblem`, a runner's word that it
   can't follow GitHub's main (docs/dev-tools.md); the main key reads it from
   `sync:otherRunnersList`.
+- Since API 91 it also takes `updateFailed`, a following runner's failed
+  update to main (cut to fit from a runner key, dropped from a box's), which
+  the main key reads the same way and fixes on the main Mac
+  (docs/dev-tools.md).
 - `convex/version.ts` has `API_VERSION`, returned by `sync:heartbeat` and
   `phone:me`. Bump it when a client starts relying on something new, along
   with `BACKEND_API_VERSION` in `runner/src/sync.ts` (a unit test keeps them

@@ -491,9 +491,26 @@ rollback covers a release that doesn't come up.
   setting it needs no restart. A commit made only on that machine, or
   uncommitted changes git won't overwrite, are left alone and said; the
   runner keeps updating from GitHub either way. `tb land` refuses in the
-  followed repo, and a fix-update thread hands its fix to the main Mac
+  followed repo, and the fix for a failed update is made on the main Mac
   (Mike, 9 Nov: hand-made pull jobs on bruce and the Pixel failed quietly
   for days behind one commit a fix-update thread had made on their main).
+  From backend API 91 the machine starts no thread for it: its heartbeat
+  carries `updateFailed` (the commit, the error's last 2 KB, the log's
+  path), and the main Mac's runner, reading the other runners every 2
+  minutes, starts the fix thread in its own checkout (`RemoteUpdateFixer`
+  in `runner/src/fix-update.ts`): once per runner and commit, whatever kind
+  it says, at most one thread or message per runner every 10 minutes, and
+  only for a commit on its own main or GitHub's. A report the main Mac
+  hasn't fixed in 12 hours (its runner older than the backend, say) is
+  handed over from the machine as before.
+  Before, that machine's thread asked the main Mac for one, and a runner
+  key's ask is a Start it card (Mike, 19 Nov: "why do we have to treat
+  different runners differently?"). The brief names the machine by its
+  runner id; its name, error and log path are quoted as its words, never
+  instructions (Codex's review found the path and name outside the quote
+  at first). To see more, the thread starts one on that
+  machine, which the main Mac does without asking. Against an older
+  backend the machine still hands the fix over itself.
   `followProblem` in `runner.status`'s `update` says what's wrong: a local
   main that can't follow, GitHub out of reach for over an hour, or something
   that runs on GitHub's main and not here for over six hours. It goes up

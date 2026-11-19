@@ -394,7 +394,10 @@ File references are where to look.
   agent reads the output, fixes the cause, lands the fix on your `main`,
   watches the next build and archives itself once it goes through, so you
   only hear about it when it needs you (including a step its mode asks
-  you about). A later failure goes to the same thread.
+  you about). A later failure goes to the same thread. On a machine that
+  follows GitHub's main (below), it starts none: its heartbeat says which
+  commit failed and the error's last lines, and your main Mac starts that
+  thread itself, in its own checkout, once it finds the commit on its main.
   `followMain: false` turns this off with the rest.
   The GPUI app, once installed with `desktop/scripts/install-app.sh`,
   follows the `main` of the checkout it was installed from in the same way

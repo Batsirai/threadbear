@@ -6,7 +6,7 @@ import { ConvexError, v } from 'convex/values';
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { messageButton, threadFields, views } from './schema';
+import { messageButton, threadFields, updateFailedValidator, views } from './schema';
 import { API_VERSION } from './version';
 import { clear, command, machines } from './machines';
 import { CLEAR_RETRY_MS, clearStateFrom } from './clearStates';
@@ -511,6 +511,7 @@ export const RUNNER_KEY_CAPS = {
   accounts: 20,
   runnerField: 300, // a heartbeat's icon, version, rpcUrl
   followProblem: 800, // a heartbeat's followProblem: a sentence or two
+  updateFailed: 2400, // a heartbeat's updateFailed error: the build's last word
   note: 500, // a schedule run's note
 } as const;
 const CAP = RUNNER_KEY_CAPS;
@@ -1331,6 +1332,7 @@ export const heartbeat = mutation({
       rpcUrl: v.optional(v.string()),
       pressure: v.optional(v.union(v.literal('memory'), v.literal('disk'))),
       followProblem: v.optional(v.string()),
+      updateFailed: v.optional(updateFailedValidator),
       // A box's: the provider's id for the machine it runs on (boxes.ts exchange's `machineId`).
       machineId: v.optional(v.string()),
     }),
@@ -1368,6 +1370,16 @@ export const heartbeat = mutation({
     // refused heartbeat would leave that Mac showing offline.
     if (!caller.owner) for (const field of ['version', 'release', 'startedAt', 'icon', 'rpcUrl'] as const) if (typeof runner[field] === 'string') (runner as Record<string, unknown>)[field] = cutBytes(runner[field], CAP.runnerField);
     if (!caller.owner && runner.followProblem !== undefined) runner = { ...runner, followProblem: cutBytes(runner.followProblem, CAP.followProblem) };
+    // A box doesn't follow main, so has no update to fail; a runner key's is
+    // cut to fit like the rest. The main Mac checks it against its own repo
+    // before acting on it (runner/src/fix-update.ts).
+    if (caller.box) {
+      const { updateFailed: _u, ...rest } = runner;
+      runner = rest;
+    } else if (!caller.owner && runner.updateFailed) {
+      const u = runner.updateFailed;
+      runner = { ...runner, updateFailed: { kind: u.kind, commit: cutBytes(u.commit, 64), subject: cutBytes(u.subject, CAP.runnerField), error: cutBytes(u.error, CAP.updateFailed), logFile: cutBytes(u.logFile, CAP.runnerField) } };
+    }
     // The Mac app reads startedAt as a time and the count as a number, so
     // anything else is left out rather than passed on (an offset of
     // "+////" once crashed the app's date parser; Daybreak, 7 Nov 2026).
@@ -1997,7 +2009,7 @@ const accountDoc = v.object({
   // API 20: what the phone's new thread pickers offer.
   models: v.optional(v.array(v.object({ id: v.string(), title: v.string(), effortLevels: v.optional(v.array(v.string())), defaultEffort: v.optional(v.string()) }))),
   defaultEffort: v.optional(v.string()),
-  // API 90: a Claude login's sign-in, for the Mac's Runners panel.
+  // API 91: a Claude login's sign-in, for the Mac's Runners panel.
   loginEndsAt: v.optional(v.string()),
   signedOut: v.optional(v.boolean()),
   yearToken: v.optional(v.object({ madeAt: v.optional(v.string()) })),
@@ -3896,7 +3908,7 @@ export const setThreadIndex = mutation({
 // the runner counts it reachable while it sleeps or starts (decision 6), and
 // `waiting` while a message wants it woken but its virtual runner has
 // maxBoxes up (boxes.ts wakeFor).
-const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()), unreachable: v.optional(v.boolean()), unsure: v.optional(v.boolean()) })) });
+const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), updateFailed: v.optional(updateFailedValidator), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()), unreachable: v.optional(v.boolean()), unsure: v.optional(v.boolean()) })) });
 
 async function otherRunners(ctx: QueryCtx, runnerId: string) {
   const runners = [];
@@ -3909,6 +3921,7 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
       ...(r.icon !== undefined ? { icon: r.icon } : {}),
       ...(r.rpcUrl !== undefined ? { rpcUrl: r.rpcUrl } : {}),
       ...(r.followProblem !== undefined ? { followProblem: r.followProblem } : {}),
+      ...(r.updateFailed !== undefined ? { updateFailed: r.updateFailed } : {}),
       ...(r.box ? { box: await boxSummary(ctx, r) } : {}),
     });
   }

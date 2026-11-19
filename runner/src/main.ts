@@ -26,7 +26,7 @@ import { RunnerUpdater, releaseTreeAt } from './update.ts';
 import { RELEASE_NOTES_SYSTEM, SETTLE_MS, Upstream } from './upstream.ts';
 import { BringIn } from './bring-in.ts';
 import { SwiftChanges } from './swift-changes.ts';
-import { UpdateFixer } from './fix-update.ts';
+import { commitBefore, commitOnMain, RemoteUpdateFixer, reportedOnDisk, UpdateFixer, type UpdateFailure } from './fix-update.ts';
 import { followOriginOn } from './follow-origin.ts';
 import { bringInSetting, spareWeekOn } from './settings.ts';
 import { SpareWeek } from './spare-week.ts';
@@ -719,6 +719,10 @@ async function main(): Promise<void> {
     scrub: (text) => redactSecrets(scrubber.known.mask(text)).text,
     log,
   });
+  // Made once the fixers are (below); the first heartbeats can come before.
+  // Off with followMain, like the rest of following main.
+  let reportedFailure: () => UpdateFailure | undefined = () => (cfg.followMain ? reportedOnDisk(cfg.home) : undefined);
+  let remoteFixer: RemoteUpdateFixer | undefined;
   const sync = new ConvexSync({
     config: { ...cfg.sync, runnerId: syncRunnerId, icon: runnerIcon },
     use: new ConvexUseTally({ home: cfg.home }),
@@ -731,6 +735,7 @@ async function main(): Promise<void> {
     ...(box ? {} : { presence: async () => (atMac = isAtMac(rpcServer?.appConnected() ?? false, await hidIdleMs())) }),
     appConnected: () => rpcServer?.appConnected() ?? false,
     followProblem: () => (updaterReady ? updater.status().followProblem : undefined),
+    updateFailed: () => reportedFailure(),
     // A thread past a move's switch is the other runner's: never written
     // from here again (runner/moves.ts).
     runner: {
@@ -896,11 +901,49 @@ async function main(): Promise<void> {
     // On the install's default mode (own-threads.ts).
     start: (r) => startOwnThread(runner, r, updateRelease?.checkout),
     open: openThread,
-    send: (threadId, text) => runner.send(threadId, text, [], { queue: true }).turnId,
+    // From the runner, not Mike: his message would clear a thread's review
+    // findings and decline its open cards (runner.ts fromMike).
+    send: (threadId, text) => runner.send(threadId, text, [], { queue: true, origin: 'runner' }).turnId,
     unqueue: (threadId, turnId) => runner.unqueue(threadId, turnId),
     followsOrigin: () => followOriginOn(cfg.home),
     checkout: updateRelease?.checkout,
+    canReport: () => sync.reportsUpdates(),
+    remoteAt: (commit) => remoteFixer?.openAt(commit),
   });
+  reportedFailure = () => {
+    if (!cfg.followMain) return undefined;
+    updateFixer.overdue();
+    return updateFixer.reported();
+  };
+  // On the main Mac: another runner's failed update gets its fix thread
+  // here, as one it asked for would need a yes (fix-update.ts).
+  const updateCheckout = updateRelease?.checkout;
+  // followMain off turns this off with the rest (docs/on-your-mac.md).
+  if (updateCheckout && cfg.followMain) {
+    remoteFixer = new RemoteUpdateFixer({
+      home: cfg.home,
+      log,
+      start: (r) => startOwnThread(runner, r, updateCheckout),
+      open: openThread,
+      // Another machine's words: never as Mike's (see updateFixer's send).
+      send: (threadId, text) => runner.send(threadId, text, [], { queue: true, origin: 'runner' }).turnId,
+      unqueue: (threadId, turnId) => runner.unqueue(threadId, turnId),
+      onMain: (commit) => commitOnMain(updateCheckout, commit),
+      before: (a, b) => commitBefore(updateCheckout, a, b),
+      ownAt: (commit) => updateFixer.openAt(commit),
+    });
+    // Its own timer, not the app's list of other runners: that's watched
+    // only while an app is connected.
+    const fixer = remoteFixer;
+    const lookAtFailures = async () => {
+      // A runner handing over to its next release leaves it to that one.
+      if (draining) return;
+      const seen = await sync.readFailedRunners();
+      if (seen && !draining) fixer.consider(seen.failed, seen.through);
+    };
+    setTimeout(() => void lookAtFailures(), 30_000).unref();
+    setInterval(() => void lookAtFailures(), 2 * 60_000).unref();
+  }
   // Follows main once this release has been marked good (below).
   const updater = new RunnerUpdater({
     home: cfg.home,

@@ -923,3 +923,20 @@ test('before the migration, checks past the old-command allowance read no more c
   await call(s.ctx, sync.dropShareImages, { key: OWNER, threadId: 'O' });
   assert.ok(s.bytesRead() < READ_LIMIT, `read ${s.bytesRead()}`);
 });
+
+// API 91: a following runner's failed update reaches the main key only, cut
+// to fit, and a heartbeat without it clears it (fix-update.ts).
+test('a runner key\'s updateFailed is cut to fit, read by the main key only, and gone once it stops sending it', async () => {
+  const s = await setup();
+  const runner = { runnerId: MINI, name: 'mac-mini', version: 'v', startedAt: '2026-11-19T00:00:00Z', draining: false, threadCount: 1 };
+  const updateFailed = { kind: 'build' as const, commit: 'a'.repeat(40), subject: 's', error: 'x'.repeat(10_000), logFile: '/tmp/update.log' };
+  await call(s.ctx, sync.heartbeat, { key: MINI_KEY, runner: { ...runner, updateFailed } });
+  const rows = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: LAPTOP })) as { runnerId: string; updateFailed?: typeof updateFailed }[];
+  const mini = rows.find((r) => r.runnerId === MINI);
+  assert.equal(mini?.updateFailed?.commit, updateFailed.commit);
+  assert.ok(Buffer.byteLength(mini!.updateFailed!.error) <= 2400);
+  assert.notEqual(await outcome(call(s.ctx, sync.otherRunnersList, { key: MINI_KEY, runnerId: MINI })), 'ok');
+  await call(s.ctx, sync.heartbeat, { key: MINI_KEY, runner });
+  const after = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: LAPTOP })) as { runnerId: string; updateFailed?: unknown }[];
+  assert.equal(after.find((r) => r.runnerId === MINI)?.updateFailed, undefined);
+});

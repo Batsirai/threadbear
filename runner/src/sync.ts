@@ -54,6 +54,7 @@ import { cutSafely } from './safe-cut.ts';
 import { siteOf } from './convex-admin.ts';
 import { withNetworkCause } from './network-cause.ts';
 import { credentialUrlProblem } from './secure-url.ts';
+import type { FailedRunner, RemoteFailure, UpdateFailure } from './fix-update.ts';
 // How soon what the backend left out of a closed thread id goes again.
 const CLOSED_RETRY_MS = 30_000;
 // A `call` for files.list answers with at most this many entries (the backend keeps it a day).
@@ -157,7 +158,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 90;
+export const BACKEND_API_VERSION = 91;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -359,6 +360,18 @@ export const RUNNER_STATS_API_VERSION = 45;
 // From this one a heartbeat can carry `followProblem` (follow-origin.ts); an
 // older backend's validator would turn the heartbeat down.
 export const FOLLOW_PROBLEM_API_VERSION = 67;
+// From this one a heartbeat can carry `updateFailed`, a following machine's
+// failed update for the main Mac to fix (fix-update.ts), and the main key
+// reads it with the other runners' rows. An older backend's validator would
+// turn the heartbeat down, so there the machine hands the fix over itself.
+export const UPDATE_FAILED_API_VERSION = 91;
+// A failed update counts while its runner was heard from this recently.
+const FAILED_ONLINE_MS = 3 * 60_000;
+
+function failedLine(f: RemoteFailure): string {
+  const commit = typeof f.commit === 'string' && /^[0-9a-f]{40}$/.test(f.commit) ? ` at ${f.commit.slice(0, 9)}` : '';
+  return `couldn't update to main${commit}`;
+}
 // The done card's loose ends (docs/protocol.md, "Loose ends") on a thread
 // row, for the phone's done card. An older backend's validator would turn
 // the row down, so it goes without.
@@ -710,6 +723,9 @@ export type SyncDeps = {
   // What this machine has to say about following GitHub's main, for the
   // heartbeat (update.ts, status().followProblem).
   followProblem?: () => string | undefined;
+  // This following machine's failed update, for the main Mac to fix
+  // (fix-update.ts reported()).
+  updateFailed?: () => UpdateFailure | undefined;
   // For the sidebar table (thread-index.ts): telling the app about other
   // runners' threads, and the data dir their tokens are copied into.
   publish?: (n: Notification) => void;
@@ -4104,6 +4120,18 @@ export class ConvexSync {
     // Git's errors and commit subjects, so through the scrubber like the rest.
     const problem = (this.backendApiVersion ?? 0) >= FOLLOW_PROBLEM_API_VERSION ? this.deps.followProblem?.() : undefined;
     const followProblem = problem ? { followProblem: this.scrubber.safeText(problem) } : {};
+    const failure = this.reportsUpdates() ? this.deps.updateFailed?.() : undefined;
+    const updateFailed = failure
+      ? {
+          updateFailed: {
+            kind: failure.kind,
+            commit: failure.commit,
+            subject: this.scrubber.safeText(failure.subject).slice(0, 300),
+            error: this.scrubber.safeText(failure.error).slice(0, 2000),
+            logFile: this.scrubber.safeText(failure.logFile).slice(0, 300),
+          },
+        }
+      : {};
     const runner = {
       runnerId: this.runnerId,
       name: this.name,
@@ -4115,6 +4143,7 @@ export class ConvexSync {
       ...(this.deps.config.icon && (this.backendApiVersion ?? 0) >= RUNNER_ICON_API_VERSION ? { icon: this.deps.config.icon } : {}),
       ...(this.stats?.pressure && (this.backendApiVersion ?? 0) >= RUNNER_STATS_API_VERSION ? { pressure: this.stats.pressure } : {}),
       ...followProblem,
+      ...updateFailed,
       // A box's machine (boxes.ts exchange's machineId): a box's backend is
       // always new enough, and only a box sends it.
       ...(this.deps.box?.machineId ? { machineId: this.deps.box.machineId } : {}),
@@ -4338,9 +4367,50 @@ export class ConvexSync {
     return this.index?.heard() ?? false;
   }
 
-  /** Runners online now that say they aren't following GitHub's main properly. */
+  /** Runners online now that say they aren't following GitHub's main properly, or couldn't update to it. */
   behindRunners(): { name: string; problem: string }[] {
-    return (this.index?.current().runners ?? []).flatMap((r) => (r.online && r.followProblem ? [{ name: r.name, problem: r.followProblem }] : []));
+    const failed = new Map(this.failedSeen.map((r) => [r.id, r.failure]));
+    const out = (this.index?.current().runners ?? []).flatMap((r) => {
+      const problem = [r.followProblem, failed.has(r.id) ? failedLine(failed.get(r.id)!) : undefined].filter(Boolean).join('; ');
+      failed.delete(r.id);
+      return r.online && problem ? [{ name: r.name, problem }] : [];
+    });
+    // Without an app connected the index isn't watched, but the reads below go on.
+    for (const r of this.failedSeen) if (failed.has(r.id)) out.push({ name: r.name, problem: failedLine(r.failure) });
+    return out;
+  }
+
+  // The last readFailedRunners() answer.
+  private failedSeen: FailedRunner[] = [];
+
+  /**
+   * On the main Mac's key: the runners heard from in the last 3 minutes
+   * whose update to main failed (fix-update.ts), and those heard from that
+   * aren't failing. Read on a timer of its own
+   * rather than from the index, which is watched only while an app is
+   * connected. Undefined when it can't be read (another key, an older
+   * backend, the read failing).
+   */
+  async readFailedRunners(): Promise<{ failed: FailedRunner[]; through: string[] } | undefined> {
+    if (!this.ownerKey() || (this.backendApiVersion ?? 0) < UPDATE_FAILED_API_VERSION) return undefined;
+    try {
+      const rows = (await this.post('query', 'sync:otherRunnersList', { key: this.deps.key, runnerId: this.runnerId })) as { runnerId?: unknown; name?: unknown; lastSeenAt?: unknown; updateFailed?: RemoteFailure }[] | null;
+      const now = this.deps.clock.now();
+      const online = (rows ?? []).filter((r) => typeof r.runnerId === 'string' && typeof r.name === 'string' && typeof r.lastSeenAt === 'number' && now - r.lastSeenAt < FAILED_ONLINE_MS);
+      this.failedSeen = online.flatMap((r) => (r.updateFailed && typeof r.updateFailed === 'object' ? [{ id: r.runnerId as string, name: r.name as string, failure: r.updateFailed }] : []));
+      // Heard from and not failing: got through. One not heard from is
+      // neither, so a short outage doesn't count as getting through.
+      return { failed: this.failedSeen, through: online.filter((r) => !r.updateFailed).map((r) => r.runnerId as string) };
+    } catch (e) {
+      this.deps.log.debug('could not read the other runners for failed updates', { error: String(e) });
+      return undefined;
+    }
+  }
+
+  // A following machine on a runner key, with a backend that takes
+  // updateFailed: it reports a failed update rather than handing it over.
+  reportsUpdates(): boolean {
+    return !this.ownerKey() && Boolean(this.deps.key) && (this.backendApiVersion ?? 0) >= UPDATE_FAILED_API_VERSION;
   }
 
   /** remoteThreads.list: other runners' threads, empty with sync off. */

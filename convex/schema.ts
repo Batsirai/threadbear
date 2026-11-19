@@ -214,6 +214,15 @@ export const threadFields = {
 // phone and the Mac app agree: "inbox", "hibernating" (snoozed) or "den"
 // (archived). A starred thread that's snoozed stays in "inbox", as Starred
 // is at the top of the phone's inbox.
+// A following runner's failed update to main, in its heartbeat (API 91).
+export const updateFailedValidator = v.object({
+  kind: v.union(v.literal('build'), v.literal('backend')),
+  commit: v.string(),
+  subject: v.string(),
+  error: v.string(),
+  logFile: v.string(),
+});
+
 export const views = ['inbox', 'hibernating', 'den'] as const;
 
 // A move's states, in order (docs/protocol.md, "Moving a thread to another runner").
@@ -249,6 +258,10 @@ export const appSchema = defineSchema({
     // runner/src/follow-origin.ts): why, in a sentence or two, for the main
     // Mac's Updates panel and the canary.
     followProblem: v.optional(v.string()),
+    // Set while this following runner's update to main has failed (API 91,
+    // runner/src/fix-update.ts): the main Mac's runner starts the fix thread
+    // there, rather than this runner asking it to on a card.
+    updateFailed: v.optional(updateFailedValidator),
     // Its active schedules have been copied to scheduleWakes (API 45), once.
     wakesSeeded: v.optional(v.boolean()),
     // How a Mac app reaches this runner to open one of its threads (API 12):
@@ -1230,7 +1243,7 @@ export const appSchema = defineSchema({
     // API 20: what the phone's new thread pickers offer.
     models: v.optional(v.array(v.object({ id: v.string(), title: v.string(), effortLevels: v.optional(v.array(v.string())), defaultEffort: v.optional(v.string()) }))),
     defaultEffort: v.optional(v.string()),
-    // API 90: a Claude login's sign-in, for the Mac's Runners panel.
+    // API 91: a Claude login's sign-in, for the Mac's Runners panel.
     loginEndsAt: v.optional(v.string()),
     signedOut: v.optional(v.boolean()),
     yearToken: v.optional(v.object({ madeAt: v.optional(v.string()) })),
