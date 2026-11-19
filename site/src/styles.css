@@ -273,6 +273,9 @@ a.appstore:active { transform: scale(.98); }
 .hero { max-width: 1240px; margin: 0 auto; padding: var(--s-500) var(--s-300) 0; text-align: center; }
 .hero-title { font-size: 60px; line-height: 60px; font-weight: 600; letter-spacing: -.035em; }
 .hero-sub { font-size: 18px; line-height: 28px; color: var(--body); max-width: 700px; margin: var(--s-100) auto 0; }
+/* Each agent named in the hero line carries its logo, in the ink colour, sized to the text. */
+.agent { white-space: nowrap; }
+.agent .icon { display: inline-block; width: 0.95em; height: 0.95em; vertical-align: -0.12em; margin-right: 0.22em; color: var(--ink); }
 .hero-cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: var(--s-100) var(--s-300); margin-top: var(--s-300); }
 .risk { margin-top: var(--s-100); font-size: 14px; line-height: 20px; font-weight: 500; color: var(--ink-soft); }
 /* The platforms, as logos with "Free" under them (build.mjs platforms()). */

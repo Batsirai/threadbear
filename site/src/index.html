@@ -1,4 +1,4 @@
-<!--page {"title": "Threadbear · Get to your next decision fast", "description": "Threadbear is a desktop app (Mac, Windows and Linux) for running Claude Code and Codex threads on the subscriptions you already have, with iPhone and Android apps, a link for every thread, and the whole source to change however you like.", "path": "/"} -->
+<!--page {"title": "Threadbear · Get to your next decision fast", "description": "Threadbear is a desktop app (Mac, Windows and Linux) for running Claude Code, Codex, Grok, Cursor and OpenCode threads on the subscriptions you already have, with iPhone and Android apps, a link for every thread, and the whole source to change however you like.", "path": "/"} -->
 <!-- Every claim here is checked against the repo (AGENTS.md, docs/guide.md, docs/protocol.md,
      docs/convex-backend.md, docs/website.md, ios/README.md). Anything the page describes that
      isn't built yet has a "NOT BUILT" comment right beside it. Search for NOT BUILT and change
@@ -15,11 +15,13 @@
     <section class="hero" aria-labelledby="hero-title">
       <!-- Mike picked this from four on 19 Nov (~/dev/me/misc/threadbear-hero-options): decisions
            first, from his launch video, with "you can patch it" moved into the line below. It was
-           "The agent app you can patch yourself". -->
+           "The agent app you can patch yourself". On 20 Nov he had all five agents named here, each
+           with its logo inside the sentence (picked over a logo row and chips; the logos are the
+           desktop app's, LobeHub's icons, in src/icons/agent-*.svg). -->
       <div class="hero-top">
       <div class="hero-copy">
       <h1 id="hero-title" class="hero-title">Get to your next decision <span class="fast">fast</span></h1>
-      <p class="hero-sub">An app for running all your Claude Code and Codex threads, where each one says just what it needs from you. You also get all the source, so you (or more likely your agent) can patch anything you like.</p>
+      <p class="hero-sub">An app for running all your <span class="agent">{{icon agent-claude}}Claude Code</span>, <span class="agent">{{icon agent-codex}}Codex</span>, <span class="agent">{{icon agent-grok}}Grok</span>, <span class="agent">{{icon agent-cursor}}Cursor</span> and <span class="agent">{{icon agent-opencode}}OpenCode</span> threads, where each one says just what it needs from you. You also get all the source, so you (or more likely your agent) can patch anything you like.</p>
       <!-- Installing is a prompt for your own agent, so the hero gives you that rather than a
            Fork button (Mike, 5 Nov). The prompt itself is printed once, in #get. Mike took the
            "See the prompt" link beside it out on 17 Nov. -->
