@@ -271,6 +271,9 @@ export const handoversPart = {
       else if (rec.queue.length && this.bucket(rec) === 'inbox') {
         this.kickQueue(st);
       }
+      // Finished there, and let go before the guess at whether Mike needed
+      // to see it was made (runner/inbox-guess.ts).
+      this.catchUpInboxGuess(st);
     } catch (e) {
       this.recoveryFailed(st, e);
     }

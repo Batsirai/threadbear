@@ -15,8 +15,8 @@ Meanwhile, each time one of your own threads finishes with nothing for you, two 
 
 ## Lives in
 
-`runner/src/runner/inbox-guess.ts`, called from `completeTurn` and `update` in `runner/src/runner.ts`; the two verdicts `didntNeedToSee` and `gladISaw` (`runner/src/protocol.ts`); the Archive menu in `desktop/gpui/src/composer_card.rs` and `MenuAction::ArchiveAs` (`desktop/gpui/src/sidebar.rs`)
+`runner/src/runner/inbox-guess.ts`, called from `completeTurn`, `start` and `update` in `runner/src/runner.ts` and from `adopt` in `runner/src/runner/handovers.ts`; the two verdicts `didntNeedToSee` and `gladISaw` (`runner/src/protocol.ts`); the Archive menu in `desktop/gpui/src/composer_card.rs` and `MenuAction::ArchiveAs` (`desktop/gpui/src/sidebar.rs`)
 
 ## Taking it out
 
-Delete `runner/src/runner/inbox-guess.ts`, its two calls in `runner.ts` and its part in the `Runner` interface and the parts list, `inboxGuess` on the thread record (`store.ts`), the two verdicts and their notes, and in the desktop app `inbox_guess_on`, `open_archive_menu` and `MenuAction::ArchiveAs`, so Archive is a plain button again.
+Delete `runner/src/runner/inbox-guess.ts`, its three calls in `runner.ts`, the one in `handovers.ts`, and its part in the `Runner` interface and the parts list, `inboxGuess` on the thread record (`store.ts`), the two verdicts and their notes, and in the desktop app `inbox_guess_on`, `open_archive_menu` and `MenuAction::ArchiveAs`, so Archive is a plain button again.

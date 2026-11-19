@@ -4092,19 +4092,33 @@ a reply is often the thing he asked for and hiding one of those is the
 expensive mistake. This collects what's needed to tell the two apart
 before anything acts on it. It archives nothing and shows nowhere.
 
-**The guess.** When a turn finishes for good as in A quiet inbox, and the
-thread isn't a helper nobody's touched, the runner makes a guess for its
-done card (`seq`, the turn's `needs` event, as loose ends use): `skip`
-(it could have gone straight to Archived) or not. A turn with `next`
-follow-ups, or with any loose end (a booked check-in counts), is never a
-skip, by rule, and no model is asked. Otherwise `models.generate` is
-asked twice, Haiku and (`strong`) Opus, with `GUESS_SYSTEM` and the
+**The guess.** When a turn finishes for good as in A quiet inbox, the
+runner makes a guess for its done card (`seq`, the turn's `needs` event,
+as loose ends use): `skip` (it could have gone straight to Archived) or
+not. A turn with `next` follow-ups, or with any loose end (a booked
+check-in counts), is never a skip, by rule, and no model is asked. A
+helper nobody's touched gets only that rule's guess, when it stays in
+the inbox; one that finishes clean archives itself and has none, and nor
+does another lab's review. Otherwise `models.generate` is asked twice, Haiku and (`strong`) Opus, with `GUESS_SYSTEM` and the
 thread's title, who started it, Mike's latest message, any newer message
 that isn't his, and the reply (each clipped, as data between tagged
 lines). A model that can't run (no pool, a private folder, no room) or
 gives no clear answer has no guess. The guesses are kept on the thread's
 record as `inboxGuess: { seq, guesses: [{ by, skip, why }] }` (`by` is the
 model's id, or `"rule"`), which no summary carries.
+
+**A guess lost with its runner.** A guess takes a few seconds, and a
+runner handing over lets a thread go half a second after its turn ends,
+so the guess being made there is dropped (seven of Mike's first sixteen
+answers had none beside them, 19 Nov 2026). The runner that takes the
+thread on makes it instead (`catchUpInboxGuess`): as it adopts a thread
+that is `finished` with a done card and no guess for it, and at start for
+such a thread that finished within the last hour (`GUESS_CATCH_UP_MS`;
+not every finished thread in the inbox, which would be a model call each
+at every start). The follow-ups come from the card's `turn.completed` and
+the reply from the turn's last text. A runner that stopped between
+writing a guess and saving the thread leaves two lines for one card; the
+later one counts.
 
 **The label.** While the experiment is on, the GPUI app's done card
 Archive opens a menu for a thread on its own runner, "Didn't need this"

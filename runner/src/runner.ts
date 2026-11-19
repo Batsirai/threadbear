@@ -166,7 +166,7 @@ import { newThreadsPart, type NewThreadsPart } from './runner/new-threads.ts';
 import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, ledgerCard, openFindings, parseVerdict, type LabReviewPart } from './runner/lab-review.ts';
 import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
-import { inboxGuessPart, type InboxGuessPart } from './runner/inbox-guess.ts';
+import { GUESS_CATCH_UP_MS, inboxGuessPart, type InboxGuessPart } from './runner/inbox-guess.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
 import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
@@ -986,6 +986,9 @@ export class Runner {
     this.seedPatchTrust(records.map((r) => r.cwd));
     this.flush();
     void this.settleLostCleanups();
+    // A guess the last runner was still making when it stopped or let a
+    // thread go (runner/inbox-guess.ts); it catches its own errors.
+    for (const st of this.threads.values()) this.catchUpInboxGuess(st, GUESS_CATCH_UP_MS);
     for (const st of this.threads.values()) {
       try {
         if (st.rec.queue.some(q => q.reviewId) && this.bucket(st.rec) === 'inbox') this.kickQueue(st);
