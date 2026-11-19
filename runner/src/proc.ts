@@ -36,6 +36,11 @@ type Entry = { pid: number; command: string; startedAt: string; lstart?: string;
 // started later, as it can only be one that got the CLI's pid after the CLI
 // went (Codex's second review: checked after assigning, it was too late to
 // take the process out of the job).
+// How far past now a CLI's start may read and still be the CLI. Small: a
+// process that got the CLI's pid would have to start this soon after the
+// CLI did, and the pid can't be reused while the runner still holds the
+// child, which it does until it has seen it exit.
+const NOT_AFTER_SLACK_MS = 100n;
 export type JobControl = { assign(pid: number, name: string, notAfter: string): Promise<string>; end(name: string): Promise<unknown>; forget(name: string): Promise<unknown> };
 
 export const helperJobs: JobControl = {
@@ -135,10 +140,12 @@ export class ProcessRegistry {
     // The CLI started before now, and its pid can't have gone to anything
     // else yet: the runner holds the child until it has seen it exit, which
     // can't happen before this returns. So anything with that pid that
-    // started after now isn't it (no slack: Codex's third review). Now is
-    // rounded up to the next millisecond, as Date.now() rounds down and the
-    // CLI can have started earlier in the same one.
-    const notAfter = ((BigInt(Date.now()) + 1n + FILETIME_AT_UNIX_EPOCH_MS) * 10_000n).toString();
+    // started after now isn't it (Codex's third review). Now goes forward by
+    // NOT_AFTER_SLACK_MS, as node's clock isn't the one Windows stamps a
+    // process's start with: on the Windows box a CLI that started before
+    // Date.now() was read was stamped up to 1.2 ms after it, and its job was
+    // refused about half the time (19 Nov).
+    const notAfter = ((BigInt(Date.now()) + NOT_AFTER_SLACK_MS + FILETIME_AT_UNIX_EPOCH_MS) * 10_000n).toString();
     const assigned = job ? this.jobs!.assign(pid, job, notAfter) : undefined;
     // Taken before the probe, which can take a while: the process was started
     // moments ago, so on Windows this stands in for its start time if

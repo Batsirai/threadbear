@@ -125,7 +125,7 @@ test('a CLI that exits before the helper has answered has its job ended once it 
     const l = processInfo(cli.pid!)?.lstart ?? '';
     reg.remove(cli.pid!);
     answer(/^\d+$/.test(l) ? l : '1');
-    await tick();
+    await until(() => calls.length > 0);
     assert.equal(calls.length, 1);
   } finally {
     cli.kill();
@@ -211,11 +211,42 @@ test("the helper is told the latest start the CLI can have, and an answer after 
     reg.add(cli.pid!, 'claude', 'th1');
     const now = (BigInt(Date.now()) + 11_644_473_600_000n) * 10_000n;
     assert.ok(/^\d+$/.test(seen[0]!) && BigInt(seen[0]!) >= now - 10_000_000n && BigInt(seen[0]!) <= now + 10_000_000n, 'about now, as a FILETIME');
-    await tick();
+    await until(() => calls.length > 0);
     assert.match(calls[0] ?? '', /^forget /);
     reg.remove(cli.pid!);
     await tick();
     assert.ok(!calls.some((c) => c.startsWith('end')));
+  } finally {
+    cli.kill();
+  }
+});
+
+// Windows stamped CLIs up to 1.2 ms after node's Date.now() from just after
+// they were spawned, and their jobs were refused (19 Nov).
+test("a CLI stamped a little after node's now is still the CLI: Windows' clock isn't node's", async () => {
+  let notAfter = '';
+  let created = '';
+  const calls: string[] = [];
+  const reg = new ProcessRegistry(tmpDir(), nullLogger);
+  reg.jobs = {
+    assign: async (_pid, _name, n) => {
+      notAfter = n;
+      // 2 ms after node's now as the runner asks.
+      created = ((BigInt(Date.now()) + 2n + 11_644_473_600_000n) * 10_000n).toString();
+      return created;
+    },
+    end: async (n) => void calls.push(`end ${n}`),
+    forget: async (n) => void calls.push(`forget ${n}`),
+  };
+  const cli = sleeper();
+  try {
+    reg.add(cli.pid!, 'claude', 'th1');
+    (reg as unknown as { entries: Map<number, { lstart?: string }> }).entries.get(cli.pid!)!.lstart = created;
+    assert.ok(BigInt(created) <= BigInt(notAfter), 'the helper takes it too');
+    await tick();
+    reg.remove(cli.pid!);
+    await until(() => calls.length > 0);
+    assert.match(calls[0] ?? '', /^end /);
   } finally {
     cli.kill();
   }
