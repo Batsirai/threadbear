@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Full page screenshots of the built site for review, desktop (1440 wide), a big monitor (2560
 // wide) and phone (390 wide), into site/review/ (gitignored). The big one is there because the
-// hero was first laid out for a laptop and sat as a small island on Mike's large screen (19 Nov). Serve it first (`npm run serve`), then `npm run shots`.
+// hero was first laid out for a laptop, then grew far too big on Mike's large screen (19 Nov). Serve it first (`npm run serve`), then `npm run shots`.
 // Playwright comes from wherever it's installed (PLAYWRIGHT_DIR, see loadPlaywright), so the
 // site itself has no dependencies.
 //

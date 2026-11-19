@@ -625,14 +625,16 @@ a.video-card:hover .video-play { scale: 1.06; }
    above the other said the same thing).
 
    On wide screens everything in it is a multiple of --hu, a length that's 1px on a 1440 by 900
-   screen and grows with the screen, up to 2px, so a big monitor gets the same picture bigger
-   and not a small island in an empty screen (Mike, 19 Nov: "you've got to think about really
-   large screens too"). It's the smaller of the width's share and the height's, so the hero
-   always fits the first screen. That makes the hero's type fluid, the one place off the type
-   scale. Text stops shrinking at its 1440 size; only the headline and the spacing go smaller. */
+   screen and grows with the screen, so a big monitor gets the same picture a bit bigger and
+   not a laptop-sized island (Mike, 19 Nov: "you've got to think about really large screens
+   too"). It stops at 1.25px: at 1.8 times on his big monitor it felt "way too big", "it should
+   have like a maximum size". It's the smaller of the width's share and the height's, so the
+   hero always fits the first screen. That makes the hero's type fluid, the one place off the
+   type scale. Text stops shrinking at its 1440 size; only the headline and the spacing go
+   smaller. */
 .js .hero-top { min-height: calc(100svh - 104px); display: flex; flex-direction: column; justify-content: center; padding-bottom: var(--s-400); }
 @media (min-width: 1081px) {
-  .js .hero { --hu: clamp(.8334px, min(100vw / 1440, (100svh - 104px) / 640), 2px); max-width: none; }
+  .js .hero { --hu: clamp(.8334px, min(100vw / 1440, (100svh - 104px) / 640), 1.25px); max-width: none; }
   .js .hero-top {
     display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 7fr); gap: calc(64 * var(--hu));
     align-items: center; max-width: calc(1240 * var(--hu)); margin: 0 auto; text-align: left;
@@ -650,8 +652,8 @@ a.video-card:hover .video-play { scale: 1.06; }
   .js .hero-top .platform-logos { gap: max(16px, 16 * var(--hu)); }
   .js .hero-top .platform svg { width: max(22px, 22 * var(--hu)); height: max(22px, 22 * var(--hu)); }
   .js .hero-top .risk { font-size: max(14px, 14 * var(--hu)); line-height: 1.4286; }
-  /* The player under it grows too, as far as its clips stay sharp (they're 1600 wide). */
-  .js .player { max-width: clamp(1120px, 1120 * var(--hu), 1720px); grid-template-columns: clamp(292px, 250 * var(--hu), 360px) minmax(0, 1fr); }
+  /* The player under it grows by the same share, so it doesn't look small after the hero. */
+  .js .player { max-width: max(1120px, 1120 * var(--hu)); grid-template-columns: max(292px, 250 * var(--hu)) minmax(0, 1fr); }
 }
 /* Full width: it sizes to its container (container-type), so in the hero's flex column it'd
    otherwise shrink to nothing. */

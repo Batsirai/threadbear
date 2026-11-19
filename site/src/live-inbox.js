@@ -269,6 +269,8 @@
       await wait(120);
     }
     const card = make("ld-card", cardHTML(t));
+    // Out of sight until it rises: for those 40 ms it sat in place, over the card still leaving.
+    card.style.transform = "translateY(100%)";
     cardArea.append(card);
     await wait(40);
     await go(card, { transform: "translateY(100%)", opacity: 0.4 }, { transform: "none", opacity: 1 }, RISE);
