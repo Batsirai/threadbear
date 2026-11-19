@@ -77,20 +77,23 @@ export const rearmTimer = machines.internalMutation({
 });
 
 /**
- * Delivers again every timer whose job failed: the deploy runs it after a
- * stepping stone (stepping.ts), as a timer due while its machine was off
- * found nobody to deliver it to. One that fails again for a bug of its own
- * stays failed. `npx convex run machines:rearmFailed`
+ * Delivers again the timers whose job failed, a page of scheduled jobs a
+ * run: the deploy runs it after a stepping stone (stepping.ts), as a timer
+ * due while its machine was off found nobody to deliver it to, passing back
+ * the cursor it returns until it returns null (a string, as `convex run`
+ * prints an object over several lines). One that fails again for a bug of
+ * its own stays failed. A page, as Convex keeps a week of scheduled jobs with no index on
+ * their state, and reading them all in one function went past its 4,096
+ * reads (19 Nov 2026). 500 jobs a page leaves room for each failed one's
+ * row and its rearm. `npx convex run machines:rearmFailed`
  */
 export const rearmFailed = machines.internalMutation({
-  args: {},
-  returns: v.number(),
-  handler: async (ctx) => {
-    // Failed deliveries newest first, superseded ones included in the count,
-    // so a wide look; the deploy calls this again until it rearms none.
-    const failed = await machines.failedTimers(ctx, { limit: 2000 });
-    for (const t of failed) await machines.rearmTimer(ctx, t);
-    return failed.length;
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { cursor }) => {
+    const r = await machines.failedTimersPage(ctx, { cursor: cursor ?? null, numItems: 500 });
+    for (const t of r.page) await machines.rearmTimer(ctx, t);
+    return r.isDone ? null : r.continueCursor;
   },
 });
 

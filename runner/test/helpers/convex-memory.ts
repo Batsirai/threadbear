@@ -296,8 +296,25 @@ export function memoryBackend(root = CONVEX) {
       get: async (a: string, b?: string) => (b === undefined ? (files.has(a) ? { _id: a } : null) : a === '_scheduled_functions' ? (jobs.get(b) ?? null) : files.has(b) ? { _id: b } : null),
       query: (table: string) => {
         if (table !== '_scheduled_functions') throw new Error(`convex-memory: no system table ${table}`);
-        const list = () => [...jobs.values()];
-        return { order: () => ({ async *[Symbol.asyncIterator]() { yield* list().reverse(); } }), async *[Symbol.asyncIterator]() { yield* list(); } };
+        // Each job counts as a read, as Convex's 4,096 a function count them.
+        const list = (desc: boolean) => (desc ? [...jobs.values()].reverse() : [...jobs.values()]);
+        const over = (desc: boolean) => ({
+          async *[Symbol.asyncIterator]() {
+            for (const j of list(desc)) {
+              read(j as never);
+              yield j;
+            }
+          },
+          // A page in that order, its cursor the last job's id.
+          async paginate({ numItems, cursor }: { numItems: number; cursor: string | null }) {
+            const rest = list(desc);
+            const from = cursor ? rest.findIndex((j) => j._id === cursor) + 1 : 0;
+            const page = rest.slice(from, from + numItems);
+            page.forEach((j) => read(j as never));
+            return { page, isDone: from + page.length >= rest.length, continueCursor: page.at(-1)?._id ?? cursor ?? '' };
+          },
+        });
+        return { order: (d: 'asc' | 'desc') => over(d === 'desc'), ...over(false) };
       },
       // A stored file's id is any name a test gave it (file()), or no table's row; a job's, a scheduled one's.
       normalizeId: (table: string, id: string) => (table === '_storage' ? (files.has(id) || !id.includes(':') ? id : null) : table === '_scheduled_functions' ? (jobs.has(id) ? id : null) : null),
