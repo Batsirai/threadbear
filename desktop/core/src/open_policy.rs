@@ -219,7 +219,8 @@ pub fn is_document(path: &Path) -> bool {
 const CODE_RUNNER_APPS: &[&str] = &[
     "com.apple.terminal", "com.googlecode.iterm2", "org.python.pythonlauncher", "com.apple.installer", "com.apple.shortcuts", "com.apple.jarlauncher",
     "com.apple.automator.automator-application-stub", "com.apple.systempreferences", "com.apple.systemsettings", "com.apple.scripteditor.id.scriptapplet",
-    "net.kovidgoyal.kitty", "dev.warp.warp-stable", "com.mitchellh.ghostty", "io.alacritty", "co.zeit.hyper", "com.github.wez.wezterm", "com.panic.prompt3",
+    "net.kovidgoyal.kitty", "dev.warp.warp-stable", "dev.warp.warp-preview", "com.mitchellh.ghostty", "io.alacritty", "org.alacritty",
+    "org.tabby", "com.raphaelamorim.rio", "dev.commandline.waveterm", "co.zeit.hyper", "com.github.wez.wezterm", "com.panic.prompt3",
 ];
 
 /// Where an app the gate hands a file to may be: the Mac's own folders for
@@ -734,8 +735,10 @@ impl TrustedOpener {
 /// archive brings in files (an app among them), and a script may run in
 /// whatever opens it (Gemini's review, 19 Nov).
 const NEVER_REMEMBERED_EXTENSIONS: &[&str] = &[
-    "alias", "dmg", "iso", "img", "cdr", "sparseimage", "toast", "zip", "xip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "ipa",
-    "py", "pyw", "pyc", "rb", "pl", "php", "lua", "js", "mjs", "cjs", "zsh", "bash", "fish", "csh", "ksh", "tcsh", "applescript", "scpt",
+    "alias", "dmg", "iso", "img", "cdr", "sparseimage", "toast", "zip", "xip", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "zst",
+    "tzst", "lz4", "lzma", "tlz", "cpgz", "cpio", "xar", "cab", "7z", "rar", "ipa", "py", "pyw", "pyc", "pyz", "pyzw", "rb", "pl", "php",
+    "lua", "tcl", "awk", "js", "mjs", "cjs", "zsh", "bash", "fish", "csh", "ksh", "tcsh", "applescript", "scpt", "docm", "dotm", "xlsm",
+    "xltm", "xlam", "pptm", "potm", "ppam",
 ];
 
 /// Apps never given an Always: they open what a file points at, mount or
@@ -743,6 +746,7 @@ const NEVER_REMEMBERED_EXTENSIONS: &[&str] = &[
 const NEVER_REMEMBERED_APPS: &[&str] = &[
     "com.apple.finder", "com.apple.diskimagemounter", "com.apple.archiveutility", "com.apple.scripteditor2", "com.apple.automator",
     "com.apple.installer", "com.apple.shortcuts", "org.python.idle", "com.apple.systemevents", "com.apple.applescriptutility",
+    "cx.c3.theunarchiver", "com.macpaw.site.theunarchiver", "com.aone.keka", "com.macitbetter.betterzip",
 ];
 
 /// Where an app may be for an Always to name it: directly in /Applications,

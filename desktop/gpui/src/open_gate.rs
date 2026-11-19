@@ -393,12 +393,21 @@ fn clicked(url: &str, event: &ClickEvent, origin: Origin, base: &str, cx: &mut A
 /// it can't place opens without asking once Mike has said always open that
 /// kind in that app. `path` is absolute.
 pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
-    match policy::decide_file_trusting(path, origin, &app_for, &crate::reply_links::trusted_openers()) {
+    // A remembered kind counts only while its app is still the Mac's own
+    // choice for that kind, so a file a thread pointed at another app with
+    // its own "open with" never matches one (Codex and Gemini, second round).
+    let trusted: Vec<_> = crate::reply_links::trusted_openers().into_iter().filter(is_default_opener).collect();
+    match policy::decide_file_trusting(path, origin, &app_for, &trusted) {
         FileVerdict::Open { url, look, with, .. } => {
             open_checked(path, &look, &with, &url, cx);
         }
         FileVerdict::Refuse(why) => refuse(why, cx),
-        FileVerdict::Ask { question, url, look, with } => {
+        FileVerdict::Ask { mut question, url, look, with } => {
+            // Always only for the Mac's own app for that kind, never one a
+            // file was pointed at by itself.
+            if !look.trustable.as_ref().is_some_and(is_default_opener) {
+                question.always = None;
+            }
             let path = path.to_owned();
             // What was said yes to, still: not a file swapped in while the
             // question was up (`open_checked` looks again). Always is kept
@@ -412,6 +421,37 @@ pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
             });
         }
     }
+}
+
+/// Whether `kind`'s app is the one this Mac opens that kind of file in by
+/// default: asked about an empty file of that kind in the app's own cache
+/// folder, which nothing in a project can give an "open with" of its own.
+#[cfg(target_os = "macos")]
+fn is_default_opener(kind: &policy::TrustedOpener) -> bool {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSString, NSURL};
+    if kind.extension.is_empty() || !kind.extension.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return false;
+    }
+    let Some(folder) = opened_folder().map(|f| f.join("kinds")) else { return false };
+    if threadbear_core::private_file::dir(&folder).is_err() {
+        return false;
+    }
+    let probe = folder.join(format!("probe.{}", kind.extension));
+    // Made fresh, so no "open with" left on an old one counts.
+    let _ = std::fs::remove_file(&probe);
+    if threadbear_core::private_file::write(&probe, b"").is_err() {
+        return false;
+    }
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&probe.to_string_lossy()));
+    let app = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url);
+    let _ = std::fs::remove_file(&probe);
+    app.and_then(|a| a.path()).and_then(|p| policy::real_path(Path::new(&p.to_string())).ok()).is_some_and(|real| real == kind.app)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_default_opener(_kind: &policy::TrustedOpener) -> bool {
+    false
 }
 
 /// Opens a file `decide_file` checked: only if it's still the same file (its
