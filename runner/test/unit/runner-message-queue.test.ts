@@ -555,7 +555,7 @@ test('the same check report queued on every tick arrives once', () => {
 });
 
 test('a deleted schedule\'s message whose receipt cannot be written stays queued', () => {
-  const { h, thread } = running();
+  const { h, thread, s } = running();
   const a = h.runner.sendScheduled(thread.id, sameReport(), 's1', 't1', h.clock.now(), true);
   const b = h.runner.sendScheduled(thread.id, `${sameReport()}\nmore`, 's1', 't2', h.clock.now(), true);
   const emit = h.runner.emit.bind(h.runner);
@@ -567,6 +567,13 @@ test('a deleted schedule\'s message whose receipt cannot be written stays queued
   assert.throws(() => h.runner.dropScheduled(thread.id, 's1'), /ENOSPC/);
   assert.deepEqual(h.runner.mustGet(thread.id).rec.queue.map(q => q.turnId), [b.turnId]);
   assert.notEqual(a.turnId, b.turnId);
+  // Once the disk has room, it's dropped before the next turn would start,
+  // with no scheduler to ask (a draining runner's has stopped).
+  h.runner.emit = emit;
+  const turns = s.sent.length;
+  s.result();
+  assert.equal(s.sent.length, turns);
+  assert.equal(h.runner.mustGet(thread.id).rec.queue.length, 0);
 });
 
 test('a deleted schedule\'s reminder that comes in late (a handover, a lost reply, a failed receipt) never starts', () => {

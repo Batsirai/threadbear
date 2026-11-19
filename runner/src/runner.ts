@@ -1859,7 +1859,7 @@ export class Runner {
     const messageId = run ? scheduledMessageId(threadId, scheduleId, run) : undefined;
     // Deleted while this was on its way (a handover's fallback, a retry):
     // an idle thread would start it straight away, past prepareQueue.
-    if (this.scheduleDeleted?.(scheduleId)) return { turnId: messageId ?? crypto.randomUUID() };
+    if (this.wasScheduleDeleted(scheduleId)) return { turnId: messageId ?? crypto.randomUUID() };
     const logged = messageId ? this.scheduledMessage(this.mustGet(threadId), messageId, since) : undefined;
     // A partial start retries the original logged input, including its check
     // output, so the model reads exactly what the transcript shows.
@@ -4198,6 +4198,10 @@ export class Runner {
   // A thread busy in a long turn otherwise got every tick's copy after
   // delete_schedule said Deleted (ae88bd2c, 20 Nov). How many it dropped.
   dropScheduled(threadId: string, scheduleId: string): number {
+    // Remembered first, so a receipt that fails now is dropped again before
+    // its turn would start (wasScheduleDeleted), on a draining runner too,
+    // whose own scheduler has stopped.
+    this.droppedSchedules.add(scheduleId);
     const st = this.threads.get(threadId);
     if (!st || st.rt.deleted) return 0;
     const gone = st.rec.queue.filter((q) => isReminder(q) && q.scheduleId === scheduleId);
@@ -4208,7 +4212,10 @@ export class Runner {
     const receipted = new Set<QueuedSend>();
     try {
       for (const q of gone) {
-        this.emit(st, { type: 'system.note', text: DELETED_REMINDER, supersededReminder: q.turnId }, st.rt.turn?.turnId);
+        // One already receipted or started (put back after a failed start)
+        // needs no second note.
+        const known = this.scheduledMessage(st, q.turnId, q.scheduledSince ?? 0);
+        if (!known?.superseded && !known?.started) this.emit(st, { type: 'system.note', text: DELETED_REMINDER, supersededReminder: q.turnId }, st.rt.turn?.turnId);
         receipted.add(q);
       }
     } finally {
@@ -4286,6 +4293,10 @@ export class Runner {
   // they got here: a handover adopting a queue, a retry after a lost reply,
   // a receipt that couldn't be written the first time (ae88bd2c, 20 Nov).
   scheduleDeleted?: (scheduleId: string) => boolean;
+  private droppedSchedules = new Set<string>();
+  private wasScheduleDeleted(scheduleId: string): boolean {
+    return this.droppedSchedules.has(scheduleId) || Boolean(this.scheduleDeleted?.(scheduleId));
+  }
 
   // Repair queues saved by older releases as well as direct queued sends.
   // Keep ordinary messages in order ahead of reminders, and only the latest
@@ -4297,7 +4308,7 @@ export class Runner {
     const seen = new Set<string>();
     const seenText = new Set<string>();
     const superseded = new Set<QueuedSend>();
-    const deleted = new Set(queue.filter(q => isReminder(q) && !receipted.has(q) && q.scheduleId && this.scheduleDeleted?.(q.scheduleId)));
+    const deleted = new Set(queue.filter(q => isReminder(q) && !receipted.has(q) && q.scheduleId && this.wasScheduleDeleted(q.scheduleId)));
     for (let i = queue.length - 1; i >= 0; i--) {
       const q = queue[i];
       // Check output may contain new items already removed from the check's

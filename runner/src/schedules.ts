@@ -493,7 +493,6 @@ export class Scheduler {
       const was = before.get(rec.id);
       if (was && (was.createdAt !== rec.createdAt || was.runnerId !== rec.runnerId)) this.dropKept(rec.id);
       this.items.set(rec.id, rec);
-      this.deleted.delete(rec.id);
       if (!this.names.has(rec.runnerId)) this.namesDue = true;
     }
     // Deleted elsewhere (the phone, the website, another Mac): its
