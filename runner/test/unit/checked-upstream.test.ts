@@ -36,7 +36,7 @@ function setup(t: { after: (f: () => void) => void }) {
   // The remote says Mike's URL, and insteadOf sends its fetches here.
   git(work, 'config', `url.${mikes}.insteadOf`, MIKES);
   git(work, 'remote', 'set-url', 'origin', MIKES);
-  return { work };
+  return { work, mikes };
 }
 
 test("Mike's code as his repo has it leaves the checks out", (t) => {
@@ -62,13 +62,29 @@ test('a commit of your own runs them', (t) => {
   assert.equal(checkedUpstream({ repo: work, mikesRepo: MIKES }).checked, false);
 });
 
-test("a fork: upstream is Mike's, fetched only when nothing is", (t) => {
+test("a fork: upstream is Mike's, fetched when nothing is", (t) => {
   const { work } = setup(t);
   git(work, 'remote', 'rename', 'origin', 'upstream');
   git(work, 'remote', 'add', 'origin', 'https://github.com/someone/threadbear.git');
   for (const ref of git(work, 'for-each-ref', '--format=%(refname)', 'refs/remotes/upstream/').split('\n').filter(Boolean)) git(work, 'update-ref', '-d', ref);
-  assert.equal(checkedUpstream({ repo: work, mikesRepo: MIKES, fetch: false }).checked, false, 'nothing fetched, no fetch');
   assert.deepEqual(checkedUpstream({ repo: work, mikesRepo: MIKES }), { checked: true, remote: 'upstream' });
+});
+
+test("a main of someone else's left under Mike's remote isn't believed", (t) => {
+  const { work } = setup(t);
+  fs.writeFileSync(path.join(work, 'runner', 'd.ts'), 'd\n');
+  git(work, 'add', '.');
+  git(work, 'commit', '-q', '-m', "the fork's");
+  git(work, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  assert.equal(checkedUpstream({ repo: work, mikesRepo: MIKES }).checked, false);
+});
+
+test("a fetch that fails runs them", (t) => {
+  const { work, mikes } = setup(t);
+  fs.rmSync(mikes, { recursive: true, force: true });
+  const r = checkedUpstream({ repo: work, mikesRepo: MIKES });
+  assert.equal(r.checked, false);
+  assert.match(r.why, /couldn't fetch/);
 });
 
 test("no remote of Mike's runs them", (t) => {

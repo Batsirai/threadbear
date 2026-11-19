@@ -71,7 +71,7 @@ set -eu
 echo $$ >>"$HOME/all-launcher.pids"
 id=''
 for ((i=1;i<=$#;i++)); do if [ "\u0024{!i}" = --id ]; then j=$((i+1)); id="\u0024{!j}"; fi; done
-tmp_root="\u0024{TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)}"
+tmp_root="\u0024{TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo "/tmp/threadbear-$(id -u)")}"
 mkdir -p "$tmp_root/threadbear-dev-app"
 state_root="$(cd "$tmp_root/threadbear-dev-app" && pwd -P)"
 dir="$state_root/$id"
@@ -242,11 +242,10 @@ test('Swift TMPDIR fallback matches the launcher even when TMP points elsewhere'
   assert.ok(!fs.existsSync(h.file('ordinary-open')), 'TMP fallback bypassed the app gate');
   // This account's own temp folder, never the shared /tmp: a second account
   // on Tinker Desk couldn't make its instance in the first's (19 Nov).
-  // (A Mac's: Linux has no such folder, and the Swift app is the Mac's.)
-  if (process.platform === 'darwin') {
-    const own = fs.realpathSync(spawnSync('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout.trim());
-    assert.ok(fs.readFileSync(h.file('instance-dir'), 'utf8').startsWith(own + path.sep), 'the fallback left this account\'s temp folder');
-  }
+  // (Linux has no such folder, so there it's /tmp/threadbear-<uid>.)
+  const mac = spawnSync('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' });
+  const own = fs.realpathSync(mac.status === 0 ? mac.stdout.trim() : `/tmp/threadbear-${process.getuid!()}`);
+  assert.ok(fs.readFileSync(h.file('instance-dir'), 'utf8').startsWith(own + path.sep), 'the fallback left this account\'s temp folder');
   const next = h.run({}, h.verify);
   assert.equal(await next.done, 0, next.output);
 });

@@ -13,14 +13,14 @@
 // So they're left out when HEAD is a commit Mike's main has (a remote whose
 // URL is his; not his other branches, like the unlanded cloud/ ones). The release is built from HEAD, never
 // the files as they are (deploy.mjs), so that's the code that runs.
-// Anything else runs them: a commit of their own, or a copy that can't
-// tell (no remote of his, nothing fetched from it and a fetch that fails).
+// His main is fetched fresh for it: a ref already here can be stale, or a
+// fork's main left behind when the remote was pointed at his (Codex's
+// review). Anything else runs them: a commit of their own, or a copy that
+// can't tell (no remote of his, or a fetch that fails).
 //
-//   checkedUpstream({ repo, mikesRepo, fetch })
+//   checkedUpstream({ repo, mikesRepo })
 //     repo       the checkout
 //     mikesRepo  Mike's repo's URL, in any form git takes
-//     fetch      whether to fetch his main when it hasn't been fetched
-//                yet (setup's `git remote add upstream` doesn't fetch)
 //   returns { checked: true, remote } or { checked: false, why }
 import { spawnSync } from 'node:child_process';
 
@@ -32,17 +32,19 @@ function git(repo, args, timeout = 30_000) {
   return { ok: r.status === 0, out: (r.stdout ?? '').trim() };
 }
 
-export function checkedUpstream({ repo, mikesRepo, fetch = true }) {
+export function checkedUpstream({ repo, mikesRepo }) {
   const head = git(repo, ['rev-parse', '--verify', '-q', 'HEAD^{commit}']);
   if (!head.ok) return { checked: false, why: 'no commit checked out' };
   const mikes = repoKey(mikesRepo);
   const remotes = git(repo, ['remote']).out.split('\n').filter(Boolean)
     .filter((name) => { const url = git(repo, ['config', '--get', `remote.${name}.url`]); return url.ok && repoKey(url.out) === mikes; });
   if (!remotes.length) return { checked: false, why: "no remote is Mike's repo" };
+  let fetched = false;
   for (const remote of remotes) {
     const main = `refs/remotes/${remote}/main`;
-    if (fetch && !git(repo, ['rev-parse', '--verify', '-q', main]).ok) git(repo, ['fetch', '--quiet', remote, `+refs/heads/main:${main}`], 120_000);
+    if (!git(repo, ['fetch', '--quiet', '--no-tags', remote, `+refs/heads/main:${main}`], 120_000).ok) continue;
+    fetched = true;
     if (git(repo, ['merge-base', '--is-ancestor', head.out, main]).ok) return { checked: true, remote };
   }
-  return { checked: false, why: "HEAD isn't a commit Mike's repo has" };
+  return { checked: false, why: fetched ? "HEAD isn't a commit Mike's main has" : "couldn't fetch Mike's main" };
 }

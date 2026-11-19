@@ -55,11 +55,11 @@ APP_ROOT="$(cd "$TOOLS_DIR/.." && pwd)"
 # The checkout an instance was built from, and the thread that started it.
 CHECKOUT="$(cd "$APP_ROOT/.." && pwd -P)"
 OWNER_THREAD="${THREADBEAR_THREAD_ID:-}"
-# TMPDIR, else macOS's own temp folder for this account: never a fixed name
-# in the shared /tmp, which another account on the Mac may own already
-# (Tinker Desk's second account couldn't start the app, 19 Nov 2026).
-# features/support/swift.ts finds the same folder.
-TMP_ROOT="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp)}"
+# TMPDIR, else macOS's own temp folder for this account, else one in /tmp
+# with the account's uid in its name: never a name another account on the
+# Mac may own already (Tinker Desk's second account couldn't start the app,
+# 19 Nov 2026). features/support/swift.ts finds the same folder.
+TMP_ROOT="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo "/tmp/threadbear-$(id -u)")}"
 mkdir -p "${TMP_ROOT%/}/threadbear-dev-app"
 # With symlinks resolved (/var is /private/var): it's how the app's own
 # path reads in ps and pgrep.

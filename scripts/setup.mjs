@@ -1006,8 +1006,9 @@ function install() {
   const env = { ...process.env, THREADBEAR_NODE: process.execPath };
   const homeArgs = path.resolve(home) === DEFAULT_HOME ? [] : ['--home', home];
   const checked = v['run-checks'] ? { checked: false, why: '--run-checks' } : checkedUpstream({ repo, mikesRepo: MIKES_REPO });
-  if (checked.checked) note(`Leaving out the runner's unit tests: this is Mike's code as ${checked.remote} has it, and they passed there (--run-checks runs them anyway)`);
-  else note(`Running the runner's unit tests (${checked.why}); they can take up to an hour`);
+  // Only said for a release it builds: one already built from HEAD is kept as it is.
+  if (checked.checked) note(`A new release leaves out the runner's unit tests: this is Mike's code as his main on ${checked.remote} has it, and they passed there (--run-checks runs them anyway)`);
+  else note(`A new release runs the runner's unit tests first (${checked.why}); they can take up to an hour`);
   const skipChecks = checked.checked ? ['--skip-checks'] : [];
   runOrFail('Installing the runner', 'bash', [path.join(repo, 'runner', 'scripts', 'install-runner.sh'), ...homeArgs, ...skipChecks], { env });
   // A Mac joining a Threadbear you already use: you know your way round,

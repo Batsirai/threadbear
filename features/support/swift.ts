@@ -13,7 +13,8 @@ const script = path.join(root, 'app/Tools/dev-app.sh');
 let instances = 0;
 
 // dev-app.sh's instance folders: under TMPDIR, else macOS's temp folder for
-// this account (getconf), as the script picks it. Never the shared /tmp,
+// this account (getconf), else /tmp/threadbear-<uid>, as the script picks
+// it. Never a name in the shared /tmp anyone could own,
 // where another account's folder of the same name stopped the tests
 // (Tinker Desk, 19 Nov 2026).
 function stateRoot(): string {
@@ -21,7 +22,7 @@ function stateRoot(): string {
   if (!tmp) {
     try { tmp = execFileSync('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).trim(); } catch { tmp = ''; }
   }
-  return path.join(tmp || '/tmp', 'threadbear-dev-app');
+  return path.join(tmp || `/tmp/threadbear-${process.getuid?.() ?? 0}`, 'threadbear-dev-app');
 }
 
 export class SwiftDriver implements Driver {
