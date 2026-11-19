@@ -152,23 +152,35 @@ Feature: The Updates panel
 
   # Codex's review of the restart, 12 Nov: a card's own answer, a shell
   # running something or typed in, and where the app comes back to.
+  # A card's own answer goes across a restart in the drafts file, so it
+  # doesn't hold one off: Mike, 19 Nov, "just reboot and then just put the
+  # text back in the box".
   @system.selfupdate @swift-pending
-  Scenario: The next version waits while my own answer to a card isn't sent
+  Scenario: My own answer to a card doesn't hold the next version, and comes back after it
     When the app's next version, def5678, is ready
     And I open the thread "Ship the beta to TestFlight"
+    And I pick answer 1 of ask 1 on the card
+    And I write "not before Friday" as my own answer to ask 2
     Then a restart onto it waits for nothing
-    When I write "not before Friday" as my own answer to ask 1
-    Then a restart onto it waits for the words typed
+    When I wait a moment
+    And the app is quit and opened again
+    And I open the thread "Ship the beta to TestFlight"
+    Then ask 2 on the card is answered "something else: \"not before Friday\""
+    And ask 1 on the card is answered "done"
 
   # Which field, not just "a field": a hold on words typed somewhere sat for
-  # hours on 13 Nov with nobody able to find the box.
+  # hours on 13 Nov with nobody able to find the box. And which thread, with
+  # a way there: on 19 Nov one held it and he couldn't tell whose.
   @system.selfupdate @swift-pending
-  Scenario: The next version names the field it's waiting for
+  Scenario: The next version names the field it's waiting for, and its thread
     When the app's next version, def5678, is ready
     And I open the thread "Ship the beta to TestFlight"
-    And I write "not before Friday" as my own answer to ask 1
-    And I open the Updates panel
-    Then the Updates panel lists "The app's next version (def5678) is ready. It switches in once what you're typing in a card's Something else box is sent, saved or cleared, or now."
+    And I start renaming the open thread
+    And I type "Beta on Friday" where the cursor is
+    Then a restart onto it waits for the words typed
+    When I open the Updates panel
+    Then the Updates panel lists "The app's next version (def5678) is ready. It switches in once what you're typing in the title box in “Ship the beta to TestFlight” is sent, saved or cleared, or now."
+    And the Updates panel lists "  > Ship the beta to TestFlight"
 
   # Windows has no foreground-process check for ConPTY yet. Every live shell
   # holds a restart, as it could be running a command the app cannot see.

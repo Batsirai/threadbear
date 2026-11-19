@@ -73,6 +73,9 @@ pub(crate) struct AppUpdater {
     /// What the staged build's restart waits on, as the Updates panel says
     /// it, set at each once-a-second look (`consider_auto_restart`).
     pub(crate) wait: Option<rules::RestartWait>,
+    /// The thread whose box holds it, for the Updates panel's button that
+    /// opens it.
+    pub(crate) hold_thread: Option<String>,
     /// The same hold since when, and whether the log has it: one that lasts
     /// a minute goes in the log once, so a restart that never came says why.
     held_since: Option<(String, std::time::Instant, bool)>,
@@ -569,12 +572,14 @@ impl Threadbear {
 
     /// Words or pictures in a message box (one still being copied in too), a
     /// schedule editor open, or words in any other field that aren't saved
-    /// anywhere yet (unsent.rs: a card's Something else, a project's goals
+    /// anywhere yet (unsent.rs: a project's goals
     /// being edited, a new title, a secret): the Swift app doesn't restart
     /// under the first two (`hasDrafts`), as Mike may be halfway through.
     fn has_unsent_words(&self, cx: &App) -> bool {
         let boxes = self.composers.values().chain(self.new_thread.composer.iter());
-        boxes.into_iter().any(|c| c.read(cx).holds_anything(cx)) || self.schedule_editor.is_some() || crate::unsent::any(cx)
+        // A card's boxes go across in the drafts file, but not a picture
+        // still being copied into one.
+        boxes.into_iter().any(|c| c.read(cx).holds_anything(cx) || c.read(cx).copying_picture(cx)) || self.schedule_editor.is_some() || crate::unsent::any(cx)
     }
 
     /// Something of the app's own under way that a restart would cut off: a
@@ -600,20 +605,33 @@ impl Threadbear {
     /// What holds a restart, as the end of "It switches in once ...", for
     /// the Updates panel and the log: the first of `has_unsent_words`,
     /// `under_way` and the windows' that holds, with the thread whose
-    /// message box has words in it named, as that's the one he can't see.
-    fn restart_hold(&self, windows: WindowsNow, cx: &App) -> String {
-        let s = |text: &str| text.to_owned();
+    /// message box (or card's box) has words in it named, as that's the one
+    /// he can't see, and its id for the panel's button that opens it.
+    fn restart_hold(&self, windows: WindowsNow, cx: &App) -> (String, Option<String>) {
         if let Some((id, _)) = self.composers.iter().find(|(_, c)| c.read(cx).holds_anything(cx)) {
-            return format!("the message box in “{}” is sent or cleared", self.thread_title(id));
+            return (format!("the message box in “{}” is sent or cleared", self.thread_title(id)), Some(id.clone()));
         }
+        if let Some((id, _)) = self.composers.iter().find(|(_, c)| c.read(cx).copying_picture(cx)) {
+            return (format!("the picture being copied into the card in “{}” is in", self.thread_title(id)), Some(id.clone()));
+        }
+        if let Some((field, thread)) = crate::unsent::first(cx) {
+            let field = match &thread {
+                Some(id) => format!("{field} in “{}”", self.thread_title(id)),
+                None => field,
+            };
+            return (format!("what you're typing in {field} is sent, saved or cleared"), thread);
+        }
+        (self.restart_hold_elsewhere(windows, cx), None)
+    }
+
+    /// `restart_hold` for the holds that aren't on a thread.
+    fn restart_hold_elsewhere(&self, windows: WindowsNow, cx: &App) -> String {
+        let s = |text: &str| text.to_owned();
         if self.new_thread.composer.as_ref().is_some_and(|c| c.read(cx).holds_anything(cx)) {
             return s("the new thread's message box is sent or cleared");
         }
         if self.schedule_editor.is_some() {
             return s("the schedule you're editing is saved or closed");
-        }
-        if let Some(field) = crate::unsent::first(cx) {
-            return format!("what you're typing in {field} is sent, saved or cleared");
         }
         if crate::terminal::holds_a_restart(cx) {
             return s("the Terminal's shell is back at an empty prompt");
@@ -673,14 +691,24 @@ impl Threadbear {
         // wait on, for pictures and specs, but never restarts.
         if self.updater.restarting || self.updater.staged.is_none() {
             self.updater.held_since = None;
+            self.updater.hold_thread = None;
             if self.updater.wait.take().is_some() {
                 cx.notify();
             }
             return;
         }
         let moment = self.restart_moment(windows, cx);
-        let wait = rules::restart_wait(&moment, || self.restart_hold(windows, cx));
+        let mut thread = None;
+        let wait = rules::restart_wait(&moment, || {
+            let (why, on) = self.restart_hold(windows, cx);
+            thread = on;
+            why
+        });
         self.note_long_hold(wait.as_ref());
+        if thread != self.updater.hold_thread {
+            self.updater.hold_thread = thread;
+            cx.notify();
+        }
         // Drawn again only when the line changes: once a second while it
         // counts down, not at all while it's held or he's using the app.
         if wait != self.updater.wait {

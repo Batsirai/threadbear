@@ -532,6 +532,11 @@ impl Threadbear {
     fn render_app_update(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let side = self.app_side();
         let mut out = vec![text_line(rules::app_line(&side), 12., style::label_text(cx)).into_any_element()];
+        // The thread whose box holds it, to go and send or clear it there.
+        if let (Some(threadbear_core::app_update::RestartWait::Held(_)), Some(id)) = (&side.wait, self.updater.hold_thread.clone()) {
+            let open = id.clone();
+            out.push(text_button(SharedString::from(format!("updates-hold-{id}")), self.thread_title(&id), "Open the thread with the words still typed", 12., true, false, cx, move |t, window, cx| t.open(open.clone(), window, cx)));
+        }
         if side.staged.is_some() {
             out.push(h_flex().child(push_button("updates-restart", "Restart to Update", "Quit and reopen on the new version. Running threads carry on in the runner.", false, false, cx, |t, _, cx| t.restart_to_update(cx))).into_any_element());
         } else if side.failed {
@@ -858,7 +863,12 @@ impl Threadbear {
                 });
             }
         }
-        lines.extend(["# App".to_owned(), rules::app_line(&self.app_side()), "# Runner".to_owned()]);
+        let side = self.app_side();
+        lines.extend(["# App".to_owned(), rules::app_line(&side)]);
+        if let (Some(threadbear_core::app_update::RestartWait::Held(_)), Some(id)) = (&side.wait, &self.updater.hold_thread) {
+            lines.push(format!("  > {}", self.thread_title(id)));
+        }
+        lines.push("# Runner".to_owned());
         match &self.updates_panel.runner {
             Some(runner) => {
                 let (build, old, launcher) = (rules::build_line(runner), rules::old_runners_line(runner), rules::launcher_line(runner));

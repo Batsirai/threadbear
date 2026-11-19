@@ -181,7 +181,7 @@ File references are where to look.
 - **Files:** the data folder `~/Library/Application Support/Threadbear`
   (threads, settings, `secrets/`, runner releases, the pinned release key
   `upstream-signers`, the Mac app's `app-drafts.json` and the GPUI app's
-  `desktop-drafts.json`, what's typed but not sent in each message box, so
+  `desktop-drafts.json`, what's typed but not sent in each message box and card's Something else box, so
   a quit or relaunch doesn't lose it, and
   `sync-sent.json`, hashes of what's already in your
   Convex mirror so a restart sends only what changed, and

@@ -2236,7 +2236,10 @@ while it does: the new version opens the same thread underneath and takes
 over, so you shouldn't see it go.
 
 Whatever's typed in a message box and not sent is kept through a quit or a
-restart. While a runner restart waits for threads to finish, a quiet line at
+restart, and so are your own answers in a card's Something else boxes. Those
+answers don't hold the new version back. When something else typed does (a
+title being renamed, say), the Updates panel names the box and the thread,
+with a button that opens the thread. While a runner restart waits for threads to finish, a quiet line at
 the top says how many it's waiting for, and hovering it names them. A message
 you send while the runner is restarting waits under its bubble and goes once
 the new one is up. If one can't be sent, its words go

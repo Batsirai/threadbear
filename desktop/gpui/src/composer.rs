@@ -470,8 +470,11 @@ impl Composer {
     /// picture, one still being copied in included (app_update.rs).
     /// A picture still being copied in: not in the draft yet (`draft`), so a
     /// handover waits for it rather than lose it.
+    /// A picture still being copied in, in the box or a card's Something
+    /// else box: it isn't in the drafts file until it's in.
     pub(crate) fn copying_picture(&self, cx: &App) -> bool {
-        self.box_chips(cx).iter().any(|(_, chip)| matches!(chip, threadbear_core::inline_chips::BoxChip::Picture(None)))
+        let copying = |chips: Vec<(std::ops::Range<usize>, threadbear_core::inline_chips::BoxChip)>| chips.iter().any(|(_, chip)| matches!(chip, threadbear_core::inline_chips::BoxChip::Picture(None)));
+        copying(self.box_chips(cx)) || self.card.answer_inputs().iter().any(|input| copying(self.box_chips_in(input, cx)))
     }
 
     pub(crate) fn holds_anything(&self, cx: &App) -> bool {

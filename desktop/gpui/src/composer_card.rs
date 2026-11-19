@@ -134,10 +134,91 @@ impl Composer {
 
     /// The card's state, reset when a new card turns up: it opens on its
     /// first unanswered ask.
-    fn sync_card(&mut self, card: &AsksCard) {
+    /// The words in its Something else boxes from before a restart come
+    /// back (drafts.rs).
+    fn sync_card(&mut self, card: &AsksCard, cx: &mut Context<Self>) {
         if self.card.seq != Some(card.seq) {
             self.card = CardState { seq: Some(card.seq), ..Default::default() };
+            if self.restore_card_notes(card.seq) {
+                // Told to the transcript once this draw is done.
+                let this = cx.weak_entity();
+                cx.defer(move |cx| {
+                    this.update(cx, |c, cx| c.push_card_state(cx)).ok();
+                });
+            }
         }
+    }
+
+    /// The card's saved Something else words (drafts.rs), into each box not
+    /// typed in this run, answered that way. Whether any came back.
+    fn restore_card_notes(&mut self, seq: i64) -> bool {
+        let Some(thread) = self.thread_id.as_deref() else { return false };
+        let mut any = false;
+        // The other asks' picks, so a mixed answer comes back whole.
+        if let Some(picks) = crate::drafts::saved_picks::<BTreeMap<i64, i64>>(&crate::drafts::card_picks_key(thread, seq)) {
+            for (ask, option) in picks {
+                if !self.card.picks.contains_key(&ask) {
+                    self.card.picks.insert(ask, option);
+                    any = true;
+                }
+            }
+        }
+        for (ask, draft) in crate::drafts::saved_card(thread, seq) {
+            if self.card.notes.get(&ask).is_some_and(|n| !n.text.trim().is_empty() || !n.images.is_empty()) {
+                continue;
+            }
+            self.card.notes.insert(ask, AskNote { text: draft.text, images: draft.images });
+            self.card.picks.insert(ask, OWN_ANSWER);
+            // A box made empty while a handover waited is made again with them.
+            self.card.inputs.remove(&(ask as usize));
+            any = true;
+        }
+        any
+    }
+
+    /// A handover's incoming app taking over: the card's and questions'
+    /// boxes get their saved words, as the message box does.
+    pub(crate) fn restore_box_drafts(&mut self, cx: &mut Context<Self>) {
+        if let Some(seq) = self.card.seq {
+            if self.restore_card_notes(seq) {
+                self.push_card_state(cx);
+                cx.notify();
+            }
+        }
+        if let Some(pane) = self.pane.upgrade() {
+            pane.update(cx, |p, cx| p.restore_question_boxes(cx));
+        }
+    }
+
+    /// The card's and questions' boxes for the drafts file: the open card's
+    /// boxes answered with Something else, or none once it's answered.
+    /// Nothing said until the transcript's in, or the card's been drawn.
+    pub(crate) fn box_drafts(&self, cx: &App) -> crate::drafts::ThreadBoxes {
+        let (Some(thread), Some(pane)) = (self.thread_id.as_deref(), self.pane.upgrade()) else { return Default::default() };
+        if !pane.read(cx).is_loaded() {
+            return Default::default();
+        }
+        let card = match self.open_card(cx).filter(|c| !c.is_done()) {
+            None => Some(Vec::new()),
+            Some(card) if self.card.seq == Some(card.seq) => {
+                let mut boxes: Vec<(String, crate::drafts::Draft)> = self
+                    .card
+                    .notes
+                    .iter()
+                    .filter(|(ask, _)| self.card.picks.get(ask) == Some(&OWN_ANSWER))
+                    .map(|(ask, note)| (crate::drafts::card_key(thread, card.seq, *ask), crate::drafts::Draft { text: note.text.clone(), images: note.images.clone() }))
+                    .collect();
+                let key = crate::drafts::card_picks_key(thread, card.seq);
+                boxes.extend(crate::drafts::picks_draft(&self.card.picks, self.card.picks.is_empty()).map(|d| (key, d)));
+                Some(boxes)
+            }
+            Some(_) => None,
+        };
+        let (questions, open) = pane.read(cx).question_box_drafts(cx);
+        // Only with nothing older left to load: a waiting question on a page
+        // not in yet isn't among them.
+        let open_questions = (!pane.read(cx).feed.model().has_older_events()).then_some(open);
+        crate::drafts::ThreadBoxes { card, questions, open_questions }
     }
 
     /// Hands the picks to the reducer, so the rest of the app reads them off
@@ -145,6 +226,12 @@ impl Composer {
     /// picks back after the pane has been remade.
     pub(crate) fn push_card_state(&self, cx: &mut App) {
         let (Some(pane), Some(seq)) = (self.pane.upgrade(), self.card.seq) else { return };
+        // The boxes' words are kept across a quit (drafts.rs), after this
+        // update, as it may come from inside the app's.
+        let app = self.app.clone();
+        cx.defer(move |cx| {
+            app.update(cx, |app, cx| app.drafts_changed(cx)).ok();
+        });
         let (picks, notes, next, explain) = (self.card.picks.clone(), self.card.notes.clone(), self.card.next_picks.clone(), self.card.explain.clone());
         pane.update(cx, |p, cx| p.set_card_picks(seq, picks, notes, next, explain, cx));
     }
@@ -154,7 +241,7 @@ impl Composer {
     /// next one still waiting, a beat later so the tick shows first.
     pub(crate) fn pick_answer(&mut self, ask: usize, option: i64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(card) = self.open_card(cx) else { return };
-        self.sync_card(&card);
+        self.sync_card(&card, cx);
         let key = ask as i64;
         let picked = self.card.picks.get(&key) == Some(&option);
         if picked {
@@ -293,9 +380,8 @@ impl Composer {
         }
         let existing = self.card.notes.get(&(ask as i64)).cloned().unwrap_or_default();
         let input = cx.new(|cx| TextareaState::new(window, cx).placeholder("Say something else…").auto_grow(1, 8).submit_on_enter(true));
-        // Its words are only here until they're sent: an update's restart
-        // waits for them (unsent.rs).
-        crate::unsent::watch(&input, "a card's Something else box", cx);
+        // Its words go across a restart in the drafts file (drafts.rs), so
+        // they don't hold one off.
         // What was answered before (a refused send put back), its pictures
         // as chips again.
         if !existing.is_empty() {
@@ -429,7 +515,7 @@ impl Composer {
         let card = self.open_card(cx);
         let settle = self.card_arrival.saw(self.thread_id.as_deref(), card.as_ref().map(|c| c.seq), cx.reduce_motion());
         let card = card?;
-        self.sync_card(&card);
+        self.sync_card(&card, cx);
         let body = if card.is_done() { self.render_done_card(&card, settle.filter(|_| !cx.reduce_motion()), window, cx) } else { self.render_asks_card(&card, window, cx) };
         // Arriving while he's watching, it comes up from a touch below as it
         // fades in (`ComposerCard`'s arriving card, Mike picked it 13 Nov).
@@ -1287,7 +1373,7 @@ impl Composer {
     #[cfg(feature = "automation")]
     pub(crate) fn decide(&mut self, cmd: &Value, window: &mut Window, cx: &mut Context<Self>) -> Result<String, String> {
         let Some(card) = self.open_card(cx).filter(|c| !c.is_done()) else { return Err("the open thread has no card of asks to answer".to_owned()) };
-        self.sync_card(&card);
+        self.sync_card(&card, cx);
         if cmd["clear"].as_bool().unwrap_or(false) {
             self.card.picks.clear();
             self.push_card_state(cx);
@@ -1341,7 +1427,7 @@ impl Composer {
     #[cfg(feature = "automation")]
     pub(crate) fn card_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<(), String> {
         let Some(card) = self.open_card(cx) else { return Err("that card is closed".to_owned()) };
-        self.sync_card(&card);
+        self.sync_card(&card, cx);
         let parts: Vec<&str> = action.split(':').collect();
         match parts.as_slice() {
             ["archive"] => self.archive_thread(window.mouse_position(), window, cx),
