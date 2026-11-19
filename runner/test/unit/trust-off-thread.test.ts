@@ -9,6 +9,7 @@ import { claudeCommands, CLAUDE_PATCH_ID } from '../../src/claude-trust.ts';
 import { PatchTrust, TRUST_ALL } from '../../src/patch-trust.ts';
 import { TrustOffThread } from '../../src/trust-off-thread.ts';
 import { codeOfUnhashedPatch } from '../../src/unhashed-scan.ts';
+import { execFileSync } from 'node:child_process';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { until } from '../helpers/worktrees-harness.ts';
 
@@ -74,7 +75,70 @@ test('a worker that never answers is given up on, and the next call gets a new o
   const off = new TrustOffThread({ timeoutMs: 300, script: new URL(`file://${script}`) });
   t.after(() => off.close());
   await assert.rejects(off.claudeCommands(dir, dir, [false], 'urgent'), /took over/);
-  await assert.rejects(off.claudeCommands(dir, dir, [false], 'urgent'), /took over/);
+  // Its worker stops (it was only stuck in JavaScript), so a look there
+  // soon gets a new one, which is just as silent.
+  let last = '';
+  for (let i = 0; i < 100 && !/took over/.test(last); i++) {
+    last = await off.claudeCommands(dir, dir, [false], 'urgent').then(
+      () => 'answered',
+      (e: Error) => e.message,
+    );
+    if (/still stuck/.test(last)) await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.match(last, /took over/);
+});
+
+// Writes to a FIFO if something has it open to read, without waiting.
+function poke(fifo: string): boolean {
+  try {
+    const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+    fs.writeSync(fd, '{}');
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function outcome(p: Promise<unknown>): Promise<string> {
+  return p.then(
+    () => 'answered',
+    (e: Error) => e.message,
+  );
+}
+
+test('a folder whose look is stuck in the OS (a FIFO for its settings) fails at once until that worker lets go, without a new worker each time; other folders go on', async (t) => {
+  const root = tmpDir();
+  const stuck = path.join(root, 'stuck');
+  fs.mkdirSync(path.join(stuck, '.claude'), { recursive: true });
+  const fifo = path.join(stuck, '.claude', 'settings.json');
+  execFileSync('mkfifo', [fifo]);
+  t.after(async () => {
+    // Let any worker still waiting on it go.
+    for (let i = 0; i < 50; i++) {
+      poke(fifo);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  });
+  const fine = path.join(root, 'fine');
+  hooked(fine);
+  const off = new TrustOffThread({ timeoutMs: 500 });
+  t.after(() => off.close());
+  // A look that times out inside the read leaves its worker stuck there.
+  let last = '';
+  for (let i = 0; i < 20 && !/still stuck/.test(last); i++) last = await outcome(off.claudeCommands(stuck, root, [false], 'urgent'));
+  assert.match(last, /still stuck/);
+  assert.match(await outcome(off.claudeCommands(stuck, root, [false], 'urgent')), /still stuck/);
+  assert.ok((await off.claudeCommands(fine, root, [false], 'urgent'))[0]?.files.length);
+  // Something writes to it at last: the stuck worker reads it and goes, and
+  // the next look there goes to a worker again rather than failing at once.
+  await until(() => poke(fifo), 'the stuck worker to take the write');
+  last = '';
+  for (let i = 0; i < 100 && (last === '' || /still stuck/.test(last)); i++) {
+    last = await outcome(off.claudeCommands(stuck, root, [false], 'urgent'));
+    if (/still stuck/.test(last)) await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.match(last, /took over/);
 });
 
 test("a worker that can't start leaves the look to this thread, as before", async (t) => {
@@ -215,8 +279,10 @@ function heldTrust() {
     ...TRUST_ALL,
     lookClaude: async (cwd: string, opts: { grants?: boolean } = {}) => {
       o.looks.push({ at: ++n });
+      // Whether it fails is settled when it starts, as a real look's would be.
+      const fail = o.fail;
       if (o.hold) await o.hold;
-      if (o.fail) throw o.fail;
+      if (fail) throw fail;
       return { cwd, grants: opts.grants === true, found: undefined };
     },
     checkClaude: (_cwd: string, _opts?: unknown, look?: unknown) => {
@@ -330,4 +396,39 @@ test("a folder change while a new CLI's look runs makes it look again at the new
   await until(() => h.adapter.sessions.length === 1, 'the CLI to start');
   assert.deepEqual([...new Set(seen)], [a, b]);
   assert.equal(o.checks.at(-1)?.look, true, "startSession used the new folder's look");
+});
+
+test('a look begun for a message taken off the queue is not used for the next one: that one gets a look of its own', async (t) => {
+  const o = heldTrust();
+  const { h, s, thread } = await warmThread(t, o.trust);
+  let release = () => {};
+  o.hold = new Promise((r) => (release = () => r()));
+  const before = o.looks.length;
+  const first = h.runner.send(thread.id, 'never mind');
+  await until(() => o.looks.length === before + 1, 'the first look');
+  assert.ok(h.runner.unqueue(thread.id, first.turnId));
+  h.runner.send(thread.id, 'this one');
+  o.hold = undefined;
+  release();
+  await until(() => s.sent.length >= 2, 'the second message to reach the CLI');
+  assert.equal(o.looks.length, before + 2, 'a look of its own');
+  assert.match(s.sent[1].text, /this one/);
+});
+
+test("a look that failed while the thread moved folder is taken again for the new one, rather than failing the message", async (t) => {
+  const o = heldTrust();
+  const { h, s, thread } = await warmThread(t, o.trust);
+  let release = () => {};
+  o.hold = new Promise((r) => (release = () => r()));
+  o.fail = new Error('Looking at the old folder took over 120 s.');
+  const before = o.looks.length;
+  h.runner.send(thread.id, 'again');
+  await until(() => o.looks.length === before + 1, 'the look');
+  h.runner.threads.get(thread.id)!.rec.cwd = tmpDir();
+  o.hold = undefined;
+  o.fail = undefined;
+  release();
+  await until(() => s.sent.length >= 2 || h.adapter.sessions.length > 1, 'the message to go');
+  assert.ok(o.looks.length >= before + 2, 'looked again');
+  assert.ok(!h.events(thread.id).some((e) => JSON.stringify(e).includes("Couldn't read this folder's Claude Code settings")));
 });

@@ -137,7 +137,10 @@ export const commandsPart = {
   // then the CLI's for the thread's folder, skills included.
   async threadCommands(this: Runner, threadId: string): Promise<{ commands: SlashCommand[] }> {
     const { rec, rt } = this.mustGet(threadId);
-    return this.listCommands(rec.accountId, rec.cwd, rec.permissionMode, rt.session?.commands ? () => rt.session!.commands!() : undefined);
+    // This CLI, as it is now: listCommands waits on a look first, and a
+    // CLI started meanwhile may be in another folder (Codex's review).
+    const session = rt.session;
+    return this.listCommands(rec.accountId, rec.cwd, rec.permissionMode, session?.commands ? async () => (rt.session === session ? session.commands!() : undefined) : undefined);
   },
 
   // The same for a new thread's box, before there's a thread
@@ -153,7 +156,7 @@ export const commandsPart = {
     return this.listCommands(accountId, cwd, params.permissionMode ?? 'auto');
   },
 
-  async listCommands(this: Runner, accountId: string, cwd: string, permissionMode: PermissionMode, live?: () => Promise<SlashCommand[]>): Promise<{ commands: SlashCommand[] }> {
+  async listCommands(this: Runner, accountId: string, cwd: string, permissionMode: PermissionMode, live?: () => Promise<SlashCommand[] | undefined>): Promise<{ commands: SlashCommand[] }> {
     const account = this.accounts.get(accountId);
     const provider = account?.provider ?? 'claude';
     let cli: SlashCommand[] = [];

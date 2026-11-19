@@ -472,7 +472,9 @@ type Runtime = {
   // CLI (kickQueue). Taken before the turn exists, so the CLI's own turns
   // meanwhile (a background task waking it) go as they always did. `looks`
   // or `failed` once it's done; used only straight away, else dropped.
-  preLook?: { token: object; looks?: ClaudeLook[]; failed?: string };
+  // `front`, `cwd` and `grants`: the message, folder and kind it was for;
+  // a look for anything else is dropped and taken again.
+  preLook?: { token: object; front: string; cwd: string; grants: boolean; looks?: ClaudeLook[]; failed?: string };
   // Started in Full with the folder's settings, which hold permission
   // rules not trusted for a thread that asks first (StartSessionOptions.heldGrants).
   claudeHeldGrants?: boolean;
@@ -2046,15 +2048,23 @@ export class Runner {
 
   // Whether the front of the queue waits for a look before its turn starts
   // on the live CLI (rt.preLook): only with a worker to look on.
+  // Not on a draining runner: a schedule handed to it must start at once
+  // or be refused (handover.ts sendScheduled), so it looks as before.
   needsPreLook(st: ThreadState): boolean {
     const { rec, rt } = st;
-    return rec.provider === 'claude' && Boolean(this.offThread && this.patchTrust.lookClaude) && Boolean(rt.session) && !rt.closing;
+    return rec.provider === 'claude' && Boolean(this.offThread && this.patchTrust.lookClaude) && Boolean(rt.session) && !rt.closing && !this.draining;
+  }
+
+  // Whether the look still answers for the front of the queue as it is.
+  preLookFits(st: ThreadState, pre: NonNullable<Runtime['preLook']>): boolean {
+    const { rec } = st;
+    return pre.front === rec.queue[0]?.turnId && pre.cwd === rec.cwd && pre.grants === (claudeOptions(rec).grants === true);
   }
 
   startPreLook(st: ThreadState): void {
-    const { rt } = st;
+    const { rec, rt } = st;
     const token = {};
-    const pre: NonNullable<Runtime['preLook']> = { token };
+    const pre: NonNullable<Runtime['preLook']> = { token, front: rec.queue[0]!.turnId, cwd: rec.cwd, grants: claudeOptions(rec).grants === true };
     rt.preLook = pre;
     const done = () => {
       if (rt.preLook !== pre || rt.deleted) return;
@@ -2248,12 +2258,17 @@ export class Runner {
     // A look that failed (a hung folder) fails the turn: looking again here
     // would be on the main thread, and could hang it on the same file.
     if (live && 'failed' in live) throw cantRead(live.failed);
+    // A look that fails while the folder or access changed is taken
+    // again (the loop below), as it was of the old one.
     const look = async (): Promise<ClaudeLook[] | 'gone' | undefined> => {
+      const cwd = rec.cwd;
+      const kinds = lookKinds(rec, true).join();
       let looks: ClaudeLook[] | undefined;
       try {
         looks = await this.claudeLooks(st, true);
       } catch (e) {
         if (gone()) return 'gone';
+        if (rec.cwd !== cwd || lookKinds(rec, true).join() !== kinds) return [];
         throw cantRead(e instanceof Error ? e.message : String(e));
       }
       return gone() ? 'gone' : looks;
@@ -2264,7 +2279,9 @@ export class Runner {
     // The folder's Claude Code hooks were trusted since the CLI started
     // without them, or new ones came that aren't (a pull): a fresh CLI
     // reads the folder's settings again.
-    else if (rt.session && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(live && !('failed' in live) ? live : undefined, rec.cwd, claudeOptions(rec))).trusted) this.releaseSession(st);
+    // Not for one already closing: the turn waits for it below, then looks
+    // for the new one.
+    else if (rt.session && !rt.closing && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(live && !('failed' in live) ? live : undefined, rec.cwd, claudeOptions(rec))).trusted) this.releaseSession(st);
     // Never two live CLIs on one session: wait for a releasing one to exit.
     while (rt.closing) await rt.closing;
     // An archive's worktree cleanup still running: where this turn starts
@@ -4200,7 +4217,9 @@ export class Runner {
       const pre = st.rt.preLook;
       if (pre && !pre.looks && pre.failed === undefined) return false;
       st.rt.preLook = undefined;
-      if (!pre || (pre.looks && !looksCover(pre.looks, st.rec, false))) {
+      // One taken for another message (that one was taken off the queue),
+      // folder or kind of thread looks again, failed or not.
+      if (!pre || !this.preLookFits(st, pre) || (pre.looks && !looksCover(pre.looks, st.rec, false))) {
         this.startPreLook(st);
         return false;
       }

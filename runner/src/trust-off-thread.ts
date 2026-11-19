@@ -45,6 +45,11 @@ function inline(ask: Ask): unknown {
 
 type Call = { ask: Ask; resolve: (v: unknown) => void; reject: (e: Error) => void };
 
+// What a call looks at: the folder, or the patch file.
+function whatOf(ask: Ask): string {
+  return ask.kind === 'claudeCommands' ? ask.cwd : ask.file;
+}
+
 // One worker, given one call at a time from a queue here, so a call's time
 // limit runs from when it starts and a call that hangs or crashes the
 // worker fails alone: the calls behind it go to a new worker.
@@ -58,6 +63,11 @@ class OneWorker {
   private current?: { call: Call; id: number; timer: NodeJS.Timeout };
   private nextId = 1;
   private closed = false;
+  // Workers given up on mid-look, by what they were looking at, until they
+  // exit. One stuck in a read the OS won't let go of (a FIFO, a hung mount)
+  // never does, so further looks there fail at once rather than leave
+  // another stuck worker each time (Codex's review).
+  private stuck = new Map<string, Worker>();
   private timeoutMs: number;
   private script: URL;
   constructor(timeoutMs: number, script: URL) {
@@ -67,6 +77,8 @@ class OneWorker {
 
   call(ask: Ask): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('The trust worker is closed.'));
+    const stuck = this.stuckOn(ask);
+    if (stuck) return Promise.reject(stuck);
     return new Promise((resolve, reject) => {
       this.queue.push({ ask, resolve, reject });
       this.next();
@@ -91,9 +103,22 @@ class OneWorker {
     // worker that stops before then never had a call that could be why.
     if (!this.ready) return;
     const call = this.queue.shift()!;
+    // Queued before a look there got stuck.
+    const stuck = this.stuckOn(call.ask);
+    if (stuck) {
+      call.reject(stuck);
+      this.next();
+      return;
+    }
     const id = this.nextId++;
-    const what = call.ask.kind === 'claudeCommands' ? call.ask.cwd : call.ask.file;
-    const timer = setTimeout(() => this.failCurrent(new Error(`Looking at ${what} took over ${Math.round(this.timeoutMs / 1000)} s.`)), this.timeoutMs);
+    const what = whatOf(call.ask);
+    const timer = setTimeout(() => {
+      this.stuck.set(what, worker);
+      worker.once('exit', () => {
+        if (this.stuck.get(what) === worker) this.stuck.delete(what);
+      });
+      this.failCurrent(new Error(`Looking at ${what} took over ${Math.round(this.timeoutMs / 1000)} s.`));
+    }, this.timeoutMs);
     timer.unref();
     this.current = { call, id, timer };
     worker.postMessage({ ...call.ask, id } satisfies TrustRequest);
@@ -159,6 +184,11 @@ class OneWorker {
   }
 
   // The call under way fails; its worker goes, and the next call gets a new one.
+  private stuckOn(ask: Ask): Error | undefined {
+    const what = whatOf(ask);
+    return this.stuck.has(what) ? new Error(`An earlier look at ${what} is still stuck, so it can't be looked at yet.`) : undefined;
+  }
+
   private failCurrent(e: Error): void {
     const cur = this.current;
     this.current = undefined;
