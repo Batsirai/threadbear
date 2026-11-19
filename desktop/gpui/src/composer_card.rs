@@ -114,6 +114,24 @@ impl Composer {
         card.is_open.then(|| card.clone())
     }
 
+    /// What the thread is waiting on, when it's put away to wait on its own
+    /// work rather than done (`ThreadSummary::waiting_on_work`), and the
+    /// tooltip that says more.
+    pub(crate) fn waiting_on_work(&self, cx: &App) -> Option<(String, String)> {
+        let id = self.thread_id.as_ref()?;
+        let app = self.app.upgrade()?;
+        let t = app.read(cx);
+        let thread = t.threads.get(id)?;
+        if !thread.waiting_on_work() {
+            return None;
+        }
+        threadbear_core::sidebar::work_wait_row(thread, &threadbear_core::chrono::Local::now())
+    }
+
+    fn waiting_spinner(&self, cx: &App) -> AnyElement {
+        crate::spinner::Spinner::new().with_size(px(13.)).color(style::quiet_text(cx)).into_any_element()
+    }
+
     /// The card's state, reset when a new card turns up: it opens on its
     /// first unanswered ask.
     fn sync_card(&mut self, card: &AsksCard) {
@@ -448,12 +466,20 @@ impl Composer {
             }
             None => crate::icons::tall_checkmark().with_size(px(16.)).text_color(green).into_any_element(),
         };
+        // Put away to wait on its own work (threads it's waiting to hear
+        // from, or the app restarting onto what it landed): what for, with a
+        // spinner, as it hasn't finished (19 Nov: one waiting to land read
+        // Done and was archived with nothing landed).
+        let heading = match self.waiting_on_work(cx) {
+            Some((words, _)) => card_title(self.waiting_spinner(cx), 4., words, cx).into_any_element(),
+            None => card_title(tick, 2.5, "Done", cx).into_any_element(),
+        };
         column = column.child(
             h_flex()
                 .w_full()
                 .h(px(metrics::PAGED_HEADING))
                 .justify_between()
-                .child(card_title(tick, 2.5, "Done", cx))
+                .child(heading)
                 .child(card_button(("done-archive", 0usize), "Archive", ButtonLook::Plain, "Archive this thread", cx).on_click({
                     let this = this.clone();
                     move |ev, window, cx| {
@@ -1365,7 +1391,7 @@ impl Composer {
             self.pane.upgrade()?.read(cx).ask_link_words(&link.title, &target)
         });
         if card.is_done() {
-            lines.push("Done".to_owned());
+            lines.push(self.waiting_on_work(cx).map(|(words, _)| words).unwrap_or_else(|| "Done".to_owned()));
             for (i, next) in card.next.iter().enumerate() {
                 let tick = if self.card.next_picks.contains(&(i as i64)) { "[x]" } else { "[ ]" };
                 lines.push(format!("{tick} {next}{}", if self.card.explain.contains(&(i as i64)) { " (?)" } else { "" }));
@@ -1494,7 +1520,8 @@ pub(crate) mod metrics {
 /// three quarters of a point lower than centring puts them, where TextKit's
 /// rounded-down baseline offset leaves the Swift card's.
 /// `gap` puts the words where the Swift title's space after its symbol does.
-fn card_title(mark: AnyElement, gap: f32, words: &'static str, cx: &App) -> impl IntoElement {
+fn card_title(mark: AnyElement, gap: f32, words: impl Into<SharedString>, cx: &App) -> impl IntoElement {
+    let words: SharedString = words.into();
     h_flex()
         .flex_none()
         .items_center()

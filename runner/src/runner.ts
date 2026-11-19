@@ -1882,6 +1882,7 @@ export class Runner {
       delete rec.untilRelease;
       delete rec.wakeWhen;
       delete rec.waitingOn;
+      delete rec.hibernatedForApp;
       delete rec.archivedAt;
       rt.releaseWhenIdle = false;
     }
@@ -3054,6 +3055,10 @@ export class Runner {
     else if (forApp && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Hibernating until the Threadbear app restarts onto the new build, a day at most.' });
       this.update({ threadId: rec.id, snoozedUntil: new Date(this.clock.now() + APP_RESTART_MAX_AGE_MS).toISOString() });
+      // After update, which clears it with the rest of a wait: the app shows
+      // it under Running, as its work isn't over until Mike's running it.
+      rec.hibernatedForApp = true;
+      this.markDirty(st);
     }
     // An invalid wait may leave the thread awake; do not strand its queue.
     if (holdQueue && !rt.turn && this.bucket(rec) === 'inbox') this.afterTurn(st);
@@ -3620,6 +3625,7 @@ export class Runner {
       delete rec.untilRelease;
       delete rec.wakeWhen;
       delete rec.waitingOn;
+      delete rec.hibernatedForApp;
       if (params.snoozedUntil === null) delete rec.snoozedUntil;
       else if (params.snoozedUntil === 'restart' || params.snoozedUntil === 'release') {
         rec.snoozedUntil = UNTIL_RESTART;
@@ -4313,6 +4319,7 @@ export class Runner {
       s.wakeWhen = wakeWhen;
     }
     if (rec.waitingOn && rec.snoozedUntil) s.waitingOn = rec.waitingOn.map((w) => ({ threadId: w.threadId, title: w.title, ...(w.until ? { until: w.until } : {}), ...(w.done ? { done: true as const } : {}) }));
+    if (rec.hibernatedForApp && rec.snoozedUntil) s.awaitingAppRestart = true;
     if (rec.woke && rec.forceUnread) s.woke = { ...rec.woke };
     if (rec.archivedAt) {
       s.archivedAt = rec.archivedAt;

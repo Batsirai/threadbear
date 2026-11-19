@@ -365,6 +365,10 @@ type ThreadSummary = {
   waitingOn?: { threadId, title, until?, done?: true }[] // hibernating until these
                         // threads finish (end_turn's waitFor); only
                         // while snoozedUntil is set
+  awaitingAppRestart?: true // hibernating until the Mac app restarts onto
+                        // what this thread landed (wait_for_app_restart);
+                        // only while snoozedUntil is set. With an unfinished
+                        // waitingOn, the sidebar puts it under Running.
   startedBy?: { kind, label, icon?, threadId?, threadTitle?, why? } // who
                         // started it when Mike didn't (Who started a thread)
   detached?: true       // a thread another thread started that doesn't

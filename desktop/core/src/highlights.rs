@@ -794,6 +794,9 @@ pub fn started_rows<'a>(parent: &ThreadSummary, threads: impl Iterator<Item = &'
 pub fn started_state(t: &ThreadSummary, now_ms: i64) -> StartedState {
     if t.is_archived() {
         StartedState::Archived
+    } else if t.snoozed(now_ms) && t.waiting_on_work() {
+        // Still at its job, as the sidebar has it under Running.
+        StartedState::Working
     } else if t.snoozed(now_ms) {
         StartedState::Hibernating
     } else if t.status == "waiting" || t.review_waiting() || t.waiting_on_mike() {
@@ -829,6 +832,11 @@ pub fn thread_status<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Str
     }
     if t.snoozed_until_restart == Some(true) {
         return "Hibernating until the runner restarts".into();
+    }
+    if t.snoozed(now_ms) && t.waiting_on_work() {
+        if let Some((words, _)) = sidebar::work_wait_row(t, now) {
+            return words;
+        }
     }
     if let (true, Some(until)) = (t.snoozed(now_ms), t.snoozed_until_ms()) {
         if let Some((words, _)) = sidebar::wake_row(t, now) {

@@ -267,6 +267,7 @@ export type ThreadSummary = {
   // topic it waits for, and pending while the time is worked out.
   wakeWhen?: { said: string; topic?: string; pending?: true };
   waitingOn?: { threadId: string; title: string; until?: string; done?: true }[]; // hibernating until these finish (or do `until`)
+  awaitingAppRestart?: true; // hibernating until the Mac app restarts onto what this thread landed
   woke?: { at: string; since?: string }; // woke from hibernating by itself, not looked at yet
   onOldRunner?: boolean; // finishing a turn on a runner that handed over (Handovers)
   archivedAt?: string;

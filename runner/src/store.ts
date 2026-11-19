@@ -194,6 +194,10 @@ export type ThreadRecord = {
   // `by`: the waiting thread's access when it said to wait (hibernation.ts,
   // mayHear): what it asked to hear isn't passed on once it has more.
   waitingOn?: { threadId: string; title: string; until?: string; review?: true; by?: { mode: PermissionMode }; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string; verdict?: ReviewVerdict; edited?: string[] } }[];
+  // Hibernating until Mike's app restarts onto what its turn landed
+  // (wait_for_app_restart), not for him: sent as awaitingAppRestart, so the
+  // app keeps it under Running. Cleared with the rest of a wait.
+  hibernatedForApp?: true;
   // Its last finished turn (nothing needed, nothing left running) and that
   // turn's reply, for threads waiting on it, including on a runner it
   // moves to (runner/hibernation.ts, reconcileWaits). Cleared by any new

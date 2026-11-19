@@ -97,6 +97,10 @@ pub struct ThreadSummary {
     pub wake_when: Option<Value>,
     #[serde(default, deserialize_with = "crate::wire::optional_list")]
     pub waiting_on: Option<Vec<Value>>,
+    /// Hibernating until Mike's app restarts onto the build its turn landed
+    /// (wait_for_app_restart): its work isn't over until he's running it.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub awaiting_app_restart: Option<bool>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub woke: Option<Value>,
     #[serde(default, deserialize_with = "crate::wire::field")]
@@ -363,6 +367,19 @@ impl ThreadSummary {
         }
         let asks = self.asks.as_deref().unwrap_or(&[]);
         asks.is_empty() || asks.iter().any(|a| a.ticked != Some(true))
+    }
+    /// Put away by its own agent to wait on its own work, not for Mike: on
+    /// threads it's waiting to hear from (end_turn's waitFor, a review of its
+    /// change) or on his app restarting onto what it landed. It sits under
+    /// Running rather than Hibernating, and its card doesn't say Done, as the
+    /// job isn't over: on 19 Nov a thread waiting for main's CI to go green
+    /// before landing showed Done, and Mike archived it with nothing landed.
+    /// The runner only sends either while the thread is hibernating.
+    pub fn waiting_on_work(&self) -> bool {
+        if self.is_archived() || (self.snoozed_until.is_none() && self.snoozed_until_restart != Some(true)) {
+            return false;
+        }
+        self.awaiting_app_restart == Some(true) || self.waiting_on.iter().flatten().any(|w| w.get("done").and_then(Value::as_bool) != Some(true))
     }
     /// Snoozed past `now_ms`. A restart snooze carries a far-off `snoozedUntil` too.
     pub fn snoozed(&self, now_ms: i64) -> bool {
@@ -643,6 +660,8 @@ pub fn section_of(t: &ThreadSummary, now_ms: i64, wakes: &HashMap<String, Wake>)
         "archived"
     } else if t.is_starred() {
         "starred"
+    } else if t.snoozed(now_ms) && t.waiting_on_work() {
+        "running"
     } else if t.snoozed(now_ms) {
         "hibernating"
     } else if t.review_waiting() || t.needs_answer() || t.waiting_on_mike() || (t.needs_you && !t.working_in_background()) {
@@ -1033,6 +1052,22 @@ mod tests {
         assert_eq!(ids(&s, "running"), ["t2"]);
         assert_eq!(ids(&s, "hibernating"), ["t4"]);
         assert_eq!(ids(&s, "starred"), ["t5"]);
+    }
+
+    #[test]
+    fn a_thread_waiting_on_its_own_work_stays_under_running() {
+        let waiting = thread(1, json!({ "needs": "nothing", "snoozedUntil": "2026-11-07T00:00:00Z", "waitingOn": [{ "threadId": "x", "title": "Fix main's CI" }] }));
+        let heard = thread(2, json!({ "needs": "nothing", "snoozedUntil": "2026-11-07T00:00:00Z", "waitingOn": [{ "threadId": "x", "title": "Fix main's CI", "done": true }] }));
+        let for_app = thread(3, json!({ "needs": "nothing", "snoozedUntil": "2026-11-07T00:00:00Z", "awaitingAppRestart": true }));
+        let asleep = thread(4, json!({ "snoozedUntil": "2026-11-07T00:00:00Z" }));
+        let archived = thread(5, json!({ "snoozedUntil": "2026-11-07T00:00:00Z", "archivedAt": "2026-11-06T09:00:00Z", "waitingOn": [{ "threadId": "x", "title": "Fix main's CI" }] }));
+        let all = [waiting, heard, for_app, asleep, archived];
+        let s = sections(&all, now());
+        assert_eq!(ids(&s, "running"), ["t3", "t1"], "still at its job, so not hibernating (newest first)");
+        assert_eq!(ids(&s, "hibernating"), ["t4", "t2"], "one whose wait is over, or Mike's own snooze");
+        assert_eq!(ids(&s, "archived"), ["t5"], "archiving it still puts it away");
+        let woken = thread(6, json!({ "needs": "nothing", "awaitingAppRestart": true }));
+        assert!(!woken.waiting_on_work(), "only while it's hibernating for it");
     }
 
     #[test]

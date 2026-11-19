@@ -60,7 +60,8 @@ impl RowLook {
                 _ => RowStatus::Background,
             }
         };
-        let done = status == RowStatus::Time && !t.needs_you && t.said_done() && t.unread();
+        // One waiting on its own work hasn't finished, whatever it said.
+        let done = status == RowStatus::Time && !t.needs_you && t.said_done() && t.unread() && !t.waiting_on_work();
         let unread = status == RowStatus::NeedsYou || (t.needs_you && status != RowStatus::Working && status != RowStatus::Background) || done;
         let emphasised = t.needs_you || status == RowStatus::NeedsYou || done;
         let labelled = !(status == RowStatus::Working && section == Some("running"));
@@ -486,6 +487,16 @@ pub fn wake_row<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Option<(
     Some((topic, format!("{tip}. You said \"{}\".", wake.said)))
 }
 
+/// What a thread waiting on its own work is waiting for, and the tooltip
+/// (`ThreadSummary::waiting_on_work`): threads it waits to hear from, as a
+/// Hibernating row says them, or Mike's app restarting onto what it landed.
+pub fn work_wait_row<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Option<(String, String)> {
+    if t.waiting_on.iter().flatten().any(|w| w.get("done").and_then(serde_json::Value::as_bool) != Some(true)) {
+        return wake_row(t, now);
+    }
+    (t.awaiting_app_restart == Some(true)).then(|| ("Waiting for the app update".to_string(), "Carries on once Threadbear restarts onto what this thread landed, which it does by itself when you leave it idle.".to_string()))
+}
+
 /// The tooltip for "Woke up": "Woke up after hibernating for 2 days"
 /// (`WokeWords.tip`).
 pub fn woke_tip(t: &ThreadSummary) -> String {
@@ -562,6 +573,13 @@ pub fn trailing<Tz: TimeZone>(t: &ThreadSummary, look: &RowLook, mode: RowMode, 
     let time = || relative_short(if mode == RowMode::Archive { t.archived_ms().unwrap_or(t.activity_ms()) } else { t.activity_ms() }, now);
     match look.status {
         RowStatus::Time => {
+            // Under Running, waiting on its own work: what for, with the
+            // grey spinner a background job has, as it's still going.
+            if mode != RowMode::Archive && t.waiting_on_work() {
+                if let Some((text, tip)) = work_wait_row(t, now) {
+                    return Trailing { text, kind: TrailingKind::Background, tip: Some(tip) };
+                }
+            }
             if mode == RowMode::Hibernating {
                 if let Some((text, tip)) = wake_row(t, now) {
                     return Trailing { text, kind: TrailingKind::Quiet, tip: Some(tip) };
@@ -1105,6 +1123,15 @@ mod tests {
         let out = trailing(&topic, &RowLook::PLAIN, RowMode::Hibernating, &now, None);
         assert_eq!(out.text, "wood");
         assert!(out.tip.unwrap().starts_with("Back when you next talk about wood."));
+
+        let waiting = thread(json!({ "needs": "nothing", "lastSeq": 5, "lastSeenSeq": 1, "snoozedUntil": "2026-11-10T09:00:00Z", "waitingOn": [{ "threadId": "x", "title": "Fix main's CI" }] }));
+        let look = RowLook::of(&waiting, Some("running"));
+        assert!(!look.done, "no tick: it hasn't finished");
+        let out = trailing(&waiting, &look, RowMode::Inbox, &now, None);
+        assert_eq!((out.text.as_str(), out.kind), ("Waiting on \"Fix main's CI\"", TrailingKind::Background));
+        let for_app = thread(json!({ "needs": "nothing", "snoozedUntil": "2026-11-10T09:00:00Z", "awaitingAppRestart": true }));
+        let out = trailing(&for_app, &RowLook::of(&for_app, Some("running")), RowMode::Inbox, &now, None);
+        assert_eq!((out.text.as_str(), out.kind), ("Waiting for the app update", TrailingKind::Background));
 
         let thinking = thread(json!({ "snoozedUntil": "9999-12-31T00:00:00.000Z", "wakeWhen": { "said": "soon", "pending": true } }));
         assert_eq!(trailing(&thinking, &RowLook::PLAIN, RowMode::Hibernating, &now, None).text, "Thinking…");

@@ -54,7 +54,11 @@ asked you something, as what they find can change what it asks. It comes to
 the inbox when they're done, and you can still open it and answer early.
 Hibernating and Archived, at the foot, hold the threads that are put away
 (see [Hibernate and archive](#hibernate-and-archive)). They start folded,
-showing only how many; click a heading to open or fold it. Hibernating also
+showing only how many; click a heading to open or fold it. A thread whose agent
+is waiting on its own work stays under Running too, with a grey spinner and
+what it's waiting for: on other threads to finish (a fix it needs, a review of
+its change), or for your app to restart onto what it landed. Its card says
+that rather than Done, as the job isn't over until it is. Hibernating also
 has the threads that have booked a message to themselves for later (an
 agent saying "I'll check again in 20 minutes") and have nothing for you
 until then. Each row says when it wakes, soonest first. When the time comes

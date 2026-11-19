@@ -71,3 +71,20 @@ Feature: Section headings in the sidebar
     And the "hibernating" section is unfolded
     Then the "Hibernating" section lists "Add dark mode to the dashboard"
     And the row "Add dark mode to the dashboard" says when its schedule messages it
+
+  # Waiting on its own work isn't done: on 19 Nov a thread waiting for
+  # main's CI before it could land showed Done, and Mike archived it with
+  # nothing landed. It stays under Running until the work is over.
+  @sidebar.sections
+  Scenario: A thread waiting on another thread stays under Running
+    Given the "Inbox" section lists "Add dark mode to the dashboard"
+    When "Add dark mode to the dashboard" waits on "Ship the beta to TestFlight"
+    Then the "Running" section lists "Add dark mode to the dashboard"
+    And the row "Add dark mode to the dashboard" says "Waiting on" on the right
+
+  @sidebar.sections
+  Scenario: A thread waiting for the app to update stays under Running
+    Given the "Inbox" section lists "Add dark mode to the dashboard"
+    When "Add dark mode to the dashboard" waits for the app update
+    Then the "Running" section lists "Add dark mode to the dashboard"
+    And the row "Add dark mode to the dashboard" says "Waiting for the app update" on the right

@@ -394,11 +394,31 @@ test('a done turn waiting on the app restart hibernates until it comes, then wak
   let t = h.runner.get(thread.id);
   assert.equal(Date.parse(t.snoozedUntil!), h.clock.now() + 24 * 60 * 60_000);
   assert.equal(h.events(thread.id).findLast((e) => e.type === 'system.note')?.text, 'Hibernating until the Threadbear app restarts onto the new build, a day at most.');
+  // The app keeps it under Running, as it isn't done until Mike runs it (19 Nov 2026).
+  assert.equal(t.awaitingAppRestart, true);
   watcher.appHello(D2, 'desktop');
   t = h.runner.get(thread.id);
   assert.equal(t.snoozedUntil, undefined);
+  assert.equal(t.awaitingAppRestart, undefined);
   assert.ok(['starting', 'running'].includes(t.status), 'the restart message started a turn');
   assert.match(said(h, thread.id).message, /Check Edit shows beside Copy\./);
+});
+
+test("Mike hibernating a thread that waits on the app makes it his own snooze", () => {
+  let watcher!: AppRestarts;
+  const h = makeHarness(undefined, {}, { awaitingAppRestart: (id) => watcher.isWatching(id) });
+  watcher = new AppRestarts({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger });
+  const { thread } = h.runner.create({ text: 'Add Edit to draft boxes', accountId: 'claude-3' });
+  const s = h.adapter.last;
+  s.init();
+  watcher.appHello(D1, 'desktop');
+  watcher.watch(thread.id);
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  s.text('m1', 'Landed.');
+  s.result('completed');
+  assert.equal(h.runner.get(thread.id).awaitingAppRestart, true);
+  h.runner.update({ threadId: thread.id, snoozedUntil: new Date(h.clock.now() + 2 * 60 * 60_000).toISOString() });
+  assert.equal(h.runner.get(thread.id).awaitingAppRestart, undefined, 'under Hibernating, where he put it');
 });
 
 test('a turn that needs Mike, or one not waiting on the app, stays in the inbox', () => {

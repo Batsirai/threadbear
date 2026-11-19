@@ -1757,6 +1757,26 @@ async function dispatch(client, method, p) {
       const at = new Date(Date.now() + (p.minutes ?? 60) * 60_000).toISOString();
       return dispatch(client, 'schedules.create', { title: p.text ?? 'See how it went', text: p.text ?? 'See how it went.', at, threadId: entry.summary.id, createdBy: entry.summary.id });
     }
+    // A thread whose agent ended its turn waiting on its own work, as
+    // end_turn's waitFor leaves one: hibernating a day at most, waiting on
+    // the thread called `on`, or for the app to restart onto what it landed
+    // (`app: true`, as wait_for_app_restart does).
+    case 'mock.waitOn': {
+      const entry = [...threads.values()].find((t) => t.summary.title === p.title);
+      if (!entry) throw rpcError(-32602, `No thread called "${p.title}"`);
+      const s = entry.summary;
+      s.needs = 'nothing';
+      s.needsYou = false;
+      s.snoozedUntil = new Date(Date.now() + 86_400_000).toISOString();
+      if (p.app) s.awaitingAppRestart = true;
+      else {
+        const other = [...threads.values()].find((t) => t.summary.title === p.on);
+        if (!other) throw rpcError(-32602, `No thread called "${p.on}"`);
+        s.waitingOn = [{ threadId: other.summary.id, title: other.summary.title }];
+      }
+      broadcastSummary(s.id);
+      return { thread: s };
+    }
     // A sub-agent whose record the CLI has cleaned up: threads.subagent
     // answers -32006 for it, for the "no record" view.
     case 'mock.forgetSubagent': {

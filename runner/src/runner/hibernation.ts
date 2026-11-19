@@ -562,6 +562,7 @@ export const hibernationPart = {
     delete rec.untilRelease;
     delete rec.wakeWhen;
     delete rec.waitingOn;
+    delete rec.hibernatedForApp;
   },
 };
 
