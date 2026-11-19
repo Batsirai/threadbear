@@ -151,7 +151,13 @@ as it has no THREADBEAR_RELEASE in its environment:
 ```
 
 The property and the environment variable both set the version; the
-property wins if both are there. F-Droid signs with its own key, so its
+property wins if both are there. F-Droid's update check can't read a version
+that comes from the tag, so each release's `release` job also attaches
+`android-version.txt` (`versionCode=20261119`, `versionName=2026-11-19`),
+which the recipe reads from `releases/latest/download/` (`UpdateCheckMode:
+HTTP`), with `AutoUpdateMode: Version release/%v` to build the matching tag.
+The draft recipe is in `~/dev/me/misc/threadbear-fdroid/` on Mike's M5 until
+it goes to fdroiddata. F-Droid signs with its own key, so its
 build and the GitHub one can't update each other: moving between them
 means uninstalling (and pairing again). The Convex client (`libconvexmobile.so`)
 and JNA (`libjnidispatch.so`) come from Maven Central with their native

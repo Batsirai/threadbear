@@ -239,6 +239,14 @@ jobs:
             gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" --latest="$latest"
           fi
           gh release upload "$TAG" "$RUNNER_TEMP/threadbear-android.apk"
+          # For F-Droid's update check (its recipe's UpdateCheckData reads
+          # releases/latest/download/android-version.txt): the release's
+          # versionCode and versionName, as build.gradle.kts makes them from
+          # the tag's date. F-Droid can't read them from the source, as they
+          # come from the tag rather than a file.
+          day="${TAG#release/}"
+          printf 'versionCode=%s\nversionName=%s\n' "${day//-/}" "$day" > "$RUNNER_TEMP/android-version.txt"
+          gh release upload "$TAG" "$RUNNER_TEMP/android-version.txt" --clobber
 
       - name: Never leave the key on the runner
         if: always()
