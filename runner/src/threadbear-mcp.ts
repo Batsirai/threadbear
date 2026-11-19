@@ -1540,7 +1540,8 @@ export function buildThreadbearTools(
         const signIns = await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth);
         const missing = uncovered(signIns, needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns)) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        // Sign-ins the turn needs and Restart to Update are the user's to do.
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
@@ -1672,7 +1673,7 @@ export function buildThreadbearTools(
         const signIns = await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth);
         const missing = uncovered(signIns, needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns)) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
