@@ -3,6 +3,10 @@
 // effort. The first that isn't the thread's own provider and has a login
 // with room reviews, so when one runs out for the week the next takes over
 // (Mike, 15 Nov 2026, with Codex used up and Grok credits going spare).
+// A row's tick puts it on the review panel: for a big or risky change,
+// every one ticked with a login reviews at once and their findings merge.
+// A provider can be listed more than once on different models, so rows are
+// known by their place in the list, not their provider.
 //
 // The rows drag into order the way the Runners panel's cards do
 // (runners_panel.rs). Every change is the whole list, shown at once
@@ -11,6 +15,7 @@
 use super::{row_with, SettingsWindow};
 use crate::highlights::{tipped, tipped_as};
 use crate::{icons, style};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::{h_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -20,9 +25,10 @@ use threadbear_core::composer::{effort_title, model_title};
 use threadbear_core::logins::{choice_for, ModelChoice, RunnerLogins};
 use threadbear_core::runner_settings::{reviewer_dropped, reviewers_change, LabReviewer};
 
-/// A reviewer's row being dragged.
+/// A reviewer's row being dragged, by its place in the list.
 #[derive(Clone)]
 struct DraggedReviewer {
+    index: usize,
     provider: String,
     name: SharedString,
 }
@@ -62,14 +68,30 @@ fn has_login(logins: &RunnerLogins, provider: &str) -> bool {
     logins.accounts.iter().any(|a| a.provider_id() == provider)
 }
 
-/// The providers with a login here that aren't in the list yet, in the
-/// order the runner lists its providers.
-fn addable(logins: &RunnerLogins, list: &[LabReviewer]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+/// A model's id as a reviewer names it.
+fn model_id(m: &ModelChoice) -> String {
+    if m.model.is_empty() { m.id.clone() } else { m.model.clone() }
+}
+
+/// The rows Add Reviewer offers: one per provider with a login here, in the
+/// order the runner lists its providers. One already listed is offered
+/// again so it can review on another model too, starting on a model none of
+/// its rows has yet (the runner drops an exact repeat, so a second row on
+/// the same model would vanish); with every model taken it isn't offered.
+fn addable(logins: &RunnerLogins, list: &[LabReviewer]) -> Vec<LabReviewer> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = Vec::new();
     let ids = logins.providers.iter().map(|p| p.id.clone()).chain(logins.accounts.iter().map(|a| a.provider_id().to_owned()));
     for id in ids {
-        if has_login(logins, &id) && !list.iter().any(|r| r.provider == id) && !out.contains(&id) {
-            out.push(id);
+        if !has_login(logins, &id) || seen.contains(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        let taken: Vec<Option<&str>> = list.iter().filter(|r| r.provider == id).map(|r| r.model.as_deref()).collect();
+        if !taken.contains(&None) {
+            out.push(LabReviewer::new(&id));
+        } else if let Some(free) = models_of(logins, &id).iter().map(model_id).find(|m| !taken.contains(&Some(m.as_str()))) {
+            out.push(LabReviewer { model: Some(free), ..LabReviewer::new(&id) });
         }
     }
     out
@@ -85,8 +107,8 @@ fn with(list: &[LabReviewer], i: usize, change: impl FnOnce(&mut LabReviewer)) -
 }
 
 impl SettingsWindow {
-    /// The reviewers' rows, then Add Reviewer when there's a provider left
-    /// to add.
+    /// The reviewers' rows, then Add Reviewer when there's a provider with a
+    /// login to add.
     pub(super) fn reviewer_rows(&self, list: &[LabReviewer], cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(app) = self.app.upgrade() else { return Vec::new() };
         let logins = app.read(cx).logins.clone();
@@ -94,14 +116,15 @@ impl SettingsWindow {
         let more = addable(&logins, list);
         if !more.is_empty() {
             let choices: Vec<(String, bool, Value)> = more
-                .iter()
-                .map(|p| {
+                .into_iter()
+                .map(|r| {
+                    let title = logins.provider_title(&r.provider);
                     let mut next = list.to_vec();
-                    next.push(LabReviewer::new(p));
-                    (logins.provider_title(p), false, reviewers_change(&next))
+                    next.push(r);
+                    (title, false, reviewers_change(&next))
                 })
                 .collect();
-            let add = self.menu_owned("settings-reviewer-add".into(), "Add Reviewer".into(), None, "Add a provider you have a login for to the end of the list".into(), choices, cx);
+            let add = self.menu_owned("settings-reviewer-add".into(), "Add Reviewer".into(), None, "Add a provider you have a login for to the end of the list. One already listed can go on again with another model".into(), choices, cx);
             rows.push(row_with(h_flex().child(add).into_any_element(), div().into_any_element(), cx));
         }
         rows
@@ -117,7 +140,7 @@ impl SettingsWindow {
         let mut label = h_flex().gap(px(8.)).items_center().min_w_0();
         if movable {
             label = label.child(
-                tipped_as(div().id(SharedString::from(format!("settings-reviewer-handle-{provider}"))).flex_none().w(px(13.)).h(px(17.)).flex().items_center().justify_center().cursor_grab(), "Drag to change the order", gpui_kit::Role::GenericContainer)
+                tipped_as(div().id(SharedString::from(format!("settings-reviewer-handle-{i}"))).flex_none().w(px(13.)).h(px(17.)).flex().items_center().justify_center().cursor_grab(), "Drag to change the order", gpui_kit::Role::GenericContainer)
                     .child(icons::symbol("line.3.horizontal").with_size(px(12.)).text_color(tertiary)),
             );
         }
@@ -126,11 +149,19 @@ impl SettingsWindow {
             .child(div().min_w_0().whitespace_nowrap().text_ellipsis().overflow_hidden().when(!here, |s| s.text_color(tertiary)).child(name.clone()));
         if !here {
             // Kept in the list (the login may come back), but passed over.
-            label = label.child(tipped(div().id(SharedString::from(format!("settings-reviewer-missing-{provider}"))).text_size(px(11.)).text_color(tertiary).whitespace_nowrap(), format!("There's no {name} login on this runner, so it's passed over")).child("No login"));
+            label = label.child(tipped(div().id(SharedString::from(format!("settings-reviewer-missing-{i}"))).text_size(px(11.)).text_color(tertiary).whitespace_nowrap(), format!("There's no {name} login on this runner, so it's passed over")).child("No login"));
         }
 
         let models = models_of(logins, &provider);
         let mut controls = h_flex().gap(px(6.)).items_center().flex_none();
+        // On the panel or not: a bare tick, its meaning in the tip.
+        let me = cx.entity().downgrade();
+        let flip = list.to_vec();
+        let tip = "On the review panel: for a big or risky change, every reviewer ticked here reviews at once";
+        controls = controls.child(Checkbox::new(SharedString::from(format!("settings-reviewer-panel-{i}"))).checked(r.panel).small().tooltip(tip).on_click(move |on: &bool, _, cx| {
+            let change = with(&flip, i, |x| x.panel = *on);
+            me.update(cx, |this, cx| this.update(change, cx)).ok();
+        }));
         if here && !models.is_empty() {
             let shown = r.model.as_deref().map(|m| choice_for(m, &models).map_or_else(|| model_title(Some(m)), |c| if c.title.is_empty() { model_title(Some(m)) } else { c.title.clone() }));
             // A new model keeps the effort only if it offers it; otherwise the
@@ -143,7 +174,7 @@ impl SettingsWindow {
                 x.effort = default_effort;
             }))];
             for m in &models {
-                let id = if m.model.is_empty() { m.id.clone() } else { m.model.clone() };
+                let id = model_id(m);
                 let title = if m.title.is_empty() { model_title(Some(&id)) } else { m.title.clone() };
                 let picked = r.model.as_deref() == Some(id.as_str()) || r.model.as_deref() == Some(m.id.as_str());
                 let effort = keeps(Some(&id));
@@ -152,7 +183,7 @@ impl SettingsWindow {
                     x.effort = effort;
                 })));
             }
-            controls = controls.child(self.menu_owned(format!("settings-reviewer-model-{provider}"), shown.unwrap_or_else(|| "Default".into()), None, format!("The model {name} reviews on"), choices, cx));
+            controls = controls.child(self.menu_owned(format!("settings-reviewer-model-{i}"), shown.unwrap_or_else(|| "Default".into()), None, format!("The model {name} reviews on"), choices, cx));
         }
         let levels = logins.effort_levels(r.model.as_deref(), &models, &provider);
         if here && !levels.is_empty() {
@@ -165,13 +196,14 @@ impl SettingsWindow {
                     (effort_title(l), *l == current, with(list, i, |x| x.effort = Some(level)))
                 })
                 .collect();
-            controls = controls.child(self.menu_owned(format!("settings-reviewer-effort-{provider}"), effort_title(&current), None, format!("How hard {name} thinks while it reviews"), choices, cx));
+            controls = controls.child(self.menu_owned(format!("settings-reviewer-effort-{i}"), effort_title(&current), None, format!("How hard {name} thinks while it reviews"), choices, cx));
         }
-        let rest: Vec<LabReviewer> = list.iter().filter(|x| x.provider != provider).cloned().collect();
-        controls = controls.child(self.icon_button_owned(format!("settings-reviewer-remove-{provider}"), "minus.circle", format!("Take {name} off the list"), cx, move |this, _, cx| this.update(reviewers_change(&rest), cx)));
+        let mut rest = list.to_vec();
+        rest.remove(i);
+        controls = controls.child(self.icon_button_owned(format!("settings-reviewer-remove-{i}"), "minus.circle", format!("Take {name} off the list"), cx, move |this, _, cx| this.update(reviewers_change(&rest), cx)));
 
         let row = row_with(label.into_any_element(), controls.into_any_element(), cx);
-        let shell = div().id(SharedString::from(format!("settings-reviewer-{provider}"))).w_full().rounded(px(8.));
+        let shell = div().id(SharedString::from(format!("settings-reviewer-{i}"))).w_full().rounded(px(8.));
         if !movable {
             return shell.child(row).into_any_element();
         }
@@ -179,12 +211,11 @@ impl SettingsWindow {
         // dashed meanwhile, as on the Runners panel.
         let slot = style::tertiary_label(cx);
         let order = list.to_vec();
-        let onto = provider.clone();
         shell
-            .on_drag(DraggedReviewer { provider: provider.clone(), name: name.into() }, |d, _, _, cx| cx.new(|_| ReviewerGhost { provider: d.provider.clone(), name: d.name.clone() }))
+            .on_drag(DraggedReviewer { index: i, provider: provider.clone(), name: name.into() }, |d, _, _, cx| cx.new(|_| ReviewerGhost { provider: d.provider.clone(), name: d.name.clone() }))
             .drag_over::<DraggedReviewer>(move |s, _, _, _| s.border_1().border_dashed().border_color(slot).m(gpui_kit::px(-1.)))
             .on_drop(cx.listener(move |this, d: &DraggedReviewer, _, cx| {
-                if let Some(next) = reviewer_dropped(&order, &d.provider, &onto) {
+                if let Some(next) = reviewer_dropped(&order, d.index, i) {
                     this.update(reviewers_change(&next), cx);
                 }
             }))
@@ -213,9 +244,18 @@ mod tests {
     }
 
     #[test]
-    fn add_offers_providers_with_a_login_not_listed() {
+    fn add_offers_providers_with_a_login_on_a_model_not_listed() {
         let list = vec![LabReviewer::new("codex"), LabReviewer::new("claude")];
-        assert_eq!(addable(&logins(), &list), vec!["grok"], "Cursor has no login here");
+        let offered = |list: &[LabReviewer]| addable(&logins(), list).into_iter().map(|r| (r.provider, r.model)).collect::<Vec<_>>();
+        assert_eq!(
+            offered(&list),
+            vec![("codex".into(), Some("gpt-6.1-sol".into())), ("grok".into(), None)],
+            "Codex again on its other model; Claude has no other model to go on; Cursor has no login here"
+        );
+        let both = vec![LabReviewer::new("codex"), LabReviewer { model: Some("gpt-6.1-sol".into()), ..LabReviewer::new("codex") }];
+        assert_eq!(offered(&both), vec![("claude".into(), None), ("grok".into(), None)], "every Codex model is taken");
+        let picked = vec![LabReviewer { model: Some("gpt-6.1-sol".into()), ..LabReviewer::new("codex") }];
+        assert_eq!(offered(&picked)[1], ("codex".into(), None), "the default is free while no Codex row is on it");
         assert_eq!(models_of(&logins(), "codex").len(), 1);
         assert!(models_of(&logins(), "grok").is_empty());
     }

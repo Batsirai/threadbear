@@ -340,3 +340,39 @@ fn a_reviewed_turns_ledger_is_a_row_over_the_reply() {
     let ids = ids(&carried);
     assert_eq!(ids.iter().position(|i| i == "lr:t2").map(|p| p + 1), ids.iter().position(|i| i == "a:m2"), "{ids:?}");
 }
+
+#[test]
+fn a_panels_ledger_names_everyone_and_who_found_each_finding() {
+    let review = LabReview::decode(&json!({
+        "reviewer": "Gemini (opencode-main), Codex (codex-1), Claude (claude-2)", "independent": true, "rounds": 1, "threadId": "rev-1", "passed": false,
+        "panel": [
+            {"reviewer": "Gemini (opencode-main)", "threadId": "rev-1", "independent": true},
+            {"reviewer": "Codex (codex-1)", "threadId": "rev-2", "independent": true},
+            {"reviewer": "Claude (claude-2)", "threadId": "rev-3", "independent": false},
+            "not a reviewer"
+        ],
+        "findings": [
+            {"id": 1, "claim": "Drops the session on refresh.", "outcome": "fixed", "by": "Codex (codex-1)"},
+            {"id": 2, "claim": "Keeps the old token.", "outcome": "left"}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(review.panel.as_ref().map(Vec::len), Some(3), "one that isn't an object is left out");
+    assert_eq!(review.heading(), "Reviewed by Gemini, Codex and a fresh Claude session: 1 open");
+    assert_eq!(review.found_by(&review.findings[0]).as_deref(), Some("Codex"), "the login is left off");
+    assert_eq!(review.found_by(&review.findings[1]), None, "the runner didn't say");
+
+    // The same provider on two models: the login tells them apart.
+    let twins = LabReview::decode(&json!({
+        "reviewer": "Gemini (opencode-main), Gemini (opencode-2)",
+        "panel": [{"reviewer": "Gemini (opencode-main)", "threadId": "a"}, {"reviewer": "Gemini (opencode-2)", "threadId": "b"}],
+        "findings": [{"id": 1, "claim": "x", "by": "Gemini (opencode-2)"}]
+    }))
+    .unwrap();
+    assert_eq!(twins.found_by(&twins.findings[0]).as_deref(), Some("Gemini (opencode-2)"));
+
+    // One reviewer: the heading already names it.
+    let one = LabReview::decode(&json!({"reviewer": "Codex (codex-1)", "findings": [{"id": 1, "claim": "x", "by": "Codex (codex-1)"}]})).unwrap();
+    assert!(one.panel.is_none());
+    assert_eq!(one.found_by(&one.findings[0]), None);
+}

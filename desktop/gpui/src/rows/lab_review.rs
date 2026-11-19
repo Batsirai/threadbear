@@ -1,7 +1,8 @@
 // Another lab's review as a row over the turn's reply (RowRenderer.reviewText):
 // a quiet line saying who reviewed and how it came out, which opens the
 // review's thread, then each finding with what the agent did about it
-// (fixed, disputed and why, left for Mike, or no answer) and where. It was on
+// (fixed, disputed and why, left for Mike, or no answer), where, and, when a
+// panel reviewed together, who found it. It was on
 // the done card until 12 Nov 2026; Mike moved it into the transcript, as the
 // review runs in the background and needn't draw his eye. The ledger is
 // `turn.completed`'s `review` (docs/protocol.md, "Review by another lab").
@@ -31,8 +32,8 @@ fn outcome(finding: &ReviewFinding, cx: &App) -> (IconName, &'static str, Hsla) 
 }
 
 /// The line under a finding: what was done, the agent's note, how serious,
-/// and where.
-fn finding_detail(finding: &ReviewFinding, word: &str) -> String {
+/// where, and who found it when a panel reviewed (LabReview::found_by).
+fn finding_detail(finding: &ReviewFinding, word: &str, by: Option<String>) -> String {
     let mut detail = word.to_owned();
     if let Some(note) = finding.note.as_deref().filter(|n| !n.is_empty()) {
         detail.push_str(&format!(": {note}"));
@@ -42,6 +43,9 @@ fn finding_detail(finding: &ReviewFinding, word: &str) -> String {
     }
     if let Some(place) = finding.where_.as_deref().filter(|w| !w.is_empty()) {
         detail.push_str(&format!(" · {place}"));
+    }
+    if let Some(by) = by {
+        detail.push_str(&format!(" · found by {by}"));
     }
     detail
 }
@@ -83,7 +87,7 @@ impl ThreadPane {
                             .flex_1()
                             .min_w_0()
                             .child(div().text_size(px(size::SMALL)).line_height(px(19.)).text_color(secondary).child(finding.claim.clone()))
-                            .child(div().text_size(px(size::SMALL)).line_height(px(17.)).text_color(quiet).child(finding_detail(finding, word))),
+                            .child(div().text_size(px(size::SMALL)).line_height(px(17.)).text_color(quiet).child(finding_detail(finding, word, review.found_by(finding)))),
                     ),
             );
         }

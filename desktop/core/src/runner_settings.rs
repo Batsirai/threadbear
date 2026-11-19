@@ -63,22 +63,27 @@ pub struct Experiment {
 /// One reviewer in Settings > General > Code review, in Mike's order
 /// (runner/src/lab-reviewers.ts): a provider, with the model and effort it
 /// reviews on when it names them (else the provider's default, at high).
+/// A provider can be listed more than once on different models, so a row is
+/// known by its place in the list, not its provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabReviewer {
     pub provider: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// On the review panel: for a big or risky change, every reviewer on it
+    /// with a login reviews at once.
+    pub panel: bool,
 }
 
 impl LabReviewer {
     pub fn new(provider: &str) -> LabReviewer {
-        LabReviewer { provider: provider.to_owned(), model: None, effort: None }
+        LabReviewer { provider: provider.to_owned(), model: None, effort: None, panel: false }
     }
 
     fn decode(v: &Value) -> Option<LabReviewer> {
         let provider = v["provider"].as_str().filter(|p| !p.is_empty())?.to_owned();
         let text = |k: &str| v[k].as_str().filter(|s| !s.is_empty()).map(str::to_owned);
-        Some(LabReviewer { provider, model: text("model"), effort: text("effort") })
+        Some(LabReviewer { provider, model: text("model"), effort: text("effort"), panel: v["panel"] == Value::Bool(true) })
     }
 
     pub fn json(&self) -> Value {
@@ -89,6 +94,9 @@ impl LabReviewer {
         if let Some(effort) = &self.effort {
             v["effort"] = Value::from(effort.clone());
         }
+        if self.panel {
+            v["panel"] = Value::Bool(true);
+        }
         v
     }
 }
@@ -98,13 +106,11 @@ pub fn reviewers_change(list: &[LabReviewer]) -> Value {
     serde_json::json!({ "labReviewers": list.iter().map(LabReviewer::json).collect::<Vec<_>>() })
 }
 
-/// The list with the reviewer `dragged` dropped on `onto`'s row: it takes
+/// The list with the reviewer at `from` dropped on the row at `to`: it takes
 /// that place and the rest close up, as a runner card dropped on another
 /// does. None when nothing moves.
-pub fn reviewer_dropped(list: &[LabReviewer], dragged: &str, onto: &str) -> Option<Vec<LabReviewer>> {
-    let from = list.iter().position(|r| r.provider == dragged)?;
-    let to = list.iter().position(|r| r.provider == onto)?;
-    if from == to {
+pub fn reviewer_dropped(list: &[LabReviewer], from: usize, to: usize) -> Option<Vec<LabReviewer>> {
+    if from == to || from >= list.len() || to >= list.len() {
         return None;
     }
     let mut out = list.to_vec();
@@ -257,15 +263,39 @@ mod tests {
     fn reviewers_read_save_and_reorder() {
         let s = RunnerSettings::decode(&json!({ "labReviewers": [{ "provider": "grok", "model": "grok-4.7", "effort": "high" }, { "provider": "" }, { "provider": "codex" }] }));
         let list = s.lab_reviewers.expect("sent, so shown");
-        assert_eq!(list, vec![LabReviewer { provider: "grok".into(), model: Some("grok-4.7".into()), effort: Some("high".into()) }, LabReviewer::new("codex")], "one with no provider is left out");
+        assert_eq!(list, vec![LabReviewer { provider: "grok".into(), model: Some("grok-4.7".into()), effort: Some("high".into()), panel: false }, LabReviewer::new("codex")], "one with no provider is left out");
         assert_eq!(reviewers_change(&list), json!({ "labReviewers": [{ "provider": "grok", "model": "grok-4.7", "effort": "high" }, { "provider": "codex" }] }), "a reviewer with no model or effort sends neither");
         assert!(RunnerSettings::decode(&json!({})).lab_reviewers.is_none(), "an older runner: no list");
 
         let three = vec![LabReviewer::new("codex"), LabReviewer::new("claude"), LabReviewer::new("grok")];
         let order = |l: Vec<LabReviewer>| l.into_iter().map(|r| r.provider).collect::<Vec<_>>();
-        assert_eq!(order(reviewer_dropped(&three, "grok", "codex").unwrap()), vec!["grok", "codex", "claude"], "dropped on the first: goes first");
-        assert_eq!(order(reviewer_dropped(&three, "codex", "grok").unwrap()), vec!["claude", "grok", "codex"], "dropped on the last: goes last");
-        assert!(reviewer_dropped(&three, "codex", "codex").is_none());
-        assert!(reviewer_dropped(&three, "gemini", "codex").is_none());
+        assert_eq!(order(reviewer_dropped(&three, 2, 0).unwrap()), vec!["grok", "codex", "claude"], "dropped on the first: goes first");
+        assert_eq!(order(reviewer_dropped(&three, 0, 2).unwrap()), vec!["claude", "grok", "codex"], "dropped on the last: goes last");
+        assert!(reviewer_dropped(&three, 0, 0).is_none());
+        assert!(reviewer_dropped(&three, 3, 0).is_none(), "a row that's gone moves nothing");
+    }
+
+    #[test]
+    fn reviewers_keep_the_panel_and_a_provider_twice() {
+        let sent = json!({ "labReviewers": [
+            { "provider": "opencode", "model": "google/gemini-4-carbon", "panel": true },
+            { "provider": "codex", "panel": false },
+            { "provider": "opencode", "model": "zai/glm-5", "panel": true },
+        ] });
+        let list = RunnerSettings::decode(&sent).lab_reviewers.expect("sent, so shown");
+        assert_eq!(list.iter().map(|r| r.panel).collect::<Vec<_>>(), vec![true, false, true], "only true is on the panel");
+        assert_eq!(list.iter().filter(|r| r.provider == "opencode").count(), 2, "the same provider on two models is two reviewers");
+        assert_eq!(
+            reviewers_change(&list),
+            json!({ "labReviewers": [
+                { "provider": "opencode", "model": "google/gemini-4-carbon", "panel": true },
+                { "provider": "codex" },
+                { "provider": "opencode", "model": "zai/glm-5", "panel": true },
+            ] }),
+            "panel is sent only when on"
+        );
+        // Dragging the second OpenCode moves that one, not the first.
+        let moved = reviewer_dropped(&list, 2, 0).unwrap();
+        assert_eq!(moved.iter().map(|r| r.model.as_deref()).collect::<Vec<_>>(), vec![Some("zai/glm-5"), Some("google/gemini-4-carbon"), None]);
     }
 }

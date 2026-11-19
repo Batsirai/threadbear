@@ -633,7 +633,7 @@ impl SettingsWindow {
             sections.push(section(
                 "settings-code-review",
                 "Code review",
-                "When a thread changes code and is done, another lab tries to break the change in a review thread of its own. Your thread waits for what it finds, fixes what holds up, and tells you in its reply. The reviewers below go in order: the first that isn't the thread's own provider and has a login with room reviews, on its model and effort, so when one runs out the next takes over. Drag them to change the order. With no other lab to hand, a fresh session of the thread's own provider reviews instead.",
+                "When a thread changes code and is done, another lab tries to break the change in a review thread of its own. Your thread waits for what it finds, fixes what holds up, and tells you in its reply. The reviewers below go in order: the first that isn't the thread's own provider and has a login with room reviews, on its model and effort, so when one runs out the next takes over. For a big or risky change, every reviewer ticked for the panel reviews at once instead. Drag them to change the order. With no other lab to hand, a fresh session of the thread's own provider reviews instead.",
                 "explain what a review found, change who reviews, or turn reviews on or off for you.",
                 rows,
                 cx,

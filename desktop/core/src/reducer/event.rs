@@ -1229,6 +1229,9 @@ pub struct ReviewFinding {
     /// fixed, disputed or left; None when the agent didn't answer.
     pub outcome: Option<String>,
     pub note: Option<String>,
+    /// The reviewer that found it ("Gemini (opencode-main)"), when the
+    /// runner names one: a panel's findings are merged into one list.
+    pub by: Option<String>,
 }
 
 impl ReviewFinding {
@@ -1243,8 +1246,36 @@ impl ReviewFinding {
             case: string(c, "case"),
             outcome: string(c, "outcome"),
             note: string(c, "note"),
+            by: string(c, "by"),
         })
     }
+}
+
+/// One of the reviewers on a panel that reviewed the latest round together
+/// (LabReviewLedger.panel).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PanelReviewer {
+    /// "Codex (codex-1)".
+    pub reviewer: String,
+    pub thread_id: String,
+    /// Another lab, not a fresh session of the same one.
+    pub independent: bool,
+}
+
+impl PanelReviewer {
+    fn decode(v: &Value) -> Option<PanelReviewer> {
+        let c = v.as_object()?;
+        Some(PanelReviewer {
+            reviewer: string(c, "reviewer").filter(|r| !r.is_empty())?,
+            thread_id: string(c, "threadId").unwrap_or_default(),
+            independent: boolean(c, "independent").unwrap_or(true),
+        })
+    }
+}
+
+/// A reviewer's name without its login: "Codex (codex-1)" is "Codex".
+fn reviewer_name(reviewer: &str) -> &str {
+    reviewer.split(" (").next().unwrap_or(reviewer)
 }
 
 /// The review ledger a turn that answered another lab's findings carries
@@ -1265,6 +1296,9 @@ pub struct LabReview {
     /// Fixes made in the last round there is, which no review looked at.
     pub unchecked: bool,
     pub findings: Vec<ReviewFinding>,
+    /// Who reviewed the latest round, when a panel of several did; then
+    /// `reviewer` is their names joined with ", ".
+    pub panel: Option<Vec<PanelReviewer>>,
 }
 
 impl LabReview {
@@ -1279,15 +1313,42 @@ impl LabReview {
             unstructured: boolean(c, "unstructured").unwrap_or(false),
             unchecked: boolean(c, "unchecked").unwrap_or(false),
             findings: lossy(c, "findings", ReviewFinding::decode).into_iter().filter(|f| !f.claim.is_empty()).collect(),
+            panel: c.get("panel").and_then(Value::as_array).map(|_| lossy(c, "panel", PanelReviewer::decode)).filter(|p| !p.is_empty()),
         })
+    }
+
+    /// Who found a finding, to show beside it: the reviewer's name without
+    /// its login, unless another on the panel has the same name. None when
+    /// the runner didn't say, or when one reviewer did the whole review and
+    /// the heading already names it.
+    pub fn found_by(&self, finding: &ReviewFinding) -> Option<String> {
+        let by = finding.by.as_deref().filter(|b| !b.is_empty())?;
+        if self.panel.is_none() && by == self.reviewer {
+            return None;
+        }
+        let name = reviewer_name(by);
+        let twin = self.panel.iter().flatten().any(|p| p.reviewer != by && reviewer_name(&p.reviewer) == name);
+        Some(if twin { by.to_owned() } else { name.to_owned() })
     }
 
     /// The one line over the findings: who, how many rounds, how it came out
     /// (LabReview.heading). The reviewer's login ("Codex (codex-1)") is left
     /// off: which account reviewed is noise here (Mike, 12 Nov 2026).
     pub fn heading(&self) -> String {
-        let name = self.reviewer.split(" (").next().unwrap_or(&self.reviewer);
-        let who = if self.independent { format!("Reviewed by {name}") } else { format!("Reviewed by a fresh {name} session") };
+        let one = |reviewer: &str, independent: bool| {
+            let name = reviewer_name(reviewer);
+            if independent { name.to_owned() } else { format!("a fresh {name} session") }
+        };
+        let who = match &self.panel {
+            Some(panel) => {
+                let names: Vec<String> = panel.iter().map(|p| one(&p.reviewer, p.independent)).collect();
+                match names.split_last() {
+                    Some((last, rest)) if !rest.is_empty() => format!("Reviewed by {} and {last}", rest.join(", ")),
+                    _ => format!("Reviewed by {}", names.join("")),
+                }
+            }
+            None => format!("Reviewed by {}", one(&self.reviewer, self.independent)),
+        };
         let rounds = if self.rounds > 1 { format!(", {} rounds", self.rounds) } else { String::new() };
         let open = self.findings.iter().filter(|f| f.outcome.is_none() || f.outcome.as_deref() == Some("left")).count();
         let result = if self.unstructured {
