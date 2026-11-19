@@ -58,7 +58,9 @@
 //      GPUI one in desktop/, with Rust if there's none), built, installed
 //      and opened. The runner's typecheck and unit tests (up to an hour)
 //      only run when this is code Mike's repo doesn't have, or with
-//      --run-checks (scripts/checked-upstream.mjs)
+//      --run-checks (scripts/checked-upstream.mjs). An app already
+//      installed from an older main gets main's build staged for its next
+//      start (switch-from-swift.sh)
 //   9. where to pair your iPhone and sign a browser in (the app's Settings)
 //
 // Node built-ins only, so it runs before the repo's packages are installed.

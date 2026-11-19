@@ -434,7 +434,10 @@ rollback covers a release that doesn't come up.
   the runner's typecheck and unit tests run and not skipped), the build
   runs `deploy.mjs --skip-checks` (`landChecked` in `runner/src/update.ts`;
   the runner's log says `checksLeftOut`). The snapshot, the smoke test and
-  the crash rollback are as before. On 13 Nov each landing that changed the
+  the crash rollback are as before. Someone else's copy that pulled Mike's
+  main as it is has no such line, so there the proof is his main having
+  the commit, fetched fresh from whichever remote is his (`onMikesMain`; a
+  fork's runner ran the whole suite for each update before, 19 Nov). On 13 Nov each landing that changed the
   runner had the same tests run twice on the check hosts, five minutes
   apart (a build's `check.sh --runner` is those two steps and nothing
   more): about two hours a day of the hosts. The checks still run for a
