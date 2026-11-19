@@ -553,3 +553,18 @@ test('the same check report queued on every tick arrives once', () => {
   s.result();
   assert.equal(s.sent.filter(m => /44525978424/.test(m.text)).length, 1);
 });
+
+test('a deleted schedule\'s message whose receipt cannot be written stays queued', () => {
+  const { h, thread } = running();
+  const a = h.runner.sendScheduled(thread.id, sameReport(), 's1', 't1', h.clock.now(), true);
+  const b = h.runner.sendScheduled(thread.id, `${sameReport()}\nmore`, 's1', 't2', h.clock.now(), true);
+  const emit = h.runner.emit.bind(h.runner);
+  let notes = 0;
+  h.runner.emit = ((st, body, turnId) => {
+    if (body.type === 'system.note' && ++notes === 2) throw new Error('ENOSPC');
+    return emit(st, body, turnId);
+  }) as typeof h.runner.emit;
+  assert.throws(() => h.runner.dropScheduled(thread.id, 's1'), /ENOSPC/);
+  assert.deepEqual(h.runner.mustGet(thread.id).rec.queue.map(q => q.turnId), [b.turnId]);
+  assert.notEqual(a.turnId, b.turnId);
+});

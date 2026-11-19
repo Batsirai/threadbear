@@ -4199,10 +4199,22 @@ export class Runner {
     if (!st || st.rt.deleted) return 0;
     const gone = st.rec.queue.filter((q) => isReminder(q) && q.scheduleId === scheduleId);
     if (!gone.length) return 0;
-    st.rec.queue = st.rec.queue.filter((q) => !gone.includes(q));
-    for (const q of gone) this.emit(st, { type: 'system.note', text: DELETED_REMINDER, supersededReminder: q.turnId }, st.rt.turn?.turnId);
-    this.markDirty(st);
-    return gone.length;
+    // Each receipt is on disk before its message leaves the queue: one that
+    // can't be written (disk full) leaves the rest queued, and the error
+    // goes to the caller.
+    const receipted = new Set<QueuedSend>();
+    try {
+      for (const q of gone) {
+        this.emit(st, { type: 'system.note', text: DELETED_REMINDER, supersededReminder: q.turnId }, st.rt.turn?.turnId);
+        receipted.add(q);
+      }
+    } finally {
+      if (receipted.size) {
+        st.rec.queue = st.rec.queue.filter((q) => !receipted.has(q));
+        this.markDirty(st);
+      }
+    }
+    return receipted.size;
   }
 
   // A saved user message must be answered before automatic redelivery.

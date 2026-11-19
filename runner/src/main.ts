@@ -21,7 +21,7 @@ import { win32Helper } from './win32-helper.ts';
 import { RELEASE, markConfigStop, markGoodLater, onStopRequest, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
 import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
-import { scheduledSendMethods, sendScheduled, Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, primaryRemote, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
+import { dropScheduled, scheduledSendMethods, sendScheduled, Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, primaryRemote, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
 import { RunnerUpdater, releaseTreeAt } from './update.ts';
 import { RELEASE_NOTES_SYSTEM, SETTLE_MS, Upstream } from './upstream.ts';
 import { BringIn } from './bring-in.ts';
@@ -554,6 +554,7 @@ async function main(): Promise<void> {
     elsewhere: (id) => peers.owns(id) || peers.isArriving(id),
     folderElsewhere: (id) => peers.find(id)?.cwd,
     sendElsewhere: (id, text, scheduleId, run, since, preserve) => sendScheduled(runner, peers, id, text, scheduleId, run, since, preserve),
+    dropElsewhere: (id, scheduleId) => dropScheduled(runner, peers, id, scheduleId),
     self: { id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName(), icon: runnerIcon, version: RUNNER_VERSION, release: RELEASE.release, startedAt },
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
     // A box keeps none (decision 13): every way to make, change or run one is refused.

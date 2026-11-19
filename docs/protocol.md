@@ -6033,13 +6033,21 @@ kept in `schedules.json` in the data dir.
   per schedule, with a durable local note for each superseded delivery so
   retrying a lost reply cannot bring it back. Reminders carrying check output
   are preserved separately: that output may contain items no longer in the
-  check's storage. New queued sends carry `preserveSchedule: boolean` from
+  check's storage, except that the same text queued again from one
+  schedule (a check printing the same thing every tick while the thread is
+  busy) keeps only the newest copy. New queued sends carry `preserveSchedule: boolean` from
   the scheduler, so a quoted check report in the reminder's own text does
   not disable coalescing. Legacy queues infer this from the check suffix,
   conservatively retaining held-check notices too. Repeated Run now requests
   also replace a pending reminder
-  from the same schedule; they cannot hold up ordinary messages. Pausing or
-  deleting a schedule does not retract its already accepted message. A
+  from the same schedule; they cannot hold up ordinary messages. Pausing a
+  schedule does not retract its already accepted message. Deleting one
+  does: its reminders still queued for the thread are dropped, each with
+  the same `supersededReminder` receipt, whether it was deleted here or the
+  backend's rows stop showing it. A draining runner keeping the thread is
+  asked with `drain.dropScheduled { threadId, scheduleId }` → `{ dropped }`
+  (`moved` once the thread has come across, when the primary drops them
+  itself); a draining release without the method keeps its queue. A
   thread kept by a draining runner receives it there through
   `drain.sendScheduled { threadId, text, scheduleId }` → `{ turnId }`,
   with `origin: "schedule"` and `queue: true`, once its turn ends and

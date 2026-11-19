@@ -223,6 +223,11 @@ export class Scheduler {
   private elsewhere: (threadId: string) => boolean;
   private folderElsewhere?: (threadId: string) => string | undefined;
   private sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number, preserve?: boolean) => Promise<{ turnId: string }>;
+  private dropElsewhere?: (threadId: string, scheduleId: string) => Promise<number>;
+  // The ids in the backend's last snapshot: only a row it has shown and then
+  // left out was deleted. One this runner has just saved may not be in the
+  // next snapshot yet.
+  private shown = new Set<string>();
   // Schedule checks (schedule-check.ts).
   private home: string;
   private check: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -271,6 +276,7 @@ export class Scheduler {
     elsewhere?: (threadId: string) => boolean;
     folderElsewhere?: (threadId: string) => string | undefined;
     sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number, preserve?: boolean) => Promise<{ turnId: string }>;
+    dropElsewhere?: (threadId: string, scheduleId: string) => Promise<number>;
     self?: SelfRunner;
     syncOn?: boolean;
     runCheck?: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -288,6 +294,7 @@ export class Scheduler {
     this.elsewhere = deps.elsewhere ?? (() => false);
     this.folderElsewhere = deps.folderElsewhere;
     this.sendElsewhere = deps.sendElsewhere;
+    this.dropElsewhere = deps.dropElsewhere;
     this.file = path.join(deps.home, 'schedules.json');
     this.runsDir = path.join(deps.home, 'schedule-runs');
     this.clock = deps.clock;
@@ -482,8 +489,14 @@ export class Scheduler {
       if (!this.names.has(rec.runnerId)) this.namesDue = true;
     }
     // Deleted elsewhere (the phone, the website, another Mac): its
-    // messages still waiting for a busy thread here go too.
-    for (const was of before.values()) if (!this.items.has(was.id) && !was.finishedAt) this.dropQueued(was);
+    // messages still waiting for a busy thread here go too. A one-off is
+    // finished as soon as its message is queued, so only one pruned a week
+    // after that is left alone.
+    const now = this.clock.now();
+    for (const was of before.values()) {
+      if (this.shown.has(was.id) && !this.items.has(was.id) && !(was.finishedAt && now - Date.parse(was.finishedAt) > KEEP_FINISHED_MS)) this.dropQueued(was);
+    }
+    this.shown = new Set(rows.map((r) => r.id));
     this.overlayUnrecorded();
     if (this.namesDue) void this.refreshNames();
     this.changed();
@@ -813,11 +826,17 @@ export class Scheduler {
   // A deleted schedule's messages still waiting behind a busy turn go
   // with it, rather than arriving after delete_schedule said Deleted.
   private dropQueued(rec: ScheduleRecord): void {
-    if (!rec.threadId) return;
+    const threadId = rec.threadId;
+    if (!threadId) return;
+    const failed = (e: unknown) => this.log.warn("could not drop a deleted schedule's queued messages", { scheduleId: rec.id, threadId, error: String(e) });
+    if (this.elsewhere(threadId)) {
+      void this.dropElsewhere?.(threadId, rec.id).catch(failed);
+      return;
+    }
     try {
-      this.runner.dropScheduled(rec.threadId, rec.id);
+      this.runner.dropScheduled(threadId, rec.id);
     } catch (e) {
-      this.log.warn("could not drop a deleted schedule's queued messages", { scheduleId: rec.id, error: String(e) });
+      failed(e);
     }
   }
 
@@ -1548,6 +1567,8 @@ export class Scheduler {
           } finally {
             this.sending.delete(rec.id);
           }
+          // Deleted while that was out: it may have queued it on arrival.
+          if (!this.items.has(rec.id)) this.dropQueued(rec);
         } else {
           ({ turnId } = this.runner.sendScheduled(rec.threadId, text, rec.id, run, since, preserve));
         }
