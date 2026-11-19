@@ -295,6 +295,8 @@ export class CliUpdates {
   private async updateAcp(p: Provider): Promise<void> {
     const binary = this.d.acp?.binary(p);
     if (!binary || this.ps(p).update?.state === 'running') return;
+    // One with no updater of its own (Antigravity): a new version is a new download.
+    if (!this.d.acp!.updateArgs(p).length) return this.finish(p, { state: 'unchanged', message: `${cliName(p)} has no updater: download a new version yourself.` });
     this.setUpdate(p, { state: 'running', message: `Updating ${cliName(p)}` });
     await this.refreshAcp(p);
     const before = this.installed[p];

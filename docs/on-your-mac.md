@@ -382,6 +382,14 @@ File references are where to look.
   (`seen.mjs`, which does nothing) whose running Grok reports, so a thread
   whose plugin didn't load is stopped. The guard reads
   `~/.grok/trusted_folders.toml` (`runner/src/adapters/acp/grok-guard.ts`).
+- **When Google's antigravity-acp (Gemini) is set up and signed in**
+  (`antigravityPath` in `runner.json`, or an `agy_acp_server.par` on your
+  PATH, signed by Google), it starts that for threads on Gemini, runs
+  `/usr/bin/codesign --verify` on it and the `localharness_external` beside
+  it, and runs it with `--version` when the runner starts. Each session opens
+  in an empty folder under your temp folder (`threadbear-acp-session-*`),
+  removed when it ends, as Antigravity writes a `skills/` folder into the
+  folder its session opens in. Threadbear never updates or downloads it.
 - **New installs start threads on Auto.** On Auto, Claude runs with its
   safety check approving or blocking each action, and Codex asks before
   edits. An install set up before 9 Nov 2026 keeps starting threads on
@@ -748,6 +756,9 @@ File references are where to look.
   (never opened). Grok itself reads `~/.grok`, and as it does anywhere your
   `~/.claude` settings, hooks, skills and `CLAUDE.md`; its threads run your
   own Grok and Claude hooks.
+- Whether `$GEMINI_HOME/antigravity-acp/acp_token.json` (`~/.gemini` by
+  default) exists (never opened). Antigravity itself reads and writes its
+  own folder there (its sign-in, conversations and settings).
 - With the Shared memory experiment on (off unless you turn it on): on your
   main Mac, each Claude login's `CLAUDE.md` and the memory files under
   `projects/*/memory/` for folders in your home folder, once a minute, which
@@ -806,6 +817,7 @@ File references are where to look.
 | OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with a thread on OpenCode: that thread's prompts and tool output, through the official CLI, and small jobs' text when a pool of only OpenCode logins is picked for them in Settings |
 | Cursor (api2.cursor.sh) | theirs | Only with a thread on Cursor: the same, on your own login |
 | xAI (cli-chat-proxy.grok.com and Grok's other services) | theirs | Only with a thread on Grok: the same, on your own login, and small jobs' text when a pool of only Grok logins is picked for them in Settings. After a Grok turn fails because the API couldn't be reached, the runner opens (and closes) a connection to cli-chat-proxy.grok.com as it does for the others |
+| Google (cloudcode-pa.googleapis.com and Antigravity's other services) | theirs | Only with a thread on Gemini: the same, on your own Google login. After a Gemini turn fails because the API couldn't be reached, the runner opens (and closes) a connection to cloudcode-pa.googleapis.com as it does for the others |
 | Fly.io (api.machines.dev) | yours, if you set it up | Never from the Mac: only from your Convex deployment, and only once you've made a virtual runner there (`boxes:setRunnerService`, docs/virtual-runners.md) and set `FLY_API_TOKEN` and `FLY_APP` on the deployment. It makes, pauses, resumes, lists and deletes a Fly Machine for each thread on a virtual runner (`convex/boxService.ts`, `convex/boxProviders/fly.ts`), and every 10 minutes lists them to delete any nobody wants. A machine's environment holds only your deployment's address and a single-use boot token that lapses in 10 minutes, and its tags name the box's rows. |
 | Mike's push relay | Mike's | Only when a paired iPhone or Android phone gets a notification (an Android phone's goes on to Google's Firebase Cloud Messaging, from the relay). It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A UnifiedPush server (ntfy.sh or whichever distributor the phone uses) | the distributor's | Only with the Android app's F-Droid build paired: each notification is posted from your Convex deployment, not the Mac, to the https address the phone's distributor gave it, encrypted so the server sees neither the text nor the thread (`convex/push.ts` `sendWebPush`, `docs/push-relay.md`, "UnifiedPush"). Private and local addresses are refused. |

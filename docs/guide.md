@@ -1456,6 +1456,18 @@ it turns up as a login and a pool, with its models in the picker. A pool
 with logins of several kinds lists each one's models under its name. OpenCode's
 free models work with no login; Cursor needs `agent login` first, and Grok
 `grok login`.
+Gemini on a Google AI plan (Pro or Ultra) runs through Google's own
+Antigravity agent, the way T3 Code does: download `agy_acp_server.par` for
+your Mac from the [ACP Registry](https://agentclientprotocol.com) (version
+1.4.5 works; 1.5.0 didn't start sessions on a Mac on 20 Nov 2026), set its
+path as `antigravityPath` in `runner.json`, and sign it in once with your
+Google account. Threadbear can't sign it in for you yet: the login shows up
+once `~/.gemini/antigravity-acp/acp_token.json` exists, which signing in
+from an ACP client that uses that folder makes. It then shows as a Gemini
+login with your plan's models.
+Google's FAQ says using an Antigravity login from other software can get the
+account suspended, so that risk is yours. Every tool it uses asks Threadbear
+first, and reads inside the thread's folder go ahead.
 Everything the agent wants to do comes through Threadbear first: on Ask and
 Plan first you get the usual cards, Auto behaves like Ask, and Full access
 goes ahead without them. A folder's own OpenCode config and plugins aren't
@@ -1597,7 +1609,8 @@ provider you have a login for (Grok, say), and pick each one's model and
 effort. The first that isn't the thread's own provider and has a login
 with room does the review, so when one runs out for the week, the next
 takes over. You can list a provider more than once on different models.
-Gemini reviews through OpenCode: give OpenCode a Google AI Studio key
+Gemini reviews through the Gemini login on a Google plan (above), or
+through OpenCode: give OpenCode a Google AI Studio key
 (`opencode auth login google`) and its Gemini models show up under
 OpenCode once the runner restarts.
 

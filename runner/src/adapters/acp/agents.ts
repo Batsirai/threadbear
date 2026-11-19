@@ -11,7 +11,7 @@ import type { InitializeResult } from './connection.ts';
 import { exeName } from '../../platform.ts';
 import { grokGuardDir, grokTrusts, guardPluginName } from './grok-guard.ts';
 
-export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok'>;
+export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok' | 'antigravity'>;
 
 // What a process is started for: the runner's data dir (where Grok's hook
 // lives), and whether it's a small job that may use no tools at all.
@@ -32,13 +32,14 @@ export type AcpAgent = {
   findBinary(o: { explicit?: string; home: string; pathEnv: string }): string | undefined;
   // Read for every process it starts.
   args(run?: AgentRun): string[];
-  // Runs the agent's own updater, when Update is pressed.
+  // Runs the agent's own updater, when Update is pressed. Empty: it has none.
   updateArgs: string[];
   // Set on every process it starts. What stops a thread running tools
   // unguarded is here, so it applies whatever mode the thread starts in and
   // whatever it changes to later: the runner answers each request (AcpSession).
   // noTools: for a small job, where the agent may not use anything at all.
-  env(o?: { noTools?: boolean }): Record<string, string>;
+  // binary: the program it's for.
+  env(o?: { noTools?: boolean; binary?: string }): Record<string, string>;
   // Whether the process that answered initialize really is this agent, as
   // the same command name can be another program's.
   identifies(init: InitializeResult): boolean;
@@ -54,6 +55,18 @@ export type AcpAgent = {
   guardName?(args: string[]): string | undefined;
   // Whether the agent trusts this folder, read once as a process starts.
   trusts?(cwd: string): boolean;
+  // The agent writes into the folder its session opens in (Antigravity's
+  // skills/): each session opens in an empty folder of its own, with the
+  // thread's folder passed as an additional directory.
+  ownSessionFolder?: boolean;
+  // Said before the first message of a new session, about where the work is.
+  folderNote?(cwd: string): string;
+  // A tool call's arguments in the names the runner reads (command, cwd),
+  // for an agent that names them its own way.
+  toolInput?(raw: Record<string, unknown>): Record<string, unknown>;
+  // In an asking mode, a read of files that are all inside the thread's
+  // folder is allowed without a card, as other agents' own rules do.
+  readsInFolderGoAhead?: boolean;
   // Why a thread in this folder and mode can't run, if it can't. trusted: what
   // trusts said when its process started, which outlasts the trust file.
   // binary: the program the thread runs, for a refusal that depends on its version.
@@ -250,6 +263,103 @@ export function opencodeMajor(binary: string | undefined): number | undefined {
   }
 }
 
+// Google's team id, which signs antigravity-acp's binaries. A file counts
+// only when macOS says Google signed it, remembered per file until it
+// changes on disk. Elsewhere there's no such check to make.
+export const GOOGLE_TEAM_ID = 'EQHXZ8M8AV';
+const signed = new Map<string, { key: string; ok: boolean }>();
+export function isGoogleSigned(file: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== 'darwin') return true;
+  let key: string;
+  try {
+    const st = fs.statSync(file);
+    key = `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return false;
+  }
+  const known = signed.get(file);
+  if (known?.key === key) return known.ok;
+  let ok: boolean;
+  try {
+    execFileSync('/usr/bin/codesign', ['--verify', '--strict', `-R=anchor apple generic and certificate leaf[subject.OU] = "${GOOGLE_TEAM_ID}"`, file], { timeout: 20_000, stdio: 'ignore' });
+    ok = true;
+  } catch {
+    ok = false;
+  }
+  signed.set(file, { key, ok });
+  return ok;
+}
+
+// antigravity-acp comes as agy_acp_server.par with localharness_external
+// beside it (Google's download, dl.google.com/agy-extensions). Both must be
+// Google's.
+function isAntigravityBinary(file: string): boolean {
+  return isExecutableFile(file) && isGoogleSigned(file) && isGoogleSigned(path.join(path.dirname(file), 'localharness_external'));
+}
+
+// Where antigravity-acp keeps its login: GEMINI_HOME, or ~/.gemini.
+function geminiHome(home: string): string {
+  return process.env.GEMINI_HOME || path.join(home, '.gemini');
+}
+
+const ACP_TOOL_KEYS: Record<string, string> = { CommandLine: 'command', Cwd: 'cwd' };
+
+const ANTIGRAVITY: AcpAgent = {
+  provider: 'antigravity',
+  accountId: 'antigravity-main',
+  title: 'Gemini',
+  configDir: (home) => path.join(geminiHome(home), 'antigravity-acp'),
+  // Its sign-in, kept as a file (AGY_ACP_FORCE_FILE_STORAGE); only whether
+  // it exists is read.
+  loggedIn: (home) => fs.existsSync(path.join(geminiHome(home), 'antigravity-acp', 'acp_token.json')),
+  findBinary({ explicit, pathEnv }) {
+    if (explicit) return path.isAbsolute(explicit) && isAntigravityBinary(explicit) ? explicit : undefined;
+    const found = onPath('agy_acp_server.par', pathEnv);
+    return found && isAntigravityBinary(found) ? found : undefined;
+  },
+  args: () => [],
+  // Google's download has no updater: a new version is a new download.
+  updateArgs: [],
+  // A key in the runner's environment would be used instead of the Google
+  // sign-in, so they're blanked. The harness is the one beside the server.
+  env: (o = {}) => ({
+    GEMINI_API_KEY: '',
+    GOOGLE_API_KEY: '',
+    GOOGLE_GENERATIVE_AI_API_KEY: '',
+    GOOGLE_APPLICATION_CREDENTIALS: '',
+    AGY_ACP_FORCE_FILE_STORAGE: '1',
+    PYTHONUNBUFFERED: '1',
+    ...(o.binary ? { ANTIGRAVITY_HARNESS_PATH: path.join(path.dirname(o.binary), 'localharness_external') } : {}),
+  }),
+  identifies: (init) => init.agentInfo?.name === 'antigravity-acp',
+  // Its default mode asks before every tool; auto_edit and yolo don't, so
+  // it's never moved off it. Each request is answered from the thread's mode.
+  modeFor: () => 'default',
+  // It writes skills/system/run-workflow/SKILL.md into the folder its
+  // session opens in (1.4.5, 20 Nov 2026).
+  ownSessionFolder: true,
+  folderNote: (cwd) => `The project you're working in is ${cwd}: run commands there and use full paths under it. Your session's own folder is only a scratch space.`,
+  // Its shell tool says CommandLine and Cwd.
+  toolInput: (raw) => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const name = ACP_TOOL_KEYS[k];
+      out[name && !(name in raw) ? name : k] = v;
+    }
+    return out;
+  },
+  readsInFolderGoAhead: true,
+  // An MCP tool's request says its server and tool in _meta.mcp (1.4.5).
+  mcpToolName(call) {
+    const meta = (call as { _meta?: unknown })._meta;
+    if (!meta || typeof meta !== 'object') return undefined;
+    const m = meta as Record<string, unknown>;
+    const mcp = m.mcp as Record<string, unknown> | undefined;
+    if (m.is_mcp_tool_call !== true || !mcp || typeof mcp.server !== 'string' || typeof mcp.tool !== 'string' || !mcp.server || !mcp.tool) return undefined;
+    return `${mcp.server}__${mcp.tool}`;
+  },
+};
+
 export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
   opencode: {
     provider: 'opencode',
@@ -350,6 +460,7 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
       return undefined;
     },
   },
+  antigravity: ANTIGRAVITY,
 };
 
 export const ACP_PROVIDERS = Object.keys(ACP_AGENTS) as AcpProvider[];

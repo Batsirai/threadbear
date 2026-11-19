@@ -32,7 +32,7 @@ import { AcpNormalizer, absolutePath, isPlainEdit, isPlainObject, requestPaths, 
 // Where an execute call can say it runs (OpenCode's bash tool: workdir).
 const FOLDER_KEYS = ['workdir', 'cwd', 'workingDirectory', 'directory', 'dir'];
 // What an execute call can carry that doesn't change what runs or where.
-const BENIGN_KEYS = new Set(['description', 'timeout']);
+const BENIGN_KEYS = new Set(['description', 'timeout', 'WaitMsBeforeAsync']);
 
 function realFolder(p: string): string | undefined {
   try {
@@ -131,12 +131,12 @@ export class AcpAdapter implements AgentAdapter {
     this.provider = deps.agent.provider;
   }
 
-  private env(account: Account, threadEnv?: Record<string, string>): Record<string, string | undefined> {
+  private env(account: Account, binary: string, threadEnv?: Record<string, string>): Record<string, string | undefined> {
     const env = cliEnv(account, this.deps.env ?? process.env);
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CLAUDE_AGENT_SDK_CLIENT_APP;
     // Last, so a thread's own variables can't take these off.
-    return { ...env, ...threadEnv, ...this.deps.agent.env() };
+    return { ...env, ...threadEnv, ...this.deps.agent.env({ binary }) };
   }
 
   private binary(): string {
@@ -150,7 +150,7 @@ export class AcpAdapter implements AgentAdapter {
     const binary = this.binary();
     const refused = this.deps.agent.refuses?.({ cwd: opts.cwd, mode: opts.permissionMode, binary });
     if (refused) throw new Error(refused);
-    const s = new AcpSession(opts, sink, this.deps, binary, this.env(opts.account, opts.env));
+    const s = new AcpSession(opts, sink, this.deps, binary, this.env(opts.account, binary, opts.env));
     s.start();
     return s;
   }
@@ -162,7 +162,7 @@ export class AcpAdapter implements AgentAdapter {
     const { deps } = this;
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
     const bin = this.binary();
-    const p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, binary: bin }), env: this.env(account), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
+    const p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, binary: bin }), env: this.env(account, bin), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
     try {
       const init = await p.start();
       if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
@@ -226,6 +226,8 @@ export class AcpSession implements AgentSession {
   private preamble?: string;
   private replaying = false;
   private exitedCalled = false;
+  // The empty folder the agent's session opens in (AcpAgent.ownSessionFolder).
+  private ownFolder?: string;
   private exitPromise: Promise<void>;
   private resolveExit!: () => void;
 
@@ -298,7 +300,8 @@ export class AcpSession implements AgentSession {
       res = await this.openSession(mcpServers);
     } catch (e) {
       if (e instanceof AcpRpcError && e.code === AUTH_REQUIRED) {
-        throw Object.assign(new Error(`${name} needs a sign-in. Run \`${providerInfo(deps.agent.provider).loginCommand}\` in a terminal, then send this again.`), { errorKind: 'auth' });
+        const login = providerInfo(deps.agent.provider).loginCommand;
+        throw Object.assign(new Error(login ? `${name} needs a sign-in. Run \`${login}\` in a terminal, then send this again.` : `${name} needs a sign-in. Sign it in again, then send this again.`), { errorKind: 'auth' });
       }
       throw e;
     }
@@ -308,7 +311,7 @@ export class AcpSession implements AgentSession {
     this.noteOptions(res);
     this.ownEfforts = modelEfforts(res.models);
     if (!opts.resume) {
-      this.preamble = [defs.length ? toolGuidance(defs) : '', defs.length ? (deps.extraGuidance?.() ?? '') : '', opts.instructions ?? ''].filter(Boolean).join('\n\n') || undefined;
+      this.preamble = [defs.length ? toolGuidance(defs) : '', defs.length ? (deps.extraGuidance?.() ?? '') : '', deps.agent.folderNote?.(opts.cwd) ?? '', opts.instructions ?? ''].filter(Boolean).join('\n\n') || undefined;
     }
     await this.applyMode();
     if (this.model) await this.applyModel(this.model);
@@ -322,9 +325,13 @@ export class AcpSession implements AgentSession {
   private openSession(mcpServers: unknown[]): Promise<SessionResult> {
     const { opts } = this;
     const caps = this.init.agentCapabilities;
-    if (!opts.resume) return this.proc.request<SessionResult>('session/new', { cwd: opts.cwd, mcpServers });
+    // An agent that writes into its session's folder gets an empty one, and
+    // the thread's folder as an extra one (where the work is).
+    if (this.deps.agent.ownSessionFolder) this.ownFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-session-'));
+    const where = this.ownFolder ? { cwd: this.ownFolder, additionalDirectories: [opts.cwd] } : { cwd: opts.cwd };
+    if (!opts.resume) return this.proc.request<SessionResult>('session/new', { ...where, mcpServers });
     this.sessionId = opts.sessionId;
-    const common = { sessionId: opts.sessionId, cwd: opts.cwd, mcpServers };
+    const common = { sessionId: opts.sessionId, ...where, mcpServers };
     const opened = caps?.sessionCapabilities?.resume !== undefined
       ? this.proc.request<SessionResult>('session/resume', common)
       : caps?.loadSession
@@ -439,7 +446,7 @@ export class AcpSession implements AgentSession {
     if (this.guard && !this.replaying && this.checkGuard(method, params)) return;
     if (this.replaying || method !== 'session/update' || !isPlainObject(params)) return;
     if (this.sessionId && params.sessionId !== undefined && params.sessionId !== this.sessionId) return;
-    const update = params.update;
+    const update = this.mapInput(params.update);
     if (isPlainObject(update)) {
       if (update.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string') this.currentMode = update.currentModeId;
       if (update.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) this.noteOptions({ configOptions: update.configOptions as ConfigOption[] });
@@ -479,6 +486,24 @@ export class AcpSession implements AgentSession {
     return true;
   }
 
+  // A tool call's arguments in the names the runner reads (AcpAgent.toolInput).
+  private mapInput(u: unknown): unknown {
+    const map = this.deps.agent.toolInput;
+    if (!map || !isPlainObject(u) || !isPlainObject(u.rawInput)) return u;
+    return { ...u, rawInput: map(u.rawInput) };
+  }
+
+  // Every path inside the thread's folder, as the disk has it: a link out of
+  // the folder is where it goes, and one that can't be resolved isn't inside.
+  private allInFolder(paths: string[]): boolean {
+    const folder = realFolder(this.opts.cwd);
+    if (!folder || !paths.length) return false;
+    return paths.every((p) => {
+      const real = realFolder(p);
+      return real !== undefined && (real === folder || real.startsWith(folder + path.sep));
+    });
+  }
+
   private noteCommands(raw: unknown[]): void {
     this.cliCommands = raw.flatMap((c) => {
       if (!isPlainObject(c) || typeof c.name !== 'string' || !c.name) return [];
@@ -493,7 +518,7 @@ export class AcpSession implements AgentSession {
   private request(id: RequestId, method: string, params: unknown): void {
     if (method === 'session/request_permission' && !this.replaying) {
       const p = (isPlainObject(params) ? params : {}) as { toolCall?: AcpToolCall; options?: PermissionOption[]; _meta?: unknown };
-      const call = isPlainObject(p.toolCall) ? withoutHookNote(p.toolCall, p._meta) : p.toolCall;
+      const call = isPlainObject(p.toolCall) ? withoutHookNote(this.mapInput(p.toolCall) as AcpToolCall, p._meta) : p.toolCall;
       // Never left unanswered: the turn would hang with session/prompt open.
       this.permission(id, { ...p, toolCall: call }).catch((e: unknown) => {
         this.deps.log.error('acp permission handler threw', { threadId: this.opts.threadId, error: String(e) });
@@ -540,6 +565,9 @@ export class AcpSession implements AgentSession {
     if (mcpName && this.ownTools.has(mcpName)) return this.answer(id, options, true);
 
     const { kind } = seen;
+    // A read of the thread's own files, for an agent whose own rules can't
+    // say so (Antigravity asks before every tool).
+    if (kind === 'read' && this.deps.agent.readsInFolderGoAhead && this.allInFolder([...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))])) return this.answer(id, options, true);
     // What this request names and what earlier updates to the call said:
     // more names only makes the check stricter.
     const paths = [...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
@@ -874,6 +902,7 @@ export class AcpSession implements AgentSession {
     this.mcp?.close();
     this.emit(this.normalizer.closeOpen('Interrupted'));
     this.turn = undefined;
+    if (this.ownFolder) fs.rmSync(this.ownFolder, { recursive: true, force: true });
     this.resolveExit();
     this.sink.exited(error);
   }

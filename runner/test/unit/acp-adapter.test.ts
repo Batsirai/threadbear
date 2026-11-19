@@ -973,3 +973,90 @@ test('no protocol version in initialize is refused', async () => {
   await r.exited();
   assert.match(String(r.exitError()), /ACP version/);
 });
+
+// ---- Antigravity (Google's antigravity-acp, as Gemini)
+
+const agy = (o: Parameters<typeof rig>[0] = {}) => rig({ agent: ACP_AGENTS.antigravity, ...o, env: { FAKE_ACP_NAME: 'Antigravity', ...o.env } });
+
+test('Antigravity: a session runs from a folder of its own, with the thread\'s as an extra one, so its skills folder never lands in the repo', async () => {
+  const r = agy({ mode: 'full' });
+  const s = r.start();
+  await turn(r, s, 'exec ls');
+  const opened = r.log().find((l) => l.newSession) as { newSession: { cwd: string; additionalDirectories?: string[] } };
+  assert.notEqual(opened.newSession.cwd, r.cwd);
+  assert.deepEqual(opened.newSession.additionalDirectories, [r.cwd]);
+  assert.equal(fs.existsSync(path.join(r.cwd, 'skills')), false, 'nothing written into the thread\'s folder');
+  assert.ok(fs.existsSync(path.join(opened.newSession.cwd, 'skills')), 'it went in its own folder');
+  assert.deepEqual(r.log().find((l) => l.ran), { ran: 'ls', in: r.cwd });
+  const prompt = r.log().find((l) => l.prompt) as { prompt: string };
+  assert.match(prompt.prompt, new RegExp(`${r.cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), 'the first message says where the work is');
+  await s.end();
+  assert.equal(fs.existsSync(opened.newSession.cwd), false, 'its own folder goes with the session');
+});
+
+test('Antigravity: resume gets a folder of its own too', async () => {
+  const r = agy({ mode: 'full', opts: { resume: true, sessionId: 'ses-old' } });
+  const s = r.start();
+  await turn(r, s, 'hello');
+  const resumed = r.log().find((l) => l.resumed) as { cwd: string; additionalDirectories?: string[] };
+  assert.notEqual(resumed.cwd, r.cwd);
+  assert.deepEqual(resumed.additionalDirectories, [r.cwd]);
+  assert.equal(fs.existsSync(path.join(r.cwd, 'skills')), false);
+});
+
+test('Antigravity: its shell command shows as the command and folder, and Always allow covers that exact command', async () => {
+  let n = 0;
+  const r = agy({ answer: () => ({ decision: n++ === 0 ? 'allowAlways' : 'deny' }) });
+  const s = r.start();
+  await turn(r, s, 'exec ls -la');
+  assert.equal(r.cards.length, 1);
+  assert.equal(r.cards[0].name, 'shell');
+  assert.equal(r.cards[0].title, 'ls -la');
+  assert.deepEqual(r.cards[0].input, { command: 'ls -la', cwd: r.cwd });
+  assert.equal(r.cards[0].canAlwaysAllow, true);
+  await turn(r, s, 'exec ls -la', 'turn-2');
+  assert.equal(r.cards.length, 1, 'the saved rule allowed it without a card');
+  assert.equal(r.log().filter((l) => l.ran).length, 2);
+});
+
+test('Antigravity: never put in its auto-approving modes, and its own "always" is never picked', async () => {
+  const r = agy({ mode: 'full' });
+  const s = r.start();
+  await turn(r, s, 'exec ls');
+  assert.equal(r.log().some((l) => (l.set as Record<string, unknown> | undefined)?.mode), false, 'left in default, where every tool asks');
+  assert.deepEqual((r.log().find((l) => l.answered) as { answered: unknown }).answered, { outcome: { outcome: 'selected', optionId: 'allow' } });
+  for (const m of ['ask', 'auto', 'plan', 'full'] as PermissionMode[]) assert.equal(ACP_AGENTS.antigravity.modeFor(m), 'default');
+});
+
+test('Antigravity: reading a file in the thread\'s folder goes ahead in Ask; outside it, a card', async () => {
+  const r = agy({ deny: true });
+  fs.writeFileSync(path.join(r.cwd, 'a.txt'), 'x');
+  const s = r.start();
+  await turn(r, s, `read ${path.join(r.cwd, 'a.txt')}`);
+  assert.equal(r.cards.length, 0);
+  assert.deepEqual(r.log().find((l) => l.read), { read: path.join(r.cwd, 'a.txt') });
+  await turn(r, s, `read ${path.join(r.root, 'agent.log')}`, 'turn-2');
+  assert.equal(r.cards.length, 1, 'outside the folder asks');
+  // Through a link out of the folder, it's where the link goes that counts.
+  fs.symlinkSync(r.root, path.join(r.cwd, 'out'));
+  await turn(r, s, `read ${path.join(r.cwd, 'out', 'agent.log')}`, 'turn-3');
+  assert.equal(r.cards.length, 2, 'a link out of the folder asks');
+});
+
+test('Antigravity: the row', () => {
+  const a = ACP_AGENTS.antigravity;
+  assert.equal(a.identifies({ agentInfo: { name: 'antigravity-acp' } }), true);
+  assert.equal(a.identifies({ agentInfo: { name: 'OpenCode' } }), false);
+  const env = a.env({ binary: '/x/agy/agy_acp_server.par' });
+  for (const k of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS']) assert.equal(env[k], '', `${k} blanked, so the Google sign-in is used, not a key`);
+  assert.equal(env.ANTIGRAVITY_HARNESS_PATH, '/x/agy/localharness_external');
+  assert.deepEqual(a.updateArgs, [], 'no updater of its own');
+});
+
+test('Antigravity: an MCP tool is named from the request\'s _meta, never from its title', () => {
+  const name = ACP_AGENTS.antigravity.mcpToolName!;
+  assert.equal(name({ kind: 'other', title: 'threadbear_end_turn', _meta: { mcp: { tool: 'end_turn', server: 'threadbear' }, is_mcp_tool_call: true } } as never), 'threadbear__end_turn');
+  assert.equal(name({ kind: 'execute', title: 'threadbear_end_turn' }), undefined, 'a command that reads like one is not one');
+  assert.equal(name({ kind: 'other', _meta: { mcp: { tool: 'end_turn', server: 'threadbear' } } } as never), undefined, 'only when it says it is an MCP call');
+  assert.equal(name({ kind: 'other', _meta: { mcp: { tool: '', server: 'threadbear' }, is_mcp_tool_call: true } } as never), undefined);
+});

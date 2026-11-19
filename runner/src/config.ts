@@ -43,6 +43,7 @@ export type CliUpdatesConfig = {
   cursor?: CliPolicy;
   opencode?: CliPolicy;
   grok?: CliPolicy;
+  antigravity?: CliPolicy;
   checkMinutes: number;
   keepCodexVersions: number; // Codex copies kept under <home>/tools/codex
   // Other CLIs' update commands, run daily (updates/extra.ts). None by default.
@@ -105,6 +106,8 @@ export type Config = {
   cursorPath?: string;
   opencodePath?: string;
   grokPath?: string;
+  // agy_acp_server.par, with localharness_external beside it.
+  antigravityPath?: string;
   codexArgs: string[]; // extra `codex app-server` arguments
   codexMainDir: string; // codex-main's CODEX_HOME
   tokenStatsLimitsFile: string; // Token Stats' limits.json, read only
@@ -213,6 +216,7 @@ export type RunnerJson = {
   cursorPath?: string;
   opencodePath?: string;
   grokPath?: string;
+  antigravityPath?: string;
   codexArgs?: string[];
   cliUpdates?: Partial<CliUpdatesConfig>;
   accountNotes?: Record<string, string>;
@@ -511,6 +515,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     ...(nonEmpty(json.cursorPath) ? { cursorPath: expand(nonEmpty(json.cursorPath)!) } : {}),
     ...(nonEmpty(json.opencodePath) ? { opencodePath: expand(nonEmpty(json.opencodePath)!) } : {}),
     ...(nonEmpty(json.grokPath) ? { grokPath: expand(nonEmpty(json.grokPath)!) } : {}),
+    ...(nonEmpty(json.antigravityPath) ? { antigravityPath: expand(nonEmpty(json.antigravityPath)!) } : {}),
     codexArgs: Array.isArray(json.codexArgs) ? json.codexArgs.filter((a): a is string => typeof a === 'string') : [],
     codexMainDir: expand(env.THREADBEAR_CODEX_MAIN_DIR || '~/.codex'),
     tokenStatsLimitsFile: expand(

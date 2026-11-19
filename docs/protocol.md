@@ -177,9 +177,9 @@ upgrade with an `Authorization` header that's wrong is turned away with HTTP
 ## Types
 
 ```ts
-// cursor, opencode and grok: ACP agents, where their CLIs are installed and
-// logged in (see "ACP agents")
-type Provider = "claude" | "codex" | "cursor" | "opencode" | "grok"
+// cursor, opencode, grok and antigravity (Gemini on a Google plan): ACP
+// agents, where their CLIs are installed and logged in (see "ACP agents")
+type Provider = "claude" | "codex" | "cursor" | "opencode" | "grok" | "antigravity"
 
 // What a provider is called and can do, from `hello`. A client asks this
 // rather than comparing provider names, so a provider it has never heard of
@@ -1455,16 +1455,21 @@ Agents that speak the [Agent Client Protocol](https://agentclientprotocol.com)
 (runner/src/adapters/acp/) run as one process per live thread, over stdio.
 Where one's CLI isn't installed and logged in, no account or pool of its
 appears. `runner.json`'s `cursorPath`,
-`opencodePath` and `grokPath` set a binary by hand; otherwise each is found
-where it installs.
+`opencodePath`, `grokPath` and `antigravityPath` set a binary by hand; otherwise each is found
+where it installs (Antigravity: an `agy_acp_server.par` on the PATH).
 
-- **One login each**, per machine, ids `opencode-main`, `cursor-main` and
-  `grok-main` (signed in: `~/.grok/auth.json` exists, never opened). No
+- **One login each**, per machine, ids `opencode-main`, `cursor-main`,
+  `grok-main` (signed in: `~/.grok/auth.json` exists, never opened) and
+  `antigravity-main` (signed in: `$GEMINI_HOME/antigravity-acp/acp_token.json`,
+  `~/.gemini` by default, exists, never opened). No
   usage readings, so a pool can't move a thread by room.
 - **Which program.** The process must say it's that agent in `initialize`, or
   the thread doesn't start. `agent` is a generic name: a file only counts as
   Cursor's by where it really lives (`~/.local/share/cursor-agent/...`), and
-  only as Grok's when that's named `grok` or `grok-<version>...`.
+  only as Grok's when that's named `grok` or `grok-<version>...`. Antigravity's
+  `agy_acp_server.par` and the `localharness_external` beside it must both be
+  signed by Google (team `EQHXZ8M8AV`, checked with `codesign` on a Mac), and
+  it must call itself `antigravity-acp`.
 - **Asking.** Every tool comes to the runner first. OpenCode gets `*: ask` as
   inline config, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` (and 2's
   `OPENCODE_CONFIG_PROJECT_DISABLE=1`), `OPENCODE_CONFIG` blanked, a config
@@ -1533,6 +1538,19 @@ where it installs.
   `use_tool` naming `<server>__<tool>`: one of the session's own
   `threadbear__` tools is allowed as it comes, as the MCP server gates it. A
   rejected call ends Grok's turn (`stopReason: "cancelled"`).
+- **Antigravity** (Google's `antigravity-acp`, shown as Gemini) asks before
+  every tool in its `default` mode, so it's never moved off it (`auto_edit`
+  and `yolo` would approve by themselves), and each request is answered from
+  the thread's mode. A read whose files are all inside the thread's folder
+  (as the disk has them, links followed) goes ahead without a card. It writes
+  `skills/system/run-workflow/SKILL.md` into the folder its session opens in,
+  so each session (new or resumed) opens in an empty temp folder of its own,
+  removed when the session ends, with the thread's folder in
+  `additionalDirectories`, and the first message says where the work is. Its
+  shell tool's `CommandLine` and `Cwd` are read as `command` and `cwd`, and
+  its MCP calls say `_meta.mcp: { server, tool }`. Keys for Google's API in
+  the runner's environment are blanked, so its Google sign-in is what's used.
+  It has no updater, so Update does nothing for it.
 - **Plan first** uses the agent's plan mode, and the last reply of a turn is
   proposed as the plan.
 - **The threadbear tools** reach the agent as an MCP server over HTTP on
