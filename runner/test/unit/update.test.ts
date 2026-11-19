@@ -1072,7 +1072,7 @@ test("landChecked: someone's copy that pulled Mike's main skips what his landing
   git('config', `url.${mikes}.insteadOf`, 'https://github.com/mikecann/threadbear.git');
   git('remote', 'add', 'upstream', 'https://github.com/mikecann/threadbear.git');
   git('push', '-q', 'upstream', 'main');
-  assert.match((await landChecked(repo, 'runner/', his)) ?? '', /Mike's main has this commit \(upstream\)/);
+  assert.match((await landChecked(repo, 'runner/', his)) ?? '', /upstream\/main has this commit/);
   // A commit of this copy's own, even with a stale ref saying his main has it.
   const own = commit('mine', 'runner/src/main.ts', 'console.log(4)\n');
   git('update-ref', 'refs/remotes/upstream/main', own);

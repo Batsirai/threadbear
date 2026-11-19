@@ -505,7 +505,7 @@ export async function onMikesMain(checkout: string, commit: string): Promise<str
     try {
       await gitWithin(checkout, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', remote, `+refs/heads/main:${main}`], { timeoutMs: FETCH_TIMEOUT_MS });
       await gitWithin(checkout, ['merge-base', '--is-ancestor', commit, main]);
-      return `Mike's main has this commit (${remote}), and a landing's check passed them there`;
+      return `${remote}/main has this commit, and a landing's check passed them there`;
     } catch {
       // not fetched, or not his
     }
