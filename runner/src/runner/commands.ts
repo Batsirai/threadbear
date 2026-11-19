@@ -159,9 +159,11 @@ export const commandsPart = {
     let cli: SlashCommand[] = [];
     // Claude's list in a folder whose settings Mike hasn't trusted is made
     // without them (claude-trust.ts), so it's cached apart.
-    // The look on the trust worker (trust-off-thread.ts): outside git it's a walk of the folder.
+    // The look on the trust worker (trust-off-thread.ts): outside git it's a
+    // walk of the folder. A fresh one, never shared with an earlier look, as
+    // what it decides goes to a CLI started for the list.
     const opts = claudeOptions({ permissionMode });
-    const look = provider === 'claude' && this.offThread && this.patchTrust.lookClaude ? await this.patchTrust.lookClaude(cwd, opts) : undefined;
+    const look = provider === 'claude' && this.offThread && this.patchTrust.lookClaude ? await this.patchTrust.lookClaude(cwd, opts, 'urgent') : undefined;
     const claude = provider === 'claude' ? this.patchTrust.checkClaude(cwd, opts, look) : undefined;
     const skipped = claude && !claude.trusted ? claude.hash : undefined;
     const untrusted = skipped ? claudeSettingsWithoutCommands(cwd) : undefined;

@@ -145,3 +145,87 @@ test("a message sent while the turn's look at the folder is under way waits for 
   assert.match(s.sent[1].text, /again/);
   assert.ok(!s.sent[1].text.includes('and this'));
 });
+
+// A trust store whose looks can be held, failed and counted, with the
+// checks it makes after them.
+function heldTrust() {
+  const o = {
+    hold: undefined as Promise<void> | undefined,
+    fail: undefined as Error | undefined,
+    looks: [] as { at: number }[],
+    checks: [] as { look: boolean }[],
+    trust: undefined as unknown as typeof TRUST_ALL,
+  };
+  let n = 0;
+  o.trust = {
+    ...TRUST_ALL,
+    lookClaude: async (cwd: string, opts: { grants?: boolean } = {}) => {
+      o.looks.push({ at: ++n });
+      if (o.hold) await o.hold;
+      if (o.fail) throw o.fail;
+      return { cwd, grants: opts.grants === true, found: undefined };
+    },
+    checkClaude: (_cwd: string, _opts?: unknown, look?: unknown) => {
+      o.checks.push({ look: look !== undefined });
+      return { trusted: true as const };
+    },
+  };
+  return o;
+}
+
+async function warmThread(t: { after: (f: () => void) => void }, trust: typeof TRUST_ALL) {
+  const off = new TrustOffThread();
+  t.after(() => off.close());
+  const h = makeHarness(tmpDir(), {}, { patchTrust: trust, offThread: off });
+  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: tmpDir() });
+  await until(() => h.adapter.sessions.length === 1, 'the CLI to start');
+  const s = h.adapter.last;
+  s.init();
+  s.result('completed');
+  await until(() => !h.runner.threads.get(thread.id)!.rt.turn, 'the turn to end');
+  return { h, s, thread };
+}
+
+test('a CLI started after the old one closes gets a look taken after it closed, not before', async (t) => {
+  const o = heldTrust();
+  const { h, s, thread } = await warmThread(t, o.trust);
+  s.slowExit = true;
+  h.runner.threads.get(thread.id)!.rt.releaseWhenIdle = true;
+  h.runner.send(thread.id, 'again');
+  await until(() => s.ended, 'the old CLI asked to end');
+  const before = o.looks.length;
+  await tick();
+  assert.equal(h.adapter.sessions.length, 1, 'waits for the old CLI');
+  s.exit();
+  await until(() => h.adapter.sessions.length === 2, 'the new CLI');
+  assert.ok(o.looks.length > before, 'looked again once the old CLI had gone');
+  // Its check used that look, not one from before the wait.
+  assert.equal(o.checks.at(-1)?.look, true);
+});
+
+test('Stop while the look runs ends the turn without sending the message', async (t) => {
+  const o = heldTrust();
+  const { h, s, thread } = await warmThread(t, o.trust);
+  let release = () => {};
+  o.hold = new Promise((r) => (release = () => r()));
+  const before = o.looks.length;
+  h.runner.send(thread.id, 'again');
+  await until(() => o.looks.length > before, 'the look');
+  h.runner.interrupt(thread.id, { byMike: true });
+  release();
+  await until(() => !h.runner.threads.get(thread.id)!.rt.turn, 'the turn to end');
+  assert.deepEqual(s.sent.slice(1), []);
+  assert.equal(h.adapter.sessions.length, 1);
+});
+
+test("a look that fails fails the turn, rather than looking again on the runner's main thread", async (t) => {
+  const o = heldTrust();
+  const { h, s, thread } = await warmThread(t, o.trust);
+  o.fail = new Error('Looking at /x took over 120 s.');
+  const checks = o.checks.length;
+  h.runner.send(thread.id, 'again');
+  await until(() => !h.runner.threads.get(thread.id)!.rt.turn, 'the turn to end');
+  assert.equal(o.checks.length, checks, 'no check without a look');
+  assert.deepEqual(s.sent.slice(1), []);
+  assert.ok(h.events(thread.id).some((e) => JSON.stringify(e).includes("Couldn't read this folder's Claude Code settings")));
+});

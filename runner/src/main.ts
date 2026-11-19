@@ -430,7 +430,9 @@ async function main(): Promise<void> {
   // only come through that mirror.
   let atMac: boolean | undefined;
   const instructions = new InstructionsStore({ home: cfg.home, token, publish: (n) => runner.publish(n) });
-  const trustWorker = new TrustOffThread();
+  // Not in box mode: its spawn gate (spawn-gate.ts) holds processes on the
+  // main thread only, and the look runs git.
+  const trustWorker = box ? undefined : new TrustOffThread();
   runner = new Runner({
     // A box's one thread, and whether its restored worktree's setup must run
     // before any turn (runner/moves.ts setUpRestored).

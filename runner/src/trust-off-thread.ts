@@ -129,6 +129,12 @@ export class TrustOffThread {
     return this.ask({ kind: 'editsAsk', file, from, now }, 'background') as Promise<EditsAsk>;
   }
 
+  // Calls from now on don't share a look begun before (forgetFolders: what
+  // it read may be from before the change).
+  forget(): void {
+    this.shared.clear();
+  }
+
   close(): void {
     this.lanes.urgent.close();
     this.lanes.background.close();

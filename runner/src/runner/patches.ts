@@ -234,6 +234,8 @@ export const patchesPart = {
     this.folderCache.clear();
     this.claudeChecks.clear();
     this.claudeChecksGen++;
+    // And a look already under way isn't shared with the reads after this.
+    this.offThread?.forget();
     this.sharedPatchSets.clear();
     // A turn may have changed what they read (comments resolved, a handback).
     // One still running is kept, so it isn't started again beside itself.
