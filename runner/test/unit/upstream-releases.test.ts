@@ -703,3 +703,14 @@ test("a tag that never reached GitHub isn't a release: the next look deletes it 
   assert.notEqual(git(r.w.mike, 'rev-parse', `refs/tags/${tag}`), bad);
   assert.ok(git(r.w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`));
 });
+
+// Codex's third review: a pushed release/latest at main's tip passed for
+// the last release, though forks only take date-named ones.
+test('a release/ tag not named for a day is not the last release', async () => {
+  const r = readyToPublish();
+  signedTag(r.w.mike, 'release/latest', r.w.mikeKey.priv);
+  git(r.w.mike, 'push', '-q', 'origin', 'refs/tags/release/latest');
+  // A branch named like the old release can't hide it from the key check.
+  git(r.w.mike, 'branch', 'release/2026-10-01');
+  assert.equal(await r.publisher(r.w.mikeKey.priv).publishOnce(), tagFor(new Date(r.now)));
+});

@@ -1016,7 +1016,8 @@ export class Upstream {
     const pushed = new Set((await this.git(checkout, ['ls-remote', '--refs', 'origin', `refs/tags/${TAG_PREFIX}*`], { timeoutMs: this.fetchTimeoutMs }))
       .split('\n').map((l) => l.split('\t')[1]?.slice('refs/tags/'.length)).filter(Boolean));
     const local = (await this.git(checkout, ['tag', '--list', '--sort=-refname', `${TAG_PREFIX}*`])).split('\n').filter(Boolean);
-    const tags = local.filter((t) => pushed.has(t));
+    // Named as forks take them (RELEASE_NAME): a release/latest isn't one.
+    const tags = local.filter((t) => pushed.has(t) && RELEASE_NAME.test(t.slice(TAG_PREFIX.length)));
     this.pushedTags = new Set(tags);
     if (tags.includes(tag)) return this.hold(undefined);
     if (local.includes(tag)) {
@@ -1131,7 +1132,7 @@ export class Upstream {
     if (!keysIn(signers).length) return `${SIGNERS_FILE} has no keys at that commit`;
     const signer = signerKey(split.signature);
     const settled = await this.settledRelease(checkout, now);
-    if (settled && signer && !keysIn(await this.git(checkout, ['show', `${settled}:${SIGNERS_FILE}`]).catch(() => '')).includes(signer)) {
+    if (settled && signer && !keysIn(await this.git(checkout, ['show', `refs/tags/${settled}:${SIGNERS_FILE}`]).catch(() => '')).includes(signer)) {
       return `its key wasn't in ${SIGNERS_FILE} at ${settled}, so forks don't take it yet`;
     }
     const revoked = last ? keysIn(await this.git(checkout, ['show', `refs/tags/${last}:${REVOKED_FILE}`]).catch(() => '')) : [];
@@ -1150,7 +1151,7 @@ export class Upstream {
   // The newest release tag dated a day more than ADD_DELAY_MS ago (forks
   // look every six hours, and a Mac sleeps), or else the oldest there is.
   private async settledRelease(checkout: string, now: number): Promise<string | undefined> {
-    const lines = (await this.git(checkout, ['for-each-ref', '--sort=-taggerdate', '--format=%(refname:short)%09%(taggerdate:unix)', `refs/tags/${TAG_PREFIX}*`])).split('\n');
+    const lines = (await this.git(checkout, ['for-each-ref', '--sort=-taggerdate', '--format=%(refname:lstrip=2)%09%(taggerdate:unix)', `refs/tags/${TAG_PREFIX}*`])).split('\n');
     let oldest: string | undefined;
     for (const line of lines) {
       const [name, at] = line.split('\t');
