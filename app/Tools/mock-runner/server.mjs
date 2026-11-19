@@ -899,6 +899,7 @@ async function dispatch(client, method, p) {
       // Finish setting up counts that as a login that works).
       t.summary.nativeSessionId ??= 'mock-session-' + t.summary.id;
       setTimeout(() => fakeTurn(t.summary.id, p.text ?? '', p.images ?? [], turnId, p.origin === 'phone' ? 'phone' : undefined, extra), 10 + slow.queueMs);
+      wakeForTopics(t.summary.id, p.text ?? '');
       return { turnId };
     }
     case 'threads.edit': {
@@ -1312,8 +1313,9 @@ async function dispatch(client, method, p) {
     }
     case 'threads.hibernateWhen': {
       // Away at once, then a canned answer a moment later, as the real
-      // runner does after Opus answers: "talk about X" is a topic, anything
-      // else two days on.
+      // runner does after Opus answers: "talk about X" or "mention X" is a
+      // topic (woken when a message in another thread says it,
+      // wakeForTopics), anything else two days on.
       const t = need(p.threadId);
       const s = t.summary;
       const said = String(p.said ?? '').trim();
@@ -1322,7 +1324,7 @@ async function dispatch(client, method, p) {
       s.live = false;
       broadcastSummary(s.id);
       await new Promise((r) => setTimeout(r, 1500));
-      const topic = /talk about (.+)$/i.exec(said)?.[1];
+      const topic = /(?:talk about|mention)\s+(.+?)\.?$/i.exec(said)?.[1];
       s.wakeWhen = topic ? { said, topic } : { said };
       if (!topic) s.snoozedUntil = new Date(Date.now() + 2 * 86_400_000).toISOString();
       scheduleWake(s.id);
@@ -2935,6 +2937,30 @@ function scheduleWake(threadId) {
       broadcastSummary(threadId);
     }
   }, delay + 50);
+}
+
+// A message that says a hibernating thread's topic wakes it, as the
+// runner's librarian does (wakeForTopic in runner/src/runner/hibernation.ts),
+// a moment later and with the same note. The librarian reads for meaning;
+// this just looks for the words.
+function wakeForTopics(inThreadId, text) {
+  const where = threads.get(inThreadId)?.summary.title;
+  const said = String(text).toLowerCase();
+  for (const [id, t] of threads) {
+    const s = t.summary;
+    const topic = s.wakeWhen?.topic;
+    if (!topic || id === inThreadId || !s.snoozedUntil || s.archivedAt || !said.includes(topic.toLowerCase())) continue;
+    setTimeout(() => {
+      if (s.wakeWhen?.topic !== topic || !s.snoozedUntil || s.archivedAt) return;
+      s.snoozedUntil = undefined;
+      delete s.wakeWhen;
+      s.needsYou = true;
+      persist(id, { type: 'system.note', text: `Woke up: you talked about ${topic}${where ? ` in "${where}"` : ' in another thread'}.` });
+      s.woke = { at: iso(), ...(s.snoozedAt ? { since: s.snoozedAt } : {}) };
+      delete s.snoozedAt;
+      broadcastSummary(id);
+    }, 2500);
+  }
 }
 
 // ---------------------------------------------------------------- schedules
