@@ -537,13 +537,15 @@ export const patchesPart = {
       const at = this.clock.now();
       const gen = this.claudeChecksGen;
       const look = this.offThread && this.patchTrust.lookClaude ? await this.patchTrust.lookClaude(cwd, opts) : undefined;
-      hit = { at, look };
+      // Without a worker (box mode, tests) the verdict is kept, as looking
+      // again would be on this thread.
+      hit = look ? { at, look } : { at, verdict: this.patchTrust.checkClaude(cwd, opts) };
       // Not when forgetFolders cleared them meanwhile (the next read looks
       // again), nor over a newer look.
       const now = this.claudeChecks.get(key);
       if (gen === this.claudeChecksGen && (!now || now.at <= at)) this.claudeChecks.set(key, hit);
     }
-    const v = this.patchTrust.checkClaude(cwd, opts, hit.look);
+    const v = hit.verdict ?? this.patchTrust.checkClaude(cwd, opts, hit.look);
     if (v.trusted) return undefined;
     if (v.reason === 'unchecked') return { id: CLAUDE_PATCH_ID, source: 'claude', ...(v.files.length ? { file: v.files[0] } : {}), error: `Skipped, and can't be trusted as they are: ${v.problem}` };
     const helpers = [...v.files.slice(1), ...v.named];

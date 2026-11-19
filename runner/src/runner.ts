@@ -804,7 +804,7 @@ export class Runner {
   liveRuns = new Map<string, { doneAt?: number; out: Promise<CommandOutcome> }>();
   // Each folder's Claude settings verdict for its patch list, read again
   // as often as the folders are (claudePatchInfo).
-  claudeChecks = new Map<string, { at: number; look?: ClaudeLook }>();
+  claudeChecks = new Map<string, { at: number; look?: ClaudeLook; verdict?: ClaudeVerdict }>();
   // Bumped by forgetFolders: a look begun before it isn't kept.
   claudeChecksGen = 0;
   threads = new Map<string, ThreadState>();
@@ -2012,10 +2012,14 @@ export class Runner {
     const { rec, rt } = st;
     if (rec.provider !== 'claude' || !this.offThread || !this.patchTrust.lookClaude) return undefined;
     const cwd = rec.cwd;
+    // In Full both kinds, looked at together in one go on the worker, as
+    // close together as startSession's two checks were: two calls queued
+    // apart could see the folder before and after a pull.
     const kinds = forStart && rec.permissionMode === 'full' ? [false, true] : [claudeOptions(rec).grants === true];
     const token = {};
     if (rt.session) rt.lookingAtClaude = token;
     try {
+      if (this.patchTrust.lookClaudeKinds) return await this.patchTrust.lookClaudeKinds(cwd, kinds, 'urgent');
       return await Promise.all(kinds.map((grants) => this.patchTrust.lookClaude!(cwd, { grants }, 'urgent')));
     } finally {
       if (rt.lookingAtClaude === token) rt.lookingAtClaude = undefined;
@@ -2248,7 +2252,9 @@ export class Runner {
     // For a new CLI: looked at here, after the waits above, and used only
     // if nothing below waits again before startSession (the worktree steps
     // drop it), so it's as fresh as looking there.
-    let forStart = !rt.session && rec.provider === 'claude' && this.offThread ? await look(true) : undefined;
+    // A turn with a worktree step below waits there, so a look now would be
+    // dropped: startSession looks for itself.
+    let forStart = !rt.session && rec.provider === 'claude' && this.offThread && !rec.worktreePending && !this.leavesRemovedWorktree(rec) ? await look(true) : undefined;
     if (forStart === 'gone') return;
     if (!rt.session && rec.worktreePending) {
       forStart = undefined;
@@ -2817,6 +2823,11 @@ export class Runner {
         const r = o.result;
         const turn = rt.turn;
         if (!turn) break;
+        // While deliver looks at the folder before sending this turn's
+        // message (rt.lookingAtClaude), a result is the CLI's own turn (a
+        // background task woke it): not about this turn, whose message it
+        // hasn't had yet, as with no turn at all.
+        if (rt.lookingAtClaude && !turn.dispatched) break;
         // The compaction sent ahead of the message (runner/cold-compact.ts).
         // A turn the CLI ran by itself meanwhile isn't it: keep waiting.
         if (turn.precompact?.gen === rt.generation) {
@@ -3431,7 +3442,9 @@ export class Runner {
     const session = rt.session;
     // Nothing is running in the CLI for a turn that was only opened for a
     // background subagent's approval, so nothing would end it.
-    if (!session || rt.closing || (turn.auto && !turn.cliStarted)) {
+    // Nor for one whose message is still waiting on deliver's look at the
+    // folder (rt.lookingAtClaude): the CLI is idle, and its message unsent.
+    if (!session || rt.closing || (turn.auto && !turn.cliStarted) || (rt.lookingAtClaude && !turn.dispatched)) {
       this.failTurn(st, 'Interrupted.');
       return {};
     }

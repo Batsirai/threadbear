@@ -189,6 +189,9 @@ export interface PatchTrustStore extends PatchGate {
   // The slow part of checkClaude, on a worker thread (trust-off-thread.ts).
   // Absent: checkClaude looks for itself.
   lookClaude?(cwd: string, opts?: ClaudeOptions, lane?: Lane): Promise<ClaudeLook>;
+  // Several kinds of thread (grants or not) in one look, the folder read
+  // once after the other with nothing between, as startSession's checks were.
+  lookClaudeKinds?(cwd: string, grants: boolean[], lane?: Lane): Promise<ClaudeLook[]>;
   trustClaude(cwd: string, hash: string): boolean;
   // An agent's verified Edit or Write to `file` in a Full access thread in
   // `cwd`, which wrote bytes hashing to `sha256` from a file hashing to
@@ -454,12 +457,15 @@ export class PatchTrust implements PatchTrustStore {
   }
 
   async lookClaude(cwd: string, opts: ClaudeOptions = {}, lane: Lane = 'background'): Promise<ClaudeLook> {
-    const grants = opts.grants === true;
+    return (await this.lookClaudeKinds(cwd, [opts.grants === true], lane))[0];
+  }
+
+  async lookClaudeKinds(cwd: string, grants: boolean[], lane: Lane = 'background'): Promise<ClaudeLook[]> {
     this.load();
     // Trusted whatever it holds: nothing to look at.
-    if (this.alwaysFor(folderKeyOfDir(cwd), cwd)) return { cwd, grants, found: undefined, skipped: true };
-    const found = this.offThread ? await this.offThread.claudeCommands(cwd, this.claudeHome ?? os.homedir(), grants, lane) : claudeCommands(cwd, this.claudeHome, opts);
-    return { cwd, grants, found };
+    if (this.alwaysFor(folderKeyOfDir(cwd), cwd)) return grants.map((g) => ({ cwd, grants: g, found: undefined, skipped: true }));
+    const found = this.offThread ? await this.offThread.claudeCommands(cwd, this.claudeHome ?? os.homedir(), grants, lane) : grants.map((g) => claudeCommands(cwd, this.claudeHome, { grants: g }));
+    return grants.map((g, i) => ({ cwd, grants: g, found: found[i] }));
   }
 
   checkClaude(cwd: string, opts: ClaudeOptions = {}, look?: ClaudeLook): ClaudeVerdict {

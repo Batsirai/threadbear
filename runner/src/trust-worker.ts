@@ -10,7 +10,7 @@ import type { TrustRequest, TrustReply } from './trust-off-thread.ts';
 function answer(req: TrustRequest): unknown {
   switch (req.kind) {
     case 'claudeCommands':
-      return claudeCommands(req.cwd, req.home, { grants: req.grants });
+      return req.grants.map((grants) => claudeCommands(req.cwd, req.home, { grants }));
     case 'editsAsk': {
       const scan = codeOfUnhashedPatch(req.file, req.from, req.now);
       return { all: scan.all, ...(scan.why ? { why: scan.why } : {}) };
@@ -27,3 +27,6 @@ parentPort?.on('message', (req: TrustRequest) => {
   }
   parentPort!.postMessage(reply);
 });
+
+// Loaded: from here a worker that stops is a crash, not one that can't run.
+parentPort?.postMessage({ ready: true } satisfies TrustReply);

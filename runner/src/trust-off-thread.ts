@@ -21,34 +21,43 @@ import { claudeCommands, type ClaudeCommands } from './claude-trust.ts';
 import { codeOfUnhashedPatch, type UnsureWhy } from './unhashed-scan.ts';
 
 export type TrustRequest = { id: number } & (
-  | { kind: 'claudeCommands'; cwd: string; home: string; grants: boolean }
+  // One look per kind of thread (grants or not), one after the other.
+  | { kind: 'claudeCommands'; cwd: string; home: string; grants: boolean[] }
   | { kind: 'editsAsk'; file: string; from: string; now: number }
 );
-export type TrustReply = { id: number; ok: true; value: unknown } | { id: number; ok: false; error: string };
+// `ready`: sent once, when the worker's code has loaded.
+export type TrustReply = { id: number; ok: true; value: unknown } | { id: number; ok: false; error: string } | { ready: true };
 type Ask = TrustRequest extends infer R ? (R extends { id: number } ? Omit<R, 'id'> : never) : never;
 
 export type EditsAsk = { all: boolean; why?: UnsureWhy };
 export type Lane = 'urgent' | 'background';
 
-// A look that takes longer than this (a hung disk, a fifo) is given up on
-// and its worker replaced.
+// A look that takes longer than this once it has started (a hung disk, a
+// FIFO) is given up on and its worker replaced.
 export const TRUST_CALL_TIMEOUT_MS = 120_000;
 
-// The same call on this thread: when no worker can be had.
+// The same call on this thread: when no worker can be started here at all.
 function inline(ask: Ask): unknown {
-  if (ask.kind === 'claudeCommands') return claudeCommands(ask.cwd, ask.home, { grants: ask.grants });
+  if (ask.kind === 'claudeCommands') return ask.grants.map((grants) => claudeCommands(ask.cwd, ask.home, { grants }));
   const scan = codeOfUnhashedPatch(ask.file, ask.from, ask.now);
   return { all: scan.all, ...(scan.why ? { why: scan.why } : {}) };
 }
 
-class WorkerFailed extends Error {}
+type Call = { ask: Ask; resolve: (v: unknown) => void; reject: (e: Error) => void };
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
-
+// One worker, given one call at a time from a queue here, so a call's time
+// limit runs from when it starts and a call that hangs or crashes the
+// worker fails alone: the calls behind it go to a new worker.
 class OneWorker {
   private worker?: Worker;
-  private pending = new Map<number, Pending>();
+  // Whether this worker's code has loaded (it says so): one that never
+  // does means workers can't run here, and the calls run on this thread as
+  // they did before.
+  private ready = false;
+  private queue: Call[] = [];
+  private current?: { call: Call; id: number; timer: NodeJS.Timeout };
   private nextId = 1;
+  private closed = false;
   private timeoutMs: number;
   private script: URL;
   constructor(timeoutMs: number, script: URL) {
@@ -57,57 +66,103 @@ class OneWorker {
   }
 
   call(ask: Ask): Promise<unknown> {
-    const worker = this.start();
-    const id = this.nextId++;
+    if (this.closed) return Promise.reject(new Error('The trust worker is closed.'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        // Whatever it's stuck on, the calls queued behind it would wait too.
-        this.fail(worker, new Error(`Looking at ${ask.kind === 'claudeCommands' ? ask.cwd : ask.file} took over ${Math.round(this.timeoutMs / 1000)} s.`));
-      }, this.timeoutMs);
-      timer.unref();
-      this.pending.set(id, { resolve, reject, timer });
-      // Held open while it has work: an unreferenced worker's reply never
-      // comes if nothing else keeps the process going.
-      if (this.pending.size === 1) worker.ref();
-      worker.postMessage({ ...ask, id } satisfies TrustRequest);
+      this.queue.push({ ask, resolve, reject });
+      this.next();
     });
   }
 
   close(): void {
-    if (this.worker) this.fail(this.worker, new WorkerFailed('closed'));
+    this.closed = true;
+    const calls = [...(this.current ? [this.current.call] : []), ...this.queue];
+    this.queue = [];
+    this.drop();
+    for (const c of calls) c.reject(new Error('The trust worker is closed.'));
+  }
+
+  private next(): void {
+    if (this.current || !this.queue.length || this.closed) return;
+    const call = this.queue.shift()!;
+    const worker = this.start();
+    const id = this.nextId++;
+    const what = call.ask.kind === 'claudeCommands' ? call.ask.cwd : call.ask.file;
+    const timer = setTimeout(() => this.failCurrent(new Error(`Looking at ${what} took over ${Math.round(this.timeoutMs / 1000)} s.`)), this.timeoutMs);
+    timer.unref();
+    this.current = { call, id, timer };
+    // Held open while it has work: an unreferenced worker's reply never
+    // comes if nothing else keeps the process going.
+    worker.ref();
+    worker.postMessage({ ...call.ask, id } satisfies TrustRequest);
   }
 
   private start(): Worker {
     if (this.worker) return this.worker;
     // The runner's environment as it is at each call (HOME, a test's change).
     const worker = new Worker(this.script, { env: SHARE_ENV });
-    // Never what keeps the runner (or a test) from exiting.
     worker.unref();
     worker.on('message', (r: TrustReply) => {
-      const p = this.pending.get(r.id);
-      if (!p) return;
-      this.pending.delete(r.id);
-      clearTimeout(p.timer);
-      if (this.pending.size === 0) worker.unref();
-      if (r.ok) p.resolve(r.value);
-      else p.reject(new Error(r.error));
+      if ('ready' in r) {
+        if (this.worker === worker) this.ready = true;
+        return;
+      }
+      const cur = this.current;
+      if (this.worker !== worker || !cur || cur.id !== r.id) return;
+      clearTimeout(cur.timer);
+      this.current = undefined;
+      worker.unref();
+      if (r.ok) cur.call.resolve(r.value);
+      else cur.call.reject(new Error(r.error));
+      this.next();
     });
-    worker.on('error', (e) => this.fail(worker, new WorkerFailed(String(e))));
-    worker.on('exit', () => this.fail(worker, new WorkerFailed('the trust worker exited')));
+    worker.on('error', (e: unknown) => {
+      if (this.worker === worker) this.crashed(e instanceof Error ? e : new Error(String(e)));
+    });
+    worker.on('exit', () => {
+      if (this.worker === worker) this.crashed(new Error('the trust worker exited'));
+    });
     this.worker = worker;
     return worker;
   }
 
-  private fail(worker: Worker, e: Error): void {
-    if (this.worker !== worker) return;
-    this.worker = undefined;
-    void worker.terminate().catch(() => undefined);
-    const pending = [...this.pending.values()];
-    this.pending.clear();
-    for (const p of pending) {
-      clearTimeout(p.timer);
-      p.reject(e);
+  // A worker that never started: everything waiting runs on this thread,
+  // as it did before there were workers. One that started and then died
+  // (a crash, out of memory) fails only the call it was on, which would
+  // likely do the same on this thread; the rest go to a new worker.
+  private crashed(e: Error): void {
+    if (!this.ready) {
+      const calls = [...(this.current ? [this.current.call] : []), ...this.queue];
+      if (this.current) clearTimeout(this.current.timer);
+      this.current = undefined;
+      this.queue = [];
+      this.drop();
+      for (const c of calls) {
+        try {
+          c.resolve(inline(c.ask));
+        } catch (err) {
+          c.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+      return;
     }
+    this.failCurrent(new Error(`The trust worker stopped: ${e.message}`));
+  }
+
+  // The call under way fails; its worker goes, and the next call gets a new one.
+  private failCurrent(e: Error): void {
+    const cur = this.current;
+    this.current = undefined;
+    if (cur) clearTimeout(cur.timer);
+    this.drop();
+    cur?.call.reject(e);
+    this.next();
+  }
+
+  private drop(): void {
+    const worker = this.worker;
+    this.worker = undefined;
+    this.ready = false;
+    if (worker) void worker.terminate().catch(() => undefined);
   }
 }
 
@@ -121,8 +176,10 @@ export class TrustOffThread {
     this.lanes = { urgent: new OneWorker(ms, script), background: new OneWorker(ms, script) };
   }
 
-  claudeCommands(cwd: string, home: string, grants: boolean, lane: Lane): Promise<ClaudeCommands | undefined> {
-    return this.ask({ kind: 'claudeCommands', cwd, home, grants }, lane) as Promise<ClaudeCommands | undefined>;
+  // What the folder's Claude Code settings run for each kind of thread
+  // (grants or not), looked at one after the other.
+  claudeCommands(cwd: string, home: string, grants: boolean[], lane: Lane): Promise<(ClaudeCommands | undefined)[]> {
+    return this.ask({ kind: 'claudeCommands', cwd, home, grants }, lane) as Promise<(ClaudeCommands | undefined)[]>;
   }
 
   editsAsk(file: string, from: string, now: number): Promise<EditsAsk> {
@@ -153,14 +210,9 @@ export class TrustOffThread {
     return p;
   }
 
-  private async run(ask: Ask, lane: Lane): Promise<unknown> {
-    try {
-      return await this.lanes[lane].call(ask);
-    } catch (e) {
-      // No worker to be had: as before, on this thread.
-      if (e instanceof WorkerFailed) return inline(ask);
-      throw e;
-    }
+  private run(ask: Ask, lane: Lane): Promise<unknown> {
+    return this.lanes[lane].call(ask);
   }
+
 }
 
