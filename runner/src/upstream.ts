@@ -47,7 +47,7 @@ import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
-import { applyKeyChanges, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signerKey, SIGNERS_FILE } from './release-keys.ts';
+import { ADD_DELAY_MS, applyKeyChanges, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signerKey, SIGNERS_FILE } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
 
 export const FETCH_INTERVAL_MS = 6 * 60 * 60_000;
@@ -93,6 +93,8 @@ const MAX_OLDER = 9;
 // A release tag's message lists at most 200 subjects (publishOnce), a few
 // tens of KB; a bigger tag object is turned down unread.
 const MAX_TAG_BYTES = 1024 * 1024;
+// How a hold says the unpushed tag couldn't be deleted (dropTag).
+const STUCK = '. Its local tag could not be deleted; until it is, no release goes out: ';
 
 type Ref = { oid: string; type: string; size: number };
 
@@ -1009,6 +1011,10 @@ export class Upstream {
     await this.git(checkout, ['fetch', '-q', '--no-tags', 'origin', `+refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*`], { timeoutMs: this.fetchTimeoutMs });
     const tag = tagFor(new Date(now));
     const tags = (await this.git(checkout, ['tag', '--list', '--sort=-refname', `${TAG_PREFIX}*`])).split('\n').filter(Boolean);
+    // An unpushed tag that couldn't be deleted keeps saying so (dropTag)
+    // until it's gone, rather than passing for a release.
+    const stuck = this.st.held?.why.split(`${STUCK}git tag -d `)[1];
+    if (stuck && tags.includes(stuck)) return undefined;
     if (tags.includes(tag)) return this.hold(undefined);
     const last = tags[0];
     if (last && (await this.isAncestor(checkout, tip, last))) return this.hold(undefined);
@@ -1064,20 +1070,21 @@ export class Upstream {
     // Checked as a fork checks it before it goes anywhere: on 19 Nov 2026
     // the Secure Enclave handed back a signature with nothing in it (empty
     // r and s), git called that signed, and release/2026-11-19 went out
-    // verifying nowhere.
-    const bad = await this.selfCheck(checkout, tag, tip).catch((e: unknown) => `ssh-keygen couldn't check it (${String(e).slice(0, 120)})`);
+    // verifying nowhere. The object checked is the one pushed, by its id.
+    const oid = await this.git(checkout, ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`]).catch(() => '');
+    const bad = !oid ? 'the tag was not there to check' : await this.selfCheck(checkout, tag, oid, tip, last, now).catch((e: unknown) => `ssh-keygen couldn't check it (${String(e).slice(0, 120)})`);
     if (bad) {
-      await this.git(checkout, ['tag', '-d', tag]).catch(() => undefined);
-      this.hold({ commit: tip, why: `its signature didn't verify, so it wasn't pushed: ${bad}`, at: new Date(now).toISOString() });
-      this.deps.log.warn('release signature does not verify; tag deleted, not pushed', { tag, commit: tip, why: bad });
+      const dropped = !oid || (await this.dropTag(checkout, tag, oid));
+      this.hold({ commit: tip, why: `its signature didn't verify, so it wasn't pushed: ${bad}${dropped ? '' : `${STUCK}git tag -d ${tag}`}`, at: new Date(now).toISOString() });
+      this.deps.log.warn('release signature does not verify; not pushed', { tag, commit: tip, why: bad, tagDeleted: dropped });
       return undefined;
     }
     this.hold(undefined);
     try {
-      await this.git(checkout, ['push', '-q', 'origin', `refs/tags/${tag}`], { timeoutMs: this.fetchTimeoutMs });
+      await this.git(checkout, ['push', '-q', 'origin', `${oid}:refs/tags/${tag}`], { timeoutMs: this.fetchTimeoutMs });
     } catch (e) {
       // Taken back, so the next look tries the push again.
-      await this.git(checkout, ['tag', '-d', tag]).catch(() => undefined);
+      await this.dropTag(checkout, tag, oid);
       throw e;
     }
     this.deps.log.info('tagged a release', { tag, commit: tip });
@@ -1085,16 +1092,40 @@ export class Upstream {
     return tag;
   }
 
-  // Why the tag just made wouldn't verify for a fork, or undefined if it
-  // does: split and checked exactly as verified() does, against the
-  // release-signers and release-keys-revoked of the commit it tags.
-  private async selfCheck(checkout: string, tag: string, tip: string): Promise<string | undefined> {
-    const raw = await (this.deps.gitBytes ?? gitBytes)(checkout, ['cat-file', 'tag', `refs/tags/${tag}`]);
+  // Deletes the local tag if it's still `oid`. A tag left behind would pass
+  // for today's release on the next look, and as the last release after
+  // that, so a failure says so in the hold (STUCK) and the hold stays.
+  private async dropTag(checkout: string, tag: string, oid: string): Promise<boolean> {
+    for (let i = 0; i < 2; i++) {
+      if (await this.git(checkout, ['update-ref', '-d', `refs/tags/${tag}`, oid]).then(() => true, () => false)) return true;
+    }
+    this.deps.log.error('could not delete an unpushed release tag', { tag, oid });
+    return false;
+  }
+
+  // Why the tag object `oid` wouldn't count as `tag` for a fork, or
+  // undefined if it would: the same size limit, split and ssh-keygen check
+  // as verified(), on the commit it was made for. The keys are what forks
+  // hold: those in release-signers at the commit, and (once there are
+  // releases a week older than ADD_DELAY_MS, the wait before an announced
+  // key counts) in the newest of those too; revoked are those the last
+  // release revoked, as a release that revokes its own key must still go
+  // out for forks to take the revocation in.
+  private async selfCheck(checkout: string, tag: string, oid: string, tip: string, last: string | undefined, now: number): Promise<string | undefined> {
+    const size = Number(await this.git(checkout, ['cat-file', '-s', oid]));
+    if (!(size > 0 && size <= MAX_TAG_BYTES)) return `the tag is ${size} bytes, more than forks read`;
+    const raw = await (this.deps.gitBytes ?? gitBytes)(checkout, ['cat-file', 'tag', oid]);
     const split = splitSignedTag(raw, tag);
     if (!split) return 'the tag is not one SSH-signed release tag';
+    if (split.commit !== tip) return `the tag names ${split.commit.slice(0, 8)}, not ${tip.slice(0, 8)}`;
     const signers = await this.git(checkout, ['show', `${tip}:${SIGNERS_FILE}`]).catch(() => '');
     if (!keysIn(signers).length) return `${SIGNERS_FILE} has no keys at that commit`;
-    const revoked = keysIn(await this.git(checkout, ['show', `${tip}:${REVOKED_FILE}`]).catch(() => ''));
+    const signer = signerKey(split.signature);
+    const settled = await this.settledRelease(checkout, now);
+    if (settled && signer && !keysIn(await this.git(checkout, ['show', `${settled}:${SIGNERS_FILE}`]).catch(() => '')).includes(signer)) {
+      return `its key wasn't in ${SIGNERS_FILE} at ${settled}, so forks don't take it yet`;
+    }
+    const revoked = last ? keysIn(await this.git(checkout, ['show', `refs/tags/${last}:${REVOKED_FILE}`]).catch(() => '')) : [];
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-release-self-'));
     try {
       const signersFile = path.join(dir, 'signers');
@@ -1105,6 +1136,17 @@ export class Upstream {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  // The newest release tag dated a day more than ADD_DELAY_MS ago (forks
+  // look every six hours, and a Mac sleeps), if there is one.
+  private async settledRelease(checkout: string, now: number): Promise<string | undefined> {
+    const lines = (await this.git(checkout, ['for-each-ref', '--sort=-taggerdate', '--format=%(refname:short)%09%(taggerdate:unix)', `refs/tags/${TAG_PREFIX}*`])).split('\n');
+    for (const line of lines) {
+      const [name, at] = line.split('\t');
+      if (name && Number(at) > 0 && Number(at) * 1000 <= now - ADD_DELAY_MS - 24 * 60 * 60_000) return name;
+    }
+    return undefined;
   }
 
   // Plain-words notes for a release, from its commits' subjects and bodies.

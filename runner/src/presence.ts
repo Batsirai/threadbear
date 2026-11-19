@@ -26,32 +26,36 @@ export function hidIdleMs(): Promise<number | undefined> {
   });
 }
 
-// Whether this user's screen is locked, from the console session IOKit
-// lists (CGSSessionScreenIsLocked). A Touch ID prompt can't show over the
-// lock screen, and there the Secure Enclave's SSH provider hands back an
-// empty signature as if it had signed (release/2026-11-19, signed eight
-// minutes after the screen saver locked the Mac while HIDIdleTime still
-// said someone was there). False off a Mac, or when it can't be read: the
-// release's own check (upstream.ts selfCheck) still stops a bad signature.
+// Whether this user's screen is locked, or their session isn't the one on
+// the console (another user's, or the login window), from IOKit's console
+// sessions. A Touch ID prompt can't show there, and over the lock screen
+// the Secure Enclave's SSH provider hands back an empty signature as if it
+// had signed (release/2026-11-19, signed eight minutes after the screen
+// saver locked the Mac while HIDIdleTime still said someone was there).
+// False off a Mac, or when it can't be read: the release's own check
+// (upstream.ts selfCheck) still stops a bad signature.
 export function screenLocked(): Promise<boolean> {
   if (process.platform !== 'darwin') return Promise.resolve(false);
   return new Promise((resolve) => {
-    execFile('/usr/sbin/ioreg', ['-n', 'Root', '-d', '1', '-k', 'IOConsoleUsers'], { encoding: 'utf8', timeout: 5000 }, (_err, stdout) => {
+    // The plist, as JSON: a name with braces in it can't upset a parse.
+    execFile('/bin/sh', ['-c', '/usr/sbin/ioreg -a -n Root -d 1 -k IOConsoleUsers | /usr/bin/plutil -convert json -o - -'], { encoding: 'utf8', timeout: 5000 }, (_err, stdout) => {
       resolve(parseScreenLocked(stdout ?? '', process.getuid?.() ?? -1));
     });
   });
 }
 
-// IOConsoleUsers' sessions are {"key"=value,...} dicts on one line; the
-// one for `uid` says "CGSSessionScreenIsLocked"=Yes while it's locked (and
-// leaves the key out when it isn't).
-export function parseScreenLocked(ioreg: string, uid: number): boolean {
-  const line = ioreg.split('\n').find((l) => l.includes('"IOConsoleUsers"')) ?? '';
-  for (const session of line.match(/\{[^{}]*\}/g) ?? []) {
-    if (!new RegExp(`"kCGSSessionUserIDKey"=${uid}(?![0-9])`).test(session)) continue;
-    return /"CGSSessionScreenIsLocked"=Yes/.test(session);
+// Root's properties as JSON (above): locked unless `uid` has the console
+// session and it isn't locked; false when there's no session list to read.
+export function parseScreenLocked(json: string, uid: number): boolean {
+  let users: unknown;
+  try {
+    users = (JSON.parse(json) as { IOConsoleUsers?: unknown }).IOConsoleUsers;
+  } catch {
+    return false;
   }
-  return false;
+  if (!Array.isArray(users)) return false;
+  const mine = (users as Record<string, unknown>[]).find((u) => u?.kCGSSessionUserIDKey === uid && u?.kCGSSessionOnConsoleKey === true);
+  return !mine || mine.CGSSessionScreenIsLocked === true;
 }
 
 export function isAtMac(appConnected: boolean, idleMs: number | undefined): boolean {

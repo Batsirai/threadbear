@@ -7,6 +7,7 @@ import path from 'node:path';
 import { FakeClock } from '../../src/clock.ts';
 import { type CiRun, bareRepoArgs, ciVerdict, earlierVerdict, HISTORY_PAGE, FETCH_INTERVAL_MS, FIRST_LOOK_MS, RETRY_AFTER_FAILURE_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
 import { nullLogger } from '../../src/log.ts';
+import { type GitOptions, gitAsync } from '../../src/upstream.ts';
 import { LATER, asGitHub, commit, fakeGpg, git, kept, key, release, signedTag, upstreamFor, waitFor, withVictimGpg, world } from '../helpers/upstream-harness.ts';
 
 test('repoKey: the same repo however its URL is written', () => {
@@ -220,7 +221,7 @@ test("release notes: Mike's runner writes them into the tag, and a fork reads ea
     publish: { publish: true, signingKey: w.mikeKey.priv }, runningMainSettled: () => true,
     writeNotes: async (commits: string) => { prompts.push(commits); if (reply === 'throw') throw new Error('no room'); return reply; },
     git: async (cwd: string, args: string[]) => {
-      if (args[0] === 'push' && args.some((a) => a.startsWith('refs/tags/')) && failPush) { failPush = false; throw new Error('push offline'); }
+      if (args[0] === 'push' && args.some((a) => a.includes('refs/tags/')) && failPush) { failPush = false; throw new Error('push offline'); }
       return git(cwd, ...args);
     },
   });
@@ -576,7 +577,8 @@ test('a release name that verified keeps its first tag even if a signed one repl
 // s, git called the tag signed, and release/2026-11-19 went out verifying
 // nowhere. Mike's runner now checks its own tag as a fork would first.
 test("Mike's runner never pushes a release tag whose signature doesn't verify against release-signers", async () => {
-  for (const how of ['corrupt', 'unannounced'] as const) {
+  // The corrupting signer is a shell script, which git on Windows doesn't run as one.
+  for (const how of process.platform === 'win32' ? (['unannounced'] as const) : (['corrupt', 'unannounced'] as const)) {
     const w = world();
     commit(w.mike, 'b.txt', 'Newer work');
     git(w.mike, 'push', '-q', 'origin', 'main');
@@ -605,7 +607,93 @@ esac
     const tag = tagFor(new Date(committed + 2 * SETTLE_MS));
     assert.equal(git(w.mike, 'tag', '--list', tag), '', `${how}: the bad tag is deleted`);
     assert.equal(git(w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`), '', `${how}: and never pushed`);
-    assert.match(up.status().held?.why ?? '', /signature didn't verify, so it wasn't pushed/, how);
+    assert.match(up.status().held?.why ?? '', /signature didn't verify, so it wasn't pushed: ssh-keygen says it isn't good/, how);
     assert.ok(logged.some((m) => /does not verify/.test(m)), how);
   }
+});
+
+// A world ready to publish today's release: `files` committed on main and
+// pushed, the clock past the settle time.
+function readyToPublish(files: Record<string, string> = {}) {
+  const w = world();
+  for (const [f, text] of Object.entries(files)) {
+    fs.writeFileSync(path.join(w.mike, f), text);
+    git(w.mike, 'add', f);
+  }
+  const tip = commit(w.mike, 'b.txt', 'Newer work');
+  git(w.mike, 'push', '-q', 'origin', 'main');
+  const now = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000 + 2 * SETTLE_MS;
+  const publisher = (signingKey: string, extra = {}) => upstreamFor(w.mike, w.home, new FakeClock(now), { publish: { publish: true, signingKey }, runningMainSettled: () => true, ...extra });
+  return { w, tip, now, publisher };
+}
+
+const pub = (k: { signers: string }) => fs.readFileSync(k.signers, 'utf8').trim().split(' ').slice(2, 4).join(' ');
+const signers = (...ks: { signers: string }[]) => ks.map((k) => fs.readFileSync(k.signers, 'utf8').trim().replace(/^\S+/, 'threadbear-releases')).join('\n') + '\n';
+
+// Codex's and Gemini's reviews of the check: revoked keys are the last
+// release's, so a key revoked there is refused, and one revoking itself
+// still goes out (forks take the revocation in, then don't offer it).
+test("the release check refuses a key the last release revoked, and lets a key revoke itself", async () => {
+  let r = readyToPublish();
+  release(r.w, 'release/2026-10-02', r.w.mikeKey.priv, { 'scripts/release-keys-revoked': `${pub(r.w.mikeKey)}\n` });
+  commit(r.w.mike, 'c.txt', 'After the revocation');
+  git(r.w.mike, 'push', '-q', 'origin', 'main');
+  const now = Number(git(r.w.mike, 'log', '-1', '--format=%ct')) * 1000 + 2 * SETTLE_MS;
+  const up = upstreamFor(r.w.mike, r.w.home, new FakeClock(now), { publish: { publish: true, signingKey: r.w.mikeKey.priv }, runningMainSettled: () => true });
+  assert.equal(await up.publishOnce(), undefined);
+  assert.match(up.status().held?.why ?? '', /isn't good for any key/);
+
+  r = readyToPublish({ 'scripts/release-keys-revoked': `${pub(r.w.mikeKey)}\n` });
+  const self = r.publisher(r.w.mikeKey.priv);
+  assert.ok(await self.publishOnce(), 'a release revoking its own key still goes out');
+});
+
+// A key in release-signers counts for forks only a week after a release
+// announced it (release-keys.ts): signing with it sooner is held.
+test("the release check holds a key forks haven't had a week to take in", async () => {
+  const r = readyToPublish();
+  const next = key(r.w.root, 'next-key');
+  const oldTag = (name: string, daysAgo: number) => {
+    const at = Math.floor((r.now - daysAgo * 24 * 60 * 60_000) / 1000);
+    const t = spawnSync('git', ['-C', r.w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${r.w.mikeKey.priv}`, 'tag', '-s', '-m', name, name, 'HEAD'], { env: { ...process.env, GIT_COMMITTER_DATE: `${at} +0000` } });
+    assert.equal(t.status, 0, String(t.stderr));
+  };
+  oldTag('release/2026-09-01', 10); // its release-signers has only Mike's key
+  fs.writeFileSync(path.join(r.w.mike, 'scripts', 'release-signers'), signers(r.w.mikeKey, next));
+  git(r.w.mike, 'add', 'scripts/release-signers');
+  const tip = commit(r.w.mike, 'd.txt', 'Announce the next key');
+  git(r.w.mike, 'push', '-q', 'origin', 'main');
+  const now = Number(git(r.w.mike, 'log', '-1', '--format=%ct')) * 1000 + 2 * SETTLE_MS;
+  const publisher = (k: string) => upstreamFor(r.w.mike, r.w.home, new FakeClock(now), { publish: { publish: true, signingKey: k }, runningMainSettled: () => true });
+  const early = publisher(next.priv);
+  assert.equal(await early.publishOnce(), undefined);
+  assert.match(early.status().held?.why ?? '', /wasn't in scripts\/release-signers at release\/2026-09-01, so forks don't take it yet/);
+  // A release with it in, more than eight days old: now it counts.
+  spawnSync('git', ['-C', r.w.mike, 'tag', '-d', 'release/2026-09-01']);
+  oldTag('release/2026-09-02', 9);
+  const tag = await publisher(next.priv).publishOnce();
+  assert.ok(tag);
+  assert.equal(git(r.w.mike, 'rev-parse', `${tag}^{commit}`), tip);
+});
+
+// Gemini's review: a bad tag that couldn't be deleted passed for today's
+// release on the next look, and as the last release after that.
+test('an unpushed bad tag that could not be deleted holds every release until it is', async () => {
+  const r = readyToPublish();
+  const stranger = key(r.w.root, 'stranger');
+  let failDelete = true;
+  const up = r.publisher(stranger.priv, {
+    git: (cwd: string, args: string[], opts?: GitOptions) => (failDelete && args[0] === 'update-ref' && args[1] === '-d' ? Promise.reject(new Error('cannot lock ref')) : gitAsync(cwd, args, opts)),
+  });
+  assert.equal(await up.publishOnce(), undefined);
+  const tag = tagFor(new Date(r.now));
+  assert.ok(git(r.w.mike, 'tag', '--list', tag), 'left behind');
+  assert.match(up.status().held?.why ?? '', new RegExp(`could not be deleted.*git tag -d ${tag}`));
+  assert.equal(await up.publishOnce(), undefined);
+  assert.match(up.status().held?.why ?? '', /could not be deleted/, 'still says so');
+  assert.equal(git(r.w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`), '');
+  failDelete = false;
+  git(r.w.mike, 'tag', '-d', tag);
+  assert.equal(await up.publishOnce(), undefined);
+  assert.doesNotMatch(up.status().held?.why ?? '', /could not be deleted/, 'tried again once it was gone');
 });

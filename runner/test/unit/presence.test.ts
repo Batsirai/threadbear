@@ -12,14 +12,15 @@ test('isAtMac: the app connected and input in the last two minutes', () => {
 
 // release/2026-11-19 was signed over the lock screen, where the Secure
 // Enclave hands back an empty signature: release signing waits for this.
-test("parseScreenLocked: this user's console session, as ioreg prints it", () => {
-  const locked = '+-o Root  <class IORegistryEntry>\n      "IOConsoleUsers" = ({"kCGSSessionOnConsoleKey"=Yes,"CGSSessionScreenIsLocked"=Yes,"kCGSSessionUserIDKey"=501})\n';
-  const open = '      "IOConsoleUsers" = ({"kCGSSessionOnConsoleKey"=Yes,"kCGSSessionUserIDKey"=501})\n';
-  const other = '      "IOConsoleUsers" = ({"kCGSSessionOnConsoleKey"=No,"CGSSessionScreenIsLocked"=Yes,"kCGSSessionUserIDKey"=502},{"kCGSSessionUserIDKey"=501,"kCGSSessionOnConsoleKey"=Yes})\n';
-  assert.equal(parseScreenLocked(locked, 501), true);
-  assert.equal(parseScreenLocked(open, 501), false);
-  assert.equal(parseScreenLocked(other, 501), false, "another user's locked session isn't this one");
-  assert.equal(parseScreenLocked(other, 502), true);
-  assert.equal(parseScreenLocked(locked, 50), false, 'uid 50 is not 501');
-  assert.equal(parseScreenLocked('', 501), false);
+test("parseScreenLocked: this user's console session, from ioreg's plist as JSON", () => {
+  const of = (...users: Record<string, unknown>[]) => JSON.stringify({ IOConsoleLocked: false, IOConsoleUsers: users });
+  const me = { kCGSSessionUserIDKey: 501, kCGSSessionOnConsoleKey: true, kCGSessionLongUserNameKey: 'Mike {Cann}' };
+  assert.equal(parseScreenLocked(of({ ...me, CGSSessionScreenIsLocked: true }), 501), true);
+  assert.equal(parseScreenLocked(of(me), 501), false);
+  assert.equal(parseScreenLocked(of({ kCGSSessionUserIDKey: 502, kCGSSessionOnConsoleKey: false, CGSSessionScreenIsLocked: true }, me), 501), false, "another user's locked session isn't this one");
+  assert.equal(parseScreenLocked(of({ ...me, kCGSSessionOnConsoleKey: false }, { kCGSSessionUserIDKey: 502, kCGSSessionOnConsoleKey: true }), 501), true, 'switched to another user');
+  assert.equal(parseScreenLocked(of(), 501), true, 'the login window');
+  assert.equal(parseScreenLocked(of(me), 50), true, 'uid 50 is not 501');
+  assert.equal(parseScreenLocked('', 501), false, "can't read it");
+  assert.equal(parseScreenLocked('{}', 501), false);
 });
