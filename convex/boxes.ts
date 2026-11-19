@@ -202,11 +202,18 @@ async function addBox(ctx: MutationCtx, a: NewBox): Promise<Id<'boxes'>> {
 
 const SERVICE_NAME = /^[^\u0000-\u001f\u007f]{1,80}$/;
 const IMAGE = /^[\x21-\x7e]{1,300}$/;
-// A virtual runner's image when none is given: the box image Mike's repo's
-// workflow builds from main and publishes (runner/box/Dockerfile,
-// .github/workflows/box-image.yml). Mike's own: a fork builds and names its
-// own (docs/forking.md).
-export const DEFAULT_BOX_IMAGE = 'ghcr.io/mikecann/threadbear-box:latest';
+// A virtual runner's image when none is given: the box image this repo's
+// workflow builds from main and pushes to the Fly app the boxes live in
+// (runner/box/Dockerfile, .github/workflows/box-image.yml), so
+// registry.fly.io/<FLY_APP>:latest. It's private to that Fly organisation,
+// as it holds Claude Code, which isn't ours to publish: Fly pulls it for the
+// app's machines with no credentials. A fork's workflow pushes to its own
+// app (docs/forking.md).
+export function defaultBoxImage(provider: string, env: Record<string, string | undefined> = process.env): string {
+  const app = env.FLY_APP?.trim();
+  if (provider !== 'fly' || !app) throw bad("image must be given: there's no default box image without FLY_APP set on this deployment");
+  return `registry.fly.io/${app}:latest`;
+}
 const REGION = /^[a-z0-9-]{1,20}$/;
 // Each limit's whole-number range.
 const LIMIT_RANGE = { maxBoxes: [1, 100], idleSleepMinutes: [1, 24 * 60], maxAwakeHoursPerDay: [1, 24], deleteAfterDays: [1, 365] } as const;
@@ -261,7 +268,7 @@ export const runnerServices = query({
 /**
  * Makes a virtual runner, or changes one (`serviceId`): its name, image,
  * box size, region and limits (any left out: BOX_LIMITS, or as they were;
- * the image left out: DEFAULT_BOX_IMAGE, or as it was).
+ * the image left out: as it was, or defaultBoxImage).
  * A provider is a virtual runner's for life: another one is a new runner.
  */
 export const setRunnerService = mutation({
@@ -293,7 +300,7 @@ export const setRunnerService = mutation({
       if (!Number.isSafeInteger(x) || x < lo || x > hi) throw bad(`limits.${k} must be a whole number from ${lo} to ${hi}`);
       limits[k] = x;
     }
-    const fields = { name: a.name.trim(), provider: a.provider, image: a.image ?? old?.image ?? DEFAULT_BOX_IMAGE, box: { cpus: a.box.cpus, memoryMb: a.box.memoryMb }, limits };
+    const fields = { name: a.name.trim(), provider: a.provider, image: a.image ?? old?.image ?? defaultBoxImage(a.provider), box: { cpus: a.box.cpus, memoryMb: a.box.memoryMb }, limits };
     if (old) {
       // A region left out goes: the provider picks one.
       await ctx.db.patch(old._id, { ...fields, region: a.region });

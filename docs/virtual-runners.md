@@ -882,14 +882,24 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
   machine stops, as the Fly adapter's `restart: no` intends.
 - **Which runner it is.** Built from the repo at a commit rather than from
   a signed release, so it's the runner Mike's backend is deployed from: a
-  push to main that changes what the image holds publishes
-  `ghcr.io/mikecann/threadbear-box:<commit>` and `:latest`, and
+  push to main that changes what the image holds pushes
+  `registry.fly.io/<FLY_APP>:<commit>` and `:latest`, and
   `setRunnerService` makes a virtual runner with `:latest` when it names
-  no image (`DEFAULT_BOX_IMAGE`). A new box is a few minutes behind main
+  no image (`defaultBoxImage`). A new box is a few minutes behind main
   while the image builds; the runner and backend stay compatible both ways,
   as for any runner. A release tag publishes `:release-<date>` too, for a
-  virtual runner pinned to a release. A fork's push builds its own, under
-  its owner's name (docs/forking.md).
+  virtual runner pinned to a release. A fork's push builds its own, into its
+  own Fly app (docs/forking.md).
+- **Private, in the boxes' own Fly app** (Mike, 19 Nov). The image holds
+  Claude Code, which isn't open source, so publishing it would
+  redistribute Anthropic's program. It goes to the private registry of
+  the Fly app the boxes live in (Mike's is `tb-boxes-mikecann`), which
+  Fly pulls from for that app's machines with no credentials. GitHub
+  pushes with `FLY_BOX_IMAGE_TOKEN`, a token that reaches that app only
+  (Mike's org token narrowed with `fly tokens attenuate`, so it ends when
+  that token does, 16 Dec 2026). The passed-over choices were a public
+  image without Claude Code, installed at each box's start (about 20 s
+  slower), and a public image with it.
 - **Checked before it's pushed** (`smoke.sh`, no secrets): with no boot
   token it exits 64 and says why; Claude Code runs at the version its link
   names, with git, ps and the runner's version; and in box mode the whole
