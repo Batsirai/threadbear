@@ -17,7 +17,7 @@
 // only collects, as he suggested: when one of his threads finishes with
 // nothing for him, a cheap model and a strong one each guess whether he
 // needed to see it, and the done card's Archive opens a menu ("Didn't
-// need this", "Glad I saw this") whose pick says who was right. Both go in
+// need this", "Glad I saw this", "Not sure") whose pick says who was right. Both go in
 // a file, one line each. The guess archives nothing and shows nowhere.
 // The check-in (the experiment's reminder) reads the file and asks him
 // what to do with it.
@@ -51,8 +51,11 @@ export type Guess = { by: string; skip: boolean; why: string };
 // written down beside the guesses it answers.
 export type InboxGuess = { seq: number; guesses: Guess[] };
 
-// Mike's two answers from the Archive menu, as the file's `label`.
-const LABELS: Partial<Record<ArchiveVerdict, 'skip' | 'show'>> = { didntNeedToSee: 'skip', gladISaw: 'show' };
+// Mike's answers from the Archive menu, as the file's `label`. "Not sure"
+// (added 19 Nov: "sometimes like an in-betweeny where I'm not sure whether
+// it's valuable that I saw it") is `unsure`, so scoring leaves it out: it
+// mustn't teach a model to hide that kind of thread, nor count as a miss.
+const LABELS: Partial<Record<ArchiveVerdict, 'skip' | 'show' | 'unsure'>> = { didntNeedToSee: 'skip', gladISaw: 'show', notSure: 'unsure' };
 
 export const GUESS_SYSTEM = `You help the user of Threadbear, an app that runs AI coding agents in threads, keep their inbox short. A thread's agent has just finished a turn and says it needs nothing more from the user. Decide whether the user needs to see its reply, or whether the thread could have gone straight to the archive unread.
 

@@ -669,7 +669,7 @@ impl Threadbear {
         if !asks {
             return self.toggle_archive(window, cx);
         }
-        let rows = vec![MenuRow::item("Didn't need this", "eye.slash", MenuAction::ArchiveAs("didntNeedToSee")), MenuRow::item("Glad I saw this", "eye", MenuAction::ArchiveAs("gladISaw"))];
+        let rows = vec![MenuRow::item("Didn't need this", "eye.slash", MenuAction::ArchiveAs("didntNeedToSee")), MenuRow::item("Glad I saw this", "eye", MenuAction::ArchiveAs("gladISaw")), MenuRow::item("Not sure", "questionmark.circle", MenuAction::ArchiveAs("notSure"))];
         self.open_menu(Some(id), rows, at, false, window, cx);
     }
 

@@ -183,6 +183,20 @@ test('"Glad I saw this" is the other label, and a plain archive has none', async
   assert.equal('label' in plain, false);
 });
 
+test('"Not sure" is kept as unsure, so scoring can leave it out', async () => {
+  const h = setup();
+  const id = mine(h);
+  finish(h, id);
+  await until(() => h.lines().length === 1, 'the guess written down');
+  h.runner.update({ threadId: id, archived: true, verdict: 'notSure' });
+  assert.equal(h.runner.get(id).archiveVerdict, 'notSure');
+  assert.ok(notes(h, id).includes('Archived by you: not sure you needed to see this.'));
+  const line = h.lines()[1];
+  assert.equal(line.kind, 'archive');
+  assert.equal(line.label, 'unsure');
+  assert.deepEqual(line.guesses, h.lines()[0].guesses);
+});
+
 test('only his own archives of a finished thread are written down', async () => {
   const h = setup();
   const id = mine(h);

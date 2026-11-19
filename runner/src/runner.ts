@@ -687,6 +687,7 @@ const ARCHIVE_NOTES: Record<ArchiveVerdict, string> = {
   notNeeded: 'Archived by you: not needed any more.',
   didntNeedToSee: "Archived by you: didn't need to see this.",
   gladISaw: 'Archived by you: glad to have seen this.',
+  notSure: 'Archived by you: not sure you needed to see this.',
 };
 
 const DELTA_INTERVAL_MS = 33; // at most ~30 delta flushes a second per thread

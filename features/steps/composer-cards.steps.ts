@@ -216,7 +216,7 @@ Then('the done card lists nothing as still open', async function (this: Threadbe
 });
 
 // The done card's Archive menu (the inboxGuess experiment): "Didn't need
-// this" or "Glad I saw this", each of which archives with that answer.
+// this", "Glad I saw this" or "Not sure", each of which archives with that answer.
 Then('the Archive menu offers {string}', async function (this: ThreadbearWorld, list: string) {
   const result = String(await this.app.do({ cmd: 'menu-popover' }));
   assert.match(result, /shown true/, `no menu showing: ${result}`);

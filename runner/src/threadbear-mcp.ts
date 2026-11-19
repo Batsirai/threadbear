@@ -577,7 +577,7 @@ export function buildThreadbearTools(
   const archivedHow = (t: ThreadSummary): string => {
     if (!t.archivedBy) return '';
     const who = t.archivedBy === 'mike' ? 'the user' : t.archivedBy === 'agent' ? 'an agent' : 'Threadbear';
-    const verdict = t.archiveVerdict === 'worked' ? ': it worked' : t.archiveVerdict === 'didntWork' ? ": it didn't work" : t.archiveVerdict === 'notNeeded' ? ': not needed' : t.archiveVerdict === 'didntNeedToSee' ? ": they didn't need to see it" : t.archiveVerdict === 'gladISaw' ? ': glad to have seen it' : '';
+    const verdict = t.archiveVerdict === 'worked' ? ': it worked' : t.archiveVerdict === 'didntWork' ? ": it didn't work" : t.archiveVerdict === 'notNeeded' ? ': not needed' : t.archiveVerdict === 'didntNeedToSee' ? ": they didn't need to see it" : t.archiveVerdict === 'gladISaw' ? ': glad to have seen it' : t.archiveVerdict === 'notSure' ? ': not sure they needed to see it' : '';
     return ` by ${who}${verdict}`;
   };
 

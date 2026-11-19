@@ -95,7 +95,7 @@ Feature: The open card in the composer
   Scenario: Archive on the done card asks whether I needed to see the thread
     When I open the thread "Tidy the imports in the uploader"
     And I press "archive" on the card
-    Then the Archive menu offers "Didn't need this | Glad I saw this"
+    Then the Archive menu offers "Didn't need this | Glad I saw this | Not sure"
     And the "Inbox" section lists "Tidy the imports in the uploader"
     When I pick "Didn't need this" from the Archive menu
     Then the "Archived" section lists "Tidy the imports in the uploader"
