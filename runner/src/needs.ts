@@ -532,7 +532,7 @@ const END_TURN_SNOOZE =
 export const TRY_IT_FIRST =
   'Before you give the user a step, try it yourself with the tools you have, including any that drive their browser, apps or phone, and if it works there is no ask. ' +
   'Hand it over only when it really needs them (a payment, something physical, an approval that is theirs to give) or after a real attempt, and say in your reply what you tried and what stopped it. ' +
-  'Get a key or password yourself when you can (on a page in a signed-in browser, or one you made); ask with ask_secret only for one only they know, and carry on. ' +
+  'Get a key yourself when you can (one shown on a page in a signed-in browser), and use a password you set up yourself; ask with ask_secret only for one only they know, and carry on. ' +
   'If there is still something you could try, offer "Can you do it?" next to Done and say what in its answer: it lets them send the step back to you, and is no reason to skip trying. ';
 
 // What end_turn says, once a turn, to a card handing the user a step. The
@@ -552,7 +552,7 @@ export const TRY_IT_FIRST =
 // them itself. So it comes to any card that hands over a step (handsOverAStep).
 export const TRY_FIRST_NUDGE = 'Not ended: this card hands the user a step to do.';
 export function tryFirstNudge(): string {
-  return `${TRY_FIRST_NUDGE} If you could do it yourself and haven't tried, try it now with the tools you have (a setting or dialog on a Mac you can reach with ComputerCub or Screen Sharing, a key on a page in a signed-in browser, a password you made, which you can type or make shorter), then call end_turn again with whatever is left. If you already tried, it really needs the user (a password or code only they know, a payment, something physical, an approval that is theirs to give), or it's a choice rather than a step, call end_turn again as you were, and say in your reply what you tried or why it needs them: this note comes once a turn.`;
+  return `${TRY_FIRST_NUDGE} If you could do it yourself and haven't tried, try it now with the tools you have (a setting or dialog on a Mac you can reach with ComputerCub or Screen Sharing, a key shown on a page in a signed-in browser, a password you set for a test account, which you can type yourself), then call end_turn again with whatever is left. If you already tried, it really needs the user (a password or code only they know, a payment, something physical, an approval that is theirs to give), or it's a choice rather than a step, call end_turn again as you were, and say in your reply what you tried or why it needs them: this note comes once a turn.`;
 }
 
 // An ask about another thread with no answers and no link: "Pick a
@@ -592,18 +592,26 @@ export function offersToTakeItBack(asks: Ask[]): boolean {
 // on did on 19 Nov. A question about what to do ("Should I...?", "How should
 // we...?", "Can I log you out tonight?") is a choice, and a card that opens a
 // review (show_options) is a pick: neither is held up, and nor is an
-// instruction asked as a question ("Delete the old install?", "Install the
-// new Tandem now?"), which asks leave to do it.
-const SAYS_DONE = /^(?:done|all (?:done|set)|did (?:it|that)|i did|it'?s (?:done|on|in)|i(?:'ve| have) \w+ed\b|i(?:'ve| have) done|finished|completed|unlocked|switched|signed|logged|turned|added|allowed|granted|enabled|installed|pasted|typed|entered|connected|reconnected|approved|plugged|restarted|rebooted|clicked|copied|saved|updated|sorted|fixed)\b/i;
-const STEP_VERB = 'add|allow|approve|buy|change|click|connect|copy|create|delete|drag|enable|enter|give|grant|install|let(?! me\\b| us\\b)|log|move|open|paste|pay|plug|press|put|reconnect|remove|restart|reboot|run|save|select|set|sign|switch|tap|tick|turn|type|unlock|unplug';
-// The instruction, maybe after a clause saying where ("On Tinker Desk, ").
-const STARTS_WITH_A_STEP = new RegExp(`^(?:(?:on|in|at|from|over|using|with) [^,.?]{1,80}, )?(?:${STEP_VERB})\\b`, 'i');
+// instruction asked as a question ("Install the new Tandem now?"), which asks
+// leave to do it. Deleting, removing, buying and paying are left out of the
+// instructions it knows, so the note never presses an agent towards one of
+// those; nor do labels that are as often a choice ("Fixed price", "Signed
+// URL", "Enabled") count as saying it's done. Codex and Gemini found those
+// in review (20 Nov).
+const SAYS_DONE = /^(?:done|all (?:done|set)|did (?:it|that)|i did|it's (?:done|on|in)|i(?: have|'ve) (?:\w+ed|done|set|put|got|made|run)\b|finished|unlocked|switched (?:on|off|back|over|it)|signed in|logged in|turned (?:it )?(?:on|off)|added|allowed|granted|installed|pasted|typed|entered|reconnected|plugged in|restarted|rebooted|clicked|copied)\b/i;
+const STEP_VERB = 'add|allow|click|connect|copy|create|drag|enable|enter|give|grant|install|log (?:in|out|on)|move|open|paste|plug|press|put|reconnect|restart|reboot|run|set|sign (?:in|up|out)|switch|tap|tick|turn|type|unlock|unplug';
+// The instruction, maybe after "Please" or a clause saying where ("On Tinker
+// Desk, "), and any bold or link markdown before it.
+const STARTS_WITH_A_STEP = new RegExp(`^[*_\\[\\s]*(?:please,? )?(?:(?:on|in|at|from|over|using|with) [^,?]{1,120}, )?[*_\\[]*(?:please,? )?(?:${STEP_VERB})\\b`, 'i');
+// Curly apostrophes, as typed on a phone or by some models.
+const plain = (s: string) => s.replace(/[‘’]/g, "'").trim();
 export function handsOverAStep(asks: Ask[]): boolean {
-  if (asks.some((a) => a.links?.some((l) => l.url.startsWith('review:')))) return false;
-  return offersToTakeItBack(asks) || asks.some((a) => a.options?.some((o) => SAYS_DONE.test(o.trim())) || givesAnInstruction(a.action));
+  // An ask that opens a review is a pick; the card's other asks still count.
+  const steps = asks.filter((a) => !a.links?.some((l) => l.url.startsWith('review:')));
+  return offersToTakeItBack(steps) || steps.some((a) => [...(a.options ?? []), ...(a.reply ? [a.reply] : [])].some((o) => SAYS_DONE.test(plain(o))) || givesAnInstruction(plain(a.action)));
 }
 function givesAnInstruction(action: string): boolean {
-  const first = action.trim().split(/(?<=[.?!])\s/)[0];
+  const first = action.split(/(?<=[.?!])\s/)[0];
   return STARTS_WITH_A_STEP.test(first) && !first.endsWith('?');
 }
 

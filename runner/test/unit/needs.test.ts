@@ -511,6 +511,9 @@ test('handsOverAStep knows a step from a choice', () => {
     ['In the Google AI Studio tab I brought forward, set up prepay on the Convex billing account and buy US$50 of credit.', undefined],
     ['Skip Apple Account sign-in on Tinker Desk, finish the setup screens. Done?', ['Done', 'Stuck']],
     ['Turn on the setting.', ['Done', 'Can you do it?']],
+    ['Please enable Desk Runner’s Removable Volumes access.', ['I’ve enabled it', 'Stuck']],
+    ['In [the AI Studio tab](https://aistudio.google.com/billing), set up prepay.', undefined],
+    ['**Turn on** the switch.', undefined],
     ['Allow Desk Runner on Tinker Desk to read its files, so I can run the test?', ["I've allowed it", 'Land without it']],
     ['Sign in to the store.', ['Signed in', 'Hold off']],
   ] as const) assert.ok(card(action, options && [...options]), action);
@@ -523,8 +526,17 @@ test('handsOverAStep knows a step from a choice', () => {
     ['Which households should get the portal email?', ['Ever paid + affiliates', 'Paid this or last year']],
     ['Let me know which name you like', ['Bramble', 'Thicket']],
     ['Dictate a sentence on your phone and tell me what it typed', undefined],
+    ['Which pricing model should we use?', ['Fixed price', 'Hourly']],
+    ['Which URL should the share link use?', ['Signed URL', 'Public URL']],
+    ['Default for the new switch?', ['Enabled', 'Disabled']],
+    ['Send this email to Emily?', ['Approved', 'Edit first']],
+    ["Let's decide which plan to use.", ['Credits', 'Plan']],
+    ['Delete the old Linux install on the Dell laptop.', ['Delete it', 'Leave it']],
+    ['Buy the weather station kit (about A$246).', ['Order it', 'Wait']],
   ] as const) assert.ok(!card(action, options && [...options]), action);
   assert.ok(!card('Turn on one of these', ['Done'], [{ title: 'Review', url: 'review:abc' }]), 'a review is a pick');
+  assert.ok(handsOverAStep([{ action: 'Which design?', options: ['A', 'B'], links: [{ title: 'Review', url: 'review:abc' }] }, { action: 'Allow Desk Runner on removable volumes.', options: ['Done'] }]), "a review doesn't hide the card's other asks");
+  assert.ok(handsOverAStep([{ action: 'Desk Runner needs removable volumes', reply: 'done' }]), "the older form's reply counts");
 });
 
 // Run on the card was taken out (14 Nov 2026): a session that loaded

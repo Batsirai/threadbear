@@ -408,6 +408,30 @@ test('end_turn is refused once a turn when a sign-in error has no ask, naming th
   assert.match(r.text, /is done/);
 });
 
+// Gemini's review (20 Nov): the sign-in note asks for a sign-in ask, which the
+// try-first note would then question. After the one, the other stays quiet.
+test('end_turn: the sign-in ask the sign-in note asked for is taken, with no try-first note after it', async () => {
+  const h = makeHarness();
+  const { thread } = h.runner.create({ text: 'Find the email from Emily', accountId: 'claude-3' });
+  const s = h.adapter.last;
+  s.init();
+  const endTurn = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, sleep: async () => {} }).find((x) => x.name === 'end_turn')!;
+  const call = async (args: Record<string, unknown>, itemId: string) => {
+    s.out({ kind: 'event', event: { type: 'tool.call', itemId, name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: args } });
+    const r = (await endTurn.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
+    const text = r.content.map((c) => c.text).join('\n');
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.isError, text, truncated: false, images: [] } });
+    return { text, error: Boolean(r.isError) };
+  };
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'g1', name: 'mcp__claude_ai_Gmail__search_threads', kind: 'mcp', title: 'Gmail', input: {} } });
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'g1', ok: false, text: 'MCP server "claude.ai Gmail" needs you to sign in again', truncated: false, images: [] } });
+  s.text('m1', "I couldn't search Gmail: it needs signing in again.");
+  let r = await call({ needs: 'nothing' }, 'e1');
+  assert.ok(r.text.startsWith(SIGN_IN_NUDGE));
+  r = await call({ needs: 'you', asks: [{ action: 'Sign in to Gmail again on claude.ai.', why: 'Then I can search it.', options: ['Signed in'] }] }, 'e2');
+  assert.equal(r.error, false, r.text);
+});
+
 test('end_turn takes an ask that covers the sign-in straight away', async () => {
   const h = makeHarness();
   const { thread } = h.runner.create({ text: 'Check Sentry', accountId: 'claude-3' });

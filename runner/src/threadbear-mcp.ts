@@ -1539,7 +1539,8 @@ export function buildThreadbearTools(
         checkFindings(input, needs, events);
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        // Not after the sign-in note, which asked for the sign-in ask this would question.
+        if (opts.tryFirstNote !== false && needs === 'you' && !nudgedThisTurn(events) && handsOverAStep(asks) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
@@ -1670,7 +1671,7 @@ export function buildThreadbearTools(
         checkFindings(args, needs, events);
         const missing = uncovered(await turnSignIns(events, opts.gateway?.(), opts.gatewayHealth), needs === 'you' ? asks : []);
         if (missing.length && !nudgedThisTurn(events)) throw new Error(signInNudge(missing));
-        if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
+        if (opts.tryFirstNote !== false && needs === 'you' && !nudgedThisTurn(events) && handsOverAStep(asks ?? []) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
