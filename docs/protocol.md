@@ -1271,7 +1271,8 @@ the summary and then the reply.
 | `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac apps' own builds, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], providers?: ProviderInfo[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel }, permissionMode?: "full" \| "ask" \| "auto" }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `providers` is what each provider this runner knows is called and can do, in its own order (`ProviderInfo` above; absent from older runners, when a client uses what it knows of Claude and Codex). `experiments` is the ids of the experiments on for this runner (docs/experiments.md), read at each `hello`, so the app shows what belongs to one (the Projects page's decisions for `projectDecisions`) from its next connect. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 1% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `defaults.permissionMode` is the mode a `threads.create` with none starts on, and the one the app's new-thread composer starts on and goes back to after each send (`runner.json`'s `defaults.permissionMode`, read at startup; `"plan"` or anything else there is ignored). Absent means `"full"`: setup writes `"auto"` into the `runner.json` it makes for a new install, and an install from before has none. A client that doesn't know the runner's (an older runner, or another runner reached through the backend) starts on `"full"`. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` `client` is `threadbear-mac` for the Swift app and `threadbear-desktop` for the GPUI one; either counts as the app being open (the GPUI one not for a browser panel, which only the Swift app has) |
 | `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; a value the runner doesn't know is left out; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
 | `threads.search` | `{ query: string, limit?: number }` | `{ threads: ThreadSummary[] }` matches title, preview and `keywords` across all threads, archived included (Search) |
-| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, detached?: true, projectIds?: string[] }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `confined: true` is refused (see Sandboxed threads (taken out)). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" |
+| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, detached?: true, projectIds?: string[], serviceId?: string }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `serviceId` starts it on a virtual runner instead (Virtual runners, "Starting from the Mac"). `confined: true` is refused (see Sandboxed threads (taken out)). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers" |
+| `cloudTokens.make`, `cloudTokens.set`, `cloudTokens.useMac`, `cloudTokens.list` | `{ login }`; `{ login, token }`; `{ login }`; `{}` | A virtual runner's cloud token for a Claude login (Virtual runners, "Cloud tokens on the Mac"): made with `claude setup-token` here (up to 10 minutes, waiting on Mike in the browser), pasted, or this Mac's year-long token for that login. `{}` once set; `list` answers `{ tokens: { login, madeAt, setAt, state }[] }`, never a token |
 | `threads.samples` | `{ cwd: string, remove?: boolean }` | `{ threads: ThreadSummary[] }`. The app's first-run tour's sample threads (`runner/src/samples.ts`): made up exchanges written as finished turns with no CLI, in `cwd` (the app's `~/ThreadbearThreads/Welcome`, where it writes an example patch), with `sample: true`; the first needs you, with a card of asks, and one is left unread. Asking again deletes any there are and makes them afresh (writing the patch again if it's gone, and trusting it as written). `remove: true` deletes them all, archived and hibernating ones too, and returns none. `threads.send` to a sample is `-32602` |
 | `threads.send` | `{ threadId, text, images?: ImageRef[], answers?: AskAnswer[], origin?: "phone", runnerId?: string \| null }` | `{ turnId }`. `runnerId` is the runner the client shows the thread on (`null` for this Mac's own): given, the primary refuses the message with `-32031` when it would reach any other runner (a thread still on the runner it's moving from, say), rather than passing it on; absent, it's routed as before, except that a message for another runner's thread is refused the same way while this runner knows of a move of it under way (an older app may have shown it as already moved). `text` can place the `images` among its words with `[Picture N]` markers (Pictures in a message). `origin: "phone"` is only for a phone command the primary passes on to a draining runner (Sync, "Commands"), so the message keeps its origin there; any other `origin` is `-32602`. If a turn is running and its CLI is live, the message goes into that turn straight away (a `user.message` under the running `turnId`, which is returned): the agent takes it at its next step, or right after its reply if that was already finishing, and the turn doesn't complete until it has been answered. If the thread was moved to another login (usually another provider) during the running turn, a message from Mike (or the phone) doesn't steer into the old CLI: the turn is stopped (`system.note` "Stopped here so <model> can take over.") and the message starts the next turn on the new login, with the handoff, as T3 Code does. If the agent is waiting on a card for its own tool call (an approval or a question, with an `itemId`), a message from Mike declines that card first (`approval.resolved` with `deny` and a `message` telling the agent he wrote instead), as the CLI reads nothing else until the card is answered; a background subagent's card is left open. Otherwise (the CLI is still starting or leaving, messages are already waiting, a move or fresh CLI is due on the next turn, Stop has been pressed, or the turn was opened only for a card) the message is queued and starts its own turn when the running one ends |
 | `threads.interrupt` | `{ threadId }` | `{}`. Stop ends the turn. Claude reports which user inputs it queued, started and cancelled. An input it never started is saved, including pictures, with a `system.note`; one it started is a deliberate cancel, even at zero tokens. With no receipt support, the fallback saves only a turn with no model output and zero input/output tokens, or one whose CLI never became ready. Saved inputs persist across restarts and precede the next ordinary user message in one model input, with pictures renumbered. Stop alone never retries them. `/clear` discards them; other slash commands and scheduled messages leave them saved. Editing a message discards saved rows in the cut history, and restores earlier saved rows when the edit cuts the input that carried them. A move to another runner drops automatic replay state (the original messages stay in its history). Missing pictures are marked unavailable; recovery only reads pictures inside this thread's own media folder |
@@ -6260,7 +6261,8 @@ type RemoteRunner = {
                        // a message reaches (box, below)
   lastSeenAt: string
   followProblem?: string
-  box?: { state: string, waiting?: true, unreachable?: true, unsure?: true } // one thread's box on a virtual
+  box?: { state: string, waiting?: true, unreachable?: true, unsure?: true,
+          service?: string, token?: "none" | "dead", login?: string } // one thread's box on a virtual
                        // runner (Virtual runners), as its machine has it:
                        // creating, starting, awake, saving, asleep, waking,
                        // retiring, failed, destroying, gone (archived, its save kept)
@@ -6275,8 +6277,20 @@ type RemoteRunner = {
                        // provider made more than one machine for it and
                        // which holds its work isn't known yet; each message
                        // tries the next (Box keys). An older runner
-                       // leaves them out.
+                       // leaves them out. From API 90: `service`, its
+                       // virtual runner's id (`services` below), and
+                       // `needsToken` among the states. `token` says its
+                       // login (`login`, an email) has no cloud token
+                       // ("none") or a refused one ("dead"): the thread
+                       // shows the token card until one is set.
+                       // A box's runner is never a machine to pick:
+                       // Runs on, Move to and Settings leave it out.
 }
+// From API 90 with the virtualRunners experiment on, and only on the
+// owner key's runner: the virtual runners (`boxes:runnerServices`), for
+// Runs on's entries after the machines. Left out otherwise.
+type VirtualRunner = { id: string, name: string, provider: string }
+// RemoteThreads gains `services?: VirtualRunner[]`.
 // rpcUrl and tokenFile were the direct link between Macs (step 6 part 2),
 // taken out 13 Nov 2026. An app ignores them if an older runner sends them.
 type RemoteThread = { runnerId: string, threadId: string, title, cwd,
@@ -7811,7 +7825,9 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `startThread` | owner only | a thread on a virtual runner: its runner, box and `create` command in one step, refused past `maxBoxes` (Virtual runners) |
 | `wakePastHours` | owner only | wakes a thread's box that's waiting for tomorrow's hours, and lets it run the rest of today (Virtual runners) |
 | `setCloudToken` | owner only | a Claude login's cloud token for boxes, sealed under `BOX_SEAL_KEY` (`convex/boxes.ts`, Box keys) |
-| `cloudTokens` | owner only | which logins have a cloud token, when each was made and set; never the token |
+| `cloudTokens` | owner only | which logins have a cloud token, when each was made and set, and whether it's `valid` or `dead` (API 90); never the token |
+| `tokenRefused` | its own | a box's key only: its login's cloud token was refused by a turn (API 90, Box mode) |
+| `boxCloudToken` | its own | a box's key only: its login's cloud token while it's valid, for a box waiting after a refusal (API 90, Box mode) |
 | `mintBootToken` | owner only | a boot token for a thread's booting box: returned once, only its hash kept, 10 minutes |
 | `archiveBox` | owner only | the thread's box goes to `destroying`, and its key stops working |
 | `boxSaved` | its own | a box's key only: its thread's save, a file its runner uploaded and nothing else uses; replaces the last save |
@@ -7856,7 +7872,58 @@ has to be on for it.
   `queueCommand`'s `create` takes and `from: "mac"`; then the service
   makes its box. It answers `{ runnerId, commandId }`. Past the virtual
   runner's `maxBoxes` it's refused at once (`kind: "limit"`, saying how
-  many are up), and nothing is written.
+  many are up), and nothing is written. From API 90 it also takes `cwd`
+  and `accountId` (the folder and login on the Mac it was started from,
+  for show only) and writes the thread's sidebar row (`threadIndex`,
+  under the box's runner id: its first line as the title and preview,
+  `status: "starting"`), so the thread is listed everywhere at once and
+  stays listed while it waits, before its box has written anything.
+- **Waiting for a cloud token** (API 90). A thread whose login has no
+  cloud token, or only a refused one (`cloudToken`'s `dead`, below), starts
+  in the box state `needsToken`: nothing is asked of the provider, its
+  `create` waits in the queue, and it counts toward nothing. Setting a
+  valid token for that login (`setCloudToken`) moves every box waiting on
+  it to `creating` (`TOKEN_SET`), and the service makes its box. Archiving
+  one that's waiting ends it (`expired`: it never ran, so nothing's kept).
+- **Cloud tokens' lifecycle** (API 90). A `cloudTokens` row is a state
+  machine (`convex/cloudTokenMachine.ts`, `tokenState`): `valid` once set,
+  `dead` once a box's turn on it was refused (a 401), `valid` again when a
+  new one is set. No row is a login with none. `setCloudToken` sends `SET`
+  (and releases the boxes waiting on the login); a box's
+  `boxes:tokenRefused({ key, setAt })` sends `REFUSED`, which only kills
+  the token it was given (`setAt` the row's own), so a token set since is
+  never marked dead by an older one's refusal. `boxes:cloudTokens` adds
+  each one's `state`.
+- **Cloud tokens on the Mac.** The app asks its own runner (owner key):
+  `cloudTokens.make { login }` runs `claude setup-token` for this Mac's
+  login with that email, in a pseudo-terminal with no window, as that
+  login (`CLAUDE_CONFIG_DIR` for any but claude-main). It opens claude.ai
+  in the browser; once Mike approves, the CLI gets its code on a localhost
+  callback and prints the token, which the runner takes from its output
+  (escapes and whitespace stripped, as it wraps) and sends to
+  `setCloudToken` with `madeAt` now. It answers `{}` once the token is
+  set, or an error, and gives up after 10 minutes (the CLI is stopped).
+  `cloudTokens.set { login, token }` sets one Mike pasted, and
+  `cloudTokens.useMac { login }` sets the login's year-long token on this
+  Mac (Accounts, "Year-long tokens") with its `madeAt`, when Mike picks
+  it on the card: the one place that token leaves the login's CLI. A
+  token is never logged, written to disk, put in an event or sent
+  anywhere but `setCloudToken`; the runner's scrubber knows it from the
+  moment it's read. `cloudTokens.list {}` answers `{ tokens: { login,
+  madeAt, setAt, state }[] }`. Each needs the `virtualRunners`
+  experiment and a backend of 90; otherwise `-32602`.
+- **Starting from the Mac.** `threads.create` with `serviceId` (a virtual
+  runner's id from `RemoteThreads.services`) starts the thread on it:
+  the runner reads the repo from `cwd` on this Mac (`origin` without
+  credentials, which it must have; the subfolder from the repo's top; the
+  base branch the current branch's upstream on `origin`, else `origin`'s
+  default branch, else `main`), takes the login's email from `accountId`
+  (a Claude login on this Mac; a pool's pick when only `poolId` is
+  given), makes the thread's id and calls `boxes:startThread`. It answers
+  as a create on another runner does (`thread.runnerId` the box's runner,
+  `status: "starting"`). Pictures aren't taken yet (`-32602`, saying so).
+  The thread then waits on its box, and on a cloud token if its login has
+  none, which the app shows from `RemoteRunner.box`.
 - **The box.** The provider starts it from the image with only
   `THREADBEAR_SYNC_URL` (the deployment's address),
   `THREADBEAR_BOX_BOOT` (its boot token, Box keys) and, for a provider that
@@ -8202,6 +8269,20 @@ the machine stops.
   for everything the runner starts. The app port listens on 127.0.0.1
   only, as every runner's does; nothing dials a box.
 - **Heartbeats** carry `runner.machineId`, the same id as the exchange.
+- **A refused token** (API 90). The exchange also gives `tokenSetAt`, when
+  the login's token was set, kept in `box.json`. `claude auth status`
+  calls any token signed in, so a dead one only shows when a turn is
+  refused (errorKind `auth`). In box mode that turn sends
+  `boxes:tokenRefused({ key, setAt })`, says so once in the thread
+  (`system.note`), and the thread waits (`waitingForToken` on its record,
+  kept across restarts; no pool move, as a box has one login). While it
+  waits the runner asks `boxes:boxCloudToken({ key })` (an action, box key
+  only: the login's token and `setAt` while it's `valid`, else null) every
+  30 seconds; a token set later than its own is written over
+  claude-main's `threadbear-token.json` (0600) and into `box.json`, the
+  thread's CLI is closed so the next turn starts on it, and the thread
+  carries on by itself with the runner's carry-on message, as after a
+  sign-in. A message from Mike meanwhile waits behind it.
 - **Superseded.** Any call refused with `kind: "auth"` (the box key
   unknown: a newer box for the thread has traded its boot token, or the
   box was lost, failed or archived) means this box no longer has the
