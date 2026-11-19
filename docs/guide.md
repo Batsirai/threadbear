@@ -2299,6 +2299,12 @@ release runs until you say go: then it merges, runs the checks and lands. Let's 
 talks the release through first, what's in it and what it means for your
 own changes, and changes nothing until you say. From a thread, `tb updates`
 says the same, and `tb updates check` looks again now.
+Once a release is in, the thread offers to send Mike a short check-up: which
+release came in, how far behind you were, and how often Threadbear's own errors
+came up, with anything of yours only counted. You see the whole draft first,
+and it goes as a comment on a public Discussion on Mike's repo, under your
+GitHub login, only if you say Send. Never ask turns it off
+(`"releases": { "checkup": false }` in `runner.json`).
 
 You don't have to remember to look. Every 5 days, if Mike has a release
 your copy doesn't have, Threadbear starts that thread for you: it reaches

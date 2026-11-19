@@ -6,7 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { defaultHome, runnerUrl, type Config } from './config.ts';
+import { defaultHome, peekRunnerJson, runnerUrl, type Config } from './config.ts';
 import { newTbClient } from './tb-connect.ts';
 import { realPathSync } from './platform.ts';
 import { RunnerClient, RpcClientError } from './client.ts';
@@ -17,12 +17,18 @@ import type { RestartResult, RunnerStatus } from './restart.ts';
 import type { UpstreamStatus } from './upstream.ts';
 import { forTerminal } from './terminal-text.ts';
 import { localOnly } from './convex-admin.ts';
+import { buildCheckup, checkupOff, postDraft, saveDraft, skipped } from './checkup.ts';
 
 export const DEV_HELP = `Working on Threadbear itself:
   tb status [--json]              the runner: version, live CLIs, busy threads, a pending restart
   tb self [--json]                the thread this command runs in (THREADBEAR_THREAD_ID)
   tb updates [check] [--json]     Mike's newest release and what this copy's main is missing
                                   (docs/bringing-in-updates.md); check fetches upstream now
+  tb checkup [--text "note"] [--post | --skip] [--json]
+                                  in someone else's copy, after bringing in a release: drafts
+                                  the check-up for Mike (docs/bringing-in-updates.md, 7);
+                                  --post sends the draft once they've said Send, --skip notes
+                                  they didn't
   tb restart [--now] [--resume "text" | --no-resume] [--reason "text"] [--thread ID]
              [--max-wait 30m]     restart once no thread is busy (or now), for dev runners and
                                   sandboxes. Inside a thread it carries that thread on
@@ -100,6 +106,8 @@ export async function runDev(client: RunnerClient, cmd: string, args: string[], 
       process.stdout.write(formatUpstream(r.upstream, Date.now()) + '\n');
       return 0;
     }
+    case 'checkup':
+      return checkupCommand(client, f);
     case 'self': {
       const id = env.THREADBEAR_THREAD_ID;
       if (!id) {
@@ -981,4 +989,38 @@ function follow(file: string, filter: string | undefined, from: number): Promise
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
   });
+}
+
+// tb checkup (checkup.ts): drafts, sends or skips the check-up for Mike.
+async function checkupCommand(client: RunnerClient, f: Flags): Promise<number> {
+  const s = await client.call<RunnerStatus>('runner.status');
+  const checkout = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).stdout.trim();
+  if (!checkout) {
+    console.error('Run tb checkup inside the Threadbear checkout.');
+    return 1;
+  }
+  const off = checkupOff(checkout, peekRunnerJson(s.home));
+  if (off) {
+    console.log(off);
+    return 0;
+  }
+  if (f.post) {
+    const r = postDraft(s.home, Date.now());
+    (r.code ? console.error : console.log)(r.message);
+    return r.code;
+  }
+  if (f.skip) {
+    skipped(s.home, Date.now());
+    console.log("Skipped. The next check-up counts from now.");
+    return 0;
+  }
+  const id = process.env.THREADBEAR_THREAD_ID;
+  const self = id ? (await listAll(client)).find((t) => t.id === id) : undefined;
+  const logLines = s.logFile && fs.existsSync(s.logFile) ? lastLines(s.logFile, 20_000, ' ERROR ') : [];
+  const c = buildCheckup({ home: s.home, checkout, logLines, patches: self?.patches ?? [], updateFailing: s.update?.state === 'failed', ...(typeof f.text === 'string' ? { note: f.text } : {}), now: Date.now() });
+  const draft = saveDraft(s.home, c);
+  if (f.json) return printJson({ ...c, draft: draft.text, file: draft.file });
+  console.log(draft.text);
+  console.log(`\n(Saved as ${draft.file}. Show them this on a card; tb checkup --post sends exactly this once they say Send.)`);
+  return 0;
 }
