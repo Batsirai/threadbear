@@ -257,7 +257,7 @@ Threads that need those belong on the Mac.
 
 A Windows 10 or 11 PC can be a runner too, natively, with no WSL
 (docs/gpui-port/runner-windows-plan.md). It's new, so expect rough edges:
-patches run only when clicked, Codex isn't offered yet, and the Mac-only
+patches run only when clicked, and the Mac-only
 tools are off. Do this as the person who'll use it, in PowerShell, with no
 admin rights needed.
 

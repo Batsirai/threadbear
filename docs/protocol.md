@@ -2582,7 +2582,7 @@ thread to another login when the one it's on runs out of room.
   a known value to the secret scrubbing, and the file a secrets file.
 - **Year-long tokens on another runner.** The Usage panel's Terminal
   helper only reaches this Mac's logins. For another runner's (bruce,
-  Tinker Desk, a WSL box), the Runners panel's details for that runner
+  Tinker Desk, a Windows PC), the Runners panel's details for that runner
   list its Claude logins with Year-long token… (`accounts.yearToken`
   with its `runnerId`). That runner runs `claude setup-token` for the
   login itself, under a small Python helper in a pseudo-terminal 1000

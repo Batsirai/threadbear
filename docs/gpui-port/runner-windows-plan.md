@@ -4,12 +4,15 @@ Written 17 Nov 2026, from the 9 Nov audit (`runner-windows.md`), Keith's
 fork as it stood on 10 Nov (`platima/main`, 113 commits; his GitHub repo is
 gone now, so the local copy is all there is), and a look at the Dell XPS.
 
-Today a Windows PC runs the GPUI app natively and the runner in WSL
-(Ubuntu 24.04, mirrored networking, a systemd unit copying the token across).
-The goal is the runner running on Windows itself, installed and kept up to
-date the way it is on the Mac, with WSL no longer needed.
+When this was written, a Windows PC ran the GPUI app natively and the runner
+in WSL (Ubuntu 24.04, mirrored networking, a systemd unit copying the token
+across). The goal was the runner running on Windows itself, installed and
+kept up to date the way it is on the Mac, with WSL no longer needed. *Done:
+since 19 Nov nothing uses WSL. The Dell's Ubuntu and its start-up task are
+deleted, and the app no longer looks for the token WSL copied (it brings an
+older app's settings across from that folder once).*
 
-## Where things stand
+## Where things stood (17 Nov)
 
 - **Main's runner has nothing for Windows yet.** Four files mention `win32`.
   Everything in the audit is still to do.

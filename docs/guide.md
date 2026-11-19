@@ -1383,7 +1383,7 @@ Remote Control don't work on that login; MCP servers you set up yourself
 still do, and so do the usage numbers. To go back to signing in, delete
 that file.
 
-A login on another of your machines (a second Mac, a Linux box, WSL) gets
+A login on another of your machines (a second Mac, a Linux box, a Windows PC) gets
 one from the Runners panel: open that machine's card, and its Claude logins
 are listed under its figures, each with Year-long token…. Your browser opens
 on claude.ai's page for it; click Authorize, then Copy code on the page it
