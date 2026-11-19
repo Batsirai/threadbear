@@ -59,3 +59,16 @@ When("I press the PR's button {string}", async function (this: ThreadbearWorld, 
 Then("the PR's button {string} is busy", async function (this: ThreadbearWorld, key: string) {
   await this.until(`${key} spinning`, (d) => pr(d)?.busy === key);
 });
+
+// A PR link in a reply has a mark before it in its state's colour; the
+// dump has each as "<url>: <state>" (`prMarks`).
+type MarkedRow = { kind: string; prMarks?: string[] };
+When('a reply linking the PR {string} streams in', async function (this: ThreadbearWorld, url: string) {
+  const d = await this.app.dump();
+  await this.app.do({ cmd: 'mock', method: 'stream', params: { threadId: d.selection?.id, text: `It's [#72](${url}) for now.`, hz: 60 } });
+  await this.until('the reply with its PR link', (dump) => [...dump.transcript.rows].reverse().some((r) => (r as unknown as MarkedRow).prMarks?.some((m) => m.startsWith(`${url}:`))));
+});
+
+Then('the mark before the PR {string} says {string}', async function (this: ThreadbearWorld, url: string, state: string) {
+  await this.until(`the mark "${url}: ${state}"`, (d) => [...d.transcript.rows].some((r) => (r as unknown as MarkedRow).prMarks?.includes(`${url}: ${state}`)));
+});

@@ -781,13 +781,26 @@ impl ThreadPane {
 
     /// A reply's markdown with a live mark's link before each link to a
     /// thread the app has (threadbear_core::link_marks, thread_link_marks.rs).
-    pub(crate) fn with_link_marks(&self, text: String, cx: &App) -> String {
+    /// With the inlinePrs experiment, a PR's state mark before each link to
+    /// a PR too (pr_view.rs's `PrMarks`), its state asked of the runner the
+    /// first time.
+    pub(crate) fn with_link_marks(&self, text: String, cx: &mut App) -> String {
         let Some(app) = self.composer.read(cx).app.upgrade() else { return text };
         let threads = &app.read(cx).threads;
-        match threadbear_core::link_marks::with_marks(&text, &|id| threadbear_core::link_marks::resolve_in(id, threads.keys())) {
+        let text = match threadbear_core::link_marks::with_marks(&text, &|id| threadbear_core::link_marks::resolve_in(id, threads.keys())) {
             std::borrow::Cow::Owned(marked) => marked,
             std::borrow::Cow::Borrowed(_) => text,
+        };
+        if !crate::pr_view::on(app.read(cx)) {
+            return text;
         }
+        let prs = threadbear_core::pull_requests::pr_links(&text);
+        if prs.is_empty() {
+            return text;
+        }
+        let side = app.read(cx).side.clone();
+        side.update(cx, |side, cx| side.ask_pr_states(&prs, cx));
+        threadbear_core::pull_requests::with_pr_marks(&text).into_owned()
     }
 
     /// `agentMessageText`'s first line: where the message came from, small

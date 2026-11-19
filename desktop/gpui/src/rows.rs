@@ -485,6 +485,8 @@ impl ThreadPane {
             .plugin(chips)
             // The live mark before a link to another thread (`with_link_marks`).
             .plugin(crate::thread_link_marks::Marks)
+            // A PR's state before a link to it (pr_view.rs).
+            .plugin(crate::pr_view::PrMarks)
             // A closed ```mermaid or ```html fence as what it shows (rich_boxes.rs).
             .plugin(crate::rich_boxes::RichBoxes)
     }

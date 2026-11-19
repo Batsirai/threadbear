@@ -333,6 +333,57 @@ pub fn work_prompt(pr: &PrView) -> String {
     format!("Pull request {} (\"{}\" by {}). ", pr.url, pr.title, pr.author)
 }
 
+/// The link a PR's state mark is drawn for in a reply:
+/// `[\u{2060}](tbpr:<url>)` just before the PR's own link, as thread links
+/// get theirs (link_marks.rs). Mike expected PR links in replies to show
+/// whether they're open, merged or closed (19 Nov 2026).
+pub const MARK_SCHEME: &str = "tbpr:";
+
+/// Each PR a reply links to, its tidy url, once each in order.
+pub fn pr_links(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, url) in pr_link_starts(text) {
+        if !out.contains(&url) {
+            out.push(url);
+        }
+    }
+    out
+}
+
+/// `text` with a state mark's link before each link to a PR, or `text` as
+/// it was when there's none. Links in code are text, so they're left alone.
+pub fn with_pr_marks(text: &str) -> std::borrow::Cow<'_, str> {
+    let at = pr_link_starts(text);
+    if at.is_empty() {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + at.len() * 60);
+    let mut from = 0;
+    for (start, url) in at {
+        out.push_str(&text[from..start]);
+        out.push_str(&format!("[\u{2060}]({MARK_SCHEME}{url})"));
+        from = start;
+    }
+    out.push_str(&text[from..]);
+    std::borrow::Cow::Owned(out)
+}
+
+fn pr_link_starts(text: &str) -> Vec<(usize, String)> {
+    if !text.contains("github.com/") {
+        return Vec::new();
+    }
+    let Ok(tree) = markdown::to_mdast(text, &markdown::ParseOptions::gfm()) else { return Vec::new() };
+    let mut at = Vec::new();
+    crate::link_marks::collect(&tree, &mut |link| {
+        let Some(start) = link.position.as_ref().map(|p| p.start.offset) else { return };
+        if let Some(r) = PrRef::parse(&link.url).filter(|_| text.is_char_boundary(start)) {
+            at.push((start, r.url()));
+        }
+    });
+    at.sort_by_key(|(start, _)| *start);
+    at
+}
+
 fn repo_of(url: &str) -> Option<String> {
     PrRef::parse(url).map(|r| format!("{}/{}", r.owner, r.repo))
 }
@@ -341,6 +392,17 @@ fn repo_of(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_mark_before_each_pr_link_in_a_reply() {
+        let text = "Try [#72](https://github.com/acme/app/pull/72/files) or https://github.com/acme/app/pull/77, not `https://github.com/acme/app/pull/9` or [docs](https://github.com/acme/app).";
+        assert_eq!(
+            with_pr_marks(text),
+            "Try [\u{2060}](tbpr:https://github.com/acme/app/pull/72)[#72](https://github.com/acme/app/pull/72/files) or [\u{2060}](tbpr:https://github.com/acme/app/pull/77)https://github.com/acme/app/pull/77, not `https://github.com/acme/app/pull/9` or [docs](https://github.com/acme/app)."
+        );
+        assert_eq!(pr_links(text), ["https://github.com/acme/app/pull/72", "https://github.com/acme/app/pull/77"]);
+        assert!(matches!(with_pr_marks("No links here"), std::borrow::Cow::Borrowed(_)));
+    }
 
     #[test]
     fn pr_links_and_only_pr_links() {

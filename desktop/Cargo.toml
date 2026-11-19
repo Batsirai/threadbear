@@ -29,6 +29,10 @@ exclude = ["vendor"]
 # And a paste longer than a textarea scrolled to its end: `scroll_to` clamped
 # its target with the old text's height and left the box at the top (Mike,
 # 17 Nov: a dictated brain dump showed its start, the end cut off).
+# And a press whose release a click handler stopped (a PR tab's close) is
+# ended by the next press, not taken for a drag still going on: the link
+# clicked next did nothing until clicked again (Mike, 19 Nov;
+# `released_unseen` in text_selection.rs).
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
 gpui-base = { path = "vendor/gpui-base" }

@@ -12,6 +12,7 @@
 // until GitHub has answered, then the PR is read again.
 use crate::highlights::{icon, palette, tipped, Palette, PanePreview, SidePane, Target};
 use crate::style::{self, px};
+use crate::tips::Tip as _;
 use crate::{call, now_ms};
 use gpui_kit::base::TextViewState;
 use gpui_kit::component::input::{Textarea, TextareaState};
@@ -149,7 +150,10 @@ impl SidePane {
                 let load = match res {
                     Ok(v) => match serde_json::from_value::<PrView>(v) {
                         Ok(pr) => {
-                            this.prs.states.insert(url.clone(), pr.state);
+                            // A reply's mark for it shows the new state too.
+                            if this.prs.states.insert(url.clone(), pr.state) != Some(pr.state) {
+                                cx.refresh_windows();
+                            }
                             PrLoad::Ready(Arc::new(pr))
                         }
                         Err(e) => PrLoad::Failed(format!("Couldn't read the PR: {e}")),
@@ -179,24 +183,32 @@ impl SidePane {
     /// time the row shows; None until it answers, or if it can't say.
     pub(crate) fn pr_link_state(&mut self, url: &str, cx: &mut Context<Self>) -> Option<PrState> {
         let url = pr_url(url)?;
-        if let Some(s) = self.prs.states.get(&url) {
-            return Some(*s);
+        self.ask_pr_states(std::slice::from_ref(&url), cx);
+        self.prs.states.get(&url).copied()
+    }
+
+    /// Asks the runner once for the states of the links in `urls` it hasn't
+    /// been asked about, in one `github.prStates`. The answer redraws every
+    /// window, as the marks in replies are drawn from it too.
+    pub(crate) fn ask_pr_states(&mut self, urls: &[String], cx: &mut Context<Self>) {
+        let new: Vec<String> = urls.iter().filter_map(|u| pr_url(u)).filter(|u| !self.prs.states.contains_key(u) && self.prs.asked.insert(u.clone())).collect();
+        if new.is_empty() {
+            return;
         }
-        if self.prs.asked.insert(url.clone()) {
-            let client = self.client.clone();
-            cx.spawn(async move |this, cx| {
-                let Ok(v) = call(client, "github.prStates", json!({ "urls": [url.clone()] })).await else { return };
-                this.update(cx, |this, cx| {
-                    if let Some(s) = v["states"][&url].as_str().and_then(PrState::parse) {
-                        this.prs.states.insert(url, s);
-                        cx.notify();
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(v) = call(client, "github.prStates", json!({ "urls": new })).await else { return };
+            this.update(cx, |this, cx| {
+                for url in &new {
+                    if let Some(s) = v["states"][url].as_str().and_then(PrState::parse) {
+                        this.prs.states.insert(url.clone(), s);
                     }
-                })
-                .ok();
+                }
+                cx.refresh_windows();
             })
-            .detach();
-        }
-        None
+            .ok();
+        })
+        .detach();
     }
 
     /// A button's work on GitHub: busy until it lands, then the PR read again.
@@ -860,4 +872,54 @@ fn pr_checks(pr: &PrView, p: Palette, cx: &mut App) -> AnyElement {
         }
     }
     col.into_any_element()
+}
+
+/// The markdown plugin that draws `[\u{2060}](tbpr:<url>)` before a PR link
+/// in a reply as GitHub's pull request mark in its state's colour (open,
+/// draft, merged, closed), from what the pane knows of it; grey until the
+/// runner says (`ask_pr_states`).
+pub(crate) struct PrMarks;
+
+#[derive(Clone)]
+struct PrMarkRef {
+    url: String,
+}
+
+impl gpui_kit::base::text::MarkdownPlugin for PrMarks {
+    fn name(&self) -> &str {
+        "pr-link-mark"
+    }
+
+    fn parse(&self, node: &markdown::mdast::Node, _cx: &gpui_kit::base::text::MarkdownParseContext<'_>) -> Option<gpui_kit::base::text::MarkdownNode> {
+        let markdown::mdast::Node::Link(link) = node else { return None };
+        let url = link.url.strip_prefix(rules::MARK_SCHEME)?.to_owned();
+        Some(gpui_kit::base::text::MarkdownNode::new("pr-link-mark", PrMarkRef { url }).text("").markdown(""))
+    }
+
+    fn render_inline(&self, node: &gpui_kit::base::text::MarkdownNode, _context: &gpui_kit::base::text::InlineRenderContext, _window: &mut Window, cx: &mut App) -> Option<gpui_kit::base::text::InlineElement> {
+        let mark = node.data::<PrMarkRef>()?.clone();
+        let app = cx.try_global::<crate::open_gate::GateNotices>().and_then(|n| n.0.upgrade());
+        let state = app.and_then(|a| a.read(cx).side.read(cx).prs.states.get(&mark.url).copied());
+        let colour = state.map_or(style::faint_text(cx), |s| state_colour(s, cx));
+        let mark_el = div()
+            .id(SharedString::from(format!("pr-link-mark-{}", mark.url)))
+            .flex_none()
+            .mr(px(3.))
+            .child(icon("arrow.triangle.pull", 12., colour))
+            .tip(state.map_or("Pull request", PrState::words));
+        Some(gpui_kit::base::text::InlineElement::new(mark_el).with_baseline(px(11.)))
+    }
+}
+
+/// For scripts: each PR link's mark in a reply, as "<url>: <state>" ("Pull
+/// request" until the runner says), in order. None with the experiment off
+/// or no PR links.
+#[cfg(feature = "automation")]
+pub(crate) fn dump_marks(text: &str, app: &crate::app::Threadbear, cx: &App) -> Option<Vec<String>> {
+    if !on(app) {
+        return None;
+    }
+    let states = &app.side.read(cx).prs.states;
+    let out: Vec<String> = rules::pr_links(text).into_iter().map(|u| format!("{u}: {}", states.get(&u).map_or("Pull request", |s| s.words()))).collect();
+    (!out.is_empty()).then_some(out)
 }

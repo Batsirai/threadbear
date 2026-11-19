@@ -124,7 +124,7 @@ pub fn resolve_in<'a>(id: &str, ids: impl IntoIterator<Item = &'a String>) -> Op
     found.cloned()
 }
 
-fn collect(node: &markdown::mdast::Node, found: &mut impl FnMut(&markdown::mdast::Link)) {
+pub(crate) fn collect(node: &markdown::mdast::Node, found: &mut impl FnMut(&markdown::mdast::Link)) {
     if let markdown::mdast::Node::Link(link) = node {
         found(link);
     }

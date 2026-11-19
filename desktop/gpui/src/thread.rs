@@ -1835,6 +1835,10 @@ impl ThreadPane {
                         if let Some(marks) = crate::thread_link_marks::dump(&item.text, app.read(cx)) {
                             out["linkMarks"] = json!(marks);
                         }
+                        // And the state marks before its links to PRs (pr_view.rs).
+                        if let Some(marks) = crate::pr_view::dump_marks(&item.text, app.read(cx), cx) {
+                            out["prMarks"] = json!(marks);
+                        }
                     }
                 }
                 if let Some(chips) = crate::chips::row_chips(self, row, cx) {

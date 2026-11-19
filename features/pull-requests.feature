@@ -31,3 +31,11 @@ Feature: Pull requests open beside the thread
     And I press the PR's button "Closes the PR on GitHub"
     Then the PR's button "close" is busy
     And the PR's status reads "Closed"
+
+  @pane.prs @inline-prs @swift-pending
+  Scenario: A PR link in a reply shows whether it's open, and keeps up
+    When a reply linking the PR "https://github.com/acme/app/pull/72" streams in
+    Then the mark before the PR "https://github.com/acme/app/pull/72" says "Open"
+    When I follow the PR link "https://github.com/acme/app/pull/72" in the thread
+    And I press the PR's button "Closes the PR on GitHub"
+    Then the mark before the PR "https://github.com/acme/app/pull/72" says "Closed"
