@@ -48,6 +48,12 @@ gpui-base = { path = "vendor/gpui-base" }
 # range, not a viewport beyond it: ScrollBounce took that gap for a pull past
 # the transcript's bottom and stretched it the wrong way (Ian, 17 Nov).
 gpui-pre = { path = "vendor/gpui-pre" }
+# gpui-pre-macos 0.3.11 as published, except that with a native view inside
+# the window holding the keyboard (a web panel's page), a key without ⌘ or
+# Control isn't GPUI's key equivalent: it goes to that view. Otherwise
+# Backspace and the arrows went to a GPUI text box out of sight (Mike, 19 Nov,
+# the YouTube panel). See another_view_has_the_keyboard in its window.rs.
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 
 # Scripted screenshots run in debug apps, often at background priority. An
 # unoptimized PNG encode stalled the app for 30 seconds (14 Nov). Optimize
