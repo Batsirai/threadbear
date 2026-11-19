@@ -536,11 +536,14 @@ export const PICTURE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'i
 const PICTURE_PATH = 2_048;
 const PICTURE_SIDE = 100_000;
 const PICTURE_INDEX = 100;
-function checkPicture(caller: Caller, img: { seq: number; index?: number; path?: string; src?: string; mediaType: string; width?: number; height?: number }): void {
+// A reply's media also takes a live page (API 95, the livePages experiment):
+// stored as plain bytes, run only in the apps' sealed views.
+export const REPLY_TYPES = new Set([...PICTURE_TYPES, 'text/html']);
+function checkPicture(caller: Caller, img: { seq: number; index?: number; path?: string; src?: string; mediaType: string; width?: number; height?: number }, types: Set<string> = PICTURE_TYPES): void {
   if (caller.owner) return;
   const whole = (n: number, lo: number, hi: number) => Number.isSafeInteger(n) && n >= lo && n <= hi;
   const bad = (what: string) => new ConvexError({ kind: 'badArgs', message: `a picture's ${what} isn't one a runner key may write` });
-  if (!PICTURE_TYPES.has(img.mediaType)) throw bad('type');
+  if (!types.has(img.mediaType)) throw bad('type');
   if (!isSeq(img.seq)) throw bad('seq');
   if (img.index !== undefined && !whole(img.index, 0, PICTURE_INDEX)) throw bad('index');
   for (const side of [img.width, img.height]) if (side !== undefined && !whole(side, 1, PICTURE_SIDE)) throw bad('size');
@@ -1161,7 +1164,7 @@ export const addReplyImage = mutation({
   returns: pictureAnswer,
   handler: async (ctx, { key, ...sent }) => {
     const caller = await runnerAuth(ctx, key, 'addReplyImage');
-    checkPicture(caller, sent);
+    checkPicture(caller, sent, REPLY_TYPES);
     const img = clean(sent);
     const mine = await ownThread(ctx, caller, img.threadId);
     await mustMayUseStorage(ctx, caller, img.storageId);

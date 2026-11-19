@@ -461,4 +461,9 @@
 //    (boxes:tokenRefused) and fetches the new one (boxes:boxCloudToken);
 //    otherRunnersList's box carries service, token and login. A runner
 //    offers virtual runners only on a backend of 94 or later.
-export const API_VERSION = 94;
+// 95: sync:addReplyImage takes a live page, mediaType text/html (the
+//    livePages experiment, docs/live-pages-design), uploaded as plain bytes;
+//    phoneImage carries `mediaType` for a reply's media, so the phones run
+//    a page in a sealed view rather than decode it. A runner sends pages
+//    only to a backend of 95 or later.
+export const API_VERSION = 95;

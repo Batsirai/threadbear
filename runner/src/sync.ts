@@ -29,7 +29,8 @@ import { ConvexClient } from 'convex/browser';
 import { phonePicture } from './project-icons.ts';
 import { RunnerStats, type MachineStats } from './runner-stats.ts';
 import { draftFromPhone, phoneReview, reviewStills } from './phone-reviews.ts';
-import { imagesInEvent, pastedImagesInEvent, readReplyImage, readShareImage, replyImagesInEvent, type ReplyImage, type ShareImage } from './share-images.ts';
+import { experimentOn } from './experiments.ts';
+import { imagesInEvent, PAGE_TYPE, pastedImagesInEvent, readReplyImage, readShareImage, replyImagesInEvent, type ReplyImage, type ShareImage } from './share-images.ts';
 import { extForMediaType, sniffImage } from './media.ts';
 import { makeFunctionReference } from 'convex/server';
 import type { Clock, TimerHandle } from './clock.ts';
@@ -158,7 +159,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 94;
+export const BACKEND_API_VERSION = 95;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -401,6 +402,10 @@ export const KEYWORDS_API_VERSION = 74;
 // every other runner's thread, 18 Nov 2026). An older backend's validator
 // would turn the row down, so it goes without.
 export const INDEX_MODE_API_VERSION = 88;
+// From this one addReplyImage takes a live page (text/html, the livePages
+// experiment) and the phone's pictures say their type. An older backend
+// would turn the row down.
+export const LIVE_PAGES_API_VERSION = 95;
 // How far back a start looks for pictures, as new ones go up as they come.
 // Reading a whole log for each thread is too much to do for all of them on
 // every start, and it's the threads in use that Mike opens on the phone.
@@ -2550,7 +2555,7 @@ export class ConvexSync {
     // Only to a backend that takes them: an older one would leave them
     // queued, and a start looks through recent threads once it's new enough.
     if ((this.backendApiVersion ?? 0) >= REPLY_IMAGES_API_VERSION) {
-      const found = [...replyImagesInEvent(e, this.cwdOf(threadId)), ...(this.deps.config.pastedPictures === false ? [] : pastedImagesInEvent(e))];
+      const found = [...replyImagesInEvent(e, this.cwdOf(threadId), undefined, this.livePages()), ...(this.deps.config.pastedPictures === false ? [] : pastedImagesInEvent(e))];
       if (found.length) {
         this.pendingReplyImages.push(...found.map((i) => ({ ...i, threadId })));
         this.scheduleFlush();
@@ -3773,7 +3778,8 @@ export class ConvexSync {
           if (this.picturesPaused()) return;
           const sent = await this.picture('sync:addReplyImage', `${threadId} ${file}`, async () => {
             const url = (await this.post('mutation', 'sync:iconUploadUrl', { key })) as string;
-            const storageId = await this.upload(url, read.bytes, read.mediaType);
+            // A page is stored as plain bytes: served as HTML, its URL would run it on the backend's origin.
+            const storageId = await this.upload(url, read.bytes, read.mediaType === PAGE_TYPE ? 'application/octet-stream' : read.mediaType);
             const { mediaType, width, height } = read;
             this.pictureKept(await this.post('mutation', 'sync:addReplyImage', { key, threadId, seq, path: file, ...(src ? { src } : {}), ...(pinned ? { pinned } : {}), storageId, mediaType, ...(width ? { width } : {}), ...(height ? { height } : {}) }));
           });
@@ -3785,14 +3791,20 @@ export class ConvexSync {
     }
   }
 
+  // Live pages go up only while the experiment's on, to a backend that takes them.
+  private livePages(): boolean {
+    return (this.backendApiVersion ?? 0) >= LIVE_PAGES_API_VERSION && Boolean(this.deps.home) && experimentOn(this.deps.home!, 'livePages');
+  }
+
   private replyImagesOf(t: ThreadSummary): ReplyImage[] {
     const out: ReplyImage[] = [];
+    const pages = this.livePages();
     let after = 0;
     while (t.lastSeq > after) {
       const { events } = this.deps.runner.events(t.id, { afterSeq: after, limit: BACKFILL_EVENTS });
       const next = events.at(-1)?.seq ?? after;
       if (next <= after) break;
-      for (const e of events) if (e.seq > after) out.push(...replyImagesInEvent(e, t.cwd));
+      for (const e of events) if (e.seq > after) out.push(...replyImagesInEvent(e, t.cwd, undefined, pages));
       after = next;
     }
     return out;

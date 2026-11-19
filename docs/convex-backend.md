@@ -281,6 +281,14 @@ older thread's pictures stay on the Mac and the phone says so. They're
 deleted with the thread. Mike's attachments and tools' screenshots stay on
 the Mac unless the thread is shared (`shareImages`), as they're many and big.
 
+Since API 95, with the livePages experiment on, a page an agent shows in its
+reply (`![title](/path/page.html)`, one self-contained HTML file, checked
+to be markup) goes too: its row's `mediaType` is `text/html`, but the file
+is stored as `application/octet-stream`, so its storage URL opened in a
+browser downloads it rather than running it on the deployment's origin.
+`phoneImage` carries `mediaType`, and the apps run a page only in their
+sealed views (docs/live-pages-design). A pinned page stays on the Mac.
+
 They go as the file is, so a GIF keeps its frames; the phone's 1400 pixel limit
 is only on what it decodes for the column. MP4 and MOV files an agent writes
 the same way or pins go through the same rows (`.mp4`, `.m4v`, `.mov`, under

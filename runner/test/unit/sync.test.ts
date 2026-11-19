@@ -2512,7 +2512,7 @@ test('a row carries who started it, once the backend takes it', async () => {
 });
 
 // Reply pictures: for any thread, shared or not, once the backend takes them.
-function setupReplyImages(opts: { backend?: number; uploadFails?: () => Error | undefined; pastedPictures?: boolean } = {}) {
+function setupReplyImages(opts: { backend?: number; uploadFails?: () => Error | undefined; pastedPictures?: boolean; home?: string } = {}) {
   const h = makeHarness();
   const dir = tmpDir();
   const png = path.join(dir, 'guide.png');
@@ -2535,6 +2535,7 @@ function setupReplyImages(opts: { backend?: number; uploadFails?: () => Error | 
       startedAt: '2026-11-01T00:00:00.000Z',
       clock: h.clock,
       log: nullLogger,
+      ...(opts.home ? { home: opts.home } : {}),
       post: async (kind, fn, args) => {
         calls.push({ kind, fn, args });
         if (fn === 'sync:heartbeat') return { apiVersion: opts.backend ?? REPLY_IMAGES_API_VERSION };
@@ -2586,6 +2587,29 @@ test('reply pictures: from a thread that is not shared, with their size, new one
   assert.equal(uploads.length, 2);
   assert.notEqual(added()[1]!.seq, added()[0]!.seq);
   await sync.stop();
+});
+
+test('live pages: a page in a reply goes up as plain bytes, only with the experiment on and a backend that takes it', async () => {
+  const run = async (backend: number, on: boolean) => {
+    const home = tmpDir();
+    fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { livePages: on } }));
+    const { fresh, uploads, added, thread, settle } = setupReplyImages({ backend, home });
+    const page = path.join(tmpDir(), 'garden.html');
+    fs.writeFileSync(page, '<!doctype html><canvas></canvas><script>spin()</script>');
+    thread(`Turn it: ![Garden](${page})`);
+    await tick();
+    const sync = fresh();
+    sync.start();
+    await settle(sync);
+    await sync.stop();
+    return { uploads, added: added().map((a) => [a.src, a.mediaType]), page };
+  };
+  const on = await run(LIVE_PAGES_API_VERSION, true);
+  // Stored as bytes, so its URL never runs it on the backend's origin; the row says what it is.
+  assert.deepEqual(on.uploads, ['application/octet-stream']);
+  assert.deepEqual(on.added, [[on.page, 'text/html']]);
+  assert.deepEqual((await run(LIVE_PAGES_API_VERSION, false)).uploads, []);
+  assert.deepEqual((await run(LIVE_PAGES_API_VERSION - 1, true)).uploads, []);
 });
 
 test('pasted pictures: go up as they are sent, each named for its marker, never looked back for', async () => {
@@ -2746,7 +2770,7 @@ test("projects: notes go up only when they change, and a backend before API 50 a
 
 // docs/protocol.md, "Secrets".
 import { seal } from '../../src/secrets.ts';
-import { NOTES_APART_API_VERSION, SECRETS_API_VERSION } from '../../src/sync.ts';
+import { NOTES_APART_API_VERSION, SECRETS_API_VERSION, LIVE_PAGES_API_VERSION } from '../../src/sync.ts';
 
 test('secrets: the card goes up with the runner key, and the phone sealed answer is opened here', async () => {
   const f = setupFull({ apiVersion: SECRETS_API_VERSION });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { imagesInEvent, localImagePath, markdownImages, PIN_TOOL, readReplyImage, readShareImage, replyImagesInEvent } from '../../src/share-images.ts';
+import { imagesInEvent, localImagePath, markdownImages, PAGE_TYPE, PIN_TOOL, readReplyImage, readShareImage, replyImagesInEvent } from '../../src/share-images.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 
 test('share images: Markdown pictures on this Mac, not on the web', () => {
@@ -62,6 +62,43 @@ test('reply images: a video goes to the phone, but not to a shared page', () => 
   assert.deepEqual(replyImagesInEvent(pin, '/w', home), [{ seq: 2, path: '/w/clip.m4v', pinned: true }]);
   assert.equal(localImagePath('/w/a.mp4', home), undefined);
   assert.deepEqual(imagesInEvent(text, home), []);
+});
+
+test('reply images: a live page goes from a reply only while live pages are on, never from a pin', () => {
+  const home = '/Users/ann';
+  const base = { threadId: 't', turnId: 'u', ts: '2026-11-01T00:00:00.000Z' };
+  const text = { ...base, seq: 1, type: 'assistant.text', itemId: 'm', text: '![Garden](/w/garden.html) ![old](/w/b.HTM) ![a](/w/a.png)' } as never;
+  assert.deepEqual(replyImagesInEvent(text, '/w', home), [{ seq: 1, path: '/w/a.png', src: '/w/a.png' }]);
+  assert.deepEqual(replyImagesInEvent(text, '/w', home, true), [
+    { seq: 1, path: '/w/garden.html', src: '/w/garden.html' },
+    { seq: 1, path: '/w/b.HTM', src: '/w/b.HTM' },
+    { seq: 1, path: '/w/a.png', src: '/w/a.png' },
+  ]);
+  // Pinned mockups stay on the Mac: there are many, and nobody asked for them to go.
+  const pin = { ...base, seq: 2, type: 'tool.call', itemId: 'i', name: PIN_TOOL, kind: 'mcp', title: 'pin', input: { path: 'mock.html' } } as never;
+  assert.deepEqual(replyImagesInEvent(pin, '/w', home, true), []);
+  // A shared page never gets one.
+  assert.deepEqual(imagesInEvent(text, home), [{ seq: 1, path: '/w/a.png', src: '/w/a.png', mediaType: 'image/png' }]);
+});
+
+test('reply images: a live page has to really be a page', () => {
+  const dir = tmpDir();
+  const write = (name: string, bytes: string | Buffer) => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, bytes);
+    return file;
+  };
+  const page = readReplyImage(write('g.html', '\uFEFF\n  <!doctype html><meta charset=utf-8><canvas></canvas><script>draw()</script>'));
+  assert.ok(!('skip' in page));
+  assert.equal(page.mediaType, PAGE_TYPE);
+  assert.ok(!('skip' in readReplyImage(write('bare.htm', '<script>document.body.append(1)</script>'))));
+  // Anything else named .html: a key, a binary, text that isn't markup.
+  assert.deepEqual(readReplyImage(write('key.html', '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n')), { skip: "it isn't a page" });
+  assert.deepEqual(readReplyImage(write('bin.html', Buffer.from([0x3c, 0x68, 0x74, 0x6d, 0x6c, 0x3e, 0, 1, 2]))), { skip: "it isn't a page" });
+  assert.deepEqual(readReplyImage(write('bad.html', Buffer.from([0x3c, 0x62, 0x3e, 0xff, 0xfe]))), { skip: "it isn't a page" });
+  assert.deepEqual(readReplyImage(write('notes.html', 'just some notes < 3 things')), { skip: "it isn't a page" });
+  // Markup named as a picture is still not a picture.
+  assert.deepEqual(readReplyImage(write('p.png', '<html><body>hi</body></html>')), { skip: "it isn't a picture" });
 });
 
 // The boxes of an MP4 as far as the size: ftyp, then moov > trak > tkhd.

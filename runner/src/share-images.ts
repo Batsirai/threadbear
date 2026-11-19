@@ -43,6 +43,16 @@ function replyMediaType(file: string): string | undefined {
   return imageType(file) ?? (/\.(mp4|m4v|mov)$/i.test(file) ? 'video/mp4' : undefined);
 }
 
+// A live page (the livePages experiment, docs/live-pages-design): one
+// self-contained HTML file an agent shows in its reply, which the phone runs
+// sealed. Recorded as this type, uploaded as plain bytes (sync.ts), so its
+// storage URL opened in a browser never runs it on the backend's origin.
+export const PAGE_TYPE = 'text/html';
+const isPageName = (file: string) => /\.html?$/i.test(file);
+function replyOrPageType(file: string): string | undefined {
+  return replyMediaType(file) ?? (isPageName(file) ? PAGE_TYPE : undefined);
+}
+
 // A Markdown image's address as a file on this Mac: an absolute path, a
 // file:// URL or a ~ path. Undefined for a web address or anything else.
 export function localImagePath(src: string, home = os.homedir(), typeOf = imageType): string | undefined {
@@ -285,8 +295,10 @@ export type ReplyImage = {
 
 export const PIN_TOOL = 'mcp__threadbear__pin';
 
-export function replyImagesInEvent(e: PersistedEvent, cwd: string | undefined, home = os.homedir()): ReplyImage[] {
-  if (e.type === 'assistant.text') return markdownImages(e.text, home, replyMediaType).map(({ src, path }) => ({ seq: e.seq, path, src }));
+// `pages`: live pages too, from a reply only. A pinned page (a mockup, a
+// report) stays on the Mac: agents pin many, and none asked to go anywhere.
+export function replyImagesInEvent(e: PersistedEvent, cwd: string | undefined, home = os.homedir(), pages = false): ReplyImage[] {
+  if (e.type === 'assistant.text') return markdownImages(e.text, home, pages ? replyOrPageType : replyMediaType).map(({ src, path }) => ({ seq: e.seq, path, src }));
   if (e.type !== 'tool.call' || e.name !== PIN_TOOL || typeof e.input.path !== 'string') return [];
   // The pin tool takes a path relative to the thread's folder.
   const raw = e.input.path.trim();
@@ -307,9 +319,25 @@ export function pastedImagesInEvent(e: PersistedEvent): ReplyImage[] {
   return (e.images ?? []).map((image, i) => ({ seq: e.seq, path: image.path, src: `picture:${i + 1}` }));
 }
 
+// Whether bytes are an HTML page: UTF-8 with no NULs, starting (past a BOM
+// and spaces) with markup, and a tag a page has near the top. An agent can
+// name any file .html, so this keeps a key or a binary from going up as one.
+const PAGE_TAGS = /<(!doctype\s+html|html|head|body|meta|title|style|script|canvas|svg|div|main|link)[\s>/]/i;
+export function sniffPage(bytes: Uint8Array): boolean {
+  if (bytes.includes(0)) return false;
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return false;
+  }
+  const start = text.replace(/^\uFEFF/, '').trimStart();
+  return start.startsWith('<') && PAGE_TAGS.test(start.slice(0, 4096));
+}
+
 // The bytes to upload and what they really are, or why not. An agent can
 // write any path with a .png on the end, so the file has to be a picture or
-// a video.
+// a video, or, named .html, a page.
 export function readReplyImage(file: string): { bytes: Uint8Array; mediaType: string; width?: number; height?: number } | { skip: string } {
   if (!isLocalPath(file)) return { skip: "it's a network or device path" };
   let read: ReturnType<typeof readCapped>;
@@ -320,6 +348,7 @@ export function readReplyImage(file: string): { bytes: Uint8Array; mediaType: st
   }
   if ('skip' in read) return read;
   const buf = Buffer.from(read.bytes);
+  if (isPageName(file)) return sniffPage(read.bytes) ? { bytes: read.bytes, mediaType: PAGE_TYPE } : { skip: "it isn't a page" };
   const info = sniffImage(buf) ?? sniffVideo(buf);
   if (!info) return { skip: "it isn't a picture" };
   return { bytes: read.bytes, mediaType: info.mediaType, ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}) };

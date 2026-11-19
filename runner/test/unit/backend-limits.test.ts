@@ -165,15 +165,19 @@ test("reply and share pictures from a runner key: capped paths, real types, one 
   assert.equal(await outcome(reply({ src: 's'.repeat(512 * 1024) })), 'badArgs');
   assert.equal(await outcome(shared({ mediaType: 'm'.repeat(512 * 1024) })), 'badArgs');
   assert.equal(await outcome(reply({})), 'ok');
+  // A live page (API 95) is a reply's to send, never a shared page's picture.
+  const page = await runnerUpload(s, 'page');
+  assert.equal(await outcome(shared({ storageId: page, path: 'g.html', mediaType: 'text/html' })), 'badArgs');
+  assert.equal(await outcome(reply({ storageId: page, seq: 7, path: 'g.html', mediaType: 'text/html' })), 'ok');
   // The same upload again under new seqs, in either table.
   for (let seq = 2; seq < 6; seq++) assert.equal(await outcome(reply({ seq })), 'forbidden');
   assert.equal(await outcome(shared({ seq: 9 })), 'forbidden');
-  assert.equal(s.rows('replyImages').length + s.rows('shareImages').length, 1);
+  assert.equal(s.rows('replyImages').length + s.rows('shareImages').length, 2, 'the picture and the page');
   // The owner's runner is trusted with its own rows, as before.
   await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [thread('O', LAPTOP)] });
   const mine = s.file('owner-file');
   await call(s.ctx, sync.addReplyImage, { key: OWNER, threadId: 'O', seq: 1, path: 'x.heic', storageId: mine, mediaType: 'image/heic' });
-  assert.equal(s.rows('replyImages').length, 2);
+  assert.equal(s.rows('replyImages').length, 3);
 });
 
 test('cleanup of many oversized held pictures sharing one file stays under the read limit, even with one expired', async () => {
