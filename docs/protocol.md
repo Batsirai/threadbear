@@ -6279,7 +6279,8 @@ type RemoteRunner = {
                        // tries the next (Box keys). An older runner
                        // leaves them out. From API 90: `service`, its
                        // virtual runner's id (`services` below), and
-                       // `needsToken` among the states. `token` says its
+                       // `needsToken` and `waitingForRoom` (with `waiting`)
+                       // among the states. `token` says its
                        // login (`login`, an email) has no cloud token
                        // ("none") or a refused one ("dead"): the thread
                        // shows the token card until one is set.
@@ -7877,16 +7878,26 @@ has to be on for it.
   many are up), and nothing is written. From API 90 it also takes `cwd`
   and `accountId` (the folder and login on the Mac it was started from,
   for show only) and writes the thread's sidebar row (`threadIndex`,
-  under the box's runner id: its first line as the title and preview,
+  under the box's runner id: its first line, scrubbed of secrets as a
+  runner's writes are, as the title and preview,
   `status: "starting"`), so the thread is listed everywhere at once and
   stays listed while it waits, before its box has written anything.
 - **Waiting for a cloud token** (API 90). A thread whose login has no
   cloud token, or only a refused one (`cloudToken`'s `dead`, below), starts
   in the box state `needsToken`: nothing is asked of the provider, its
   `create` waits in the queue, and it counts toward nothing. Setting a
-  valid token for that login (`setCloudToken`) moves every box waiting on
-  it to `creating` (`TOKEN_SET`), and the service makes its box. Archiving
-  one that's waiting ends it (`expired`: it never ran, so nothing's kept).
+  valid token for that login (`setCloudToken`) releases the boxes waiting
+  on it (`TOKEN_SET`): as many as their virtual runner has room for under
+  `maxBoxes` go to `creating`, and the service makes their boxes; the rest
+  go to `waitingForRoom` (no box, nothing billed, shown `waiting`) and start
+  oldest first as room frees (a box sleeps, fails or is archived, or at the
+  idle check: `wakeWaiting`, `ROOM`). Archiving one that hasn't started
+  (`needsToken` or `waitingForRoom`) ends it (`expired`: it never ran, so
+  nothing's kept): the archive command is done at once by the backend
+  (`boxes:archiveUnstarted`), the thread's sidebar row gets `archivedAt`,
+  and its other waiting commands (its `create`) fail, saying it can't come
+  back. Deleting another runner's thread from the Mac isn't a command
+  (`threads.delete` on one is refused), so there's no delete to handle.
 - **Cloud tokens' lifecycle** (API 90). A `cloudTokens` row is a state
   machine (`convex/cloudTokenMachine.ts`, `tokenState`): `valid` once set,
   `dead` once a box's turn on it was refused (a 401), `valid` again when a

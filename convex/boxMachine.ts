@@ -47,7 +47,7 @@ export const box = defineMachine(
       // `attempt`: which box the event is about (boxes.ts mintBootToken numbers
       // each), on every event about one box. Without one, it's taken to be
       // about the newest (a loss: every box's so far). WAKE is the thread's.
-      server: { TOKEN_SET: {}, CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }, WAKE: {}, EXPIRE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string(), attempt: v.optional(v.number()) }, PAUSED: { attempt: v.optional(v.number()) }, RETIRE: { sleptAt: v.number() }, RETIRED: {} },
+      server: { TOKEN_SET: { room: v.boolean() }, ROOM: {}, CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }, WAKE: {}, EXPIRE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string(), attempt: v.optional(v.number()) }, PAUSED: { attempt: v.optional(v.number()) }, RETIRE: { sleptAt: v.number() }, RETIRED: {} },
     },
     guards: {
       heardFrom: "The box hasn't heartbeated within the lease.",
@@ -65,6 +65,7 @@ export const box = defineMachine(
       wakeOverdue: 'It has been waking more than fifteen minutes, and the event is about the newest attempt.',
       hasSave: 'The thread has a save to come back from.',
       hasToken: "Its login has a cloud token that no box's turn has been refused on.",
+      room: "Its virtual runner has fewer boxes up or starting than its maxBoxes.",
     },
     states: {
       start: {
@@ -78,7 +79,17 @@ export const box = defineMachine(
       needsToken: {
         description: "Waiting for a cloud token for its login. No box, no key and nothing billed; its first message waits in the queue, and the thread shows the token card.",
         on: {
-          TOKEN_SET: { to: 'creating', effect: 'tokenSet', description: 'Mike set a token for the login: the service asks the provider for the thread\'s first box.' },
+          TOKEN_SET: [
+            { to: 'creating', guard: 'room', effect: 'tokenSet', description: "Mike set a token for the login, and there's room: the service asks the provider for the thread's first box." },
+            { to: 'waitingForRoom', effect: 'awaitRoom', description: 'Mike set a token for the login, but its virtual runner has maxBoxes up or starting: it waits its turn.' },
+          ],
+          ARCHIVE: { to: 'expired', effect: 'archiveUnstarted', description: 'Mike archives the thread before it ever ran: nothing was made or saved, so it ends.' },
+        },
+      },
+      waitingForRoom: {
+        description: "Its login has a token, but its virtual runner has maxBoxes up or starting. No box and nothing billed; its first message waits in the queue. Those waiting start oldest first as room frees (a box sleeps, fails or is archived, or at the idle check).",
+        on: {
+          ROOM: { to: 'creating', effect: 'tokenSet', description: "There's room now: the service asks the provider for the thread's first box." },
           ARCHIVE: { to: 'expired', effect: 'archiveUnstarted', description: 'Mike archives the thread before it ever ran: nothing was made or saved, so it ends.' },
         },
       },
@@ -296,6 +307,8 @@ export const box = defineMachine(
       wakeOverdue: (_ctx, { row, event }) => !stale(row, event.attempt) && row.boxState.kind === 'waking' && Date.now() >= (row.boxState.since ?? 0) + WAKE_GRACE_MS,
       keptBox: (_ctx, { row }) => row.boxKeyHash !== undefined && row.providerBoxId !== undefined && row.keyAttempt === row.providerAttempt,
       hasSave: (_ctx, { row }) => row.save !== undefined,
+      // releaseForToken counts the room, as it releases a page of them (boxes.ts).
+      room: (_ctx, { event }) => event.room,
       hasToken: async (ctx, { row }) => {
         const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique();
         return token !== null && token.tokenState.kind !== 'dead';
@@ -304,6 +317,7 @@ export const box = defineMachine(
     effects: {
       start: async () => ({ kind: 'creating' as const, bootBy: Date.now() + BOOT_MS }),
       awaitToken: async () => ({ kind: 'needsToken' as const, since: Date.now() }),
+      awaitRoom: async () => ({ kind: 'waitingForRoom' as const, since: Date.now() }),
       // The row has an id now (unlike START's), so the step asks for its box itself.
       tokenSet: async (ctx, { id }) => {
         await provide(ctx, 'createBox', id);
@@ -606,10 +620,14 @@ async function expiredNow(ctx: { scheduler: { runAfter(ms: number, fn: never, ar
 }
 
 // A box stopped counting toward its virtual runner's maxBoxes: one waiting
-// to wake can now (boxes.ts wakeWaiting).
+// to wake, or to start (waitingForRoom), can now (boxes.ts wakeWaiting).
 async function freed(ctx: { db: unknown; scheduler: { runAfter(ms: number, fn: never, args: never): Promise<unknown> } }, row: Box): Promise<void> {
   const db = ctx.db as { query(t: 'boxes'): { withIndex(i: 'by_service_wants', f: (q: any) => unknown): { first(): Promise<unknown> } } };
-  const waiting = await db.query('boxes').withIndex('by_service_wants', (q) => q.eq('serviceId', row.serviceId).gt('wantsWakeAt', 0)).first();
+  const states = ctx.db as { query(t: 'boxes'): { withIndex(i: 'by_service_state', f: (q: any) => unknown): { first(): Promise<unknown> } } };
+  const waiting =
+    (await db.query('boxes').withIndex('by_service_wants', (q) => q.eq('serviceId', row.serviceId).gt('wantsWakeAt', 0)).first()) ??
+    // Or one with a token that's waiting for room to start (waitingForRoom).
+    (await states.query('boxes').withIndex('by_service_state', (q) => q.eq('serviceId', row.serviceId).eq('boxState.kind', 'waitingForRoom')).first());
   if (waiting) await ctx.scheduler.runAfter(0, internal.boxes.wakeWaiting as never, { serviceId: row.serviceId } as never);
 }
 

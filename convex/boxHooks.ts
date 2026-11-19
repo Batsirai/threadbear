@@ -14,6 +14,8 @@ import { internal } from './_generated/api';
 // the save) and shelved (unarchived: its kept box resumed). From expired
 // the command fails, saying the thread can't come back.
 export const WAKES_FROM: readonly string[] = ['asleep', 'failed', 'saving', 'archiving', 'gone', 'shelved', 'expired'];
+// A thread whose box never started: no box, no runner to take its commands.
+export const UNSTARTED: readonly string[] = ['needsToken', 'waitingForRoom'];
 // Archived: woken only for what needs it running (wakesArchived).
 const ARCHIVED: readonly string[] = ['gone', 'shelved', 'archiving'];
 
@@ -35,10 +37,11 @@ export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: str
     .withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))
     .first();
   if (!row) return;
-  // Waiting for its login's cloud token: nothing to wake, but archiving it
-  // ends the wait (boxMachine.ts needsToken's ARCHIVE).
-  if (row.boxState.kind === 'needsToken') {
-    if (endsWait(kind, args)) await ctx.scheduler.runAfter(0, internal.boxes.archiveIfStill, { threadId: row.threadId });
+  // Never started (waiting for its login's cloud token, or for room): nothing
+  // to wake, but archiving it ends the wait (boxMachine.ts ARCHIVE), and that
+  // archive is done there and then, as no runner will ever take it.
+  if (UNSTARTED.includes(row.boxState.kind)) {
+    if (endsWait(kind, args)) await ctx.scheduler.runAfter(0, internal.boxes.archiveUnstarted, { threadId: row.threadId, ...(commandId ? { commandId } : {}) });
     return;
   }
   if (!WAKES_FROM.includes(row.boxState.kind)) return;

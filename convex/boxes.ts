@@ -22,10 +22,11 @@ import { checkRunnerId, forbidden, MACHINE_ID, runnerAuth, sha256, withoutCreden
 import { commandArgs } from './relay';
 import { PROVIDERS } from './boxProviders/types';
 import { FLY_SUSPEND_MAX_MB } from './boxProviders/fly';
-import { WAKES_FROM } from './boxHooks';
+import { UNSTARTED, WAKES_FROM } from './boxHooks';
 import { MOVE_GOING } from './moves';
 import { BOX_KEY_DEAD, BOX_KEY_PREFIX, isThreadId, mayUseStorage } from './runnerAccess';
 import { deleteIfUnused, endCommandFiles, finishedArgs, MAX_RUNNER_UPLOAD_BYTES, uploadedBy } from './sync';
+import { HELD_BACK, scrubText } from './redaction';
 
 // A virtual runner's limits when it's made (runnerServices.limits).
 // The smallest box a virtual runner may have (setRunnerService).
@@ -147,10 +148,10 @@ export const storeCloudToken = internalMutation({
   },
 });
 
-// Boxes waiting for a token on the login go to creating (TOKEN_SET), a page
-// at a time; only while its token is still valid (one refused meanwhile
-// leaves them waiting). Not held to maxBoxes: a released box starts as a
-// new thread past the limit would have been refused, a known gap.
+// Boxes waiting for a token on the login are released (TOKEN_SET), a page
+// at a time, only while its token is still valid (one refused meanwhile
+// leaves them waiting): as many as their virtual runner has room for go to
+// creating, the rest to waitingForRoom, started as room frees (wakeWaiting).
 const RELEASE_PAGE = 50;
 export const releaseForToken = machines.internalMutation({
   args: { login: v.string() },
@@ -159,7 +160,17 @@ export const releaseForToken = machines.internalMutation({
     const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', login)).unique();
     if (!token || token.tokenState.kind !== 'valid') return null;
     const waiting = await ctx.db.query('boxes').withIndex('by_login_state', (q) => q.eq('login', login).eq('boxState.kind', 'needsToken')).take(RELEASE_PAGE);
-    for (const row of waiting) await boxMachine.send(ctx, row._id, { type: 'TOKEN_SET' });
+    // Room left on each virtual runner, counted once and spent as boxes go to creating.
+    const room = new Map<string, number>();
+    for (const row of waiting) {
+      if (!room.has(row.serviceId)) {
+        const max = (await ctx.db.get('runnerServices', row.serviceId))?.limits.maxBoxes ?? BOX_LIMITS.maxBoxes;
+        room.set(row.serviceId, Math.max(0, max - (await countRunning(ctx as unknown as QueryCtx, row.serviceId, max))));
+      }
+      const left = room.get(row.serviceId)!;
+      const r = await boxMachine.send(ctx, row._id, { type: 'TOKEN_SET', room: left > 0 });
+      if (r.status === 'done' && r.to === 'creating') room.set(row.serviceId, left - 1);
+    }
     if (waiting.length === RELEASE_PAGE) await ctx.scheduler.runAfter(0, internal.boxes.releaseForToken, { login });
     return null;
   },
@@ -462,7 +473,9 @@ export const beginThread = internalMutation({
 const INDEX_TITLE_CHARS = 120;
 const INDEX_PREVIEW_CHARS = 300;
 function firstIndexRow(a: { runnerId: string; threadId: string; text: string; model?: string; permissionMode?: string; plan?: boolean; cwd?: string; accountId?: string }): Omit<Doc<'threadIndex'>, '_id' | '_creationTime'> {
-  const line = a.text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  // Scrubbed whole, as setThreadIndex scrubs what a runner writes, and before
+  // it's cut: a key cut short could slip past the rules that know its shape.
+  const line = safeScrub(a.text).split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   const now = new Date().toISOString();
   const mode = a.plan ? 'plan' : a.permissionMode;
   return {
@@ -482,6 +495,15 @@ function firstIndexRow(a: { runnerId: string; threadId: string; text: string; mo
     ...(mode ? { permissionMode: mode.slice(0, 16) } : {}),
     updatedMs: Date.now(),
   };
+}
+
+// A check that throws holds the text back rather than storing it as it came (sync.ts clean).
+function safeScrub(text: string): string {
+  try {
+    return scrubText(text);
+  } catch {
+    return HELD_BACK;
+  }
 }
 
 // ------------------------------------------------------------ boot tokens (decision 5)
@@ -960,6 +982,12 @@ export const wakeWaiting = machines.internalMutation({
       if ((await boxMachine.send(machineCtx, row._id, { type: 'WAKE' })).status === 'done') woken++;
       else await ctx.db.patch(row._id, { wantsWakeAt: undefined });
     }
+    // Then threads that have never run, waiting for room to start, oldest first.
+    const max = (await ctx.db.get('runnerServices', serviceId))?.limits.maxBoxes ?? BOX_LIMITS.maxBoxes;
+    for (const row of await ctx.db.query('boxes').withIndex('by_service_state', (q) => q.eq('serviceId', serviceId).eq('boxState.kind', 'waitingForRoom')).take(WAKE_BATCH)) {
+      if ((await countRunning(ctx, serviceId, max)) >= max) break;
+      if ((await boxMachine.send(machineCtx, row._id, { type: 'ROOM' })).status === 'done') woken++;
+    }
     return woken;
   },
 });
@@ -1025,6 +1053,33 @@ export async function askToSave(ctx: MutationCtx, row: Pick<Doc<'boxes'>, 'runne
 
 // The states archiving does nothing more in.
 const ARCHIVED_ALREADY: readonly string[] = ['archiving', 'shelved', 'destroying', 'gone', 'expired'];
+
+/**
+ * Mike archived a thread whose box never started (boxHooks.ts UNSTARTED):
+ * it ends (ARCHIVE, to expired: nothing was made or saved), the archive
+ * command that asked is done here, as no runner will ever take it, and the
+ * thread's sidebar row is archived, so it goes to Archived everywhere.
+ * What else was waiting for it (its create) fails, saying it can't come
+ * back (failExpired, scheduled by the machine's step, after this).
+ */
+export const archiveUnstarted = internalMutation({
+  args: { threadId: v.string(), commandId: v.optional(v.id('commands')) },
+  returns: v.null(),
+  handler: async (ctx, { threadId, commandId }) => {
+    const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
+    if (!row) return null;
+    if (UNSTARTED.includes(row.boxState.kind) && (await boxMachine.send(ctx, row._id, { type: 'ARCHIVE' })).status !== 'done') return null;
+    if (row.boxState.kind !== 'expired' && !UNSTARTED.includes(row.boxState.kind)) return null;
+    const c = commandId ? await ctx.db.get('commands', commandId) : null;
+    if (c && c.runnerId === row.runnerId && c.state === 'pending') {
+      await commandMachine.send(ctx, c._id, { type: 'TAKE' });
+      await commandMachine.send(ctx, c._id, { type: 'FINISH', ok: true });
+    }
+    const index = await ctx.db.query('threadIndex').withIndex('by_runner_thread', (q) => q.eq('runnerId', row.runnerId).eq('threadId', threadId)).unique();
+    if (index && !index.archivedAt && !index.deleted) await ctx.db.patch('threadIndex', index._id, { archivedAt: new Date().toISOString(), status: 'idle', updatedMs: Date.now() });
+    return null;
+  },
+});
 
 /** The thread was archived or deleted a while ago (boxHooks.ts archiveSoon): its box goes, unless it's back out. */
 export const archiveIfStill = internalMutation({

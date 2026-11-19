@@ -366,6 +366,17 @@ No box, no key and nothing billed; its
 first message waits in the queue, and
 the thread shows the token card.
   end note
+  state "waitingForRoom" as waitingForRoom
+  waitingForRoom : since
+  note right of waitingForRoom
+Its login has a token, but its virtual
+runner has maxBoxes up or starting. No
+box and nothing billed; its first
+message waits in the queue. Those
+waiting start oldest first as room frees
+(a box sleeps, fails or is archived, or
+at the idle check).
+  end note
   state "creating" as creating
   creating : bootBy
   note right of creating
@@ -462,8 +473,11 @@ kept, and no key works for it.
   end note
   [*] --> creating : START (owner) [1. hasToken] / start
   [*] --> needsToken : START (owner) [else] / awaitToken
-  needsToken --> creating : TOKEN_SET (server) / tokenSet
+  needsToken --> creating : TOKEN_SET(room) (server) [1. room] / tokenSet
+  needsToken --> waitingForRoom : TOKEN_SET(room) (server) [else] / awaitRoom
   needsToken --> expired : ARCHIVE (owner) / archiveUnstarted
+  waitingForRoom --> creating : ROOM (server) / tokenSet
+  waitingForRoom --> expired : ARCHIVE (owner) / archiveUnstarted
   creating --> starting : CREATED(providerBoxId, attempt?) (server) [newBox] / created
   creating --> awake : READY (runner) / ready
   creating --> failed : FAILED(error, attempt?) (server) [unexchanged] / fail
@@ -557,7 +571,13 @@ How a row is born:
 
 From `needsToken`:
 
-- `TOKEN_SET (server)` → `creating`. Mike set a token for the login: the service asks the provider for the thread's first box.
+- `TOKEN_SET(room) (server)` [1. room] → `creating`. Mike set a token for the login, and there's room: the service asks the provider for the thread's first box.
+- `TOKEN_SET(room) (server)` [else] → `waitingForRoom`. Mike set a token for the login, but its virtual runner has maxBoxes up or starting: it waits its turn.
+- `ARCHIVE (owner)` → `expired`. Mike archives the thread before it ever ran: nothing was made or saved, so it ends.
+
+From `waitingForRoom`:
+
+- `ROOM (server)` → `creating`. There's room now: the service asks the provider for the thread's first box.
 - `ARCHIVE (owner)` → `expired`. Mike archives the thread before it ever ran: nothing was made or saved, so it ends.
 
 From `creating`:

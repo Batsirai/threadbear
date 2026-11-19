@@ -25,7 +25,7 @@ afterEach(() => {
 
 const ACTIONS = new Set(['createBox', 'wakeBox', 'sleepBox', 'destroyBox', 'checkBox', 'retireBox', 'reapBoxes', 'reapService', 'reapOne', 'driftOne']);
 // What run() runs of what's scheduled: the service's steps, and a move's rehoming.
-const RUNS = new Set(['boxes.releaseForToken', 'boxes.wakeFor', 'boxes.archiveIfStill', 'boxes.wakeWaiting', 'boxes.wakeAllWaiting', 'boxes.failExpired', 'moves.rehomeRows']);
+const RUNS = new Set(['boxes.releaseForToken', 'boxes.archiveUnstarted', 'boxes.wakeFor', 'boxes.archiveIfStill', 'boxes.wakeWaiting', 'boxes.wakeAllWaiting', 'boxes.failExpired', 'moves.rehomeRows']);
 const REPO = { origin: 'https://github.com/mikecann/threadbear.git', subfolder: '', baseBranch: 'main' };
 const AT = new Date().toISOString();
 const MINUTE = 60_000;
@@ -699,17 +699,72 @@ test("a thread on a virtual runner is listed from its start, with its first line
   assert.deepEqual(since.map((r: { threadId: string }) => r.threadId), ['T2']);
 });
 
-test('archiving a thread that never got its token ends it: nothing to keep, its waiting commands fail', async () => {
+test('archiving a thread that never got its token ends it: the archive works, its row is archived, its other commands fail', async () => {
   const s = await setup();
   const { runnerId, commandId } = await startAs(s, 'T2', OTHER_LOGIN);
-  await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { archive: true } });
-  assert.deepEqual(await s.run(), ['archiveIfStill', 'failExpired']);
+  const archived = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId, threadId: 'T2', kind: 'update', args: { archive: true } });
+  await s.run();
   assert.equal(s.stateOf('T2'), 'expired');
   assert.equal(s.rows('commands').find((c) => c._id === commandId)!.state, 'failed');
+  // Codex's review of slice 5, 3: the archive itself worked, and the sidebar row says so.
+  assert.equal(s.rows('commands').find((c) => c._id === archived)!.state, 'done');
+  const row = s.rows('threadIndex').find((r) => r.threadId === 'T2')!;
+  assert.equal(typeof row.archivedAt, 'string');
+  const since = await call(s.ctx, sync.threadIndexSince, { key: OWNER, runners: [{ runnerId }] });
+  assert.equal(since.find((r: { threadId: string }) => r.threadId === 'T2').archivedAt, row.archivedAt);
   // A token set later starts nothing for it.
   await setFor(s, OTHER_LOGIN);
   assert.deepEqual(await s.run(), ['releaseForToken']);
   assert.equal(s.fly.live().length, 0);
+});
+
+// Codex's review of slice 5, 1: the first line went into the sidebar unscrubbed.
+test("a virtual runner thread's first sidebar row has its secrets taken out, before it's cut short", async () => {
+  const s = await setup();
+  const claude = `sk-ant-oat01-${'A'.repeat(80)}`;
+  const boxKey = `tbb_${'a'.repeat(64)}`;
+  const boot = `tbt_${'b'.repeat(64)}`;
+  await startAs(s, 'T2', OTHER_LOGIN, { text: `use ${claude} ${boxKey} ${boot}\nsecond` });
+  // One that starts just before the title's cut: cut first, what's left of it wouldn't look like a key.
+  await startAs(s, 'T3', OTHER_LOGIN, { text: `${'x '.repeat(55)}${claude}` });
+  for (const id of ['T2', 'T3']) {
+    const row = s.rows('threadIndex').find((r) => r.threadId === id)!;
+    for (const field of [row.title, row.preview]) {
+      assert.ok(!field.includes('sk-ant'), `${id}: no claude token in ${field}`);
+      assert.ok(!field.includes('tbb_aaaa') && !field.includes('tbt_bbbb'), `${id}: no box key or boot token in ${field}`);
+    }
+  }
+});
+
+// Codex's review of slice 5, 2: setting a token released every waiting box at once, past maxBoxes.
+test('setting a token starts only as many waiting threads as there is room for; the rest start as room frees', async () => {
+  const s = await setup();
+  // The helper's own box is creating: one of two.
+  await setLimits(s, { maxBoxes: 2 });
+  for (const id of ['T2', 'T3', 'T4']) await startAs(s, id, OTHER_LOGIN);
+  assert.deepEqual(['T2', 'T3', 'T4'].map(s.stateOf), ['needsToken', 'needsToken', 'needsToken']);
+  await setFor(s, OTHER_LOGIN);
+  const ran = await s.run();
+  assert.equal(ran.filter((n) => n === 'createBox').length, 1, 'one box made');
+  assert.equal(s.fly.live().length, 1);
+  assert.deepEqual(['T2', 'T3', 'T4'].map(s.stateOf), ['starting', 'waitingForRoom', 'waitingForRoom']);
+  // The app shows the rest waiting, with no token card.
+  const list = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: 'mainmac00001' })) as { runnerId: string; box?: Record<string, unknown> }[];
+  const t3 = list.find((r) => r.runnerId === s.rowOf('T3').runnerId)!.box!;
+  assert.equal(t3.state, 'waitingForRoom');
+  assert.equal(t3.waiting, true);
+  assert.equal(t3.token, undefined);
+  // T2 archived: its room goes to T3, the oldest waiting.
+  await call(s.ctx, boxes.archiveBox, { key: OWNER, threadId: 'T2' });
+  await s.run();
+  assert.deepEqual(['T3', 'T4'].map(s.stateOf), ['starting', 'waitingForRoom']);
+  // T4 archived while it waits for room: it ends, its archive done, its row archived.
+  const t4 = s.rowOf('T4').runnerId;
+  const archived = await call(s.ctx, relay.queueCommand, { key: OWNER, runnerId: t4, threadId: 'T4', kind: 'update', args: { archive: true } });
+  await s.run();
+  assert.equal(s.stateOf('T4'), 'expired');
+  assert.equal(s.rows('commands').find((c) => c._id === archived)!.state, 'done');
+  assert.equal(typeof s.rows('threadIndex').find((r) => r.threadId === 'T4')!.archivedAt, 'string');
 });
 
 // ------------------------------------------------------------ Codex's review of 66ccfc1c4 (18 Nov 2026)

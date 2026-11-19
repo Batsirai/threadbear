@@ -944,7 +944,12 @@ Mac"; Box mode, "A refused token"), behind the `virtualRunners` experiment
 - **Waiting for a token** (backend API 90). A login's cloud token is a
   state machine (`cloudTokenMachine.ts`: valid, dead), and a box whose
   login has none, or a dead one, starts in `needsToken`: nothing is asked
-  of the provider until a token is set, which moves it on to `creating`.
+  of the provider until a token is set, which moves it on to `creating`,
+  as many as there's room for under `maxBoxes`; the rest wait for room
+  (`waitingForRoom`) and start oldest first as it frees. Archiving one that
+  never started ends it there and then, its archive done and its sidebar
+  row archived (Codex's review of slice 5, with the first sidebar row's
+  secrets scrubbed).
 - **A refused token.** A box's turn refused with a 401 sends
   `boxes:tokenRefused` (only the token it was given dies), holds the thread
   and asks `boxes:boxCloudToken` every 30 s; a newer token is written in,

@@ -3950,7 +3950,7 @@ async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: st
   const missing = !row ? undefined : !token ? ('none' as const) : token.tokenState.kind === 'dead' ? ('dead' as const) : undefined;
   return {
     state: row?.boxState.kind ?? 'expired',
-    ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}),
+    ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined || row?.boxState.kind === 'waitingForRoom' ? { waiting: true } : {}),
     ...(row?.unreachableSince !== undefined ? { unreachable: true } : {}),
     ...(row?.unsure?.surfaced ? { unsure: true } : {}),
     ...(row ? { service: row.serviceId as string } : {}),
