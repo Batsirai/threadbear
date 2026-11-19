@@ -37,6 +37,10 @@ export type Lane = 'urgent' | 'background';
 // FIFO) is given up on and its worker replaced.
 export const TRUST_CALL_TIMEOUT_MS = 120_000;
 
+// A worker that hasn't loaded in this long counts as one that can't. Apart
+// from a call's limit: on a busy Mac loading alone can take a second or two.
+const LOAD_TIMEOUT_MS = 30_000;
+
 // The same call on this thread: when no worker can be started here at all.
 // Its reads still never wait on a FIFO (no-fifo-reads.ts).
 function inline(ask: Ask): unknown {
@@ -162,7 +166,7 @@ class OneWorker {
     // A worker that hasn't loaded in this long counts as one that can't.
     const loading = setTimeout(() => {
       if (this.worker === worker && !this.ready) this.crashed(new Error("the trust worker didn't load"));
-    }, this.timeoutMs);
+    }, LOAD_TIMEOUT_MS);
     loading.unref();
     worker.on('message', (r: TrustReply) => {
       if ('ready' in r) {
