@@ -431,6 +431,8 @@ struct WakeWhen {
     topic: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pending: bool,
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    agent: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -480,11 +482,13 @@ pub fn wake_row<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Option<(
         return Some(("Thinking…".into(), format!("Working out when from \"{}\"", wake.said)));
     }
     let topic = wake.topic?;
-    let mut tip = format!("Back when you next talk about {topic}");
+    // Its own agent waits for something to happen; Mike's waits for him.
+    let mut tip = if wake.agent { format!("Back when {topic}") } else { format!("Back when you next talk about {topic}") };
     if let Some(time) = wake_time(t) {
         tip += &format!(", or {} at the latest", until_words(time, now));
     }
-    Some((topic, format!("{tip}. You said \"{}\".", wake.said)))
+    let who = if wake.agent { "The agent" } else { "You" };
+    Some((topic, format!("{tip}. {who} said \"{}\".", wake.said)))
 }
 
 /// What a thread waiting on its own work is waiting for, and the tooltip
@@ -498,8 +502,8 @@ pub fn work_wait_row<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Opt
         return Some(("Waiting for the app update".to_string(), "Carries on once Threadbear restarts onto what this thread landed, which it does by itself when you leave it idle.".to_string()));
     }
     let unlanded = t.waiting_to_land()?;
-    let wake: Option<WakeWhen> = t.wake_when.clone().and_then(crate::wire::read);
-    let mut tip = format!("{unlanded}. Back when {}", wake.and_then(|w| w.topic).unwrap_or_else(|| "it has landed".into()));
+    let wake: WakeWhen = crate::wire::read(t.wake_when.clone()?)?;
+    let mut tip = format!("{unlanded}. Back when {}", wake.topic?);
     if let Some(time) = wake_time(t) {
         tip += &format!(", or {} at the latest", until_words(time, now));
     }
@@ -1132,6 +1136,9 @@ mod tests {
         let out = trailing(&topic, &RowLook::PLAIN, RowMode::Hibernating, &now, None);
         assert_eq!(out.text, "wood");
         assert!(out.tip.unwrap().starts_with("Back when you next talk about wood."));
+        let agents = thread(json!({ "snoozedUntil": "9999-12-31T00:00:00.000Z", "wakeWhen": { "said": "when the landing finishes", "topic": "the landing has finished", "agent": true } }));
+        let out = trailing(&agents, &RowLook::PLAIN, RowMode::Hibernating, &now, None);
+        assert_eq!(out.tip.as_deref(), Some("Back when the landing has finished. The agent said \"when the landing finishes\"."));
 
         let waiting = thread(json!({ "needs": "nothing", "lastSeq": 5, "lastSeenSeq": 1, "snoozedUntil": "2026-11-10T09:00:00Z", "waitingOn": [{ "threadId": "x", "title": "Fix main's CI" }] }));
         let look = RowLook::of(&waiting, Some("running"));

@@ -59,7 +59,7 @@ export const looseEndsPart = {
       // Hibernating to wait on its own work (other threads, the app
       // restarting onto what it landed) is still working, as the sidebar has it.
       // So is hibernating until something it watches for with its commits not on main yet.
-      const waiting = Boolean(s.waitingOn?.some((w) => !w.done) || s.awaitingAppRestart || (s.wakeWhen?.agent && s.looseEnds?.ends.some((e) => e.kind === 'unlanded')));
+      const waiting = Boolean(s.waitingOn?.some((w) => !w.done) || s.awaitingAppRestart || (s.wakeWhen?.agent && s.wakeWhen.topic && s.looseEnds?.ends.some((e) => e.kind === 'unlanded')));
       children.push({ id: o.id, title: o.title, working: o.status === 'running' || o.status === 'starting' || waiting, needsYou: s.needsYou && s.needs !== 'nothing' });
     }
     return childLooseEnds(children);
@@ -93,10 +93,13 @@ export const looseEndsPart = {
     if (rt.deleted || rt.looseEndsRun !== run || this.looseEndsCard(st) !== seq) return;
     const before = rec.looseEnds;
     if (before && before.seq === seq && JSON.stringify(before.ends) === JSON.stringify(ends)) return;
+    const unlanded = (list?: LooseEnd[]) => Boolean(list?.some((e) => e.kind === 'unlanded'));
+    const landedNow = unlanded(before?.seq === seq ? before.ends : undefined) !== unlanded(ends);
     rec.looseEnds = { seq, ends, at: this.isoNow() };
     this.markDirty(st);
-    // Its starter's card counts it as working while it waits to land.
-    if (rec.snoozedUntil && rec.wakeWhen?.by === 'agent') this.recheckStarter(st);
+    // Its starter's card counts it as working while it waits to land, so
+    // it hears when that starts or ends.
+    if (landedNow && rec.snoozedUntil && rec.wakeWhen?.by === 'agent' && rec.wakeWhen.topic) this.recheckStarter(st);
   },
 
   // Again, if the thread already has a check for its card (so it's on and
@@ -114,7 +117,7 @@ export const looseEndsPart = {
   recheckWaitingToLand(this: Runner): void {
     for (const st of this.threads.values()) {
       const { rec } = st;
-      if (rec.snoozedUntil && rec.wakeWhen?.by === 'agent' && rec.looseEnds?.ends.some((e) => e.kind === 'unlanded')) this.recheckLooseEnds(st, true);
+      if (rec.snoozedUntil && rec.wakeWhen?.by === 'agent' && rec.wakeWhen.topic && rec.looseEnds?.ends.some((e) => e.kind === 'unlanded')) this.recheckLooseEnds(st, true);
     }
   },
 

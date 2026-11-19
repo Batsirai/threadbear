@@ -386,7 +386,9 @@ impl ThreadSummary {
     /// land, so still working. One Mike hibernated himself isn't. Gives the
     /// loose end's words ("1 commit on … isn't on main").
     pub fn waiting_to_land(&self) -> Option<String> {
-        if self.wake_when.as_ref()?.get("agent").and_then(Value::as_bool) != Some(true) {
+        let wake = self.wake_when.as_ref()?;
+        // Watching for something to happen, not just a time in its words.
+        if wake.get("agent").and_then(Value::as_bool) != Some(true) || wake.get("topic").and_then(Value::as_str).is_none() {
             return None;
         }
         self.loose_ends_check()?.ends.into_iter().find(|e| e.kind == "unlanded").map(|e| e.text)
@@ -1088,9 +1090,10 @@ mod tests {
         let landed = thread(2, json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00Z", "wakeWhen": watching, "looseEnds": { "seq": 4, "ends": [] } }));
         let mikes_own = thread(3, json!({ "needs": "nothing", "snoozedUntil": "2026-11-07T00:00:00Z", "looseEnds": unlanded }));
         let mikes_words = thread(4, json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00Z", "wakeWhen": { "said": "next time I talk about billing", "topic": "billing" }, "looseEnds": unlanded }));
-        let s = sections(&[landing, landed, mikes_own, mikes_words], now());
+        let a_time = thread(5, json!({ "needs": "nothing", "snoozedUntil": "2026-11-08T00:00:00Z", "wakeWhen": { "said": "tomorrow morning", "agent": true }, "looseEnds": unlanded }));
+        let s = sections(&[landing, landed, mikes_own, mikes_words, a_time], now());
         assert_eq!(ids(&s, "running"), ["t1"], "waiting to land is still at its job");
-        assert_eq!(ids(&s, "hibernating"), ["t3", "t4", "t2"], "nothing left to land, or Mike hibernated it himself");
+        assert_eq!(ids(&s, "hibernating"), ["t3", "t5", "t4", "t2"], "nothing left to land, Mike hibernated it himself, or only a time");
     }
 
     #[test]

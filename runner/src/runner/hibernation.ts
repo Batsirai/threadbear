@@ -51,7 +51,7 @@ export const hibernationPart = {
     const by = params.by === 'agent' ? ('agent' as const) : undefined;
     const input = { said, now: this.clock.now(), timeZone, title: st.rec.title, first: gist.first, brief: st.rec.brief?.text, ...(by ? { by } : {}) };
     this.update({ threadId: st.rec.id, snoozedUntil: NO_WAKE_TIME });
-    st.rec.wakeWhen = { said, pending: true };
+    st.rec.wakeWhen = { said, pending: true, ...(by ? { by } : {}) };
     this.markDirty(st);
     const ask = (withThread: boolean) =>
       models.generate({
@@ -77,6 +77,7 @@ export const hibernationPart = {
       this.markDirty(st);
       this.armSnoozeTimer();
       if (this.bucket(st.rec) === 'inbox') this.kickQueue(st);
+      if (by) this.recheckStarter(st);
       throw new RpcError(ErrorCode.other, `Couldn't work out when to wake it: ${answer.error}`);
     }
     st.rec.snoozedUntil = answer.until ?? NO_WAKE_TIME;
@@ -85,6 +86,9 @@ export const hibernationPart = {
     if (st.rec.wakeChecked && (!by || st.rec.wakeChecked.said !== said)) delete st.rec.wakeChecked;
     this.emit(st, { type: 'system.note', text: hibernateNote(answer, said, timeZone, by) });
     this.armSnoozeTimer();
+    // Its starter's card counts it as working while it waits to land
+    // (loose-ends.ts): its own loose ends may have come in first.
+    if (by) this.recheckStarter(st);
     this.log.info('hibernated in words', { threadId: st.rec.id, until: answer.until, topic: answer.topic });
     return { thread: this.summary(st), ...answer };
   },

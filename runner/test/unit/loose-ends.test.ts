@@ -142,7 +142,10 @@ test('looseEnds: a done turn gets a check on its summary, kept up to date, and o
 
 test('looseEnds: a thread hibernating to wait for its own landing is checked again, so it leaves Running once landed', async () => {
   const h = setup();
-  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main' });
+  const parent = h.runner.create({ text: 'Plan it', accountId: 'claude-main' }).thread.id;
+  finish(h, parent);
+  await until(() => Boolean(h.runner.get(parent).looseEnds), "the starter's check");
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main', startedBy: { kind: 'thread', label: 'Agent', threadId: parent } });
   const id = thread.id;
   const st = h.runner.threads.get(id)!;
   const w = repoWithWorktree();
@@ -150,17 +153,23 @@ test('looseEnds: a thread hibernating to wait for its own landing is checked aga
   sh(w.path, 'echo two > b.txt && git add b.txt && git commit -qm two');
   finish(h, id);
   await until(() => Boolean(h.runner.get(id).looseEnds), 'the check');
+  await until(() => !h.runner.get(parent).looseEnds?.ends.some((e) => e.threadId === id), 'the child done');
   // Its own agent hibernated it "until the landing finishes".
   st.rec.snoozedUntil = '9999-12-31T00:00:00.000Z';
   st.rec.wakeWhen = { said: 'when the landing finishes', topic: 'the landing has finished', by: 'agent' };
   const s = h.runner.get(id);
   assert.deepEqual(s.wakeWhen, { said: 'when the landing finishes', topic: 'the landing has finished', agent: true });
   assert.deepEqual(checkSummary(s), []);
+  // Its starter's card counts it as still working.
+  h.runner.recheckStarter(st);
+  await until(() => Boolean(h.runner.get(parent).looseEnds?.ends.some((e) => e.threadId === id)), 'the child listed as working');
   // A detached tb land puts it on main and tells nobody: the sweep sees it.
   sh(w.mainCheckout, 'git merge -q --ff-only thread/abcd1234');
   h.clock.advance(10_000);
   h.runner.recheckWaitingToLand();
   await until(() => h.runner.get(id).looseEnds?.ends.length === 0, 'nothing left to land');
+  // And its starter hears it's no longer working.
+  await until(() => !h.runner.get(parent).looseEnds?.ends.some((e) => e.threadId === id), 'the child gone from the card');
 });
 
 test('looseEnds: not checked when the turn needs Alex, or when it archives itself', async () => {
