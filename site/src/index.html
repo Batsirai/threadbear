@@ -1,4 +1,4 @@
-<!--page {"title": "Threadbear · Get to your next decision fast", "description": "Threadbear is a desktop app (Mac, Windows and Linux) for running Claude Code and Codex threads on the subscriptions you already have, with an iPhone app, a link for every thread, and the whole source to change however you like.", "path": "/"} -->
+<!--page {"title": "Threadbear · Get to your next decision fast", "description": "Threadbear is a desktop app (Mac, Windows and Linux) for running Claude Code and Codex threads on the subscriptions you already have, with iPhone and Android apps, a link for every thread, and the whole source to change however you like.", "path": "/"} -->
 <!-- Every claim here is checked against the repo (AGENTS.md, docs/guide.md, docs/protocol.md,
      docs/convex-backend.md, docs/website.md, ios/README.md). Anything the page describes that
      isn't built yet has a "NOT BUILT" comment right beside it. Search for NOT BUILT and change
@@ -63,15 +63,15 @@
         </li>
         <li>
           <span class="badge-icon">{{icon desktop}}</span>
-          <h3>Schedules that run on any of your Macs</h3>
+          <h3>Schedules that run on any of your machines</h3>
           <button type="button" class="tip-btn" aria-expanded="false" aria-controls="tip-schedules" aria-label="More about schedules">i</button>
-          <p class="tip" id="tip-schedules" hidden>Send a thread a message at a set time, once or over and over, or start a new thread each time. Pick which Mac it runs on and it runs there, even while this one's asleep.</p>
+          <p class="tip" id="tip-schedules" hidden>Send a thread a message at a set time, once or over and over, or start a new thread each time. Pick which machine it runs on and it runs there, even while this one's asleep.</p>
         </li>
         <li>
           <span class="badge-icon">{{icon key}}</span>
           <h3>Runs on your own Claude or Codex login</h3>
           <button type="button" class="tip-btn" aria-expanded="false" aria-controls="tip-login" aria-label="More about logins">i</button>
-          <p class="tip" id="tip-login" hidden>It drives the official <code>claude</code> and <code>codex</code> command line tools, logged in as you, so it's your plan doing the work. It never reads or copies your login tokens.</p>
+          <p class="tip" id="tip-login" hidden>It drives the official <code>claude</code> and <code>codex</code> command line tools, logged in as you, so it's your plan doing the work. It never reads or copies your login tokens. Grok, Cursor and OpenCode can run threads too, through their own command line tools.</p>
         </li>
       </ul>
     </section>
@@ -84,7 +84,7 @@
       <ol class="flow" aria-label="Where your threads live">
         <li><span class="badge-icon">{{icon desktop}}</span><b>Your computer</b><span>The app and the runner, with every full transcript</span></li>
         <li><span class="badge-icon">{{icon database}}</span><b>Your Convex deployment</b><span>Titles, messages, what each tool did, and what needs you</span></li>
-        <li><span class="badge-icon">{{icon device-mobile}}</span><b>Your iPhone and browser</b><span>Read, reply and approve from anywhere</span></li>
+        <li><span class="badge-icon">{{icon device-mobile}}</span><b>Your phone and browser</b><span>Read, reply and approve from anywhere</span></li>
       </ol>
     </section>
 
@@ -133,7 +133,7 @@
             <button type="button" class="btn btn-lg btn-ghost send-mac" hidden>{{icon desktop}}<span>Send this page to my Mac</span></button>
           </div>
         </figure>
-        <!-- The Mac app's Settings > Phone & browser shows the code (DevicesSettings.swift). -->
+        <!-- The desktop app's Settings > Phone & browser shows the code (desktop/gpui/src/settings_window.rs). -->
         <div class="phone-row">
           <div class="store-badges">{{appStoreBadge}}{{androidBadge}}</div>
           <p>Then grab the phone app and pair it with the code in the app's settings.</p>

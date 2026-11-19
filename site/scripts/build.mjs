@@ -291,17 +291,18 @@ const FAQ = [
   // keep-awake.ts, off by default). If that goes on for everyone, this answer has to change.
   // A new thread from the phone waits for the first Mac unless you pick another (docs/guide.md).
   ["What happens when my Mac's asleep?",
-    "You can still read all your threads on your phone and the website, because they're synced to your Convex deployment. The agents run on your Mac though, so they can't do anything while it's asleep (Threadbear won't keep it awake unless you turn on <a href=\"/docs/experiments\">that experiment</a>), and anything you send from your phone waits for it to wake up. If you want work to keep going, a second Mac or a Linux server can be an always-on machine, and you can pick it when you start a thread from your phone."],
-  ["Do I need the iPhone app?",
-    "No, the desktop app does everything on its own. The iPhone app and the browser links are for when you're away from your desk."],
+    "You can still read all your threads on your phone and the website, because they're synced to your Convex deployment. The agents run on your Mac though, so they can't do anything while it's asleep (Threadbear won't keep it awake unless you turn on <a href=\"/docs/experiments\">that experiment</a>), and anything you send from your phone waits for it to wake up. If you want work to keep going, a second Mac, a Linux server or a Windows PC can be an always-on machine, and you can pick it when you start a thread from your phone."],
+  ["Do I need the phone app?",
+    "No, the desktop app does everything on its own. The iPhone and Android apps and the browser links are for when you're away from your desk."],
   // runner/src/sync.ts mirrors this; docs/on-your-mac.md has the full list. Full sync starts off
-  // and is offered once a phone, the website or another machine is paired (docs/full-convex.md, step 6).
+  // and is never offered since 16 Nov (92b0d7ded): Settings > General > Full sync turns it on.
   ["What goes up to Convex?",
-    "The thread list, the text of every message, a line for what each tool did, anything waiting on you, your projects and schedules, your logins' emails and usage, and any pictures you paste in. Anything that looks like a secret gets scrubbed out on the way up, but that's not a guarantee, and nothing can scrub a picture. The tool output itself stays on your Mac to start with. Once you pair your phone or add another machine, Threadbear asks if you want that going up too (kept 30 days), so you can see what the agent actually did from anywhere, even with your Mac asleep. Things like your .env files and the agent's screenshots stay on your Mac either way. It's your deployment in your own Convex account, so none of it comes to me. The <a href=\"/docs/privacy\">privacy docs</a> have the rest, including the switch that keeps pictures on your Mac."],
-  // Self-hosting is step 8 of docs/setup-and-updates.md and isn't built, so setup can't do it. With
-  // sync off the Mac app still works, since it talks to the runner (docs/protocol.md, "Sync").
+    "The thread list, the text of every message, a line for what each tool did, anything waiting on you, your projects and schedules, your logins' emails and usage, and any pictures you paste in. Anything that looks like a secret gets scrubbed out on the way up, but that's not a guarantee, and nothing can scrub a picture. The tool output itself stays on your Mac unless you turn on full sync in Settings, which sends that up too (kept 30 days), so you can see what the agent actually did from anywhere, even with your Mac asleep. Things like your .env files and the agent's screenshots stay on your Mac either way. It's your deployment in your own Convex account, so none of it comes to me. The <a href=\"/docs/privacy\">privacy docs</a> have the rest, including the switch that keeps pictures on your Mac."],
+  // Self-hosting: `./threadbear setup --self-hosted` runs Convex's backend in Docker on the Mac
+  // (docs/guide.md, "Self-hosting your backend"; docs/self-hosting.md). With sync off the app still
+  // works, since it talks to the runner (docs/protocol.md, "Sync").
   ["Do I have to use Convex?",
-    "Pretty much, yes (and by the way I work at Convex, so I'm a bit biased). Setup makes a deployment in your own Convex account, and that's how your phone, the website and your other machines see your threads. You can turn the syncing off with <code>\"sync\": { \"enabled\": false }</code> in <code>runner.json</code> and the Mac app carries on by itself, but you'd lose all of that. If you'd rather keep it on your own server, <a href=\"https://docs.convex.dev/self-hosting\">Convex's backend is open source</a> and you can run it yourself, but setup won't do that for you, so that one's up to you and your agent."],
+    "Pretty much, yes (and by the way I work at Convex, so I'm a bit biased). Setup makes a deployment in your own Convex account, and that's how your phone, the website and your other machines see your threads. You can turn the syncing off with <code>\"sync\": { \"enabled\": false }</code> in <code>runner.json</code> and the Mac app carries on by itself, but you'd lose all of that. If you'd rather keep it all on your own machine, <a href=\"https://docs.convex.dev/self-hosting\">Convex's backend is open source</a> and setup can run it for you in Docker, though you lose phone notifications (<a href=\"/docs/self-hosting\">the self-hosting docs</a> have the rest)."],
   ["What can a patch do?",
     "Add buttons above the message box that run a command or send a prompt, add panels beside the thread (a web page, or a list Threadbear draws itself), and run a command after each turn, like a typecheck, telling the agent when it fails. A patch is a plain file in your repo, so it gets reviewed and committed like anything else."],
   ["Why would I want my own copy of the code?",
@@ -311,7 +312,7 @@ const FAQ = [
   ["Why is it called Threadbear?",
     "A threadbare teddy is the one you've had for years, worn and patched and loved for it, and that's what I wanted this to be. There are a few bear words in the app too: snoozing a thread is Hibernate, the archive is the Den, and while an agent works it says Bear with me."],
   ["When can I get it?",
-    "Right now. Copy the prompt from <a href=\"/#get\">Install it with a prompt</a>, paste it into Claude Code or Codex and let it set things up for you. The iPhone app is on the App Store."],
+    "Right now. Copy the prompt from <a href=\"/#get\">Install it with a prompt</a>, paste it into Claude Code or Codex and let it set things up for you. The iPhone app is on the App Store, and the Android one <a href=\"/docs/phone-and-browser#on-android\">comes from GitHub</a>."],
 ];
 
 /** The FAQ as an accordion: every answer's still in the page for search engines, just folded. */
