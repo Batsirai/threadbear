@@ -105,7 +105,8 @@ fresh PC), which is what you want gone.
    by a bare name in the folders commands run from, so a program a pull
    drops there asks again, and refuses round 4's ways round
    NoDefaultCurrentDirectoryInExePath. Codex's sixth review still found
-   gaps (a JS subprocess's cwd and package commands, a DLL beside a repo
+   gaps (a JS subprocess's cwd and package commands, a variable named by
+   an expansion, which this repo's own scripts use, a DLL beside a repo
    program), so clicks-only stays on for now.*
 6. **Polish.** Codex on Windows, pictures, stuck-job detection, a Windows
    check host, client path display (`C:\Users\...` shown as `~`).

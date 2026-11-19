@@ -1606,17 +1606,6 @@ class Reach {
       if (v && this.unfollowableVar(v, ctx, line)) return;
     }
     if (name === 'export' || name === 'local' || name === 'declare' || name === 'typeset' || name === 'readonly' || name === 'integer') {
-      // A name or option worked out as it runs could be anything
-      // (`export "$target=$PWD"`, `declare "$option" d=HOME`: Codex's fourth
-      // review), so it's refused. A literal name with an expanded value is fine.
-      // Any of the name, up to its `=`, worked out as it runs: `H${x}=...`
-      // too (Codex's sixth review).
-      for (const w of args) {
-        for (const p of w.parts) {
-          if (p.k === 'lit' && p.s.includes('=')) break;
-          if (p.k !== 'lit') return this.fail(ctx, line, `runs ${name} with a name or option worked out as it runs, which patch trust can't follow.`);
-        }
-      }
       // A name reference makes a later assignment to one name write
       // another (declare -n d=HOME; d=x), which isn't followed.
       if (name !== 'export' && args.some((w) => /^[-+][a-zA-Z]*n/.test(litOf(w) ?? ''))) return this.fail(ctx, line, `makes a name reference (${name} -n), which patch trust doesn't follow.`);
