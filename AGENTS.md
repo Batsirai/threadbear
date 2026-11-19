@@ -281,11 +281,18 @@ of your own in a commit on top. A comment to them goes past Mike first.
 Work rewritten by hand from their PR or fork gets a `Co-Authored-By:`
 trailer for them, as 434438d9 does for Wayne.
 
-A commit on someone's fork isn't an offer, however good it looks: they haven't
-asked for it to go anywhere. Don't suggest bringing one in, and don't take one,
-unless Mike asks for that one by name or they've opened a PR. Mike, 6 Nov: "I
-don't think you should be pulling in anybody's stuff willy nilly." Telling him
-what people have built is fine, and that's all the fork watch schedule does.
+A commit on someone's fork isn't an offer: they haven't asked for it to go
+anywhere. The fork watch schedule (`~/dev/me/misc/schedules/threadbear-fork-watch`)
+is what brings them in. It takes the small ones it's sure of by itself (a real
+bug, test or check fix, small enough to read whole, that changes nothing about
+how Threadbear works), written fresh from what the diff does and credited as
+above, and asks Mike about features and anything that changes how something
+works. Mike, 19 Nov: "for these small things like these fixes... that you are
+pretty certain are valuable, I think in the future you should just
+automatically pull them in. And leaving it up to me, the bigger decisions."
+Outside that schedule, don't take a fork's commit unless Mike asks for that
+one by name or its author has opened a PR (his 6 Nov "I don't think you
+should be pulling in anybody's stuff willy nilly" still stands for the rest).
 
 ## Experiments
 
