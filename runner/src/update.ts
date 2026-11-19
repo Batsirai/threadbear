@@ -484,6 +484,8 @@ const MIKES_REPO = 'github.com/mikecann/threadbear';
 // remote's URL is his (its own name, upstream or origin), as setup does
 // (scripts/checked-upstream.mjs): a ref already here may be a fork's, left
 // behind when the remote was pointed at his. A fetch that fails checks.
+// It's the person's own checkout, so the fetch leaves FETCH_HEAD alone: a
+// `git merge FETCH_HEAD` of theirs would take Mike's main (Codex's review).
 export async function onMikesMain(checkout: string, commit: string): Promise<string | undefined> {
   let remotes: string[];
   try {
@@ -501,7 +503,7 @@ export async function onMikesMain(checkout: string, commit: string): Promise<str
     if (repoKey(url) !== MIKES_REPO) continue;
     const main = `refs/remotes/${remote}/main`;
     try {
-      await gitWithin(checkout, ['fetch', '--quiet', '--no-tags', remote, `+refs/heads/main:${main}`], { timeoutMs: FETCH_TIMEOUT_MS });
+      await gitWithin(checkout, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', remote, `+refs/heads/main:${main}`], { timeoutMs: FETCH_TIMEOUT_MS });
       await gitWithin(checkout, ['merge-base', '--is-ancestor', commit, main]);
       return `Mike's main has this commit (${remote}), and a landing's check passed them there`;
     } catch {

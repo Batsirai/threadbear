@@ -157,11 +157,18 @@ except Exception: print("")' "$TARGET/Contents/Resources/build.json" 2>/dev/null
 
 if installed; then
   if [[ -n "$(behind_main)" ]]; then
+    elsewhere="$(builds_elsewhere)"
     echo "STEP Building main's version of the app, which it swaps in when it next starts"
-    from_main stage-update.sh
-    # Not fatal: the app is installed, and its own updates try again.
+    # Not fatal: the app is installed, and its own updates try again. Room
+    # for it is checked as for a first build (Codex's review), in a subshell
+    # so its exit only skips the build.
     code=0
-    "$work/stage-update.sh" "$CHECKOUT" --next "$HOME/Applications/.Threadbear GPUI.app.next" || code=$?
+    if ( room_for_it ); then
+      from_main stage-update.sh
+      "$work/stage-update.sh" "$CHECKOUT" --next "$HOME/Applications/.Threadbear GPUI.app.next" || code=$?
+    else
+      code=6
+    fi
     case "$code" in
       0) echo "Staged main's build beside $TARGET" ;;
       3) echo "The app is already building main's version itself." ;;

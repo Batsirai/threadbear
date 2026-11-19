@@ -206,6 +206,16 @@ test('an installed app already on main builds nothing', mac, () => {
   assert.equal(fs.existsSync(next(w)), false);
 });
 
+test("an installed app behind main isn't rebuilt on a disk without room, and setup goes on", mac, () => {
+  const w = world();
+  assert.equal(run(w, 50 * GiB).status, 0);
+  builtFrom(w, 'an-older-tree');
+  const r = run(w, 1);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /needs about .* GB free/);
+  assert.equal(fs.existsSync(next(w)), false);
+});
+
 test("main's build failing for an installed app doesn't fail setup: its own updates try again", mac, () => {
   const w = world({ stageExit: 1 });
   const macos = path.join(w.home, 'Applications', 'Threadbear GPUI.app', 'Contents', 'MacOS');

@@ -42,7 +42,7 @@ export function checkedUpstream({ repo, mikesRepo }) {
   let fetched = false;
   for (const remote of remotes) {
     const main = `refs/remotes/${remote}/main`;
-    if (!git(repo, ['fetch', '--quiet', '--no-tags', remote, `+refs/heads/main:${main}`], 120_000).ok) continue;
+    if (!git(repo, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', remote, `+refs/heads/main:${main}`], 120_000).ok) continue;
     fetched = true;
     if (git(repo, ['merge-base', '--is-ancestor', head.out, main]).ok) return { checked: true, remote };
   }
