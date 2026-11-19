@@ -148,8 +148,17 @@ export class FakeAdapter implements AgentAdapter {
 }
 
 const made: string[] = [];
+// One something still holds on Windows (a process a test left to be
+// killed, still in it) stays in the temp folder: failing the whole file at
+// exit for it fails tests that passed (patch-isolation, 19 Nov).
 process.on('exit', () => {
-  for (const d of made) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of made) {
+    try {
+      fs.rmSync(d, { recursive: true, force: true });
+    } catch {
+      // left for the system's temp cleanup
+    }
+  }
 });
 
 // Whether dir is inside a folder tmpDir() made in this process: what the
