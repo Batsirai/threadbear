@@ -767,6 +767,47 @@ test('setting a token starts only as many waiting threads as there is room for; 
   assert.equal(typeof s.rows('threadIndex').find((r) => r.threadId === 'T4')!.archivedAt, 'string');
 });
 
+// Codex's second look at slice 5, 1: a thread waiting for room started on a token refused meanwhile.
+test("a thread waiting for room whose login's token was refused meanwhile goes back to waiting for a token, using no room", async () => {
+  const s = await setup();
+  await setLimits(s, { maxBoxes: 2 });
+  for (const id of ['T2', 'T3']) await startAs(s, id, OTHER_LOGIN);
+  await setFor(s, OTHER_LOGIN);
+  await s.run();
+  assert.deepEqual(['T2', 'T3'].map(s.stateOf), ['starting', 'waitingForRoom']);
+  const got = await s.boot('T2', s.fly.live()[0]!.id);
+  await call(s.ctx, boxes.tokenRefused, { key: got.boxKey, setAt: got.tokenSetAt });
+  // Room for T3 now, but its token is dead.
+  await setLimits(s, { maxBoxes: 3 });
+  await call(s.ctx, boxes.wakeWaiting, { serviceId: s.serviceId });
+  const ran = await s.run();
+  assert.equal(s.stateOf('T3'), 'needsToken');
+  assert.equal(ran.filter((n) => n === 'createBox').length, 0, 'no machine for a dead token');
+  const list = (await call(s.ctx, sync.otherRunnersList, { key: OWNER, runnerId: 'mainmac00001' })) as { runnerId: string; box?: Record<string, unknown> }[];
+  assert.equal(list.find((r) => r.runnerId === s.rowOf('T3').runnerId)!.box!.token, 'dead');
+  // A new token starts it.
+  await setFor(s, OTHER_LOGIN, `sk-ant-oat01-${'Q'.repeat(60)}`);
+  await s.run();
+  assert.equal(s.stateOf('T3'), 'starting');
+});
+
+// Codex's second look at slice 5, 2: a token's release jumped the room queue.
+test("a token's threads join the room queue in the order they started: older threads waiting for room go first", async () => {
+  const s = await setup();
+  await setLimits(s, { maxBoxes: 2 });
+  for (const id of ['T2', 'T3']) await startAs(s, id, OTHER_LOGIN);
+  await setFor(s, OTHER_LOGIN);
+  await s.run();
+  assert.deepEqual(['T2', 'T3'].map(s.stateOf), ['starting', 'waitingForRoom']);
+  // One more slot, and a younger thread on another login, whose token is set before any idle check: T3, older, takes the slot.
+  await setLimits(s, { maxBoxes: 3 });
+  await startAs(s, 'T4', 'third@example.com');
+  assert.equal(s.stateOf('T4'), 'needsToken');
+  await setFor(s, 'third@example.com');
+  await s.run();
+  assert.deepEqual(['T3', 'T4'].map(s.stateOf), ['starting', 'waitingForRoom']);
+});
+
 // ------------------------------------------------------------ Codex's review of 66ccfc1c4 (18 Nov 2026)
 
 const boxIdOf = (s: Awaited<ReturnType<typeof setup>>, threadId: string) => s.rowOf(threadId)._id;

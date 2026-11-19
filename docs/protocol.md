@@ -7887,11 +7887,14 @@ has to be on for it.
   in the box state `needsToken`: nothing is asked of the provider, its
   `create` waits in the queue, and it counts toward nothing. Setting a
   valid token for that login (`setCloudToken`) releases the boxes waiting
-  on it (`TOKEN_SET`): as many as their virtual runner has room for under
-  `maxBoxes` go to `creating`, and the service makes their boxes; the rest
-  go to `waitingForRoom` (no box, nothing billed, shown `waiting`) and start
-  oldest first as room frees (a box sleeps, fails or is archived, or at the
-  idle check: `wakeWaiting`, `ROOM`). Archiving one that hasn't started
+  on it (`TOKEN_SET`) into their virtual runner's queue for room
+  (`waitingForRoom`: no box, nothing billed, shown `waiting`), which starts
+  them by when each thread started, oldest first, whatever released them,
+  so a token never passes a thread already waiting: at once while there's
+  room under `maxBoxes`, else as room frees (a box sleeps, fails or is
+  archived, or at the idle check: `wakeWaiting`, `ROOM`). One whose login's
+  token was refused while it waited goes back to `needsToken` when its turn
+  comes, using none of the room. Archiving one that hasn't started
   (`needsToken` or `waitingForRoom`) ends it (`expired`: it never ran, so
   nothing's kept): the archive command is done at once by the backend
   (`boxes:archiveUnstarted`), the thread's sidebar row gets `archivedAt`,

@@ -473,10 +473,10 @@ kept, and no key works for it.
   end note
   [*] --> creating : START (owner) [1. hasToken] / start
   [*] --> needsToken : START (owner) [else] / awaitToken
-  needsToken --> creating : TOKEN_SET(room) (server) [1. room] / tokenSet
-  needsToken --> waitingForRoom : TOKEN_SET(room) (server) [else] / awaitRoom
+  needsToken --> waitingForRoom : TOKEN_SET (server) / awaitRoom
   needsToken --> expired : ARCHIVE (owner) / archiveUnstarted
-  waitingForRoom --> creating : ROOM (server) / tokenSet
+  waitingForRoom --> creating : ROOM (server) [1. hasToken] / tokenSet
+  waitingForRoom --> needsToken : ROOM (server) [else] / awaitToken
   waitingForRoom --> expired : ARCHIVE (owner) / archiveUnstarted
   creating --> starting : CREATED(providerBoxId, attempt?) (server) [newBox] / created
   creating --> awake : READY (runner) / ready
@@ -571,13 +571,13 @@ How a row is born:
 
 From `needsToken`:
 
-- `TOKEN_SET(room) (server)` [1. room] → `creating`. Mike set a token for the login, and there's room: the service asks the provider for the thread's first box.
-- `TOKEN_SET(room) (server)` [else] → `waitingForRoom`. Mike set a token for the login, but its virtual runner has maxBoxes up or starting: it waits its turn.
+- `TOKEN_SET (server)` → `waitingForRoom`. Mike set a token for the login: it joins its virtual runner's queue for room, in the order the threads started, so it never passes one that was waiting before it (boxes.ts wakeWaiting starts it at once if there's room).
 - `ARCHIVE (owner)` → `expired`. Mike archives the thread before it ever ran: nothing was made or saved, so it ends.
 
 From `waitingForRoom`:
 
-- `ROOM (server)` → `creating`. There's room now: the service asks the provider for the thread's first box.
+- `ROOM (server)` [1. hasToken] → `creating`. There's room now, and its login's token is still good: the service asks the provider for the thread's first box.
+- `ROOM (server)` [else] → `needsToken`. There's room, but a box's turn was refused on its login's token meanwhile: it waits for a token again, using none of the room, rather than start a machine that would be refused too.
 - `ARCHIVE (owner)` → `expired`. Mike archives the thread before it ever ran: nothing was made or saved, so it ends.
 
 From `creating`:

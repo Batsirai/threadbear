@@ -47,7 +47,7 @@ export const box = defineMachine(
       // `attempt`: which box the event is about (boxes.ts mintBootToken numbers
       // each), on every event about one box. Without one, it's taken to be
       // about the newest (a loss: every box's so far). WAKE is the thread's.
-      server: { TOKEN_SET: { room: v.boolean() }, ROOM: {}, CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }, WAKE: {}, EXPIRE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string(), attempt: v.optional(v.number()) }, PAUSED: { attempt: v.optional(v.number()) }, RETIRE: { sleptAt: v.number() }, RETIRED: {} },
+      server: { TOKEN_SET: {}, ROOM: {}, CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }, WAKE: {}, EXPIRE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string(), attempt: v.optional(v.number()) }, PAUSED: { attempt: v.optional(v.number()) }, RETIRE: { sleptAt: v.number() }, RETIRED: {} },
     },
     guards: {
       heardFrom: "The box hasn't heartbeated within the lease.",
@@ -65,7 +65,6 @@ export const box = defineMachine(
       wakeOverdue: 'It has been waking more than fifteen minutes, and the event is about the newest attempt.',
       hasSave: 'The thread has a save to come back from.',
       hasToken: "Its login has a cloud token that no box's turn has been refused on.",
-      room: "Its virtual runner has fewer boxes up or starting than its maxBoxes.",
     },
     states: {
       start: {
@@ -79,17 +78,17 @@ export const box = defineMachine(
       needsToken: {
         description: "Waiting for a cloud token for its login. No box, no key and nothing billed; its first message waits in the queue, and the thread shows the token card.",
         on: {
-          TOKEN_SET: [
-            { to: 'creating', guard: 'room', effect: 'tokenSet', description: "Mike set a token for the login, and there's room: the service asks the provider for the thread's first box." },
-            { to: 'waitingForRoom', effect: 'awaitRoom', description: 'Mike set a token for the login, but its virtual runner has maxBoxes up or starting: it waits its turn.' },
-          ],
+          TOKEN_SET: { to: 'waitingForRoom', effect: 'awaitRoom', description: "Mike set a token for the login: it joins its virtual runner's queue for room, in the order the threads started, so it never passes one that was waiting before it (boxes.ts wakeWaiting starts it at once if there's room)." },
           ARCHIVE: { to: 'expired', effect: 'archiveUnstarted', description: 'Mike archives the thread before it ever ran: nothing was made or saved, so it ends.' },
         },
       },
       waitingForRoom: {
         description: "Its login has a token, but its virtual runner has maxBoxes up or starting. No box and nothing billed; its first message waits in the queue. Those waiting start oldest first as room frees (a box sleeps, fails or is archived, or at the idle check).",
         on: {
-          ROOM: { to: 'creating', effect: 'tokenSet', description: "There's room now: the service asks the provider for the thread's first box." },
+          ROOM: [
+            { to: 'creating', guard: 'hasToken', effect: 'tokenSet', description: "There's room now, and its login's token is still good: the service asks the provider for the thread's first box." },
+            { to: 'needsToken', effect: 'awaitToken', description: "There's room, but a box's turn was refused on its login's token meanwhile: it waits for a token again, using none of the room, rather than start a machine that would be refused too." },
+          ],
           ARCHIVE: { to: 'expired', effect: 'archiveUnstarted', description: 'Mike archives the thread before it ever ran: nothing was made or saved, so it ends.' },
         },
       },
@@ -307,8 +306,6 @@ export const box = defineMachine(
       wakeOverdue: (_ctx, { row, event }) => !stale(row, event.attempt) && row.boxState.kind === 'waking' && Date.now() >= (row.boxState.since ?? 0) + WAKE_GRACE_MS,
       keptBox: (_ctx, { row }) => row.boxKeyHash !== undefined && row.providerBoxId !== undefined && row.keyAttempt === row.providerAttempt,
       hasSave: (_ctx, { row }) => row.save !== undefined,
-      // releaseForToken counts the room, as it releases a page of them (boxes.ts).
-      room: (_ctx, { event }) => event.room,
       hasToken: async (ctx, { row }) => {
         const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique();
         return token !== null && token.tokenState.kind !== 'dead';

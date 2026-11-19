@@ -150,8 +150,10 @@ export const storeCloudToken = internalMutation({
 
 // Boxes waiting for a token on the login are released (TOKEN_SET), a page
 // at a time, only while its token is still valid (one refused meanwhile
-// leaves them waiting): as many as their virtual runner has room for go to
-// creating, the rest to waitingForRoom, started as room frees (wakeWaiting).
+// leaves them waiting). They join their virtual runner's queue for room
+// (waitingForRoom), which starts the oldest first, by when each thread
+// started, whatever released it (wakeWaiting, run here for each one's
+// virtual runner): a token never passes a thread already waiting.
 const RELEASE_PAGE = 50;
 export const releaseForToken = machines.internalMutation({
   args: { login: v.string() },
@@ -160,17 +162,9 @@ export const releaseForToken = machines.internalMutation({
     const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', login)).unique();
     if (!token || token.tokenState.kind !== 'valid') return null;
     const waiting = await ctx.db.query('boxes').withIndex('by_login_state', (q) => q.eq('login', login).eq('boxState.kind', 'needsToken')).take(RELEASE_PAGE);
-    // Room left on each virtual runner, counted once and spent as boxes go to creating.
-    const room = new Map<string, number>();
-    for (const row of waiting) {
-      if (!room.has(row.serviceId)) {
-        const max = (await ctx.db.get('runnerServices', row.serviceId))?.limits.maxBoxes ?? BOX_LIMITS.maxBoxes;
-        room.set(row.serviceId, Math.max(0, max - (await countRunning(ctx as unknown as QueryCtx, row.serviceId, max))));
-      }
-      const left = room.get(row.serviceId)!;
-      const r = await boxMachine.send(ctx, row._id, { type: 'TOKEN_SET', room: left > 0 });
-      if (r.status === 'done' && r.to === 'creating') room.set(row.serviceId, left - 1);
-    }
+    const services = new Set<Id<'runnerServices'>>();
+    for (const row of waiting) if ((await boxMachine.send(ctx, row._id, { type: 'TOKEN_SET' })).status === 'done') services.add(row.serviceId);
+    for (const serviceId of services) await ctx.scheduler.runAfter(0, internal.boxes.wakeWaiting, { serviceId });
     if (waiting.length === RELEASE_PAGE) await ctx.scheduler.runAfter(0, internal.boxes.releaseForToken, { login });
     return null;
   },
@@ -984,9 +978,13 @@ export const wakeWaiting = machines.internalMutation({
     }
     // Then threads that have never run, waiting for room to start, oldest first.
     const max = (await ctx.db.get('runnerServices', serviceId))?.limits.maxBoxes ?? BOX_LIMITS.maxBoxes;
+    // In the order they started (the index keeps rows by creation within a
+    // state). One whose login's token was refused meanwhile goes back to
+    // waiting for a token (ROOM's other step) and uses none of the room.
     for (const row of await ctx.db.query('boxes').withIndex('by_service_state', (q) => q.eq('serviceId', serviceId).eq('boxState.kind', 'waitingForRoom')).take(WAKE_BATCH)) {
       if ((await countRunning(ctx, serviceId, max)) >= max) break;
-      if ((await boxMachine.send(machineCtx, row._id, { type: 'ROOM' })).status === 'done') woken++;
+      const r = await boxMachine.send(machineCtx, row._id, { type: 'ROOM' });
+      if (r.status === 'done' && r.to === 'creating') woken++;
     }
     return woken;
   },
