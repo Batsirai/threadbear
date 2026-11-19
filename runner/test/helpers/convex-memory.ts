@@ -148,6 +148,12 @@ export function memoryBackend(root = CONVEX) {
   // Inside a function (call), every row written is checked against its table.
   const inCall = { depth: 0 };
   const tableOf = (id: string) => Object.keys(tables).find((t) => tables[t]!.some((r) => r._id === id));
+  // (table, id): the id must be that table's, as Convex checks; (id) alone as it is.
+  const byTable = (a: string, b?: string): string => {
+    if (b === undefined) return a;
+    if (!b.startsWith(`${a}:`)) throw new Error(`convex-memory: ${b} isn't an id of ${a}`);
+    return b;
+  };
   const checkRow = (table: string | undefined, row: Record<string, unknown>) => {
     if (!inCall.depth || !table) return;
     const { _id, _creationTime, ...doc } = row;
@@ -248,12 +254,17 @@ export function memoryBackend(root = CONVEX) {
       return _id;
     },
     // A get counts toward the bytes, not the rows (reads() is queries' rows).
-    async get(id: string) {
+    // Each takes (id) or, as Convex 1.31 and later do, (table, id), whose id
+    // must be of that table.
+    async get(a: string, b?: string) {
+      const id = byTable(a, b);
       const r = find(id);
       if (r) counter.bytes += Buffer.byteLength(JSON.stringify(r));
       return r;
     },
-    async patch(id: string, p: Record<string, unknown>) {
+    async patch(a: string, b: string | Record<string, unknown>, c?: Record<string, unknown>) {
+      const id = typeof b === 'string' ? byTable(a, b) : a;
+      const p = (typeof b === 'string' ? c : b)!;
       const row = find(id);
       if (!row) throw new Error(`convex-memory: no row ${id}`);
       const next: Record<string, unknown> = { ...row };
@@ -267,14 +278,17 @@ export function memoryBackend(root = CONVEX) {
         else row[k] = x;
       }
     },
-    async replace(id: string, doc: Record<string, unknown>) {
+    async replace(a: string, b: string | Record<string, unknown>, c?: Record<string, unknown>) {
+      const id = typeof b === 'string' ? byTable(a, b) : a;
+      const doc = (typeof b === 'string' ? c : b)!;
       const row = find(id);
       if (!row) throw new Error(`convex-memory: no row ${id}`);
       checkRow(tableOf(id), doc);
       for (const k of Object.keys(row)) if (k !== '_id' && k !== '_creationTime') delete row[k];
       Object.assign(row, doc);
     },
-    async delete(id: string) {
+    async delete(a: string, b?: string) {
+      const id = byTable(a, b);
       for (const t of Object.keys(tables)) tables[t] = tables[t]!.filter((r) => r._id !== id);
     },
     // (id) for a stored file, or (table, id) as the state machines library asks for its timers' jobs.
