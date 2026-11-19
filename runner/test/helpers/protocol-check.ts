@@ -200,7 +200,7 @@ export function checkSummary(t: Obj): string[] {
   if (t.wakeWhen !== undefined) {
     const w = t.wakeWhen;
     const ok = w && typeof w === 'object' && isStr(w.said) && isStr(t.snoozedUntil) && (w.topic === undefined || isStr(w.topic)) && (w.pending === undefined || w.pending === true) &&
-      Object.keys(w).every((k) => ['said', 'topic', 'pending'].includes(k));
+      (w.agent === undefined || w.agent === true) && Object.keys(w).every((k) => ['said', 'topic', 'pending', 'agent'].includes(k));
     if (!ok) problems.push('wakeWhen');
   }
   if (t.waitingOn !== undefined) {

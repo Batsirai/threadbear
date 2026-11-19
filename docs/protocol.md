@@ -359,9 +359,12 @@ type ThreadSummary = {
                         // snoozedUntil is then 9999-12-31T00:00:00.000Z
   snoozedUntilRelease?: true // with snoozedUntilRestart: only a start on
                         // another release than the one it went to sleep on
-  wakeWhen?: { said: string, topic?: string, pending?: true }
+  wakeWhen?: { said: string, topic?: string, pending?: true, agent?: true }
                         // hibernated in Mike's words (Hibernate in words);
-                        // only while snoozedUntil is set
+                        // only while snoozedUntil is set. `agent`: its own
+                        // agent set it (end_turn's snooze); with an
+                        // "unlanded" loose end it's waiting to land, and
+                        // the sidebar puts it under Running
   waitingOn?: { threadId, title, until?, done?: true }[] // hibernating until these
                         // threads finish (end_turn's waitFor); only
                         // while snoozedUntil is set

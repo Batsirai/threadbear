@@ -498,8 +498,12 @@ pub fn work_wait_row<Tz: TimeZone>(t: &ThreadSummary, now: &DateTime<Tz>) -> Opt
         return Some(("Waiting for the app update".to_string(), "Carries on once Threadbear restarts onto what this thread landed, which it does by itself when you leave it idle.".to_string()));
     }
     let unlanded = t.waiting_to_land()?;
-    let back = wake_row(t, now).map(|(_, tip)| format!(" {tip}")).unwrap_or_default();
-    Some(("Waiting to land".to_string(), format!("{unlanded}.{back}")))
+    let wake: Option<WakeWhen> = t.wake_when.clone().and_then(crate::wire::read);
+    let mut tip = format!("{unlanded}. Back when {}", wake.and_then(|w| w.topic).unwrap_or_else(|| "it has landed".into()));
+    if let Some(time) = wake_time(t) {
+        tip += &format!(", or {} at the latest", until_words(time, now));
+    }
+    Some(("Waiting to land".to_string(), format!("{tip}.")))
 }
 
 /// The tooltip for "Woke up": "Woke up after hibernating for 2 days"
@@ -1137,12 +1141,12 @@ mod tests {
         let for_app = thread(json!({ "needs": "nothing", "snoozedUntil": "2026-11-10T09:00:00Z", "awaitingAppRestart": true }));
         let out = trailing(&for_app, &RowLook::of(&for_app, Some("running")), RowMode::Inbox, &now, None);
         assert_eq!((out.text.as_str(), out.kind), ("Waiting for the app update", TrailingKind::Background));
-        let landing = thread(json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00.000Z", "wakeWhen": { "said": "when the landing finishes", "topic": "the landing has finished" }, "looseEnds": { "seq": 4, "ends": [{ "kind": "unlanded", "text": "1 commit on thread/x isn't on main" }] } }));
+        let landing = thread(json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00.000Z", "wakeWhen": { "said": "when the landing finishes", "topic": "the landing has finished", "agent": true }, "looseEnds": { "seq": 4, "ends": [{ "kind": "unlanded", "text": "1 commit on thread/x isn't on main" }] } }));
         let look = RowLook::of(&landing, Some("running"));
         assert!(!look.done, "no tick: nothing has landed");
         let out = trailing(&landing, &look, RowMode::Inbox, &now, None);
         assert_eq!((out.text.as_str(), out.kind), ("Waiting to land", TrailingKind::Background));
-        assert_eq!(out.tip.as_deref(), Some("1 commit on thread/x isn't on main. Back when you next talk about the landing has finished. You said \"when the landing finishes\"."));
+        assert_eq!(out.tip.as_deref(), Some("1 commit on thread/x isn't on main. Back when the landing has finished."));
 
         let thinking = thread(json!({ "snoozedUntil": "9999-12-31T00:00:00.000Z", "wakeWhen": { "said": "soon", "pending": true } }));
         assert_eq!(trailing(&thinking, &RowLook::PLAIN, RowMode::Hibernating, &now, None).text, "Thinking…");

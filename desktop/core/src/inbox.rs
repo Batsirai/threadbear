@@ -381,11 +381,14 @@ impl ThreadSummary {
         }
         self.awaiting_app_restart == Some(true) || self.waiting_on.iter().flatten().any(|w| w.get("done").and_then(Value::as_bool) != Some(true)) || self.waiting_to_land().is_some()
     }
-    /// Hibernating until something it's watching for ("when the landing
-    /// finishes") while its own commits aren't on main yet: waiting to land,
-    /// so still working. Gives the loose end's words ("1 commit on … isn't on main").
+    /// Hibernating until something its own agent is watching for ("when the
+    /// landing finishes") while its commits aren't on main yet: waiting to
+    /// land, so still working. One Mike hibernated himself isn't. Gives the
+    /// loose end's words ("1 commit on … isn't on main").
     pub fn waiting_to_land(&self) -> Option<String> {
-        self.wake_when.as_ref()?;
+        if self.wake_when.as_ref()?.get("agent").and_then(Value::as_bool) != Some(true) {
+            return None;
+        }
         self.loose_ends_check()?.ends.into_iter().find(|e| e.kind == "unlanded").map(|e| e.text)
     }
     /// Snoozed past `now_ms`. A restart snooze carries a far-off `snoozedUntil` too.
@@ -1080,13 +1083,14 @@ mod tests {
     #[test]
     fn a_thread_hibernating_with_its_commits_not_on_main_stays_under_running() {
         let unlanded = json!({ "seq": 4, "ends": [{ "kind": "unlanded", "text": "1 commit on thread/x isn't on main" }] });
-        let watching = json!({ "said": "when the landing finishes", "topic": "the landing has finished" });
+        let watching = json!({ "said": "when the landing finishes", "topic": "the landing has finished", "agent": true });
         let landing = thread(1, json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00Z", "wakeWhen": watching, "looseEnds": unlanded }));
         let landed = thread(2, json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00Z", "wakeWhen": watching, "looseEnds": { "seq": 4, "ends": [] } }));
         let mikes_own = thread(3, json!({ "needs": "nothing", "snoozedUntil": "2026-11-07T00:00:00Z", "looseEnds": unlanded }));
-        let s = sections(&[landing, landed, mikes_own], now());
+        let mikes_words = thread(4, json!({ "needs": "nothing", "snoozedUntil": "9999-12-31T00:00:00Z", "wakeWhen": { "said": "next time I talk about billing", "topic": "billing" }, "looseEnds": unlanded }));
+        let s = sections(&[landing, landed, mikes_own, mikes_words], now());
         assert_eq!(ids(&s, "running"), ["t1"], "waiting to land is still at its job");
-        assert_eq!(ids(&s, "hibernating"), ["t3", "t2"], "nothing left to land, or Mike hibernated it himself");
+        assert_eq!(ids(&s, "hibernating"), ["t3", "t4", "t2"], "nothing left to land, or Mike hibernated it himself");
     }
 
     #[test]

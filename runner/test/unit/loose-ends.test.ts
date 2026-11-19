@@ -140,6 +140,29 @@ test('looseEnds: a done turn gets a check on its summary, kept up to date, and o
   assert.equal(s.looseEnds, undefined);
 });
 
+test('looseEnds: a thread hibernating to wait for its own landing is checked again, so it leaves Running once landed', async () => {
+  const h = setup();
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main' });
+  const id = thread.id;
+  const st = h.runner.threads.get(id)!;
+  const w = repoWithWorktree();
+  st.rec.worktree = w;
+  sh(w.path, 'echo two > b.txt && git add b.txt && git commit -qm two');
+  finish(h, id);
+  await until(() => Boolean(h.runner.get(id).looseEnds), 'the check');
+  // Its own agent hibernated it "until the landing finishes".
+  st.rec.snoozedUntil = '9999-12-31T00:00:00.000Z';
+  st.rec.wakeWhen = { said: 'when the landing finishes', topic: 'the landing has finished', by: 'agent' };
+  const s = h.runner.get(id);
+  assert.deepEqual(s.wakeWhen, { said: 'when the landing finishes', topic: 'the landing has finished', agent: true });
+  assert.deepEqual(checkSummary(s), []);
+  // A detached tb land puts it on main and tells nobody: the sweep sees it.
+  sh(w.mainCheckout, 'git merge -q --ff-only thread/abcd1234');
+  h.clock.advance(10_000);
+  h.runner.recheckWaitingToLand();
+  await until(() => h.runner.get(id).looseEnds?.ends.length === 0, 'nothing left to land');
+});
+
 test('looseEnds: not checked when the turn needs Alex, or when it archives itself', async () => {
   const h = setup();
   const b = h.runner.create({ text: 'Fix it', accountId: 'claude-main' }).thread.id;

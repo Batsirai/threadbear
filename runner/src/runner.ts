@@ -164,7 +164,7 @@ import type { SlashCommand } from './slash-commands.ts';
 import { hibernationPart, leastAuthority, type HibernationPart } from './runner/hibernation.ts';
 import { newThreadsPart, type NewThreadsPart } from './runner/new-threads.ts';
 import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, ledgerCard, openFindings, parseVerdict, type LabReviewPart } from './runner/lab-review.ts';
-import { looseEndsPart, type LooseEndsPart } from './runner/loose-ends.ts';
+import { looseEndsPart, WAITING_TO_LAND_RECHECK_MS, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
 import { GUESS_CATCH_UP_MS, inboxGuessPart, type InboxGuessPart } from './runner/inbox-guess.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
@@ -825,6 +825,7 @@ export class Runner {
   // Accounts whose CLI has been asked for its models (or is being asked).
   probed = new Set<string>();
   rescanTimer?: TimerHandle;
+  landRecheckAt = 0;
   liveTimer?: TimerHandle;
   accountsTimer?: TimerHandle;
   accountsSentAt = -Infinity;
@@ -1115,6 +1116,10 @@ export class Runner {
       this.rescanTimer = undefined;
       if (this.stopping) return;
       this.rescanAccounts();
+      if (this.clock.now() - this.landRecheckAt >= WAITING_TO_LAND_RECHECK_MS) {
+        this.landRecheckAt = this.clock.now();
+        this.recheckWaitingToLand();
+      }
       this.armRescan();
     }, ACCOUNT_RESCAN_MS);
   }
@@ -4314,9 +4319,9 @@ export class Runner {
     if (rec.snoozedUntilRestart) s.snoozedUntilRestart = true;
     if (rec.snoozedUntilRestart && rec.untilRelease) s.snoozedUntilRelease = true;
     if (rec.wakeWhen && rec.snoozedUntil) {
-      // Who set it stays in the runner (WakeWhen.by): the protocol has none.
-      const { by: _by, ...wakeWhen } = rec.wakeWhen;
-      s.wakeWhen = wakeWhen;
+      // `agent`: the thread's own agent set it (WakeWhen.by), not Mike.
+      const { by, ...wakeWhen } = rec.wakeWhen;
+      s.wakeWhen = { ...wakeWhen, ...(by === 'agent' ? { agent: true as const } : {}) };
     }
     if (rec.waitingOn && rec.snoozedUntil) s.waitingOn = rec.waitingOn.map((w) => ({ threadId: w.threadId, title: w.title, ...(w.until ? { until: w.until } : {}), ...(w.done ? { done: true as const } : {}) }));
     // Only while something still listens for the restart: one archived when

@@ -877,6 +877,7 @@ impl Threadbear {
                 t.snoozed_until_restart = Some(true);
                 t.waiting_on = None;
                 t.awaiting_app_restart = None;
+                t.wake_when = None;
             },
             json!({ "snoozedUntil": "restart" }),
             cx,
