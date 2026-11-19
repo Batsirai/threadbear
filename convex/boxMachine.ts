@@ -47,7 +47,7 @@ export const box = defineMachine(
       // `attempt`: which box the event is about (boxes.ts mintBootToken numbers
       // each), on every event about one box. Without one, it's taken to be
       // about the newest (a loss: every box's so far). WAKE is the thread's.
-      server: { CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }, WAKE: {}, EXPIRE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string(), attempt: v.optional(v.number()) }, PAUSED: { attempt: v.optional(v.number()) }, RETIRE: { sleptAt: v.number() }, RETIRED: {} },
+      server: { TOKEN_SET: {}, CREATED: { providerBoxId: v.string(), attempt: v.optional(v.number()) }, IDLE: { attempt: v.optional(v.number()), capped: v.optional(v.boolean()) }, WAKE: {}, EXPIRE: {}, RESUMED: { attempt: v.optional(v.number()) }, LOST: { attempt: v.optional(v.number()) }, DESTROYED: {}, FAILED: { error: v.string(), attempt: v.optional(v.number()) }, PAUSED: { attempt: v.optional(v.number()) }, RETIRE: { sleptAt: v.number() }, RETIRED: {} },
     },
     guards: {
       heardFrom: "The box hasn't heartbeated within the lease.",
@@ -64,10 +64,23 @@ export const box = defineMachine(
       stillWaking: 'A box of the thread may hold work newer than its save, and the wake has gone on less than fifteen minutes.',
       wakeOverdue: 'It has been waking more than fifteen minutes, and the event is about the newest attempt.',
       hasSave: 'The thread has a save to come back from.',
+      hasToken: "Its login has a cloud token that no box's turn has been refused on.",
     },
     states: {
       start: {
-        on: { START: { to: 'creating', effect: 'start', description: 'A thread starts on a virtual runner: the service asks the provider for its first box, with a boot token and nothing reusable in its environment.' } },
+        on: {
+          START: [
+            { to: 'creating', guard: 'hasToken', effect: 'start', description: 'A thread starts on a virtual runner: the service asks the provider for its first box, with a boot token and nothing reusable in its environment.' },
+            { to: 'needsToken', effect: 'awaitToken', description: "A thread starts on a virtual runner with a login that has no cloud token, or only a refused one: nothing is asked of the provider until Mike sets one, from the card in the thread." },
+          ],
+        },
+      },
+      needsToken: {
+        description: "Waiting for a cloud token for its login. No box, no key and nothing billed; its first message waits in the queue, and the thread shows the token card.",
+        on: {
+          TOKEN_SET: { to: 'creating', effect: 'tokenSet', description: 'Mike set a token for the login: the service asks the provider for the thread\'s first box.' },
+          ARCHIVE: { to: 'expired', effect: 'archiveUnstarted', description: 'Mike archives the thread before it ever ran: nothing was made or saved, so it ends.' },
+        },
       },
       creating: {
         description: "The service is asking the provider for the thread's first box.",
@@ -283,9 +296,23 @@ export const box = defineMachine(
       wakeOverdue: (_ctx, { row, event }) => !stale(row, event.attempt) && row.boxState.kind === 'waking' && Date.now() >= (row.boxState.since ?? 0) + WAKE_GRACE_MS,
       keptBox: (_ctx, { row }) => row.boxKeyHash !== undefined && row.providerBoxId !== undefined && row.keyAttempt === row.providerAttempt,
       hasSave: (_ctx, { row }) => row.save !== undefined,
+      hasToken: async (ctx, { row }) => {
+        const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique();
+        return token !== null && token.tokenState.kind !== 'dead';
+      },
     },
     effects: {
       start: async () => ({ kind: 'creating' as const, bootBy: Date.now() + BOOT_MS }),
+      awaitToken: async () => ({ kind: 'needsToken' as const, since: Date.now() }),
+      // The row has an id now (unlike START's), so the step asks for its box itself.
+      tokenSet: async (ctx, { id }) => {
+        await provide(ctx, 'createBox', id);
+        return { kind: 'creating' as const, bootBy: Date.now() + BOOT_MS };
+      },
+      archiveUnstarted: async (ctx, { row }) => {
+        await expiredNow(ctx, row);
+        return { kind: 'expired' as const, at: Date.now() };
+      },
       // A new box: whatever box held the key before is done with. Its own key comes at its exchange.
       created: async (ctx, { id, row, state, event }) => {
         // A key of an older attempt than this box's goes; this box's own (or a newer one's) can't be here yet.

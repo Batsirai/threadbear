@@ -1,7 +1,8 @@
 // Every state machine in the backend (docs/lifecycles.md), checked together
 // when the app loads: a command's (commandMachine.ts), a move's
 // (moveMachine.ts), a runner request's (requestMachine.ts), a thread
-// id's clear (clearMachine.ts) and a virtual runner's box (boxMachine.ts). Functions that
+// id's clear (clearMachine.ts), a virtual runner's box (boxMachine.ts) and
+// a login's cloud token for boxes (cloudTokenMachine.ts). Functions that
 // send `server` events, purge rows or read failed timers are built with this
 // catalog's internalMutation, which carries the brand those need and a db
 // that can't write a machine's state; the rest of the backend stays on
@@ -18,11 +19,12 @@ import { move as moveMachine } from './moveMachine';
 import { request as requestMachine } from './requestMachine';
 import { clear as clearMachine } from './clearMachine';
 import { box as boxMachine } from './boxMachine';
+import { cloudToken as cloudTokenMachine } from './cloudTokenMachine';
 import { steppingFor } from './stepping';
 import { wakeIfAsleep, wakeLevelOf } from './boxHooks';
 
 // A machine whose backfill's stepping stone is being deployed is left out (stepping.ts).
-export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [...(steppingFor('commandState') ? [] : [commandMachine]), ...(steppingFor('moveState') ? [] : [moveMachine]), ...(steppingFor('requestState') ? [] : [requestMachine]), ...(steppingFor('clearState') ? [] : [clearMachine]), boxMachine] as never, {
+export const machines: Machines<typeof appSchema> = defineMachines(appSchema, [...(steppingFor('commandState') ? [] : [commandMachine]), ...(steppingFor('moveState') ? [] : [moveMachine]), ...(steppingFor('requestState') ? [] : [requestMachine]), ...(steppingFor('clearState') ? [] : [clearMachine]), boxMachine, ...(steppingFor('tokenState') ? [] : [cloudTokenMachine])] as never, {
   mutation,
   internalMutation,
   internalQuery,
@@ -36,6 +38,7 @@ export const move = moveMachine;
 export const request = requestMachine;
 export const clear = clearMachine;
 export const box = boxMachine;
+export const cloudToken = cloudTokenMachine;
 
 /**
  * A new command, pending for its runner: the machine's QUEUE, which writes

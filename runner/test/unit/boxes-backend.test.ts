@@ -27,14 +27,15 @@ async function save(s: Awaited<ReturnType<typeof boxBackend>>, boxKey: string, n
   await call(s.ctx, boxes.boxSaved, { key: boxKey, storageId: name, bytes });
 }
 
-test("a cloud token is kept sealed: listed by login and time only, never in the clear", async () => {
-  const s = await boxBackend();
+test("a cloud token is kept sealed: listed by login, time and state only, never in the clear", async () => {
+  const s = await boxBackend({ token: false });
   await s.setToken();
   const row = { ...s.rows('cloudTokens')[0] };
   assert.equal(row.login, LOGIN);
   assert.ok(!JSON.stringify(s.rows('cloudTokens')).includes(CLAUDE_TOKEN.slice(13, 40)), 'not stored in the clear');
   const listed = await call(s.ctx, boxes.cloudTokens, { key: OWNER });
-  assert.deepEqual(listed.map((l: Record<string, unknown>) => Object.keys(l).sort()), [['login', 'madeAt', 'setAt']]);
+  assert.deepEqual(listed.map((l: Record<string, unknown>) => Object.keys(l).sort()), [['login', 'madeAt', 'setAt', 'state']]);
+  assert.equal(listed[0].state, 'valid');
   assert.ok(!JSON.stringify(listed).includes(row.sealed));
   // Setting it again replaces it.
   await s.setToken(`sk-ant-oat01-${'R'.repeat(60)}`);
@@ -43,7 +44,7 @@ test("a cloud token is kept sealed: listed by login and time only, never in the 
 });
 
 test('only the main key sets or lists cloud tokens, and a deployment without a seal key says so', async () => {
-  const s = await boxBackend();
+  const s = await boxBackend({ token: false });
   await s.ctx.db.insert('runnerKeys', { runnerId: MINI, keyHash: await sha256(MINI_KEY), name: 'mac-mini', createdAt: 1 });
   assert.equal(await outcome(s.setToken(CLAUDE_TOKEN, LOGIN, MINI_KEY)), 'forbidden');
   assert.equal(await outcome(call(s.ctx, boxes.cloudTokens, { key: MINI_KEY })), 'forbidden');
@@ -161,13 +162,15 @@ test('of two exchanges racing with one boot token, exactly one wins', async () =
   assert.equal(s.state(), 'waking');
 });
 
-test('with no cloud token for its login, the exchange refuses and the boot token still works once one is set', async () => {
+test('with its cloud token gone, the exchange refuses and the boot token still works once one is set', async () => {
   const s = await boxBackend();
   const token = await s.mint();
+  // Never happens by itself (rows aren't deleted): the exchange still refuses rather than hand out nothing.
+  const kept = s.rows('cloudTokens').splice(0);
   assert.equal(await outcome(s.exchange(token)), 'noCloudToken');
   assert.equal(s.state(), 'creating');
   assert.equal(s.box().boxKeyHash, undefined);
-  await s.setToken();
+  s.rows('cloudTokens').push(...kept);
   assert.equal((await s.exchange(token)).claudeToken, CLAUDE_TOKEN);
 });
 

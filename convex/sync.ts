@@ -3921,7 +3921,7 @@ export const setThreadIndex = mutation({
 // the runner counts it reachable while it sleeps or starts (decision 6), and
 // `waiting` while a message wants it woken but its virtual runner has
 // maxBoxes up (boxes.ts wakeFor).
-const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), updateFailed: v.optional(updateFailedValidator), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()), unreachable: v.optional(v.boolean()), unsure: v.optional(v.boolean()) })) });
+const remoteRunner = v.object({ runnerId: v.string(), name: v.string(), icon: v.optional(v.string()), lastSeenAt: v.number(), rpcUrl: v.optional(v.string()), followProblem: v.optional(v.string()), updateFailed: v.optional(updateFailedValidator), box: v.optional(v.object({ state: v.string(), waiting: v.optional(v.boolean()), unreachable: v.optional(v.boolean()), unsure: v.optional(v.boolean()), service: v.optional(v.string()), token: v.optional(v.union(v.literal('none'), v.literal('dead'))), login: v.optional(v.string()) })) });
 
 async function otherRunners(ctx: QueryCtx, runnerId: string) {
   const runners = [];
@@ -3941,9 +3941,21 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
   return runners;
 }
 
-async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean }> {
+// A box's state as the Mac's sidebar shows it. From API 90 its virtual
+// runner (`service`), and `token` with its `login` when the login has no
+// cloud token ('none') or a refused one ('dead'): the thread's token card.
+async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean; service?: string; token?: 'none' | 'dead'; login?: string }> {
   const row = await boxOfRunner(ctx, r);
-  return { state: row?.boxState.kind ?? 'expired', ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}), ...(row?.unreachableSince !== undefined ? { unreachable: true } : {}), ...(row?.unsure?.surfaced ? { unsure: true } : {}) };
+  const token = row ? await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique() : null;
+  const missing = !row ? undefined : !token ? ('none' as const) : token.tokenState.kind === 'dead' ? ('dead' as const) : undefined;
+  return {
+    state: row?.boxState.kind ?? 'expired',
+    ...(row?.wantsWakeAt !== undefined || row?.waitsForHours !== undefined ? { waiting: true } : {}),
+    ...(row?.unreachableSince !== undefined ? { unreachable: true } : {}),
+    ...(row?.unsure?.surfaced ? { unsure: true } : {}),
+    ...(row ? { service: row.serviceId as string } : {}),
+    ...(missing ? { token: missing, login: row!.login } : {}),
+  };
 }
 
 // API 29: the other runners on their own, so a heartbeat re-runs only this

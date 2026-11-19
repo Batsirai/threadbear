@@ -56,7 +56,8 @@ export async function later<T>(ms: number, f: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function boxBackend() {
+// opts.token false: the login has no cloud token, so the helper's box waits in needsToken.
+export async function boxBackend(opts: { token?: boolean } = {}) {
   process.env.RUNNER_KEY = OWNER;
   delete process.env.RUNNER_KEY_NEXT;
   process.env.BOX_SEAL_KEY = SEAL_KEY;
@@ -65,8 +66,10 @@ export async function boxBackend() {
   const a = actionCtx(b);
   const serviceId = await b.ctx.db.insert('runnerServices', { name: 'Cloud (Fly)', provider: 'fly', box: { cpus: 2, memoryMb: 4096 }, image: 'registry.fly.io/threadbear-box:1', limits: { ...boxes.BOX_LIMITS }, createdAt: Date.now() });
   const newBox = (threadId = THREAD, runnerId = BOX_RUNNER) => call(a, boxes.newBox, { serviceId, threadId, runnerId, login: LOGIN, repo: { origin: ORIGIN_WITH_TOKEN, subfolder: 'runner', baseBranch: 'main' } });
-  const boxId = await newBox();
   const setToken = (token = CLAUDE_TOKEN, login = LOGIN, key = OWNER) => call(a, boxes.setCloudToken, { key, login, token });
+  // A login with a cloud token, as a box's thread needs to start (boxMachine.ts needsToken).
+  if (opts.token !== false) await setToken();
+  const boxId = await newBox();
   const mint = async (threadId = THREAD, key = OWNER): Promise<string> => (await call(a, boxes.mintBootToken, { key, threadId })).bootToken;
   const exchange = (bootToken: string) => call(a, boxes.exchange, { bootToken });
   const report = (event: Record<string, unknown>, threadId = THREAD): Promise<boolean> => call(b.ctx, boxes.report, { threadId, event });

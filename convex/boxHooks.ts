@@ -34,7 +34,14 @@ export async function wakeIfAsleep(ctx: MutationCtx, runnerId: string, kind: str
     .query('boxes')
     .withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))
     .first();
-  if (!row || !WAKES_FROM.includes(row.boxState.kind)) return;
+  if (!row) return;
+  // Waiting for its login's cloud token: nothing to wake, but archiving it
+  // ends the wait (boxMachine.ts needsToken's ARCHIVE).
+  if (row.boxState.kind === 'needsToken') {
+    if (endsWait(kind, args)) await ctx.scheduler.runAfter(0, internal.boxes.archiveIfStill, { threadId: row.threadId });
+    return;
+  }
+  if (!WAKES_FROM.includes(row.boxState.kind)) return;
   // An archived one comes back only for what needs it running (unarchiving
   // it, a message), not for marking it seen or a title.
   if (ARCHIVED.includes(row.boxState.kind) && !wakesArchived(kind, args)) return;
@@ -57,6 +64,11 @@ export async function wakeIfPending(ctx: MutationCtx, runnerId: string, as: 'asl
 export function wakeLevelOf(kind: string, args: unknown): number | undefined {
   if (kind === 'save') return undefined;
   return wakesArchived(kind, args) ? 2 : 1;
+}
+
+// An archive of a thread whose box never started.
+function endsWait(kind: string, args: unknown): boolean {
+  return kind === 'update' && (args as { archive?: unknown } | null)?.archive === true;
 }
 
 export function wakesArchived(kind: string, args: unknown): boolean {

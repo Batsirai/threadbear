@@ -12,6 +12,7 @@ import { requestStateV } from './requestStates';
 import { clearStateV } from './clearStates';
 import { boxStateV } from './boxStates';
 import { requiredUnlessStepping } from './stepping';
+import { tokenStateV } from './cloudTokenStates';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
 // docs/protocol.md): "link" is readable by anyone with /s/<slug>; "off"
@@ -397,6 +398,8 @@ export const appSchema = defineSchema({
     .index('by_box_key', ['boxKeyHash'])
     .index('by_box_state', ['boxState.kind'])
     .index('by_service_state', ['serviceId', 'boxState.kind'])
+    // Boxes waiting on a login's cloud token (needsToken), released when one is set.
+    .index('by_login_state', ['login', 'boxState.kind'])
     .index('by_service_wants', ['serviceId', 'wantsWakeAt'])
     .index('by_service_hours', ['serviceId', 'waitsForHours'])
     .index('by_kept', ['keptRunningSince'])
@@ -439,6 +442,9 @@ export const appSchema = defineSchema({
     // When the token was made (it lasts a year), and when it was set here.
     madeAt: v.number(),
     setAt: v.number(),
+    // Its lifecycle (cloudTokenMachine.ts): valid, or dead once a box's
+    // turn on it was refused. Since API 90.
+    tokenState: requiredUnlessStepping('tokenState', tokenStateV),
   }).index('by_login', ['login']),
 
   // Runner keys (docs/protocol.md, "Runner keys"): each authenticates as its

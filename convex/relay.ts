@@ -377,8 +377,11 @@ export const queueCommand = mutation({
     if (!runner) throw new ConvexError({ kind: 'notFound', message: 'no such runner' });
     if (threadId !== undefined) {
       const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
-      if (!t) throw new ConvexError({ kind: 'notFound', message: 'no such thread' });
-      if (t.runnerId !== runnerId) throw forbidden("queue that: the thread isn't that runner's");
+      // A thread on a virtual runner has no row until its box writes one
+      // (it may be booting, or waiting for a cloud token): its box row says whose it is.
+      const owner = t?.runnerId ?? (await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique())?.runnerId;
+      if (owner === undefined) throw new ConvexError({ kind: 'notFound', message: 'no such thread' });
+      if (owner !== runnerId) throw forbidden("queue that: the thread isn't that runner's");
     } else if (kind !== 'create' && kind !== 'call') {
       throw new ConvexError({ kind: 'badArgs', message: `a ${kind} needs a thread` });
     } else if (kind === 'create' && runner.box) {

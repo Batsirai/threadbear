@@ -8179,7 +8179,7 @@ A box key may call:
 `pendingCommands`, `takeCommand`, `finishCommand`, `fileRequest`,
 `runnerRequest`, `closeRequest`, `moves`, `moveInfo`, `moveReady`,
 `moveFrozen`, `moveChunkUrl`, `movePacked`, `moveChunks`, `moveClaim`,
-`moveDone`, `moveFailed`, `boxSaved`
+`moveDone`, `moveFailed`, `boxSaved`, `tokenRefused`, `boxCloudToken`
 <!-- /box-calls -->
 
 ### Box mode

@@ -16,6 +16,9 @@ export const SAVE_MS = 10 * 60_000;
 export const WAKE_GRACE_MS = 15 * 60_000;
 
 export const boxStateV = v.union(
+  // Its login has no cloud token, or only a refused one: nothing is asked
+  // of the provider, and its create waits, until one is set (TOKEN_SET).
+  v.object({ kind: v.literal('needsToken'), since: v.number() }),
   // The service is asking the provider for the thread's first box.
   // `bootBy`: when it fails if no box has traded its boot token by then.
   v.object({ kind: v.literal('creating'), bootBy: v.number() }),

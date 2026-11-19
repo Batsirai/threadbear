@@ -16,7 +16,7 @@ import { ConvexError, v, type Infer } from 'convex/values';
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { box as boxMachine, command as commandMachine, machines, queued } from './machines';
+import { box as boxMachine, cloudToken as tokenMachine, command as commandMachine, machines, queued } from './machines';
 import { BOOT_MS } from './boxStates';
 import { checkRunnerId, forbidden, MACHINE_ID, runnerAuth, sha256, withoutCredentials } from './lib';
 import { commandArgs } from './relay';
@@ -96,15 +96,17 @@ const threadKeyPurpose = (threadId: string) => `threadKey:${threadId}`;
 
 // An action's own gate: actions have no database, so runnerAuth runs in a
 // query, under the action's own name (runnerAccess.ts ACCESS).
-async function actionAuth(ctx: ActionCtx, key: string, fn: string): Promise<void> {
-  await ctx.runQuery(internal.boxes.authorize, { key, fn });
+// A box's call through an action is read-only (`housekeeping`): a query
+// can't mark its attempt as holding work, and reading makes none.
+async function actionAuth(ctx: ActionCtx, key: string, fn: string, opts: { housekeeping?: boolean } = {}): Promise<void> {
+  await ctx.runQuery(internal.boxes.authorize, { key, fn, ...(opts.housekeeping ? { housekeeping: true } : {}) });
 }
 
 export const authorize = internalQuery({
-  args: { key: v.string(), fn: v.string() },
+  args: { key: v.string(), fn: v.string(), housekeeping: v.optional(v.boolean()) },
   returns: v.null(),
-  handler: async (ctx, { key, fn }) => {
-    await runnerAuth(ctx, key, fn);
+  handler: async (ctx, { key, fn, housekeeping }) => {
+    await runnerAuth(ctx, key, fn, { housekeeping: housekeeping === true });
     return null;
   },
 });
@@ -127,26 +129,105 @@ export const setCloudToken = action({
   },
 });
 
+// The sealed value and its times are the row's own fields; the machine's
+// SET (cloudTokenMachine.ts) makes it valid and releases the boxes waiting
+// on the login (releaseForToken).
 export const storeCloudToken = internalMutation({
   args: { login: v.string(), sealed: v.string(), madeAt: v.number() },
   returns: v.null(),
   handler: async (ctx, { login, sealed, madeAt }) => {
-    const now = Date.now();
+    // Strictly later than the last, so a box's refusal of the old one (by its setAt) never matches the new one.
     const row = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', login)).unique();
-    if (row) await ctx.db.patch(row._id, { sealed, madeAt, setAt: now });
-    else await ctx.db.insert('cloudTokens', { login, sealed, madeAt, setAt: now });
+    const now = Math.max(Date.now(), (row?.setAt ?? 0) + 1);
+    const r = row
+      ? (await ctx.db.patch(row._id, { sealed, madeAt, setAt: now }), await tokenMachine.send(ctx, row._id, { type: 'SET' }))
+      : await tokenMachine.create(ctx, { login, sealed, madeAt, setAt: now } as never, { type: 'SET' });
+    if (r.status !== 'done') throw conflict(`The token couldn't be set: ${r.reasons.join(' ')}`);
     return null;
   },
 });
 
-/** Which logins have a cloud token, and when each was made and set. Never the token. */
+// Boxes waiting for a token on the login go to creating (TOKEN_SET), a page
+// at a time; only while its token is still valid (one refused meanwhile
+// leaves them waiting). Not held to maxBoxes: a released box starts as a
+// new thread past the limit would have been refused, a known gap.
+const RELEASE_PAGE = 50;
+export const releaseForToken = machines.internalMutation({
+  args: { login: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { login }) => {
+    const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', login)).unique();
+    if (!token || token.tokenState.kind !== 'valid') return null;
+    const waiting = await ctx.db.query('boxes').withIndex('by_login_state', (q) => q.eq('login', login).eq('boxState.kind', 'needsToken')).take(RELEASE_PAGE);
+    for (const row of waiting) await boxMachine.send(ctx, row._id, { type: 'TOKEN_SET' });
+    if (waiting.length === RELEASE_PAGE) await ctx.scheduler.runAfter(0, internal.boxes.releaseForToken, { login });
+    return null;
+  },
+});
+
+/** Which logins have a cloud token, when each was made and set, and whether it's valid or dead. Never the token. */
 export const cloudTokens = query({
   args: { key: v.string() },
-  returns: v.array(v.object({ login: v.string(), madeAt: v.number(), setAt: v.number() })),
+  returns: v.array(v.object({ login: v.string(), madeAt: v.number(), setAt: v.number(), state: v.union(v.literal('valid'), v.literal('dead')) })),
   handler: async (ctx, { key }) => {
     await runnerAuth(ctx, key, 'cloudTokens');
     const rows = await ctx.db.query('cloudTokens').withIndex('by_login').collect();
-    return rows.map((r) => ({ login: r.login, madeAt: r.madeAt, setAt: r.setAt }));
+    return rows.map((r) => ({ login: r.login, madeAt: r.madeAt, setAt: r.setAt, state: r.tokenState.kind }));
+  },
+});
+
+/**
+ * A box's turn was refused with the cloud token it was given (a 401): the
+ * token is dead (REFUSED), and the thread's card asks Mike for a new one.
+ * `setAt` is the token the box has (the exchange's tokenSetAt, or the last
+ * boxCloudToken's): a refusal of an older one changes nothing. A box's key only.
+ */
+export const tokenRefused = mutation({
+  args: { key: v.string(), setAt: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { key, setAt }) => {
+    const caller = await runnerAuth(ctx, key, 'tokenRefused');
+    if (caller.owner || !caller.box) throw forbidden("say a box's token was refused: only the box's own key can");
+    const row = (await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', caller.box!.threadId)).unique())!;
+    const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique();
+    if (token) await tokenMachine.send(ctx, token._id, { type: 'REFUSED', setAt });
+    return null;
+  },
+});
+
+/**
+ * Its login's token for a box waiting after a refusal (Box mode, "A refused
+ * token"): the token and when it was set while it's valid, else null. A
+ * box's key only; reading it isn't work (no workAttempts).
+ */
+export const boxCloudToken = action({
+  args: { key: v.string() },
+  returns: v.union(v.null(), v.object({ token: v.string(), setAt: v.number() })),
+  handler: async (ctx, { key }): Promise<{ token: string; setAt: number } | null> => {
+    await actionAuth(ctx, key, 'boxCloudToken', { housekeeping: true });
+    const found: { login: string; sealed: string; setAt: number } | null = await ctx.runQuery(internal.boxes.boxTokenFor, { key });
+    if (!found) return null;
+    let token: string;
+    try {
+      token = new TextDecoder().decode(await unseal(await sealKey(), found.sealed, tokenPurpose(found.login)));
+    } catch {
+      throw new ConvexError({ kind: 'config', message: "The login's cloud token can't be unsealed with this deployment's BOX_SEAL_KEY." });
+    }
+    return { token, setAt: found.setAt };
+  },
+});
+
+export const boxTokenFor = internalQuery({
+  args: { key: v.string() },
+  returns: v.union(v.null(), v.object({ login: v.string(), sealed: v.string(), setAt: v.number() })),
+  handler: async (ctx, { key }) => {
+    const caller = await runnerAuth(ctx, key, 'boxCloudToken', { housekeeping: true });
+    if (caller.owner || !caller.box) throw forbidden("read a box's cloud token: only the box's own key can");
+    const row = await ctx.db.query('boxes').withIndex('by_threadId', (q) => q.eq('threadId', caller.box!.threadId)).unique();
+    if (!row) return null;
+    const token = await ctx.db.query('cloudTokens').withIndex('by_login', (q) => q.eq('login', row.login)).unique();
+    if (!token || token.tokenState.kind !== 'valid') return null;
+    return { login: token.login, sealed: token.sealed, setAt: token.setAt };
   },
 });
 
@@ -197,7 +278,8 @@ async function addBox(ctx: MutationCtx, a: NewBox): Promise<Id<'boxes'>> {
     { type: 'START' },
   );
   if (made.status !== 'done') throw conflict(`The box couldn't be made: ${made.reasons.join(' ')}`);
-  await ctx.scheduler.runAfter(0, internal.boxService.createBox, { boxId: made.id as Id<'boxes'> });
+  // One waiting for its login's cloud token (needsToken) is asked for once it's set (TOKEN_SET).
+  if (made.to === 'creating') await ctx.scheduler.runAfter(0, internal.boxService.createBox, { boxId: made.id as Id<'boxes'> });
   return made.id as Id<'boxes'>;
 }
 
@@ -326,6 +408,9 @@ const startArgs = {
   effort: v.optional(v.string()),
   permissionMode: v.optional(v.string()),
   plan: v.optional(v.boolean()),
+  // The folder and login on the Mac it was started from, for its sidebar row only (API 90).
+  cwd: v.optional(v.string()),
+  accountId: v.optional(v.string()),
 };
 
 /**
@@ -366,9 +451,38 @@ export const beginThread = internalMutation({
     await addBox(ctx, { serviceId: a.serviceId, threadId: a.threadId, runnerId: a.runnerId, login: a.login, repo: a.repo, sealedThreadKey: a.sealedThreadKey });
     // For its own thread (the box takes only that), from the main Mac.
     const commandId = await queued(ctx, { runnerId: a.runnerId, threadId: a.threadId, kind: 'create', args: { ...create, from: 'mac' }, createdAt: Date.now() });
+    // Listed at once, everywhere, before its box has written anything (it may wait a while for a token).
+    await ctx.db.insert('threadIndex', firstIndexRow(a));
     return { runnerId: a.runnerId, commandId };
   },
 });
+
+// The sidebar row a thread on a virtual runner has from its start: its first
+// line as title and preview, starting, until its box's runner writes its own.
+const INDEX_TITLE_CHARS = 120;
+const INDEX_PREVIEW_CHARS = 300;
+function firstIndexRow(a: { runnerId: string; threadId: string; text: string; model?: string; permissionMode?: string; plan?: boolean; cwd?: string; accountId?: string }): Omit<Doc<'threadIndex'>, '_id' | '_creationTime'> {
+  const line = a.text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  const now = new Date().toISOString();
+  const mode = a.plan ? 'plan' : a.permissionMode;
+  return {
+    runnerId: a.runnerId,
+    threadId: a.threadId,
+    title: line.slice(0, INDEX_TITLE_CHARS),
+    cwd: (a.cwd ?? '').slice(0, REPO_CHARS),
+    accountId: (a.accountId ?? '').slice(0, 200),
+    provider: 'claude',
+    ...(a.model ? { model: a.model.slice(0, 200) } : {}),
+    status: 'starting',
+    needsYou: false,
+    unread: false,
+    preview: line.slice(0, INDEX_PREVIEW_CHARS),
+    createdAt: now,
+    lastActivityAt: now,
+    ...(mode ? { permissionMode: mode.slice(0, 16) } : {}),
+    updatedMs: Date.now(),
+  };
+}
 
 // ------------------------------------------------------------ boot tokens (decision 5)
 
@@ -445,10 +559,13 @@ const exchanged = v.object({
   // The Claude login the box runs on, as its cloud token is kept (an email):
   // a token login writes no oauthAccount, so the box's runner is told it.
   login: v.string(),
+  // When the login's token was set (API 90): what the box names in
+  // tokenRefused, and what a newer one from boxCloudToken is newer than.
+  tokenSetAt: v.number(),
 });
 
 type Exchanged = Infer<typeof exchanged>;
-type Peeked = { login: string; threadId: string; sealedToken: string; sealedThreadKey: string };
+type Peeked = { login: string; threadId: string; sealedToken: string; sealedThreadKey: string; tokenSetAt: number };
 type Claimed = { runnerId: string; threadId: string; repo: Exchanged['repo']; save: Exchanged['save'] };
 type Replayed = Peeked & Claimed;
 const KEY_HASH = /^[0-9a-f]{64}$/;
@@ -496,7 +613,7 @@ export const exchange = action({
       } catch {
         throw new ConvexError({ kind: 'config', message: "The box's secrets can't be unsealed with this deployment's BOX_SEAL_KEY." });
       }
-      return { runnerId: again.runnerId, threadId: again.threadId, claudeToken, threadKey, repo: again.repo, save: again.save, login: again.login };
+      return { runnerId: again.runnerId, threadId: again.threadId, claudeToken, threadKey, repo: again.repo, save: again.save, login: again.login, tokenSetAt: again.tokenSetAt };
     }
     let claudeToken: string;
     let threadKey: string;
@@ -509,7 +626,7 @@ export const exchange = action({
     const boxKey = boxKeyHash === undefined ? BOX_KEY_PREFIX + randomHex(32) : undefined;
     const got: Claimed | null = await ctx.runMutation(internal.boxes.claimBoot, { bootHash, boxKeyHash: boxKeyHash ?? (await sha256(boxKey!)), sealedToken: peeked.sealedToken, sealedThreadKey: peeked.sealedThreadKey, ...(machineId !== undefined ? { machineId } : {}) });
     if (!got) throw refusedBoot();
-    return { ...(boxKey ? { boxKey } : {}), runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save, login: peeked.login };
+    return { ...(boxKey ? { boxKey } : {}), runnerId: got.runnerId, threadId: got.threadId, claudeToken, threadKey, repo: got.repo, save: got.save, login: peeked.login, tokenSetAt: peeked.tokenSetAt };
   },
 });
 
@@ -536,7 +653,7 @@ export const peekReplay = internalQuery({
   args: { bootHash: v.string(), boxKeyHash: v.string(), machineId: v.string() },
   returns: v.union(
     v.null(),
-    v.object({ login: v.string(), threadId: v.string(), sealedToken: v.string(), sealedThreadKey: v.string(), runnerId: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }), save: v.union(v.null(), v.object({ url: v.string(), at: v.number(), bytes: v.number() })) }),
+    v.object({ login: v.string(), threadId: v.string(), sealedToken: v.string(), sealedThreadKey: v.string(), tokenSetAt: v.number(), runnerId: v.string(), repo: v.object({ origin: v.string(), subfolder: v.string(), baseBranch: v.string() }), save: v.union(v.null(), v.object({ url: v.string(), at: v.number(), bytes: v.number() })) }),
   ),
   handler: async (ctx, { bootHash, boxKeyHash, machineId }) => {
     const row = await ctx.db.query('boxes').withIndex('by_box_key', (q) => q.eq('boxKeyHash', boxKeyHash)).first();
@@ -544,19 +661,19 @@ export const peekReplay = internalQuery({
     if (!row.exchanged || row.exchanged.bootHash !== bootHash || row.exchanged.until <= Date.now() || row.keyMachineId !== machineId) return null;
     const token = await cloudToken(ctx, row.login);
     const url = row.save ? await ctx.storage.getUrl(row.save.storageId) : null;
-    return { login: row.login, threadId: row.threadId, sealedToken: token.sealed, sealedThreadKey: row.sealedThreadKey, runnerId: row.runnerId, repo: row.repo, save: row.save && url ? { url, at: row.save.at, bytes: row.save.bytes } : null };
+    return { login: row.login, threadId: row.threadId, sealedToken: token.sealed, sealedThreadKey: row.sealedThreadKey, tokenSetAt: token.setAt, runnerId: row.runnerId, repo: row.repo, save: row.save && url ? { url, at: row.save.at, bytes: row.save.bytes } : null };
   },
 });
 
 /** What the exchange unseals, read without using the boot token up. A login with no cloud token refuses here. */
 export const peekBoot = internalQuery({
   args: { bootHash: v.string() },
-  returns: v.union(v.null(), v.object({ login: v.string(), threadId: v.string(), sealedToken: v.string(), sealedThreadKey: v.string() })),
+  returns: v.union(v.null(), v.object({ login: v.string(), threadId: v.string(), sealedToken: v.string(), sealedThreadKey: v.string(), tokenSetAt: v.number() })),
   handler: async (ctx, { bootHash }) => {
     const row = await bootBox(ctx, bootHash);
     if (!row) return null;
     const token = await cloudToken(ctx, row.login);
-    return { login: row.login, threadId: row.threadId, sealedToken: token.sealed, sealedThreadKey: row.sealedThreadKey };
+    return { login: row.login, threadId: row.threadId, sealedToken: token.sealed, sealedThreadKey: row.sealedThreadKey, tokenSetAt: token.setAt };
   },
 });
 

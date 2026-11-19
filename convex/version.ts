@@ -453,4 +453,12 @@
 //    action phone:webPushKey ({ token }) gives the phone this deployment's
 //    VAPID public key to register with. The app registers this way only
 //    with a backend of 93 or later.
-export const API_VERSION = 93;
+// 94: virtual runners from the Mac (docs/virtual-runners.md, slice 5): a
+//    cloud token is a state machine (valid, dead), boxes:cloudTokens says
+//    which; a box whose login has none waits (needsToken) until one is set;
+//    boxes:startThread takes cwd and accountId and writes the thread's
+//    sidebar row; the exchange gives tokenSetAt; a box says a refused token
+//    (boxes:tokenRefused) and fetches the new one (boxes:boxCloudToken);
+//    otherRunnersList's box carries service, token and login. A runner
+//    offers virtual runners only on a backend of 94 or later.
+export const API_VERSION = 94;
