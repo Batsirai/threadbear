@@ -160,8 +160,10 @@ class OneWorker {
 
   private start(): Worker {
     if (this.worker) return this.worker;
-    // The runner's environment as it is at each call (HOME, a test's change).
-    const worker = new Worker(this.script, { env: SHARE_ENV });
+    // The runner's environment as it is at each call (HOME, a test's change),
+    // and none of its node flags: the runner has none, and a preload (the
+    // tests' sets the umask, which a worker may not) would stop it loading.
+    const worker = new Worker(this.script, { env: SHARE_ENV, execArgv: [] });
     worker.unref();
     // A worker that hasn't loaded in this long counts as one that can't.
     const loading = setTimeout(() => {
