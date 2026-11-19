@@ -22,7 +22,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConvexAdminError, convexEnv, prodArgs, readConvexAdmin } from '../src/convex-admin.ts';
 import { Fail, stepRetryingNetwork } from './deploy-steps.mjs';
-import { backfillsAt, lastJson, STEPPING_FILE, withStepping } from './backend-stones.mjs';
+import { backfillsAt, lastJson, rearmCursor, STEPPING_FILE, withStepping } from './backend-stones.mjs';
 
 const HELP = `deploy-backend.mjs: deploy convex/ and web/ at a commit to the runner's Convex deployment, if they changed.
 
@@ -375,8 +375,13 @@ function main(argv) {
         if (r.status !== 0) {
           failed('timers', new Fail(`Couldn't deliver again the timers that failed while a machine was off: ${convexError(r)}`));
         }
-        const next = lastJson(r.stdout);
-        if (typeof next !== 'string') break;
+        let next;
+        try {
+          next = rearmCursor(r.stdout);
+        } catch (e) {
+          failed('timers', new Fail(`Delivering again the timers that failed: ${e.message}`));
+        }
+        if (next === null) break;
         if (i > 2000) failed('timers', new Fail('Delivering again the timers that failed was still going after 2,000 pages.'));
         cursor = next;
       }

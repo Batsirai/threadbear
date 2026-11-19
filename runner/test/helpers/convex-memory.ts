@@ -308,7 +308,9 @@ export function memoryBackend(root = CONVEX) {
           // A page in that order, its cursor the last job's id.
           async paginate({ numItems, cursor }: { numItems: number; cursor: string | null }) {
             const rest = list(desc);
-            const from = cursor ? rest.findIndex((j) => j._id === cursor) + 1 : 0;
+            const at = cursor ? rest.findIndex((j) => j._id === cursor) : -1;
+            if (cursor && at < 0) throw new Error(`convex-memory: no job ${cursor} for a page's cursor`);
+            const from = at + 1;
             const page = rest.slice(from, from + numItems);
             page.forEach((j) => read(j as never));
             return { page, isDone: from + page.length >= rest.length, continueCursor: page.at(-1)?._id ?? cursor ?? '' };
