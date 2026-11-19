@@ -28,20 +28,26 @@ func windowAt(_ windows: [[String: Any]], point: CGPoint, displays: [CGRect], do
     // BetterDisplay's own display-sized overlay (its software dimming), at
     // the top window level, is the same case on Tinker Desk (19 Nov): only
     // the real app's, named as it names them, and with the same AX proof.
-    let ownerPID = top[kCGWindowOwnerPID as String] as? Int32
-    let isDock = dockPID != nil && ownerPID == dockPID
-        && top[kCGWindowOwnerName as String] as? String == "Dock"
-        && top[kCGWindowName as String] as? String == "Dock"
-        && top[kCGWindowLayer as String] as? Int == 20
-    let isBetterDisplay = ownerPID.map(betterDisplayPIDs.contains) ?? false
-        && top[kCGWindowOwnerName as String] as? String == "BetterDisplay"
-        && (top[kCGWindowName as String] as? String)?.hasPrefix("BetterDisplay Overlay for Display ") == true
-    guard isDock || isBetterDisplay,
-          let bounds = frame(top), displays.contains(bounds),
-          // Moving the pointer to an edge can reveal an auto-hidden Dock
-          // after this preflight. Never allow that through the exception.
-          bounds.insetBy(dx: 24, dy: 24).contains(point),
-          let beneath = covering.dropFirst().first,
+    // Both can be up at once (BetterDisplay's over the Dock's, 19 Nov), so
+    // skip each in turn; the first other window must still be an ordinary
+    // one that AX proves input reaches.
+    func passThrough(_ w: [String: Any]) -> Bool {
+        let ownerPID = w[kCGWindowOwnerPID as String] as? Int32
+        let isDock = dockPID != nil && ownerPID == dockPID
+            && w[kCGWindowOwnerName as String] as? String == "Dock"
+            && w[kCGWindowName as String] as? String == "Dock"
+            && w[kCGWindowLayer as String] as? Int == 20
+        let isBetterDisplay = ownerPID.map(betterDisplayPIDs.contains) ?? false
+            && w[kCGWindowOwnerName as String] as? String == "BetterDisplay"
+            && (w[kCGWindowName as String] as? String)?.hasPrefix("BetterDisplay Overlay for Display ") == true
+        guard isDock || isBetterDisplay, let bounds = frame(w) else { return false }
+        // Moving the pointer to an edge can reveal an auto-hidden Dock
+        // after this preflight. Never allow that through the exception.
+        return displays.contains(bounds) && bounds.insetBy(dx: 24, dy: 24).contains(point)
+    }
+    let overlays = covering.prefix(while: passThrough)
+    guard !overlays.isEmpty,
+          let beneath = covering.dropFirst(overlays.count).first,
           beneath[kCGWindowLayer as String] as? Int == 0,
           let pid = beneath[kCGWindowOwnerPID as String] as? Int32,
           hitPID() == pid else { return top }
