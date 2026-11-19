@@ -582,5 +582,8 @@ test('replyAsksNudge quotes the sentence, clipped, and says the reply stands', (
   const n = replyAsksNudge('Which do you want to start with?');
   assert.match(n, /^Your reply closes by asking the user something \("Which do you want to start with\?"\)/);
   assert.match(n, /Your message above is the reply: don't write it again/);
+  // It names the field the ask goes in: told "as its ask, with ... options",
+  // a thread sent ask and options as end_turn's own keys (19 Nov).
+  assert.match(n, /asks: \[\{ question, options: \[\{ label \}\] \}\]/);
   assert.ok(replyAsksNudge(`Should I ${'really '.repeat(60)}do it?`).length < 800);
 });

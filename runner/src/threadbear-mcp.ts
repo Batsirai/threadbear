@@ -26,7 +26,7 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
+import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, offersToTakeItBack, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -1733,7 +1733,11 @@ export function buildThreadbearTools(
     const openGone = (r: Result): Result => (!r.isError && r.content[0]?.text.startsWith(`${ENDED} is done`) ? ok(r.content.map((c) => c.text).join('\n') + OPEN_GONE) : r);
     const sayingOpenGone = (t: typeof today, args: unknown): typeof today =>
       droppedOpenLines(args) ? ({ ...t, handler: (async (a: unknown, extra: unknown) => openGone(await (t.handler as (a: unknown, extra: unknown) => Promise<Result>)(a, extra))) as never }) : t;
-    if (codex) return Object.assign(today, { formFor: (args: unknown) => sayingOpenGone(otherForm(args) ? other : today, args) });
+    const refusingStray = (t: typeof today, args: unknown): typeof today => {
+      const stray = strayAskFields(args);
+      return stray.length ? ({ ...t, handler: (async () => fail(endTurnMisfit(strayAskProblem(stray, oneReply), oneReply))) as never }) : t;
+    };
+    if (codex) return Object.assign(today, { formFor: (args: unknown) => refusingStray(sayingOpenGone(otherForm(args) ? other : today, args), args) });
     // Unlike Codex, which runs the other form's handler, Claude's goes by
     // how its CLI was started: it ends the turn at an accepted end_turn only
     // with bullets (adapter.ts, terminalMcpTools), so only today's handler
@@ -1749,6 +1753,8 @@ export function buildThreadbearTools(
     return Object.assign(today, {
       inputSchema: z.looseObject(published) as never,
       handler: (async (args: unknown, extra: unknown) => {
+        const stray = strayAskFields(args);
+        if (stray.length) return fail(endTurnMisfit(strayAskProblem(stray, oneReply), oneReply));
         const fits = z.object((otherForm(args) ? shapes.other : shapes.today) as z.ZodRawShape).safeParse(args);
         if (!fits.success) return fail(endTurnMisfit(z.prettifyError(fits.error), oneReply));
         const r = await run(fits.data, extra);

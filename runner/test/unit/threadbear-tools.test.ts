@@ -1365,6 +1365,35 @@ test('end_turn asks once for a card with answers to be read as the user will, in
   }
 });
 
+test('end_turn refuses an ask written outside asks, naming where it goes (thread f0dd80e2, 19 Nov)', async () => {
+  for (const oneReply of [true, false]) {
+    const h = makeHarness();
+    const { thread, s } = start(h);
+    s.text('m1', 'Pushed the fix. Should I build secret_to next?');
+    const t = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, undefined, undefined, { oneReply: () => oneReply, sleep: async () => undefined, plainCardNote: false }).find((x) => x.name === 'end_turn')!;
+    const call = async (args: Record<string, unknown>) => {
+      const r = (await t.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
+      return { text: r.content.map((c) => c.text).join('\n'), error: Boolean(r.isError) };
+    };
+    // What the thread sent: the question and its answers on end_turn itself.
+    const stray = { needs: 'you', ask: 'Build secret_to next?', options: '["File", "Keychain", "Not yet"]' };
+    toolCall(s, 'e1', END_TURN, stray);
+    const refused = await call(stray);
+    assert.equal(refused.error, true, refused.text);
+    assert.match(refused.text, /^Not ended: those arguments don't fit end_turn\./);
+    assert.match(refused.text, /`ask`, `options` aren't end_turn's own fields/);
+    assert.match(refused.text, /inside asks/);
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: false, text: refused.text, truncated: false, images: [] } });
+    // Written as asks, it's taken.
+    const asks = oneReply
+      ? { needs: 'you', asks: [{ question: 'Build secret_to next?', options: [{ label: 'Go' }, { label: 'Not yet' }] }] }
+      : { needs: 'you', summary: ['Pushed the fix.'], asks: [{ action: 'Build secret_to next?', why: 'It keeps keys out of output.', options: ['Go', 'Not yet'] }] };
+    toolCall(s, 'e2', END_TURN, asks);
+    const taken = await call(asks);
+    assert.equal(taken.error, false, taken.text);
+  }
+});
+
 test('bullet replies off: bullets alone are refused, and the summary gives way to the message', async () => {
   const h = makeHarness(undefined, { bulletReplies: false });
   const { thread, s } = start(h);

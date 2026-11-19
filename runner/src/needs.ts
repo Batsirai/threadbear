@@ -805,6 +805,23 @@ export function endTurnIsOneReply(result: { ok: boolean; text: string }): boolea
 // first loaded, and ToolSearch shows that one too (threadbear-mcp.ts, endTurn).
 // An agent on 1 Nov 2026 got a bare zod error and had to read the source
 // (thread 1b770c6a).
+// An ask's own fields written on end_turn itself, not inside asks. The
+// schema lets unknown keys through, so they were dropped without a word: on
+// 19 Nov a thread answering the reply-asks nudge sent { needs: "you", ask,
+// options } and its two questions came out as a "Needs you" with no card at
+// all (thread f0dd80e2). Refused, naming where they go.
+const ASK_FIELDS = ['ask', 'question', 'action', 'why', 'options', 'suggested'];
+export function strayAskFields(input: unknown): string[] {
+  if (!input || typeof input !== 'object') return [];
+  const o = input as Record<string, unknown>;
+  return ASK_FIELDS.filter((k) => o[k] !== undefined);
+}
+export function strayAskProblem(fields: string[], oneReply: boolean): string {
+  const named = fields.map((f) => `\`${f}\``).join(', ');
+  const inside = oneReply ? 'asks: [{ question, options: [{ label, does }] }]' : 'asks: [{ action, why, options: [...] }]';
+  return `${named} ${fields.length === 1 ? "isn't one of end_turn's own fields" : "aren't end_turn's own fields"}, so the card would have no ask. Each ask goes inside asks, one object per thing to answer: ${inside}.`;
+}
+
 export function endTurnMisfit(problem: string, oneReply: boolean): string {
   const shape = oneReply
     ? '{ headline?, needs?, asks?: { question, options?: { label, does? }[], suggested?, links? }[], next?, archive?, snooze?, waitFor? }, then write your reply after it, as ordinary text: that reply is the only text the user sees from the turn.'
@@ -907,7 +924,7 @@ export function replyAsksNudge(sentence: string): string {
   const quoted = sentence.length > 160 ? `${sentence.slice(0, 160)}…` : sentence;
   return (
     `${REPLY_ASKS} ("${quoted}"), but your end_turn said nothing is needed, so the thread shows as done with no card to answer on. ` +
-    'If you need their answer before you can go on, call end_turn again now with needs "you" and that as its ask, with its likely answers as options (a go-ahead takes "Go" and "Not yet"). ' +
+    'If you need their answer before you can go on, call end_turn again now with needs "you" and that question in asks, one entry per question, each with its likely answers: asks: [{ question, options: [{ label }] }] (a go-ahead takes "Go" and "Not yet"). ' +
     "Your message above is the reply: don't write it again, and write nothing else. " +
     'If it needs no answer from them, stop here with no more text.'
   );
