@@ -89,8 +89,10 @@ export class GpuiDriver implements Driver {
 
   private appProcess?: ChildProcess;
   private display?: string;
+  /** This driver's folder on the home disk, on a remote.sh run (launchApp). */
+  private homeDisk?: string;
 
-  private child(cmd: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string): ChildProcess {
+  private child(cmd: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
     // A process group of its own: `dbus-run-session`'s bus and the portals it
     // starts are grandchildren that outlive a plain kill, and the cloud box
     // ended up with thousands of them (9 Nov, "can't spawn worker thread").
@@ -99,7 +101,7 @@ export class GpuiDriver implements Driver {
     const registry = process.platform === 'win32' ? undefined : process.env.THREADBEAR_PERF_CHILDREN;
     const c = spawn(registry ? 'perl' : cmd,
       registry ? [path.join(root, 'scripts/perf-children.pl'), '--child', registry, cmd, ...args] : args,
-      { env: { ...process.env, ...env }, cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+      { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     this.commands.set(c, cmd);
     c.stdout?.on('data', (d) => (this.log += d));
     c.stderr?.on('data', (d) => (this.log += d));
@@ -146,17 +148,18 @@ export class GpuiDriver implements Driver {
       THREADBEAR_REDUCE_MOTION: process.env.TB_REDUCE_MOTION ?? 'off',
       ...specShell(),
     };
-    // On a remote.sh run, the app's temp folder, working folder and (unless
-    // the run chose one) web runtime go on the home disk: the Chromium
-    // helpers it starts inherit the first two, and on Tinker Desk remote.sh's
-    // are on an external SSD that every new build's helpers asked macOS for,
-    // with nobody at the screen to answer (19 Nov; web-runtime.ts).
-    let cwd: string | undefined;
+    // On a remote.sh run, the app's temp folder and (unless the run chose
+    // one) web runtime go on the home disk: the Chromium helpers it starts
+    // run from the runtime and inherit the temp folder, and on Tinker Desk
+    // remote.sh's are on an external SSD that every new build's helpers asked
+    // macOS for, with nobody at the screen to answer (19 Nov; web-runtime.ts).
+    // One of each per driver, kept across its relaunches: two apps can't
+    // share a Chromium profile.
     if (process.env.THREADBEAR_WEB_RUNTIME_PARENT) {
-      cwd = runtimeParent();
-      env.TMPDIR = path.join(cwd, `app-tmp-${process.pid}`);
+      this.homeDisk ??= fs.mkdtempSync(path.join(runtimeParent(), 'tb-driver-'));
+      env.TMPDIR = path.join(this.homeDisk, 'tmp');
       fs.mkdirSync(env.TMPDIR, { recursive: true });
-      if (!process.env.THREADBEAR_WEB_RUNTIME_DIR) env.THREADBEAR_WEB_RUNTIME_DIR = path.join(cwd, `web-runtime-${process.pid}`);
+      if (!process.env.THREADBEAR_WEB_RUNTIME_DIR) env.THREADBEAR_WEB_RUNTIME_DIR = path.join(this.homeDisk, 'web-runtime');
     }
     if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
       // A server: a virtual screen, and a session bus of its own for the
@@ -166,9 +169,9 @@ export class GpuiDriver implements Driver {
         this.child('Xvfb', [this.display, '-screen', '0', '1400x900x24'], {});
         await sleep(400);
       }
-      this.appProcess = this.child('dbus-run-session', ['--', path.resolve(binary)], { ...env, DISPLAY: this.display, NO_AT_BRIDGE: '1', LIBGL_ALWAYS_SOFTWARE: '1' }, cwd);
+      this.appProcess = this.child('dbus-run-session', ['--', binary], { ...env, DISPLAY: this.display, NO_AT_BRIDGE: '1', LIBGL_ALWAYS_SOFTWARE: '1' });
     } else {
-      this.appProcess = this.child(path.resolve(binary), [], env, cwd);
+      this.appProcess = this.child(binary, [], env);
     }
     try {
       await waitForFile(file, 'The app', 30_000);
@@ -236,6 +239,7 @@ export class GpuiDriver implements Driver {
     if (!fs.existsSync(binary)) throw new Error(`No GPUI app at ${binary}: cargo build -p threadbear-gpui --features automation`);
     // TB_RUNNER_HOME points at a real runner's data folder (a dev runner's), for
     // a one-off check that the app works with the real thing and not just the mock.
+    this.homeDisk = undefined;
     this.home = process.env.TB_RUNNER_HOME ?? fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tb-spec-'));
     const ready = path.join(this.home, 'mock-ready');
     // TB_MOCK_FIXTURES swaps the demo threads for that folder's, for one-off checks.
@@ -430,5 +434,7 @@ export class GpuiDriver implements Driver {
     }
     await sleep(100);
     if (this.home && !process.env.TB_RUNNER_HOME) await fs.promises.rm(this.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    if (this.homeDisk) await fs.promises.rm(this.homeDisk, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    this.homeDisk = undefined;
   }
 }

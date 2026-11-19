@@ -289,8 +289,8 @@ mkdir -p "\$TMPDIR"
 # helpers as apps in their own right: run from that disk, each new build's
 # Threadbear Helper asked macOS for it, with nobody at the screen to answer,
 # and the prompt held Desk Runner's own reads too (19 Nov). The specs' driver
-# also gives the app a temp and working folder there (features/support/gpui.ts),
-# as the helpers inherit both. That disk is the small one, so this checkout's
+# also gives the app its temp folder there (features/support/gpui.ts), as the
+# helpers inherit it. That disk is the small one, so this checkout's
 # folder is emptied as each run starts and ends (its runs take turns), and
 # another checkout's, left by a run that was killed, once a day old.
 export THREADBEAR_WEB_RUNTIME_PARENT="\$HOME/.cache/threadbear-check/web-runtimes/$key"
