@@ -443,7 +443,7 @@ test('a long queue of looks at a folder that just got stuck all fail at once, on
   const after = off.claudeCommands('/x/ok', dir, [false], 'urgent');
   assert.match(await first, /took over/);
   const all = await Promise.all(queued);
-  assert.ok(all.every((m) => /still stuck/.test(m)), all.find((m) => !/still stuck/.test(m)));
+  assert.ok(all.every((m) => /still stuck/.test(m)), all.find((m) => !/still stuck/.test(m)) ?? "");
   assert.deepEqual(await after, ['/x/ok']);
 });
 
