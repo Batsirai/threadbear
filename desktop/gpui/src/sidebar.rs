@@ -2763,9 +2763,13 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Win
             // scrolled to first, as a person would, so the click's middle
             // lands on it (settings_window::scroll_into_view). Partly counts
             // as shown above, with its middle maybe past the pane's edge.
-            if cmd["settings"].as_bool() == Some(true) {
+            // The PR tab's Close without merging is the same, below the
+            // pane's bottom on a small screen.
+            let settings = cmd["settings"].as_bool() == Some(true);
+            if settings || found.is_empty() {
                 let target = found.last().cloned().or_else(|| window.elements().into_iter().filter(|e| e.label().is_some_and(&matches)).last());
-                if target.is_some_and(|t| crate::settings_window::scroll_into_view(app, t.bounds(), cx)) {
+                let scrolled = |t: Bounds<Pixels>| if settings { crate::settings_window::scroll_into_view(app, t, cx) } else { app.read(cx).side.read(cx).prs.scroll_into_view(t) };
+                if target.is_some_and(|t| scrolled(t.bounds())) {
                     window.refresh();
                     window.render_frame(cx);
                     found = shown(window);
