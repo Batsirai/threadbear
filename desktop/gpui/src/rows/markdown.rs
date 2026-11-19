@@ -134,6 +134,46 @@ pub(crate) fn pictures(text: &str, local: bool) -> std::borrow::Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// `![title](/path/page.html)` in this Mac's own reply, with the livePages
+/// experiment on: a fenced block the live page card draws (live_pages.rs),
+/// rather than a link. On its own, with a blank line each side, as a card
+/// sits between paragraphs.
+pub(crate) fn live_pages(text: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if !text.contains("![") || !text.contains(".htm") {
+        return Cow::Borrowed(text);
+    }
+    let Ok(tree) = markdown::to_mdast(text, &markdown::ParseOptions::gfm()) else { return Cow::Borrowed(text) };
+    let mut swaps: Vec<(usize, usize, String)> = Vec::new();
+    collect_images(&tree, &mut |image| {
+        let Some(at) = &image.position else { return };
+        let Some(path) = picture_path(&image.url) else { return };
+        let path = path.to_string_lossy().into_owned();
+        let lower = path.to_ascii_lowercase();
+        if !(lower.ends_with(".html") || lower.ends_with(".htm")) || path.contains(['\n', '\r', '`']) {
+            return;
+        }
+        let title: String = image.alt.chars().map(|c| if c == '\n' || c == '\r' || c == '`' { ' ' } else { c }).collect();
+        swaps.push((at.start.offset, at.end.offset, format!("\n\n```{}\n{path}\n{}\n```\n\n", crate::live_pages::fence(), title.trim())));
+    });
+    if swaps.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    swaps.sort_by_key(|s| s.0);
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut at = 0;
+    for (start, end, block) in swaps {
+        if start < at || end > text.len() || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            continue;
+        }
+        out.push_str(&text[at..start]);
+        out.push_str(&block);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    Cow::Owned(out)
+}
+
 fn collect_images(node: &markdown::mdast::Node, found: &mut impl FnMut(&markdown::mdast::Image)) {
     if let markdown::mdast::Node::Image(image) = node {
         found(image);
@@ -755,7 +795,7 @@ const DOCUMENTS_KEPT: usize = 600;
 
 #[cfg(test)]
 mod tests {
-    use super::{dead_file_links, looks_like_path, pictures, prepare};
+    use super::{dead_file_links, live_pages, looks_like_path, pictures, prepare};
 
     #[test]
     fn windows_pictures_name_a_drive_file_before_any_file_access() {
@@ -831,6 +871,28 @@ mod tests {
         let plain = "No links to files here, [web](https://x.dev).";
         assert!(matches!(dead_file_links(plain, true), std::borrow::Cow::Borrowed(_)));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_page_in_a_reply_becomes_a_live_page_card() {
+        let fence = crate::live_pages::fence();
+        assert_eq!(live_pages("Turn it: ![Garden lights](/w/garden.html) there"), format!("Turn it: \n\n```{fence}\n/w/garden.html\nGarden lights\n```\n\n there"));
+        assert_eq!(live_pages("![](file:///w/a%20b.htm)"), format!("\n\n```{fence}\n/w/a b.htm\n\n```\n\n"));
+        assert_eq!(live_pages("![shot](/w/a.png) ![web](https://x.io/p.html)"), "![shot](/w/a.png) ![web](https://x.io/p.html)", "pictures and web pages aren't pages here");
+        assert_eq!(live_pages("`![g](/w/g.html)` in code"), "`![g](/w/g.html)` in code");
+        let fenced = live_pages("![g](/w/g.html)").into_owned();
+        let tree = markdown::to_mdast(&fenced, &markdown::ParseOptions::gfm()).unwrap();
+        let mut codes = Vec::new();
+        fn walk(n: &markdown::mdast::Node, out: &mut Vec<(Option<String>, String)>) {
+            if let markdown::mdast::Node::Code(c) = n {
+                out.push((c.lang.clone(), c.value.clone()));
+            }
+            for ch in n.children().into_iter().flatten() {
+                walk(ch, out);
+            }
+        }
+        walk(&tree, &mut codes);
+        assert_eq!(codes, vec![(Some(fence.to_owned()), "/w/g.html\ng".to_owned())]);
     }
 
     #[test]

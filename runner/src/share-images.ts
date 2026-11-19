@@ -180,16 +180,34 @@ export function imagesInEvent(e: PersistedEvent, home = os.homedir()): ShareImag
   return [];
 }
 
-// A file's bytes, at most SHARE_IMAGE_BYTES, or why not.
+// A file's bytes, at most SHARE_IMAGE_BYTES, or why not. Opened without
+// waiting (a FIFO named .png or .html would hold the runner up for good),
+// checked to be a regular file on the open descriptor (a link to /dev/zero
+// would read forever), and read no further than the cap whatever its size
+// said a moment before.
 function readCapped(file: string): { bytes: Uint8Array } | { skip: string } {
-  let size: number;
+  let fd: number;
   try {
-    size = fs.statSync(file).size;
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   } catch {
     return { skip: 'the file is gone' };
   }
-  if (size > SHARE_IMAGE_BYTES) return { skip: `it's ${Math.round(size / 1024 / 1024)} MB` };
-  return { bytes: new Uint8Array(fs.readFileSync(file)) };
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return { skip: "it can't be read" };
+    if (st.size > SHARE_IMAGE_BYTES) return { skip: `it's ${Math.round(st.size / 1024 / 1024)} MB` };
+    const bytes = Buffer.alloc(Math.min(st.size, SHARE_IMAGE_BYTES) + 1);
+    let got = 0;
+    while (got < bytes.length) {
+      const n = fs.readSync(fd, bytes, got, bytes.length - got, got);
+      if (n === 0) break;
+      got += n;
+    }
+    if (got > SHARE_IMAGE_BYTES) return { skip: 'it grew past 10 MB' };
+    return { bytes: new Uint8Array(bytes.subarray(0, got)) };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 // A shared thread's pictures come only from its media folder in the data
@@ -348,7 +366,17 @@ export function readReplyImage(file: string): { bytes: Uint8Array; mediaType: st
   }
   if ('skip' in read) return read;
   const buf = Buffer.from(read.bytes);
-  if (isPageName(file)) return sniffPage(read.bytes) ? { bytes: read.bytes, mediaType: PAGE_TYPE } : { skip: "it isn't a page" };
+  if (isPageName(file)) {
+    // By its real name too: x.html linked to a .xml or .plist isn't a page
+    // (Gemini's second review), as the Mac's open gate has it.
+    let real: string;
+    try {
+      real = fs.realpathSync(file);
+    } catch {
+      return { skip: 'the file is gone' };
+    }
+    return isPageName(real) && sniffPage(read.bytes) ? { bytes: read.bytes, mediaType: PAGE_TYPE } : { skip: "it isn't a page" };
+  }
   const info = sniffImage(buf) ?? sniffVideo(buf);
   if (!info) return { skip: "it isn't a picture" };
   return { bytes: read.bytes, mediaType: info.mediaType, ...(info.width ? { width: info.width } : {}), ...(info.height ? { height: info.height } : {}) };

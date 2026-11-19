@@ -401,7 +401,12 @@ data class MessageImage(
     val url: String,
     val width: Int? = null,
     val height: Int? = null,
+    /** What it is (API 95): text/html for a live page, which this app doesn't run yet. */
+    val mediaType: String? = null,
 ) {
+    /** A live page an agent showed in its reply (the livePages experiment). */
+    val isPage: Boolean get() = mediaType == "text/html"
+
     companion object {
         fun read(o: JsonObject) = MessageImage(
             seq = o.needNum("seq").wholeCount() ?: throw BadRow("Not a seq"),
@@ -410,6 +415,7 @@ data class MessageImage(
             url = o.needStr("url"),
             width = o.num("width")?.wholeCount(),
             height = o.num("height")?.wholeCount(),
+            mediaType = o.str("mediaType"),
         )
     }
 }

@@ -460,6 +460,7 @@ let connectors = {
   ],
 };
 addDemoProjects();
+if (process.env.TB_MOCK_LIVE_PAGES) addLivePageDemo(process.env.TB_MOCK_LIVE_PAGES);
 // The experiments the mock's hello says are on: Decisions on the Projects
 // page with TB_MOCK_DECISIONS, nested threads with TB_MOCK_NESTED, and the
 // done card's Archive menu with TB_MOCK_INBOX_GUESS.
@@ -471,7 +472,27 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_INBOX_GUESS ? ['inboxGuess'] : []),
     // PR links opening as a tab in the pane, with TB_MOCK_PRS.
     ...(process.env.TB_MOCK_PRS ? ['inlinePrs'] : []),
+    // A live page's card, with TB_MOCK_LIVE_PAGES (addLivePageDemo).
+    ...(process.env.TB_MOCK_LIVE_PAGES ? ['livePages'] : []),
   ];
+}
+
+// TB_MOCK_LIVE_PAGES=<an .html file>: the livePages experiment on, and
+// demo_live_page, a thread whose reply shows that page as a live page.
+function addLivePageDemo(page) {
+  const id = 'demo_live_page';
+  const at = new Date(Date.now() - 5 * 60_000).toISOString();
+  const summary = {
+    id, title: 'Show the garden lights', cwd: path.dirname(page), accountId: 'claude-main', provider: 'claude',
+    permissionMode: 'full', status: 'idle', live: false, needsYou: false, createdAt: at, updatedAt: at, lastActivityAt: at,
+    preview: 'Here it is with the effect running.', lastSeq: 3, lastSeenSeq: 3,
+  };
+  const events = [
+    { seq: 1, ts: at, threadId: id, turnId: 't0', type: 'user.message', text: 'Can I see the stairs strings with an effect running?', images: [] },
+    { seq: 2, ts: at, threadId: id, turnId: 't0', type: 'assistant.text', itemId: 'm1', text: `Here it is with the effect running. Drag to turn it, scroll to zoom.\n\n![Garden lights](${page})\n\nIt's one file, so your phone gets it too.` },
+    { seq: 3, ts: at, threadId: id, turnId: 't0', type: 'turn.completed', outcome: 'completed', durationMs: 72000, needs: 'nothing' },
+  ];
+  threads.set(id, { summary, events, inProgress: new Map(), timers: [] });
 }
 
 // The inlinePrs experiment's GitHub, made up: one open PR whose checks

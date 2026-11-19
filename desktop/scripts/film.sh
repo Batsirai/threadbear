@@ -4,7 +4,7 @@
 # on Tinker Desk's desktop, recorded at 2x. Run it from the M5; everything
 # that shows a window happens on Tinker Desk, never here.
 #
-#   desktop/scripts/film.sh start [--turns FILE] [--fixtures DIR]... [--size 1240x820]
+#   desktop/scripts/film.sh start [--turns FILE] [--fixtures DIR]... [--live-page FILE] [--size 1240x820]
 #                                 [--appearance dark|light] [--no-build]
 #   desktop/scripts/film.sh do '<json>'...        (dev-app.sh's commands)
 #   desktop/scripts/film.sh dump | shot <file.png> | log [--mock]
@@ -62,7 +62,7 @@ SSH=(ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes)
 # (ssh has no TMPDIR, Desk Runner the per-user one; not the SSD, whose root
 # any account can write to, which dev-app.sh refuses), the build film.sh
 # made, and the turns.
-env_there="cd $base/checkout && export TMPDIR=\$(getconf DARWIN_USER_TEMP_DIR) THREADBEAR_FILM_HOST=1 DEV_APP_IDLE_QUIT_SECONDS=1200 TB_GPUI_BIN=$base/bin/threadbear-gpui; [ ! -f $base/turns.json ] || export MOCK_SCRIPTED_TURNS=$base/turns.json"
+env_there="cd $base/checkout && export TMPDIR=\$(getconf DARWIN_USER_TEMP_DIR) THREADBEAR_FILM_HOST=1 DEV_APP_IDLE_QUIT_SECONDS=1200 TB_GPUI_BIN=$base/bin/threadbear-gpui; [ ! -f $base/turns.json ] || export MOCK_SCRIPTED_TURNS=$base/turns.json; [ ! -f $base/live-page.html ] || export TB_MOCK_LIVE_PAGES=$base/live-page.html"
 q() { printf '%q ' "$@"; }
 there() { "${SSH[@]}" "$host" "$env_there; $1"; }
 desk() { "${SSH[@]}" "$host" "~/.local/bin/desk $(q "$env_there; $1")"; }
@@ -92,7 +92,7 @@ cmd="${1:-help}"
 [ $# -eq 0 ] || shift
 case "$cmd" in
   start)
-    turns="" size=1240x820 appearance=dark build=1 fixtures=() fix_src=()
+    turns="" size=1240x820 appearance=dark build=1 fixtures=() fix_src=() live_page=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --turns) turns="$2"; shift 2 ;;
@@ -100,6 +100,8 @@ case "$cmd" in
         --size) size="$2"; shift 2 ;;
         --appearance) appearance="$2"; shift 2 ;;
         --no-build) build=0; shift ;;
+        # A live page for the mock's demo_live_page thread (the livePages experiment).
+        --live-page) live_page="$2"; shift 2 ;;
         *) die "unknown start option $1" ;;
       esac
     done
@@ -141,6 +143,8 @@ case "$cmd" in
     # What dev-app.sh needs there, and the recorder.
     (cd "$root" && rsync -rlpcR --delete -e "${SSH[*]}" --exclude node_modules \
       desktop/scripts runner/scripts/find-node.sh runner/src app/Tools/mock-runner site/scripts/record-window.swift "$host:$base/checkout/")
+    "${SSH[@]}" "$host" "rm -f $base/live-page.html"
+    [ -z "$live_page" ] || rsync -c -e "${SSH[*]}" "$live_page" "$host:$base/live-page.html"
     for f in "${fix_src[@]+"${fix_src[@]}"}"; do rsync -rlpc --delete -e "${SSH[*]}" "${f%/}/" "$host:$base/fixtures/$(basename "$f")/"; done
     if [ -n "$turns" ]; then scp -q "$turns" "$host:$base/turns.json"; else "${SSH[@]}" "$host" "rm -f $base/turns.json"; fi
     there "[ -d app/Tools/mock-runner/node_modules ] || (. runner/scripts/find-node.sh && n=\"\$(threadbear_find_node)\" && PATH=\"\${n%/*}:\$PATH\" npm ci --silent --prefix app/Tools/mock-runner)

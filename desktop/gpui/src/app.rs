@@ -861,6 +861,7 @@ impl Threadbear {
                 if let Status::Connected { hello, .. } = &status {
                     self.logins = RunnerLogins::from_hello(hello);
                     self.remote.experiments = hello["experiments"].as_array().into_iter().flatten().filter_map(|e| e.as_str().map(str::to_owned)).collect();
+                    crate::live_pages::set_on(self.remote.experiments.iter().any(|e| e == crate::live_pages::EXPERIMENT), self.main_window, cx);
                     self.runner_version = hello["runnerVersion"].as_str().unwrap_or("").to_owned();
                     self.upstream_on = hello["updates"]["upstream"]["state"].as_str().is_some_and(|s| s != "off");
                     self.upstream_checkout = hello["updates"]["upstream"]["checkout"].as_str().filter(|c| !c.is_empty()).map(str::to_owned);
@@ -2009,7 +2010,13 @@ impl Render for Threadbear {
         // The web panels' pages are native views: shown and placed once the
         // window's laid out, where their panels were drawn (web_panels.rs).
         // ⌘K's box covers them as the share popover does (open_anything.rs).
-        let pages = crate::web_panels::sweeper(self.open_menu_at(), self.share_popover.is_some() || self.anything.is_some());
+        // The picture viewer and the pane's own menu as well, as videos are
+        // below (a live page in the transcript drew over the viewer: Gemini's
+        // review, 19 Nov).
+        let pages = {
+            let side = self.side.read(cx);
+            crate::web_panels::sweeper(self.open_menu_at().or(side.menu.as_ref().map(|m| m.position)), self.share_popover.is_some() || self.anything.is_some() || side.viewer.is_open())
+        };
         // Videos and PDFs in the system's views the same way (media_view.rs),
         // hidden under the picture viewer and the pane's own menus too.
         let media = {

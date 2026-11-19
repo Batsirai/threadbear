@@ -61,8 +61,8 @@ fetch the bytes and load them into their sealed views.
 
 | | Still | Running |
 |---|---|---|
-| Mac (GPUI) | the offscreen Chromium that pictures html blocks today | the same offscreen page at 30 fps, its frames drawn in the card, the pointer and scroll passed in |
-| iPhone | WKWebView with scripts off (RichWebSandbox) | the same with scripts on |
+| Mac (GPUI) | a card with Run (no page made until then) | the side pane's sealed page view, placed in the card |
+| iPhone | a card with Run | WKWebView, RichWebSandbox's rules, scripts on |
 | Android | WebView, scripts off, blocking network loads | scripts on |
 | Website | iframe, `sandbox=""` | `sandbox="allow-scripts"`, CSP `default-src 'none'` with inline and data: |
 
@@ -72,8 +72,93 @@ fetch the bytes and load them into their sealed views.
    page, checked to be markup, stored as plain bytes, with `mediaType` on
    the phone's pictures. No new request, so no parity row; the phones and
    website show a page as the picture they can't load until their slices.
-2. Mac: the card, Run, running inline, full size.
-3. iPhone.
+2. Mac (built): the reply's `![title](page.html)` becomes a card
+   (`desktop/gpui/src/live_pages.rs`). Run shows the page there in the side
+   pane's sealed page view (`web_panels::live_page`, a fresh token origin,
+   served only while its bytes are the ones Run was pressed for), scripts
+   on, with `worker-src blob:` added for a live page only, as three.js
+   decodes models in a worker. The view is native, so it shows only while
+   the whole card is in the transcript; partly scrolled out it hides and
+   Chromium pauses it. One runs at a time; Stop closes its view. Not yet:
+   full size.
+3. iPhone (built): `ios/Threadbear/LivePageView.swift`. Run fetches the
+   bytes and runs them in a WKWebView with RichWebSandbox's dead proxy,
+   fresh store and link guard, a rule list of about:, data: and blob: only,
+   and a policy ahead of the page that it can only narrow; no alerts. Full
+   screen from the card.
 4. Website and Android.
 5. Telling agents: the guide, and a line in what agents read about showing
    things (within the context budget).
+
+## What the reviews found (Codex and Gemini, 19 Nov)
+
+Fixed:
+
+- A reply's `.html` was read with a plain `readFileSync`: a FIFO named
+  `.html` (or `.png`, before this) held the runner up, and a link to
+  `/dev/zero` read without end. `readCapped` now opens without waiting,
+  checks it's a regular file on the descriptor and reads to the cap.
+- A runner key's upload was stored with whatever type it said, so one
+  that said `text/html` was a page on the deployment's origin behind the
+  website's link to it. `/runner/upload` (and the relay's and phone's)
+  now keep a picture's or video's type and make anything else plain bytes
+  (`uploads.ts` `storedType`).
+- An agent could write the card's fence itself and get a card with the
+  experiment off, or in another Mac's thread. The fence's name now has a
+  random part made at each start, so only the app's own rewrite makes one.
+- The Mac served a live page its folder's named assets, which its scripts
+  could read: a live page's site is now the page alone (`Site::page_only`).
+- The Mac's sealed page views let a page open alert, confirm and prompt
+  boxes and the file chooser (the side pane's Run them too): both refused
+  now. The dead proxy didn't cover loopback: `<-loopback>`.
+- A running page whose card went out of sight (another thread opened)
+  kept its workers running hidden: it stops once its view has been hidden
+  for three seconds (read from the view, as the app draws nothing while
+  Mike drags inside the page). The card hashed the file every frame: it's
+  checked once a second off the main thread.
+- The iPhone's link guard ran in the page's own world, where its scripts
+  could undo it: a copy runs in the app's world too. A page doesn't run
+  if WebKit's switch for WebRTC is missing. Clipboard, file picker, share
+  sheet and printing are locked away before the page's scripts run.
+- The website drew a page as a broken picture linking to its file: it
+  leaves it out. Android shows its title and where to open it.
+
+Second round (the fixes above, again):
+
+- `window.print()` put the Mac's print dialog over the app: locked in the
+  page guard, and `printing.enabled` off where Chromium has it.
+- iPhone: a long press on a link offered Open Link in Safari, taking the
+  address out: link previews and the context menu are off. A page
+  scrolled out of view kept running (the transcript keeps its rows):
+  it stops on scroll visibility. A Stop while the rule list was still
+  being made could still load the page: it doesn't now.
+- A link named `.html` to some other kind of file went up if it read like
+  markup: the runner checks the real name too.
+- The iPhone's clipboard and file picker guard runs in the page's own
+  world, so a page can get round it. Left as best effort: the view has
+  no network, so nothing it gets that way can leave the phone.
+
+For Mike:
+
+- **The Mac's Chromium runs with its own sandbox off** (`host.rs`,
+  `no_sandbox`), as it can't read the runtime in the data folder with it
+  on. That was there before live pages: the side pane's Run them and the
+  web panels (real websites) run under it too. A live page is
+  agent-written script under it, so a Chromium exploit in one would have
+  Mike's user's access. Turning the sandbox on means bundling the runtime
+  in the app (docs/gpui-port.md, "Choice 1", option B).
+
+Not fixed, lower:
+
+- A script can still make an `about:blank` frame whose fresh window
+  hasn't had the clipboard guard yet (Mac); the page's view is sealed
+  from the network either way.
+- Mac sealed views share one in-memory cookie jar for the app's run, so
+  one agent page can leave a cookie another reads.
+- On the Mac, if DevTools refused to add the page guard, the page would
+  load without it (the side pane's Run them as well); never seen.
+- Any `.html` an agent names in a reply goes up to Mike's own backend
+  when the experiment's on, as any picture it names does.
+- The Mac's native view hides under the picture viewer and the pane's
+  menu now, but can still draw over a few of the app's own overlays near
+  the card (the transcript's fades, a link's peek).

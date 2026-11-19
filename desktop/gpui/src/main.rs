@@ -102,6 +102,7 @@ mod reply_buttons;
 mod reply_links;
 mod review_window;
 mod rich_boxes;
+mod live_pages;
 mod rich_window;
 mod row_motion;
 mod row_swipe;

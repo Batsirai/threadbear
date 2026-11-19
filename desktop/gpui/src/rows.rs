@@ -489,6 +489,8 @@ impl ThreadPane {
             .plugin(crate::pr_view::PrMarks)
             // A closed ```mermaid or ```html fence as what it shows (rich_boxes.rs).
             .plugin(crate::rich_boxes::RichBoxes)
+            // A live page's card (live_pages.rs).
+            .plugin(crate::live_pages::Cards)
     }
 
     /// The reading column's text: markdown, selectable, links going where they
@@ -499,7 +501,9 @@ impl ThreadPane {
         // A link to a file that isn't here as its words (`dead_file_links`).
         // After `prepare`, which links paths in backticks: a dead one of those
         // goes back to plain code too.
-        let source = markdown::dead_file_links(&markdown::prepare(&markdown::pictures(&item.text, local), &self.summary.id), local).into_owned();
+        // A page shown in the reply as a live page's card (live_pages.rs), first.
+        let text = if local && crate::live_pages::on(cx) { markdown::live_pages(&item.text) } else { std::borrow::Cow::Borrowed(item.text.as_str()) };
+        let source = markdown::dead_file_links(&markdown::prepare(&markdown::pictures(&text, local), &self.summary.id), local).into_owned();
         // Thread ids as chips (chips.rs), and a live mark before each link
         // to another thread (thread_link_marks.rs).
         let source = self.with_thread_chips(source, cx);

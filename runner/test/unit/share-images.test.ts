@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { imagesInEvent, localImagePath, markdownImages, PAGE_TYPE, PIN_TOOL, readReplyImage, readShareImage, replyImagesInEvent } from '../../src/share-images.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 
@@ -97,6 +98,20 @@ test('reply images: a live page has to really be a page', () => {
   assert.deepEqual(readReplyImage(write('bin.html', Buffer.from([0x3c, 0x68, 0x74, 0x6d, 0x6c, 0x3e, 0, 1, 2]))), { skip: "it isn't a page" });
   assert.deepEqual(readReplyImage(write('bad.html', Buffer.from([0x3c, 0x62, 0x3e, 0xff, 0xfe]))), { skip: "it isn't a page" });
   assert.deepEqual(readReplyImage(write('notes.html', 'just some notes < 3 things')), { skip: "it isn't a page" });
+  // A FIFO or a device named .html is never waited on or read without end.
+  const fifo = path.join(dir, 'pipe.html');
+  if (process.platform !== 'win32') {
+    execFileSync('mkfifo', [fifo]);
+    assert.deepEqual(readReplyImage(fifo), { skip: "it can't be read" });
+    fs.symlinkSync('/dev/zero', path.join(dir, 'zero.html'));
+    assert.deepEqual(readReplyImage(path.join(dir, 'zero.html')), { skip: "it can't be read" });
+  }
+  // A link named .html to a file that isn't one, however it reads.
+  const xml = write('feed.xml', '<?xml version="1.0"?><svg><title>secret</title></svg>');
+  fs.symlinkSync(xml, path.join(dir, 'feed.html'));
+  assert.deepEqual(readReplyImage(path.join(dir, 'feed.html')), { skip: "it isn't a page" });
+  fs.symlinkSync(path.join(dir, 'g.html'), path.join(dir, 'also.html'));
+  assert.ok(!('skip' in readReplyImage(path.join(dir, 'also.html'))), 'a link to a real page is one');
   // Markup named as a picture is still not a picture.
   assert.deepEqual(readReplyImage(write('p.png', '<html><body>hi</body></html>')), { skip: "it isn't a picture" });
 });
