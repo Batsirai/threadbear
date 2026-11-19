@@ -3786,8 +3786,20 @@ mod tests {
         // person's does.
         cx.simulate_event(gpui::MouseMoveEvent { position: on_link, pressed_button: None, modifiers: Modifiers::default() });
         draw(cx);
+        assert!(!cx.update(|window, cx| crate::TextSelection::has_selection(window, cx)), "moving over the words selects nothing");
         click(cx, on_link);
         assert_eq!(clicks.lock().unwrap().len(), 2, "so does the first one after the button");
+
+        // Let go with Control held, a left press can come back as a right
+        // release; that one's seen too.
+        cx.simulate_event(MouseDownEvent { position: on_close, modifiers: Modifiers::default(), button: MouseButton::Left, click_count: 1, first_mouse: false });
+        cx.simulate_event(MouseUpEvent { position: on_close, modifiers: Modifiers::control(), button: MouseButton::Right, click_count: 1 });
+        draw(cx);
+        cx.simulate_event(gpui::MouseMoveEvent { position: on_link, pressed_button: None, modifiers: Modifiers::default() });
+        draw(cx);
+        assert!(!cx.update(|window, cx| crate::TextSelection::has_selection(window, cx)), "nor after a Control release");
+        click(cx, on_link);
+        assert_eq!(clicks.lock().unwrap().len(), 3, "and the link still clicks first time");
     }
 
     /// Threadbear's: a press on a link is noted for a handler further out,

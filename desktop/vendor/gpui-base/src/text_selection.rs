@@ -3623,13 +3623,30 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
         }
     });
 
+    // Any button's, as the bubble listener below ends the press on any: a
+    // left press let go with Control held can come back as a right release.
     let release_state = state.downgrade();
-    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
         if phase.capture()
-            && event.button == MouseButton::Left
             && let Some(state) = release_state.upgrade()
         {
             state.update(cx, |state, _| state.released_unseen = state.mouse_down_prepared);
+        }
+    });
+    // A release that never reached the bubble phase is over by the next
+    // move, before the move could stretch the old selection over whatever
+    // the pointer passes (drawn, and copied by Command-C).
+    let stale_state = state.downgrade();
+    window.on_mouse_event(move |_: &MouseMoveEvent, phase, _, cx| {
+        if phase.capture()
+            && let Some(state) = stale_state.upgrade()
+            && state.read(cx).released_unseen
+        {
+            state.update(cx, |state, cx| {
+                state.mouse_down_prepared = false;
+                state.released_unseen = false;
+                state.end(cx);
+            });
         }
     });
 
