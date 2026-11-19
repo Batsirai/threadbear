@@ -108,7 +108,7 @@ export async function readCapped(request: Request, max: number): Promise<Blob | 
   } catch {
     return 'broken';
   }
-  return new Blob(parts as BlobPart[], { type });
+  return new Blob(parts as unknown as ConstructorParameters<typeof Blob>[0], { type });
 }
 
 /** A fresh claim: 16 random bytes, hex. */
