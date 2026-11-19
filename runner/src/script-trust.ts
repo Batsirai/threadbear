@@ -1162,7 +1162,8 @@ class Reach {
     // name worked out as it runs gets past (Codex's fourth review).
     const code = text.replace(/^[ \t]*#.*$/gm, '');
     if (HOME_SET.test(code)) return this.fail(ctx, undefined, "sets HOME (in arithmetic or let), so ~ and $HOME name another folder from then on, which patch trust doesn't follow.");
-    if (IS_WINDOWS && MSYS_SET.test(code)) return this.fail(ctx, undefined, "sets one of Git Bash's MSYS variables, which change how it hands paths to programs, so patch trust can't tell which file one names.");
+    const msys = IS_WINDOWS ? MSYS_SET.exec(code) : null;
+    if (msys) return this.fail(ctx, undefined, `sets ${/MSYS2?_\w+/.exec(msys[0])?.[0] ?? 'an MSYS variable'}, which changes how Git Bash hands paths to programs, so patch trust can't tell which file one names.`);
     if (IS_WINDOWS && /nodefaultcurrentdirectoryinexepath/i.test(code)) return this.fail(ctx, undefined, "names NoDefaultCurrentDirectoryInExePath, which keeps cmd.exe from running a program from the folder it's in, so patch trust can't tell what a command name runs.");
     let lexed: Lexer;
     try {
@@ -1995,6 +1996,8 @@ class Reach {
       }
       return this.fail(ctx, line, `runs ${name} reading what to run from its input${extra ? ' (from xargs)' : ''}, which patch trust can't follow.`);
     }
+    // npm's own script by its path is npm, there or not (Codex's fourth review).
+    if (IS_WINDOWS && PACKAGE_MANAGER_ENTRY.test(slashes(file))) return this.fail(ctx, line, `runs ${path.basename(file)}, a package manager, which on Windows runs package scripts with cmd.exe, so patch trust can't follow it.`);
     this.runFile(file, ctx, line);
   }
 

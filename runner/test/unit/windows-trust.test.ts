@@ -277,7 +277,8 @@ test('a Windows program name is the program: what node.exe, npm.cmd and the othe
   const names = (files: string[]) => files.filter((f) => fs.existsSync(f)).map((f) => path.relative(folder, f).replace(/\\/g, '/')).sort();
   // Followed: the same files as the plain name reaches.
   for (const [command, files] of [
-    ['node.exe ./scripts/main.js', ['scripts/helper.js', 'scripts/main.js']],
+    // With what Windows could run by name beside them (besideRun).
+    ['node.exe ./scripts/main.js', ['scripts/helper.js', 'scripts/main.js', 'scripts/x.bat', 'scripts/x.cmd', 'scripts/x.ps1']],
     ['bash.exe ./scripts/main.sh', ['scripts/lib.sh', 'scripts/main.sh']],
     ['sh.exe ./scripts/main.sh', ['scripts/lib.sh', 'scripts/main.sh']],
     ['make.exe build', ['Makefile', 'scripts/lib.sh']],
@@ -447,8 +448,10 @@ test('a program named by a backslash path is followed as the file it is', ONLY_W
 test("a package script isn't followed on Windows: npm runs it with cmd.exe", ONLY_WINDOWS, () => {
   const folder = project({ 'package.json': '{"scripts":{"build":"node ./main.js"}}', 'main.js': '1;\n' });
   assert.match(commandFiles('npm run build', folder).problem ?? '', /cmd\.exe/);
-  assert.match(liveCommandProblem('npm run build', folder, []) ?? '', /cmd\.exe/);
-  assert.match(liveCommandProblem('npx convex data', folder, []) ?? '', /cmd\.exe/);
+  // Refused either way; the main.js beside it, which Windows could run by
+  // name, isn't in the empty list of hashed files either.
+  assert.ok(liveCommandProblem('npm run build', folder, []));
+  assert.ok(liveCommandProblem('npx convex data', folder, []));
 });
 
 test("turning off Git Bash's path conversion fails closed", ONLY_WINDOWS, () => {

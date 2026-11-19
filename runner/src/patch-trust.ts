@@ -59,7 +59,7 @@ import { claudeCommands, type ClaudeOptions } from './claude-trust.ts';
 import { isBinary, looksRunnable, MAX_READ_BYTES, reachOf, reachOfCommand, Reads, type FollowOptions, type ScriptReach } from './script-trust.ts';
 import { bareImport } from './tracked-packages.ts';
 import { allowCommand } from './shell-allowlist.ts';
-import { clicksOnly, realPath, realPathSync, slashes } from './platform.ts';
+import { clicksOnly, IS_WINDOWS, realPath, realPathSync, slashes } from './platform.ts';
 
 export type TrustVerdict =
   // `files`: the local files its hash covered, real paths. Absent when the
@@ -875,6 +875,17 @@ export function patchHash(file: string): PatchHash {
       // (an action's command that can't be followed is let go, but this one
       // may hide the very file that runs).
       if (reach.refused) incomplete ??= `patch trust won't follow ${reach.refused}: it could be a file in the repo under another name, so trusting the patch couldn't cover it.`;
+    }
+  }
+  // Windows: what a command run in the folder by a bare name could turn
+  // out to be (script-trust.ts, besideRun), for the commands a patch works
+  // out in code too, which aren't followed here: hashed, and the list of
+  // them watched, so a program dropped there asks again.
+  if (IS_WINDOWS && isInside(realpath(folder), top)) {
+    for (const f of reachOfCommand(':', 'the folder', opts).files) {
+      if (seen.has(f)) continue;
+      seen.add(f);
+      deps.push({ path: f });
     }
   }
   const missing = [...unnamed];
