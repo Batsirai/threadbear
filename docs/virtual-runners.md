@@ -910,8 +910,6 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
   manifest (the Dockerfile says how), in a commit that rebuilds the image.
   Until then a box runs that version, while Mike's other runners follow
   Claude Code's latest.
-- The package has to be public, as Fly pulls with no credentials. The
-  first push makes it private; its settings on GitHub change that, once.
 
 Not built yet, in about the order they're needed:
 
