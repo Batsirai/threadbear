@@ -93,8 +93,6 @@ const MAX_OLDER = 9;
 // A release tag's message lists at most 200 subjects (publishOnce), a few
 // tens of KB; a bigger tag object is turned down unread.
 const MAX_TAG_BYTES = 1024 * 1024;
-// How a hold says the unpushed tag couldn't be deleted (dropTag).
-const STUCK = '. Its local tag could not be deleted; until it is, no release goes out: ';
 
 type Ref = { oid: string; type: string; size: number };
 
@@ -502,6 +500,8 @@ export class Upstream {
   // list (keyChanges).
   private newestVerified?: SignedTag & { tag: string };
   private readonly git: (cwd: string, args: string[], opts?: GitOptions) => Promise<string>;
+  // The release tags GitHub had at publishOnce's last look.
+  private pushedTags = new Set<string>();
   private readonly deps: UpstreamDeps;
 
   private get fetchTimeoutMs(): number {
@@ -1010,12 +1010,22 @@ export class Upstream {
     // Tags made on another Mac, or by hand, count too.
     await this.git(checkout, ['fetch', '-q', '--no-tags', 'origin', `+refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*`], { timeoutMs: this.fetchTimeoutMs });
     const tag = tagFor(new Date(now));
-    const tags = (await this.git(checkout, ['tag', '--list', '--sort=-refname', `${TAG_PREFIX}*`])).split('\n').filter(Boolean);
-    // An unpushed tag that couldn't be deleted keeps saying so (dropTag)
-    // until it's gone, rather than passing for a release.
-    const stuck = this.st.held?.why.split(`${STUCK}git tag -d `)[1];
-    if (stuck && tags.includes(stuck)) return undefined;
+    // Only tags GitHub has are releases: one made here and never pushed (its
+    // push failed, or it didn't verify and couldn't be deleted, perhaps
+    // before a restart) would otherwise pass for today's, then the last.
+    const pushed = new Set((await this.git(checkout, ['ls-remote', '--refs', 'origin', `refs/tags/${TAG_PREFIX}*`], { timeoutMs: this.fetchTimeoutMs }))
+      .split('\n').map((l) => l.split('\t')[1]?.slice('refs/tags/'.length)).filter(Boolean));
+    const local = (await this.git(checkout, ['tag', '--list', '--sort=-refname', `${TAG_PREFIX}*`])).split('\n').filter(Boolean);
+    const tags = local.filter((t) => pushed.has(t));
+    this.pushedTags = new Set(tags);
     if (tags.includes(tag)) return this.hold(undefined);
+    if (local.includes(tag)) {
+      const oid = await this.git(checkout, ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`]).catch(() => '');
+      if (oid && !(await this.dropTag(checkout, tag, oid))) {
+        this.hold({ commit: tip, why: `today's tag ${tag} was made here but never pushed, and it can't be deleted (git tag -d ${tag})`, at: new Date(now).toISOString() });
+        return undefined;
+      }
+    }
     const last = tags[0];
     if (last && (await this.isAncestor(checkout, tip, last))) return this.hold(undefined);
     const why = await this.checksSay(checkout, tip);
@@ -1075,7 +1085,7 @@ export class Upstream {
     const bad = !oid ? 'the tag was not there to check' : await this.selfCheck(checkout, tag, oid, tip, last, now).catch((e: unknown) => `ssh-keygen couldn't check it (${String(e).slice(0, 120)})`);
     if (bad) {
       const dropped = !oid || (await this.dropTag(checkout, tag, oid));
-      this.hold({ commit: tip, why: `its signature didn't verify, so it wasn't pushed: ${bad}${dropped ? '' : `${STUCK}git tag -d ${tag}`}`, at: new Date(now).toISOString() });
+      this.hold({ commit: tip, why: `its signature didn't verify, so it wasn't pushed: ${bad}${dropped ? '' : ` (its local tag couldn't be deleted yet; the next look tries again)`}`, at: new Date(now).toISOString() });
       this.deps.log.warn('release signature does not verify; not pushed', { tag, commit: tip, why: bad, tagDeleted: dropped });
       return undefined;
     }
@@ -1092,9 +1102,8 @@ export class Upstream {
     return tag;
   }
 
-  // Deletes the local tag if it's still `oid`. A tag left behind would pass
-  // for today's release on the next look, and as the last release after
-  // that, so a failure says so in the hold (STUCK) and the hold stays.
+  // Deletes the local tag if it's still `oid`. One left behind isn't on
+  // GitHub, so the next look doesn't count it and tries again (publishOnce).
   private async dropTag(checkout: string, tag: string, oid: string): Promise<boolean> {
     for (let i = 0; i < 2; i++) {
       if (await this.git(checkout, ['update-ref', '-d', `refs/tags/${tag}`, oid]).then(() => true, () => false)) return true;
@@ -1106,9 +1115,9 @@ export class Upstream {
   // Why the tag object `oid` wouldn't count as `tag` for a fork, or
   // undefined if it would: the same size limit, split and ssh-keygen check
   // as verified(), on the commit it was made for. The keys are what forks
-  // hold: those in release-signers at the commit, and (once there are
-  // releases a week older than ADD_DELAY_MS, the wait before an announced
-  // key counts) in the newest of those too; revoked are those the last
+  // hold: those in release-signers at the commit, and at the newest release
+  // a day older than ADD_DELAY_MS (the wait before an announced key counts),
+  // or the oldest release when none is; revoked are those the last
   // release revoked, as a release that revokes its own key must still go
   // out for forks to take the revocation in.
   private async selfCheck(checkout: string, tag: string, oid: string, tip: string, last: string | undefined, now: number): Promise<string | undefined> {
@@ -1139,14 +1148,18 @@ export class Upstream {
   }
 
   // The newest release tag dated a day more than ADD_DELAY_MS ago (forks
-  // look every six hours, and a Mac sleeps), if there is one.
+  // look every six hours, and a Mac sleeps), or else the oldest there is.
   private async settledRelease(checkout: string, now: number): Promise<string | undefined> {
     const lines = (await this.git(checkout, ['for-each-ref', '--sort=-taggerdate', '--format=%(refname:short)%09%(taggerdate:unix)', `refs/tags/${TAG_PREFIX}*`])).split('\n');
+    let oldest: string | undefined;
     for (const line of lines) {
       const [name, at] = line.split('\t');
-      if (name && Number(at) > 0 && Number(at) * 1000 <= now - ADD_DELAY_MS - 24 * 60 * 60_000) return name;
+      if (!name || !(Number(at) > 0) || !this.pushedTags.has(name)) continue;
+      if (Number(at) * 1000 <= now - ADD_DELAY_MS - 24 * 60 * 60_000) return name;
+      oldest = name;
     }
-    return undefined;
+    // None that old: the first release's keys are the ones forks pinned.
+    return oldest;
   }
 
   // Plain-words notes for a release, from its commits' subjects and bodies.

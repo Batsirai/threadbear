@@ -607,7 +607,7 @@ esac
     const tag = tagFor(new Date(committed + 2 * SETTLE_MS));
     assert.equal(git(w.mike, 'tag', '--list', tag), '', `${how}: the bad tag is deleted`);
     assert.equal(git(w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`), '', `${how}: and never pushed`);
-    assert.match(up.status().held?.why ?? '', /signature didn't verify, so it wasn't pushed: ssh-keygen says it isn't good/, how);
+    assert.match(up.status().held?.why ?? '', how === 'corrupt' ? /signature didn't verify, so it wasn't pushed: ssh-keygen says it isn't good/ : /signature didn't verify, so it wasn't pushed: its key wasn't in scripts\/release-signers at release\/2026-10-01/, how);
     assert.ok(logged.some((m) => /does not verify/.test(m)), how);
   }
 });
@@ -657,6 +657,7 @@ test("the release check holds a key forks haven't had a week to take in", async 
     const at = Math.floor((r.now - daysAgo * 24 * 60 * 60_000) / 1000);
     const t = spawnSync('git', ['-C', r.w.mike, '-c', 'gpg.format=ssh', '-c', `user.signingkey=${r.w.mikeKey.priv}`, 'tag', '-s', '-m', name, name, 'HEAD'], { env: { ...process.env, GIT_COMMITTER_DATE: `${at} +0000` } });
     assert.equal(t.status, 0, String(t.stderr));
+    git(r.w.mike, 'push', '-q', 'origin', `refs/tags/${name}`);
   };
   oldTag('release/2026-09-01', 10); // its release-signers has only Mike's key
   fs.writeFileSync(path.join(r.w.mike, 'scripts', 'release-signers'), signers(r.w.mikeKey, next));
@@ -669,31 +670,36 @@ test("the release check holds a key forks haven't had a week to take in", async 
   assert.equal(await early.publishOnce(), undefined);
   assert.match(early.status().held?.why ?? '', /wasn't in scripts\/release-signers at release\/2026-09-01, so forks don't take it yet/);
   // A release with it in, more than eight days old: now it counts.
-  spawnSync('git', ['-C', r.w.mike, 'tag', '-d', 'release/2026-09-01']);
+  git(r.w.mike, 'push', '-q', 'origin', ':refs/tags/release/2026-09-01');
+  git(r.w.mike, 'tag', '-d', 'release/2026-09-01');
   oldTag('release/2026-09-02', 9);
   const tag = await publisher(next.priv).publishOnce();
   assert.ok(tag);
   assert.equal(git(r.w.mike, 'rev-parse', `${tag}^{commit}`), tip);
 });
 
-// Gemini's review: a bad tag that couldn't be deleted passed for today's
-// release on the next look, and as the last release after that.
-test('an unpushed bad tag that could not be deleted holds every release until it is', async () => {
+// Gemini's and Codex's reviews: a tag made here and never pushed (its
+// delete failed, perhaps before a restart) passed for today's release on
+// the next look, and as the last release after that.
+test("a tag that never reached GitHub isn't a release: the next look deletes it and tries again", async () => {
   const r = readyToPublish();
   const stranger = key(r.w.root, 'stranger');
   let failDelete = true;
-  const up = r.publisher(stranger.priv, {
-    git: (cwd: string, args: string[], opts?: GitOptions) => (failDelete && args[0] === 'update-ref' && args[1] === '-d' ? Promise.reject(new Error('cannot lock ref')) : gitAsync(cwd, args, opts)),
-  });
+  const failing = { git: (cwd: string, args: string[], opts?: GitOptions) => (failDelete && args[0] === 'update-ref' && args[1] === '-d' ? Promise.reject(new Error('cannot lock ref')) : gitAsync(cwd, args, opts)) };
+  const up = r.publisher(stranger.priv, failing);
   assert.equal(await up.publishOnce(), undefined);
   const tag = tagFor(new Date(r.now));
-  assert.ok(git(r.w.mike, 'tag', '--list', tag), 'left behind');
-  assert.match(up.status().held?.why ?? '', new RegExp(`could not be deleted.*git tag -d ${tag}`));
-  assert.equal(await up.publishOnce(), undefined);
-  assert.match(up.status().held?.why ?? '', /could not be deleted/, 'still says so');
+  const bad = git(r.w.mike, 'rev-parse', `refs/tags/${tag}`);
+  assert.match(up.status().held?.why ?? '', /couldn't be deleted yet/);
+  // A restarted runner, delete still failing: held, saying so, nothing pushed.
+  const again = r.publisher(stranger.priv, failing);
+  assert.equal(await again.publishOnce(), undefined);
+  assert.match(again.status().held?.why ?? '', new RegExp(`never pushed, and it can't be deleted \\(git tag -d ${tag}\\)`));
   assert.equal(git(r.w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`), '');
+  // Once it can be deleted, a good key's release goes out in its place.
   failDelete = false;
-  git(r.w.mike, 'tag', '-d', tag);
-  assert.equal(await up.publishOnce(), undefined);
-  assert.doesNotMatch(up.status().held?.why ?? '', /could not be deleted/, 'tried again once it was gone');
+  const good = r.publisher(r.w.mikeKey.priv);
+  assert.equal(await good.publishOnce(), tag);
+  assert.notEqual(git(r.w.mike, 'rev-parse', `refs/tags/${tag}`), bad);
+  assert.ok(git(r.w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`));
 });

@@ -49,7 +49,10 @@ export function screenLocked(): Promise<boolean> {
 export function parseScreenLocked(json: string, uid: number): boolean {
   let users: unknown;
   try {
-    users = (JSON.parse(json) as { IOConsoleUsers?: unknown }).IOConsoleUsers;
+    // Root's dictionary, or (some ioreg versions) an array holding it.
+    const parsed = JSON.parse(json) as unknown;
+    const root = (Array.isArray(parsed) ? parsed[0] : parsed) as { IOConsoleUsers?: unknown } | undefined;
+    users = root?.IOConsoleUsers;
   } catch {
     return false;
   }

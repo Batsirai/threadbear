@@ -21,6 +21,7 @@ test("parseScreenLocked: this user's console session, from ioreg's plist as JSON
   assert.equal(parseScreenLocked(of({ ...me, kCGSSessionOnConsoleKey: false }, { kCGSSessionUserIDKey: 502, kCGSSessionOnConsoleKey: true }), 501), true, 'switched to another user');
   assert.equal(parseScreenLocked(of(), 501), true, 'the login window');
   assert.equal(parseScreenLocked(of(me), 50), true, 'uid 50 is not 501');
+  assert.equal(parseScreenLocked(JSON.stringify([JSON.parse(of({ ...me, CGSSessionScreenIsLocked: true }))]), 501), true, 'Root inside an array');
   assert.equal(parseScreenLocked('', 501), false, "can't read it");
   assert.equal(parseScreenLocked('{}', 501), false);
 });
