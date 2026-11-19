@@ -148,6 +148,11 @@ export type Config = {
   // on its model and effort if it names them. Unset is Codex then Claude,
   // which is the other provider for either (lab-review.ts, reviewLogin).
   labReviewers?: LabReviewer[];
+  // How many lines of code a change needs for the reviewers ticked for the
+  // panel to review it all at once (runner.json `labPanelLines`, 150 when
+  // unset; lab-review.ts, panelChange). A change to auth, payments or
+  // secrets gets the panel whatever its size.
+  labPanelLines: number;
   // Keep the Mac out of idle sleep while threads work (keep-awake.ts). On
   // unless runner.json says `keepAwake: false` (Settings > General).
   keepAwake: boolean;
@@ -237,6 +242,7 @@ export type RunnerJson = {
   oneReply?: boolean;
   labReview?: boolean;
   labReviewers?: unknown;
+  labPanelLines?: unknown;
   keepAwake?: boolean;
   // spareWeek: false stops the runner starting a thread by itself when a
   // login's week is about to go unused (spare-week.ts). On when absent.
@@ -270,6 +276,9 @@ export type RunnerJson = {
 // to approve a plan, so a thread nobody's watching (a schedule, one from
 // the phone) would only sit there.
 export type DefaultMode = Exclude<PermissionMode, 'plan'>;
+// See Config.labPanelLines.
+export const LAB_PANEL_LINES = 150;
+
 function labReviewersFrom(v: unknown): { labReviewers?: LabReviewer[] } {
   const list = parseLabReviewers(v);
   return list ? { labReviewers: list } : {};
@@ -480,6 +489,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     oneReply: json.oneReply !== false,
     labReview: json.labReview !== false,
     ...labReviewersFrom(json.labReviewers),
+    labPanelLines: typeof json.labPanelLines === 'number' && Number.isFinite(json.labPanelLines) && json.labPanelLines >= 0 ? Math.floor(json.labPanelLines) : LAB_PANEL_LINES,
     // On for everyone since 10 Nov 2026, after a few days as an experiment
     // on Mike's Mac; Settings turns it off for anyone who'd rather.
     keepAwake: json.keepAwake !== false,

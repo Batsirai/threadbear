@@ -1533,7 +1533,20 @@ reviews, in order: drag them into the order you want, add any other
 provider you have a login for (Grok, say), and pick each one's model and
 effort. The first that isn't the thread's own provider and has a login
 with room does the review, so when one runs out for the week, the next
-takes over. The review runs in a thread of its own in the same folder, with
+takes over. You can list a provider more than once on different models.
+Gemini reviews through OpenCode: give OpenCode a Google AI Studio key
+(`opencode auth login google`) and its Gemini models show up under
+OpenCode once the runner restarts.
+
+For a big change (150 lines of code or more) or one to code about
+sign-ins, passwords, secrets or payments, a review panel can look at it
+instead: tick the reviewers you want on the panel, and each of them
+reviews at once, in a thread of its own. Your thread waits for all of
+them and gets their findings in one numbered list, each saying who found
+it, and the round only passes if none of them found anything. Smaller
+changes still get the one reviewer, so the panel's cost goes where it
+pays. With fewer than two ticked reviewers able to review, the one
+reviewer does. `"labPanelLines"` in `runner.json` changes the 150. The review runs in a thread of its own in the same folder, with
 the same permissions as the thread it reviews, and is told not to edit
 anything. Your thread says who is reviewing and waits. The reviewer gives a
 verdict: a list of concrete findings, or nothing that holds up. Then your

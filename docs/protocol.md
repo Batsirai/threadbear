@@ -806,10 +806,14 @@ type Settings = {
                         // lab); on unless runner.json has labReview: false.
                         // Absent from an older runner, where it was an
                         // experiment, so a client shows no switch
-  labReviewers?: { provider: Provider, model?: string, effort?: EffortLevel }[]
+  labReviewers?: { provider: Provider, model?: string, effort?: EffortLevel, panel?: true }[]
                         // who reviews, in order (Settings > General > Code review): the
                         // first of another lab with a login that has room,
                         // on its model and effort when it names them.
+                        // panel: on the review panel, which reviews a big
+                        // or risky change all at once (Review by another
+                        // lab). A provider may come more than once on
+                        // different models.
                         // runner.json's labReviewers, else Codex then Claude.
                         // Absent from an older runner: no list to show
   keepAwake?: boolean   // keep the Mac out of idle sleep while threads
@@ -1328,7 +1332,7 @@ the summary and then the reply.
 | `pools.list` | `{}` | `{ pools: Pool[] }` (see Pools) |
 | `pools.save` | `{ pools: Pool[] }` | `{ pools: Pool[] }`. Replaces the whole list in `runner.json` (`builtIn` is dropped; an empty list goes back to the built-in ones). `-32602` for a duplicate id, a blank id or title, an empty `accountIds`, or an account id the runner doesn't know. A blank or non-string `icon` is dropped. Every client gets `pools.updated` |
 | `settings.get` | `{}` | `{ settings: Settings }` |
-| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, labReviewers?, keepAwake?, bringIn?, spareWeek?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id, `labReviewers` a list of `{ provider, model?, effort? }` with known providers and efforts (a provider listed twice counts once); otherwise `-32602` saying which. Every client gets `settings.updated` |
+| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, labReviewers?, keepAwake?, bringIn?, spareWeek?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id, `labReviewers` a list of `{ provider, model?, effort?, panel? }` with known providers and efforts (the same provider on the same model listed twice counts once); otherwise `-32602` saying which. Every client gets `settings.updated` |
 | `instructions.get` | `{}` | `{ instructions: StandingInstructions }` (see Standing instructions). `-32601` with the experiment off, and from an older runner: the app then shows no box |
 | `instructions.set` | `{ text: string }` | `{ instructions: StandingInstructions }`. Saves and signs the text, trimmed; an empty one clears them and removes both files. `-32602` for a `text` that isn't a string or is over 20,000 characters, `-32601` as for `instructions.get`. Every client gets `instructions.updated` |
 | `devices.list` | `{}` | `{ devices: Device[], site?: string, reason?: string }` (see Devices). `site` is the website's root while sync is on; `reason` says why nothing can pair when it's off |
@@ -3654,7 +3658,24 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   Its login is the first reviewer's in `Settings.labReviewers` whose
   provider isn't the thread's and that has a login with room
   (`pickInPool` over the pools with no folders, then a login no pool
-  holds), else a fresh session of the thread's own provider. For a folder a
+  holds), else a fresh session of the thread's own provider. A change of
+  `labPanelLines` lines of code or more (runner.json, 150 when unset), or
+  code under a risky path (a path part named auth, oauth, login, password,
+  secret, crypto, encrypt…, payment, billing, stripe, permission or
+  security), goes to the review panel instead: every reviewer with
+  `panel: true` that has a login with room, the thread's own provider
+  too, each in a review thread of its own at once, with a line in the
+  brief saying others are looking too. With fewer than two of them able
+  to, the one reviewer above reviews. The thread waits on all of them
+  (a `waitingOn` entry each, `review: true`) and wakes once every one has
+  finished or gone, with all their findings numbered together, each with
+  `by` naming the reviewer, and each one's reply cut to fit 12,000
+  characters between them, at most 20 findings in all (the most serious;
+  the message says how many were left out). One that finishes while the
+  rest still work is archived then, its reply and verdict kept in its
+  wait (`done.verdict`). The round passes only when every one reviewed,
+  gave a verdict and found nothing; with none back, it isn't delivered.
+  A panel's `independent` is true when any of it is another lab. For a folder a
   pool is kept for, only that pool's logins are used, and a kept pool's
   logins never review anything outside it. The first thread gets a
   `system.note` saying who reviews and whether it's another lab, then
@@ -3704,9 +3725,11 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
 
   ```ts
   type ReviewFinding = { id: number, round: number, severity: "high" | "medium" | "low",
-    claim: string, where?: string, case?: string, outcome?: "fixed" | "disputed" | "left", note?: string }
-  type LabReviewLedger = { reviewer: string /* "Codex (codex-1)" */, independent: boolean,
-    rounds: number, threadId: string /* the latest round's review thread */, passed: boolean,
+    claim: string, where?: string, case?: string, outcome?: "fixed" | "disputed" | "left", note?: string,
+    by?: string /* which of a panel found it */ }
+  type LabReviewLedger = { reviewer: string /* "Codex (codex-1)"; a panel's names joined with ", " */, independent: boolean,
+    rounds: number, threadId: string /* the latest round's review thread (a panel's first) */, passed: boolean,
+    panel?: { reviewer: string, threadId: string, independent: boolean }[] /* the latest round's, when several reviewed at once */,
     unstructured?: true /* a round gave no verdict: its reply is all there is */,
     unchecked?: true /* fixes in the last round, which no review looked at */,
     findings: ReviewFinding[] }

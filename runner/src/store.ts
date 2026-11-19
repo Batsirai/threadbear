@@ -69,6 +69,7 @@ const NESTED: [string, string, 'object' | 'string' | 'number'][] = [
   ['highlights', 'edited', 'string'],
   ['highlights', 'removed', 'string'],
   ['labReview', 'findings', 'object'],
+  ['labReview', 'panel', 'object'],
   ['reviewVerdict', 'findings', 'object'],
 ];
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -192,7 +193,7 @@ export type ThreadRecord = {
   // `review`: the thread is a review of this one's change (runner/lab-review.ts).
   // `by`: the waiting thread's access when it said to wait (hibernation.ts,
   // mayHear): what it asked to hear isn't passed on once it has more.
-  waitingOn?: { threadId: string; title: string; until?: string; review?: true; by?: { mode: PermissionMode }; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string } }[];
+  waitingOn?: { threadId: string; title: string; until?: string; review?: true; by?: { mode: PermissionMode }; done?: { at: string; how: 'finished' | 'met' | 'archived' | 'deleted'; reply?: string; why?: string; verdict?: ReviewVerdict; edited?: string[] } }[];
   // Its last finished turn (nothing needed, nothing left running) and that
   // turn's reply, for threads waiting on it, including on a runner it
   // moves to (runner/hibernation.ts, reconcileWaits). Cleared by any new

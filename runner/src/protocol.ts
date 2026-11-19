@@ -726,12 +726,19 @@ export type TurnErrorKind = 'usageLimit' | 'contextWindow' | 'auth' | 'network';
 // agent's answer (end_turn's findings), absent until it gives one.
 export type ReviewSeverity = 'high' | 'medium' | 'low';
 export type ReviewOutcome = 'fixed' | 'disputed' | 'left';
-export type ReviewFinding = { id: number; round: number; severity: ReviewSeverity; claim: string; where?: string; case?: string; outcome?: ReviewOutcome; note?: string };
+// by: which of a panel found it (its reviewer line), on a round several
+// reviewed.
+export type ReviewFinding = { id: number; round: number; severity: ReviewSeverity; claim: string; where?: string; case?: string; outcome?: ReviewOutcome; note?: string; by?: string };
+// One of a review panel (runner/lab-review.ts): several reviewers at once
+// on a big or risky change.
+export type PanelReviewer = { reviewer: string; threadId: string; independent: boolean };
 export type LabReviewLedger = {
-  reviewer: string; // "Codex (codex-1)"
-  independent: boolean; // another lab, not a fresh session of the same one
+  reviewer: string; // "Codex (codex-1)"; a panel's names, joined with ", "
+  independent: boolean; // another lab, not a fresh session of the same one (a panel: any of it)
   rounds: number;
-  threadId: string; // the latest round's review thread
+  threadId: string; // the latest round's review thread (a panel's first)
+  // The latest round's panel, when several reviewed it at once.
+  panel?: PanelReviewer[];
   // The latest round found nothing that holds up.
   passed: boolean;
   // A round whose reviewer gave no verdict in end_turn: its reply is all
