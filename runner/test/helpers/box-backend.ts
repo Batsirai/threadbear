@@ -13,6 +13,18 @@ export const BOX_RUNNER = 'box0thread01';
 export const THREAD = 'box-thread-1';
 export const ORIGIN_WITH_TOKEN = 'https://mike:ghp_SECRETSECRET@github.com/mikecann/threadbear.git';
 
+// The box tests' clock starts at midday (UTC) today. A box's awake time is
+// counted by the UTC day (convex/boxMachine.ts awakeAdded), and a test that
+// moves the clock on a few minutes with later() saw the count go back to
+// nothing when that crossed midnight: GitHub's Windows run at 23:54 UTC on
+// 18 Nov failed two of box-service's charging tests that pass any other time.
+{
+  const realNow = Date.now;
+  const midday = new Date(realNow()).setUTCHours(12, 0, 0, 0);
+  const offset = midday - realNow();
+  Date.now = () => realNow() + offset;
+}
+
 const boxes = load('boxes');
 const machinesModule = load('machines');
 

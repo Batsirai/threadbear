@@ -109,7 +109,9 @@ test("promisify(exec) and promisify(execFile) keep their contract through the ga
   const got = pFile(process.execPath, ['-e', 'process.stdout.write("out"); process.stderr.write("err")']);
   assert.ok((got as unknown as { child?: unknown }).child, '.child is there');
   assert.deepEqual(await got, { stdout: 'out', stderr: 'err' });
-  assert.deepEqual(await pExec('echo hi'), { stdout: 'hi\n', stderr: '' });
+  // cmd.exe's echo ends its line with \r\n (Windows CI, 18 Nov).
+  const echoed = await pExec('echo hi');
+  assert.deepEqual({ ...echoed, stdout: echoed.stdout.replace(/\r\n/g, '\n') }, { stdout: 'hi\n', stderr: '' });
   await assert.rejects(pFile(process.execPath, ['-e', 'process.stdout.write("so far"); process.exit(3)']), (e: { code?: number; stdout?: string }) => e.code === 3 && e.stdout === 'so far');
   closeSpawns('a save holds the box');
   await assert.rejects(pFile('true'), SpawnRefused);

@@ -3,12 +3,16 @@
 # file as a hard check and these as a report. Take a file off the list once
 # it passes there; the list only shrinks, except for a new test of something
 # that only runs on a Mac or Linux (tb land's, added 18 Nov: its test
-# harness makes repos through /bin/sh).
+# harness makes repos through /bin/sh),
+# and box mode's (box-mode, box-save, added 19 Nov: a box is a Linux machine,
+# and their tests make its repos through /bin/sh).
 account-isolation.test.ts
 acp-adapter.test.ts
 acp-grok.test.ts
 agent-write-trust.test.ts
 background.test.ts
+box-mode.test.ts
+box-save.test.ts
 check-mock-swift-tests.test.ts
 check-only.test.ts
 check-remote-line.test.ts
