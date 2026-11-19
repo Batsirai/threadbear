@@ -110,6 +110,17 @@ export class Reads {
     }
   }
 
+  // Windows: the names of the files in a folder that cmd.exe or Windows'
+  // own lookup could run by a bare name (runnableNames), so a cached hash
+  // looks again once one turns up, as a program a pull drops beside a
+  // script would be run in place of an installed one by that name.
+  readonly listings = new Map<string, string>();
+  runnables(dir: string): string[] | undefined {
+    const names = runnableNames(dir);
+    this.listings.set(dir, names === undefined ? '\u0000none' : names.join('\n'));
+    return names;
+  }
+
   // Files over MAX_READ_BYTES, not read: a hash that needed one can't
   // be made (patchHash), so nothing that reaches one can be trusted.
   readonly tooBig = new Set<string>();
@@ -149,6 +160,10 @@ export class Reads {
         return false;
       }
     }
+    for (const [dir, names] of this.listings) {
+      const now = runnableNames(dir);
+      if ((now === undefined ? '\u0000none' : now.join('\n')) !== names) return false;
+    }
     for (const [p, real] of this.links) {
       let now = '';
       try {
@@ -159,6 +174,23 @@ export class Reads {
       if (now !== real) return false;
     }
     return true;
+  }
+}
+
+// The files directly in `dir` with an extension Windows runs by a bare name
+// (PATHEXT, and its defaults whatever it says), sorted; undefined when it
+// can't be read.
+const DEFAULT_PATHEXT = ['.com', '.exe', '.bat', '.cmd', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.msc', '.cpl', '.ps1'];
+export function runnableNames(dir: string): string[] | undefined {
+  const exts = new Set([...DEFAULT_PATHEXT, ...(process.env.PATHEXT ?? '').split(';').map((e) => e.trim().toLowerCase()).filter((e) => e.startsWith('.'))]);
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => !e.isDirectory() && exts.has(path.extname(e.name).toLowerCase()))
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return undefined;
   }
 }
 
@@ -198,6 +230,16 @@ export type FollowOptions = {
   // a schedule's check runs them unattended, by a path as often as not.
   outside?: boolean;
 };
+
+// A package manager's own entry script, run by path through node.
+const PACKAGE_MANAGER_ENTRY = /\/node_modules\/(?:npm|pnpm|yarn|corepack|bun|@yarnpkg\/[^/]+)\/|\/(?:npm|npx|pnpm|pnpx|yarn|yarnpkg|corepack)(?:-cli)?\.[cm]?js$/i;
+
+// The variables patch trust can't follow a script setting, in the forms
+// assignment() doesn't read: arithmetic (`$((HOME=0))`, `let`, `(( ))`,
+// `HOME++`), by the script's text. A `$` or `{` before the name is a read.
+const ARITH_SET = (name: string) => new RegExp(`(?<![$\\w{])${name}\\s*(?:(?:[-+*/%^|&]|<<|>>)?=(?!=)|\\+\\+|--)|(?:\\+\\+|--)\\s*${name}\\b`);
+const HOME_SET = ARITH_SET('HOME');
+const MSYS_SET = ARITH_SET('MSYS2?_(?:ARG_CONV_EXCL|NO_PATHCONV|ENV_CONV_EXCL)');
 
 // Bounds: a script reaching more than this can't be checked.
 export const MAX_SCRIPT_FILES = 300;
@@ -731,6 +773,7 @@ class Reach {
   private binDirs: string[] = [];
   refused?: string;
   private visits = new Set<string>();
+  private besides = new Set<string>();
   private wraps = 0;
   // Each function a script defines, by the line it's defined on.
   private functions = new Map<string, number>();
@@ -770,6 +813,28 @@ class Reach {
     return inside(p) || inside(realOrNearest(p));
   }
 
+  // Windows: every file in `dir` that a program run by a bare name could
+  // turn out to be (runnableNames), hashed, and the folder's list of them
+  // watched (Reads.runnables). cmd.exe, and Windows' own lookup a program
+  // like node uses, try the folder a command runs in before PATH unless
+  // NoDefaultCurrentDirectoryInExePath is set, which the runner sets but a
+  // script can drop for what it starts in many ways (Codex's fourth review,
+  // 19 Nov 2026): this way, a program a pull drops there changes the hash
+  // whatever the script did to the variable.
+  private besideRun(dir: string, ctx?: Ctx, line?: number): void {
+    if (!IS_WINDOWS || this.problem || this.besides.has(dir) || !this.inRepo(dir)) return;
+    this.besides.add(dir);
+    const names = this.reads.runnables(dir);
+    if (!names) return;
+    for (const n of names) {
+      const real = this.reads.real(path.join(dir, n));
+      if (real === undefined || !isFile(real)) continue;
+      this.reads.read(real);
+      this.files.add(real);
+      if (this.files.size > MAX_SCRIPT_FILES) return this.fail(ctx, line, `runs commands in ${this.rel(dir) || 'the repo'}, which has more files Windows could run by name than patch trust follows.`);
+    }
+  }
+
   // Hashes a file of the repo's and follows it by its kind. `how`: it runs
   // (its own process), it's sourced into `ctx`'s shell, it's loaded as
   // code or config (an import, a package.json a package script runs from),
@@ -778,7 +843,12 @@ class Reach {
   follow(file: string, how: 'run' | 'source' | 'load' | 'named', ctx: Ctx | undefined, line?: number): void {
     if (this.problem) return;
     const abs = path.resolve(file);
-    if (!this.inRepo(abs)) return this.noteOutside(abs, how, ctx, line);
+    if (!this.inRepo(abs)) {
+      // npm's own script run through node is npm, with none of its checks
+      // (Codex's fourth review, 19 Nov 2026).
+      if (IS_WINDOWS && how === 'run' && PACKAGE_MANAGER_ENTRY.test(slashes(abs))) return this.fail(ctx, line, `runs ${path.basename(abs)}, a package manager, which on Windows runs package scripts with cmd.exe, so patch trust can't follow it.`);
+      return this.noteOutside(abs, how, ctx, line);
+    }
     if (how === 'named' && !looksRunnable(abs)) return;
     const passive = how === 'named' || how === 'load';
     const found = this.reads.real(abs);
@@ -1037,6 +1107,13 @@ class Reach {
     if (this.o.strict && (/child_process|\bBun\b|\bDeno\b|\bprocess\s*\.\s*(binding|dlopen)\b|\\(u[0-9a-fA-F{]|x[0-9a-fA-F]{2}|[0-7])/.test(text) || scan.strings.some((x) => /child_process|worker_threads|^(node:)?(vm|module|cluster|inspector)$/.test(x)))) {
       return this.fail(undefined, undefined, `${label} runs other commands or native code itself, which a hash can't follow. Run them from a shell script instead.`);
     }
+    // On Windows a program it starts with an environment of its own loses
+    // NoDefaultCurrentDirectoryInExePath, and may be run from wherever it
+    // says (Codex's fourth review, 19 Nov 2026).
+    if (IS_WINDOWS && /child_process|\bexeca\b|cross-spawn|\bzx\b|shelljs|\bBun\b|\bDeno\b/.test(text) && (/(?<!process\s*\.\s*)\benv\b|nodefaultcurrentdirectoryinexepath/i.test(text) || /\\(u[0-9a-fA-F{]|x[0-9a-fA-F]{2})/.test(text))) {
+      return this.fail(undefined, undefined, `${label} starts programs with an environment of its own, which on Windows lets one run from the folder it's in, so patch trust can't tell what runs. Leave env out, or run them from a shell script.`);
+    }
+    for (const d of [...dirs, path.dirname(file)]) this.besideRun(d);
     const ctx: Ctx = { label, file, argv0: [file], dirs, vars: new Map(), depth };
     for (const spec of scan.specifiers) {
       const target = this.o.resolveImport(path.dirname(file), spec);
@@ -1081,6 +1158,12 @@ class Reach {
 
   shell(text: string, ctx: Ctx, lineBase = 1): void {
     if (this.problem) return;
+    // By the text, comment lines aside, so no form of assignment or
+    // name worked out as it runs gets past (Codex's fourth review).
+    const code = text.replace(/^[ \t]*#.*$/gm, '');
+    if (HOME_SET.test(code)) return this.fail(ctx, undefined, "sets HOME (in arithmetic or let), so ~ and $HOME name another folder from then on, which patch trust doesn't follow.");
+    if (IS_WINDOWS && MSYS_SET.test(code)) return this.fail(ctx, undefined, "sets one of Git Bash's MSYS variables, which change how it hands paths to programs, so patch trust can't tell which file one names.");
+    if (IS_WINDOWS && /nodefaultcurrentdirectoryinexepath/i.test(code)) return this.fail(ctx, undefined, "names NoDefaultCurrentDirectoryInExePath, which keeps cmd.exe from running a program from the folder it's in, so patch trust can't tell what a command name runs.");
     let lexed: Lexer;
     try {
       lexed = new Lexer(text, lineBase).run();
@@ -1483,6 +1566,8 @@ class Reach {
 
   private program(called: string, args: Word[], ctx: Ctx, line: number, extra: boolean): void {
     const name = programName(called);
+    // Whatever it is: a builtin's name can be a program's too.
+    for (const d of ctx.dirs) this.besideRun(d, ctx, line);
     const a = (i: number) => this.str(args[i], ctx);
     if (Object.hasOwn(UNFOLLOWABLE, name)) return this.fail(ctx, line, `${UNFOLLOWABLE[name]}, which patch trust can't follow.`);
     if (name === 'hash' && args.some((w) => /^-\w*p/.test(this.str(w, ctx) ?? ''))) return this.fail(ctx, line, 'maps a command name to a file (`hash -p`), which patch trust can\'t follow.');
@@ -1503,16 +1588,26 @@ class Reach {
     if (name === 'unset') {
       for (const w of args) {
         const v = this.str(w, ctx);
-        if (v && !v.startsWith('-') && this.unfollowableVar(v, ctx, line)) return;
+        if (v === undefined) return this.fail(ctx, line, "unsets a variable whose name patch trust can't read.");
+        if (!v.startsWith('-') && this.unfollowableVar(v, ctx, line)) return;
       }
     }
     if (name === 'printf') {
-      const at = args.findIndex((w) => litOf(w) === '-v');
+      // "$option" could be -v (Codex's fourth review).
+      if (args[0] && this.str(args[0], ctx) === undefined && args[0].parts.some((p) => p.k !== 'lit')) return this.fail(ctx, line, "runs printf with a first argument worked out as it runs, which could make it set a variable patch trust can't name.");
+      const at = args.findIndex((w) => this.str(w, ctx) === '-v');
       const v = at >= 0 ? args[at + 1] && this.str(args[at + 1]!, ctx) : undefined;
       if (at >= 0 && v === undefined) return this.fail(ctx, line, "sets a variable with printf -v whose name patch trust can't read.");
       if (v && this.unfollowableVar(v, ctx, line)) return;
     }
     if (name === 'export' || name === 'local' || name === 'declare' || name === 'typeset' || name === 'readonly' || name === 'integer') {
+      // A name or option worked out as it runs could be anything
+      // (`export "$target=$PWD"`, `declare "$option" d=HOME`: Codex's fourth
+      // review), so it's refused. A literal name with an expanded value is fine.
+      for (const w of args) {
+        const first = w.parts[0];
+        if (first && first.k !== 'lit') return this.fail(ctx, line, `runs ${name} with a name or option worked out as it runs, which patch trust can't follow.`);
+      }
       // A name reference makes a later assignment to one name write
       // another (declare -n d=HOME; d=x), which isn't followed.
       if (name !== 'export' && args.some((w) => /^[-+][a-zA-Z]*n/.test(litOf(w) ?? ''))) return this.fail(ctx, line, `makes a name reference (${name} -n), which patch trust doesn't follow.`);
@@ -1584,7 +1679,7 @@ class Reach {
     // script by its own rules; routes in kept turning up (npx -c, a bare
     // npm install's lifecycle, npm start's implicit server.js: Codex's
     // reviews, 18 Nov 2026), so none is followed there.
-    if (IS_WINDOWS && ['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bunx'].includes(name)) return this.fail(ctx, line, `runs ${name}, which on Windows runs package scripts and programs with cmd.exe, so patch trust can't follow it.`);
+    if (IS_WINDOWS && ['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'yarnpkg', 'bunx', 'corepack'].includes(name)) return this.fail(ctx, line, `runs ${name}, which on Windows runs package scripts and programs with cmd.exe, so patch trust can't follow it.`);
     if (['npm', 'pnpm', 'yarn'].includes(name)) return this.pkgRun(name, args, ctx, line);
     if (['npx', 'bunx', 'pnpx'].includes(name)) return this.npx(args, ctx, line);
     if (name === 'make' || name === 'gmake') return this.make(args, ctx, line);
@@ -1632,6 +1727,11 @@ class Reach {
     };
     switch (name) {
       case 'exec':
+        // -c clears the environment, NoDefaultCurrentDirectoryInExePath with it.
+        if (IS_WINDOWS && args.some((w) => /^-[a-z]*c/.test(litOf(w) ?? ''))) {
+          this.fail(ctx, line, "runs `exec -c`, which on Windows lets cmd.exe run a program from the folder it's in, so patch trust doesn't follow it.");
+          return { words: [], extra: false };
+        }
         return { words: args.slice(val(['-a'])), extra: false };
       case 'command': {
         if (args.some((w) => /^-[vV]$/.test(litOf(w) ?? ''))) return { words: [], extra: false };
@@ -1691,8 +1791,18 @@ class Reach {
           }
           if (s === '-u' || s === '--unset') {
             const v = args[i + 1] && this.str(args[i + 1]!, ctx);
+            if (v === undefined) {
+              this.fail(ctx, line, "runs `env -u` with a name worked out as it runs, which patch trust can't follow.");
+              return { words: [], extra: false };
+            }
             if (v && this.unfollowableVar(v, ctx, line)) return { words: [], extra: false };
             i++;
+            continue;
+          }
+          // -uNAME and --unset=NAME (Codex's fourth review).
+          const joined = /^(?:-u|--unset=)(.+)$/s.exec(s);
+          if (joined) {
+            if (this.unfollowableVar(joined[1]!, ctx, line)) return { words: [], extra: false };
             continue;
           }
           // A cleared environment loses NoDefaultCurrentDirectoryInExePath.

@@ -471,3 +471,67 @@ test("nothing a patch runs can let cmd.exe run a program from the folder again (
     assert.match(commandFiles(command, folder).problem ?? '', /NoDefaultCurrentDirectoryInExePath|env -i/, command);
   }
 });
+
+// Codex's fourth review of the port (19 Nov 2026).
+
+test('HOME set by arithmetic, let, or a name or option worked out as it runs fails closed, on every platform; reading it is fine', () => {
+  const folder = project({ 'payload.sh': 'echo one\n', '0/payload.sh': 'echo two\n' });
+  for (const command of [
+    ': "$((HOME=0))"; bash "$HOME/payload.sh"',
+    ': $(( HOME += 1 )); bash "$HOME/payload.sh"',
+    'let HOME=0; bash "$HOME/payload.sh"',
+    '(( HOME = 0 )); bash "$HOME/payload.sh"',
+    ': $((HOME++)); bash "$HOME/payload.sh"',
+  ]) assert.match(commandFiles(command, folder).problem ?? '', /sets HOME/, command);
+  for (const command of [
+    'target=HOME; export "$target=$PWD"; bash "$HOME/payload.sh"',
+    'option=-n; declare "$option" destination=HOME; destination="$PWD"; bash "$HOME/payload.sh"',
+    'option=-v; printf "$1" HOME %s "$PWD"; bash "$HOME/payload.sh"',
+    'unset "$1"; bash payload.sh',
+  ]) assert.ok(commandFiles(command, folder).problem, command);
+  for (const command of ['[ "$HOME" = x ] && bash payload.sh', '[ $HOME = x ] || bash payload.sh', 'printf "%s\\n" "$HOME"; bash payload.sh', 'x=1; local y="$x"; bash payload.sh', ': "${HOME}"; bash payload.sh', '# HOME=0\nbash payload.sh']) {
+    assert.equal(commandFiles(command, folder).problem, undefined, command);
+  }
+});
+
+test('a program a pull drops beside a script, which Windows would run in place of an installed one, changes what is hashed', ONLY_WINDOWS, () => {
+  const folder = project({ 'check.sh': 'git status\n' });
+  const before = commandFiles('./check.sh', folder).files;
+  fs.writeFileSync(path.join(folder, 'git.exe'), 'MZ');
+  const after = commandFiles('./check.sh', folder).files;
+  assert.ok(after.some((f) => /git\.exe$/i.test(f)), JSON.stringify(after));
+  assert.ok(!before.some((f) => /git\.exe$/i.test(f)));
+});
+
+test('a cached patch hash looks again when a runnable file turns up beside what it runs', ONLY_WINDOWS, async () => {
+  const folder = project({ 'check.sh': 'git status\n', '.threadbear/patches/p.ts': "export default { hooks: [{ title: 'H', on: 'turn.end', run: './check.sh' }] };\n" });
+  const patch = path.join(folder, '.threadbear', 'patches', 'p.ts');
+  const trust = new PatchTrust();
+  trust.trustCurrent([patch]);
+  assert.equal((await trust.check(patch, 0)).trusted, true);
+  fs.writeFileSync(path.join(folder, 'git.cmd'), '@echo pwned\n');
+  const v = await trust.check(patch, 0);
+  assert.equal(v.trusted, false);
+});
+
+test('the ways round NoDefaultCurrentDirectoryInExePath fail closed on Windows', ONLY_WINDOWS, () => {
+  const folder = project({ 'main.js': '1;\n', 'package.json': '{"scripts":{"build":"node main.js"}}' });
+  for (const command of [
+    'export -n NoDefaultCurrentDirectoryInExePath; git status',
+    'declare +x NoDefaultCurrentDirectoryInExePath; git status',
+    'env --unset=NoDefaultCurrentDirectoryInExePath git status',
+    'env -uNoDefaultCurrentDirectoryInExePath git status',
+    'exec -c git status',
+    'corepack pnpm run build',
+    "node 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build",
+  ]) assert.ok(commandFiles(command, folder).problem, command);
+});
+
+test('followed JavaScript that starts a program with an environment of its own fails closed on Windows', ONLY_WINDOWS, () => {
+  const folder = project({
+    'own-env.cjs': "require('node:child_process').execSync('node main.js', { env: { SystemRoot: process.env.SystemRoot } });\n",
+    'inherits.cjs': "require('node:child_process').execSync('git status', { stdio: 'inherit' });\nconsole.log(process.env.PATH);\n",
+  });
+  assert.match(commandFiles('node own-env.cjs', folder).problem ?? '', /environment of its own/);
+  assert.equal(commandFiles('node inherits.cjs', folder).problem, undefined);
+});
