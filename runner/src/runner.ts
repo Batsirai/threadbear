@@ -4319,7 +4319,9 @@ export class Runner {
       s.wakeWhen = wakeWhen;
     }
     if (rec.waitingOn && rec.snoozedUntil) s.waitingOn = rec.waitingOn.map((w) => ({ threadId: w.threadId, title: w.title, ...(w.until ? { until: w.until } : {}), ...(w.done ? { done: true as const } : {}) }));
-    if (rec.hibernatedForApp && rec.snoozedUntil) s.awaitingAppRestart = true;
+    // Only while something still listens for the restart: one archived when
+    // it came isn't told, and its watch is spent (Codex's review, 19 Nov).
+    if (rec.hibernatedForApp && rec.snoozedUntil && this.awaitingAppRestart?.(rec.id)) s.awaitingAppRestart = true;
     if (rec.woke && rec.forceUnread) s.woke = { ...rec.woke };
     if (rec.archivedAt) {
       s.archivedAt = rec.archivedAt;

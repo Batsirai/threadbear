@@ -421,6 +421,25 @@ test("Mike hibernating a thread that waits on the app makes it his own snooze", 
   assert.equal(h.runner.get(thread.id).awaitingAppRestart, undefined, 'under Hibernating, where he put it');
 });
 
+test('one archived while the app restarted no longer says it waits for the app', () => {
+  // Its watch is spent and nothing will wake it (Codex's review, 19 Nov 2026).
+  let watcher!: AppRestarts;
+  const h = makeHarness(undefined, {}, { awaitingAppRestart: (id) => watcher.isWatching(id) });
+  watcher = new AppRestarts({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger });
+  const { thread } = h.runner.create({ text: 'Add Edit to draft boxes', accountId: 'claude-3' });
+  const s = h.adapter.last;
+  s.init();
+  watcher.appHello(D1, 'desktop');
+  watcher.watch(thread.id);
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  s.text('m1', 'Landed.');
+  s.result('completed');
+  h.runner.update({ threadId: thread.id, archived: true });
+  watcher.appHello(D2, 'desktop');
+  h.runner.update({ threadId: thread.id, archived: false });
+  assert.equal(h.runner.get(thread.id).awaitingAppRestart, undefined);
+});
+
 test('a turn that needs Mike, or one not waiting on the app, stays in the inbox', () => {
   let watching = true;
   const h = makeHarness(undefined, {}, { awaitingAppRestart: () => watching });
