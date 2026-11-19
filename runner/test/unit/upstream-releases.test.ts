@@ -330,7 +330,9 @@ test("Mike's runner holds a release when a workflow that didn't run on the tip w
     ciHistory: async (_repo: string, file: string) => (askedFor.push(file), history),
   });
   assert.equal(await up.publishOnce(), undefined, "runner.yml's red run holds it");
-  assert.deepEqual(askedFor, ['.github/workflows/runner.yml'], 'only the workflow that sat the tip out');
+  // The tip's look asks only for the workflow that sat it out; the look
+  // back for an older green commit (none here) then reads each one's.
+  assert.deepEqual(askedFor[0], '.github/workflows/runner.yml', 'only the workflow that sat the tip out');
   assert.equal(up.status().held?.commit, tip);
   assert.equal(up.status().held!.why, `"Runner" didn't pass on ${broke.slice(0, 8)}, the last commit it ran on`);
   // Re-run green on that commit: the tip can go.
@@ -385,6 +387,49 @@ test("Mike's runner holds a release until GitHub's checks pass on that commit", 
   assert.equal(up.status().published?.tag, tag);
   assert.equal(notesCalls, 1);
   assert.match(git(w.mike, "cat-file", "tag", tag!), /What's new:\n- Checks keep releases buildable/);
+});
+
+test("a red tip doesn't hold the day's release: the newest commit green on everything goes out, never one inside a push", async () => {
+  const w = world();
+  asGitHub(w.mike, w.root);
+  fs.mkdirSync(path.join(w.mike, '.github', 'workflows'), { recursive: true });
+  commit(w.mike, '.github/workflows/build.yml', 'Build on GitHub');
+  const c0 = commit(w.mike, '.github/workflows/runner.yml', 'Runner tests on GitHub');
+  // Only build.yml's paths: runner.yml counts by its run on c0.
+  const g1 = commit(w.mike, 'README.md', 'Docs');
+  // Pushed with the tip, so nothing ran on it alone.
+  const inside = commit(w.mike, 'a.txt', 'Inside a push');
+  const tip = commit(w.mike, 'b.txt', 'Breaks Windows');
+  git(w.mike, 'push', '-q', 'origin', 'main');
+  const committed = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000;
+  const clock = new FakeClock(committed + 2 * SETTLE_MS);
+  const ran = (wf: string, sha: string, conclusion: string): CiRun => ({ workflow: wf === 'build' ? '7' : '8', name: wf === 'build' ? 'Build' : 'Runner', status: 'completed', conclusion, attempt: 1, file: `.github/workflows/${wf}.yml`, sha });
+  let history: Record<string, CiRun[]> = {
+    '.github/workflows/build.yml': [ran('build', tip, 'success'), ran('build', g1, 'success'), ran('build', c0, 'success')],
+    '.github/workflows/runner.yml': [ran('runner', tip, 'failure'), ran('runner', c0, 'success')],
+  };
+  const make = () =>
+    upstreamFor(w.mike, w.home, clock, {
+      publish: { publish: true, signingKey: w.mikeKey.priv },
+      runningMainSettled: () => true,
+      ciRuns: async (_repo: string, sha: string) => [...history['.github/workflows/build.yml']!, ...history['.github/workflows/runner.yml']!].filter((r) => r.sha === sha),
+      ciHistory: async (_repo: string, file: string) => history[file] ?? [],
+    });
+  // Nothing green since the last push head either: held, saying why the tip is.
+  history = { ...history, '.github/workflows/runner.yml': [ran('runner', tip, 'failure'), ran('runner', c0, 'cancelled')] };
+  const held = make();
+  assert.equal(await held.publishOnce(), undefined);
+  assert.equal(held.status().held?.commit, tip);
+  assert.match(held.status().held!.why, /"Runner" didn't pass on it/);
+  // c0 green, g1 green by c0's runner run: g1 goes out, not the commit inside the push.
+  history = { ...history, '.github/workflows/runner.yml': [ran('runner', tip, 'failure'), ran('runner', c0, 'success')] };
+  const up = make();
+  const tag = await up.publishOnce();
+  assert.equal(tag, tagFor(new Date(clock.now())));
+  assert.equal(git(w.mike, 'rev-parse', `${tag}^{commit}`), g1);
+  assert.notEqual(git(w.mike, 'rev-parse', `${tag}^{commit}`), inside);
+  assert.equal(up.status().held, undefined);
+  assert.doesNotMatch(git(w.mike, 'cat-file', 'tag', tag!), /Breaks Windows|Inside a push/, "the tag's notes are its own commits'");
 });
 
 test("Mike's runner pushes a settled main GitHub doesn't have, then waits for its checks", async () => {

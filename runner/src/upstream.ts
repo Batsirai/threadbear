@@ -36,6 +36,8 @@
 // says nothing about the apps building. release/2026-11-04
 // to -06 went out not building on Xcode 26.6, and people installing it
 // found out before Mike did (PR #1, Maroš's fork).
+// When the tip is red, the newest older commit that passes the same checks
+// goes out instead (newestGreen).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -271,6 +273,8 @@ const NO_VERDICT = new Set(['skipped', 'neutral', 'stale']);
 
 // How many of a workflow's runs on main earlierVerdict is given.
 export const HISTORY_PAGE = 100;
+// How far back along main newestGreen looks for a green commit.
+export const GREEN_LOOKBACK = 80;
 
 // A workflow that didn't run on the tip, as its paths didn't change: what
 // its last finished run on a commit the tip has says, from `history`
@@ -1009,11 +1013,22 @@ export class Upstream {
     const last = tags[0];
     if (last && (await this.isAncestor(checkout, tip, last))) return this.hold(undefined);
     const why = await this.checksSay(checkout, tip);
-    if (why) {
+    // The tip held by a red check: the newest settled commit since the last
+    // release that's green on everything goes out instead (newestGreen).
+    const target = !why ? tip : this.lastSaid ? await this.newestGreen(checkout, tip, last, now).catch(() => undefined) : undefined;
+    if (why && !target) {
       this.hold({ commit: tip, why, at: new Date(now).toISOString() });
       return undefined;
     }
+    if (why) this.deps.log.info('main is held, so the newest commit green on everything goes out', { tip, commit: target, why });
     this.hold(undefined);
+    return this.tagRelease(checkout, target!, last, tag, now);
+  }
+
+  // Tags `tip` as today's release `tag`, signed, and pushes it.
+  private async tagRelease(checkout: string, tip: string, last: string | undefined, tag: string, now: number): Promise<string | undefined> {
+    const { publish } = this.deps;
+    if (!publish?.signingKey) return undefined;
 
     const range = last ? `${last}..${tip}` : tip;
     const subjects = (await this.git(checkout, ['log', '--no-merges', '--format=- %s', range, '--max-count=200'])).trim();
@@ -1100,6 +1115,7 @@ export class Upstream {
   // them waits for them, and is held when they can't be read: a release
   // that can wait a day is better than one that doesn't build.
   private async checksSay(checkout: string, tip: string): Promise<string | undefined> {
+    this.lastSaid = false;
     const workflows = (await this.git(checkout, ['ls-tree', '--name-only', tip, '.github/workflows/'])).split('\n').filter((f) => /\.ya?ml$/.test(f));
     if (!workflows.length) return undefined;
     // The URL as configured, not as an insteadOf rewrites it for fetching.
@@ -1111,6 +1127,7 @@ export class Upstream {
     try {
       const runs = await (this.deps.ciRuns ?? githubRuns)(repo, tip);
       const said = ciVerdict(runs);
+      this.lastSaid = Boolean(said);
       if (said) return said;
       const ran = new Set(runs.map((r) => r.file));
       const quiet = workflows.filter((f) => !ran.has(f));
@@ -1124,10 +1141,64 @@ export class Upstream {
         const why = earlierVerdict(await (this.deps.ciHistory ?? githubWorkflowRuns)(repo, file), has);
         if (why) held.push(why);
       }
+      this.lastSaid = held.length > 0;
       return held.length ? held.join('; ') : undefined;
     } catch (e) {
       return `couldn't read GitHub's checks (${String(e)})`;
     }
+  }
+
+  // Whether checksSay's last answer came from GitHub's runs (a red, running
+  // or cancelled check), not from main being just pushed, gone another way,
+  // or GitHub not answering: only then is an older commit looked for.
+  private lastSaid = false;
+
+  // The newest commit since `last` (main's first-parent line, the tip left
+  // out) that is as safe to hand on as a green tip: an hour old, the head of
+  // a push GitHub ran checks on, and every workflow in it green by the same
+  // rule as the tip's (earlierVerdict: its run on that commit, or for one
+  // its paths didn't set off, its last finished run on a commit it has).
+  // A commit inside a push isn't one: nothing ran on its changes alone.
+  // Without this one red push held every release: none went out from 16 to
+  // 19 Nov while Windows failed on main, with green commits in between.
+  // It's the same bar the Xcode 26 lesson set (release/2026-11-04 to -06
+  // went out unchecked), only on an older commit. One GitHub request a
+  // workflow, as the hourly look's are counted (60 an hour without a token).
+  private async newestGreen(checkout: string, tip: string, last: string | undefined, now: number): Promise<string | undefined> {
+    const key = repoKey(await this.git(checkout, ['config', '--get', 'remote.origin.url']).catch(() => ''));
+    if (!key.startsWith('github.com/')) return undefined;
+    const repo = key.slice('github.com/'.length);
+    const line = (await this.git(checkout, ['log', '--first-parent', `--max-count=${GREEN_LOOKBACK}`, '--format=%H %ct', tip, ...(last ? [`^${last}`] : [])]))
+      .split('\n')
+      .map((l) => l.trim().split(' '))
+      .filter((p): p is [string, string] => p.length === 2 && p[0] !== tip)
+      .filter(([, ct]) => now - Number(ct) * 1000 >= SETTLE_MS);
+    if (!line.length) return undefined;
+    const histories = new Map<string, CiRun[]>();
+    const historyOf = async (file: string) => {
+      let h = histories.get(file);
+      if (!h) histories.set(file, (h = await (this.deps.ciHistory ?? githubWorkflowRuns)(repo, file)));
+      return h;
+    };
+    const tipHas = new Set((await this.git(checkout, ['rev-list', tip])).split('\n').filter(Boolean));
+    const files = (await this.git(checkout, ['ls-tree', '--name-only', tip, '.github/workflows/'])).split('\n').filter((f) => /\.ya?ml$/.test(f));
+    for (const f of files) await historyOf(f);
+    const ranOn = new Set([...histories.values()].flat().map((r) => r.sha).filter(Boolean));
+    for (const [sha] of line) {
+      if (!ranOn.has(sha)) continue;
+      const mine = (await this.git(checkout, ['ls-tree', '--name-only', sha, '.github/workflows/'])).split('\n').filter((f) => /\.ya?ml$/.test(f));
+      const after = new Set((await this.git(checkout, ['rev-list', `${sha}..${tip}`])).split('\n').filter(Boolean));
+      const has = new Set([...tipHas].filter((c) => !after.has(c)));
+      let green = true;
+      for (const f of mine) {
+        if (earlierVerdict(await historyOf(f), has)) {
+          green = false;
+          break;
+        }
+      }
+      if (green) return sha;
+    }
+    return undefined;
   }
 
   // Says (or stops saying) why today's release is waiting, logging only a

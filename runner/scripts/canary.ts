@@ -4,7 +4,8 @@
 // thread there, sends it a red square, checks the agent saw red, checks the
 // decision card it ends with keeps what each answer does on the way back,
 // and archives the thread. Then it checks the backend is on the version this
-// runner expects and that no machine says it can't follow GitHub's main. One line per check; exits 1 if any failed.
+// runner expects, that no machine says it can't follow GitHub's main, and
+// on Mike's runner that releases are still going out. One line per check; exits 1 if any failed.
 //
 // The unit tests (scenarios.test.ts, parity.test.ts) prove the code agrees
 // with itself; this proves the real machines do: a release that didn't
@@ -16,6 +17,7 @@
 //
 // The daily schedule runs it as its check: an agent starts only when it
 // prints, which is only when something failed.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -67,6 +69,7 @@ try {
   // A machine that can't follow GitHub's main (follow-origin.ts): what sat
   // unnoticed on bruce and the Pixel for days before this canary found it.
   for (const r of status.behindRunners ?? []) say(false, `${r.name} isn't following GitHub's main properly: ${r.problem}`);
+  if (cfg.releases?.publish) await releasesGoingOut();
 
   const remote = (await read('remoteThreads.list', {})) as { runners: Runner[] };
   const runners = remote.runners.filter((r) => !values.runner || r.name === values.runner || r.id === values.runner);
@@ -114,6 +117,31 @@ async function check(r: Runner): Promise<void> {
   } finally {
     await client.call('threads.update', { threadId: id, archived: true }).catch((e) => say(false, `${r.name}: couldn't archive the canary thread ${id}: ${(e as Error).message}`));
   }
+}
+
+// Mike's runner tags a release a day once GitHub's checks pass
+// (src/upstream.ts). None went out from 16 to 19 Nov while main was red on
+// Windows, and nobody noticed until forks were days behind. More than
+// STALL_DAYS without one is said once (the newest tag is kept in
+// release-stall-told), so a long stall starts one thread, not one a day.
+// (Inside: a const out here isn't set yet when the checks above call this.)
+async function releasesGoingOut(): Promise<void> {
+  const STALL_DAYS = 2;
+  const { upstream } = await read<{ upstream: { checkout?: string; held?: { commit: string; why: string } } }>('upstream.status', {});
+  if (!upstream.checkout) return say(false, "releases: this runner doesn't say which checkout it publishes from");
+  const tags = execFileSync('git', ['-C', upstream.checkout, 'tag', '--list', 'release/*', '--sort=-refname'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  const newest = tags[0];
+  const day = newest && /^release\/(\d{4}-\d{2}-\d{2})/.exec(newest)?.[1];
+  if (!newest || !day) return say(false, 'releases: no release/ tags in the checkout');
+  const today = new Date();
+  const days = Math.round((Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) - Date.parse(`${day}T00:00:00Z`)) / 86_400_000);
+  if (days <= STALL_DAYS) return say(true, `releases: the newest is ${newest}`);
+  const told = path.join(cfg.home, 'runner', 'release-stall-told');
+  if (fs.existsSync(told) && fs.readFileSync(told, 'utf8').trim() === newest) return say(true, `releases: none since ${newest} (${days} days), already said`);
+  fs.mkdirSync(path.dirname(told), { recursive: true });
+  fs.writeFileSync(told, `${newest}\n`);
+  const why = upstream.held ? `main (${upstream.held.commit.slice(0, 8)}) is held: ${upstream.held.why}` : "the runner hasn't said why (tb logs, 'holding back a release')";
+  say(false, `releases: none has gone out since ${newest}, ${days} days ago, so forks aren't getting updates; ${why}`);
 }
 
 // A read that failed on a network blip (this Mac's runner reaching Convex)

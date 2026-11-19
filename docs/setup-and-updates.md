@@ -127,7 +127,10 @@ It also waits until GitHub's checks (the Xcode 26 builds) have passed on that ex
 commit, as the runner staying up says nothing about the apps building. Nothing else
 pushes main, so the runner pushes a settled main to GitHub first if it isn't there yet. A release held
 back says why in `tb status` and the Updates panel, and goes out on the next hourly look
-once the checks are green. The tag is signed with Mike's SSH signing key and pushed to GitHub. The tag's message
+once the checks are green. When main's newest commit is red, the newest older one since
+the last release that GitHub checked and passed on every workflow goes out instead (an
+hour old at least, and the head of a push, so its changes were checked on their own), so
+one red push doesn't hold releases for days. The tag is signed with Mike's SSH signing key and pushed to GitHub. The tag's message
 starts with plain-words notes ("What's new:", a few lines Opus writes from the commits
 on Mike's runner, for people who use Threadbear rather than work on it), then lists
 every commit since the last tag. The app's Updates panel shows the notes, and the

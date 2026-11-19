@@ -162,6 +162,11 @@ wouldn't have caught any of that (they pass on Tinker Desk), and all of them
 take 15 to 30 minutes a system, so instead the workflow's own result holds
 the next landing.
 
+The runner, Convex and website tests (`runner.yml`), Android (`android.yml`)
+and the Xcode 26 builds (`xcode-26.yml`) hold too since 19 Nov: `runner.yml`
+was red on Windows from 16 to 19 Nov, and as the daily release waits for
+every workflow to pass on one commit, none went out.
+
 A workflow opts in with a line of its own in its file:
 
 ```yaml

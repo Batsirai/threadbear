@@ -14,11 +14,20 @@
 # It costs nothing, and must stay that way (Mike, 9 Nov): GitHub's standard
 # hosted runners (ubuntu-24.04, macos-26) are free for a public repo, while
 # larger ones (anything -large, -xlarge or with more cores) are billed. So:
-# standard runners only, no schedule or cron, a newer push cancels the run
-# before it, and it only runs when something it checks changed (the paths
+# standard runners only, no schedule or cron, a newer push replaces a run
+# still waiting, and it only runs when something it checks changed (the paths
 # below: the runner, Convex, the website, the relay and scripts/ that the
 # runner's tests cover, check.sh that runs them, the root packages, and
 # this file).
+#
+# tb land holds a landing that changes what this checks while its last run
+# on main failed (runner/src/land-gate.ts, docs/thread-worktrees.md "Red on
+# GitHub"), and main's runs aren't cancelled by newer pushes, so each one
+# finishes and says something (only a pull request's are). From 16 to 19
+# Nov this workflow was red on Windows while landings went on top, and
+# with every workflow having to pass on one commit for the daily release,
+# none went out (runner/src/upstream.ts).
+# tb land: hold while red
 name: Runner, Convex and website tests
 
 on:
@@ -53,7 +62,7 @@ permissions:
 
 concurrency:
   group: runner-tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Only in Mike's repo (or when started by hand): in a fork, a push of its
 # main ran every job here on Linux, Mac, Windows and Android, though its
