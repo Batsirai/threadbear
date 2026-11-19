@@ -1217,6 +1217,12 @@ export function automaticCommand(command: string, folder: string, files: string[
       problem: `\`${command}\` runs by itself, but patch trust can't follow everything ${script} runs, so trusting the patch couldn't cover it: ${why} Run other scripts by a plain path ("./scripts/x.sh") and package scripts by a plain name ("npm run build").`,
     };
   }
+  // Hashed isn't followed: on Windows a script beside another is hashed
+  // as something Windows could run by name, without what it runs being
+  // read (Codex's sixth review). So what this one runs is followed now,
+  // and must all be covered too.
+  const deep = actionCommandProblem(command, folder, files, blocked);
+  if (deep) return { problem: `\`${command}\` runs by itself, but it ${deep}` };
   const quote = (w: string) => `'${w.replace(/'/g, `'\\''`)}'`;
   // From the folder holding .threadbear/, which is where the follow
   // started: a hook in a thread in a subfolder ran from there, so the

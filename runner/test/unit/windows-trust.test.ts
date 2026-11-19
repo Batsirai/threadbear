@@ -540,3 +540,33 @@ test('followed JavaScript that starts a program with an environment of its own f
   assert.match(commandFiles('node own-env.cjs', folder).problem ?? '', /environment of its own/);
   assert.equal(commandFiles('node inherits.cjs', folder).problem, undefined);
 });
+
+// Codex's sixth review (19 Nov 2026).
+
+test("cd --, CDPATH, find -execdir, let and half-worked-out names fail closed or are followed, on every platform", () => {
+  const folder = project({ 'payload.sh': 'echo root\n', 'sub/payload.sh': 'echo sub\n', 'sub/marker': '' });
+  const r = commandFiles('cd -- sub; bash payload.sh', folder);
+  assert.equal(r.problem, undefined);
+  assert.ok(r.files.some((f) => /sub[\\/]payload\.sh$/.test(f)), JSON.stringify(r.files));
+  for (const command of [
+    'CDPATH="$PWD/nest"; cd target; bash payload.sh',
+    'find sub -name marker -execdir bash payload.sh \;',
+    'target=HOME; let "$target=1"; bash "$HOME/payload.sh"',
+    'suffix=OME; export "H${suffix}=$PWD/sub"; bash "$HOME/payload.sh"',
+  ]) assert.ok(commandFiles(command, folder).problem, command);
+});
+
+test("a hook's script hashed only as a file beside another isn't taken as followed", ONLY_WINDOWS, async () => {
+  const folder = project({
+    '.threadbear/patches/p.ts': "export default { hooks: [{ title: 'Check', on: 'turn.end', run: '.' + '/check.js' }] };\n",
+    'check.js': '#!/usr/bin/env bash\nbash sub/payload.sh\n',
+    'sub/payload.sh': 'echo one\n',
+  });
+  const patch = path.join(folder, '.threadbear', 'patches', 'p.ts');
+  const trust = new PatchTrust();
+  trust.trustCurrent([patch]);
+  const { loadPatchSet } = await import('../../src/patches.ts');
+  const set = await loadPatchSet(folder, tmpDir(), new Map(), [], [], undefined, trust);
+  assert.equal(set.hooks.length, 0);
+  assert.match(set.patches[0]?.error ?? '', /hook "Check"/);
+});

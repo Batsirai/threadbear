@@ -1164,6 +1164,8 @@ class Reach {
     if (HOME_SET.test(code)) return this.fail(ctx, undefined, "sets HOME (in arithmetic or let), so ~ and $HOME name another folder from then on, which patch trust doesn't follow.");
     const msys = IS_WINDOWS ? MSYS_SET.exec(code) : null;
     if (msys) return this.fail(ctx, undefined, `sets ${/MSYS2?_\w+/.exec(msys[0])?.[0] ?? 'an MSYS variable'}, which changes how Git Bash hands paths to programs, so patch trust can't tell which file one names.`);
+    // CDPATH makes `cd x` go somewhere else than ./x (Codex's sixth review).
+    if (/\bCDPATH\b/.test(code)) return this.fail(ctx, undefined, "uses CDPATH, which makes cd go to folders patch trust can't follow.");
     if (IS_WINDOWS && /nodefaultcurrentdirectoryinexepath/i.test(code)) return this.fail(ctx, undefined, "names NoDefaultCurrentDirectoryInExePath, which keeps cmd.exe from running a program from the folder it's in, so patch trust can't tell what a command name runs.");
     let lexed: Lexer;
     try {
@@ -1593,6 +1595,8 @@ class Reach {
         if (!v.startsWith('-') && this.unfollowableVar(v, ctx, line)) return;
       }
     }
+    // let's expressions assign by their text, so one worked out as it runs could set anything.
+    if (name === 'let' && args.some((w) => w.parts.some((p) => p.k !== 'lit'))) return this.fail(ctx, line, "runs let with an expression worked out as it runs, which could set a variable patch trust can't name.");
     if (name === 'printf') {
       // "$option" could be -v (Codex's fourth review).
       if (args[0] && this.str(args[0], ctx) === undefined && args[0].parts.some((p) => p.k !== 'lit')) return this.fail(ctx, line, "runs printf with a first argument worked out as it runs, which could make it set a variable patch trust can't name.");
@@ -1605,9 +1609,13 @@ class Reach {
       // A name or option worked out as it runs could be anything
       // (`export "$target=$PWD"`, `declare "$option" d=HOME`: Codex's fourth
       // review), so it's refused. A literal name with an expanded value is fine.
+      // Any of the name, up to its `=`, worked out as it runs: `H${x}=...`
+      // too (Codex's sixth review).
       for (const w of args) {
-        const first = w.parts[0];
-        if (first && first.k !== 'lit') return this.fail(ctx, line, `runs ${name} with a name or option worked out as it runs, which patch trust can't follow.`);
+        for (const p of w.parts) {
+          if (p.k === 'lit' && p.s.includes('=')) break;
+          if (p.k !== 'lit') return this.fail(ctx, line, `runs ${name} with a name or option worked out as it runs, which patch trust can't follow.`);
+        }
       }
       // A name reference makes a later assignment to one name write
       // another (declare -n d=HOME; d=x), which isn't followed.
@@ -1666,7 +1674,9 @@ class Reach {
     if (this.problem) return;
     if (name === 'find') {
       for (let i = 0; i < args.length; i++) {
-        if (!/^-(exec|execdir|ok|okdir)$/.test(a(i) ?? '')) continue;
+        // From each folder it finds, which isn't followed (Codex's sixth review).
+        if (/^-(execdir|okdir)$/.test(a(i) ?? '')) return this.fail(ctx, line, 'runs a command from each folder find finds (-execdir), which patch trust can\'t follow.');
+        if (!/^-(exec|ok)$/.test(a(i) ?? '')) continue;
         const end = args.findIndex((w, j) => j > i && /^[;+]$/.test(litOf(w) ?? ''));
         this.run(args.slice(i + 1, end < 0 ? args.length : end), ctx, line, false);
       }
@@ -1696,7 +1706,7 @@ class Reach {
   }
 
   private cd(args: Word[], ctx: Ctx, line: number): void {
-    const words = args.filter((w) => !/^-[LPe@]+$/.test(litOf(w) ?? ''));
+    const words = args.filter((w) => !/^-[LPe@]+$|^--$/.test(litOf(w) ?? ''));
     if (!words.length) {
       ctx.dirs.add(this.home);
       return;
