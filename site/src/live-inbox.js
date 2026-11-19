@@ -7,7 +7,9 @@
 // slides off (its thread goes back to work, so Running ticks up), the rest glide up, and after
 // the last one the bear waves at an empty inbox. Then the threads come back and it plays again.
 // It holds while it's off screen or the tab's hidden, and with reduced motion it's a still of the
-// first decision. Everything moves by transform and opacity (Web Animations), with spring curves
+// first decision. It's drawn in the page's light colours, not the app's dark ones ("Paper
+// window", Mike's pick of 19 Nov from three fixes to the hero), and on a phone the decision
+// sits above the list (styles.css). Everything moves by transform and opacity (Web Animations), with spring curves
 // drawn as CSS linear() where the browser has it.
 (() => {
   const host = document.querySelector(".live");
@@ -140,7 +142,8 @@
   const win = $(".ld-win"), rowsEl = $(".ld-rows"), head = $(".ld-head"), body = $(".ld-body");
   const after = $(".ld-after"), cardArea = $(".ld-cardarea"), compose = $(".ld-compose"), zero = $(".ld-zero"), ptr = $(".ld-ptr");
   const counts = { inbox: $('[data-k="inbox"]'), run: $('[data-k="run"]') };
-  const rh = () => parseFloat(getComputedStyle(host.firstElementChild).getPropertyValue("--rh")) || 46;
+  // The row height, measured: the window's sizes scale with its width (--u in styles.css).
+  const rh = () => rowsEl.offsetHeight / THREADS.length;
   const narrow = () => win.offsetWidth < 520;
 
   const rowHTML = (t) => `<span class="ld-dot"></span><div class="ld-av">${t.av}</div><div class="ld-tx"><div class="ld-t">${t.title}</div><div class="ld-s"><span>${t.project}</span><span>${t.time}</span></div></div>`;
@@ -329,6 +332,15 @@
       await inboxZero();
       await wait(300);
     }
+  }
+
+  // A resized window changes the row height, so everything goes back to where it belongs.
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(() => {
+      rows.forEach((r, i) => { r.y = i * rh(); r.el.style.transform = `translateY(${r.y}px)`; });
+      afterY = -(THREADS.length - rows.length) * rh();
+      after.style.transform = `translateY(${afterY}px)`;
+    }).observe(win);
   }
 
   // With reduced motion: the first decision, still.
