@@ -2049,6 +2049,11 @@ export class ConvexSync {
     return Boolean(this.deps.key) && !this.deps.key!.startsWith('tbr_') && !this.deps.key!.startsWith('tbb_');
   }
 
+  /** The settings changed (an experiment switched): the sidebar's watch takes in what it now may (thread-index.ts refresh). */
+  refreshIndex(): void {
+    this.index?.refresh();
+  }
+
   // Virtual runners from the Mac (virtual-runners.ts): the experiment on, the
   // main Mac's key, and a backend that has them.
   virtualRunnersReady(): boolean {

@@ -6288,7 +6288,9 @@ type RemoteRunner = {
 }
 // From API 90 with the virtualRunners experiment on, and only on the
 // owner key's runner: the virtual runners (`boxes:runnerServices`), for
-// Runs on's entries after the machines. Left out otherwise.
+// Runs on's entries after the machines. Left out otherwise. Switching the
+// experiment, or the backend reaching 90, takes effect in the watch at once:
+// they come (or go, with a remoteThreads.updated without them) then.
 type VirtualRunner = { id: string, name: string, provider: string }
 // RemoteThreads gains `services?: VirtualRunner[]`.
 // rpcUrl and tokenFile were the direct link between Macs (step 6 part 2),

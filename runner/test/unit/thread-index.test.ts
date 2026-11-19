@@ -537,3 +537,51 @@ test('the virtual runners (API 90, the experiment) come with the other runners f
     index.stop();
   }
 });
+
+// Codex's review of slice 5 (7): switching the experiment on (or the backend
+// reaching API 90) while the app watches starts the virtual runners' watch at
+// the next refresh, and switching it off stops it and drops them.
+test('the virtual runners watch starts and stops with a refresh, as the experiment or the backend changes', async () => {
+  const h = makeHarness();
+  let takes = false;
+  const asked: string[] = [];
+  let stopped = 0;
+  let servicesAnswer: ((v: unknown) => void) | undefined;
+  const heard: RemoteThreads[] = [];
+  const index = new ThreadIndex({
+    post: async () => null,
+    subscribe: (fn, _args, onUpdate) => {
+      asked.push(fn);
+      if (fn === 'boxes:runnerServices') {
+        servicesAnswer = onUpdate;
+        return () => void stopped++;
+      }
+      return () => undefined;
+    },
+    key: 'k',
+    runnerId: 'r-laptop',
+    home: h.home,
+    host: h.runner,
+    publish: (n: Notification) => n.method === 'remoteThreads.updated' && heard.push(n.params),
+    clock: h.clock,
+    log: nullLogger,
+    takesSince: () => true,
+    takesServices: () => takes,
+  });
+  index.start();
+  index.list();
+  assert.ok(!asked.includes('boxes:runnerServices'));
+  takes = true;
+  index.refresh();
+  assert.equal(asked.filter((f) => f === 'boxes:runnerServices').length, 1, 'watched once it can be');
+  servicesAnswer!([{ serviceId: 'runnerServices:1', name: 'Cloud (Fly)', provider: 'fly' }]);
+  assert.deepEqual(heard.at(-1)!.services, [{ id: 'runnerServices:1', name: 'Cloud (Fly)', provider: 'fly' }]);
+  index.refresh();
+  assert.equal(asked.filter((f) => f === 'boxes:runnerServices').length, 1, 'not twice');
+  takes = false;
+  index.refresh();
+  assert.equal(stopped, 1);
+  assert.equal(index.list().services, undefined);
+  assert.equal(heard.at(-1)!.services, undefined, 'the app hears they went');
+  index.stop();
+});

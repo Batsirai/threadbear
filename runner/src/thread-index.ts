@@ -376,6 +376,16 @@ export class ThreadIndex {
     );
   }
 
+  // No longer watched (the experiment switched off): the app hears they went.
+  private dropServices(): void {
+    this.unsubServices?.();
+    this.unsubServices = undefined;
+    this.services = undefined;
+    const { services: _gone, ...rest } = this.remote;
+    this.remote = rest;
+    this.deps.publish?.({ method: 'remoteThreads.updated', params: { ...this.remote, ready: this.heard() } });
+  }
+
   private onRunners(v: unknown): void {
     this.runnersHeard = Array.isArray(v) ? (v as RawRunner[]) : [];
     if (!this.runnersHeard.length) this.answered = true;
@@ -515,6 +525,10 @@ export class ThreadIndex {
     }
     // The backend's taken the runner order since the watch began.
     if (this.unsubscribe) this.watchOrder();
+    // The virtual runners: the experiment switched, or the backend reached
+    // API 90, since the watch began (Codex's review of slice 5, 7).
+    if (this.unsubscribe) this.watchServices();
+    if (this.unsubServices && !this.deps.takesServices?.()) this.dropServices();
     for (const t of this.deps.host.list(['inbox', 'snoozed', 'archived'])) this.mark(t);
     this.schedule();
   }

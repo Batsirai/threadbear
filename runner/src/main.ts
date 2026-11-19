@@ -477,7 +477,15 @@ async function main(): Promise<void> {
   });
   // Until it is listening (below): see Runner.holdWaits.
   runner.holdWaits = true;
-  const settings = new SettingsService({ config: cfg, publish: (n) => runner.publish(n), poolIds: () => runner.listPools().pools.map((p) => p.id) });
+  const settings = new SettingsService({
+    config: cfg,
+    publish: (n) => {
+      runner.publish(n);
+      // An experiment switched (virtualRunners' Runs on entries): the sidebar's watch catches up.
+      if (n.method === 'settings.updated') sync.refreshIndex();
+    },
+    poolIds: () => runner.listPools().pools.map((p) => p.id),
+  });
   // Runners still finishing turns after a handover: connected before the
   // threads load, so the ones they have are left to them. Nothing after the
   // await below yields until runner.start(), so no thread can arrive first.
