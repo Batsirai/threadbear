@@ -393,19 +393,22 @@ fn clicked(url: &str, event: &ClickEvent, origin: Origin, base: &str, cx: &mut A
 /// it can't place opens without asking once Mike has said always open that
 /// kind in that app. `path` is absolute.
 pub(crate) fn open_file(path: &str, origin: Origin, cx: &mut App) {
-    // A remembered kind counts only while its app is still the Mac's own
-    // choice for that kind, so a file a thread pointed at another app with
-    // its own "open with" never matches one (Codex and Gemini, second round).
-    let trusted: Vec<_> = crate::reply_links::trusted_openers().into_iter().filter(is_default_opener).collect();
-    match policy::decide_file_trusting(path, origin, &app_for, &trusted) {
+    match policy::decide_file(path, origin, &app_for) {
         FileVerdict::Open { url, look, with, .. } => {
             open_checked(path, &look, &with, &url, cx);
         }
         FileVerdict::Refuse(why) => refuse(why, cx),
         FileVerdict::Ask { mut question, url, look, with } => {
-            // Always only for the Mac's own app for that kind, never one a
-            // file was pointed at by itself.
-            if !look.trustable.as_ref().is_some_and(is_default_opener) {
+            // Always, and a remembered kind, only for the Mac's own app for
+            // that kind, so a file a thread pointed at another app with its
+            // own "open with" never matches one (Codex and Gemini, second
+            // round). Looked up only for a kind that could be remembered.
+            let default = look.trustable.as_ref().is_some_and(is_default_opener);
+            if default && policy::remembered(&look, &crate::reply_links::trusted_openers()) {
+                open_checked(&path, &look, &with, &url, cx);
+                return;
+            }
+            if !default {
                 question.always = None;
             }
             let path = path.to_owned();
@@ -433,14 +436,17 @@ fn is_default_opener(kind: &policy::TrustedOpener) -> bool {
     if kind.extension.is_empty() || !kind.extension.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
         return false;
     }
+    static PROBES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let Some(folder) = opened_folder().map(|f| f.join("kinds")) else { return false };
     if threadbear_core::private_file::dir(&folder).is_err() {
         return false;
     }
-    let probe = folder.join(format!("probe.{}", kind.extension));
-    // Made fresh, so no "open with" left on an old one counts.
-    let _ = std::fs::remove_file(&probe);
-    if threadbear_core::private_file::write(&probe, b"").is_err() {
+    // A new empty file each time, named for this process and this look, so
+    // no "open with" left on an old one counts and two apps (a handover)
+    // never share one. Nothing to sync: it's only ever asked about.
+    let n = PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let probe = folder.join(format!("probe-{}-{n}.{}", std::process::id(), kind.extension));
+    if std::fs::File::create_new(&probe).is_err() {
         return false;
     }
     let url = NSURL::fileURLWithPath(&NSString::from_str(&probe.to_string_lossy()));

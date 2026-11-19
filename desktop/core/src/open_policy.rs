@@ -633,6 +633,13 @@ fn runs(file: &Path, meta: &std::fs::Metadata, app: Option<OpeningApp>) -> (Opti
         if app.bundle_id.as_deref().is_some_and(is_code_runner) {
             return (Some(format!("It opens in {}, which runs it.", app.name)), None);
         }
+        // A file (even one named like a document) that a thread pointed at
+        // Finder or an app that mounts or unpacks what it's given: an alias
+        // opens what it points at, an image or archive brings in an app
+        // (Gemini's third look, 19 Nov). A folder going to Finder is shown.
+        if !meta.is_dir() && app.bundle_id.as_deref().is_some_and(|id| OPENS_WHATS_INSIDE.contains(&id.to_ascii_lowercase().as_str())) {
+            return (Some(format!("It opens in {}, which opens what's inside it.", app.name)), None);
+        }
         // An app in a project folder (or anywhere else a thread can write)
         // can be made a file's opener, with Launch Services' per-file "open
         // with" setting on the file itself, and opening the file would
@@ -741,12 +748,18 @@ const NEVER_REMEMBERED_EXTENSIONS: &[&str] = &[
     "xltm", "xlam", "pptm", "potm", "ppam",
 ];
 
-/// Apps never given an Always: they open what a file points at, mount or
-/// unpack it, or run it (the code runners are refused before this).
+/// Apps that open what a file points at or holds: a file going to one
+/// always asks (`runs`), whatever it's called.
+const OPENS_WHATS_INSIDE: &[&str] = &[
+    "com.apple.finder", "com.apple.diskimagemounter", "com.apple.archiveutility", "cx.c3.theunarchiver", "com.macpaw.site.theunarchiver",
+    "com.aone.keka", "com.macitbetter.betterzip",
+];
+
+/// Apps never given an Always, besides those: they run what they're given
+/// (the code runners are refused before this).
 const NEVER_REMEMBERED_APPS: &[&str] = &[
-    "com.apple.finder", "com.apple.diskimagemounter", "com.apple.archiveutility", "com.apple.scripteditor2", "com.apple.automator",
-    "com.apple.installer", "com.apple.shortcuts", "org.python.idle", "com.apple.systemevents", "com.apple.applescriptutility",
-    "cx.c3.theunarchiver", "com.macpaw.site.theunarchiver", "com.aone.keka", "com.macitbetter.betterzip",
+    "com.apple.scripteditor2", "com.apple.automator", "com.apple.installer", "com.apple.shortcuts", "org.python.idle", "com.apple.systemevents",
+    "com.apple.applescriptutility",
 ];
 
 /// Where an app may be for an Always to name it: directly in /Applications,
@@ -769,6 +782,11 @@ fn rememberable_place(app: &Path) -> bool {
     };
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     directly_in(Path::new("/Applications")) || directly_in(Path::new("/System/Applications")) || home.is_some_and(|h| directly_in(&h.join("Applications")))
+}
+
+/// Whether `look` is a kind of file `trusted` says always opens in its app.
+pub fn remembered(look: &Look, trusted: &[TrustedOpener]) -> bool {
+    look.trustable.as_ref().is_some_and(|t| trusted.iter().any(|k| k.same(t)))
 }
 
 /// Decides about the file at `path`, which must be absolute already, with
@@ -802,7 +820,7 @@ pub fn decide_file_trusting(path: &str, origin: Origin, app_for: &dyn Fn(&Path) 
         return FileVerdict::Refuse(format!("Threadbear can't open {real} on Windows yet: its path is too long, or it's on a network drive."));
     }
     let url = file_url(&look.resolved.to_string_lossy());
-    let remembered = look.trustable.as_ref().is_some_and(|t| trusted.iter().any(|k| k.same(t)));
+    let remembered = remembered(&look, trusted);
     match &look.runs {
         None => FileVerdict::Open { url, resolved: look.resolved.clone(), with: opener(&look), look },
         Some(_) if remembered => FileVerdict::Open { url, resolved: look.resolved.clone(), with: opener(&look), look },
@@ -1644,8 +1662,18 @@ mod tests {
             let FileVerdict::Ask { question, .. } = decide_file(&given, Origin::ThisMac, &there) else { panic!() };
             assert!(question.always.is_none());
         }
-        // Finder, or an alias or a disk image: no Always.
         let finder = |_: &Path| Some(OpeningApp { path: "/System/Library/CoreServices/Finder.app".into(), bundle_id: Some("com.apple.finder".into()), name: "Finder".into() });
+        // A file named like a document that was pointed at Finder or an
+        // unpacker asks, with no Always.
+        let json = s.file("data.json", "x");
+        let FileVerdict::Ask { question, .. } = decide_file(&json.to_string_lossy(), Origin::ThisMac, &finder) else { panic!("a document went to Finder") };
+        assert!(question.always.is_none() && question.detail.contains("opens what's inside it"));
+        let unpacker = |_: &Path| Some(OpeningApp { path: "/System/Library/CoreServices/Applications/Archive Utility.app".into(), bundle_id: Some("com.apple.archiveutility".into()), name: "Archive Utility".into() });
+        assert!(matches!(decide_file(&json.to_string_lossy(), Origin::ThisMac, &unpacker), FileVerdict::Ask { .. }));
+        // A folder still goes to Finder.
+        fs::create_dir_all(s.path("plain")).unwrap();
+        assert!(matches!(decide_file(&s.path("plain").to_string_lossy(), Origin::ThisMac, &finder), FileVerdict::Open { .. }));
+        // Finder, or an alias or a disk image: no Always.
         let alias = s.file("go.alias", "x");
         let FileVerdict::Ask { question, .. } = decide_file(&alias.to_string_lossy(), Origin::ThisMac, &finder) else { panic!() };
         assert!(question.always.is_none());
