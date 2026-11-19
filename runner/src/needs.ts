@@ -599,26 +599,28 @@ export function offersToTakeItBack(asks: Ask[]): boolean {
 // it's done. Codex and Gemini found those in two rounds of review (20 Nov).
 // The whole answer is the done phrase, maybe with "it" or a few words after a
 // comma ("Done, picked"), so "Installed apps" or "I've changed my mind" isn't.
-const SAYS_DONE = /^(?:done|all (?:done|set)|did (?:it|that)|i did|it's (?:done|on|in)|i(?: have|'ve) (?:\w+ed|done|set|put|got|made|run)|finished|unlocked|switched (?:on|off|back|over)|signed in|logged in|turned (?:it )?(?:on|off)|added|allowed|granted|installed|pasted|typed|entered|reconnected|plugged in|restarted|rebooted|clicked|copied)(?: (?:it|them|that|this|both|all|now|in|on|back))?(?:[,.!:;].*)?$/i;
+const SAYS_DONE = /^(?:done|all (?:done|set)|did (?:it|that)|i did|it's (?:done|on|in)|i(?: have|'ve) (?:\w+ed|done|set|put|got|made|run)|finished|unlocked|switched|signed in|logged in|turned(?: (?:it|them))? (?:on|off)|added|allowed|granted|installed|pasted|typed|entered|reconnected|plugged in|restarted|rebooted|clicked|copied)(?: (?:it|them|that|this|both|all|now|in|on|off|up|back|over))*(?:\s*[-–—(,.!:;].*| to .*)?$/i;
 const STEP_VERB = 'add|allow|click|connect|copy|create|drag|enable|enter|give|grant|install|log ?in(?:to)?|log (?:out|on(?:to)?)|move|open|paste|plug|press|put|reconnect|restart|reboot|run|set|sign ?in(?:to)?|sign (?:up|out)|switch|tap|tick|turn|type|unlock|unplug';
 // The instruction, maybe after "Please" or "Can you" and clauses saying where
 // ("On Tinker Desk, in System Settings, ").
-const STARTS_WITH_A_STEP = new RegExp(`^(?:please,? |(?:can|could|would) you (?:please )?)?(?:(?:on|in|at|from|over|using|with) [^,?]{1,120}, ){0,2}(?:please,? )?(?:${STEP_VERB})\\b`, 'i');
+const ASKED_TO = '(?:can|could|would) you (?:please )?';
+const STARTS_WITH_A_STEP = new RegExp(`^(?:please,? |${ASKED_TO})?(?:(?:on|in|at|from|over|using|with) [^,?]{1,120}, ){0,2}(?:please,? |${ASKED_TO})?(?:${STEP_VERB})\\b`, 'i');
 // Deleting, paying and the like are never pressed on an agent, whatever the card.
-const NOT_TO_PRESS = /\b(?:delete|remove|erase|wipe|uninstall|destroy|drop|reset|pay|buy|purchase|order|refund|cancel|close (?:the |your |my )?account)\b/i;
+const NOT_TO_PRESS = /\b(?:delet(?:e|es|ed|ing|ion)|remov(?:e|es|ed|ing)|erase|wipe|uninstall|destroy|pay|paid|paying|payment|prepay|buy|purchase|checkout|subscribe|refund|(?:place|make) (?:an |the )?order|order (?:it|them|one|the|a|some)|cancel (?:the |my |your |this )?(?:subscription|plan|order|account|membership)|close (?:the |your |my )?account)\b/i;
 // Curly apostrophes as typed on a phone or by some models, markdown links as
 // their words, and bold or italics, so they don't hide the words.
 const plain = (s: string) => s.replace(/[‘’]/g, "'").replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`]/g, '').trim();
 export function handsOverAStep(asks: Ask[]): boolean {
   // An ask that opens a review is a pick; the card's other asks still count.
-  const steps = asks.filter((a) => !a.links?.some((l) => l.url.startsWith('review:')) && !NOT_TO_PRESS.test(plain(a.action)));
+  const steps = asks.filter((a) => !a.links?.some((l) => l.url.startsWith('review:')) && !NOT_TO_PRESS.test(plain([a.action, a.why, ...(a.optionNotes ?? [])].join(' '))));
   return offersToTakeItBack(steps) || steps.some((a) => [...(a.options ?? []), ...(a.reply ? [a.reply] : [])].some((o) => SAYS_DONE.test(plain(o))) || givesAnInstruction(plain(a.action)));
 }
 // An instruction, and not a question: one ending "?" asks leave or is a
 // choice ("Install the new Tandem now?", "Open PRs #38 and #41 both touch
 // auth. Which first?"); "Can you ...?" is the user being asked to do it.
 function givesAnInstruction(action: string): boolean {
-  if (action.endsWith('?') && !/^(?:can|could|would) you /i.test(action)) return false;
+  const first = action.split(/(?<=[.?!])\s/)[0];
+  if ((first.endsWith('?') || action.endsWith('?')) && !/\b(?:can|could|would) you /i.test(first)) return false;
   return STARTS_WITH_A_STEP.test(action);
 }
 

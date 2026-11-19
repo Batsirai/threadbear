@@ -435,6 +435,17 @@ test('end_turn: the sign-in ask the sign-in note asked for is taken, with no try
   r = await call({ needs: 'you', asks: [{ action: 'Sign in to Gmail again on claude.ai.', why: 'Then I can search it.', options: ['Signed in'] }] }, 'e3');
   assert.equal(r.error, false, r.text);
 
+  // Naming the service isn't signing in: a step that only mentions Gmail still counts.
+  const h3 = makeHarness();
+  const t3 = h3.runner.create({ text: 'Find the email from Emily', accountId: 'claude-3' });
+  h3.adapter.last.init();
+  h3.adapter.last.out({ kind: 'event', event: { type: 'tool.call', itemId: 'g1', name: 'mcp__claude_ai_Gmail__search_threads', kind: 'mcp', title: 'Gmail', input: {} } });
+  h3.adapter.last.out({ kind: 'event', event: { type: 'tool.result', itemId: 'g1', ok: false, text: 'MCP server "claude.ai Gmail" needs you to sign in again', truncated: false, images: [] } });
+  const endTurn3 = buildThreadbearTools(h3.runner, t3.thread.id, Date.now, undefined, undefined, undefined, { plainCardNote: false, sleep: async () => {} }).find((x) => x.name === 'end_turn')!;
+  const both = { needs: 'you', asks: [{ action: 'Sign in to Gmail again on claude.ai.', why: 'Then I can search it.', options: ['Signed in'] }, { action: 'Allow Desk Runner on removable volumes.', why: 'The Gmail export is on the SSD.', options: ['Done'] }] };
+  const r3 = (await endTurn3.handler(both as never, {})) as { content: { text: string }[]; isError?: boolean };
+  assert.ok(r3.content[0].text.startsWith(TRY_FIRST_NUDGE), r3.content[0].text);
+
   // A sign-in ask written first time, with no sign-in note before it, is taken too.
   const h2 = makeHarness();
   const t2 = h2.runner.create({ text: 'Find the email from Emily', accountId: 'claude-3' });

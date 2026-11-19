@@ -511,12 +511,19 @@ test('handsOverAStep knows a step from a choice', () => {
     ['Skip Apple Account sign-in on Tinker Desk, finish the setup screens. Done?', ['Done', 'Stuck']],
     ['Turn on the setting.', ['Done', 'Can you do it?']],
     ['Please enable Desk Runner’s Removable Volumes access.', ['I’ve enabled it', 'Stuck']],
-    ['In [the AI Studio tab](https://aistudio.google.com/billing), set up prepay.', undefined],
     ['**Turn on** the switch.', undefined],
     ['Can you enable Desk Runner’s Removable Volumes access?', ['Enabled', 'Stuck']],
     ['Log into Tinker Desk as ademark.', undefined],
     ['In [Google Cloud Console](https://console.cloud.google.com/apis/credentials?project=app), copy the Gemini API key.', undefined],
+    ['In [the AI Studio tab](https://aistudio.google.com/apikey), copy the key.', undefined],
     ['On Tinker Desk, in System Settings, allow Desk Runner on removable volumes.', undefined],
+    ['Allow Desk Runner to use Removable Volumes in order to run the tests.', ['Done', 'Stuck']],
+    ['Drag and drop the cert into Keychain Access.', undefined],
+    ['Click Cancel on the Apple Account prompt on Tinker Desk, then finish setup.', undefined],
+    ['On Tinker Desk, can you allow Desk Runner to use Removable Volumes?', ['Enabled', 'Stuck']],
+    ['Desk Runner needs the external drive.', ['Done — run the test', 'Land without it']],
+    ['Desk Runner needs the external drive.', ["I've turned it on", 'Land without it']],
+    ["Tinker Desk is on the ademark login.", ['Switched back to mikeysee', 'Land it anyway']],
     ['Allow Desk Runner on Tinker Desk to read its files, so I can run the test?', ["I've allowed it", 'Land without it']],
     ['Sign in to the store.', ['Signed in', 'Hold off']],
   ] as const) assert.ok(card(action, options && [...options]), action);
@@ -539,7 +546,10 @@ test('handsOverAStep knows a step from a choice', () => {
     ['In the Google AI Studio tab I brought forward, set up prepay on the Convex billing account and buy US$50 of credit.', ['Done']],
     ['Delete the old Linux install on the Dell laptop.', ['Done', 'Stuck']],
     ['Click Delete Account to close it for good.', undefined],
+    ['Complete the payment in Stripe.', ['Done']],
+    ['In [the AI Studio tab](https://aistudio.google.com/billing), set up prepay.', ['Done']],
     ['**Install the new Tandem now?**', ['Install now', 'Later']],
+    ['Install the new Tandem now? It restarts the app.', ['Install now', 'Later']],
     ['Open PRs #38 and #41 both touch auth. Which should I merge first?', ['#38', '#41']],
     ['Which apps should this list show?', ['Installed apps', 'All apps']],
     ['Keep going with the old plan?', ["I've changed my mind", 'Keep going']],
@@ -547,6 +557,7 @@ test('handsOverAStep knows a step from a choice', () => {
   assert.ok(!card('Turn on one of these', ['Done'], [{ title: 'Review', url: 'review:abc' }]), 'a review is a pick');
   assert.ok(handsOverAStep([{ action: 'Which design?', options: ['A', 'B'], links: [{ title: 'Review', url: 'review:abc' }] }, { action: 'Allow Desk Runner on removable volumes.', options: ['Done'] }]), "a review doesn't hide the card's other asks");
   assert.ok(handsOverAStep([{ action: 'Desk Runner needs removable volumes', reply: 'done' }]), "the older form's reply counts");
+  assert.ok(!handsOverAStep([{ action: 'Click Confirm.', why: 'This deletes the account for good.', options: ['Done'] }]), "a why that deletes isn't pressed on");
 });
 
 // Run on the card was taken out (14 Nov 2026): a session that loaded
