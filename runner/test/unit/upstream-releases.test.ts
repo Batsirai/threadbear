@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FakeClock } from '../../src/clock.ts';
 import { type CiRun, bareRepoArgs, ciVerdict, earlierVerdict, HISTORY_PAGE, FETCH_INTERVAL_MS, FIRST_LOOK_MS, RETRY_AFTER_FAILURE_MS, SETTLE_MS, cleanNotes, parseImportant, parseNotes, repoKey, signersPath, splitSignedTag, tagFor } from '../../src/upstream.ts';
+import { nullLogger } from '../../src/log.ts';
 import { LATER, asGitHub, commit, fakeGpg, git, kept, key, release, signedTag, upstreamFor, waitFor, withVictimGpg, world } from '../helpers/upstream-harness.ts';
 
 test('repoKey: the same repo however its URL is written', () => {
@@ -569,4 +570,42 @@ test('a release name that verified keeps its first tag even if a signed one repl
   const s = await up.check();
   assert.equal(kept(w.theirs, '2026-10-30'), first);
   assert.equal(s.release?.commit, first);
+});
+
+// 19 Nov 2026: the Secure Enclave handed back a signature with empty r and
+// s, git called the tag signed, and release/2026-11-19 went out verifying
+// nowhere. Mike's runner now checks its own tag as a fork would first.
+test("Mike's runner never pushes a release tag whose signature doesn't verify against release-signers", async () => {
+  for (const how of ['corrupt', 'unannounced'] as const) {
+    const w = world();
+    commit(w.mike, 'b.txt', 'Newer work');
+    git(w.mike, 'push', '-q', 'origin', 'main');
+    const committed = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000;
+    let signingKey = w.mikeKey.priv;
+    if (how === 'corrupt') {
+      // A signer that says it signed but leaves a signature that's no good,
+      // as the provider did: ssh-keygen signs, then the blob is mangled.
+      const program = path.join(w.root, 'bad-signer');
+      fs.writeFileSync(program, `#!/bin/sh
+ssh-keygen "$@" || exit $?
+for last; do :; done
+case "$*" in *"-Y sign"*)
+  # The signature's own bytes sit at the end of the armor.
+  awk '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { if (l[i + 2] ~ /^-----END/) l[i] = "AAAAAAAA" substr(l[i], 9); print l[i] } }' "$last.sig" > "$last.sig.tmp" && mv "$last.sig.tmp" "$last.sig" ;;
+esac
+`, { mode: 0o755 });
+      git(w.mike, 'config', 'gpg.ssh.program', program);
+    } else {
+      signingKey = key(w.root, 'not-announced').priv;
+    }
+    const logged: string[] = [];
+    const log = { ...nullLogger, warn: (m: string) => logged.push(m) };
+    const up = upstreamFor(w.mike, w.home, new FakeClock(committed + 2 * SETTLE_MS), { publish: { publish: true, signingKey }, runningMainSettled: () => true, log });
+    assert.equal(await up.publishOnce(), undefined, how);
+    const tag = tagFor(new Date(committed + 2 * SETTLE_MS));
+    assert.equal(git(w.mike, 'tag', '--list', tag), '', `${how}: the bad tag is deleted`);
+    assert.equal(git(w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`), '', `${how}: and never pushed`);
+    assert.match(up.status().held?.why ?? '', /signature didn't verify, so it wasn't pushed/, how);
+    assert.ok(logged.some((m) => /does not verify/.test(m)), how);
+  }
 });

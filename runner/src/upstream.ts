@@ -1061,6 +1061,17 @@ export class Upstream {
       this.deps.log.info('release signature not given; asking again next hour', { tag, error: String(e).slice(0, 200) });
       return undefined;
     }
+    // Checked as a fork checks it before it goes anywhere: on 19 Nov 2026
+    // the Secure Enclave handed back a signature with nothing in it (empty
+    // r and s), git called that signed, and release/2026-11-19 went out
+    // verifying nowhere.
+    const bad = await this.selfCheck(checkout, tag, tip).catch((e: unknown) => `ssh-keygen couldn't check it (${String(e).slice(0, 120)})`);
+    if (bad) {
+      await this.git(checkout, ['tag', '-d', tag]).catch(() => undefined);
+      this.hold({ commit: tip, why: `its signature didn't verify, so it wasn't pushed: ${bad}`, at: new Date(now).toISOString() });
+      this.deps.log.warn('release signature does not verify; tag deleted, not pushed', { tag, commit: tip, why: bad });
+      return undefined;
+    }
     this.hold(undefined);
     try {
       await this.git(checkout, ['push', '-q', 'origin', `refs/tags/${tag}`], { timeoutMs: this.fetchTimeoutMs });
@@ -1072,6 +1083,28 @@ export class Upstream {
     this.deps.log.info('tagged a release', { tag, commit: tip });
     this.set({ ...this.st, published: { tag, at: new Date(now).toISOString() } });
     return tag;
+  }
+
+  // Why the tag just made wouldn't verify for a fork, or undefined if it
+  // does: split and checked exactly as verified() does, against the
+  // release-signers and release-keys-revoked of the commit it tags.
+  private async selfCheck(checkout: string, tag: string, tip: string): Promise<string | undefined> {
+    const raw = await (this.deps.gitBytes ?? gitBytes)(checkout, ['cat-file', 'tag', `refs/tags/${tag}`]);
+    const split = splitSignedTag(raw, tag);
+    if (!split) return 'the tag is not one SSH-signed release tag';
+    const signers = await this.git(checkout, ['show', `${tip}:${SIGNERS_FILE}`]).catch(() => '');
+    if (!keysIn(signers).length) return `${SIGNERS_FILE} has no keys at that commit`;
+    const revoked = keysIn(await this.git(checkout, ['show', `${tip}:${REVOKED_FILE}`]).catch(() => ''));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-release-self-'));
+    try {
+      const signersFile = path.join(dir, 'signers');
+      const revokedFile = path.join(dir, 'revoked');
+      fs.writeFileSync(signersFile, signers.endsWith('\n') ? signers : `${signers}\n`);
+      if (revoked.length) fs.writeFileSync(revokedFile, revoked.join('\n') + '\n');
+      return (await sshVerified(split, signersFile, revoked.length ? revokedFile : undefined)) ? undefined : `ssh-keygen says it isn't good for any key in ${SIGNERS_FILE}`;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   // Plain-words notes for a release, from its commits' subjects and bodies.
