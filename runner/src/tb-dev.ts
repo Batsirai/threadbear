@@ -17,6 +17,7 @@ import type { RestartResult, RunnerStatus } from './restart.ts';
 import type { UpstreamStatus } from './upstream.ts';
 import { forTerminal } from './terminal-text.ts';
 import { localOnly } from './convex-admin.ts';
+import type { ProfileLine, ProfileResult } from './self-profile.ts';
 import { buildCheckup, checkupOff, postDraft, saveDraft, skipped } from './checkup.ts';
 
 export const DEV_HELP = `Working on Threadbear itself:
@@ -46,7 +47,21 @@ export const DEV_HELP = `Working on Threadbear itself:
   tb export <threadId> [--out DIR]
                                   thread.json, events.ndjson and media/ for the mock runner,
                                   in app/.fixtures/threads/<id> by default
+  tb profile [seconds] [--json]   where the runner's CPU goes: profiles its main thread for 10 s
+                                  (up to 120), writes a .cpuprofile and lists the busiest code
   tb rpc <method> ['{"json": "params"}']`;
+
+export function printProfile(r: ProfileResult): string {
+  const s = r.summary;
+  const pct = (ms: number) => (s.ms ? `${Math.round((ms / s.ms) * 100)}%` : '0%');
+  const table = (title: string, lines: ProfileLine[]) => [title, ...lines.slice(0, 15).map((l) => `  ${String(l.ms).padStart(6)} ms ${String(l.pct).padStart(5)}%  ${l.name}${l.where ? `  ${l.where}` : ''}`)].join('\n');
+  return [
+    `Profiled ${(s.ms / 1000).toFixed(1)} s: busy ${s.busyMs} ms (${pct(s.busyMs)}), garbage collection ${s.gcMs} ms (${pct(s.gcMs)}).`,
+    table('The runner\'s own code, with what it called:', s.own),
+    table('Where the time was spent:', s.self),
+    `Open it in Chrome DevTools (Performance, Load profile) or speedscope.app: ${r.file}`,
+  ].join('\n\n');
+}
 
 export type Flags = Record<string, string | boolean | string[] | undefined>;
 type Resolve = (prefix: string | undefined) => Promise<string>;
@@ -257,6 +272,13 @@ export async function runDev(client: RunnerClient, cmd: string, args: string[], 
       console.log(`To look at it in a debug app, then dump, shot and stop it:`);
       console.log(`  ${shQuote(path.join(root, 'app', 'Tools', 'dev-app.sh'))} start --mock --fixtures ${shQuote(out)}`);
       console.log(`Its events by seq (line N of events.ndjson is seq N): ${tbCommand()} events ${id.slice(0, 8)} --from N --to M`);
+      return 0;
+    }
+    case 'profile': {
+      const seconds = args[0] === undefined ? 10 : Number(args[0]);
+      const r = await client.call<ProfileResult>('runner.profile', { seconds });
+      if (f.json) return printJson(r);
+      console.log(printProfile(r));
       return 0;
     }
     case 'rpc': {

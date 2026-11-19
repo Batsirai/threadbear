@@ -76,6 +76,7 @@ import { acquireLock } from './lock.ts';
 import { isDirectory, removeTempFiles } from './fsutil.ts';
 import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
+import { SelfProfiler, profileMethods, watchStalls } from './self-profile.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
 import { BOX_NO_SCHEDULES, BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
@@ -159,6 +160,8 @@ async function main(): Promise<void> {
   const reporting = await startSentry(cfg.home);
   log.info('runner starting', { version: RUNNER_VERSION, home: cfg.home, port: cfg.port, pid: process.pid, sentry: reporting });
   if (secretsAclProblem) log.warn('could not make the secrets folder private', { why: secretsAclProblem });
+  // A main thread held up for a second or more says so in tb logs (self-profile.ts).
+  watchStalls({ log });
 
   // The SDK warns when canUseTool is set in bypass mode; it's deliberate
   // (AskUserQuestion still goes through it), so keep it out of the log.
@@ -1107,6 +1110,8 @@ async function main(): Promise<void> {
     const behind = sync.behindRunners();
     return { ...(restartStatus(p) as Record<string, unknown>), ...(behind.length ? { behindRunners: behind } : {}), webRuntimeProblem: webRuntimeUpdates.problem(), clis: updates.list(), sync: sync.status(), secretCheck: secretCheck.status(), relay: relay.status(), upstream: upstream.status(), ...(draining.length ? { draining } : {}), ...(macScreen ? { macScreen: macScreen.status() } : {}) };
   };
+  // tb profile (docs/protocol.md, "runner.profile"): where this runner's CPU goes.
+  Object.assign(methods, profileMethods(new SelfProfiler({ dir: path.join(cfg.home, 'profiles'), log })));
   // tb updates (docs/protocol.md, "Mike's releases").
   methods['upstream.status'] = () => ({ upstream: upstream.status() });
   // The Updates panel's Update it (docs/protocol.md, "Runner updates").
