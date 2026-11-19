@@ -7,7 +7,9 @@ set -euo pipefail
 self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$self")"
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-lock="${TMPDIR:-/tmp}/threadbear-android-build.lock"
+# With the account in its name: without TMPDIR (Linux, often) it is in the
+# shared /tmp, where another account's lock would refuse this one.
+lock="${TMPDIR:-/tmp}/threadbear-android-build-$(id -u).lock"
 if command -v flock >/dev/null; then
   exec 9>"$lock"
   if ! flock -n 9; then
