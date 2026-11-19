@@ -140,15 +140,26 @@ The listing's text and screenshots are in
 `android-native/app/fastlane/metadata/android/en-US/`, which F-Droid reads
 from the repo. Its build recipe (in F-Droid's fdroiddata repo, not here)
 builds the `fdroid` flavour with the release's date as a Gradle property,
-as it has no THREADBEAR_RELEASE in its environment:
+as it has no THREADBEAR_RELEASE in its environment. It writes the property
+from `$$VERSION$$` in `prebuild` rather than a fixed `gradleprops` line,
+since F-Droid's auto-update copies the last build block and changes only the
+version and commit:
 
 ```yaml
     subdir: android-native/app
     gradle:
       - fdroid
-    gradleprops:
-      - threadbearRelease=2026-11-19
+    rm:
+      - vendor
+    prebuild: printf "\nthreadbearRelease=%s\n" "$$VERSION$$" >> ../gradle.properties
 ```
+
+`rm: vendor` takes out the vendored state-machines tgz, which F-Droid's
+source scanner refuses (the app doesn't use it). The app targets Java 17
+bytecode with `jvmTarget` and `compileOptions`, not a JDK 17 toolchain, so
+it builds on F-Droid's image, which only has Java 21. Tested with F-Droid's
+own tools (`fdroid lint`, `fdroid build` in the buildserver image) on the
+cloud box, 19 Nov 2026: it builds, and the APK has no Google classes.
 
 The property and the environment variable both set the version; the
 property wins if both are there. F-Droid's update check can't read a version

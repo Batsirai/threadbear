@@ -137,7 +137,9 @@ android {
 
 }
 
-kotlin { jvmToolchain(17) }
+// Java 17 bytecode from whatever JDK runs Gradle (17 or later), not a JDK 17
+// toolchain: F-Droid's build image only has 21 (compileOptions above).
+kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 
 dependencies {
     implementation(project(":kit"))
