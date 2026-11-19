@@ -20,7 +20,7 @@ import { GpuiDriver } from '../support/gpui.ts';
 import { sleep, type Dump } from '../support/driver.ts';
 import { startSites, stopSites } from '../support/web-pages.ts';
 import { runtimeParent } from '../support/web-runtime.ts';
-import { assertInFront, windowFrame, work } from './real-screen.ts';
+import { assertInFront, assertOwnScreen, windowFrame, work } from './real-screen.ts';
 import { ensurePerfLock } from './perf-lock.ts';
 
 await ensurePerfLock();
@@ -93,6 +93,7 @@ execFileSync('swiftc', ['-O', `${keys}.swift`, '-o', keys]);
 const post = (...args: string[]) => execFileSync(keys, args);
 /** Keys go to the app in front: this one, or nothing's posted. */
 async function inFront(): Promise<void> {
+  assertOwnScreen();
   for (let i = 0; i < 20; i += 1) {
     if (Number(execFileSync(keys, ['front']).toString().trim()) === app.pid) return;
     await app.do({ cmd: 'front' });
