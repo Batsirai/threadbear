@@ -366,7 +366,12 @@ if `tb` isn't found (an older runner, or outside a thread), use
   is a volume on its external SSD mounted there, not a link (remote.sh
   refuses links on that path). A `--desk` run that sits with no output may
   be waiting on macOS asking Desk Runner to reach a removable volume:
-  `desk "screencapture -x /tmp/s.png"` shows the screen (17 Nov). A host that stops answering partway is dropped for the next
+  `desk "screencapture -x /tmp/s.png"` shows the screen (17 Nov). Fix
+  that yourself, never ask Mike (19 Nov: "I want you to be able to access
+  that hard drive"): `desk "open 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_FilesAndFolders'"`,
+  click Desk Runner.app's row open with a CGEvent click run through `desk`
+  (it has Accessibility) and see Removable Volumes is on. On 19 Nov it
+  was on already, and opening the row was enough. Close System Settings after. A host that stops answering partway is dropped for the next
   one. If none can be reached it runs here
   at low priority. `--e2e` always runs here, as it needs the claude login. It skips the deploy tests and BearDock's
   unless something they cover changed from main (`--all` runs them
