@@ -3410,7 +3410,11 @@ export class ConvexSync {
       // it's new enough (sawBackend).
       const v = this.backendApiVersion ?? 0;
       for (let i = 0; i < docs.length; i += SYNC_BATCH) {
-        const batch = docs.slice(i, i + SYNC_BATCH).map((d) => forBackend(d, v, this.deps.clock.now()));
+        // Not a thread that moved away since the flush began, as an earlier
+        // batch was going up: its row is the other runner's now, and the
+        // owner key's write would take it back (Codex's review, 19 Nov).
+        const batch = docs.slice(i, i + SYNC_BATCH).filter((d) => !this.deps.movedAway?.(d.threadId)).map((d) => forBackend(d, v, this.deps.clock.now()));
+        if (!batch.length) continue;
         for (const d of batch) {
           this.writing.set(d.threadId, { digest: digest(JSON.stringify(d)), by: me });
           this.linkOnItsWay(d);
@@ -3628,6 +3632,9 @@ export class ConvexSync {
   private async sendShareImages(): Promise<void> {
     const key = this.deps.key;
     for (const threadId of [...this.imagesDrop]) {
+      // Forgotten meanwhile (moved away while an earlier drop went): its
+      // pictures are the other runner's now.
+      if (!this.imagesDrop.has(threadId)) continue;
       await this.post('mutation', 'sync:dropShareImages', { key, threadId });
       this.imagesDrop.delete(threadId);
     }
@@ -3677,7 +3684,10 @@ export class ConvexSync {
         }
         up.add(id);
       }
-      this.pendingImages.shift();
+      // By identity, not the first: a thread that moved away while this one
+      // went up has had its own taken out of the queue (forgetMoved).
+      const at = this.pendingImages.indexOf(img);
+      if (at >= 0) this.pendingImages.splice(at, 1);
     }
   }
 

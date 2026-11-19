@@ -4330,3 +4330,78 @@ function pickLogin(d: Record<string, unknown>) {
   for (const k of ['loginEndsAt', 'signedOut', 'yearToken']) if (d[k] !== undefined) out[k] = d[k];
   return out;
 }
+
+// Codex's review of the moved-thread fix (19 Nov): a thread that moved away
+// while another's picture was going up took its own pictures out of the
+// queue, and the upload's finish then dropped the next thread's picture.
+test("sharing: a thread moving away while a picture goes up leaves the others' pictures queued", async () => {
+  const h = makeHarness();
+  const calls: Call[] = [];
+  const uploads: string[] = [];
+  const moved = new Set<string>();
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((r) => (release = r));
+  let first = true;
+  const sync = new ConvexSync({
+    config: { enabled: true, url: 'https://x.convex.cloud', runnerId: 'r1' },
+    key: 'k',
+    runner: h.runner,
+    home: h.cfg.home,
+    version: '0.1.0+test',
+    startedAt: '2026-10-29T00:00:00.000Z',
+    clock: h.clock,
+    log: nullLogger,
+    movedAway: (id) => moved.has(id),
+    post: async (kind, fn, args) => {
+      calls.push({ kind, fn, args });
+      if (fn === 'sync:heartbeat') return { apiVersion: SHARE_API_VERSION };
+      if (fn === 'sync:shareImages') return [];
+      if (fn === 'sync:iconUploadUrl') return 'https://upload.example/u';
+      return null;
+    },
+    upload: async (_url, bytes) => {
+      if (first) {
+        first = false;
+        await held;
+      }
+      uploads.push(Buffer.from(bytes).toString('hex'));
+      return `st_${uploads.length}`;
+    },
+  });
+  const threads = ['A', 'B'].map((name, i) => {
+    const t = h.runner.create({ text: `draw ${name}`, cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+    const pic = path.join(paths.media(h.cfg.home, t.id), `${name}.png`);
+    fs.mkdirSync(path.dirname(pic), { recursive: true });
+    fs.writeFileSync(pic, pngBytes(10 + i, 10));
+    const s = session(h, t.id);
+    s.init();
+    s.text('m1', `![${name}](${pic})`);
+    s.result('completed');
+    return { t, pic };
+  });
+  await tick();
+  sync.start();
+  await tick(20);
+  await sync.flushNow();
+  for (const { t } of threads) h.runner.share(t.id, { access: 'link' });
+  h.clock.advance(SYNC_COALESCE_MS);
+  await tick(20);
+  const flushing = sync.flushNow();
+  await tick(20);
+  // The first picture is on its way; its thread moves away meanwhile.
+  const [a, b] = threads;
+  const goingUp = calls.some((c) => c.fn === 'sync:iconUploadUrl');
+  assert.ok(goingUp, 'a picture is on its way up');
+  moved.add(a!.t.id);
+  h.runner.delete(a!.t.id);
+  await tick();
+  release!();
+  await flushing;
+  await tick(20);
+  await sync.flushNow();
+  await tick(20);
+  await sync.flushNow();
+  const added = calls.filter((c) => c.fn === 'sync:addShareImage').map((c) => c.args.threadId);
+  assert.ok(added.includes(b!.t.id), "B's picture still went up");
+  await sync.stop();
+});
