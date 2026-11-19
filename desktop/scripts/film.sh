@@ -142,6 +142,8 @@ case "$cmd" in
         there "pkill -f '^perl desktop/scripts/film/hold.pl $base ' || true; cat $base/stage.log 2>/dev/null || true" >&2
         die "hold.pl on $host hasn't taken the build-and-measurement lock in 30 seconds though nobody holds it, so it's stuck, not waiting (stopped it). Check Desk Runner can open $base: desk \"ls $base\" there should answer at once"
       fi
+      # No holder file when nobody holds the lock: sed's failure would end
+      # the script silently under set -e.
       note="$("${SSH[@]}" "$host" "sed -n 3p ~/.cache/threadbear-perf.lock.holder 2>/dev/null || true")"
       [ "$note" = "$said" ] || { echo "Waiting for $host's build-and-measurement lock, held by: ${note:-someone}" >&2; said="$note"; }
       sleep 5
