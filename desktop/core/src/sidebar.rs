@@ -991,6 +991,50 @@ pub fn archive_rows(count: usize, limit: usize, searching: bool, selected_index:
     (shown, count - shown)
 }
 
+/// What a thread on a virtual runner's row says at its right, from its box
+/// (`RemoteRunner.box`), in place of the time: None when the box is up and
+/// the thread's own status is what matters. Starting and waking take the
+/// grey spinner background work has; asleep reads as plainly as a time.
+pub fn box_trailing(b: &crate::remote::RunnerBox) -> Option<Trailing> {
+    use crate::remote::TokenNeed;
+    let line = |text: &str, kind: TrailingKind, tip: String| Some(Trailing { text: text.to_owned(), kind, tip: Some(tip) });
+    if b.needs_token() {
+        let login = b.login.as_deref().unwrap_or("its Claude login");
+        let tip = if b.token == Some(TokenNeed::Dead) {
+            format!("Claude refused the cloud token for {login}. Open the thread to make a new one; the message goes once it's set.")
+        } else {
+            format!("{login} has no cloud token yet. Open the thread to make one; the message goes once it's set.")
+        };
+        return line("Needs a cloud token", TrailingKind::Quiet, tip);
+    }
+    if b.waiting {
+        return line("Waiting for room", TrailingKind::Quiet, "Its virtual runner has as many machines up as it's allowed. It wakes, with the message, when one sleeps.".into());
+    }
+    if b.unreachable {
+        return line("Not answering", TrailingKind::Quiet, "Its machine hasn't checked in for five minutes. Threadbear is asking the provider about it.".into());
+    }
+    match b.state.as_str() {
+        "creating" | "starting" => line("Starting a machine", TrailingKind::Background, "A machine is booting for it and getting the repo. The message goes once it's up.".into()),
+        "waking" | "retiring" => line("Waking", TrailingKind::Background, "Its machine is coming back for the message.".into()),
+        "asleep" => line("Asleep", TrailingKind::Quiet, "Its machine sleeps while the thread's idle. A message wakes it.".into()),
+        "failed" => line("Couldn't start", TrailingKind::Failed, "A machine couldn't be started for it. The next message tries again.".into()),
+        _ => None,
+    }
+}
+
+/// A thread on a virtual runner whose box waits on a cloud token needs Mike:
+/// its row takes the needs-you dot, as a question does, rather than the
+/// Working look its sidebar row's "starting" would give it.
+pub fn dress_box(t: &mut ThreadSummary, b: &crate::remote::RunnerBox) {
+    if !b.needs_token() {
+        return;
+    }
+    t.needs_you = true;
+    if matches!(t.status.as_str(), "starting" | "running") {
+        t.status = "idle".to_owned();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1316,4 +1360,46 @@ mod tests {
         let evening = snooze_presets(&now).iter().find(|p| p.id == "tomorrow").unwrap().until_ms;
         assert_eq!(evening, tz.with_ymd_and_hms(2026, 11, 10, 9, 0, 0).unwrap().timestamp_millis());
     }
+    // A thread on a virtual runner says what its box is doing, quietly
+    // (docs/virtual-runners.md, "What it's like when it's done").
+    #[test]
+    fn a_box_threads_row_says_what_its_box_is_doing() {
+        use crate::remote::{RunnerBox, TokenNeed};
+        let b = |state: &str| RunnerBox { state: state.into(), ..Default::default() };
+        let line = |r: RunnerBox| box_trailing(&r).map(|t| (t.text, t.kind));
+        assert_eq!(line(b("creating")), Some(("Starting a machine".into(), TrailingKind::Background)));
+        assert_eq!(line(b("starting")), Some(("Starting a machine".into(), TrailingKind::Background)));
+        assert_eq!(line(b("waking")), Some(("Waking".into(), TrailingKind::Background)));
+        assert_eq!(line(b("asleep")), Some(("Asleep".into(), TrailingKind::Quiet)));
+        assert_eq!(line(b("awake")), None, "an awake box's thread says what the thread's doing");
+        assert_eq!(line(b("saving")), None);
+        assert_eq!(line(b("something new")), None);
+        let needs = RunnerBox { state: "needsToken".into(), token: Some(TokenNeed::None), login: Some("mike@example.com".into()), ..Default::default() };
+        let t = box_trailing(&needs).unwrap();
+        assert_eq!((t.text.as_str(), t.kind), ("Needs a cloud token", TrailingKind::Quiet));
+        assert!(t.tip.unwrap().contains("mike@example.com"));
+        let dead = RunnerBox { state: "awake".into(), token: Some(TokenNeed::Dead), login: Some("mike@example.com".into()), ..Default::default() };
+        assert!(box_trailing(&dead).unwrap().tip.unwrap().contains("refused"));
+        let waiting = RunnerBox { state: "asleep".into(), waiting: true, ..Default::default() };
+        assert_eq!(line(waiting), Some(("Waiting for room".into(), TrailingKind::Quiet)));
+        let silent = RunnerBox { state: "awake".into(), unreachable: true, ..Default::default() };
+        assert_eq!(line(silent), Some(("Not answering".into(), TrailingKind::Quiet)));
+    }
+
+    // Needing a token is needing Mike: the needs-you dot, not a new mark,
+    // and not the Working look its index row's "starting" would give.
+    #[test]
+    fn a_box_thread_waiting_on_a_token_needs_you() {
+        use crate::remote::{RunnerBox, TokenNeed};
+        let mut t = thread(json!({ "status": "starting" }));
+        dress_box(&mut t, &RunnerBox { state: "needsToken".into(), token: Some(TokenNeed::None), ..Default::default() });
+        let look = RowLook::of(&t, Some("inbox"));
+        assert!(t.needs_you && look.unread && look.emphasised);
+        assert_eq!(look.status, RowStatus::Time);
+        let mut booting = thread(json!({ "status": "starting" }));
+        dress_box(&mut booting, &RunnerBox { state: "starting".into(), ..Default::default() });
+        assert!(!booting.needs_you);
+        assert_eq!(booting.status, "starting", "a box that's starting isn't changed");
+    }
 }
+

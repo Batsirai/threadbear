@@ -574,6 +574,10 @@ pub struct NewThreadPicks {
     /// The runner it starts on; None for this Mac.
     pub runner: Option<String>,
     pub runner_picked: bool,
+    /// A virtual runner it starts on instead (`threads.create`'s
+    /// `serviceId`), with `runner` None: the folder and login are this
+    /// Mac's, as the runner here reads the repo and the login's email.
+    pub service: Option<String>,
 }
 
 /// What the next new thread remembers across sends (AppModel's UserDefaults:
@@ -594,6 +598,9 @@ pub struct Remembered {
     pub last_permission: Option<String>,
     /// The runner new threads start on ("Runs on"'s star), nil for this Mac.
     pub default_runner: Option<String>,
+    /// Or the virtual runner they start on, when that has the star
+    /// (`default_runner` is None then).
+    pub default_service: Option<String>,
 }
 
 impl Remembered {

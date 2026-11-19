@@ -33,6 +33,8 @@ pub fn timeout_for(method: &str, params: &Value) -> Duration {
     match method {
         "actions.run" if params["actionId"] == "worktree.land" => Duration::from_secs(61 * 60),
         "actions.run" => Duration::from_secs(11 * 60),
+        // claude setup-token waits on Mike in the browser, 10 minutes at most.
+        "cloudTokens.make" => Duration::from_secs(11 * 60),
         // A slow parse of "when" on the pool's CLI, a Convex CLI's first key.
         "threads.hibernateWhen" | "panels.convexDeployments" | "panels.convexKey" => Duration::from_secs(150),
         // A message stays dimmed in the transcript while it's on its way,
@@ -862,6 +864,7 @@ mod tests {
         assert_eq!(timeout_for("panels.convexKey", &json!({})), Duration::from_secs(150));
         assert_eq!(timeout_for("threads.list", &json!({})), Duration::from_secs(120));
         assert_eq!(timeout_for("threads.send", &json!({})), Duration::from_secs(300));
+        assert_eq!(timeout_for("cloudTokens.make", &json!({ "login": "a@b" })), Duration::from_secs(11 * 60), "it waits on claude.ai in the browser");
     }
 
     #[test]
