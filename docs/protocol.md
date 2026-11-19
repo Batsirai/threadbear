@@ -8279,10 +8279,15 @@ the machine stops.
   refused (errorKind `auth`). In box mode that turn sends
   `boxes:tokenRefused({ key, setAt })`, says so once in the thread
   (`system.note`), and the thread waits (`waitingForToken` on its record,
-  kept across restarts; no pool move, as a box has one login). While it
-  waits the runner asks `boxes:boxCloudToken({ key })` (an action, box key
+  kept across restarts, with `refusedSetAt`, the version refused, and
+  `reported` once the backend has heard; no pool move, as a box has one
+  login). A refusal not yet heard is sent again on the next start or
+  poll, always with `refusedSetAt`, never a version installed since. While
+  it waits the runner asks `boxes:boxCloudToken({ key })` (an action, box key
   only: the login's token and `setAt` while it's `valid`, else null) every
-  30 seconds; a token set later than its own is written over
+  30 seconds. Any token newer than the refused one lifts the hold: one the
+  box already has (a box restored from a save whose exchange installed a
+  newer token goes at once, telling nobody), or one set later, which is written over
   claude-main's `threadbear-token.json` (0600) and into `box.json`, the
   thread's CLI is closed so the next turn starts on it, and the thread
   carries on by itself with the runner's carry-on message, as after a

@@ -7,6 +7,14 @@
 // the box's own is written where claude-main's CLI reads it, and the thread
 // carries on (Runner.tokenReplaced).
 //
+// What was refused, and whether the backend has heard, live on the thread's
+// record (waitingForToken's refusedSetAt and reported), never here: a
+// restart replays a refusal the backend didn't hear, with the version that
+// was refused, never the one installed since (that would kill a good token).
+// And any token newer than the refused one lifts the hold, the one already
+// on the box included: a hold restored from a save, on a box whose exchange
+// installed a newer token, goes at once (Codex's review of slice 5).
+//
 // Nothing runs while a save holds the box: a tick then waits for the next.
 // The token is never logged; the scrubber knows it from the moment it's read.
 import type { Logger } from './log.ts';
@@ -28,8 +36,11 @@ export class BoxTokenWatch {
     setTimeout: (fn: () => void, ms: number) => Timer;
     // A save holds the box: nothing is fetched or written meanwhile.
     held: () => boolean;
-    // The thread waiting for a token, if any (its record's waitingForToken).
-    waiting: () => boolean;
+    // The thread's wait for a token, if any (its record's waitingForToken):
+    // the version refused, and whether the backend has heard.
+    waiting: () => { refusedSetAt?: number; reported?: boolean } | undefined;
+    // The backend has heard the refusal: kept on the record.
+    markReported: () => void;
     // A newer token is on disk: the thread carries on.
     replaced: () => void;
     // A call refused as a bad key: this box no longer has the thread.
@@ -37,7 +48,6 @@ export class BoxTokenWatch {
     everyMs?: number;
   };
   private timer?: Timer;
-  private reportOwed = false;
   private stopped = false;
   private ticking = false;
 
@@ -45,13 +55,12 @@ export class BoxTokenWatch {
     this.o = o;
   }
 
-  /** A turn was refused: say so, and watch for a newer token. */
+  /** A turn was refused (the record says which token): say so, and watch for a newer token. */
   refused(): void {
-    this.reportOwed = true;
     this.arm(0);
   }
 
-  /** At start: a thread still waiting from before watches again (its refusal was said then). */
+  /** At start: a thread still waiting from before watches again, saying its refusal if that wasn't heard. */
   start(): void {
     if (this.o.waiting()) this.arm(0);
   }
@@ -79,18 +88,29 @@ export class BoxTokenWatch {
     if (this.stopped || this.ticking) return;
     this.ticking = true;
     try {
-      if (!this.o.waiting()) return;
+      const w = this.o.waiting();
+      if (!w) return;
       if (this.o.held()) return this.arm(this.o.everyMs ?? TOKEN_POLL_MS);
-      if (this.reportOwed) {
-        await this.o.post('mutation', 'boxes:tokenRefused', { key: this.o.key, setAt: this.own() });
-        this.reportOwed = false;
+      // A record from before the version was kept: the token on the box is the one refused.
+      const refused = w.refusedSetAt ?? this.own();
+      // Already newer on the box (an exchange since the refusal): go, telling nobody.
+      if (this.own() > refused) {
+        this.o.log.info('box: the cloud token on the box is newer than the one refused; carrying on', { setAt: this.own() });
+        this.o.replaced();
+        return;
+      }
+      if (w.refusedSetAt !== undefined && !w.reported) {
+        await this.o.post('mutation', 'boxes:tokenRefused', { key: this.o.key, setAt: w.refusedSetAt });
+        this.o.markReported();
       }
       const got = (await this.o.post('action', 'boxes:boxCloudToken', { key: this.o.key })) as { token?: unknown; setAt?: unknown } | null;
-      if (got && typeof got.token === 'string' && typeof got.setAt === 'number' && got.setAt > this.own()) {
+      if (got && typeof got.token === 'string' && typeof got.setAt === 'number' && got.setAt > refused) {
         rememberToken(got.token);
         if (this.o.held()) return this.arm(this.o.everyMs ?? TOKEN_POLL_MS);
-        writeBoxToken(this.o.claudeDir, got.token);
-        setTokenSetAt(this.o.home, got.setAt);
+        if (got.setAt > this.own()) {
+          writeBoxToken(this.o.claudeDir, got.token);
+          setTokenSetAt(this.o.home, got.setAt);
+        }
         this.o.log.info('box: a newer cloud token is set; carrying on', { setAt: got.setAt });
         this.o.replaced();
         return;

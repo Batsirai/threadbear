@@ -1030,10 +1030,10 @@ test("the token watch, against the real backend on the box's key alone: it says 
     return call((kind as string) === 'action' ? s.a : s.ctx, boxes[name], args);
   }) as unknown as ActionPost;
   const timers: { fn: () => void; ms: number }[] = [];
-  let waiting = true;
+  let waiting: { refusedSetAt?: number; reported?: boolean } | undefined = { refusedSetAt: got.tokenSetAt, reported: false };
   let held = false;
   let replaced = 0;
-  const watch = new BoxTokenWatch({ home, claudeDir, key: got.boxKey, post, log: nullLogger, setTimeout: (fn, ms) => (timers.push({ fn, ms }), { cancel: () => {} }), held: () => held, waiting: () => waiting, replaced: () => void replaced++ });
+  const watch = new BoxTokenWatch({ home, claudeDir, key: got.boxKey, post, log: nullLogger, setTimeout: (fn, ms) => (timers.push({ fn, ms }), { cancel: () => {} }), held: () => held, waiting: () => waiting, markReported: () => void (waiting!.reported = true), replaced: () => void replaced++ });
   watch.refused();
   await watch.tick();
   assert.equal(s.rows('cloudTokens')[0].tokenState.kind, 'dead', 'told: the card comes back on the Mac');
@@ -1053,6 +1053,96 @@ test("the token watch, against the real backend on the box's key alone: it says 
   assert.equal(fs.statSync(path.join(claudeDir, 'threadbear-token.json')).mode & 0o777, 0o600);
   assert.ok((readBoxSecrets(home)?.tokenSetAt ?? 0) > (got.tokenSetAt ?? 0));
   assert.deepEqual(refusedCalls.filter((f) => f.startsWith('boxes:')), [], 'only calls a box key may make');
-  waiting = false;
+  waiting = undefined;
   watch.stop();
+});
+
+// Codex's review of slice 5, 4 and 5: the refusal is the refused token's
+// version, kept on the record with whether the backend has heard, so a
+// restart replays it and a token installed since (an exchange after a
+// restore) lifts the hold without ever being reported.
+
+type Waiting = { refusedSetAt?: number; reported?: boolean };
+function fakeWatch(home: string, waiting: () => Waiting | undefined, post: ActionPost, extra: { reported?: () => void } = {}) {
+  const timers: { fn: () => void; ms: number }[] = [];
+  let replaced = 0;
+  const watch = new BoxTokenWatch({ home, claudeDir: tmpDir('tb-box-claude-'), key: 'tbb_' + 'b'.repeat(64), post, log: nullLogger, setTimeout: (fn, ms) => (timers.push({ fn, ms }), { cancel: () => {} }), held: () => false, waiting, markReported: extra.reported ?? (() => {}), replaced: () => void replaced++ });
+  return { watch, timers, replaced: () => replaced };
+}
+function boxHome(tokenSetAt: number): string {
+  const home = tmpDir('tb-box-tok-');
+  writeBoxSecrets(home, { version: 1, bootHash: 'h', syncUrl: URL, boxKey: 'tbb_' + 'b'.repeat(64), runnerId: 'abcdef123456', threadId: THREAD, threadKey: 'k', repo: { origin: 'https://github.com/a/b.git', subfolder: '', baseBranch: 'main' }, save: null, tokenSetAt });
+  return home;
+}
+
+test('a hold restored from a save, on a box whose exchange already installed a newer token, lifts at start, and that token is never reported', async () => {
+  const home = boxHome(2000);
+  const calls: string[] = [];
+  const post: ActionPost = async (_k, fn) => {
+    calls.push(fn);
+    return { token: `sk-ant-oat01-${'B'.repeat(60)}`, setAt: 2000 };
+  };
+  let waiting: Waiting | undefined = { refusedSetAt: 1000, reported: true };
+  const w = fakeWatch(home, () => waiting, post);
+  w.watch.start();
+  await w.watch.tick();
+  assert.equal(w.replaced(), 1, 'the token on the box is newer than the one refused');
+  assert.ok(!calls.includes('boxes:tokenRefused'), 'B is never reported as refused');
+  // Unreported too: the newer token makes the old refusal moot, and nothing kills B.
+  waiting = { refusedSetAt: 1000, reported: false };
+  const again = fakeWatch(home, () => waiting, post);
+  again.watch.start();
+  await again.watch.tick();
+  assert.equal(again.replaced(), 1);
+  assert.ok(!calls.includes('boxes:tokenRefused'));
+});
+
+test("a refusal the backend didn't hear before a restart is sent on the next start, with the refused token's version", async () => {
+  const home = boxHome(1000);
+  const sent: { fn: string; args: Record<string, unknown> }[] = [];
+  let fail = true;
+  const post: ActionPost = async (_k, fn, args) => {
+    sent.push({ fn, args: args as Record<string, unknown> });
+    if (fn === 'boxes:tokenRefused' && fail) throw new Error('network down');
+    return null;
+  };
+  const rec: Waiting = { refusedSetAt: 1000, reported: false };
+  const first = fakeWatch(home, () => rec, post, { reported: () => void (rec.reported = true) });
+  first.watch.refused();
+  await first.watch.tick();
+  assert.equal(rec.reported, false, 'not heard: still owed');
+  first.watch.stop();
+  // The runner restarts: the record is all there is.
+  fail = false;
+  sent.length = 0;
+  const second = fakeWatch(home, () => rec, post, { reported: () => void (rec.reported = true) });
+  second.watch.start();
+  await second.watch.tick();
+  const told = sent.filter((s) => s.fn === 'boxes:tokenRefused');
+  assert.equal(told.length, 1);
+  assert.equal(told[0]!.args.setAt, 1000);
+  assert.equal(rec.reported, true);
+  // Once heard, never again.
+  await second.watch.tick();
+  assert.equal(sent.filter((s) => s.fn === 'boxes:tokenRefused').length, 1);
+});
+
+test("a refused turn keeps the refused token's version on the record, unreported until the watch says so, across a restart", async () => {
+  const home = tmpDir();
+  const h = makeHarness(home, {}, { boxThread: THREAD });
+  h.runner.onBoxTokenRefused = () => {};
+  h.runner.boxTokenSetAt = () => 1234;
+  h.runner.create({ text: 'go', cwd: h.cfg.defaults.cwd, accountId: 'claude-main', id: THREAD });
+  const s = h.adapter.last;
+  s.init();
+  s.result('failed', undefined, 'Invalid bearer token', { errorKind: 'auth' });
+  await tick();
+  const rec = h.runner.threads.get(THREAD)!.rec;
+  assert.equal(rec.waitingForToken?.refusedSetAt, 1234);
+  assert.equal(rec.waitingForToken?.reported, false);
+  h.runner.tokenRefusalReported(THREAD);
+  h.runner.flush();
+  const again = makeHarness(home, {}, { boxThread: THREAD });
+  assert.equal(again.runner.threads.get(THREAD)!.rec.waitingForToken?.reported, true);
+  assert.equal(again.runner.threads.get(THREAD)!.rec.waitingForToken?.refusedSetAt, 1234);
 });

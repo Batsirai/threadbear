@@ -147,7 +147,10 @@ export type ThreadRecord = {
   // Box mode: a turn was refused with the box's cloud token (errorKind auth):
   // the thread waits, turns held, until the backend has a newer token for
   // its login (Runner.holdForToken, box-token.ts). Kept across restarts.
-  waitingForToken?: { since: string; turnId: string };
+  // `refusedSetAt`: which token was refused (box.json's tokenSetAt then);
+  // `reported`: the backend has heard (boxes:tokenRefused), so a restart
+  // before it did says it again, with that version, never a newer one's.
+  waitingForToken?: { since: string; turnId: string; refusedSetAt?: number; reported?: boolean };
   // The runner's own carry-on after that, so if it can't get through
   // either the thread waits again, counting on from the same outage.
   netCarryOn?: { turnId: string; since: string; tries: number };

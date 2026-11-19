@@ -1248,11 +1248,23 @@ export const movesPart = {
   holdForToken(this: Runner, st: ThreadState, turnId: string): void {
     const { rec } = st;
     const already = Boolean(rec.waitingForToken);
-    rec.waitingForToken = { since: rec.waitingForToken?.since ?? this.isoNow(), turnId };
+    // Which token was refused: the one the box ran on (box.json), kept with
+    // the wait so a restart says it again with that version (box-token.ts).
+    const was = rec.waitingForToken;
+    const refusedSetAt = was?.refusedSetAt ?? this.boxTokenSetAt?.();
+    rec.waitingForToken = { since: was?.since ?? this.isoNow(), turnId, ...(refusedSetAt !== undefined ? { refusedSetAt } : {}), reported: was?.reported ?? false };
     this.holdTurns(rec.id, 'token');
     if (!already) this.emit(st, { type: 'system.note', text: "Claude refused this box's token. The thread carries on once a new one is set." });
     this.markDirty(st);
     this.onBoxTokenRefused?.(rec.id);
+  },
+
+  // The backend has heard the box's refusal (box-token.ts): kept, so a restart doesn't say it again.
+  tokenRefusalReported(this: Runner, threadId: string): void {
+    const st = this.threads.get(threadId);
+    if (!st?.rec.waitingForToken || st.rec.waitingForToken.reported) return;
+    st.rec.waitingForToken.reported = true;
+    this.markDirty(st);
   },
 
   // A newer cloud token is on disk (box-token.ts): the CLI goes so the next

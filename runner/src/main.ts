@@ -81,7 +81,7 @@ import { SelfProfiler, profileMethods, watchStalls } from './self-profile.ts';
 import { TrustOffThread } from './trust-off-thread.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
-import { BOX_NO_SCHEDULES, BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
+import { BOX_NO_SCHEDULES, BoxFolderBroken, bootBox, readBoxSecrets, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
 import { BoxProcesses } from './box-procs.ts';
 import { asSave, closeSpawns, installSpawnGate, openSpawns } from './spawn-gate.ts';
 import { isolatePatchCode } from './patches.ts';
@@ -678,7 +678,8 @@ async function main(): Promise<void> {
           log,
           setTimeout: (fn, ms) => realClock.setTimeout(fn, ms),
           held: () => saveHold.held,
-          waiting: () => runner.threads.get(box.secrets.threadId)?.rec.waitingForToken !== undefined,
+          waiting: () => runner.threads.get(box.secrets.threadId)?.rec.waitingForToken,
+          markReported: () => runner.tokenRefusalReported(box.secrets.threadId),
           replaced: () => runner.tokenReplaced(box.secrets.threadId),
           superseded: (e) => {
             if (!keyRejected(e)) return false;
@@ -687,7 +688,10 @@ async function main(): Promise<void> {
           },
         })
       : undefined;
-  if (tokenWatch) runner.onBoxTokenRefused = () => tokenWatch.refused();
+  if (tokenWatch) {
+    runner.onBoxTokenRefused = () => tokenWatch.refused();
+    runner.boxTokenSetAt = () => readBoxSecrets(cfg.home)?.tokenSetAt;
+  }
   // The rest of the box stopped, categorically, before a save copies anything.
   const stopOthers = async () => {
     if (!boxProcs) throw new Error("This box can't see its processes (no /proc), so it can't stop them to save.");

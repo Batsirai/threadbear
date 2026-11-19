@@ -847,6 +847,8 @@ export class Runner {
   // Box mode: told when a turn is refused with the box's cloud token, to say so
   // to the backend and watch for a newer one (main.ts, box-token.ts).
   onBoxTokenRefused?: (threadId: string) => void;
+  // Box mode: the version of the cloud token on the box (box.json's tokenSetAt), which a refusal records.
+  boxTokenSetAt?: () => number | undefined;
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;
