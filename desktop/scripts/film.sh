@@ -117,7 +117,9 @@ case "$cmd" in
     said=""
     until there "[ -f $base/locked ]"; do
       there "pgrep -f '[h]old.pl $base ' >/dev/null" || { there "cat $base/stage.log" >&2; die "the lock holder stopped (above says why)"; }
-      note="$("${SSH[@]}" "$host" "sed -n 3p ~/.cache/threadbear-perf.lock.holder 2>/dev/null")"
+      # No holder file when nobody holds the lock: sed's failure would end
+      # the script silently under set -e.
+      note="$("${SSH[@]}" "$host" "sed -n 3p ~/.cache/threadbear-perf.lock.holder 2>/dev/null || true")"
       [ "$note" = "$said" ] || { echo "Waiting for $host's build-and-measurement lock, held by: ${note:-someone}" >&2; said="$note"; }
       sleep 5
     done
