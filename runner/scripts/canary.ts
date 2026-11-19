@@ -121,8 +121,8 @@ async function check(r: Runner): Promise<void> {
 
 // Mike's runner tags a release a day once GitHub's checks pass
 // (src/upstream.ts). None went out from 16 to 19 Nov while main was red on
-// Windows, and nobody noticed until forks were days behind. More than
-// STALL_DAYS without one is said once (the newest tag is kept in
+// Windows, and nobody noticed until forks were days behind. Main's changes
+// waiting more than STALL_DAYS for one is said once (the newest tag is kept in
 // release-stall-told), so a long stall starts one thread, not one a day.
 // (Inside: a const out here isn't set yet when the checks above call this.)
 async function releasesGoingOut(): Promise<void> {
@@ -131,17 +131,19 @@ async function releasesGoingOut(): Promise<void> {
   if (!upstream.checkout) return say(false, "releases: this runner doesn't say which checkout it publishes from");
   const tags = execFileSync('git', ['-C', upstream.checkout, 'tag', '--list', 'release/*', '--sort=-refname'], { encoding: 'utf8' }).split('\n').filter(Boolean);
   const newest = tags[0];
-  const day = newest && /^release\/(\d{4}-\d{2}-\d{2})/.exec(newest)?.[1];
-  if (!newest || !day) return say(false, 'releases: no release/ tags in the checkout');
-  const today = new Date();
-  const days = Math.round((Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) - Date.parse(`${day}T00:00:00Z`)) / 86_400_000);
-  if (days <= STALL_DAYS) return say(true, `releases: the newest is ${newest}`);
+  if (!newest) return say(false, 'releases: no release/ tags in the checkout');
+  // Counted from the oldest commit main has that the newest release doesn't:
+  // a quiet main with nothing to release isn't a stall (Codex's review).
+  const unreleased = execFileSync('git', ['-C', upstream.checkout, 'log', '--format=%ct', '--reverse', `${newest}..refs/heads/main`], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  if (!unreleased.length) return say(true, `releases: main has nothing since ${newest}`);
+  const days = Math.floor((Date.now() - Number(unreleased[0]) * 1000) / 86_400_000);
+  if (days < STALL_DAYS) return say(true, `releases: the newest is ${newest}`);
   const told = path.join(cfg.home, 'runner', 'release-stall-told');
-  if (fs.existsSync(told) && fs.readFileSync(told, 'utf8').trim() === newest) return say(true, `releases: none since ${newest} (${days} days), already said`);
+  if (fs.existsSync(told) && fs.readFileSync(told, 'utf8').trim() === newest) return say(true, `releases: none since ${newest}, already said`);
   fs.mkdirSync(path.dirname(told), { recursive: true });
   fs.writeFileSync(told, `${newest}\n`);
   const why = upstream.held ? `main (${upstream.held.commit.slice(0, 8)}) is held: ${upstream.held.why}` : "the runner hasn't said why (tb logs, 'holding back a release')";
-  say(false, `releases: none has gone out since ${newest}, ${days} days ago, so forks aren't getting updates; ${why}`);
+  say(false, `releases: none has gone out since ${newest}, with ${unreleased.length} commits on main waiting for ${days} days, so forks aren't getting updates; ${why}`);
 }
 
 // A read that failed on a network blip (this Mac's runner reaching Convex)
