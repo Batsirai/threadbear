@@ -26,6 +26,34 @@ export function hidIdleMs(): Promise<number | undefined> {
   });
 }
 
+// Whether this user's screen is locked, from the console session IOKit
+// lists (CGSSessionScreenIsLocked). A Touch ID prompt can't show over the
+// lock screen, and there the Secure Enclave's SSH provider hands back an
+// empty signature as if it had signed (release/2026-11-19, signed eight
+// minutes after the screen saver locked the Mac while HIDIdleTime still
+// said someone was there). False off a Mac, or when it can't be read: the
+// release's own check (upstream.ts selfCheck) still stops a bad signature.
+export function screenLocked(): Promise<boolean> {
+  if (process.platform !== 'darwin') return Promise.resolve(false);
+  return new Promise((resolve) => {
+    execFile('/usr/sbin/ioreg', ['-n', 'Root', '-d', '1', '-k', 'IOConsoleUsers'], { encoding: 'utf8', timeout: 5000 }, (_err, stdout) => {
+      resolve(parseScreenLocked(stdout ?? '', process.getuid?.() ?? -1));
+    });
+  });
+}
+
+// IOConsoleUsers' sessions are {"key"=value,...} dicts on one line; the
+// one for `uid` says "CGSSessionScreenIsLocked"=Yes while it's locked (and
+// leaves the key out when it isn't).
+export function parseScreenLocked(ioreg: string, uid: number): boolean {
+  const line = ioreg.split('\n').find((l) => l.includes('"IOConsoleUsers"')) ?? '';
+  for (const session of line.match(/\{[^{}]*\}/g) ?? []) {
+    if (!new RegExp(`"kCGSSessionUserIDKey"=${uid}(?![0-9])`).test(session)) continue;
+    return /"CGSSessionScreenIsLocked"=Yes/.test(session);
+  }
+  return false;
+}
+
 export function isAtMac(appConnected: boolean, idleMs: number | undefined): boolean {
   return appConnected && idleMs !== undefined && idleMs < AT_MAC_IDLE_MS;
 }

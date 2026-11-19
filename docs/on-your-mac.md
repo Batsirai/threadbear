@@ -640,7 +640,9 @@ File references are where to look.
   `git clone` its repo from `origin` if this machine has no copy.
 - **Presence** (`runner/src/presence.ts`): reads how long the keyboard and
   mouse have been idle (`ioreg`), so your phone knows whether you're at
-  the Mac.
+  the Mac. A runner that signs releases with a Touch ID key also reads
+  whether the screen is locked (`ioreg`'s console session), as it can't
+  sign until you've unlocked it.
 - **Dialogs on the screen** (`runner/src/mac-screen.ts`): every 2 minutes it
   runs `osascript` to count the windows of macOS's UserNotificationCenter, so
   it can tell you when a dialog has been left waiting. It sees how many, not

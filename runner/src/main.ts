@@ -45,7 +45,7 @@ import { Librarian, librarianMethods } from './librarian.ts';
 import { ConnectorsMonitor, connectorsMethods } from './connectors.ts';
 import { TaskBoards, gatewayCaller, helperHeaders } from './notion-tasks.ts';
 import { createLogger } from './log.ts';
-import { hidIdleMs, isAtMac } from './presence.ts';
+import { hidIdleMs, isAtMac, screenLocked } from './presence.ts';
 import { ThreadStore } from './store.ts';
 import { AccountRegistry } from './accounts.ts';
 import { ClaudeAdapter, cliEnv } from './adapters/claude/adapter.ts';
@@ -1036,8 +1036,9 @@ async function main(): Promise<void> {
       if (readState(cfg.home)?.lastGood !== thisRelease.id) return false;
       return releaseTreeAt(thisRelease.checkout, thisRelease.prefix ?? 'runner/', 'refs/heads/main') === thisRelease.tree;
     },
-    // A release signed with a Touch ID key waits for Mike at the Mac.
-    atMac: async () => isAtMac(true, await hidIdleMs()),
+    // A release signed with a Touch ID key waits for Mike at the Mac, and
+    // with it unlocked: over the lock screen the key signs nothing.
+    atMac: async () => isAtMac(true, await hidIdleMs()) && !(await screenLocked()),
     onChange: () => publishUpdates(),
     onChecked: (status) => {
       void bringIn.consider(status);
