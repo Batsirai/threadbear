@@ -178,7 +178,7 @@ export interface Probe {
 
 type Host = {
   idleBackground(): IdleBackground[];
-  send(threadId: string, text: string, images: never[], opts: { origin: 'runner' }): unknown;
+  send(threadId: string, text: string, images: never[], opts: { origin: 'runner'; wakeReason?: string }): unknown;
 };
 
 type Deps = { host: Host; clock: Clock; log: Logger; home: string; probe?: Probe };
@@ -323,7 +323,7 @@ export class StuckJobs {
 
     for (const [threadId, jobs] of stuck) {
       try {
-        host.send(threadId, message(jobs), [], { origin: 'runner' });
+        host.send(threadId, message(jobs), [], { origin: 'runner', wakeReason: jobs.length === 1 ? 'A background job ran long' : 'Background jobs ran long' });
         for (const j of jobs) nudged[key(threadId, j.task.id)] = new Date(now).toISOString();
         this.deps.log.info('nudged a thread about stuck background jobs', { threadId, jobs: jobs.map((j) => j.task.description) });
       } catch (e) {

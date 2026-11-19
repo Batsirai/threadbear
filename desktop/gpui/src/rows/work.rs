@@ -560,7 +560,7 @@ mod gap_tip_tests {
         use threadbear_core::chrono::{Local, TimeZone as _};
         let from = Local.with_ymd_and_hms(2026, 11, 14, 14, 29, 0).unwrap().timestamp() as f64;
         let to = Local.with_ymd_and_hms(2026, 11, 14, 14, 33, 0).unwrap().timestamp() as f64;
-        let gap = threadbear_core::reducer::TurnGap { from, to, woke_by: vec![] };
+        let gap = threadbear_core::reducer::TurnGap { from, to, woke_by: vec![], runner_wake: None };
         let expected = if crate::style::uses_24_hour_clock() { "Waited from 14:29 to 14:33" } else { "Waited from 2:29 pm to 2:33 pm" };
         assert_eq!(super::gap_tip(&gap), expected);
     }

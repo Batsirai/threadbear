@@ -1444,7 +1444,9 @@ pub enum EventPayload {
     /// resume after a restart); `edit_of` is the seq of the message this one
     /// replaced; `review` is Mike's answer to a review, when the runner sent
     /// it for one.
-    UserMessage { text: String, images: Vec<ImageRef>, origin: Option<String>, answers: Vec<AskAnswer>, edit_of: Option<i64>, review: Option<ReviewAnswer> },
+    /// `wake_reason` (`wakeReason`): on a runner's message, what happened in a few words ("The
+    /// app restarted onto 1f103ac18"), for the divider before its turn.
+    UserMessage { text: String, images: Vec<ImageRef>, origin: Option<String>, wake_reason: Option<String>, answers: Vec<AskAnswer>, edit_of: Option<i64>, review: Option<ReviewAnswer> },
     /// `summary`: the turn's summary, written by the runner from end_turn.
     /// `gives_way`: on a summary, with bullet replies off. `final_reply`:
     /// One reply's reply, the agent's message after end_turn.
@@ -1546,6 +1548,7 @@ struct TextFields {
     images: Vec<ImageRef>,
     message: Option<String>,
     origin: Option<String>,
+    wake_reason: Option<String>,
     answers: Vec<AskAnswer>,
     edit_of: Option<i64>,
     review_id: Option<String>,
@@ -1564,6 +1567,7 @@ impl TextFields {
             images: lossy(c, "images", ImageRef::decode),
             message: string(c, "message"),
             origin: string(c, "origin"),
+            wake_reason: string(c, "wakeReason"),
             answers: lossy(c, "answers", AskAnswer::decode),
             edit_of: lenient_int(c, "editOf"),
             review_id: string(c, "reviewId"),
@@ -1583,7 +1587,7 @@ fn decode_payload(type_: &str, c: &Object) -> Result<EventPayload, ()> {
         "user.message" => {
             let f = TextFields::decode(c);
             let review = ReviewAnswer::parse(&f.text, f.review_id.as_deref(), f.review_response.as_ref());
-            EventPayload::UserMessage { text: f.text, images: f.images, origin: f.origin, answers: f.answers, edit_of: f.edit_of, review }
+            EventPayload::UserMessage { text: f.text, images: f.images, origin: f.origin, wake_reason: f.wake_reason, answers: f.answers, edit_of: f.edit_of, review }
         }
         "assistant.text" => {
             let f = TextFields::decode(c);

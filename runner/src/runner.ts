@@ -1878,6 +1878,7 @@ export class Runner {
     const turnId = opts.messageId ?? crypto.randomUUID();
     const msg: QueuedSend = { turnId, text, images: refs };
     if (opts.origin) msg.origin = opts.origin;
+    if (opts.wakeReason && opts.origin === 'runner') msg.wakeReason = opts.wakeReason;
     if (opts.scheduleId) msg.scheduleId = opts.scheduleId;
     if (opts.preserveSchedule !== undefined) msg.preserveSchedule = opts.preserveSchedule;
     if (opts.scheduledSince !== undefined) msg.scheduledSince = opts.scheduledSince;
@@ -4687,7 +4688,10 @@ export function stoppedWorkMessage(what: string[], last: boolean): string {
   ].join('\n');
 }
 
-export type SendOptions = { origin?: MessageOrigin; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
+// `wakeReason`: for a message the runner sends by itself, what happened, in a few
+// words ("The app restarted"), shown on the divider before the turn it
+// starts ("14 h later · The app restarted", Mike 19 Nov).
+export type SendOptions = { origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
 
 type ScheduledDelivery = { seq: number; started: boolean; text: string; images: ImageRef[]; superseded?: false } | { superseded: true; started: true };
 
@@ -4760,6 +4764,7 @@ export function userMessage(msg: QueuedSend): EventBody {
     text: msg.text,
     images: msg.images,
     ...(msg.origin ? { origin: msg.origin } : {}),
+    ...(msg.wakeReason ? { wakeReason: msg.wakeReason } : {}),
     ...(msg.scheduleId ? { scheduleId: msg.scheduleId } : {}),
     ...(msg.reviewId ? { reviewId: msg.reviewId, reviewResponse: msg.reviewResponse } : {}),
     ...(msg.answers?.length ? { answers: msg.answers } : {}),

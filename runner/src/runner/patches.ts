@@ -967,7 +967,7 @@ export const patchesPart = {
         '```\n' + (shown.trim() || '(no output)') + '\n```\n\n' +
         (outcome.ok ? 'Nothing to do unless something above surprises you.' : 'If this is from your change, fix it; if not, say so and carry on.');
       try {
-        this.sendTo(st, text, [], { origin: 'runner' });
+        this.sendTo(st, text, [], { origin: 'runner', wakeReason: `${hook.title} ${verdict}` });
       } catch (e) {
         this.log.warn('could not tell the agent a hook result', { threadId: st.rec.id, hook: hook.id, error: String(e) });
       }

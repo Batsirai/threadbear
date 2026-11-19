@@ -249,7 +249,7 @@ export class AppRestarts {
       runner.note(w.threadId, note);
       if (why) return;
       const head = `The ${appName(app)} has restarted onto ${build.short} (${build.commit}), as you asked to hear.`;
-      runner.send(w.threadId, w.text ? `${head}\n\n${w.text}` : `${head} Check your change in the running app.`, [], { origin: 'runner' });
+      runner.send(w.threadId, w.text ? `${head}\n\n${w.text}` : `${head} Check your change in the running app.`, [], { origin: 'runner', wakeReason: `The ${appName(app)} restarted onto ${build.short}` });
       log.info('told a thread the app restarted', { threadId: w.threadId, build: build.short, app });
     } catch (e) {
       log.warn('could not tell a thread the app restarted', { threadId: w.threadId, error: String(e) });
