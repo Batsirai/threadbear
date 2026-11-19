@@ -18,8 +18,9 @@ slices (18 Nov, "What's built", below): the tables, the box's state
 machine, box keys, cloud tokens and the boot exchange; then the Fly
 adapter, the service's actions, starting a thread, waking, reachable
 boxes and the crons; then the runner's box mode (19 Nov, slice 3) and the
-box image it boots (slice 4). Nothing has made a real box through the app
-yet. A first draft of the plan
+box image it boots (slice 4); then starting one from the Mac app, with
+its cloud token made just in time in the thread (19 Nov, slice 5). Nothing
+has made a real box through the app yet. A first draft of the plan
 went to a review panel (Fable, Opus and Grok, 16 Nov), each reading the
 code; their changes are folded in, and "What the review changed" at the
 end says what moved and why.
@@ -911,6 +912,50 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
   Until then a box runs that version, while Mike's other runners follow
   Claude Code's latest.
 
+The fifth slice (19 Nov 2026), **starting from the Mac and the token
+card** (docs/protocol.md, Virtual runners: "Waiting for a cloud token",
+"Cloud tokens' lifecycle", "Cloud tokens on the Mac", "Starting from the
+Mac"; Box mode, "A refused token"), behind the `virtualRunners` experiment
+(decision 14), with tests in `box-service.test.ts`, `boxes-backend.test.ts`,
+`virtual-runners.test.ts`, `thread-index.test.ts`, `thread-keys.test.ts`,
+`box-mode.test.ts`, desktop/core's unit tests and
+`features/virtual-runners.feature`:
+
+- **Runs on.** After the machines, one entry per virtual runner
+  (`RemoteThreads.services`, from `boxes:runnerServices`), with a cloud
+  icon and no online word; it's in Default too. A box's own runner is never
+  listed as a machine (Runs on, Move to, Settings, schedules). With one
+  picked, the folder and login are this Mac's: `threads.create` with
+  `serviceId` reads the repo here (`runner/src/virtual-runners.ts`: origin
+  without credentials, subfolder, the upstream or origin's default branch)
+  and the login's email, and calls `boxes:startThread`, which now writes
+  the thread's sidebar row at once, so it's listed while it waits.
+- **Rows.** "Starting a machine" and "Waking" with the small spinner,
+  "Asleep" as quietly as a hibernating thread, and "Needs a cloud token"
+  with the needs-you mark (`desktop/core`, the row rule).
+- **The token card** (Mike's option C, 17 Nov), on the thread's message box
+  where the limit box goes, while its box's login has no cloud token or a
+  refused one (`RemoteRunner.box.token`): Make one (the runner runs `claude
+  setup-token` headless in a pseudo-terminal as that login,
+  `runner/src/cloud-token-helper.py`, and sends the token to
+  `setCloudToken`), Paste a token, and Use this Mac's token when that login
+  has a year-long token here. A click shows a spinner with the buttons off
+  until the runner answers.
+- **Waiting for a token** (backend API 90). A login's cloud token is a
+  state machine (`cloudTokenMachine.ts`: valid, dead), and a box whose
+  login has none, or a dead one, starts in `needsToken`: nothing is asked
+  of the provider until a token is set, which moves it on to `creating`.
+- **A refused token.** A box's turn refused with a 401 sends
+  `boxes:tokenRefused` (only the token it was given dies), holds the thread
+  and asks `boxes:boxCloudToken` every 30 s; a newer token is written in,
+  the CLI closed, and the thread carries on by itself
+  (`runner/src/box-token.ts`). The card comes back meanwhile.
+
+Not built in this slice: Settings' list of cloud tokens with their expiry,
+a picture with a virtual runner thread's first message, and the first
+message showing in the thread before the box has written it (the row's
+preview has it).
+
 Not built yet, in about the order they're needed:
 
 - TODO a real box started from the Mac end to end, on Fly with the box
@@ -921,7 +966,8 @@ Not built yet, in about the order they're needed:
 - TODO a lost box's taken command put back to pending once (decision 12).
 - TODO starting and waking from the phone (`startThread` takes the owner
   key only), and archiving a sleeping box's thread without waking it.
-- TODO the GPUI app and the phone (Order, 4), and the experiment (14).
+- TODO the phone (Order, 4), Settings' section per virtual runner and its
+  cloud tokens, and the experiment made standard (14).
 
 ## Order
 
