@@ -116,6 +116,11 @@ fresh PC), which is what you want gone.
    (`abbreviate_home` in `desktop/core/src/new_thread.rs`, and every place
    that shortened paths on its own now uses it), and the test helpers run
    Git Bash rather than `/bin/sh`.*
+   *19 Nov: Codex runs on the Dell as it is: the runner's own copy
+   (`tools\codex`, 0.170.0) signed in as codex-main, in the Misc pool. A
+   thread in Full ran a command (Codex uses PowerShell there) and
+   Threadbear's tools; one in Ask put up an approval card for its
+   PowerShell command, and ran it once allowed.*
 
 Slices 1 to 4 replace WSL on the Dell. 5 is where it's as safe as the Mac.
 
