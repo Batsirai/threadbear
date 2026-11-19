@@ -2621,7 +2621,7 @@ extern "C" fn handle_key_equivalent(
     _: Sel,
     native_event: *mut AnyObject,
 ) -> Bool {
-    if another_view_has_the_keyboard(this) && !is_command_or_control(native_event) {
+    if another_view_has_the_keyboard(this) && !is_app_shortcut_key(native_event) {
         return Bool::NO;
     }
     handle_key_event(this, native_event, true)
@@ -2633,7 +2633,8 @@ extern "C" fn handle_key_equivalent(
 // text box. So with a native view inside this one holding the keyboard (a web
 // panel's page), Backspace went to a GPUI box out of sight instead of the
 // page's (Mike, 19 Nov: the YouTube panel's reply box). Only ⌘ and Control
-// shortcuts are the app's there; every other key is that view's.
+// shortcuts, and F1 to F35 (a shortcut can be one, shortcuts.rs), are the
+// app's there; every other key is that view's.
 fn another_view_has_the_keyboard(this: &AnyObject) -> bool {
     unsafe {
         let window: *mut AnyObject = msg_send![this, window];
@@ -2649,9 +2650,23 @@ fn another_view_has_the_keyboard(this: &AnyObject) -> bool {
     }
 }
 
-fn is_command_or_control(native_event: *mut AnyObject) -> bool {
+fn is_app_shortcut_key(native_event: *mut AnyObject) -> bool {
     let modifiers: NSEventModifierFlags = unsafe { msg_send![native_event, modifierFlags] };
-    modifiers.contains(NSEventModifierFlags::Command) || modifiers.contains(NSEventModifierFlags::Control)
+    if modifiers.contains(NSEventModifierFlags::Command) || modifiers.contains(NSEventModifierFlags::Control) {
+        return true;
+    }
+    // NSF1FunctionKey..=NSF35FunctionKey. The arrows, Delete, Home and End
+    // carry the Function flag too, so the flag alone can't tell.
+    let characters: *mut AnyObject = unsafe { msg_send![native_event, charactersIgnoringModifiers] };
+    if characters.is_null() {
+        return false;
+    }
+    let length: usize = unsafe { msg_send![characters, length] };
+    if length != 1 {
+        return false;
+    }
+    let first: u16 = unsafe { msg_send![characters, characterAtIndex: 0usize] };
+    (0xF704..=0xF726).contains(&first)
 }
 
 extern "C" fn handle_key_down(this: &AnyObject, _: Sel, native_event: *mut AnyObject) {
