@@ -59,9 +59,10 @@ export function asksForAppRestart(asks: { action?: unknown; why?: unknown; where
 // The two questions asked of git, swappable in tests. `resolve` gives a
 // full commit id or undefined; `contains` says whether `commit` has
 // `ancestor` in its history, or undefined when git can't tell (a commit it
-// doesn't know, no repo), which counts as the old rule: any new build, or
-// 'busy' when git didn't answer in time, which keeps waiting: a slow disk
-// shouldn't bring back the false news this is here to stop. `tree` gives
+// doesn't know, no repo), or 'busy' when git didn't answer in time. Neither
+// wakes the thread: an unconfirmed build is the false news this is here to
+// stop (Codex's and Gemini's review, 19 Nov). The watch still ends after a
+// day at most, like any other. `tree` gives
 // the trees of `dirs` at `commit`, joined with + as the apps' builds do
 // (app/build-app.sh, desktop/scripts/make-bundle.sh).
 export type RestartGit = {
@@ -127,9 +128,17 @@ export class AppRestarts {
   // `commit`: what the new build must contain, by default main's HEAD in
   // the thread's folder (a thread's worktree shares its refs).
   watch(threadId: string, text?: string, commit?: string): { build?: AppBuild; running?: string; waitingFor?: string } {
-    const want = this.wanted(threadId, commit);
     const state = this.read();
     state.watching = state.watching.filter((w) => w.threadId !== threadId);
+    let want: Watch['want'];
+    try {
+      want = this.wanted(threadId, commit);
+    } catch (e) {
+      // Asking again replaces the request, even one that can't be armed:
+      // else an earlier commit's wait stays set behind the refusal.
+      this.write(state);
+      throw e;
+    }
     state.watching.push({
       threadId,
       ...(text?.trim() ? { text: text.trim() } : {}),
@@ -197,7 +206,14 @@ export class AppRestarts {
     const has = (want: NonNullable<Watch['want']>) => {
       if (want.trees?.[app] === build.tree) return true;
       const key = `${want.repo}\0${want.commit}`;
-      if (!asked.has(key)) asked.set(key, git.contains(want.repo, want.commit, build.commit));
+      if (!asked.has(key)) {
+        let answer = git.contains(want.repo, want.commit, build.commit);
+        // The thread's folder may not know the build (a fork's own
+        // checkout, a worktree since removed): the apps' checkout may.
+        const { appRepo } = this.deps;
+        if (answer === undefined && appRepo && appRepo !== want.repo) answer = git.contains(appRepo, want.commit, build.commit);
+        asked.set(key, answer);
+      }
       return asked.get(key);
     };
     for (const watch of state.watching) {
@@ -216,9 +232,10 @@ export class AppRestarts {
       if (!counts) kept.push(w);
       // Git too slow to say: unchanged, so the next hello asks again.
       else if (w.want && has(w.want) === 'busy') kept.push(w);
-      // A new build, but one without the commit it's waiting for: keep
-      // waiting, from this build, so a reconnect on it isn't news again.
-      else if (w.want && has(w.want) === false) {
+      // A new build, but one without the commit it's waiting for, or one
+      // git can't place: keep waiting, from this build, so a reconnect on
+      // it isn't news again.
+      else if (w.want && has(w.want) !== true) {
         const moved = app === 'desktop' ? { fromDesktopTree: build.tree, fromDesktopShort: build.short } : { fromTree: build.tree, fromShort: build.short };
         kept.push({ ...w, ...moved });
         if (runner.has(w.threadId)) older.push(w);
@@ -234,7 +251,8 @@ export class AppRestarts {
     this.write(state);
     for (const w of older) {
       try {
-        runner.note(w.threadId, `${appName(app)} restarted onto ${build.short}, which doesn't have ${w.want!.short} yet. Still waiting.`);
+        const why = has(w.want!) === false ? `which doesn't have ${w.want!.short} yet` : `and git can't tell whether that has ${w.want!.short}`;
+        runner.note(w.threadId, `${appName(app)} restarted onto ${build.short}, ${why}. Still waiting.`);
       } catch (e) {
         log.warn('could not note an older app build', { threadId: w.threadId, error: String(e) });
       }

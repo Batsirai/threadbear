@@ -258,7 +258,7 @@ test('a new build without the commit the thread waits for keeps it waiting', asy
   assert.ok(!watcher.isWatching(thread.id));
 });
 
-test('a named commit, and one git can\'t place, fall back sensibly', () => {
+test('a named commit, and a build git can\'t place, keep waiting', () => {
   const { h, thread } = setUp();
   const asked: string[] = [];
   const watcher = new AppRestarts({
@@ -271,9 +271,10 @@ test('a named commit, and one git can\'t place, fall back sensibly', () => {
   watcher.appHello(A);
   assert.equal(watcher.watch(thread.id, undefined, 'mine').waitingFor, 'c0ffee123');
   assert.deepEqual(asked, ['mine']);
-  // Git can't tell: any new build counts, as before.
+  // Git can't tell: not news, as the build may not have it (19 Nov).
   watcher.appHello(B);
-  assert.match(said(h, thread.id).message, /restarted onto bbbb222/);
+  assert.equal(said(h, thread.id).message, undefined);
+  assert.ok(watcher.isWatching(thread.id));
 });
 
 // 42071b05, 19 Nov: a thread in ~/dev/me/misc named a Threadbear commit
@@ -307,7 +308,10 @@ test('a commit named from a thread outside the repo is looked for in the apps\' 
   assert.ok(watcher.isWatching(thread.id));
   watcher.appHello(D(landed, 'tree-2'), 'desktop');
   assert.match(String(h.events(thread.id).findLast((e) => e.type === 'user.message' && e.origin === 'runner')?.text), new RegExp(`restarted onto ${landed.slice(0, 9)}`));
-  // One found nowhere is refused, not turned into "any new build".
+  // One found nowhere is refused, not turned into "any new build", and
+  // takes the place of the wait the thread had.
+  watcher.watch(thread.id);
+  assert.ok(watcher.isWatching(thread.id));
   assert.throws(() => watcher.watch(thread.id, undefined, 'deadbeef1'), /Can't find commit deadbeef1/);
   assert.ok(!watcher.isWatching(thread.id));
 });

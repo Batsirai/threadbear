@@ -1856,7 +1856,8 @@ own restarts.
   the thread's folder; a `commit` in the thread's folder, then that
   checkout (so `HEAD` is a worktree's own, and a thread in another repo
   can name a Threadbear commit). A `commit` found in neither is refused with an error, rather
-  than waiting for any new build. Asking again replaces its request.
+  than waiting for any new build, and drops the request it had. Asking
+  again replaces its request.
 - A turn that ends needing nothing (no archive, snooze or waitFor) while
   its thread is on the list hibernates the thread for a day at most
   (`system.note` "Hibernating until the Threadbear app restarts onto the
@@ -1880,10 +1881,12 @@ own restarts.
   now from that build, with a `system.note` "<app> restarted onto <short>,
   which doesn't have <commit> yet. Still waiting." A build whose `tree`
   is that commit's tree for the app (main moved on with other changes
-  before the thread asked) counts too. When git can't tell (an unknown
-  commit, no repo) any new build counts, as before; when it's too slow to
-  answer, the thread stays on the list as it was and the next `hello` asks
-  again. A build a thread on a draining runner was due to hear about is
+  before the thread asked) counts too. When git can't tell (a build commit
+  neither the thread's repo nor the apps' checkout knows) the thread stays
+  on the list from that build too, noted "...and git can't tell whether
+  that has <commit>"; when it's too slow to answer, it stays on the list as
+  it was and the next `hello` asks again. Only a request with no commit at
+  all (none could be resolved) takes any new build. A build a thread on a draining runner was due to hear about is
   forgotten when the same app comes back on any other build (rolled back,
   or one without the commit); if that one counts, it hears about that. A thread that remembered only one app's
   build waits for that app: the other's first `build` isn't a restart of it.
