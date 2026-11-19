@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, type Driver, type Dump } from './driver.ts';
 import { ownFolder } from '../../desktop/scripts/own-folder.ts';
+import { runtimeParent } from './web-runtime.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const exe = process.platform === 'win32' ? 'threadbear-gpui.exe' : 'threadbear-gpui';
@@ -89,7 +90,7 @@ export class GpuiDriver implements Driver {
   private appProcess?: ChildProcess;
   private display?: string;
 
-  private child(cmd: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
+  private child(cmd: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string): ChildProcess {
     // A process group of its own: `dbus-run-session`'s bus and the portals it
     // starts are grandchildren that outlive a plain kill, and the cloud box
     // ended up with thousands of them (9 Nov, "can't spawn worker thread").
@@ -98,7 +99,7 @@ export class GpuiDriver implements Driver {
     const registry = process.platform === 'win32' ? undefined : process.env.THREADBEAR_PERF_CHILDREN;
     const c = spawn(registry ? 'perl' : cmd,
       registry ? [path.join(root, 'scripts/perf-children.pl'), '--child', registry, cmd, ...args] : args,
-      { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+      { env: { ...process.env, ...env }, cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     this.commands.set(c, cmd);
     c.stdout?.on('data', (d) => (this.log += d));
     c.stderr?.on('data', (d) => (this.log += d));
@@ -145,6 +146,18 @@ export class GpuiDriver implements Driver {
       THREADBEAR_REDUCE_MOTION: process.env.TB_REDUCE_MOTION ?? 'off',
       ...specShell(),
     };
+    // On a remote.sh run, the app's temp folder, working folder and (unless
+    // the run chose one) web runtime go on the home disk: the Chromium
+    // helpers it starts inherit the first two, and on Tinker Desk remote.sh's
+    // are on an external SSD that every new build's helpers asked macOS for,
+    // with nobody at the screen to answer (19 Nov; web-runtime.ts).
+    let cwd: string | undefined;
+    if (process.env.THREADBEAR_WEB_RUNTIME_PARENT) {
+      cwd = runtimeParent();
+      env.TMPDIR = path.join(cwd, `app-tmp-${process.pid}`);
+      fs.mkdirSync(env.TMPDIR, { recursive: true });
+      if (!process.env.THREADBEAR_WEB_RUNTIME_DIR) env.THREADBEAR_WEB_RUNTIME_DIR = path.join(cwd, `web-runtime-${process.pid}`);
+    }
     if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
       // A server: a virtual screen, and a session bus of its own for the
       // desktop settings and portals the app asks for.
@@ -153,9 +166,9 @@ export class GpuiDriver implements Driver {
         this.child('Xvfb', [this.display, '-screen', '0', '1400x900x24'], {});
         await sleep(400);
       }
-      this.appProcess = this.child('dbus-run-session', ['--', binary], { ...env, DISPLAY: this.display, NO_AT_BRIDGE: '1', LIBGL_ALWAYS_SOFTWARE: '1' });
+      this.appProcess = this.child('dbus-run-session', ['--', path.resolve(binary)], { ...env, DISPLAY: this.display, NO_AT_BRIDGE: '1', LIBGL_ALWAYS_SOFTWARE: '1' }, cwd);
     } else {
-      this.appProcess = this.child(binary, [], env);
+      this.appProcess = this.child(path.resolve(binary), [], env, cwd);
     }
     try {
       await waitForFile(file, 'The app', 30_000);

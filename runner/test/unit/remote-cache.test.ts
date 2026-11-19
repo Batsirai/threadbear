@@ -299,9 +299,15 @@ done
   const run = (where: string, ...cmd: string[]) => spawnSync('/bin/bash', [path.join(SCRIPTS, 'remote.sh'), where, '--', ...cmd], { env: h.env, encoding: 'utf8', timeout: 30_000 });
 
   // Remote builds keep line numbers, not the full debug info that filled it.
-  const fine = run('host1', 'bash', '-c', 'echo "debug=$CARGO_PROFILE_DEV_DEBUG"');
+  const fine = run('host1', 'bash', '-c', 'echo "debug=$CARGO_PROFILE_DEV_DEBUG"; [ -d "$THREADBEAR_WEB_RUNTIME_PARENT" ] && echo "runtimes=$THREADBEAR_WEB_RUNTIME_PARENT"');
   assert.equal(fine.status, 0, fine.stderr);
   assert.match(fine.stdout, /debug=line-tables-only/);
+  // Web runtimes go on the home disk, off the build volume (Tinker Desk's
+  // external SSD, whose prompts held --desk runs, 19 Nov), and go after.
+  const runtimes = /runtimes=(.+)/.exec(fine.stdout)?.[1];
+  assert.ok(runtimes, fine.stdout);
+  assert.ok(!runtimes.includes('/gpui/'), runtimes);
+  assert.ok(!fs.existsSync(runtimes), 'the run left its web runtimes behind');
 
   const filled = run('host2', 'touch', full);
   assert.equal(filled.status, 1);
