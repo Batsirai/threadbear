@@ -625,19 +625,23 @@ impl SettingsWindow {
         if settings.lab_review_supported {
             let on = settings.lab_review;
             let switch = self.switch("settings-lab-review", on, "Have another lab check each code change a thread makes", cx, |this, on, cx| this.update(json!({ "labReview": on }), cx));
-            let mut rows = vec![row("Review code changes before a thread is done", switch, cx)];
-            // Who reviews, in order, while reviews are on (reviewers.rs).
-            if let Some(list) = settings.lab_reviewers.as_ref().filter(|_| on) {
-                rows.extend(self.reviewer_rows(list, cx));
-            }
-            sections.push(section(
+            let rows = vec![row("Review code changes before a thread is done", switch, cx)];
+            let review = section(
                 "settings-code-review",
                 "Code review",
-                "When a thread changes code and is done, another lab tries to break the change in a review thread of its own. Your thread waits for what it finds, fixes what holds up, and tells you in its reply. The reviewers below go in order: the first that isn't the thread's own provider and has a login with room reviews, on its model and effort, so when one runs out the next takes over. For a big or risky change, every reviewer ticked for the panel reviews at once instead. Drag them to change the order. With no other lab to hand, a fresh session of the thread's own provider reviews instead.",
+                "When a thread changes code and is done, another lab tries to break the change in a review thread of its own. Your thread waits for what it finds, fixes what holds up, and tells you in its reply.\n\nA change gets one reviewer: the first in Every change that isn't the thread's own provider and has a login with room, so when one runs out the next takes over. Drag them to change the order. A big or risky change gets everyone in Big or risky changes at once, or one reviewer from Every change if fewer than two of them can review. With no other lab to hand, a fresh session of the thread's own provider reviews.",
                 "explain what a review found, change who reviews, or turn reviews on or off for you.",
                 rows,
                 cx,
-            ));
+            );
+            // Who reviews, while reviews are on (reviewers.rs): two lists
+            // under the switch, kept closer to it than the next section.
+            let lists = if on { self.review_lists(settings, cx) } else { Vec::new() };
+            if lists.is_empty() {
+                sections.push(review);
+            } else {
+                sections.push(v_flex().gap(px(20.)).child(review).children(lists).into_any_element());
+            }
         }
         // Why it's worth turning on, then what's in it, for anyone wary of
         // turning it on (the Swift app's, Mike, 29 Oct). This Mac's own
@@ -1481,6 +1485,7 @@ impl SettingsWindow {
             }),
             "labReview": settings.as_ref().map(|s| s.lab_review),
             "labReviewers": settings.as_ref().and_then(|s| s.lab_reviewers.as_ref()).map(|l| l.iter().map(|r| r.provider.clone()).collect::<Vec<_>>()),
+            "labPanel": settings.as_ref().and_then(|s| s.lab_panel.as_ref()).map(|l| l.iter().map(|r| r.provider.clone()).collect::<Vec<_>>()),
             "privateFolders": settings.as_ref().map(|s| s.private_folders.clone()),
             "smallJobsPool": settings.as_ref().and_then(|s| s.pool.clone()),
             // General's Web runtime row, as it reads.

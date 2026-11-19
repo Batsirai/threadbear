@@ -153,6 +153,16 @@ let accounts = [
     }),
   },
 ];
+// TB_MOCK_REVIEWERS: Grok and OpenCode logins too, and Code review's two
+// lists as Mike has them (19 Nov), for pictures of Settings › General ›
+// Code review. Off by default so the design set stays as it was.
+if (process.env.TB_MOCK_REVIEWERS) {
+  accounts = [
+    ...accounts,
+    { id: 'grok-main', provider: 'grok', title: 'Grok · alex@example.com', configDir: '~/.grok', models: [{ id: 'grok-4.7', model: 'grok-4.7', title: 'grok-4.7', effortLevels: ['low', 'medium', 'high'] }] },
+    { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '~/.config/opencode', models: [{ id: 'google/gemini-4-neon', model: 'google/gemini-4-neon', title: 'google/gemini-4-neon', effortLevels: ['low', 'medium', 'high'] }, { id: 'zai/glm-5', model: 'zai/glm-5', title: 'zai/glm-5' }] },
+  ];
+}
 // TB_MOCK_SIGN_INS: claude-4 signed out and claude-3's sign-in ending in two
 // days, for pictures of the Usage panel's sign-in lines (docs/protocol.md,
 // Pools, "Signed out"). Off by default so the design set stays as it was.
@@ -333,12 +343,16 @@ const devicesRefusal = () => {
 
 let mockInstructions = { text: '' };
 const settings = {
-  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, labReviewers: [{ provider: 'codex', model: 'gpt-6.1-sol' }, { provider: 'claude', effort: 'xhigh' }], keepAwake: true, fullSync: false, spareWeek: true,
+  defaultCwd: defaults.cwd, idleMinutes: 30, maxLiveCLIs: 6, followMain: true, bulletReplies: true, oneReply: true, labReview: true, labReviewers: [{ provider: 'codex', model: 'gpt-6.1-sol' }, { provider: 'claude', effort: 'xhigh' }], labPanel: [], labPanelLines: 150, keepAwake: true, fullSync: false, spareWeek: true,
   models: {
     pool: 'claude',
     privateFolders: ['~/dev/clients/acme'],
   },
 };
+if (process.env.TB_MOCK_REVIEWERS) {
+  settings.labReviewers = [{ provider: 'codex', effort: 'high' }, { provider: 'grok', model: 'grok-4.7', effort: 'high' }, { provider: 'claude', effort: 'high' }];
+  settings.labPanel = [{ provider: 'codex', effort: 'high' }, { provider: 'opencode', model: 'google/gemini-4-neon', effort: 'high' }];
+}
 
 /** threadId -> { summary, events: [], inProgress: Map(itemId -> {type,text}), timers: [] } */
 const threads = new Map();
@@ -1760,6 +1774,10 @@ async function dispatch(client, method, p) {
       if (p.labReviewers !== undefined) {
         if (!Array.isArray(p.labReviewers)) throw rpcError(-32602, 'labReviewers must be a list');
         settings.labReviewers = p.labReviewers;
+      }
+      if (p.labPanel !== undefined) {
+        if (!Array.isArray(p.labPanel)) throw rpcError(-32602, 'labPanel must be a list');
+        settings.labPanel = p.labPanel;
       }
       if (p.keepAwake !== undefined) settings.keepAwake = Boolean(p.keepAwake);
       if (p.fullSync !== undefined) settings.fullSync = Boolean(p.fullSync);

@@ -7,7 +7,7 @@ import { atomicWriteFileSync } from './fsutil.ts';
 import { RELEASE } from './release.ts';
 import { gatewayBase, gatewayUrlFrom } from './connectors.ts';
 import { credentialUrlProblem } from './secure-url.ts';
-import { parseLabReviewers, type LabReviewer } from './lab-reviewers.ts';
+import { reviewerLists, type LabReviewer } from './lab-reviewers.ts';
 import { findGatewayClient } from './notion-tasks.ts';
 import { onPath } from './adapters/acp/agents.ts';
 import { dataDirFor, exeName, logFileFor } from './platform.ts';
@@ -148,8 +148,12 @@ export type Config = {
   // on its model and effort if it names them. Unset is Codex then Claude,
   // which is the other provider for either (lab-review.ts, reviewLogin).
   labReviewers?: LabReviewer[];
-  // How many lines of code a change needs for the reviewers ticked for the
-  // panel to review it all at once (runner.json `labPanelLines`, 150 when
+  // Who reviews a big or risky change, all at once (runner.json `labPanel`,
+  // Settings > General > Code review > Big or risky changes;
+  // lab-reviewers.ts). Unset is no panel: one reviewer, as for any change.
+  labPanel?: LabReviewer[];
+  // How many lines of code a change needs for the panel to review it all
+  // at once (runner.json `labPanelLines`, 150 when
   // unset; lab-review.ts, panelChange). A change to auth, payments or
   // secrets gets the panel whatever its size.
   labPanelLines: number;
@@ -242,6 +246,7 @@ export type RunnerJson = {
   oneReply?: boolean;
   labReview?: boolean;
   labReviewers?: unknown;
+  labPanel?: unknown;
   labPanelLines?: unknown;
   keepAwake?: boolean;
   // spareWeek: false stops the runner starting a thread by itself when a
@@ -279,10 +284,6 @@ export type DefaultMode = Exclude<PermissionMode, 'plan'>;
 // See Config.labPanelLines.
 export const LAB_PANEL_LINES = 150;
 
-function labReviewersFrom(v: unknown): { labReviewers?: LabReviewer[] } {
-  const list = parseLabReviewers(v);
-  return list ? { labReviewers: list } : {};
-}
 
 export function defaultModeOf(v: unknown): DefaultMode | undefined {
   return v === 'full' || v === 'ask' || v === 'auto' ? v : undefined;
@@ -488,7 +489,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     // balance, and it's no longer in Settings).
     oneReply: json.oneReply !== false,
     labReview: json.labReview !== false,
-    ...labReviewersFrom(json.labReviewers),
+    ...reviewerLists(json.labReviewers, json.labPanel),
     labPanelLines: typeof json.labPanelLines === 'number' && Number.isFinite(json.labPanelLines) && json.labPanelLines >= 0 ? Math.floor(json.labPanelLines) : LAB_PANEL_LINES,
     // On for everyone since 10 Nov 2026, after a few days as an experiment
     // on Mike's Mac; Settings turns it off for anyone who'd rather.

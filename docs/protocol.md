@@ -813,16 +813,23 @@ type Settings = {
                         // lab); on unless runner.json has labReview: false.
                         // Absent from an older runner, where it was an
                         // experiment, so a client shows no switch
-  labReviewers?: { provider: Provider, model?: string, effort?: EffortLevel, panel?: true }[]
-                        // who reviews, in order (Settings > General > Code review): the
-                        // first of another lab with a login that has room,
-                        // on its model and effort when it names them.
-                        // panel: on the review panel, which reviews a big
-                        // or risky change all at once (Review by another
-                        // lab). A provider may come more than once on
-                        // different models.
+  labReviewers?: { provider: Provider, model?: string, effort?: EffortLevel }[]
+                        // who reviews, in order (Settings > General > Code
+                        // review > Every change): the first of another lab
+                        // with a login that has room, on its model and
+                        // effort when it names them. A provider may come
+                        // more than once on different models.
                         // runner.json's labReviewers, else Codex then Claude.
                         // Absent from an older runner: no list to show
+  labPanel?: { provider: Provider, model?: string, effort?: EffortLevel }[]
+                        // the review panel (Code review > Big or risky
+                        // changes), which reviews a big or risky change all
+                        // at once (Review by another lab); [] for none.
+                        // runner.json's labPanel, else the entries of an
+                        // older runner.json's labReviewers ticked
+                        // panel: true. Absent from an older runner, which
+                        // sent those ticks in labReviewers instead
+  labPanelLines?: number // lines of code that make a change big (150)
   keepAwake?: boolean   // keep the Mac out of idle sleep while threads
                         // work (keep-awake.ts); on by default, sent only by
                         // a runner on a Mac, so clients show no switch
@@ -1341,7 +1348,7 @@ the summary and then the reply.
 | `pools.list` | `{}` | `{ pools: Pool[] }` (see Pools) |
 | `pools.save` | `{ pools: Pool[] }` | `{ pools: Pool[] }`. Replaces the whole list in `runner.json` (`builtIn` is dropped; an empty list goes back to the built-in ones). `-32602` for a duplicate id, a blank id or title, an empty `accountIds`, or an account id the runner doesn't know. A blank or non-string `icon` is dropped. Every client gets `pools.updated` |
 | `settings.get` | `{}` | `{ settings: Settings }` |
-| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, labReviewers?, keepAwake?, bringIn?, spareWeek?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id, `labReviewers` a list of `{ provider, model?, effort?, panel? }` with known providers and efforts (the same provider on the same model listed twice counts once); otherwise `-32602` saying which. Every client gets `settings.updated` |
+| `settings.update` | `{ defaultCwd?, idleMinutes?, maxLiveCLIs?, followMain?, bulletReplies?, oneReply?, labReview?, labReviewers?, labPanel?, keepAwake?, bringIn?, spareWeek?, fullSync?, models?: { pool?: string \| null, privateFolders? }, experiments?: { [id]: boolean } }` | `{ settings: Settings }`. Saves what's given to `runner.json` and applies it straight away, except `followMain` and `fullSync` (next restart). `experiments` sets those switches under runner.json's `experiments`, keeping the rest; `Settings.experiments` lists every one as `{ id, name, does, on }`, oldest first. `defaultCwd` must be an existing folder, `idleMinutes` at least 1, `maxLiveCLIs` 1 to 20, `pool` a pool id or `null`, each `experiments` key an experiment's id, `labReviewers` and `labPanel` each a list of `{ provider, model?, effort? }` with known providers and efforts (the same provider on the same model listed twice in one list counts once; an older app's `panel: true` entries in `labReviewers`, sent without `labPanel`, become the panel and stay in the list); otherwise `-32602` saying which. Every client gets `settings.updated` |
 | `instructions.get` | `{}` | `{ instructions: StandingInstructions }` (see Standing instructions). `-32601` with the experiment off, and from an older runner: the app then shows no box |
 | `instructions.set` | `{ text: string }` | `{ instructions: StandingInstructions }`. Saves and signs the text, trimmed; an empty one clears them and removes both files. `-32602` for a `text` that isn't a string or is over 20,000 characters, `-32601` as for `instructions.get`. Every client gets `instructions.updated` |
 | `devices.list` | `{}` | `{ devices: Device[], site?: string, reason?: string }` (see Devices). `site` is the website's root while sync is on; `reason` says why nothing can pair when it's off |
@@ -3686,8 +3693,8 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   `labPanelLines` lines of code or more (runner.json, 150 when unset), or
   code under a risky path (a path part named auth, oauth, login, password,
   secret, crypto, encrypt…, payment, billing, stripe, permission or
-  security), goes to the review panel instead: every reviewer with
-  `panel: true` that has a login with room, the thread's own provider
+  security), goes to the review panel instead: every reviewer in
+  `Settings.labPanel` that has a login with room, the thread's own provider
   too, each in a review thread of its own at once, with a line in the
   brief saying others are looking too. With fewer than two of them able
   to, the one reviewer above reviews. The thread waits on all of them

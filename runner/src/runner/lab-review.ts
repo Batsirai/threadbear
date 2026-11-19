@@ -336,7 +336,7 @@ export const labReviewPart = {
   },
 
   // Who reviews this change: for a big or risky one (`panel`), every
-  // reviewer Mike ticked for the panel that has a login with room, at once,
+  // reviewer on the panel (runner.json `labPanel`) with a login with room, at once,
   // the thread's own provider too (on another model, it's still a second
   // look); else the one reviewer reviewLogin picks. Also that one when
   // fewer than two of the panel can, or when the panel would all be the
@@ -347,7 +347,7 @@ export const labReviewPart = {
     if (panel) {
       const pick = reviewPicker(this, rec);
       const out: ReviewLogin[] = [];
-      for (const r of (this.cfg.labReviewers ?? DEFAULT_LAB_REVIEWERS).filter((x) => x.panel)) {
+      for (const r of this.cfg.labPanel ?? []) {
         const account = pick(r.provider);
         if (account) out.push({ account, independent: r.provider !== rec.provider, reviewer: r });
       }
