@@ -7680,7 +7680,7 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `bye` | its own | `runnerId` |
 | `setPresence` | its own | `runnerId` |
 | `upsertThreads` | its own | each row's `runnerId` is the key's, and so is the row it replaces: no taking or moving another runner's thread, its secret card's key or where its commands go. A new row only under an id that's had nothing but its runner (Thread ids, above) |
-| `removeThreads` | its own | the row's runner; for an id with no row a runner key leaves what's there alone |
+| `removeThreads` | its own | the row's runner; for an id with no row a runner key leaves what's there alone. With `runnerId` (API 92, which the runner sends) only that runner's rows go, whatever the key, so the main Mac can't remove a thread it moved to another runner |
 | `prune` | its own | `runnerId`; each pruned thread's messages and pictures go too, and it gets a tombstone |
 | `sharedThreads` | its own | `runnerId`: the ids of its rows shared by link (API 60) |
 | `threadsOf` | its own | `runnerId` |

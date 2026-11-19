@@ -1102,10 +1102,15 @@ export const sendStaleHeldPushes = internalMutation({
 });
 
 export const removeThreads = mutation({
-  args: { key: v.string(), threadIds: v.array(v.string()) },
+  // `runnerId` (API 92): the runner whose threads went. A row that's
+  // another runner's is left alone, whatever the key: the main Mac's owner
+  // key removed threads it had moved to another Mac, their rows there and
+  // all (David Clark's fork, 16 Nov 2026).
+  args: { key: v.string(), threadIds: v.array(v.string()), runnerId: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { key, threadIds }) => {
+  handler: async (ctx, { key, threadIds, runnerId }) => {
     const caller = await runnerAuth(ctx, key, 'removeThreads');
+    if (runnerId !== undefined) await actAs(ctx, caller, runnerId);
     for (const threadId of threadIds) {
       const row = await ctx.db
         .query('threads')
@@ -1113,6 +1118,7 @@ export const removeThreads = mutation({
         .unique();
       // A runner key leaves alone what isn't its own thread, there or not (ownThread).
       if (!caller.owner && !(row && mayTouch(caller, row.runnerId, threadId))) continue;
+      if (runnerId !== undefined && row && row.runnerId !== runnerId) continue;
       await archiveSoon(ctx, threadId);
       await dropThread(ctx, threadId, row, !caller.box);
     }

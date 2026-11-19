@@ -741,7 +741,9 @@ async function main(): Promise<void> {
     runner: {
       onNotification: (fn) =>
         runner.onNotification((n) => {
-          const id = (n.params as { threadId?: unknown } | undefined)?.threadId;
+          // A thread.updated names its thread inside `thread`, the rest by threadId.
+          const p = n.params as { threadId?: unknown; thread?: { id?: unknown } } | undefined;
+          const id = p?.threadId ?? p?.thread?.id;
           // Its delete still goes through: sync forgets the thread as
           // sent then, rather than removing the other runner's row.
           if (typeof id === 'string' && movesRef?.gone(id) && n.method !== 'thread.deleted') return;

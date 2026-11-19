@@ -441,4 +441,9 @@
 //    reads it from sync:otherRunnersList and starts the fix thread on the
 //    main Mac itself, so the following runner no longer asks for one there
 //    on a card. A runner sends it only to a backend of 91 or later.
-export const API_VERSION = 91;
+// 92: sync:removeThreads takes `runnerId`, the runner whose threads went,
+//    and leaves a row that's another runner's alone, whatever the key: a
+//    restart of the main Mac removed threads it had moved to another Mac,
+//    their rows there and all. A runner sends it only to a backend of 92
+//    or later.
+export const API_VERSION = 92;

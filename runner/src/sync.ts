@@ -158,7 +158,10 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 91;
+export const BACKEND_API_VERSION = 92;
+// From this one sync:removeThreads takes the runner's id and leaves a row
+// that's another runner's alone (a thread moved away), whatever the key.
+export const REMOVE_OWN_ROWS_API_VERSION = 92;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -2476,24 +2479,7 @@ export class ConvexSync {
           this.forgetMoved(id);
           break;
         }
-        this.dirty.delete(id);
-        this.sent.delete(id);
-        this.held.delete(id);
-        this.lastWrite.delete(id);
-        this.heads.delete(id);
-        this.arrivedFrom.delete(id);
-        this.noteSent();
-        this.forgetCards(id);
-        this.earliest.delete(id);
-        this.nexts.delete(id);
-        for (const k of [...this.buttonRows.keys()]) if (k.startsWith(`${id} `)) this.buttonRows.delete(k);
-        this.replyDue.delete(id);
-        this.replyUp.delete(id);
-        this.pendingReplyImages = this.pendingReplyImages.filter((i) => i.threadId !== id);
-        this.bodyCollector.forget(id);
-        this.bodies = this.bodies.filter((b) => b.threadId !== id);
-        this.closedBodies = this.closedBodies.filter((b) => b.threadId !== id);
-        this.bodyQueueChars = this.bodies.reduce((n, b) => n + rawChars(b), 0);
+        this.forgetThread(id);
         this.removed.add(id);
         this.scheduleFlush();
         break;
@@ -2735,15 +2721,39 @@ export class ConvexSync {
    * from raven).
    */
   private forgetMoved(threadId: string): void {
-    this.sent.delete(threadId);
-    this.heads.delete(threadId);
-    this.lastWrite.delete(threadId);
-    this.dirty.delete(threadId);
-    this.held.delete(threadId);
+    this.forgetThread(threadId);
     this.missing.delete(threadId);
     this.removed.delete(threadId);
     this.removedFromFile.delete(threadId);
+    // Nor anything still queued for it: with the owner key, a message or a
+    // picture drop would land on the other runner's thread.
+    this.messages = this.messages.filter((m) => m.threadId !== threadId);
+    this.imagesDue.delete(threadId);
+    this.imagesDrop.delete(threadId);
+    this.pendingImages = this.pendingImages.filter((i) => i.threadId !== threadId);
+  }
+
+  // Everything this runner keeps about a thread's row and what's queued for
+  // it, for one that's gone from here (deleted, or moved away).
+  private forgetThread(id: string): void {
+    this.dirty.delete(id);
+    this.sent.delete(id);
+    this.held.delete(id);
+    this.lastWrite.delete(id);
+    this.heads.delete(id);
+    this.arrivedFrom.delete(id);
     this.noteSent();
+    this.forgetCards(id);
+    this.earliest.delete(id);
+    this.nexts.delete(id);
+    for (const k of [...this.buttonRows.keys()]) if (k.startsWith(`${id} `)) this.buttonRows.delete(k);
+    this.replyDue.delete(id);
+    this.replyUp.delete(id);
+    this.pendingReplyImages = this.pendingReplyImages.filter((i) => i.threadId !== id);
+    this.bodyCollector.forget(id);
+    this.bodies = this.bodies.filter((b) => b.threadId !== id);
+    this.closedBodies = this.closedBodies.filter((b) => b.threadId !== id);
+    this.bodyQueueChars = this.bodies.reduce((n, b) => n + rawChars(b), 0);
   }
 
   private forgetCards(threadId: string): void {
@@ -3426,7 +3436,8 @@ export class ConvexSync {
       rowsDone();
       if (this.removing.size) {
         const removed = [...this.removing];
-        await this.post('mutation', 'sync:removeThreads', { key, threadIds: removed });
+        const ownRows = (this.backendApiVersion ?? 0) >= REMOVE_OWN_ROWS_API_VERSION;
+        await this.post('mutation', 'sync:removeThreads', { key, threadIds: removed, ...(ownRows ? { runnerId: this.runnerId } : {}) });
         for (const id of removed) {
           removedNow.add(id);
           this.removing.delete(id);
