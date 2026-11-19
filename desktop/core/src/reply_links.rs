@@ -324,11 +324,10 @@ pub fn page_peek(url: &str, words: &str) -> PeekWords {
 /// does. `away` names another Mac whose file it is.
 pub fn file_peek(path: &str, exists: bool, away: Option<&str>, home: &str) -> PeekWords {
     let name = highlights::last_component(path).to_owned();
-    let parent = path.trim_end_matches('/').rsplit_once('/').map_or("", |(dir, _)| if dir.is_empty() { "/" } else { dir });
-    let detail = match parent.strip_prefix(home.trim_end_matches('/')) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
-        _ => parent.to_owned(),
-    };
+    let trimmed = path.trim_end_matches('/');
+    let split = if crate::reducer::text::is_windows_path(trimmed) { trimmed.rsplit_once(['/', '\\']) } else { trimmed.rsplit_once('/') };
+    let parent = split.map_or("", |(dir, _)| if dir.is_empty() { "/" } else { dir });
+    let detail = crate::new_thread::abbreviate_home(parent, home);
     let footer = match (exists, away) {
         (true, _) => "Click to open".to_owned(),
         (false, Some(away)) => format!("On {away}. Click to open."),

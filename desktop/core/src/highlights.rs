@@ -565,10 +565,7 @@ pub mod text {
                 return rest.to_owned();
             }
         }
-        if !home.is_empty() && (parent == home || parent.starts_with(&format!("{home}/"))) {
-            return format!("~{}", &parent[home.len()..]);
-        }
-        parent.to_owned()
+        crate::new_thread::abbreviate_home(parent, home)
     }
 
     fn parent_path(path: &str) -> &str {

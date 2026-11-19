@@ -53,7 +53,6 @@ perf-build.test.ts
 perf-lock.test.ts
 perf-swift.test.ts
 projects.test.ts
-quiet-inbox.test.ts
 reinstall.test.ts
 release.test.ts
 remote-perf-lock.test.ts

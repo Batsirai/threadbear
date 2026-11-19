@@ -1747,11 +1747,7 @@ fn icon(name: &str, size: f32, color: Hsla) -> Icon {
 
 /// `abbreviatingHome`, for tooltips.
 fn abbreviate(path: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && path == home => "~".into(),
-        Ok(home) if !home.is_empty() && path.starts_with(&format!("{home}/")) => format!("~{}", &path[home.len()..]),
-        _ => path.to_string(),
-    }
+    threadbear_core::new_thread::abbreviate_home(path, &crate::files::home_dir())
 }
 
 /// The sign-in script, readable and runnable by Mike only, written whole:

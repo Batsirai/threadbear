@@ -110,6 +110,12 @@ fresh PC), which is what you want gone.
    program), so clicks-only stays on for now.*
 6. **Polish.** Codex on Windows, pictures, stuck-job detection, a Windows
    check host, client path display (`C:\Users\...` shown as `~`).
+   *19 Nov: pictures are converted with Windows' own imaging
+   (`runner/src/win-image.ps1`, WIC through a hidden PowerShell; no SVG),
+   the app shows a Windows home as `~` whatever its case or slashes
+   (`abbreviate_home` in `desktop/core/src/new_thread.rs`, and every place
+   that shortened paths on its own now uses it), and the test helpers run
+   Git Bash rather than `/bin/sh`.*
 
 Slices 1 to 4 replace WSL on the Dell. 5 is where it's as safe as the Mac.
 

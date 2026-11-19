@@ -136,7 +136,10 @@ File references are where to look.
   (`GetLastInputInfo`) and the battery (`GetSystemPowerStatus`), and keeps
   the computer from sleeping by itself while threads work
   (`SetThreadExecutionState`), in place of `ioreg`, `pmset` and
-  `caffeinate` below.
+  `caffeinate` below. Pictures (a big pasted photo shrunk for the model, a
+  HEIC paste, a phone still, a project icon) are converted by a hidden
+  `powershell.exe` started for each, running `runner/src/win-image.ps1`
+  with Windows' own imaging, in place of `sips`; SVG isn't drawn there.
 - **A one-shot update job:** when the runner's LaunchAgent or
   Threadbear Runner.app is behind main (or you press Update it in the
   Updates panel after one failed), the runner

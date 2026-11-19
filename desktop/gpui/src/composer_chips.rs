@@ -796,10 +796,7 @@ fn permission_icon(mode: &str) -> IconName {
 }
 
 fn abbreviate_home(path: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && path.starts_with(&home) => format!("~{}", &path[home.len()..]),
-        _ => path.to_owned(),
-    }
+    threadbear_core::new_thread::abbreviate_home(path, &crate::files::home_dir())
 }
 
 /// A row in one of the chips' menus: an icon, a title, a line under it and a
@@ -1148,7 +1145,7 @@ impl Composer {
     /// new-thread page, the pool a new thread starts in.
     fn unpin_pool(&self, data: &ChipData, cx: &App) -> Option<String> {
         let thread = data.summary.as_ref()?;
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::files::home_dir();
         let last = self.app.upgrade().and_then(|a| a.read(cx).new_thread.prefs.remembered.last_pool.clone());
         threadbear_core::login_picker::unpin_target(&data.logins.pools, &thread.account_id, &thread.cwd, &home, last.as_deref())
     }

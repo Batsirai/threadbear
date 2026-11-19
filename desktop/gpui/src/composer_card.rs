@@ -825,7 +825,7 @@ pub(crate) trait AskHost: Sized + 'static {
         let half = (metrics::BUTTON_LINE - metrics::BUTTON_HEIGHT) / 2.;
         // Its links on a line of their own, over the answers: going to look
         // comes before answering. The first is the thing to go and do.
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::files::home_dir();
         let links: Vec<(usize, String, String)> = ask.links.iter().enumerate().filter_map(|(n, link)| link.target(&home).map(|target| (n, link.title.clone(), target))).collect();
         let has_links = !links.is_empty();
         if has_links {
@@ -1351,7 +1351,7 @@ impl Composer {
             ["explain", n] => self.toggle_explain(n.parse().map_err(|_| "bad index")?, window, cx),
             ["link", a, n] => {
                 let (a, n): (usize, usize) = (a.parse().map_err(|_| "bad ask")?, n.parse().map_err(|_| "bad link")?);
-                let home = std::env::var("HOME").unwrap_or_default();
+                let home = crate::files::home_dir();
                 let target = card.asks.get(a).and_then(|ask| ask.links.get(n)).and_then(|l| l.target(&home)).ok_or("no link like that")?;
                 self.open_ask_link(&target, window, cx);
             }
@@ -1383,7 +1383,7 @@ impl Composer {
         let mut lines = Vec::new();
         // A link button's card while it shows: "peek: <title> | <detail>",
         // as its card says them, last.
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::files::home_dir();
         let peek = card.asks.iter().enumerate().flat_map(|(a, ask)| ask.links.iter().enumerate().map(move |(n, link)| (a, n, link))).find_map(|(a, n, link)| {
             let key = self.ask_link_key(a, n)?;
             let target = link.target(&home)?;
