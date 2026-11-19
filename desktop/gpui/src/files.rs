@@ -176,6 +176,9 @@ pub(crate) struct LocalPage {
     pub scan: Option<(bool, String)>,
     /// Mike chose Run them for these bytes (`ScriptConsent`).
     pub allowed: bool,
+    /// A live page opened big from its card: the card's running page shows
+    /// here (live_pages::pane_view), not the file's own preview.
+    pub live: bool,
 }
 
 impl LocalPage {
@@ -372,7 +375,7 @@ impl SidePane {
                 }
                 // Sealed in the pane, if the open gate's rule for pages lets it
                 // (this Mac's own, a real page after its symlinks).
-                Viewer::Web => self.show_local_page(thread, path, preview.opened, cx),
+                Viewer::Web => self.show_local_page(thread, path, preview.opened, preview.live, cx),
                 _ if media_kind(path).is_some() => self.show_media_file(thread, path, preview.opened, cx),
                 _ => self.load_file(thread, path.clone(), preview.opened, cx),
             },
@@ -389,7 +392,7 @@ impl SidePane {
     /// A local web page: checked by the gate, then scanned off the main
     /// thread for scripts and its digest, which decide the bar over it and
     /// whether Run them was already chosen for these bytes.
-    fn show_local_page(&mut self, thread: &ThreadSummary, path: &str, opened: u64, cx: &mut Context<Self>) {
+    fn show_local_page(&mut self, thread: &ThreadSummary, path: &str, opened: u64, live: bool, cx: &mut Context<Self>) {
         if self.files.open.get(&thread.id).is_some_and(|f| f.path == path && f.opened == opened) {
             return;
         }
@@ -401,7 +404,16 @@ impl SidePane {
                 return;
             }
         };
-        let page = LocalPage { real: real.to_string_lossy().into_owned(), scan: None, allowed: false };
+        let real_text = real.to_string_lossy().into_owned();
+        if live {
+            // Nothing to scan: the card's Run already checked it and holds
+            // the digest it runs for.
+            let page = LocalPage { real: real_text, scan: Some((false, String::new())), allowed: false, live: true };
+            self.files.open.insert(thread.id.clone(), OpenFile::new(path.to_owned(), opened, FileBody::Page(page)));
+            cx.notify();
+            return;
+        }
+        let page = LocalPage { real: real_text, scan: None, allowed: false, live: false };
         self.files.open.insert(thread.id.clone(), OpenFile::new(path.to_owned(), opened, FileBody::Page(page)));
         cx.notify();
         let (thread_id, path) = (thread.id.clone(), path.to_owned());
@@ -941,7 +953,11 @@ impl SidePane {
                     div().size_full().flex().items_center().justify_center().child(Spinner::new().with_size(px(14.)).color(p.secondary)).into_any_element()
                 } else {
                     let main = self.app.upgrade().is_some_and(|app| app.read(cx).main_window == window.window_handle());
-                    crate::web_panels::local_page(&page.real, page.scripts_for(), open.opened, main, window, cx)
+                    if page.live {
+                        crate::live_pages::pane_view(&page.real, main, window, cx)
+                    } else {
+                        crate::web_panels::local_page(&page.real, page.scripts_for(), open.opened, main, window, cx)
+                    }
                 };
                 v_flex().id("hl-page").size_full().children(bar).child(div().flex_1().min_h_0().child(body)).into_any_element()
             }

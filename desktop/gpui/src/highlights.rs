@@ -78,11 +78,14 @@ pub(crate) struct PanePreview {
     pub memory: FolderMemory,
     /// A text file with its own text up, raw (the Markdown menu's Markdown).
     pub editing: bool,
+    /// A live page opened big from its card (live_pages.rs, Full size): the
+    /// running page shows here in place of the file's own preview.
+    pub live: bool,
 }
 
 impl PanePreview {
     pub(crate) fn new(target: Target, title: String, from: String) -> Self {
-        PanePreview { target, title, from, opened: 0, back: vec![], memory: Default::default(), editing: false }
+        PanePreview { target, title, from, opened: 0, back: vec![], memory: Default::default(), editing: false, live: false }
     }
 
     pub(crate) fn file_path(&self) -> Option<&str> {

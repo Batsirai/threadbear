@@ -79,8 +79,10 @@ fetch the bytes and load them into their sealed views.
    on, with `worker-src blob:` added for a live page only, as three.js
    decodes models in a worker. The view is native, so it shows only while
    the whole card is in the transcript; partly scrolled out it hides and
-   Chromium pauses it. One runs at a time; Stop closes its view. Not yet:
-   full size.
+   Chromium pauses it. One runs at a time; Stop closes its view. Full size
+   (Mike, 20 Nov: "a bit small and can't be resized") moves the running
+   page into the side pane, as wide as he drags it; the card says it's
+   there, and Stop, Run on another or the pane closing stop it.
 3. iPhone (built): `ios/Threadbear/LivePageView.swift`. Run fetches the
    bytes and runs them in a WKWebView with RichWebSandbox's dead proxy,
    fresh store and link guard, a rule list of about:, data: and blob: only,

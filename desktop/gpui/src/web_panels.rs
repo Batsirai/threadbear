@@ -479,16 +479,17 @@ thread_local! {
 /// only for `scripts_for`'s bytes. `real` is the file the open gate found;
 /// `opened` makes opening it again a fresh page, read again.
 pub(crate) fn local_page(real: &str, scripts_for: Option<&str>, opened: u64, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
-    sealed_page(&format!("preview:{opened}:{}:{real}", scripts_for.unwrap_or("")), real, scripts_for, false, main, window, cx)
+    sealed_page(&format!("preview:{opened}:{}:{real}", scripts_for.unwrap_or("")), real, scripts_for, false, false, main, window, cx)
 }
 
 /// A live page's card in the transcript (live_pages.rs): the same sealed
 /// page with its scripts on for `digest`'s bytes, a fresh one for each Run
 /// (`run`). Shown only while the whole card is inside the transcript: its
 /// native view can't be cut to the scrolled list, so partly out it hides,
-/// and Chromium pauses a hidden page.
-pub(crate) fn live_page(real: &str, digest: &str, run: u64, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
-    sealed_page(&live_key(real, digest, run), real, Some(digest), true, main, window, cx)
+/// and Chromium pauses a hidden page. `in_pane`: the same page opened big in
+/// the side pane (Full size), placed whole as the pane's other pages are.
+pub(crate) fn live_page(real: &str, digest: &str, run: u64, in_pane: bool, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+    sealed_page(&live_key(real, digest, run), real, Some(digest), !in_pane, true, main, window, cx)
 }
 
 thread_local! {
@@ -552,7 +553,7 @@ fn placed(drawn: Rc<Cell<(u64, Bounds<Pixels>)>>, clip: bool) -> AnyElement {
     .into_any_element()
 }
 
-fn sealed_page(key: &str, real: &str, scripts_for: Option<&str>, clip: bool, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+fn sealed_page(key: &str, real: &str, scripts_for: Option<&str>, clip: bool, live: bool, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
     let Some(panels) = panels(cx) else { return note("This page can't show here.", cx) };
     let parent = match running("hl-page", "this page", main, None, window, cx) {
         Ok(parent) => parent,
@@ -570,15 +571,15 @@ fn sealed_page(key: &str, real: &str, scripts_for: Option<&str>, clip: bool, mai
         return note(&format!("Couldn't show this page: {why}"), cx);
     }
     if panels.update(cx, |p, _| p.making.insert(key.clone())) {
-        // A live page (`clip`) gets its own bytes and nothing beside it.
-        let site = match (clip, scripts_for) {
+        // A live page gets its own bytes and nothing beside it.
+        let site = match (live, scripts_for) {
             (true, Some(digest)) => threadbear_core::local_preview::Site::page_only(std::path::Path::new(real), digest.to_owned()),
             _ => threadbear_core::local_preview::Site::new(std::path::Path::new(real), scripts_for.map(str::to_owned)),
         };
         match site {
             Some(site) => {
                 let site = Arc::new(site);
-                let preview = if clip { threadbear_web::PreviewSite::live(site) } else { threadbear_web::PreviewSite::new(site, scripts_for.is_some()) };
+                let preview = if live { threadbear_web::PreviewSite::live(site) } else { threadbear_web::PreviewSite::new(site, scripts_for.is_some()) };
                 let (panels, url) = (panels.clone(), preview.page_url());
                 // After this frame, as a panel's page is made.
                 cx.defer(move |cx| panels.update(cx, |p, cx| p.make(key, url, PanelKind::Preview(preview), parent, cx)));

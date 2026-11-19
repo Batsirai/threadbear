@@ -7,7 +7,10 @@
 // was pressed for). One runs at a time; Stop, Run on another, or the page
 // changing on disk stops it. Scrolled partly out of the transcript, its view
 // hides (a native view can't be cut to the transcript), and Chromium pauses
-// it while it's hidden.
+// it while it's hidden. Full size moves the running page into the side pane,
+// as wide and tall as Mike makes the pane (Mike, 20 Nov: "a bit small and
+// can't be resized"); the card then says where it is, and Stop, Run on
+// another, or the pane closing still stop it.
 //
 // The reply's `![...](....html)` becomes a fenced block first
 // (rows::markdown::live_pages), drawn here by a block plugin of the kit's,
@@ -40,6 +43,9 @@ const NODE: &str = "live-page";
 
 pub(crate) const RUN_TIP: &str = "Run this page here: its scripts on, with no internet and no files but its own";
 pub(crate) const STOP_TIP: &str = "Stop this page";
+pub(crate) const BIG_TIP: &str = "Run this page big in the side pane, which you can widen";
+const IN_PANE: &str = "Running in the side pane.";
+const PANE_STOPPED: &str = "This page has stopped. Press Run or Full size on its card to start it again.";
 const SEALED: &str = "Runs sealed: no internet, and no files but its own.";
 
 /// The card's measures, in points at 100%.
@@ -73,6 +79,8 @@ struct Running {
     real: String,
     digest: String,
     run: u64,
+    /// Opened big: it shows in the side pane, not the card.
+    big: bool,
 }
 
 /// Seconds a running page's view may stay hidden (another thread open, the
@@ -170,7 +178,7 @@ fn run(page: &LivePage, window: &mut Window, cx: &mut App) {
     let state = cx.default_global::<LivePages>();
     state.runs += 1;
     let run = state.runs;
-    state.running = found.as_ref().ok().map(|(real, digest)| Running { path: page.path.clone(), real: real.clone(), digest: digest.clone(), run });
+    state.running = found.as_ref().ok().map(|(real, digest)| Running { path: page.path.clone(), real: real.clone(), digest: digest.clone(), run, big: false });
     match found {
         Ok((real, digest)) => {
             FAILED.with(|f| f.borrow_mut().remove(&page.path));
@@ -183,6 +191,46 @@ fn run(page: &LivePage, window: &mut Window, cx: &mut App) {
         }
     }
     window.refresh();
+}
+
+/// Full size: runs the page if it isn't running, then shows it in the side
+/// pane beside this thread, opening the pane if it's shut. The same page
+/// moves there (one view, one key), so it doesn't start again.
+fn open_big(page: &LivePage, window: &mut Window, cx: &mut App) {
+    if running_for(page, cx).is_none() {
+        run(page, window, cx);
+    }
+    let Some(running) = cx.global_mut::<LivePages>().running.as_mut().filter(|r| r.path == page.path) else { return };
+    running.big = true;
+    let Some(app) = crate::terminal::app(cx) else { return };
+    let side = app.read(cx).side.clone();
+    let Some(thread) = side.read(cx).thread(cx) else { return };
+    let mut preview = crate::highlights::PanePreview::new(crate::highlights::Target::File(page.path.clone()), page.title.clone(), side.read(cx).section_for(&thread));
+    preview.live = true;
+    let section = preview.from.clone();
+    side.update(cx, |side, cx| side.show_preview(preview, &thread.id, cx));
+    app.update(cx, |t, cx| {
+        if !t.dock.read(cx).controller.is_showing(&section) {
+            t.show_pane(&section, cx);
+        }
+    });
+    window.refresh();
+}
+
+/// The side pane's view of a page opened big: the running page, if it's
+/// still this one and still big, else a note saying how to start it again.
+pub(crate) fn pane_view(real: &str, main: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+    let running = cx.try_global::<LivePages>().and_then(|s| s.running.clone()).filter(|r| r.big && r.real == real);
+    match running {
+        Some(r) => div().id("live-page-pane").size_full().child(crate::web_panels::live_page(&r.real, &r.digest, r.run, true, main, window, cx)).into_any_element(),
+        None => v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .p(px(24.))
+            .child(div().text_center().text_size(px(size::DETAIL)).text_color(style::secondary_label(cx)).child(PANE_STOPPED))
+            .into_any_element(),
+    }
 }
 
 fn stop(window: &mut Window, cx: &mut App) {
@@ -242,6 +290,7 @@ pub(crate) fn dump(cx: &App) -> serde_json::Value {
     serde_json::json!({
         "on": state.is_some_and(|s| s.on),
         "running": state.and_then(|s| s.running.as_ref()).map(|r| r.path.clone()),
+        "big": state.and_then(|s| s.running.as_ref()).is_some_and(|r| r.big),
     })
 }
 
@@ -251,6 +300,10 @@ fn card(page: &LivePage, window: &mut Window, cx: &mut App) -> AnyElement {
     let running = running_for(page, cx);
     let (fill, edge, hairline, label, secondary) = (style::code_background(cx), style::card_border(cx), style::hairline(cx), style::label_text(cx), style::secondary_label(cx));
     let id = stable_id(&page.path);
+    let big = running.as_ref().is_none_or(|r| !r.big).then(|| {
+        let page = page.clone();
+        text_button(format!("live-big-{id}"), "Full size", BIG_TIP, false, cx, move |window, cx| open_big(&page, window, cx))
+    });
     let button = if running.is_some() {
         text_button(format!("live-stop-{id}"), "Stop", STOP_TIP, false, cx, |window, cx| stop(window, cx))
     } else {
@@ -266,6 +319,7 @@ fn card(page: &LivePage, window: &mut Window, cx: &mut App) -> AnyElement {
         .gap(px(8.))
         .child(div().flex_1().min_w_0().truncate().text_size(px(size::DETAIL)).font_weight(FontWeight::MEDIUM).text_color(label).child(page.title.clone()))
         .child(div().flex_none().text_size(px(size::DETAIL)).text_color(secondary).child(threadbear_core::highlights::last_component(&page.path).to_owned()))
+        .children(big)
         .child(button);
     let width = f32::from(window.viewport_size().width).min(style::MAX_CONTENT_WIDTH);
     // Never taller than the transcript has room for, header and a margin
@@ -273,12 +327,20 @@ fn card(page: &LivePage, window: &mut Window, cx: &mut App) -> AnyElement {
     let room = crate::web_panels::live_room().map_or(MAX_BODY, |h| (h - HEADER - 24.).max(MIN_BODY));
     let height = (width * ASPECT).min(MAX_BODY).min(room);
     let body = match running {
-        Some(r) => {
+        Some(r) if !r.big => {
             let main = cx.try_global::<LivePages>().and_then(|s| s.main) == Some(window.window_handle());
             // Hidden while partly scrolled out, it leaves the box's own fill.
-            let view = crate::web_panels::live_page(&r.real, &r.digest, r.run, main, window, cx);
+            let view = crate::web_panels::live_page(&r.real, &r.digest, r.run, false, main, window, cx);
             div().w_full().h(px(height)).child(view).into_any_element()
         }
+        Some(_) => v_flex()
+            .w_full()
+            .h(px(height.min(120.)))
+            .items_center()
+            .justify_center()
+            .px(px(PAD))
+            .child(div().text_size(px(size::DETAIL)).text_color(secondary).child(IN_PANE))
+            .into_any_element(),
         None => {
             let why = FAILED.with(|f| f.borrow().get(&page.path).cloned());
             v_flex()
