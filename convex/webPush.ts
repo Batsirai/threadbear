@@ -6,14 +6,17 @@
 // own worked example, byte for byte. push.ts sends with these; only Node
 // files may import this.
 import { createCipheriv, createECDH, createHmac, createPrivateKey, randomBytes, sign } from 'node:crypto';
+import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 
 const hmac = (key: Buffer, data: Buffer) => createHmac('sha256', key).update(data).digest();
 
 // One record of at most this many bytes; a sealed notification is far smaller.
 export const RECORD_SIZE = 4096;
-// What's left for the plaintext in one record: the 0x02 delimiter and the
-// 16-byte tag come out of it.
-export const WEB_PUSH_PLAINTEXT_MAX = RECORD_SIZE - 17;
+// The longest plaintext every push service and the phone's connector (Google
+// Tink, which caps the whole body at 4096 bytes) will take: RFC 8291 section
+// 4's 3993, the 4096-byte body less the 86-byte header (salt, record size,
+// key id length, the 65-byte key), the 0x02 delimiter and the 16-byte tag.
+export const WEB_PUSH_PLAINTEXT_MAX = 4096 - 86 - 1 - 16;
 
 /**
  * Encrypts `plaintext` for one subscription: `uaPublic` is its p256dh (an
@@ -64,4 +67,25 @@ export function vapidAuthorization(endpoint: string, key: VapidKey, subject: str
   const pk = createPrivateKey({ key: { kty: 'EC', crv: 'P-256', ...key }, format: 'jwk' });
   const sig = sign('sha256', Buffer.from(`${head}.${claims}`), { key: pk, dsaEncoding: 'ieee-p1363' });
   return `vapid t=${head}.${claims}.${sig.toString('base64url')}, k=${vapidPublic(key)}`;
+}
+
+type Resolve = (host: string, opts: { all: true }, cb: (err: Error | null, addrs: LookupAddress[]) => void) => void;
+
+/**
+ * The `lookup` push.ts gives node:https for a UnifiedPush endpoint: it
+ * resolves the name and refuses if any address it gets is private
+ * (webPushEndpoint.ts privateAddress, as `isPrivate`), so the socket only ever connects to an
+ * address that was checked, in the same lookup. `isPrivate` is that check,
+ * passed in (this file imports nothing of the backend's, so the runner's
+ * tests can load it); `resolve` is for tests.
+ */
+export function pinnedLookup(isPrivate: (ip: string) => boolean, resolve: Resolve = dnsLookup as unknown as Resolve) {
+  return (host: string, opts: { all?: boolean; family?: number }, cb: (...a: unknown[]) => void) => {
+    resolve(host, { ...opts, all: true }, (err, addrs) => {
+      if (err) return cb(err);
+      if (!addrs?.length || addrs.some((a) => isPrivate(a.address))) return cb(Object.assign(new Error('resolves to a private address'), { code: 'EPRIVATE' }));
+      if (opts.all) cb(null, addrs);
+      else cb(null, addrs[0].address, addrs[0].family);
+    });
+  };
 }

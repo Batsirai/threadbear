@@ -60,6 +60,11 @@ test('bad keys and oversized messages are refused', () => {
   assert.throws(() => encryptWebPush(Buffer.from('x'), b(RFC.uaPublic).subarray(1), b(RFC.auth)));
   assert.throws(() => encryptWebPush(Buffer.from('x'), b(RFC.uaPublic), b(RFC.auth).subarray(1)));
   assert.throws(() => encryptWebPush(Buffer.alloc(WEB_PUSH_PLAINTEXT_MAX + 1), b(RFC.uaPublic), b(RFC.auth)));
+  // The longest allowed makes a body of exactly 4096 bytes (RFC 8291 section 4; Tink's cap).
+  assert.equal(WEB_PUSH_PLAINTEXT_MAX, 3993);
+  assert.equal(encryptWebPush(Buffer.alloc(WEB_PUSH_PLAINTEXT_MAX), b(RFC.uaPublic), b(RFC.auth)).length, 4096);
+  // A key that isn't an uncompressed point is refused at registration.
+  assert.doesNotMatch('A'.repeat(87), P256DH);
   assert.match(RFC.uaPublic, P256DH);
   assert.match(RFC.auth, AUTH_SECRET);
 });
@@ -88,11 +93,30 @@ test('endpoints: public https only', () => {
     'https://127.0.0.1/x', 'https://10.1.2.3/x', 'https://172.16.0.1/x', 'https://192.168.1.10/x', 'https://169.254.169.254/latest',
     'https://100.100.1.1/x', 'https://0.0.0.0/x', 'https://[::1]/x', 'https://[::]/x', 'https://[fd00::1]/x', 'https://[fe80::1]/x',
     'https://[::ffff:10.0.0.1]/x', 'https://[::ffff:a00:1]/x', 'https://[64:ff9b::7f00:1]/x', 'https://' + 'a'.repeat(1100) + '.com/',
+    // From the cross-lab review: IPv4-compatible, local NAT64, SIIT, site-local, 6to4, Teredo, and IPv4 in other spellings.
+    'https://[::127.0.0.1]/x', 'https://[64:ff9b:1::a00:1]/x', 'https://[::ffff:0:a00:1]/x', 'https://[fec0::1]/x', 'https://[2002:7f00:1::1]:8443/x', 'https://[2001:0:4136:e378::1]/x',
+    'https://2130706433/x', 'https://0x7f.1/x', 'https://127.1/x', 'https://0177.0.0.1/x',
   ];
   for (const no of bad) assert.notEqual(endpointProblem(no), null, no);
 });
 
 test('resolved addresses: private ones are caught, public ones pass', () => {
   for (const p of ['10.0.0.1', '127.0.0.53', '172.31.255.255', '192.168.0.1', '169.254.0.1', '100.64.0.1', '224.0.0.1', '255.255.255.255', '::1', 'fc00::1', 'fe80::abcd', '::ffff:192.168.1.1', '2001:db8::1']) assert.ok(privateAddress(p), p);
-  for (const p of ['8.8.8.8', '1.1.1.1', '159.69.1.1', '172.32.0.1', '2606:4700:4700::1111', '2a01:4f9:c010::1']) assert.equal(privateAddress(p), false, p);
+  for (const p of ['64:ff9b:1::a00:1', 'fec0::1', '2002:a00:1::1', '2001::1', '2001:1ff::1', '::a00:1', '::ffff:0:a00:1', '2001:db8::1', 'garbage', '1.2.3']) assert.ok(privateAddress(p), p);
+  for (const p of ['8.8.8.8', '1.1.1.1', '159.69.1.1', '172.32.0.1', '2606:4700:4700::1111', '2a01:4f9:c010::1', '2001:4860::8888']) assert.equal(privateAddress(p), false, p);
+});
+
+test("the endpoint's name is checked in the same lookup the connection uses", async () => {
+  const { pinnedLookup } = await import('../../../convex/webPush.ts');
+  const run = (answers: { address: string; family: number }[], all: boolean) => new Promise<unknown[]>((done) => {
+    pinnedLookup(privateAddress, (_h, _o, cb) => cb(null, answers))('push.example.com', { all }, (...a: unknown[]) => done(a));
+  });
+  // Public: handed on, as one address or all of them.
+  assert.deepEqual(await run([{ address: '8.8.8.8', family: 4 }], false), [null, '8.8.8.8', 4]);
+  assert.deepEqual(await run([{ address: '8.8.8.8', family: 4 }, { address: '2606:4700::1', family: 6 }], true), [null, [{ address: '8.8.8.8', family: 4 }, { address: '2606:4700::1', family: 6 }]]);
+  // Any private answer (a rebinding name, a mixed record set) refuses the lot.
+  for (const answers of [[{ address: '127.0.0.1', family: 4 }], [{ address: '8.8.8.8', family: 4 }, { address: '10.0.0.1', family: 4 }], [{ address: '::1', family: 6 }], []]) {
+    const [err] = await run(answers, true);
+    assert.ok(err instanceof Error, JSON.stringify(answers));
+  }
 });

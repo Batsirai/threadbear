@@ -8,6 +8,7 @@ import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { messageButton, threadFields, updateFailedValidator, views } from './schema';
 import { API_VERSION } from './version';
+import { endpointProblem } from './webPushEndpoint';
 import { clear, command, machines } from './machines';
 import { CLEAR_RETRY_MS, clearStateFrom } from './clearStates';
 import { steppingFor } from './stepping';
@@ -3753,6 +3754,7 @@ const LIMITS_STARTED = 'limits-2026-11-07';
 const LIMITS_DONE = 'limits-2026-11-07-done';
 const MIGRATE_PAGE = 8;
 const APNS_TOKEN = /^[0-9a-fA-F]{16,200}$/;
+const FCM_TOKEN = /^[A-Za-z0-9_:-]{20,4096}$/;
 const MAX_DEVICES_PER_TOKEN = 5;
 async function markSet(ctx: QueryCtx | MutationCtx, name: string): Promise<boolean> {
   return (await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', name)).first()) !== null;
@@ -3780,7 +3782,12 @@ export const limitsMigration = internalMutation({
     for (const row of page.page as Record<string, any>[]) {
       if (what === 'devices') {
         // Junk, or from before tokenId (they get no pushes: pushTargets.ts; devices:dropUnlinked).
-        if (!row.tokenId || !APNS_TOKEN.test(row.apnsToken) || (row.pushKey !== undefined && row.pushKey.length > 100) || utf8Bytes(row.tokenName) > 200) await ctx.db.delete(row._id);
+        // An Android phone's token isn't hex (a Firebase token, or a UnifiedPush
+        // endpoint for the F-Droid build), so each kind is checked as
+        // phone:registerDevice checks it (this deleted every Android phone's
+        // row before 19 Nov 2026).
+        const tokenOk = row.platform === 'android' ? FCM_TOKEN.test(row.apnsToken) : row.platform === 'webpush' ? endpointProblem(row.apnsToken) === null : APNS_TOKEN.test(row.apnsToken);
+        if (!row.tokenId || !tokenOk || (row.pushKey !== undefined && row.pushKey.length > 100) || utf8Bytes(row.tokenName) > 200) await ctx.db.delete(row._id);
       } else if (what === 'deviceCap') {
         // Past a token's newest MAX_DEVICES_PER_TOKEN (phone.ts registerDevice); small rows by now.
         const newest = row.tokenId ? await ctx.db.query('devices').withIndex('by_tokenId', (x) => x.eq('tokenId', row.tokenId)).order('desc').take(MAX_DEVICES_PER_TOKEN) : [];

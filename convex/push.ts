@@ -7,7 +7,7 @@
 // sandbox (Xcode) or production (TestFlight, App Store) install, and
 // goes to the matching APNs host.
 import { createPrivateKey, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
-import { lookup } from 'node:dns/promises';
+import { request as httpsRequest } from 'node:https';
 import http2 from 'node:http2';
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
@@ -16,8 +16,8 @@ import { failureText } from './pushHealth';
 import { pushText } from './pushText';
 import { seal } from './pushSeal';
 import { API_VERSION } from './version';
-import { encryptWebPush, vapidAuthorization, WEB_PUSH_PLAINTEXT_MAX, type VapidKey } from './webPush';
-import { endpointProblem, isIpLiteral, privateAddress } from './webPushEndpoint';
+import { encryptWebPush, pinnedLookup, vapidAuthorization, WEB_PUSH_PLAINTEXT_MAX, type VapidKey } from './webPush';
+import { endpointProblem, privateAddress } from './webPushEndpoint';
 
 // The push relay (relay/, docs/push-relay.md): Mike's Convex project that
 // holds his Apple key, for backends that don't have one. A deployment with
@@ -200,8 +200,10 @@ async function deliver(ctx: ActionCtx, alert: { title: string; body: string; thr
   const web = chosen.filter((t) => t.platform === 'webpush');
   const targets = chosen.filter((t) => t.platform !== 'webpush');
   if (!targets.length) return await sendWebPush(ctx, alert, web);
-  if (web.length) return both(await sendWebPush(ctx, alert, web), await deliverRest(ctx, alert, targets));
-  return await deliverRest(ctx, alert, targets);
+  if (!web.length) return await deliverRest(ctx, alert, targets);
+  // Side by side, so a slow UnifiedPush server never holds up Apple's or Firebase's.
+  const [w, rest] = await Promise.all([sendWebPush(ctx, alert, web), deliverRest(ctx, alert, targets)]);
+  return both(w, rest);
 }
 
 async function deliverRest(ctx: ActionCtx, alert: { title: string; body: string; threadId: string }, targets: Target[]): Promise<SendSummary> {
@@ -256,20 +258,6 @@ async function vapid(ctx: ActionCtx): Promise<VapidKey> {
   return await ctx.runMutation(internal.devices.putVapidKey, { x: jwk.x!, y: jwk.y!, d: jwk.d! });
 }
 
-// Why this endpoint can't be posted to now: its own problem
-// (webPushEndpoint.ts), or a name that resolves to a private address. Looked
-// up just before the post, so a name can't be pointed somewhere private after
-// it was registered. null when it's fine.
-async function unreachable(endpoint: string): Promise<string | null> {
-  const problem = endpointProblem(endpoint);
-  if (problem) return problem;
-  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, '');
-  if (isIpLiteral(host)) return null;
-  const addrs = await lookup(host, { all: true }).catch(() => null);
-  if (!addrs?.length) return "a name that doesn't resolve";
-  return addrs.some((a) => privateAddress(a.address)) ? 'a name with a private address' : null;
-}
-
 // The F-Droid build's notifications (API 93): straight to each phone's
 // UnifiedPush endpoint, encrypted for it (RFC 8291) and signed with this
 // deployment's VAPID key (RFC 8292). What's inside is what the relay's
@@ -280,13 +268,18 @@ async function unreachable(endpoint: string): Promise<string | null> {
 async function sendWebPush(ctx: ActionCtx, alert: { title: string; body: string; threadId: string }, targets: Target[]): Promise<SendSummary> {
   if (!targets.length) return { sent: 0, failed: 0 };
   const key = await vapid(ctx);
-  const subject = process.env.CONVEX_SITE_URL || 'https://threadbear.mikecann.app';
+  // RFC 8292 wants an https: or mailto: subject; a dev deployment's site is http.
+  const site = process.env.CONVEX_SITE_URL;
+  const subject = site?.startsWith('https://') ? site : 'https://threadbear.mikecann.app';
+  // All at once (a phone token has at most 5, MAX_DEVICES_PER_TOKEN), each
+  // with its own 10-second limit, so one slow server can't hold up the rest.
+  const results = await Promise.all(targets.map((t) => webPushOne(t, alert, key, subject).catch((e: Error) => ({ status: 0, reason: e.message }))));
   let sent = 0;
   let failed = 0;
   let broken = 0;
   let failure: string | undefined;
-  for (const t of targets) {
-    const said = await webPushOne(t, alert, key, subject).catch((e: Error) => ({ status: 0, reason: e.message }));
+  for (const [i, said] of results.entries()) {
+    const t = targets[i];
     if (said.status >= 200 && said.status < 300) {
       sent++;
       continue;
@@ -304,21 +297,70 @@ async function sendWebPush(ctx: ActionCtx, alert: { title: string; body: string;
 
 async function webPushOne(t: Target, alert: { title: string; body: string; threadId: string }, key: VapidKey, subject: string): Promise<{ status: number; reason?: string }> {
   if (!t.webPush) return { status: 0, reason: 'no keys' };
-  const why = await unreachable(t.apnsToken);
-  if (why) return { status: 0, reason: `endpoint is ${why}` };
+  const problem = endpointProblem(t.apnsToken);
+  if (problem) return { status: 0, reason: `endpoint is ${problem}` };
   let text = JSON.stringify({ threadId: alert.threadId, ...(t.pushKey ? { e: seal(t.pushKey, JSON.stringify({ title: alert.title, body: alert.body })) } : {}) });
   // A very long title or text: the phone shows its stand-in rather than nothing.
   if (Buffer.byteLength(text) > WEB_PUSH_PLAINTEXT_MAX) text = JSON.stringify({ threadId: alert.threadId });
-  const body = encryptWebPush(Buffer.from(text), Buffer.from(t.webPush.p256dh, 'base64url'), Buffer.from(t.webPush.auth, 'base64url'));
-  const res = await fetch(t.apnsToken, {
-    method: 'POST',
-    headers: { TTL: '3600', Urgency: 'high', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', Authorization: vapidAuthorization(t.apnsToken, key, subject) },
-    body: new Uint8Array(body),
-    // A redirect could lead anywhere, private addresses included: not followed.
-    redirect: 'manual',
-    signal: AbortSignal.timeout(10_000),
+  let body: Buffer;
+  try {
+    body = encryptWebPush(Buffer.from(text), Buffer.from(t.webPush.p256dh, 'base64url'), Buffer.from(t.webPush.auth, 'base64url'));
+  } catch {
+    // Keys that aren't a point on the curve: no send can ever work, so the
+    // registration goes, as a dropped one does (410).
+    return { status: 410, reason: 'keys unusable' };
+  }
+  return await postPinned(t.apnsToken, { TTL: '3600', Urgency: 'high', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', Authorization: vapidAuthorization(t.apnsToken, key, subject) }, body, 10_000);
+}
+
+// Posts over node:https rather than fetch, so the addresses the endpoint's
+// name resolves to are checked as the socket connects to them (the lookup
+// below), not in a separate lookup a name could answer differently. The
+// connection goes to an address that was checked, TLS still checks the
+// certificate for the name, and redirects are never followed (https.request
+// doesn't). `ms` covers everything, the lookup included, and at most 256
+// bytes of an error's body are read.
+function postPinned(endpoint: string, headers: Record<string, string>, body: Buffer, ms: number): Promise<{ status: number; reason?: string }> {
+  return new Promise((resolve) => {
+    const u = new URL(endpoint);
+    let done = false;
+    let req: ReturnType<typeof httpsRequest> | undefined;
+    const finish = (r: { status: number; reason?: string }) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      req?.destroy();
+      resolve(r);
+    };
+    const timer = setTimeout(() => finish({ status: 0, reason: 'timeout' }), ms);
+    req = httpsRequest(
+      {
+        hostname: u.hostname.replace(/^\[|\]$/g, ''),
+        port: u.port || 443,
+        path: `${u.pathname}${u.search}`,
+        method: 'POST',
+        headers: { ...headers, 'Content-Length': String(body.length) },
+        agent: false,
+        lookup: pinnedLookup(privateAddress) as never,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 200 && status < 300) {
+          res.resume();
+          return finish({ status });
+        }
+        let got = Buffer.alloc(0);
+        res.on('data', (c: Buffer) => {
+          got = Buffer.concat([got, c]).subarray(0, 256);
+          if (got.length >= 256) finish({ status, reason: got.toString('utf8').slice(0, 80) });
+        });
+        res.on('end', () => finish({ status, reason: got.toString('utf8').slice(0, 80) || undefined }));
+        res.on('error', () => finish({ status }));
+      },
+    );
+    req.on('error', (e) => finish({ status: 0, reason: e.message }));
+    req.end(body);
   });
-  return { status: res.status, ...(res.ok ? {} : { reason: (await res.text().catch(() => '')).slice(0, 80) || undefined }) };
 }
 
 // Scheduled by sync:upsertThreads when a thread starts needing Mike, and by

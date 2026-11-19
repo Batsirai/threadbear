@@ -990,3 +990,17 @@ test('phone:webPushKey makes one VAPID key for the deployment and hands every ph
   // A bad token gets nothing.
   assert.notEqual(await outcome(call(actx, phone.webPushKey, { token: 'nope' })), 'ok');
 });
+
+test("limitsMigration keeps Android phones' Firebase and UnifiedPush rows, which aren't hex", async () => {
+  const s = await setup();
+  await unmigrated(s);
+  const firebase = 'fXyZ1234567890abcdef:APA91bHexample_token-with-dashes_0123456789abcdefghij';
+  const endpoint = 'https://ntfy.sh/upAbCdEf123?up=1';
+  await s.ctx.db.insert('devices', { apnsToken: firebase, environment: 'production', tokenName: 'pixel', tokenId: s.tokenId, updatedAt: 1, platform: 'android' });
+  await s.ctx.db.insert('devices', { apnsToken: endpoint, environment: 'production', tokenName: 'pixel', tokenId: s.tokenId, updatedAt: 2, platform: 'webpush', webPush: { p256dh: 'B' + 'A'.repeat(86), auth: 'A'.repeat(22) } });
+  // Junk of each kind still goes.
+  await s.ctx.db.insert('devices', { apnsToken: 'https://127.0.0.1/x', environment: 'production', tokenName: 'pixel', tokenId: s.tokenId, updatedAt: 3, platform: 'webpush' });
+  await s.ctx.db.insert('devices', { apnsToken: 'has spaces', environment: 'production', tokenName: 'pixel', tokenId: s.tokenId, updatedAt: 4, platform: 'android' });
+  await migrate(s);
+  assert.deepEqual(s.rows('devices').map((d) => d.apnsToken).sort(), [endpoint, firebase].sort());
+});

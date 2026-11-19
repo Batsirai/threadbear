@@ -15,7 +15,9 @@
 export const WEB_PUSH_ENDPOINT_MAX = 1024;
 // The connector's keys, base64url without padding (RFC 8291): an uncompressed
 // P-256 point (65 bytes) and a 16-byte auth secret.
-export const P256DH = /^[A-Za-z0-9_-]{87}$/;
+// An uncompressed point starts 0x04, which is "B" in base64url (whether it's
+// on the curve is only known when a send uses it: push.ts drops it then).
+export const P256DH = /^B[A-Za-z0-9_-]{86}$/;
 export const AUTH_SECRET = /^[A-Za-z0-9_-]{22}$/;
 
 /** Why this endpoint can't be used, or null when it can. */
@@ -61,24 +63,22 @@ export function privateAddress(ip: string): boolean {
       || (p === 203 && q === 0 && r === 113);
   }
   if (!a.includes(':')) return true;
-  // An IPv4 address inside an IPv6 one (::ffff:10.0.0.1, 64:ff9b::10.0.0.1).
-  const tail = a.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
-  if (tail) return privateAddress(tail[1]) || !/^(::ffff:|::|64:ff9b::)/.test(a);
+  // IPv6: only global unicast (2000::/3) counts as public, less the ranges in
+  // it that tunnel or translate to somewhere else or are for documentation:
+  // Teredo and other IETF special use (2001::/23), documentation
+  // (2001:db8::/32) and 6to4 (2002::/16). Everything outside 2000::/3 is out,
+  // which takes care of loopback, unspecified, unique-local, link-local,
+  // site-local, multicast, IPv4-mapped and -compatible (::ffff:0:0/96, ::/96)
+  // and NAT64 (64:ff9b::/96 and the local 64:ff9b:1::/48) at once. A dotted
+  // IPv4 tail never reaches here written that way from new URL(), and is
+  // refused if it does.
   const groups = expand(a);
   if (!groups) return true;
-  const [g0] = groups;
-  if (groups.every((g) => g === 0)) return true; // ::
-  if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return true; // ::1
-  if ((g0 & 0xfe00) === 0xfc00) return true; // fc00::/7
-  if ((g0 & 0xffc0) === 0xfe80) return true; // fe80::/10
-  if ((g0 & 0xff00) === 0xff00) return true; // ff00::/8
-  // ::ffff:a.b.c.d and 64:ff9b:: written in hex: check the IPv4 inside.
-  const mapped = groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff;
-  const nat64 = g0 === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every((g) => g === 0);
-  if (mapped || nat64) return privateAddress(`${groups[6] >> 8}.${groups[6] & 255}.${groups[7] >> 8}.${groups[7] & 255}`);
-  // 2001:db8::/32 (documentation) and 100::/64 (discard).
-  if (g0 === 0x2001 && groups[1] === 0x0db8) return true;
-  if (g0 === 0x100 && groups.slice(1, 4).every((g) => g === 0)) return true;
+  const [g0, g1] = groups;
+  if ((g0 & 0xe000) !== 0x2000) return true;
+  if (g0 === 0x2001 && g1 < 0x200) return true;
+  if (g0 === 0x2001 && g1 === 0x0db8) return true;
+  if (g0 === 0x2002) return true;
   return false;
 }
 

@@ -65,17 +65,25 @@ Firebase, so it doesn't use the relay at all (API 93, 19 Nov 2026):
    `webPush`, plus its 32-byte push key as before.
 2. `convex/push.ts` (`sendWebPush`) posts each notification to that endpoint
    itself: `{ threadId, e }` (the same sealed title and text as Firebase's),
-   encrypted for the phone with RFC 8291 and signed with the VAPID key (RFC
+   encrypted for the phone with RFC 8291 (at most 3993 bytes, so the whole
+   body fits in 4096, which the phone's connector requires) and signed with the VAPID key (RFC
    8292), both in `convex/webPush.ts` with node:crypto, checked against the
    RFC's own example in `runner/test/unit/web-push.test.ts`. The
    distributor's server sees the endpoint and an opaque blob; it can't read
    the thread id either. `PUSH_RELAY=off` doesn't stop these, as no relay is
    involved.
 3. The endpoint is chosen by whoever holds the phone's pairing token, so the
-   backend only takes a public https one (`convex/webPushEndpoint.ts`), looks
-   its name up again before every post and refuses any that resolve to a
-   private address, never follows a redirect, and gives up after 10 seconds.
-   A 404 or 410 means the distributor dropped it, so the row goes.
+   backend only takes a public https one (`convex/webPushEndpoint.ts`: for
+   IPv6 only global unicast, less 6to4, Teredo and documentation). Each post
+   goes over node:https with a `lookup` (`pinnedLookup` in `webPush.ts`) that
+   refuses a name if any address it resolves to is private, in the same
+   lookup the socket connects with, so a name can't answer differently
+   between a check and the connection. It never follows a redirect, reads at
+   most 256 bytes of an error, and gives up after 10 seconds, lookup
+   included. Web pushes go out side by side with each other and with
+   Apple's and Firebase's, so a slow server holds up nobody. A 404 or 410
+   means the distributor dropped the phone, and keys that aren't a P-256
+   point can never work, so either way the row goes.
 
 ### An Android phone
 
