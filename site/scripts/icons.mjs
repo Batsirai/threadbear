@@ -18,6 +18,8 @@ const ICONS = {
   // apple-logo.svg isn't made here: Phosphor's filled apple has a flat bottom that looks cut off,
   // so it's Simple Icons' Apple mark (CC0), padded to Phosphor's margins by hand.
   "windows-logo": ["WindowsLogo", "fill"], "linux-logo": ["LinuxLogo", "fill"],
+  // The Android badge beside the App Store one in the install section.
+  "android-logo": ["AndroidLogo", "fill"],
   // The docs pages' own icons (site/docs-icons.json).
   "chats-circle": "ChatsCircle", "paper-plane-tilt": "PaperPlaneTilt", "archive": "Archive", "push-pin": "PushPin",
   "stack": "Stack", "clock": "Clock", "users-three": "UsersThree", "keyboard": "Keyboard", "flask": "Flask",

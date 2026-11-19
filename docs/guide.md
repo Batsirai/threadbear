@@ -1905,6 +1905,25 @@ closed; and a deleted thread's old messages being cleared away), with how many a
 and any one's history. It's for looking into something that seems stuck; it
 changes nothing.
 
+### On Android
+
+There's an Android app too, for the same things: your inbox, answering
+threads, starting new ones and notifications. It isn't on Google Play yet,
+so you install it yourself from GitHub, where each Threadbear release puts
+a new copy:
+
+1. On your Android phone, download
+   [the latest Threadbear APK](https://github.com/mikecann/threadbear/releases/latest/download/threadbear-android.apk).
+2. Open it from your downloads. The first time, Android asks whether your
+   browser may install apps: allow it, then tap Install.
+3. Open Threadbear and pair it with Scan the code, as above.
+
+After that it looks for new releases itself. When one's out, its inbox
+menu and Settings show "Update to" and the release's date, and tapping it
+downloads the new APK to install over the top, still paired. Notifications
+come through Google's Firebase, so a phone without Google Play services
+gets everything but those.
+
 ## Self-hosting your backend
 <!-- slug: self-hosting -->
 

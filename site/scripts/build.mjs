@@ -5,7 +5,7 @@
 // cut down to one page and a 404. `npm run build`, then `npm run serve` to look at it on :5176.
 //
 // Pages can use {{mac <name> [classes]}} for a Mac app screenshot, {{phone <name> [hero] [classes]}}
-// for an iPhone one, {{icon <name>}} for a Phosphor icon, {{fork}} and {{appStoreBadge}} for the
+// for an iPhone one, {{icon <name>}} for a Phosphor icon, {{fork}}, {{appStoreBadge}} and {{androidBadge}} for the
 // two ways to get it, and {{commits}} / {{firstDay}} for the repo's own numbers.
 //
 // The changelog (/changelog) isn't in src either: scripts/changelog.mjs makes it from site/changelog/.
@@ -199,6 +199,15 @@ function appStoreBadge() {
   return APP_STORE_LIVE ? `<a class="appstore" href="${APP_STORE_URL}">${label}</a>` : `<span class="appstore soon">${label}</span>`;
 }
 
+/**
+ * The Android twin of the App Store badge. It's not on Google Play (Mike has no Play account yet),
+ * so rather than a store it goes to the docs' "On Android" part, which says how to install the
+ * APK each release attaches on GitHub (Mike, 19 Nov).
+ */
+function androidBadge() {
+  return `<a class="appstore android" href="/docs/phone-and-browser#on-android">${icon("android-logo").replace('class="icon"', 'class="icon appstore-logo"')}<span><small>Get it for</small><b>Android</b></span></a>`;
+}
+
 
 /**
  * How people install it: a prompt for their own agent, the same as README.md's "The easy way: let
@@ -379,7 +388,7 @@ const siteScript = fingerprint("site.js");
 const layout = readFileSync(join(src, "layout.html"), "utf8");
 const shared = {
   site: SITE_URL, styles, commits: commits.toLocaleString("en-AU"), firstDay,
-  appStoreBadge: appStoreBadge(), copyButton: copyButton(), prompt: escape(INSTALL_PROMPT), showcase: showcase(), launchVideo: launchVideo(), faq: faq(), githubCorner: githubCorner(), convexCorner: convexCorner(), platforms: platforms(),
+  appStoreBadge: appStoreBadge(), androidBadge: androidBadge(), copyButton: copyButton(), prompt: escape(INSTALL_PROMPT), showcase: showcase(), launchVideo: launchVideo(), faq: faq(), githubCorner: githubCorner(), convexCorner: convexCorner(), platforms: platforms(),
   latestRelease: readReleases(join(root, "changelog"))[0]?.release ?? "",
   // Moves the top bar in to clear the corner, when there is one.
   bodyClass: GITHUB_PUBLIC ? " has-corner" : "",
