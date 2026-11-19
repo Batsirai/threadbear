@@ -129,6 +129,10 @@ pub struct Composer {
     pub(crate) spell: crate::composer_spelling::SpellState,
     /// Board clicks wait for the box's own window and any saved draft restore.
     pending_mentions: Vec<threadbear_core::board::PendingMention>,
+    /// The token card's paste field, for that login (token_card.rs): its
+    /// words go out with Set and are never kept.
+    pub(crate) token_field: Option<(String, Entity<gpui_kit::component::input::InputState>)>,
+    pub(crate) token_sub: Option<Subscription>,
     _subs: Vec<Subscription>,
 }
 
@@ -260,6 +264,8 @@ impl Composer {
             pending_saved: None,
             held_extras: Vec::new(),
             pending_mentions: vec![],
+            token_field: None,
+            token_sub: None,
             palette: PaletteState::default(),
             palette_asked: None,
             palette_scroll: ScrollHandle::new(),
@@ -1786,6 +1792,9 @@ impl Render for Composer {
         // The box: the limit box and the open card, each over a line, then
         // the message.
         let limit = self.render_limit_box(cx);
+        // A thread on a virtual runner whose login needs a cloud token
+        // (token_card.rs), in the same place.
+        let token_card = self.render_token_card(window, cx);
         // An edit is a message of its own: the open card waits for after it.
         let card = if self.editing.is_some() { None } else { self.render_card(window, cx) };
         // Dimmed while the thread moves, with nothing on it taking a click.
@@ -1855,6 +1864,7 @@ impl Render for Composer {
                         this.focus(window, cx);
                         crate::web_panels::keyboard_to_app(window);
                     }))
+                    .children(token_card)
                     .children(limit)
                     .children(card)
                     .child(body)

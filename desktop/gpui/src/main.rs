@@ -132,6 +132,7 @@ mod text_services;
 mod native_text;
 mod thread_map;
 mod tips;
+mod token_card;
 mod thread_panels;
 mod thread_link_marks;
 mod tour;

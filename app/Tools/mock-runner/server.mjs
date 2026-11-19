@@ -386,6 +386,9 @@ let lastArchive;
 // mock.releaseMovePreview), as the real one over the relay can take a
 // quarter of a minute (18 Nov 2026).
 let moveHold;
+// The same for the cloud token requests (mock.holdTokens, mock.releaseTokens),
+// so the token card's in-progress state can be looked at.
+let tokenHold;
 // Every threads.moveCancel's params, for the specs (mock.moveCancels).
 const moveCancels = [];
 const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
@@ -409,6 +412,20 @@ let remotePicturesUp = true;
 // A picture pasted into a message of one of `runnerId`'s threads.
 const pastedOn = (runnerId, file) => [...threads.values()].some((t) => t.runnerId === runnerId && t.events.some((e) => e.type === 'user.message' && e.images?.some((i) => i.path === file)));
 if (!process.env.TB_MOCK_NO_REMOTE) addRemoteDemo();
+// Virtual runners (docs/virtual-runners.md, docs/protocol.md "Virtual
+// runners"), with MOCK_VIRTUAL_RUNNERS=1 only, so the usual demo stays as it
+// is: one virtual runner, "Cloud (Fly)", and a thread on a box of it in each
+// state worth seeing. `boxes` is each box's runner's `box` as the backend
+// says it; `cloudTokens` the logins with a token, and whether Claude
+// refused it.
+const VIRTUAL = Boolean(process.env.MOCK_VIRTUAL_RUNNERS);
+const SERVICES = VIRTUAL ? [{ id: 'svc_fly', name: 'Cloud (Fly)', provider: 'fly' }] : [];
+const boxes = new Map();
+const cloudTokens = new Map([
+  ['work@example.com', { state: 'dead', madeAt: Date.now() - 200 * 86_400_000, setAt: Date.now() - 200 * 86_400_000 }],
+  ['alex+4@example.com', { state: 'valid', madeAt: Date.now() - 20 * 86_400_000, setAt: Date.now() - 20 * 86_400_000 }],
+]);
+if (VIRTUAL) addVirtualDemo();
 /** The schedules (docs/protocol.md, "Schedules"), soonest first. */
 let schedules = [];
 addDemoSchedules();
@@ -586,7 +603,7 @@ async function handle(client, { id, method, params = {} }) {
     // backend"), the app's default way in: here, that's mac-mini's own code
     // answering, on the same connection and with the same shapes. Events
     // come to whoever subscribed, whichever runner's connection they used.
-    if (client.as !== null || !runners.some((r) => !r.self && r.id === ownerOf(params.threadId))) {
+    if (client.as !== null || !(runners.some((r) => !r.self && r.id === ownerOf(params.threadId)) || boxes.has(ownerOf(params.threadId)))) {
       return reply(client, id, null, { code: -32004, message: 'Thread not found' });
     }
     caller = { ...client, as: ownerOf(params.threadId) };
@@ -805,6 +822,29 @@ async function dispatch(client, method, p) {
     }
     case 'threads.create': {
       if (!p.text) throw rpcError(-32602, 'text is required');
+      // On a virtual runner (Virtual runners, "Starting from the Mac"): a box
+      // of its own, waiting on a token if its login has none.
+      if (typeof p.serviceId === 'string') {
+        if (!SERVICES.some((s) => s.id === p.serviceId)) throw rpcError(-32602, 'No such virtual runner.');
+        if (p.images?.length) throw rpcError(-32602, "Pictures can't go with a thread's first message on a virtual runner yet.");
+        await sleep(400);
+        const runnerId = 'box_' + crypto.randomBytes(6).toString('hex');
+        const threadId = crypto.randomUUID();
+        const accountId = p.accountId ?? defaults.accountId;
+        const login = accounts.find((a) => a.id === accountId)?.email ?? accountId;
+        const now = iso();
+        const summary = {
+          id: threadId, title: p.text.split('\n')[0].slice(0, 60), cwd: p.cwd ?? defaults.cwd, accountId, provider: 'claude',
+          model: p.model ?? defaults.models.claude, permissionMode: p.permissionMode ?? 'full', status: 'starting', live: false, needsYou: false,
+          createdAt: now, updatedAt: now, lastActivityAt: now, preview: p.text.slice(0, 140), lastSeq: 1, lastSeenSeq: 1,
+        };
+        threads.set(threadId, { summary, events: [{ seq: 1, ts: now, threadId, turnId: 'box_t0', type: 'user.message', text: p.text, images: [] }], inProgress: new Map(), timers: [], runnerId });
+        const token = cloudTokens.get(login);
+        boxes.set(runnerId, { state: token?.state === 'valid' ? 'creating' : 'needsToken', service: p.serviceId, login });
+        if (token?.state === 'valid') bootBox(runnerId);
+        broadcastRemote();
+        return { thread: { ...summary, runnerId } };
+      }
       // New Thread on a project's page: every project checked first, as the runner does.
       const startIn = (p.projectIds ?? []).map((id) => needProject(id));
       const threadId = 'th_' + crypto.randomBytes(6).toString('hex');
@@ -1508,6 +1548,25 @@ async function dispatch(client, method, p) {
     case 'remoteThreads.list':
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       return remoteThreads(client);
+    // A virtual runner's cloud tokens (docs/protocol.md, "Cloud tokens on
+    // the Mac"): Make one takes a few seconds here, as if Mike approved it on
+    // claude.ai straight away; mock.holdTokens holds it until released.
+    case 'cloudTokens.make':
+    case 'cloudTokens.set':
+    case 'cloudTokens.useMac': {
+      if (!VIRTUAL) throw rpcError(-32602, 'Virtual runners are an experiment that is off here.');
+      const login = String(p.login ?? '');
+      if (!login) throw rpcError(-32602, 'login is required');
+      if (method === 'cloudTokens.set' && !/^sk-ant-oat01-[A-Za-z0-9_-]{40,}$/.test(String(p.token ?? '').trim())) throw rpcError(-32602, "That doesn't look like a token from claude setup-token (sk-ant-oat01-…).");
+      if (method === 'cloudTokens.useMac' && !accounts.some((a) => a.email === login && a.yearToken)) throw rpcError(-32602, `${login} has no year-long token on this Mac.`);
+      if (method !== 'cloudTokens.make' && !accounts.some((a) => a.email === login)) throw rpcError(-32010, `No login ${login} on this Mac.`);
+      await sleep(method === 'cloudTokens.make' ? 3000 : 700);
+      if (tokenHold) await tokenHold.promise;
+      tokenSet(login);
+      return {};
+    }
+    case 'cloudTokens.list':
+      return { tokens: [...cloudTokens].map(([login, t]) => ({ login, madeAt: t.madeAt, setAt: t.setAt, state: t.state })) };
     case 'remoteThreads.logins': {
       // That runner's logins through this one, from the backend (no pools,
       // and its default folder), as mac-mini's own hello has them.
@@ -1929,6 +1988,16 @@ async function dispatch(client, method, p) {
       moveHold = { promise, release };
       return { ok: true };
     }
+    case 'mock.holdTokens': {
+      let release;
+      const promise = new Promise((r) => { release = r; });
+      tokenHold = { promise, release };
+      return { ok: true };
+    }
+    case 'mock.releaseTokens':
+      tokenHold?.release();
+      tokenHold = undefined;
+      return { ok: true };
     case 'mock.moveCancels':
       return { cancels: moveCancels };
     case 'mock.releaseMovePreview':
@@ -2821,12 +2890,77 @@ function remoteThreads(client) {
   return {
     runners: [{
       id: BRUCE, name: mini.name, icon: mini.icon, online: true, lastSeenAt: iso(),
-    }, ...MORE_RUNNERS, ...runners.filter((r) => !r.self && r.id !== BRUCE && !MORE_RUNNERS.some((m) => m.id === r.id)).map((r) => ({ ...r, online: true, lastSeenAt: iso() }))],
+    }, ...MORE_RUNNERS, ...runners.filter((r) => !r.self && r.id !== BRUCE && !MORE_RUNNERS.some((m) => m.id === r.id)).map((r) => ({ ...r, online: true, lastSeenAt: iso() })),
+    // A box's runner: named for its virtual runner, never heartbeating, and
+    // online in every state a message reaches it in.
+    ...[...boxes].map(([id, b]) => ({ id, name: SERVICES.find((s) => s.id === b.service)?.name ?? 'Cloud', online: true, lastSeenAt: new Date(0).toISOString(), box: boxView(b) }))],
     threads: rows,
     order: runnerOrder,
+    ...(SERVICES.length ? { services: SERVICES } : {}),
   };
 }
 
+
+// A box as RemoteRunner.box has it: its token's word only while its login
+// has none or a refused one.
+function boxView(b) {
+  const token = cloudTokens.get(b.login);
+  const need = !token ? 'none' : token.state === 'dead' ? 'dead' : undefined;
+  return { state: b.state, service: b.service, ...(need ? { token: need, login: b.login } : {}) };
+}
+
+function broadcastRemote() {
+  for (const c of clients) if (c.authed && c.as === null) send(c, 'remoteThreads.updated', remoteThreads(c));
+}
+
+// A box on its way up: up a few seconds later, its thread's first turn run.
+function bootBox(runnerId) {
+  const b = boxes.get(runnerId);
+  b.state = 'starting';
+  broadcastRemote();
+  setTimeout(() => {
+    if (b.state !== 'starting') return;
+    b.state = 'awake';
+    const t = [...threads.values()].find((x) => x.runnerId === runnerId);
+    if (t) {
+      t.summary.status = 'idle';
+      broadcastSummary(t.summary.id);
+    }
+    broadcastRemote();
+  }, 5000);
+}
+
+// A token set for a login: every box waiting on it goes, as the backend's
+// TOKEN_SET does, and a refused one's thread carries on.
+function tokenSet(login) {
+  cloudTokens.set(login, { state: 'valid', madeAt: Date.now(), setAt: Date.now() });
+  for (const [id, b] of boxes) if (b.login === login && b.state === 'needsToken') bootBox(id);
+  broadcastRemote();
+}
+
+// One thread on a box in each state: booting, asleep, waking, waiting on a
+// token for a login with a year-long token on this Mac and one without, and
+// awake with its token refused.
+function addVirtualDemo() {
+  accounts.find((a) => a.id === 'claude-main').yearToken = { madeAt: new Date(Date.now() - 30 * 86_400_000).toISOString() };
+  const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const make = (runnerId, id, title, state, login, minutes, ask) => {
+    boxes.set(runnerId, { state, service: 'svc_fly', login });
+    const summary = {
+      id, title, cwd: '/Users/alex/code/threadbear', accountId: 'claude-main', provider: 'claude', model: 'claude-opus-5-5', permissionMode: 'full',
+      status: state === 'starting' || state === 'needsToken' ? 'starting' : 'idle', live: false, needsYou: false,
+      createdAt: ago(minutes + 5), updatedAt: ago(minutes), lastActivityAt: ago(minutes), preview: ask, lastSeq: 1, lastSeenSeq: 1,
+    };
+    const events = [{ seq: 1, ts: ago(minutes), threadId: id, turnId: `${id}_t0`, type: 'user.message', text: ask, images: [] }];
+    threads.set(id, { summary, events, inProgress: new Map(), timers: [], runnerId });
+  };
+  make('box_start', 'box_starting', 'Tidy the sync retries', 'starting', 'alex+4@example.com', 1, 'Tidy up the retry loop in sync.ts and add a test for the backoff.');
+  make('box_sleep', 'box_asleep', 'Port the usage chart', 'asleep', 'alex+4@example.com', 90, 'Port the usage chart to the GPUI app.');
+  make('box_wake', 'box_waking', 'Check the landing page copy', 'waking', 'alex+4@example.com', 30, 'Read the landing page copy and tighten it.');
+  make('box_mac', 'box_token_mac', 'Write the changelog entry', 'needsToken', 'alex@example.com', 2, 'Write the changelog entry for this week\'s release.');
+  make('box_new', 'box_token_new', 'Fix the flaky move test', 'needsToken', 'alex+3@example.com', 3, 'The move test fails one run in ten. Find out why and fix it.');
+  make('box_dead', 'box_token_dead', 'Bump Claude Code in the box image', 'awake', 'work@example.com', 5, 'Bump Claude Code in the box image to the latest.');
+}
 
 function bruceFile(file) {
   if (file === BRUCE_FILES.picture) return fs.readFileSync(path.join(here, 'fixtures/demo-upload-resume/media/upload-times.png'));

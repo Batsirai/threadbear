@@ -480,7 +480,10 @@ Size is `none` throughout: the planning docs don't size these, and work the app 
 
 | ID | Feature | What it does | How in GPUI | Route | Size | Swift |
 |---|---|---|---|---|---|---|
-| `planned.cloud.sandboxes` | Cloud sandboxes | Runner in a throwaway VM, shown as a remote peer | Appears as another runner in the existing runner lists (not designed or built yet). | build | none | none |
+| `planned.cloud.sandboxes` | Cloud sandboxes | Runner in a throwaway VM, shown as a remote peer | Built as virtual runners (the `virtual.*` rows): one Runs on entry per virtual runner, never a box per thread in the runner lists. | build | none | none |
+| `virtual.runs-on` | Virtual runners in Runs on | A thread started on a machine of its own in the cloud (docs/virtual-runners.md) | After the machines, one entry per virtual runner (`services`), its folder and login this Mac's, sent with `serviceId`; a box's runner is never listed as a machine (`new_thread.rs`, `remote.rs`). GPUI only: the Swift app is frozen. | build | S | none |
+| `virtual.rows` | A box thread's row | Starting a machine, Waking, Asleep, Needs a cloud token | `sidebar.rs box_trailing` in core; needing a token takes the needs-you dot (`dress_box`). | build | S | none |
+| `virtual.token-card` | The token card | Make one, Paste a token, or this Mac's year-long token, in the thread | On the composer, as the limit box is (`token_card.rs`). | build | M | none |
 | `planned.schedule.anyrunner` | Any-runner schedules | First runner to reach it claims the run | A "no runner" option in `schedule.editor` (not confirmed as built). | build | none | none |
 | `planned.runner.smarterchoice` | Smarter runner choice | Picks the runner for a new thread | Changes what `composer.runner` offers (not confirmed as built). | build | none | none |
 | `planned.sync.fullconvex` | Full Convex | Drops the Tailscale link, runner tokens and pairing by token | Changes how `foundation.rpc` reaches other runners; `sync.full` exists but is off by default. | build | none | none |

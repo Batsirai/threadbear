@@ -117,7 +117,10 @@ impl Threadbear {
                     t.runners_panel.refreshing = false;
                 }
                 match res {
-                    Ok(v) => t.remote.all_runners = remote::decode_runners(&v),
+                    Ok(v) => {
+                        t.remote.all_runners = remote::decode_runners(&v);
+                        t.remote.keep_machines();
+                    }
                     Err(e) if shown => t.show_error(e.message, cx),
                     Err(_) => {}
                 }
@@ -255,7 +258,7 @@ impl Threadbear {
     /// runner is known: without it a drop would save an order that leaves
     /// this Mac out (`canOrderRunners`).
     fn can_order_runners(&self) -> bool {
-        self.runners_panel.order.is_some() && !self.remote.runners.is_empty() && self.remote.all_runners.iter().any(|r| r.is_self)
+        self.runners_panel.order.is_some() && !self.remote.machines().is_empty() && self.remote.all_runners.iter().any(|r| r.is_self)
     }
 
     /// `receive(remote:)`'s part: the backend's order, unless a drop of
@@ -279,7 +282,7 @@ impl Threadbear {
         }
         let part = rules::moving(&shown, from, to);
         let self_id = self.remote.all_runners.iter().find(|r| r.is_self).map(|r| r.id.clone());
-        let others: Vec<String> = self.remote.runners.iter().map(|r| r.id.clone()).collect();
+        let others: Vec<String> = self.remote.machines().into_iter().map(|r| r.id).collect();
         let order = rules::order_after_drop(&part, self_id.as_deref(), &others, self.runners_panel.order.as_deref());
         self.set_runner_order(order, cx);
     }

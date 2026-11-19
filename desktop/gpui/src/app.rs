@@ -95,6 +95,8 @@ pub struct Threadbear {
     /// The login each thread's limit box has picked in its Continue now on
     /// menu, when it isn't the first.
     pub(crate) limit_pick: HashMap<String, String>,
+    /// Each Claude login's cloud token card (token_card.rs).
+    pub(crate) token_cards: crate::token_card::TokenCards,
     /// Logins a Use a reset is on its way for (`use_reset`).
     pub(crate) resetting: std::collections::HashSet<String>,
     /// The Threads button's badge, kept until the app next changes (the same
@@ -523,6 +525,7 @@ impl Threadbear {
             menus_stale: true,
             failed_on_account: HashMap::new(),
             limit_pick: HashMap::new(),
+            token_cards: Default::default(),
             resetting: Default::default(),
             inbox_count_cache: Default::default(),
             sections_cache: Default::default(),
@@ -935,6 +938,9 @@ impl Threadbear {
                         // word; everything shown gets a move just picked.
                         let from_runner = t.clone();
                         self.starting_moves.dress(&mut t, crate::now_ms());
+                        if let Some(b) = self.remote.box_of(t.runner_id.as_deref()) {
+                            threadbear_core::sidebar::dress_box(&mut t, b);
+                        }
                         if let Some(pane) = &self.pane {
                             pane.update(cx, |p, cx| p.summary_changed(&t, cx));
                         }
@@ -1739,6 +1745,8 @@ impl Threadbear {
         // What came across from the Swift app, while its note's up. Set
         // after, as the literal above is as long as serde_json's macro goes.
         dump["importNote"] = json!(self.import_note);
+        // A virtual runner's thread waiting on a cloud token (token_card.rs).
+        dump["tokenCard"] = self.token_card_dump();
         // Panels pinned to their threads (pinned_panels.rs).
         dump["pinnedPanels"] = self.pinned_panels_dump(cx);
         // The tour or a page's intro on show, and Finish setting up (tour.rs, setup_panel.rs).

@@ -309,7 +309,10 @@ impl Composer {
             // This Mac: "+", then the machine chip on a new thread.
             (None, _) => {
                 row = row.child(div().flex_none().ml(px(-7.)).child(self.render_plus(&data, window, cx)));
-                let others = self.app.upgrade().is_some_and(|a| !a.read(cx).remote.runners.is_empty());
+                let others = self.app.upgrade().is_some_and(|a| {
+                    let remote = &a.read(cx).remote;
+                    !remote.runners.is_empty() || !remote.services().is_empty()
+                });
                 if data.is_new && others {
                     row = row.child(self.render_runs_on_chip(cx));
                 } else if others {
@@ -553,7 +556,11 @@ impl Composer {
                 let tip = if t.remote.runners.iter().any(|r| r.id == runner && !r.online) { format!("Runs on {name}, offline") } else { format!("Runs on {name}") };
                 (t.runner_icon_symbol(Some(&runner)), tip)
             }
-            None => (self.app.upgrade().map_or("desktopcomputer", |a| a.read(cx).self_runner_symbol()), "Runs on this Mac".to_owned()),
+            None => match self.app.upgrade().and_then(|a| a.read(cx).new_thread.picks.service.clone().map(|s| a.read(cx).service_name_of(&s))) {
+                // A virtual runner: a machine of its own for this thread.
+                Some(name) => (crate::icons::VIRTUAL_RUNNER, format!("Runs on {name}, a machine of its own")),
+                None => (self.app.upgrade().map_or("desktopcomputer", |a| a.read(cx).self_runner_symbol()), "Runs on this Mac".to_owned()),
+            },
         };
         let app = self.app.clone();
         h_flex()

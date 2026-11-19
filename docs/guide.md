@@ -1243,6 +1243,19 @@ runner that's online in it. Adding or renaming a runner is done on its own machi
 so ask an agent to do it for you. Schedules need your
 Convex backend: with no internet, they wait.
 
+With the `virtualRunners` experiment on and a virtual runner set up in your
+backend (docs/virtual-runners.md), Runs on also lists it after the Macs,
+for example "Cloud (Fly)": the thread gets a machine of its own in the
+cloud, made from the folder's git repo on this Mac and your Claude login.
+Its row says "Starting a machine" while it boots, "Asleep" once it's been
+idle a while, and "Waking" when a message brings it back. The first time a
+login runs there, the thread asks for a cloud token in a card on its
+message box: Make one runs `claude setup-token` for that login and opens
+claude.ai to approve it, Paste a token takes one you made, and Use this
+Mac's token appears when that login already has a year-long token here.
+The message waits and goes once it's set. If Claude later refuses the
+token, the same card comes back.
+
 With more than one runner, Runners (the rack icon near the bottom of the
 left-hand rail) opens a panel with each one: whether it's online and for
 how long, or when it was last heard from, the commit it runs, and the

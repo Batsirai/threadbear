@@ -1032,6 +1032,12 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
             app.update(cx, |t, cx| t.snooze_open(seconds, cx))?;
             Ok(json!("ok"))
         }
+        // The token card on a virtual runner's thread (token_card.rs).
+        "token-card" => {
+            let press = text(cmd, "press").to_string();
+            app.update(cx, |t, cx| t.token_card_press(&press, cx))?;
+            Ok(json!("ok"))
+        }
         "menu" => {
             let (row, click) = (text(cmd, "row").to_string(), cmd["click"].as_str().map(str::to_owned));
             let result = app.update(cx, |t, cx| t.update_pane(cx, |p, cx| p.menu_command(&row, click.as_deref(), cx)))??;
