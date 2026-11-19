@@ -32,6 +32,9 @@ const RELAY_URL = 'https://impartial-hound-393.ap-southeast-2.convex.site';
 // endpoint and this deployment posts to it itself (sendWebPush), relay or not.
 type Target = { apnsToken: string; environment: 'sandbox' | 'production'; notify: 'away' | 'always' | 'off'; pushKey?: string; platform?: 'android' | 'webpush'; webPush?: { p256dh: string; auth: string } };
 
+// This deployment's own site address (relay registration, the VAPID subject).
+const siteUrl = (): string | undefined => process.env.CONVEX_SITE_URL;
+
 async function relayInstall(ctx: ActionCtx, url: string): Promise<{ installId: string; installKey: string } | { failure: string }> {
   const known = await ctx.runQuery(internal.devices.relayInstall, { url });
   if (known) return known;
@@ -39,7 +42,7 @@ async function relayInstall(ctx: ActionCtx, url: string): Promise<{ installId: s
   // names by posting the nonce back to that deployment's /relay/verify
   // (http.ts), so nobody can use up its allowance of new installs by
   // calling /register anonymously (relay/convex/http.ts).
-  const deployment = process.env.CONVEX_SITE_URL;
+  const deployment = siteUrl();
   const nonce = randomBytes(24).toString('hex');
   if (deployment) await ctx.runMutation(internal.devices.startRelayCheck, { nonce });
   const res = await fetch(`${url}/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: `api-${API_VERSION}`, ...(deployment ? { deployment, nonce } : {}) }) }).catch((e: Error) => e);
@@ -272,7 +275,7 @@ async function sendWebPush(ctx: ActionCtx, alert: { title: string; body: string;
   if (!targets.length) return { sent: 0, failed: 0 };
   const key = await vapid(ctx);
   // RFC 8292 wants an https: or mailto: subject; a dev deployment's site is http.
-  const site = process.env.CONVEX_SITE_URL;
+  const site = siteUrl();
   const subject = site?.startsWith('https://') ? site : 'https://threadbear.mikecann.app';
   // All at once (a phone token has at most 5, MAX_DEVICES_PER_TOKEN), each
   // with its own 10-second limit, so one slow server can't hold up the rest.
