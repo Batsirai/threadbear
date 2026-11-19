@@ -7915,7 +7915,11 @@ has to be on for it.
 - **Starting from the Mac.** `threads.create` with `serviceId` (a virtual
   runner's id from `RemoteThreads.services`) starts the thread on it:
   the runner reads the repo from `cwd` on this Mac (`origin` without
-  credentials, which it must have; the subfolder from the repo's top; the
+  credentials, which it must have, and which a box must be able to clone:
+  a box clones over https with no ssh key, so an https address, or GitHub's
+  ssh forms sent as their https address; a folder, `file://`, http, git://
+  or another host's ssh is refused, `-32602`, before anything is started,
+  and the app keeps the draft; the subfolder from the repo's top; the
   base branch the current branch's upstream on `origin`, else `origin`'s
   default branch, else `main`), takes the login's email from `accountId`
   (a Claude login on this Mac; a pool's pick when only `poolId` is

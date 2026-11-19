@@ -15,7 +15,7 @@ import path from 'node:path';
 import type { Account } from './protocol.ts';
 import { ErrorCode, RpcError, remoteCreateMode } from './protocol.ts';
 import type { Logger } from './log.ts';
-import { originUrl, repoTop, withoutCredentials } from './move-git.ts';
+import { cloneableUrl, originUrl, repoTop, withoutCredentials } from './move-git.ts';
 import { realpath } from './worktrees.ts';
 import { readYearToken, rememberToken } from './year-token.ts';
 
@@ -53,6 +53,29 @@ function git(cwd: string, args: string[]): Promise<string | undefined> {
   });
 }
 
+// GitHub's names: an owner and a repo, letters, digits, `.`, `_` and `-`.
+const GH_PATH = /^([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100})$/;
+
+/**
+ * The address a box clones an origin from, or undefined when a box can't
+ * reach it (Codex's review of slice 5, 6). A box clones over https only,
+ * with no ssh key of Mike's: an https address the box's clone takes
+ * (move-git.ts cloneableUrl, as cloneRepo checks it there), or GitHub's ssh
+ * forms (`git@github.com:o/r.git`, `ssh://git@github.com/o/r.git`) as their
+ * https address. A folder, `file://`, plain http, git:// and another host's
+ * ssh are refused.
+ */
+export function boxOrigin(url: string): string | undefined {
+  const s = url.trim();
+  if (/^https:\/\//i.test(s)) return cloneableUrl(s) ? s : undefined;
+  const ssh = /^ssh:\/\/(?:git@)?github\.com\/(.+)$/i.exec(s) ?? (s.includes('://') ? null : /^(?:git@)?github\.com:(.+)$/i.exec(s));
+  if (!ssh) return undefined;
+  const p = GH_PATH.exec(ssh[1]!);
+  if (!p) return undefined;
+  const https = `https://github.com/${p[1]}/${p[2]}`;
+  return cloneableUrl(https) ? https : undefined;
+}
+
 /**
  * Which repo a folder on this Mac is, for a box to clone: its origin without
  * credentials (one with none is refused), the folder's path from the repo's
@@ -65,11 +88,13 @@ export async function repoOf(cwd: string): Promise<Repo> {
   const raw = await originUrl(top);
   const origin = raw ? withoutCredentials(raw) : '';
   if (!origin) throw bad(`${path.basename(top)} has no origin a box can clone from. Push it somewhere first.`);
+  const reachable = boxOrigin(origin);
+  if (!reachable) throw bad(`A box can't reach ${origin}: it clones over https. Use a repo whose origin is an https address, or on GitHub.`);
   const rel = path.relative(realpath(top), realpath(cwd)).split(path.sep).join('/');
   const upstream = await git(top, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const fromOrigin = (ref: string | undefined) => (ref?.startsWith('origin/') ? ref.slice('origin/'.length) : undefined);
   const baseBranch = fromOrigin(upstream) ?? fromOrigin(await git(top, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])) ?? 'main';
-  return { origin, subfolder: rel === '' || rel === '.' ? '' : rel, baseBranch };
+  return { origin: reachable, subfolder: rel === '' || rel === '.' ? '' : rel, baseBranch };
 }
 
 /** The headless helper: its one line of output, or undefined when no token came back. */

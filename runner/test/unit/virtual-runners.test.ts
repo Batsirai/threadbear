@@ -13,7 +13,7 @@ import path from 'node:path';
 import type { Account } from '../../src/protocol.ts';
 import type { Logger } from '../../src/log.ts';
 import { TOKEN_FILE, onYearToken } from '../../src/year-token.ts';
-import { repoOf, runTokenHelper, VirtualRunners, type VirtualRunnerDeps } from '../../src/virtual-runners.ts';
+import { boxOrigin, repoOf, runTokenHelper, VirtualRunners, type VirtualRunnerDeps } from '../../src/virtual-runners.ts';
 
 const TOKEN = `sk-ant-oat01-${'Ab1_-'.repeat(19)}xyz`;
 
@@ -87,6 +87,29 @@ test('a folder on this Mac is the repo its origin names, without credentials, it
   assert.equal((await repoOf(dir)).baseBranch, 'trunk');
 });
 
+// Codex's review of slice 5 (6): a box clones over https with no ssh key of
+// Mike's, so only what it can reach starts a thread; GitHub's ssh forms go as
+// its https address; anything else is refused before the backend hears of it.
+test('only an origin a box can clone over https starts one; GitHub ssh addresses go as https', async () => {
+  assert.equal(boxOrigin('https://github.com/mikecann/threadbear.git'), 'https://github.com/mikecann/threadbear.git');
+  assert.equal(boxOrigin('https://gitlab.com/a/b'), 'https://gitlab.com/a/b');
+  assert.equal(boxOrigin('git@github.com:mikecann/threadbear.git'), 'https://github.com/mikecann/threadbear.git');
+  assert.equal(boxOrigin('github.com:mikecann/threadbear'), 'https://github.com/mikecann/threadbear');
+  assert.equal(boxOrigin('ssh://git@github.com/mikecann/threadbear.git'), 'https://github.com/mikecann/threadbear.git');
+  for (const bad of ['/Users/me/repos/source.git', 'file:///Users/me/repos/source.git', '../source', 'git@gitlab.com:a/b.git', 'ssh://git@example.com/a/b.git', 'http://github.com/a/b', 'git://github.com/a/b', 'https://-x/a', '', 'git@github.com:a/b/c'])
+    assert.equal(boxOrigin(bad), undefined, bad);
+});
+
+test("a repo whose origin a box can't reach is refused before anything is started, saying so", async () => {
+  const { dir } = repo();
+  await assert.rejects(repoOf(dir), /a box can't reach .*origin\.git: it clones over https/i);
+  sh(dir, 'remote', 'set-url', 'origin', 'git@gitlab.com:a/b.git');
+  await assert.rejects(repoOf(dir), /a box can't reach git@gitlab\.com:a\/b\.git/i);
+  const { v, calls } = harness();
+  await assert.rejects(v.start({ serviceId: 'runnerServices:1', cwd: dir, accountId: 'claude-2', text: 'go' }), (e: { code?: number }) => e.code === -32602);
+  assert.equal(calls.length, 0, 'the backend never hears of it');
+});
+
 test("a folder that isn't a repo, or has no origin, is refused saying why", async () => {
   await assert.rejects(repoOf(tmp('tb-vr-plain-')), /isn't in a git repo/);
   const dir = tmp('tb-vr-noorigin-');
@@ -96,13 +119,14 @@ test("a folder that isn't a repo, or has no origin, is refused saying why", asyn
 
 test('starting a thread: boxes:startThread with the repo, the login by email and the first message; listed at once as starting', async () => {
   const { dir } = repo();
+  sh(dir, 'remote', 'set-url', 'origin', 'git@github.com:mikecann/threadbear.git');
   const { v, calls, made } = harness();
   const res = await v.start({ serviceId: 'runnerServices:1', cwd: path.join(dir, 'runner'), accountId: 'claude-2', text: 'Fix the thing\nwith detail', model: 'claude-opus-5-5', permissionMode: 'plan' });
   assert.equal(calls.length, 1);
   const c = calls[0]!;
   assert.deepEqual({ kind: c.kind, fn: c.fn }, { kind: 'action', fn: 'boxes:startThread' });
   assert.match(String(c.args.threadId), /^[0-9a-f-]{36}$/);
-  assert.deepEqual(c.args.repo, { origin: path.join(path.dirname(dir), 'origin.git'), subfolder: 'runner', baseBranch: 'trunk' });
+  assert.deepEqual(c.args.repo, { origin: 'https://github.com/mikecann/threadbear.git', subfolder: 'runner', baseBranch: 'trunk' }, "GitHub's ssh form as the box clones it, over https");
   assert.equal(c.args.login, 'two@example.com');
   assert.equal(c.args.accountId, 'claude-2');
   assert.equal(c.args.text, 'Fix the thing\nwith detail');
@@ -119,6 +143,7 @@ test('starting a thread: boxes:startThread with the repo, the login by email and
 
 test('a start is refused for pictures, another provider, a missing login, or with virtual runners off; the backend\'s refusal comes back as said', async () => {
   const { dir } = repo();
+  sh(dir, 'remote', 'set-url', 'origin', 'https://github.com/mikecann/threadbear.git');
   const { v, calls } = harness();
   const base = { serviceId: 's', cwd: dir, accountId: 'claude-main', text: 'hi' };
   await assert.rejects(v.start({ ...base, images: [{ path: '/x.png' }] }), /Pictures can't go/);
