@@ -94,6 +94,8 @@ pub struct Group {
     /// member's urgency, its newest activity.
     pub urgency: u8,
     pub activity_ms: i64,
+    /// A card waits on Mike in one of its awake threads (`ThreadSummary::on_card`).
+    pub card: bool,
 }
 
 impl Group {
@@ -156,6 +158,7 @@ impl Nesting {
             };
             let awake = live.iter().filter(|t| !t.snoozed(now_ms));
             let urgency = awake.clone().map(|t| t.urgency()).chain([starter.urgency()]).min().unwrap_or(4);
+            let card = awake.clone().any(|t| t.on_card()) || starter.on_card();
             let activity_ms = awake.map(|t| t.activity_ms()).chain([starter.activity_ms()]).max().unwrap_or(0);
             groups.insert(
                 starter_id.to_owned(),
@@ -167,6 +170,7 @@ impl Nesting {
                     section,
                     urgency,
                     activity_ms,
+                    card,
                 },
             );
         }

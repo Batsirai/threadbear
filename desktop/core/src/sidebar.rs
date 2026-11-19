@@ -1230,8 +1230,14 @@ mod tests {
         let all = [a, b, c];
         let inbox = |s: &[Section]| s.iter().find(|x| x.key == "inbox").unwrap().rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
         assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::NeedsYou, &Default::default())), ["asking", "new", "old"]);
-        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Newest, &Default::default())), ["new", "asking", "old"]);
-        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Oldest, &Default::default())), ["old", "asking", "new"]);
+        // A card waiting on Mike (ask_secret, a question) goes first in every
+        // order, as it runs out: oldest first had it at the bottom (19 Nov).
+        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Newest, &Default::default())), ["asking", "new", "old"]);
+        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Oldest, &Default::default())), ["asking", "old", "new"]);
+        // Only a live card: a finished turn asking him keeps its place.
+        let d = thread(json!({ "id": "asked", "needsYou": true, "needs": "you", "lastActivityAt": "2026-11-09T06:00:00Z" }));
+        let all = [all[0].clone(), all[1].clone(), all[2].clone(), d];
+        assert_eq!(inbox(&sections_ordered(&all, 0, InboxOrder::Oldest, &Default::default())), ["asking", "old", "asked", "new"]);
     }
 
     /// The shared urgency rule (`app/Tests/Fixtures/inbox-urgency-cases.json`):

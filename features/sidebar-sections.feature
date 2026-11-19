@@ -39,6 +39,19 @@ Feature: Section headings in the sidebar
     Then the Inbox is sorted oldest first
     And "Add dark mode to the dashboard" comes before "Ship the beta to TestFlight" in the "Inbox" section
 
+  # A thread whose turn waits on a card (ask_secret, a question) goes first
+  # whatever the order, as the card runs out: sorted oldest first it sat at
+  # the bottom while Mike worked down from the top, and his password card
+  # timed out unseen (19 Nov).
+  # The Swift app is frozen (AGENTS.md, "The GPUI port"), so only the GPUI app has it.
+  @sidebar.sort @swift-pending
+  Scenario: A thread waiting on a card stays first when the Inbox is sorted oldest first
+    Given the Inbox is sorted by what needs me first
+    When I sort the Inbox oldest first
+    Then the Inbox is sorted oldest first
+    And "Stop Keep Awake asking for my password" comes before "Add dark mode to the dashboard" in the "Inbox" section
+    And "Add dark mode to the dashboard" comes before "Compare SQLite and plain files for the runner" in the "Inbox" section
+
   # A tick beside the order it's in, in its own column beside the line's
   # icon, as a macOS menu has it (Mike, 12 Nov: the GPUI app's had none).
   @sidebar.sort

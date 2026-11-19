@@ -348,6 +348,12 @@ impl ThreadSummary {
     fn needs_answer(&self) -> bool {
         self.status == "waiting"
     }
+    /// Its turn is stuck on a card only Mike can answer (a permission, a
+    /// question, ask_secret), which runs out if he doesn't: first in the
+    /// Inbox whatever order it's in (`sort_sections`).
+    pub fn on_card(&self) -> bool {
+        self.needs_answer() && !self.is_archived()
+    }
     /// The last turn ended asking Mike for something and he hasn't done it
     /// all yet (Swift `waitingOnMike`, whose comments say why sub-agents
     /// still working count differently from a shell job).
@@ -623,8 +629,8 @@ fn sections_with<'a, T: Borrow<ThreadSummary> + Clone + 'a>(threads: impl IntoIt
     }
     // A group's row sorts by its most urgent and newest member.
     let keys = |t: &ThreadSummary| match nesting.and_then(|n| n.group(&t.id)) {
-        Some(g) => (g.urgency, g.activity_ms),
-        None => (t.urgency(), t.activity_ms()),
+        Some(g) => SortKeys { urgency: g.urgency, activity_ms: g.activity_ms, card: g.card },
+        None => SortKeys { urgency: t.urgency(), activity_ms: t.activity_ms(), card: t.on_card() },
     };
     sort_sections(starred, inbox, running, hibernating, archived, order, wakes, &keys)
 }
@@ -674,22 +680,36 @@ pub(crate) fn summary<T: Borrow<ThreadSummary>>(row: &T) -> &ThreadSummary {
     row.borrow()
 }
 
+/// What a row sorts by: its urgency, its newest activity, and whether a
+/// card waits on Mike in it (a nested group's: in any of its threads).
+#[derive(Clone, Copy)]
+struct SortKeys {
+    urgency: u8,
+    activity_ms: i64,
+    card: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn sort_sections<T: Borrow<ThreadSummary>>(mut starred: Vec<T>, mut inbox: Vec<T>, mut running: Vec<T>, mut hibernating: Vec<T>, mut archived: Vec<T>, order: InboxOrder, wakes: &HashMap<String, Wake>, keys: &dyn Fn(&ThreadSummary) -> (u8, i64)) -> Vec<Section<T>> {
+fn sort_sections<T: Borrow<ThreadSummary>>(mut starred: Vec<T>, mut inbox: Vec<T>, mut running: Vec<T>, mut hibernating: Vec<T>, mut archived: Vec<T>, order: InboxOrder, wakes: &HashMap<String, Wake>, keys: &dyn Fn(&ThreadSummary) -> SortKeys) -> Vec<Section<T>> {
     // Sorted by keys worked out once per thread: a time is text to be read,
     // and comparing two threads by reading theirs again each time cost the
     // app more than drawing a frame does (the activity bar's badge counts the
     // Inbox with this on every frame).
     use std::cmp::Reverse;
-    let newest_first = |t: &ThreadSummary| (Reverse(keys(t).1), t.id.clone());
+    let newest_first = |t: &ThreadSummary| (Reverse(keys(t).activity_ms), t.id.clone());
     starred.sort_by(|a, b| {
         let (a, b) = (summary(a), summary(b));
         a.starred_at.cmp(&b.starred_at).then_with(|| a.id.cmp(&b.id))
     });
+    // A thread whose turn is stuck on a card goes first in every order: the
+    // card runs out, and sorted oldest first it had only just been active,
+    // so it sat at the bottom while Mike worked down from the top and his
+    // ask_secret card timed out unseen (19 Nov).
+    let card_first = |t: &ThreadSummary| !keys(t).card;
     match order {
-        InboxOrder::NeedsYou => inbox.sort_by_cached_key(|t| (keys(summary(t)).0, newest_first(summary(t)))),
-        InboxOrder::Newest => inbox.sort_by_cached_key(|t| newest_first(summary(t))),
-        InboxOrder::Oldest => inbox.sort_by_cached_key(|t| (keys(summary(t)).1, Reverse(summary(t).id.clone()))),
+        InboxOrder::NeedsYou => inbox.sort_by_cached_key(|t| (keys(summary(t)).urgency, newest_first(summary(t)))),
+        InboxOrder::Newest => inbox.sort_by_cached_key(|t| (card_first(summary(t)), newest_first(summary(t)))),
+        InboxOrder::Oldest => inbox.sort_by_cached_key(|t| (card_first(summary(t)), keys(summary(t)).activity_ms, Reverse(summary(t).id.clone()))),
     }
     running.sort_by_cached_key(|t| newest_first(summary(t)));
     // A snooze's time, or for one waiting on a schedule its next run. Back on

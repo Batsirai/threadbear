@@ -33,7 +33,9 @@ The threads view has four sections. Inbox holds the threads for you, with
 the ones that need you at the top. The number on the Threads icon in the
 left-hand rail is how many are in it. The arrows at the end of its heading
 sort it newest first or oldest first instead, which is handy for working
-through a long inbox from the bottom up. ⌥⌘↓ (Go > Next Inbox Thread)
+through a long inbox from the bottom up. Whatever the order, a thread that's
+stopped mid-turn on a card for you (a password, a question, a permission)
+stays at the top, as the card closes if nobody answers it. ⌥⌘↓ (Go > Next Inbox Thread)
 opens the thread below the open one in the Inbox, or the Inbox's first if
 the open one is somewhere else; past the last one, a note says you're
 caught up. Once you've clicked the list, the up and down arrows move through
