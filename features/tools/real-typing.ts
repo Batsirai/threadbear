@@ -188,8 +188,11 @@ async function backspaceInPage(): Promise<void> {
   assertInFront(app.pid!, [at]);
   post(`click:${at[0]},${at[1]}`);
   // The caret to the end, where a person's click past the text leaves it.
-  const focused = await evalIn<boolean>(`(() => { const t = document.getElementById('reply'); t.setSelectionRange(t.value.length, t.value.length); return document.activeElement === t; })()`);
-  check('a click in the box in the page focuses it', focused);
+  // The click gives the page the keyboard; the box gets the page's focus
+  // here, in case the click landed beside it.
+  const focused = await evalIn<boolean>(`(() => { const t = document.getElementById('reply'); t.focus(); t.setSelectionRange(t.value.length, t.value.length); return document.activeElement === t; })()`);
+  check('the box in the page has the focus', focused);
+  check('and the page has the keyboard', await until((d) => keyboard(d) === 'page'), keyboard(await app.dump()));
   await inFront();
   post('backspace:2');
   const value = () => evalIn<string>(`document.getElementById('reply').value`);
