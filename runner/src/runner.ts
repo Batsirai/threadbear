@@ -2257,7 +2257,9 @@ export class Runner {
     const cantRead = (why: string) => new Error(`Couldn't read this folder's Claude Code settings: ${why}`);
     // A look that failed (a hung folder) fails the turn: looking again here
     // would be on the main thread, and could hang it on the same file.
-    if (live && 'failed' in live) throw cantRead(live.failed);
+    // Only while it's still a Claude thread: one moved to Codex meanwhile
+    // (a pool, the account menu) doesn't read them.
+    if (live && 'failed' in live && rec.provider === 'claude') throw cantRead(live.failed);
     // A look that fails while the folder or access changed is taken
     // again (the loop below), as it was of the old one.
     const look = async (): Promise<ClaudeLook[] | 'gone' | undefined> => {
@@ -2268,7 +2270,7 @@ export class Runner {
         looks = await this.claudeLooks(st, true);
       } catch (e) {
         if (gone()) return 'gone';
-        if (rec.cwd !== cwd || lookKinds(rec, true).join() !== kinds) return [];
+        if (rec.provider !== 'claude' || rec.cwd !== cwd || lookKinds(rec, true).join() !== kinds) return [];
         throw cantRead(e instanceof Error ? e.message : String(e));
       }
       return gone() ? 'gone' : looks;

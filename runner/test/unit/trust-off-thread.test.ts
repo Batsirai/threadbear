@@ -432,3 +432,52 @@ test("a look that failed while the thread moved folder is taken again for the ne
   assert.ok(o.looks.length >= before + 2, 'looked again');
   assert.ok(!h.events(thread.id).some((e) => JSON.stringify(e).includes("Couldn't read this folder's Claude Code settings")));
 });
+
+test('a long queue of looks at a folder that just got stuck all fail at once, one after another, not one call deeper each', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-trust-worker-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const off = new TrustOffThread({ timeoutMs: 300, script: picky(dir) });
+  t.after(() => off.close());
+  const first = outcome(off.claudeCommands('/x/hang', dir, [false], 'urgent'));
+  const queued = Array.from({ length: 20_000 }, () => outcome(off.claudeCommands('/x/hang', dir, [false], 'urgent')));
+  const after = off.claudeCommands('/x/ok', dir, [false], 'urgent');
+  assert.match(await first, /took over/);
+  const all = await Promise.all(queued);
+  assert.ok(all.every((m) => /still stuck/.test(m)), all.find((m) => !/still stuck/.test(m)));
+  assert.deepEqual(await after, ['/x/ok']);
+});
+
+test('once a few looks are stuck in the OS, no more are started anywhere until one lets go', async (t) => {
+  const root = tmpDir();
+  const fifos: string[] = [];
+  t.after(async () => {
+    for (let i = 0; i < 50; i++) {
+      fifos.forEach(poke);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  });
+  const off = new TrustOffThread({ timeoutMs: 400 });
+  t.after(() => off.close());
+  // Four folders, each the same FIFO by another name would be just as bad.
+  for (let i = 0; i < 4; i++) {
+    const d = path.join(root, `stuck${i}`);
+    fs.mkdirSync(path.join(d, '.claude'), { recursive: true });
+    const fifo = path.join(d, '.claude', 'settings.json');
+    execFileSync('mkfifo', [fifo]);
+    fifos.push(fifo);
+    let last = '';
+    for (let j = 0; j < 20 && !/still stuck/.test(last); j++) last = await outcome(off.claudeCommands(d, root, [false], 'urgent'));
+    assert.match(last, /still stuck/);
+  }
+  const fine = path.join(root, 'fine');
+  hooked(fine);
+  assert.match(await outcome(off.claudeCommands(fine, root, [false], 'urgent')), /4 earlier looks are still stuck/);
+  // One lets go: looks start again.
+  await until(() => poke(fifos[0]), 'the first stuck worker to take a write');
+  let last = '';
+  for (let j = 0; j < 100 && last !== 'answered'; j++) {
+    last = await outcome(off.claudeCommands(fine, root, [false], 'urgent'));
+    if (last !== 'answered') await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(last, 'answered');
+});

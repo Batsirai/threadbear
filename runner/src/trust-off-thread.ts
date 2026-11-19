@@ -45,10 +45,15 @@ function inline(ask: Ask): unknown {
 
 type Call = { ask: Ask; resolve: (v: unknown) => void; reject: (e: Error) => void };
 
-// What a call looks at: the folder, or the patch file.
+// What a call looks at: the folder, or the patch file and the folder its
+// commands are followed from (a hung folder isn't the patch's fault).
 function whatOf(ask: Ask): string {
-  return ask.kind === 'claudeCommands' ? ask.cwd : ask.file;
+  return ask.kind === 'claudeCommands' ? ask.cwd : `${ask.file} (from ${ask.from})`;
 }
+
+// At most this many workers stuck in reads the OS won't let go of, each
+// lane: each is a thread, for as long as the read lasts.
+const MAX_STUCK = 4;
 
 // One worker, given one call at a time from a queue here, so a call's time
 // limit runs from when it starts and a call that hangs or crashes the
@@ -94,7 +99,19 @@ class OneWorker {
   }
 
   private next(): void {
-    if (this.current || !this.queue.length || this.closed) return;
+    if (this.current || this.closed) return;
+    // Calls queued before a look at the same place got stuck fail now, in
+    // a loop rather than one call deep each (a long queue).
+    while (this.queue.length) {
+      const stuck = this.stuckOn(this.queue[0].ask);
+      if (!stuck) break;
+      this.queue.shift()!.reject(stuck);
+    }
+    if (!this.queue.length) {
+      // Idle: never what keeps the process going.
+      this.worker?.unref();
+      return;
+    }
     const worker = this.start();
     // Held open while it has work: an unreferenced worker's reply never
     // comes if nothing else keeps the process going.
@@ -103,13 +120,6 @@ class OneWorker {
     // worker that stops before then never had a call that could be why.
     if (!this.ready) return;
     const call = this.queue.shift()!;
-    // Queued before a look there got stuck.
-    const stuck = this.stuckOn(call.ask);
-    if (stuck) {
-      call.reject(stuck);
-      this.next();
-      return;
-    }
     const id = this.nextId++;
     const what = whatOf(call.ask);
     const timer = setTimeout(() => {
@@ -172,6 +182,12 @@ class OneWorker {
       this.queue = [];
       this.drop();
       for (const c of calls) {
+        // Never one known to be stuck: on this thread it would hang the runner.
+        const stuck = this.stuckOn(c.ask);
+        if (stuck) {
+          c.reject(stuck);
+          continue;
+        }
         try {
           c.resolve(inline(c.ask));
         } catch (err) {
@@ -183,12 +199,16 @@ class OneWorker {
     this.failCurrent(new Error(`The trust worker stopped: ${e.message}`));
   }
 
-  // The call under way fails; its worker goes, and the next call gets a new one.
+  // Also once a few are stuck at all: the same folder by other names (a
+  // link to it) would otherwise leave a stuck worker for each name.
   private stuckOn(ask: Ask): Error | undefined {
     const what = whatOf(ask);
-    return this.stuck.has(what) ? new Error(`An earlier look at ${what} is still stuck, so it can't be looked at yet.`) : undefined;
+    if (this.stuck.has(what)) return new Error(`An earlier look at ${what} is still stuck, so it can't be looked at yet.`);
+    if (this.stuck.size >= MAX_STUCK) return new Error(`${this.stuck.size} earlier looks are still stuck (${[...this.stuck.keys()].join(', ')}), so no more are started until one lets go.`);
+    return undefined;
   }
 
+  // The call under way fails; its worker goes, and the next call gets a new one.
   private failCurrent(e: Error): void {
     const cur = this.current;
     this.current = undefined;
