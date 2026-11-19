@@ -144,9 +144,11 @@ export class AppRestarts {
     return { ...(build ? { build } : {}), ...(running ? { running } : {}), ...(want ? { waitingFor: want.short } : {}) };
   }
 
-  // Looked for in the apps' own checkout first, then the thread's folder
-  // (a dev runner, or one with no checkout to hand). A named commit found
-  // in neither is refused rather than quietly waiting for any build.
+  // Main's HEAD is looked for in the apps' own checkout first, then the
+  // thread's folder (a dev runner, or one with no checkout to hand). A named
+  // commit is looked for the other way round, so `HEAD` from a thread's
+  // worktree is its own, not the main checkout's (Gemini's review). A named
+  // commit found in neither is refused rather than waiting for any build.
   private wanted(threadId: string, commit?: string): Watch['want'] {
     const git = this.deps.git ?? realGit;
     let cwd: string | undefined;
@@ -155,8 +157,8 @@ export class AppRestarts {
     } catch {
       cwd = undefined;
     }
-    const repos = [...new Set([this.deps.appRepo, cwd].filter((r): r is string => !!r))];
     const named = commit?.trim();
+    const repos = [...new Set((named ? [cwd, this.deps.appRepo] : [this.deps.appRepo, cwd]).filter((r): r is string => !!r))];
     let repo: string | undefined;
     let full: string | undefined;
     for (const r of repos) {
@@ -194,8 +196,7 @@ export class AppRestarts {
     const asked = new Map<string, boolean | 'busy' | undefined>();
     const has = (want: NonNullable<Watch['want']>) => {
       if (want.trees?.[app] === build.tree) return true;
-      // By commit alone: a thread's worktrees share one repo's objects.
-      const key = want.commit;
+      const key = `${want.repo}\0${want.commit}`;
       if (!asked.has(key)) asked.set(key, git.contains(want.repo, want.commit, build.commit));
       return asked.get(key);
     };

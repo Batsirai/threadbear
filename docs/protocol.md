@@ -1851,10 +1851,11 @@ own restarts.
 
 - `wait_for_app_restart` (`{ text?, commit? }`) puts the calling thread on
   the list, remembering the build running then and the commit the new build
-  must contain: `commit` if given, else main's HEAD at that moment. Both
-  are looked up in the Threadbear checkout the apps are built from, then
-  the thread's folder (a thread in another repo can name a Threadbear
-  commit). A `commit` found in neither is refused with an error, rather
+  must contain: `commit` if given, else main's HEAD at that moment. Main
+  is looked up in the Threadbear checkout the apps are built from, then
+  the thread's folder; a `commit` in the thread's folder, then that
+  checkout (so `HEAD` is a worktree's own, and a thread in another repo
+  can name a Threadbear commit). A `commit` found in neither is refused with an error, rather
   than waiting for any new build. Asking again replaces its request.
 - A turn that ends needing nothing (no archive, snooze or waitFor) while
   its thread is on the list hibernates the thread for a day at most

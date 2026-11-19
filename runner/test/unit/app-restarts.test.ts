@@ -312,6 +312,21 @@ test('a commit named from a thread outside the repo is looked for in the apps\' 
   assert.ok(!watcher.isWatching(thread.id));
 });
 
+test('a named commit is the thread\'s own folder\'s first, main the apps\' checkout\'s', () => {
+  const { h, thread } = setUp();
+  const cwd = h.runner.get(thread.id).cwd;
+  const asked: string[] = [];
+  const watcher = new AppRestarts({
+    runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, appRepo: '/apps-checkout',
+    git: { resolve: (repo, rev) => (asked.push(`${repo === cwd ? 'cwd' : repo} ${rev}`), `${repo === cwd ? 'c' : 'a'}0ffee1234567`), contains: () => undefined },
+  });
+  // HEAD from a worktree is the worktree's, not the main checkout's.
+  assert.equal(watcher.watch(thread.id, undefined, 'HEAD').waitingFor, 'c0ffee123');
+  assert.deepEqual(asked.splice(0), ['cwd HEAD']);
+  assert.equal(watcher.watch(thread.id).waitingFor, 'a0ffee123');
+  assert.deepEqual(asked.splice(0), ['/apps-checkout refs/heads/main']);
+});
+
 // Codex's review, 18 Nov: main moved on with only runner changes before
 // the thread asked, so the one build that comes is of an older commit
 // with the same desktop/ folder.
