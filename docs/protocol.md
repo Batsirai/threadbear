@@ -6047,7 +6047,11 @@ kept in `schedules.json` in the data dir.
   backend's rows stop showing it. A draining runner keeping the thread is
   asked with `drain.dropScheduled { threadId, scheduleId }` → `{ dropped }`
   (`moved` once the thread has come across, when the primary drops them
-  itself); a draining release without the method keeps its queue. A
+  itself); a draining release without the method keeps its queue. The
+  runner also remembers the schedules deleted while it runs (and any its
+  first backend snapshot leaves out that its saved copy had), and drops
+  their reminders before a turn would start, however they reached the
+  queue: adopted in a handover, a retried send, a receipt that failed. A
   thread kept by a draining runner receives it there through
   `drain.sendScheduled { threadId, text, scheduleId }` → `{ turnId }`,
   with `origin: "schedule"` and `queue: true`, once its turn ends and

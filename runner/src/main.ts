@@ -560,6 +560,7 @@ async function main(): Promise<void> {
     // A box keeps none (decision 13): every way to make, change or run one is refused.
     ...(box ? { refuse: BOX_NO_SCHEDULES } : {}),
   });
+  runner.scheduleDeleted = (id) => scheduler.wasDeleted(id);
   // A box has no schedules (decision 13): they stay on the Mac and send to it.
   if (!copyOfReal && !box) scheduler.start();
   // The done card's loose ends list the check-ins booked for a thread.

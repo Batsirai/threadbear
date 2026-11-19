@@ -228,6 +228,10 @@ export class Scheduler {
   // left out was deleted. One this runner has just saved may not be in the
   // next snapshot yet.
   private shown = new Set<string>();
+  // Schedules deleted while this runner ran: here, or gone from the
+  // backend's rows after it had shown them. The runner drops any of their
+  // messages still queued before a turn starts (Runner.scheduleDeleted).
+  private deleted = new Set<string>();
   // Schedule checks (schedule-check.ts).
   private home: string;
   private check: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -326,6 +330,9 @@ export class Scheduler {
         delete s.runRequestedAt;
       }
       this.items.set(s.id, s);
+      // The backend's copy from last time: one missing from its first
+      // snapshot now was deleted while this runner was away.
+      if (copy && this.syncOn) this.shown.add(s.id);
     }
     // A thread's schedules go with it.
     this.unlisten = this.runner.onNotification((n) => {
@@ -486,6 +493,7 @@ export class Scheduler {
       const was = before.get(rec.id);
       if (was && (was.createdAt !== rec.createdAt || was.runnerId !== rec.runnerId)) this.dropKept(rec.id);
       this.items.set(rec.id, rec);
+      this.deleted.delete(rec.id);
       if (!this.names.has(rec.runnerId)) this.namesDue = true;
     }
     // Deleted elsewhere (the phone, the website, another Mac): its
@@ -494,7 +502,10 @@ export class Scheduler {
     // after that is left alone.
     const now = this.clock.now();
     for (const was of before.values()) {
-      if (this.shown.has(was.id) && !this.items.has(was.id) && !(was.finishedAt && now - Date.parse(was.finishedAt) > KEEP_FINISHED_MS)) this.dropQueued(was);
+      if (this.shown.has(was.id) && !this.items.has(was.id) && !(was.finishedAt && now - Date.parse(was.finishedAt) > KEEP_FINISHED_MS)) {
+        this.deleted.add(was.id);
+        this.dropQueued(was);
+      }
     }
     this.shown = new Set(rows.map((r) => r.id));
     this.overlayUnrecorded();
@@ -818,9 +829,14 @@ export class Scheduler {
     }
     this.items.delete(rec.id);
     this.dropKept(rec.id);
+    this.deleted.add(rec.id);
     this.dropQueued(rec);
     this.changed();
     return {};
+  }
+
+  wasDeleted(scheduleId: string): boolean {
+    return this.deleted.has(scheduleId);
   }
 
   // A deleted schedule's messages still waiting behind a busy turn go
@@ -1567,8 +1583,6 @@ export class Scheduler {
           } finally {
             this.sending.delete(rec.id);
           }
-          // Deleted while that was out: it may have queued it on arrival.
-          if (!this.items.has(rec.id)) this.dropQueued(rec);
         } else {
           ({ turnId } = this.runner.sendScheduled(rec.threadId, text, rec.id, run, since, preserve));
         }

@@ -2177,3 +2177,26 @@ test('deleting a schedule reaches a thread a draining runner still keeps', async
     assert.deepEqual(old.runner.mustGet(thread.id).rec.queue.map(q => q.scheduleId), ['other']);
   } finally { sched.stop(); }
 });
+
+test('a schedule deleted on the phone while this runner was off is known as deleted from its first snapshot', async () => {
+  const h = makeHarness();
+  const { thread } = h.runner.create({ text: 'Measure', accountId: 'claude-3' });
+  h.adapter.last.init();
+  const shared = fakeBackend(h.clock, [LAPTOP]);
+  const first = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, self: LAPTOP, syncOn: true });
+  first.start();
+  await first.attach(shared.for('primary', LAPTOP.id));
+  await tick(8);
+  const sc = await first.create({ text: 'Land it', cron: '*/5 * * * *', threadId: thread.id });
+  await tick(8);
+  first.stop();
+  await shared.for('phone', LAPTOP.id).remove(sc.id);
+  const again = new Scheduler({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger, self: LAPTOP, syncOn: true });
+  again.start();
+  try {
+    assert.equal(again.wasDeleted(sc.id), false);
+    await again.attach(shared.for('primary', LAPTOP.id));
+    await tick(8);
+    assert.equal(again.wasDeleted(sc.id), true);
+  } finally { again.stop(); }
+});

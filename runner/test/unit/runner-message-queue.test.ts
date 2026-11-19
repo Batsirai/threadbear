@@ -568,3 +568,21 @@ test('a deleted schedule\'s message whose receipt cannot be written stays queued
   assert.deepEqual(h.runner.mustGet(thread.id).rec.queue.map(q => q.turnId), [b.turnId]);
   assert.notEqual(a.turnId, b.turnId);
 });
+
+test('a deleted schedule\'s reminder that comes in late (a handover, a lost reply, a failed receipt) never starts', () => {
+  const { h, thread, s } = running();
+  const gone = new Set<string>();
+  h.runner.scheduleDeleted = (id) => gone.has(id);
+  // Queued without a receipt: adopted from a draining runner, or one whose receipt failed.
+  h.runner.sendScheduled(thread.id, sameReport(), 's1', 't1', h.clock.now(), true);
+  h.runner.sendScheduled(thread.id, 'Another schedule', 'other', 't1');
+  gone.add('s1');
+  s.result();
+  assert.deepEqual(s.sent.slice(1).map(m => m.text), ['Another schedule']);
+  assert.ok(h.events(thread.id).some(e => e.type === 'system.note' && /schedule was deleted/.test(e.text)));
+  s.result();
+  // And on an idle thread, a send for it is answered without a turn.
+  const turns = s.sent.length;
+  h.runner.sendScheduled(thread.id, sameReport(), 's1', 't9', h.clock.now(), true);
+  assert.equal(s.sent.length, turns);
+});
