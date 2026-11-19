@@ -941,7 +941,7 @@ Mac"; Box mode, "A refused token"), behind the `virtualRunners` experiment
   `setCloudToken`), Paste a token, and Use this Mac's token when that login
   has a year-long token here. A click shows a spinner with the buttons off
   until the runner answers.
-- **Waiting for a token** (backend API 90). A login's cloud token is a
+- **Waiting for a token** (backend API 92). A login's cloud token is a
   state machine (`cloudTokenMachine.ts`: valid, dead), and a box whose
   login has none, or a dead one, starts in `needsToken`: nothing is asked
   of the provider until a token is set, which puts it in its virtual

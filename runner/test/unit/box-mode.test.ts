@@ -953,7 +953,7 @@ test("a command's finish goes once at a time: the save's barrier waits for one a
 });
 
 
-// ------------------------------------------------------------ a refused cloud token (slice 5, API 90)
+// ------------------------------------------------------------ a refused cloud token (slice 5, API 92)
 
 test("the exchange's tokenSetAt is kept with the box's secrets; an older backend's answer has none", async () => {
   for (const [given, kept] of [[1234, 1234], [undefined, undefined]] as const) {

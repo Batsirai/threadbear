@@ -61,7 +61,7 @@ const clearState: Step = async (ctx, cursor) => {
   return { cursor: page.continueCursor, done: page.isDone };
 };
 
-// cloudTokens.tokenState (cloudTokenMachine.ts): a token set before API 90
+// cloudTokens.tokenState (cloudTokenMachine.ts): a token set before API 92
 // is valid, as no box had said otherwise.
 const tokenState: Step = async (ctx, cursor) => {
   const page = await ctx.db.query('cloudTokens').paginate({ numItems: PAGE, cursor, maximumBytesRead: PAGE_BYTES });

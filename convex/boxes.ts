@@ -413,7 +413,7 @@ const startArgs = {
   effort: v.optional(v.string()),
   permissionMode: v.optional(v.string()),
   plan: v.optional(v.boolean()),
-  // The folder and login on the Mac it was started from, for its sidebar row only (API 90).
+  // The folder and login on the Mac it was started from, for its sidebar row only (API 92).
   cwd: v.optional(v.string()),
   accountId: v.optional(v.string()),
 };
@@ -575,7 +575,7 @@ const exchanged = v.object({
   // The Claude login the box runs on, as its cloud token is kept (an email):
   // a token login writes no oauthAccount, so the box's runner is told it.
   login: v.string(),
-  // When the login's token was set (API 90): what the box names in
+  // When the login's token was set (API 92): what the box names in
   // tokenRefused, and what a newer one from boxCloudToken is newer than.
   tokenSetAt: v.number(),
 });

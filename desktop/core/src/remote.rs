@@ -117,7 +117,7 @@ pub struct RemoteThreads {
     /// Mike's runner order (backend API 58), every runner's id: what the
     /// phone and the Runners panel list them in. None from a backend without one.
     pub order: Option<Vec<String>>,
-    /// The virtual runners (API 90, the virtualRunners experiment): Runs
+    /// The virtual runners (API 92, the virtualRunners experiment): Runs
     /// on's entries after the machines. Empty from an older runner.
     pub services: Vec<VirtualRunner>,
     /// A partial or unready index cannot prove a previously seen row is gone.

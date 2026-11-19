@@ -49,12 +49,12 @@ export type IndexRow = {
 // `unsure`: the provider made more than one machine for its box and which
 // holds the thread's work isn't known yet; each message tries the next.
 // `unreachable`: no heartbeat for 5 minutes, but the provider still has it.
-// `service` (API 90): its virtual runner's id. `token`, with `login`: its
+// `service` (API 92): its virtual runner's id. `token`, with `login`: its
 // login has no cloud token ('none') or a refused one ('dead'), so the
 // thread shows the token card.
 export type BoxView = { state: string; waiting?: true; unreachable?: true; unsure?: true; service?: string; token?: 'none' | 'dead'; login?: string };
 export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; followProblem?: string; box?: BoxView };
-// A virtual runner, for Runs on's entries after the machines (API 90, the
+// A virtual runner, for Runs on's entries after the machines (API 92, the
 // virtualRunners experiment, the main Mac's key only).
 export type VirtualRunner = { id: string; name: string; provider: string };
 // `moving`: set by the main Mac's runner for a move it knows of (main.ts
@@ -169,7 +169,7 @@ export class ThreadIndex {
     takesSince?: () => boolean;
     // Whether the backend has the runner order for the main key (API 58).
     takesOrder?: () => boolean;
-    // Whether to watch the virtual runners (API 90, the experiment, the main key).
+    // Whether to watch the virtual runners (API 92, the experiment, the main key).
     takesServices?: () => boolean;
     // Whether a Mac app is connected to this runner. Only an app shows the
     // other runners' threads, so with none there's nothing to watch them
@@ -198,7 +198,7 @@ export class ThreadIndex {
   // Mike's runner order, watched with the other runners (API 58).
   private order?: string[];
   private unsubOrder?: () => void;
-  // The virtual runners, watched with the other runners (API 90).
+  // The virtual runners, watched with the other runners (API 92).
   private services?: VirtualRunner[];
   private unsubServices?: () => void;
   // A backend before API 54 dropped a runner key's archived rows while this
@@ -526,7 +526,7 @@ export class ThreadIndex {
     // The backend's taken the runner order since the watch began.
     if (this.unsubscribe) this.watchOrder();
     // The virtual runners: the experiment switched, or the backend reached
-    // API 90, since the watch began (Codex's review of slice 5, 7).
+    // API 92, since the watch began (Codex's review of slice 5, 7).
     if (this.unsubscribe) this.watchServices();
     if (this.unsubServices && !this.deps.takesServices?.()) this.dropServices();
     for (const t of this.deps.host.list(['inbox', 'snoozed', 'archived'])) this.mark(t);

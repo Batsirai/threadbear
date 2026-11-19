@@ -323,7 +323,7 @@ export const ACCESS: Record<string, Access> = {
   wakePastHours: 'owner',
   setCloudToken: 'owner',
   cloudTokens: 'owner',
-  // A box's own login's token (API 90): refused by a turn, and fetched again once set.
+  // A box's own login's token (API 92): refused by a turn, and fetched again once set.
   tokenRefused: 'own',
   boxCloudToken: 'own',
   mintBootToken: 'owner',

@@ -578,7 +578,7 @@ test('only the owner makes, changes and lists virtual runners, and the values ar
   assert.equal(s.rows('runners').filter((r) => r.box).length, 1, "T2's runner only: a refused start writes none");
 });
 
-// ------------------------------------------------------------ cloud tokens from the Mac (slice 5, API 90)
+// ------------------------------------------------------------ cloud tokens from the Mac (slice 5, API 92)
 
 const OTHER_LOGIN = 'other@example.com';
 const otherToken = `sk-ant-oat01-${'O'.repeat(60)}`;

@@ -6277,7 +6277,7 @@ type RemoteRunner = {
                        // provider made more than one machine for it and
                        // which holds its work isn't known yet; each message
                        // tries the next (Box keys). An older runner
-                       // leaves them out. From API 90: `service`, its
+                       // leaves them out. From API 92: `service`, its
                        // virtual runner's id (`services` below), and
                        // `needsToken` and `waitingForRoom` (with `waiting`)
                        // among the states. `token` says its
@@ -6287,10 +6287,10 @@ type RemoteRunner = {
                        // A box's runner is never a machine to pick:
                        // Runs on, Move to and Settings leave it out.
 }
-// From API 90 with the virtualRunners experiment on, and only on the
+// From API 92 with the virtualRunners experiment on, and only on the
 // owner key's runner: the virtual runners (`boxes:runnerServices`), for
 // Runs on's entries after the machines. Left out otherwise. Switching the
-// experiment, or the backend reaching 90, takes effect in the watch at once:
+// experiment, or the backend reaching 92, takes effect in the watch at once:
 // they come (or go, with a remoteThreads.updated without them) then.
 type VirtualRunner = { id: string, name: string, provider: string }
 // RemoteThreads gains `services?: VirtualRunner[]`.
@@ -7828,9 +7828,9 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `startThread` | owner only | a thread on a virtual runner: its runner, box and `create` command in one step, refused past `maxBoxes` (Virtual runners) |
 | `wakePastHours` | owner only | wakes a thread's box that's waiting for tomorrow's hours, and lets it run the rest of today (Virtual runners) |
 | `setCloudToken` | owner only | a Claude login's cloud token for boxes, sealed under `BOX_SEAL_KEY` (`convex/boxes.ts`, Box keys) |
-| `cloudTokens` | owner only | which logins have a cloud token, when each was made and set, and whether it's `valid` or `dead` (API 90); never the token |
-| `tokenRefused` | its own | a box's key only: its login's cloud token was refused by a turn (API 90, Box mode) |
-| `boxCloudToken` | its own | a box's key only: its login's cloud token while it's valid, for a box waiting after a refusal (API 90, Box mode) |
+| `cloudTokens` | owner only | which logins have a cloud token, when each was made and set, and whether it's `valid` or `dead` (API 92); never the token |
+| `tokenRefused` | its own | a box's key only: its login's cloud token was refused by a turn (API 92, Box mode) |
+| `boxCloudToken` | its own | a box's key only: its login's cloud token while it's valid, for a box waiting after a refusal (API 92, Box mode) |
 | `mintBootToken` | owner only | a boot token for a thread's booting box: returned once, only its hash kept, 10 minutes |
 | `archiveBox` | owner only | the thread's box goes to `destroying`, and its key stops working |
 | `boxSaved` | its own | a box's key only: its thread's save, a file its runner uploaded and nothing else uses; replaces the last save |
@@ -7875,14 +7875,14 @@ has to be on for it.
   `queueCommand`'s `create` takes and `from: "mac"`; then the service
   makes its box. It answers `{ runnerId, commandId }`. Past the virtual
   runner's `maxBoxes` it's refused at once (`kind: "limit"`, saying how
-  many are up), and nothing is written. From API 90 it also takes `cwd`
+  many are up), and nothing is written. From API 92 it also takes `cwd`
   and `accountId` (the folder and login on the Mac it was started from,
   for show only) and writes the thread's sidebar row (`threadIndex`,
   under the box's runner id: its first line, scrubbed of secrets as a
   runner's writes are, as the title and preview,
   `status: "starting"`), so the thread is listed everywhere at once and
   stays listed while it waits, before its box has written anything.
-- **Waiting for a cloud token** (API 90). A thread whose login has no
+- **Waiting for a cloud token** (API 92). A thread whose login has no
   cloud token, or only a refused one (`cloudToken`'s `dead`, below), starts
   in the box state `needsToken`: nothing is asked of the provider, its
   `create` waits in the queue, and it counts toward nothing. Setting a
@@ -7901,7 +7901,7 @@ has to be on for it.
   and its other waiting commands (its `create`) fail, saying it can't come
   back. Deleting another runner's thread from the Mac isn't a command
   (`threads.delete` on one is refused), so there's no delete to handle.
-- **Cloud tokens' lifecycle** (API 90). A `cloudTokens` row is a state
+- **Cloud tokens' lifecycle** (API 92). A `cloudTokens` row is a state
   machine (`convex/cloudTokenMachine.ts`, `tokenState`): `valid` once set,
   `dead` once a box's turn on it was refused (a 401), `valid` again when a
   new one is set. No row is a login with none. `setCloudToken` sends `SET`
@@ -7927,7 +7927,7 @@ has to be on for it.
   anywhere but `setCloudToken`; the runner's scrubber knows it from the
   moment it's read. `cloudTokens.list {}` answers `{ tokens: { login,
   madeAt, setAt, state }[] }`. Each needs the `virtualRunners`
-  experiment and a backend of 90; otherwise `-32602`.
+  experiment and a backend of 92; otherwise `-32602`.
 - **Starting from the Mac.** `threads.create` with `serviceId` (a virtual
   runner's id from `RemoteThreads.services`) starts the thread on it:
   the runner reads the repo from `cwd` on this Mac (`origin` without
@@ -8293,7 +8293,7 @@ the machine stops.
   for everything the runner starts. The app port listens on 127.0.0.1
   only, as every runner's does; nothing dials a box.
 - **Heartbeats** carry `runner.machineId`, the same id as the exchange.
-- **A refused token** (API 90). The exchange also gives `tokenSetAt`, when
+- **A refused token** (API 92). The exchange also gives `tokenSetAt`, when
   the login's token was set, kept in `box.json`. `claude auth status`
   calls any token signed in, so a dead one only shows when a turn is
   refused (errorKind `auth`). In box mode that turn sends

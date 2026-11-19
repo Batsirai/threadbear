@@ -443,7 +443,7 @@ export const appSchema = defineSchema({
     madeAt: v.number(),
     setAt: v.number(),
     // Its lifecycle (cloudTokenMachine.ts): valid, or dead once a box's
-    // turn on it was refused. Since API 90.
+    // turn on it was refused. Since API 92.
     tokenState: requiredUnlessStepping('tokenState', tokenStateV),
   }).index('by_login', ['login']),
 
