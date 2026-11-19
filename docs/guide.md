@@ -1358,6 +1358,14 @@ Remote Control don't work on that login; MCP servers you set up yourself
 still do, and so do the usage numbers. To go back to signing in, delete
 that file.
 
+A login on another of your machines (a second Mac, a Linux box, WSL) gets
+one from the Runners panel: open that machine's card, and its Claude logins
+are listed under its figures, each with Year-long token…. Your browser opens
+on claude.ai's page for it; click Authorize, then Copy code on the page it
+ends on, and Paste code back in the panel. That machine makes the token and
+keeps it, and it never leaves there. It needs `python3` on that machine,
+and your main Mac's app (it goes through your Convex backend).
+
 The sign-in command comes from the runner's provider list, so Cursor opens
 `agent login`, for example. Sign in… is offered only when the login's own
 details can be read.

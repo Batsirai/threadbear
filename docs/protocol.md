@@ -1343,6 +1343,7 @@ the summary and then the reply.
 | `accounts.useReset` | `{ accountId }` | `{ outcome: "reset" \| "nothingToReset" \| "noCredit" \| "alreadyRedeemed", account?: Account }`. Spends one of a Codex login's usage resets (Pools, "Usage resets"): Mike's click on the limit box, never a thread's (the thread-key gate refuses it). `account` is the login after the reading taken straight after. `-32010` for an unknown login, `-32602` for one whose provider has no resets, `-32020` while a reset for the same login is still on its way, `-32000` with Codex's words when it fails. A runner older than this answers `-32601` |
 | `accounts.findWork` | `{ accountId }` | `{ threadId, started: boolean, thread: ThreadSummary }`. The Usage panel's Find work for it, on a login whose week will go partly unused: starts a thread pinned to that login that suggests 2 to 4 jobs to spend the rest of its week on and asks before starting any (runner/src/spare-week.ts), whatever `Settings.spareWeek` says. While that login's last such thread is still open (not archived) it answers that one, `started: false`, rather than starting another. The app opens the thread either way. `-32010` for an unknown login. The app's, never a thread's (the thread-key gate refuses it). A runner older than this answers `-32601` |
 | `accounts.recheck` | `{ accountId? }` | `{ accounts: Account[] }`. Reads the login list again and asks the Claude CLI about that login's sign-in now (every Claude login without `accountId`), rather than at the next check, up to 10 minutes away. The app calls it every few seconds while a Sign in… it opened is unfinished, so the row stops waiting as soon as Terminal's sign-in is done. `accounts.updated` follows as usual. The app's, never a thread's (the thread-key gate refuses it). A runner older than this answers `-32601` |
+| `accounts.yearToken` | `{ accountId, runnerId?, code?, check?: boolean, cancel?: boolean }` | `{ state: "idle" \| "starting" \| "waiting" \| "checking" \| "done" \| "failed", url?, message?, madeAt? }`. Year-long token… for a Claude login on another runner (Accounts, "Year-long tokens", "On another runner"), with `runnerId` that runner's, through Convex as a `call` (backend API 90); without it this runner's own. With none of `code`, `check` or `cancel` it starts `claude setup-token` for the login, or joins the one already going, and answers within a few seconds: `starting` until setup-token has printed its sign-in page, then `waiting` with `url`, the claude.ai page to approve it on in any browser. `code` is what the page shows after Authorize (`<code>#<state>`, letters, digits, `-` and `_`, its state the url's own): the runner types it in and answers `checking`, then `done` (with `madeAt`) once the token is in the login's `threadbear-token.json`, or `failed` with `message`. `check` only reports (`idle` when nothing has been started, or the last one ended over 10 minutes ago); `cancel` stops it. One not finished within 10 minutes is stopped. The token is never in an answer. `-32010` for an unknown login, `-32602` for one that isn't Claude's or a code of the wrong shape or for another page, `-32020` while a code is being checked. The app's, never a thread's (the thread-key gate refuses it). A runner older than this answers `-32601`, or through Convex an error naming the method |
 | `clis.update` | `{ provider: Provider, version?: string, force?: boolean }` | `{ clis: CliStatus[] }`. Starts an update and returns at once, with `update.state` `running` or `waiting`; progress comes through `clis.updated`. `version` picks a kept Codex version (how "Go back" works). `force: true` installs a held version anyway |
 | `clis.setPolicy` | `{ provider: Provider, policy: "auto" \| "notify" \| "off" }` | `{ clis: CliStatus[] }` |
 | `usage.stats` | `{ days?: number }` | `UsageStats` (see Usage history): each login's tokens by the hour and its limit readings over time, for the Usage panel's charts. `days` is 1 to 14 (default 8). A runner older than this answers `-32601` |
@@ -2555,6 +2556,30 @@ thread to another login when the one it's on runs out of room.
   their turns end, so the next turn runs on the new token, and a refusal
   on it is taken back. Each token read, whole and without its prefix, is
   a known value to the secret scrubbing, and the file a secrets file.
+- **Year-long tokens on another runner.** The Usage panel's Terminal
+  helper only reaches this Mac's logins. For another runner's (bruce,
+  Tinker Desk, a WSL box), the Runners panel's details for that runner
+  list its Claude logins with Year-long token… (`accounts.yearToken`
+  with its `runnerId`). That runner runs `claude setup-token` for the
+  login itself, under a small Python helper in a pseudo-terminal 1000
+  columns wide (`runner/src/year-token-maker.ts`), with the login's own
+  environment and no token in it. The helper picks the claude.ai page
+  (the one whose `redirect_uri` is `platform.claude.com`'s code page) out
+  of what setup-token prints and says only that, `done` or `failed` to
+  the runner, never anything else setup-token printed. The app opens the
+  page in Mike's browser; after Authorize the page shows a code, which he
+  copies and the app takes from the clipboard on Paste code, checking its
+  state is the page's. The runner checks the code's shape and state
+  again, types it in, then Enter on its own half a second later (sent
+  together, setup-token shows the code and never takes it), and the
+  helper writes `threadbear-token.json` (0600) from what setup-token
+  prints, as the Terminal helper does. The runner's watch picks the file
+  up as for any token. The token never leaves that machine: not in an
+  answer, Convex, the relay, the app or the log. The code is single-use
+  and worthless without the verifier only that setup-token holds; the
+  backend keeps a `call`'s args only until it's finished. Through
+  Convex it's the owner key's alone (`relay:queueCommand`), so a runner
+  key can't start one. Needs `python3` and a Mac or Linux runner.
 - **Which login.** Of the pool's logins of a provider that are OK to run
   on, the one whose weekly window resets soonest, since whatever is left
   in it then is lost; the most room breaks a tie. Logins with no weekly
@@ -7012,7 +7037,9 @@ the mirror back as state. The Mac app doesn't use it.
   symbol?, picture?, by }`, `picture` naming the runner's copy of the
   picture, the file name without its extension; `Schedule` without effort
   and permission mode; `Account` as `id, provider, title, note?, email?,
-  plan?, defaultModel?, usage?`, never `configDir`; from backend API 20
+  plan?, defaultModel?, usage?`, never `configDir`; from backend API 90
+  also `loginEndsAt?`, `signedOut?` and `yearToken?` (`{ madeAt? }`), for
+  the Runners panel's logins; from backend API 20
   also `models?` (each `id, title, effortLevels?, defaultEffort?`) and
   `defaultEffort?`, for the phone's new thread pickers). The same at start,
   and the accounts again once a heartbeat first says the backend is at 20.

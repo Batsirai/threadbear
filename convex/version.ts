@@ -430,4 +430,9 @@
 //    phone:messages passes them on, so the phone draws them as the Mac
 //    does: the question small, the answer as his words. A runner sends
 //    `answers` only to a backend of 89 or later.
-export const API_VERSION = 89;
+// 90: relay:queueCommand's `call` takes accounts.yearToken (the Mac's
+//    Runners panel's Year-long token… for another runner's login), and an
+//    accounts row can carry `loginEndsAt`, `signedOut` and `yearToken`
+//    (`{ madeAt? }`), never the token. A runner sends them only to a
+//    backend of 90 or later.
+export const API_VERSION = 90;

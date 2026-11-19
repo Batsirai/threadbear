@@ -157,7 +157,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 89;
+export const BACKEND_API_VERSION = 90;
 // From this one a message row can be a login's note (role "note"): a thread
 // that moved to another login or is waiting for room says so on another Mac.
 export const LOGIN_NOTES_API_VERSION = 78;
@@ -186,6 +186,10 @@ export const MESSAGE_PICTURES_API_VERSION = 87;
 // From this one a user's message row carries the asks it answered
 // (`answers`), so the phone draws them as answers, as the Mac does.
 export const MESSAGE_ANSWERS_API_VERSION = 89;
+// From this one an accounts row carries a Claude login's sign-in
+// (loginEndsAt, signedOut, yearToken's madeAt), for the Mac's Runners panel,
+// and a `call` can be accounts.yearToken.
+export const LOGIN_STATE_API_VERSION = 90;
 // From this one the Mac app's Runners panel can ask for every runner's machine
 // figures (runners.stats): sync:watchRunnersFromMac and sync:runnerStatsList,
 // on top of the website's runnerStats rows (API 45).
@@ -648,6 +652,9 @@ export type CommandHost = {
   // The Mac's Move sheet (`moves.describe` and `moves.preview` calls).
   moveDescribe?: (threadId: string) => Promise<MoveInfo>;
   movePreview?: (p: { info: MoveInfo; cwd?: string; accountId?: string }) => Promise<MovePreview>;
+  // The Mac's Runners panel: Year-long token… for a login here (an
+  // `accounts.yearToken` call, year-token-maker.ts). Never on a box.
+  yearToken?: (accountId: string, p: { code?: string; check?: boolean; cancel?: boolean }) => Promise<unknown>;
   // The phone's Reviews sheet (API 86).
   listReviews?: (threadId: string) => unknown;
   getReview?: (threadId: string, reviewId: string) => unknown;
@@ -1361,6 +1368,12 @@ export function toAccountDoc(a: Account, apiVersion = 0) {
     // Just what a picker shows and sends: no descriptions or full ids.
     if (a.models) out.models = a.models.map((m) => ({ id: m.id, title: m.title, ...(m.effortLevels ? { effortLevels: m.effortLevels } : {}), ...(m.defaultEffort ? { defaultEffort: m.defaultEffort } : {}) }));
     if (a.defaultEffort) out.defaultEffort = a.defaultEffort;
+  }
+  if (apiVersion >= LOGIN_STATE_API_VERSION) {
+    if (a.loginEndsAt) out.loginEndsAt = a.loginEndsAt;
+    if (a.signedOut) out.signedOut = true;
+    // When it was made, never the token (accounts.ts never puts it on an Account).
+    if (a.yearToken) out.yearToken = a.yearToken.madeAt ? { madeAt: a.yearToken.madeAt } : {};
   }
   if (a.usage) {
     const u = a.usage;
@@ -4877,6 +4890,22 @@ export class ConvexSync {
           const info = moveInfoFrom(params.info);
           if (!info) throw new Error("The move preview didn't say what thread it's for.");
           return { result: await host.movePreview({ info, ...(typeof params.cwd === 'string' && params.cwd ? { cwd: params.cwd } : {}), ...(typeof params.accountId === 'string' && params.accountId ? { accountId: params.accountId } : {}) }) };
+        }
+        // Year-long token… from the main Mac's Runners panel: only its own
+        // (a phone's command never says from: "mac"), and the answer is a
+        // state and the claude.ai page, never the token.
+        if (a.method === 'accounts.yearToken') {
+          if (!host.yearToken) throw new Error("This runner can't make tokens from another Mac.");
+          if (a.from !== 'mac') throw new Error('Only the main Mac makes a token for a login here.');
+          if (typeof params.accountId !== 'string' || !params.accountId) throw new Error('Which login?');
+          if (params.code !== undefined && typeof params.code !== 'string') throw new Error('code must be a string');
+          return {
+            result: await host.yearToken(params.accountId, {
+              ...(typeof params.code === 'string' ? { code: params.code } : {}),
+              ...(params.check === true ? { check: true } : {}),
+              ...(params.cancel === true ? { cancel: true } : {}),
+            }),
+          };
         }
         if (a.method !== 'files.list') throw new Error(`${String(a.method)} can't be asked of this runner`);
         const list = listFolderFor({ path: params.path });

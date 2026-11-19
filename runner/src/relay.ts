@@ -1883,6 +1883,17 @@ export class Relay {
     return done.result;
   }
 
+  /**
+   * accounts.yearToken for one of another runner's logins (year-token-maker.ts
+   * there): a `call` the backend lets only the owner key queue. Its answer is
+   * a state and the claude.ai page, never a token.
+   */
+  async yearToken(runnerId: string, params: { accountId: string; code?: string; check?: boolean; cancel?: boolean }): Promise<unknown> {
+    const p = { accountId: params.accountId, ...(params.code !== undefined ? { code: params.code } : {}), ...(params.check ? { check: true } : {}), ...(params.cancel ? { cancel: true } : {}) };
+    const done = await this.command(runnerId, undefined, 'call', { method: 'accounts.yearToken', params: p }, { done: true, ms: CALL_MS });
+    return done.result;
+  }
+
   /** Another runner's logins for the new-thread pickers, from the backend's accounts rows. */
   async logins(runnerId: string): Promise<{ accounts: unknown[]; pools: unknown[]; defaults: Record<string, unknown> }> {
     const rows = (await this.read('relay:remoteAccounts', { runnerId })) as { id: string; provider: string; runnerId?: string }[];

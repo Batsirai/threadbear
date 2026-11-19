@@ -124,6 +124,11 @@ export class CallerGate {
     // Reinstalling stops every thread's runner; an agent hands that to the
     // user (install-runner.sh refuses from a thread too), Full access or not.
     if (method === 'runner.reinstall') throw new RpcError(ErrorCode.notAllowed, "Reinstalling the runner stops every thread's turn, so it's the user's to do: Reinstall now in the app's Updates panel.");
+    // A year-long token changes which Claude account a login (on any of
+    // the user's runners) runs as: a thread could approve the page with an
+    // account of its own choosing. Only the user's click in the app, Full
+    // access or not (Codex's review, 19 Nov).
+    if (method === 'accounts.yearToken') throw new RpcError(ErrorCode.notAllowed, "Making a year-long token is the user's to do: Year-long token… in the app's Usage or Runners panel.");
     if (known?.mode === 'full') return p;
     if (GATED_READS.has(method)) return p;
     if (!known) throw new RpcError(ErrorCode.notAllowed, "This thread isn't one the runner knows now, so it can only read. Ask the user to do it in the app.");

@@ -170,6 +170,7 @@ import { GUESS_CATCH_UP_MS, inboxGuessPart, type InboxGuessPart } from './runner
 import { nestedPart, type NestedPart } from './runner/nested.ts';
 import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
+import type { YearTokenAnswer, YearTokenParams } from './year-token-maker.ts';
 
 export type Notification =
   | { method: 'thread.updated'; params: { thread: ThreadSummary } }
@@ -623,6 +624,8 @@ export type RunnerDeps = {
   // Which logins are signed out (sign-in-state.ts): told of refused and
   // working turns, and its changes reach clients.
   signIn?: SignInSink;
+  // Year-long token… asked from another Mac (year-token-maker.ts).
+  tokenMaker?: { step(account: Account, p: YearTokenParams): Promise<YearTokenAnswer>; stopAll(): void };
   // Which account a thread made without one starts on; usage.ts's
   // pickAccount (the most room) unless a test swaps it.
   pickAccount?: AccountPicker;
@@ -753,6 +756,7 @@ export class Runner {
   accounts: AccountSource;
   usage?: UsageSink;
   signIn?: SignInSink;
+  private tokenMaker?: RunnerDeps['tokenMaker'];
   // Each login and folder's slash commands, for the picker (runner/commands.ts).
   commandCache = new Map<string, { at: number; commands: SlashCommand[] }>();
   // threads.contextUsage asks in flight, by thread, so two at once share one.
@@ -891,6 +895,7 @@ export class Runner {
     this.accounts = deps.accounts;
     this.usage = deps.usage;
     this.signIn = deps.signIn;
+    this.tokenMaker = deps.tokenMaker;
     this.pickAccount = deps.pickAccount ?? pickByRoom;
     this.clock = deps.clock;
     this.folderCache = new FolderCache(FOLDER_CACHE_MS, () => this.clock.now());
@@ -1125,6 +1130,18 @@ export class Runner {
     return { accounts: this.safeAccounts() };
   }
 
+  // accounts.yearToken (docs/protocol.md): Year-long token… for one of this
+  // runner's Claude logins, asked from a Mac's Runners panel.
+  async yearToken(accountId: string, p: YearTokenParams): Promise<YearTokenAnswer> {
+    if (!this.tokenMaker) throw new RpcError(ErrorCode.methodNotFound, "This runner can't make tokens.");
+    const account = this.safeAccounts().find((a) => a.id === accountId);
+    if (!account) throw new RpcError(ErrorCode.accountNotFound, `No login ${accountId} on this runner.`);
+    const r = await this.tokenMaker.step(account, p);
+    // The new file is seen by the folder watch; this makes it at once.
+    if (r.state === 'done') this.rescanAccounts();
+    return r;
+  }
+
   rescanAccounts(): void {
     const list = this.safeAccounts();
     const fresh = new Set(list.filter((a) => !this.probed.has(a.id)).map((a) => a.id));
@@ -1349,6 +1366,7 @@ export class Runner {
   // recovery would end them, rather than as failures when their CLI dies.
   async shutdown(): Promise<void> {
     this.stopping = true;
+    this.tokenMaker?.stopAll();
     this.snoozeTimer?.cancel();
     this.roomTimer?.cancel();
     this.netTimer?.cancel();

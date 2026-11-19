@@ -1997,6 +1997,10 @@ const accountDoc = v.object({
   // API 20: what the phone's new thread pickers offer.
   models: v.optional(v.array(v.object({ id: v.string(), title: v.string(), effortLevels: v.optional(v.array(v.string())), defaultEffort: v.optional(v.string()) }))),
   defaultEffort: v.optional(v.string()),
+  // API 90: a Claude login's sign-in, for the Mac's Runners panel.
+  loginEndsAt: v.optional(v.string()),
+  signedOut: v.optional(v.boolean()),
+  yearToken: v.optional(v.object({ madeAt: v.optional(v.string()) })),
   usage: v.optional(
     v.object({
       windows: v.array(v.object({ kind: v.string(), title: v.string(), remainingPercent: v.number(), resetsAt: v.optional(v.string()), detail: v.optional(v.string()) })),

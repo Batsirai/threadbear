@@ -327,7 +327,14 @@ File references are where to look.
   runner watches each Claude login's folder for that one file, so the row
   changes as soon as it's made, and reads it and gives the token to that login's Claude Code as
   `CLAUDE_CODE_OAUTH_TOKEN`, and to nothing else. Delete the file to go back
-  to the login's normal sign-in.
+  to the login's normal sign-in. For a login on another of your machines
+  (`runner/src/year-token-maker.ts`), only when you ask from the Runners
+  panel on your main Mac: that machine's runner runs `claude setup-token`
+  itself, under a small Python helper (`python3`) in a pseudo-terminal, and
+  sends back through your Convex backend only the claude.ai page to approve
+  it on and whether it worked. The code you paste goes the other way and is
+  dropped from the backend once used. The helper writes the same file there;
+  the token never leaves that machine.
 - **A pinned file being shown** (`desktop/gpui/src/highlights.rs`): if its
   Highlights request fails, the app retries after 1 second, then 2, then 4,
   up to 5 seconds between tries while you're looking at that thread. It

@@ -4,6 +4,7 @@
 // First, so every process the runner starts on Windows has no console window.
 import './win32-hide.ts';
 import { onYearToken } from './year-token.ts';
+import { YearTokenMaker } from './year-token-maker.ts';
 import { realCopy } from './real-copy.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -269,6 +270,8 @@ async function main(): Promise<void> {
   const signIn = new SignInState({ claudePath: cfg.claudePath, accounts: () => accounts.list(), env: (a) => cliEnv(a), clock: realClock, log });
   accounts.signIn = signIn;
   signIn.start();
+  // Year-long token… asked from another Mac (docs/protocol.md, accounts.yearToken).
+  const tokenMaker = new YearTokenMaker({ claudePath: cfg.claudePath, env: (a) => cliEnv(a), log });
   const tally = new TokenTally({ dataDir: cfg.home, clock: realClock, log, accounts: () => accounts.list() });
   if (cfg.tokenTally !== false) tally.start();
   // Every session gets tools for driving Threadbear itself, bound to its
@@ -449,6 +452,7 @@ async function main(): Promise<void> {
       onChange: (fn) => usage.onChange(fn),
     },
     signIn,
+    tokenMaker,
     clock: realClock,
     log,
     models,
@@ -764,6 +768,9 @@ async function main(): Promise<void> {
       movePreview: async (p) => {
         return runner.previewMove({ ...p, self: syncRunnerId });
       },
+      // The Mac's Runners panel's Year-long token… (year-token-maker.ts); a
+      // box's login is its cloud token, so not there.
+      ...(box ? {} : { yearToken: (accountId: string, p: { code?: string; check?: boolean; cancel?: boolean }) => runner.yearToken(accountId, p) }),
       // A box's one thread, under its own id, in its clone, on its one login.
       ...(box
         ? {

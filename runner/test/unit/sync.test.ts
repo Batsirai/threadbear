@@ -14,7 +14,7 @@ import { loadConfig, paths, readRunnerJson } from '../../src/config.ts';
 import { downgradeFetch, redirectTrap } from '../helpers/redirect-trap.ts';
 import { scrubText } from '../../src/redaction.ts';
 import { Scrubber } from '../../src/scrub.ts';
-import { SCRUB_API_VERSION, isConvexCloud, MESSAGE_PICTURES_API_VERSION } from '../../src/sync.ts';
+import { SCRUB_API_VERSION, isConvexCloud, MESSAGE_PICTURES_API_VERSION, LOGIN_STATE_API_VERSION } from '../../src/sync.ts';
 import { makePng } from '../helpers/png.ts';
 import { ConvexUseTally } from '../../src/convex-use.ts';
 
@@ -792,6 +792,10 @@ function setupFull(opts: { heads?: { threadId: string; lastSeq: number }[]; take
       buttons: (id) => h.runner.listButtons(id).buttons,
     },
     commands: {
+      yearToken: async (accountId, p) => {
+        applied.push(`yearToken ${accountId} ${JSON.stringify(p)}`);
+        return { state: 'waiting', url: 'https://claude.com/cai/oauth/authorize?state=x' };
+      },
       threadCommands: (id) => {
         applied.push(`commands ${id}`);
         return h.runner.threadCommands(id);
@@ -4294,3 +4298,35 @@ test('a message row says how many pictures it came with, and goes with it from A
     await f.sync.stop();
   }
 });
+
+// Year-long token… from the Mac's Runners panel (year-token-maker.ts): only
+// a command the main Mac queued (from: "mac") reaches the maker; the phone's
+// can't, and the answer goes back as the call's result.
+test("accounts.yearToken calls: the main Mac's reach the maker, nobody else's", async () => {
+  const { sync, push, applied, calls } = setupFull();
+  sync.start();
+  await sync.flushNow();
+  push([{ commandId: 'y1', kind: 'call', args: { method: 'accounts.yearToken', params: { accountId: 'claude-3', code: 'abcdefgh#ijklmnop', extra: 'dropped' }, from: 'mac' }, createdAt: 1 }]);
+  await tick(10);
+  push([{ commandId: 'y2', kind: 'call', args: { method: 'accounts.yearToken', params: { accountId: 'claude-3' } }, createdAt: 2 }]);
+  await tick(10);
+  assert.deepEqual(applied.filter((a) => a.startsWith('yearToken')), ['yearToken claude-3 {"code":"abcdefgh#ijklmnop"}']);
+  const y1 = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'y1')!;
+  assert.equal(y1.args.ok, true);
+  assert.equal(JSON.parse(String(y1.args.result)).state, 'waiting');
+  const y2 = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'y2')!;
+  assert.equal(y2.args.ok, false);
+  assert.match(String(y2.args.note), /Only the main Mac/);
+  await sync.stop();
+});
+
+test("an accounts row carries a login's sign-in and token date from backend API 90, never the token", () => {
+  const a = { id: 'claude-1', provider: 'claude', title: 't', configDir: '/x', loginEndsAt: '2027-11-18T00:00:00.000Z', signedOut: true, yearToken: { madeAt: '2026-11-18T00:00:00.000Z' } } as never;
+  assert.deepEqual(pickLogin(toAccountDoc(a, LOGIN_STATE_API_VERSION)), { loginEndsAt: '2027-11-18T00:00:00.000Z', signedOut: true, yearToken: { madeAt: '2026-11-18T00:00:00.000Z' } });
+  assert.deepEqual(pickLogin(toAccountDoc(a, LOGIN_STATE_API_VERSION - 1)), {});
+});
+function pickLogin(d: Record<string, unknown>) {
+  const out: Record<string, unknown> = {};
+  for (const k of ['loginEndsAt', 'signedOut', 'yearToken']) if (d[k] !== undefined) out[k] = d[k];
+  return out;
+}

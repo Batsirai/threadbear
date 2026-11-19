@@ -1,4 +1,5 @@
 // WebSocket JSON-RPC 2.0 server at ws://127.0.0.1:<port>/rpc.
+import type { YearTokenParams } from './year-token-maker.ts';
 import { EXPERIMENTS, experimentOn } from './experiments.ts';
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -135,6 +136,8 @@ export type RelayHandler = {
   /** A picture pasted into one of another runner's messages, from the backend's file storage (relay.ts readFile); any other path is refused. */
   readFile?(runnerId: string, path: string, maxBytes?: number): Promise<unknown>;
   logins(runnerId: string): Promise<unknown>;
+  /** accounts.yearToken for one of another runner's logins, through an allow-listed `call`. */
+  yearToken?(runnerId: string, params: { accountId: string } & YearTokenParams): Promise<unknown>;
 };
 
 export type RpcServerOptions = {
@@ -951,6 +954,20 @@ export class RpcServer {
       // The app's, after its Sign in… (never a thread's: the gate refuses it).
       case 'accounts.recheck':
         return r.recheckAccounts(optString(p, 'accountId'));
+      // Year-long token… for a login on this runner or, with runnerId,
+      // another's through Convex (year-token-maker.ts). The app's, never a
+      // thread's (the gate refuses it): it changes what a login runs as.
+      case 'accounts.yearToken': {
+        const accountId = reqString(p, 'accountId');
+        const step = yearTokenParams(p);
+        // runnerId only for another runner's login, as for threads.create.
+        const other = optString(p, 'runnerId');
+        if (other) {
+          if (!this.opts.relay?.yearToken) throw new RpcError(ErrorCode.other, "This Mac's runner can't reach other runners through Convex.");
+          return this.opts.relay.yearToken(other, { accountId, ...step });
+        }
+        return r.yearToken(accountId, step);
+      }
       // A GitHub PR for the app's PR tab (github-pr.ts). Mike's clicks only:
       // not in rpc-gate's reads, so a thread's key can't merge or comment.
       case 'github.pr':
@@ -1049,6 +1066,17 @@ function reqString(p: Record<string, unknown>, k: string): string {
   const v = p[k];
   if (typeof v !== 'string') throw bad(`${k} must be a string`);
   return v;
+}
+
+// accounts.yearToken's step: a code, a check, a cancel, or none (a start).
+function yearTokenParams(p: Record<string, unknown>): YearTokenParams {
+  if (p.code !== undefined && typeof p.code !== 'string') throw new RpcError(ErrorCode.badParams, 'code must be a string');
+  if (typeof p.code === 'string' && p.code.length > 1100) throw new RpcError(ErrorCode.badParams, 'code is too long');
+  return {
+    ...(typeof p.code === 'string' ? { code: p.code } : {}),
+    ...(p.check === true ? { check: true } : {}),
+    ...(p.cancel === true ? { cancel: true } : {}),
+  };
 }
 
 function optString(p: Record<string, unknown>, k: string): string | undefined {

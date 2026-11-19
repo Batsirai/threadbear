@@ -183,6 +183,8 @@ for (const mode of MODES) {
         ['accounts.useReset', { accountId: 'codex-main' }],
         ['accounts.findWork', { accountId: 'codex-main' }],
         ['accounts.recheck', {}],
+        ['accounts.yearToken', { accountId: 'claude-main' }],
+        ['accounts.yearToken', { accountId: 'claude-main', runnerId: 'cb921b2447ea', code: 'abcdefgh#ijklmnop' }],
         ['panels.convexKey', { threadId: me.id, panelId: 'x' }],
         ['no.such.method', {}],
       ];
@@ -235,6 +237,22 @@ test('a thread lowered to Ask loses it at once: the mode is read at each call', 
     await c.call('threads.create', { text: 'x', permissionMode: 'full', accountId: 'claude-3' });
     h.runner.update({ threadId: me.id, permissionMode: 'ask' });
     await assert.rejects(c.call('threads.create', { text: 'x', permissionMode: 'full', accountId: 'claude-3' }), refused);
+    c.close();
+  } finally {
+    await server.close();
+  }
+});
+
+// Codex's review, 19 Nov: a Full access thread could ask another runner for
+// a token page, approve it with an account of its own and send the code.
+test("a Full access thread can't make a year-long token, here or on another runner", async () => {
+  const { h, server, token, url } = await serve();
+  const me = thread(h, 'full');
+  try {
+    const c = await as(url, token, me.id);
+    for (const params of [{ accountId: 'claude-main' }, { accountId: 'claude-main', runnerId: 'cb921b2447ea', code: 'abcdefgh#ijklmnop' }]) {
+      await assert.rejects(c.call('accounts.yearToken', params), /user's to do/);
+    }
     c.close();
   } finally {
     await server.close();

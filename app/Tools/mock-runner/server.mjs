@@ -393,6 +393,8 @@ const MORE_RUNNERS = process.env.MOCK_MORE_RUNNERS ? [
   { id: 'runner_pixel', name: 'Phone', icon: 'smartphone', online: true, lastSeenAt: new Date().toISOString() },
 ] : [];
 let runnerOrder = ['runner_mock', BRUCE, ...MORE_RUNNERS.map((r) => r.id)];
+// accounts.yearToken's one flow, for mac-mini's claude-main.
+let yearTokenFlow;
 // Files on mac-mini's Mac that its threads name (docs/protocol.md, "Other
 // runners' threads"): the picture is a real PNG, the rest text. None of
 // these paths exist on this Mac.
@@ -1510,6 +1512,30 @@ async function dispatch(client, method, p) {
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       if (p.runnerId !== BRUCE) throw rpcError(-32000, `No logins known for ${p.runnerId}`);
       return { accounts: publicAccounts().filter((a) => a.id === 'claude-main' || a.id === 'codex-main'), pools: [], defaults: { ...defaults, poolId: undefined, accountId: 'claude-main', cwd: '/Users/alex/code/misc' } };
+    }
+    case 'accounts.yearToken': {
+      // Year-long token… for mac-mini's login (docs/protocol.md): starting,
+      // then its page at the next look; a code with the page's state is
+      // checked, then done. No real setup-token, and no token anywhere.
+      if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
+      if (p.runnerId !== BRUCE) throw rpcError(-32000, `No logins known for ${p.runnerId}`);
+      if (p.accountId !== 'claude-main') throw rpcError(-32010, `No login ${p.accountId} on that runner.`);
+      const page = 'https://claude.com/cai/oauth/authorize?code=true&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=MockState0123456789abcdef';
+      const t = (yearTokenFlow ??= { state: 'idle' });
+      if (p.cancel) { yearTokenFlow = { state: 'idle' }; return { state: 'idle' }; }
+      if (typeof p.code === 'string') {
+        if (t.state !== 'waiting') throw rpcError(-32000, 'Nothing is waiting for a code.');
+        if (!/^[A-Za-z0-9_-]+#MockState0123456789abcdef$/.test(p.code)) throw rpcError(-32602, "That code isn't for this sign-in page.");
+        Object.assign(t, { state: 'checking', polls: 0 });
+        return { state: 'checking', url: page };
+      }
+      if (p.check) {
+        if (t.state === 'starting') Object.assign(t, { state: 'waiting' });
+        else if (t.state === 'checking') Object.assign(t, { state: 'done', madeAt: iso() });
+        return { state: t.state, ...(t.state === 'waiting' || t.state === 'checking' ? { url: page } : {}), ...(t.madeAt ? { madeAt: t.madeAt } : {}) };
+      }
+      if (t.state !== 'waiting') yearTokenFlow = { state: 'starting' };
+      return { state: yearTokenFlow.state, ...(yearTokenFlow.state === 'waiting' ? { url: page } : {}) };
     }
     case 'runners.setOrder': {
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
