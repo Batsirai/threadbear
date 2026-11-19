@@ -83,16 +83,19 @@ class OneWorker {
 
   private next(): void {
     if (this.current || !this.queue.length || this.closed) return;
-    const call = this.queue.shift()!;
     const worker = this.start();
+    // Held open while it has work: an unreferenced worker's reply never
+    // comes if nothing else keeps the process going.
+    worker.ref();
+    // Nothing goes to it until its code has loaded and it says so, so a
+    // worker that stops before then never had a call that could be why.
+    if (!this.ready) return;
+    const call = this.queue.shift()!;
     const id = this.nextId++;
     const what = call.ask.kind === 'claudeCommands' ? call.ask.cwd : call.ask.file;
     const timer = setTimeout(() => this.failCurrent(new Error(`Looking at ${what} took over ${Math.round(this.timeoutMs / 1000)} s.`)), this.timeoutMs);
     timer.unref();
     this.current = { call, id, timer };
-    // Held open while it has work: an unreferenced worker's reply never
-    // comes if nothing else keeps the process going.
-    worker.ref();
     worker.postMessage({ ...call.ask, id } satisfies TrustRequest);
   }
 
@@ -101,9 +104,17 @@ class OneWorker {
     // The runner's environment as it is at each call (HOME, a test's change).
     const worker = new Worker(this.script, { env: SHARE_ENV });
     worker.unref();
+    // A worker that hasn't loaded in this long counts as one that can't.
+    const loading = setTimeout(() => {
+      if (this.worker === worker && !this.ready) this.crashed(new Error("the trust worker didn't load"));
+    }, this.timeoutMs);
+    loading.unref();
     worker.on('message', (r: TrustReply) => {
       if ('ready' in r) {
-        if (this.worker === worker) this.ready = true;
+        clearTimeout(loading);
+        if (this.worker !== worker) return;
+        this.ready = true;
+        this.next();
         return;
       }
       const cur = this.current;
@@ -125,15 +136,14 @@ class OneWorker {
     return worker;
   }
 
-  // A worker that never started: everything waiting runs on this thread,
-  // as it did before there were workers. One that started and then died
-  // (a crash, out of memory) fails only the call it was on, which would
-  // likely do the same on this thread; the rest go to a new worker.
+  // A worker that never loaded (and so never had a call): everything
+  // waiting runs on this thread, as it did before there were workers. One
+  // that loaded and then died (a crash, out of memory) fails only the call
+  // it was on, which would likely do the same on this thread; the rest go
+  // to a new worker.
   private crashed(e: Error): void {
     if (!this.ready) {
-      const calls = [...(this.current ? [this.current.call] : []), ...this.queue];
-      if (this.current) clearTimeout(this.current.timer);
-      this.current = undefined;
+      const calls = [...this.queue];
       this.queue = [];
       this.drop();
       for (const c of calls) {

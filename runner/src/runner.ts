@@ -467,11 +467,12 @@ type Runtime = {
   // skipped (claude-trust.ts). `claudeNoted` is the last one said in the
   // thread, so a session restart doesn't say it again.
   claudeSkipped?: string;
-  // Set while deliver looks at the folder's Claude Code settings on the
-  // trust worker with the CLI live: no steering meanwhile, as the message
-  // would reach the CLI before the turn's own. The look's own token, so an
-  // abandoned turn's look ending doesn't clear the next one's.
-  lookingAtClaude?: object;
+  // A look at the folder's Claude Code settings on the trust worker for the
+  // message at the front of the queue, before it starts a turn on the live
+  // CLI (kickQueue). Taken before the turn exists, so the CLI's own turns
+  // meanwhile (a background task waking it) go as they always did. `looks`
+  // or `failed` once it's done; used only straight away, else dropped.
+  preLook?: { token: object; looks?: ClaudeLook[]; failed?: string };
   // Started in Full with the folder's settings, which hold permission
   // rules not trusted for a thread that asks first (StartSessionOptions.heldGrants).
   claudeHeldGrants?: boolean;
@@ -711,9 +712,24 @@ const STARTUP_NOTICE_MS = 10 * 60_000;
 // How long a finished background task keeps the thread counted as busy
 // while the CLI gets round to its own turn (usually well under a second).
 const WAKE_GRACE_MS = 15_000;
+// kickQueue's look for a turn on the live CLI, or why it couldn't look.
+type LiveLook = ClaudeLook[] | { failed: string };
+
 // The look of `looks` for this folder and kind of thread, if there is one.
 function lookFor(looks: ClaudeLook[] | undefined, cwd: string, opts: ClaudeOptions): ClaudeLook | undefined {
   return looks?.find((l) => l.cwd === cwd && l.grants === (opts.grants === true));
+}
+
+// The kinds of thread (grants or not) a look must cover: the thread's own,
+// and for a new CLI in Full the asking kind too (startSession's two checks).
+function lookKinds(rec: ThreadRecord, forStart: boolean): boolean[] {
+  return forStart && rec.permissionMode === 'full' ? [false, true] : [claudeOptions(rec).grants === true];
+}
+
+// Whether `looks` still answers for the thread as it is now: its folder and
+// access may have changed while they were taken.
+function looksCover(looks: ClaudeLook[] | undefined, rec: ThreadRecord, forStart: boolean): boolean {
+  return lookKinds(rec, forStart).every((grants) => lookFor(looks, rec.cwd, { grants }) !== undefined);
 }
 
 // How long a thread's patches are kept before the folder is read again.
@@ -1989,6 +2005,14 @@ export class Runner {
       if (!this.kickQueue(st) && this.queueHeld(st)) this.scheduleIdle(st);
       return turnId;
     }
+    // Onto the live CLI: it waits in the queue (shown there) while the
+    // folder's Claude Code settings are looked at (kickQueue, rt.preLook).
+    if (this.needsPreLook(st)) {
+      rec.queue.push(msg);
+      this.markDirty(st);
+      this.kickQueue(st);
+      return turnId;
+    }
     this.startTurn(st, msg);
     return turnId;
   }
@@ -2009,27 +2033,53 @@ export class Runner {
   // the check on a live CLI. A look that fails or times out throws: looking
   // again on this thread could hang it on the same file (a FIFO).
   async claudeLooks(st: ThreadState, forStart: boolean): Promise<ClaudeLook[] | undefined> {
-    const { rec, rt } = st;
+    const { rec } = st;
     if (rec.provider !== 'claude' || !this.offThread || !this.patchTrust.lookClaude) return undefined;
     const cwd = rec.cwd;
     // In Full both kinds, looked at together in one go on the worker, as
     // close together as startSession's two checks were: two calls queued
     // apart could see the folder before and after a pull.
-    const kinds = forStart && rec.permissionMode === 'full' ? [false, true] : [claudeOptions(rec).grants === true];
+    const kinds = lookKinds(rec, forStart);
+    if (this.patchTrust.lookClaudeKinds) return await this.patchTrust.lookClaudeKinds(cwd, kinds, 'urgent');
+    return await Promise.all(kinds.map((grants) => this.patchTrust.lookClaude!(cwd, { grants }, 'urgent')));
+  }
+
+  // Whether the front of the queue waits for a look before its turn starts
+  // on the live CLI (rt.preLook): only with a worker to look on.
+  needsPreLook(st: ThreadState): boolean {
+    const { rec, rt } = st;
+    return rec.provider === 'claude' && Boolean(this.offThread && this.patchTrust.lookClaude) && Boolean(rt.session) && !rt.closing;
+  }
+
+  startPreLook(st: ThreadState): void {
+    const { rt } = st;
     const token = {};
-    if (rt.session) rt.lookingAtClaude = token;
-    try {
-      if (this.patchTrust.lookClaudeKinds) return await this.patchTrust.lookClaudeKinds(cwd, kinds, 'urgent');
-      return await Promise.all(kinds.map((grants) => this.patchTrust.lookClaude!(cwd, { grants }, 'urgent')));
-    } finally {
-      if (rt.lookingAtClaude === token) rt.lookingAtClaude = undefined;
-    }
+    const pre: NonNullable<Runtime['preLook']> = { token };
+    rt.preLook = pre;
+    const done = () => {
+      if (rt.preLook !== pre || rt.deleted) return;
+      // A snoozed or archived thread keeps its queue until it comes back.
+      if (this.bucket(st.rec) === 'inbox') this.kickQueue(st);
+      // Not taken (a turn started meanwhile, the thread was snoozed): it's
+      // dropped, and the next kick looks again.
+      if (rt.preLook === pre) rt.preLook = undefined;
+    };
+    this.claudeLooks(st, false).then(
+      (looks) => {
+        pre.looks = looks ?? [];
+        done();
+      },
+      (e: unknown) => {
+        pre.failed = e instanceof Error ? e.message : String(e);
+        done();
+      },
+    );
   }
 
   canSteer(st: ThreadState): boolean {
     const { rec, rt } = st;
     const turn = rt.turn;
-    if (!turn || !rt.session || rt.closing || this.stopping || rt.editing || rt.lookingAtClaude) return false;
+    if (!turn || !rt.session || rt.closing || this.stopping || rt.editing) return false;
     if (rec.queue.some(q => !isAutomaticInput(q)) || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
     // Nor into a compaction or review (a skill's turn takes them).
     if (turn.noSteer || turn.local) return false;
@@ -2127,7 +2177,8 @@ export class Runner {
   // Writes the turn's first events before changing any state, so if the
   // disk refuses (full, permissions) the thread is left as it was rather
   // than stuck on a turn that never started.
-  startTurn(st: ThreadState, msg: QueuedSend): void {
+  // `live`: kickQueue's look at the folder for a turn on the live CLI.
+  startTurn(st: ThreadState, msg: QueuedSend, live?: LiveLook): void {
     const { rec, rt } = st;
     // Only the thread's own pictures go to the agent: everything queued was
     // copied into its media folder when it was sent (sendTo, a review's
@@ -2178,13 +2229,13 @@ export class Runner {
     // A message to the thread (not a turn the CLI opened by itself), so the
     // librarian can file a new thread before its first turn is over.
     if (!this.stopping) this.tellActivity({ kind: 'turn.start', threadId: rec.id });
-    this.deliver(st, msg).catch((e: unknown) => {
+    this.deliver(st, msg, live).catch((e: unknown) => {
       this.log.error('could not start turn', { threadId: rec.id, error: String(e) });
       this.failTurn(st, e instanceof Error ? e.message : String(e));
     });
   }
 
-  async deliver(st: ThreadState, msg: QueuedSend): Promise<void> {
+  async deliver(st: ThreadState, msg: QueuedSend, live?: LiveLook): Promise<void> {
     const { rec, rt } = st;
     // Deleted (which leaves rt.turn as it was) or interrupted meanwhile.
     const gone = () => rt.deleted || rt.turn?.turnId !== msg.turnId;
@@ -2193,30 +2244,27 @@ export class Runner {
     // at every message (19 Nov). After the look, the turn may have been
     // stopped: with a live CLI that keeps the turn for its grace period, so
     // it ends here, before anything is sent.
-    const look = async (forStart: boolean): Promise<ClaudeLook[] | 'gone' | undefined> => {
+    const cantRead = (why: string) => new Error(`Couldn't read this folder's Claude Code settings: ${why}`);
+    // A look that failed (a hung folder) fails the turn: looking again here
+    // would be on the main thread, and could hang it on the same file.
+    if (live && 'failed' in live) throw cantRead(live.failed);
+    const look = async (): Promise<ClaudeLook[] | 'gone' | undefined> => {
       let looks: ClaudeLook[] | undefined;
       try {
-        looks = await this.claudeLooks(st, forStart);
+        looks = await this.claudeLooks(st, true);
       } catch (e) {
         if (gone()) return 'gone';
-        throw new Error(`Couldn't read this folder's Claude Code settings: ${e instanceof Error ? e.message : String(e)}`);
+        throw cantRead(e instanceof Error ? e.message : String(e));
       }
-      if (gone()) return 'gone';
-      if (rt.turn?.interruptRequested) {
-        this.failTurn(st, 'Interrupted.');
-        return 'gone';
-      }
-      return looks;
+      return gone() ? 'gone' : looks;
     };
-    const live = rt.session && rec.provider === 'claude' && this.offThread ? await look(false) : undefined;
-    if (live === 'gone') return;
     // A folder, account or settings change asked for a fresh CLI, or a CLI
     // update came in since this one started.
     if (rt.session && (rt.releaseWhenIdle || rec.handoff || (rt.versionMove && rt.tasks.length === 0))) this.releaseSession(st);
     // The folder's Claude Code hooks were trusted since the CLI started
     // without them, or new ones came that aren't (a pull): a fresh CLI
     // reads the folder's settings again.
-    else if (rt.session && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(live, rec.cwd, claudeOptions(rec))).trusted) this.releaseSession(st);
+    else if (rt.session && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(live && !('failed' in live) ? live : undefined, rec.cwd, claudeOptions(rec))).trusted) this.releaseSession(st);
     // Never two live CLIs on one session: wait for a releasing one to exit.
     while (rt.closing) await rt.closing;
     // An archive's worktree cleanup still running: where this turn starts
@@ -2254,7 +2302,10 @@ export class Runner {
     // drop it), so it's as fresh as looking there.
     // A turn with a worktree step below waits there, so a look now would be
     // dropped: startSession looks for itself.
-    let forStart = !rt.session && rec.provider === 'claude' && this.offThread && !rec.worktreePending && !this.leavesRemovedWorktree(rec) ? await look(true) : undefined;
+    let forStart = !rt.session && rec.provider === 'claude' && this.offThread && !rec.worktreePending && !this.leavesRemovedWorktree(rec) ? await look() : undefined;
+    // The folder or access changed while it looked: look again (a few
+    // times at most, then startSession looks for itself, as before).
+    for (let i = 0; forStart && forStart !== 'gone' && !looksCover(forStart, rec, true) && i < 3; i++) forStart = await look();
     if (forStart === 'gone') return;
     if (!rt.session && rec.worktreePending) {
       forStart = undefined;
@@ -2823,11 +2874,6 @@ export class Runner {
         const r = o.result;
         const turn = rt.turn;
         if (!turn) break;
-        // While deliver looks at the folder before sending this turn's
-        // message (rt.lookingAtClaude), a result is the CLI's own turn (a
-        // background task woke it): not about this turn, whose message it
-        // hasn't had yet, as with no turn at all.
-        if (rt.lookingAtClaude && !turn.dispatched) break;
         // The compaction sent ahead of the message (runner/cold-compact.ts).
         // A turn the CLI ran by itself meanwhile isn't it: keep waiting.
         if (turn.precompact?.gen === rt.generation) {
@@ -3442,9 +3488,7 @@ export class Runner {
     const session = rt.session;
     // Nothing is running in the CLI for a turn that was only opened for a
     // background subagent's approval, so nothing would end it.
-    // Nor for one whose message is still waiting on deliver's look at the
-    // folder (rt.lookingAtClaude): the CLI is idle, and its message unsent.
-    if (!session || rt.closing || (turn.auto && !turn.cliStarted) || (rt.lookingAtClaude && !turn.dispatched)) {
+    if (!session || rt.closing || (turn.auto && !turn.cliStarted)) {
       this.failTurn(st, 'Interrupted.');
       return {};
     }
@@ -4149,10 +4193,23 @@ export class Runner {
     }
     // A saved user cancellation must be read before automatic work resumes.
     if (isAutomaticInput(st.rec.queue[0]) && st.rec.interruptedMessages?.length) return false;
+    // Onto the live CLI: first a look at the folder's Claude Code settings,
+    // on the trust worker, with no turn open meanwhile. It comes back here.
+    let live: LiveLook | undefined;
+    if (this.needsPreLook(st)) {
+      const pre = st.rt.preLook;
+      if (pre && !pre.looks && pre.failed === undefined) return false;
+      st.rt.preLook = undefined;
+      if (!pre || (pre.looks && !looksCover(pre.looks, st.rec, false))) {
+        this.startPreLook(st);
+        return false;
+      }
+      live = pre.failed !== undefined ? { failed: pre.failed } : pre.looks;
+    }
     const next = st.rec.queue.shift()!;
     this.markDirty(st);
     try {
-      this.startTurn(st, next);
+      this.startTurn(st, next, live);
       return true;
     } catch (e) {
       st.rec.queue.unshift(next);

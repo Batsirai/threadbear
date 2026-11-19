@@ -1608,6 +1608,8 @@ async function main(): Promise<void> {
     await sync.stop({ bye: signal !== 'restart' && signal !== 'superseded' && !draining });
     try {
       await runner.shutdown();
+      // A look still under way (a hung folder) would hold the exit for its time limit.
+      trustWorker?.close();
       await server.close().catch(() => {});
       await drainServer?.close().catch(() => {});
       await registry.killAll(3000);

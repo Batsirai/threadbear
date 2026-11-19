@@ -70,7 +70,7 @@ test('a worker that never answers is given up on, and the next call gets a new o
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-trust-worker-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const script = path.join(dir, 'silent.mjs');
-  fs.writeFileSync(script, "import { parentPort } from 'node:worker_threads';\nparentPort.on('message', () => {});\n");
+  fs.writeFileSync(script, "import { parentPort } from 'node:worker_threads';\nparentPort.postMessage({ ready: true });\nparentPort.on('message', () => {});\n");
   const off = new TrustOffThread({ timeoutMs: 300, script: new URL(`file://${script}`) });
   t.after(() => off.close());
   await assert.rejects(off.claudeCommands(dir, dir, [false], 'urgent'), /took over/);
@@ -257,7 +257,7 @@ test('a CLI started after the old one closes gets a look taken after it closed, 
   assert.equal(o.checks.at(-1)?.look, true);
 });
 
-test('Stop while the look runs ends the turn without sending the message', async (t) => {
+test('while the look runs the message waits in the queue with no turn open, so Stop has nothing of it to stop and the CLI nothing of it to answer', async (t) => {
   const o = heldTrust();
   const { h, s, thread } = await warmThread(t, o.trust);
   let release = () => {};
@@ -265,11 +265,14 @@ test('Stop while the look runs ends the turn without sending the message', async
   const before = o.looks.length;
   h.runner.send(thread.id, 'again');
   await until(() => o.looks.length > before, 'the look');
+  const st = h.runner.threads.get(thread.id)!;
+  assert.equal(st.rt.turn, undefined);
+  assert.deepEqual(st.rec.queue.map((q) => q.text), ['again']);
   h.runner.interrupt(thread.id, { byMike: true });
+  assert.equal(s.interrupts, 0, 'the idle CLI is left alone');
   release();
-  await until(() => !h.runner.threads.get(thread.id)!.rt.turn, 'the turn to end');
-  assert.deepEqual(s.sent.slice(1), []);
-  assert.equal(h.adapter.sessions.length, 1);
+  await until(() => s.sent.length >= 2, '"again" to reach the CLI');
+  assert.match(s.sent[1].text, /again/);
 });
 
 test("a look that fails fails the turn, rather than looking again on the runner's main thread", async (t) => {
@@ -278,10 +281,10 @@ test("a look that fails fails the turn, rather than looking again on the runner'
   o.fail = new Error('Looking at /x took over 120 s.');
   const checks = o.checks.length;
   h.runner.send(thread.id, 'again');
-  await until(() => !h.runner.threads.get(thread.id)!.rt.turn, 'the turn to end');
+  const said = () => h.events(thread.id).some((e) => JSON.stringify(e).includes("Couldn't read this folder's Claude Code settings"));
+  await until(() => said() && !h.runner.threads.get(thread.id)!.rt.turn, 'the turn to fail, saying why');
   assert.equal(o.checks.length, checks, 'no check without a look');
   assert.deepEqual(s.sent.slice(1), []);
-  assert.ok(h.events(thread.id).some((e) => JSON.stringify(e).includes("Couldn't read this folder's Claude Code settings")));
 });
 
 test("the CLI's own turn ending while a message waits on the look leaves that message to be sent, not dropped", async (t) => {
@@ -292,12 +295,39 @@ test("the CLI's own turn ending while a message waits on the look leaves that me
   const before = o.looks.length;
   h.runner.send(thread.id, 'again');
   await until(() => o.looks.length > before, 'the look');
-  // A background task woke the CLI, and its own turn ends now.
+  // A background task woke the CLI, and its own turn ends now: it's no
+  // turn of the message's, which hasn't started one.
+  assert.equal(h.runner.threads.get(thread.id)!.rt.turn, undefined);
   s.result('completed', undefined, undefined, { own: true, queuedTurns: 0 });
   await tick();
-  assert.ok(h.runner.threads.get(thread.id)!.rt.turn, 'the turn waits for its message');
   assert.ok(!h.events(thread.id).some((e) => JSON.stringify(e).includes('was dropped by the CLI')));
   release();
   await until(() => s.sent.length >= 2, '"again" to reach the CLI');
   assert.match(s.sent[1].text, /again/);
+});
+
+test("a folder change while a new CLI's look runs makes it look again at the new folder, not on the runner's main thread", async (t) => {
+  const o = heldTrust();
+  const seen: string[] = [];
+  const look = o.trust.lookClaude!;
+  // The new CLI's looks (the patch list looks too, on the background lane).
+  o.trust.lookClaude = async (cwd, opts, lane) => {
+    if (lane === 'urgent') seen.push(cwd);
+    return look(cwd, opts, lane);
+  };
+  let release = () => {};
+  o.hold = new Promise((r) => (release = () => r()));
+  const off = new TrustOffThread();
+  t.after(() => off.close());
+  const h = makeHarness(tmpDir(), {}, { patchTrust: o.trust, offThread: off });
+  const a = tmpDir();
+  const b = tmpDir();
+  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: a });
+  await until(() => seen.length >= 1, 'the look at the first folder');
+  h.runner.threads.get(thread.id)!.rec.cwd = b;
+  o.hold = undefined;
+  release();
+  await until(() => h.adapter.sessions.length === 1, 'the CLI to start');
+  assert.deepEqual([...new Set(seen)], [a, b]);
+  assert.equal(o.checks.at(-1)?.look, true, "startSession used the new folder's look");
 });
