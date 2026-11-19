@@ -173,6 +173,9 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   // the mock's made-up PR.
   if (pickle.tags.some((t) => t.name === '@inline-prs')) process.env.TB_MOCK_PRS = '1';
   else delete process.env.TB_MOCK_PRS;
+  // Its files read 3 s after the rest of it, as a big PR's are.
+  if (pickle.tags.some((t) => t.name === '@slow-pr-files')) process.env.TB_MOCK_PR_FILES_MS = '3000';
+  else delete process.env.TB_MOCK_PR_FILES_MS;
   // Parts of a project: Photo sync as a part of Threadbear.
   if (pickle.tags.some((t) => t.name === '@project-parts')) process.env.TB_MOCK_PARTS = '1';
   else delete process.env.TB_MOCK_PARTS;

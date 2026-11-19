@@ -1327,7 +1327,8 @@ the summary and then the reply.
 | `projects.delete` | `{ projectId }` | `{}`. Its threads leave it; nothing else is touched |
 | `threads.setProjects` | `{ threadId, add?: string[], remove?: string[] }` | `{ thread: ThreadSummary }`. What Mike does by hand: an added project is pinned (adding one the thread is already in pins it, which is how "keep it here" works), a removed one is remembered so the librarian never puts the thread back in it |
 | `librarian.status` | `{}` | `{ librarian: LibrarianStatus }` |
-| `github.pr` | `{ url }` | `PrView` (see Pull requests). `-32602` for a link that isn't a github.com PR; gh's own error (`-32000`) when it can't be read |
+| `github.pr` | `{ url, files? }` | `PrView` (see Pull requests). With `files: false`, without its files (`files: []`, `filesLater: true`). `-32602` for a link that isn't a github.com PR; gh's own error (`-32000`) when it can't be read |
+| `github.prFiles` | `{ url }` | `{ files, filesError?, filesCut? }`: a PR's files alone, as in `PrView` |
 | `github.prStates` | `{ urls: string[] }` | `{ states: { [url]: "open" \| "draft" \| "merged" \| "closed" } }`. A link it couldn't place is left out |
 | `github.prAct` | `{ url, action, method?, body? }` | `{}` once GitHub has it, or gh's own error. `action` is `merge` (with `method` `rebase`, `squash` or `merge`), `close`, `reopen`, `comment` (`body`), `approve` (`body?`) or `requestChanges` (`body`) |
 | `connectors.status` | `{ refresh?: boolean }` | `{ connectors: ConnectorsStatus }` (see Connectors). `refresh` asks the gateway's `/health` first, unless it did in the last 10 seconds; the app passes it when the Connectors panel opens. A runner from before Connectors answers `-32601` and the app leaves the panel out |
@@ -5602,12 +5603,19 @@ type PrView = {
   files: { path: string; from?: string; additions, deletions: number; hunks: Hunk[]; binary?: boolean }[];
   filesError?: string;     // the diff couldn't be read
   filesCut?: number;       // lines left out past 20,000
+  filesLater?: boolean;    // asked for with files: false
 };
 ```
 
+A big PR's diff is the slowest read (two seconds for 600 KB), so the app
+asks `github.pr` with `files: false` and `github.prFiles` together, and
+shows the PR while its files are on their way. A runner older than that
+ignores `files` and answers `github.prFiles` with `-32601`, and the app
+keeps the files the first answer brought.
+
 `github.prStates` gives the coloured state of each PR link in a transcript,
 one `gh pr list` per repo (its latest 300), kept a minute; `github.prAct`
-forgets that repo's states so the icons catch up. None of the three is in a
+forgets that repo's states so the icons catch up. None of these is in a
 thread key's reads (rpc-gate.ts): a thread can't merge or comment through
 the app's connection. Another runner's thread still opens its PRs through
 this Mac's gh.

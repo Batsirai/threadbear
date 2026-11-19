@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use threadbear_core::inbox::{ago, parse_ms, ThreadSummary};
-use threadbear_core::pull_requests::{self as rules, CheckState, MergeMethod, PrRef, PrState, PrTab, PrView};
+use threadbear_core::pull_requests::{self as rules, CheckState, MergeMethod, PrFiles, PrRef, PrState, PrTab, PrView};
 
 /// GitHub's merged purple: no other colour in the app means merged.
 const MERGED: u32 = 0xa371f7;
@@ -65,6 +65,8 @@ pub(crate) struct PrPanes {
     /// links already asked about (`github.prStates`).
     states: HashMap<String, PrState>,
     asked: std::collections::HashSet<String>,
+    /// A PR's files that came before the PR itself (`load_pr`).
+    early_files: HashMap<String, PrFiles>,
     /// The PR the pane drew last, for a script's click to scroll to a
     /// button below its bottom.
     #[cfg(feature = "automation")]
@@ -87,7 +89,7 @@ impl PrPanes {
             // The words the tab draws, for the specs.
             Some(PrLoad::Ready(pr)) => {
                 let (checks, failed) = rules::checks_summary(&pr.checks);
-                json!({ "title": pr.title, "state": pr.state.words(), "status": rules::status_words(pr), "checks": checks, "failed": failed, "files": pr.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), "activity": pr.activity.iter().map(|a| a.body.clone()).collect::<Vec<_>>(), "canMerge": pr.can_merge })
+                json!({ "title": pr.title, "state": pr.state.words(), "status": rules::status_words(pr), "checks": checks, "failed": failed, "files": pr.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), "filesLater": pr.files_later, "activity": pr.activity.iter().map(|a| a.body.clone()).collect::<Vec<_>>(), "canMerge": pr.can_merge })
             }
             Some(PrLoad::Failed(e)) => json!({ "error": e }),
             _ => json!("loading"),
@@ -123,13 +125,31 @@ impl SidePane {
         self.show_preview(PanePreview::new(Target::Pr(url), r.tab_title(), from), &thread.id, cx);
     }
 
-    /// From `begin_preview`: read it the first time it shows.
+    /// From `begin_preview`: read it the first time it shows, or again if
+    /// the last read failed (a read started by a hover, say, that the runner
+    /// or GitHub turned down).
     pub(crate) fn begin_pr(&mut self, url: &str, cx: &mut Context<Self>) {
-        if !self.prs.loads.contains_key(url) {
+        if matches!(self.prs.loads.get(url), None | Some(PrLoad::Failed(_))) {
             self.load_pr(url, cx);
         }
     }
 
+    /// The pointer resting on a PR link in a reply (reply_links.rs): read it
+    /// now, so the click that usually follows finds it read or on its way.
+    /// A read takes a second or more (three gh calls, behind whatever else
+    /// the runner is doing), and Mike found the tab slow to fill (19 Nov).
+    /// Once per PR while the app runs, as an opened one is.
+    pub(crate) fn preload_pr(&mut self, url: &str, cx: &mut Context<Self>) {
+        let Some(url) = pr_url(url) else { return };
+        if !self.prs.loads.contains_key(&url) {
+            self.load_pr(&url, cx);
+        }
+    }
+
+    /// Reads the PR in two: the PR itself, and its files apart
+    /// (`github.prFiles`), as a big PR's diff is the slowest read. The tab
+    /// shows the PR once the first answers, its Diff once the second does,
+    /// whichever comes first.
     fn load_pr(&mut self, url: &str, cx: &mut Context<Self>) {
         match self.prs.loads.get(url) {
             Some(PrLoad::Ready(_)) => self.prs.ui.entry(url.to_owned()).or_default().refreshing = true,
@@ -137,16 +157,32 @@ impl SidePane {
                 self.prs.loads.insert(url.to_owned(), PrLoad::Loading);
             }
         }
+        self.prs.early_files.remove(url);
         let (client, url) = (self.client.clone(), url.to_owned());
+        cx.spawn({
+            let (client, url) = (client.clone(), url.clone());
+            async move |this, cx| {
+                let res = call(client, "github.prFiles", json!({ "url": url })).await;
+                this.update(cx, |this, cx| this.pr_files_read(&url, res, cx)).ok();
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
-            let res = call(client, "github.pr", json!({ "url": url })).await;
+            let res = call(client, "github.pr", json!({ "url": url, "files": false })).await;
             this.update(cx, |this, cx| {
                 let load = match res {
                     Ok(v) => match serde_json::from_value::<PrView>(v) {
-                        Ok(pr) => {
+                        Ok(mut pr) => {
                             // A reply's mark for it shows the new state too.
                             if this.prs.states.insert(url.clone(), pr.state) != Some(pr.state) {
                                 cx.refresh_windows();
+                            }
+                            if pr.files_later {
+                                if let Some(files) = this.prs.early_files.remove(&url) {
+                                    pr = pr.with_files(files);
+                                } else if let Some(PrLoad::Ready(before)) = this.prs.loads.get(&url) {
+                                    pr = pr.keeping_files_of(before);
+                                }
                             }
                             PrLoad::Ready(Arc::new(pr))
                         }
@@ -170,6 +206,34 @@ impl SidePane {
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    /// `github.prFiles` answered: into the PR if it's read and waiting for
+    /// them, kept for it if it isn't read yet. An older runner doesn't know
+    /// the call, and its `github.pr` brought the files anyway.
+    fn pr_files_read(&mut self, url: &str, res: Result<serde_json::Value, threadbear_client::runner::RpcError>, cx: &mut Context<Self>) {
+        let files = match res {
+            Ok(v) => serde_json::from_value::<PrFiles>(v).unwrap_or_else(|e| PrFiles { files_error: Some(e.to_string()), ..Default::default() }),
+            Err(e) if e.code == -32601 => return,
+            Err(e) => PrFiles { files_error: Some(e.message), ..Default::default() },
+        };
+        let refreshing = self.prs.ui.get(url).is_some_and(|u| u.refreshing);
+        match self.prs.loads.get(url) {
+            Some(PrLoad::Ready(pr)) if pr.files_later => {
+                let pr = PrView::clone(pr).with_files(files);
+                self.prs.loads.insert(url.to_owned(), PrLoad::Ready(Arc::new(pr)));
+            }
+            // The PR (or a refresh of it) still to come: it takes them.
+            Some(PrLoad::Loading) => {
+                self.prs.early_files.insert(url.to_owned(), files);
+            }
+            Some(PrLoad::Ready(_)) if refreshing => {
+                self.prs.early_files.insert(url.to_owned(), files);
+            }
+            // Failed, or a read of an older runner's that had them already.
+            _ => return,
+        }
         cx.notify();
     }
 
@@ -706,6 +770,9 @@ impl SidePane {
     }
 
     fn pr_diff(&mut self, url: &str, pr: &Arc<PrView>, p: Palette, cx: &mut Context<Self>) -> AnyElement {
+        if pr.files.is_empty() && pr.files_later {
+            return crate::files::pane_note("Reading the changes from GitHub…", p).into_any_element();
+        }
         if pr.files.is_empty() {
             let note = pr.files_error.clone().map_or_else(|| "No changes.".to_owned(), |e| format!("Couldn't read the diff: {e}"));
             return div().pt(px(20.)).text_size(px(style::size::LABEL)).text_color(p.secondary).child(note).into_any_element();
@@ -909,6 +976,18 @@ impl gpui_kit::base::text::MarkdownPlugin for PrMarks {
 /// request" until the runner says), in order. None with the experiment off
 /// or no PR links.
 #[cfg(feature = "automation")]
+/// The PR links in a reply already read or being read (`preload_pr`, a
+/// click), for the dump's `prsRead`.
+#[cfg(feature = "automation")]
+pub(crate) fn dump_read(text: &str, app: &crate::app::Threadbear, cx: &App) -> Option<Vec<String>> {
+    if !on(app) {
+        return None;
+    }
+    let loads = &app.side.read(cx).prs.loads;
+    let out: Vec<String> = rules::pr_links(text).into_iter().filter(|u| loads.contains_key(u)).collect();
+    (!out.is_empty()).then_some(out)
+}
+
 pub(crate) fn dump_marks(text: &str, app: &crate::app::Threadbear, cx: &App) -> Option<Vec<String>> {
     if !on(app) {
         return None;

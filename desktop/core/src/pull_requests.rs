@@ -199,6 +199,45 @@ pub struct PrView {
     pub files_error: Option<String>,
     #[serde(default)]
     pub files_cut: Option<u64>,
+    /// Read without its files (`github.pr` with `files: false`): they come
+    /// from `github.prFiles`.
+    #[serde(default)]
+    pub files_later: bool,
+}
+
+/// A PR's files alone (`github.prFiles`), read apart from the rest as a big
+/// PR's diff is the slowest read.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFiles {
+    #[serde(default)]
+    pub files: Vec<PrFile>,
+    #[serde(default)]
+    pub files_error: Option<String>,
+    #[serde(default)]
+    pub files_cut: Option<u64>,
+}
+
+impl PrView {
+    /// Its files, as `github.prFiles` read them.
+    pub fn with_files(mut self, files: PrFiles) -> Self {
+        self.files = files.files;
+        self.files_error = files.files_error;
+        self.files_cut = files.files_cut;
+        self.files_later = false;
+        self
+    }
+
+    /// Read without its files, it keeps those an earlier read had until
+    /// its own come: a refresh shouldn't empty the Diff tab meanwhile.
+    pub fn keeping_files_of(mut self, before: &PrView) -> Self {
+        if self.files_later && !before.files_later {
+            self.files = before.files.clone();
+            self.files_error = before.files_error.clone();
+            self.files_cut = before.files_cut;
+        }
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -427,6 +466,25 @@ mod tests {
         assert_eq!(pr.merge_methods, vec![MergeMethod::Rebase, MergeMethod::Squash]);
         let diff = pr.files[0].edit_diff("k");
         assert_eq!((diff.path.as_str(), diff.hunks[0].lines.len()), ("a.ts", 2));
+    }
+
+    #[test]
+    fn a_pr_read_without_its_files_takes_them_when_they_come() {
+        let files = |path: &str| serde_json::from_value::<PrFiles>(json!({ "files": [{ "path": path }] })).unwrap();
+        let later = view(json!({ "files": [], "filesLater": true }));
+        assert!(later.files_later && later.files.is_empty());
+        let full = later.clone().with_files(files("a.ts"));
+        assert!(!full.files_later);
+        assert_eq!(full.files[0].path, "a.ts");
+        // A refresh read without its files keeps the last ones meanwhile,
+        // still waiting for its own.
+        let refreshed = later.clone().keeping_files_of(&full);
+        assert_eq!((refreshed.files[0].path.as_str(), refreshed.files_later), ("a.ts", true));
+        assert_eq!(refreshed.with_files(files("b.ts")).files[0].path, "b.ts");
+        // An older runner's answer has its files and no filesLater.
+        assert!(!view(json!({ "files": [{ "path": "c.ts" }] })).files_later);
+        let failed = serde_json::from_value::<PrFiles>(json!({ "files": [], "filesError": "HTTP 502" })).unwrap();
+        assert_eq!(later.with_files(failed).files_error.as_deref(), Some("HTTP 502"));
     }
 
     #[test]

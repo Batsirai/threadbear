@@ -751,6 +751,7 @@ fn rested(serial: u64, pane: &WeakEntity<ThreadPane>, thread: &str, row: &str, w
         return;
     }
     hide_peek(cx);
+    preload_pr(pane, &url, cx);
     let spot = link_spot(at, &url, window, cx);
     PEEK.with(|p| p.borrow_mut().hovered = Some(Hovered { pane: pane.clone(), thread: thread.to_owned(), row: row.to_owned(), url: url.clone(), spot, card: None }));
     let (pane, row, thread) = (pane.clone(), row.to_owned(), thread.to_owned());
@@ -773,7 +774,21 @@ fn rested(serial: u64, pane: &WeakEntity<ThreadPane>, thread: &str, row: &str, w
         .detach();
 }
 
-/// Whether a link can have a card, cheaply: a web page or a file does
+/// A rest on a PR link that opens in a tab (the inlinePrs experiment) starts
+/// reading the PR, ahead of the click (pr_view.rs `preload_pr`).
+fn preload_pr(pane: &WeakEntity<ThreadPane>, url: &str, cx: &mut App) {
+    if crate::pr_view::pr_url(url).is_none() {
+        return;
+    }
+    let Some(app) = pane.upgrade().and_then(|p| p.read(cx).app.upgrade()) else { return };
+    if !crate::pr_view::on(app.read(cx)) {
+        return;
+    }
+    let side = app.read(cx).side.clone();
+    side.update(cx, |side, cx| side.preload_pr(url, cx));
+}
+
+/// Whether a link can have a card, cheaply:a web page or a file does
 /// (`peek(atCharacter:)`); Threadbear's own links (a step, a thread, a
 /// review, a chip, a reply button) and other apps' (`mailto:`) don't.
 pub(crate) fn has_card(url: &str) -> bool {
@@ -1132,8 +1147,10 @@ pub(crate) fn peek_command(app: &Entity<crate::app::Threadbear>, cmd: &serde_jso
             _ => None,
         }
     } else { None };
-    // Its card, as resting the pointer there shows it.
+    // Its card, as resting the pointer there shows it, and a PR's read
+    // started, as the rest starts it.
     hide_peek(cx);
+    preload_pr(&pane.downgrade(), &url, cx);
     let Some(card) = pane.read(cx).peek_card(&url, &row.id) else { return Some(Err(format!("{words} has no card"))) };
     let card = match card {
         Card::File { words, picture: FilePicture::Lines(path, None) } => {

@@ -1855,6 +1855,9 @@ impl ThreadPane {
                         if let Some(marks) = crate::pr_view::dump_marks(&item.text, app.read(cx), cx) {
                             out["prMarks"] = json!(marks);
                         }
+                        if let Some(read) = crate::pr_view::dump_read(&item.text, app.read(cx), cx) {
+                            out["prsRead"] = json!(read);
+                        }
                     }
                 }
                 if let Some(chips) = crate::chips::row_chips(self, row, cx) {

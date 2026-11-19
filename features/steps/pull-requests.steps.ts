@@ -6,7 +6,7 @@ import type { Dump } from '../support/driver.ts';
 // A PR open as a tab in the pane (the inlinePrs experiment). The GPUI app's
 // dump has it as the pane's preview, `previewKind` "pr", and `pr` with the
 // words the tab draws.
-type PrDump = { url: string; tab?: string | null; busy?: string | null; error?: string | null; pr: { title: string; state: string; status: string; checks: string; failed?: string | null; files: string[]; activity: string[] } | string };
+type PrDump = { url: string; tab?: string | null; busy?: string | null; error?: string | null; pr: { title: string; state: string; status: string; checks: string; failed?: string | null; files: string[]; filesLater?: boolean; activity: string[] } | string };
 const pr = (d: Dump): PrDump | undefined => {
   const p = pane(d) as (ReturnType<typeof pane> & { pr?: PrDump }) | undefined;
   return p?.previewKind === 'pr' ? p.pr : undefined;
@@ -62,7 +62,7 @@ Then("the PR's button {string} is busy", async function (this: ThreadbearWorld, 
 
 // A PR link in a reply has a mark before it in its state's colour; the
 // dump has each as "<url>: <state>" (`prMarks`).
-type MarkedRow = { kind: string; prMarks?: string[] };
+type MarkedRow = { kind: string; id: string; prMarks?: string[]; prsRead?: string[] };
 When('a reply linking the PR {string} streams in', async function (this: ThreadbearWorld, url: string) {
   const d = await this.app.dump();
   await this.app.do({ cmd: 'mock', method: 'stream', params: { threadId: d.selection?.id, text: `It's [#72](${url}) for now.`, hz: 60 } });
@@ -71,4 +71,21 @@ When('a reply linking the PR {string} streams in', async function (this: Threadb
 
 Then('the mark before the PR {string} says {string}', async function (this: ThreadbearWorld, url: string, state: string) {
   await this.until(`the mark "${url}: ${state}"`, (d) => [...d.transcript.rows].some((r) => (r as unknown as MarkedRow).prMarks?.includes(`${url}: ${state}`)));
+});
+
+// Resting the pointer on a link (both apps' `peek`) reads a PR link's PR
+// ahead of the click; the dump has each one read or being read in the
+// reply's `prsRead`.
+When("I rest the pointer on the reply's link {string}", async function (this: ThreadbearWorld, words: string) {
+  const row = await this.until('a reply from the agent', (d) => [...d.transcript.rows].reverse().find((r) => r.kind === 'assistant'));
+  await this.app.do({ cmd: 'peek', row: row.id, words });
+});
+
+Then('the PR {string} is being read', async function (this: ThreadbearWorld, url: string) {
+  await this.until(`"${url}" read ahead`, (d) => [...d.transcript.rows].some((r) => (r as unknown as MarkedRow).prsRead?.includes(url)));
+});
+
+// The mock's PR files come 3 s after the rest (@slow-pr-files).
+Then("the PR's changes are still being read", async function (this: ThreadbearWorld) {
+  await this.until('the PR read without its files', (d) => loaded(d)?.filesLater === true && loaded(d)?.files.length === 0);
 });

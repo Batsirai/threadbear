@@ -17,7 +17,7 @@ import type { CallerGate } from './rpc-gate.ts';
 import type { PeerSocket } from './peer.ts';
 import { cutSafely } from './safe-cut.ts';
 import { wellFormedJson } from './well-formed-json.ts';
-import { fetchPr, forgetStates, parsePrUrl, prAct, prStates, type PrAction, type PrRef } from './github-pr.ts';
+import { fetchPr, fetchPrFiles, forgetStates, parsePrUrl, prAct, prStates, type PrAction, type PrRef } from './github-pr.ts';
 
 type Conn = {
   id: number;
@@ -971,7 +971,9 @@ export class RpcServer {
       // A GitHub PR for the app's PR tab (github-pr.ts). Mike's clicks only:
       // not in rpc-gate's reads, so a thread's key can't merge or comment.
       case 'github.pr':
-        return ghCall(() => fetchPr(reqPrRef(p)));
+        return ghCall(() => fetchPr(reqPrRef(p), undefined, { files: p.files !== false }));
+      case 'github.prFiles':
+        return ghCall(() => fetchPrFiles(reqPrRef(p)));
       case 'github.prStates': {
         if (!Array.isArray(p.urls) || p.urls.some((u) => typeof u !== 'string')) throw bad('urls must be an array of strings');
         return ghCall(async () => ({ states: await prStates(p.urls as string[]) }));

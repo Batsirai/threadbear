@@ -1656,7 +1656,13 @@ async function dispatch(client, method, p) {
       return { connectors };
     case 'github.pr':
       if (!String(p.url ?? '').startsWith(MOCK_PR_URL)) throw rpcError(-32000, 'GraphQL: Could not resolve to a PullRequest');
-      return mockPr;
+      return p.files === false ? { ...mockPr, files: [], filesLater: true } : mockPr;
+    case 'github.prFiles':
+      if (!String(p.url ?? '').startsWith(MOCK_PR_URL)) throw rpcError(-32000, 'GraphQL: Could not resolve to a PullRequest');
+      // Later than the rest, as a big PR's diff is, so a spec can see the
+      // PR before its files.
+      await new Promise((resolve) => setTimeout(resolve, Number(process.env.TB_MOCK_PR_FILES_MS ?? 0)));
+      return { files: mockPr.files };
     case 'github.prStates':
       return { states: Object.fromEntries((p.urls ?? []).filter((u) => String(u).startsWith(MOCK_PR_URL)).map((u) => [u, mockPr.state])) };
     case 'github.prAct': {

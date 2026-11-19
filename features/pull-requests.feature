@@ -39,3 +39,16 @@ Feature: Pull requests open beside the thread
     When I follow the PR link "https://github.com/acme/app/pull/72" in the thread
     And I press the PR's button "Closes the PR on GitHub"
     Then the mark before the PR "https://github.com/acme/app/pull/72" says "Closed"
+
+  @pane.prs @inline-prs @swift-pending
+  Scenario: Resting the pointer on a PR link starts reading it before the click
+    When a reply linking the PR "https://github.com/acme/app/pull/72" streams in
+    And I rest the pointer on the reply's link "#72"
+    Then the PR "https://github.com/acme/app/pull/72" is being read
+
+  @pane.prs @inline-prs @slow-pr-files @swift-pending
+  Scenario: A PR shows before its changes are read
+    When I follow the PR link "https://github.com/acme/app/pull/72" in the thread
+    Then the PR's status reads "Open"
+    And the PR's changes are still being read
+    And the PR lists the file "runner/src/swift-changes.ts"
