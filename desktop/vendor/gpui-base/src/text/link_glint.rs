@@ -7,8 +7,10 @@
 //! It draws over the words, never re-lays them out: the link's text is
 //! shaped again in a lighter color (GPUI's shaping cache ignores color, so
 //! that is a lookup) and painted through thin vertical masks, each a little
-//! more see-through towards the band's edges, which makes the soft edge
-//! GPUI can't draw as a gradient on text. One link glints at a time, and
+//! less lit towards the band's edges, which makes the soft edge GPUI can't
+//! draw as a gradient on text. The colors are mixed solid ([`lit`]), not
+//! see-through: translucent text painted over the same text didn't show at
+//! all on the Linux build (19 Nov), though the shapes lined up exactly. One link glints at a time, and
 //! nothing plays with Reduce Motion on.
 
 #[cfg(not(target_family = "wasm"))]
@@ -81,6 +83,17 @@ pub(super) fn shine(color: Hsla) -> Hsla {
     }
 }
 
+/// `color` taken `strength` (0 to 1) of the way to [`shine`], solid: the
+/// copy covers the words' own glyphs exactly, so mixing here looks the same
+/// as a see-through shine over them, and a renderer that draws translucent
+/// text over text differently can't lose it (the Linux build showed none).
+pub(super) fn lit(color: Hsla, strength: f32) -> Hsla {
+    let (from, to) = (gpui::Rgba::from(color), gpui::Rgba::from(shine(color)));
+    let k = strength.clamp(0., 1.);
+    let mix = |a: f32, b: f32| a + (b - a) * k;
+    Hsla::from(gpui::Rgba { r: mix(from.r, to.r), g: mix(from.g, to.g), b: mix(from.b, to.b), a: from.a })
+}
+
 /// What to paint at `t` (0 to 1) of a glint across a link `width` wide,
 /// measured along the link as it reads (its rows laid end to end): how
 /// strongly the whole link lightens, and the band's strips, each a span
@@ -146,5 +159,17 @@ mod tests {
         assert!(light.l > 0.9 && light.l < 1.);
         assert_eq!(light.h, blue.h);
         assert_eq!(light.a, 1.);
+    }
+
+    #[test]
+    fn lit_mixes_solid_from_the_link_to_the_shine() {
+        let blue = gpui::hsla(0.59, 1., 0.63, 1.);
+        let none = gpui::Rgba::from(lit(blue, 0.));
+        let full = gpui::Rgba::from(lit(blue, 1.));
+        let half = gpui::Rgba::from(lit(blue, 0.5));
+        let (b, s) = (gpui::Rgba::from(blue), gpui::Rgba::from(shine(blue)));
+        assert!((none.r - b.r).abs() < 0.01 && (full.r - s.r).abs() < 0.01);
+        assert!(half.r > b.r && half.r < s.r);
+        assert_eq!(half.a, 1.);
     }
 }

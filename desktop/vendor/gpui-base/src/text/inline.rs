@@ -1165,8 +1165,7 @@ impl Inline {
                     }
                     let mut run = run.clone();
                     run.len = end - start;
-                    let light = super::link_glint::shine(run.color);
-                    run.color = Hsla { a: light.a * strength, ..light };
+                    run.color = super::link_glint::lit(run.color, strength);
                     run.underline = None;
                     run.strikethrough = None;
                     run.background_color = None;
@@ -1192,7 +1191,9 @@ impl Inline {
                 if from >= to {
                     continue;
                 }
-                let line = shaped(*strength, window);
+                // Solid, so each strip carries the whole link's lift too,
+                // as a see-through band over the lifted link would.
+                let line = shaped(whole + (1. - whole) * *strength, window);
                 paint(line, from, to, window, cx);
             }
             along += right - left;
