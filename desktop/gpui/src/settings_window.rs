@@ -1511,7 +1511,13 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, cx: &mut App) ->
 #[cfg(feature = "automation")]
 pub(crate) fn scroll_into_view(app: &Entity<Threadbear>, bounds: Bounds<Pixels>, cx: &App) -> bool {
     let Some((_, view)) = app.read(cx).settings_window.as_ref() else { return false };
-    let scroll = &view.read(cx).scroll;
+    scroll_to(&view.read(cx).scroll, bounds)
+}
+
+/// Scrolls `scroll`'s pane so `bounds`, drawn wholly or partly out of
+/// sight in it, comes into view. False when it's in view already.
+#[cfg(feature = "automation")]
+pub(crate) fn scroll_to(scroll: &ScrollHandle, bounds: Bounds<Pixels>) -> bool {
     let (pane, offset, most) = (scroll.bounds(), scroll.offset(), scroll.max_offset());
     let margin = gpui_kit::px(12.);
     let y = if bounds.bottom() > pane.bottom() {

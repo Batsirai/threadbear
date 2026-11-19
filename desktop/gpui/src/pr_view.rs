@@ -64,9 +64,27 @@ pub(crate) struct PrPanes {
     /// links already asked about (`github.prStates`).
     states: HashMap<String, PrState>,
     asked: std::collections::HashSet<String>,
+    /// The PR the pane drew last, for a script's click to scroll to a
+    /// button below its bottom.
+    #[cfg(feature = "automation")]
+    shown: Option<String>,
 }
 
 impl PrPanes {
+    /// Scrolls the PR on show so `bounds`, a control drawn out of sight
+    /// in it, comes into view, as a person scrolls down to Close without
+    /// merging (below the bottom on GitHub's 1024 by 768 Macs, 18 Nov).
+    #[cfg(feature = "automation")]
+    pub(crate) fn scroll_into_view(&self, bounds: Bounds<Pixels>) -> bool {
+        let Some(ui) = self.shown.as_ref().and_then(|url| self.ui.get(url)) else { return false };
+        let pane = ui.scroll.bounds();
+        // Only a control in this pane's column.
+        if bounds.center().x < pane.left() || bounds.center().x > pane.right() {
+            return false;
+        }
+        crate::settings_window::scroll_to(&ui.scroll, bounds)
+    }
+
     #[cfg(feature = "automation")]
     pub(crate) fn describe(&self, url: &str) -> Value {
         let ui = self.ui.get(url);
@@ -332,6 +350,10 @@ impl SidePane {
             Some(PrLoad::Ready(pr)) => pr.clone(),
         };
         self.prs.ui.entry(url.to_owned()).or_default();
+        #[cfg(feature = "automation")]
+        {
+            self.prs.shown = Some(url.to_owned());
+        }
         let ui_tab = self.prs.ui[url].tab;
         let scroll = self.prs.ui[url].scroll.clone();
         let body = match ui_tab {
