@@ -55,7 +55,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSync } from 'oxc-parser';
 import { atomicWriteFileSync } from './fsutil.ts';
-import { claudeCommands, type ClaudeOptions } from './claude-trust.ts';
+import { claudeCommands, type ClaudeCommands, type ClaudeOptions } from './claude-trust.ts';
+import type { Lane, TrustOffThread } from './trust-off-thread.ts';
 import { isBinary, looksRunnable, MAX_READ_BYTES, reachOf, reachOfCommand, Reads, type FollowOptions, type ScriptReach } from './script-trust.ts';
 import { bareImport } from './tracked-packages.ts';
 import { allowCommand } from './shell-allowlist.ts';
@@ -181,7 +182,13 @@ export interface PatchTrustStore extends PatchGate {
   // The thread folder's Claude Code settings (claude-trust.ts), with
   // what lets tools run unasked counted too for a thread that asks first
   // (`grants`).
-  checkClaude(cwd: string, opts?: ClaudeOptions): ClaudeVerdict;
+  // `look`, from lookClaude: what the folder's settings run, looked at off
+  // the main thread, used in place of looking again when it's of this
+  // folder and kind of thread.
+  checkClaude(cwd: string, opts?: ClaudeOptions, look?: ClaudeLook): ClaudeVerdict;
+  // The slow part of checkClaude, on a worker thread (trust-off-thread.ts).
+  // Absent: checkClaude looks for itself.
+  lookClaude?(cwd: string, opts?: ClaudeOptions, lane?: Lane): Promise<ClaudeLook>;
   trustClaude(cwd: string, hash: string): boolean;
   // An agent's verified Edit or Write to `file` in a Full access thread in
   // `cwd`, which wrote bytes hashing to `sha256` from a file hashing to
@@ -219,6 +226,12 @@ export const TRUST_ALL: PatchTrustStore = {
   save: () => {},
 };
 
+// What a folder's Claude Code settings run, as claudeCommands found it,
+// for checkClaude to judge against what's trusted at the time.
+// `skipped`: not looked at, as the folder was trusted whatever it held then;
+// checkClaude looks for itself if that has changed.
+export type ClaudeLook = { cwd: string; grants: boolean; found: ClaudeCommands | undefined; skipped?: true };
+
 const UNVOUCHED_VERSION = 2;
 
 export class PatchTrust implements PatchTrustStore {
@@ -241,9 +254,13 @@ export class PatchTrust implements PatchTrustStore {
 
   // `file` undefined keeps it in memory (tests). `always` are folders whose
   // patches are trusted whatever they hold.
-  constructor(opts: { file?: string; always?: string[]; claudeHome?: string } = {}) {
+  private offThread: TrustOffThread | undefined;
+  // offThread: where lookClaude looks (the runner's trust worker); without
+  // one, on the calling thread.
+  constructor(opts: { file?: string; always?: string[]; claudeHome?: string; offThread?: TrustOffThread } = {}) {
     this.file = opts.file;
     this.claudeHome = opts.claudeHome;
+    this.offThread = opts.offThread;
     this.always = (opts.always ?? []).map((d) => realpath(path.resolve(d)));
     this.existed = this.load() !== 'missing';
   }
@@ -436,11 +453,20 @@ export class PatchTrust implements PatchTrustStore {
     return { trusted: false, reason: before ? 'changed' : 'new', hash, ...(helpers.length ? { helpers } : {}) };
   }
 
-  checkClaude(cwd: string, opts: ClaudeOptions = {}): ClaudeVerdict {
+  async lookClaude(cwd: string, opts: ClaudeOptions = {}, lane: Lane = 'background'): Promise<ClaudeLook> {
+    const grants = opts.grants === true;
+    this.load();
+    // Trusted whatever it holds: nothing to look at.
+    if (this.alwaysFor(folderKeyOfDir(cwd), cwd)) return { cwd, grants, found: undefined, skipped: true };
+    const found = this.offThread ? await this.offThread.claudeCommands(cwd, this.claudeHome ?? os.homedir(), grants, lane) : claudeCommands(cwd, this.claudeHome, opts);
+    return { cwd, grants, found };
+  }
+
+  checkClaude(cwd: string, opts: ClaudeOptions = {}, look?: ClaudeLook): ClaudeVerdict {
     this.load();
     const key = folderKeyOfDir(cwd);
     if (this.alwaysFor(key, cwd)) return { trusted: true };
-    const found = claudeCommands(cwd, this.claudeHome, opts);
+    const found = look && !look.skipped && look.cwd === cwd && look.grants === (opts.grants === true) ? look.found : claudeCommands(cwd, this.claudeHome, opts);
     if (!found) return { trusted: true };
     const known = (this.folders.get(key) ?? []).filter((h) => h.startsWith(CLAUDE_PREFIX));
     const base = { hash: found.hash, files: found.files, named: found.named, read: found.read, ...(found.grants ? { grants: found.grants } : {}) };

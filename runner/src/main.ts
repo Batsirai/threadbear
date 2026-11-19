@@ -77,6 +77,7 @@ import { isDirectory, removeTempFiles } from './fsutil.ts';
 import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
 import { SelfProfiler, profileMethods, watchStalls } from './self-profile.ts';
+import { TrustOffThread } from './trust-off-thread.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
 import { ConvexSync, convexPoster, convexUploader, defaultRunnerName, ensureRunnerId, keyRejected, readSyncKey } from './sync.ts';
 import { BOX_NO_SCHEDULES, BoxFolderBroken, bootBox, enterBoxEnv, markSetUp, prepareBoxFolder, readBoxBoot, repoFolderName, setBaseline, setSaveHold, type ActionPost, type BoxSecrets } from './box-mode.ts';
@@ -429,6 +430,7 @@ async function main(): Promise<void> {
   // only come through that mirror.
   let atMac: boolean | undefined;
   const instructions = new InstructionsStore({ home: cfg.home, token, publish: (n) => runner.publish(n) });
+  const trustWorker = new TrustOffThread();
   runner = new Runner({
     // A box's one thread, and whether its restored worktree's setup must run
     // before any turn (runner/moves.ts setUpRestored).
@@ -460,7 +462,9 @@ async function main(): Promise<void> {
     log,
     models,
     // A box's clone is its own checkout too: its repo's worktree setup runs as a new thread's would.
-    patchTrust: new PatchTrust({ file: path.join(cfg.home, 'patch-trust.json'), always: [ownCheckout(), ...(box && !box.broken ? [box.checkout] : [])] }),
+    // The slow looks at folders on worker threads, not the main one (trust-off-thread.ts).
+    patchTrust: new PatchTrust({ file: path.join(cfg.home, 'patch-trust.json'), always: [ownCheckout(), ...(box && !box.broken ? [box.checkout] : [])], offThread: trustWorker }),
+    offThread: trustWorker,
     // Keeps any text end_turn's own sign-up or wait_for_app_restart gave.
     appRestartAsked: (threadId) => {
       if (!appRestarts.isWatching(threadId)) appRestarts.watch(threadId);

@@ -112,8 +112,9 @@ import { archiveFromTool, bylineFromTool, END_TURN_TOOL, endTurnAccepted, endTur
 import type { Needs } from './needs.ts';
 import { asksForAppRestart, MAX_AGE_MS as APP_RESTART_MAX_AGE_MS } from './app-restarts.ts';
 import type { ConnectorsStatus } from './connectors.ts';
-import { isPatchFile, PatchTrust, type ClaudeVerdict, type PatchTrustStore } from './patch-trust.ts';
-import { claudeOptions, claudeSettingsWithoutCommands } from './claude-trust.ts';
+import type { TrustOffThread } from './trust-off-thread.ts';
+import { isPatchFile, PatchTrust, type ClaudeLook, type ClaudeVerdict, type PatchTrustStore } from './patch-trust.ts';
+import { claudeOptions, claudeSettingsWithoutCommands, type ClaudeOptions } from './claude-trust.ts';
 import {
   EMPTY_PATCH_SET,
   findWorktreePatch,
@@ -466,6 +467,12 @@ type Runtime = {
   // skipped (claude-trust.ts). `claudeNoted` is the last one said in the
   // thread, so a session restart doesn't say it again.
   claudeSkipped?: string;
+  // deliver's look at the folder's Claude Code settings, done on the trust
+  // worker (trust-off-thread.ts) for startSession, and `lookingAtClaude`
+  // while it's under way (no steering meanwhile: the message would reach
+  // the CLI before the turn's own).
+  claudeLooks?: { at: number; cwd: string; looks: ClaudeLook[] };
+  lookingAtClaude?: boolean;
   // Started in Full with the folder's settings, which hold permission
   // rules not trusted for a thread that asks first (StartSessionOptions.heldGrants).
   claudeHeldGrants?: boolean;
@@ -645,6 +652,9 @@ export type RunnerDeps = {
   // Which project patch files may load (patch-trust.ts). Defaults to
   // patch-trust.json in the data dir; tests not about trust pass TRUST_ALL.
   patchTrust?: PatchTrustStore;
+  // The trust worker (trust-off-thread.ts) for the slow parts of reading a
+  // folder's patches; without one they run on the main thread (tests).
+  offThread?: TrustOffThread;
   // The shell command actions run through, and how long they may take;
   // tests pass /bin/sh -c and a short limit.
   actionShell?: string[];
@@ -702,6 +712,16 @@ const STARTUP_NOTICE_MS = 10 * 60_000;
 // How long a finished background task keeps the thread counted as busy
 // while the CLI gets round to its own turn (usually well under a second).
 const WAKE_GRACE_MS = 15_000;
+// How old deliver's look at the folder's Claude Code settings may be when
+// the CLI starts; older, startSession looks again (rt.claudeLooks).
+const CLAUDE_LOOK_MS = 5_000;
+
+// The look of `looks` for this folder and kind of thread, if there is one.
+function lookFor(looks: { cwd: string; looks: ClaudeLook[] } | undefined, cwd: string, opts: ClaudeOptions): ClaudeLook | undefined {
+  if (!looks || looks.cwd !== cwd) return undefined;
+  return looks.looks.find((l) => l.grants === (opts.grants === true));
+}
+
 // How long a thread's patches are kept before the folder is read again.
 export const PATCHES_TTL_MS = 15_000;
 // How long a folder listing (and a patch file's time, a .env) read for one
@@ -783,13 +803,16 @@ export class Runner {
   activity = new Set<(a: ThreadActivity) => void>();
   patchCache: PatchCache = new Map();
   patchTrust: PatchTrustStore;
+  offThread?: TrustOffThread;
   folderCache: FolderCache;
   sharedPatchSets = new Map<string, { at: number; set: Promise<PatchSet> }>();
   patchReads = new Set<Promise<void>>();
   liveRuns = new Map<string, { doneAt?: number; out: Promise<CommandOutcome> }>();
   // Each folder's Claude settings verdict for its patch list, read again
   // as often as the folders are (claudePatchInfo).
-  claudeChecks = new Map<string, { at: number; verdict: ClaudeVerdict }>();
+  claudeChecks = new Map<string, { at: number; look?: ClaudeLook }>();
+  // Bumped by forgetFolders: a look begun before it isn't kept.
+  claudeChecksGen = 0;
   threads = new Map<string, ThreadState>();
   // Other runners' names by id, for what a move says (main.ts sets it).
   runnerNames?: (runnerId: string) => string | undefined;
@@ -875,6 +898,7 @@ export class Runner {
     this.screenshot = deps.screenshot ?? simctlScreenshot;
     this.panelsRoot = deps.panelsRoot;
     this.patchTrust = deps.patchTrust ?? new PatchTrust({ file: path.join(deps.config.home, 'patch-trust.json') });
+    this.offThread = deps.offThread;
     this.actionShell = deps.actionShell;
     this.actionTimeoutMs = deps.actionTimeoutMs;
     this.backgroundJobs = deps.backgroundJobs ?? true;
@@ -1983,10 +2007,36 @@ export class Runner {
   // meant for that), not after Stop was pressed (the CLI would cancel it
   // with the rest), and not into a turn opened only for a card, where
   // there's no CLI turn to join.
+  // deliver's look at the folder's Claude Code settings (rt.claudeLooks),
+  // on the trust worker's urgent lane. Nothing when there's no worker to
+  // ask or it fails: then checkClaude looks for itself, as before.
+  async claudeLooks(st: ThreadState): Promise<Runtime['claudeLooks']> {
+    const { rec, rt } = st;
+    const lookClaude = this.patchTrust.lookClaude?.bind(this.patchTrust);
+    if (!lookClaude) return undefined;
+    const at = this.clock.now();
+    const cwd = rec.cwd;
+    // What startSession and the check above ask: the thread's own kind,
+    // and in Full the asking kind too.
+    const kinds = rec.permissionMode === 'full' ? [false, true] : [true];
+    rt.lookingAtClaude = true;
+    try {
+      const looks = await Promise.all(kinds.map((grants) => lookClaude(cwd, { grants }, 'urgent')));
+      rt.claudeLooks = { at, cwd, looks };
+      return rt.claudeLooks;
+    } catch (e) {
+      this.log.warn("could not look at the folder's Claude Code settings off the main thread", { threadId: rec.id, error: String(e) });
+      rt.claudeLooks = undefined;
+      return undefined;
+    } finally {
+      rt.lookingAtClaude = false;
+    }
+  }
+
   canSteer(st: ThreadState): boolean {
     const { rec, rt } = st;
     const turn = rt.turn;
-    if (!turn || !rt.session || rt.closing || this.stopping || rt.editing) return false;
+    if (!turn || !rt.session || rt.closing || this.stopping || rt.editing || rt.lookingAtClaude) return false;
     if (rec.queue.some(q => !isAutomaticInput(q)) || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
     // Nor into a compaction or review (a skill's turn takes them).
     if (turn.noSteer || turn.local) return false;
@@ -2143,21 +2193,26 @@ export class Runner {
 
   async deliver(st: ThreadState, msg: QueuedSend): Promise<void> {
     const { rec, rt } = st;
+    // Deleted (which leaves rt.turn as it was) or interrupted meanwhile.
+    const gone = () => rt.deleted || rt.turn?.turnId !== msg.turnId;
+    // The folder's Claude Code settings as they are now, read on the trust
+    // worker: a folder outside git is walked, which held the main thread
+    // for seconds at every message (19 Nov).
+    const claude = rec.provider === 'claude' && this.patchTrust.lookClaude ? await this.claudeLooks(st) : undefined;
+    if (claude && gone()) return;
     // A folder, account or settings change asked for a fresh CLI, or a CLI
     // update came in since this one started.
     if (rt.session && (rt.releaseWhenIdle || rec.handoff || (rt.versionMove && rt.tasks.length === 0))) this.releaseSession(st);
     // The folder's Claude Code hooks were trusted since the CLI started
     // without them, or new ones came that aren't (a pull): a fresh CLI
     // reads the folder's settings again.
-    else if (rt.session && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec)).trusted) this.releaseSession(st);
+    else if (rt.session && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(claude, rec.cwd, claudeOptions(rec))).trusted) this.releaseSession(st);
     // Never two live CLIs on one session: wait for a releasing one to exit.
     while (rt.closing) await rt.closing;
     // An archive's worktree cleanup still running: where this turn starts
     // depends on whether it removed the folder (leaveRemovedWorktree), and
     // a CLI started there meanwhile would have the folder taken from under it.
     while (rt.cleaning) await rt.cleaning;
-    // Deleted (which leaves rt.turn as it was) or interrupted meanwhile.
-    const gone = () => rt.deleted || rt.turn?.turnId !== msg.turnId;
     if (gone()) return; // interrupted while waiting
     const local = this.runLocalCommand(st, msg);
     if (local === true || (local !== false && (await local))) return;
@@ -2378,9 +2433,14 @@ export class Runner {
     // One the old sandbox experiment shut in, or in a folder it named.
     const retired = this.retiredSandbox(rec.cwd, rec);
     if (retired) throw new Error(retired);
-    const claude = rec.provider === 'claude' ? this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec)) : undefined;
+    // deliver's look, when it's of this folder and new enough: a turn that
+    // waited long (an old CLI closing) looks again here.
+    const looked = rt.claudeLooks;
+    rt.claudeLooks = undefined;
+    const fresh = looked && this.clock.now() - looked.at < CLAUDE_LOOK_MS ? looked : undefined;
+    const claude = rec.provider === 'claude' ? this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(fresh, rec.cwd, claudeOptions(rec))) : undefined;
     rt.claudeSkipped = claude && !claude.trusted ? claude.hash : undefined;
-    rt.claudeHeldGrants = Boolean(claude?.trusted && rec.permissionMode === 'full' && !this.patchTrust.checkClaude(rec.cwd, { grants: true }).trusted);
+    rt.claudeHeldGrants = Boolean(claude?.trusted && rec.permissionMode === 'full' && !this.patchTrust.checkClaude(rec.cwd, { grants: true }, lookFor(fresh, rec.cwd, { grants: true })).trusted);
     rt.session = adapter.start(
       {
         threadId: rec.id,
