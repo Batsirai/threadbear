@@ -14,12 +14,12 @@
 //      TB_WEB_RUNTIME_ARCHIVE=<the pinned archive> node features/tools/real-typing.ts'
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GpuiDriver } from '../support/gpui.ts';
 import { sleep, type Dump } from '../support/driver.ts';
 import { startSites, stopSites } from '../support/web-pages.ts';
+import { runtimeParent } from '../support/web-runtime.ts';
 import { assertInFront, windowFrame, work } from './real-screen.ts';
 import { ensurePerfLock } from './perf-lock.ts';
 
@@ -100,7 +100,7 @@ async function inFront(): Promise<void> {
 }
 
 // The web runtime, installed once into a folder of this run's.
-const runtime = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tb-real-typing-runtime-'));
+const runtime = fs.mkdtempSync(path.join(runtimeParent(), 'tb-real-typing-runtime-'));
 process.env.THREADBEAR_WEB_RUNTIME_DIR = runtime;
 const sites = await startSites();
 

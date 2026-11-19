@@ -284,6 +284,16 @@ export THREADBEAR_SHARED_CARGO_BASE="\$HOME/$base" THREADBEAR_SHARED_CARGO_SRC="
 export CARGO_PROFILE_DEV_DEBUG=line-tables-only
 export TMPDIR="\$HOME/$base/tmp"
 mkdir -p "\$TMPDIR"
+# The web runtimes the specs and real-screen tools install, though, go on the
+# home disk. On Tinker Desk $base is an external SSD, and Chromium starts its
+# helpers as apps in their own right: run from that disk, each new build's
+# Threadbear Helper asked macOS for it, with nobody at the screen to answer,
+# and the prompt held Desk Runner's own reads too (19 Nov). This checkout's
+# folder is emptied at each run (its runs take turns), and others' after a day.
+export THREADBEAR_WEB_RUNTIME_PARENT="\$HOME/.cache/threadbear-check/web-runtimes/$key"
+find "\$HOME/.cache/threadbear-check/web-runtimes" -mindepth 1 -maxdepth 1 -mtime +1 -exec rm -rf {} + 2>/dev/null || true
+rm -rf "\$THREADBEAR_WEB_RUNTIME_PARENT"
+mkdir -p "\$THREADBEAR_WEB_RUNTIME_PARENT"
 . scripts/build-priority.sh
 # The shared targets' cargo goes in front of build-priority's, which wrote the
 # real cargo's path into its own as it was made: so the slot's wait and copy

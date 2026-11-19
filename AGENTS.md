@@ -244,6 +244,12 @@ else may be using that desktop: first check nothing's recording it
 names, including variants) and that your window really is in front (`front`,
 then a look at the screen). Wake its screen with `caffeinate -u`, or the events go nowhere.
 
+A spec or tool that installs the web runtime puts it in `runtimeParent()`
+(`features/support/web-runtime.ts`), never straight in the temp folder:
+remote.sh's temp folder is on Tinker Desk's external SSD, and Chromium's
+helpers run from there asked macOS for that disk on every new build, with
+nobody at the screen to answer (19 Nov).
+
 ## The GPUI port
 
 The desktop app is being rewritten as one GPUI app for Mac, Windows and Linux
