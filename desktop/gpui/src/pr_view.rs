@@ -1153,18 +1153,14 @@ mod cache {
         serde_json::from_slice(&bytes).ok()
     }
 
-    /// Written whole and then moved into place, so a read never finds half.
+    /// Written whole and moved into place, this user's only (private repos'
+    /// PRs are in it), so a read never finds half.
     pub(super) fn write(kept: &CachedPr) {
         let (Some(dir), Some(r)) = (folder(), PrRef::parse(&kept.pr.url)) else { return };
         let Ok(bytes) = serde_json::to_vec(kept) else { return };
-        if std::fs::create_dir_all(&dir).is_err() {
-            return;
+        if threadbear_core::private_file::write(&dir.join(r.cache_name()), &bytes).is_ok() {
+            prune(&dir);
         }
-        let (to, part) = (dir.join(r.cache_name()), dir.join(format!("{}.part", r.cache_name())));
-        if std::fs::write(&part, bytes).is_ok() && std::fs::rename(&part, &to).is_err() {
-            let _ = std::fs::remove_file(&part);
-        }
-        prune(&dir);
     }
 
     fn prune(dir: &std::path::Path) {
