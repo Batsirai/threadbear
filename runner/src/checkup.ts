@@ -29,10 +29,11 @@ import { repoKey, TAG_PREFIX } from './upstream.ts';
 import type { PatchInfo } from './protocol.ts';
 
 export const CHECKUPS_REPO = 'mikecann/threadbear';
-// The pinned Discussion check-ups go to, as comments. Undefined until Mike
-// has opened it: --post then says it isn't set up, and the doc's step is
-// skipped.
-export const CHECKUPS_DISCUSSION: number | undefined = undefined;
+// The pinned Discussion check-ups go to, as comments
+// (https://github.com/mikecann/threadbear/discussions/85). Undefined in a
+// fork that takes this out: --post then says there's nowhere to send it,
+// and the doc's step is skipped.
+export const CHECKUPS_DISCUSSION: number | undefined = 85;
 
 const MIKES_REPO = 'github.com/mikecann/threadbear';
 const DAY_MS = 86_400_000;
