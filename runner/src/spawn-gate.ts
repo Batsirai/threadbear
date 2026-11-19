@@ -75,6 +75,12 @@ export function installSpawnGate(): void {
 }
 
 // While closed, every process start is refused, saying `why`, but the save's own.
+// Whether the gate is on (box mode): the trust worker (trust-off-thread.ts)
+// won't start then, as a worker thread's processes would get round it.
+export function spawnGateInstalled(): boolean {
+  return installed;
+}
+
 export function closeSpawns(why: string): void {
   closed = why;
 }

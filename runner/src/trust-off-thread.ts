@@ -20,6 +20,7 @@ import { SHARE_ENV, Worker } from 'node:worker_threads';
 import { claudeCommands, type ClaudeCommands } from './claude-trust.ts';
 import { codeOfUnhashedPatch, type UnsureWhy } from './unhashed-scan.ts';
 import { noFifoReads } from './no-fifo-reads.ts';
+import { spawnGateInstalled } from './spawn-gate.ts';
 
 export type TrustRequest = { id: number } & (
   // One look per kind of thread (grants or not), one after the other.
@@ -264,6 +265,10 @@ export class TrustOffThread {
   private shared = new Map<string, Promise<unknown>>();
   // script: the worker's code (tests give one that never answers).
   constructor(o: { timeoutMs?: number; script?: URL } = {}) {
+    // Box mode's gate (spawn-gate.ts) holds the main thread's processes
+    // only, and a look runs git: main.ts makes none there, and this makes
+    // sure.
+    if (spawnGateInstalled()) throw new Error("No trust worker in box mode: a worker's processes would get round its spawn gate.");
     const ms = o.timeoutMs ?? TRUST_CALL_TIMEOUT_MS;
     const script = o.script ?? new URL('./trust-worker.ts', import.meta.url);
     const stuck = new Map<string, Set<Worker>>();

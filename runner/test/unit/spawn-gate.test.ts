@@ -70,6 +70,16 @@ test("the gate covers every function node:child_process has that starts a proces
   assert.deepEqual(fns.filter((k) => k !== 'ChildProcess' && k !== '_forkChild').sort(), [...SPAWNERS].sort());
 });
 
+// Workers that refuse to start once the gate is installed (the test below
+// checks each does).
+const WORKERS_REFUSED_IN_BOX = ['trust-off-thread.ts'];
+
+test("the trust worker won't start once the gate is installed", async () => {
+  const { TrustOffThread } = await import('../../src/trust-off-thread.ts');
+  installSpawnGate();
+  assert.throws(() => new TrustOffThread(), /No trust worker in box mode/);
+});
+
 test('nothing in runner/src starts a process past the gate', () => {
   const files: string[] = [];
   const walk = (d: string) => {
@@ -86,7 +96,7 @@ test('nothing in runner/src starts a process past the gate', () => {
     const rel = path.relative(SRC, f);
     // Process bindings below child_process, or another module that starts processes.
     if (/\bprocess\.binding\(|\binternalBinding\(|spawn_wrap|process_wrap|\bposix_spawn/.test(text)) problems.push(`${rel}: a process binding`);
-    if (/from ['"](node:)?(cluster|worker_threads)['"]/.test(text) && /\bexecArgv|\bfork\(/.test(text)) problems.push(`${rel}: cluster or worker processes`);
+    if (/from ['"](node:)?(cluster|worker_threads)['"]/.test(text) && /\bexecArgv|\bfork\(/.test(text) && !WORKERS_REFUSED_IN_BOX.includes(rel)) problems.push(`${rel}: cluster or worker processes`);
     // What it takes from child_process: only the gated functions, and types.
     for (const m of text.matchAll(/import\s+(type\s+)?\{([^}]*)\}\s+from\s+['"](?:node:)?child_process['"]/g)) {
       if (m[1]) continue;
