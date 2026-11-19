@@ -33,6 +33,8 @@ exclude = ["vendor"]
 # ended by the next press, not taken for a drag still going on: the link
 # clicked next did nothing until clicked again (Mike, 19 Nov;
 # `released_unseen` in text_selection.rs).
+# And a press on a link in text sends a sheen across its words, which Mike
+# picked from four mockups (19 Nov; `text/link_glint.rs`).
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
 gpui-base = { path = "vendor/gpui-base" }

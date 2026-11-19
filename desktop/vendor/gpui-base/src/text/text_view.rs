@@ -3912,6 +3912,46 @@ mod tests {
         assert!(pressed.borrow().is_empty());
     }
 
+    /// Threadbear's: a press on a link sends a sheen across its words
+    /// (`link_glint`), painted over them while it plays; a press on plain
+    /// words doesn't, and nor does any press with Reduce Motion on.
+    #[gpui::test]
+    fn a_press_on_a_link_glints_it(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let (_view, cx) = cx.add_window_view(|_, cx| TextViewTestRoot::new("[link](https://a.b) and words after", cx));
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        let draw = |cx: &mut VisualTestContext| cx.update(|window, cx| { let _ = window.draw(cx); });
+        let press = |cx: &mut VisualTestContext, x: f32| {
+            let position = point(px(x), px(10.));
+            cx.simulate_event(MouseDownEvent { position, modifiers: Modifiers::default(), button: MouseButton::Left, click_count: 1, first_mouse: false });
+            cx.simulate_event(MouseUpEvent { position, modifiers: Modifiers::default(), button: MouseButton::Left, click_count: 1 });
+        };
+        draw(cx);
+
+        press(cx, 200.);
+        assert_eq!(cx.update(|_, cx| super::super::link_glint::active(cx)), None, "plain words glinted");
+
+        press(cx, 10.);
+        assert_eq!(cx.update(|_, cx| super::super::link_glint::active(cx)), Some(0..4));
+        // Painting with it playing draws the sheen and asks for another frame.
+        draw(cx);
+        assert!(cx.update(|window, cx| window.simulate_next_frame(cx)) > 0, "no next frame asked for");
+    }
+
+    #[gpui::test]
+    fn reduce_motion_keeps_links_still(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (_view, cx) = cx.add_window_view(|_, cx| TextViewTestRoot::new("[link](https://a.b) and words after", cx));
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        cx.update(|window, cx| { let _ = window.draw(cx); });
+        let position = point(px(10.), px(10.));
+        cx.simulate_event(MouseDownEvent { position, modifiers: Modifiers::default(), button: MouseButton::Left, click_count: 1, first_mouse: false });
+        assert_eq!(cx.update(|_, cx| super::super::link_glint::active(cx)), None);
+    }
+
     #[gpui::test]
     fn double_click_selects_word(cx: &mut TestAppContext) {
         cx.update(crate::init);
