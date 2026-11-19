@@ -179,11 +179,13 @@ Feature: The Updates panel
   Scenario: The next version names the field it's waiting for, and its thread
     When the app's next version, def5678, is ready
     And I open the thread "Ship the beta to TestFlight"
+    # The panel first: a click on its icon mid-rename ends the rename
+    # (Windows saves it as the box loses focus), and nothing's held then.
+    And I open the Updates panel
     And I start renaming the open thread
     And I type "Beta on Friday" where the cursor is
     Then a restart onto it waits for the words typed
-    When I open the Updates panel
-    Then the Updates panel lists "The app's next version (def5678) is ready. It switches in once what you're typing in the title box in “Ship the beta to TestFlight” is sent, saved or cleared, or now."
+    And the Updates panel lists "The app's next version (def5678) is ready. It switches in once what you're typing in the title box in “Ship the beta to TestFlight” is sent, saved or cleared, or now."
     And the Updates panel lists "  > Ship the beta to TestFlight"
 
   # Windows has no foreground-process check for ConPTY yet. Every live shell
