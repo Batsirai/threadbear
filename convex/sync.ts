@@ -3941,7 +3941,7 @@ async function otherRunners(ctx: QueryCtx, runnerId: string) {
   return runners;
 }
 
-// A box's state as the Mac's sidebar shows it. From API 92 its virtual
+// A box's state as the Mac's sidebar shows it. From API 94 its virtual
 // runner (`service`), and `token` with its `login` when the login has no
 // cloud token ('none') or a refused one ('dead'): the thread's token card.
 async function boxSummary(ctx: QueryCtx, r: Doc<'runners'>): Promise<{ state: string; waiting?: boolean; service?: string; token?: 'none' | 'dead'; login?: string }> {

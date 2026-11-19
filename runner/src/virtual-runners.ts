@@ -4,7 +4,7 @@
 // login's cloud token for its boxes, made here with `claude setup-token`,
 // pasted, or this Mac's own year-long token for that login. Only the main
 // Mac's runner (the owner key) does any of it, with the virtualRunners
-// experiment on and a backend of API 92.
+// experiment on and a backend of API 94.
 //
 // A token is never logged, written to disk, put in an error or an event, or
 // sent anywhere but boxes:setCloudToken. It's known to the scrubber
@@ -19,7 +19,7 @@ import { cloneableUrl, originUrl, repoTop, withoutCredentials } from './move-git
 import { realpath } from './worktrees.ts';
 import { readYearToken, rememberToken } from './year-token.ts';
 
-export const VIRTUAL_RUNNERS_API = 92;
+export const VIRTUAL_RUNNERS_API = 94;
 // Making one waits on Mike in the browser; past this the CLI is stopped.
 export const MAKE_TOKEN_MS = 10 * 60_000;
 const TOKEN = /^sk-ant-oat01-[A-Za-z0-9_-]{40,300}$/;
@@ -28,7 +28,7 @@ export const HELPER = path.join(import.meta.dirname, 'cloud-token-helper.py');
 export type Repo = { origin: string; subfolder: string; baseBranch: string };
 
 export type VirtualRunnerDeps = {
-  // The experiment on, a backend of API 92 and the owner key: else every call is refused.
+  // The experiment on, a backend of API 94 and the owner key: else every call is refused.
   on(): boolean;
   // An action, query or mutation on the owner key, the key added here by the caller.
   call(kind: 'action' | 'query' | 'mutation', fn: string, args: Record<string, unknown>): Promise<unknown>;
@@ -141,7 +141,7 @@ export class VirtualRunners {
   }
 
   private mustBeOn(): void {
-    if (!this.deps.on()) throw bad("Virtual runners aren't on for this runner (the virtualRunners experiment, a backend of API 92 and the main Mac's key).");
+    if (!this.deps.on()) throw bad("Virtual runners aren't on for this runner (the virtualRunners experiment, a backend of API 94 and the main Mac's key).");
   }
 
   // This Mac's Claude login a cloud token is for: by its email, or its id when it has none.

@@ -500,7 +500,7 @@ test("a box's virtual runner, and its login when it has no usable cloud token, r
   index.stop();
 });
 
-test('the virtual runners (API 92, the experiment) come with the other runners for Runs on; not otherwise', async () => {
+test('the virtual runners (API 94, the experiment) come with the other runners for Runs on; not otherwise', async () => {
   for (const takes of [true, false]) {
     const h = makeHarness();
     const asked: string[] = [];
@@ -539,7 +539,7 @@ test('the virtual runners (API 92, the experiment) come with the other runners f
 });
 
 // Codex's review of slice 5 (7): switching the experiment on (or the backend
-// reaching API 92) while the app watches starts the virtual runners' watch at
+// reaching API 94) while the app watches starts the virtual runners' watch at
 // the next refresh, and switching it off stops it and drops them.
 test('the virtual runners watch starts and stops with a refresh, as the experiment or the backend changes', async () => {
   const h = makeHarness();

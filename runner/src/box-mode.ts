@@ -48,7 +48,7 @@ const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 export type BoxBoot = { bootToken: string; syncUrl: string; machineId?: string };
 export type BoxRepo = { origin: string; subfolder: string; baseBranch: string };
 export type BoxSaveRef = { url: string; at: number; bytes: number };
-// tokenSetAt (API 92): when the login's cloud token was set, which a refusal names (box-token.ts).
+// tokenSetAt (API 94): when the login's cloud token was set, which a refusal names (box-token.ts).
 export type Exchanged = { boxKey: string; runnerId: string; threadId: string; claudeToken: string; threadKey: string; repo: BoxRepo; save: BoxSaveRef | null; login?: string; tokenSetAt?: number };
 
 // What the box keeps in its data dir's secrets (0600): enough to start
@@ -65,7 +65,7 @@ export type BoxSecrets = {
   repo: BoxRepo;
   login?: string;
   // When the cloud token on disk was set (the exchange's, or boxCloudToken's
-  // after a refusal: box-token.ts). Absent from a backend before API 92.
+  // after a refusal: box-token.ts). Absent from a backend before API 94.
   tokenSetAt?: number;
   save: BoxSaveRef | null;
   // Once the thread's folder is ready (cloned, or restored from the save).

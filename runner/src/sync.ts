@@ -314,7 +314,7 @@ export const INDEX_SINCE_API_VERSION = 29;
 // sync:runnerOrder and sync:setRunnerOrder, for the Mac's Settings > Runners.
 export const RUNNER_ORDER_API_VERSION = 58;
 // Virtual runners from the Mac (docs/virtual-runners.md, slice 5): boxes:runnerServices to watch, startThread with cwd, cloud tokens' states.
-export const VIRTUAL_RUNNERS_API_VERSION = 92;
+export const VIRTUAL_RUNNERS_API_VERSION = 94;
 // Moving a thread to another runner (convex/moves.ts).
 export const MOVES_API_VERSION = 64;
 // sync:takeCommand takes `attempt`, and relay:decideRequest `claim`, so a take
