@@ -3670,7 +3670,11 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   to the first thread in thread.json, and a brief: the latest user
   message, the reply, the files and the diff (up to 40,000 characters),
   each in a fence one backtick longer than any run in it, so nothing in
-  them can close it, and marked as data to review, not instructions.
+  them can close it, and marked as data to review, not instructions. A
+  reviewer billed per token (an OpenCode login: its Zen balance or a
+  Gemini API key) also gets a reading budget: work from the diff, about 8
+  reads or searches, no test suite, since every read is billed again on
+  each later step.
   Its login is the first reviewer's in `Settings.labReviewers` whose
   provider isn't the thread's and that has a login with room
   (`pickInPool` over the pools with no folders, then a login no pool

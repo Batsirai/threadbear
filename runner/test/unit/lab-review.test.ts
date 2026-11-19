@@ -1155,3 +1155,13 @@ test('labReview panel: no more than 20 findings in all, the most serious kept', 
   assert.match(msg, /these less serious ones have no number/);
   assert.match(msg, /- \[low\] \(Codex [^\n]*A low 6\./);
 });
+
+test('labReview: a reviewer billed per token (OpenCode) gets a reading budget in its brief, a subscription one does not', async () => {
+  const { reviewBrief, READING_BUDGET } = await import('../../src/runner/lab-review.ts');
+  const h = setup();
+  const rec = h.runner.threads.get(start(h))!.rec;
+  const change = { files: [{ path: 'src/app.ts', added: 5, removed: 5 }], codeLines: 10, diff: '--- src/app.ts\n+new\n', clipped: false };
+  const base = { rec, ask: 'Fix it', change, independent: true, round: 1 };
+  assert.ok(reviewBrief({ ...base, lean: true }).includes(READING_BUDGET));
+  assert.ok(!reviewBrief(base).includes('Reading budget'));
+});

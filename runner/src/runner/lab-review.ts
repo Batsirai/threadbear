@@ -126,7 +126,7 @@ export const labReviewPart = {
       let model: string | undefined;
       try {
         const { thread } = this.create({
-          text: reviewBrief({ rec, ask: lastAsk(this, st), reply, change, independent: login.independent, round, earlier: rec.labReview?.findings, panel }),
+          text: reviewBrief({ rec, ask: lastAsk(this, st), reply, change, independent: login.independent, round, earlier: rec.labReview?.findings, panel, lean: paidPerToken(login) }),
           cwd: rec.cwd,
           accountId: login.account.id,
           // The reviewer's own, else the provider's default model at high.
@@ -387,6 +387,23 @@ function reviewPicker(runner: Runner, rec: ThreadRecord): (provider: Provider) =
   };
 }
 
+// A reviewer billed for every token it reads (OpenCode: Mike's Zen balance,
+// or the Gemini API key Convex pays for) rather than a subscription's week.
+// An agent sends all it has read again on every step, so a review that
+// roams the repo costs several times one that works from the diff: on 19
+// Nov 2026 Gemini reviews that roamed used half the key's US$90 monthly cap
+// in two hours, and the same review with this budget cost a third as much
+// and found the same main bugs (the delegate skill's gemini_seat).
+export function paidPerToken(login: ReviewLogin): boolean {
+  return login.account.provider === 'opencode';
+}
+
+export const READING_BUDGET = [
+  'Reading budget: every file you read stays in your context and is billed again on every later step, so work mostly from the change above.',
+  '- Read a file outside it only to confirm or rule out a specific suspicion, and only the lines you need, never whole large files.',
+  "- Aim for about 8 reads or searches in all, then give your verdict. Don't re-read what you've seen, and don't run the test suite.",
+].join('\n');
+
 // How a reviewer is named on the card and in notes: "Codex (codex-main)",
 // with the model when it names one, so two of one provider tell apart. A
 // model OpenCode reaches for another lab goes by that lab, as that's whose
@@ -458,7 +475,7 @@ export function fence(text: string, info = ''): string {
 // diff) can carry text from a repo, an issue or a web page that thread
 // read, so it goes in fences the text can't close, marked as data to
 // review and never as instructions (Gautam's scan, 6 Nov 2026, F13).
-export function reviewBrief(p: { rec: ThreadRecord; ask: string; reply?: string; change: TurnChange; independent: boolean; round: number; earlier?: ReviewFinding[]; panel?: boolean }): string {
+export function reviewBrief(p: { rec: ThreadRecord; ask: string; reply?: string; change: TurnChange; independent: boolean; round: number; earlier?: ReviewFinding[]; panel?: boolean; lean?: boolean }): string {
   const { rec, change } = p;
   const files = change.files.map((f) => `- ${oneLine(f.path)} (+${f.added} −${f.removed})`).join('\n');
   const earlier = p.round > 1 && p.earlier?.length ? earlierFindings(p.earlier) : '';
@@ -483,6 +500,7 @@ export function reviewBrief(p: { rec: ThreadRecord; ask: string; reply?: string;
     'Try to break it: wrong behaviour, edge cases, old data and first-run paths, races, security holes, and tests that pass without testing what they claim. Check each finding against the code before you report it. Reply with what holds up, most serious first: the file and line, what goes wrong, and a concrete case that shows it. Leave out style and naming. If nothing holds up, say so in one line. Your reply goes back to that thread as it is.',
     '',
     'Give your verdict in end_turn too, in its `findings`: one entry per finding that holds up, most serious first, as `{ "severity": "high" | "medium" | "low", "where": "file:line", "claim": "what goes wrong, one sentence", "case": "the concrete case that shows it" }`, or `findings: []` when nothing holds up. The agent has to answer each one before it can finish.',
+    p.lean ? `\n${READING_BUDGET}` : '',
   ].filter((l, i, all) => l !== '' || all[i - 1] !== '').join('\n');
 }
 
