@@ -68,6 +68,22 @@ there() { "${SSH[@]}" "$host" "$env_there; $1"; }
 desk() { "${SSH[@]}" "$host" "~/.local/bin/desk $(q "$env_there; $1")"; }
 devapp() { there "desktop/scripts/dev-app.sh $(q "$@") --id film"; }
 die() { echo "film: $*" >&2; exit 1; }
+# Who has the host's screen: with fast user switching another account's
+# session can be on the console while ours sits behind it, and then the
+# stage's virtual display comes up 0x0 (19 Nov: an ADEMark run's ademark
+# session had it, and start failed only after the whole build). Empty when
+# it's ours, otherwise why not.
+console_not_ours() {
+  local who
+  who="$("${SSH[@]}" "$host" 'echo "$(stat -f %Su /dev/console) $(id -un)"')" || { echo "couldn't ask $host who has its screen"; return; }
+  set -- $who
+  [ "${1:-}" != "${2:-}" ] || return 0
+  case "${1:-}" in
+    ademark) echo "$host's screen is on the ademark user's session (an ADEMark run?); film again when it's back on ${2:-}" ;;
+    root|loginwindow|"") echo "$host is at the login window, so no session has its screen; film again once ${2:-} is logged in there and on screen" ;;
+    *) echo "$host's screen is on the ${1} user's session, not ${2:-}'s; film again when it's back on ${2:-}" ;;
+  esac
+}
 
 cmd="${1:-help}"
 [ $# -eq 0 ] || shift
@@ -85,6 +101,9 @@ case "$cmd" in
       esac
     done
     [ -z "$turns" ] || [ -f "$turns" ] || die "no turns file $turns"
+    # Before anything slow: the stage needs our session on the screen.
+    why="$(console_not_ours)"
+    [ -z "$why" ] || die "$why"
     w="${size%x*}" h="${size#*x}"
     # The display has room round the window, so it's never pushed off an edge.
     stage_size="$(( w + 360 > 1600 ? w + 360 : 1600 ))x$(( h + 180 > 1000 ? h + 180 : 1000 ))"
@@ -155,7 +174,17 @@ case "$cmd" in
     pid="$(there "cat \"\$(find \"\$TMPDIR\" -path '*/film/app.json' 2>/dev/null | head -1)\"" | sed -E 's/.*"app":([0-9]+).*/\1/')"
     [[ "$pid" =~ ^[0-9]+$ ]] || { there "touch $base/stage.stop"; die "couldn't find the app's pid"; }
     there "echo $pid > $base/go; for i in \$(seq 1 150); do [ -f $base/stage.json ] && break; grep -q '^error' $base/stage.log && break; sleep 0.2; done; cat $base/stage.log"
-    there "[ -f $base/stage.json ]" || { there "desktop/scripts/dev-app.sh stop --id film >/dev/null 2>&1; touch $base/stage.stop"; die "the stage didn't come up (above says why)"; }
+    if ! there "[ -f $base/stage.json ]"; then
+      there "desktop/scripts/dev-app.sh stop --id film >/dev/null 2>&1; touch $base/stage.stop"
+      # Its own words, in the message itself: on 19 Nov all that showed was
+      # "film", and the reason sat in stage.log on the host.
+      said_log="$(there "grep -v '^[[:space:]]*\$' $base/stage.log 2>/dev/null | tail -5" || true)"
+      why="$(console_not_ours)"
+      die "the stage didn't come up.${said_log:+ The stage said:
+$said_log}${why:+
+$why.}
+The whole log: $host:$base/stage.log"
+    fi
     devapp do '{"cmd":"focus"}' >/dev/null
     echo "Filming on $host: the app's up at $size $appearance on a 2x stage. Drive it with film.sh do, record with film.sh record."
     ;;
