@@ -48,15 +48,38 @@ export type IndexRow = {
 // maxBoxes up: it wakes when one sleeps, and the message waits meanwhile.
 // `unsure`: the provider made more than one machine for its box and which
 // holds the thread's work isn't known yet; each message tries the next.
-export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; followProblem?: string; box?: { state: string; waiting?: true; unsure?: true } };
+// `unreachable`: no heartbeat for 5 minutes, but the provider still has it.
+// `service` (API 90): its virtual runner's id. `token`, with `login`: its
+// login has no cloud token ('none') or a refused one ('dead'), so the
+// thread shows the token card.
+export type BoxView = { state: string; waiting?: true; unreachable?: true; unsure?: true; service?: string; token?: 'none' | 'dead'; login?: string };
+export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; followProblem?: string; box?: BoxView };
+// A virtual runner, for Runs on's entries after the machines (API 90, the
+// virtualRunners experiment, the main Mac's key only).
+export type VirtualRunner = { id: string; name: string; provider: string };
 // `moving`: set by the main Mac's runner for a move it knows of (main.ts
 // remoteMoving), never by the backend's rows.
 export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./moves.ts').ThreadMoving };
 // `order`: Mike's runner order (backend API 58), every runner's id, this
 // one's too, for the app's Settings > Runners. Left out before it's heard.
-export type RemoteThreads = { runners: RemoteRunner[]; threads: RemoteThread[]; order?: string[]; ready?: boolean };
+export type RemoteThreads = { runners: RemoteRunner[]; threads: RemoteThread[]; order?: string[]; ready?: boolean; services?: VirtualRunner[] };
 
-type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; followProblem?: string; box?: { state?: unknown; waiting?: unknown; unsure?: unknown } };
+type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; followProblem?: string; box?: { state?: unknown; waiting?: unknown; unreachable?: unknown; unsure?: unknown; service?: unknown; token?: unknown; login?: unknown } };
+
+// A box's view as the backend gave it, only what's of the expected shape.
+function boxView(b: NonNullable<RawRunner['box']>): BoxView {
+  const short = (x: unknown) => (typeof x === 'string' && x.length > 0 && x.length <= 200 ? x : undefined);
+  const token = b.token === 'none' || b.token === 'dead' ? b.token : undefined;
+  const login = token ? short(b.login) : undefined;
+  return {
+    state: typeof b.state === 'string' ? b.state : 'expired',
+    ...(b.waiting === true ? { waiting: true as const } : {}),
+    ...(b.unreachable === true ? { unreachable: true as const } : {}),
+    ...(b.unsure === true ? { unsure: true as const } : {}),
+    ...(short(b.service) ? { service: short(b.service)! } : {}),
+    ...(token && login ? { token, login } : {}),
+  };
+}
 type SinceRow = RemoteThread & { updatedMs?: number; deleted?: boolean };
 
 const FLUSH_MS = 1000;
@@ -146,6 +169,8 @@ export class ThreadIndex {
     takesSince?: () => boolean;
     // Whether the backend has the runner order for the main key (API 58).
     takesOrder?: () => boolean;
+    // Whether to watch the virtual runners (API 90, the experiment, the main key).
+    takesServices?: () => boolean;
     // Whether a Mac app is connected to this runner. Only an app shows the
     // other runners' threads, so with none there's nothing to watch them
     // for. Left out, they're always watched.
@@ -173,6 +198,9 @@ export class ThreadIndex {
   // Mike's runner order, watched with the other runners (API 58).
   private order?: string[];
   private unsubOrder?: () => void;
+  // The virtual runners, watched with the other runners (API 90).
+  private services?: VirtualRunner[];
+  private unsubServices?: () => void;
   // A backend before API 54 dropped a runner key's archived rows while this
   // remembered them as sent: they go once more, then this says so (snapshot).
   private archivedSent = false;
@@ -279,6 +307,7 @@ export class ThreadIndex {
     this.answered = false;
     const failed = (e: Error) => this.watchFailed(e);
     this.watchOrder();
+    this.watchServices();
     this.watchingSince = this.deps.takesSince?.() ?? false;
     if (this.watchingSince) {
       // A heartbeat re-runs only this small read; the rows are watched
@@ -301,6 +330,8 @@ export class ThreadIndex {
     this.unsubscribe = undefined;
     this.unsubOrder?.();
     this.unsubOrder = undefined;
+    this.unsubServices?.();
+    this.unsubServices = undefined;
     this.unsubRows?.();
     this.unsubRows = undefined;
     this.rowsKey = undefined;
@@ -322,6 +353,26 @@ export class ThreadIndex {
         this.deps.publish?.({ method: 'remoteThreads.updated', params: { ...this.remote, ready: this.heard() } });
       },
       (e) => this.deps.log.warn('the runner order subscription failed', { error: String(e) }),
+    );
+  }
+
+  // The virtual runners, for Runs on (boxes:runnerServices, owner only). It
+  // re-runs as their boxes start and sleep (its counts), which is rare
+  // beside the threads' rows. A failure leaves the last list, logged.
+  private watchServices(): void {
+    if (this.unsubServices || !this.deps.subscribe || !this.deps.takesServices?.()) return;
+    this.unsubServices = this.deps.subscribe(
+      'boxes:runnerServices',
+      { key: this.deps.key },
+      (v) => {
+        const rows = Array.isArray(v) ? (v as { serviceId?: unknown; name?: unknown; provider?: unknown }[]) : [];
+        this.services = rows
+          .filter((r) => typeof r.serviceId === 'string' && typeof r.name === 'string' && typeof r.provider === 'string')
+          .map((r) => ({ id: r.serviceId as string, name: r.name as string, provider: r.provider as string }));
+        this.remote = { ...this.remote, services: this.services };
+        this.deps.publish?.({ method: 'remoteThreads.updated', params: { ...this.remote, ready: this.heard() } });
+      },
+      (e) => this.deps.log.warn('the virtual runners subscription failed', { error: String(e) }),
     );
   }
 
@@ -563,7 +614,7 @@ export class ThreadIndex {
           name: r.name,
           ...(r.icon ? { icon: r.icon } : {}),
           online: now - r.lastSeenAt < ONLINE_MS || boxReachable(r.box?.state),
-          ...(r.box ? { box: { state: typeof r.box.state === 'string' ? r.box.state : 'expired', ...(r.box.waiting === true ? { waiting: true as const } : {}), ...(r.box.unsure === true ? { unsure: true as const } : {}) } } : {}),
+          ...(r.box ? { box: boxView(r.box) } : {}),
           lastSeenAt: new Date(r.lastSeenAt).toISOString(),
           ...(r.followProblem ? { followProblem: r.followProblem } : {}),
         })),
@@ -572,6 +623,7 @@ export class ThreadIndex {
       // checked, and an extra Mac may be compromised.
       threads: (value?.threads ?? []).filter((t) => isThreadIdShape(t?.threadId)),
       ...(this.order ? { order: this.order } : {}),
+      ...(this.services ? { services: this.services } : {}),
     };
     this.deps.publish?.({ method: 'remoteThreads.updated', params: { ...this.remote, ready: this.heard() } });
   }

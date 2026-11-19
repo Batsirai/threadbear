@@ -48,7 +48,8 @@ const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 export type BoxBoot = { bootToken: string; syncUrl: string; machineId?: string };
 export type BoxRepo = { origin: string; subfolder: string; baseBranch: string };
 export type BoxSaveRef = { url: string; at: number; bytes: number };
-export type Exchanged = { boxKey: string; runnerId: string; threadId: string; claudeToken: string; threadKey: string; repo: BoxRepo; save: BoxSaveRef | null; login?: string };
+// tokenSetAt (API 90): when the login's cloud token was set, which a refusal names (box-token.ts).
+export type Exchanged = { boxKey: string; runnerId: string; threadId: string; claudeToken: string; threadKey: string; repo: BoxRepo; save: BoxSaveRef | null; login?: string; tokenSetAt?: number };
 
 // What the box keeps in its data dir's secrets (0600): enough to start
 // again after its runner restarts, as the boot token works only once.
@@ -63,6 +64,9 @@ export type BoxSecrets = {
   threadKey: string;
   repo: BoxRepo;
   login?: string;
+  // When the cloud token on disk was set (the exchange's, or boxCloudToken's
+  // after a refusal: box-token.ts). Absent from a backend before API 90.
+  tokenSetAt?: number;
   save: BoxSaveRef | null;
   // Once the thread's folder is ready (cloned, or restored from the save).
   prepared?: { checkout: string; cwd: string; restored: boolean };
@@ -174,6 +178,7 @@ function checkExchanged(v: unknown, ownKey: string): Exchanged {
     repo: { origin: r.origin, subfolder: r.subfolder.replace(/\/+$/, ''), baseBranch: r.baseBranch },
     save: save ? { url: save.url, at: Number(save.at) || 0, bytes: save.bytes } : null,
     ...(typeof g.login === 'string' && g.login ? { login: g.login } : {}),
+    ...(typeof g.tokenSetAt === 'number' && Number.isSafeInteger(g.tokenSetAt) && g.tokenSetAt > 0 ? { tokenSetAt: g.tokenSetAt } : {}),
   };
 }
 
@@ -247,14 +252,28 @@ export async function bootBox(o: { boot: BoxBoot; home: string; claudeDir: strin
     threadKey: got.threadKey,
     repo: got.repo,
     ...(got.login ? { login: got.login } : {}),
+    ...(got.tokenSetAt ? { tokenSetAt: got.tokenSetAt } : {}),
     save: got.save,
   };
   // box.json last: a start that finds it finds the rest written too.
-  writePrivate(path.join(o.claudeDir, TOKEN_FILE), JSON.stringify({ token: got.claudeToken, madeAt: new Date().toISOString() }) + '\n');
+  writeBoxToken(o.claudeDir, got.claudeToken);
   writePrivate(path.join(paths.secrets(o.home), 'convex-key'), got.boxKey + '\n');
   writeBoxSecrets(o.home, secrets);
   o.log.info('box: traded its boot token', { runnerId: got.runnerId, threadId: got.threadId, machineId: o.boot.machineId, restoring: Boolean(got.save) });
   return { secrets, fresh: true };
+}
+
+/** The login's token where the runner passes it to claude-main's CLI (year-token.ts), 0600. */
+export function writeBoxToken(claudeDir: string, token: string): void {
+  if (!CLAUDE_TOKEN.test(token)) throw new Error("That isn't a setup token, so it wasn't written.");
+  writePrivate(path.join(claudeDir, TOKEN_FILE), JSON.stringify({ token, madeAt: new Date().toISOString() }) + '\n');
+}
+
+// A newer cloud token's time, kept with the box's secrets (box-token.ts).
+export function setTokenSetAt(home: string, setAt: number): void {
+  const s = readBoxSecrets(home);
+  if (!s) throw new Error("This box's secrets are gone, so its token's time can't be kept.");
+  writeBoxSecrets(home, { ...s, tokenSetAt: setAt });
 }
 
 // A restored worktree's setup has run (markSetUp), kept apart from

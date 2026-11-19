@@ -158,7 +158,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 93;
+export const BACKEND_API_VERSION = 94;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -313,6 +313,8 @@ export const LINKS_API_VERSION = 28;
 export const INDEX_SINCE_API_VERSION = 29;
 // sync:runnerOrder and sync:setRunnerOrder, for the Mac's Settings > Runners.
 export const RUNNER_ORDER_API_VERSION = 58;
+// Virtual runners from the Mac (docs/virtual-runners.md, slice 5): boxes:runnerServices to watch, startThread with cwd, cloud tokens' states.
+export const VIRTUAL_RUNNERS_API_VERSION = 90;
 // Moving a thread to another runner (convex/moves.ts).
 export const MOVES_API_VERSION = 64;
 // sync:takeCommand takes `attempt`, and relay:decideRequest `claim`, so a take
@@ -691,6 +693,9 @@ export type SyncDeps = {
   // Whether the Mac app is connected, so the other runners' threads are
   // watched only while something shows them (thread-index.ts).
   appConnected?: () => boolean;
+  // Whether the virtualRunners experiment is on (experiments.ts): the virtual
+  // runners are watched for the app's Runs on only then (RemoteThreads.services).
+  virtualRunners?: () => boolean;
   // Where the sync keeps what it has sent once and for all (the full history
   // backfill), per deployment. Tests leave it out and get a backfill each start.
   statePath?: string;
@@ -1754,6 +1759,7 @@ export class ConvexSync {
         takesMode: () => (this.backendApiVersion ?? 0) >= INDEX_MODE_API_VERSION,
         takesSince: () => (this.backendApiVersion ?? 0) >= INDEX_SINCE_API_VERSION,
         takesOrder: () => (this.backendApiVersion ?? 0) >= RUNNER_ORDER_API_VERSION,
+        takesServices: () => this.virtualRunnersReady(),
         seed: () => {
           const file = deps.cachePath;
           const url = deps.config.url;
@@ -2043,6 +2049,18 @@ export class ConvexSync {
     return Boolean(this.deps.key) && !this.deps.key!.startsWith('tbr_') && !this.deps.key!.startsWith('tbb_');
   }
 
+  // Virtual runners from the Mac (virtual-runners.ts): the experiment on, the
+  // main Mac's key, and a backend that has them.
+  virtualRunnersReady(): boolean {
+    return !this.off && this.ownerKey() && (this.deps.virtualRunners?.() ?? false) && (this.backendApiVersion ?? 0) >= VIRTUAL_RUNNERS_API_VERSION;
+  }
+
+  /** A call on this runner's own key, its args as given (boxes:startThread, setCloudToken: a token must reach it whole). */
+  async ownerCall(kind: 'action' | 'query' | 'mutation', fn: string, args: Record<string, unknown>): Promise<unknown> {
+    this.mustBeOn();
+    return this.backend(kind, fn, { key: this.deps.key, ...args });
+  }
+
   // The backend's side of moving threads (src/moves.ts), once it has it.
   movesBackend(): MovesBackend | undefined {
     if (!this.running || !this.subscriber || (this.backendApiVersion ?? 0) < MOVES_API_VERSION) return undefined;
@@ -2100,9 +2118,10 @@ export class ConvexSync {
   // A backend from before API 5 has none of the token functions: the
   // Convex HTTP API says it can't find them. Said in words the Settings
   // window can show, rather than the API's line about `npx convex dev`.
-  private async backend(kind: 'mutation' | 'query', fn: string, args: Record<string, unknown>): Promise<unknown> {
+  private async backend(kind: 'mutation' | 'query' | 'action', fn: string, args: Record<string, unknown>): Promise<unknown> {
     try {
-      return await this.post(kind, fn, args);
+      // An action (ownerCall's) goes as a query does, never scrubbed: convexPoster takes any kind.
+      return await (this.post as (k: string, f: string, a: Record<string, unknown>) => Promise<unknown>)(kind, fn, args);
     } catch (e) {
       const message = (e as Error)?.message ?? String(e);
       // An argument it doesn't know yet (a browser's sign-in code before API

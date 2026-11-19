@@ -161,6 +161,8 @@ export type RpcServerOptions = {
   // Other runners' threads, through the backend (relay.ts). Without it, or
   // for a thread it doesn't own, they're unknown here as before.
   relay?: RelayHandler;
+  // threads.create with a serviceId: a thread on a virtual runner (virtual-runners.ts).
+  virtualStart?: (params: Record<string, unknown>) => Promise<unknown>;
   // Whether this runner knows of a move under way for another runner's
   // thread (main.ts remoteMoving). A relayed send or edit that doesn't say
   // which runner it's shown on is refused meanwhile (mustReachShown).
@@ -692,6 +694,12 @@ export class RpcServer {
         return remote.search(query, limit ?? 50).then((more) => ({ threads: mergeSummaries(local, more).slice(0, limit ?? 50) }));
       }
       case 'threads.create': {
+        // On a virtual runner (docs/protocol.md, Virtual runners, "Starting from the Mac").
+        if (p.serviceId !== undefined) {
+          if (typeof p.serviceId !== 'string' || !p.serviceId) throw bad('serviceId must be a virtual runner\'s id');
+          if (!this.opts.virtualStart) throw bad("This runner can't start threads on a virtual runner.");
+          return this.opts.virtualStart(p);
+        }
         // On another runner (docs/protocol.md, "Other runners' threads through the backend").
         if (typeof p.runnerId === 'string' && this.opts.relay) {
           return this.opts.relay.create(p.runnerId, p).then((res) => {

@@ -13,6 +13,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { localClone, originRepo, sh } from '../helpers/box-git.ts';
 import { SaveHold } from '../../src/box-save.ts';
+import { BoxTokenWatch } from '../../src/box-token.ts';
+import { CARRY_ON_TOKEN } from '../../src/runner.ts';
+import { call } from '../helpers/convex-memory.ts';
+import { boxBackend } from '../helpers/box-backend.ts';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { nullLogger } from '../../src/log.ts';
 import { readYearToken } from '../../src/year-token.ts';
@@ -946,4 +950,109 @@ test("a command's finish goes once at a time: the save's barrier waits for one a
   assert.deepEqual(sent, ['c1', 'c1']);
   assert.deepEqual(refusedCalls.splice(0), []);
   await sync.stop();
+});
+
+
+// ------------------------------------------------------------ a refused cloud token (slice 5, API 90)
+
+test("the exchange's tokenSetAt is kept with the box's secrets; an older backend's answer has none", async () => {
+  for (const [given, kept] of [[1234, 1234], [undefined, undefined]] as const) {
+    const home = tmpDir('tb-box-tok-');
+    const post: ActionPost = async () => exchanged(given === undefined ? {} : { tokenSetAt: given });
+    const { secrets } = await bootBox({ boot: { bootToken: BOOT, syncUrl: URL }, home, claudeDir: tmpDir('tb-box-claude-'), post, log: nullLogger });
+    assert.equal(secrets.tokenSetAt, kept);
+    assert.equal(readBoxSecrets(home)?.tokenSetAt, kept);
+  }
+});
+
+const notesOf = (h: ReturnType<typeof makeHarness>, id: string) => h.events(id).filter((e: { type: string }) => e.type === 'system.note').map((e: { text: string }) => e.text);
+const sentTo = (h: ReturnType<typeof makeHarness>, id: string) => h.events(id).filter((e: { type: string }) => e.type === 'user.message').map((e: { text: string }) => e.text);
+
+test("a box's turn refused with its cloud token: one note, the thread waits (a message queues behind it), and the backend is told", async () => {
+  const h = makeHarness(tmpDir(), {}, { boxThread: THREAD });
+  const told: string[] = [];
+  h.runner.onBoxTokenRefused = (id) => void told.push(id);
+  h.runner.create({ text: 'go', cwd: h.cfg.defaults.cwd, accountId: 'claude-main', id: THREAD });
+  const s = h.adapter.last;
+  s.init();
+  s.result('failed', undefined, 'Invalid bearer token', { errorKind: 'auth' });
+  await tick();
+  const rec = h.runner.threads.get(THREAD)!.rec;
+  assert.ok(rec.waitingForToken);
+  assert.deepEqual(told, [THREAD]);
+  assert.deepEqual(notesOf(h, THREAD).filter((n) => /refused this box's token/.test(n)).length, 1);
+  assert.equal(rec.accountId, 'claude-main', 'no pool move in a box');
+  // Mike's message waits rather than start a doomed turn.
+  const before = h.adapter.sessions.length;
+  h.runner.send(THREAD, 'are you there', []);
+  assert.equal(h.adapter.sessions.length, before);
+  assert.equal(rec.queue.length, 1);
+  // A newer token: his message goes, not the runner's carry-on.
+  h.runner.tokenReplaced(THREAD);
+  assert.equal(rec.waitingForToken, undefined);
+  await tick();
+  assert.equal(h.adapter.sessions.length, before + 1);
+  assert.deepEqual(sentTo(h, THREAD).slice(-1), ['are you there']);
+});
+
+test('with nothing queued, a newer token carries the thread on by itself, on a fresh CLI; a restart while waiting waits again', async () => {
+  const home = tmpDir();
+  const h = makeHarness(home, {}, { boxThread: THREAD });
+  h.runner.onBoxTokenRefused = () => {};
+  h.runner.create({ text: 'go', cwd: h.cfg.defaults.cwd, accountId: 'claude-main', id: THREAD });
+  const s = h.adapter.last;
+  s.init();
+  s.result('failed', undefined, 'Invalid bearer token', { errorKind: 'auth' });
+  await tick();
+  h.runner.flush();
+  // Started again while waiting: still held.
+  const again = makeHarness(home, {}, { boxThread: THREAD });
+  again.runner.onBoxTokenRefused = () => {};
+  const before = again.adapter.sessions.length;
+  again.runner.send(THREAD, 'hello?', []);
+  assert.equal(again.adapter.sessions.length, before, 'held after a restart');
+  again.runner.threads.get(THREAD)!.rec.queue.length = 0;
+  again.runner.tokenReplaced(THREAD);
+  await tick();
+  assert.equal(again.adapter.sessions.length, before + 1);
+  assert.equal(sentTo(again, THREAD).at(-1), CARRY_ON_TOKEN);
+});
+
+test("the token watch, against the real backend on the box's key alone: it says the refusal, waits while the token is dead, then writes the newer one and lets the thread go", async () => {
+  const s = await boxBackend();
+  const boxes = load('boxes');
+  const got = await s.boot();
+  const home = tmpDir('tb-box-watch-');
+  const claudeDir = tmpDir('tb-box-claude-');
+  writeBoxSecrets(home, { version: 1, bootHash: 'h', syncUrl: URL, boxKey: got.boxKey, runnerId: got.runnerId, threadId: got.threadId, threadKey: got.threadKey, repo: got.repo, save: null, tokenSetAt: got.tokenSetAt });
+  const post = onlyBoxCalls(async (kind, fn, args) => {
+    const name = fn.split(':')[1]!;
+    return call((kind as string) === 'action' ? s.a : s.ctx, boxes[name], args);
+  }) as unknown as ActionPost;
+  const timers: { fn: () => void; ms: number }[] = [];
+  let waiting = true;
+  let held = false;
+  let replaced = 0;
+  const watch = new BoxTokenWatch({ home, claudeDir, key: got.boxKey, post, log: nullLogger, setTimeout: (fn, ms) => (timers.push({ fn, ms }), { cancel: () => {} }), held: () => held, waiting: () => waiting, replaced: () => void replaced++ });
+  watch.refused();
+  await watch.tick();
+  assert.equal(s.rows('cloudTokens')[0].tokenState.kind, 'dead', 'told: the card comes back on the Mac');
+  assert.equal(replaced, 0);
+  assert.equal(timers.at(-1)!.ms, 30_000, 'asks again in 30 seconds');
+  // A save holding the box: nothing fetched or written.
+  const fresh = `sk-ant-oat01-${'F'.repeat(60)}`;
+  await s.setToken(fresh);
+  held = true;
+  await watch.tick();
+  assert.equal(replaced, 0);
+  assert.equal(readYearToken(claudeDir), undefined);
+  held = false;
+  await watch.tick();
+  assert.equal(replaced, 1);
+  assert.equal(readYearToken(claudeDir)?.token, fresh);
+  assert.equal(fs.statSync(path.join(claudeDir, 'threadbear-token.json')).mode & 0o777, 0o600);
+  assert.ok((readBoxSecrets(home)?.tokenSetAt ?? 0) > (got.tokenSetAt ?? 0));
+  assert.deepEqual(refusedCalls.filter((f) => f.startsWith('boxes:')), [], 'only calls a box key may make');
+  waiting = false;
+  watch.stop();
 });

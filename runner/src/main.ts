@@ -69,6 +69,7 @@ import { UsageHistory } from './usage-history.ts';
 import { TokenTally } from './token-tally.ts';
 import { usageStatsMethods } from './usage-stats.ts';
 import { Relay } from './relay.ts';
+import { VirtualRunners } from './virtual-runners.ts';
 import { RpcServer } from './rpc.ts';
 import { AppSeen } from './app-seen.ts';
 import { realClock } from './clock.ts';
@@ -85,6 +86,7 @@ import { BoxProcesses } from './box-procs.ts';
 import { asSave, closeSpawns, installSpawnGate, openSpawns } from './spawn-gate.ts';
 import { isolatePatchCode } from './patches.ts';
 import { SaveHold, saveThread } from './box-save.ts';
+import { BoxTokenWatch } from './box-token.ts';
 import { ClockJumpWatch } from './clock-jump.ts';
 import { pushFailingText } from './push-failing.ts';
 import { Scrubber } from './scrub.ts';
@@ -664,6 +666,28 @@ async function main(): Promise<void> {
         persist: (state) => setSaveHold(cfg.home, state),
       })
     : undefined;
+  // A turn refused with the box's cloud token (box-token.ts): the backend is
+  // told, and the thread carries on once a newer token is set.
+  const tokenWatch =
+    box && boxPost && saveHold
+      ? new BoxTokenWatch({
+          home: cfg.home,
+          claudeDir: cfg.claudeMainDir,
+          key: box.secrets.boxKey,
+          post: boxPost as unknown as ActionPost,
+          log,
+          setTimeout: (fn, ms) => realClock.setTimeout(fn, ms),
+          held: () => saveHold.held,
+          waiting: () => runner.threads.get(box.secrets.threadId)?.rec.waitingForToken !== undefined,
+          replaced: () => runner.tokenReplaced(box.secrets.threadId),
+          superseded: (e) => {
+            if (!keyRejected(e)) return false;
+            boxSuperseded();
+            return true;
+          },
+        })
+      : undefined;
+  if (tokenWatch) runner.onBoxTokenRefused = () => tokenWatch.refused();
   // The rest of the box stopped, categorically, before a save copies anything.
   const stopOthers = async () => {
     if (!boxProcs) throw new Error("This box can't see its processes (no /proc), so it can't stop them to save.");
@@ -743,6 +767,8 @@ async function main(): Promise<void> {
     // pools, shared memory or machine figures.
     ...(box ? {} : { presence: async () => (atMac = isAtMac(rpcServer?.appConnected() ?? false, await hidIdleMs())) }),
     appConnected: () => rpcServer?.appConnected() ?? false,
+    // Virtual runners in Runs on (thread-index.ts services); never in a box.
+    virtualRunners: () => !box && experimentOn(cfg.home, 'virtualRunners'),
     followProblem: () => (updaterReady ? updater.status().followProblem : undefined),
     updateFailed: () => reportedFailure(),
     // A thread past a move's switch is the other runner's: never written
@@ -1187,6 +1213,27 @@ async function main(): Promise<void> {
     clock: realClock,
     log,
   }));
+  // Virtual runners from the Mac (virtual-runners.ts): a thread started on
+  // one, and a login's cloud token for its boxes, on the main Mac's key.
+  const virtualRunners = new VirtualRunners({
+    on: () => sync.virtualRunnersReady(),
+    call: (kind, fn, args) => sync.ownerCall(kind, fn, args),
+    accounts: () => runner.safeAccounts(),
+    poolLogin: (poolId) => {
+      const pool = runner.poolById(poolId);
+      const logins = runner.safeAccounts().filter((a) => a.provider === 'claude' && pool?.accountIds.includes(a.id));
+      const id = logins.length ? runner.pickAccount(logins, undefined) : undefined;
+      return logins.find((a) => a.id === id);
+    },
+    claudePath: () => cfg.claudePath,
+    made: (row) => relay.noteMade({ ...row, provider: 'claude', status: 'starting', needsYou: false, unread: false, lastActivityAt: row.createdAt }),
+    log,
+    now: () => Date.now(),
+  });
+  methods['cloudTokens.make'] = (p) => virtualRunners.make(String(p.login ?? ''));
+  methods['cloudTokens.set'] = (p) => virtualRunners.set(String(p.login ?? ''), String(p.token ?? ''));
+  methods['cloudTokens.useMac'] = (p) => virtualRunners.useMac(String(p.login ?? ''));
+  methods['cloudTokens.list'] = () => virtualRunners.list();
   // Starting threads on other runners, and a runner key's requests for
   // that (docs/protocol.md, "Asking another runner").
   // A request's mode as the card showed it: none is the default (full
@@ -1455,6 +1502,7 @@ async function main(): Promise<void> {
     methods,
     remote: peers,
     relay,
+    virtualStart: (p) => virtualRunners.start(p),
     gate: new CallerGate({ runner, remote: peers, schedules: scheduler }),
     callerOf: (sock) => threadOfSocket(sock, { registry, known: (id) => runner.has(id) || peers.owns(id), log }),
     updates: () => (draining ? undefined : runnerUpdates()),
@@ -1557,6 +1605,8 @@ async function main(): Promise<void> {
   // A save that was holding the box when it stopped holds it again: no
   // process starts (the turns and patches were held as the thread loaded).
   if (box?.secrets.saveHold) closeSpawns(SAVE_HOLDS_SPAWNS);
+  // A thread still waiting for a newer cloud token when the runner stopped watches for it again.
+  tokenWatch?.start();
   // A degraded box says why on its thread (if it has one here) and runs nothing.
   if (box?.broken) runner.holdBroken(box.secrets.threadId, box.broken);
 

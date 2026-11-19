@@ -414,7 +414,7 @@ export type Turn = {
   wake?: WakeRead;
 };
 
-export type TurnHold = 'save' | 'setup' | 'broken';
+export type TurnHold = 'save' | 'setup' | 'broken' | 'token';
 
 type Runtime = {
   // On its way to another runner (runner/moves.ts): no turn starts.
@@ -424,7 +424,8 @@ type Runtime = {
   // the backend says it may run again (box-save.ts SaveHold); 'broken', a
   // box that can't use its folder (box-mode.ts, degraded);
   // the box is resumed or sent something; 'setup', a restored worktree's
-  // setup still running. Messages wait in the queue meanwhile.
+  // setup still running; 'token', its cloud token refused, until a newer
+  // one comes (holdForToken). Messages wait in the queue meanwhile.
   holds?: Set<TurnHold>;
   // A restored worktree's setup running (setUpRestored): a writer a
   // stopping save waits for.
@@ -843,6 +844,9 @@ export class Runner {
   // other new thread is refused (makeThread), and that one only under its id.
   boxThread?: string;
   boxHolds: TurnHold[] = [];
+  // Box mode: told when a turn is refused with the box's cloud token, to say so
+  // to the backend and watch for a newer one (main.ts, box-token.ts).
+  onBoxTokenRefused?: (threadId: string) => void;
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;
@@ -996,6 +1000,8 @@ export class Runner {
       // A box's restored thread: nothing starts (recovery, a carry-on, a
       // wake) until its worktree's setup has run (setUpRestored).
       if (this.boxHolds.length && rec.id === this.boxThread) st.rt.holds = new Set(this.boxHolds);
+      // A box's thread still waiting for a cloud token when it stopped waits again.
+      if (rec.waitingForToken && rec.id === this.boxThread) (st.rt.holds ??= new Set()).add('token');
       this.threads.set(rec.id, st);
       // One thread's record that trips something here (a field another
       // runner wrote wrong: a moved thread's `presses: {}` stopped every
@@ -3327,7 +3333,10 @@ export class Runner {
         this.log.error('could not move a thread off a login at its limit', { threadId: st.rec.id, error: String(e) });
       }
     }
-    if (signedOut) {
+    // In a box, its one login's cloud token was refused: the thread waits for a newer one (box-token.ts).
+    if (signedOut && this.boxThread === st.rec.id && this.onBoxTokenRefused) {
+      this.holdForToken(st, signedOut);
+    } else if (signedOut) {
       try {
         this.onSignedOut(st);
       } catch (e) {
@@ -4942,6 +4951,8 @@ export const NET_PROBE_FIRST_MS = 5_000;
 export const NET_PROBE_MAX_MS = 60_000;
 export const NET_CARRY_ON_MAX = 5;
 export const NET_WAIT_MAX_MS = 6 * 3_600_000;
+// A box's thread, after its refused cloud token was replaced (holdForToken).
+export const CARRY_ON_TOKEN = "This machine's Claude token was refused partway through that turn, and a new one has been set. Carry on from where you left off.";
 export const CARRY_ON_BACK = 'Your login hit its usage limit partway through that turn and has room again now. Carry on from where you left off.';
 
 // How many sub-agents a thread keeps in its summary.

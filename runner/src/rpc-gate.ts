@@ -129,6 +129,10 @@ export class CallerGate {
     // account of its own choosing. Only the user's click in the app, Full
     // access or not (Codex's review, 19 Nov).
     if (method === 'accounts.yearToken') throw new RpcError(ErrorCode.notAllowed, "Making a year-long token is the user's to do: Year-long token… in the app's Usage or Runners panel.");
+    // A login's cloud token, and threads on a virtual runner (a box billed by
+    // the hour, holding a year-long token), are the user's own, from the app.
+    if (method.startsWith('cloudTokens.')) throw new RpcError(ErrorCode.notAllowed, "A login's cloud token is the user's to set, from the card in the app.");
+    if (method === 'threads.create' && p.serviceId !== undefined) throw new RpcError(ErrorCode.notAllowed, 'Starting a thread on a virtual runner is the user\'s to do, from Runs on in the app.');
     if (known?.mode === 'full') return p;
     if (GATED_READS.has(method)) return p;
     if (!known) throw new RpcError(ErrorCode.notAllowed, "This thread isn't one the runner knows now, so it can only read. Ask the user to do it in the app.");

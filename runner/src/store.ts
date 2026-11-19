@@ -144,6 +144,10 @@ export type ThreadRecord = {
   // (Runner.onNetworkLost). `since` is when the line first went, `tries`
   // the carry-ons sent since. Kept here so the wait survives a restart.
   waitingForNetwork?: { since: string; tries: number };
+  // Box mode: a turn was refused with the box's cloud token (errorKind auth):
+  // the thread waits, turns held, until the backend has a newer token for
+  // its login (Runner.holdForToken, box-token.ts). Kept across restarts.
+  waitingForToken?: { since: string; turnId: string };
   // The runner's own carry-on after that, so if it can't get through
   // either the thread waits again, counting on from the same outage.
   netCarryOn?: { turnId: string; since: string; tries: number };

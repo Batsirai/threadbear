@@ -770,3 +770,33 @@ for (const mode of MODES) {
     }
   });
 }
+
+test("a login's cloud token and a thread on a virtual runner are the user's, from the app: refused to any thread's key, Full access too", async () => {
+  const started: unknown[] = [];
+  const tokens: unknown[] = [];
+  const { h, server, token, url } = await serve({
+    virtualStart: async (p) => {
+      started.push(p);
+      return { thread: { id: 'cloud-1', runnerId: 'abcdef012345' } };
+    },
+    methods: { 'cloudTokens.set': (p) => (tokens.push(p), {}), 'cloudTokens.make': (p) => (tokens.push(p), {}) },
+  });
+  const me = thread(h, 'full');
+  try {
+    const c = await as(url, token, me.id);
+    await assert.rejects(c.call('cloudTokens.set', { login: 'me@example.com', token: 'sk-ant-oat01-x' }), (e: { code?: number; message?: string }) => refused(e) && /card in the app/.test(e.message ?? ''));
+    await assert.rejects(c.call('cloudTokens.make', { login: 'me@example.com' }), refused);
+    await assert.rejects(c.call('threads.create', { text: 'x', serviceId: 'runnerServices:1', cwd: '/x', accountId: 'claude-3' }), (e: { code?: number; message?: string }) => refused(e) && /Runs on/.test(e.message ?? ''));
+    c.close();
+    assert.deepEqual([started.length, tokens.length], [0, 0]);
+    // The app, on the runner's token: through.
+    const app = await RunnerClient.connect(url, token);
+    assert.deepEqual(await app.call('threads.create', { text: 'x', serviceId: 'runnerServices:1', cwd: '/x', accountId: 'claude-3' }), { thread: { id: 'cloud-1', runnerId: 'abcdef012345' } });
+    assert.deepEqual(await app.call('cloudTokens.make', { login: 'me@example.com' }), {});
+    await assert.rejects(app.call('threads.create', { text: 'x', serviceId: 7 }), (e: { code?: number }) => e.code === -32602);
+    app.close();
+    assert.equal(started.length, 1);
+  } finally {
+    await server.close();
+  }
+});

@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Runner, ThreadState, TurnHold } from '../runner.ts';
+import { CARRY_ON_TOKEN } from '../runner.ts';
 import type { ImageRef } from '../protocol.ts';
 import { normaliseRecord, type ThreadRecord } from '../store.ts';
 import type { RunnerPart } from './part.ts';
@@ -1238,6 +1239,34 @@ export const movesPart = {
       if (st && st.rt.restoreSetup === going) st.rt.restoreSetup = undefined;
       this.releaseTurns(threadId, 'setup');
     }
+  },
+
+  // Box mode: a turn refused with the box's cloud token (errorKind auth). A
+  // box has one login, so there's nowhere to move: the thread says so once,
+  // waits with its turns held (messages queue behind), and the backend is
+  // told (onBoxTokenRefused) so the token card shows on Mike's Mac.
+  holdForToken(this: Runner, st: ThreadState, turnId: string): void {
+    const { rec } = st;
+    const already = Boolean(rec.waitingForToken);
+    rec.waitingForToken = { since: rec.waitingForToken?.since ?? this.isoNow(), turnId };
+    this.holdTurns(rec.id, 'token');
+    if (!already) this.emit(st, { type: 'system.note', text: "Claude refused this box's token. The thread carries on once a new one is set." });
+    this.markDirty(st);
+    this.onBoxTokenRefused?.(rec.id);
+  },
+
+  // A newer cloud token is on disk (box-token.ts): the CLI goes so the next
+  // one starts on it, and the thread carries on by itself, unless a message
+  // of Mike's waited meanwhile, which goes instead.
+  tokenReplaced(this: Runner, threadId: string): void {
+    const st = this.threads.get(threadId);
+    if (!st?.rec.waitingForToken) return;
+    delete st.rec.waitingForToken;
+    this.markDirty(st);
+    if (st.rt.session && !st.rt.closing) this.releaseSession(st);
+    const queued = st.rec.queue.length > 0;
+    this.releaseTurns(threadId, 'token');
+    if (!queued && this.bucket(st.rec) === 'inbox') this.carryOn(st, CARRY_ON_TOKEN);
   },
 
   // Box mode's degraded state (box-mode.ts): the box can't use its folder,

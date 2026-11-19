@@ -7923,7 +7923,11 @@ has to be on for it.
   as a create on another runner does (`thread.runnerId` the box's runner,
   `status: "starting"`). Pictures aren't taken yet (`-32602`, saying so).
   The thread then waits on its box, and on a cloud token if its login has
-  none, which the app shows from `RemoteRunner.box`.
+  none, which the app shows from `RemoteRunner.box`. Commands for it
+  (`queueCommand`) reach its box's runner before the box has written the
+  thread's row, by its `boxes` row; an archive of one waiting for a token
+  ends it. Neither this nor `cloudTokens.*` is taken from a thread's own
+  key, whatever its access (rpc-gate.ts): they're the user's, from the app.
 - **The box.** The provider starts it from the image with only
   `THREADBEAR_SYNC_URL` (the deployment's address),
   `THREADBEAR_BOX_BOOT` (its boot token, Box keys) and, for a provider that

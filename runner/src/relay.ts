@@ -688,6 +688,11 @@ export class Relay {
     return { watching: [...this.watches.values()].filter((w) => w.unsub.length).length, held, reads: this.reads, bytes: this.bytes };
   }
 
+  /** A thread started from here elsewhere (a virtual runner's, virtual-runners.ts), openable before the sidebar's list has its row. */
+  noteMade(row: RemoteThread): void {
+    this.made.set(row.threadId, row);
+  }
+
   private find(threadId: string): RemoteThread | undefined {
     const listed = this.deps.remote().threads.find((t) => t.threadId === threadId);
     if (listed) {

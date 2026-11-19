@@ -81,7 +81,10 @@ cherry-picked.
   Mike's own logins. Never read or copy OAuth tokens or Keychain credentials.
   The one exception is a login's year-long token that Mike made with
   Year-long token… (`threadbear-token.json` in that login's folder): the
-  runner passes it to that login's CLI and nowhere else (Mike, 17 Nov).
+  runner passes it to that login's CLI and nowhere else (Mike, 17 Nov), but
+  to Convex as that login's cloud token when Mike picks it on a cloud token
+  card (`cloudTokens.useMac`). A cloud token made with Make one goes only to
+  `boxes:setCloudToken`, never to disk or the log.
 - Tests that hit a real model use the cheapest model, tiny prompts, a temp
   working folder and a temp runner data dir, never the real one.
 - Never kill processes you didn't start; T3 Code runs the same CLIs.

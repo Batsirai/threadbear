@@ -344,7 +344,21 @@ File references are where to look.
   sends back through your Convex backend only the claude.ai page to approve
   it on and whether it worked. The code you paste goes the other way and is
   dropped from the backend once used. The helper writes the same file there;
-  the token never leaves that machine.
+  the token never leaves that machine. The one other place a year-long
+  token can go is your own Convex backend, if you pick Use this Mac's token
+  on a cloud token card (below).
+- **A cloud token for virtual runners, if you make one** (the
+  `virtualRunners` experiment, off unless you turn it on;
+  `runner/src/virtual-runners.ts`, `runner/src/cloud-token-helper.py`): Make
+  one on the card in a thread on a virtual runner has the runner run `claude
+  setup-token` for that login with no window, through a small Python helper
+  (`python3`, in a pseudo-terminal), which opens claude.ai in your browser to
+  approve. The CLI gets its code back on a localhost callback, and the helper
+  hands the token it printed to the runner, which sends it, over HTTPS, only
+  to your Convex backend's `boxes:setCloudToken`, which keeps it sealed. It's
+  never written to disk here or logged; the helper is stopped after 10
+  minutes. Paste a token, or Use this Mac's token (that login's year-long
+  token, above), send it the same way.
 - **A pinned file being shown** (`desktop/gpui/src/highlights.rs`): if its
   Highlights request fails, the app retries after 1 second, then 2, then 4,
   up to 5 seconds between tries while you're looking at that thread. It
