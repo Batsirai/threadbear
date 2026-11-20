@@ -19,9 +19,9 @@ function turn(n: number, texts: string[], opts: { tools?: boolean; summary?: str
   const base = n * 100;
   return [
     { seq: base, role: 'user', text: 'go', turn: t },
-    ...(opts.tools ? [{ seq: base + 1, role: 'assistant', text: 'Looking.', turn: t }, { seq: base + 2, role: 'tool', text: 'Ran tests', turn: t }] : []),
+    ...(opts.tools ? [{ seq: base + 1, role: 'assistant', text: 'Looking.', turn: t }, { seq: base + 2, role: 'tool', text: 'Ran tests', toolKind: 'command', turn: t }] : []),
     ...texts.map((text, i) => ({ seq: base + 10 + i, role: 'assistant', text, turn: t })),
-    ...(opts.summary ? [{ seq: base + 40, role: 'tool', text: 'end_turn', turn: t }, { seq: base + 41, role: 'assistant', text: opts.summary, summary: true, turn: t }] : []),
+    ...(opts.summary ? [{ seq: base + 40, role: 'tool', text: 'threadbear: end_turn', toolKind: 'mcp', turn: t }, { seq: base + 41, role: 'assistant', text: opts.summary, summary: true, turn: t }] : []),
   ];
 }
 
@@ -44,6 +44,8 @@ function fake(dir = tmpDir('far-reports')) {
         return s.row;
       },
       rows: async () => s.rows,
+      self: () => 'm5',
+      runnerName: (id) => (id === 'cloud' ? 'Cloud box' : undefined),
       has: (id) => s.here.has(id),
       deliver: (to, text) => {
         if (s.failDeliver) throw new Error('busy');
@@ -104,7 +106,7 @@ test('a reply that reached the backend after it was passed on follows', async ()
   await f.tick(fr);
   await f.tick(fr);
   assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0]!.text, /Looking\.$/);
+  assert.match(f.sent[0]!.text, /\(Its turn ended with no reply\.\)$/, 'narration before a command is no reply');
   f.s.rows = turn(1, ['The real report.'], { tools: true });
   await f.tick(fr);
   await f.tick(fr);
@@ -194,7 +196,7 @@ test("a turn's reply is its last words before the tool calls that end it", () =>
   assert.equal(replyOf(turn(1, ['Done: it works.', 'Also this.'], { tools: true }), 't1'), 'Done: it works.\n\nAlso this.');
   assert.equal(replyOf(turn(1, ['Report.'], { tools: true, summary: '- bullets' }), 't1'), 'Report.');
   assert.equal(replyOf(turn(1, [], { summary: '- bullets' }), 't1'), '- bullets');
-  assert.equal(replyOf(turn(1, [], { tools: true }), 't1'), 'Looking.');
+  assert.equal(replyOf(turn(1, [], { tools: true }), 't1'), '(Its turn ended with no reply.)');
   assert.equal(replyOf(turn(1, []), 't1'), '(Its turn ended with no reply.)');
   assert.deepEqual(turnsOf([...turn(1, ['a']), ...turn(2, ['b'])]), ['t1', 't2']);
   assert.match(farReportText({ title: 'x', threadId: 'far1', runnerName: 'Pixel', reply: 'r'.repeat(30_000) }), /\[cut: read_thread far1 has the rest\]$/);
@@ -229,15 +231,34 @@ test("a turn whose last reply came only with the next turn's rows follows", asyn
   assert.match(f.sent[1]!.text, /again[^]*Real\.$/);
 });
 
-test('a thread moved off the runner it started on is let go', async () => {
+test('a thread moved to this Mac is let go; one moved to another runner is followed there', async () => {
   const f = fake();
   const fr = f.make();
   fr.add({ threadId: 'far1', runnerId: 'pixel', runnerName: 'Pixel', starter: 'starter1' });
   f.set('idle', '2026-11-20T10:01:00Z', turn(1, ['Report.']));
+  f.s.row = { ...f.s.row!, runnerId: 'cloud' } as typeof f.s.row;
+  await f.tick(fr);
+  await f.tick(fr);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /From Cloud box,/);
   f.s.row = { ...f.s.row!, runnerId: 'm5' } as typeof f.s.row;
   await f.tick(fr);
   assert.deepEqual(fr.watching(), []);
-  assert.equal(f.sent.length, 0);
+});
+
+test("a turn's late reply follows even when that turn fills the whole page", async () => {
+  const f = fake();
+  const fr = f.make();
+  fr.add({ threadId: 'far1', runnerName: 'Pixel', starter: 'starter1' });
+  const long = (end: FarRow[]): FarRow[] => [...Array.from({ length: 100 - end.length }, (_, i): FarRow => ({ seq: i, role: 'tool', text: 'Ran it', toolKind: 'command', turn: 't1' })), ...end];
+  f.set('idle', '2026-11-20T10:01:00Z', long([]));
+  await f.tick(fr);
+  await f.tick(fr);
+  f.s.rows = long([{ seq: 200, role: 'assistant', text: 'Real.', turn: 't1' }]);
+  await f.tick(fr);
+  await f.tick(fr);
+  assert.equal(f.sent.length, 2);
+  assert.match(f.sent[1]!.text, /Real\.$/);
 });
 
 test("a handover's old runner, finishing a look late, doesn't undo what the new one passed on", async () => {
@@ -263,11 +284,12 @@ test("a handover's old runner, finishing a look late, doesn't undo what the new 
 
 test("a turn's reply is its words before end_turn, not narration or what Mike changed", () => {
   const t = 't1';
-  const rows = (...r: [string, string, boolean?][]): FarRow[] => r.map(([role, text, summary], i) => ({ seq: i, role, text, turn: t, ...(summary ? { summary } : {}) }));
-  // Narration, a tool, end_turn and its bullets: the bullets are the report.
-  assert.equal(replyOf(rows(['user', 'go'], ['assistant', 'Let me look.'], ['tool', 'Ran it'], ['tool', 'end_turn'], ['assistant', '- Found it', true]), t), '- Found it');
-  // The report, end_turn and its bullets: the report.
-  assert.equal(replyOf(rows(['user', 'go'], ['tool', 'Ran it'], ['assistant', 'The report.'], ['tool', 'end_turn'], ['assistant', '- Found it', true]), t), 'The report.');
+  const rows = (...r: [string, string, boolean?][]): FarRow[] =>
+    r.map(([role, text, summary], i) => ({ seq: i, role: role === 'mcp' ? 'tool' : role, text, turn: t, ...(role === 'mcp' ? { toolKind: 'mcp' } : role === 'tool' ? { toolKind: 'command' } : {}), ...(summary ? { summary } : {}) }));
+  // Narration, a command, end_turn and its bullets: the bullets are the report.
+  assert.equal(replyOf(rows(['user', 'go'], ['assistant', 'Let me look.'], ['tool', 'Ran it'], ['mcp', 'end_turn'], ['assistant', '- Found it', true]), t), '- Found it');
+  // The report, a pin, end_turn and its bullets: the report.
+  assert.equal(replyOf(rows(['user', 'go'], ['tool', 'Ran it'], ['assistant', 'The report.'], ['mcp', 'Pin x'], ['mcp', 'end_turn'], ['assistant', '- Found it', true]), t), 'The report.');
   // Mike wrote into the running turn: only what came after.
   assert.equal(replyOf(rows(['user', 'go'], ['assistant', 'Doing A.'], ['user', 'No, B.'], ['assistant', 'Did B.']), t), 'Did B.');
 });

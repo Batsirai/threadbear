@@ -1362,6 +1362,8 @@ async function main(): Promise<void> {
       if (!src) throw new Error('sync is off');
       return ((await src.post('query', 'relay:remoteMessages', { key: src.key, threadId, limit: FAR_ROWS })) as { messages: FarRow[] }).messages;
     },
+    self: () => syncRunnerId,
+    runnerName: (id) => runnerNames.get(id),
     has: (id) => runner.has(id),
     deliver: (starter, text) => {
       runner.send(starter, text, [], { queue: true });

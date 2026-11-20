@@ -44,7 +44,7 @@ type Rec = {
 };
 
 // A message row as the backend keeps it (relay.ts RelayRow).
-export type FarRow = { seq: number; role: string; text: string; turn?: string; summary?: boolean; plan?: boolean };
+export type FarRow = { seq: number; role: string; text: string; turn?: string; toolKind?: string; summary?: boolean; plan?: boolean };
 
 export type FarReportsDeps = {
   file: string;
@@ -52,6 +52,9 @@ export type FarReportsDeps = {
   row: (threadId: string) => Promise<{ status: string; runnerId?: string; lastActivityAt?: string; title?: string } | null>;
   // Its newest message rows, oldest first.
   rows: (threadId: string) => Promise<FarRow[]>;
+  // This runner's id, and another's name.
+  self: () => string;
+  runnerName: (runnerId: string) => string | undefined;
   // Whether the starter is one of this runner's threads.
   has: (starter: string) => boolean;
   deliver: (starter: string, text: string) => void;
@@ -94,19 +97,19 @@ export function farReportText(p: { title: string; threadId: string; runnerName: 
   return `${AGENT_MESSAGE_PREFIX}"${title}" (${p.threadId.slice(0, 8)})]\n\nFrom ${runner}, where this thread started it. ${what} passed on by this Mac's runner (thread ${p.threadId}):\n\n${reply}`;
 }
 
-// A turn's reply from its rows: its last words, before the tool call that
-// ends it (end_turn's) if there is one. end_turn's summary (its bullets)
-// stands in when there are none: words before another tool call are
-// narration, and words before a message Mike sent into the running turn
-// were what he changed.
+// A turn's reply from its rows: its last words, past the MCP tool calls
+// after them (end_turn's, a pin, a picked option: every threadbear tool's
+// row is `mcp`). end_turn's summary (its bullets) stands in when there are
+// none: words before another kind of tool call (a command, a read, an
+// edit) are narration, and words before a message Mike sent into the
+// running turn were what he changed.
 export function replyOf(rows: FarRow[], turn: string): string {
   const mine = rows.filter((r) => r.turn === turn);
   const said: string[] = [];
   const summary: string[] = [];
-  let tools = 0;
   for (const r of [...mine].reverse()) {
     if (r.role === 'tool') {
-      if (said.length || ++tools > 1) break;
+      if (said.length || r.toolKind !== 'mcp') break;
       continue;
     }
     if (r.role === 'user') break;
@@ -202,9 +205,13 @@ export class FarReports {
     let before = start;
     const row = await this.deps.row(rec.threadId);
     if (!row) return now - (rec.seenAt ?? rec.at) <= FORGET_MS;
-    // Moved off the runner it was started on (to this Mac, say): its own
-    // send_message reaches the starter from there.
-    if (rec.runnerId && row.runnerId && row.runnerId !== rec.runnerId) return false;
+    // Moved to this Mac: its own send_message reaches the starter from
+    // here. Moved to another runner, it's followed there.
+    if (row.runnerId && row.runnerId === this.deps.self()) return false;
+    if (row.runnerId && row.runnerId !== rec.runnerId) {
+      rec.runnerId = row.runnerId;
+      rec.runnerName = this.deps.runnerName(row.runnerId) ?? rec.runnerName;
+    }
     rec.seenAt = now;
     if (row.lastActivityAt !== rec.activity) {
       rec.activity = row.lastActivityAt;
@@ -224,11 +231,11 @@ export class FarReports {
     const done = running ? turns.slice(0, -1) : turns;
     const from = rec.sentTurn ? turns.indexOf(rec.sentTurn) : -1;
     // Any passed on whose reply has changed since (more of it reached the
-    // backend late; not the first on a full page, whose start may be cut
-    // off), then every turn after the last one passed on: all of them on
+    // backend late; a reply is taken from a turn's end, so one whose start
+    // is off the page reads the same), then every turn after the last one passed on: all of them on
     // this page if that one is older.
     const hashes = rec.hashes ?? {};
-    const changed = done.filter((t, i) => (i > 0 || rows.length < ROWS) && i <= from && hashes[t] !== undefined && hashes[t] !== hash(replyOf(rows, t)));
+    const changed = done.filter((t, i) => i <= from && hashes[t] !== undefined && hashes[t] !== hash(replyOf(rows, t)));
     const todo = [...changed, ...done.slice(from + 1)];
     if (!todo.length) {
       rec.pending = undefined;

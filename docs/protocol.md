@@ -6926,18 +6926,20 @@ runner that's this one is the usual create.
   turn ended before its last reply reaches the backend). If one of the
   last 20 turns passed on later shows a different reply (more of it
   arrived, even with the next turn's rows), that goes again, saying so.
-  A turn's reply is its last agent words before the one tool call that
-  ends it (end_turn's), back to a message sent into the running turn;
-  end_turn's summary stands in when there are none, as words before
-  another tool call are narration. It goes queued, as an agent's
+  A turn's reply is its last agent words, past the MCP tool calls after
+  them (end_turn's, a pin: every threadbear tool's row has `toolKind`
+  `mcp`), back to a message sent into the running turn; end_turn's
+  summary stands in when there are none, as words before another kind of
+  tool call (a command, a read, an edit) are narration. It goes queued, as an agent's
   message: `[Sent by the agent in the thread "<title>" (<id8>)]`, then
   `From <runner>, where this thread started it. Its reply as its turn
   ended, passed on by this Mac's runner (thread <id>):` and the reply. The
   title and runner name lose quotes, brackets and newlines, and the reply
   is cut at 20,000 characters. The record is saved after each send, and
   a look that finds the other runner of a handover passed on more
-  meanwhile writes nothing. One that has moved off the runner it was
-  started on is let go: its own `send_message` reaches the starter. A starter that
+  meanwhile writes nothing. One moved to the main Mac is let go (its own
+  `send_message` reaches the starter); one moved to another runner is
+  followed there. A starter that
   isn't on this runner (a handover's other runner has it) waits, and one
   gone a day is taken as deleted; a send that fails is tried at the next
   look. At most 40 go per thread a day, as each wakes the starter. A
