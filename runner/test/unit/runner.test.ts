@@ -2604,3 +2604,41 @@ test('request: one whose first message of his is past the first 300 events has n
   h2.runner.send(thread.id, 'Try again');
   assert.equal(h2.runner.get(thread.id).request, undefined, 'not his first');
 });
+
+// Found by the CLI session table (cli-session.ts): a setting the CLI refused
+// asked for a fresh CLI whenever the refusal landed, so one that came after
+// that CLI had gone and another had started asked the new one, which had
+// started with the setting, to go too: the next message restarted it (a
+// model or effort), or it was released at once (a permission mode).
+test('a setting an old CLI refuses late leaves the next CLI alone', async () => {
+  for (const which of ['model', 'mode'] as const) {
+    const h = makeHarness();
+    const { thread } = create(h);
+    const first = h.adapter.last;
+    first.init();
+    first.result();
+    let refuse!: (e: Error) => void;
+    const late = new Promise<void>((_, reject) => (refuse = reject));
+    if (which === 'model') first.setModel = () => late;
+    else first.setPermissionMode = () => late;
+    h.runner.update(which === 'model' ? { threadId: thread.id, model: 'claude-opus-5-5' } : { threadId: thread.id, permissionMode: 'ask' });
+    // The CLI dies before it answers; the next message starts another.
+    first.kill();
+    await tick();
+    h.runner.send(thread.id, 'carry on');
+    await tick();
+    const next = h.adapter.last;
+    assert.notEqual(next, first, which);
+    next.init();
+    next.result();
+    await tick();
+    refuse(new Error('the CLI went'));
+    await tick();
+    assert.equal(next.ended, false, `${which}: the new CLI kept`);
+    // The next message goes to it, not to a third CLI.
+    h.runner.send(thread.id, 'and again');
+    await tick();
+    assert.equal(h.adapter.last, next, `${which}: no third CLI`);
+    assert.equal(next.sent.length, 2, which);
+  }
+});

@@ -611,7 +611,8 @@ starts the next, so one session never has two CLIs. One that exits by itself
 goes straight back to `none`, and a turn it was running fails, or starts
 again once on a fresh session when the one to resume can't be found. Every
 start, delete, handover and shutdown moves the generation on, and anything an
-older CLI says (its output, its exit) is dropped by that one check.
+older CLI says or a step that waited on it brings back (its output, its exit,
+a setting it refused) is dropped by that one check.
 
 ```mermaid
 stateDiagram-v2

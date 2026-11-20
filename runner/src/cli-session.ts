@@ -58,7 +58,8 @@
 //   tasks *     its background work list           (tasks, in every state)
 //   exited *    its exit (onExited)                none!    spare!   none      none      closing (session gone)
 //   retryFresh  onExited, resuming once            (retriedFresh on)
-//   leave       a setting it can't take, etc.      (leave on, in every state)
+//   leave       a setting it can't take, etc.      (leave on, in every state; *
+//               when it's a refusal that came back)
 //   stay        a message or review answer brings  (leave off, in every state)
 //               a put-away thread back
 //   versionMove releaseIdle: a CLI update          !        !        (on or off)         !
@@ -146,7 +147,9 @@ export type CliEvent =
   | { kind: 'tasks'; gen: number; tasks: BackgroundTask[] }
   | { kind: 'exited'; gen: number }
   | { kind: 'retryFresh' }
-  | { kind: 'leave' }
+  // `gen`: from a step that waited on the CLI (a setting it refused), the
+  // generation it was asked of: a later CLI started with the setting.
+  | { kind: 'leave'; gen?: number }
   | { kind: 'stay' }
   | { kind: 'versionMove'; move: boolean }
   // `done`: settles once the CLI has gone (the runner settles it after closed).
@@ -267,6 +270,7 @@ export function moveCli(s: Cli, e: CliEvent): CliMove {
     case 'retryFresh':
       return ok({ ...s, marks: { ...m, retriedFresh: true } });
     case 'leave':
+      if (e.gen !== undefined && e.gen !== m.gen) return no(STALE);
       return ok({ ...s, marks: { ...m, leave: true } });
     case 'stay':
       return ok({ ...s, marks: without(m, 'leave') });

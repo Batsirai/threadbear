@@ -120,8 +120,9 @@ export const approvalsPart = {
     const call = [...rt.approvals.values()].find((p) => p.kind === 'tool' && p.plan === params.itemId);
     if (call) return this.respondApproval({ threadId: params.threadId, approvalId: call.approvalId, decision: 'allow' });
     const mode = this.leavePlan(st);
+    const gen = rt.generation;
     rt.session?.setPermissionMode(mode).catch(() => {
-      this.cli(st, { kind: 'leave' });
+      this.cli(st, { kind: 'leave', gen });
     });
     this.send(params.threadId, PLAN_GO_AHEAD);
     return {};

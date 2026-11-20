@@ -344,11 +344,11 @@ test('random walks move as the writes by hand did, and the ones the runner sends
 
 // Nothing older moves it: an event for an older generation is refused and
 // changes nothing, whatever state it lands in.
-test('an older CLI`s output or exit changes nothing', () => {
+test('an older CLI`s output, exit or refused setting changes nothing', () => {
   for (const [name, make] of Object.entries(STATES)) {
     for (const e of [
       { kind: 'init', gen: -1 }, { kind: 'version', gen: -1, atWanted: true }, { kind: 'tasks', gen: -1, tasks: [task('x')] },
-      { kind: 'exited', gen: -1 },
+      { kind: 'exited', gen: -1 }, { kind: 'leave', gen: -1 },
     ] satisfies CliEvent[]) {
       const rt = make();
       const before = { ...rt };
@@ -357,6 +357,13 @@ test('an older CLI`s output or exit changes nothing', () => {
       assert.deepEqual(rt, before, `${name} + ${e.kind}: a refused move leaves the fields`);
     }
   }
+});
+
+// A refused setting for this CLI still asks it to go once idle.
+test('a setting this CLI refuses asks it to leave', () => {
+  const rt = STATES.live();
+  assert.ok(cliRuntime(rt, { kind: 'leave', gen: rt.generation }).ok);
+  assert.equal(rt.releaseWhenIdle, true);
 });
 
 test('every state reads and writes back as it was', () => {

@@ -3605,10 +3605,12 @@ export class Runner {
       if (rec.moved?.fromCwd === rec.cwd) delete rec.moved;
       const session = rt.session;
       if (session && !rt.closing) {
+        const gen = rt.generation;
         const fallback = () => {
           // Couldn't move the live session: a fresh CLI resumes there,
-          // once any background work is done (scheduleIdle).
-          this.cli(st, { kind: 'leave' });
+          // once any background work is done (scheduleIdle). Not one
+          // started since, which started there.
+          if (!this.cli(st, { kind: 'leave', gen }).ok) return;
           if (!rt.turn) this.scheduleIdle(st);
         };
         if (session.setCwd) session.setCwd(rec.cwd).catch(fallback);
@@ -3661,8 +3663,9 @@ export class Runner {
       if (model) rec.model = model;
       else delete rec.model;
       if (rt.session && !release) {
+        const gen = rt.generation;
         rt.session.setModel(model).catch(() => {
-          this.cli(st, { kind: 'leave' });
+          this.cli(st, { kind: 'leave', gen });
         });
         if (sayNextTurn()) nextTurn.push(model ? (account ? modelTitle(account, model) : model) : 'The default model');
       }
@@ -3671,8 +3674,9 @@ export class Runner {
       if (effort) rec.effort = effort;
       else delete rec.effort;
       if (rt.session && !release) {
+        const gen = rt.generation;
         rt.session.setEffort(effort).catch(() => {
-          this.cli(st, { kind: 'leave' });
+          this.cli(st, { kind: 'leave', gen });
         });
         if (sayNextTurn()) nextTurn.push(effort ? `${effortTitle(effort)} effort` : "The model's own effort level");
       }
@@ -3698,8 +3702,10 @@ export class Runner {
       // call) still hears it: its turn runs on till the next message, and
       // on Full a Codex one answers its own approvals.
       if (rt.session) {
+        const gen = rt.generation;
         rt.session.setPermissionMode(params.permissionMode).catch(() => {
-          this.cli(st, { kind: 'leave' });
+          // A CLI started since started in this mode.
+          if (!this.cli(st, { kind: 'leave', gen }).ok) return;
           if (!rt.turn) this.releaseSession(st);
         });
         // Full counts at once even on Codex: what the turn would ask, the
