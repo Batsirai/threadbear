@@ -3,7 +3,7 @@
 // section his own instructions ask every agent to end with. No model call:
 // the agent that did the work is the one that knows.
 
-import type { Ask, AskLink, NeedsWho, PersistedEvent } from './protocol.ts';
+import { sentByAgent, type Ask, type AskLink, type NeedsWho, type PersistedEvent } from './protocol.ts';
 import { hasLineBreak, replaceLinks } from './linear-text.ts';
 import { cutSafely, safeEnd } from './safe-cut.ts';
 
@@ -646,7 +646,7 @@ export function projectStepNudge(projects: { title: string; state: string }[], o
   const earlier = open.length
     ? ` Earlier in this thread you asked or suggested these, and no answer to them came back: ${open.map((o) => `"${o}"`).join('; ')}. Keep any that still matter, as an ask or in next, and leave out ones that were settled another way or no longer apply.`
     : '';
-  return `${PROJECT_STEP_NUDGE} It's in ${which}. Done means the user can archive the thread: the whole job, not this step. If the next step is theirs (looking at what you made, sending it to someone, a decision), put it on the card as an ask with needs "you". If it's yours later, hibernate with snooze or book it with schedule_message.${earlier} If this thread's part really is finished, call end_turn again as you were: this note comes once a turn.`;
+  return `${PROJECT_STEP_NUDGE} It's in ${which}. Done means the user can archive the thread: the whole job, not this step. If the next step is theirs (looking at what you made, sending it to someone, a decision), put it on the card as an ask with needs "you". If it's yours to do later, book it with schedule_message, which runs you then.${earlier} If this thread's part really is finished, call end_turn again as you were: this note comes once a turn.`;
 }
 export function projectStepNudged(events: PersistedEvent[]): boolean {
   return nudgedSince(events, PROJECT_STEP_NUDGE);
@@ -654,36 +654,30 @@ export function projectStepNudged(events: PersistedEvent[]): boolean {
 
 // The asks and follow-ups (next) on this thread's earlier cards that no
 // message from Mike answered since, oldest first, at most six: the last
-// few, as older ones are likelier settled. An ask counts as answered by a
-// card answer naming it or a message quoting it; a follow-up by a message
-// with its words (ticking one sends them). The current turn's own cards and
-// what `now` already lists are left out.
+// few, as older ones are likelier settled. A card is what its turn ended
+// with (turn.completed), so one an interrupted or reopened turn replaced,
+// which Mike never saw, isn't here, and the turn still running has none
+// yet. An ask counts as answered by a card answer naming it or a message
+// quoting it, a follow-up by a message with its words (ticking one sends
+// them), however late: one sent into the running turn too. Only Mike's
+// messages answer (fromMike: not the runner's, a schedule's or another
+// agent's), and what an edit cut out (thread.rewound) never happened.
+// What `now` already lists is left out.
 const plainKey = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
 export function unansweredItems(events: PersistedEvent[], now: string[] = []): string[] {
-  let end = events.length;
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type === 'turn.started') {
-      end = i;
-      break;
-    }
-  }
+  const cuts = events.flatMap((e) => (e.type === 'thread.rewound' ? [{ from: e.fromSeq, to: e.toSeq }] : []));
   const open = new Map<string, string>();
-  // Only calls that ended their turn: a refused one was sent again changed.
-  const calls = new Map<string, unknown>();
-  for (const e of events.slice(0, end)) {
-    if (e.type === 'tool.call' && /(?:^|[_.])end_turn$/.test(String(e.name ?? ''))) calls.set(e.itemId, e.input);
-    else if (e.type === 'tool.result' && calls.has(e.itemId) && endTurnTaken(e)) {
-      const n = needsFromTool(calls.get(e.itemId));
-      calls.delete(e.itemId);
-      if (!n) continue;
-      const items = n.needs === 'you' ? (n.asks ?? []).map((a) => a.action) : (n.next ?? []);
+  for (const e of events) {
+    if (cuts.some((c) => e.seq >= c.from && e.seq <= c.to)) continue;
+    if (e.type === 'turn.completed') {
+      const items = e.needs === 'you' ? (e.asks ?? []).map((a) => a.action) : e.needs === 'nothing' ? (e.next ?? []) : [];
       for (const t of items) {
         open.delete(plainKey(t));
         open.set(plainKey(t), t);
       }
-    } else if (e.type === 'user.message' && (!e.origin || e.origin === 'phone')) {
+    } else if (e.type === 'user.message' && (!e.origin || e.origin === 'phone') && !sentByAgent(e.text ?? '')) {
       const said = plainKey(e.text ?? '');
-      const answered = new Set((e.answers ?? []).map((a) => plainKey(a.action)));
+      const answered = new Set((e.answers ?? []).map((x) => plainKey(x.action)));
       for (const k of [...open.keys()]) if (answered.has(k) || (k && said.includes(k))) open.delete(k);
     }
   }

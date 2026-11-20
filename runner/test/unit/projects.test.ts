@@ -10,6 +10,7 @@ import type { PocketCardInput, PocketCardSummary } from '../../src/sync.ts';
 import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, disclaims, mainCheckout, PICK_CHECKS_PER_LOOK, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS, KEYWORDS_SYSTEM } from '../../src/librarian.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { PROJECT_STEP_NUDGE } from '../../src/needs.ts';
+import { AGENT_MESSAGE_PREFIX } from '../../src/protocol.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
 import { ErrorCode, RpcError } from '../../src/protocol.ts';
@@ -831,6 +832,8 @@ test("end_turn: a Done card in a project still going is told once of the project
     s.out({ kind: 'event', event: { type: 'tool.call', itemId, name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input } });
     const r = (await tool('end_turn').handler(input as never, {} as never)) as { content: { text: string }[]; isError?: boolean };
     const text = r.content.map((c) => c.text).join('');
+    // The CLI may have been resumed while the call ran (a card answer does that).
+    s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
     s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.isError, text, truncated: false, images: [] } });
     return { text, error: Boolean(r.isError) };
   };
@@ -848,7 +851,7 @@ test("end_turn: a Done card in a project still going is told once of the project
   s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
   s.init();
   s.text('m3', 'Which of these should I build?');
-  r = await endTurn({ needs: 'you', asks: [{ question: 'Neon suggested three bigger changes. Which should I build?', options: [{ label: 'Download all' }, { label: 'None' }] }] });
+  r = await endTurn({ needs: 'you', asks: [{ question: 'Neon suggested three bigger changes. Which should I build?', options: [{ label: 'Download all' }, { label: 'None' }] }, { question: "Send the site to Peter's list now?", options: [{ label: 'Send it' }, { label: 'Wait' }] }] });
   assert.equal(r.error, false, r.text);
   s.text('m4', 'Asked.');
   s.result('completed');
@@ -857,10 +860,25 @@ test("end_turn: a Done card in a project still going is told once of the project
   s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
   s.init();
   s.text('m5', 'Design A is live.');
-  // Snoozing, archiving or waiting on threads isn't Done: no note.
+  // Snoozing, archiving or waiting on threads isn't Done: no note. A blank snooze is no snooze.
+  r = await endTurn({ needs: 'nothing', snooze: ' ' });
+  assert.ok(r.text.startsWith(PROJECT_STEP_NUDGE), r.text);
+  s.result('completed');
+  h.runner.send(thread.id, 'keep going');
+  s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
+  s.init();
+  s.text('m5b', 'Design A is live.');
   r = await endTurn({ needs: 'nothing', snooze: '2h' });
   assert.equal(r.error, false, r.text);
-  h.runner.send(thread.id, 'one more');
+  s.result('completed');
+  // Another agent quoting an item isn't Mike answering it.
+  h.runner.send(thread.id, `${AGENT_MESSAGE_PREFIX}abc] Still open: Draft an email telling Peter the site is ready`);
+  s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
+  s.init();
+  s.text('m5c', 'Noted.');
+  s.result('completed');
+  // His card answer, a turn later than the card, is.
+  h.runner.send(thread.id, "Send the site to Peter's list now?\nWait", [], { answers: [{ action: "Send the site to Peter's list now?", answer: 'Wait' }] });
   s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
   s.init();
   s.text('m6', 'Fixed the review findings.');
@@ -868,7 +886,7 @@ test("end_turn: a Done card in a project still going is told once of the project
   assert.ok(r.text.startsWith(PROJECT_STEP_NUDGE), r.text);
   assert.match(r.text, /"Draft an email telling Peter the site is ready"; "Neon suggested three bigger changes\. Which should I build\?"\./);
   // The ticked one, and one this card already carries, aren't listed.
-  assert.doesNotMatch(r.text, /sign-in screen|rest of Peter's photos/);
+  assert.doesNotMatch(r.text, /sign-in screen|rest of Peter's photos|Peter's list/);
   // Once a turn: sent again as it was, it's taken.
   r = await endTurn({ needs: 'nothing', next: ["Load the rest of Peter's photos once he sends them"] });
   assert.equal(r.error, false, r.text);

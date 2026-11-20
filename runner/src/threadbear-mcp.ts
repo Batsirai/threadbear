@@ -327,15 +327,19 @@ export function buildThreadbearTools(
     return out;
   };
 
-  // The thread's recent events, oldest first, a few pages back: for the
-  // cards earlier turns left (needs.ts, unansweredItems).
-  const recentEvents = async (pages = 6): Promise<PersistedEvent[]> => {
+  // The thread's events back to its last few finished turns, oldest
+  // first: for the cards they left (needs.ts, unansweredItems). Pages back
+  // until it has passed `turns` turn.completed events, at most 20 pages, so
+  // a long turn running now doesn't hide the cards before it.
+  const recentEvents = async (turns = 10): Promise<PersistedEvent[]> => {
     const out: PersistedEvent[] = [];
     let before: number | undefined;
-    for (let i = 0; i < pages; i++) {
+    let seen = 0;
+    for (let pages = 0; pages < 20 && seen < turns; pages++) {
       const page = await control.events(selfId, { beforeSeq: before, limit: 500 });
       const evs = page.events as PersistedEvent[];
       out.unshift(...evs);
+      seen += evs.filter((e) => e.type === 'turn.completed').length;
       if (!evs.length || page.firstSeq <= 1) break;
       before = page.firstSeq;
     }
@@ -345,15 +349,21 @@ export function buildThreadbearTools(
   // The once-a-turn note to a Done card (needs.ts, projectStepNudge): only
   // in a thread Mike started (a helper's Done is about its own brief), in a
   // project that isn't archived, and not when the card archives it, sleeps
-  // or waits on other threads, as those say it isn't over or he asked.
+  // or waits on other threads or the app restarting, as those say it isn't
+  // over or he asked. Not a sub-agent's call either: it isn't in the
+  // thread's events, so the once-a-turn mark would never be seen and it
+  // would be refused every time (refuseUnread, likewise). A project it
+  // can't read in time is left out rather than holding the turn's end.
   const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
     if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
-    if (input.archive || input.snooze || (Array.isArray(input.waitFor) && input.waitFor.length) || projectStepNudged(events)) return undefined;
-    const me = await (async () => control.get(selfId))().catch(() => undefined);
+    if (input.archive === true || snoozeFromTool({ ...input, needs: 'nothing' }) || (Array.isArray(input.waitFor) && input.waitFor.length) || projectStepNudged(events)) return undefined;
+    if (appRestarts?.isWatching(selfId)) return undefined;
+    if (!codex && !(await replied()).landed) return undefined;
+    const me = await inTime((async () => control.get(selfId))(), ID_LIST_TIMEOUT_MS, "couldn't read the thread").catch(() => undefined);
     if (!me || me.startedBy || !me.projects?.length) return undefined;
     const live: { title: string; state: string }[] = [];
     for (const p of me.projects) {
-      const got = await Promise.resolve(projects.get(p.id)).catch(() => undefined);
+      const got = await inTime((async () => projects.get(p.id))(), ID_LIST_TIMEOUT_MS, "couldn't read the project").catch(() => undefined);
       if (got && !got.project.archived) live.push({ title: got.project.title, state: got.project.state });
     }
     if (!live.length) return undefined;
