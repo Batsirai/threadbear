@@ -652,6 +652,51 @@ real runner with a debug build that replaced Mike's app in `~/Applications`;
 that's his call, never an agent's, and now needs `--automation-allow-live`.
 Its window-only captures are in `../docs/screenshots/`.
 
+## Rules for changing it
+
+The app is frozen (AGENTS.md, "The GPUI port"), so these only matter when
+Mike asks for a change here. The rules they come from are in AGENTS.md.
+
+- Never run `restart.sh` or `install.sh` yourself: they replace and
+  relaunch Mike's own app in front of his work and throw away whatever he's
+  typed. Land the change and the installed app updates itself ("Build and
+  run" above); `~/Library/Logs/threadbear-update.log` has the build output
+  if it doesn't turn up.
+- Every click shows something at once (AGENTS.md, "Assume every action is
+  slow to land"). The pieces: `whileBusy(BusyKey...)` and `isBusy`
+  (`AppModel+Busy.swift`) with `.busy(_:)` on the control, `note:` for a
+  click from a menu (it shows in the banner), a guess with rollback like
+  `update` and `updateProject`, and in the transcript
+  `ThreadSession.answering` with `Spinner` in Cells.swift.
+  `EveryClickShowsTests` fails on a new call that changes something on the
+  runner until you've done that and listed where it shows.
+- Tooltips: `.tip("…")` (SwiftUI) or `setTip` (AppKit). `.help` and
+  `toolTip` never show in this app; TipsTests fails on them.
+- Animations: hand anything longer than a hover fade to Core Animation
+  (keyframes, `animator()`, SwiftUI's own animations), never step it from
+  the main thread each frame, and before landing try it with the main
+  thread busy (a temporary sleep after the click). The archive flight,
+  stepped from a display link, showed Mike a couple of frames, as the same
+  click opens the next thread (30 Oct). The perf run times archiving too.
+- The first-run tour (`Views/Tour.swift`), its sample threads
+  (`threads.samples`) or anything a step points at: run
+  `node app/Tools/tour-e2e.mjs` before landing (above) and look at the shots
+  too. The mock fakes patches and trust, and tours that passed on it were
+  broken on a real install (30 Oct).
+- `Tools/perf-run.sh` and `Tools/run-mock.sh` bring a window to the front
+  of Mike's work, so ask him before running them.
+- The app freezing: read `~/Library/Logs/Threadbear/hangs` first
+  (`HangWatch.swift`). Each stall of 4 seconds or more has a `sample` of
+  the stuck main thread, and one of 15 or more reaches Sentry as "Main
+  thread stuck in ...". Fix the frame it names rather than guessing from
+  logs.
+- Its errors go to Sentry (tag `component` mac) only from the installed
+  release app (`CrashReporting.swift`).
+- `Tools/dev-app.sh` drives it the way `desktop/scripts/dev-app.sh` drives
+  the GPUI app (above, "Seeing and driving it from a script"), and
+  `Tools/screenshots.sh <dir>` (`--only 11` for one scene) shoots the full
+  design set ("Screenshots").
+
 ## Tests
 
 ```bash

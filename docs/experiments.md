@@ -1,12 +1,15 @@
 # Experiments
 
+
 <!-- Made by `npm run experiment-docs` in runner/ from runner/src/experiments/*.md:
 edit those, not this. Each entry is one line, so two threads adding one at once
 both keep theirs (.gitattributes merges this file line by line). -->
 
+
 New features that are still being tried out start off, with a switch under
 `experiments` in `runner.json` (the user guide, "Experiments", says how to turn one
 on). These are the ones there are now.
+
 
 ## What each one does
 
@@ -30,6 +33,33 @@ on). These are the ones there are now.
 For forks (docs/forking.md). Each one's switch is `experiments.<id>` in `runner.json`, and
 its own file is `runner/src/experiments/<id>.md`, which goes with it.
 
+- Give it a file of its own, `runner/src/experiments/<id>.md` (copy one that's there): its
+  id, name, title, `added` date, `on: false` and `reminder`, then what it does (for the
+  guide), where it lives and how to take it out (for forks). Check
+  `experimentOn(home, '<id>')` where it starts. Put `"experiments": { "<id>": true }` in the
+  owner's `runner.json` (`~/Library/Application Support/Threadbear/runner.json`) so it's on
+  for them. Settings > General > Experiments lists it by itself, with its name and "What it
+  does" behind the ⓘ (`settings.update`'s `experiments`), so write those for the people
+  flipping it.
+- Run `npm run experiment-docs` in `runner/` and commit this file with it;
+  `experiment-docs.test.ts` fails while it's out of date. Edit the experiment's file, never
+  this one. One file each and a line-by-line merge here (`scripts/merge-lines.mjs`) mean two
+  threads adding or taking out experiments at once don't collide.
+- Book the check-in when it lands: `schedule_message` with `new_thread` in this repo, about
+  four days out, telling that thread to look at how the experiment has gone and ask the owner
+  whether to turn it on for everyone, keep trying it, or take it out. Its id is the file's
+  `reminder`; `experiments.test.ts` fails without one.
+- To make it standard, take the flag out entirely: its file, the `experimentOn` check, its
+  key in every runner.json that has it (each machine with a runner), then
+  `npm run experiment-docs`. Its "What it does" text moves to where the feature belongs in the
+  guide. Don't leave a default-on switch behind: every flag left in is another path through
+  the code to keep working. If people might really want it off, make it a normal setting
+  instead. To take it out, delete the feature with its flag.
+For agents adding a feature (AGENTS.md, "Experiments"). A new feature the owner of the copy is
+still trying out lands off by default and on for them. Bug fixes and polish go straight in: an
+experiment is for new behaviour that changes what threads do, what they cost, or what the
+runner does to the machine.
+## Adding one, and ending one
 | Experiment | Lives in | Taking it out |
 |---|---|---|
 | Decisions on the Projects page (`projectDecisions`) | `app/Sources/ThreadbearCore/Threads/ProjectDecisions.swift` (which threads, the counts, the line on what each is doing), `decisions` in `ProjectCardStatus` (`ProjectCards.swift`); the Decisions section and its cards in `app/Sources/Threadbear/Views/ProjectDecisionsView.swift`, shown from `ProjectPage.swift`, the counts in `ProjectsHome.swift`, the folded sidebar rows in `ProjectsList.swift` (`ProjectFoldRow`) with `app/Sources/ThreadbearCore/Threads/ProjectFolds.swift` and `openProjectRows` in `AppModel.swift`; the page's tabs in `ProjectPage.swift` (`ProjectTabBar`) with `app/Sources/ThreadbearCore/Threads/ProjectTabs.swift`, `projectTabsPicked` in `AppModel.swift` and the Go menu's Show Previous Tab and Show Next Tab (`previousTab`, `nextTab` in `Shortcuts.swift`); `pickDecision`, `sendDecision` and `decisionSends` in `AppModel+ThreadActions.swift` and `AppModel.swift`. In the GPUI app: the Decisions tab and its cards in `desktop/gpui/src/project_decisions.rs`, the tabs in `project_page.rs`, the tab rules in `desktop/core/src/projects.rs`, and `previousTab`, `nextTab` in `desktop/core/src/shortcuts.rs`. The app learns it's on from `hello`'s `experiments`. The runner keeps nothing of its own for it: thread summaries already carry their asks, the line is the thread's latest headline, and answers are an ordinary `threads.send`. | Delete `ProjectDecisions.swift`, `ProjectFolds.swift`, `ProjectTabs.swift` and `ProjectDecisionsView.swift`, `ProjectTabBar` and the two tab commands, `ProjectFoldRow` and `openProjectRows`, the `projectRow` automation key, the `projectDecisionsOn` checks in `ProjectPage.swift`, `ProjectsHome.swift`, `ProjectsList.swift` and `Projects.swift`, `decisions` in `ProjectCards.swift`, the Decisions part of `AppModel+ThreadActions.swift` and `decisionSends`, and the `decision` automation command and `projectDecisions` in `dump`. Nothing in the runner or the backend changes. |
