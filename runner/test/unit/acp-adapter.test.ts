@@ -1540,3 +1540,14 @@ test('a patch whose file headers cannot be read for certain is never covered by 
   await until(() => plain.length === 1);
   assert.equal(r.cards.length, odd.length, 'a plain one is still covered');
 });
+
+test("Antigravity's edit names its file, not its old and new text", async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const file = path.join(fs.realpathSync(r.cwd), 'notes.txt');
+  const a = fakeRequest(r, s, { toolCallId: 'ag1', kind: 'edit', rawInput: { TargetFile: file, TargetContent: 'old\ntext\n', ReplacementContent: 'new\ntext\n', StartLine: 1, EndLine: 2, Instruction: 'x' } });
+  await until(() => a.length === 1);
+  assert.doesNotMatch(r.cards[0].title, /runs this file as code/);
+  assert.deepEqual((r.cards[0].input as { 'files it names': string[] })['files it names'], [file]);
+});

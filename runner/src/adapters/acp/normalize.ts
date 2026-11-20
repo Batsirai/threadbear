@@ -66,13 +66,16 @@ function toolKind(acp: string | undefined): ToolKind {
 // and from the tool's own arguments, as one could say less than the other.
 // A check takes all of them: more names only makes it stricter.
 const PATH_KEY = /path|file|dest|target|document|^to$|^from$/i;
+const TEXT_KEY = /^(?:target|replacement|code)?content$|^instruction$|^description$/i;
 // The files a patch body names: unified diffs and the `*** Update File:` kind.
 const PATCH_HEADER = /^(?:\*\*\* (?:Add|Update|Delete) File: |\*\*\* Move to: |\+\+\+ |--- |Index: |(?:rename|copy) (?:from|to) |diff --git )(.+)$/gm;
 
 function pathsIn(v: unknown, key: string, out: Set<string>, depth: number): void {
   if (depth > 8) return;
   if (typeof v === 'string') {
-    if (v && PATH_KEY.test(key)) out.add(v);
+    // A key about text (Antigravity's TargetContent, ReplacementContent,
+    // Instruction) holds words, not a file, whatever else it's called.
+    if (v && PATH_KEY.test(key) && !TEXT_KEY.test(key)) out.add(v);
     if (v.includes('\n')) {
       for (const m of v.matchAll(PATCH_HEADER)) {
         // A git header names two (`diff --git a/x b/y`), and git quotes a
