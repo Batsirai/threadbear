@@ -11,6 +11,7 @@ pub mod chips;
 pub mod completion_sound;
 pub mod composer;
 pub mod confetti;
+pub mod connection;
 pub mod connectors;
 pub mod context_breakdown;
 pub mod convex_panel;
