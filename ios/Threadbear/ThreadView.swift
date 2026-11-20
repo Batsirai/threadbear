@@ -111,7 +111,7 @@ struct ThreadView: View {
                         }.accessibilityHint("Read the pending design reviews and answer")
                     }
                 }
-                menu(thread)
+                menu(model.shown(thread))
             }
         }
         .sheet(item: $designReviewShown) { target in
@@ -139,7 +139,7 @@ struct ThreadView: View {
         .task(id: "\(threadId):\(history.lateImagesFrom ?? -1):\(model.connection):\(model.apiVersion ?? 0)") { await followLateImages() }
         .task(id: "\(sent?.id ?? ""):\(model.connection)") { await followCommand() }
         .task(id: answeredCommand) {
-            guard let id = answeredCommand, let status = await model.commandOutcome(id), status.state == .failed,
+            guard let id = answeredCommand, await model.commands.outcome(.answer(threadId), commandId: id, throughTimeOuts: true).isFailed,
                   answeredCommand == id else { return }
             // Refused, even after the runner took it: its card comes back.
             answeredAsks = nil
@@ -324,7 +324,7 @@ struct ThreadView: View {
                     VoiceBar(threadId: threadId, afterSeq: messages.last?.seq ?? 0, working: thread.isBusy) { typing = true }
                 } else {
                     Composer(text: $draft, placeholder: composerPlaceholder(thread), links: thread.links ?? [], threadId: thread.id, provider: thread.provider,
-                             running: thread.isBusy, stopping: model.stopping.contains(thread.threadId),
+                             running: thread.isBusy, stopping: model.isStopping(thread.threadId),
                              onStop: model.canStop ? { model.stop(threadId: thread.threadId) } : nil) { text, photos in
                         await send(text, photos: photos, to: thread)
                     }
@@ -746,11 +746,9 @@ struct ThreadView: View {
         dismiss()
     }
 
+    /// Shown at once (AppModel.shown), back with why if it's refused.
     private func change(_ change: ThreadChange) {
-        Task {
-            guard let backend = model.backend else { return }
-            do { _ = try await backend.update(threadId: threadId, change: change) } catch { model.report(error) }
-        }
+        model.change(threadId, change)
     }
 }
 

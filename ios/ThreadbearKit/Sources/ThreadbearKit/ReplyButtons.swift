@@ -75,6 +75,22 @@ public enum ReplyButtons {
         return .ready
     }
 
+    /// What a button shows with this phone's press as a PendingCommand: one
+    /// the Mac hasn't picked up in time can be pressed again (the runner
+    /// presses it once however many times it's asked), saying why, rather
+    /// than spinning for ever.
+    public static func look(_ button: MessageButton, pending: PendingCommand) -> Look {
+        switch pending {
+        case .idle: return look(button, status: nil, asking: false)
+        case .sending, .queued, .taken: return look(button, status: nil, asking: true)
+        case let .done(_, result): return look(button, status: result ?? CommandStatus(state: .done), asking: false)
+        case let .failed(_, reason): return look(button, status: CommandStatus(state: .failed, note: reason), asking: false)
+        case .timedOut:
+            if let id = button.pressedThreadId { return .pressed(threadId: id) }
+            return .failed(pending.timedOutNote ?? "The Mac hasn't picked this up yet.")
+        }
+    }
+
     /// What VoiceOver says, and where it goes.
     public static func hint(_ button: MessageButton) -> String {
         switch button.kind {
