@@ -148,7 +148,7 @@ export function trackedFiles(root) {
     // A copy without its git folder (a check host's): every file but builds.
     all = walk(root, '');
   }
-  const frozen = (f) => (f.startsWith('app/') && !f.startsWith('app/Tools/mock-runner/')) || f.startsWith('dock/') || f.startsWith('docs/archive/') || f === 'docs/experiments.md' || f.startsWith('runner/src/experiments/') || SELF.includes(f);
+  const frozen = (f) => f.startsWith('app/') || f.startsWith('dock/') || f.startsWith('docs/archive/') || f === 'docs/experiments.md' || f.startsWith('runner/src/experiments/') || SELF.includes(f);
   return all.filter((f) => f !== INDEX && !f.startsWith(`${DIR}/`) && !frozen(f) && /\.(ts|tsx|mts|mjs|js|cjs|swift|rs|kt|kts|md|sh|json|toml|yml|yaml|feature|html|css|txt)$/.test(f) && !/(^|\/)package-lock\.json$/.test(f));
 }
 

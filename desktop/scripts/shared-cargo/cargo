@@ -160,7 +160,7 @@ if ! rsync -rlpDc --delete --exclude node_modules --exclude .build --exclude tar
   exit 1
 fi
 # The copy's node_modules, linked where they are there: the client's tests
-# start the mock runner (app/Tools/mock-runner) from the slot's copy, and it
+# start the mock runner (mock-runner/) from the slot's copy, and it
 # needs its packages (Codex's review). rsync leaves what it excludes alone, so
 # the links stay through the next copy and are only made again.
 find "$dir/src" -name node_modules -prune -type l -exec rm -f {} + 2>/dev/null || true

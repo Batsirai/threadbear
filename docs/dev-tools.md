@@ -214,7 +214,7 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   filtered to one thread.
 - `tb export <id> [--out DIR]`: `thread.json`, `events.ndjson` and
   `media/` in the mock runner's fixture format, by default under
-  `app/.fixtures/threads/<id>` (private and gitignored), so a rendering bug
+  `.fixtures/threads/<id>` at the repo's top (private and gitignored), so a rendering bug
   in one of Mike's threads can be reproduced against the mock runner.
 - `tb rpc <method> [json]`: a raw call, printing the result.
 - `tb activity` (and `--summary`): what Mike has clicked, opened, chosen and

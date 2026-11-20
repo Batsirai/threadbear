@@ -3,8 +3,8 @@ import Foundation
 /// How much an inbox thread wants Mike, lowest first, and whether it counts
 /// in the badge: the one rule the Mac's sidebar and Dock badge
 /// (ThreadSections) and the phone's inbox and badge (InboxSections) both
-/// read. The phone's ThreadbearKit links to this file, as it does to
-/// SlashCommands.swift. The website keeps a copy (`urgency` in
+/// read. It lives in the phone's ThreadbearKit; the frozen Mac app links to
+/// it from app/, as it does to SlashCommands.swift. The website keeps a copy (`urgency` in
 /// web/src/sections.ts), and all three run the cases in
 /// shared/cases/inbox-urgency.json, so they can't drift apart.
 ///

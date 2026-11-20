@@ -220,7 +220,7 @@ and prints what to point `tb` and the app at:
 ```
   pid:  41234
 For tb:      /tmp/threadbear-dev.Ab12Cd/tb status
-For the app: ~/dev/me/threadbear/app/Tools/dev-app.sh start --home /tmp/threadbear-dev.Ab12Cd
+For the app: ~/dev/me/threadbear/desktop/scripts/dev-app.sh start --home /tmp/threadbear-dev.Ab12Cd
 Stop it:     kill 41234   (never pkill: the real runner runs src/main.ts too)
 ```
 
@@ -362,7 +362,7 @@ bin/tb restart [--now [--force]] [--resume "text" | --no-resume] [--reason "text
 bin/tb restart --cancel         # withdraw a pending restart (--force: someone else's, from a terminal)
 bin/tb show <id> [--last N] [--tools]   # the thread as plain text, approvals with their ids
 bin/tb logs [-f] [-n 200] [--thread ID]
-bin/tb export <id> [--out DIR]  # a mock-runner fixture in app/.fixtures/threads/<id>
+bin/tb export <id> [--out DIR]  # a mock-runner fixture in .fixtures/threads/<id>
 bin/tb rpc <method> ['{"json": "params"}']
 ```
 
@@ -398,10 +398,10 @@ ignored), naming the ones it takes (never `--force`), and `tb <command> --help` 
 reads; with the runner down it reads `<home>/runner.log` for a dev runner or
 sandbox, and `--thread` includes the CLI's spawn and exit lines. `tb export`
 writes the thread as idle (a mid-turn export would otherwise look stuck)
-and prints the `app/Tools/dev-app.sh start --mock --fixtures` command for
+and prints the `desktop/scripts/dev-app.sh start --mock --fixtures` command for
 it (a debug app kept behind Mike's windows, with its own mock runner, which
 an agent can dump, screenshot and stop) and the `tb events` one; the mock no longer loads
-`app/.fixtures/threads/` by default, so exports never reach design
+`.fixtures/threads/` by default, so exports never reach design
 screenshots. A mistyped flag gets a message, not a stack trace. Messages
 print `tb` with its full path, and the one that was run: a dev runner's
 `<home>/tb`, or `THREADBEAR_HOME=<home>` in front when it was pointed away

@@ -206,6 +206,8 @@ Where things are:
 - `ios/`: the iPhone app, `android-native/`: the Android app
 - `convex/`: the backend, `web/`: the website
 - `relay/`: the push relay (Mike's, shared by everyone)
+- `mock-runner/`: a stand-in runner with demo threads, for the apps' tests,
+  `shared/`: what more than one app uses (test cases, pictures, Pele)
 - `site/`: the landing page at threadbear.mikecann.app
 - `docs/`: how it all works
 
@@ -213,4 +215,4 @@ Where things are:
 
 MIT, see [LICENSE](LICENSE). The fonts and icons under `site/` keep their own
 licences, beside them, as does [Pele](https://pele.run/) (MIT), the diagram
-library bundled in the Mac and iPhone apps (`Rich/pele-LICENSE.txt`).
+library bundled in the apps (`shared/rich/pele-LICENSE.txt`).

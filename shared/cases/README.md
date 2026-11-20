@@ -4,7 +4,7 @@ The same rules are written once per app: the desktop app (Rust, `desktop/core`),
 the iPhone kit (Swift, `ios/ThreadbearKit`), the Android kit (Kotlin,
 `android-native/kit`) and the website (TypeScript, `web/src`). Each file here is one
 rule's cases, and every app it names runs every case through its own copy, so the
-copies can't drift apart unseen. No app owns this folder.
+copies can't drift apart unseen. No app owns this folder (../README.md).
 
 ## A file
 

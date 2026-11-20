@@ -23,10 +23,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 // The tour's sample threads, the runner's own (it runs TypeScript as it is).
-import { SAMPLE_THREADS } from '../../../runner/src/samples.ts';
+import { SAMPLE_THREADS } from '../runner/src/samples.ts';
 import { fileURLToPath } from 'node:url';
-import { reviewDraft, reviewReply, sameDraft } from '../../../runner/src/reviews.ts';
-import { authProof, isNonce, newNonce } from '../../../runner/src/rpc-auth.ts';
+import { reviewDraft, reviewReply, sameDraft } from '../runner/src/reviews.ts';
+import { authProof, isNonce, newNonce } from '../runner/src/rpc-auth.ts';
 
 // What a waiting (untrusted) demo patch gives once it's trusted, by file.
 const waitingPatchGives = new Map();
@@ -487,7 +487,7 @@ function mockExperiments() {
 // (docs/protocol/projects.md, "Recipes"): three on with a month of made-up runs, one
 // off, the rest not added. The ones that come with Threadbear use their
 // header pictures from runner/src/recipes; the rest have colours only.
-const RECIPES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../runner/src/recipes');
+const RECIPES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../runner/src/recipes');
 const recipes = new Map();
 function addRecipesDemo() {
   const day = 86_400_000;
@@ -3809,7 +3809,7 @@ function addPerfProjects(count) {
   const ago = (minutes) => new Date(now - minutes * 60_000).toISOString();
   const base = ['Garden planner', 'Walkies HQ', 'Recipe box', 'Bird log', 'Bike routes', 'Tutorial videos', 'Club site', 'Budget sheet'];
   const names = Array.from({ length: 80 }, (_, i) => `${base[i % base.length]}${i < base.length ? '' : ` ${Math.floor(i / base.length) + 1}`}`);
-  const picture = fileURLToPath(new URL('../../icons/threadbear.png', import.meta.url));
+  const picture = fileURLToPath(new URL('../shared/icons/threadbear.png', import.meta.url));
   const made = names.map((title, i) => ({
     id: `p_perf_${i}`, title, folders: [`/Users/alex/code/${title.toLowerCase().replace(/ /g, '-')}`],
     goals: `Keep ${title} moving.`, state: `${title} is in progress; a few threads are waiting on decisions.`, notes: '', links: [],
@@ -4122,7 +4122,7 @@ function addDemoProjects() {
     createdBy: 'librarian', createdByThread: 'demo_release_notes', createdAt: ago(60 * 24 * 9), updatedAt: ago(3), stateUpdatedAt: ago(41),
     // The three kinds of icon: a picture (the app's own), a symbol, and
     // Walkies with none yet, which shows its letter.
-    icon: { image: { path: fileURLToPath(new URL('../../icons/threadbear.png', import.meta.url)), mediaType: 'image/png' }, from: '/Users/alex/code/threadbear/app/icons/threadbear.png', by: 'librarian', updatedAt: ago(60) },
+    icon: { image: { path: fileURLToPath(new URL('../shared/icons/threadbear.png', import.meta.url)), mediaType: 'image/png' }, from: '/Users/alex/code/threadbear/app/icons/threadbear.png', by: 'librarian', updatedAt: ago(60) },
   };
   const photo = {
     id: 'p_7a2c41f0', title: 'Photo sync', folders: ['/Users/alex/dev/photo-sync'],
@@ -4215,7 +4215,7 @@ function addDemoProjects() {
 
 function defaultFixtureDirs() {
   const dirs = [path.join(here, 'fixtures')];
-  const privateDir = path.resolve(here, '../../.fixtures');
+  const privateDir = path.resolve(here, '../.fixtures');
   if (fs.existsSync(privateDir)) dirs.push(privateDir);
   // Not .fixtures/threads, where `tb export` puts Mike's real threads: they'd
   // sort above the demo threads in every screenshot. Pass --fixtures for them.
@@ -4458,7 +4458,7 @@ The new hero is shorter, and every page now leads with what the app does.
     const before = file('screens/pricing-before.png', { copy: path.join(here, 'fixtures/demo-upload-resume/media/progress-before.png') });
     // A real film (the site's inbox clip, 1600x1058 H.264), for a video in
     // the pane (features/file-previews.feature). Only listed in the folder.
-    const clip = path.join(here, '../../../site/public/clips/inbox.mp4');
+    const clip = path.join(here, '../site/public/clips/inbox.mp4');
     if (fs.existsSync(clip)) file('screens/hero-walkthrough.mp4', { copy: clip });
     // And a one-page PDF, for a PDF in the pane.
     file('docs/launch-brief.pdf', onePagePdf('Launch brief: the new hero ships Friday', 'https://example.com/launch-brief'));

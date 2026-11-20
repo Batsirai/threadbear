@@ -1,0 +1,1 @@
+../../../../ios/ThreadbearKit/Sources/ThreadbearKit/ProviderInfo.swift

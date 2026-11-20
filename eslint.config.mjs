@@ -6,12 +6,15 @@ const TS = ["{runner,relay,convex,web}/**/*.{ts,tsx,mts,cts}"];
 export default [
   // Lints the TypeScript in convex/, web/, relay/, runner/ and features/
   // (the GPUI specs' steps, typed by features/tsconfig.json). The rest is
-  // Swift, Rust and the public site, each with checks of its own. runner/
+  // Swift, Rust and the public site, each with checks of its own, and the
+  // mock runner (plain JavaScript, never linted while it was in app/; check.sh
+  // parses it). runner/
   // and features/ aren't React: their use... functions aren't hooks.
   ...(await mikecannLint({
     root: import.meta.dirname,
     ignores: [
       "app/**",
+      "mock-runner/**",
       "desktop/**",
       "android-native/**",
       "ios/**",

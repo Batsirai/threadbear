@@ -653,7 +653,7 @@ mod tests {
         assert!(words("merged d1ecf9c as baa45b6").is_empty());
         assert!(words("sha 1e66c6d4f2a8b9c0").is_empty());
         assert!(words("releases/20261027T055446Z-d1ecf9c").is_empty());
-        assert!(words("app/.fixtures/threads/85735a8f").is_empty());
+        assert!(words(".fixtures/threads/85735a8f").is_empty());
         assert!(words("x85735a8f 85735a8fx 85735A8F").is_empty());
         assert!(words("52594bb9-e49d-4ec7-8ed8-bbc61b48ef77x").is_empty());
     }

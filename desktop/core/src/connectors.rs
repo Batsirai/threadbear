@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// What the mock runner's gateway says (app/Tools/mock-runner/server.mjs).
+    /// What the mock runner's gateway says (mock-runner/server.mjs).
     fn mock() -> ConnectorsStatus {
         ConnectorsStatus::decode(
             &json!({ "state": "ok", "url": "https://mac-mini.example.ts.net:8443", "version": "0.2.0", "checkedAt": "2026-11-11T01:00:00.000Z", "services": [

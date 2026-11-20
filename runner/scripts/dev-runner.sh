@@ -22,7 +22,7 @@
 #
 # It writes <home>/tb, a tb that always talks to this runner (an exported
 # THREADBEAR_HOME doesn't last past one command in an agent's shell), and
-# prints the app/Tools/dev-app.sh command for a debug app against it. On a
+# prints the desktop/scripts/dev-app.sh command for a debug app against it. On a
 # new data dir, threads default to the folder <home>/work (under $TMPDIR
 # when <home> isn't), the first Claude login that works (src/test-login.ts:
 # not plan-ended, hidden or noted, else claude-main; TB_E2E_ACCOUNT picks
@@ -187,7 +187,7 @@ echo "  pid:  $$"
 echo "For tb:      $(printf '%q' "$TB") status"
 echo "A thread:    $(printf '%q' "$TB") new \"say hi\" --model claude-haiku-5-5 --wait$IN_WORK"
 echo "On Codex:    $(printf '%q' "$TB") new \"say hi\" --account codex-main --model gpt-6-luna --effort low --wait"
-echo "For the app: $(printf '%q' "$(cd "$RUNNER_DIR/.." && pwd)/app/Tools/dev-app.sh") start --home $(printf '%q' "$DATA_HOME")"
+echo "For the app: $(printf '%q' "$(cd "$RUNNER_DIR/.." && pwd)/desktop/scripts/dev-app.sh") start --home $(printf '%q' "$DATA_HOME")"
 echo "Stop it:     kill $$   (never pkill: the real runner runs src/main.ts too)"
 echo
 

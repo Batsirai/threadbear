@@ -1,7 +1,7 @@
-// The Rust client against the mock runner (app/Tools/mock-runner), the same
+// The Rust client against the mock runner (mock-runner/), the same
 // stand-in the Mac app's tests use: it signs in with the challenge, says
 // hello, lists the inbox and reads a thread. Needs Node, and the mock's
-// node_modules (`npm ci` in app/Tools/mock-runner).
+// node_modules (`npm ci` in mock-runner).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -38,7 +38,7 @@ fn start_mock() -> (Mock, RunnerConfig) {
     std::fs::create_dir_all(&home).unwrap();
     let ready = home.join("ready");
     let child = Command::new("node")
-        .arg(repo.join("app/Tools/mock-runner/server.mjs"))
+        .arg(repo.join("mock-runner/server.mjs"))
         .args(["--port", "0", "--quiet", "--data-dir"])
         .arg(&home)
         .arg("--ready-file")

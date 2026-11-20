@@ -154,7 +154,7 @@ File references are where to look.
   `<data folder>/runner/reinstall.log`, and is left loaded but stopped
   until the next one replaces it. On Linux
   it's a transient `systemd-run --user` unit instead (`runner/src/reinstall.ts`).
-- **Commands:** `~/.local/bin/threadbear`, a link into your clone, and
+- **Commands:** `~/.local/bin/threadbear`, a link into your clone (only where the old Swift app was installed with `app/install.sh`), and
   `~/.local/bin/tb`, a three-line script that runs the `tb` of the runner
   release this Mac runs (`runner/scripts/link-tb.sh`; it leaves a `tb` that
   isn't its own alone, and `install-runner.sh --uninstall` removes it).
@@ -250,7 +250,7 @@ File references are where to look.
   ```` ```html ```` blocks in replies, and each one's page for the side pane,
   newest 900 files kept). They're drawn on this Mac in web views that load
   nothing from the network: the diagram library, [Pele](https://pele.run/),
-  is bundled with the app (`Resources/Rich/pele.js`, MIT), and a block's
+  is bundled with the app (`shared/rich/pele.js` in the repo, MIT), and a block's
   page runs no scripts;
   `~/Library/Logs/threadbear-runner.log` and `threadbear-update.log`;
   `~/Library/Logs/Threadbear/hangs` (the last 10 times the app froze: if its

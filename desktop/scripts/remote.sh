@@ -304,7 +304,7 @@ mkdir -p "\$THREADBEAR_WEB_RUNTIME_PARENT"
 # priority cargo would have called this one, and this one it, for ever.
 export PATH="\$HOME/$src/desktop/scripts/shared-cargo:\$PATH"
 # What the specs need, the first time this folder's used.
-for dir in features app/Tools/mock-runner runner; do
+for dir in features mock-runner runner; do
   [ -d "\$dir/node_modules" ] || npm ci --silent --prefix "\$dir" >/dev/null 2>&1 || true
 done
 PRELUDE

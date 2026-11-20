@@ -142,12 +142,12 @@ case "$cmd" in
     fi
     # What dev-app.sh needs there, and the recorder.
     (cd "$root" && rsync -rlpcR --delete -e "${SSH[*]}" --exclude node_modules \
-      desktop/scripts runner/scripts/find-node.sh runner/src app/Tools/mock-runner site/scripts/record-window.swift "$host:$base/checkout/")
+      desktop/scripts runner/scripts/find-node.sh runner/src mock-runner site/scripts/record-window.swift "$host:$base/checkout/")
     "${SSH[@]}" "$host" "rm -f $base/live-page.html"
     [ -z "$live_page" ] || rsync -c -e "${SSH[*]}" "$live_page" "$host:$base/live-page.html"
     for f in "${fix_src[@]+"${fix_src[@]}"}"; do rsync -rlpc --delete -e "${SSH[*]}" "${f%/}/" "$host:$base/fixtures/$(basename "$f")/"; done
     if [ -n "$turns" ]; then scp -q "$turns" "$host:$base/turns.json"; else "${SSH[@]}" "$host" "rm -f $base/turns.json"; fi
-    there "[ -d app/Tools/mock-runner/node_modules ] || (. runner/scripts/find-node.sh && n=\"\$(threadbear_find_node)\" && PATH=\"\${n%/*}:\$PATH\" npm ci --silent --prefix app/Tools/mock-runner)
+    there "[ -d mock-runner/node_modules ] || (. runner/scripts/find-node.sh && n=\"\$(threadbear_find_node)\" && PATH=\"\${n%/*}:\$PATH\" npm ci --silent --prefix mock-runner)
       clang -fobjc-arc -O -framework AppKit -framework ApplicationServices -framework CoreGraphics desktop/scripts/film/stage.m -o $base/stage"
     # The host's build-and-measurement lock first (film/hold.pl), so the app's
     # window and the stage never land in another thread's --desk run.

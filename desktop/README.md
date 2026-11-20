@@ -69,12 +69,12 @@ On a flaky connection, crates.io downloads need
 `CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10`.
 
 ```bash
-npm ci --prefix ../app/Tools/mock-runner   # for the tests and the mock
+npm ci --prefix ../mock-runner   # for the tests and the mock
 cargo run -p threadbear-gpui
 ```
 
 To run it against the mock runner instead of your real one, start
-`node ../app/Tools/mock-runner/server.mjs --data-dir /tmp/tb-mock` and run
+`node ../mock-runner/server.mjs --data-dir /tmp/tb-mock` and run
 the app with `THREADBEAR_HOME=/tmp/tb-mock`.
 
 ## Installing it on a Mac
@@ -221,7 +221,7 @@ says whose is whose. An instance quits after an hour with no command.
 - A scripted app is never in front, so opening a thread doesn't mark it read
   until you send `{"cmd":"focus"}`.
 - A bug in one of Mike's real threads: `tb export <id>`, then
-  `dev-app.sh start --mock --fixtures app/.fixtures/threads/<id>` and `open`
+  `dev-app.sh start --mock --fixtures .fixtures/threads/<id>` and `open`
   it. Exports are his private conversations: keep shots of them out of git
   and delete them when done.
 - A runner change seen in the app: start `runner/scripts/dev-runner.sh`, then

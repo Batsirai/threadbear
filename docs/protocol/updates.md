@@ -188,8 +188,8 @@ it froze. The GPUI app is different code, so those changes can only be
 rebuilt in `desktop/`, not copied (`runner/src/swift-changes.ts`).
 
 Theirs means a commit on the checkout's `main` that touches `app/` or
-`dock/` outside what the GPUI app still uses from there
-(`scripts/swift-freeze.sh --gpui-shared`), isn't a merge, isn't reachable
+`dock/` outside what the GPUI app used from there before that moved out on
+21 Nov 2026 (`GPUI_SHARED`), isn't a merge, isn't reachable
 from upstream (`refs/threadbear/upstream/*` and `refs/remotes/upstream/main`),
 and doesn't share its author, author date and subject with one of
 upstream's (a cherry-pick of Mike's, or a fix of theirs he took). In a copy

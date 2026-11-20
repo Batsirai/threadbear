@@ -1416,7 +1416,7 @@ mod tests {
             .is_empty());
     }
 
-    /// The mock runner's two CLIs (app/Tools/mock-runner/server.mjs).
+    /// The mock runner's two CLIs (mock-runner/server.mjs).
     fn mock_clis() -> Vec<CliStatus> {
         decode_clis(&json!([
             { "provider": "claude", "path": "/x/claude", "managedBy": "cli", "installedVersion": "2.1.311", "latestVersion": "2.1.312", "status": "behind", "policy": "auto", "inUse": [], "checkedAt": "2026-11-11T01:00:00.000Z" },

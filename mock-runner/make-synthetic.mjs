@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Writes the synthetic demo threads in fixtures/ (safe to commit: made up,
 // no real transcripts). The mock runner serves them alongside any private
-// fixtures in app/.fixtures. Re-run after changing this file.
+// fixtures in the repo's .fixtures/. Re-run after changing this file.
 
 import fs from 'node:fs';
 import path from 'node:path';

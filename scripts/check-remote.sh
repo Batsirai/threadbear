@@ -155,7 +155,7 @@ if [ "${1:-}" = "--on-host" ]; then
   # each). npm ci only when the lockfile is new.
   # --runner (the runner's self-update) needs only the runner's: a broken
   # lockfile elsewhere mustn't hold the runner back (Codex, 9 Nov).
-  dep_dirs=". runner app/Tools/mock-runner features"
+  dep_dirs=". runner mock-runner features"
   case " $* " in *" --runner "*) dep_dirs="runner" ;; esac
   for dir in $dep_dirs; do
     [ -f "$src/$dir/package-lock.json" ] || continue
@@ -497,23 +497,18 @@ changed="$(mktemp)"
 
 # Whether a Linux host can run this: only the runner's, Convex's and the
 # website's checks, so --quick, nothing changed under ios/ (ThreadbearKit's
-# tests), app/ or dock/ (the Mac app's release build) beyond what the GPUI
-# app shares (scripts/swift-freeze.sh --gpui-shared: the mock runner,
-# fixtures, art, which the Swift app's build no longer runs for, but not
-# the mock runner, whose Swift tests still run), and
-# something changed (with nothing, check.sh itself or --all, it runs
-# everything), no shots.
+# tests), app/ or dock/ (the Mac app's release build) or the mock runner
+# (its Swift tests, which check.sh runs whenever it or they change:
+# swift-freeze.sh --mock-tests), and something changed (with nothing,
+# check.sh itself or --all, it runs everything), no shots. What the GPUI
+# app shares with the Swift app (shared/'s art and Pele) is outside app/
+# since 21 Nov 2026 and doesn't build the frozen Swift app, so it can go to
+# Linux.
 linux_ok=0
-GPUI_SHARED="$("$ROOT/scripts/swift-freeze.sh" --gpui-shared 2>/dev/null)"
-# Without it, nothing counts as shared: an empty pattern would match every
-# line, and every change would look like none.
-[ -n "$GPUI_SHARED" ] || GPUI_SHARED='^$'
-# The mock runner, though shared, has Swift tests check.sh runs whenever it
-# or they change (swift-freeze.sh --mock-tests), and those need a Mac.
 MOCK_TESTS="$("$ROOT/scripts/swift-freeze.sh" --mock-tests 2>/dev/null | head -1)"
 [ -n "$MOCK_TESTS" ] || MOCK_TESTS='^$'
 if [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -z "$SHOTS" ] && [ -s "$changed" ] \
-  && ! grep -qE '^ios/|^check\.sh$' "$changed" && ! grep -vE "$GPUI_SHARED" "$changed" | grep -E '^(app|dock)/' >/dev/null \
+  && ! grep -qE '^ios/|^check\.sh$' "$changed" && ! grep -E '^(app|dock)/' "$changed" >/dev/null \
   && ! grep -E "$MOCK_TESTS" "$changed" >/dev/null; then linux_ok=1; fi
 # (grep to /dev/null, not -q: -q closing the pipe early fails grep -v under
 # pipefail, and a big change would have looked like none.)
