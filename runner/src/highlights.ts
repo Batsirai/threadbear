@@ -150,6 +150,9 @@ export function observe(state: HighlightState, events: Iterable<PersistedEvent>,
         }
         break;
       }
+      default:
+        // Other events show nothing here.
+        break;
     }
   }
   return changed;

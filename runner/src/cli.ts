@@ -1159,7 +1159,8 @@ async function tail(
 // Exit only once stdout has drained: into a pipe Node writes it
 // asynchronously, and exiting straight away cut `tb list --json | ...`
 // off partway (at 64 or 128 KB).
-main(process.argv.slice(2)).then((code) => process.stdout.write('', () => process.exit(code)));
+// A failure in main is Node's own: it prints the stack and exits 1.
+void main(process.argv.slice(2)).then((code) => process.stdout.write('', () => process.exit(code)));
 
 // ------------------------------------------------------------- projects
 

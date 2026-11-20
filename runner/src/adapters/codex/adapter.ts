@@ -753,7 +753,9 @@ export class CodexSession implements AgentSession {
       return;
     }
     this.unknown.set(tid, [[method, p]]);
-    this.proc
+    // Nothing below can reject: .catch turns a failed read into false, and
+    // enqueue catches what its handler throws.
+    void this.proc
       .request<{ thread?: { parentThreadId?: unknown } }>('thread/read', { threadId: tid })
       .then((r) => {
         const parent = r?.thread?.parentThreadId;
