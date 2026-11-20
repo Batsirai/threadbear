@@ -3380,6 +3380,22 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   lettered mockups are fine there. Nothing reaches the app. It's a note, not
   a line in the description: in replays of cards Mike couldn't follow, the
   line changed nothing and the note rewrote every one.
+- **Done in a project still going.** A Done card (`needs: "nothing"`) in a
+  thread Mike started (no `startedBy`) that's in a project not archived is
+  refused once a turn, with an error result that starts `Not ended: this
+  card says Done, and this thread is part of a project that isn't finished`
+  (`projectStepNudge`). It quotes the project's state (first 400
+  characters) and says Done means the thread can be archived, so a next
+  step that's Mike's goes on the card as an ask. It also lists up to six
+  asks and follow-ups from the thread's earlier cards (the last 3,000
+  events) that no message from Mike answered since (`unansweredItems`: a
+  card answer naming the ask, or a message with its words), leaving it to
+  the agent which still matter. A card that archives, snoozes or waits on
+  threads is left alone. Called again, it's taken as it is. Since 20 Nov
+  2026: the calendar site's thread said Done twice with its project's state
+  saying "Next is Peter's review of the live site" and three follow-ups
+  never answered, and Mike nearly archived it. He didn't want old questions
+  carried onto cards by rule, as some no longer apply.
 - **Bullet replies off.** `Settings.bulletReplies: false` (runner.json
   only since 2 Nov; Mike, 30 Oct 2026: he liked the folded working but not always
   the bullets in place of the agent's message). `end_turn`'s description

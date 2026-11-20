@@ -27,7 +27,7 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
+import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, projectStepNudge, projectStepNudged, unansweredItems, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -280,6 +280,9 @@ export function buildThreadbearTools(
     // The once-a-turn note asking for a try at a step (needs.ts,
     // tryFirstNudge), off likewise.
     tryFirstNote?: boolean;
+    // The once-a-turn note to a Done card in a project still going
+    // (needs.ts, projectStepNudge), off likewise.
+    projectStepNote?: boolean;
   } = {},
 ) {
   const codex = opts.provider === 'codex';
@@ -322,6 +325,39 @@ export function buildThreadbearTools(
       before = page.firstSeq;
     }
     return out;
+  };
+
+  // The thread's recent events, oldest first, a few pages back: for the
+  // cards earlier turns left (needs.ts, unansweredItems).
+  const recentEvents = async (pages = 6): Promise<PersistedEvent[]> => {
+    const out: PersistedEvent[] = [];
+    let before: number | undefined;
+    for (let i = 0; i < pages; i++) {
+      const page = await control.events(selfId, { beforeSeq: before, limit: 500 });
+      const evs = page.events as PersistedEvent[];
+      out.unshift(...evs);
+      if (!evs.length || page.firstSeq <= 1) break;
+      before = page.firstSeq;
+    }
+    return out;
+  };
+
+  // The once-a-turn note to a Done card (needs.ts, projectStepNudge): only
+  // in a thread Mike started (a helper's Done is about its own brief), in a
+  // project that isn't archived, and not when the card archives it, sleeps
+  // or waits on other threads, as those say it isn't over or he asked.
+  const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
+    if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
+    if (input.archive || input.snooze || (Array.isArray(input.waitFor) && input.waitFor.length) || projectStepNudged(events)) return undefined;
+    const me = await (async () => control.get(selfId))().catch(() => undefined);
+    if (!me || me.startedBy || !me.projects?.length) return undefined;
+    const live: { title: string; state: string }[] = [];
+    for (const p of me.projects) {
+      const got = await Promise.resolve(projects.get(p.id)).catch(() => undefined);
+      if (got && !got.project.archived) live.push({ title: got.project.title, state: got.project.state });
+    }
+    if (!live.length) return undefined;
+    return projectStepNudge(live, unansweredItems(await recentEvents(), next ?? []));
   };
 
   // Whether the turn has replied to Mike (needs.ts, turnReply). The SDK
@@ -1612,6 +1648,8 @@ export function buildThreadbearTools(
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
+        const projectNote = await projectStepNote(input, needs, parsed?.next, events);
+        if (projectNote) throw new Error(projectNote);
         let restart = '';
         if (needs === 'you' && appRestarts && asksForAppRestart(asks)) {
           if (!appRestarts.isWatching(selfId)) appRestarts.watch(selfId);
@@ -1744,6 +1782,8 @@ export function buildThreadbearTools(
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
+        const projectNote = await projectStepNote(args, needs, parsed?.next, events);
+        if (projectNote) throw new Error(projectNote);
         // Asking Mike to Restart to Update means wanting to know when he
         // has, to check the change in the running app: the same as
         // wait_for_app_restart, unless that was already asked for.

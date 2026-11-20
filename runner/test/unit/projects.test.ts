@@ -9,6 +9,7 @@ import { projectRouter, type PrimaryLink } from '../../src/handover.ts';
 import type { PocketCardInput, PocketCardSummary } from '../../src/sync.ts';
 import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, disclaims, mainCheckout, PICK_CHECKS_PER_LOOK, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS, KEYWORDS_SYSTEM } from '../../src/librarian.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
+import { PROJECT_STEP_NUDGE } from '../../src/needs.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
 import { ErrorCode, RpcError } from '../../src/protocol.ts';
@@ -813,6 +814,75 @@ test('update_project editNotes: changes one line in place, refuses what doesn\'t
   const done = projects.editNotes(p.id, [{ old: 'Decided: npm.', new: 'Decided: pnpm.' }], { ifNotes: projects.list()[0].notes, state: 'Moving', appendNote: 'Last.' });
   assert.equal(done.notes, 'Decided: pnpm.\n\n- Host: Fly, picked 20 Nov\n\nGotcha: tags.\n\nLast.');
   assert.equal(done.state, 'Moving');
+// 20 Nov 2026: the calendar site's thread said Done with its project's state
+// naming a next step for Mike and earlier follow-ups never answered.
+test("end_turn: a Done card in a project still going is told once of the project's state and earlier items nobody answered", async () => {
+  const { h, repo, projects, create } = setup();
+  const app = repo('dev/cal');
+  const { thread } = create();
+  const tools = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, projects, undefined, { oneReply: () => true, plainCardNote: false, tryFirstNote: false, sleep: async () => {} });
+  const tool = (name: string) => tools.find((x) => x.name === name)!;
+  await tool('create_project').handler({ title: 'Calendar', folders: [app], goals: 'Voting site', state: "Live. Next is Peter's review of the live site." } as never, {} as never);
+  let s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
+  s.init();
+  let n = 0;
+  const endTurn = async (input: Record<string, unknown>) => {
+    const itemId = `e${++n}`;
+    s.out({ kind: 'event', event: { type: 'tool.call', itemId, name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input } });
+    const r = (await tool('end_turn').handler(input as never, {} as never)) as { content: { text: string }[]; isError?: boolean };
+    const text = r.content.map((c) => c.text).join('');
+    s.out({ kind: 'event', event: { type: 'tool.result', itemId, ok: !r.isError, text, truncated: false, images: [] } });
+    return { text, error: Boolean(r.isError) };
+  };
+  // An earlier turn's card: three follow-ups, then a question, each refused once first.
+  s.text('m1', 'Google sign-in works.');
+  let r = await endTurn({ needs: 'nothing', next: ['Draft an email telling Peter the site is ready', 'Load the rest of Peter\'s photos once he sends them', 'Make Google\'s sign-in screen name the calendar site'] });
+  assert.ok(r.text.startsWith(PROJECT_STEP_NUDGE), r.text);
+  assert.match(r.text, /"Calendar" \(its state: "Live\. Next is Peter's review of the live site\."\)/);
+  r = await endTurn({ needs: 'nothing', next: ['Draft an email telling Peter the site is ready', 'Load the rest of Peter\'s photos once he sends them', 'Make Google\'s sign-in screen name the calendar site'] });
+  assert.equal(r.error, false, r.text);
+  s.text('m2', 'Done.');
+  s.result('completed');
+  // Mike ticks one follow-up (its words are his message).
+  h.runner.send(thread.id, "Make Google's sign-in screen name the calendar site");
+  s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
+  s.init();
+  s.text('m3', 'Which of these should I build?');
+  r = await endTurn({ needs: 'you', asks: [{ question: 'Neon suggested three bigger changes. Which should I build?', options: [{ label: 'Download all' }, { label: 'None' }] }] });
+  assert.equal(r.error, false, r.text);
+  s.text('m4', 'Asked.');
+  s.result('completed');
+  // He replies with something else, so the question goes unanswered.
+  h.runner.send(thread.id, 'Can you have Neon design a few versions?');
+  s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
+  s.init();
+  s.text('m5', 'Design A is live.');
+  // Snoozing, archiving or waiting on threads isn't Done: no note.
+  r = await endTurn({ needs: 'nothing', snooze: '2h' });
+  assert.equal(r.error, false, r.text);
+  h.runner.send(thread.id, 'one more');
+  s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
+  s.init();
+  s.text('m6', 'Fixed the review findings.');
+  r = await endTurn({ needs: 'nothing', next: ["Load the rest of Peter's photos once he sends them"] });
+  assert.ok(r.text.startsWith(PROJECT_STEP_NUDGE), r.text);
+  assert.match(r.text, /"Draft an email telling Peter the site is ready"; "Neon suggested three bigger changes\. Which should I build\?"\./);
+  // The ticked one, and one this card already carries, aren't listed.
+  assert.doesNotMatch(r.text, /sign-in screen|rest of Peter's photos/);
+  // Once a turn: sent again as it was, it's taken.
+  r = await endTurn({ needs: 'nothing', next: ["Load the rest of Peter's photos once he sends them"] });
+  assert.equal(r.error, false, r.text);
+
+  // A thread another thread started, in the same project: its Done is about its own brief.
+  const helper = h.runner.create({ text: 'Fix the review window', accountId: 'claude-3', cwd: app, startedBy: { kind: 'thread', label: 'Agent', threadId: thread.id } }).thread;
+  const p = projects.list()[0];
+  projects.changeMembership(helper.id, { add: [p.id], by: 'agent' });
+  const helperEnd = buildThreadbearTools(h.runner, helper.id, Date.now, undefined, projects, undefined, { oneReply: () => true, plainCardNote: false, tryFirstNote: false, sleep: async () => {} }).find((x) => x.name === 'end_turn')!;
+  const hs = h.adapter.sessions.filter((x) => x.opts.threadId === helper.id).at(-1)!;
+  hs.init();
+  hs.text('h1', 'Fixed.');
+  const hr = (await helperEnd.handler({ needs: 'nothing' } as never, {} as never)) as { content: { text: string }[]; isError?: boolean };
+  assert.ok(!hr.isError, hr.content[0].text);
 });
 
 // The primary's side of a handover in these tests: projects with no

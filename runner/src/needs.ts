@@ -627,6 +627,70 @@ function givesAnInstruction(action: string): boolean {
   return STARTS_WITH_A_STEP.test(action);
 }
 
+// What end_turn says, once a turn, to a Done card in a thread Mike started
+// that's part of a project still going. On 20 Nov 2026 the calendar site's
+// thread said Done twice in a row (after building the look Mike picked, then
+// after fixing its review), with its own project's state saying "Next is
+// Peter's review of the live site", and with three follow-ups and a question
+// from earlier cards never answered (Peter's missing photos, the email to
+// him, Google's sign-in screen). Mike nearly archived it. Done reads as safe
+// to archive, so the note shows the project's state and those earlier items,
+// and leaves it to the agent which still matter: Mike didn't want old
+// questions carried forward by rule, as some no longer apply.
+export const PROJECT_STEP_NUDGE = "Not ended: this card says Done, and this thread is part of a project that isn't finished.";
+const MAX_STATE_CHARS = 400;
+const MAX_OPEN_ITEMS = 6;
+export function projectStepNudge(projects: { title: string; state: string }[], open: string[]): string {
+  const cut = (t: string) => (t.length > MAX_STATE_CHARS ? `${t.slice(0, MAX_STATE_CHARS).replace(/\s+\S*$/, '')}…` : t);
+  const which = projects.map((p) => `"${p.title}"${p.state.trim() ? ` (its state: "${cut(p.state.trim().replace(/\s+/g, ' '))}")` : ''}`).join(' and ');
+  const earlier = open.length
+    ? ` Earlier in this thread you asked or suggested these, and no answer to them came back: ${open.map((o) => `"${o}"`).join('; ')}. Keep any that still matter, as an ask or in next, and leave out ones that were settled another way or no longer apply.`
+    : '';
+  return `${PROJECT_STEP_NUDGE} It's in ${which}. Done means the user can archive the thread: the whole job, not this step. If the next step is theirs (looking at what you made, sending it to someone, a decision), put it on the card as an ask with needs "you". If it's yours later, hibernate with snooze or book it with schedule_message.${earlier} If this thread's part really is finished, call end_turn again as you were: this note comes once a turn.`;
+}
+export function projectStepNudged(events: PersistedEvent[]): boolean {
+  return nudgedSince(events, PROJECT_STEP_NUDGE);
+}
+
+// The asks and follow-ups (next) on this thread's earlier cards that no
+// message from Mike answered since, oldest first, at most six: the last
+// few, as older ones are likelier settled. An ask counts as answered by a
+// card answer naming it or a message quoting it; a follow-up by a message
+// with its words (ticking one sends them). The current turn's own cards and
+// what `now` already lists are left out.
+const plainKey = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
+export function unansweredItems(events: PersistedEvent[], now: string[] = []): string[] {
+  let end = events.length;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === 'turn.started') {
+      end = i;
+      break;
+    }
+  }
+  const open = new Map<string, string>();
+  // Only calls that ended their turn: a refused one was sent again changed.
+  const calls = new Map<string, unknown>();
+  for (const e of events.slice(0, end)) {
+    if (e.type === 'tool.call' && /(?:^|[_.])end_turn$/.test(String(e.name ?? ''))) calls.set(e.itemId, e.input);
+    else if (e.type === 'tool.result' && calls.has(e.itemId) && endTurnTaken(e)) {
+      const n = needsFromTool(calls.get(e.itemId));
+      calls.delete(e.itemId);
+      if (!n) continue;
+      const items = n.needs === 'you' ? (n.asks ?? []).map((a) => a.action) : (n.next ?? []);
+      for (const t of items) {
+        open.delete(plainKey(t));
+        open.set(plainKey(t), t);
+      }
+    } else if (e.type === 'user.message' && (!e.origin || e.origin === 'phone')) {
+      const said = plainKey(e.text ?? '');
+      const answered = new Set((e.answers ?? []).map((a) => plainKey(a.action)));
+      for (const k of [...open.keys()]) if (answered.has(k) || (k && said.includes(k))) open.delete(k);
+    }
+  }
+  for (const t of now) open.delete(plainKey(t));
+  return [...open.values()].slice(-MAX_OPEN_ITEMS);
+}
+
 // Whether this turn has had the note (connectors.ts, nudgedThisTurn, is the same).
 export function triedFirstNudged(events: PersistedEvent[]): boolean {
   return nudgedSince(events, TRY_FIRST_NUDGE);
