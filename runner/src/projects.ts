@@ -792,6 +792,44 @@ function checkText(name: string, text: unknown, max: number): string {
   return text.trim();
 }
 
+export type NoteEdit = { old: string; new: string };
+
+// update_project's editNotes, like Claude Code's Edit: each `old` must be in
+// the notes exactly once (after the edits before it), and is replaced by
+// `new`; an empty `new` takes it out. All or none: the first that doesn't
+// match throws, and nothing is saved. Before this, changing one stale line
+// meant sending all the notes back, which a copy could quietly corrupt and
+// which reached the card reviewer as a rewrite (thread c21654fd, 17 Nov 2026).
+export function applyNoteEdits(notes: string, edits: unknown): string {
+  if (!Array.isArray(edits) || !edits.length) throw bad('editNotes must be a list of { old, new }.');
+  let out = notes;
+  for (const [i, e] of edits.entries()) {
+    const { old, new: next } = (e ?? {}) as Record<string, unknown>;
+    if (typeof old !== 'string' || typeof next !== 'string') throw bad('Each of editNotes is { old, new }, both text.');
+    const which = edits.length > 1 ? `editNotes[${i}]` : 'editNotes';
+    if (!old) throw bad(`${which}'s old is empty: name the text to change. appendNote adds a paragraph.`);
+    if (old === next) throw bad(`${which}'s old and new are the same.`);
+    const at = out.indexOf(old);
+    if (at < 0) {
+      throw bad(`${which}'s old isn't in the notes${i ? ' (after the edits before it)' : ''}, so nothing changed. Copy it exactly as read_project shows it.`);
+    }
+    if (out.indexOf(old, at + 1) >= 0) throw bad(`${which}'s old is in the notes more than once, so nothing changed. Take in more of the text round it.`);
+    const before = out.slice(0, at);
+    const after = out.slice(at + old.length);
+    if (next) {
+      out = before + next + after;
+      continue;
+    }
+    // Text taken out leaves the line breaks of one side, not both: a bullet
+    // taken out of a list doesn't split it with a blank line.
+    const b = before.replace(/\n+$/, '');
+    const a = after.replace(/^\n+/, '');
+    const breaks = b && a ? Math.max(before.length - b.length, after.length - a.length) : 0;
+    out = b + '\n'.repeat(breaks) + a;
+  }
+  return out;
+}
+
 // Each a web address with a title (the host when there's none), no two the
 // same, at most LINKS_MAX.
 export function checkLinks(links: unknown): ProjectLink[] {

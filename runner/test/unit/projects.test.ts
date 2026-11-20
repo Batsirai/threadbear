@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { checkSummary } from '../helpers/protocol-check.ts';
-import { Projects, drainProjectMethods, projectMethods, BRIEF_MAX, NOTES_LONG, type ProjectHost } from '../../src/projects.ts';
+import { Projects, drainProjectMethods, projectMethods, applyNoteEdits, BRIEF_MAX, NOTES_LONG, type ProjectHost } from '../../src/projects.ts';
 import { projectRouter, type PrimaryLink } from '../../src/handover.ts';
 import type { PocketCardInput, PocketCardSummary } from '../../src/sync.ts';
 import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, disclaims, mainCheckout, PICK_CHECKS_PER_LOOK, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS, KEYWORDS_SYSTEM } from '../../src/librarian.ts';
@@ -751,6 +751,47 @@ test('agent tools: make, read, update, join and leave projects', async () => {
   assert.match((await call('leave_project', { project: p.id })).text, /no longer in "App"/);
   assert.equal(rec(h, thread.id)?.projectsLeft?.[0], p.id);
   assert.equal((await call('read_project', { project: 'nope' })).error, true);
+});
+
+test('applyNoteEdits: like Edit, each old matches once, in order, all or none', () => {
+  const notes = 'Intro.\n\n- one\n- two\n- three\n\nOutro.';
+  assert.equal(applyNoteEdits(notes, [{ old: '- two', new: '- two, done' }]), 'Intro.\n\n- one\n- two, done\n- three\n\nOutro.');
+  // Several, each on the result of the ones before.
+  assert.equal(applyNoteEdits(notes, [{ old: 'Intro.', new: 'Start.' }, { old: 'Start.\n', new: 'Begin.\n' }]), 'Begin.\n\n- one\n- two\n- three\n\nOutro.');
+  // Taking out a bullet doesn't split the list; a paragraph leaves one blank line.
+  assert.equal(applyNoteEdits(notes, [{ old: '- two', new: '' }]), 'Intro.\n\n- one\n- three\n\nOutro.');
+  assert.equal(applyNoteEdits(notes, [{ old: '- one\n- two\n- three', new: '' }]), 'Intro.\n\nOutro.');
+  assert.equal(applyNoteEdits(notes, [{ old: 'Intro.', new: '' }]), '- one\n- two\n- three\n\nOutro.');
+  const fails = (edits: unknown, re: RegExp) => assert.throws(() => applyNoteEdits(notes, edits), (e: any) => e instanceof RpcError && re.test(e.message));
+  fails([{ old: '- four', new: 'x' }], /old isn't in the notes, so nothing changed/);
+  fails([{ old: '- t', new: 'x' }], /more than once/);
+  fails([{ old: '- one', new: 'x' }, { old: '- one', new: 'y' }], /editNotes\[1\]'s old isn't in the notes \(after the edits before it\)/);
+  fails([{ old: '', new: 'x' }], /old is empty/);
+  fails([{ old: 'Intro.', new: 'Intro.' }], /the same/);
+  fails([], /must be a list/);
+  fails([{ old: 'Intro.' }], /both text/);
+});
+
+test('update_project editNotes: changes one line in place, refuses what doesn\'t match, and goes with appendNote', async () => {
+  const { h, projects, create } = setup();
+  const { thread } = create();
+  const tools = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, projects);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const t = tools.find((x) => x.name === name)!;
+    const r = await t.handler(args as never, {} as never);
+    return { text: r.content.map((c: any) => c.text).join(''), error: Boolean(r.isError) };
+  };
+  const p = projects.create({ title: 'App', notes: 'Decided: npm.\n\n- Open: pick a host\n- Owed: docs', by: 'mike' });
+  assert.deepEqual(await call('update_project', { project: p.id, editNotes: [{ old: '- Open: pick a host', new: '- Host: Fly, picked 20 Nov' }] }), { text: `Updated "App" (${p.id}).`, error: false });
+  assert.equal(projects.list()[0].notes, 'Decided: npm.\n\n- Host: Fly, picked 20 Nov\n- Owed: docs');
+  const miss = await call('update_project', { project: p.id, editNotes: [{ old: '- Owed: docs', new: '' }, { old: 'nowhere', new: 'x' }], state: 'Moving' });
+  assert.equal(miss.error, true);
+  assert.match(miss.text, /editNotes\[1\]'s old isn't in the notes/);
+  assert.equal(projects.list()[0].notes, 'Decided: npm.\n\n- Host: Fly, picked 20 Nov\n- Owed: docs', 'all or none');
+  assert.equal(projects.list()[0].state, '', 'and nothing else changed');
+  assert.equal((await call('update_project', { project: p.id, notes: 'x', editNotes: [{ old: 'a', new: 'b' }] })).error, true);
+  assert.equal((await call('update_project', { project: p.id, editNotes: [{ old: '- Owed: docs', new: '' }], appendNote: 'Gotcha: tags.' })).error, false);
+  assert.equal(projects.list()[0].notes, 'Decided: npm.\n\n- Host: Fly, picked 20 Nov\n\nGotcha: tags.');
 });
 
 // The primary's side of a handover in these tests: projects with no

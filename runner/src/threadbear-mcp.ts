@@ -21,7 +21,7 @@ import { AGENT_MESSAGE_PREFIX, EFFORT_LEVELS, ErrorCode, MOVE_MESSAGE_PREFIX, Rp
 import type { Scheduler } from './schedules.ts';
 import { MAX_CHECK_TIMEOUT_SECS } from './schedule-check.ts';
 import { checkDigest, type CheckCard } from './patch-trust.ts';
-import type { Projects } from './projects.ts';
+import { applyNoteEdits, type Projects } from './projects.ts';
 import { parseWhen, relativeFuture, relativeTime } from './when.ts';
 import { SAID_MAX } from './wake-when.ts';
 
@@ -1114,8 +1114,9 @@ export function buildThreadbearTools(
     const next: Partial<Record<'title' | 'goals' | 'state' | 'notes', string>> = {};
     for (const k of ['title', 'goals', 'state'] as const) if (typeof fields[k] === 'string') next[k] = fields[k];
     const append = typeof fields.appendNote === 'string' ? norm(fields.appendNote) : '';
-    if (typeof fields.notes === 'string' || append) {
-      const base = typeof fields.notes === 'string' ? norm(fields.notes) : norm(p.notes ?? '');
+    const edits = fields.editNotes !== undefined ? applyNoteEdits(p.notes ?? '', fields.editNotes) : undefined;
+    if (typeof fields.notes === 'string' || edits !== undefined || append) {
+      const base = typeof fields.notes === 'string' ? norm(fields.notes) : norm(edits ?? p.notes ?? '');
       next.notes = append ? (base ? `${base}\n\n${append}` : append) : base;
     }
     const parts = (Object.keys(next) as (keyof typeof next)[]).map((k) => {
@@ -1130,7 +1131,7 @@ export function buildThreadbearTools(
       const count = (c: string) => lines.filter((l) => l.startsWith(c)).length;
       return `${head} ${count('-')} lines removed and ${count('+')} added, too many to show here: judge this field from the input, as a rewrite.`;
     });
-    const others = Object.keys(fields).filter((k) => !['project', 'title', 'goals', 'state', 'notes', 'appendNote'].includes(k));
+    const others = Object.keys(fields).filter((k) => !['project', 'title', 'goals', 'state', 'notes', 'editNotes', 'appendNote'].includes(k));
     if (others.length) parts.push(`Also changes, not shown here (judge them from the input): ${others.join(', ')}`);
     return parts.length ? parts.join('\n\n') : undefined;
   };
@@ -1302,7 +1303,7 @@ export function buildThreadbearTools(
     ),
     tool(
       'update_project',
-      "Changes a project: title, goals, state, notes, links, folders, icon or Notion task board. Keep state current as work moves on (what's done, what's next, what's blocked). Notes are for what a later thread should know that the repo doesn't say: decisions and why, gotchas, what's still owed. They're not a log of what landed (git and the docs have that), so when something you note replaces an older note, rewrite the notes rather than adding to them. appendNote adds a paragraph without rewriting the notes. When the project gets a place the user will keep going back to (it goes live, gets an admin page, a dashboard, a store listing), add it with addLinks: links show at the top of every one of its threads' Highlights. The librarian finds icons by itself from the project's folders, so only set one when the user asks or the project gets a new app icon somewhere it wouldn't look.",
+      "Changes a project: title, goals, state, notes, links, folders, icon or Notion task board. Keep state current as work moves on (what's done, what's next, what's blocked). Notes are for what a later thread should know that the repo doesn't say: decisions and why, gotchas, what's still owed. They're not a log of what landed (git and the docs have that), so when something you note replaces an older note, fix that note with editNotes rather than adding another; notes replaces them all, for a real restructure. When the project gets a place the user will keep going back to (it goes live, gets an admin page, a dashboard, a store listing), add it with addLinks: links show at the top of every one of its threads' Highlights. The librarian finds icons by itself from the project's folders, so only set one when the user asks or the project gets a new app icon somewhere it wouldn't look.",
       {
         project: z.string().describe('Project id, id prefix or title.'),
         title: z.string().optional(),
@@ -1310,6 +1311,10 @@ export function buildThreadbearTools(
         goals: z.string().optional(),
         state: z.string().optional(),
         notes: z.string().optional().describe('Replaces all the notes.'),
+        editNotes: z
+          .array(z.object({ old: z.string(), new: z.string() }))
+          .optional()
+          .describe('Edits the notes in place, like Edit: each old must match once and becomes new (empty removes it). All or none.'),
         appendNote: z.string().optional().describe('Adds a paragraph to the end of the notes.'),
         links: linksArg.optional().describe('Replaces all the links. ' + LINKS_HELP),
         addLinks: linksArg.optional().describe('Adds links, or retitles ones it has (same url).'),
@@ -1328,9 +1333,12 @@ export function buildThreadbearTools(
           ),
         parent: z.string().optional().describe(PARENT_HELP + ' Empty undoes it.'),
       },
-      handle(async ({ project: q, title, mikeAsked, goals, state, notes, appendNote, links, addLinks, removeLinks, addFolders, removeFolders, icon, notion, parent }, extra) => {
+      handle(async ({ project: q, title, mikeAsked, goals, state, notes, editNotes, appendNote, links, addLinks, removeLinks, addFolders, removeFolders, icon, notion, parent }, extra) => {
         const pc = mustProjects();
         const p = await project(q);
+        if (editNotes !== undefined && notes !== undefined) throw new Error('Give notes or editNotes, not both: notes replaces them all.');
+        // Edits that don't match fail here, before anyone is asked.
+        if (editNotes !== undefined) applyNoteEdits(p.notes ?? '', editNotes);
         // Raising access (above): the brief its threads are told (title,
         // goals, state, notes, folders) is a message to each of them. Its
         // threads are the project's own list and every thread that says it's
@@ -1346,13 +1354,13 @@ export function buildThreadbearTools(
         // the goals a new parent brings.
         const newParent = parent?.trim() ? (await pc.get((await project(parent)).id)).project : undefined;
         let judged = false;
-        if (caller && ([title, goals, state, notes, appendNote, notion, links, parent].some((x) => x !== undefined) || addFolders?.length || addLinks?.length)) {
+        if (caller && ([title, goals, state, notes, editNotes, appendNote, notion, links, parent].some((x) => x !== undefined) || addFolders?.length || addLinks?.length)) {
           const parts = (await pc.list({ archived: true })).filter((x) => x.parentId === p.id).map((x) => x.id);
           const told = [p.id, ...parts, ...(newParent ? [newParent.id] : []), ...(p.parentId ? [p.parentId] : [])];
           const top = await topTold(told, caller);
           if (top) {
             const parentShown = newParent ? { title: newParent.title, id: newParent.id, ...(newParent.goals ? { goals: newParent.goals } : {}) } : parent;
-            const fields = Object.fromEntries(Object.entries({ title, goals, state, notes, appendNote, addFolders: added, notion, links, addLinks, parent: parentShown }).filter(([, v]) => v !== undefined));
+            const fields = Object.fromEntries(Object.entries({ title, goals, state, notes, editNotes, appendNote, addFolders: added, notion, links, addLinks, parent: parentShown }).filter(([, v]) => v !== undefined));
             await confirm('update_project', [`Change the brief of the project "${p.title}", which "${top.title}" (${accessName(top)}) is told`], { project: { title: p.title, id: p.id }, ...fields }, extra?.signal, briefChanges(p, fields));
             judged = true;
             if (addFolders?.length) for (const [i, f] of addFolders.entries()) await sameFolder(f, added![i]!);
@@ -1379,12 +1387,17 @@ export function buildThreadbearTools(
             throw new Error(`"${p.title}"'s brief changed while this waited for an OK, so nothing changed. Read it again (read_project) and redo the change on what it says now.`);
           }
         }
+        // Edits go on the notes as they are now, read just before the write
+        // (judged, they're the notes the card was shown), so a note another
+        // thread changed meanwhile isn't undone.
+        const edited = editNotes !== undefined ? applyNoteEdits((await pc.get(p.id)).project.notes ?? '', editNotes) : undefined;
         // New notes and a paragraph on the end are saved as one, as they were
         // judged: saved in two steps, the notes stood for a moment without it.
         const add = appendNote?.trim();
-        const whole = notes !== undefined && add ? (notes.trim() ? `${notes.trimEnd()}\n\n${add}` : add) : notes;
+        const base = notes ?? edited;
+        const whole = base !== undefined && add ? (base.trim() ? `${base.trimEnd()}\n\n${add}` : add) : base;
         let out = await pc.update(p.id, { title, goals, state, notes: whole, links, folders, notion, ...(parent !== undefined ? { parent: newParent?.id ?? '' } : {}), by: mikeAsked ? 'mike' : 'agent' });
-        if (add && notes === undefined) out = await pc.appendNote(p.id, appendNote!);
+        if (add && base === undefined) out = await pc.appendNote(p.id, appendNote!);
         if (addLinks?.length || removeLinks?.length) {
           if (!pc.addLinks || !pc.removeLinks) throw new Error("This runner can't change project links yet.");
           if (removeLinks?.length) out = await pc.removeLinks(p.id, removeLinks);

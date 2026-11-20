@@ -371,6 +371,14 @@ test('update_project: the card reviewer is shown what the brief\'s notes change,
   assert.match(r2, /Also changes, not shown here \(judge them from the input\): addLinks/);
   await withCard(s, 'deny', 'update_project', { project: p.id, appendNote: 'x' });
   assert.match(reqs.at(-1).review, /notes: 40 lines before, 42 after/);
+  // editNotes: the reviewer sees the one line it changes, worked out from the notes.
+  await withCard(s, 'deny', 'update_project', { project: p.id, editNotes: [{ old: '- note 30', new: '- note 30, paused' }] });
+  const r3: string = reqs.at(-1).review;
+  assert.match(r3, /notes: 40 lines before, 40 after/);
+  assert.match(r3, /^-- note 30$/m);
+  assert.match(r3, /^\+- note 30, paused$/m);
+  assert.doesNotMatch(r3, /Also changes/);
+  assert.equal(s.projects.list()[0].notes, lines.join('\n'), 'denied, nothing changed');
   // Too many changed lines to show: their counts, to be judged as a rewrite.
   await s.projects.update(p.id, { notes: Array.from({ length: 600 }, (_, i) => `- a longer note, number ${i}, to fill the brief`).join('\n') });
   await withCard(s, 'deny', 'update_project', { project: p.id, notes: 'Short now.' });

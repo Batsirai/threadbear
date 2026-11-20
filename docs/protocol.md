@@ -3704,7 +3704,7 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   the card): for each of title, goals, state and notes it changes, the
   line counts before and after and the changed lines with three lines
   round them, worked out from the project as it is (notes as they'd be
-  saved, with `appendNote`, trimmed and with CRLF as LF), and the names of
+  saved, with `editNotes` and `appendNote`, trimmed and with CRLF as LF), and the names of
   the other fields it changes, which the reviewer judges from the input.
   A field whose changed lines pass 20,000 characters gets only how many
   lines go and come, to be judged as a rewrite. Just before the write,
@@ -6014,7 +6014,13 @@ never takes one away. Merging two projects keeps both lots.
 **Agents** have tools for projects (see Tools for agents):
 `list_projects`, `read_project`, `create_project`, `update_project`,
 `join_project` and `leave_project` (each for their own thread by default).
-An agent's join is pinned.
+An agent's join is pinned. `update_project` changes notes three ways:
+`editNotes` (a list of `{ old, new }`, like Claude Code's Edit: each `old`
+must be in the notes exactly once, after the edits before it, and an empty
+`new` takes it out; one that doesn't match refuses the whole call),
+`appendNote` (a paragraph on the end, which can follow `editNotes` in the
+same call) and `notes` (all of them, for a restructure; not with
+`editNotes`). Edits apply to the notes as they are just before the write.
 
 ### Project tasks
 
