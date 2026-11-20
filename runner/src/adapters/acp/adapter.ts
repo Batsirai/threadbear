@@ -217,7 +217,7 @@ export class AcpSession implements AgentSession {
   // can't wash out what an earlier one said (Codex's and Gemini's third
   // reviews, 20 Nov 2026). Kept for the session's life: a call can ask after
   // its turn.
-  private callFrames = new Map<string, { mcp: boolean; ids: Set<string>; inputs: Record<string, unknown>[]; kinds: Set<string>; paths: Set<string> }>();
+  private callFrames = new Map<string, { mcp: boolean; ids: Set<string>; names: Set<string>; acting: number; named: Map<string, number>; inputs: Record<string, unknown>[]; kinds: Set<string>; paths: Set<string> }>();
   private configOptions: ConfigOption[] = [];
   // The plugin whose hook must be reported running before the model does
   // anything in a turn (Grok's guard), and whether it has been this turn.
@@ -567,9 +567,21 @@ export class AcpSession implements AgentSession {
 
   private noteFrame(u: unknown): void {
     if (!isPlainObject(u) || typeof u.toolCallId !== 'string' || u.toolCallId === '') return;
-    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, ids: new Set<string>(), inputs: [], kinds: new Set<string>(), paths: new Set<string>() };
-    const id = mcpIdOf(u);
+    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, ids: new Set<string>(), names: new Set<string>(), acting: 0, named: new Map<string, number>(), inputs: [], kinds: new Set<string>(), paths: new Set<string>() };
+    // Which tool the frame says it is: Antigravity's _meta.mcp, or the
+    // tool_name Grok's use_tool carries. A frame that carries anything (its
+    // arguments, an MCP mark) counts, named or not, so a call can be taken
+    // for one of Threadbear's own tools only when every such frame named it
+    // (Codex's and Gemini's ninth reviews, 20 Nov 2026).
+    const raw = isPlainObject(u.rawInput) ? u.rawInput : undefined;
+    const id = mcpIdOf(u) ?? (typeof raw?.tool_name === 'string' && raw.tool_name ? raw.tool_name : undefined);
     if (id) f.ids.add(id);
+    if (typeof u.name === 'string' && u.name) f.names.add(u.name);
+    const acting = (raw !== undefined && Object.keys(raw).length > 0) || (u.rawInput !== undefined && u.rawInput !== null && raw === undefined) || isMcpFrame(u);
+    if (acting) {
+      f.acting++;
+      if (id) f.named.set(id, (f.named.get(id) ?? 0) + 1);
+    }
     for (const p of requestPaths(u as AcpToolCall)) f.paths.add(p);
     if (isMcpFrame(u)) f.mcp = true;
     if (typeof u.kind === 'string') f.kinds.add(u.kind);
@@ -646,7 +658,7 @@ export class AcpSession implements AgentSession {
     // Only when every frame of the call said it was that same tool, and one
     // kind of call: a later frame can't make another server's tool ours
     // (Codex's eighth review, 20 Nov 2026).
-    if (mcpName && this.ownTools.has(mcpName) && (!frames || ([...frames.ids].every((i) => i === mcpName) && frames.kinds.size <= 1))) return this.answer(id, options, true);
+    if (mcpName && this.ownTools.has(mcpName) && (!frames || ([...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k))))) return this.answer(id, options, true);
 
     const { kind } = seen;
     // A read of the thread's own files, for an agent whose own rules can't
@@ -694,6 +706,8 @@ export class AcpSession implements AgentSession {
     const named = FOLDER_KEYS.map((k) => input[k]).filter((d): d is string => typeof d === 'string' && d !== '');
     const resolve = () =>
       named.map((d) => {
+        // `~` is the home folder to a shell, whatever the folder holds.
+        if (d.startsWith('~')) return undefined;
         const disk = realFolder(path.isAbsolute(d) ? d : `${this.opts.cwd}/${d}`);
         return disk !== undefined && disk === realFolder(absolutePath(d, this.opts.cwd)) ? disk : undefined;
       });
@@ -742,7 +756,7 @@ export class AcpSession implements AgentSession {
     const title = command
       ? firstLineSafely(command, 200, '…')
       : edits && paths.length === 1
-        ? `Edit ${displayPath(paths[0], this.opts.cwd)}`
+        ? `${kind === 'delete' ? 'Delete' : kind === 'move' ? 'Move' : 'Edit'} ${displayPath(paths[0], this.opts.cwd)}`
         : firstLineSafely(seen.title || kind || 'Use a tool', 200, '…');
     // The folder as the agent gave it goes on the card too when it reads
     // differently (a link): what the card says it resolved to is checked
@@ -762,7 +776,7 @@ export class AcpSession implements AgentSession {
       placeKnown &&
       !unknownPlace &&
       said.length <= 1 &&
-      Object.entries(input).every(([k, v]) => k === 'command' || (FOLDER_KEYS.includes(k) && (typeof v === 'string' || v === undefined)) || (k === 'variant' && typeof v === 'string') || (BENIGN_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number')));
+      Object.entries(input).every(([k, v]) => k === 'command' || (FOLDER_KEYS.includes(k) && (typeof v === 'string' || v === undefined)) || (k === 'variant' && v === 'Bash') || (BENIGN_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number')));
     // Any other command card says where it runs as a line of its own, known
     // or not, so the phone (which allows only a card whose one value is the
     // line it shows) never allows it.
@@ -781,11 +795,15 @@ export class AcpSession implements AgentSession {
     // and nothing in it is drawn as a shell command (Codex's and Gemini's
     // eighth reviews, 20 Nov 2026: patching card shapes one at a time kept
     // leaving one short).
-    const plainEdit = edits && !relative && isPlainEdit(input) && (frames?.inputs ?? []).every(isPlainEdit) && consistent && paths.length > 0 && !Object.hasOwn(input, 'arguments as sent');
+    const plainEdit = edits && !outside && !relative && isPlainEdit(input) && (frames?.inputs ?? []).every(isPlainEdit) && consistent && paths.length > 0 && !Object.hasOwn(input, 'arguments as sent');
+    // An edit whose frames didn't all say the same (OpenCode's do differ)
+    // shows what this request writes, as the preview may be an earlier
+    // frame's.
+    const editFramesDiffer = new Set((frames?.inputs ?? []).map((i) => JSON.stringify(i))).size > 1;
     const lastSent = JSON.stringify(frames?.inputs.at(-1) ?? rawIn ?? {});
     const earlier = [...new Set((frames?.inputs ?? []).map((i) => JSON.stringify(i)))].filter((i) => i !== lastSent).map((i) => JSON.parse(i) as unknown);
     const full = (): Record<string, unknown> => ({
-      tool: { kind: kind ?? 'not said', ...(frames && frames.kinds.size > 1 ? { 'kinds it said': [...frames.kinds] } : {}), title: seen.title || p.toolCall?.title || 'not said', ...(typeof p.toolCall?.name === 'string' ? { name: p.toolCall.name } : {}), ...(external ? { 'MCP tool': mcpTool ?? 'not named', ...(frames && [...frames.ids].some((i) => i !== mcpTool) ? { 'MCP tools it said': [...frames.ids] } : {}) } : {}) },
+      tool: { kind: kind ?? 'not said', ...(frames && frames.names.size ? { 'names it said': [...frames.names] } : {}), ...(frames && frames.ids.size && !external ? { 'tools it said': [...frames.ids] } : {}), ...(frames && frames.kinds.size > 1 ? { 'kinds it said': [...frames.kinds] } : {}), title: seen.title || p.toolCall?.title || 'not said', ...(typeof p.toolCall?.name === 'string' ? { name: p.toolCall.name } : {}), ...(external ? { 'MCP tool': mcpTool ?? 'not named', ...(frames && [...frames.ids].some((i) => i !== mcpTool) ? { 'MCP tools it said': [...frames.ids] } : {}) } : {}) },
       ...(command ? { command, 'runs in': runsIn } : kind === 'execute' && !external ? { 'runs in': runsIn } : {}),
       arguments: input,
       ...(earlier.length ? { 'said earlier': earlier } : {}),
@@ -794,7 +812,7 @@ export class AcpSession implements AgentSession {
     const shown: Record<string, unknown> = shellCard
       ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
       : plainEdit
-        ? { paths }
+        ? { ...(kind !== 'edit' ? { action: kind } : {}), paths, ...(editFramesDiffer ? { 'what it writes': input } : {}) }
         : full();
     const card = cardInput(shown, plainEdit ? ['paths'] : 'all');
     if (card.tooLong) {
