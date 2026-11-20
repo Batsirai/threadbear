@@ -367,10 +367,10 @@ export function previewOf(title: string, messages: PageMessage[], images: Pictur
 // stop working under him.
 export function ShareControl({ token, threadId, share, onSharePage, preview }: { token: string; threadId: string; share?: { access: string; slug: string }; onSharePage?: boolean; preview?: Unfurl }) {
   const send = useMutation(api.phone.share);
-  const cmd = useCommand(token);
+  const cmd = useCommand<'switch' | 'new'>(token);
   const shared = share?.access === 'link';
   const link = share ? `${location.origin}/s/${share.slug}` : undefined;
-  const run = (access: 'off' | 'link', newLink?: boolean) => void cmd.run(() => send({ token, threadId, access, ...(newLink ? { newLink: true } : {}) }), undefined);
+  const run = (access: 'off' | 'link', newLink?: boolean) => void cmd.run(() => send({ token, threadId, access, ...(newLink ? { newLink: true } : {}) }), newLink ? 'new' : 'switch');
   return (
     <details className="pop">
       <summary className={`share-btn ${shared ? 'on' : ''}`} title={shared ? 'Anyone with the link can read this thread' : 'Share this thread'}>
@@ -415,7 +415,7 @@ export function ShareControl({ token, threadId, share, onSharePage, preview }: {
         {shared && !onSharePage ? (
           <div className="buttons">
             <button className="btn" disabled={cmd.busy} onClick={() => run('link', true)} title="The old link stops working">
-              {cmd.spinning ? <span className="spinner" /> : null}
+              {(cmd.state.kind === 'sending' || cmd.state.kind === 'waiting') && cmd.state.payload === 'new' ? <span className="spinner" /> : null}
               New link
             </button>
           </div>

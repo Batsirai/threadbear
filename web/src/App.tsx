@@ -16,6 +16,7 @@ import { ReplyButton } from './reply-button';
 import { OutLink } from './link-confirm';
 import { CommandNote, useCommand } from './command-state';
 import { unqueued } from './command';
+import { withFailed, withoutSent } from './composer-draft';
 import { previewOf, ShareControl, SharePage } from './share';
 import { busy, Lists, ResizeHandle, type Row, useSidebarWidth } from './sidebar';
 import { Pop } from './menu';
@@ -393,33 +394,22 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   // Picks on the card of asks: ask index to choice index, for one card.
   const [picks, setPicks] = useState<Draft['picks']>({ by: {} });
   const [ticked, setTicked] = useState<Draft['ticked']>({ set: new Set() });
-  // What's in the composer now, for putting a failed draft back.
-  const draft = useRef<Draft>({ text, picks, ticked });
-  useEffect(() => {
-    draft.current = { text, picks, ticked };
-  });
   // The composer keeps what's typed and picked until the backend has the
-  // message, and gets it back if it fails: all of it into an empty
-  // composer, else its words above whatever is there now, so neither is
-  // lost and two drafts' picks never mix.
+  // message, and gets it back if it fails later: its words above whatever
+  // is there now (composer-draft.ts), its picks and ticks only where there
+  // are none, so two drafts' picks never mix.
   const sending = useCommand<Draft>(token, {
-    onQueued: () => {
-      setText('');
-      setPicks({ by: {} });
-      setTicked({ set: new Set() });
+    onQueued: (d) => {
+      setText((cur) => withoutSent(cur, d.text));
+      setPicks((cur) => (cur === d.picks ? { by: {} } : cur));
+      setTicked((cur) => (cur === d.ticked ? { set: new Set() } : cur));
     },
     onFailed: (_error, d, queued) => {
       // Never queued: it was never taken out of the composer.
       if (!queued) return;
-      const now = draft.current;
-      const empty = !now.text.trim() && !Object.values(now.picks.by).some((n) => n >= 0) && now.ticked.set.size === 0;
-      if (empty) {
-        setText(d.text);
-        setPicks(d.picks);
-        setTicked(d.ticked);
-      } else if (d.text.trim()) {
-        setText(`${d.text.trim()}\n\n${now.text}`);
-      }
+      setText((cur) => withFailed(cur, d.text));
+      setPicks((cur) => (Object.values(cur.by).some((n) => n >= 0) ? cur : d.picks));
+      setTicked((cur) => (cur.set.size ? cur : d.ticked));
     },
   });
   const holding = unqueued(sending.state);
@@ -592,11 +582,11 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
             // Stop only while nothing's typed, as on the Mac: a message
             // typed during a turn goes into it.
             <button type="button" className="send" disabled={stopCmd.busy} onClick={stop} aria-label={stopCmd.busy ? 'Stopping' : 'Stop'} title={stopCmd.busy ? 'Stopping' : 'Stop'}>
-              {stopCmd.busy ? <span className="spinner" /> : <Icon.Stop />}
+              {stopCmd.spinning ? <span className="spinner" /> : <Icon.Stop />}
             </button>
           ) : (
             <button className="send" disabled={!ready || holding} aria-label={holding ? 'Sending' : 'Send'} title={holding ? 'Sending' : 'Send'}>
-              {holding ? <span className="spinner" /> : <Icon.Up />}
+              {sending.state.kind === 'sending' ? <span className="spinner" /> : <Icon.Up />}
             </button>
           )}
         </div>
@@ -638,7 +628,7 @@ function ApprovalCard({ token, threadId, approval }: { token: string; threadId: 
   const secret = useMutation(api.phone.secret);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   // Which button was pressed, for its spinner.
-  const reply = useCommand<string>(token);
+  const reply = useCommand<string>(token, { keepDone: true });
   const pressed = (b: string) => (reply.state.kind === 'sending' || reply.state.kind === 'waiting') && reply.state.payload === b;
 
   if (approval.kind === 'approval') {
@@ -692,6 +682,7 @@ function ApprovalCard({ token, threadId, approval }: { token: string; threadId: 
                 <button
                   key={o.label}
                   className={`choice ${chosen ? 'on' : ''}`}
+                  disabled={reply.busy}
                   onClick={() =>
                     setAnswers((a) => {
                       const cur = a[q.question] ?? [];

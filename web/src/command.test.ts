@@ -116,10 +116,13 @@ test('answers from an earlier attempt, or another command, are ignored', () => {
   assert.equal(gone.kind, 'idle');
 });
 
-test('done and failed can be pressed again, and dismissed', () => {
+test('failed can be pressed again, done once it settles, and both dismissed', () => {
   const f = step(sent(), { kind: 'queueFailed', attempt: 1, error: 'x' });
   assert.equal(step(f, { kind: 'send', payload: { text: 'again' }, at: 0 }).kind, 'sending');
   assert.equal(step(f, { kind: 'dismiss' }).kind, 'idle');
   const d = step(step(sent(), { kind: 'queued', attempt: 1, id: 'c1', at: 0 }), { kind: 'report', id: 'c1', report: { state: 'done' }, at: 0 });
-  assert.equal(step(d, { kind: 'send', payload: { text: 'again' }, at: 0 }).attempt, 2);
+  // Done is locked until it settles; a composer's next message isn't held up.
+  assert.equal(step(d, { kind: 'send', payload: { text: 'again' }, at: 0 }), d);
+  assert.equal(step(d, { kind: 'send', payload: { text: 'again' }, at: 0, again: true }).attempt, 2);
+  assert.equal(step(step(d, { kind: 'settle' }), { kind: 'send', payload: { text: 'again' }, at: 0 }).attempt, 2);
 });

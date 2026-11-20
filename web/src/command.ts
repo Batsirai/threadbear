@@ -36,7 +36,7 @@ export type CommandState<P> =
 
 export type CommandEvent<P> =
   // A press. `again`: the composer may send its next message once the last
-  // is queued (waiting or slow with an id); a button never may.
+  // is queued (waiting, slow with an id, or done); a button never may.
   | { kind: 'send'; payload: P; at: number; again?: boolean }
   // The mutation answered with the command's id, or threw.
   | { kind: 'queued'; attempt: number; id: string; at: number }
@@ -70,7 +70,8 @@ export function unqueued(s: CommandState<unknown>): boolean {
 export function step<P>(s: CommandState<P>, e: CommandEvent<P>): CommandState<P> {
   switch (e.kind) {
     case 'send': {
-      const free = s.kind === 'idle' || s.kind === 'done' || s.kind === 'failed' || (e.again === true && (s.kind === 'waiting' || s.kind === 'slow') && !!s.id);
+      // Done is still locked until it settles, except for a composer's next message.
+      const free = s.kind === 'idle' || s.kind === 'failed' || (e.again === true && (s.kind === 'done' || ((s.kind === 'waiting' || s.kind === 'slow') && !!s.id)));
       return free ? { kind: 'sending', attempt: s.attempt + 1, since: e.at, payload: e.payload } : s;
     }
     case 'queued':
