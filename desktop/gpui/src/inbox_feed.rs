@@ -77,18 +77,22 @@ pub(crate) struct FeedState {
     seen: Option<HashSet<String>>,
 }
 
-/// The first word of the Mac account's full name ("Mike"), for the top of
-/// a card he started and over his messages; "You" where there's none.
+/// The first word of this account's full name ("Mike"), for the top of a
+/// card he started and over his messages; "You" where there's none. Read
+/// from the account's own record (its GECOS field), so no program runs.
 fn user_name() -> &'static str {
     static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     NAME.get_or_init(|| {
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(out) = std::process::Command::new("/usr/bin/id").arg("-F").output() {
-                return rules::first_name(String::from_utf8_lossy(&out.stdout).trim());
-            }
-        }
-        rules::first_name("")
+        // SAFETY: getpwuid's record is read straight away, on one thread
+        // (OnceLock), before anything else can call it again.
+        #[cfg(unix)]
+        let full = unsafe {
+            let pw = libc::getpwuid(libc::getuid());
+            if pw.is_null() || (*pw).pw_gecos.is_null() { String::new() } else { std::ffi::CStr::from_ptr((*pw).pw_gecos).to_string_lossy().into_owned() }
+        };
+        #[cfg(not(unix))]
+        let full = String::new();
+        rules::first_name(full.split(',').next().unwrap_or(""))
     })
 }
 
