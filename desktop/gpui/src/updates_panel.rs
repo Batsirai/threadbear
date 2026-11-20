@@ -772,7 +772,8 @@ impl Threadbear {
         let title = rules::update_title(cli);
         // Its first line's baseline on the button's, as the Swift row's
         // `.firstTextBaseline` puts it.
-        let status = text_line(rules::status_line(cli), 12., if cli.status == "held" { system_orange(cx) } else { fg }).flex_1().min_w_0().when(title.is_some(), |s| s.mt(px(2.)));
+        // Being looked into needs nothing from Mike, so it isn't orange.
+        let status = text_line(rules::status_line(cli), 12., if cli.status == "held" && !rules::is_investigated(cli) { system_orange(cx) } else { fg }).flex_1().min_w_0().when(title.is_some(), |s| s.mt(px(2.)));
         let mut top = h_flex().items_start().gap(px(6.)).child(status);
         if let Some(title) = title {
             let tip = if cli.can_update_now {
@@ -791,6 +792,11 @@ impl Threadbear {
         }
         if let Some(missing) = cli.hold.as_ref().map(|h| &h.missing).filter(|m| !m.is_empty()) {
             row = row.child(text_line(format!("Missing: {}", missing.join(", ")), 11., tertiary).line_clamp(2));
+        }
+        if let Some(id) = rules::hold_thread(cli) {
+            let open = id.to_owned();
+            let tip = if rules::is_investigated(cli) { "Open the thread looking into it" } else { "Open the thread that looked into it" };
+            row = row.child(text_button(SharedString::from(format!("updates-hold-{provider}")), self.thread_title(id), tip, 12., true, false, cx, move |t, window, cx| t.open(open.clone(), window, cx)));
         }
         if let Some(managed) = rules::managed_line(cli) {
             row = row.child(text_line(managed, 11., tertiary));
@@ -929,6 +935,9 @@ impl Threadbear {
                 lines.push(rules::dump_line(cli));
                 if let Some(missing) = cli.hold.as_ref().map(|h| &h.missing).filter(|m| !m.is_empty()) {
                     lines.push(format!("  Missing: {}", missing.join(", ")));
+                }
+                if let Some(id) = rules::hold_thread(cli) {
+                    lines.push(format!("  [{}]", self.thread_title(id)));
                 }
                 lines.extend(rules::managed_line(cli).map(|m| format!("  {m}")));
             }

@@ -291,9 +291,14 @@ type CliStatus = {
   inUse: { version: string, threadIds: string[] }[] // versions live sessions run
   previousVersion?: string  // Codex: the kept version "Go back" returns to
   checkedAt?: string
-  hold?: { version: string, reason: string, missing?: string[] } // why an
+  hold?: { version: string, reason: string, missing?: string[],
+          threadId?: string, investigating?: boolean } // why an
                         // update wasn't installed by itself ("the app-server
-                        // protocol changed", with what it lost)
+                        // protocol changed", with what it lost). A protocol
+                        // hold starts a thread that looks into it (threadId;
+                        // investigating while it's open), and is checked
+                        // again once per runner start, so the landing that
+                        // fixes it installs the version by itself
   update?: {            // the latest update, while it runs and after
     state: "waiting" | "running" | "succeeded" | "unchanged" | "failed"
     targetVersion?: string

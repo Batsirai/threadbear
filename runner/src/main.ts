@@ -54,6 +54,7 @@ import { SignInState } from './sign-in-state.ts';
 import { ProcessRegistry, killGroup } from './proc.ts';
 import { Runner } from './runner.ts';
 import { startOwnThread } from './own-threads.ts';
+import { heldBackBrief, heldBackTitle } from './updates/held-thread.ts';
 import { ConvexUseTally } from './convex-use.ts';
 import { CodexAdapter } from './adapters/codex/adapter.ts';
 import { AcpAdapter } from './adapters/acp/adapter.ts';
@@ -330,6 +331,20 @@ async function main(): Promise<void> {
       releaseIdle: (p, v) => runner.releaseIdle(p, v),
       versionsInUse: (p) => runner.versionsInUse(p),
       codexBinariesInUse: () => runner.codexBinariesInUse(),
+      // Only where a fix can land: a checkout of its own that doesn't follow
+      // GitHub's main. Elsewhere the fix reaches it from main as usual.
+      heldBack: (h) => {
+        const checkout = readRelease()?.checkout;
+        if (!checkout || !cfg.followMain || followOriginOn(cfg.home)) return undefined;
+        return startOwnThread(runner, { text: heldBackBrief(h, cfg.home), title: heldBackTitle(h), why: 'a Codex update held back by the protocol check' }, checkout);
+      },
+      threadOpen: (threadId) => {
+        try {
+          return !runner.get(threadId).archivedAt;
+        } catch {
+          return false;
+        }
+      },
     },
     codex: { resolve: (start) => resolveCodexBinary(start), checkSurface, testedVersion },
     notice: (level, message) => runner.notice(level, message),

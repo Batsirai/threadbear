@@ -264,6 +264,62 @@ test('codex: a version whose schema lacks a method we use is held; the first sta
   assert.deepEqual(t.npm.installs(), ['0.166.0', '0.164.0']);
 });
 
+test('codex: a protocol hold starts one thread looking into it, and a runner start whose lists now pass installs it by itself', async () => {
+  const t = setup();
+  t.u.update('codex', { version: '0.164.0' });
+  await t.u.settled();
+  const started: { version: string; current?: string; missing: string[] }[] = [];
+  const open = new Set<string>();
+  t.hooks.heldBack = (h) => {
+    started.push(h);
+    open.add(`thread-${started.length}`);
+    return `thread-${started.length}`;
+  };
+  t.hooks.threadOpen = (id) => open.has(id);
+  t.latest.codex = '0.166.0';
+  fs.writeFileSync(path.join(t.root, 'drop-0.166.0'), '');
+  t.u.check('codex');
+  await t.u.settled();
+  let c = of(t.u.list(), 'codex');
+  assert.equal(c.status, 'held');
+  assert.deepEqual(started, [{ version: '0.166.0', current: '0.164.0', missing: ['turn/steer'], added: [] }]);
+  assert.deepEqual(c.hold, { version: '0.166.0', reason: 'the app-server protocol changed', missing: ['turn/steer'], threadId: 'thread-1', investigating: true });
+  // Later checks start no second thread; archived, it's no longer "investigating".
+  t.u.check('codex');
+  await t.u.settled();
+  assert.equal(started.length, 1);
+  open.clear();
+  assert.equal(of(t.u.list(), 'codex').hold?.investigating, undefined);
+  // The fix lands (here: the version's schema stops lacking turn/steer) and
+  // the runner restarts: its first check puts the kept copy through the gate
+  // again, clears the hold and installs it, with no second download.
+  fs.rmSync(path.join(t.root, 'drop-0.166.0'));
+  const again = t.make();
+  again.check('codex');
+  await again.settled();
+  c = of(again.list(), 'codex');
+  assert.deepEqual([c.installedVersion, c.status, c.hold], ['0.166.0', 'current', undefined]);
+  assert.deepEqual(t.npm.installs(), ['0.164.0', '0.166.0']);
+  assert.equal(started.length, 1);
+});
+
+test('codex: a hold from before heldBack gets its thread at the next check, still held', async () => {
+  const t = setup({ latest: { codex: '0.166.0' } });
+  t.u.update('codex', { version: '0.164.0' });
+  await t.u.settled();
+  fs.writeFileSync(path.join(t.root, 'drop-0.166.0'), '');
+  t.u.check('codex');
+  await t.u.settled();
+  assert.equal(of(t.u.list(), 'codex').hold?.threadId, undefined, 'no hook, no thread');
+  const started: string[] = [];
+  t.hooks.heldBack = (h) => (started.push(h.version), 'thread-old');
+  const again = t.make();
+  again.check('codex');
+  await again.settled();
+  const c = of(again.list(), 'codex');
+  assert.deepEqual([c.status, c.installedVersion, c.hold?.threadId, started], ['held', '0.164.0', 'thread-old', ['0.166.0']]);
+});
+
 test('codex: new names only still activate, and are recorded', async () => {
   const t = setup();
   fs.writeFileSync(path.join(t.root, 'add-0.165.0'), '');

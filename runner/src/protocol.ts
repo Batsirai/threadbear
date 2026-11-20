@@ -163,7 +163,9 @@ export type CliStatus = {
   // update on demand (ACP agents).
   canUpdateNow?: boolean;
   checkedAt?: string;
-  hold?: { version: string; reason: string; missing?: string[] };
+  // threadId: the thread started to look into a protocol hold;
+  // investigating: it's still open.
+  hold?: { version: string; reason: string; missing?: string[]; threadId?: string; investigating?: boolean };
   update?: {
     state: CliUpdateState;
     targetVersion?: string;
