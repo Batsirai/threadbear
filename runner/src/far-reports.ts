@@ -18,6 +18,7 @@ import { AGENT_MESSAGE_PREFIX } from './protocol.ts';
 
 type Rec = {
   threadId: string;
+  runnerId?: string;
   runnerName: string;
   starter: string;
   at: number;
@@ -30,11 +31,11 @@ type Rec = {
   activity?: string;
   changedAt?: number;
   nextAt?: number;
-  // The last turn passed on, and a hash of the reply that went with it: if
-  // its rows change later (its last reply reached the backend late) the
-  // new reply follows.
+  // The newest turn passed on, and a hash of the reply that went with each
+  // of the last few: if a turn's rows change later (its last reply reached
+  // the backend late, even with the next turn's) the new reply follows.
   sentTurn?: string;
-  sentHash?: string;
+  hashes?: Record<string, string>;
   // The newest turn's reply as last seen, sent once a second look finds it
   // the same: the row can say the turn ended before its last reply arrives.
   pending?: string;
@@ -48,7 +49,7 @@ export type FarRow = { seq: number; role: string; text: string; turn?: string; s
 export type FarReportsDeps = {
   file: string;
   // That thread's row, or null when the backend has none.
-  row: (threadId: string) => Promise<{ status: string; lastActivityAt?: string; title?: string } | null>;
+  row: (threadId: string) => Promise<{ status: string; runnerId?: string; lastActivityAt?: string; title?: string } | null>;
   // Its newest message rows, oldest first.
   rows: (threadId: string) => Promise<FarRow[]>;
   // Whether the starter is one of this runner's threads.
@@ -62,6 +63,8 @@ export type FarReportsDeps = {
 };
 
 export const TICK_MS = 15_000;
+// How many of a thread's newest rows are read.
+export const ROWS = 100;
 // A thread quiet this long is looked at every five minutes, not every tick.
 const HOT_MS = 30 * 60_000;
 const COLD_MS = 5 * 60_000;
@@ -75,6 +78,8 @@ const MAX_PER_DAY = 40;
 const MAX_REPLY = 20_000;
 const RUNNING = new Set(['running', 'starting', 'waiting']);
 
+// What's been passed on, to tell whether another process passed on more.
+const mark = (r: Rec) => `${r.sentTurn ?? ''}:${JSON.stringify(r.hashes ?? {})}`;
 const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
 
 // Words from the other runner, in the header's quotes: nothing that could
@@ -89,21 +94,25 @@ export function farReportText(p: { title: string; threadId: string; runnerName: 
   return `${AGENT_MESSAGE_PREFIX}"${title}" (${p.threadId.slice(0, 8)})]\n\nFrom ${runner}, where this thread started it. ${what} passed on by this Mac's runner (thread ${p.threadId}):\n\n${reply}`;
 }
 
-// A turn's reply from its rows: its last words, walking back past the tool
-// calls after them (end_turn's), and the plan it proposed. A summary of
-// them (end_turn's bullets) only stands in when there's nothing else.
+// A turn's reply from its rows: its last words, before the tool call that
+// ends it (end_turn's) if there is one. end_turn's summary (its bullets)
+// stands in when there are none: words before another tool call are
+// narration, and words before a message Mike sent into the running turn
+// were what he changed.
 export function replyOf(rows: FarRow[], turn: string): string {
   const mine = rows.filter((r) => r.turn === turn);
   const said: string[] = [];
   const summary: string[] = [];
+  let tools = 0;
   for (const r of [...mine].reverse()) {
     if (r.role === 'tool') {
-      if (said.length) break;
+      if (said.length || ++tools > 1) break;
       continue;
     }
+    if (r.role === 'user') break;
     if (r.role !== 'assistant' || !r.text.trim()) continue;
-    if (r.summary) summary.unshift(r.text);
-    else said.unshift(r.text);
+    if (r.summary && !said.length) summary.unshift(r.text);
+    else if (!r.summary) said.unshift(r.text);
   }
   return (said.length ? said : summary).join('\n\n') || '(Its turn ended with no reply.)';
 }
@@ -147,7 +156,7 @@ export class FarReports {
     }
   }
 
-  add(p: { threadId: string; runnerName: string; starter: string }): void {
+  add(p: { threadId: string; runnerId?: string; runnerName: string; starter: string }): void {
     // A thread already watched keeps its starter: another runner naming one
     // of its threads as new again can't send its replies elsewhere.
     if (this.read().has(p.threadId)) return;
@@ -167,8 +176,14 @@ export class FarReports {
         // Each as the file has it now, and saved as soon as it's looked at.
         const rec = this.read().get(id);
         if (!rec || (rec.nextAt ?? 0) > this.deps.now()) continue;
+        const before = mark(rec);
         try {
-          if (await this.look(rec)) this.write(rec);
+          const keep = await this.look(rec, before);
+          // What another process (a handover's other runner) passed on
+          // meanwhile stands: this look's view of it is old.
+          const now = this.read().get(id);
+          if (now && mark(now) !== before && mark(now) !== mark(rec)) continue;
+          if (keep) this.write(rec);
           else this.write(undefined, rec.threadId);
         } catch (e) {
           // Looked at again next tick.
@@ -182,10 +197,14 @@ export class FarReports {
   }
 
   // False once it's to be forgotten.
-  private async look(rec: Rec): Promise<boolean> {
+  private async look(rec: Rec, start: string): Promise<boolean> {
     const now = this.deps.now();
+    let before = start;
     const row = await this.deps.row(rec.threadId);
     if (!row) return now - (rec.seenAt ?? rec.at) <= FORGET_MS;
+    // Moved off the runner it was started on (to this Mac, say): its own
+    // send_message reaches the starter from there.
+    if (rec.runnerId && row.runnerId && row.runnerId !== rec.runnerId) return false;
     rec.seenAt = now;
     if (row.lastActivityAt !== rec.activity) {
       rec.activity = row.lastActivityAt;
@@ -204,11 +223,13 @@ export class FarReports {
     // While it runs, its newest turn isn't done.
     const done = running ? turns.slice(0, -1) : turns;
     const from = rec.sentTurn ? turns.indexOf(rec.sentTurn) : -1;
-    // The turns after the last one passed on (only the newest, if that one
-    // is out of this page), and the last one again if it's still the newest
-    // and its reply changed.
-    let todo = rec.sentTurn && from < 0 ? done.slice(-1) : done.slice(from + 1);
-    if (from >= 0 && from === turns.length - 1 && !running && hash(replyOf(rows, rec.sentTurn!)) !== rec.sentHash) todo = [rec.sentTurn!, ...todo];
+    // Any passed on whose reply has changed since (more of it reached the
+    // backend late; not the first on a full page, whose start may be cut
+    // off), then every turn after the last one passed on: all of them on
+    // this page if that one is older.
+    const hashes = rec.hashes ?? {};
+    const changed = done.filter((t, i) => (i > 0 || rows.length < ROWS) && i <= from && hashes[t] !== undefined && hashes[t] !== hash(replyOf(rows, t)));
+    const todo = [...changed, ...done.slice(from + 1)];
     if (!todo.length) {
       rec.pending = undefined;
       return true;
@@ -228,17 +249,18 @@ export class FarReports {
       }
       // Passed on meanwhile by the other runner of a handover.
       const there = this.read().get(rec.threadId);
-      if (there && (there.sentTurn !== rec.sentTurn || there.sentHash !== rec.sentHash)) return true;
-      if (!this.deps.active()) return true;
+      if ((there && mark(there) !== before) || !this.deps.active()) return true;
       rec.sends = (rec.sends ?? []).filter((t) => now - t < 24 * 3600_000);
       if (rec.sends.length >= MAX_PER_DAY) this.deps.log.warn('not passing on another reply from that thread today', { threadId: rec.threadId, starter: rec.starter });
       else {
-        this.deps.deliver(rec.starter, farReportText({ title: row.title ?? 'a thread', threadId: rec.threadId, runnerName: rec.runnerName, reply, again: turn === rec.sentTurn }));
+        this.deps.deliver(rec.starter, farReportText({ title: row.title ?? 'a thread', threadId: rec.threadId, runnerName: rec.runnerName, reply, again: hashes[turn] !== undefined }));
         rec.sends.push(now);
       }
-      rec.sentTurn = turn;
-      rec.sentHash = hash(reply);
+      if (turns.indexOf(turn) > turns.indexOf(rec.sentTurn ?? '')) rec.sentTurn = turn;
+      hashes[turn] = hash(reply);
+      rec.hashes = Object.fromEntries(Object.entries(hashes).slice(-20));
       this.write(rec);
+      before = mark(rec);
     }
     return true;
   }

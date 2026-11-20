@@ -108,7 +108,7 @@ import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, build
 import { CrossRunner } from './cross-runner.ts';
 import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
 import type { RemoteThreads } from './thread-index.ts';
-import { FarReports, TICK_MS as FAR_TICK_MS, type FarRow } from './far-reports.ts';
+import { FarReports, ROWS as FAR_ROWS, TICK_MS as FAR_TICK_MS, type FarRow } from './far-reports.ts';
 import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel, type PermissionMode } from './protocol.ts';
 
 // Tells launch.mjs this runner calls its listening() hook (release.ts), so
@@ -1355,19 +1355,20 @@ async function main(): Promise<void> {
     row: async (threadId) => {
       const src = sync.relaySource();
       if (!src) throw new Error('sync is off');
-      return (await src.post('query', 'relay:remoteThread', { key: src.key, threadId })) as { status: string; lastActivityAt?: string; title?: string } | null;
+      return (await src.post('query', 'relay:remoteThread', { key: src.key, threadId })) as { status: string; runnerId?: string; lastActivityAt?: string; title?: string } | null;
     },
     rows: async (threadId) => {
       const src = sync.relaySource();
       if (!src) throw new Error('sync is off');
-      return ((await src.post('query', 'relay:remoteMessages', { key: src.key, threadId, limit: 100 })) as { messages: FarRow[] }).messages;
+      return ((await src.post('query', 'relay:remoteMessages', { key: src.key, threadId, limit: FAR_ROWS })) as { messages: FarRow[] }).messages;
     },
     has: (id) => runner.has(id),
     deliver: (starter, text) => {
       runner.send(starter, text, [], { queue: true });
     },
-    // Not while sync is off, nor on a draining runner: its replacement does it.
-    active: () => !draining && !runner.draining && Boolean(sync.relaySource()),
+    // Not while sync is off, nor on a draining or stopping runner: its
+    // replacement does it.
+    active: () => !draining && !stopping && !runner.draining && Boolean(sync.relaySource()),
     log,
     now: () => Date.now(),
   });
