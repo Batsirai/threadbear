@@ -6328,6 +6328,64 @@ kept in `schedules.json` in the data dir.
   minutes"). `schedule_message` takes a `runner` (a name or id from
   `runners.list`); left out, the schedule runs on the agent's own runner.
 
+## Recipes
+
+Behind the `recipes` experiment. A recipe is a technique someone found worth
+keeping (a morning brief, a nightly look back, an email watcher), written so
+an agent can set it up for anyone: one `RECIPE.md`, with an optional header
+picture beside it. The format is in `runner/src/recipes/FORMAT.md`. The ones
+that come with Threadbear are `runner/src/recipes/<id>/`; the user's own are
+`<recipes folder>/<id>/` (`runner.json`'s `recipes.folder`, default
+`~/ThreadbearThreads/recipes`), and one of theirs with a built-in's id is used
+in its place. That folder is also where a recipe's working files go once it's
+set up (its `TASK.md`, its `memory.md`), so a subfolder without a `RECIPE.md`
+is just that and isn't listed.
+
+What the runner remembers about each, in `recipes.json` in the data dir:
+whether it's on, the thread that set it up, and the schedules that are its.
+A schedule made by its setup thread (`createdBy`) becomes its own when the
+runner next looks, so the setup agent needs no tool of its own. A recipe with
+`experiment: <id>` is on while that experiment is: its switch is the
+experiment's switch (`settings.update`'s `experiments`).
+
+`RecipeSummary`:
+
+```
+{ id, name, icon,            // icon: an emoji
+  description,               // one line, for its card
+  by?,                       // who wrote it
+  source: "builtin" | "yours",
+  experiment?,               // the experiment it switches
+  when?,                     // how often, in words: "Every day at 6:30"
+  color?,                    // "#rrggbb", the header's colour when it has no picture
+  header?,                   // absolute path of its header picture on this Mac
+  state: "add" | "settingUp" | "on" | "off",
+  setupThreadId?,
+  schedules: { id, title, paused, nextRunAt?, whenText }[],
+  stats: { runs: number, neededYou: number, seen: number, lastRunAt?, lastHeadline? } }   // last 30 days
+```
+
+`state` is `add` until it's added; `settingUp` from `recipes.add` until it
+has a schedule (or, for an experiment's, until that's on); then `on` or `off`.
+`stats` count the threads its schedules started in the last 30 days: those
+that ended needing the user, and those they've read (`lastSeenSeq` at
+`lastSeq`).
+
+| Method | Params | Result |
+|---|---|---|
+| `recipes.list` | `{}` | `{ recipes: RecipeSummary[] }`, on first, then the rest by name |
+| `recipes.get` | `{ id }` | `{ recipe: RecipeSummary & { about, example?, file, runs: RecipeRun[] } }`. `about` and `example` are Markdown (the file's sections); `file` is the `RECIPE.md` path. `RecipeRun` is `{ threadId, title, at, headline?, needsYou, seen, archived }`, the threads its schedules started in the last 30 days, newest first, 60 at most |
+| `recipes.add` | `{ id }` | `{ threadId }`: starts a thread in `<recipes folder>/<id>` (made if need be), on the default pool and Full access, whose message points its agent at the recipe's file and has it set the recipe up with the user. The recipe is `settingUp` from now |
+| `recipes.setOn` | `{ id, on }` | `{ recipe }`. Off pauses each of its schedules (and turns its experiment off); on resumes them (and turns it on). A recipe still setting up just records the choice |
+| `recipes.remove` | `{ id }` | `{ removed: true }`: deletes its schedules, turns its experiment off and forgets it, so it's `add` again. Its files stay |
+| `recipes.create` | `{ text?, fromThreadId?, editId? }` | `{ threadId }`: starts a thread in the recipes folder whose agent writes a new recipe with the user (from `text`, or from what went well in `fromThreadId`), and a header picture if it can make one. A new recipe shows as `add` until it's added. With `editId` the agent changes that recipe instead, writing a built-in's changed copy into the recipes folder as the user's own |
+
+`recipes.updated` (notification, no params) says the list has changed: a
+recipe's file, its state, its schedules or the threads they started. The
+runner looks every 30 seconds and at once after its own changes; a client
+fetches `recipes.list` again (and `recipes.get` for a recipe it shows). With
+the experiment off every method fails with `-32601`.
+
 ## Other runners' threads
 
 Step 6 part 2 (docs/step6-plan.md). The Mac app lists every runner's
