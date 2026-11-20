@@ -118,13 +118,10 @@ pub struct Composer {
     /// What the box is to hold at the next render (an edit sent puts back
     /// what was in it before; that needs the window).
     pending_box: Option<(String, Vec<ImageRef>)>,
-    /// The box is on its way to the runner as a review's answer
-    /// (`send_review_answer`): it keeps its words, locked, until that's back.
-    review_sending: bool,
-    /// A review's answer whose acknowledgement never came (the connection
-    /// went mid-send): the next Send goes to that review again, where the
-    /// same answer twice counts once, rather than out as a new message.
-    review_unconfirmed: Option<threadbear_core::reducer::DesignReview>,
+    /// A review's answer on its way to the runner (`send_review_answer`),
+    /// with the ticks that went: its chips show dimmed with a spinner, and
+    /// nothing else is sent from here until it's back.
+    review_sending: Option<threadbear_core::reducer::DesignReview>,
     /// The box as it was before an edit that's been sent, to put back at the
     /// next render with its undo history.
     pending_saved: Option<SavedBox>,
@@ -278,8 +275,7 @@ impl Composer {
             shown_placeholder: "Message".into(),
             editing: None,
             pending_box: None,
-            review_sending: false,
-            review_unconfirmed: None,
+            review_sending: None,
             pending_saved: None,
             held_extras: Vec::new(),
             pending_mentions: vec![],
@@ -316,9 +312,7 @@ impl Composer {
     }
 
     pub(crate) fn can_take_pictures(&self, cx: &App) -> bool {
-        // Nor while the box is on its way as a review's answer: what's
-        // added then isn't in it, and goes when the box empties.
-        !self.creating(cx) && self.moving_line(cx).is_none() && !self.review_sending
+        !self.creating(cx) && self.moving_line(cx).is_none()
     }
 
     /// The thread exists: what was sent leaves the box, if it's still what
@@ -522,6 +516,11 @@ impl Composer {
         if self.thread_id.as_deref().is_some_and(crate::thread::sending_now) {
             return Some("the message on its way in “{t}” has gone");
         }
+        // A review's answer is out of the box and not yet with the runner:
+        // if it doesn't go, its words come back here.
+        if self.review_sending.is_some() {
+            return Some("the answer on its way in “{t}” has gone");
+        }
         None
     }
 
@@ -588,8 +587,12 @@ impl Composer {
             return true;
         }
         // Options ticked on a review's page are what Return sends, never a
-        // waiting tool's Allow (Gemini's review, 20 Nov).
-        if self.review_picks(cx).is_some() || self.review_unconfirmed.is_some() {
+        // waiting tool's Allow (Gemini's review, 20 Nov); and while that
+        // answer's on its way Return does nothing.
+        if self.review_sending.is_some() {
+            return true;
+        }
+        if self.review_picks(cx).is_some() {
             return false;
         }
         let Some(pane) = self.pane() else { return false };
@@ -626,21 +629,21 @@ impl Composer {
 
     /// Whether there's anything to send (ComposerView.canSend).
     fn can_send(&self, cx: &App) -> bool {
-        !self.loading_pictures(cx) && !self.review_sending && self.has_send_content(cx)
+        !self.loading_pictures(cx) && self.review_sending.is_none() && self.has_send_content(cx)
     }
 
     fn has_send_content(&self, cx: &App) -> bool {
         let (text, images) = self.draft(cx);
-        composer::can_send(&text, images.len()) || !self.card.picks.is_empty() || !self.card.next_picks.is_empty() || !self.card.explain.is_empty() || self.review_picks(cx).is_some() || self.review_unconfirmed.is_some()
+        composer::can_send(&text, images.len()) || !self.card.picks.is_empty() || !self.card.next_picks.is_empty() || !self.card.explain.is_empty() || self.review_picks(cx).is_some()
     }
 
     /// The review this box answers when it's sent: one of this thread's
     /// with options ticked on its page beside the thread, its ticks as the
-    /// page shows them (the reviewPage experiment; review_pane.rs has the
-    /// rule). Never while an older message is being edited: an edit isn't
-    /// an answer.
+    /// app shows them (the reviewPage experiment; review_pane.rs has the
+    /// rule). None while an older message is being edited, as an edit isn't
+    /// an answer, or while an answer's already on its way.
     fn review_picks(&self, cx: &App) -> Option<threadbear_core::reducer::DesignReview> {
-        if self.editing.is_some() || !crate::review_pane::is_on(cx) {
+        if self.editing.is_some() || self.review_sending.is_some() || !crate::review_pane::is_on(cx) {
             return None;
         }
         let thread_id = self.thread_id.as_deref()?;
@@ -649,82 +652,101 @@ impl Composer {
         side.read(cx).review_to_answer(thread_id, waiting)
     }
 
-    /// Sends the box as `review`'s answer: its ticks, the box's words as
-    /// the reply and its pictures, through `reviews.respond`, as the review
+    /// Sends the box as `review`'s answer: its ticks, `words` as the reply
+    /// and the box's pictures, through `reviews.respond`, as the review
     /// window's Send does, so it's taken whole or not at all and a restart
     /// never sends it twice. (A first try had the runner turn a plain
     /// message into the answer; Codex and Gemini's reviews, 20 Nov, found
     /// that could send twice after a restart, lose its pictures, and
-    /// swallow a command.) The box keeps its words, locked, until the
-    /// runner has it, and an error leaves them there to try again.
+    /// swallow a command.)
     ///
-    /// A runner that's restarting is waited out. If it still refuses, the
-    /// review is read again: one that changed (a tick still on its way) is
-    /// sent once more at its new revision, and one already answered is sent
-    /// once more as it is, since the same answer twice is the first one,
-    /// which is how an answer whose acknowledgement was lost is found to
-    /// have gone. If the runner can't be asked at all the review is kept
-    /// (`review_unconfirmed`) and the next Send goes to it again. False
-    /// when there's no thread to send from.
-    fn send_review_answer(&mut self, review: threadbear_core::reducer::DesignReview, words: String, images: Vec<ImageRef>, edits: bool, cx: &mut Context<Self>) -> bool {
+    /// The box empties at once, as a message's does, and its chips show
+    /// dimmed with a spinner; nothing else goes from here until it's back.
+    /// If it doesn't go, `draft` (the box as it was) is given back.
+    ///
+    /// The same answer twice is the first one, so a try that got no answer
+    /// (the runner restarting, the connection dropped with it out) is
+    /// simply made again, three times at most. A refusal has the review
+    /// read again: one that changed (a tick still on its way) is sent once
+    /// more at its new revision, and anything else is the runner's no.
+    /// (Between these two a second and third review found a kept "ask
+    /// again later" copy sending ticks since taken off, and a locked box
+    /// losing what was added to it.) False when there's no thread to send
+    /// from or the runner can't be reached: nothing's changed then.
+    fn send_review_answer(&mut self, review: threadbear_core::reducer::DesignReview, words: String, draft: RestoreDraft, edits: String, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        use threadbear_core::reducer::DesignReview;
         let Some(thread_id) = self.thread_id.clone() else { return false };
         let Some(pane) = self.pane() else { return false };
         if let Some(why) = pane.read(cx).cant_send_now() {
             if let Some(app) = self.app.upgrade() {
                 app.update(cx, |app, cx| app.show_connection_error(why, cx));
             }
-            // Still that review's to answer when the runner's back.
-            self.review_unconfirmed = self.review_unconfirmed.take().or(Some(review));
             return true;
         }
-        let mut draft = review.draft.clone();
-        draft.reply = (!words.is_empty()).then_some(words);
-        draft.images = images;
-        crate::activity::sent(Some(&thread_id), draft.images.len(), 0, false);
-        self.review_sending = true;
+        let mut answer = review.draft.clone();
+        answer.reply = (!words.is_empty()).then_some(words);
+        answer.images = draft.images.clone();
+        crate::activity::sent(Some(&thread_id), answer.images.len(), 0, false);
+        self.input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.forget_chips();
+        self.review_sending = Some(review.clone());
         cx.notify();
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
-            use threadbear_core::reducer::DesignReview;
-            let (mut revision, mut read_again) = (review.revision, false);
+            let (mut revision, mut read_again, mut tries, mut latest) = (review.revision, false, 0, None::<DesignReview>);
             // Ok, or why not and whether it may have gone all the same.
             let sent: Result<(), (String, bool)> = loop {
-                let params = json!({ "threadId": thread_id, "reviewId": review.id, "revision": revision, "draft": draft.to_json() });
+                tries += 1;
+                let params = json!({ "threadId": thread_id, "reviewId": review.id, "revision": revision, "draft": answer.to_json() });
                 let refused = match crate::review_window::riding_out(client.clone(), "reviews.respond", params, cx).await {
                     Ok(_) => break Ok(()),
                     Err(e) => e,
                 };
-                let lost = threadbear_core::review::runner_away(refused.code);
-                if read_again {
-                    break Err((refused.message, lost));
+                // No answer came, which isn't a no: the client's own errors
+                // (not connected, the connection dropped with the call out,
+                // no answer in time) and a runner handing over.
+                if matches!(refused.code, -3..=-1) || threadbear_core::review::runner_away(refused.code) {
+                    if tries >= 3 {
+                        break Err((refused.message, true));
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                    continue;
                 }
-                read_again = true;
-                let latest = crate::call(client.clone(), "reviews.get", json!({ "threadId": thread_id, "reviewId": review.id })).await.ok().and_then(|v| DesignReview::decode(&v["review"]));
-                match latest {
-                    Some(latest) if latest.is_pending() && latest.revision != revision => revision = latest.revision,
-                    Some(latest) if latest.status == "answered" => {}
-                    Some(_) => break Err((refused.message, false)),
-                    None => break Err((refused.message, true)),
+                latest = crate::call(client.clone(), "reviews.get", json!({ "threadId": thread_id, "reviewId": review.id })).await.ok().and_then(|v| DesignReview::decode(&v["review"]));
+                match &latest {
+                    Some(now) if !read_again && now.is_pending() && now.revision != revision => {
+                        read_again = true;
+                        revision = now.revision;
+                    }
+                    _ => break Err((refused.message, false)),
                 }
             };
             this.update(cx, |this, cx| {
-                this.review_sending = false;
+                this.review_sending = None;
                 match sent {
                     Ok(()) => {
-                        // Emptied at the next render, which has the window.
-                        this.pending_box = Some((String::new(), Vec::new()));
-                        if edits {
+                        // The draft blocks' changes that went with it, if
+                        // they're still as they went: one changed again
+                        // while this was out goes with the next message.
+                        if !edits.is_empty() && crate::draft_boxes::unsent_edits(&thread_id, cx) == edits {
                             crate::draft_boxes::note_edits_sent(&thread_id, cx);
                         }
                     }
                     Err((why, unsure)) => {
-                        // It may have gone: the next Send asks that review
-                        // again rather than sending these words as a message.
-                        if unsure {
-                            this.review_unconfirmed = Some(review);
+                        this.restore_draft(draft, cx);
+                        // The review as the runner has it now, so chips for
+                        // one that's over don't stay.
+                        if let (Some(now), Some(app)) = (latest, this.app.upgrade()) {
+                            let side = app.read(cx).side.clone();
+                            side.update(cx, |side, cx| side.review_updated(&thread_id, &now, cx));
                         }
+                        let said = if unsure {
+                            "Your answer may not have reached the runner. If it shows in the thread it went; if not, send it again.".to_owned()
+                        } else {
+                            format!("Your answer wasn't sent: {why}")
+                        };
                         if let Some(pane) = this.pane() {
-                            pane.update(cx, |p, cx| p.show_error(format!("Your answer wasn't sent: {why}"), cx));
+                            pane.update(cx, |p, cx| p.show_error(said, cx));
                         }
                     }
                 }
@@ -739,6 +761,7 @@ impl Composer {
     /// The ticks as the dump's `composer.reviewPicks`: each option's name.
     #[cfg(feature = "automation")]
     pub(crate) fn review_pick_lines(&self, cx: &App) -> Option<Vec<String>> {
+        // None while they're on their way: they're no longer the box's to send.
         let review = self.review_picks(cx)?;
         let mut lines: Vec<String> = review.options.iter().filter(|o| review.draft.picked_ids.contains(&o.id)).map(|o| o.title.clone()).collect();
         if review.draft.none {
@@ -752,7 +775,9 @@ impl Composer {
     fn render_review_picks(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         use gpui_kit::base::TestSupportExt as _;
         const UNTICK: &str = "Untick it";
-        let review = self.review_picks(cx)?;
+        // The ones on their way stay, dimmed, until the runner has them.
+        let sending = self.review_sending.is_some();
+        let review = self.review_sending.clone().or_else(|| self.review_picks(cx))?;
         let thread_id = self.thread_id.clone()?;
         let accent = style::accent(cx);
         let secondary = style::secondary_label(cx);
@@ -763,7 +788,7 @@ impl Composer {
         }
         let mut row = h_flex().id("review-picks").w_full().gap(px(6.)).overflow_x_scroll();
         for (index, (option, label, picture)) in chips.into_iter().enumerate() {
-            let tip = format!("Your answer to \u{201C}{}\u{201D}: sent with your next message", review.title);
+            let tip = if sending { "On its way".to_owned() } else { format!("Your answer to \u{201C}{}\u{201D}: sent with your next message", review.title) };
             let (review, thread_id) = (review.clone(), thread_id.clone());
             let untick = cx.listener(move |this, _: &ClickEvent, _, cx| {
                 let Some(app) = this.app.upgrade() else { return };
@@ -785,9 +810,10 @@ impl Composer {
                     .text_size(px(style::size::CHIP))
                     .line_height(px(style::natural_line(style::size::CHIP)))
                     .tip(tip)
+                    .when(sending, |s| s.opacity(0.55))
                     .children(picture.map(|path| img(crate::rows::markdown::file_picture(&path)).flex_none().w(px(26.)).h(px(16.)).rounded(px(8.)).object_fit(ObjectFit::Cover)))
                     .child(div().max_w(px(260.)).truncate().text_color(style::label_text(cx)).child(label))
-                    .child(
+                    .when(!sending, |s| s.child(
                         div()
                             .id(("review-pick-remove", index))
                             .test_support()
@@ -797,8 +823,11 @@ impl Composer {
                             .child(gpui_kit::component::Icon::from(gpui_kit::assets::IconName::X).with_size(px(10.)).text_color(secondary))
                             .tip(UNTICK)
                             .on_click(untick),
-                    ),
+                    )),
             );
+        }
+        if sending {
+            row = row.child(Spinner::new().color(secondary).with_size(px(12.)));
         }
         Some(row.into_any_element())
     }
@@ -807,7 +836,9 @@ impl Composer {
     /// at the end of the transcript until the runner has it; it comes back
     /// if the runner doesn't take it.
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.loading_pictures(cx) || self.refuse_dead_chip(cx) { return; }
+        // Nothing while a review's answer is on its way: a message then
+        // would put that review aside before its answer lands.
+        if self.loading_pictures(cx) || self.review_sending.is_some() || self.refuse_dead_chip(cx) { return; }
         // The arrow hops as Return lands, when there's something to send
         // (Mike picked it, 13 Nov). None under Reduce Motion.
         if self.can_send(cx) && !cx.reduce_motion() {
@@ -839,16 +870,8 @@ impl Composer {
         // has answers of its own to go: those are an ordinary message, which
         // puts the review aside as any message of Mike's does.
         if !words.starts_with('/') && self.card_message(&words, cx).is_none() {
-            // One whose answer may already have gone is asked again, unless
-            // it's still waiting here: then it goes with the ticks as they
-            // are now.
-            let waiting = self.review_picks(cx);
-            let review = match self.review_unconfirmed.take() {
-                Some(unsure) if waiting.is_none() => Some(unsure),
-                _ => waiting,
-            };
-            if let Some(review) = review {
-                if self.send_review_answer(review, words.clone(), images.clone(), !edits.is_empty(), cx) {
+            if let Some(review) = self.review_picks(cx) {
+                if self.send_review_answer(review, words.clone(), RestoreDraft::plain(draft_text.clone(), images.clone()), edits.clone(), window, cx) {
                     return;
                 }
             }
@@ -1736,6 +1759,18 @@ impl Composer {
                 .bg(style::send_faint_fill(cx)).child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.)))
                 .tip("Loading picture").into_any_element();
         }
+        // A review's answer is on its way: a spinner until the runner has
+        // it, and nothing else sent from here meanwhile.
+        if self.review_sending.is_some() {
+            return circle()
+                .id("composer-answering")
+                .test_support()
+                .role(Role::ProgressIndicator).aria_label("Sending your answer")
+                .bg(style::send_faint_fill(cx))
+                .child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.)))
+                .tip("Sending your answer")
+                .into_any_element();
+        }
         // The runner is making the thread: a spinner in the button's place
         // until it has, however long a busy Mac makes that (SendButton).
         if creating {
@@ -1998,9 +2033,7 @@ impl Render for Composer {
             self.stopping = None;
         }
         let strip = self.render_strip(window, cx);
-        // An answer to a review on its way locks the box as a new thread
-        // being made does: its words stay until the runner has them.
-        let creating = self.creating(cx) || self.review_sending;
+        let creating = self.creating(cx);
         // Typing, answering and sending wait while the thread moves.
         let locked = creating || moving.is_some();
         let send_button = self.render_send_button(running, creating, cx);
