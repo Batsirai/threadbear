@@ -47,12 +47,22 @@ const editedOne = 'I edited your draft. Use my version below exactly as it is, n
 const editedMany = 'I edited your drafts. Use my versions below exactly as they are, not yours:';
 
 export function splitEdited(text: string): { words: string; drafts: Draft[] } | undefined {
-  const found = [editedOne, editedMany]
-    .map((intro) => ({ intro, at: text.lastIndexOf(intro) }))
-    .filter((f) => f.at >= 0)
-    .sort((a, b) => b.at - a.at)[0];
-  if (!found) return undefined;
-  const { intro, at } = found;
+  // From the first one: a draft can hold the line itself, and Mike's own
+  // words can too, so each place it starts a paragraph is tried until one
+  // is followed by nothing but drafts.
+  const starts: { at: number; intro: string }[] = [];
+  for (const intro of [editedOne, editedMany]) {
+    for (let at = text.indexOf(intro); at >= 0; at = text.indexOf(intro, at + 1)) starts.push({ at, intro });
+  }
+  starts.sort((a, b) => a.at - b.at);
+  for (const { at, intro } of starts) {
+    const split = splitAt(text, at, intro);
+    if (split) return split;
+  }
+  return undefined;
+}
+
+function splitAt(text: string, at: number, intro: string): { words: string; drafts: Draft[] } | undefined {
   if (at !== 0 && !text.slice(0, at).endsWith('\n\n')) return undefined;
   let rest = text.slice(at + intro.length);
   const drafts: Draft[] = [];
@@ -63,13 +73,15 @@ export function splitEdited(text: string): { words: string; drafts: Draft[] } | 
     const lineEnd = after.indexOf('\n');
     if (lineEnd < 0) return undefined;
     const word = after.slice(ticks, lineEnd);
+    if (!kinds.includes(word)) return undefined;
     const body = after.slice(lineEnd + 1);
     const close = '\n' + '`'.repeat(ticks);
     const end = findClosing(body, close);
     if (end === undefined) return undefined;
-    const draft = draftFrom(word, body.slice(0, end));
-    if (!draft) return undefined;
-    drafts.push(draft);
+    // Whatever length it is: what was sent is shown.
+    const source = body.slice(0, end).replace(/\r\n/g, '\n');
+    if (!source.trim()) return undefined;
+    drafts.push({ kind: word as DraftKind, source });
     rest = body.slice(end + close.length);
   }
   if (!drafts.length || rest.trim() || (intro === editedOne) !== (drafts.length === 1)) return undefined;

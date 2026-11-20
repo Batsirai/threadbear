@@ -359,7 +359,9 @@ impl ThreadPane {
             col = col.child(self.user_images(
                 &message.images,
                 ix,
-                message.text.is_empty() && message.origin.as_deref() == Some("phone"),
+                message.text.is_empty()
+                    && edited.is_empty()
+                    && message.origin.as_deref() == Some("phone"),
                 cx,
             ));
         }
@@ -424,12 +426,20 @@ impl ThreadPane {
                 .then(|| self.bubble_words(("user-text", ix), text, &row.id, cx));
             let drafts = (!edited.is_empty())
                 .then(|| self.edited_drafts(ix, &row.id, &edited, has_words || answered, cx));
+            // A draft opened under his words takes the bubble's whole width,
+            // not the width of a short "Send it".
+            let draft_open = (0..edited.len())
+                .any(|n| self.rows.shown_drafts.contains(&format!("{}-{n}", row.id)));
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
-                .when_some(fit, |d, (ink, _)| d.w(ink + px(BUBBLE_PAD_H * 2.)))
-                .when_some(chips.as_ref().map(|c| c.0), |d, ink| {
+                .when_some(fit.filter(|_| !draft_open), |d, (ink, _)| {
                     d.w(ink + px(BUBBLE_PAD_H * 2.))
                 })
+                .when_some(
+                    chips.as_ref().map(|c| c.0).filter(|_| !draft_open),
+                    |d, ink| d.w(ink + px(BUBBLE_PAD_H * 2.)),
+                )
+                .when(draft_open, |d| d.w(relative(BUBBLE_SHARE)))
                 .px(px(BUBBLE_PAD_H))
                 .py(px(BUBBLE_PAD_V))
                 .rounded(px(BUBBLE_RADIUS))
@@ -1638,6 +1648,7 @@ impl ThreadPane {
             .when(after_words, |d| d.mt(px(8.)));
         for (n, draft) in drafts.iter().enumerate() {
             let key = format!("{row_id}-{n}");
+            let row = row_id.to_owned();
             let shown = self.rows.shown_drafts.contains(&key);
             let tip = if shown {
                 "Hide the draft you sent"
@@ -1657,6 +1668,11 @@ impl ThreadPane {
                     if !this.rows.shown_drafts.remove(&key) {
                         this.rows.shown_drafts.insert(key.clone());
                     }
+                    // The row's height changes: the list measures it again.
+                    if let Some(i) = this.feed.model().index_of(&row) {
+                        this.scroller
+                            .update(cx, |s, cx| s.remeasure_items(i..i + 1, cx));
+                    }
                     cx.notify();
                 }));
             col = col.child(
@@ -1667,7 +1683,13 @@ impl ThreadPane {
                     .child(toggle),
             );
             if shown {
-                let lines: Vec<String> = draft.drawn_lines().iter().map(|l| l.shown()).collect();
+                let words = crate::draft_boxes::sent_draft(
+                    ("edited-draft-text", ix * 100 + n),
+                    draft,
+                    self.origin(),
+                    self.summary.cwd.clone(),
+                    cx,
+                );
                 col = col.child(
                     div()
                         .w_full()
@@ -1677,10 +1699,9 @@ impl ThreadPane {
                         .bg(style::code_background(cx))
                         .border(gpui_kit::px(0.5))
                         .border_color(style::card_border(cx))
-                        .child(SelectableText::new(
-                            ("edited-draft-text", ix * 100 + n),
-                            lines.join("\n"),
-                        )),
+                        .text_size(px(size::BODY))
+                        .line_height(px(size::BODY_LINE))
+                        .child(words),
                 );
             }
         }

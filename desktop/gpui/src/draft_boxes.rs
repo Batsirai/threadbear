@@ -280,13 +280,14 @@ fn start_edit(
             crate::unsent::watch_in(&editor, "a reply's draft box", Some(thread.clone()), cx);
             // ⌘Return is Done, as it saves a project's notes. Return is a new line.
             let done_key = key.clone();
-            let keys = cx.subscribe(&editor, move |_, event: &InputEvent, cx| {
-                if let InputEvent::PressEnter {
+            let keys = cx.subscribe(&editor, move |_, event: &InputEvent, cx| match event {
+                InputEvent::PressEnter {
                     secondary: true, ..
-                } = event
-                {
-                    finish_edit(&done_key, cx);
-                }
+                } => finish_edit(&done_key, cx),
+                // The composer's chip for it (and Send) follows what's typed,
+                // in whichever window the box is (composer_drafts.rs).
+                InputEvent::Change => cx.refresh_windows(),
+                _ => {}
             });
             let edit = Edit {
                 thread,
@@ -590,6 +591,115 @@ struct DraftSelection {
     focus: FocusHandle,
 }
 
+/// A draft's lines as one text with its looks: bold, italic, strike, code
+/// in the mono font, links in the link colour, a quote's bar.
+struct Formatted {
+    text: String,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+    code: Vec<(Range<usize>, SharedString)>,
+    links: Vec<(Range<usize>, String)>,
+}
+
+fn formatted(lines: &[Line], cx: &App) -> Formatted {
+    // Opaque colours: GPUI blends a highlight's colour into the run's
+    // (style::over_background).
+    let (link, quoted, bar) = (
+        style::link_text(cx),
+        style::over_background(style::secondary_label(cx), cx),
+        style::over_background(style::tertiary_label(cx), cx),
+    );
+    let (code_bg, mono) = (
+        style::inline_code_background(cx),
+        cx.theme().mono_font_family.clone(),
+    );
+    let mut text = String::new();
+    let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    let mut code: Vec<(Range<usize>, SharedString)> = Vec::new();
+    let mut links: Vec<(Range<usize>, String)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            text.push('\n');
+        }
+        if line.quote {
+            // The bar of a Slack quote, fainter than its words.
+            highlights.push((
+                text.len()..text.len() + QUOTE_BAR.len(),
+                HighlightStyle {
+                    color: Some(bar),
+                    ..Default::default()
+                },
+            ));
+            text.push_str(QUOTE_BAR);
+        }
+        for span in &line.spans {
+            let range = text.len()..text.len() + span.text.len();
+            text.push_str(&span.text);
+            let mut look = HighlightStyle::default();
+            if line.quote {
+                look.color = Some(quoted);
+            }
+            if span.bold {
+                look.font_weight = Some(FontWeight::SEMIBOLD);
+            }
+            if span.italic {
+                look.font_style = Some(FontStyle::Italic);
+            }
+            if span.strike {
+                look.strikethrough = Some(StrikethroughStyle {
+                    thickness: gpui_kit::px(1.),
+                    color: None,
+                });
+            }
+            if span.code {
+                look.background_color = Some(code_bg);
+                code.push((range.clone(), mono.clone()));
+            }
+            if let Some(url) = &span.link {
+                look.color = Some(link);
+                links.push((range.clone(), url.clone()));
+            }
+            if look != HighlightStyle::default() && !range.is_empty() {
+                highlights.push((range, look));
+            }
+        }
+    }
+    Formatted {
+        text,
+        highlights,
+        code,
+        links,
+    }
+}
+
+/// A draft drawn as its box draws it, formatting and links and all, for
+/// the draft Mike sent under his bubble's chip (rows.rs, `edited_drafts`).
+pub(crate) fn sent_draft(
+    id: impl Into<ElementId>,
+    draft: &DraftBlock,
+    origin: Origin,
+    cwd: String,
+    cx: &App,
+) -> AnyElement {
+    let Formatted {
+        text,
+        highlights,
+        code,
+        links,
+    } = formatted(&draft.drawn_lines(), cx);
+    let styled = StyledText::new(text)
+        .with_highlights(highlights)
+        .with_font_family_overrides(code);
+    let ranges: Vec<Range<usize>> = links.iter().map(|(r, _)| r.clone()).collect();
+    let urls: Vec<String> = links.into_iter().map(|(_, u)| u).collect();
+    InteractiveText::new(id, styled)
+        .on_click(ranges, move |ix, _, cx| {
+            if let Some(url) = urls.get(ix) {
+                open_gate::open_link(url, origin, &cwd, cx);
+            }
+        })
+        .into_any_element()
+}
+
 /// The draft's lines as one piece of text, kept as the agent wrote them,
 /// with Slack's formatting or an email's bare addresses as links: one piece,
 /// so a drag across them selects them, a double click a word, and ⌘C copies
@@ -620,68 +730,12 @@ impl DraftText {
         handle: TextSelectionHandle,
         cx: &App,
     ) -> Self {
-        // Opaque colours: GPUI blends a highlight's colour into the run's
-        // (style::over_background).
-        let (link, quoted, bar) = (
-            style::link_text(cx),
-            style::over_background(style::secondary_label(cx), cx),
-            style::over_background(style::tertiary_label(cx), cx),
-        );
-        let (code_bg, mono) = (
-            style::inline_code_background(cx),
-            cx.theme().mono_font_family.clone(),
-        );
-        let mut text = String::new();
-        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
-        let mut code: Vec<(Range<usize>, SharedString)> = Vec::new();
-        let mut links: Vec<(Range<usize>, String)> = Vec::new();
-        for (i, line) in lines.iter().enumerate() {
-            if i > 0 {
-                text.push('\n');
-            }
-            if line.quote {
-                // The bar of a Slack quote, fainter than its words.
-                highlights.push((
-                    text.len()..text.len() + QUOTE_BAR.len(),
-                    HighlightStyle {
-                        color: Some(bar),
-                        ..Default::default()
-                    },
-                ));
-                text.push_str(QUOTE_BAR);
-            }
-            for span in &line.spans {
-                let range = text.len()..text.len() + span.text.len();
-                text.push_str(&span.text);
-                let mut look = HighlightStyle::default();
-                if line.quote {
-                    look.color = Some(quoted);
-                }
-                if span.bold {
-                    look.font_weight = Some(FontWeight::SEMIBOLD);
-                }
-                if span.italic {
-                    look.font_style = Some(FontStyle::Italic);
-                }
-                if span.strike {
-                    look.strikethrough = Some(StrikethroughStyle {
-                        thickness: gpui_kit::px(1.),
-                        color: None,
-                    });
-                }
-                if span.code {
-                    look.background_color = Some(code_bg);
-                    code.push((range.clone(), mono.clone()));
-                }
-                if let Some(url) = &span.link {
-                    look.color = Some(link);
-                    links.push((range.clone(), url.clone()));
-                }
-                if look != HighlightStyle::default() && !range.is_empty() {
-                    highlights.push((range, look));
-                }
-            }
-        }
+        let Formatted {
+            text,
+            highlights,
+            code,
+            links,
+        } = formatted(lines, cx);
         let styled = StyledText::new(text.clone())
             .with_highlights(highlights)
             .with_font_family_overrides(code);

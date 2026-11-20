@@ -185,5 +185,11 @@ import Testing
         #expect(DraftBlock.splitEdited("\(one)\n\nand another thing") == nil)
         #expect(DraftBlock.splitEdited("He said \(intro)\n\n```email\nx\n```") == nil)
         #expect(DraftBlock.splitEdited("\(intro)\n\n```python\nx\n```") == nil)
+        // A draft that quotes the line itself still comes apart at the real one.
+        #expect(DraftBlock.splitEdited("ok\n\n\(intro)\n\n```email\nThe app said:\n\n\(intro)\n```")?.words == "ok")
+        // A long one is shown too, and Windows line ends are plain ones.
+        let long = String(repeating: "x", count: DraftBlock.maxSource + 1)
+        #expect(DraftBlock.splitEdited("\(intro)\n\n```draft\n\(long)\n```")?.drafts.first?.source == long)
+        #expect(DraftBlock.splitEdited("\(intro)\n\n```email\na\r\nb\n```")?.drafts.first?.source == "a\nb")
     }
 }

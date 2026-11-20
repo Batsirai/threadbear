@@ -78,6 +78,7 @@ pub fn edited_message(edits: &[(DraftKind, String)]) -> String {
             longest = longest.max(run);
         }
         let fence = "`".repeat((longest + 1).max(3));
+        let text = text.replace("\r\n", "\n");
         out.push_str(&format!(
             "\n\n{fence}{}\n{}\n{fence}",
             kind.fence_word(),
@@ -98,10 +99,20 @@ const EDITED_MANY: &str =
 /// message doesn't end that way; then it's shown as it is. The website
 /// (web/src/draft.ts, `splitEdited`) reads it the same way.
 pub fn split_edited(text: &str) -> Option<(String, Vec<DraftBlock>)> {
-    let (at, intro) = [EDITED_ONE, EDITED_MANY]
+    // From the first one: a draft can hold the line itself, and Mike's own
+    // words can too, so each place it starts a paragraph is tried until one
+    // is followed by nothing but drafts.
+    let mut starts: Vec<(usize, &str)> = [EDITED_ONE, EDITED_MANY]
         .iter()
-        .filter_map(|intro| text.rfind(intro).map(|at| (at, *intro)))
-        .max_by_key(|(at, _)| *at)?;
+        .flat_map(|intro| text.match_indices(intro).map(|(at, _)| (at, *intro)))
+        .collect();
+    starts.sort_by_key(|(at, _)| *at);
+    starts
+        .into_iter()
+        .find_map(|(at, intro)| split_at(text, at, intro))
+}
+
+fn split_at(text: &str, at: usize, intro: &str) -> Option<(String, Vec<DraftBlock>)> {
     // Its own paragraph: at the start, or after a blank line.
     if at != 0 && !text[..at].ends_with("\n\n") {
         return None;
@@ -115,12 +126,17 @@ pub fn split_edited(text: &str) -> Option<(String, Vec<DraftBlock>)> {
         }
         let fence = &after[..ticks];
         let line_end = after.find('\n')?;
-        let word = &after[ticks..line_end];
+        let kind = DraftKind::from_word(&after[ticks..line_end])?;
         let body_and_rest = &after[line_end + 1..];
         let close = format!("\n{fence}");
         let end = find_closing(body_and_rest, &close)?;
-        let draft = DraftBlock::from(Some(word), &body_and_rest[..end])?;
-        drafts.push(draft);
+        // Whatever length it is: what was sent is shown, not refused as a
+        // reply's draft over MAX_SOURCE would be.
+        let source = body_and_rest[..end].replace("\r\n", "\n");
+        if source.trim().is_empty() {
+            return None;
+        }
+        drafts.push(DraftBlock { kind, source });
         rest = &body_and_rest[end + close.len()..];
     }
     if drafts.is_empty() || !rest.trim().is_empty() || (intro == EDITED_ONE) != (drafts.len() == 1)
@@ -978,6 +994,37 @@ mod tests {
         assert!(split_edited(&format!("{one}\n\nand another thing")).is_none());
         assert!(split_edited("He said I edited your draft. Use my version below exactly as it is, not yours:\n\n```email\nx\n```").is_none());
         assert!(split_edited("I edited your draft. Use my version below exactly as it is, not yours:\n\n```python\nx\n```").is_none());
+        // A draft that quotes the line itself still comes apart at the real one.
+        let quoting = format!(
+            "ok\n\n{}",
+            edited_message(&[(
+                DraftKind::Email,
+                format!("The app said:\n\n{}", super::EDITED_ONE)
+            )])
+        );
+        let (words, drafts) = split_edited(&quoting).unwrap();
+        assert_eq!(words, "ok");
+        assert!(drafts[0].source.ends_with(super::EDITED_ONE));
+        // A long one is shown too, past the size a reply's box takes.
+        let long = "x".repeat(super::MAX_SOURCE + 1);
+        assert_eq!(
+            split_edited(&edited_message(&[(DraftKind::Draft, long.clone())]))
+                .unwrap()
+                .1[0]
+                .source,
+            long
+        );
+        // Pasted Windows line ends go as plain ones.
+        assert_eq!(
+            split_edited(&edited_message(&[(
+                DraftKind::Email,
+                "a\r\nb\r\n".to_owned()
+            )]))
+            .unwrap()
+            .1[0]
+                .source,
+            "a\nb"
+        );
     }
 
     #[test]

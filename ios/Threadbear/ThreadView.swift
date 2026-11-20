@@ -961,7 +961,7 @@ struct MessageView: View {
     /// An answer to a review reads as the Mac shows it: the review's icon
     /// and title small, then what he picked and his notes (Mike, 29 Oct).
     @ViewBuilder private var userText: some View {
-        if let review = ReviewAnswer.parse(message.text) {
+        if let review = ReviewAnswer.parse(edited.words) {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(review.lines.enumerated()), id: \.offset) { i, line in
                     VStack(alignment: .leading, spacing: 2) {

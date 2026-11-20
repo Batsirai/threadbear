@@ -53,25 +53,49 @@ public struct DraftBlock: Hashable, Sendable {
     /// bubble shows a chip for each rather than the line asking the agent
     /// to use them and the raw fences. Nil when it doesn't end that way.
     public static func splitEdited(_ text: String) -> (words: String, drafts: [DraftBlock])? {
-        let found = [editedOne, editedMany].compactMap { intro in text.range(of: intro, options: .backwards).map { (intro, $0) } }
-            .max { $0.1.lowerBound < $1.1.lowerBound }
-        guard let (intro, range) = found else { return nil }
+        // Worked on as Unicode scalars, as the Mac and the website count, so
+        // a "\r\n" isn't one Character that hides the "\n" before a fence.
+        let plain = text
+        // From the first one: a draft can hold the line itself, and his own
+        // words can too, so each place it starts a paragraph is tried until
+        // one is followed by nothing but drafts.
+        var starts: [(Range<String.Index>, String)] = []
+        for intro in [editedOne, editedMany] {
+            var from = plain.startIndex
+            while let found = plain.range(of: intro, options: .literal, range: from..<plain.endIndex) {
+                starts.append((found, intro))
+                from = plain.unicodeScalars.index(after: found.lowerBound)
+            }
+        }
+        starts.sort { $0.0.lowerBound < $1.0.lowerBound }
+        for (range, intro) in starts {
+            if let split = splitAt(plain, range, intro) { return split }
+        }
+        return nil
+    }
+
+    private static func splitAt(_ text: String, _ range: Range<String.Index>, _ intro: String) -> (words: String, drafts: [DraftBlock])? {
         let before = text[..<range.lowerBound]
-        guard before.isEmpty || before.hasSuffix("\n\n") else { return nil }
-        var rest = Substring(text[range.upperBound...])
+        guard before.isEmpty || Array(before.unicodeScalars.suffix(2)) == ["\n", "\n"] else { return nil }
+        var rest = Substring(text[range.upperBound...]).unicodeScalars
         var drafts: [DraftBlock] = []
-        while rest.hasPrefix("\n\n") {
+        while rest.starts(with: "\n\n".unicodeScalars) {
             let after = rest.dropFirst(2)
             let ticks = after.prefix { $0 == "`" }.count
             guard ticks >= 3, let lineEnd = after.firstIndex(of: "\n") else { return nil }
-            let word = String(after[after.index(after.startIndex, offsetBy: ticks)..<lineEnd])
+            let word = String(String.UnicodeScalarView(after[after.index(after.startIndex, offsetBy: ticks)..<lineEnd]))
+            guard let kind = Kind(rawValue: word) else { return nil }
             let body = after[after.index(after: lineEnd)...]
             let close = "\n" + String(repeating: "`", count: ticks)
-            guard let end = closing(body, close), let draft = from(language: word, code: String(body[..<end.lowerBound])) else { return nil }
-            drafts.append(draft)
+            guard let end = closing(body, close) else { return nil }
+            // Whatever length it is: what was sent is shown.
+            let source = String(String.UnicodeScalarView(body[..<end.lowerBound])).replacingOccurrences(of: "\r\n", with: "\n")
+            guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            drafts.append(DraftBlock(kind: kind, source: source))
             rest = body[end.upperBound...]
         }
-        guard !drafts.isEmpty, rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (intro == editedOne) == (drafts.count == 1) else { return nil }
+        let tail = String(String.UnicodeScalarView(rest))
+        guard !drafts.isEmpty, tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (intro == editedOne) == (drafts.count == 1) else { return nil }
         var words = String(before)
         while let last = words.last, last.isWhitespace { words.removeLast() }
         return (words, drafts)
@@ -79,12 +103,18 @@ public struct DraftBlock: Hashable, Sendable {
 
     /// Where a draft's closing fence is: on a line of its own, with only
     /// the end or a new paragraph after it.
-    private static func closing(_ text: Substring, _ close: String) -> Range<Substring.Index>? {
+    private static func closing(_ text: String.UnicodeScalarView.SubSequence, _ close: String) -> Range<String.UnicodeScalarView.Index>? {
+        let close = Array(close.unicodeScalars)
         var from = text.startIndex
-        while let found = text.range(of: close, range: from..<text.endIndex) {
-            let after = text[found.upperBound...]
-            if after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || after.hasPrefix("\n\n") { return found }
-            from = text.index(after: found.lowerBound)
+        while from < text.endIndex {
+            guard let first = text[from...].firstIndex(of: close[0]) else { return nil }
+            let candidate = text[first...]
+            if candidate.starts(with: close) {
+                let end = text.index(first, offsetBy: close.count)
+                let after = String(String.UnicodeScalarView(text[end...]))
+                if after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || after.hasPrefix("\n\n") { return first..<end }
+            }
+            from = text.index(after: first)
         }
         return nil
     }

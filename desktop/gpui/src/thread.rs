@@ -2260,8 +2260,10 @@ impl ThreadPane {
     /// work link does: the composer's chip for a changed draft shows where
     /// the draft is (composer_drafts.rs).
     pub(crate) fn reveal_row(&mut self, row_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // A reply that's folded away or not loaded: a beep, so the click
+        // doesn't look missed (`open_work_link`'s).
         let Some(index) = self.feed.model().index_of(row_id) else {
-            return;
+            return crate::composer_answers::beep();
         };
         self.scroller
             .update(cx, |s, cx| s.scroll_to_row(index, px(0.), cx));

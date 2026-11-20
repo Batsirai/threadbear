@@ -226,4 +226,11 @@ test('a sent message gives back its edited drafts, as draft_block.rs does', () =
   assert.equal(splitEdited(`${one}\n\nand another thing`), undefined);
   assert.equal(splitEdited(`He said ${intro}\n\n\`\`\`email\nx\n\`\`\``), undefined);
   assert.equal(splitEdited(`${intro}\n\n\`\`\`python\nx\n\`\`\``), undefined);
+  // A draft that quotes the line itself still comes apart at the real one.
+  const quoting = `ok\n\n${intro}\n\n\`\`\`email\nThe app said:\n\n${intro}\n\`\`\``;
+  assert.equal(splitEdited(quoting)?.words, 'ok');
+  // A long one is shown too.
+  const long = 'x'.repeat(maxSource + 1);
+  assert.equal(splitEdited(`${intro}\n\n\`\`\`draft\n${long}\n\`\`\``)?.drafts[0]?.source, long);
+  assert.equal(splitEdited(`${intro}\n\n\`\`\`email\na\r\nb\n\`\`\``)?.drafts[0]?.source, 'a\nb');
 });
