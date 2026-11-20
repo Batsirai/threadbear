@@ -25,7 +25,7 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -275,23 +275,32 @@ impl SidePane {
 
     /// The review the thread's message box answers when it's sent: the
     /// newest one still waiting that has options ticked, or None of them
-    /// chosen, with its ticks as the app shows them. `waiting` are the
-    /// thread's pending reviews as the transcript has them. A tick shows
-    /// before the runner has it, so the app's copy comes first: with only
-    /// the runner's, Return in an empty box straight after a first tick
-    /// allowed a waiting tool, and words sent then put the review aside
-    /// unanswered (Codex's second review, 20 Nov).
-    pub(crate) fn review_to_answer(&self, thread_id: &str, waiting: Vec<DesignReview>) -> Option<DesignReview> {
-        // The transcript's copy only where the app has none as new.
-        let mut all: Vec<DesignReview> = waiting.into_iter().filter(|review| !self.reviews.ticks.get(&review.id).is_some_and(|t| t.saving || t.again || t.review.revision >= review.revision)).collect();
-        for ticks in self.reviews.ticks.values().filter(|t| t.thread_id == thread_id && t.review.is_pending()) {
-            if all.iter().all(|r| r.id != ticks.review.id) {
-                let mut review = ticks.review.clone();
-                review.draft.picked_ids = ticks.picked.clone();
-                all.push(review);
-            }
-        }
+    /// chosen, with its ticks as the app shows them. `known` are the
+    /// thread's reviews as the transcript has them, finished ones too. A
+    /// tick shows before the runner has it, so the app's copy comes first
+    /// where it's as new or has a tick on its way: with only the runner's,
+    /// Return in an empty box straight after a first tick allowed a waiting
+    /// tool, and words sent then put the review aside unanswered (Codex's
+    /// second review, 20 Nov). Where the transcript's is newer (it caught
+    /// up on one answered while the app was away), that's what counts.
+    pub(crate) fn review_to_answer(&self, thread_id: &str, known: Vec<DesignReview>) -> Option<DesignReview> {
+        let mine = |ticks: &Ticks| {
+            let mut review = ticks.review.clone();
+            review.draft.picked_ids = ticks.picked.clone();
+            review
+        };
+        let ids: HashSet<String> = known.iter().map(|r| r.id.clone()).collect();
+        let mut all: Vec<DesignReview> = known
+            .into_iter()
+            .map(|review| match self.reviews.ticks.get(&review.id) {
+                Some(ticks) if ticks.saving || ticks.again || ticks.review.revision >= review.revision => mine(ticks),
+                _ => review,
+            })
+            .collect();
+        // And one further back than the transcript has loaded.
+        all.extend(self.reviews.ticks.values().filter(|t| t.thread_id == thread_id && !ids.contains(&t.review.id)).map(mine));
         all.into_iter()
+            .filter(DesignReview::is_pending)
             .filter_map(|mut review| {
                 // Ticks or None, never both.
                 if !review.draft.picked_ids.is_empty() {
@@ -310,9 +319,18 @@ impl SidePane {
     /// app's own update, so nothing here reads the app: the closing waits
     /// until that's over.
     pub(crate) fn review_updated(&mut self, thread_id: &str, review: &DesignReview, cx: &mut Context<Self>) {
-        let Some(ticks) = self.reviews.ticks.get_mut(&review.id) else { return };
+        if self.take_review(thread_id, review, cx) {
+            self.review_ticks_changed(thread_id, cx);
+            cx.notify();
+        }
+    }
+
+    /// The app's copy of a review brought up to a newer one: false if it
+    /// has none, or one as new.
+    fn take_review(&mut self, thread_id: &str, review: &DesignReview, cx: &mut Context<Self>) -> bool {
+        let Some(ticks) = self.reviews.ticks.get_mut(&review.id) else { return false };
         if review.revision < ticks.review.revision {
-            return;
+            return false;
         }
         let was_pending = ticks.review.is_pending();
         // Ticks being saved are ahead of this.
@@ -334,8 +352,7 @@ impl SidePane {
                 });
             });
         }
-        self.review_ticks_changed(thread_id, cx);
-        cx.notify();
+        true
     }
 
     pub(crate) fn render_review(&mut self, thread: &ThreadSummary, id: &str, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -344,6 +361,15 @@ impl SidePane {
         let now = look(cx);
         let main = self.app.upgrade().is_some_and(|app| app.read(cx).main_window == window.window_handle());
         let closed = "This review isn't open any more. Its card in the thread opens it again.";
+        // The transcript may know better: it catches up on what the app
+        // missed while the runner was away (one answered or put aside from
+        // somewhere else), and no event comes for that.
+        let caught_up = self.app.upgrade().and_then(|app| app.read(cx).pane.clone()).filter(|pane| pane.read(cx).summary.id == thread.id).and_then(|pane| pane.read(cx).review_row(id));
+        if let Some(newer) = caught_up.filter(|row| self.reviews.ticks.get(id).is_some_and(|t| row.revision > t.review.revision)) {
+            if self.take_review(&thread.id, &newer, cx) {
+                self.review_ticks_changed(&thread.id, cx);
+            }
+        }
         let Some((review, picked, error)) = self.reviews.ticks.get(id).map(|t| (t.review.clone(), t.picked.clone(), t.error.clone())) else { return note(closed) };
         let Some(open) = self.reviews.open.get_mut(&thread.id).filter(|o| o.review_id == id) else { return note(closed) };
         let Some(folder) = folder(&review) else { return note("This review's pictures aren't where Threadbear keeps them on this Mac, so its page can't show.") };
@@ -484,6 +510,13 @@ impl SidePane {
                 }
                 // A tick made while that one was on its way.
                 save_again = again && ticks.review.is_pending();
+                // With nothing of the app's own left to save, the ticks are
+                // the newest copy's: a change from somewhere else that came
+                // while this was out, and was held back for it, shows now
+                // (Codex's fourth review, 20 Nov).
+                if !save_again {
+                    ticks.picked = shown_picks(&ticks.review);
+                }
             }
             Ok(None) => ticks.error = Some("The runner's answer to that tick didn't make sense.".to_owned()),
             Err(e) => {
@@ -526,19 +559,27 @@ impl SidePane {
 }
 
 impl crate::thread::ThreadPane {
-    /// The thread's reviews still waiting, as the transcript has them, for
-    /// working out which one its message box answers
+    /// The thread's reviews as the transcript has them, finished ones too,
+    /// for working out which one its message box answers
     /// (`SidePane::review_to_answer`). None unless the experiment's on and
     /// the thread is this Mac's own: another Mac's reviews open there.
-    pub(crate) fn pending_reviews(&self, cx: &App) -> Option<Vec<DesignReview>> {
+    pub(crate) fn known_reviews(&self, cx: &App) -> Option<Vec<DesignReview>> {
         if !is_on(cx) || self.summary.runner_id.is_some() {
             return None;
         }
-        let waiting = self.feed.model().rows().iter().filter_map(|row| match &row.content {
-            RowContent::Review(review) if review.is_pending() => Some(review.clone()),
+        let reviews = self.feed.model().rows().iter().filter_map(|row| match &row.content {
+            RowContent::Review(review) => Some(review.clone()),
             _ => None,
         });
-        Some(waiting.collect())
+        Some(reviews.collect())
+    }
+
+    /// One of the thread's reviews as the transcript has it.
+    pub(crate) fn review_row(&self, review_id: &str) -> Option<DesignReview> {
+        self.feed.model().rows().iter().find_map(|row| match &row.content {
+            RowContent::Review(review) if review.id == review_id => Some(review.clone()),
+            _ => None,
+        })
     }
 }
 

@@ -122,6 +122,13 @@ pub struct Composer {
     /// with the ticks that went: its chips show dimmed with a spinner, and
     /// nothing else is sent from here until it's back.
     review_sending: Option<threadbear_core::reducer::DesignReview>,
+    /// An answer given back because the runner never said whether it took
+    /// it: the review, the answer as sent, and the box's words and how many
+    /// pictures as given back. If the review then turns out answered with
+    /// just that, and the box still holds just those words, they're taken
+    /// out again rather than left to go a second time as a message. It
+    /// changes nothing about what Send does.
+    review_given_back: Option<(String, threadbear_core::reducer::ReviewDraft, String, usize)>,
     /// The box as it was before an edit that's been sent, to put back at the
     /// next render with its undo history.
     pending_saved: Option<SavedBox>,
@@ -276,6 +283,7 @@ impl Composer {
             editing: None,
             pending_box: None,
             review_sending: None,
+            review_given_back: None,
             pending_saved: None,
             held_extras: Vec::new(),
             pending_mentions: vec![],
@@ -647,9 +655,9 @@ impl Composer {
             return None;
         }
         let thread_id = self.thread_id.as_deref()?;
-        let waiting = self.pane()?.read(cx).pending_reviews(cx)?;
+        let known = self.pane()?.read(cx).known_reviews(cx)?;
         let side = self.app.upgrade()?.read(cx).side.clone();
-        side.read(cx).review_to_answer(thread_id, waiting)
+        side.read(cx).review_to_answer(thread_id, known)
     }
 
     /// Sends the box as `review`'s answer: its ticks, `words` as the reply
@@ -667,8 +675,11 @@ impl Composer {
     /// The same answer twice is the first one, so a try that got no answer
     /// (the runner restarting, the connection dropped with it out) is
     /// simply made again, three times at most. A refusal has the review
-    /// read again: one that changed (a tick still on its way) is sent once
-    /// more at its new revision, and anything else is the runner's no.
+    /// read again: one that changed (a tick still on its way, or two) is
+    /// sent again at its new revision, and anything else is the runner's
+    /// no. If the runner never says either way the words are given back,
+    /// and taken out again if the answer then shows as gone
+    /// (`review_given_back`).
     /// (Between these two a second and third review found a kept "ask
     /// again later" copy sending ticks since taken off, and a locked box
     /// losing what was added to it.) False when there's no thread to send
@@ -693,7 +704,7 @@ impl Composer {
         cx.notify();
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
-            let (mut revision, mut read_again, mut tries, mut latest) = (review.revision, false, 0, None::<DesignReview>);
+            let (mut revision, mut reads, mut tries, mut latest) = (review.revision, 0, 0, None::<DesignReview>);
             // Ok, or why not and whether it may have gone all the same.
             let sent: Result<(), (String, bool)> = loop {
                 tries += 1;
@@ -714,8 +725,10 @@ impl Composer {
                 }
                 latest = crate::call(client.clone(), "reviews.get", json!({ "threadId": thread_id, "reviewId": review.id })).await.ok().and_then(|v| DesignReview::decode(&v["review"]));
                 match &latest {
-                    Some(now) if !read_again && now.is_pending() && now.revision != revision => {
-                        read_again = true;
+                    // A tick's save landed between: one on its way and one
+                    // queued behind it can each move the revision on.
+                    Some(now) if reads < 3 && now.is_pending() && now.revision != revision => {
+                        reads += 1;
                         revision = now.revision;
                     }
                     _ => break Err((refused.message, false)),
@@ -733,6 +746,9 @@ impl Composer {
                         }
                     }
                     Err((why, unsure)) => {
+                        if unsure && !(draft.text.is_empty() && draft.images.is_empty()) {
+                            this.review_given_back = Some((review.id.clone(), answer.clone(), draft.text.clone(), draft.images.len()));
+                        }
                         this.restore_draft(draft, cx);
                         // The review as the runner has it now, so chips for
                         // one that's over don't stay.
@@ -756,6 +772,27 @@ impl Composer {
         })
         .detach();
         true
+    }
+
+    /// An answer given back as maybe not sent that did go: once the
+    /// transcript has its review answered with just that answer, the words
+    /// given back come out of the box, if they're still all it holds, so
+    /// they can't go again as a message (Codex's fourth review, 20 Nov).
+    /// A review that ended any other way leaves them: they're his to send.
+    fn take_back_answered(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Not until they're back in the box.
+        if self.restore.is_some() || self.editing.is_some() {
+            return;
+        }
+        let Some((review_id, answer, text, pictures)) = self.review_given_back.clone() else { return };
+        let Some(now) = self.pane().and_then(|pane| pane.read(cx).review_row(&review_id)).filter(|now| !now.is_pending()) else { return };
+        self.review_given_back = None;
+        let words = |draft: &threadbear_core::reducer::ReviewDraft| draft.reply.as_deref().unwrap_or("").trim().to_owned();
+        let went = now.status == "answered" && now.response.as_ref().is_some_and(|sent| sent.picked_ids == answer.picked_ids && sent.none == answer.none && words(sent) == words(&answer) && sent.images.len() == answer.images.len());
+        let (box_text, box_images) = self.draft(cx);
+        if went && box_text == text && box_images.len() == pictures {
+            self.set_box(String::new(), Vec::new(), window, cx);
+        }
     }
 
     /// The ticks as the dump's `composer.reviewPicks`: each option's name.
@@ -839,6 +876,8 @@ impl Composer {
         // Nothing while a review's answer is on its way: a message then
         // would put that review aside before its answer lands.
         if self.loading_pictures(cx) || self.review_sending.is_some() || self.refuse_dead_chip(cx) { return; }
+        // Whatever goes now is what he means to send.
+        self.review_given_back = None;
         // The arrow hops as Return lands, when there's something to send
         // (Mike picked it, 13 Nov). None under Reduce Motion.
         if self.can_send(cx) && !cx.reduce_motion() {
@@ -2004,6 +2043,7 @@ impl Render for Composer {
                 self.apply_restore(restore, window, cx);
             }
         }
+        self.take_back_answered(window, cx);
         let mentions = threadbear_core::board::take_mentions(&mut self.pending_mentions, self.editing.as_ref().map(|e| e.seq), self.restore.is_some());
         if !mentions.is_empty() {
             for reference in mentions {
