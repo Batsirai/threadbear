@@ -324,7 +324,7 @@ export class AcpNormalizer {
   // it, or when the call's own updates say it runs: one allowed without a
   // card may be run under another id (Antigravity's create_file, 20 Nov
   // 2026), and a row for the request would be left open, then failed.
-  noteCall(call: AcpToolCall): { id: string; paths: string[]; kind?: string; input: Record<string, unknown>; title?: string } {
+  noteCall(call: AcpToolCall): { id: string; row: string; paths: string[]; kind?: string; input: Record<string, unknown>; title?: string } {
     const id = typeof call.toolCallId === 'string' && call.toolCallId ? call.toolCallId : crypto.randomUUID();
     const t = this.tool(id);
     if (!t.framed) t.asked = true;
@@ -332,7 +332,7 @@ export class AcpNormalizer {
     const diffs = (Array.isArray(call.content) ? call.content : []).filter((c) => c?.type === 'diff');
     if (diffs.length) t.askedDiffs = diffs;
     t.askedFiles = namedFiles(call);
-    return { id, paths: [...t.paths], kind: t.acpKind, input: t.input, title: t.title };
+    return { id, row: t.row, paths: [...t.paths], kind: t.acpKind, input: t.input, title: t.title };
   }
 
   // How a request was answered: only one let go ahead can be the call an
@@ -360,8 +360,8 @@ export class AcpNormalizer {
   // with no link between the two. The new call then shows on the request's
   // row, so a card's row is the one that runs; what each call has said stays
   // its own, as the permission checks read it (Codex's review, 20 Nov 2026).
-  private askedFor(u: AcpToolCall): Tool | undefined {
-    if (!writesFiles(u.kind)) return undefined;
+  private askedFor(u: AcpToolCall, kind = u.kind): Tool | undefined {
+    if (!writesFiles(kind)) return undefined;
     const paths = namedFiles(u);
     if (!paths.length || !paths.every((p) => path.isAbsolute(p))) return undefined;
     const same = (a: string[], b: string[]) => {
@@ -370,13 +370,16 @@ export class AcpNormalizer {
       return x.size === y.size && [...x].every((p) => y.has(p));
     };
     // The oldest first: an agent runs what it asked for in turn.
-    const found = [...this.tools.values()].find((t) => t.asked && t.allowed === true && !t.framed && !t.done && t.acpKind === u.kind && (t.askedFiles ?? []).every((p) => path.isAbsolute(p)) && same(t.askedFiles ?? [], paths));
+    const found = [...this.tools.values()].find((t) => t.asked && t.allowed === true && !t.framed && !t.done && t.acpKind === kind && (t.askedFiles ?? []).every((p) => path.isAbsolute(p)) && same(t.askedFiles ?? [], paths));
     return found;
   }
 
   private toolUpdate(u: AcpToolCall, out: AdapterOutput[]): void {
     if (typeof u.toolCallId !== 'string' || !u.toolCallId) return;
-    const asked = this.tools.has(u.toolCallId) ? undefined : this.askedFor(u);
+    // Tried again until the call's row is out, as its first frame may name
+    // no file yet (Codex's review, 20 Nov 2026).
+    const had = this.tools.get(u.toolCallId);
+    const asked = !had ? this.askedFor(u) : !had.emitted && !had.asked && !had.done && had.row === had.id ? this.askedFor(u, typeof u.kind === 'string' ? u.kind : had.acpKind) : undefined;
     const t = this.tool(u.toolCallId);
     if (asked) {
       asked.done = true;

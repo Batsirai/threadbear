@@ -88,6 +88,14 @@ test('a call run under another id than its request takes over the request\'s row
   n3.noteCall({ toolCallId: 'ask3', kind: 'edit', rawInput: { TargetFile: '/w/doc.md', CodeContent: 'title\n--- section\nbody' }, content: [{ type: 'diff', path: '/w/doc.md', oldText: null, newText: 'title\n--- section\nbody' }] });
   n3.answered('ask3', true);
   assert.equal((n3.handle({ sessionUpdate: 'tool_call', toolCallId: 's:5', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/doc.md' } })[0] as { event: { itemId: string } }).event.itemId, 'ask3');
+  // A call whose first frame names no file is matched once one does, and a
+  // card it asks for later names the row it shows on.
+  const n4 = new AcpNormalizer(ctx);
+  n4.noteCall({ toolCallId: 'ask4', kind: 'edit', rawInput: { TargetFile: '/w/b.js' } });
+  n4.answered('ask4', true);
+  assert.deepEqual(n4.handle({ sessionUpdate: 'tool_call', toolCallId: 's:6', kind: 'edit', status: 'pending', rawInput: {} }), []);
+  assert.equal((n4.handle({ sessionUpdate: 'tool_call_update', toolCallId: 's:6', status: 'in_progress', rawInput: { file_path: '/w/b.js' } })[0] as { event: { itemId: string } }).event.itemId, 'ask4');
+  assert.equal(n4.noteCall({ toolCallId: 's:6', kind: 'edit', rawInput: { file_path: '/w/b.js' } }).row, 'ask4');
   // One allowed without a card that never ran is gone at the turn's end.
   const n2 = new AcpNormalizer(ctx);
   n2.noteCall({ toolCallId: 'ask2', kind: 'edit', rawInput: { TargetFile: '/w/a.js' } });

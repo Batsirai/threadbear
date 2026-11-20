@@ -843,7 +843,9 @@ export class AcpSession implements AgentSession {
     let a: ToolApprovalAnswer;
     try {
       a = await this.sink.requestApproval({
-        toolUseId: typeof p.toolCall?.toolCallId === 'string' ? p.toolCall.toolCallId : undefined,
+        // The row the call shows on, which may be an earlier request's
+        // (normalize.ts, askedFor).
+        toolUseId: typeof p.toolCall?.toolCallId === 'string' && p.toolCall.toolCallId !== '' ? seen.row : undefined,
         // As an MCP tool's, for anything else: a card whose arguments say
         // what it does can only be allowed where all of them are shown.
         name: shellCard ? 'shell' : edits ? 'apply_patch' : `mcp__acp__${external ? 'mcp' : (kind ?? 'tool')}`,
