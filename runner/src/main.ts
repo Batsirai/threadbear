@@ -1785,8 +1785,21 @@ async function main(): Promise<void> {
   // must find this one's drain file, a free port and a free lock.
   let drainServer: RpcServer | undefined;
   let primaryHeard = false;
-  const handOver = async (keeps: string[]) => {
+  let mailFirst = false;
+  const handOver = async (busy: string[]) => {
+    if (draining || stopping || mailFirst) return;
+    // The new release looks at mail from here on, not both: a draining
+    // runner can't start threads, so its lists failed (THREADBEAR-2G). A
+    // look under way finishes first, while this runner is still the primary
+    // in every way, and before the new runner is asked for (requestHandover,
+    // below), so the two never look at once. One that hangs is given up
+    // after three minutes, keeping what it had finished.
+    mailFirst = true;
+    await mailWatch.stopAndWait(180_000);
+    mailFirst = false;
     if (draining || stopping) return;
+    // A thread that look started or woke is busy now: it's kept like the rest.
+    const keeps = [...new Set([...busy, ...restarter.busyThreads()])];
     draining = true;
     log.info('starting the handover', { keeps });
     try {
