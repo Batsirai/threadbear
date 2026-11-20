@@ -43,15 +43,16 @@
 # The deploy tests (a few minutes) only run when something they cover
 # changed from main: runner/scripts/, launch.mjs, the launcher or the tests
 # themselves. The Swift Mac app is frozen (scripts/swift-freeze.sh), so its
-# build and tests only run when something in app/ or dock/ it builds from
-# changed: not the parts the GPUI app uses (the mock runner, fixtures, art),
+# build and tests only run when something it builds from changed (app/ and
+# dock/, and the iPhone kit's files app/ links to: SWIFT_NEEDS, below): not
+# what it shares with the GPUI app (the mock runner, shared/'s art and Pele),
 # whose own checks are the desktop app's. Except that a change to the mock
 # runner, or to the Swift tests that read it, runs just those tests
 # (swift test --filter, swift-freeze.sh --mock-tests), --quick included,
 # so it needs a Mac. BearDock's tests only run when
 # dock/ changed (the app's own build and tests cover how it uses it). The iPhone app's ThreadbearKit
-# tests run with any of the options when ios/ changed, or a Mac app file
-# ThreadbearKit links to (IOS_NEEDS, below), --quick included, so
+# tests run with any of the options when ios/ or shared/cases changed
+# (IOS_NEEDS, below), --quick included, so
 # `tb land` runs them (MicTapTests guards a crash the phone hit twice). On
 # main itself, with nothing changed, everything but the Swift app runs.
 #
