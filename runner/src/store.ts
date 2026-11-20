@@ -20,6 +20,8 @@ export type QueuedSend = { beforeMessage?: true; retryAfterInterrupt?: true; pre
 // What thread.json holds: the public summary fields plus a few internal ones.
 // A report held for a thread from one it started (runner/nested.ts).
 export type HeldReport = { from: string; text: string; at: string };
+// An email kept for a thread's next turn (runner/mail.ts).
+export type HeldMail = { text: string; at: string };
 export type PressNote = { id: string; line: string; told?: { seq: number; inFlight?: boolean } };
 
 // A thread's press notes as read from disk, where another runner may have
@@ -55,7 +57,7 @@ export function cleanPresses(raw: unknown): PressNote[] | undefined {
 // summary and the start loop walk these for every thread: `presses: {}`,
 // then `queue: {}`, stopped the runner at every start (security review and
 // Muse's review of the fix, 11 Nov 2026, finding 96). True if it changed.
-const OBJECT_LISTS = ['heldReports', 'waitingOn', 'reviews', 'buttons', 'subagents', 'projects', 'rewinds', 'queue', 'messageRecoveries'];
+const OBJECT_LISTS = ['heldReports', 'heldMail', 'waitingOn', 'reviews', 'buttons', 'subagents', 'projects', 'rewinds', 'queue', 'messageRecoveries'];
 const STRING_LISTS = ['reviewDeliveries', 'allowRules', 'pendingApprovals', 'projectsLeft', 'projectsTold'];
 const NUMBER_LISTS = ['interruptedMessages'];
 const OBJECTS = ['needs', 'looseEnds', 'stoppedWork', 'stoppedMidTurn', 'highlights', 'worktree', 'handoff', 'moved', 'startedBy', 'labReview', 'labReviewOwed', 'reviewVerdict', 'finished'];
@@ -251,6 +253,8 @@ export type ThreadRecord = {
   // Reports the threads it started sent it with send_message, kept until
   // none of them is working (runner/nested.ts).
   heldReports?: HeldReport[];
+  // Emails about its work, kept for its agent's next turn (runner/mail.ts).
+  heldMail?: HeldMail[];
   starredAt?: string; // Mike starred it: the Starred section, oldest star first
   preview: string;
   lastSeq: number;

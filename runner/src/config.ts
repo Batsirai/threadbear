@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { RELEASE } from './release.ts';
 import { gatewayBase, gatewayUrlFrom } from './connectors.ts';
+import type { MailWatchSettings } from './mail-watch.ts';
 import { credentialUrlProblem } from './secure-url.ts';
 import { reviewerLists, type LabReviewer } from './lab-reviewers.ts';
 import { findGatewayClient } from './notion-tasks.ts';
@@ -275,6 +276,10 @@ export type RunnerJson = {
   // The gateway, when it isn't the `connectors` MCP server in
   // ~/.claude.json; url "" or enabled: false turns the panel's polling off.
   connectors?: { url?: string; enabled?: boolean; headersHelper?: string };
+  // The email watcher (experiment mailWatch, mail-watch.ts): the command
+  // that prints new emails, how often, when the pile comes, and the
+  // decisions it may act on.
+  mailWatch?: MailWatchSettings;
 };
 
 // What defaults.permissionMode may be. Not Plan first: that waits for Mike

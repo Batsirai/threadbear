@@ -610,6 +610,17 @@ File references are where to look.
   turns it off. It keeps what it last said in `runner/spare-week.json` in
   the data folder. Find work for it in the Usage panel starts the same
   thread by hand.
+- **Your email, if you set it up** (`runner/src/mail-watch.ts`, the
+  experiment mailWatch, off unless you turn it on and give it a command):
+  every five minutes the main Mac's runner runs the command you put in
+  `runner.json`'s `mailWatch.command`, which prints your new emails. The
+  runner holds no mail login and reads no mailbox itself. Each new email's
+  sender, subject and first 1,500 characters go to the model, with the
+  titles and briefs of your recent and hibernating threads (never a private
+  folder's) and the files you list in `mailWatch.decisions`. It can wake a
+  thread, add an email to a thread's next turn, start a thread (to act on
+  an email, or the twice-daily list) and keeps `runner/mail-watch.json` in
+  the data folder (the ids it has seen and the list's emails).
 - **Your changes to the old Mac app** (`runner/src/swift-changes.ts`): a
   couple of minutes after the runner starts, then hourly, after each
   release check and when the new desktop app connects, it reads your

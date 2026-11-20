@@ -14,7 +14,7 @@ import { CallerGate } from './rpc-gate.ts';
 import { threadOfSocket } from './peer.ts';
 import { threadKey as makeThreadKey } from './rpc-auth.ts';
 import { makePrivate } from './win-acl.ts';
-import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, writeRunnerJson } from './config.ts';
+import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, peekRunnerJson, writeRunnerJson } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
 import { startBorrowSweep } from './runner/worktrees.ts';
 import { win32Helper } from './win32-helper.ts';
@@ -30,6 +30,7 @@ import { commitBefore, commitOnMain, RemoteUpdateFixer, reportedOnDisk, UpdateFi
 import { followOriginOn } from './follow-origin.ts';
 import { bringInSetting, spareWeekOn } from './settings.ts';
 import { SpareWeek } from './spare-week.ts';
+import { MAIL_WATCH, MailWatch } from './mail-watch.ts';
 import { Restarter, restartMethods } from './restart.ts';
 import { AppRestarts } from './app-restarts.ts';
 import { Scheduler, scheduleMethods } from './schedules.ts';
@@ -1074,6 +1075,33 @@ async function main(): Promise<void> {
   });
   runner.spareWeek = spareWeek;
   if (!box) spareWeek.start();
+  // The email watcher (experiment mailWatch, mail-watch.ts): new emails wake
+  // the threads waiting on them, go to the threads they're about, or wait
+  // on a pile that comes as one thread at set times. Only the main Mac's
+  // runner looks, and never a copy of the real data dir's.
+  const mailWatch = new MailWatch({
+    home: cfg.home,
+    clock: realClock,
+    log,
+    host: {
+      mailThreads: () => runner.mailThreads(),
+      wakeForMail: (id, text) => runner.wakeForMail(id, text),
+      holdMail: (id, text, line) => runner.holdMail(id, text, line),
+      send: (threadId, text, why) => {
+        if (!openThread(threadId)) return false;
+        runner.send(threadId, text, [], { origin: 'runner', queue: true, wakeReason: why });
+        return true;
+      },
+      start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, startedBy: { kind: 'runner', label: 'Email', why: r.why } }).thread.id,
+      open: openThread,
+    },
+    on: () => experimentOn(cfg.home, MAIL_WATCH),
+    looks: () => !sync.secondRunner(),
+    settings: () => peekRunnerJson(cfg.home).mailWatch,
+    generate: (p) => models.generate(p),
+    isPrivate: (cwd) => models.isPrivateFolder(cwd),
+  });
+  if (!box && !copyOfReal) mailWatch.start();
   const upstream = new Upstream({
     home: cfg.home,
     checkout: thisRelease?.checkout,
@@ -1666,6 +1694,7 @@ async function main(): Promise<void> {
     projects.stop();
     usage.stop();
     spareWeek.stop();
+    mailWatch.stop();
     signIn.stop();
     tally.stop();
     webRuntimeUpdates.stop();
