@@ -2724,7 +2724,8 @@ async function playScripted(threadId, turnId, started, turn, interrupted) {
 // message carries the turn on there, a moment later so a recording catches
 // each step. `limit: { to }` names the login it moves to (as if its pool
 // held that one too: Codex, for the X series' clip); otherwise the pool's
-// other login with the most room.
+// other login with the most room. `moveMs`: how long the limit's error
+// shows before the move (1.5 s).
 const CARRY_ON_MOVED = 'Your last login hit its usage limit partway through that turn, so this thread has moved to another one. Carry on from where you left off.';
 function limitHit(threadId, turnId, started, limit) {
   const t = threads.get(threadId);
@@ -2763,9 +2764,9 @@ function limitHit(threadId, turnId, started, limit) {
     persist(threadId, { type: 'system.note', text: note, login: true });
     broadcastSummary(threadId);
     t.timers.push(setTimeout(() => {
-      if (threads.has(threadId) && !s.archivedAt && !t.interrupt) fakeTurn(threadId, CARRY_ON_MOVED, [], undefined, 'runner');
+      if (threads.has(threadId) && !s.archivedAt && !t.interrupt) fakeTurn(threadId, CARRY_ON_MOVED, [], undefined, 'runner', { wakeReason: 'Moved to another login' });
     }, 1500));
-  }, 1500));
+  }, limit.moveMs ?? 1500));
 }
 
 function finishTurn(threadId, turnId, started, outcome, said) {
