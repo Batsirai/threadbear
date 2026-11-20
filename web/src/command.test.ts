@@ -1,0 +1,108 @@
+// node --test web/src/command.test.ts
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { COMMAND_SLOW_MS, idle, locked, step, type CommandState } from './command.ts';
+
+type P = { text: string };
+const start: CommandState<P> = idle();
+const sent = (at = 0) => step(start, { kind: 'send', payload: { text: 'hi' }, at });
+
+test('a send goes sending, then waiting once the backend has queued it', () => {
+  const s = sent(100);
+  assert.equal(s.kind, 'sending');
+  assert.deepEqual(s.kind === 'sending' && s.payload, { text: 'hi' });
+  const w = step(s, { kind: 'queued', attempt: 1, id: 'c1', at: 200 });
+  assert.deepEqual(w, { kind: 'waiting', attempt: 1, id: 'c1', since: 200, taken: false, payload: { text: 'hi' } });
+});
+
+test('the runner taking it, then finishing it, ends at done with the thread it made', () => {
+  let s = step(sent(), { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  s = step(s, { kind: 'report', id: 'c1', report: { state: 'pending' }, at: 10 });
+  assert.equal(s.kind === 'waiting' && s.taken, false);
+  s = step(s, { kind: 'report', id: 'c1', report: { state: 'taken', threadId: 't9' }, at: 500 });
+  assert.equal(s.kind, 'waiting');
+  assert.equal(s.kind === 'waiting' && s.taken, true);
+  assert.equal(s.kind === 'waiting' && s.since, 500);
+  assert.equal(s.kind === 'waiting' && s.threadId, 't9');
+  s = step(s, { kind: 'report', id: 'c1', report: { state: 'done', threadId: 't9' }, at: 600 });
+  assert.deepEqual(s, { kind: 'done', attempt: 1, id: 'c1', threadId: 't9', payload: { text: 'hi' } });
+  assert.equal(locked(s), false);
+});
+
+test('a send the backend refuses fails with its error and keeps what was sent', () => {
+  const s = step(sent(), { kind: 'queueFailed', attempt: 1, error: 'expired' });
+  assert.deepEqual(s, { kind: 'failed', attempt: 1, error: 'expired', payload: { text: 'hi' } });
+  assert.equal(locked(s), false);
+});
+
+test('a command the runner reports failed (or lapsed, which reads as failed) ends with its note', () => {
+  const w = step(sent(), { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  const f = step(w, { kind: 'report', id: 'c1', report: { state: 'failed', note: 'Its runner never said how it went' }, at: 5 });
+  assert.equal(f.kind, 'failed');
+  assert.equal(f.kind === 'failed' && f.error, 'Its runner never said how it went');
+  assert.equal(f.kind === 'failed' && f.id, 'c1');
+  const noNote = step(w, { kind: 'report', id: 'c1', report: { state: 'failed' }, at: 5 });
+  assert.equal(noNote.kind === 'failed' && noNote.error, 'unknown error');
+});
+
+test('a second press while one is on its way is ignored', () => {
+  const s = sent();
+  assert.equal(step(s, { kind: 'send', payload: { text: 'again' }, at: 1 }), s);
+  const w = step(s, { kind: 'queued', attempt: 1, id: 'c1', at: 2 });
+  assert.equal(step(w, { kind: 'send', payload: { text: 'again' }, at: 3 }), w);
+  assert.equal(locked(s), true);
+  assert.equal(locked(w), true);
+});
+
+test('a composer may send the next message once the last is queued, but never while it is still sending', () => {
+  const s = sent();
+  assert.equal(step(s, { kind: 'send', payload: { text: 'b' }, at: 1, again: true }), s);
+  const w = step(s, { kind: 'queued', attempt: 1, id: 'c1', at: 2 });
+  const next = step(w, { kind: 'send', payload: { text: 'b' }, at: 3, again: true });
+  assert.equal(next.kind, 'sending');
+  assert.equal(next.attempt, 2);
+  // The first one's late answers no longer move it.
+  assert.equal(step(next, { kind: 'report', id: 'c1', report: { state: 'failed' }, at: 4 }), next);
+});
+
+test('nothing heard in time goes slow, still locked, and still listening', () => {
+  const w = step(sent(0), { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  assert.equal(step(w, { kind: 'tick', at: COMMAND_SLOW_MS - 1 }), w);
+  const slow = step(w, { kind: 'tick', at: COMMAND_SLOW_MS });
+  assert.deepEqual(slow, { kind: 'slow', attempt: 1, id: 'c1', taken: false, payload: { text: 'hi' } });
+  assert.equal(locked(slow), true);
+  assert.equal(step(slow, { kind: 'send', payload: { text: 'x' }, at: 1 }), slow);
+  assert.equal(step(slow, { kind: 'report', id: 'c1', report: { state: 'done' }, at: 9 }).kind, 'done');
+  assert.equal(step(slow, { kind: 'report', id: 'c1', report: { state: 'failed', note: 'gone' }, at: 9 }).kind, 'failed');
+  // Dismissing it lets go: the button can be pressed again.
+  assert.deepEqual(step(slow, { kind: 'dismiss' }), { kind: 'idle', attempt: 1 });
+});
+
+test('a send that never reaches the backend goes slow too, and its late answer still lands', () => {
+  const s = sent(0);
+  const slow = step(s, { kind: 'tick', at: COMMAND_SLOW_MS });
+  assert.deepEqual(slow, { kind: 'slow', attempt: 1, taken: false, payload: { text: 'hi' } });
+  assert.equal(step(slow, { kind: 'queued', attempt: 1, id: 'c1', at: 50_000 }).kind, 'waiting');
+  assert.equal(step(slow, { kind: 'queueFailed', attempt: 1, error: 'offline' }).kind, 'failed');
+});
+
+test('answers from an earlier attempt, or another command, are ignored', () => {
+  const s = sent();
+  assert.equal(step(s, { kind: 'queued', attempt: 0, id: 'old', at: 0 }), s);
+  assert.equal(step(s, { kind: 'queueFailed', attempt: 7, error: 'x' }), s);
+  const w = step(s, { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  assert.equal(step(w, { kind: 'report', id: 'c2', report: { state: 'done' }, at: 0 }), w);
+  // Dismissed while still sending is refused: there's no taking it back.
+  assert.equal(step(s, { kind: 'dismiss' }), s);
+  // A late queued after a dismiss doesn't bring the old send back.
+  const gone = step(step(step(s, { kind: 'tick', at: COMMAND_SLOW_MS }), { kind: 'dismiss' }), { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  assert.equal(gone.kind, 'idle');
+});
+
+test('done and failed can be pressed again, and dismissed', () => {
+  const f = step(sent(), { kind: 'queueFailed', attempt: 1, error: 'x' });
+  assert.equal(step(f, { kind: 'send', payload: { text: 'again' }, at: 0 }).kind, 'sending');
+  assert.equal(step(f, { kind: 'dismiss' }).kind, 'idle');
+  const d = step(step(sent(), { kind: 'queued', attempt: 1, id: 'c1', at: 0 }), { kind: 'report', id: 'c1', report: { state: 'done' }, at: 0 });
+  assert.equal(step(d, { kind: 'send', payload: { text: 'again' }, at: 0 }).attempt, 2);
+});

@@ -9,13 +9,13 @@ import { InboxProvider, useInbox } from './inbox';
 import { useTranscript } from './transcript';
 import { ConvexError } from 'convex/values';
 import { api } from '../../convex/_generated/api';
-import type { Id } from '../../convex/_generated/dataModel';
 import { go, threadPath, useRoute } from './route';
 import { useSignInNote, useSigningIn, useToken } from './token';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { OutLink } from './link-confirm';
-import { CommandState } from './command-state';
+import { CommandNote, useCommand } from './command-state';
+import { unqueued } from './command';
 import { previewOf, ShareControl, SharePage } from './share';
 import { busy, Lists, ResizeHandle, type Row, useSidebarWidth } from './sidebar';
 import { Pop } from './menu';
@@ -183,7 +183,9 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
   // For thread: links, as agents may give only the start of an id.
   const inbox = useInbox();
   const update = useMutation(api.phone.update);
-  const [pending, setPending] = useState<Id<'commands'> | null>(null);
+  // The ... menu's Star, Hibernate, Wake, Archive and Bring back, and the
+  // done card's Archive: one at a time, each said under the thread.
+  const change = useCommand(token);
   const bottom = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const keepFromBottom = useRef<number | null>(null);
@@ -228,7 +230,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
   const inText = new Map(pictures.filter((p) => p.src).map((p) => [p.src!, p.url]));
   const after = picturesByRow(messages, pictures);
   const linkTo = (id: string) => threadPath(inbox?.find((r) => r.threadId.startsWith(id))?.threadId ?? id);
-  const act = async (change: Parameters<typeof update>[0]['change']) => setPending(await update({ token, threadId, change }));
+  const act = (c: Parameters<typeof update>[0]['change']) => void change.run(() => update({ token, threadId, change: c }), undefined);
   // Another lab's review goes over its turn's reply, as on the Mac (backend API 76).
   const review = t.review as LabReviewLedger | undefined;
   const reviewAt = review ? reviewSeq(messages, t.cardTurn) : undefined;
@@ -299,9 +301,9 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
         <MoreMenu
           items={[
             { label: 'Copy link', icon: <Icon.Link />, run: () => void navigator.clipboard.writeText(location.origin + location.pathname) },
-            { label: t.starredAt ? 'Unstar' : 'Star', icon: t.starredAt ? <Icon.StarOff /> : <Icon.Star />, run: () => void act({ star: !t.starredAt }) },
-            t.view === 'hibernating' || t.snoozedUntil ? { label: 'Wake', icon: <Icon.Sun />, run: () => void act({ wake: true }) } : t.view === 'inbox' ? { label: 'Hibernate', icon: <Icon.Moon />, run: () => void act({ snooze: { untilRestart: true } }) } : null,
-            t.view === 'den' ? { label: 'Bring back', icon: <Icon.Inbox />, run: () => void act({ unarchive: true }) } : { label: 'Archive', icon: <Icon.Archive />, run: () => void act({ archive: true }) },
+            { label: t.starredAt ? 'Unstar' : 'Star', icon: t.starredAt ? <Icon.StarOff /> : <Icon.Star />, run: () => act({ star: !t.starredAt }), busy: change.busy },
+            t.view === 'hibernating' || t.snoozedUntil ? { label: 'Wake', icon: <Icon.Sun />, run: () => act({ wake: true }), busy: change.busy } : t.view === 'inbox' ? { label: 'Hibernate', icon: <Icon.Moon />, run: () => act({ snooze: { untilRestart: true } }), busy: change.busy } : null,
+            t.view === 'den' ? { label: 'Bring back', icon: <Icon.Inbox />, run: () => act({ unarchive: true }), busy: change.busy } : { label: 'Archive', icon: <Icon.Archive />, run: () => act({ archive: true }), busy: change.busy },
           ]}
         />
       </header>
@@ -333,14 +335,15 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
       </div>
 
       <div className="dock">
-        {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} /> : null}
-        <Dock token={token} thread={t} lastSeq={lastSeq} onSent={setPending} onArchive={() => void act({ archive: true })} linkTo={linkTo} />
+        <CommandNote command={change} />
+        <Dock token={token} thread={t} lastSeq={lastSeq} onArchive={() => act({ archive: true })} archiving={change.busy} linkTo={linkTo} />
       </div>
     </article>
   );
 }
 
-function MoreMenu({ items }: { items: ({ label: string; icon: ReactNode; run: () => void } | null)[] }) {
+// busy: the item sends a command and one is still on its way.
+function MoreMenu({ items }: { items: ({ label: string; icon: ReactNode; run: () => void; busy?: boolean } | null)[] }) {
   return (
     <Pop title="More" icon={<Icon.More />}>
       {(close) =>
@@ -348,6 +351,7 @@ function MoreMenu({ items }: { items: ({ label: string; icon: ReactNode; run: ()
           i ? (
             <button
               key={i.label}
+              disabled={i.busy}
               onClick={() => {
                 i.run();
                 close();
@@ -375,7 +379,10 @@ function bookedWhen(at: string): string {
   return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
-function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token: string; thread: Row; lastSeq?: number; onSent: (id: Id<'commands'>) => void; onArchive: () => void; linkTo: (id: string) => string }) {
+// What the composer sent, to put back if it fails.
+type Draft = { text: string; picks: { card?: number; by: Record<number, number> }; ticked: { seq?: number; set: Set<number> } };
+
+function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { token: string; thread: Row; lastSeq?: number; onArchive: () => void; archiving: boolean; linkTo: (id: string) => string }) {
   const send = useMutation(api.phone.send);
   const interrupt = useMutation(api.phone.interrupt);
   const [text, setText] = useState('');
@@ -394,8 +401,23 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token:
     }
   };
   // Picks on the card of asks: ask index to choice index, for one card.
-  const [picks, setPicks] = useState<{ card?: number; by: Record<number, number> }>({ by: {} });
-  const [ticked, setTicked] = useState<{ seq?: number; set: Set<number> }>({ set: new Set() });
+  const [picks, setPicks] = useState<Draft['picks']>({ by: {} });
+  const [ticked, setTicked] = useState<Draft['ticked']>({ set: new Set() });
+  // The composer keeps what's typed and picked until the backend has the
+  // message, and gets it back if it fails, unless something new is there.
+  const sending = useCommand<Draft>(token, {
+    onQueued: () => {
+      setText('');
+      setPicks({ by: {} });
+      setTicked({ set: new Set() });
+    },
+    onFailed: (_error, d) => {
+      setText((cur) => (cur.trim() ? cur : d.text));
+      setPicks((cur) => (Object.keys(cur.by).length ? cur : d.picks));
+      setTicked((cur) => (cur.set.size ? cur : d.ticked));
+    },
+  });
+  const holding = unqueued(sending.state);
   const asks = !busy(t) && !t.pendingApproval ? (t.asks ?? []) : [];
   const by = picks.card === t.asksSeq ? picks.by : {};
   const finished = !busy(t) && !t.needsYou && !t.pendingApproval && !asks.length && !t.archivedAt && !t.working;
@@ -410,14 +432,11 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token:
     const extra = text.trim();
     const body = follow.length ? followUpMessage(follow, extra) : answers.length ? answerMessage(asks.length, answers, extra) : extra;
     if (!body) return;
-    setText('');
-    setPicks({ by: {} });
-    setTicked({ set: new Set() });
-    onSent(await send({ token, threadId: t.threadId, text: body, ...(answers.length ? { answers: answers.map(({ action, answer }) => ({ action, answer })) } : {}) }));
+    await sending.run(() => send({ token, threadId: t.threadId, text: body, ...(answers.length ? { answers: answers.map(({ action, answer }) => ({ action, answer })) } : {}) }), { text, picks, ticked }, { again: true });
   };
 
   const card = t.pendingApproval ? (
-    <ApprovalCard token={token} threadId={t.threadId} approval={t.pendingApproval} onSent={onSent} />
+    <ApprovalCard key={t.pendingApproval.approvalId} token={token} threadId={t.threadId} approval={t.pendingApproval} />
   ) : asks.length ? (
     <section className="card">
       <h2>
@@ -481,7 +500,7 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token:
     <section className="card">
       <h2>
         Done
-        <button className="btn plain" style={{ marginLeft: 'auto' }} onClick={onArchive}>
+        <button className="btn plain" style={{ marginLeft: 'auto' }} disabled={archiving} onClick={onArchive}>
           Archive
         </button>
       </h2>
@@ -533,6 +552,8 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token:
 
   const ready = !!text.trim() || Object.values(by).some((n) => n >= 0) || follow.length > 0;
   return (
+    <>
+    <CommandNote command={sending} />
     <div className={`box ${t.pendingApproval || asks.length ? 'asking' : ''}`}>
       {card}
       <form
@@ -544,6 +565,7 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token:
       >
         <textarea
           value={text}
+          readOnly={holding}
           rows={Math.min(10, Math.max(1, text.split('\n').length))}
           placeholder={busy(t) ? 'Steer the agent' : asks.length ? 'Reply, or pick above' : 'Reply'}
           onChange={(e) => setText(e.target.value)}
@@ -561,23 +583,18 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive, linkTo }: { token:
           {busy(t) && !ready ? (
             // Stop only while nothing's typed, as on the Mac: a message
             // typed during a turn goes into it.
-            stopping ? (
-              <button type="button" className="send" disabled aria-label="Stopping" title="Stopping">
-                <span className="spinner" />
-              </button>
-            ) : (
-              <button type="button" className="send" onClick={() => void stop()} aria-label="Stop" title="Stop">
-                <Icon.Stop />
-              </button>
-            )
+            <button type="button" className="send" disabled={stopping} onClick={() => void stop()} aria-label={stopping ? 'Stopping' : 'Stop'} title={stopping ? 'Stopping' : 'Stop'}>
+              {stopping ? <span className="spinner" /> : <Icon.Stop />}
+            </button>
           ) : (
-            <button className="send" disabled={!ready} aria-label="Send" title="Send">
-              <Icon.Up />
+            <button className="send" disabled={!ready || holding} aria-label={holding ? 'Sending' : 'Send'} title={holding ? 'Sending' : 'Send'}>
+              {holding ? <span className="spinner" /> : <Icon.Up />}
             </button>
           )}
         </div>
       </form>
     </div>
+    </>
   );
 }
 
@@ -604,11 +621,17 @@ function followUpMessage(follow: string[], extra: string): string {
   return body;
 }
 
-function ApprovalCard({ token, threadId, approval, onSent }: { token: string; threadId: string; approval: Approval; onSent: (id: Id<'commands'>) => void }) {
+// Keyed on the approval, so a new one starts with nothing pressed. Once its
+// runner takes the answer the card goes; until then the pressed button
+// spins and none take clicks, and a failure says why on the card.
+function ApprovalCard({ token, threadId, approval }: { token: string; threadId: string; approval: Approval }) {
   const respond = useMutation(api.phone.respond);
   const answer = useMutation(api.phone.answer);
   const secret = useMutation(api.phone.secret);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  // Which button was pressed, for its spinner.
+  const reply = useCommand<string>(token);
+  const pressed = (b: string) => (reply.state.kind === 'sending' || reply.state.kind === 'waiting') && reply.state.payload === b;
 
   if (approval.kind === 'approval') {
     const label = { allow: 'Allow', allowAlways: 'Always allow', deny: 'Deny' } as Record<string, string>;
@@ -618,11 +641,13 @@ function ApprovalCard({ token, threadId, approval, onSent }: { token: string; th
         {approval.inputSummary ? <pre className="approval-input">{approval.inputSummary}</pre> : null}
         <div className="ask-links">
           {approval.options.map((o) => (
-            <button key={o} className={`btn ${o === 'allow' ? 'primary' : ''}`} onClick={async () => onSent(await respond({ token, threadId, approvalId: approval.approvalId, decision: o as 'allow' | 'allowAlways' | 'deny' }))}>
+            <button key={o} className={`btn ${o === 'allow' ? 'primary' : ''}`} disabled={reply.busy} onClick={() => void reply.run(() => respond({ token, threadId, approvalId: approval.approvalId, decision: o as 'allow' | 'allowAlways' | 'deny' }), o)}>
+              {pressed(o) ? <span className="spinner" /> : null}
               {label[o] ?? o}
             </button>
           ))}
         </div>
+        <CommandNote command={reply} className="in-card" />
       </section>
     );
   }
@@ -636,10 +661,12 @@ function ApprovalCard({ token, threadId, approval, onSent }: { token: string; th
         <p>{approval.reason}</p>
         <p className="desc">Answer this in Threadbear on your Mac or iPhone.</p>
         <div className="ask-links">
-          <button className="btn" onClick={async () => onSent(await secret({ token, threadId, approvalId: approval.approvalId, decline: true }))}>
+          <button className="btn" disabled={reply.busy} onClick={() => void reply.run(() => secret({ token, threadId, approvalId: approval.approvalId, decline: true }), 'decline')}>
+            {pressed('decline') ? <span className="spinner" /> : null}
             Decline
           </button>
         </div>
+        <CommandNote command={reply} className="in-card" />
       </section>
     );
   }
@@ -679,16 +706,18 @@ function ApprovalCard({ token, threadId, approval, onSent }: { token: string; th
       <div className="ask-links">
         <button
           className="btn primary"
-          disabled={!ready}
-          onClick={async () => {
+          disabled={!ready || reply.busy}
+          onClick={() => {
             // Multi-select choices go in one comma-joined string, as the Mac app sends them.
             const flat = Object.fromEntries(Object.entries(answers).map(([k, v]) => [k, v.join(', ')]));
-            onSent(await answer({ token, threadId, approvalId: approval.approvalId, answers: flat }));
+            void reply.run(() => answer({ token, threadId, approvalId: approval.approvalId, answers: flat }), 'answer');
           }}
         >
+          {pressed('answer') ? <span className="spinner" /> : null}
           Answer
         </button>
       </div>
+      <CommandNote command={reply} className="in-card" />
     </section>
   );
 }
