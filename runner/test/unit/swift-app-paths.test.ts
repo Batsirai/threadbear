@@ -81,7 +81,7 @@ function tracked(): Tracked {
     if (/^(app|dock)\//.test(file)) {
       if (link) t.insideLinks.add(file);
       for (let p = file; p.includes('/'); p = p.slice(0, p.lastIndexOf('/'))) t.inside.add(p);
-    } else if (!file.startsWith('docs/archive/') && file !== SELF) {
+    } else if (!file.startsWith('docs/archive/') && !file.startsWith('.check-') && file !== SELF) {
       (link ? t.links : t.files).push(file);
     }
   }
@@ -164,6 +164,22 @@ test('everything in ALLOWED still uses them, so the list is exactly what deletio
   const hits = scan();
   const stale = Object.keys(ALLOWED).filter((file) => !hits.has(file));
   assert.deepEqual(stale, [], 'These no longer name app/ or dock/: take them out of ALLOWED');
+});
+
+// Where each moved on 21 Nov 2026. git's rename detection carries a branch's
+// edits to the files across, but a file it adds in a new folder (a new demo
+// fixture) stays where it was made, silently, where nothing reads it.
+const MOVED: Record<string, string> = {
+  'app/Tools/mock-runner/': 'mock-runner/',
+  'app/Tools/droptarget.swift': 'features/tools/droptarget.swift',
+  'app/Tools/post-gesture.swift': 'features/tools/post-gesture.swift',
+  'app/Tools/realdrag.swift': 'features/tools/realdrag.swift',
+};
+
+test('nothing is left in the old homes of what moved out of app/', () => {
+  const out = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', 'app/Tools'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+  const left = out.flatMap((f) => Object.entries(MOVED).filter(([from]) => from.endsWith('/') ? f.startsWith(from) : f === from).map(([from, to]) => `  git mv ${f} ${to}${f.slice(from.length)}`));
+  assert.deepEqual(left, [], `These are where something used to be before it moved out of the frozen Swift app (21 Nov 2026), likely brought by a rebase. Move them (mkdir -p a new folder first):\n${left.join('\n')}`);
 });
 
 test('the scan finds a use, and passes over prose and lookalikes', () => {
