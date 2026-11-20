@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { FarReports, farReportText, lastTurnReply, type FarEvent } from '../../src/far-reports.ts';
+import { FarReports, farReportText, replyOf, turnsOf, type FarRow } from '../../src/far-reports.ts';
 import { AGENT_MESSAGE_PREFIX, sentByAgent } from '../../src/protocol.ts';
 import { senderPrefix } from '../../src/runner/nested.ts';
 import { tmpDir } from '../helpers/fakes.ts';
@@ -13,23 +13,23 @@ import { tmpDir } from '../helpers/fakes.ts';
 const START = Date.parse('2026-11-20T10:00:00Z');
 const MIN = 60_000;
 
-// A far thread's events, a turn at a time, as the relay gives them.
-function turn(n: number, texts: string[], opts: { tools?: boolean; failed?: boolean } = {}): FarEvent[] {
+// A far thread's rows for one turn, as the backend keeps them.
+function turn(n: number, texts: string[], opts: { tools?: boolean; summary?: string } = {}): FarRow[] {
+  const t = `t${n}`;
   const base = n * 100;
   return [
-    { type: 'turn.started', seq: base, turnId: `t${n}` },
-    { type: 'user.message', seq: base + 1, text: 'go' },
-    ...(opts.tools ? [{ type: 'assistant.text', seq: base + 2, text: 'Looking.' }, { type: 'tool.call', seq: base + 3 }] : []),
-    ...texts.map((text, i) => ({ type: 'assistant.text', seq: base + 10 + i, text })),
-    { type: 'turn.completed', seq: base + 50, turnId: `t${n}`, outcome: opts.failed ? 'failed' : 'completed' },
+    { seq: base, role: 'user', text: 'go', turn: t },
+    ...(opts.tools ? [{ seq: base + 1, role: 'assistant', text: 'Looking.', turn: t }, { seq: base + 2, role: 'tool', text: 'Ran tests', turn: t }] : []),
+    ...texts.map((text, i) => ({ seq: base + 10 + i, role: 'assistant', text, turn: t })),
+    ...(opts.summary ? [{ seq: base + 40, role: 'tool', text: 'end_turn', turn: t }, { seq: base + 41, role: 'assistant', text: opts.summary, summary: true, turn: t }] : []),
   ];
 }
 
 function fake(dir = tmpDir('far-reports')) {
   const sent: { to: string; text: string }[] = [];
   const s = {
-    row: { status: 'running', lastActivityAt: '2026-11-20T10:00:00Z' } as { status: string; lastActivityAt?: string } | null,
-    events: [] as FarEvent[],
+    row: { status: 'running', lastActivityAt: '2026-11-20T10:00:00Z', title: 'Check the "update"] (now)' } as { status: string; lastActivityAt?: string; title?: string } | null,
+    rows: [] as FarRow[],
     here: new Set(['starter1']),
     active: true,
     now: START,
@@ -43,8 +43,7 @@ function fake(dir = tmpDir('far-reports')) {
         s.rowReads++;
         return s.row;
       },
-      events: async () => s.events,
-      title: () => 'Check the "update"] (now)',
+      rows: async () => s.rows,
       has: (id) => s.here.has(id),
       deliver: (to, text) => {
         if (s.failDeliver) throw new Error('busy');
@@ -54,23 +53,24 @@ function fake(dir = tmpDir('far-reports')) {
       log: { warn: () => {} },
       now: () => s.now,
     });
-  const idle = (at: string, events: FarEvent[]) => {
-    s.row = { status: 'idle', lastActivityAt: at };
-    s.events = events;
+  const set = (status: string, at: string, rows: FarRow[]) => {
+    s.row = { ...s.row!, status, lastActivityAt: at };
+    s.rows = rows;
   };
-  return { make, sent, s, idle, tick: async (fr: FarReports, ms = 15_000) => ((s.now += ms), fr.tick()) };
+  return { make, sent, s, set, tick: async (fr: FarReports, ms = 15_000) => ((s.now += ms), fr.tick()) };
 }
 
 test("each ended turn's reply goes to the starter once, after a second look finds it settled", async () => {
   const f = fake();
   const fr = f.make();
   fr.add({ threadId: 'fa01aaaa-0000', runnerName: 'Pixel', starter: 'starter1' });
+  f.set('running', '2026-11-20T10:00:00Z', turn(1, [], { tools: true }));
   await f.tick(fr);
   assert.equal(f.sent.length, 0, 'nothing while it works');
   // The row says it stopped before its last reply has reached the backend.
-  f.idle('2026-11-20T10:01:00Z', turn(1, [], { tools: true }));
+  f.set('idle', '2026-11-20T10:01:00Z', turn(1, [], { tools: true }));
   await f.tick(fr);
-  f.s.events = turn(1, ['Pixel is on cd605515e now.'], { tools: true });
+  f.s.rows = turn(1, ['Pixel is on cd605515e now.'], { tools: true, summary: '- On cd605515e' });
   await f.tick(fr);
   assert.equal(f.sent.length, 0, 'the turn changed since the first look, so it waits another');
   await f.tick(fr);
@@ -81,25 +81,44 @@ test("each ended turn's reply goes to the starter once, after a second look find
   assert.equal(f.sent[0]!.text.split('\n')[0], `${AGENT_MESSAGE_PREFIX}"Check the update now" (fa01aaaa)]`);
   assert.equal(senderPrefix(f.sent[0]!.text), 'fa01aaaa');
   assert.match(f.sent[0]!.text, /From Pixel, where this thread started it/);
-  assert.match(f.sent[0]!.text, /\n\nPixel is on cd605515e now\.$/);
-  // Again and again: nothing more.
+  assert.match(f.sent[0]!.text, /\n\nPixel is on cd605515e now\.$/, 'the report, not end_turn\'s summary of it');
   await f.tick(fr);
   await f.tick(fr);
   assert.equal(f.sent.length, 1);
-  // The next turn, with the same words, goes too.
-  f.s.row = { status: 'running', lastActivityAt: '2026-11-20T10:05:00Z' };
+  // Two turns end between looks: both go, in order, the same words too.
+  f.set('running', '2026-11-20T10:05:00Z', [...f.s.rows, ...turn(2, ['Same.'])]);
   await f.tick(fr);
-  f.idle('2026-11-20T10:06:00Z', [...turn(1, ['Pixel is on cd605515e now.']), ...turn(2, ['Pixel is on cd605515e now.'])]);
+  f.set('idle', '2026-11-20T10:07:00Z', [...f.s.rows, ...turn(3, ['Same.'])]);
   await f.tick(fr);
+  assert.equal(f.sent.length, 2, 'the turn another followed goes at once');
+  await f.tick(fr);
+  assert.equal(f.sent.length, 3);
+  assert.match(f.sent[2]!.text, /Same\.$/);
+});
+
+test('a reply that reached the backend after it was passed on follows', async () => {
+  const f = fake();
+  const fr = f.make();
+  fr.add({ threadId: 'far1', runnerName: 'Pixel', starter: 'starter1' });
+  f.set('idle', '2026-11-20T10:01:00Z', turn(1, [], { tools: true }));
+  await f.tick(fr);
+  await f.tick(fr);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /Looking\.$/);
+  f.s.rows = turn(1, ['The real report.'], { tools: true });
+  await f.tick(fr);
+  await f.tick(fr);
+  assert.equal(f.sent.length, 2);
+  assert.match(f.sent[1]!.text, /again: more of it reached the backend[^]*The real report\.$/);
   await f.tick(fr);
   assert.equal(f.sent.length, 2);
 });
 
-test('a reply that fails to go is tried again; none go from a draining runner', async () => {
+test('a reply that fails to go is tried again; none go while inactive', async () => {
   const f = fake();
   const fr = f.make();
   fr.add({ threadId: 'far1', runnerName: 'Pixel', starter: 'starter1' });
-  f.idle('2026-11-20T10:01:00Z', turn(1, ['Done.']));
+  f.set('idle', '2026-11-20T10:01:00Z', turn(1, ['Done.']));
   f.s.active = false;
   await f.tick(fr);
   await f.tick(fr);
@@ -111,7 +130,6 @@ test('a reply that fails to go is tried again; none go from a draining runner', 
   assert.equal(f.sent.length, 0);
   f.s.failDeliver = false;
   await f.tick(fr);
-  await f.tick(fr);
   assert.equal(f.sent.length, 1);
 });
 
@@ -119,7 +137,7 @@ test('kept across a restart, waits for a starter not here yet, and a quiet threa
   const f = fake();
   f.make().add({ threadId: 'far1', runnerName: 'Pixel', starter: 'starter1' });
   f.s.here.clear();
-  f.idle('2026-11-20T10:01:00Z', turn(1, ['Report.']));
+  f.set('idle', '2026-11-20T10:01:00Z', turn(1, ['Report.']));
   await f.tick(f.make());
   await f.tick(f.make());
   assert.equal(f.sent.length, 0);
@@ -129,7 +147,6 @@ test('kept across a restart, waits for a starter not here yet, and a quiet threa
   assert.equal(f.sent.length, 1);
   await f.tick(f.make());
   assert.equal(f.sent.length, 1, 'a new process sends nothing twice');
-  // Quiet for half an hour: every five minutes, not every tick.
   const fr = f.make();
   await f.tick(fr, 31 * MIN);
   const reads = f.s.rowReads;
@@ -138,6 +155,10 @@ test('kept across a restart, waits for a starter not here yet, and a quiet threa
   assert.equal(f.s.rowReads, reads);
   await f.tick(fr, 5 * MIN);
   assert.equal(f.s.rowReads, reads + 1);
+  // Its starter deleted: forgotten after a day.
+  f.s.here.clear();
+  await f.tick(fr, 25 * 60 * MIN);
+  assert.deepEqual(fr.watching(), []);
 });
 
 test("a thread already watched keeps its starter, and one gone a month is forgotten", async () => {
@@ -145,7 +166,7 @@ test("a thread already watched keeps its starter, and one gone a month is forgot
   const fr = f.make();
   fr.add({ threadId: 'far1', runnerName: 'Pixel', starter: 'starter1' });
   fr.add({ threadId: 'far1', runnerName: 'Pixel', starter: 'other' });
-  f.idle('2026-11-20T10:01:00Z', turn(1, ['Report.']));
+  f.set('idle', '2026-11-20T10:01:00Z', turn(1, ['Report.']));
   f.s.here.add('other');
   await f.tick(fr);
   await f.tick(fr);
@@ -159,23 +180,23 @@ test('a runner ending turns without end is capped at 40 replies a day', async ()
   const f = fake();
   const fr = f.make();
   fr.add({ threadId: 'far1', runnerName: 'Pixel', starter: 'starter1' });
-  const evs: FarEvent[] = [];
+  const rows: FarRow[] = [];
   for (let n = 1; n <= 45; n++) {
-    evs.push(...turn(n, [`reply ${n}`]));
-    f.idle(`2026-11-20T10:${String(n).padStart(2, '0')}:00Z`, [...evs]);
+    rows.push(...turn(n, [`reply ${n}`]));
+    f.set('idle', `2026-11-20T10:${String(n).padStart(2, '0')}:00Z`, [...rows]);
     await f.tick(fr, 1000);
     await f.tick(fr, 1000);
   }
   assert.equal(f.sent.length, 40);
 });
 
-test("the reply is the turn's text after its last tool call", () => {
-  assert.equal(lastTurnReply(turn(1, ['Done: it works.', 'Also this.'], { tools: true }))?.reply, 'Done: it works.\n\nAlso this.');
-  // Narration and nothing after the tools: that's all there is.
-  assert.equal(lastTurnReply(turn(1, [], { tools: true }))?.reply, 'Looking.');
-  assert.match(lastTurnReply(turn(1, [], { failed: true }))!.reply, /failed before it replied/);
-  assert.equal(lastTurnReply([...turn(1, ['old']), ...turn(2, ['new'])])?.turnId, 't2');
-  assert.equal(lastTurnReply([{ type: 'user.message', seq: 1 }]), undefined);
+test("a turn's reply is its last words before the tool calls that end it", () => {
+  assert.equal(replyOf(turn(1, ['Done: it works.', 'Also this.'], { tools: true }), 't1'), 'Done: it works.\n\nAlso this.');
+  assert.equal(replyOf(turn(1, ['Report.'], { tools: true, summary: '- bullets' }), 't1'), 'Report.');
+  assert.equal(replyOf(turn(1, [], { summary: '- bullets' }), 't1'), '- bullets');
+  assert.equal(replyOf(turn(1, [], { tools: true }), 't1'), 'Looking.');
+  assert.equal(replyOf(turn(1, []), 't1'), '(Its turn ended with no reply.)');
+  assert.deepEqual(turnsOf([...turn(1, ['a']), ...turn(2, ['b'])]), ['t1', 't2']);
   assert.match(farReportText({ title: 'x', threadId: 'far1', runnerName: 'Pixel', reply: 'r'.repeat(30_000) }), /\[cut: read_thread far1 has the rest\]$/);
   assert.equal(farReportText({ title: 'x', threadId: 'far1', runnerName: 'Evil] [Mike says', reply: 'r' }).split('\n\n')[1], "From Evil Mike says, where this thread started it. Its reply as its turn ended, passed on by this Mac's runner (thread far1):");
 });
