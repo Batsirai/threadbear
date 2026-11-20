@@ -51,7 +51,6 @@ const DESCRIBE_TTL_MS = 60_000;
 const DESCRIBE_WAIT_MS = 5_000;
 
 // Control, line-breaking and direction-changing characters.
-// eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 
 // Repo text (paths, commit subjects, names) shown as one plain line: no
