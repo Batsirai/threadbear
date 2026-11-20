@@ -43,7 +43,7 @@ MAX_TARGETS=4
 
 free_gib() {
   local kb
-  kb="$(df -Pk . | awk 'NR==2 {print $4}')"
+  kb="$(df -Pk "${1:-.}" | awk 'NR==2 {print $4}')"
   case "$kb" in
     # A filesystem past its reserved blocks can report less than nothing.
     -[0123456789]*) echo 0; return ;;
@@ -163,23 +163,29 @@ fi
 # CARGO_TARGET_DIR of their own (kit-target, kx-target and the like, 13 GiB of
 # them on the cloud box on 21 Nov, which nothing gave back). Told by cargo's
 # CACHEDIR.TAG at the top. The check's own is a level down (build/), so it's
-# never one. Idle ones go when the host is short, longest unused first, and
-# any nothing has touched for three days whatever the room.
+# never one. Idle ones go when that disk is short, longest unused first, and
+# any nothing has touched for three days whatever the room. Idle is two
+# hours here, not BUSY_MINUTES: nothing of ours marks these in use, and a
+# long test run can leave its target untouched for a while (Codex's review).
+# They're moved aside beside where they are, as gpui/ can be another disk
+# (Tinker Desk's SSD), where a move would be a copy (Gemini's review).
 STRAY_IDLE_MINUTES=$((3 * 24 * 60))
+STRAY_BUSY_MINUTES=120
 if [ "${PWD##*/}" = gpui ]; then
+  find .. -mindepth 1 -maxdepth 1 -name 'stray-gone-*' -exec rm -rf {} + 2>/dev/null
   ls -dtr ../*/ 2>/dev/null | while IFS= read -r t; do
     t="${t%/}"
     name="${t##*/}"
     case "$name" in gpui|build|deps|mirror|runs|web-runtimes|*[!A-Za-z0-9._-]*) continue ;; esac
     [ -f "$t/CACHEDIR.TAG" ] && [ ! -L "$t" ] || continue
-    recent "$t" && continue
+    [ -z "$(find "$t" -mmin -"$STRAY_BUSY_MINUTES" 2>/dev/null | head -1)" ] || continue
     if [ -n "$(find "$t" -mmin -"$STRAY_IDLE_MINUTES" 2>/dev/null | head -1)" ]; then
-      [ "$(free_gib)" -lt "$TRIM_GIB" ] || continue
+      [ "$(free_gib ..)" -lt "$TRIM_GIB" ] || continue
       echo "Short of disk on this host, so removing ~/.cache/threadbear-check/$name, a cargo build folder made by hand that nothing has used lately." >&2
     else
       echo "Removing ~/.cache/threadbear-check/$name, a cargo build folder made by hand that nothing has used for three days." >&2
     fi
-    gone="target-gone-$$-stray-$name"
+    gone="../stray-gone-$$-$name"
     mv "$t" "$gone" && rm -rf "$gone"
   done
 fi

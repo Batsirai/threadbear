@@ -560,7 +560,7 @@ echo "fake 0 0 $(( (${freeGib} + (4 - n) * 6 + (${names.length} - s) * 5) * 1048
 }
 
 test("low on disk, cargo targets left in the check folder by hand go first, longest unused first, before any checkout's", (t) => {
-  const h = withStrays(t, 8, { 'kit-target': 30, 'kx-target': 2, 'busy-target': 0.05 });
+  const h = withStrays(t, 8, { 'kit-target': 30, 'kx-target': 3, 'busy-target': 0.05 });
   const r = h.trim('-');
   assert.equal(r.status, 0, r.stderr);
   // kit-target alone brings it to 13 GiB, past the 12 it trims to.

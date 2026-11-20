@@ -376,3 +376,20 @@ test('a group check no host could run blames nobody, and the group lands on the 
   for (const t of [b, c, d].filter((t) => t !== failed)) assert.ok(fs.existsSync(path.join(main, `${t.branch.slice(-8, -7)}.txt`)), t.branch);
   assert.deepEqual(waiting(path.join(main, '.git')), [], 'nobody left in the line');
 });
+
+// check-remote.sh runs a check again on another host when one ran out of
+// disk: what the earlier run said failed isn't the later one's.
+test('what failed and what ran are read from the last run in a check\'s output', () => {
+  const text = [
+    'Checking on cloud (copied in 3s; ...)',
+    'To run only what failed again: --only "desktop app check"',
+    '--only ran: "desktop app check"',
+    'cloud ran out of disk during this check (0.1 GiB free at the lowest), so what failed there may have failed for want of space. Running it again on another host.',
+    'Checking on tinker-desk (copied in 4s; ...)',
+    'npm ci failed in runner',
+  ].join('\n');
+  assert.equal(onlyFailed(text), undefined);
+  assert.equal(onlyRan(text), undefined);
+  assert.equal(onlyFailed(`${text}\nTo run only what failed again: --only "unit tests"`), 'unit tests');
+  assert.equal(onlyFailed(SAID), 'unit tests=test/unit/x.test.ts');
+});

@@ -239,19 +239,37 @@ if [ "${1:-}" = "--on-host" ]; then
   case "$start_kb" in ""|*[!0123456789]*) start_kb=999999999999999 ;; esac
   [ "${#start_kb}" -le 15 ] || start_kb=999999999999999
   if mkdir -p "$base/kept-$id" && printf '%015d' "$((10#$start_kb))" >"$min_file" 2>/dev/null; then
+    # It stops with this script however that ends: it may have this host's
+    # lock open (inherited from the flock that runs this), and one left
+    # behind would keep every later check out.
+    parent=$$
     (
-      low="" kb=""
-      # On TERM, the lowest seen once more, in case a write failed then.
-      trap '[ -z "$low" ] || printf "%015d" "$low" 1<>"$min_file"; exit 0' TERM
-      while :; do
+      # Nothing it inherited stays open in it or its sleeps: Linux's flock
+      # hands its lock to the command it runs as an open file, and a sleep
+      # still holding that after the run would keep the next check, or this
+      # check's own retry, out (Gemini's review).
+      for fd in $(ls /dev/fd 2>/dev/null); do
+        case "$fd" in 0|1|2|*[!0123456789]*) ;; *) eval "exec $fd>&-" 2>/dev/null ;; esac
+      done
+      low="" kb="" nap=""
+      sample() {
         kb="$(cd "$base" && eval "$free_cmd")"
-        case "$kb" in ""|*[!0123456789]*) ;; *)
-          if [ "${#kb}" -le 15 ] && { [ -z "$low" ] || [ "$((10#$kb))" -lt "$low" ]; }; then
-            low="$((10#$kb))"
-            printf '%015d' "$low" 1<>"$min_file" 2>/dev/null
-          fi ;;
-        esac
-        sleep "${THREADBEAR_CHECK_SAMPLE_SECS:-5}" & wait $!
+        # Past a disk's reserved blocks df can say less than nothing.
+        case "$kb" in -[0123456789]*) kb=0 ;; esac
+        case "$kb" in ""|*[!0123456789]*) return ;; esac
+        if [ "${#kb}" -le 15 ] && { [ -z "$low" ] || [ "$((10#$kb))" -lt "$low" ]; }; then
+          low="$((10#$kb))"
+          printf '%015d' "$low" 1<>"$min_file" 2>/dev/null
+        fi
+      }
+      # On TERM, one last look (a link can fill the disk between two), and
+      # the lowest written once more in case a write failed then.
+      trap '[ -z "$nap" ] || kill "$nap" 2>/dev/null; sample; [ -z "$low" ] || printf "%015d" "$low" 1<>"$min_file"; exit 0' TERM
+      while kill -0 "$parent" 2>/dev/null; do
+        sample
+        sleep "${THREADBEAR_CHECK_SAMPLE_SECS:-5}" & nap=$!
+        wait "$nap"
+        nap=""
       done
     ) </dev/null >/dev/null 2>&1 &
     sampler=$!
@@ -580,9 +598,11 @@ low_on_room() {
 # OUT_GIB is it to one place. Only a number we can read counts.
 OUT_GIB=""
 ran_out() {
-  case "$1" in ""|*[!0123456789]*) return 1 ;; esac
-  [ "${#1}" -le 15 ] || return 1
-  local kb=$((10#$1))
+  local kb="$1"
+  case "$kb" in -[0123456789]*) kb=0 ;; esac
+  case "$kb" in ""|*[!0123456789]*) return 1 ;; esac
+  [ "${#kb}" -le 15 ] || return 1
+  kb=$((10#$kb))
   [ "$kb" -lt 1048576 ] || return 1
   OUT_GIB="$((kb / 1048576)).$(((kb % 1048576) * 10 / 1048576))"
 }
@@ -801,6 +821,20 @@ tries=0
 # a disk still ends.
 disk_tries=0
 DISK_RETRIES="${THREADBEAR_CHECK_DISK_RETRIES:-2}"
+# The host set aside after running out of disk, while the others are tried.
+# back_to_out_host: none of them could take it, so that host goes back in,
+# with its idle build folders given back, and it's chosen again.
+OUT_HOST=""
+back_to_out_host() {
+  [ -n "$OUT_HOST" ] || return 1
+  local h="$OUT_HOST" rest="" s
+  OUT_HOST=""
+  for s in $SKIP; do [ "$s" = "$h" ] || rest+=" $s"; done
+  SKIP="$rest"
+  echo "No other host could take it, so it runs on $h again, after giving back idle build folders there." >&2
+  make_room "$h" '$HOME/'"$BASE_REL" >/dev/null 2>&1
+  choose
+}
 # The copy lock: a kernel lock (lockf, or flock on Linux) held by a small
 # helper until this run lets go or ends, so one a killed run held frees
 # itself. The helper looks every second for its release file and for
@@ -899,7 +933,7 @@ while :; do
   if [ -n "$copied_host" ] && [ "$copy_secs" -ge "$stay_secs" ] && ! host_is_low; then
     # HOST, HOST_OS and remote_base are still the copy's.
     FREE=0
-  elif ! choose; then
+  elif ! choose && ! back_to_out_host; then
     [ -z "$copied_host" ] || watched "$copied_host" "${SSH[@]}" "$copied_host" "rm -rf '$remote_run'" 2>/dev/null
     rm -f "$files" "$changed" "$left_out"
     if [ -n "$LOW" ]; then
@@ -1110,8 +1144,16 @@ while :; do
   # padded, so it can be written over in place.
   fail_kb=""
   if [ "$code" != 0 ]; then
-    fail_kb="$(watched "$HOST" "${SSH[@]}" "$HOST" "cd '$remote_base' && if [ -s 'kept-$id/min-free-kb' ]; then cat 'kept-$id/min-free-kb'; elif [ -s 'kept-$id/free-kb' ]; then cat 'kept-$id/free-kb'; else $free_cmd; fi" 2>/dev/null)"
-    case "$fail_kb" in *[!0]*) [[ "$fail_kb" =~ ^0+ ]] && fail_kb="${fail_kb#"${BASH_REMATCH[0]}"}" ;; esac
+    # Both files when there are both, the lower one counting: a disk that
+    # filled between two samples shows in the end's (Codex's review).
+    fail_kb=""
+    for kb in $(watched "$HOST" "${SSH[@]}" "$HOST" "cd '$remote_base' && if [ -s 'kept-$id/min-free-kb' ] || [ -s 'kept-$id/free-kb' ]; then cat 'kept-$id/min-free-kb' 2>/dev/null; echo; cat 'kept-$id/free-kb' 2>/dev/null; echo; else $free_cmd; fi" 2>/dev/null); do
+      case "$kb" in -[0123456789]*) kb=0 ;; esac
+      case "$kb" in ""|*[!0123456789]*) continue ;; esac
+      [ "${#kb}" -le 15 ] || continue
+      kb="$((10#$kb))"
+      if [ -z "$fail_kb" ] || [ "$kb" -lt "$fail_kb" ]; then fail_kb="$kb"; fi
+    done
   fi
   # A host that ran out of disk during the check: what failed failed for want
   # of space, not for anything in what it checks, and counting it as the
@@ -1130,7 +1172,11 @@ while :; do
       done
       if [ -n "$others" ]; then
         echo "$HOST ran out of disk during this check (${OUT_GIB} GiB free at the lowest), so what failed there may have failed for want of space. Running it again on another host." >&2
+        # Set aside, not given up: if no other host can take it (a Linux
+        # one for a check that needs a Mac, one that's gone), it's run here
+        # again after all (Codex's and Gemini's reviews).
         SKIP+=" $HOST"
+        OUT_HOST="$HOST"
       else
         echo "$HOST ran out of disk during this check (${OUT_GIB} GiB free at the lowest), so what failed there may have failed for want of space. Running it again there, after giving back idle build folders." >&2
         make_room "$HOST" "$remote_base" >/dev/null 2>&1

@@ -1279,7 +1279,17 @@ async function stackWaiting(
 // The `./check.sh --only` a failed check ends with: what to run again to see
 // the same failure, as THREADBEAR_CHECK_ONLY takes it. Undefined for a check
 // that says no such thing (another repo's, or one that died before its end).
+// The output of the last run in a check's: check-remote.sh runs it again on
+// another host when one drops out or runs out of disk, and what the earlier
+// one said (what failed, what ran) isn't this one's.
+function lastRun(text: string): string {
+  const starts = [...text.matchAll(/^(?:Checking on \S+ \(|So the checks run on this Mac instead\b)/gm)];
+  const at = starts.at(-1)?.index;
+  return at === undefined ? text : text.slice(at);
+}
+
 export function onlyFailed(text: string): string | undefined {
+  text = lastRun(text);
   const said = [...text.matchAll(/^To run only what failed again: (?:\.\/check\.sh )?--only "([A-Za-z0-9 ._/=;()-]{1,4000})"$/gm)].at(-1)?.[1];
   return said && !said.startsWith('-') ? said : undefined;
 }
@@ -1287,6 +1297,7 @@ export function onlyFailed(text: string): string | undefined {
 // The steps a run with --only says it ran (check.sh's last line for one), or
 // undefined when it says no such thing.
 export function onlyRan(text: string): Set<string> | undefined {
+  text = lastRun(text);
   const said = [...text.matchAll(/^--only ran: "([A-Za-z0-9 ._/;()-]{0,4000})"$/gm)].at(-1)?.[1];
   return said === undefined ? undefined : new Set(said.split(';').filter(Boolean));
 }
@@ -2094,6 +2105,9 @@ async function pushMain(a: {
       ...(r.ok && intact ? { intact: true } : {}),
     });
     if (r.ok && !intact) return gave(`the check changed files or HEAD in ${dir} as it ran, so it didn't check the merge itself`);
+    // The hosts' trouble, not the merge's: the next landing tries again,
+    // rather than the merge being put off for hours as a failed one is.
+    if (r.code === CHECK_HOSTS_UNAVAILABLE) return notPushed(`no check host could run the check on the merge. The next landing tries again.`);
     if (!r.ok) {
       const tail = r.text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES).join('\n').slice(-8000);
       return gave(`the check failed on the merge${r.code !== undefined ? ` (exit ${r.code})` : ''}`, ` The last lines of its output:\n\n${tail}`);

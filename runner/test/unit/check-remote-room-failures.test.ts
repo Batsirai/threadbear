@@ -54,6 +54,17 @@ test('with only the one host, a check that ran it out of disk runs there again',
   assert.equal(r.copies.length, 2);
 });
 
+test('a check only the host that ran out can take runs there again, not given up for one that cannot', () => {
+  // Touching app/ needs a Mac: the Linux host can't take it.
+  const s = setup({ h1: { state: 'free', outOfDisk: 1 }, h2: { state: 'free', os: 'Linux' } });
+  fs.mkdirSync(path.join(s.repo, 'app'));
+  fs.writeFileSync(path.join(s.repo, 'app', 'x.swift'), '\n');
+  const r = s.run('h1,h2', 3600);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /No other host could take it, so it runs on h1 again/);
+  assert.deepEqual(r.copies, ['h1', 'h1']);
+});
+
 test('a check that runs out of disk every time ends as no host able to run it, and says so last', () => {
   const s = setup({ h1: { state: 'free', outOfDisk: 9 }, h2: { state: 'free', outOfDisk: 9 } });
   const r = s.run('h1,h2', 3600, '', { THREADBEAR_CHECK_BUSY_EXIT: '69' });
