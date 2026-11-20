@@ -318,7 +318,7 @@ impl ThreadPane {
         ix: usize,
         row: &Row,
         message: &UserMessage,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if message.is_from_schedule() {
@@ -424,8 +424,9 @@ impl ThreadPane {
             let words = fit
                 .is_some()
                 .then(|| self.bubble_words(("user-text", ix), text, &row.id, cx));
-            let drafts = (!edited.is_empty())
-                .then(|| self.edited_drafts(ix, &row.id, &edited, has_words || answered, cx));
+            let drafts = (!edited.is_empty()).then(|| {
+                self.edited_drafts(ix, &row.id, &edited, has_words || answered, window, cx)
+            });
             // A draft opened under his words takes the bubble's whole width,
             // not the width of a short "Send it".
             let draft_open = (0..edited.len())
@@ -1634,6 +1635,7 @@ impl ThreadPane {
         row_id: &str,
         drafts: &[threadbear_core::draft_block::DraftBlock],
         after_words: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use gpui_kit::base::TestSupportExt as _;
@@ -1648,7 +1650,7 @@ impl ThreadPane {
             .when(after_words, |d| d.mt(px(8.)));
         for (n, draft) in drafts.iter().enumerate() {
             let key = format!("{row_id}-{n}");
-            let row = row_id.to_owned();
+            let (row, toggled) = (row_id.to_owned(), key.clone());
             let shown = self.rows.shown_drafts.contains(&key);
             let tip = if shown {
                 "Hide the draft you sent"
@@ -1665,8 +1667,8 @@ impl ThreadPane {
                 .child(if shown { "Hide" } else { "Show" })
                 .tip(tip)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if !this.rows.shown_drafts.remove(&key) {
-                        this.rows.shown_drafts.insert(key.clone());
+                    if !this.rows.shown_drafts.remove(&toggled) {
+                        this.rows.shown_drafts.insert(toggled.clone());
                     }
                     // The row's height changes: the list measures it again.
                     if let Some(i) = this.feed.model().index_of(&row) {
@@ -1684,10 +1686,11 @@ impl ThreadPane {
             );
             if shown {
                 let words = crate::draft_boxes::sent_draft(
-                    ("edited-draft-text", ix * 100 + n),
+                    &key,
                     draft,
                     self.origin(),
                     self.summary.cwd.clone(),
+                    window,
                     cx,
                 );
                 col = col.child(

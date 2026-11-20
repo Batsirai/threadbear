@@ -513,26 +513,12 @@ fn draft_box(
     // Its own selection, and somewhere for the keys to go once a drag starts
     // in its words, so ⌘C copies them (the thread pane's copy, selection_bar.rs).
     // Keyed by the words too, so his version gets a selection of its own.
-    let selection = window
-        .use_keyed_state(
-            ElementId::Name(format!("draft-selection-{base}-{}", self::key(&draft.source)).into()),
-            cx,
-            |_, cx| {
-                let handle = TextSelectionHandle::new(draft.plain_text(), cx);
-                let focus = cx.focus_handle();
-                let keys = focus.clone();
-                handle.focus_with(
-                    move |window, cx| {
-                        keys.focus(window, cx);
-                        crate::web_panels::keyboard_to_app(window);
-                    },
-                    cx,
-                );
-                DraftSelection { handle, focus }
-            },
-        )
-        .read(cx)
-        .clone();
+    let selection = draft_selection(
+        format!("draft-selection-{base}-{}", self::key(&draft.source)),
+        draft,
+        window,
+        cx,
+    );
     let body = div()
         .w_full()
         .px(px(CODE_PAD))
@@ -556,7 +542,7 @@ fn draft_box(
         None => body.child(DraftText::new(
             format!("draft-text-{base}"),
             &lines,
-            plugin,
+            (plugin.origin, plugin.cwd.clone()),
             selection.handle.clone(),
             cx,
         )),
@@ -589,6 +575,31 @@ const QUOTE_BAR: &str = "\u{2502} ";
 struct DraftSelection {
     handle: TextSelectionHandle,
     focus: FocusHandle,
+}
+
+/// A draft's own selection, kept under `key` between frames.
+fn draft_selection(
+    key: String,
+    draft: &DraftBlock,
+    window: &mut Window,
+    cx: &mut App,
+) -> DraftSelection {
+    window
+        .use_keyed_state(ElementId::Name(key.into()), cx, |_, cx| {
+            let handle = TextSelectionHandle::new(draft.plain_text(), cx);
+            let focus = cx.focus_handle();
+            let keys = focus.clone();
+            handle.focus_with(
+                move |window, cx| {
+                    keys.focus(window, cx);
+                    crate::web_panels::keyboard_to_app(window);
+                },
+                cx,
+            );
+            DraftSelection { handle, focus }
+        })
+        .read(cx)
+        .clone()
 }
 
 /// A draft's lines as one text with its looks: bold, italic, strike, code
@@ -671,32 +682,32 @@ fn formatted(lines: &[Line], cx: &App) -> Formatted {
     }
 }
 
-/// A draft drawn as its box draws it, formatting and links and all, for
-/// the draft Mike sent under his bubble's chip (rows.rs, `edited_drafts`).
+/// A draft drawn as its box draws it, formatting and links and all, and
+/// selectable with ⌘C as the box's words are, for the draft Mike sent under
+/// his bubble's chip (rows.rs, `edited_drafts`).
 pub(crate) fn sent_draft(
-    id: impl Into<ElementId>,
+    key: &str,
     draft: &DraftBlock,
     origin: Origin,
     cwd: String,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
-    let Formatted {
-        text,
-        highlights,
-        code,
-        links,
-    } = formatted(&draft.drawn_lines(), cx);
-    let styled = StyledText::new(text)
-        .with_highlights(highlights)
-        .with_font_family_overrides(code);
-    let ranges: Vec<Range<usize>> = links.iter().map(|(r, _)| r.clone()).collect();
-    let urls: Vec<String> = links.into_iter().map(|(_, u)| u).collect();
-    InteractiveText::new(id, styled)
-        .on_click(ranges, move |ix, _, cx| {
-            if let Some(url) = urls.get(ix) {
-                open_gate::open_link(url, origin, &cwd, cx);
-            }
-        })
+    let selection = draft_selection(
+        format!("sent-draft-selection-{key}-{}", self::key(&draft.source)),
+        draft,
+        window,
+        cx,
+    );
+    div()
+        .track_focus(&selection.focus)
+        .child(DraftText::new(
+            format!("sent-draft-text-{key}"),
+            &draft.drawn_lines(),
+            (origin, cwd),
+            selection.handle.clone(),
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -726,7 +737,7 @@ impl DraftText {
     fn new(
         id: String,
         lines: &[Line],
-        plugin: &DraftBoxes,
+        (origin, cwd): (Origin, String),
         handle: TextSelectionHandle,
         cx: &App,
     ) -> Self {
@@ -742,7 +753,6 @@ impl DraftText {
         let layout = styled.layout().clone();
         // Its links go where the reply's do: through the open gate, as this
         // thread's (a web page in the browser, a mail address asks first).
-        let (origin, cwd) = (plugin.origin, plugin.cwd.clone());
         let ranges: Vec<Range<usize>> = links.iter().map(|(r, _)| r.clone()).collect();
         let urls: Vec<String> = links.into_iter().map(|(_, u)| u).collect();
         let id = ElementId::Name(id.into());
