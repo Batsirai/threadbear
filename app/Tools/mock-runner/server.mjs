@@ -474,7 +474,142 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_PRS ? ['inlinePrs'] : []),
     // A live page's card, with TB_MOCK_LIVE_PAGES (addLivePageDemo).
     ...(process.env.TB_MOCK_LIVE_PAGES ? ['livePages'] : []),
+    // The Recipes view, with TB_MOCK_RECIPES (addRecipesDemo).
+    ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
   ];
+}
+
+// TB_MOCK_RECIPES: the recipes experiment on, with recipes in every state
+// (docs/protocol.md, "Recipes"): three on with a month of made-up runs, one
+// off, the rest not added. The ones that come with Threadbear use their
+// header pictures from runner/src/recipes; the rest have colours only.
+const RECIPES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../runner/src/recipes');
+const recipes = new Map();
+function addRecipesDemo() {
+  const day = 86_400_000;
+  const header = (id) => {
+    const file = path.join(RECIPES_DIR, id, 'header.jpg');
+    return fs.existsSync(file) ? { header: file } : {};
+  };
+  const at = (daysAgo, h, m) => {
+    const d = new Date(Date.now() - daysAgo * day);
+    d.setHours(h, m, 0, 0);
+    return d.getTime();
+  };
+  // A run: an archived thread its schedule started, so Open opens it.
+  const run = (recipe, daysAgo, h, m, headline, needsYou, seen) => {
+    const id = `th_recipe_${recipe.id}_${daysAgo}`;
+    const when = new Date(at(daysAgo, h, m)).toISOString();
+    threads.set(id, { summary: {
+      id, title: recipe.name, cwd: `${os.homedir()}/ThreadbearThreads/recipes/${recipe.id}`, accountId: defaults.accountId, provider: 'claude',
+      permissionMode: 'full', status: 'idle', live: false, needsYou: false, createdAt: when, updatedAt: when, lastActivityAt: when,
+      archivedAt: when, preview: headline, lastSeq: 2, lastSeenSeq: seen ? 2 : 0, schedule: { id: `sch_${recipe.id}`, title: recipe.name },
+      startedBy: { kind: 'schedule', label: 'Schedule' },
+    }, events: [], inProgress: new Map(), timers: [] });
+    return { threadId: id, title: recipe.name, at: when, headline, needsYou, seen, archived: true };
+  };
+  const make = (r) => recipes.set(r.id, { source: 'builtin', by: 'Mike', schedules: [], runs: [], ...header(r.id), ...r });
+  make({ id: 'daily-brief', name: 'Daily brief', icon: '☀️', color: '#e8894a', when: 'Every day at 6:30',
+    description: "A short note each morning: today's calendar, the emails that need you, threads waiting on you and a few headlines.",
+    about: 'A very short note each morning so you start the day knowing what needs you. It reads your calendar and the last day of email, lists only what needs you today, then any thread that is waiting on you, then a few headlines. A section with nothing in it is left out, and it stays under ten lines.',
+    example: '**Today**\n- 10:00 dentist, 14:30 call with Sam\n\n**Needs you**\n- Ana asked for the invoice by Friday\n- The flight change wants confirming today\n\n**Waiting on you**\n- "Pick a colour for the Share button" since Wed',
+    state: 'on', schedules: [{ id: 'sch_daily-brief', title: 'Daily brief', paused: false, nextRunAt: new Date(at(-1, 6, 30)).toISOString(), whenText: 'Every day at 6:30' }] });
+  make({ id: 'email-watcher', name: 'Email watcher', icon: '✉️', color: '#4a7bd8', experiment: 'mailWatch', when: 'Every 5 minutes',
+    description: "New emails wake the threads waiting on them, reach the threads they're about, or wait on a twice-daily list.",
+    about: 'Every few minutes the runner looks at your new emails and a small model sorts them against your threads. A reply a thread was waiting on wakes it; an email about a thread\'s work is kept for it; anything else that needs you goes on a list that comes twice a day.',
+    example: '**4 pm list**\n- Ana: invoice for October, wants it by Friday. *Suggest: reply with the PDF.*\n- GitHub: a security advisory on a package you use. *Suggest: start a thread to update it.*',
+    state: 'on' });
+  make({ id: 'nightly-retro', name: 'Nightly retro', icon: '🌙', color: '#3b2f6b', when: 'Every night at 21:30',
+    description: 'Reads what you typed today, finds what you had to correct or repeat, and fixes the instruction that should have caught it.',
+    about: 'Each night it reads the messages you typed to your threads that day, finds where you had to correct an agent, say something twice, or work around a tool, and fixes the memory or instruction that should have caught it. A real bug gets a fix thread of its own.',
+    example: '**Fixed**\n- Agents kept asking you to run builds yourself: added a line to your instructions.\n\n**Started**\n- A fix thread for the sidebar jumping when a reply arrives.',
+    state: 'on', schedules: [{ id: 'sch_nightly-retro', title: 'Nightly retro', paused: false, nextRunAt: new Date(at(0, 21, 30)).toISOString(), whenText: 'Every day at 21:30' }] });
+  make({ id: 'weekly-step-back', name: 'Weekly step back', icon: '🔭', color: '#2f7d6d', when: 'Sundays at 19:00', state: 'off',
+    description: 'Looks across the whole week on a stronger model for friction patched twice and things that stopped earning their keep.',
+    schedules: [{ id: 'sch_weekly-step-back', title: 'Weekly step back', paused: true, whenText: 'Sundays at 19:00' }] });
+  make({ id: 'spare-tokens', name: 'Spare tokens', icon: '🪙', color: '#c9a23a', when: 'Before a login\'s week resets', state: 'add',
+    description: "When a login's week is about to reset with lots unused, suggests work worth doing with it." });
+  make({ id: 'repo-watch', name: 'Repo watch', icon: '🔎', color: '#59606e', when: 'Every morning', state: 'add',
+    description: 'Each morning: new issues, PRs, commits on forks and error reports on a public repo. Takes small sure fixes, asks about the rest.' });
+  make({ id: 'docs-freshness', name: 'Docs freshness', icon: '📚', color: '#8a5fc7', when: 'When main moves', state: 'add',
+    description: "When main moves, checks the README, site and guide still say what's true and fixes what drifted." });
+  make({ id: 'os-updates', name: 'OS updates', icon: '🛠️', color: '#5a8fb0', when: 'Daily, quiet most days', state: 'add',
+    description: 'Keeps every Mac patched. Starts a thread only when an update is waiting, and installs at a safe moment.' });
+  make({ id: 'stay-in-touch', name: 'Stay in touch', icon: '👋', color: '#d86a8c', when: 'Saturdays at 9:00', state: 'add', source: 'yours', by: undefined,
+    description: "Once a week, picks a friend who's overdue and drafts a warm message with a photo. You send it." });
+  // A month of runs for the three that are on.
+  const brief = recipes.get('daily-brief');
+  for (let d = 0; d < 28; d++) {
+    if (d === 3 || d === 11) continue;
+    const needs = d % 3 === 0;
+    brief.runs.push(run(brief, d, 6, 30, needs ? (d % 2 ? '2 emails need you' : '1 email needs you') : 'Nothing urgent', needs, d !== 1));
+  }
+  const retro = recipes.get('nightly-retro');
+  for (let d = 1; d < 15; d++) retro.runs.push(run(retro, d, 21, 30, d % 4 === 0 ? 'Started 1 fix thread' : `Fixed ${(d % 3) + 1} instructions`, d % 4 === 0, true));
+  const mail = recipes.get('email-watcher');
+  mail.runs.push(run(mail, 0, 16, 0, '3 emails to look at', true, false), run(mail, 0, 9, 0, '1 email to look at', false, true), run(mail, 1, 16, 0, 'Nothing new', false, true));
+}
+if (process.env.TB_MOCK_RECIPES) addRecipesDemo();
+
+function recipeSummary(r) {
+  const since = Date.now() - 30 * 86_400_000;
+  const runs = r.runs.filter((x) => Date.parse(x.at) >= since);
+  const last = runs.reduce((a, b) => (!a || Date.parse(b.at) > Date.parse(a.at) ? b : a), undefined);
+  const { about, example, runs: _runs, ...rest } = r;
+  return { ...rest, stats: { runs: runs.length, neededYou: runs.filter((x) => x.needsYou).length, seen: runs.filter((x) => x.seen).length, ...(last ? { lastRunAt: last.at, lastHeadline: last.headline } : {}) } };
+}
+function recipeOrder(a, b) {
+  const rank = { on: 0, settingUp: 1, off: 2, add: 3 };
+  return rank[a.state] - rank[b.state] || a.name.localeCompare(b.name);
+}
+function needRecipe(id) {
+  const r = recipes.get(String(id ?? ''));
+  if (!r) throw rpcError(-32602, `No recipe ${id}`);
+  return r;
+}
+async function recipeRequest(client, method, p) {
+  if (!process.env.TB_MOCK_RECIPES) throw rpcError(-32601, 'Recipes is an experiment that is off');
+  // A moment's wait, as a busy runner's, so the spinners show.
+  await new Promise((r) => setTimeout(r, Number(process.env.TB_MOCK_RECIPES_MS ?? 400)));
+  switch (method) {
+    case 'recipes.list':
+      return { recipes: [...recipes.values()].map(recipeSummary).sort(recipeOrder) };
+    case 'recipes.get': {
+      const r = needRecipe(p.id);
+      return { recipe: { ...recipeSummary(r), about: r.about ?? r.description, ...(r.example ? { example: r.example } : {}), file: path.join(RECIPES_DIR, r.id, 'RECIPE.md'), runs: [...r.runs].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 60) } };
+    }
+    case 'recipes.setOn': {
+      const r = needRecipe(p.id);
+      if (process.env.TB_MOCK_RECIPES_REFUSE) throw rpcError(-32000, 'The runner could not reach your backend to pause its schedule.');
+      if (r.state !== 'add') r.state = r.state === 'settingUp' && p.on ? 'settingUp' : p.on ? 'on' : 'off';
+      r.schedules = r.schedules.map((s) => ({ ...s, paused: !p.on }));
+      broadcast('recipes.updated', {});
+      return { recipe: recipeSummary(r) };
+    }
+    case 'recipes.add': {
+      const r = needRecipe(p.id);
+      const made = await dispatch(client, 'threads.create', { text: `Set up the recipe "${r.name}" with me.`, title: `Set up ${r.name}`, cwd: `${os.homedir()}/ThreadbearThreads/recipes/${r.id}` });
+      r.state = 'settingUp';
+      r.setupThreadId = made.thread.id;
+      broadcast('recipes.updated', {});
+      return { threadId: made.thread.id, thread: made.thread };
+    }
+    case 'recipes.create': {
+      const edit = p.editId ? needRecipe(p.editId) : undefined;
+      const text = edit ? `Change the recipe "${edit.name}" with me.` : p.text || 'Write a new recipe with me.';
+      const made = await dispatch(client, 'threads.create', { text, title: edit ? `Change ${edit.name}` : 'A new recipe', cwd: `${os.homedir()}/ThreadbearThreads/recipes` });
+      return { threadId: made.thread.id, thread: made.thread };
+    }
+    case 'recipes.remove': {
+      const r = needRecipe(p.id);
+      r.state = 'add';
+      r.schedules = [];
+      delete r.setupThreadId;
+      broadcast('recipes.updated', {});
+      return { removed: true };
+    }
+  }
+  throw rpcError(-32601, `Unknown method ${method}`);
 }
 
 // TB_MOCK_LIVE_PAGES=<an .html file>: the livePages experiment on, and
@@ -1756,6 +1891,14 @@ async function dispatch(client, method, p) {
     // The Connectors gateway (docs/protocol.md, "Connectors"): a made-up
     // one, with a service signed out so the panel and its dot show.
     // mock.connectors changes it.
+    case 'recipes.list':
+    case 'recipes.get':
+    case 'recipes.setOn':
+    case 'recipes.add':
+    case 'recipes.create':
+    case 'recipes.remove':
+      if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
+      return recipeRequest(client, method, p);
     case 'connectors.status':
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       if (p.refresh) connectors = { ...connectors, checkedAt: iso() };

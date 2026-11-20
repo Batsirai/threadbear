@@ -361,6 +361,8 @@ It comes from reading code, not from running anything, so "(unverified)" means n
 | `projects.icon` | Project icon | Choose or librarian's | GPUI path prompt, with Reveal going through the open gate. | kit | S | `ProjectPage`, `ProjectIconView` |
 | `projects.tasks` | Tasks board page | Status columns from Notion | Drawn columns. | build | M | `ProjectPage` (`TasksSection`) |
 | `projects.newthread` | New thread in project | "In" chip | Drawn chip. | build | S | `DetailView` (`NewThreadProjectChip`) |
+| `recipes.view` | Recipes view | Experiment `recipes`: a rail button (counting the recipes on); the sidebar's New recipe, Browse recipes and each recipe added with its switch (moves at once, back with the runner's reason if it says no), how it's going and its latest runs; the gallery of cards, each with its header picture or colour, its icon on the header's edge, On, Off, Setting up or + Add (spins, then opens the setup thread) and how it's been going | Drawn list and cards. | build | M | (GPUI only) |
+| `recipes.page` | A recipe's page | Banner with the switch or Add, about, an example of a run, what it set up, the last 30 days as a strip, its numbers and its log; Change it with an agent and Remove | Drawn page. | build | M | (GPUI only) |
 | `librarian.page` | Librarian page | Picture, tiles, Look at threads, Runs on | Drawn. | build | S | `LibrarianHome`, `HomePage` |
 | `librarian.log` | Librarian log | Recent, Next, Look at everything | Drawn list. | build | M | `LibrarianView` |
 | `librarian.picture` | Pokeable picture | Secret lines | Built, with its wobble on a poke (`home_page.rs`, core's `juice::wobble`): GPUI can't turn a picture, so the Swift tilt is a sway of the picture's middle, with the squash as it is. | build | S | `HomePage` |

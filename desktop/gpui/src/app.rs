@@ -183,6 +183,8 @@ pub struct Threadbear {
     pub(crate) restoring_place: bool,
     /// The Librarian view (librarian.rs).
     pub(crate) librarian: crate::librarian::LibrarianState,
+    /// The Recipes view (recipes.rs), with the `recipes` experiment on.
+    pub(crate) recipes: crate::recipes::RecipesState,
     /// What the Librarian page's picture says when it's poked.
     pub(crate) librarian_pokes: crate::home_page::Pokes,
     /// The Usage panel's numbers and the honey pot (usage.rs).
@@ -571,6 +573,7 @@ impl Threadbear {
             shows_home: false,
             restoring_place: false,
             librarian: crate::librarian::LibrarianState::new(),
+            recipes: crate::recipes::RecipesState::new(),
             librarian_pokes: crate::home_page::Pokes::new(crate::home_page::Art::Librarian),
             usage,
             runner_settings: None,
@@ -903,6 +906,7 @@ impl Threadbear {
                     self.load_remote(cx);
                     self.load_clis(cx);
                     self.load_connectors(cx);
+                    self.load_recipes(cx);
                     self.load_setup_devices(cx);
                     self.side.update(cx, |side, cx| side.connected(cx));
                     for pane in self.pane.iter().chain(self.thread_panels.panes()) {
@@ -1014,6 +1018,7 @@ impl Threadbear {
                     }
                 }
                 "librarian.updated" => self.librarian.status = Some(threadbear_core::librarian::Status::decode(&params["librarian"])),
+                "recipes.updated" => self.load_recipes(cx),
                 "settings.updated" => self.runner_settings = Some(params["settings"].clone()),
                 // A login appearing or going, its models once asked, its
                 // usage; and the pools after a save: both replace `hello`'s.
@@ -1675,6 +1680,9 @@ impl Threadbear {
         }
         if self.mode == SidebarMode::Projects {
             sidebar["sections"] = self.projects_sidebar_dump();
+        }
+        if self.recipes_on() {
+            sidebar["recipes"] = self.recipes_dump();
         }
         let mut dump = json!({
             "connection": connection,

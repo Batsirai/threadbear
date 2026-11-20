@@ -2809,7 +2809,8 @@ pub(crate) fn automation(app: &Entity<Threadbear>, cmd: &Value, window: &mut Win
                             found = shown(window);
                         }
                     } else {
-                        let scrolls = app.read(cx).side.read(cx).prs.shown_scroll().into_iter().chain(crate::activity_panels::panel_scrolls());
+                        let recipes = Some(app.read(cx).recipes.home_scroll.clone());
+                        let scrolls = app.read(cx).side.read(cx).prs.shown_scroll().into_iter().chain(crate::activity_panels::panel_scrolls()).chain(recipes);
                         for scroll in scrolls {
                             let pane = scroll.bounds();
                             if bounds.center().x < pane.left() || bounds.center().x > pane.right() || !crate::settings_window::scroll_to(&scroll, bounds) {

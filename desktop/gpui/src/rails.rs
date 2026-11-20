@@ -333,6 +333,7 @@ impl Threadbear {
             SidebarMode::Scheduled => "rail-scheduled",
             SidebarMode::Projects => "rail-projects",
             SidebarMode::Librarian => "rail-librarian",
+            SidebarMode::Recipes => "rail-recipes",
         }
         .into();
         let sliding = lit(Some(lit_id.clone()), cx.reduce_motion());
@@ -385,6 +386,19 @@ impl Threadbear {
                 this.set_mode(SidebarMode::Librarian, cx);
                 // Its page takes the thread's place, and the list the
                 // keyboard, so Esc there goes back to the Inbox.
+                window.focus(&this.sidebar.focus, cx);
+                crate::web_panels::keyboard_to_app(window);
+            }, cx));
+        }
+        // Recipes, with its experiment on (recipes.rs): how many are on.
+        if self.recipes_on() {
+            let mut button = view_button(RailButton::new("rail-recipes", "book", "Recipes", mode == SidebarMode::Recipes));
+            button.tip = "Recipes: techniques worth keeping, set up for you by an agent".into();
+            button.badge = self.recipes.list.as_ref().map(|l| threadbear_core::recipes::on_count(l)).filter(|n| *n > 0);
+            views.push(rail_button(button, |this, window, cx| {
+                this.unfold_threads(cx);
+                let page = this.recipes.open.clone();
+                this.show_recipes(page, cx);
                 window.focus(&this.sidebar.focus, cx);
                 crate::web_panels::keyboard_to_app(window);
             }, cx));
@@ -540,6 +554,9 @@ impl Threadbear {
         if self.projects_supported {
             activity.push(json!({ "title": "Projects", "active": mode == SidebarMode::Projects }));
             activity.push(json!({ "title": "Librarian", "badge": self.librarian.status.as_ref().map(|s| s.pending_count()), "active": mode == SidebarMode::Librarian }));
+        }
+        if self.recipes_on() {
+            activity.push(json!({ "title": "Recipes", "badge": self.recipes.list.as_ref().map(|l| threadbear_core::recipes::on_count(l)), "active": mode == SidebarMode::Recipes }));
         }
         // The foot's panels, with their dots: `dot` the accent, `quietDot` the grey.
         if self.connectors_on() {

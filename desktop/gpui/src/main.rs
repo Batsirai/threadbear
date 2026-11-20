@@ -94,6 +94,7 @@ mod project_page;
 mod projects;
 mod projects_list;
 mod projects_page;
+mod recipes;
 mod push_button;
 mod quit_prompt;
 mod rails;

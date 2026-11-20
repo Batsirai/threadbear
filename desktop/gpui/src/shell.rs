@@ -46,6 +46,8 @@ pub(crate) enum SidebarMode {
     Scheduled,
     Projects,
     Librarian,
+    /// The `recipes` experiment's view (recipes.rs).
+    Recipes,
 }
 
 impl SidebarMode {
@@ -55,6 +57,7 @@ impl SidebarMode {
             SidebarMode::Scheduled => "scheduled",
             SidebarMode::Projects => "projects",
             SidebarMode::Librarian => "librarian",
+            SidebarMode::Recipes => "recipes",
         }
     }
 }
@@ -481,6 +484,7 @@ impl Threadbear {
         match self.home_page().unwrap_or(SidebarMode::Inbox) {
             SidebarMode::Projects => "Projects".into(),
             SidebarMode::Librarian => "Librarian".into(),
+            SidebarMode::Recipes => "Recipes".into(),
             SidebarMode::Scheduled => "Scheduled".into(),
             SidebarMode::Inbox => match self.open_thread() {
                 Some(t) if t.title.is_empty() => "Untitled".into(),
@@ -1636,6 +1640,7 @@ impl Threadbear {
             SidebarMode::Inbox => self.render_sidebar(cx).into_any_element(),
             SidebarMode::Scheduled => self.render_scheduled_list(cx),
             SidebarMode::Librarian => self.render_librarian_list(cx),
+            SidebarMode::Recipes => self.render_recipes_list(cx),
             SidebarMode::Projects => self.render_projects_list(cx),
         };
         // A view the activity bar's just switched to fades up into place
@@ -1676,6 +1681,7 @@ impl Threadbear {
             },
             (_, Some(SidebarMode::Scheduled)) => self.render_scheduled_home(cx),
             (_, Some(SidebarMode::Librarian)) => self.render_librarian_home(cx),
+            (_, Some(SidebarMode::Recipes)) => self.render_recipes_home(cx),
             (_, Some(_)) => self.render_projects_home(window, cx),
             // Its thread is open in a panel of its own (thread_panels.rs).
             (None, None) if self.open_elsewhere(cx).is_some() => {

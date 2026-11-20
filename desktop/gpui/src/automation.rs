@@ -1231,6 +1231,7 @@ fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &m
                 "scheduled" => shell::SidebarMode::Scheduled,
                 "projects" => shell::SidebarMode::Projects,
                 "librarian" => shell::SidebarMode::Librarian,
+                "recipes" => shell::SidebarMode::Recipes,
                 "archive" => {
                     app.update(cx, |t, cx| t.run_command(shell::Command::ShowArchived, window, cx));
                     return Ok(json!("ok"));
