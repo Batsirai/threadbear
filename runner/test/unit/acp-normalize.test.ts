@@ -65,7 +65,7 @@ test('a permission request brings the row and the preview once a card is put up,
 });
 
 test('a call run under another id than its request takes over the request\'s row only when it plainly is that call', () => {
-  const n = new AcpNormalizer(ctx);
+  const n = new AcpNormalizer(ctx, { movesAskedCalls: true });
   const seen = n.noteCall({ toolCallId: 'ask1', title: 'Run create_file?', kind: 'edit', rawInput: { TargetFile: '/w/a.js', CodeContent: 'hi' }, content: [{ type: 'diff', path: '/w/a.js', oldText: null, newText: 'hi' }] });
   // Not yet answered, then refused: another call on the file is its own row.
   assert.equal((n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:0', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } })[0] as { event: { itemId: string } }).event.itemId, 's:0', 'not while its card waits');
@@ -84,20 +84,20 @@ test('a call run under another id than its request takes over the request\'s row
   const end = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 's:3', status: 'completed' });
   assert.deepEqual(end.map((o) => (o as { event: { itemId: string; ok: boolean } }).event).map((e) => [e.itemId, e.ok]), [[seen.id, true]]);
   // A new file's text with a patch-like line in it still matches by its file.
-  const n3 = new AcpNormalizer(ctx);
+  const n3 = new AcpNormalizer(ctx, { movesAskedCalls: true });
   n3.noteCall({ toolCallId: 'ask3', kind: 'edit', rawInput: { TargetFile: '/w/doc.md', CodeContent: 'title\n--- section\nbody' }, content: [{ type: 'diff', path: '/w/doc.md', oldText: null, newText: 'title\n--- section\nbody' }] });
   n3.answered('ask3', true);
   assert.equal((n3.handle({ sessionUpdate: 'tool_call', toolCallId: 's:5', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/doc.md' } })[0] as { event: { itemId: string } }).event.itemId, 'ask3');
   // A call whose first frame names no file is matched once one does, and a
   // card it asks for later names the row it shows on.
-  const n4 = new AcpNormalizer(ctx);
+  const n4 = new AcpNormalizer(ctx, { movesAskedCalls: true });
   n4.noteCall({ toolCallId: 'ask4', kind: 'edit', rawInput: { TargetFile: '/w/b.js' } });
   n4.answered('ask4', true);
   assert.deepEqual(n4.handle({ sessionUpdate: 'tool_call', toolCallId: 's:6', kind: 'edit', status: 'pending', rawInput: {} }), []);
   assert.equal((n4.handle({ sessionUpdate: 'tool_call_update', toolCallId: 's:6', status: 'in_progress', rawInput: { file_path: '/w/b.js' } })[0] as { event: { itemId: string } }).event.itemId, 'ask4');
   assert.equal(n4.noteCall({ toolCallId: 's:6', kind: 'edit', rawInput: { file_path: '/w/b.js' } }).row, 'ask4');
   // One allowed without a card that never ran is gone at the turn's end.
-  const n2 = new AcpNormalizer(ctx);
+  const n2 = new AcpNormalizer(ctx, { movesAskedCalls: true });
   n2.noteCall({ toolCallId: 'ask2', kind: 'edit', rawInput: { TargetFile: '/w/a.js' } });
   n2.answered('ask2', true);
   n2.closeOpen('Stopped');
@@ -197,7 +197,7 @@ test("a use_tool call whose arguments stream in after it starts is still the too
 });
 
 test("Antigravity's create_file, frame by frame as 1.4.5 sends it: one row, which succeeds", () => {
-  const n = new AcpNormalizer(ctx);
+  const n = new AcpNormalizer(ctx, { movesAskedCalls: true });
   const f = '/w/hello.txt';
   const proposed = { toolCallId: 'hex1', title: 'Run create_file?', kind: 'edit', status: 'pending', content: [{ path: f, newText: 'hi\n', type: 'diff' }], locations: [{ path: f }], rawInput: { CodeContent: 'hi\n', Overwrite: true, TargetFile: f } };
   const out = [...n.handle({ sessionUpdate: 'tool_call', ...proposed })];
@@ -210,4 +210,20 @@ test("Antigravity's create_file, frame by frame as 1.4.5 sends it: one row, whic
   const evs = out.map((o) => (o as { event: { type: string; itemId: string; ok?: boolean } }).event);
   assert.deepEqual(evs.filter((e) => e.type === 'tool.call').map((e) => e.itemId), ['hex1']);
   assert.deepEqual(evs.filter((e) => e.type === 'tool.result').map((e) => [e.itemId, e.ok]), [['hex1', true]]);
+});
+
+test('a proposed call never takes an allowed request\'s row, and an agent that keeps its ids never has one taken', () => {
+  const f = '/w/a.txt';
+  const go = (n: AcpNormalizer) => {
+    n.handle({ sessionUpdate: 'tool_call', toolCallId: 'A', kind: 'edit', status: 'pending', locations: [{ path: f }], rawInput: { TargetFile: f, CodeContent: 'one' } });
+    n.answered(n.noteCall({ toolCallId: 'A', kind: 'edit', locations: [{ path: f }], rawInput: { TargetFile: f, CodeContent: 'one' } }).id, true);
+  };
+  const n = new AcpNormalizer(ctx, { movesAskedCalls: true });
+  go(n);
+  const b = n.handle({ sessionUpdate: 'tool_call', toolCallId: 'B', kind: 'edit', status: 'pending', locations: [{ path: f }], rawInput: { TargetFile: f, CodeContent: 'two' } });
+  assert.equal((b.find((o) => (o as { event: { type: string } }).event.type === 'tool.call') as { event: { itemId: string } }).event.itemId, 'B');
+  const other = new AcpNormalizer(ctx);
+  go(other);
+  const c = other.handle({ sessionUpdate: 'tool_call', toolCallId: 'C', kind: 'edit', status: 'in_progress', locations: [{ path: f }], rawInput: { file_path: f } });
+  assert.equal((c.find((o) => (o as { event: { type: string } }).event.type === 'tool.call') as { event: { itemId: string } }).event.itemId, 'C');
 });

@@ -22,6 +22,10 @@ export type AgentRun = { dataDir?: string; noTools?: boolean; trusted?: boolean;
 
 export type AcpAgent = {
   provider: AcpProvider;
+  // It may run a file change it asked about under another tool call id
+  // (Antigravity's create_file), so that call takes over the request's row
+  // (normalize.ts, askedFor).
+  movesAskedCalls?: boolean;
   accountId: string;
   title: string;
   // Where the agent keeps its login and settings. Never opened by Threadbear.
@@ -362,6 +366,7 @@ const ANTIGRAVITY_READ_KEYS: ReadonlyMap<string, 'string' | 'number'> = new Map(
 
 const ANTIGRAVITY: AcpAgent = {
   provider: 'antigravity',
+  movesAskedCalls: true,
   accountId: 'antigravity-main',
   title: 'Gemini',
   configDir: (home) => path.join(geminiHome(home), 'antigravity-acp'),

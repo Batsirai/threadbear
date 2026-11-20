@@ -254,7 +254,7 @@ export class AcpSession implements AgentSession {
     this.rules = new Set(opts.allowRules ?? []);
     this.exitPromise = new Promise((r) => (this.resolveExit = r));
     this.ctx = fileContext(opts.cwd, opts.mediaDir, opts.blobsDir);
-    this.normalizer = new AcpNormalizer(this.ctx);
+    this.normalizer = new AcpNormalizer(this.ctx, { movesAskedCalls: this.deps.agent.movesAskedCalls === true });
     this.trusted = deps.agent.trusts?.(opts.cwd) ?? false;
     this.binary = binary;
     this.startRefusal = deps.agent.refuses?.({ cwd: opts.cwd, mode: 'ask', trusted: this.trusted, binary });

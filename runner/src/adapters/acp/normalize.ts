@@ -215,8 +215,11 @@ export class AcpNormalizer {
   private lastAssistant = '';
   costUsd?: number;
 
-  constructor(ctx: NormalizerContext) {
+  private movesAskedCalls: boolean;
+
+  constructor(ctx: NormalizerContext, o: { movesAskedCalls?: boolean } = {}) {
     this.ctx = ctx;
+    this.movesAskedCalls = o.movesAskedCalls === true;
   }
 
   // The last reply's words, for a Plan first thread's plan card.
@@ -364,6 +367,10 @@ export class AcpNormalizer {
   // row, so a card's row is the one that runs; what each call has said stays
   // its own, as the permission checks read it (Codex's review, 20 Nov 2026).
   private askedFor(u: AcpToolCall, kind = u.kind): Tool | undefined {
+    // Only for an agent known to do it, and only once the new call says it
+    // runs: a call that's only proposed may be another one entirely, still to
+    // be asked about (Codex's third review, 20 Nov 2026).
+    if (!this.movesAskedCalls || (u.status !== 'in_progress' && u.status !== 'completed')) return undefined;
     if (!writesFiles(kind)) return undefined;
     const paths = namedFiles(u);
     if (!paths.length || !paths.every((p) => path.isAbsolute(p))) return undefined;
