@@ -196,7 +196,12 @@ Copy, change the words and press Done (or ⌘Return). The box says
 version goes on the end of your next message to that thread (an answer
 on its card counts, from the thread or a project page), with a line
 asking the agent to use your words, so picking "Post and close" posts
-what you wrote. The change is kept on your Mac, in the desktop app.
+what you wrote. Until then a chip over the message box says so ("Your
+edited email · 2 lines changed"): View shows the draft in its reply,
+and × puts the agent's back, as Undo does. Once sent, your message
+shows the same chip under your words in place of that line, and Show
+opens the draft you sent; the website and the phone show it that way
+too. The change is kept on your Mac, in the desktop app.
 
 A reply that needs nothing from you ends with a Done card at the top of
 the message box, with an Archive button to put the thread away. When something it talked about is

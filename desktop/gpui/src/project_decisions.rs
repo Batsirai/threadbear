@@ -244,6 +244,22 @@ impl DecisionCard {
         for (index, ask) in asks.iter().enumerate() {
             column = column.child(self.render_ask(index, ask, numbered, window, cx));
         }
+        // Drafts he's changed in the thread's replies go with the answer
+        // too: a chip each says so (composer_drafts.rs). No View: the
+        // reply isn't on this page.
+        let drafts = crate::draft_boxes::pending_edits(&self.thread, cx);
+        if !drafts.is_empty() {
+            column = column.child(
+                div()
+                    .mt(px(8.))
+                    .child(crate::composer_drafts::pending_chips(
+                        "decision-draft-chips",
+                        drafts,
+                        None,
+                        cx,
+                    )),
+            );
+        }
         column.into_any_element()
     }
 }

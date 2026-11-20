@@ -216,6 +216,8 @@ fn copy(draft: &DraftBlock, window: &mut Window, cx: &mut App) {
 /// change not yet sent (unsent.rs).
 struct Edit {
     thread: String,
+    /// The reply's row, so the composer's chip for it can show where it is.
+    row: String,
     kind: DraftKind,
     /// The agent's words, to tell a change from none and to put back.
     original: String,
@@ -251,7 +253,14 @@ fn edit_key(thread: &str, base: &str) -> String {
 
 /// Edit: the box's words become a text box with the agent's draft (or his
 /// version from before) in it, the cursor at the end.
-fn start_edit(key: String, thread: String, draft: &DraftBlock, window: &mut Window, cx: &mut App) {
+fn start_edit(
+    key: String,
+    thread: String,
+    row: String,
+    draft: &DraftBlock,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let open = EDITS.with(|e| {
         let mut edits = e.borrow_mut();
         edits.get_mut(&key).map(|edit| {
@@ -281,6 +290,7 @@ fn start_edit(key: String, thread: String, draft: &DraftBlock, window: &mut Wind
             });
             let edit = Edit {
                 thread,
+                row,
                 kind: draft.kind,
                 original: draft.source.clone(),
                 editor: editor.clone(),
@@ -314,8 +324,9 @@ fn finish_edit(key: &str, cx: &mut App) {
     cx.refresh_windows();
 }
 
-/// Undo: the agent's draft back, his version gone.
-fn undo_edit(key: &str, cx: &mut App) {
+/// Undo: the agent's draft back, his version gone. The composer's chip for
+/// it does the same.
+pub(crate) fn undo_edit(key: &str, cx: &mut App) {
     let dropped = EDITS.with(|e| e.borrow_mut().remove(key));
     drop(dropped);
     cx.refresh_windows();
@@ -343,6 +354,44 @@ pub(crate) fn unsent_edits(thread: &str, cx: &App) -> String {
             .collect::<Vec<_>>()
     });
     draft_block::edited_message(&edits)
+}
+
+/// A changed draft that goes with Mike's next message to its thread, for the
+/// composer's chip that says so (composer_drafts.rs).
+pub(crate) struct PendingEdit {
+    /// Its key, for the chip's ✕, which is the box's Undo.
+    pub key: String,
+    /// The reply's row it's in, for the chip's View.
+    pub row: String,
+    pub kind: DraftKind,
+    /// How many lines his version changes.
+    pub lines: usize,
+}
+
+/// `thread`'s changed drafts not sent yet, in the order they go: the same
+/// ones `unsent_edits` puts on the end of the message.
+pub(crate) fn pending_edits(thread: &str, cx: &App) -> Vec<PendingEdit> {
+    EDITS.with(|e| {
+        let edits = e.borrow();
+        let mut mine: Vec<(&String, &Edit)> = edits
+            .iter()
+            .filter(|(_, edit)| edit.thread == thread)
+            .collect();
+        mine.sort_by(|a, b| a.0.cmp(b.0));
+        mine.into_iter()
+            .filter_map(|(key, edit)| {
+                let text = edit
+                    .changed(cx)
+                    .filter(|text| edit.sent.as_ref() != Some(text))?;
+                Some(PendingEdit {
+                    key: key.clone(),
+                    row: edit.row.clone(),
+                    kind: edit.kind,
+                    lines: draft_block::changed_lines(&edit.original, &text).max(1),
+                })
+            })
+            .collect()
+    })
 }
 
 /// The message with `thread`'s changed drafts has gone: each is marked as
@@ -433,7 +482,7 @@ fn draft_box(
         })
         .child(edit_button(
             &key,
-            &plugin.thread,
+            (&plugin.thread, &plugin.row),
             original,
             editor.is_some(),
             &base,
@@ -970,7 +1019,7 @@ fn header_button(id: String, icon: &str, word: &'static str, color: Hsla) -> Sta
 /// thing to press next).
 fn edit_button(
     key: &str,
-    thread: &str,
+    (thread, row): (&str, &str),
     original: &DraftBlock,
     editing: bool,
     base: &str,
@@ -987,14 +1036,23 @@ fn edit_button(
         .on_click(move |_, _, cx| finish_edit(&key, cx));
         return crate::highlights::tipped(button, DONE_TIP).into_any_element();
     }
-    let (thread, original) = (thread.to_owned(), original.clone());
+    let (thread, row, original) = (thread.to_owned(), row.to_owned(), original.clone());
     let button = header_button(
         format!("draft-edit-{base}"),
         "pencil",
         "Edit",
         style::secondary_label(cx),
     )
-    .on_click(move |_, window, cx| start_edit(key.clone(), thread.clone(), &original, window, cx));
+    .on_click(move |_, window, cx| {
+        start_edit(
+            key.clone(),
+            thread.clone(),
+            row.clone(),
+            &original,
+            window,
+            cx,
+        )
+    });
     crate::highlights::tipped(button, EDIT_TIP).into_any_element()
 }
 

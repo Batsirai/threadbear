@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { bareLinks, draftFrom, fenceClosed, maxFormattedLine, maxSource, draftHTML, draftLabel, draftLines, draftPlainText, slackSpans, type Draft, type DraftKind, type Line, type Span } from './draft.ts';
+import { bareLinks, draftFrom, fenceClosed, maxFormattedLine, maxSource, draftHTML, draftLabel, draftLines, draftPlainText, slackSpans, splitEdited, type Draft, type DraftKind, type Line, type Span } from './draft.ts';
 
 const joined = (draft: Draft) => draftLines(draft).map((l) => l.spans.map((s) => s.text).join(''));
 
@@ -212,4 +212,18 @@ test('draft blocks follow the shared cases', () => {
     if (c.differs?.web) continue;
     assert.deepEqual(run(c.input), c.expect, c.name);
   }
+});
+
+test('a sent message gives back its edited drafts, as draft_block.rs does', () => {
+  const intro = 'I edited your draft. Use my version below exactly as it is, not yours:';
+  const one = `Send it\n\n${intro}\n\n\`\`\`email\nHi Geoff,\n\nCheers\n\`\`\``;
+  assert.deepEqual(splitEdited(one), { words: 'Send it', drafts: [{ kind: 'email', source: 'Hi Geoff,\n\nCheers' }] });
+  assert.deepEqual(splitEdited(`${intro}\n\n\`\`\`slack\nhey\n\`\`\``)?.words, '');
+  const many = 'I edited your drafts. Use my versions below exactly as they are, not yours:';
+  const two = `ok\n\n${many}\n\n\`\`\`draft\nrun \`x\`\n\`\`\`\n\n\`\`\`\`email\na\n\`\`\`\nb\n\`\`\`\n\nc\n\`\`\`\``;
+  assert.deepEqual(splitEdited(two)?.drafts.map((d) => d.source), ['run `x`', 'a\n```\nb\n```\n\nc']);
+  assert.equal(splitEdited('Send it'), undefined);
+  assert.equal(splitEdited(`${one}\n\nand another thing`), undefined);
+  assert.equal(splitEdited(`He said ${intro}\n\n\`\`\`email\nx\n\`\`\``), undefined);
+  assert.equal(splitEdited(`${intro}\n\n\`\`\`python\nx\n\`\`\``), undefined);
 });

@@ -2256,6 +2256,25 @@ impl ThreadPane {
         }
     }
 
+    /// Brings a row into view a third of the way down and lights it up, as a
+    /// work link does: the composer's chip for a changed draft shows where
+    /// the draft is (composer_drafts.rs).
+    pub(crate) fn reveal_row(&mut self, row_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.feed.model().index_of(row_id) else {
+            return;
+        };
+        self.scroller
+            .update(cx, |s, cx| s.scroll_to_row(index, px(0.), cx));
+        let scroller = self.scroller.clone();
+        window.on_next_frame(move |_, cx| {
+            scroller.update(cx, |s, cx| {
+                let down = s.viewport().size.height / 3.;
+                s.back_up(down, cx);
+            });
+        });
+        self.light_row(row_id.to_owned(), cx);
+    }
+
     /// Lights a row up for a moment so the eye lands on the step (`light`).
     fn light_row(&mut self, row_id: String, cx: &mut Context<Self>) {
         self.rows.lit_row = Some(row_id.clone());
@@ -2376,6 +2395,14 @@ impl ThreadPane {
                 if let RowContent::LabReview(review) = &row.content {
                     if review.folds() {
                         out["expanded"] = json!(self.row_open(row));
+                    }
+                }
+                // My message's changed drafts, drawn as chips under its words
+                // (rows.rs, `edited_drafts`).
+                #[cfg(feature = "automation")]
+                if let RowContent::User(message) = &row.content {
+                    if let Some((words, drafts)) = threadbear_core::draft_block::split_edited(&message.text) {
+                        out["editedDrafts"] = json!({ "words": words, "chips": drafts.iter().map(|d| d.kind.edited_label()).collect::<Vec<_>>() });
                     }
                 }
                 #[cfg(feature = "automation")]

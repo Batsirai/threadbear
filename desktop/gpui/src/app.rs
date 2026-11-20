@@ -2302,6 +2302,11 @@ impl Threadbear {
             if let Some(picks) = composer.review_pick_lines(cx) {
                 out["reviewPicks"] = json!(picks);
             }
+            // Changed drafts going with the message (composer_drafts.rs).
+            let drafts = composer.draft_chip_lines(cx);
+            if !drafts.is_empty() {
+                out["drafts"] = json!(drafts);
+            }
         }
         out
     }

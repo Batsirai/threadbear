@@ -761,7 +761,7 @@ impl Composer {
         self.draft(cx).1.len()
     }
 
-    fn pane(&self) -> Option<Entity<ThreadPane>> {
+    pub(crate) fn pane(&self) -> Option<Entity<ThreadPane>> {
         self.pane.upgrade()
     }
 
@@ -853,6 +853,9 @@ impl Composer {
             || !self.card.next_picks.is_empty()
             || !self.card.explain.is_empty()
             || self.review_picks(cx).is_some()
+            // A changed draft's chip says it goes with the message, so it
+            // can go on its own (composer_drafts.rs).
+            || self.has_pending_drafts(cx)
     }
 
     /// The review this box answers when it's sent: one of this thread's
@@ -3029,6 +3032,9 @@ impl Render for Composer {
         let answer_chips = self.render_answer_chips(cx);
         // And the options ticked on a review's page beside the thread.
         let review_picks = self.render_review_picks(cx);
+        // Drafts he's changed in this thread's replies, which go with the
+        // message: a chip each, so it's plain they do (composer_drafts.rs).
+        let draft_chips = self.render_draft_chips(cx);
         let needs_you = self.open_card(cx).is_some_and(|c| !c.is_done());
         let palette = self.render_palette(window, cx);
         let width = self.card_width.clone();
@@ -3058,6 +3064,7 @@ impl Render for Composer {
             .children(editing_banner)
             .children(answer_chips)
             .children(review_picks)
+            .children(draft_chips)
             .when_some(strip, |s, strip| s.child(strip))
             .child(self.render_text_field(locked, cx))
             .child(controls);

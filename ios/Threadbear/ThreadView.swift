@@ -929,6 +929,11 @@ struct MessageView: View {
                         .padding(.vertical, 10)
                         .background(BubbleBackground().clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)))
                 }
+                // Drafts he changed on the Mac, sent on the end of his words:
+                // a chip each, opening to the draft he sent.
+                ForEach(Array(edited.drafts.enumerated()), id: \.offset) { _, draft in
+                    EditedDraftChip(draft: draft)
+                }
                 if message.origin == "phone" {
                     PhoneMark()
                 } else if let origin = originText {
@@ -998,7 +1003,12 @@ struct MessageView: View {
     }
 
     /// Without the "[2 pictures]" line once the photos are over it.
-    private var shownText: String { pictures.words(of: message.text, seq: message.seq) }
+    /// His words and the drafts he changed (`DraftBlock.splitEdited`).
+    private var edited: (words: String, drafts: [DraftBlock]) {
+        DraftBlock.splitEdited(message.text) ?? (message.text, [])
+    }
+
+    private var shownText: String { pictures.words(of: edited.words, seq: message.seq) }
 
     private var originText: String? {
         switch message.origin {
@@ -1396,5 +1406,36 @@ private struct MarkdownTable: View {
 
     private func frameAlignment(_ i: Int) -> Alignment {
         switch alignment(i) { case .leading: .leading; case .center: .center; case .trailing: .trailing }
+    }
+}
+
+/// A draft Mike changed on the Mac and sent with a message: "Your edited
+/// email", which opens to the draft he sent (the Mac's bubble chip).
+struct EditedDraftChip: View {
+    let draft: DraftBlock
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            Button {
+                open.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: draft.kind == .email ? "envelope" : draft.kind == .slack ? "bubble.left" : "doc.text")
+                        .foregroundStyle(.secondary)
+                    Text(draft.editedLabel).foregroundStyle(.primary)
+                    Text(open ? "Hide" : "Show").foregroundStyle(.tint)
+                }
+                .font(.footnote)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.quaternary))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Your version of the agent's draft, sent with this message for it to use")
+            if open {
+                DraftBlockView(draft: draft)
+            }
+        }
     }
 }

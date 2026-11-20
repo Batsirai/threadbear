@@ -65,6 +65,8 @@ pub(crate) struct RowsState {
     /// Counts each lighting, so lighting the same row again starts its fade
     /// over (`light_row`).
     pub(crate) lit_serial: u64,
+    /// His bubbles' edited drafts opened with Show, by "<row>-<n>".
+    pub(crate) shown_drafts: HashSet<String>,
     /// The list's width at its last layout (for picture grids, which lay out
     /// to it). The list can't be asked mid-layout.
     pub(crate) list_width: f32,
@@ -328,6 +330,21 @@ impl ThreadPane {
         if let Some(header) = message.agent_header() {
             return self.agent_message_row(ix, row, &header, cx);
         }
+        // Drafts he changed went on the end, after a line asking the agent
+        // to use them: his bubble shows his words and a chip for each
+        // instead (composer_drafts.rs). The lift still goes by what was sent.
+        let sent_text = message.text.clone();
+        let stripped;
+        let (message, edited) = match threadbear_core::draft_block::split_edited(&message.text) {
+            Some((words, drafts)) => {
+                stripped = UserMessage {
+                    text: words,
+                    ..message.clone()
+                };
+                (&stripped, drafts)
+            }
+            None => (message, Vec::new()),
+        };
         let bubble_bg = style::bubble_background(cx);
         let label = style::label_text(cx);
         let quiet = style::quiet_text(cx);
@@ -346,7 +363,7 @@ impl ThreadPane {
                 cx,
             ));
         }
-        let show_text = !message.text.is_empty() || message.images.is_empty();
+        let show_text = !message.text.is_empty() || message.images.is_empty() || !edited.is_empty();
         if show_text {
             let mut line = h_flex().w_full().justify_end().items_end().gap(px(6.));
             match pending {
@@ -370,6 +387,7 @@ impl ThreadPane {
                 }
                 _ => {}
             }
+            let has_words = !message.text.is_empty();
             let text = if message.text.is_empty() {
                 " ".to_string()
             } else {
@@ -399,10 +417,13 @@ impl ThreadPane {
             } else {
                 self.chip_lines(ix, &row.id, message, max_text, window, cx)
             };
-            let fit = (!answered && chips.is_none()).then(|| widest_line(&text, max_text, window));
+            let fit = (!answered && chips.is_none() && (has_words || edited.is_empty()))
+                .then(|| widest_line(&text, max_text, window));
             let words = fit
                 .is_some()
                 .then(|| self.bubble_words(("user-text", ix), text, &row.id, cx));
+            let drafts = (!edited.is_empty())
+                .then(|| self.edited_drafts(ix, &row.id, &edited, has_words || answered, cx));
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
                 .when_some(fit, |d, (ink, _)| d.w(ink + px(BUBBLE_PAD_H * 2.)))
@@ -425,7 +446,10 @@ impl ThreadPane {
                 .when_some(chips.map(|c| c.1), |d, lines| d.child(lines))
                 .when_some(answered_words, |d, words| {
                     d.child(answers_body(ix, &words, cx))
-                });
+                })
+                // Room for the chip under a short line.
+                .when(drafts.is_some(), |d| d.min_w(px(EDITED_DRAFTS_MIN)))
+                .children(drafts);
             // The pencil, left of the bubble and level with its last line, on
             // hover, as Codex and ChatGPT put theirs (`Cells.updateEdit`).
             let editable = message.editable
@@ -476,7 +500,7 @@ impl ThreadPane {
                     .child("Runner restarting. Sends when it's back."),
             );
         }
-        let lift = self.send_lift(&row.id, &message.text, pending, window, cx);
+        let lift = self.send_lift(&row.id, &sent_text, pending, window, cx);
         let col = match lift {
             Some((fade, below)) => div()
                 .relative()
@@ -1583,5 +1607,83 @@ mod scroll_memory_tests {
                 .collect::<Vec<_>>(),
             vec![("t1", false, Some("r".to_owned())), ("t2", true, None)]
         );
+    }
+}
+
+/// The narrowest a bubble with edited drafts gets, so a chip fits under
+/// "Send it".
+const EDITED_DRAFTS_MIN: f32 = 240.;
+
+impl ThreadPane {
+    /// His changed drafts under his words (`split_edited`): a chip each, as
+    /// the box showed before he sent them, with Show to read the draft he
+    /// sent, drawn line for line in a box as a reply's draft is.
+    fn edited_drafts(
+        &mut self,
+        ix: usize,
+        row_id: &str,
+        drafts: &[threadbear_core::draft_block::DraftBlock],
+        after_words: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use gpui_kit::base::TestSupportExt as _;
+        let (label, secondary, accent) = (
+            style::label_text(cx),
+            style::secondary_label(cx),
+            style::accent(cx),
+        );
+        let mut col = v_flex()
+            .gap(px(6.))
+            .items_start()
+            .when(after_words, |d| d.mt(px(8.)));
+        for (n, draft) in drafts.iter().enumerate() {
+            let key = format!("{row_id}-{n}");
+            let shown = self.rows.shown_drafts.contains(&key);
+            let tip = if shown {
+                "Hide the draft you sent"
+            } else {
+                "Show the draft you sent"
+            };
+            let toggle = div()
+                .id(("edited-draft-show", ix * 100 + n))
+                .test_support()
+                .role(Role::Button)
+                .aria_label(tip)
+                .cursor_pointer()
+                .text_color(accent)
+                .child(if shown { "Hide" } else { "Show" })
+                .tip(tip)
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if !this.rows.shown_drafts.remove(&key) {
+                        this.rows.shown_drafts.insert(key.clone());
+                    }
+                    cx.notify();
+                }));
+            col = col.child(
+                crate::composer_drafts::chip_frame(("edited-draft", ix * 100 + n), cx)
+                    .tip(crate::composer_drafts::SENT_TIP)
+                    .child(crate::composer_drafts::kind_icon(draft.kind, secondary))
+                    .child(div().text_color(label).child(draft.kind.edited_label()))
+                    .child(toggle),
+            );
+            if shown {
+                let lines: Vec<String> = draft.drawn_lines().iter().map(|l| l.shown()).collect();
+                col = col.child(
+                    div()
+                        .w_full()
+                        .px(px(10.))
+                        .py(px(8.))
+                        .rounded(px(8.))
+                        .bg(style::code_background(cx))
+                        .border(gpui_kit::px(0.5))
+                        .border_color(style::card_border(cx))
+                        .child(SelectableText::new(
+                            ("edited-draft-text", ix * 100 + n),
+                            lines.join("\n"),
+                        )),
+                );
+            }
+        }
+        col.into_any_element()
     }
 }

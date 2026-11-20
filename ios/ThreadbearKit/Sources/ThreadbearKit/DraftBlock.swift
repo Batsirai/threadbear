@@ -44,6 +44,60 @@ public struct DraftBlock: Hashable, Sendable {
         return lowered.contains("slack") || lowered.contains("email") || lowered.contains("draft")
     }
 
+    private static let editedOne = "I edited your draft. Use my version below exactly as it is, not yours:"
+    private static let editedMany = "I edited your drafts. Use my versions below exactly as they are, not yours:"
+
+    /// A sent message with the Mac's edited drafts on its end
+    /// (desktop/core's draft_block.rs, `split_edited`; the website's
+    /// `splitEdited`): his own words, and each draft he changed, so his
+    /// bubble shows a chip for each rather than the line asking the agent
+    /// to use them and the raw fences. Nil when it doesn't end that way.
+    public static func splitEdited(_ text: String) -> (words: String, drafts: [DraftBlock])? {
+        let found = [editedOne, editedMany].compactMap { intro in text.range(of: intro, options: .backwards).map { (intro, $0) } }
+            .max { $0.1.lowerBound < $1.1.lowerBound }
+        guard let (intro, range) = found else { return nil }
+        let before = text[..<range.lowerBound]
+        guard before.isEmpty || before.hasSuffix("\n\n") else { return nil }
+        var rest = Substring(text[range.upperBound...])
+        var drafts: [DraftBlock] = []
+        while rest.hasPrefix("\n\n") {
+            let after = rest.dropFirst(2)
+            let ticks = after.prefix { $0 == "`" }.count
+            guard ticks >= 3, let lineEnd = after.firstIndex(of: "\n") else { return nil }
+            let word = String(after[after.index(after.startIndex, offsetBy: ticks)..<lineEnd])
+            let body = after[after.index(after: lineEnd)...]
+            let close = "\n" + String(repeating: "`", count: ticks)
+            guard let end = closing(body, close), let draft = from(language: word, code: String(body[..<end.lowerBound])) else { return nil }
+            drafts.append(draft)
+            rest = body[end.upperBound...]
+        }
+        guard !drafts.isEmpty, rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (intro == editedOne) == (drafts.count == 1) else { return nil }
+        var words = String(before)
+        while let last = words.last, last.isWhitespace { words.removeLast() }
+        return (words, drafts)
+    }
+
+    /// Where a draft's closing fence is: on a line of its own, with only
+    /// the end or a new paragraph after it.
+    private static func closing(_ text: Substring, _ close: String) -> Range<Substring.Index>? {
+        var from = text.startIndex
+        while let found = text.range(of: close, range: from..<text.endIndex) {
+            let after = text[found.upperBound...]
+            if after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || after.hasPrefix("\n\n") { return found }
+            from = text.index(after: found.lowerBound)
+        }
+        return nil
+    }
+
+    /// What the chip for his changed draft calls it.
+    public var editedLabel: String {
+        switch kind {
+        case .slack: return "Your edited Slack message"
+        case .email: return "Your edited email"
+        case .draft: return "Your edited draft"
+        }
+    }
+
     /// What the box's header calls it.
     public var label: String {
         switch kind {

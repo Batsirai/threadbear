@@ -65,9 +65,9 @@ pub fn edited_message(edits: &[(DraftKind, String)]) -> String {
         return String::new();
     }
     let intro = if edits.len() == 1 {
-        "I edited your draft. Use my version below exactly as it is, not yours:"
+        EDITED_ONE
     } else {
-        "I edited your drafts. Use my versions below exactly as they are, not yours:"
+        EDITED_MANY
     };
     let mut out = intro.to_owned();
     for (kind, text) in edits {
@@ -85,6 +85,102 @@ pub fn edited_message(edits: &[(DraftKind, String)]) -> String {
         ));
     }
     out
+}
+
+const EDITED_ONE: &str = "I edited your draft. Use my version below exactly as it is, not yours:";
+const EDITED_MANY: &str =
+    "I edited your drafts. Use my versions below exactly as they are, not yours:";
+
+/// A sent message with `edited_message` on its end, taken apart: his own
+/// words before it, and each changed draft, so his bubble shows them as
+/// chips rather than the line to the agent and the raw fences (Mike, 20 Nov:
+/// "it kind of comes like this, which looks a bit weird"). None when the
+/// message doesn't end that way; then it's shown as it is. The website
+/// (web/src/draft.ts, `splitEdited`) reads it the same way.
+pub fn split_edited(text: &str) -> Option<(String, Vec<DraftBlock>)> {
+    let (at, intro) = [EDITED_ONE, EDITED_MANY]
+        .iter()
+        .filter_map(|intro| text.rfind(intro).map(|at| (at, *intro)))
+        .max_by_key(|(at, _)| *at)?;
+    // Its own paragraph: at the start, or after a blank line.
+    if at != 0 && !text[..at].ends_with("\n\n") {
+        return None;
+    }
+    let mut rest = &text[at + intro.len()..];
+    let mut drafts = Vec::new();
+    while let Some(after) = rest.strip_prefix("\n\n") {
+        let ticks = after.chars().take_while(|c| *c == '`').count();
+        if ticks < 3 {
+            return None;
+        }
+        let fence = &after[..ticks];
+        let line_end = after.find('\n')?;
+        let word = &after[ticks..line_end];
+        let body_and_rest = &after[line_end + 1..];
+        let close = format!("\n{fence}");
+        let end = find_closing(body_and_rest, &close)?;
+        let draft = DraftBlock::from(Some(word), &body_and_rest[..end])?;
+        drafts.push(draft);
+        rest = &body_and_rest[end + close.len()..];
+    }
+    if drafts.is_empty() || !rest.trim().is_empty() || (intro == EDITED_ONE) != (drafts.len() == 1)
+    {
+        return None;
+    }
+    Some((text[..at].trim_end().to_owned(), drafts))
+}
+
+/// Where a draft's closing fence is: the fence on a line of its own, with
+/// nothing but the end or a new paragraph after it.
+fn find_closing(text: &str, close: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(found) = text[from..].find(close) {
+        let at = from + found;
+        let after = &text[at + close.len()..];
+        if after.trim().is_empty() || after.starts_with("\n\n") {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
+/// How many lines his version changes from the agent's, for the chip that
+/// says it goes with his next message: the larger of the lines taken out and
+/// put in, by the longest run of lines the two share in order.
+pub fn changed_lines(original: &str, edited: &str) -> usize {
+    let a: Vec<&str> = original.lines().map(str::trim_end).collect();
+    let b: Vec<&str> = edited.lines().map(str::trim_end).collect();
+    // Drafts are short; a huge one is just "changed".
+    if a.len() * b.len() > 250_000 {
+        return a.len().max(b.len());
+    }
+    let mut row = vec![0usize; b.len() + 1];
+    for x in &a {
+        let mut diagonal = 0;
+        for (j, y) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = if x == y {
+                diagonal + 1
+            } else {
+                above.max(row[j])
+            };
+            diagonal = above;
+        }
+    }
+    let shared = row[b.len()];
+    (a.len() - shared).max(b.len() - shared)
+}
+
+impl DraftKind {
+    /// What the chip for his changed draft calls it: "Your edited email".
+    pub fn edited_label(&self) -> &'static str {
+        match self {
+            DraftKind::Slack => "Your edited Slack message",
+            DraftKind::Email => "Your edited email",
+            DraftKind::Draft => "Your edited draft",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -849,6 +945,48 @@ mod tests {
         // And it reads back as the same draft.
         let back = super::DraftBlock::from(Some("email"), "a\n```\nb\n```").unwrap();
         assert_eq!(back.source, "a\n```\nb\n```");
+    }
+
+    #[test]
+    fn a_sent_message_gives_back_its_edited_drafts() {
+        use super::{edited_message, split_edited, DraftKind};
+        let one = format!(
+            "Send it\n\n{}",
+            edited_message(&[(DraftKind::Email, "Hi Geoff,\n\nCheers".to_owned())])
+        );
+        let (words, drafts) = split_edited(&one).unwrap();
+        assert_eq!(words, "Send it");
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].kind, DraftKind::Email);
+        assert_eq!(drafts[0].source, "Hi Geoff,\n\nCheers");
+        // Just the drafts, nothing of his own.
+        let (words, _) =
+            split_edited(&edited_message(&[(DraftKind::Slack, "hey".to_owned())])).unwrap();
+        assert_eq!(words, "");
+        // Two, one with code and a longer fence round it.
+        let two = edited_message(&[
+            (DraftKind::Draft, "run `x`".to_owned()),
+            (DraftKind::Email, "a\n```\nb\n```\n\nc".to_owned()),
+        ]);
+        let (_, drafts) = split_edited(&format!("ok\n\n{two}")).unwrap();
+        assert_eq!(
+            drafts.iter().map(|d| d.source.as_str()).collect::<Vec<_>>(),
+            vec!["run `x`", "a\n```\nb\n```\n\nc"]
+        );
+        // Anything else is shown as it is.
+        assert!(split_edited("Send it").is_none());
+        assert!(split_edited(&format!("{one}\n\nand another thing")).is_none());
+        assert!(split_edited("He said I edited your draft. Use my version below exactly as it is, not yours:\n\n```email\nx\n```").is_none());
+        assert!(split_edited("I edited your draft. Use my version below exactly as it is, not yours:\n\n```python\nx\n```").is_none());
+    }
+
+    #[test]
+    fn changed_lines_counts_what_he_changed() {
+        use super::changed_lines;
+        assert_eq!(changed_lines("a\nb\nc", "a\nb\nc"), 0);
+        assert_eq!(changed_lines("a\nb\nc", "a\nB\nc"), 1);
+        assert_eq!(changed_lines("a\nb\nc", "a\nb\nc\nd\ne"), 2);
+        assert_eq!(changed_lines("a\nb\nc", "c"), 2);
     }
 
     // The Mac's DraftBlockTests and the website's draft.test.ts check the

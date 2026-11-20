@@ -11,7 +11,8 @@ import { ConvexError } from 'convex/values';
 import { api } from '../../convex/_generated/api';
 import { go, threadPath, useRoute } from './route';
 import { useSignInNote, useSigningIn, useToken } from './token';
-import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
+import { EditedDrafts, MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
+import { splitEdited } from './draft';
 import { ReplyButton } from './reply-button';
 import { OutLink } from './link-confirm';
 import { CommandNote, useCommand } from './command-state';
@@ -275,12 +276,16 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
       );
     }
     const from = sender(m);
+    // Drafts he changed, sent on the end of his words: chips, not the raw fences.
+    const edited = !from && m.role === 'user' ? splitEdited(m.text) : undefined;
+    const shownText = edited ? edited.words : m.text;
     return (
       <Fragment key={m.seq}>
       {m.seq === reviewAt && review ? <ReviewRow review={review} threadPath={linkTo} /> : null}
       <div className={`msg ${m.role}`}>
         {from ? <div className="origin">{from.who}</div> : m.role === 'user' && m.origin && m.origin !== 'user' && m.origin !== 'phone' ? <div className="origin">{originLabel(m.origin)}</div> : null}
-        {from ? <MessageText text={from.body} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} /> : <MessageText text={m.text} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} pictureChips={m.role === 'user'} pasted={m.role === 'user' ? pastedOf(pictures, m.seq, m.text).byNumber : undefined} button={m.role === 'assistant' ? buttonFor(m) : undefined} />}
+        {from ? <MessageText text={from.body} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} /> : <MessageText text={shownText} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} pictureChips={m.role === 'user'} pasted={m.role === 'user' ? pastedOf(pictures, m.seq, m.text).byNumber : undefined} button={m.role === 'assistant' ? buttonFor(m) : undefined} />}
+        {edited ? <EditedDrafts drafts={edited.drafts} /> : null}
         <Pictures items={[...(after.get(m.seq) ?? []), ...(m.role === 'user' ? pastedOf(pictures, m.seq, m.text).unplaced : [])]} />
       </div>
       </Fragment>

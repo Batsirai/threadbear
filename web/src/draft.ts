@@ -38,6 +38,60 @@ export function draftFrom(language: string | null | undefined, code: string): Dr
   return { kind: word as DraftKind, source };
 }
 
+// A sent message with the Mac's edited drafts on its end (desktop/core's
+// draft_block.rs, `edited_message` and `split_edited`): his own words, and
+// each draft he changed, so his bubble shows a chip for each rather than the
+// line asking the agent to use them and the raw fences. Undefined when the
+// message doesn't end that way; then it's shown as it is.
+const editedOne = 'I edited your draft. Use my version below exactly as it is, not yours:';
+const editedMany = 'I edited your drafts. Use my versions below exactly as they are, not yours:';
+
+export function splitEdited(text: string): { words: string; drafts: Draft[] } | undefined {
+  const found = [editedOne, editedMany]
+    .map((intro) => ({ intro, at: text.lastIndexOf(intro) }))
+    .filter((f) => f.at >= 0)
+    .sort((a, b) => b.at - a.at)[0];
+  if (!found) return undefined;
+  const { intro, at } = found;
+  if (at !== 0 && !text.slice(0, at).endsWith('\n\n')) return undefined;
+  let rest = text.slice(at + intro.length);
+  const drafts: Draft[] = [];
+  while (rest.startsWith('\n\n')) {
+    const after = rest.slice(2);
+    const ticks = /^`*/.exec(after)![0].length;
+    if (ticks < 3) return undefined;
+    const lineEnd = after.indexOf('\n');
+    if (lineEnd < 0) return undefined;
+    const word = after.slice(ticks, lineEnd);
+    const body = after.slice(lineEnd + 1);
+    const close = '\n' + '`'.repeat(ticks);
+    const end = findClosing(body, close);
+    if (end === undefined) return undefined;
+    const draft = draftFrom(word, body.slice(0, end));
+    if (!draft) return undefined;
+    drafts.push(draft);
+    rest = body.slice(end + close.length);
+  }
+  if (!drafts.length || rest.trim() || (intro === editedOne) !== (drafts.length === 1)) return undefined;
+  return { words: text.slice(0, at).trimEnd(), drafts };
+}
+
+function findClosing(text: string, close: string): number | undefined {
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(close, from);
+    if (at < 0) return undefined;
+    const after = text.slice(at + close.length);
+    if (!after.trim() || after.startsWith('\n\n')) return at;
+    from = at + 1;
+  }
+}
+
+// What the chip for his changed draft calls it.
+export function editedLabel(kind: DraftKind): string {
+  return kind === 'slack' ? 'Your edited Slack message' : kind === 'email' ? 'Your edited email' : 'Your edited draft';
+}
+
 // Whether the fenced code block written at source[start..<end] (the hast
 // node's position in the exact text handed to Markdown) has its closing
 // fence, the way the Mac's MarkdownRenderer isClosed checks it. The node

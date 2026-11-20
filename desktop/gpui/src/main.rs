@@ -44,6 +44,7 @@ mod composer_answers;
 mod composer_card;
 mod composer_chips;
 mod composer_context;
+mod composer_drafts;
 mod composer_inline;
 mod composer_media;
 mod composer_send;

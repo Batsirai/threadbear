@@ -170,4 +170,20 @@ import Testing
             #expect(got == c.expect, "\(c.name)")
         }
     }
+
+    @Test func aSentMessageGivesBackItsEditedDrafts() {
+        let intro = "I edited your draft. Use my version below exactly as it is, not yours:"
+        let one = "Send it\n\n\(intro)\n\n```email\nHi Geoff,\n\nCheers\n```"
+        let split = DraftBlock.splitEdited(one)
+        #expect(split?.words == "Send it")
+        #expect(split?.drafts == [DraftBlock(kind: .email, source: "Hi Geoff,\n\nCheers")])
+        #expect(DraftBlock.splitEdited("\(intro)\n\n```slack\nhey\n```")?.words == "")
+        let many = "I edited your drafts. Use my versions below exactly as they are, not yours:"
+        let two = "ok\n\n\(many)\n\n```draft\nrun `x`\n```\n\n````email\na\n```\nb\n```\n\nc\n````"
+        #expect(DraftBlock.splitEdited(two)?.drafts.map(\.source) == ["run `x`", "a\n```\nb\n```\n\nc"])
+        #expect(DraftBlock.splitEdited("Send it") == nil)
+        #expect(DraftBlock.splitEdited("\(one)\n\nand another thing") == nil)
+        #expect(DraftBlock.splitEdited("He said \(intro)\n\n```email\nx\n```") == nil)
+        #expect(DraftBlock.splitEdited("\(intro)\n\n```python\nx\n```") == nil)
+    }
 }
