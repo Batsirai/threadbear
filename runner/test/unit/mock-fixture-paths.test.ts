@@ -10,7 +10,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const FIXTURES = path.resolve(import.meta.dirname, '../../../mock-runner/fixtures');
+const ROOT = path.resolve(import.meta.dirname, '../../..');
+const FIXTURES = path.join(ROOT, 'mock-runner/fixtures');
+// A check host's copy leaves the pictures in docs/ and site/ out, and lists
+// them here (scripts/check-remote.sh): they count as there.
+const LEFT_OUT = new Set(fs.existsSync(path.join(ROOT, '.check-left-out')) ? fs.readFileSync(path.join(ROOT, '.check-left-out'), 'utf8').split('\n').filter(Boolean) : []);
 
 test("every relative path in the mock runner's fixtures is a file that's there", () => {
   const missing: string[] = [];
@@ -24,7 +28,8 @@ test("every relative path in the mock runner's fixtures is a file that's there",
       // (other paths in a fixture are the made-up thread's, like Sources).
       for (const m of text.matchAll(/"path"\s*:\s*"((?:\.\.\/|\.\/|media\/)[^"]*)"/g)) {
         checked++;
-        if (!fs.existsSync(path.resolve(dir, m[1]))) missing.push(`${name}/${file}: ${m[1]}`);
+        const at = path.resolve(dir, m[1]);
+        if (!fs.existsSync(at) && !LEFT_OUT.has(path.relative(ROOT, at).split(path.sep).join('/'))) missing.push(`${name}/${file}: ${m[1]}`);
       }
     }
   }
