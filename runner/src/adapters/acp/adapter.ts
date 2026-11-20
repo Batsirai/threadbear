@@ -654,7 +654,6 @@ export class AcpSession implements AgentSession {
     const mcpCall = Boolean(frames?.mcp) || (p.toolCall !== undefined && isMcpFrame(p.toolCall));
     const seen = this.normalizer.noteCall(p.toolCall ?? {});
     this.emit(this.normalizer.flush());
-    this.emit(seen.events);
     // Read at the moment it's asked, not when the turn began.
     if (this.mode === 'full') return this.answer(id, options, true);
     // One of this session's own threadbear tools: its MCP server asks where
@@ -834,6 +833,8 @@ export class AcpSession implements AgentSession {
       return this.answer(id, options, false);
     }
     const editRule = edits && !code && !outside && paths.length > 0;
+    // The card names the call's row, so the row comes first.
+    this.emit(this.normalizer.showCall(seen.id));
     const pending: Pending = { abort: new AbortController(), options };
     this.pending.set(id, pending);
     let a: ToolApprovalAnswer;

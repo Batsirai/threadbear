@@ -309,6 +309,31 @@ async function agyPrompt(id, p, s, word, rest) {
     const input = JSON.parse(rest.join(' '));
     await tool('read', 'Running view_file', input, input.AbsolutePath ? { locations: [{ path: input.AbsolutePath }] } : {}, () => log({ read: input }));
   }
+  // Its create_file, as seen on 20 Nov 2026 (thread 4c94cdad): the
+  // permission request comes under an id of its own, and once allowed the
+  // tool runs as edit_file under the session's step id, which is all that
+  // gets updates; nothing more is said about the request's id.
+  else if (word === 'create') {
+    const file = rest[0];
+    const text = rest.slice(1).join(' ');
+    const asked = Math.random().toString(16).slice(2).padEnd(32, '0');
+    const r = await ask('session/request_permission', {
+      sessionId: p.sessionId,
+      toolCall: { toolCallId: asked, kind: 'edit', status: 'pending', title: 'Run create_file?', rawInput: { CodeContent: text, Description: 'make it', Overwrite: true, TargetFile: file }, content: [{ type: 'diff', path: file, oldText: null, newText: text }] },
+      options: [
+        { optionId: 'allow_always', name: 'Allow Always (risky)', kind: 'allow_always' },
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+      ],
+    });
+    log({ answered: r, kind: 'edit' });
+    if (r.outcome?.outcome === 'selected' && r.outcome.optionId === 'allow') {
+      const step = `${p.sessionId}:${++s.steps}`;
+      update(p.sessionId, { sessionUpdate: 'tool_call', toolCallId: step, title: 'Running edit_file', kind: 'edit', status: 'in_progress', rawInput: { file_path: file } });
+      fs.writeFileSync(file, text);
+      update(p.sessionId, { sessionUpdate: 'tool_call_update', toolCallId: step, status: 'completed' });
+    }
+  }
   else if (word === 'mcp') {
     const [server, name] = rest[0].split('__');
     await tool('other', `${server}_${name}`, { arguments: {}, }, { _meta: { mcp: { tool: name, server }, is_mcp_tool_call: true } }, () => log({ mcp: rest[0] }));
@@ -333,14 +358,14 @@ const handlers = {
   'session/new': (p) => {
     if (env.FAKE_ACP_NEEDS_LOGIN) throw Object.assign(new Error('Authentication required'), { code: -32000 });
     const sessionId = `ses-${Math.random().toString(36).slice(2)}`;
-    sessions.set(sessionId, { cwd: p.cwd, dirs: p.additionalDirectories });
+    sessions.set(sessionId, { cwd: p.cwd, dirs: p.additionalDirectories, steps: 0 });
     openedSession(p.cwd);
     log({ newSession: { cwd: p.cwd, mcpServers: p.mcpServers, ...(p.additionalDirectories ? { additionalDirectories: p.additionalDirectories } : {}) } });
     return { sessionId, configOptions: configOptions(), ...(GROK ? { models: grokModels() } : {}) };
   },
   'session/resume': (p) => {
     if (p.sessionId === 'gone') throw Object.assign(new Error('session not found'), { code: -32002 });
-    sessions.set(p.sessionId, { cwd: p.cwd, dirs: p.additionalDirectories });
+    sessions.set(p.sessionId, { cwd: p.cwd, dirs: p.additionalDirectories, steps: 0 });
     openedSession(p.cwd);
     log({ resumed: p.sessionId, cwd: p.cwd, ...(p.additionalDirectories ? { additionalDirectories: p.additionalDirectories } : {}) });
     return { configOptions: configOptions() };

@@ -41,6 +41,11 @@ type Tool = {
   // tool it calls.
   wrapped?: boolean;
   resolved?: boolean;
+  // Known only from a permission request so far, with the previews it
+  // carried, kept apart from what the call's own updates later say.
+  asked?: boolean;
+  framed?: boolean;
+  askedDiffs?: AcpToolContent[];
 };
 
 function toolKind(acp: string | undefined): ToolKind {
@@ -295,21 +300,56 @@ export class AcpNormalizer {
     if (u.rawOutput !== undefined) t.rawOutput = u.rawOutput;
   }
 
-  // A permission request carries the call as the agent sees it then: a row
-  // for it comes before the card, which names the row.
-  noteCall(call: AcpToolCall): { paths: string[]; kind?: string; input: Record<string, unknown>; title?: string; events: AdapterOutput[] } {
+  // A permission request carries the call as the agent sees it then. Its
+  // row comes out only when a card is put up (showCall), as the card names
+  // it, or when the call's own updates say it runs: one allowed without a
+  // card may be run under another id (Antigravity's create_file, 20 Nov
+  // 2026), and a row for the request would be left open, then failed.
+  noteCall(call: AcpToolCall): { id: string; paths: string[]; kind?: string; input: Record<string, unknown>; title?: string } {
     const id = typeof call.toolCallId === 'string' && call.toolCallId ? call.toolCallId : crypto.randomUUID();
     const t = this.tool(id);
+    if (!t.framed) t.asked = true;
     this.merge(t, call);
-    const events: AdapterOutput[] = [];
-    this.emitCall(t, events);
-    this.emitDiffs(t, events);
-    return { paths: [...t.paths], kind: t.acpKind, input: t.input, title: t.title, events };
+    const diffs = (Array.isArray(call.content) ? call.content : []).filter((c) => c?.type === 'diff');
+    if (diffs.length) t.askedDiffs = diffs;
+    return { id, paths: [...t.paths], kind: t.acpKind, input: t.input, title: t.title };
+  }
+
+  // The row for a request that's getting a card, with its preview.
+  showCall(id: string): AdapterOutput[] {
+    const t = this.tools.get(id);
+    if (!t) return [];
+    const out: AdapterOutput[] = [];
+    this.emitCall(t, out);
+    this.emitDiffs(t, out);
+    return out;
+  }
+
+  // A call the agent opens under a new id that is plainly the one an earlier
+  // request asked about, when nothing has been said under that request's id
+  // since: the same kind of file change, naming the same files, each by its
+  // whole path. Antigravity asks for create_file under one id and runs it as
+  // edit_file under its step's id, with no link between the two. The new id
+  // then updates the request's row, so a card's row is the one that runs.
+  private askedFor(u: AcpToolCall): Tool | undefined {
+    if (!writesFiles(u.kind)) return undefined;
+    const paths = requestPaths(u);
+    if (!paths.length || !paths.every((p) => path.isAbsolute(p))) return undefined;
+    const same = (a: string[], b: string[]) => {
+      const x = new Set(a.map((p) => path.resolve(p)));
+      const y = new Set(b.map((p) => path.resolve(p)));
+      return x.size === y.size && [...x].every((p) => y.has(p));
+    };
+    const found = [...this.tools.values()].reverse().find((t) => t.asked && !t.framed && !t.done && t.acpKind === u.kind && t.paths.length > 0 && t.paths.every((p) => path.isAbsolute(p)) && same(t.paths, paths));
+    return found;
   }
 
   private toolUpdate(u: AcpToolCall, out: AdapterOutput[]): void {
     if (typeof u.toolCallId !== 'string' || !u.toolCallId) return;
+    const asked = this.tools.has(u.toolCallId) ? undefined : this.askedFor(u);
+    if (asked) this.tools.set(u.toolCallId, asked);
     const t = this.tool(u.toolCallId);
+    t.framed = true;
     this.merge(t, u);
     // Agents can open a call with nothing filled in yet (OpenCode: title
     // "write", rawInput {}), so the row waits for its input or its start.
@@ -339,7 +379,7 @@ export class AcpNormalizer {
   }
 
   private emitDiffs(t: Tool, out: AdapterOutput[]): void {
-    for (const c of t.output) {
+    for (const c of [...t.output, ...(t.askedDiffs ?? [])]) {
       if (c?.type !== 'diff' || typeof c.path !== 'string' || typeof c.newText !== 'string' || t.diffed.has(c.path)) continue;
       t.diffed.add(c.path);
       out.push({ kind: 'event', event: { type: 'edit.diff', itemId: t.id, path: c.path, hunks: diffLines(typeof c.oldText === 'string' ? c.oldText : '', c.newText) } });

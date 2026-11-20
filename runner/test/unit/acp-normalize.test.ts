@@ -53,13 +53,30 @@ test('a call that opens empty waits for its input, then one row', () => {
   assert.deepEqual(n.handle({ ...running, status: 'in_progress' }), [], 'and only one row');
 });
 
-test('a permission request brings the row and the preview, ahead of the card', () => {
+test('a permission request brings the row and the preview once a card is put up, not before', () => {
   const n = new AcpNormalizer(ctx);
   n.handle(pending);
   const seen = n.noteCall({ toolCallId: 'c1', title: '/w/a.txt', kind: 'edit', status: 'pending', locations: [{ path: '/w/a.txt' }], rawInput: { filepath: '/w/a.txt', diff: 'x' }, content: [{ type: 'diff', path: '/w/a.txt', oldText: '', newText: 'hi' }] });
-  assert.deepEqual(kinds(seen.events), ['tool.call', 'edit.diff']);
   assert.deepEqual(seen.paths, ['/w/a.txt']);
   assert.equal(seen.kind, 'edit');
+  assert.deepEqual(kinds(n.closeOpen('Stopped')), [], 'allowed without a card and never run: no row to leave failed');
+  assert.deepEqual(kinds(n.showCall(seen.id)), ['tool.call', 'edit.diff']);
+  assert.deepEqual(kinds(n.showCall(seen.id)), [], 'and only one');
+});
+
+test('a call run under another id than its request takes over the request\'s row only when it plainly is that call', () => {
+  const n = new AcpNormalizer(ctx);
+  const seen = n.noteCall({ toolCallId: 'ask1', title: 'Run create_file?', kind: 'edit', rawInput: { TargetFile: '/w/a.js', CodeContent: 'hi' }, content: [{ type: 'diff', path: '/w/a.js', oldText: null, newText: 'hi' }] });
+  // Another file, or a relative path, is another call.
+  assert.deepEqual(kinds(n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:1', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/b.js' } })), ['tool.call']);
+  assert.deepEqual(kinds(n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:2', kind: 'edit', status: 'in_progress', rawInput: { file_path: 'a.js' } })), ['tool.call']);
+  const run = n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:3', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } });
+  assert.deepEqual(kinds(run), ['tool.call', 'edit.diff']);
+  assert.equal((run[0] as { event: { itemId: string } }).event.itemId, seen.id);
+  const end = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 's:3', status: 'completed' });
+  assert.deepEqual(end.map((o) => (o as { event: { itemId: string; ok: boolean } }).event).map((e) => [e.itemId, e.ok]), [[seen.id, true]]);
+  // Taken once: a second call on the same file is a row of its own.
+  assert.equal((n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:4', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } })[0] as { event: { itemId: string } }).event.itemId, 's:4');
 });
 
 test('a rejected call fails with what was said', () => {

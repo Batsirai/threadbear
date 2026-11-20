@@ -1551,3 +1551,40 @@ test("Antigravity's edit names its file, not its old and new text", async () => 
   assert.doesNotMatch(r.cards[0].title, /runs this file as code/);
   assert.deepEqual((r.cards[0].input as { 'files it names': string[] })['files it names'], [file]);
 });
+
+// Antigravity's create_file asks under one id and runs under another (thread
+// 4c94cdad, 20 Nov 2026): the request's row was left open, and the turn's end
+// marked it failed beside the real edit.
+const rows = (r: ReturnType<typeof rig>) => events(r.outputs, 'tool.call') as { itemId: string; name: string; title: string }[];
+const done = (r: ReturnType<typeof rig>) => events(r.outputs, 'tool.result') as { itemId: string; ok: boolean }[];
+
+test('Antigravity: a create_file allowed by Full access shows one row, which succeeds, with its diff', async () => {
+  const r = agy({ mode: 'full' });
+  const s = r.start();
+  const file = path.join(r.cwd, 'wc.js');
+  await turn(r, s, `create ${file} hello`);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'hello');
+  assert.equal(rows(r).length, 1, JSON.stringify(rows(r)));
+  assert.deepEqual(done(r).map((d) => [d.itemId, d.ok]), [[rows(r)[0].itemId, true]]);
+  const diffs = events(r.outputs, 'edit.diff') as { itemId: string; path: string }[];
+  assert.deepEqual(diffs.map((d) => [d.itemId, d.path]), [[rows(r)[0].itemId, file]]);
+});
+
+test('Antigravity: a create_file allowed on its card runs on the card\'s row, with nothing left failed', async () => {
+  const r = agy({ mode: 'ask' });
+  const s = r.start();
+  const file = path.join(r.cwd, 'wc.js');
+  await turn(r, s, `create ${file} hello`);
+  assert.equal(r.cards.length, 1);
+  assert.equal(rows(r).length, 1, JSON.stringify(rows(r)));
+  assert.equal(rows(r)[0].itemId, r.cards[0].toolUseId, 'the card names the row');
+  assert.deepEqual(done(r).map((d) => [d.itemId, d.ok]), [[rows(r)[0].itemId, true]]);
+});
+
+test('Antigravity: a command allowed by Full access still shows its row and result once', async () => {
+  const r = agy({ mode: 'full' });
+  const s = r.start();
+  await turn(r, s, 'exec ls');
+  assert.equal(rows(r).length, 1);
+  assert.deepEqual(done(r).map((d) => [d.itemId, d.ok]), [[rows(r)[0].itemId, true]]);
+});
