@@ -6,6 +6,11 @@
     non_snake_case,
     reason = "test names follow the Swift tests they mirror (testSomethingHappens)"
 )]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "a test: a panic is its failure, with the line"
+)]
 
 use std::collections::HashMap;
 use threadbear_dock_layout::*;
