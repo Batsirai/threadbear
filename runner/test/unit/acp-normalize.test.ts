@@ -67,17 +67,26 @@ test('a permission request brings the row and the preview once a card is put up,
 test('a call run under another id than its request takes over the request\'s row only when it plainly is that call', () => {
   const n = new AcpNormalizer(ctx);
   const seen = n.noteCall({ toolCallId: 'ask1', title: 'Run create_file?', kind: 'edit', rawInput: { TargetFile: '/w/a.js', CodeContent: 'hi' }, content: [{ type: 'diff', path: '/w/a.js', oldText: null, newText: 'hi' }] });
+  // Not yet answered, then refused: another call on the file is its own row.
+  assert.equal((n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:0', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } })[0] as { event: { itemId: string } }).event.itemId, 's:0', 'not while its card waits');
+  const refused = n.noteCall({ toolCallId: 'ask0', kind: 'edit', rawInput: { TargetFile: '/w/a.js' } });
+  n.answered(refused.id, false);
+  assert.equal((n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:00', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } })[0] as { event: { itemId: string } }).event.itemId, 's:00', 'nor once refused');
+  n.answered(seen.id, true);
   // Another file, or a relative path, is another call.
   assert.deepEqual(kinds(n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:1', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/b.js' } })), ['tool.call']);
   assert.deepEqual(kinds(n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:2', kind: 'edit', status: 'in_progress', rawInput: { file_path: 'a.js' } })), ['tool.call']);
   const run = n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:3', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } });
   assert.deepEqual(kinds(run), ['tool.call', 'edit.diff']);
   assert.equal((run[0] as { event: { itemId: string } }).event.itemId, seen.id);
+  // What the new call says stays its own, for the permission checks.
+  assert.deepEqual(n.noteCall({ toolCallId: 's:3', kind: 'edit', rawInput: { file_path: '/w/a.js' } }).input, { file_path: '/w/a.js' });
   const end = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 's:3', status: 'completed' });
   assert.deepEqual(end.map((o) => (o as { event: { itemId: string; ok: boolean } }).event).map((e) => [e.itemId, e.ok]), [[seen.id, true]]);
   // One allowed without a card that never ran is gone at the turn's end.
   const n2 = new AcpNormalizer(ctx);
   n2.noteCall({ toolCallId: 'ask2', kind: 'edit', rawInput: { TargetFile: '/w/a.js' } });
+  n2.answered('ask2', true);
   n2.closeOpen('Stopped');
   assert.equal((n2.handle({ sessionUpdate: 'tool_call', toolCallId: 's:9', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } })[0] as { event: { itemId: string } }).event.itemId, 's:9', 'a later turn\'s edit is its own row');
   // Taken once: a second call on the same file is a row of its own.

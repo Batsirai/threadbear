@@ -641,9 +641,12 @@ export class AcpSession implements AgentSession {
   // An option by kind: only the once kinds, as "always" would be remembered
   // by the agent, past this thread and anything Mike can see. "Always
   // allow" is kept by the runner instead (EDIT_RULE and commandRule).
-  private answer(id: RequestId, options: PermissionOption[], allow: boolean): void {
+  // `call`: the request's tool call id in the normalizer (noteCall), which
+  // learns whether it went ahead.
+  private answer(id: RequestId, options: PermissionOption[], allow: boolean, call?: string): void {
     const kind = allow ? 'allow_once' : 'reject_once';
     const optionId = options.find((o) => o?.kind === kind)?.optionId;
+    if (call !== undefined) this.normalizer.answered(call, allow && optionId !== undefined);
     // No plain allow or reject on offer: nothing ever goes ahead by default.
     this.proc.respond(id, optionId ? { outcome: { outcome: 'selected', optionId } } : { outcome: { outcome: 'cancelled' } });
   }
@@ -655,7 +658,7 @@ export class AcpSession implements AgentSession {
     const seen = this.normalizer.noteCall(p.toolCall ?? {});
     this.emit(this.normalizer.flush());
     // Read at the moment it's asked, not when the turn began.
-    if (this.mode === 'full') return this.answer(id, options, true);
+    if (this.mode === 'full') return this.answer(id, options, true, seen.id);
     // One of this session's own threadbear tools: its MCP server asks where
     // the tool needs it (tool-gate.ts), so a card here would be a second one.
     // Grok names the tool exactly, and a name it can't find doesn't run.
@@ -665,12 +668,12 @@ export class AcpSession implements AgentSession {
     // (Codex's eighth review, 20 Nov 2026).
     // A call with no id has no history to check, so it never goes ahead this
     // way (Codex's tenth review, 20 Nov 2026).
-    if (mcpName && this.ownTools.has(mcpName) && frames && [...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k))) return this.answer(id, options, true);
+    if (mcpName && this.ownTools.has(mcpName) && frames && [...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k))) return this.answer(id, options, true, seen.id);
 
     const { kind } = seen;
     // A read of the thread's own files, for an agent whose own rules can't
     // say so (Antigravity asks before every tool).
-    if (kind === 'read' && p.toolCall && !mcpName && !mcpCall && this.readGoesAhead(p.toolCall, seen.paths)) return this.answer(id, options, true);
+    if (kind === 'read' && p.toolCall && !mcpName && !mcpCall && this.readGoesAhead(p.toolCall, seen.paths)) return this.answer(id, options, true, seen.id);
     // Another MCP server's tool, whatever kind it says it is: never a local
     // command or edit, so no saved rule covers it and its card shows every
     // argument as an MCP tool's does.
@@ -698,7 +701,7 @@ export class AcpSession implements AgentSession {
     // card (cardInput): such a call is refused, never shown short.
     if (Object.hasOwn(input, '__proto__')) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: "A tool call had an argument named __proto__, which a card can't show, so it was refused." } });
-      return this.answer(id, options, false);
+      return this.answer(id, options, false, seen.id);
     }
     const command = !external && kind === 'execute' && typeof input.command === 'string' ? input.command : '';
     const argv = command ? shellWords(command) : null;
@@ -757,13 +760,13 @@ export class AcpSession implements AgentSession {
       // always asks (Antigravity has no gate of its own for that, as
       // OpenCode's external_directory is; Gemini's sixth review).
       outside = !paths.every((f) => this.inFolder(f));
-      if (!code && !outside && this.rules.has(EDIT_RULE)) return this.answer(id, options, true);
+      if (!code && !outside && this.rules.has(EDIT_RULE)) return this.answer(id, options, true, seen.id);
     } else if (paths.length && kind !== 'read' && kind !== 'search' && kind !== 'fetch' && kind !== 'think') {
       // A kind that doesn't say what it does, naming a file that runs.
       code = this.runsAsCode(paths);
     }
     // A saved rule doesn't stand in for a file that runs as code.
-    if (!code && rule && this.rules.has(rule)) return this.answer(id, options, true);
+    if (!code && rule && this.rules.has(rule)) return this.answer(id, options, true, seen.id);
 
     const title = command
       ? firstLineSafely(command, 200, '…')
@@ -830,7 +833,7 @@ export class AcpSession implements AgentSession {
     const card = cardInput(shown, plainEdit ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
-      return this.answer(id, options, false);
+      return this.answer(id, options, false, seen.id);
     }
     const editRule = edits && !code && !outside && paths.length > 0;
     // The card names the call's row, so the row comes first.
@@ -862,13 +865,13 @@ export class AcpSession implements AgentSession {
     // isn't where it would run now (Codex's second look, 10 Nov).
     if (allow && !external && kind === 'execute' && named.length && JSON.stringify(resolve()) !== JSON.stringify(places)) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: `The folder for "${firstLineSafely(command, 80, '…')}" changed while it waited for an answer, so it wasn't run. The agent can ask again.` } });
-      return this.answer(id, options, false);
+      return this.answer(id, options, false, seen.id);
     }
     if (a.decision === 'allowAlways' && !code) {
       if (editRule) this.addRules([EDIT_RULE]);
       else if (rule) this.addRules([rule]);
     }
-    this.answer(id, options, allow);
+    this.answer(id, options, allow, seen.id);
   }
 
   // A form the agent wants filled in (OpenCode 2's question tool), as

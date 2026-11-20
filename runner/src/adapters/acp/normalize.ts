@@ -27,6 +27,9 @@ type AcpToolContent = { type?: string; content?: AcpBlock; path?: string; newTex
 
 type Tool = {
   id: string;
+  // The row's item id: the call's own, or the request's it took over
+  // (askedFor).
+  row: string;
   emitted: boolean;
   done: boolean;
   acpKind?: string;
@@ -45,6 +48,8 @@ type Tool = {
   // carried, kept apart from what the call's own updates later say.
   asked?: boolean;
   framed?: boolean;
+  // Whether the request was let go ahead, once it's answered.
+  allowed?: boolean;
   askedDiffs?: AcpToolContent[];
 };
 
@@ -275,7 +280,7 @@ export class AcpNormalizer {
   private tool(id: string): Tool {
     let t = this.tools.get(id);
     if (!t) {
-      t = { id, emitted: false, done: false, input: {}, paths: [], output: [], diffed: new Set() };
+      t = { id, row: id, emitted: false, done: false, input: {}, paths: [], output: [], diffed: new Set() };
       this.tools.set(id, t);
       if (this.tools.size > 500) this.tools.delete(this.tools.keys().next().value!);
     }
@@ -315,6 +320,13 @@ export class AcpNormalizer {
     return { id, paths: [...t.paths], kind: t.acpKind, input: t.input, title: t.title };
   }
 
+  // How a request was answered: only one let go ahead can be the call an
+  // agent then runs under another id.
+  answered(id: string, allowed: boolean): void {
+    const t = this.tools.get(id);
+    if (t) t.allowed = allowed;
+  }
+
   // The row for a request that's getting a card, with its preview.
   showCall(id: string): AdapterOutput[] {
     const t = this.tools.get(id);
@@ -328,9 +340,11 @@ export class AcpNormalizer {
   // A call the agent opens under a new id that is plainly the one an earlier
   // request asked about, when nothing has been said under that request's id
   // since: the same kind of file change, naming the same files, each by its
-  // whole path. Antigravity asks for create_file under one id and runs it as
-  // edit_file under its step's id, with no link between the two. The new id
-  // then updates the request's row, so a card's row is the one that runs.
+  // whole path, and the request was let go ahead. Antigravity asks for
+  // create_file under one id and runs it as edit_file under its step's id,
+  // with no link between the two. The new call then shows on the request's
+  // row, so a card's row is the one that runs; what each call has said stays
+  // its own, as the permission checks read it (Codex's review, 20 Nov 2026).
   private askedFor(u: AcpToolCall): Tool | undefined {
     if (!writesFiles(u.kind)) return undefined;
     const paths = requestPaths(u);
@@ -340,15 +354,22 @@ export class AcpNormalizer {
       const y = new Set(b.map((p) => path.resolve(p)));
       return x.size === y.size && [...x].every((p) => y.has(p));
     };
-    const found = [...this.tools.values()].reverse().find((t) => t.asked && !t.framed && !t.done && t.acpKind === u.kind && t.paths.length > 0 && t.paths.every((p) => path.isAbsolute(p)) && same(t.paths, paths));
+    // The oldest first: an agent runs what it asked for in turn.
+    const found = [...this.tools.values()].find((t) => t.asked && t.allowed === true && !t.framed && !t.done && t.acpKind === u.kind && t.paths.length > 0 && t.paths.every((p) => path.isAbsolute(p)) && same(t.paths, paths));
     return found;
   }
 
   private toolUpdate(u: AcpToolCall, out: AdapterOutput[]): void {
     if (typeof u.toolCallId !== 'string' || !u.toolCallId) return;
     const asked = this.tools.has(u.toolCallId) ? undefined : this.askedFor(u);
-    if (asked) this.tools.set(u.toolCallId, asked);
     const t = this.tool(u.toolCallId);
+    if (asked) {
+      asked.done = true;
+      t.row = asked.row;
+      t.emitted = asked.emitted;
+      t.diffed = asked.diffed;
+      t.askedDiffs = asked.askedDiffs;
+    }
     // Closed at a turn's end before it was ever shown: a row now would never
     // get its result.
     if (t.done && !t.emitted) return;
@@ -378,14 +399,14 @@ export class AcpNormalizer {
     t.emitted = true;
     const name = canonicalToolName(t.name || t.title || t.acpKind || 'tool');
     const kind = name.startsWith('mcp__') ? 'mcp' : toolKind(t.acpKind);
-    out.push({ kind: 'event', event: { type: 'tool.call', itemId: t.id, name, kind, title: this.title(t), input: truncateInput(t.input) } });
+    out.push({ kind: 'event', event: { type: 'tool.call', itemId: t.row, name, kind, title: this.title(t), input: truncateInput(t.input) } });
   }
 
   private emitDiffs(t: Tool, out: AdapterOutput[]): void {
     for (const c of [...t.output, ...(t.askedDiffs ?? [])]) {
       if (c?.type !== 'diff' || typeof c.path !== 'string' || typeof c.newText !== 'string' || t.diffed.has(c.path)) continue;
       t.diffed.add(c.path);
-      out.push({ kind: 'event', event: { type: 'edit.diff', itemId: t.id, path: c.path, hunks: diffLines(typeof c.oldText === 'string' ? c.oldText : '', c.newText) } });
+      out.push({ kind: 'event', event: { type: 'edit.diff', itemId: t.row, path: c.path, hunks: diffLines(typeof c.oldText === 'string' ? c.oldText : '', c.newText) } });
     }
   }
 
@@ -398,7 +419,7 @@ export class AcpNormalizer {
       if (c.content.type === 'text' && typeof c.content.text === 'string') texts.push(c.content.text);
       else if (c.content.type === 'image' && typeof c.content.data === 'string' && typeof c.content.mimeType === 'string') {
         try {
-          images.push(this.ctx.saveImage(c.content.data, c.content.mimeType, t.id));
+          images.push(this.ctx.saveImage(c.content.data, c.content.mimeType, t.row));
         } catch {
           // Not an image this can save: the row still shows its text.
         }
@@ -411,7 +432,7 @@ export class AcpNormalizer {
       // error's). Dropped, end_turn's "Noted" never reached the runner.
       else if (isPlainObject(said)) for (const v of Object.values(said)) if (typeof v === 'string') texts.push(v);
     }
-    out.push({ kind: 'event', event: { type: 'tool.result', itemId: t.id, ok, ...truncateResultText(texts.join('\n'), t.id, this.ctx), images } });
+    out.push({ kind: 'event', event: { type: 'tool.result', itemId: t.row, ok, ...truncateResultText(texts.join('\n'), t.row, this.ctx), images } });
   }
 
   // The turn has ended, or the agent has gone: no more updates are coming
@@ -424,7 +445,7 @@ export class AcpNormalizer {
       // Never shown (a request allowed without a card that didn't run): no
       // row, and nothing later can take it over (askedFor).
       if (!t.emitted) continue;
-      out.push({ kind: 'event', event: { type: 'tool.result', itemId: t.id, ok: false, text: reason, truncated: false, images: [] } });
+      out.push({ kind: 'event', event: { type: 'tool.result', itemId: t.row, ok: false, text: reason, truncated: false, images: [] } });
     }
     return out;
   }
