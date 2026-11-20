@@ -126,12 +126,12 @@ pub struct Composer {
     /// kept with the drafts, so words not yet with the runner aren't lost.
     review_out: Option<RestoreDraft>,
     /// An answer given back because the runner never said whether it took
-    /// it: the review, the answer as sent, and the box's words and how many
-    /// pictures as given back. If the review then turns out answered with
+    /// it: the review, the answer as sent, and the box's words and
+    /// pictures (their files, in order) as given back. If the review then turns out answered with
     /// just that, and the box still holds just those words, they're taken
     /// out again rather than left to go a second time as a message. It
     /// changes nothing about what Send does.
-    review_given_back: Option<(String, threadbear_core::reducer::ReviewDraft, String, usize)>,
+    review_given_back: Option<(String, threadbear_core::reducer::ReviewDraft, String, Vec<String>)>,
     /// The box as it was before an edit that's been sent, to put back at the
     /// next render with its undo history.
     pending_saved: Option<SavedBox>,
@@ -783,7 +783,7 @@ impl Composer {
                     }
                     Err((why, unsure)) => {
                         if unsure && !(draft.text.is_empty() && draft.images.is_empty()) {
-                            this.review_given_back = Some((review.id.clone(), answer.clone(), draft.text.clone(), draft.images.len()));
+                            this.review_given_back = Some((review.id.clone(), answer.clone(), draft.text.clone(), draft.images.iter().map(|image| image.path.clone()).collect()));
                         }
                         this.restore_draft(draft, cx);
                         let said = if unsure {
@@ -823,7 +823,9 @@ impl Composer {
         let words = |draft: &threadbear_core::reducer::ReviewDraft| draft.reply.as_deref().unwrap_or("").trim().to_owned();
         let went = now.status == "answered" && now.response.as_ref().is_some_and(|sent| sent.picked_ids == answer.picked_ids && sent.none == answer.none && words(sent) == words(&answer) && sent.images.len() == answer.images.len());
         let (box_text, box_images) = self.draft(cx);
-        if went && box_text == text && box_images.len() == pictures {
+        // The same pictures, not just as many: one swapped for another
+        // since hasn't gone (Codex's fifth review, 20 Nov).
+        if went && box_text == text && box_images.iter().map(|image| &image.path).eq(pictures.iter()) {
             self.set_box(String::new(), Vec::new(), window, cx);
         }
     }
