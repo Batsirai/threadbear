@@ -2,7 +2,7 @@
 // shape on both apps), for the highlights, previews, patches and folder steps.
 import type { Dump } from './driver.ts';
 
-export type PaneRow = { title: string; lead?: string | null; trailing?: string | null; note?: string | null; detail?: string | null; symbol?: string | null; ticked?: boolean | null; tone?: string | null; /** A list row's drawn symbol: its own icon, else its tone's shape. */ mark?: string | null; /** Its tone's shape beside the title, for a row with its own icon. */ toneMark?: string | null };
+export type PaneRow = { title: string; lead?: string | null; trailing?: string | null; note?: string | null; detail?: string | null; symbol?: string | null; ticked?: boolean | null; tone?: string | null; /** A list row's drawn symbol: its own icon, else its tone's shape. */ mark?: string | null; /** Its tone's shape beside the title, for a row with its own icon. */ toneMark?: string | null; /** A list row's switch (`toggle`); `pending` while a press is on its way. */ switch?: { id: string; on: boolean; symbol: string; pending: boolean } | null };
 export type PaneSection = { key: string; title: string; count: number; folded: boolean; rows: PaneRow[] };
 export type Pane = {
   section: string;

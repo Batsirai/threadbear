@@ -18,7 +18,7 @@ import { CLAUDE_PATCH_ID, claudeCommands, claudeOptions, settingsCommands, setti
 import { canonicalPath, runsAsCodeByName, type CodeWrite } from '../code-writes.ts';
 import { patchCommands, sayValue } from '../patch-commands.ts';
 import type { PatchInfo } from '../protocol.ts';
-import { actionRunProblem, automaticTrust, isInside, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, PATCH_SH_MAX_BYTES, type CommandOutcome, type PanelRender, type PatchSet, type PatchThread, type ProjectFolder, projectPatchFiles } from '../patches.ts';
+import { actionRunProblem, automaticTrust, isInside, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, toggleListPanel, NoSwitches, runCommand, PATCH_SH_MAX_BYTES, type CommandOutcome, type PanelRender, type PatchSet, type PatchThread, type ProjectFolder, projectPatchFiles } from '../patches.ts';
 import { liveCommandEnv } from '../shell-allowlist.ts';
 import { codeOfUnhashedPatch, commandShown, shellWords, type CodeScan, type UnsureWhy } from '../unhashed-scan.ts';
 import type { EditsAsk } from '../trust-off-thread.ts';
@@ -625,16 +625,35 @@ export const patchesPart = {
     const st = this.mustGet(threadId);
     const panel = this.patchSet(st).panels.find((p) => p.id === panelId);
     if (!panel) throw new RpcError(ErrorCode.badParams, `This thread has no panel called ${panelId}`);
-    if (panel.kind === 'list') {
-      return renderListPanel(panel, this.patchSet(st), {
-        cwd: st.rec.cwd,
-        threadId,
-        thread: this.patchThread(st.rec),
-        run: (command, cwd) => this.runPatchCommand(threadId, command, cwd),
-        verify: (file, hash) => this.patchTrust.verify(file, hash),
-      });
-    }
+    if (panel.kind === 'list') return renderListPanel(panel, this.patchSet(st), this.listPanelContext(threadId));
     return renderPanel(panel, paths.panels(this.cfg.home, threadId), this.screenshot);
+  },
+
+  // A list row's switch pressed (`panels.toggle`): the patch's toggle
+  // function, then the panel's rows again.
+  async togglePanel(this: Runner, threadId: string, panelId: string, toggleId: string, on: boolean): Promise<PanelRender> {
+    const st = this.mustGet(threadId);
+    const panel = this.patchSet(st).panels.find((p) => p.id === panelId);
+    if (!panel || panel.kind !== 'list') throw new RpcError(ErrorCode.badParams, `This thread has no list panel called ${panelId}`);
+    try {
+      return await toggleListPanel(panel, this.patchSet(st), this.listPanelContext(threadId), toggleId, on);
+    } catch (e) {
+      if (e instanceof NoSwitches) throw new RpcError(ErrorCode.badParams, e.message);
+      throw new RpcError(ErrorCode.other, String((e as Error)?.message ?? e));
+    }
+  },
+
+  // What a list panel's functions run with: the thread's folder and its
+  // patch commands, checked against what trusting the patch covers.
+  listPanelContext(this: Runner, threadId: string) {
+    const st = this.mustGet(threadId);
+    return {
+      cwd: st.rec.cwd,
+      threadId,
+      thread: this.patchThread(st.rec),
+      run: (command: string, cwd: string) => this.runPatchCommand(threadId, command, cwd),
+      verify: (file: string, hash: string) => this.patchTrust.verify(file, hash),
+    };
   },
 
   // Cloud deployments in the Convex panel's project, through its CLI.

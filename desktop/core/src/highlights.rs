@@ -1220,9 +1220,56 @@ pub struct PanelItem {
     pub section: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub trailing: Option<String>,
+    /// A switch at the end of the title's line; a press sends `panels.toggle`.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub toggle: Option<PanelToggle>,
+}
+
+/// A list row's switch (`PanelItem.toggle`, docs/protocol.md "Row toggles").
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct PanelToggle {
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub id: String,
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub on: bool,
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub icon: Option<String>,
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub title: Option<String>,
+}
+
+impl PanelToggle {
+    /// Its icon, "power" when the patch gave none.
+    pub fn symbol(&self) -> &str {
+        self.icon.as_deref().filter(|i| !i.is_empty()).unwrap_or("power")
+    }
+
+    /// Its tooltip: the patch's words and what a press does, or that one is
+    /// on its way while `pending`.
+    pub fn tip(&self, pending: bool) -> String {
+        let what = self.title.as_deref().filter(|t| !t.is_empty()).unwrap_or("Switch");
+        if pending {
+            return format!("{what}: switching {}…", if self.on { "on" } else { "off" });
+        }
+        format!("{what}: {}", if self.on { "on. Click to turn off." } else { "off. Click to turn on." })
+    }
 }
 
 impl PanelItem {
+    /// Its switch, when it has one with an id to send back.
+    pub fn switch(&self) -> Option<&PanelToggle> {
+        self.toggle.as_ref().filter(|t| !t.id.is_empty())
+    }
+
+    /// Every row's switch whose id is `id` set to `on`: what a press shows
+    /// at once, before the runner answers, and what a failure puts back.
+    pub fn set_switch(items: &mut [PanelItem], id: &str, on: bool) {
+        for t in items.iter_mut().filter_map(|i| i.toggle.as_mut()).filter(|t| t.id == id) {
+            t.on = on;
+        }
+    }
+
     pub fn tone_kind(&self) -> Option<&str> {
         self.tone.as_deref().filter(|t| matches!(*t, "attention" | "failed" | "warning" | "working" | "done"))
     }
@@ -1656,6 +1703,29 @@ mod tests {
         let item = |section: Option<&str>| PanelItem { title: "x".into(), section: section.map(str::to_owned), ..Default::default() };
         let items = [item(Some("This branch")), item(Some("This branch")), item(Some("Elsewhere")), item(None)];
         assert_eq!(PanelItem::headings(&items), [Some("This branch".to_owned()), None, Some("Elsewhere".to_owned()), None]);
+    }
+
+    #[test]
+    fn a_list_rows_switch_reads_and_flips() {
+        let v = json!({ "items": [
+            { "title": "#1", "toggle": { "id": "o/r#1", "on": true, "icon": "wand.and.stars", "title": "Auto-fix #1" } },
+            { "title": "#2", "toggle": { "id": "o/r#2", "on": false } },
+            { "title": "bad", "toggle": { "id": "", "on": "yes" } },
+            { "title": "odd", "toggle": "on" },
+        ] });
+        let mut items = PanelRender::decode(&v).items.expect("items");
+        assert_eq!(items.len(), 4, "a broken switch doesn't lose its row");
+        let first = items[0].switch().expect("a switch");
+        assert_eq!((first.symbol(), first.on), ("wand.and.stars", true));
+        assert_eq!(first.tip(false), "Auto-fix #1: on. Click to turn off.");
+        assert_eq!(first.tip(true), "Auto-fix #1: switching on…");
+        assert!(items[2].switch().is_none());
+        assert!(items[3].switch().is_none());
+        PanelItem::set_switch(&mut items, "o/r#2", true);
+        let second = items[1].switch().expect("a switch");
+        assert_eq!((second.symbol(), second.on), ("power", true));
+        assert_eq!(second.tip(false), "Switch: on. Click to turn off.");
+        assert!(items[0].switch().expect("a switch").on, "only the row whose id it is");
     }
 
     #[test]

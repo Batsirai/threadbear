@@ -293,6 +293,8 @@ pub fn try_symbol(name: &str) -> Option<Icon> {
         "sparkle.magnifyingglass" => IconName::Search,
         "text.quote" => IconName::TextQuote,
         "arrow.up.circle.fill" => IconName::CircleArrowUp,
+        // A list panel row's switch when its patch names no icon.
+        "power" => IconName::Power,
         _ => return None,
     };
     Some(Icon::new(lucide))

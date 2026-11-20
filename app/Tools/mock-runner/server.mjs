@@ -1390,6 +1390,18 @@ async function dispatch(client, method, p) {
       await new Promise((r) => setTimeout(r, 300));
       return { image: { path: file, mediaType: 'image/png', ...imageSize(file) } };
     }
+    case 'panels.toggle': {
+      // A list row's switch: a moment's wait, as a patch's function takes,
+      // then the rows again. The Docs preview has nothing to watch.
+      const t = need(p.threadId);
+      const panel = (t.summary.panels ?? []).find((x) => x.id === p.panelId && x.kind === 'list');
+      const item = panel?.mockItems?.find((i) => i.toggle?.id === p.toggleId);
+      if (!item) throw rpcError(-32602, 'This panel has no switches.');
+      await new Promise((r) => setTimeout(r, 1500));
+      if (p.toggleId === 'docs') throw rpcError(-32000, "Couldn't switch it: the Docs build has no preview to watch");
+      item.toggle = { ...item.toggle, on: p.on === true };
+      return { items: panel.mockItems };
+    }
     case 'threads.hibernateWhen': {
       // Away at once, then a canned answer a moment later, as the real
       // runner does after Opus answers: "talk about X" or "mention X" is a
@@ -4237,8 +4249,10 @@ The new hero is shorter, and every page now leads with what the app does.
         // Grouped under headings, with a date at the end of the line and a
         // sentence long enough to wrap onto its second line.
         { title: 'Home', detail: 'Ready, with the new hero, the three plan cards and the footer links all pointing at the rebuilt pages', url: 'https://site-git-landing-rebuild.vercel.app', icon: 'globe', tone: 'done', section: 'This branch', trailing: '4m' },
-        { title: 'Pricing', detail: 'Waiting on the plan prices', url: 'https://site-git-landing-rebuild.vercel.app/pricing', icon: 'globe', tone: 'attention', section: 'This branch', trailing: '12m' },
-        { title: 'Docs', detail: 'Build failed: no image at /docs/hero.png', path: path.join(root, 'logs/docs-build.txt'), icon: 'globe', tone: 'failed', section: 'This branch', trailing: '20m' },
+        // Pricing and Docs have a switch (`toggle`, panels.toggle): watch
+        // the preview. Docs' press fails, so its switch goes back off.
+        { title: 'Pricing', detail: 'Waiting on the plan prices', url: 'https://site-git-landing-rebuild.vercel.app/pricing', icon: 'globe', tone: 'attention', section: 'This branch', trailing: '12m', toggle: { id: 'pricing', on: false, icon: 'eye', title: 'Watch the Pricing preview' } },
+        { title: 'Docs', detail: 'Build failed: no image at /docs/hero.png', path: path.join(root, 'logs/docs-build.txt'), icon: 'globe', tone: 'failed', section: 'This branch', trailing: '20m', toggle: { id: 'docs', on: false, icon: 'eye', title: 'Watch the Docs preview' } },
         { title: 'Local', detail: 'astro dev on port 4321', url: 'http://localhost:4321/', icon: 'laptopcomputer', section: 'Elsewhere' },
         { title: 'Production', detail: 'main, deployed 2 days ago', url: 'https://example.com', icon: 'globe', section: 'Elsewhere', trailing: '2d' },
         // One row of each tone with no icon of its own, so each shows its

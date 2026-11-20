@@ -644,6 +644,9 @@ export type PanelItem = {
   section?: string;
   // Short, faint, at the end of the title's line: a date or a count.
   trailing?: string;
+  // A switch at the end of the title's line; a press sends panels.toggle
+  // (docs/protocol.md, Patches, "Row toggles").
+  toggle?: { id: string; on: boolean; icon?: string; title?: string };
 };
 
 export type BackgroundKind = 'agent' | 'shell' | 'monitor' | 'other';

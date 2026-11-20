@@ -669,6 +669,7 @@ export function readPatchModule(id: string, source: 'home' | 'project', file: st
   // panels, kept aside (see liveFunctions) once the whole file has passed.
   // Only actions have a label and only panels a summary.
   const live: [string, LiveFunctions][] = [];
+  const toggles = new Map<string, ToggleFunction>();
   const liveOf = (kind: string, i: number, title: string, raw: { when?: unknown; badge?: unknown; label?: unknown; summary?: unknown }, itemId: string): string | undefined => {
     const fns: LiveFunctions = {};
     for (const key of kind === 'panels' ? (['when', 'badge', 'summary'] as const) : (['when', 'badge', 'label'] as const)) {
@@ -729,7 +730,7 @@ export function readPatchModule(id: string, source: 'home' | 'project', file: st
   if (v.panels !== undefined) {
     if (!Array.isArray(v.panels)) return problem('panels should be an array.');
     for (const [i, raw] of v.panels.entries()) {
-      const p = raw as { title?: unknown; url?: unknown; note?: unknown; icon?: unknown; items?: unknown; when?: unknown; badge?: unknown; summary?: unknown };
+      const p = raw as { title?: unknown; url?: unknown; note?: unknown; icon?: unknown; items?: unknown; toggle?: unknown; when?: unknown; badge?: unknown; summary?: unknown };
       if (!p || typeof p !== 'object' || typeof p.title !== 'string' || !p.title.trim()) return problem(`panels[${i}] needs a title.`);
       const ownIcon = readIcon(p.icon, file);
       if (typeof ownIcon === 'string') return problem(`panels[${i}] ("${p.title}"): icon ${ownIcon}`);
@@ -741,6 +742,9 @@ export function readPatchModule(id: string, source: 'home' | 'project', file: st
         if (p.url !== undefined) return problem(`panels[${i}] ("${p.title}") should have url or items, not both.`);
         panel = { id: panelId, title: p.title.trim(), kind: 'list', patch: id };
         listFunctions.set(listKey(file, panelId.slice(id.length)), p.items as ItemsFunction);
+        // What a row's switch calls (panels.toggle, "Row toggles").
+        if (p.toggle !== undefined && typeof p.toggle !== 'function') return problem(`panels[${i}] ("${p.title}") has a toggle that isn't a function.`);
+        if (typeof p.toggle === 'function') toggles.set(panelId.slice(id.length), p.toggle as ToggleFunction);
       } else {
         // A page the web view can open: a scheme with //, or a data: page.
         if (typeof p.url !== 'string' || !/^([a-z][a-z0-9+.-]*:\/\/\S|data:)/i.test(p.url.trim())) return problem(`panels[${i}] ("${p.title}") needs a url, or an items function.`);
@@ -778,6 +782,8 @@ export function readPatchModule(id: string, source: 'home' | 'project', file: st
   }
   for (const key of [...liveFunctions.keys()]) if (key.startsWith(file + '\u0000')) liveFunctions.delete(key);
   for (const [suffix, fns] of live) liveFunctions.set(listKey(file, suffix), fns);
+  for (const key of [...toggleFunctions.keys()]) if (key.startsWith(file + '\u0000')) toggleFunctions.delete(key);
+  for (const [suffix, fn] of toggles) toggleFunctions.set(listKey(file, suffix), fn);
   const loaded: LoadedPatch = { info, panels, actions, hooks };
   if (worktree) loaded.worktree = worktree;
   if (appliesTo) loaded.appliesTo = appliesTo;
@@ -1179,6 +1185,11 @@ type ItemsFunction = (ctx: ItemsContext) => unknown;
 const listFunctions = new Map<string, ItemsFunction>();
 const listKey = (file: string, suffix: string) => `${file}\u0000${suffix}`;
 
+// The `toggle` functions of list panels, keyed like listFunctions: what a
+// row's switch calls (panels.toggle), with the row's `id` and the new `on`.
+type ToggleFunction = (ctx: ItemsContext & { id: string; on: boolean }) => unknown;
+const toggleFunctions = new Map<string, ToggleFunction>();
+
 export const LIST_ITEMS_KEPT = 200;
 export const LIST_TIMEOUT_MS = 20_000;
 
@@ -1192,6 +1203,8 @@ export async function renderListPanel(
   const info = set.patches.find((p) => p.id === panel.patch);
   const fn = info?.file ? listFunctions.get(listKey(info.file, panel.id.slice(panel.patch.length))) : undefined;
   if (!fn) return { note: 'This panel has nothing to show.' };
+  // A row's switch only means something when the panel can answer a press.
+  const switches = info?.file ? toggleFunctions.has(listKey(info.file, panel.id.slice(panel.patch.length))) : false;
   // A project folder's patch runs in that folder, as its actions do.
   const cwd = info?.folder ?? ctx.cwd;
   const shIn = liveSh(info?.file, cwd, ctx);
@@ -1205,12 +1218,50 @@ export async function renderListPanel(
       }),
     ]);
     if (!Array.isArray(value)) return { note: "The panel's items function didn't return a list." };
-    return { items: value.slice(0, LIST_ITEMS_KEPT).map(panelItem).filter((x): x is PanelItem => x !== undefined) };
+    const items = value.slice(0, LIST_ITEMS_KEPT).map(panelItem).filter((x): x is PanelItem => x !== undefined);
+    return { items: switches ? items : items.map(({ toggle: _, ...rest }) => rest) };
   } catch (e) {
     return { note: `Couldn't fill this panel: ${firstLine(e)}` };
   } finally {
     clearTimeout(timer);
     shIn.close();
+  }
+}
+
+// A row's switch pressed (panels.toggle): calls the list panel's toggle
+// function with the row's id and the new state, then fills the panel again
+// so the row shows what the patch now says. A throw or a timeout rejects
+// with its first line; a panel with no toggle function rejects at once.
+export async function toggleListPanel(panel: Panel, set: PatchSet, ctx: LiveContext, id: string, on: boolean): Promise<PanelRender> {
+  const info = set.patches.find((p) => p.id === panel.patch);
+  const fn = info?.file ? toggleFunctions.get(listKey(info.file, panel.id.slice(panel.patch.length))) : undefined;
+  if (!fn) throw new NoSwitches();
+  const cwd = info?.folder ?? ctx.cwd;
+  const shIn = liveSh(info?.file, cwd, ctx);
+  const sh = async (command: string) => shText(command, await shIn.run(command));
+  const timeoutMs = ctx.timeoutMs ?? LIST_TIMEOUT_MS;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => callThenClose(() => fn({ cwd, threadId: ctx.threadId, thread: ctx.thread ?? NO_THREAD, matched: info?.matched ?? [], sh, id, on }), shIn)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`took over ${Math.round(timeoutMs / 1000)} seconds`)), timeoutMs);
+      }),
+    ]);
+  } catch (e) {
+    throw new Error(`Couldn't switch it: ${firstLine(e)}`);
+  } finally {
+    clearTimeout(timer);
+    shIn.close();
+  }
+  return renderListPanel(panel, set, ctx);
+}
+
+// toggleListPanel's refusal for a panel with no toggle function: the
+// caller's mistake (-32602), not the patch's.
+export class NoSwitches extends Error {
+  constructor() {
+    super('This panel has no switches.');
   }
 }
 
@@ -1331,7 +1382,7 @@ function badgeCount(v: unknown): number | undefined {
   return Math.min(Math.floor(n), 9999);
 }
 
-function panelItem(raw: unknown): PanelItem | undefined {
+export function panelItem(raw: unknown): PanelItem | undefined {
   if (typeof raw === 'string') return raw.trim() ? { title: raw.trim().slice(0, 300) } : undefined;
   if (!raw || typeof raw !== 'object') return undefined;
   const r = raw as Record<string, unknown>;
@@ -1341,6 +1392,12 @@ function panelItem(raw: unknown): PanelItem | undefined {
   if (r.tone === 'attention' || r.tone === 'failed' || r.tone === 'warning' || r.tone === 'working' || r.tone === 'done') item.tone = r.tone;
   if (typeof r.section === 'string' && r.section.trim()) item.section = r.section.trim().slice(0, 80);
   if (typeof r.trailing === 'string' && r.trailing.trim()) item.trailing = r.trailing.trim().slice(0, 24);
+  const t = r.toggle as Record<string, unknown> | undefined;
+  if (t && typeof t === 'object' && typeof t.id === 'string' && t.id.trim() && typeof t.on === 'boolean') {
+    item.toggle = { id: t.id.trim().slice(0, 200), on: t.on };
+    if (typeof t.icon === 'string' && t.icon.trim()) item.toggle.icon = t.icon.trim().slice(0, 100);
+    if (typeof t.title === 'string' && t.title.trim()) item.toggle.title = t.title.trim().slice(0, 80);
+  }
   return item;
 }
 
