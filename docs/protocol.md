@@ -3697,13 +3697,16 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   are never reviewed. An `update_project` card also shows the reviewer
   what the brief changes (`review` on the agent approval request, never on
   the card): for each of title, goals, state and notes it changes, the
-  line counts before and after and the changed lines with one line round
-  them, worked out from the project as it is (notes as they'd be saved,
-  with `appendNote`, trimmed and with CRLF as LF), and the names of the
-  other fields it changes, which the reviewer judges from the input. Over
-  20,000 characters and there's no diff. If the title, goals, state or
-  notes changed while the card was up, the call is refused, as a whole
-  new notes would undo that change. When the reviewer left a card for
+  line counts before and after and the changed lines with three lines
+  round them, worked out from the project as it is (notes as they'd be
+  saved, with `appendNote`, trimmed and with CRLF as LF), and the names of
+  the other fields it changes, which the reviewer judges from the input.
+  A field whose changed lines pass 20,000 characters gets only how many
+  lines go and come, to be judged as a rewrite. Just before the write,
+  if the title, goals, state, notes or folders changed while the card was
+  up (or under review), the call is refused, as a whole new notes or
+  folder list would undo that change; `notes` with `appendNote` is saved
+  in one update. When the reviewer left a card for
   Mike with a reason and he says no (Deny, or writing instead), the
   answer carries it as `reviewer`, which the agent is told after the
   denial, so it can tell him why he was asked.

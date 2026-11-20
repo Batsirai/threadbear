@@ -358,7 +358,7 @@ test('update_project: the card reviewer is shown what the brief\'s notes change,
   assert.match(review, /notes: 40 lines before, 40 after/);
   assert.match(review, /^-- note 20$/m);
   assert.match(review, /^\+- note 20, now paused$/m);
-  assert.doesNotMatch(review, /note 5\b/, 'only the changed lines and a line round them');
+  assert.doesNotMatch(review, /note 5\b/, 'only the changed lines and a few round them');
   assert.match(review, /state: 0 lines before, 1 after/);
   // Notes as they'd be saved: appendNote counts, CRLF and an end newline
   // don't, and the brief's other fields are named, not passed over
@@ -371,10 +371,10 @@ test('update_project: the card reviewer is shown what the brief\'s notes change,
   assert.match(r2, /Also changes, not shown here \(judge them from the input\): addLinks/);
   await withCard(s, 'deny', 'update_project', { project: p.id, appendNote: 'x' });
   assert.match(reqs.at(-1).review, /notes: 40 lines before, 42 after/);
-  // Too big a diff and there's none: the reviewer reads the input.
+  // Too many changed lines to show: their counts, to be judged as a rewrite.
   await s.projects.update(p.id, { notes: Array.from({ length: 600 }, (_, i) => `- a longer note, number ${i}, to fill the brief`).join('\n') });
   await withCard(s, 'deny', 'update_project', { project: p.id, notes: 'Short now.' });
-  assert.equal(reqs.at(-1).review, undefined);
+  assert.match(reqs.at(-1).review, /^notes: 600 lines before, 1 after\. 600 lines removed and 1 added, too many to show here: judge this field from the input, as a rewrite\.$/);
   s.sched.stop();
 });
 
@@ -395,8 +395,16 @@ test('update_project: a brief changed while the card was up isn\'t overwritten f
   s.h.runner.respondApproval({ threadId: s.me.id, approvalId: card.approvalId, decision: 'allow' });
   const r = await call;
   assert.equal(r.error, true);
-  assert.match(r.text, /changed while the user was being asked/);
+  assert.match(r.text, /changed while this waited for an OK/);
   assert.match(s.projects.list()[0].notes, /Do not deploy/);
+  // New notes and a paragraph on the end are saved as one change.
+  const saves: unknown[] = [];
+  const update = s.projects.update.bind(s.projects);
+  s.projects.update = ((id: string, patch: any) => (saves.push(patch.notes), update(id, patch))) as typeof s.projects.update;
+  const both = await withCard(s, 'allow', 'update_project', { project: p.id, notes: 'Fresh notes', appendNote: 'Never run it on prod' });
+  assert.equal(both.error, false, both.text);
+  assert.equal(s.projects.list()[0].notes, 'Fresh notes\n\nNever run it on prod');
+  assert.deepEqual(saves.filter((n) => typeof n === 'string'), ['Fresh notes\n\nNever run it on prod']);
   s.sched.stop();
 });
 

@@ -203,7 +203,8 @@ export const approvalsPart = {
       this.emit(st, { type: 'system.note', text: `Allowed by the reviewer: ${card.title}. ${verdict.why}` }, rt.turn?.turnId);
       return { decision: 'allow' };
     }
-    const why = verdict.allow ? undefined : verdict.why;
+    // Switched out of Auto meanwhile, it's an ordinary card.
+    const why = verdict.allow || entry.stale || !reviewsCards(this, st) ? undefined : verdict.why;
     if (!why) return show();
     this.emit(st, { type: 'system.note', text: `The reviewer left this one for you: ${why}` }, rt.turn?.turnId);
     // The agent sees only the answer, so without this it guessed why it was

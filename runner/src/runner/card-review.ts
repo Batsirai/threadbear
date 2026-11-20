@@ -101,7 +101,7 @@ export function latestMessages(runner: Runner, st: ThreadState): { mike?: string
 // Told to the agent with the answer to a card the reviewer left for Mike,
 // so it can say why he was asked.
 export function reviewerLeftIt(why: string): string {
-  return `This went to the user because Threadbear's card reviewer (a model that answers an Auto thread's cards in their place) left it for them: ${why}`;
+  return `This went to the user because Threadbear's card reviewer (a model that answers an Auto thread's cards in their place) left it for them: ${why} Don't reword or split it to get past the reviewer; tell the user why it was asked and what they'd like instead.`;
 }
 
 // Reads the model's answer. Anything but a clear allow is an ask.

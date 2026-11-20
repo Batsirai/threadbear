@@ -220,7 +220,8 @@ export function approvalTitle(name: string, input: Record<string, unknown>, find
 // How long end_turn waits for its own call to reach the thread's events
 // before judging the turn (below).
 export const LAND_WAIT_MS = 1000;
-// The most of a brief's changes shown to the card reviewer (briefChanges).
+// The most of one brief field's changed lines shown to the card reviewer
+// (briefChanges).
 const BRIEF_DIFF_MAX = 20_000;
 const LAND_POLL_MS = 50;
 
@@ -1106,8 +1107,8 @@ export function buildThreadbearTools(
   // the whole notes and read to it as a rewrite (Mike, 20 Nov 2026). Notes
   // are compared as they'd be saved (appendNote added, trimmed), and every
   // other field the call changes is named, so nothing reads as unchanged
-  // that isn't (Codex and Gemini review). Too long a diff and there's none:
-  // the reviewer reads the full input as before.
+  // that isn't (Codex and Gemini review). A field with too many changed
+  // lines to show gets their counts and is to be judged as a rewrite.
   const briefChanges = (p: Pick<Project, 'title' | 'goals' | 'state' | 'notes'>, fields: Record<string, unknown>): string | undefined => {
     const norm = (t: string) => t.replace(/\r\n?/g, '\n').trim();
     const next: Partial<Record<'title' | 'goals' | 'state' | 'notes', string>> = {};
@@ -1121,13 +1122,17 @@ export function buildThreadbearTools(
       const before = norm(p[k] ?? '');
       const after = norm(next[k]!);
       if (after === before) return `${k}: unchanged`;
-      const lines = diffLines(before, after, 1).flatMap((h) => [`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, ...h.lines]);
-      return `${k}: ${splitLines(before).length} lines before, ${splitLines(after).length} after. Changed lines (- before, + after):\n${lines.join('\n')}`;
+      const hunks = diffLines(before, after);
+      const lines = hunks.flatMap((h) => [`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, ...h.lines]);
+      const head = `${k}: ${splitLines(before).length} lines before, ${splitLines(after).length} after.`;
+      const text = lines.join('\n');
+      if (text.length <= BRIEF_DIFF_MAX) return `${head} Changed lines (- before, + after):\n${text}`;
+      const count = (c: string) => lines.filter((l) => l.startsWith(c)).length;
+      return `${head} ${count('-')} lines removed and ${count('+')} added, too many to show here: judge this field from the input, as a rewrite.`;
     });
     const others = Object.keys(fields).filter((k) => !['project', 'title', 'goals', 'state', 'notes', 'appendNote'].includes(k));
     if (others.length) parts.push(`Also changes, not shown here (judge them from the input): ${others.join(', ')}`);
-    const out = parts.join('\n\n');
-    return parts.length && out.length <= BRIEF_DIFF_MAX ? out : undefined;
+    return parts.length ? parts.join('\n\n') : undefined;
   };
   const project = async (q: string) => {
     const p = await mustProjects().find(q);
@@ -1340,6 +1345,7 @@ export function buildThreadbearTools(
         // So every one of those counts (Codex review), and the card shows
         // the goals a new parent brings.
         const newParent = parent?.trim() ? (await pc.get((await project(parent)).id)).project : undefined;
+        let judged = false;
         if (caller && ([title, goals, state, notes, appendNote, notion, links, parent].some((x) => x !== undefined) || addFolders?.length || addLinks?.length)) {
           const parts = (await pc.list({ archived: true })).filter((x) => x.parentId === p.id).map((x) => x.id);
           const told = [p.id, ...parts, ...(newParent ? [newParent.id] : []), ...(p.parentId ? [p.parentId] : [])];
@@ -1348,12 +1354,7 @@ export function buildThreadbearTools(
             const parentShown = newParent ? { title: newParent.title, id: newParent.id, ...(newParent.goals ? { goals: newParent.goals } : {}) } : parent;
             const fields = Object.fromEntries(Object.entries({ title, goals, state, notes, appendNote, addFolders: added, notion, links, addLinks, parent: parentShown }).filter(([, v]) => v !== undefined));
             await confirm('update_project', [`Change the brief of the project "${p.title}", which "${top.title}" (${accessName(top)}) is told`], { project: { title: p.title, id: p.id }, ...fields }, extra?.signal, briefChanges(p, fields));
-            // What was judged is a change from the brief as it was then:
-            // changed meanwhile, a whole new notes would undo what changed.
-            const now = (await pc.get(p.id)).project;
-            if ((['title', 'goals', 'state', 'notes'] as const).some((k) => now[k] !== p[k])) {
-              throw new Error(`"${p.title}"'s brief changed while the user was being asked, so nothing changed. Read it again (read_project) and redo the change on what it says now.`);
-            }
+            judged = true;
             if (addFolders?.length) for (const [i, f] of addFolders.entries()) await sameFolder(f, added![i]!);
             // The title and goals shown are what it gets: a parent changed
             // while the card waited is refused.
@@ -1369,8 +1370,21 @@ export function buildThreadbearTools(
           const add = added ?? [];
           folders = [...p.folders.filter((f) => !drop.has(f)), ...add.filter((f) => !p.folders.includes(f))];
         }
-        let out = await pc.update(p.id, { title, goals, state, notes, links, folders, notion, ...(parent !== undefined ? { parent: newParent?.id ?? '' } : {}), by: mikeAsked ? 'mike' : 'agent' });
-        if (appendNote?.trim()) out = await pc.appendNote(p.id, appendNote);
+        // What was judged is a change from the brief as it was then: changed
+        // meanwhile, a whole new notes or folder list would undo what changed.
+        // Checked last, just before the write (Codex and Gemini review).
+        if (judged) {
+          const now = (await pc.get(p.id)).project;
+          if ((['title', 'goals', 'state', 'notes'] as const).some((k) => now[k] !== p[k]) || now.folders.join('\n') !== p.folders.join('\n')) {
+            throw new Error(`"${p.title}"'s brief changed while this waited for an OK, so nothing changed. Read it again (read_project) and redo the change on what it says now.`);
+          }
+        }
+        // New notes and a paragraph on the end are saved as one, as they were
+        // judged: saved in two steps, the notes stood for a moment without it.
+        const add = appendNote?.trim();
+        const whole = notes !== undefined && add ? (notes.trim() ? `${notes.trimEnd()}\n\n${add}` : add) : notes;
+        let out = await pc.update(p.id, { title, goals, state, notes: whole, links, folders, notion, ...(parent !== undefined ? { parent: newParent?.id ?? '' } : {}), by: mikeAsked ? 'mike' : 'agent' });
+        if (add && notes === undefined) out = await pc.appendNote(p.id, appendNote!);
         if (addLinks?.length || removeLinks?.length) {
           if (!pc.addLinks || !pc.removeLinks) throw new Error("This runner can't change project links yet.");
           if (removeLinks?.length) out = await pc.removeLinks(p.id, removeLinks);

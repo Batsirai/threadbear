@@ -82,7 +82,7 @@ test('cardReviewer: Alex writing instead of answering a card it left still tells
   h.runner.respondApproval({ threadId: id, approvalId: req.approvalId, decision: 'deny', message: 'The user wrote you a message instead' });
   const a = await answer;
   assert.equal(a.message, 'The user wrote you a message instead');
-  assert.match(a.reviewer ?? '', /^This went to the user because .*It rewrites the whole brief\.$/);
+  assert.match(a.reviewer ?? '', /^This went to the user because .*It rewrites the whole brief\. Don't reword or split it to get past the reviewer/);
 });
 
 test('cardReviewer: a card it left that closes without Alex answering tells the agent nothing of the reviewer', async () => {
