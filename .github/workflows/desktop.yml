@@ -93,11 +93,17 @@ jobs:
         # about 620 scenarios at three seconds each. The second job only builds
         # the app and runs its half, so a share is about 16 minutes. Split
         # further, with a third job, rather than raising the limit.
+        # Mac and Windows the same since 20 Nov: their whole runs took 40
+        # minutes after 15 of Rust tests, and Mac's passed the 60 while
+        # building the release app, so no run on main finished and the land
+        # gate went by an old failure (run 44661350867).
         include:
           - { name: Linux, os: ubuntu-24.04, shard: 1/2 }
           - { name: Linux specs 2 of 2, os: ubuntu-24.04, shard: 2/2, specsOnly: true }
-          - { name: Mac, os: macos-26 }
-          - { name: Windows, os: windows-latest }
+          - { name: Mac, os: macos-26, shard: 1/2 }
+          - { name: Mac specs 2 of 2, os: macos-26, shard: 2/2, specsOnly: true }
+          - { name: Windows, os: windows-latest, shard: 1/2 }
+          - { name: Windows specs 2 of 2, os: windows-latest, shard: 2/2, specsOnly: true }
     defaults:
       run:
         shell: bash
@@ -130,7 +136,7 @@ jobs:
         if: ${{ !matrix.specsOnly }}
         run: cargo test --manifest-path desktop/Cargo.toml
       - name: Native text bridge contract
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !matrix.specsOnly
         run: bash desktop/scripts/test-native-text.sh
       - name: File-drop regression tests
         if: ${{ !matrix.specsOnly }}
