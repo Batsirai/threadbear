@@ -108,7 +108,7 @@ export const commandsPart = {
           delete rec.messageRecoveries;
           // A fresh native session from the next message; the CLI that has
           // the old one goes once this turn is over.
-          if (rt.session) rt.releaseWhenIdle = true;
+          if (rt.session) this.cli(st, { kind: 'leave' });
           rec.nativeSessionId = crypto.randomUUID();
           rec.sessionUsed = false;
           rec.sessionCostTotal = 0;

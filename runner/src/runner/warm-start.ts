@@ -170,7 +170,7 @@ export const warmStartPart = {
       // when making the thread failed.
       const st = this.threads.get(spare.id);
       if (st && st.rt.spare !== spare) return;
-      if (st) st.rt.spare = undefined;
+      if (st) this.cli(st, { kind: 'spareGone', spare });
       this.log.info('stopping the CLI started ahead of a thread that never used it', { threadId: spare.id });
       spare.session.kill();
     }, CLAIMED_MS);
@@ -181,9 +181,9 @@ export const warmStartPart = {
   // From startSession: the spare's CLI when it was started with exactly
   // these options and is still running; otherwise it's stopped.
   takeSpare(this: Runner, st: ThreadState, opts: StartSessionOptions, sink: SessionSink): AgentSession | undefined {
-    const spare = st.rt.spare;
+    const taken = this.cli(st, { kind: 'takeSpare' });
+    const spare = taken.ok ? taken.out.spare : undefined;
     if (!spare) return undefined;
-    st.rt.spare = undefined;
     clearTimeout(spare.timer);
     if (!spare.relay.exitedEarly && spare.key === spareKey(opts)) {
       spare.relay.attach(sink);

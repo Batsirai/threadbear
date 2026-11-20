@@ -68,7 +68,7 @@ export const newThreadsPart = {
       throw e;
     }
     const { st, notes, loginNote } = made;
-    if (spare) st.rt.spare = spare;
+    if (spare) this.cli(st, { kind: 'claim', spare });
     if (projectIds.length) this.projects!.changeMembership(st.rec.id, { add: projectIds, by: 'mike' });
     const turnId = this.sendTo(st, params.text ?? '', params.images ?? [], { origin: params.origin, scheduleId: params.scheduleId });
     // Under the first turn, so they read as part of starting it.

@@ -574,6 +574,7 @@ through the deploy script (Releases and deploys, above).
 | `src/runner.ts` | The Runner: startup, threads, turns, the queue, the CLI's output, update and delete, events, summaries. |
 | `src/runner/*.ts` | The rest of the Runner's methods, one area a file (pools, worktrees, patches, approvals, reviews, handovers, hibernation and so on). Each is an object of methods whose `this` is the Runner; runner.ts merges their types into the class and puts them on its prototype. A new method for one of those areas goes in its file. |
 | `src/place.ts` | Where a thread is parked (inbox, snoozed, archived): the `Place` type, `movePlace`, and `parkRecord`, the only writer of those record fields (docs/lifecycles.md, "On the runner"). |
+| `src/cli-session.ts` | A thread's CLI (none, spare, starting, live, closing): the `Cli` type, `moveCli`, and `cliRuntime` (`Runner.cli`), the only writer of those Runtime fields, which drops what an older CLI says (docs/protocol/updates.md, "A thread's CLI"). |
 | `src/reply-phase.ts` | A turn's reply phase around `end_turn` (working, ended, replying, reopened, open): the `ReplyState` type, `moveReply`, and `replyTurn` (`Runner.reply`), the only writer of those Turn fields (docs/protocol/needs-you.md, "The reply phase"). |
 | `src/rpc.ts` | WebSocket JSON-RPC server, auth, subscriptions. |
 | `src/adapters/types.ts` | The adapter interface. Codex will be a second implementation. |

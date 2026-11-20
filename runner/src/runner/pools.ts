@@ -271,7 +271,7 @@ export const poolsPart = {
       note += ` It's on ${providerName(to.provider)} now, with ${model}${rec.sessionUsed ? ' and a summary of the thread so far' : ''}.`;
     }
     if (rt.session) {
-      rt.releaseWhenIdle = true;
+      this.cli(st, { kind: 'leave' });
       if (!rt.turn) this.releaseSession(st);
     }
     rec.updatedAt = this.isoNow();

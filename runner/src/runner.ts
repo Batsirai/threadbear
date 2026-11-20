@@ -94,6 +94,7 @@ import { parseWhen } from './when.ts';
 import { SERVER_NAME } from './threadbear-mcp.ts';
 import { archiveFromTool, bylineFromTool, END_TURN_TOOL, snoozeFromTool, waitForFromTool, WakeRead } from './needs.ts';
 import { dropsStream, replyTurn, turnNeeds, type ReplyEvent, type ReplyMove, type ReplyOut } from './reply-phase.ts';
+import { cliOf, cliRuntime, STALE, type CliEvent, type CliMove } from './cli-session.ts';
 import type { Needs } from './needs.ts';
 import { asksForAppRestart, MAX_AGE_MS as APP_RESTART_MAX_AGE_MS } from './app-restarts.ts';
 import type { ConnectorsStatus } from './connectors.ts';
@@ -1212,7 +1213,7 @@ export class Runner {
       this.signIn?.noteWorked(a.id);
       for (const st of this.threads.values()) {
         if (st.rec.accountId !== a.id || !st.rt.session) continue;
-        st.rt.releaseWhenIdle = true;
+        this.cli(st, { kind: 'leave' });
         if (!st.rt.turn) this.releaseSession(st);
       }
       this.log.info('a login changed its year-long token; its sessions start again on it', { accountId: a.id });
@@ -1414,7 +1415,7 @@ export class Runner {
       rt.wakeTimer?.cancel();
       this.flushDeltas(st);
       // Output and exits from CLIs that are about to be killed no longer count.
-      rt.generation++;
+      this.cli(st, { kind: 'drop', forget: false });
       if (rt.turn) this.stopTurn(st);
       // Killing the CLIs kills their background shells and subagents too.
       // Say so in the thread, as releaseSession does, or it would wait for
@@ -1424,7 +1425,7 @@ export class Runner {
       if (rt.tasks.length) {
         const what = rt.tasks.map((t) => t.description || t.type).join('; ');
         this.rememberStoppedWork(st);
-        rt.tasks = [];
+        this.cli(st, { kind: 'stopTasks' });
         try {
           this.emit(st, { type: 'system.note', text: `Stopped background work when the runner stopped: ${what}` });
         } catch (e) {
@@ -1926,7 +1927,7 @@ export class Runner {
     // if it ends with nothing for Mike (the end of the turn, below).
     // Answering it from his phone without opening it counts as having seen
     // it woke (place.ts, message).
-    if (placeOf(rec).kind !== 'inbox') rt.releaseWhenIdle = false;
+    if (placeOf(rec).kind !== 'inbox') this.cli(st, { kind: 'stay' });
     this.park(st, { kind: 'message', fromSchedule: opts.origin === 'schedule', fromMike: fromMike(text, opts) });
     this.supersedeReviews(st, text, opts);
     // He has seen the reply a waiting panel went with.
@@ -2154,6 +2155,19 @@ export class Runner {
   // Moves the running turn's reply phase (reply-phase.ts), the only way
   // its fields change. A refusal (fields that fit no phase) leaves them
   // and is logged; the event then goes as in a turn with no end_turn.
+  // The thread's CLI (cli-session.ts): the only way its fields change. A
+  // stale event (for an older CLI) changes nothing and says nothing; a move
+  // the table says never happens is made as the old writes made it, and
+  // logged, so a real one shows up.
+  cli(st: ThreadState, e: CliEvent): CliMove {
+    const from = cliOf(st.rt).kind;
+    const res = cliRuntime(st.rt, e);
+    if (!res.ok) {
+      if (res.reason !== STALE) this.log.warn('refused a CLI session move', { threadId: st.rec.id, event: e.kind, from, reason: res.reason });
+    } else if (res.unexpected) this.log.warn('an unexpected CLI session move', { threadId: st.rec.id, event: e.kind, from, to: res.state.kind, why: res.unexpected });
+    return res;
+  }
+
   reply(st: ThreadState, e: ReplyEvent): ReplyMove | undefined {
     const turn = st.rt.turn;
     if (!turn) return undefined;
@@ -2534,14 +2548,18 @@ export class Runner {
     // wake, a review) comes through, rather than at each of them.
     if (rec.copied) throw new Error(COPIED_REFUSAL);
     if (!rec.nativeSessionId) rec.nativeSessionId = crypto.randomUUID();
-    const gen = ++rt.generation;
     const resume = Boolean(rec.sessionUsed);
+    // A new generation, so whatever an older CLI still says goes nowhere,
+    // and this CLI is the fresh one anything asked for: a release asked of
+    // the last one doesn't carry over to it (thread 8a971407).
+    this.cli(st, { kind: 'begin', resume });
+    const gen = rt.generation;
     const sink: SessionSink = {
       output: (o) => {
         if (rt.generation !== gen) return;
         rt.lastOutputAt = this.clock.now();
         try {
-          this.onOutput(st, o);
+          this.onOutput(st, o, gen);
         } catch (e) {
           // Most likely the disk (full, permissions). The CLI carries on;
           // say so rather than let the error look like a CLI crash.
@@ -2553,26 +2571,20 @@ export class Runner {
       requestQuestion: (req) => this.requestQuestion(st, gen, req),
       exited: (err) => this.onExited(st, gen, err),
     };
-    rt.resumed = resume;
     rt.cliVersion = undefined;
-    rt.versionMove = false;
-    // This CLI is the fresh one anything asked for; a release asked of the
-    // last one doesn't carry over to it (thread 8a971407).
-    rt.releaseWhenIdle = false;
     rt.sessionProvider = rec.provider;
-    rt.started = false;
     rt.startVersion = this.cliList()?.find((c) => c.provider === rec.provider)?.installedVersion;
     const { opts, claude, claudeSkipped, heldGrants } = this.sessionOptions(st, account, looks, resume);
     rt.claudeSkipped = claudeSkipped;
     rt.claudeHeldGrants = heldGrants;
     // A CLI started ahead of this thread with these same options takes the
     // place of a new one (runner/warm-start.ts).
-    rt.session = this.takeSpare(st, opts, sink) ?? adapter.start(opts, sink);
+    const session = this.takeSpare(st, opts, sink) ?? adapter.start(opts, sink);
+    this.cli(st, { kind: 'spawned', session });
     // Every input to the CLI (a turn, a steer, a retry after the session
     // went) sends only the thread's own pictures (ownInput), whichever path
     // it took (Codex's review, 17 Nov: a retry re-sent a logged message's
     // pictures as they were).
-    const session = rt.session;
     const send = session.send.bind(session);
     session.send = (input) => send(this.ownInput(st, input));
     if (claude && !claude.trusted) this.noteClaudeSkipped(st, claude);
@@ -2580,7 +2592,8 @@ export class Runner {
     this.markDirty(st);
   }
 
-  onOutput(st: ThreadState, o: AdapterOutput): void {
+  // `gen`: the CLI it came from (startSession's sink drops an older one's).
+  onOutput(st: ThreadState, o: AdapterOutput, gen = st.rt.generation): void {
     const { rec, rt } = st;
     if (rt.turn?.dispatched && !rt.closing && !rt.turn.foreignOutput && ((o.kind === 'delta' && o.delta.text.length > 0) ||
       (o.kind === 'event' && ['assistant.text', 'reasoning', 'tool.call', 'tool.result', 'edit.diff', 'image'].includes(o.event.type)))) {
@@ -2695,7 +2708,7 @@ export class Runner {
         rec.sessionUsed = true;
         // This session is there, so a later one that can't be found gets
         // its own fresh start.
-        rt.retriedFresh = false;
+        this.cli(st, { kind: 'init', gen });
         if (rec.status === 'starting') rec.status = rt.approvals.size ? 'waiting' : 'running';
         if (o.model) {
           rec.modelInUse = o.model;
@@ -2735,10 +2748,9 @@ export class Runner {
         break;
       case 'cliVersion': {
         rt.cliVersion = o.version;
-        if (!rt.started) {
-          rt.started = true;
-          this.tellStarted(rec.provider, o.version, true);
-        }
+        // Started on the version an update wants: nothing to move.
+        const said = this.cli(st, { kind: 'version', gen, atWanted: this.wantedVersion[rec.provider] === o.version });
+        if (said.ok && said.out.first) this.tellStarted(rec.provider, o.version, true);
         if (rec.cliVersion && rec.cliVersion !== o.version) {
           this.emit(st, { type: 'system.note', text: `${cliName(rec.provider)} ${o.version} from this turn on (was ${rec.cliVersion})` }, rt.turn?.turnId);
         }
@@ -2746,8 +2758,6 @@ export class Runner {
           rec.cliVersion = o.version;
           this.markDirty(st);
         }
-        // Started on the version an update wants: nothing to move.
-        if (this.wantedVersion[rec.provider] === o.version) rt.versionMove = false;
         break;
       }
       case 'cliTurn':
@@ -2774,7 +2784,7 @@ export class Runner {
         // turn still has its Claude CLI here, which wakes.
         const wakes = this.adapters[rt.sessionProvider ?? rec.provider]?.wakesAfterTasks !== false;
         const ended = endedTasks.length > 0 && wakes;
-        rt.tasks = o.tasks;
+        this.cli(st, { kind: 'tasks', gen, tasks: o.tasks });
         if (wakes) rt.finished.push(...endedTasks);
         // The CLI reports the list shrinking a moment before it starts the
         // turn that reads the result. A restart in between would lose that
@@ -3316,17 +3326,19 @@ export class Runner {
 
   onExited(st: ThreadState, gen: number, err?: Error): void {
     const { rec, rt } = st;
-    if (rt.generation !== gen) return;
+    // An older CLI's exit is stale: nothing moves. Else the session and its
+    // background work go, and it says whether it was asked to stop.
+    const exit = this.cli(st, { kind: 'exited', gen });
+    if (!exit.ok) return;
+    const released = exit.out.released === true;
     // A CLI that died before it got going, other than one asked to stop or
     // one whose session to resume was missing (the CLI itself was fine).
     const missing = err && (err instanceof SessionNotFoundError || err.name === 'SessionNotFoundError' || /no conversation found/i.test(err.message));
-    if (err && !rt.started && !missing && rt.releasedGen !== gen) this.tellStarted(rec.provider, rt.startVersion, false);
-    rt.session = undefined;
+    if (err && !exit.out.started && !missing && !released) this.tellStarted(rec.provider, rt.startVersion, false);
     rt.frozen = false;
     // Nothing's left to answer them: a subagent's card can be open with no
     // turn running, and no turn ending would close it.
     this.expireApprovals(st, 'The CLI stopped.');
-    rt.tasks = [];
     rt.finished = [];
     rt.taskEndedInTurn = false;
     // Its sub-agents went with it.
@@ -3336,11 +3348,10 @@ export class Runner {
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
     this.log.info('session ended', { threadId: rec.id, error: err?.message });
-    if (rt.releasedGen === gen) {
+    if (released) {
       // A CLI we asked to stop. A turn that is waiting for it to go starts
       // the next CLI once it has. A turn it had started by itself while
       // shutting down ends with it.
-      rt.releasedGen = undefined;
       if (rt.turn?.auto) {
         rt.turn.interruptRequested = true;
         this.failTurn(st, 'The session was released.');
@@ -3361,7 +3372,7 @@ export class Runner {
       // sessionUsed never got set. Resume it instead, once (4 Nov 2026).
       const inUse = Boolean(err && !rt.resumed && /Session ID \S+ is already in use/i.test(err.message));
       if (((notFound && rt.resumed) || inUse) && !rt.retriedFresh) {
-        rt.retriedFresh = true;
+        this.cli(st, { kind: 'retryFresh' });
         if (inUse) {
           rec.sessionUsed = true;
           // The old session goes on, not the fresh one the brief was for.
@@ -3597,7 +3608,7 @@ export class Runner {
         const fallback = () => {
           // Couldn't move the live session: a fresh CLI resumes there,
           // once any background work is done (scheduleIdle).
-          rt.releaseWhenIdle = true;
+          this.cli(st, { kind: 'leave' });
           if (!rt.turn) this.scheduleIdle(st);
         };
         if (session.setCwd) session.setCwd(rec.cwd).catch(fallback);
@@ -3651,7 +3662,7 @@ export class Runner {
       else delete rec.model;
       if (rt.session && !release) {
         rt.session.setModel(model).catch(() => {
-          rt.releaseWhenIdle = true;
+          this.cli(st, { kind: 'leave' });
         });
         if (sayNextTurn()) nextTurn.push(model ? (account ? modelTitle(account, model) : model) : 'The default model');
       }
@@ -3661,7 +3672,7 @@ export class Runner {
       else delete rec.effort;
       if (rt.session && !release) {
         rt.session.setEffort(effort).catch(() => {
-          rt.releaseWhenIdle = true;
+          this.cli(st, { kind: 'leave' });
         });
         if (sayNextTurn()) nextTurn.push(effort ? `${effortTitle(effort)} effort` : "The model's own effort level");
       }
@@ -3681,14 +3692,14 @@ export class Runner {
       // and the next message gets a CLI without them.
       if (rt.session && rt.claudeHeldGrants && params.permissionMode !== 'full') {
         rt.session.askBeforeEveryTool?.();
-        rt.releaseWhenIdle = true;
+        this.cli(st, { kind: 'leave' });
       }
       // A session on its way out (another login or folder in the same
       // call) still hears it: its turn runs on till the next message, and
       // on Full a Codex one answers its own approvals.
       if (rt.session) {
         rt.session.setPermissionMode(params.permissionMode).catch(() => {
-          rt.releaseWhenIdle = true;
+          this.cli(st, { kind: 'leave' });
           if (!rt.turn) this.releaseSession(st);
         });
         // Full counts at once even on Codex: what the turn would ask, the
@@ -3778,14 +3789,14 @@ export class Runner {
     if (!stop && this.bucket(rec) === 'inbox') this.kickQueue(st);
     if (stop) {
       // Snoozing or archiving stops the CLI: end any turn, then release.
-      rt.releaseWhenIdle = true;
+      this.cli(st, { kind: 'leave' });
       if (rt.turn) this.interrupt(rec.id);
       else this.releaseSession(st);
     } else if (release) {
       // Another login or folder: the CLI goes now, or once its background
       // work is done (scheduleIdle). The next message gets the fresh one
       // either way.
-      rt.releaseWhenIdle = true;
+      this.cli(st, { kind: 'leave' });
       if (!rt.turn) this.scheduleIdle(st);
     }
     // Its first turn on the new login releases the old CLI (deliver).
@@ -3846,16 +3857,15 @@ export class Runner {
     rt.deltaTimer?.cancel();
     rt.wakeTimer?.cancel();
     rt.turn?.interruptTimer?.cancel();
-    // Bumping the generation makes everything the old CLI still reports
-    // (output, approvals, its exit) go nowhere.
-    rt.generation++;
+    // A new generation makes everything the old CLI still reports (output,
+    // approvals, its exit) go nowhere; the CLI is forgotten and stopped.
+    const dropped = this.cli(st, { kind: 'drop', forget: true });
     for (const [, p] of rt.approvals) {
       settleDeclined(p, 'expired', 'The thread was deleted.');
     }
     rt.approvals.clear();
     for (const r of [...(rt.reviews?.values() ?? [])]) r.cancel({ decision: 'expired', message: 'The thread was deleted.' });
-    const session = rt.session;
-    rt.session = undefined;
+    const session = dropped.ok ? dropped.out.forgot : undefined;
     const ended = session?.end({ hard: true }).catch((e: unknown) => this.log.warn('stopping a deleted thread failed', { threadId, error: String(e) }));
     this.archiveNative(st, ended ?? rt.closing);
     // Its worktree goes once the CLI has let go of the folder, and after an

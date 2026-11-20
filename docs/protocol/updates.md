@@ -595,6 +595,44 @@ short wait it will use within its turn (a server starting) goes through
 when the command carries `# short wait`. Codex's shell has no hook to
 refuse a call with, so Codex threads are left to the stuck-job check.
 
+### A thread's CLI
+
+How the runner holds a thread's CLI, as one state type
+(`runner/src/cli-session.ts`, 21 Nov 2026; its header has the table of every
+event in every state). Nothing here is on the wire or stored: it's the
+runner's memory, and a handover lets each CLI go before the thread moves. A
+thread has no CLI (`none`) until a message starts one, unless warm start's
+spare was claimed for it at `threads.create` (`spare`), which its first start
+takes when it still fits. A started CLI is `starting` until it says its
+version (Claude in its init), then `live`. Releasing it (idle, the live cap, a
+CLI update, another login or folder, a setting it couldn't take, /clear, a
+snooze or archive) makes it `closing`; a turn waits for that to end before it
+starts the next, so one session never has two CLIs. One that exits by itself
+goes straight back to `none`, and a turn it was running fails, or starts
+again once on a fresh session when the one to resume can't be found. Every
+start, delete, handover and shutdown moves the generation on, and anything an
+older CLI says (its output, its exit) is dropped by that one check.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> none
+  none --> spare: claim (threads.create)
+  spare --> none: spareGone (unused)
+  none --> starting: begin, spawned
+  spare --> starting: begin, takeSpare, spawned
+  starting --> live: version
+  starting --> none: exited (crash, or resume refused)
+  live --> none: exited
+  starting --> closing: release
+  live --> closing: release
+  closing --> closing: exited (session gone)
+  closing --> none: closed
+  live --> live: tasks, leave, versionMove, init
+  none --> none: drop (delete, handover, shutdown)
+  live --> none: drop on delete (forgets it)
+```
+
 ### Frozen CLIs
 
 A CLI can freeze on something only a person can answer: on 31 Oct 2026 a

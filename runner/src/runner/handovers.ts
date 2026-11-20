@@ -205,7 +205,7 @@ export const handoversPart = {
     if (rt.deleted) return;
     rt.deltaTimer?.cancel();
     rt.wakeTimer?.cancel();
-    rt.generation++;
+    this.cli(st, { kind: 'drop', forget: false });
     this.store.saveIfChanged(rec);
     rt.deleted = true;
     this.dirty.delete(rec.id);

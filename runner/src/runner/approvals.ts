@@ -121,7 +121,7 @@ export const approvalsPart = {
     if (call) return this.respondApproval({ threadId: params.threadId, approvalId: call.approvalId, decision: 'allow' });
     const mode = this.leavePlan(st);
     rt.session?.setPermissionMode(mode).catch(() => {
-      rt.releaseWhenIdle = true;
+      this.cli(st, { kind: 'leave' });
     });
     this.send(params.threadId, PLAN_GO_AHEAD);
     return {};

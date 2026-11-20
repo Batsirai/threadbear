@@ -97,8 +97,15 @@ happens around `end_turn`, seventeen fields on a Turn (in memory only) read as
 working, ended, replying, reopened or open, written only by `replyTurn`
 (`Runner.reply`). Drawn in docs/protocol/needs-you.md, "The reply phase".
 
-Next on the runner, most worth it first: the CLI session's life, sync's
-command intake and the worktree slot.
+**A thread's CLI** (`runner/src/cli-session.ts`, 21 Nov 2026): none, a spare
+warm start began for it, starting, live or closing, eleven Runtime fields (in
+memory only: `session`, `spare`, `generation`, `closing`, `releasedGen`,
+`resumed`, `retriedFresh`, `started`, `releaseWhenIdle`, `versionMove`,
+`tasks`) written only by `cliRuntime` (`Runner.cli`). Events from a CLI
+carry its generation, and an older one's are dropped there. Drawn in docs/protocol/updates.md, "A thread's CLI".
+
+Next on the runner, most worth it first: sync's command intake and the
+worktree slot.
 
 ## Moving them onto @convex-dev/state-machines
 
