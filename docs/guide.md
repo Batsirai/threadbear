@@ -1348,6 +1348,21 @@ when you click its refresh button. Once a thread has sat idle for half an
 hour its Claude has stopped, so it shows the last breakdown and how old
 it is until your next message.
 
+A Claude thread keeps its conversation in the provider's prompt cache for
+about an hour after its last model call. Wake a long thread after that
+(your message the next morning, a schedule, a report from a thread it
+started) and the whole conversation has to be read in again, which on a
+thread past 200k tokens costs about three times a warm turn. So a Claude
+thread with 200k tokens or more of context that has been idle for over an
+hour and five minutes compacts first: Claude Code summarises the
+conversation, asked to keep what was decided, what you asked for that
+isn't done, what's still running or waited on, the files, branches and
+threads involved, and how you said you want the work done. Then your
+message runs on the summary, in the same turn. It takes a minute or so
+before the turn starts, and a quiet line in the thread says it happened
+and why. A thread that's still warm, a shorter one, a slash command and
+Codex threads are left alone.
+
 To add another login, such as a second Claude subscription, give it a
 folder of its own under `accounts` in Threadbear's data folder, named
 `claude-1` (then `claude-2` and so on, or `codex-1` for Codex), and sign in
