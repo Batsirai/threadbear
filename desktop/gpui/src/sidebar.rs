@@ -1655,6 +1655,8 @@ impl Threadbear {
         self.note_navigation();
         self.new_thread.picks.project = None;
         self.new_thread.focus_pending = true;
+        // Its CLI starts now, while the message is written (warm start).
+        self.warm_new_thread(cx);
         cx.notify();
     }
 

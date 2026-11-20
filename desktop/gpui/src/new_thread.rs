@@ -38,11 +38,16 @@ pub(crate) struct NewThreadState {
     pub(crate) runner_problem: Option<String>,
     /// The box should take the cursor at the next render (⌘N, or the button).
     pub(crate) focus_pending: bool,
+    /// The settings last sent to `threads.warm`, and the id the runner gave
+    /// for them (docs/protocol.md, "Warm start"): sent back with
+    /// `threads.create` while the box still has those settings.
+    pub(crate) warm_asked: Option<Value>,
+    pub(crate) warm: Option<(Value, String)>,
 }
 
 impl NewThreadState {
     pub(crate) fn new() -> Self {
-        NewThreadState { composer: None, picks: NewThreadPicks::default(), prefs: prefs::load(), creating: false, error: None, runner_problem: None, focus_pending: false }
+        NewThreadState { composer: None, picks: NewThreadPicks::default(), prefs: prefs::load(), creating: false, error: None, runner_problem: None, focus_pending: false, warm_asked: None, warm: None }
     }
 
     /// Saved when something that sticks changes (a model, a login used, the
@@ -75,6 +80,51 @@ impl Threadbear {
         let home = home_dir();
         let draft = Draft { logins, picks: &self.new_thread.picks, mem: &self.new_thread.prefs.remembered, home: &home, now_ms: now_ms() };
         f(&draft)
+    }
+
+    /// What `threads.warm` is asked for: the new thread's settings as
+    /// `threads.create` would send them, without the words. None for a thread
+    /// that starts on another runner or a virtual one, or while disconnected.
+    fn warm_params(&self) -> Option<Value> {
+        if self.new_thread.picks.runner.is_some() || self.new_thread.picks.service.is_some() || !matches!(self.status, Status::Connected { .. }) {
+            return None;
+        }
+        let logins = self.draft_logins();
+        let mut params = self.with_draft(&logins, |d| d.create_params("", Vec::new(), false));
+        if let Some(map) = params.as_object_mut() {
+            map.remove("text");
+            map.remove("images");
+        }
+        if let Some(project) = &self.new_thread.picks.project {
+            params["projectIds"] = json!([project]);
+        }
+        Some(params)
+    }
+
+    /// Asks the runner to start the new thread's CLI now, while its first
+    /// message is written (docs/protocol.md, "Warm start"), unless it was
+    /// already asked for these settings. On ⌘N or the button, and as the box
+    /// changes, so a folder or model picked after opening gets its own.
+    pub(crate) fn warm_new_thread(&mut self, cx: &mut Context<Self>) {
+        let Some(params) = self.warm_params() else { return };
+        if self.new_thread.warm_asked.as_ref() == Some(&params) {
+            return;
+        }
+        self.new_thread.warm_asked = Some(params.clone());
+        self.new_thread.warm = None;
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(client, "threads.warm", params.clone()).await;
+            let id = res.ok().and_then(|v| v["warmId"].as_str().map(str::to_owned));
+            this.update(cx, |this, _| {
+                // Only for the settings still asked for.
+                if this.new_thread.warm_asked.as_ref() == Some(&params) {
+                    this.new_thread.warm = id.map(|id| (params, id));
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The box's chips read the draft through a `ThreadSummary`, as a
@@ -141,6 +191,15 @@ impl Threadbear {
         let project = self.new_thread.picks.project.clone().filter(|p| self.sidebar.projects.iter().any(|known| &known.id == p));
         if let Some(project) = &project {
             params["projectIds"] = json!([project]);
+        }
+        // The CLI started for this draft, while its settings are the ones it
+        // was started with (warm start). Used once either way.
+        let warm = self.new_thread.warm.take();
+        self.new_thread.warm_asked = None;
+        if let (Some((warmed, id)), Some(now)) = (warm, self.warm_params()) {
+            if warmed == now {
+                params["warmId"] = json!(id);
+            }
         }
         let account = self.with_draft(&logins, |d| d.account_id());
         let used_pool = params.get("poolId").is_some();

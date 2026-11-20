@@ -225,7 +225,17 @@ impl Composer {
                 this.spelling_after_edit(window, cx);
                 // Kept across a quit (drafts.rs).
                 if let Some(app) = this.app.upgrade() {
-                    app.update(cx, |app, cx| app.drafts_changed(cx));
+                    // Not for the box emptying after a send: that would start
+                    // one for a thread nobody is writing.
+                    let new_thread = this.thread_id.is_none() && !this.input.read(cx).value().trim().is_empty();
+                    app.update(cx, |app, cx| {
+                        app.drafts_changed(cx);
+                        // A new thread's CLI, started again if the box's
+                        // settings changed since the page opened (warm start).
+                        if new_thread {
+                            app.warm_new_thread(cx);
+                        }
+                    });
                 }
                 cx.notify();
             }
