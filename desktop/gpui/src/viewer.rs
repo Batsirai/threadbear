@@ -246,7 +246,7 @@ fn read_picture<T: HostsViewer>(host: &mut T, index: usize, cx: &mut Context<T>)
         let read = res.ok().as_ref().and_then(threadbear_core::folders::FileRead::decode).filter(|read| runner.is_none() || !read.truncated);
         // Shrunk to what the GPU can draw (fit_picture.rs), off this thread.
         let path2 = path.clone();
-        let picture = cx.background_executor().spawn(async move { read.and_then(|read| format_of(&path2, &read.data).map(|format| crate::fit_picture::fit_bytes(format, read.data))) }).await;
+        let picture = cx.background_executor().spawn(async move { read.and_then(|read| format_of(&path2, &read.data).and_then(|format| crate::fit_picture::fit_bytes(format, read.data))) }).await;
         this.update(cx, |t, cx| {
             let viewer = t.viewer_state();
             // Only into the opening that asked for it.

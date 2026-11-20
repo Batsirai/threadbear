@@ -132,11 +132,14 @@ pub(crate) struct FilesState {
     /// The window the pane draws in, for putting a file's text in its editor
     /// after a save or a check that came later.
     pub(crate) window: Option<AnyWindowHandle>,
+    /// Each thread's latest read, so an older one finishing later (a big
+    /// picture still being shrunk) doesn't replace it.
+    reads: HashMap<String, u64>,
 }
 
 impl Default for FilesState {
     fn default() -> Self {
-        FilesState { open: HashMap::new(), known_folders: HashSet::new(), reading_style: None, prefs: crate::files_store::load(), last_query: String::new(), focus: None, window: None }
+        FilesState { open: HashMap::new(), known_folders: HashSet::new(), reading_style: None, prefs: crate::files_store::load(), last_query: String::new(), focus: None, window: None, reads: HashMap::new() }
     }
 }
 
@@ -542,36 +545,43 @@ impl SidePane {
         }
         let client = self.client.clone();
         let thread_id = thread.id.clone();
+        let read_number = {
+            let n = self.files.reads.entry(thread_id.clone()).or_default();
+            *n += 1;
+            *n
+        };
         let mut params = json!({ "path": path, "maxBytes": MAX_BYTES });
         if let Some(runner) = &thread.runner_id {
             params["runnerId"] = json!(runner);
         }
         cx.spawn(async move |this, cx| {
             let res = call(client, "files.read", params).await;
-            // A picture too big for the GPU, shrunk off this thread to draw.
-            let big = match (&res, image_format(&path)) {
-                (Ok(v), Some(format)) => FileRead::decode(v).map(|read| read.data).filter(|data| crate::fit_picture::size_of(data).is_some_and(crate::fit_picture::too_big)).map(|data| (format, data)),
+            let read = res.as_ref().ok().map(FileRead::decode);
+            // A picture too big for the GPU, shrunk off this thread to draw
+            // (Some(None): too big to shrink).
+            let big = match (&read, image_format(&path)) {
+                (Some(Some(read)), Some(format)) if crate::fit_picture::size_of(&read.data).is_some_and(crate::fit_picture::too_big) => Some((format, read.data.clone())),
                 _ => None,
             };
             let fitted = match big {
-                Some((format, data)) => Some(cx.background_executor().spawn(async move {
-                    let (format, data) = crate::fit_picture::fit_bytes(format, data);
-                    Arc::new(Image::from_bytes(format, data))
-                }).await),
+                Some((format, data)) => Some(
+                    cx.background_executor().spawn(async move { crate::fit_picture::fit_bytes(format, data).map(|(format, data)| Arc::new(Image::from_bytes(format, data))) }).await,
+                ),
                 None => None,
             };
             this.update(cx, |this, cx| {
-                // A newer file opened while this one was on its way.
+                // A newer file opened while this one was on its way, or the
+                // same one read again since.
                 let current = this.previews.get(&thread_id).and_then(|p| p.file_path().map(str::to_owned));
-                if current.as_deref() != Some(path.as_str()) {
+                if current.as_deref() != Some(path.as_str()) || this.files.reads.get(&thread_id) != Some(&read_number) {
                     return;
                 }
-                match res {
-                    Ok(v) => match FileRead::decode(&v) {
+                match (res, read) {
+                    (Ok(_), Some(read)) => match read {
                         Some(read) => this.show_read(&thread_id, &path, opened, read, here, fitted, cx),
                         None => this.fail_file(&thread_id, &path, opened, "Couldn't read that answer from the runner.".into(), cx),
                     },
-                    Err(e) if e.message.starts_with("Not a file") => {
+                    (Err(e), _) if e.message.starts_with("Not a file") => {
                         // A folder: into the browser, as a click on one is.
                         this.files.known_folders.insert(path.clone());
                         this.files.open.remove(&thread_id);
@@ -585,8 +595,9 @@ impl SidePane {
                     }
                     // No runner (not a slow one: a timeout while connected
                     // has no reconnect to wait for, so it fails as it is).
-                    Err(e) if matches!(e.code, threadbear_client::runner::NOT_CONNECTED | threadbear_client::runner::CLOSED) => this.wait_for_runner(&thread_id, &path, opened, cx),
-                    Err(e) => this.fail_file(&thread_id, &path, opened, e.message, cx),
+                    (Err(e), _) if matches!(e.code, threadbear_client::runner::NOT_CONNECTED | threadbear_client::runner::CLOSED) => this.wait_for_runner(&thread_id, &path, opened, cx),
+                    (Err(e), _) => this.fail_file(&thread_id, &path, opened, e.message, cx),
+                    (Ok(_), None) => {}
                 }
             })
             .ok();
@@ -630,14 +641,16 @@ impl SidePane {
         cx.notify();
     }
 
-    fn show_read(&mut self, thread_id: &str, path: &str, opened: u64, read: FileRead, here: bool, fitted: Option<Arc<Image>>, cx: &mut Context<Self>) {
+    fn show_read(&mut self, thread_id: &str, path: &str, opened: u64, read: FileRead, here: bool, fitted: Option<Option<Arc<Image>>>, cx: &mut Context<Self>) {
         let viewer = core::viewer_for_path(path);
         let is_picture = viewer == Viewer::Picture && (core::looks_like_picture(path) || image_format(path).is_some());
         let body = if is_picture {
             match image_format(path) {
+                // Drawn as it is, one too big to shrink would be a blank box.
+                Some(_) if matches!(fitted, Some(None)) => FileBody::Opaque { note: crate::fit_picture::TOO_BIG.into() },
                 Some(format) => {
                     let image = Arc::new(Image::from_bytes(format, read.data));
-                    FileBody::Picture { size: picture_size(image.bytes()), drawn: fitted.unwrap_or_else(|| image.clone()), image }
+                    FileBody::Picture { size: picture_size(image.bytes()), drawn: fitted.flatten().unwrap_or_else(|| image.clone()), image }
                 }
                 None => FileBody::Opaque { note: "This kind of picture opens in its own app.".into() },
             }

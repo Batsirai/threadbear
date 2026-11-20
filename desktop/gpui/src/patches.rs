@@ -173,7 +173,8 @@ impl SidePane {
                         Some(read) => {
                             let jpeg = image.media_type.contains("jpeg");
                             let format = if jpeg { ImageFormat::Jpeg } else { ImageFormat::Png };
-                            Some(cx.background_executor().spawn(async move { crate::fit_picture::fit_bytes(format, read.data) }).await)
+                            // One too big to shrink shows nothing, as one that can't be read.
+                            cx.background_executor().spawn(async move { crate::fit_picture::fit_bytes(format, read.data) }).await
                         }
                         None => None,
                     }

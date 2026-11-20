@@ -481,7 +481,7 @@ pub(crate) fn file_picture(path: &str) -> ImageSource {
         let meta = threadbear_core::open_policy::local_metadata(&path).ok().filter(|_| !path.as_os_str().is_empty());
         let Some(meta) = meta.filter(|meta| crate::fit_picture::file_size(&path, meta).is_some_and(crate::fit_picture::too_big)) else { return path.into() };
         let key = (path, meta.len(), meta.modified().ok());
-        ImageSource::Custom(std::sync::Arc::new(move |window, cx| window.use_asset::<crate::fit_picture::FittedPicture>(&key, cx)))
+        ImageSource::Custom(std::sync::Arc::new(move |window, cx| crate::fit_picture::use_fitted(&key, window, cx)))
     }
 }
 
@@ -526,7 +526,7 @@ impl Asset for LocalPicture {
         async move {
             let bytes = checked_picture_bytes(&path)?;
             let format = crate::viewer::format_of(&path.to_string_lossy(), &bytes).ok_or_else(|| std::io::Error::other("Not a picture"))?;
-            let (format, bytes) = crate::fit_picture::fit_bytes(format, bytes);
+            let (format, bytes) = crate::fit_picture::fit_bytes(format, bytes).ok_or_else(|| std::io::Error::other(crate::fit_picture::TOO_BIG))?;
             Image::from_bytes(format, bytes).to_image_data(renderer).map_err(Into::into)
         }
     }
