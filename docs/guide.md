@@ -652,10 +652,13 @@ The caret stays visible after ten seconds without editing or moving it,
 and starts blinking again when you continue typing or refocus the box.
 
 On a Mac the composer checks your spelling as the Mac's own text boxes do. A
-misspelled word gets a red wavy line once you've finished typing it, and
-with Correct Spelling Automatically on (it starts as your Mac's Keyboard
-settings have it) the Mac's correction and your text replacements go in as
-you start the next word; ⌘Z puts back what you typed. A correction you
+misspelled word gets a red wavy line once you've finished typing it. Words
+aren't changed for you: Correct Spelling Automatically is off to start with,
+whatever your Mac's Keyboard settings say (right-click the box, then Spelling
+and Grammar, to turn it on). With it on, the Mac's correction goes in as you
+start the next word, as your text replacements do either way (those start
+as your Mac's Keyboard settings have them); ⌘Z puts back what you typed. A
+correction you
 take back (⌘Z straight after it, or deleting into the word and typing it
 your way again) isn't made again while the app runs, and the word stops
 being marked. "Threadbear" is never marked or corrected. Right-click a marked
