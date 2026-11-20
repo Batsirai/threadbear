@@ -351,7 +351,7 @@ impl Threadbear {
             div().absolute().top(px(14.)).left_0().right_0().flex().justify_center().child(
                 crate::highlights::tipped(
                     div()
-                        .id("feed-new")
+                        .id("feed-new").role(gpui_kit::Role::Button)
                         .px(px(16.))
                         .py(px(7.))
                         .rounded_full()
@@ -402,7 +402,7 @@ impl Threadbear {
             .when_some(head, |s, head| s.child(div().flex_none().text_color(faint).child("\u{b7}")).child(div().flex_1().min_w_0().truncate().text_color(style::secondary_text(cx)).child(head)))
             .child(div().flex_1())
             .child(
-                crate::highlights::tipped(div().id(SharedString::from(format!("feed-undo-{}", t.id))).flex_none().cursor_pointer().text_color(style::link_text(cx)).hover(|s| s.underline()), "Put it back in your Inbox")
+                crate::highlights::tipped(div().id(SharedString::from(format!("feed-undo-{}", t.id))).role(gpui_kit::Role::Button).flex_none().cursor_pointer().text_color(style::link_text(cx)).hover(|s| s.underline()), "Put it back in your Inbox")
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.feed_undo(&id, cx)))
                     .child("Undo"),
             )
@@ -551,7 +551,7 @@ impl Threadbear {
         let (fold_id, done_id, later_id) = (t.id.clone(), t.id.clone(), t.id.clone());
         let fold = crate::highlights::tipped(
             h_flex()
-                .id(SharedString::from(format!("feed-fold-{}", t.id)))
+                .id(SharedString::from(format!("feed-fold-{}", t.id))).role(gpui_kit::Role::Button)
                 .items_center()
                 .gap(px(8.))
                 .pl(px(5.))
@@ -592,7 +592,7 @@ impl Threadbear {
             let n = start;
             list = list.child(
                 div()
-                    .id(SharedString::from(format!("feed-earlier-{}", t.id)))
+                    .id(SharedString::from(format!("feed-earlier-{}", t.id))).role(gpui_kit::Role::Button)
                     .ml(px(INSET))
                     .mb(px(10.))
                     .cursor_pointer()
@@ -635,7 +635,7 @@ impl Threadbear {
             .text_color(style::faint_text(cx))
             .child(
                 crate::highlights::tipped(
-                    h_flex().id(SharedString::from(format!("feed-full-{}-{}", t.id, m.seq))).gap(px(4.)).items_center().cursor_pointer().hover(|s| s.text_color(style::secondary_text(cx))),
+                    h_flex().id(SharedString::from(format!("feed-full-{}-{}", t.id, m.seq))).role(gpui_kit::Role::Button).gap(px(4.)).items_center().cursor_pointer().hover(|s| s.text_color(style::secondary_text(cx))),
                     if full { "Cut it back to three lines" } else { "See all of this message" },
                 )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -649,7 +649,7 @@ impl Threadbear {
             )
             .child(
                 crate::highlights::tipped(
-                    h_flex().id(SharedString::from(format!("feed-open-{}-{}", t.id, m.seq))).gap(px(4.)).items_center().cursor_pointer().hover(|s| s.text_color(style::secondary_text(cx))),
+                    h_flex().id(SharedString::from(format!("feed-open-{}-{}", t.id, m.seq))).role(gpui_kit::Role::Button).gap(px(4.)).items_center().cursor_pointer().hover(|s| s.text_color(style::secondary_text(cx))),
                     "Open thread",
                 )
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.open_thread_from_page(open_id.clone(), window, cx)))
@@ -687,7 +687,7 @@ impl Threadbear {
         let send: AnyElement = if sending.is_some() {
             div().flex_none().size(px(26.)).flex().items_center().justify_center().child(Spinner::new().icon(gpui_kit::assets::IconName::LoaderCircle).color(secondary).with_size(px(13.))).into_any_element()
         } else {
-            crate::highlights::tipped(div().id(SharedString::from(format!("feed-send-{}", t.id))).flex_none().size(px(26.)).flex().items_center().justify_center().rounded(px(6.)).cursor_pointer().hover(|s| s.bg(style::hover_fill(cx))), "Send it to the thread")
+            crate::highlights::tipped(div().id(SharedString::from(format!("feed-send-{}", t.id))).role(gpui_kit::Role::Button).flex_none().size(px(26.)).flex().items_center().justify_center().rounded(px(6.)).cursor_pointer().hover(|s| s.bg(style::hover_fill(cx))), "Send it to the thread")
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.feed_send_reply(&id, window, cx)))
                 .child(icons::symbol("paperplane").with_size(px(15.)).text_color(secondary))
                 .into_any_element()
@@ -778,7 +778,7 @@ fn plain(text: &str) -> String {
 fn foot_button(id: SharedString, symbol: &'static str, label: &'static str, tip: &'static str, cx: &App, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
     let color = style::secondary_text(cx);
     crate::highlights::tipped(
-        h_flex().id(id).items_center().gap(px(6.)).px(px(10.)).py(px(4.)).rounded_full().cursor_pointer().hover(|s| s.bg(style::hover_fill(cx))).text_size(px(13.)).line_height(px(16.)).text_color(color).on_click(on_click).child(icons::symbol(symbol).with_size(px(13.)).text_color(color)).child(label),
+        h_flex().id(id).role(gpui_kit::Role::Button).items_center().gap(px(6.)).px(px(10.)).py(px(4.)).rounded_full().cursor_pointer().hover(|s| s.bg(style::hover_fill(cx))).text_size(px(13.)).line_height(px(16.)).text_color(color).on_click(on_click).child(icons::symbol(symbol).with_size(px(13.)).text_color(color)).child(label),
         tip,
     )
     .into_any_element()
