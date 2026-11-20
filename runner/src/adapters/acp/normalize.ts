@@ -47,7 +47,10 @@ type Tool = {
   // Known only from a permission request so far, with the previews it
   // carried, kept apart from what the call's own updates later say.
   asked?: boolean;
-  framed?: boolean;
+  // Said by the agent to be running or over (in_progress, completed,
+  // failed): a frame that only proposes it (Antigravity's pending "Run
+  // create_file?") doesn't count.
+  ran?: boolean;
   // Whether the request was let go ahead, once it's answered.
   allowed?: boolean;
   // The files the request named outright (namedFiles).
@@ -327,7 +330,7 @@ export class AcpNormalizer {
   noteCall(call: AcpToolCall): { id: string; row: string; paths: string[]; kind?: string; input: Record<string, unknown>; title?: string } {
     const id = typeof call.toolCallId === 'string' && call.toolCallId ? call.toolCallId : crypto.randomUUID();
     const t = this.tool(id);
-    if (!t.framed) t.asked = true;
+    t.asked = true;
     this.merge(t, call);
     const diffs = (Array.isArray(call.content) ? call.content : []).filter((c) => c?.type === 'diff');
     if (diffs.length) t.askedDiffs = diffs;
@@ -370,7 +373,7 @@ export class AcpNormalizer {
       return x.size === y.size && [...x].every((p) => y.has(p));
     };
     // The oldest first: an agent runs what it asked for in turn.
-    const found = [...this.tools.values()].find((t) => t.asked && t.allowed === true && !t.framed && !t.done && t.acpKind === kind && (t.askedFiles ?? []).every((p) => path.isAbsolute(p)) && same(t.askedFiles ?? [], paths));
+    const found = [...this.tools.values()].find((t) => t.asked && t.allowed === true && !t.ran && !t.done && t.acpKind === kind && (t.askedFiles ?? []).every((p) => path.isAbsolute(p)) && same(t.askedFiles ?? [], paths));
     return found;
   }
 
@@ -379,7 +382,7 @@ export class AcpNormalizer {
     // Tried again until the call's row is out, as its first frame may name
     // no file yet (Codex's review, 20 Nov 2026).
     const had = this.tools.get(u.toolCallId);
-    const asked = !had ? this.askedFor(u) : !had.emitted && !had.asked && !had.done && had.row === had.id ? this.askedFor(u, typeof u.kind === 'string' ? u.kind : had.acpKind) : undefined;
+    const asked = !had ? this.askedFor(u) : !had.emitted && had.allowed === undefined && !had.done && had.row === had.id ? this.askedFor(u, typeof u.kind === 'string' ? u.kind : had.acpKind) : undefined;
     const t = this.tool(u.toolCallId);
     if (asked) {
       asked.done = true;
@@ -391,7 +394,7 @@ export class AcpNormalizer {
     // Closed at a turn's end before it was ever shown: a row now would never
     // get its result.
     if (t.done && !t.emitted) return;
-    t.framed = true;
+    if (u.status === 'in_progress' || u.status === 'completed' || u.status === 'failed') t.ran = true;
     this.merge(t, u);
     // Agents can open a call with nothing filled in yet (OpenCode: title
     // "write", rawInput {}), so the row waits for its input or its start.

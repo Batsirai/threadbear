@@ -195,3 +195,19 @@ test("a use_tool call whose arguments stream in after it starts is still the too
   assert.equal(ev.name, 'mcp__threadbear__end_turn');
   assert.deepEqual(ev.input, { needs: 'nothing' });
 });
+
+test("Antigravity's create_file, frame by frame as 1.4.5 sends it: one row, which succeeds", () => {
+  const n = new AcpNormalizer(ctx);
+  const f = '/w/hello.txt';
+  const proposed = { toolCallId: 'hex1', title: 'Run create_file?', kind: 'edit', status: 'pending', content: [{ path: f, newText: 'hi\n', type: 'diff' }], locations: [{ path: f }], rawInput: { CodeContent: 'hi\n', Overwrite: true, TargetFile: f } };
+  const out = [...n.handle({ sessionUpdate: 'tool_call', ...proposed })];
+  const seen = n.noteCall(proposed);
+  n.answered(seen.id, true);
+  out.push(...n.handle({ sessionUpdate: 'tool_call', toolCallId: 'sess:1', title: 'Running edit_file', kind: 'edit', status: 'in_progress', locations: [{ path: f }], rawInput: { file_path: f } }));
+  out.push(...n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 'sess:1', status: 'completed', rawOutput: 'Create hello.txt file' }));
+  out.push(...n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 'hex1', status: 'failed', rawOutput: 'Tool call was approved but never executed.' }));
+  out.push(...n.closeOpen('Stopped'));
+  const evs = out.map((o) => (o as { event: { type: string; itemId: string; ok?: boolean } }).event);
+  assert.deepEqual(evs.filter((e) => e.type === 'tool.call').map((e) => e.itemId), ['hex1']);
+  assert.deepEqual(evs.filter((e) => e.type === 'tool.result').map((e) => [e.itemId, e.ok]), [['hex1', true]]);
+});
