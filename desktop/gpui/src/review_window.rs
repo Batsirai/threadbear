@@ -126,7 +126,7 @@ pub(crate) fn receive_event(params: &Value, cx: &mut App) {
 /// it updates itself several times a day and is gone a few seconds each time,
 /// which isn't worth an error or a second press of Send. Trying again is safe:
 /// an identical answer to a review already answered returns the first one.
-async fn riding_out(client: Arc<Client>, method: &'static str, params: Value, cx: &mut AsyncApp) -> Result<Value, RpcError> {
+pub(crate) async fn riding_out(client: Arc<Client>, method: &'static str, params: Value, cx: &mut AsyncApp) -> Result<Value, RpcError> {
     let deadline = Instant::now() + Duration::from_millis(rules::RECONNECT_WAIT_MS);
     loop {
         match call(client.clone(), method, params.clone()).await {

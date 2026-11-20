@@ -693,7 +693,7 @@ let pendingRestart;
 // a stalled event loop does; `queueMs` answers threads.send at once but
 // starts its turn (and its user.message) that much later, as a message
 // queued behind a running turn is. Both 0 by default.
-let slow = { ms: 0, queueMs: 0 };
+let slow = { ms: 0, queueMs: 0, saveMs: 0 };
 // The runner's own update (protocol "Runner updates"), set by mock.updates.
 let updates = { state: 'idle', oldRunners: [] };
 
@@ -799,6 +799,8 @@ async function handle(client, { id, method, params = {} }) {
   if (slow.ms > 0 && ['threads.send', 'threads.create', 'threads.update'].includes(method)) {
     await new Promise((resolve) => setTimeout(resolve, slow.ms));
   }
+  // `saveMs` holds reviews.save: a tick on a review's page on its way.
+  if (slow.saveMs > 0 && method === 'reviews.save') await new Promise((resolve) => setTimeout(resolve, slow.saveMs));
   const result = await dispatch(caller, method, params);
   if (id !== undefined && id !== null) reply(client, id, result ?? {});
   // Like the real runner: a client that says hello hears about a restart
@@ -2216,7 +2218,7 @@ async function dispatch(client, method, p) {
       return { ok: true };
     }
     case 'mock.slow': {
-      slow = { ms: Math.max(0, Number(p.ms ?? 0)), queueMs: Math.max(0, Number(p.queueMs ?? 0)) };
+      slow = { ms: Math.max(0, Number(p.ms ?? 0)), queueMs: Math.max(0, Number(p.queueMs ?? 0)), saveMs: Math.max(0, Number(p.saveMs ?? 0)) };
       return slow;
     }
     case 'mock.restartPending': {

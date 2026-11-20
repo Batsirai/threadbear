@@ -71,3 +71,14 @@ Feature: A design review as a page beside the thread
     And I click the tick of option 4 on the review's page
     Then the review's page has "" ticked
     And the message box shows no ticks
+
+  # A tick shows on the page before the runner has saved it, and it's the
+  # page's ticks the box goes by: with only the runner's, Return straight
+  # after a first tick allowed a waiting tool (Codex's review, 20 Nov).
+  @review.page @review-page @swift-pending @windows-pending
+  Scenario: A tick counts for the message box before the runner has it
+    When I open the review's page
+    And the runner is slow to save
+    And I click the tick of option 1 on the review's page without waiting
+    Then the message box shows the ticks "Auto account" before the runner has them
+    And the review's page has "A" ticked

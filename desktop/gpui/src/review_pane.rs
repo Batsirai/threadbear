@@ -80,8 +80,18 @@ pub(crate) struct ReviewPanes {
     /// By thread.
     open: HashMap<String, Open>,
     opened: u64,
+    /// Pages closed with a tick still on its way to the runner, by their
+    /// view's key, with their thread: the save that's out is heard back
+    /// here, and a tick made behind it is still saved (Codex's second
+    /// review, 20 Nov: closing the page dropped it).
+    flushing: HashMap<String, (String, Open)>,
     /// The section the pane was last widened for, and how wide.
     wide: Option<(String, f32)>,
+}
+
+/// A page's key without the marks a new look adds to it (`render_review`).
+fn page_of(key: &str) -> &str {
+    key.trim_end_matches('+')
 }
 
 /// The ticks a review shows: its draft's while it waits, what was sent after.
@@ -180,7 +190,7 @@ impl SidePane {
         let (id, title) = (review.id.clone(), review.title.clone());
         let open = Open { picked: shown_picks(&review), review, key, site: None, made_from: None, html: String::new(), links: vec![], cwd: thread.cwd.clone(), saving: false, again: false, error: None };
         if let Some(old) = self.reviews.open.insert(thread.id.clone(), open) {
-            crate::web_panels::close_made_page(&old.key, cx);
+            self.put_review_away(&thread.id, old, cx);
         }
         self.show_preview(PanePreview::new(Target::Review(id), title, from), &thread.id, cx);
         self.sync_review_width(cx);
@@ -192,9 +202,38 @@ impl SidePane {
     /// width goes back.
     pub(crate) fn review_closed(&mut self, thread_id: &str, cx: &mut Context<Self>) {
         if let Some(old) = self.reviews.open.remove(thread_id) {
-            crate::web_panels::close_made_page(&old.key, cx);
+            self.put_review_away(thread_id, old, cx);
         }
         self.sync_review_width(cx);
+        self.review_ticks_changed(cx);
+    }
+
+    /// A page that's no longer open: its view closes, and if a tick of its
+    /// is still on its way it's kept until that's saved (`flushing`).
+    fn put_review_away(&mut self, thread_id: &str, old: Open, cx: &mut Context<Self>) {
+        crate::web_panels::close_made_page(&old.key, cx);
+        if old.saving {
+            self.reviews.flushing.insert(page_of(&old.key).to_owned(), (thread_id.to_owned(), old));
+        }
+    }
+
+    /// The page with this key: the one open, or one closed with a save out.
+    fn review_entry(&mut self, thread_id: &str, key: &str) -> Option<&mut Open> {
+        if self.reviews.open.get(thread_id).is_some_and(|o| page_of(&o.key) == page_of(key)) {
+            return self.reviews.open.get_mut(thread_id);
+        }
+        self.reviews.flushing.get_mut(page_of(key)).map(|(_, open)| open)
+    }
+
+    /// The ticks over the message box are drawn from these (composer.rs,
+    /// `review_picks`), so its box draws again when they change. Once this
+    /// update is over, as it's reached through the app.
+    fn review_ticks_changed(&self, cx: &mut Context<Self>) {
+        let app = self.app.clone();
+        cx.defer(move |cx| {
+            let Some(composer) = app.upgrade().and_then(|app| app.read(cx).pane.clone()).map(|pane| pane.read(cx).composer.clone()) else { return };
+            composer.update(cx, |_, cx| cx.notify());
+        });
     }
 
     /// The pane as wide as the review on show wants, and back to what it was
@@ -229,11 +268,41 @@ impl SidePane {
         });
     }
 
-    /// The ticks a review's page shows now, if it's open here and still
-    /// waiting: what the message box sends as the answer (composer.rs), as a
-    /// click's tick can be a moment ahead of the runner's copy.
-    pub(crate) fn review_ticks(&self, thread_id: &str, review_id: &str) -> Option<Vec<String>> {
-        self.reviews.open.get(thread_id).filter(|o| o.review.id == review_id && o.review.is_pending()).map(|o| o.picked.clone())
+    /// The thread's review page as the app has it: the one open, or one
+    /// just closed whose last tick is still on its way.
+    fn review_shown(&self, thread_id: &str) -> Option<&Open> {
+        self.reviews.open.get(thread_id).or_else(|| self.reviews.flushing.values().find(|(thread, _)| thread == thread_id).map(|(_, open)| open))
+    }
+
+    /// The review the thread's message box answers when it's sent: the
+    /// newest one still waiting that has options ticked, or None of them
+    /// chosen, with its ticks as its page shows them. `waiting` are the
+    /// thread's pending reviews as the transcript has them. A tick shows on
+    /// the page before the runner has it, so the page's word comes first:
+    /// with only the runner's, Return in an empty box straight after a
+    /// first tick allowed a waiting tool, and words sent then put the
+    /// review aside unanswered (Codex's second review, 20 Nov).
+    pub(crate) fn review_to_answer(&self, thread_id: &str, waiting: Vec<DesignReview>) -> Option<DesignReview> {
+        let mut all = waiting;
+        if let Some(shown) = self.review_shown(thread_id) {
+            // The page's copy is the newer one, and may be of a review
+            // further back than the transcript has loaded.
+            all.retain(|r| r.id != shown.review.id);
+            if shown.review.is_pending() {
+                let mut review = shown.review.clone();
+                review.draft.picked_ids = shown.picked.clone();
+                all.push(review);
+            }
+        }
+        all.into_iter()
+            .filter_map(|mut review| {
+                // Ticks or None, never both.
+                if !review.draft.picked_ids.is_empty() {
+                    review.draft.none = false;
+                }
+                (!review.draft.picked_ids.is_empty() || review.draft.none).then_some(review)
+            })
+            .max_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)))
     }
 
     /// The runner says a review changed (`review.updated`, whichever thread
@@ -370,17 +439,20 @@ impl SidePane {
         if open.saving {
             open.again = true;
         } else {
-            self.save_review_picks(thread_id, cx);
+            let key = open.key.clone();
+            self.save_review_picks(thread_id, &key, cx);
         }
+        self.review_ticks_changed(cx);
         cx.notify();
     }
 
-    fn save_review_picks(&mut self, thread_id: &str, cx: &mut Context<Self>) {
-        let Some(open) = self.reviews.open.get_mut(thread_id) else { return };
+    fn save_review_picks(&mut self, thread_id: &str, key: &str, cx: &mut Context<Self>) {
+        let client = self.client.clone();
+        let Some(open) = self.review_entry(thread_id, key) else { return };
         open.saving = true;
         open.again = false;
         let params = picks_params(thread_id, &open.review, &open.picked);
-        let (client, thread_id, key, review_id) = (self.client.clone(), thread_id.to_owned(), open.key.clone(), open.review.id.clone());
+        let (thread_id, key, review_id) = (thread_id.to_owned(), open.key.clone(), open.review.id.clone());
         cx.spawn(async move |this, cx| {
             let saved = call(client.clone(), "reviews.save", params).await;
             // Turned down (it changed somewhere else, or it's over): the
@@ -395,16 +467,15 @@ impl SidePane {
     }
 
     fn review_picks_saved(&mut self, thread_id: &str, key: &str, saved: Result<Value, RpcError>, latest: Option<DesignReview>, cx: &mut Context<Self>) {
-        let Some(open) = self.reviews.open.get_mut(thread_id).filter(|o| o.key.trim_end_matches('+') == key.trim_end_matches('+')) else { return };
+        let Some(open) = self.review_entry(thread_id, key) else { return };
         open.saving = false;
+        let mut again = false;
         match saved.map(|v| DesignReview::decode(&v["review"])) {
             Ok(Some(review)) => {
                 if review.revision >= open.review.revision {
                     open.review = review;
                 }
-                if open.again {
-                    self.save_review_picks(thread_id, cx);
-                }
+                again = open.again;
             }
             Ok(None) => open.error = Some("The runner's answer to that tick didn't make sense.".to_owned()),
             Err(e) => {
@@ -416,6 +487,14 @@ impl SidePane {
                 }
             }
         }
+        if again {
+            // A tick made while that one was on its way.
+            self.save_review_picks(thread_id, key, cx);
+        } else {
+            // A closed page with nothing more to save is done with.
+            self.reviews.flushing.remove(page_of(key));
+        }
+        self.review_ticks_changed(cx);
         cx.notify();
     }
 
@@ -455,25 +534,19 @@ impl SidePane {
 }
 
 impl crate::thread::ThreadPane {
-    /// The review the next message from here answers: the newest one still
-    /// waiting with options ticked or None chosen, as the runner has it
-    /// (reviewPicksWaiting in runner/src/runner/reviews.ts). Only with the
-    /// experiment on, and for this Mac's own threads: another Mac's runner
-    /// has its own switch.
-    pub(crate) fn review_picks(&self, cx: &App) -> Option<DesignReview> {
+    /// The thread's reviews still waiting, as the transcript has them, for
+    /// working out which one its message box answers
+    /// (`SidePane::review_to_answer`). None unless the experiment's on and
+    /// the thread is this Mac's own: another Mac's reviews open there.
+    pub(crate) fn pending_reviews(&self, cx: &App) -> Option<Vec<DesignReview>> {
         if !is_on(cx) || self.summary.runner_id.is_some() {
             return None;
         }
-        self.feed
-            .model()
-            .rows()
-            .iter()
-            .filter_map(|row| match &row.content {
-                RowContent::Review(review) if review.is_pending() && (!review.draft.picked_ids.is_empty() || review.draft.none) => Some(review),
-                _ => None,
-            })
-            .max_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)))
-            .cloned()
+        let waiting = self.feed.model().rows().iter().filter_map(|row| match &row.content {
+            RowContent::Review(review) if review.is_pending() => Some(review.clone()),
+            _ => None,
+        });
+        Some(waiting.collect())
     }
 }
 
@@ -521,8 +594,8 @@ pub(crate) async fn automation(app: &WeakEntity<crate::app::Threadbear>, main: A
     }
     if let Some(ask) = cmd["ask"].as_str() {
         side.update(cx, |s, cx| s.review_asked(&thread_id, &review.id, ask, cx));
-        // Until a tick it made is saved.
-        for _ in 0..250 {
+        // Until a tick it made is saved, unless told not to wait (`wait: false`).
+        for _ in 0..if cmd["wait"].as_bool() == Some(false) { 0 } else { 250 } {
             if !side.read_with(cx, |s, _| s.reviews.open.get(&thread_id).is_some_and(|o| o.saving || o.again)) {
                 break;
             }

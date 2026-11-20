@@ -102,3 +102,17 @@ Then('the review window is a closer look, with no column down the right', async 
   const state = JSON.parse(okValue(await this.app.do({ cmd: 'review', open: false }, 30))) as { closerLook?: boolean };
   assert.equal(state.closerLook, true);
 });
+
+// reviews.save held a few seconds by the mock, as a busy runner's is.
+When('the runner is slow to save', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'mock', method: 'slow', params: { saveMs: 3000 } });
+});
+
+When("I click the tick of option {int} on the review's page without waiting", async function (this: ThreadbearWorld, option: number) {
+  await page(this, { ask: `pick/${option - 1}`, wait: false });
+});
+
+Then('the message box shows the ticks {string} before the runner has them', async function (this: ThreadbearWorld, titles: string) {
+  await this.until(`the ticks "${titles}" over the message box`, (d) => ticks(d).join(', ') === titles);
+  assert.equal((await page(this, { open: false })).saving, true, 'the tick was still on its way');
+});

@@ -994,8 +994,8 @@ over the thread's message box, which is the reply box: sending it calls
 `reply` and its pictures as `images` (they're in `inbox/`, as a reply's
 are), so the answer is the same one the window sends, taken whole or not at
 all. Ticks alone can be sent. A message starting with `/`, or sent with
-answers picked on a card of asks, is an ordinary message, and with nothing
-ticked a message supersedes the review, as before. (A first version had the
+answers picked on a card of asks, is an ordinary message, and like one sent
+with nothing ticked it supersedes the review, as before. (A first version had the
 runner turn a plain `threads.send` into the answer; Codex and Gemini's
 reviews found it could be sent twice after a restart, lose its pictures and
 swallow a command.) A picture on the page opens the review window at that
