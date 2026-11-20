@@ -49,7 +49,7 @@ export const approvalsPart = {
     decision: ApprovalDecision;
     message?: string;
     answers?: Record<string, string>;
-    // Answers to the calls queued on the card (docs/protocol.md, "Queued calls").
+    // Answers to the calls queued on the card (docs/protocol/threads.md, "Queued calls").
     queued?: QueuedAnswers;
     // From the phone or another Mac's view of this runner, through the
     // backend (sync.ts), which show only a line of a card's input.
@@ -108,7 +108,7 @@ export const approvalsPart = {
     return {};
   },
 
-  // plans.approve (docs/protocol.md, "Plan first"): Go ahead on a plan card.
+  // plans.approve (docs/protocol/threads.md, "Plan first"): Go ahead on a plan card.
   // Claude's plan is an ExitPlanMode call waiting on its approval, which
   // this allows. Otherwise (Codex, whose plan ends its turn, or Claude's
   // after a restart dropped the call) the thread leaves plan mode and Mike
@@ -144,7 +144,7 @@ export const approvalsPart = {
   // it gets a turn. A background subagent's (no toolUseId) gets none: it's
   // between the subagent and Mike, whatever the agent is doing. A turn opened
   // for one held Mike's messages back until the CLI next ran one, and ending
-  // it cleared the asks of the turn before (docs/protocol.md, "A subagent's
+  // it cleared the asks of the turn before (docs/protocol/needs-you.md, "A subagent's
   // card").
   turnForRequest(this: Runner, st: ThreadState, gen: number, main = true): boolean {
     const { rt } = st;
@@ -285,7 +285,7 @@ export const approvalsPart = {
     });
   },
 
-  // ask_secret (docs/protocol.md, "Secrets"): a card that waits for Mike to
+  // ask_secret (docs/protocol/threads.md, "Secrets"): a card that waits for Mike to
   // type a secret on the Mac or the phone. Resolves with the file's paths,
   // or declined or expired; never with the value.
   requestSecret(this: Runner, threadId: string, req: SecretRequest): Promise<SecretAnswer> {

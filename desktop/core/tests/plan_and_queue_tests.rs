@@ -1,6 +1,6 @@
 // Ports of app/Tests/ThreadbearCoreTests/PlanCardTests.swift ("Plan first":
 // the plan card, its approval and the checklist it turns into) and
-// QueuedCallsTests.swift (docs/protocol.md, "Queued calls": a reply's other
+// QueuedCallsTests.swift (docs/protocol/threads.md, "Queued calls": a reply's other
 // calls that will ask, shown on the first one's card).
 #![allow(non_snake_case)]
 

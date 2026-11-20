@@ -1,5 +1,5 @@
 // Someone's own changes to the old Swift Mac app, for rebuilding in the
-// GPUI one (docs/protocol.md, "Your changes to the old app").
+// GPUI one (docs/protocol/updates.md, "Your changes to the old app").
 //
 // Other people run forks of Threadbear, and some changed the Swift app
 // (app/, dock/) before it froze. GPUI is different code, so those changes

@@ -330,7 +330,7 @@ File references are where to look.
   environment (`THREADBEAR_THREAD_KEY`), never the token. When something
   connects, the runner runs `lsof` and `ps` on that one connection to see
   which process it is and whether it's under a thread's CLI
-  (`runner/src/peer.ts`, docs/protocol.md "Who's really calling").
+  (`runner/src/peer.ts`, docs/protocol/connection.md "Who's really calling").
 - **Whether each Claude login is signed in** (`runner/src/sign-in-state.ts`):
   when the runner starts, every 10 minutes, and after a turn the login
   refused, it runs `claude auth status --json` once per Claude login, in

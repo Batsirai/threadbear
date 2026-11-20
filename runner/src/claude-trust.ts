@@ -1,5 +1,5 @@
 // A folder's Claude Code settings that run commands by themselves, or
-// widen what the agent may do unasked (docs/protocol.md, "Trusting a
+// widen what the agent may do unasked (docs/protocol/trust.md, "Trusting a
 // folder's Claude Code hooks").
 //
 // The runner starts Claude with the folder's own settings

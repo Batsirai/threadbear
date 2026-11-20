@@ -4,7 +4,7 @@
 use serde::Deserialize;
 
 /// A command the palette offers, as `threads.commands` lists it
-/// (docs/protocol.md, "Slash commands").
+/// (docs/protocol/threads.md, "Slash commands").
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SlashCommand {

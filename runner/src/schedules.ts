@@ -218,7 +218,7 @@ export class Scheduler {
   private names = new Map<string, string>();
   private icons = new Map<string, string>();
   private namesDue = false;
-  // Threads a draining runner still has (docs/protocol.md, "Handovers"):
+  // Threads a draining runner still has (docs/protocol/updates.md, "Handovers"):
   // they're real threads, just not loaded here yet.
   private elsewhere: (threadId: string) => boolean;
   private folderElsewhere?: (threadId: string) => string | undefined;
@@ -463,7 +463,7 @@ export class Scheduler {
   }
 
   // adoptSchedules is the main key's only (it clears mirrored rows from
-  // before API 9, docs/protocol.md "Runner keys"): a runner key's runner
+  // before API 9, docs/protocol/keys.md "Runner keys"): a runner key's runner
   // saves its schedules one by one instead, which is all it needs.
   // Any held back means nothing moved: the file stays this runner's copy,
   // its schedules keep running from it, and nothing is lost (HeldLocal).
@@ -536,7 +536,7 @@ export class Scheduler {
     const me: RunnerInfo = { id, name, ...(icon ? { icon } : {}), online: true, self: true, ...(version ? { version } : {}), ...(release ? { release } : {}), ...(startedAt ? { startedAt } : {}) };
     if (!this.backend) return [me];
     const now = this.clock.now();
-    // Only the main key lists every runner (docs/protocol.md, "Runner keys"):
+    // Only the main key lists every runner (docs/protocol/keys.md, "Runner keys"):
     // on a runner key, this runner is the only one there is.
     let all: BackendRunner[];
     try {

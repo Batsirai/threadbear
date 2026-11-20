@@ -60,7 +60,7 @@ pub const THREAD_NOT_FOUND: i64 = -32004;
 /// The runner's: busy, or handing over to a new one (`RPCError.busy`).
 pub const BUSY: i64 = -32020;
 
-/// What the app was built from, for hello's `build` (docs/protocol.md, "App
+/// What the app was built from, for hello's `build` (docs/protocol/updates.md, "App
 /// restarts"): set once at launch by the installed app, so the runner can
 /// tell a thread waiting for the app to restart when it's back on a new
 /// build. Any other launch sends none.
@@ -925,7 +925,7 @@ impl Client {
         // Its error, if it failed: the session ends on that, below.
         let mut hello = tokio::spawn(async move {
             let mut params = json!({ "client": CLIENT_NAME, "version": env!("CARGO_PKG_VERSION") });
-            // The Browser pane and BrowserBear's handoff (docs/protocol.md,
+            // The Browser pane and BrowserBear's handoff (docs/protocol/panels.md,
             // "Showing panels"): BrowserBear is a Mac thing.
             if cfg!(target_os = "macos") {
                 params["browserPanel"] = json!(true);

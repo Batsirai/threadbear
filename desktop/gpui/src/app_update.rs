@@ -198,7 +198,7 @@ pub(crate) fn apply_staged_at_launch() -> bool {
 
 /// What the installed app was built from, in hello's `build`, so the runner
 /// can tell a thread waiting for the app to restart when it's back on a new
-/// one (docs/protocol.md, "App restarts"). Any other launch sends none.
+/// one (docs/protocol/updates.md, "App restarts"). Any other launch sends none.
 pub(crate) fn announce_build() {
     let launch = installed::launch();
     if let Some(build) = launch

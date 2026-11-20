@@ -1,4 +1,4 @@
-// A button an agent put in its reply (docs/protocol.md, "Reply buttons";
+// A button an agent put in its reply (docs/protocol/events.md, "Reply buttons";
 // Swift's ReplyButton.swift): `add_button` stores one on the thread, the
 // reply links it as `[title](button:<id>)`, and Mike's press starts a thread
 // with the brief or sends the message, once, or opens another folder's patch

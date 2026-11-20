@@ -168,7 +168,7 @@ export type Notification =
   | { method: 'drain.handedOver'; params: { threadId: string } }
   | { method: 'drain.usage'; params: { accountId: string; reading: UsageReading } };
 
-// hello's `updates` and runner.updates (docs/protocol.md, "Runner updates").
+// hello's `updates` and runner.updates (docs/protocol/updates.md, "Runner updates").
 export type RunnerUpdates = {
   state: 'off' | 'idle' | 'checking' | 'building' | 'waiting' | 'failed';
   commit?: string;
@@ -261,10 +261,10 @@ export type PendingApproval =
   // client that shows it all counts.
   // title: what it's asking, for telling the agent about a subagent's.
   // itemId and queued: the agent's call and the calls waiting behind it
-  // on the same card (docs/protocol.md, "Queued calls"), by itemId.
+  // on the same card (docs/protocol/threads.md, "Queued calls"), by itemId.
   | { approvalId: string; kind: 'tool'; main: boolean; title?: string; plan?: string; macOnly?: boolean; itemId?: string; queued?: Set<string>; fullAllows?: boolean; resolve: (a: ToolApprovalAnswer) => void }
   | { approvalId: string; kind: 'question'; main: boolean; title?: string; questions: Question[]; resolve: (a: QuestionAnswer) => void }
-  // An agent's ask_secret (docs/protocol.md, "Secrets"). The value never
+  // An agent's ask_secret (docs/protocol/threads.md, "Secrets"). The value never
   // passes through here: secrets.answer writes the file and hands this the
   // paths.
   | { approvalId: string; kind: 'secret'; main: boolean; resolve: (a: SecretAnswer) => void }
@@ -358,7 +358,7 @@ export type Turn = {
   // (TranscriptReducer, reply(of:)): a "Done." under them is still a
   // repeat. The bullets' length, while it's owed.
   owedReply?: number;
-  // One reply (docs/protocol.md, "One reply"): the accepted end_turn said
+  // One reply (docs/protocol/needs-you.md, "One reply"): the accepted end_turn said
   // the reply comes next, so the agent's text after it is kept, streamed
   // and marked `final`, the turn's reply. headline: end_turn gave one, and
   // it's the preview. replyNeeds: the reply ended in a "What I need from
@@ -832,7 +832,7 @@ export class Runner {
   saveRetryTimer?: TimerHandle;
   snoozeTimer?: TimerHandle;
   stopping = false;
-  // Set while this runner drains after a handover (docs/protocol.md,
+  // Set while this runner drains after a handover (docs/protocol/updates.md,
   // "Handovers"): the threads it still keeps, and who hears when one goes.
   draining?: Drain;
   // The CLI started ahead of a new thread the app is writing
@@ -859,7 +859,7 @@ export class Runner {
   // The version E last asked sessions to move to, per provider.
   wantedVersion: Partial<Record<Provider, string>> = {};
   unsubs: (() => void)[] = [];
-  // Pools (docs/protocol.md, "Pools"): the timer for threads waiting for
+  // Pools (docs/protocol/settings.md, "Pools"): the timer for threads waiting for
   // room, the list clients were last sent, and logins a turn found at
   // their limit, blocked here until the time given even when the usage
   // readings haven't caught up.
@@ -1075,7 +1075,7 @@ export class Runner {
     this.accountsChanged();
   }
 
-  // accounts.useReset (docs/protocol.md, "Usage resets"): spends one of a
+  // accounts.useReset (docs/protocol/settings.md, "Usage resets"): spends one of a
   // Codex login's usage-limit resets, on Mike's click in the limit box. The
   // reading taken after it goes into the usage store like a turn's, so the
   // block lifts and any thread waiting for room on that login carries on by
@@ -1435,10 +1435,10 @@ export class Runner {
   }
 
   // ------------------------------------------------------------- handovers
-  // docs/protocol.md, "Handovers".
+  // docs/protocol/updates.md, "Handovers".
 
   // ---------------------------------------------------- stopped background work
-  // docs/protocol.md, "Stopped background work". A handover or restart stops
+  // docs/protocol/updates.md, "Stopped background work". A handover or restart stops
   // work the thread is counting on, usually a wait it promised to report
   // back from (1 Nov: Mike asked "Is this still going?" 4.5 hours later).
   // The note alone wakes nobody, so the next runner tells the thread.
@@ -1618,11 +1618,11 @@ export class Runner {
   }
 
   // ------------------------------------------------------------------ pools
-  // docs/protocol.md, "Pools". The rules are in pools.ts; this is where
+  // docs/protocol/settings.md, "Pools". The rules are in pools.ts; this is where
   // they meet threads.
 
   // With ids, only those threads (threads.list's ids): a draining runner
-  // looking one up mustn't be sent all 900 (docs/protocol.md, "Handovers").
+  // looking one up mustn't be sent all 900 (docs/protocol/updates.md, "Handovers").
   list(include: ('inbox' | 'snoozed' | 'archived')[] = ['inbox'], ids?: string[]): ThreadSummary[] {
     const want = new Set(include);
     const out: ThreadSummary[] = [];
@@ -2231,7 +2231,7 @@ export class Runner {
     delete rec.waitingForNetwork;
     if (rec.netCarryOn && rec.netCarryOn.turnId !== msg.turnId) delete rec.netCarryOn;
     this.beforeTurn(st);
-    // A subagent's card can still be open (docs/protocol.md, "A subagent's card").
+    // A subagent's card can still be open (docs/protocol/needs-you.md, "A subagent's card").
     rec.status = rt.session && !rt.closing ? (rt.approvals.size ? 'waiting' : 'running') : 'starting';
     this.markDirty(st);
     // A message to the thread (not a turn the CLI opened by itself), so the
@@ -2732,7 +2732,7 @@ export class Runner {
           this.emit(st, { type: 'assistant.text', itemId: `${ev.itemId}.reply`, text, final: true }, rt.turn.turnId);
         }
         // end_turn's summary, written as the turn's reply straight after
-        // the call it came in (docs/protocol.md, "The summary").
+        // the call it came in (docs/protocol/needs-you.md, "The summary").
         if (ev.type === 'tool.result' && rt.turn && ev.itemId === rt.turn.endTurnCall && endTurnTaken(ev)) {
           const bullets = endTurnIsOneReply(ev) ? undefined : summaryFromTool(rt.turn.endTurn);
           if (bullets) {
@@ -3364,7 +3364,7 @@ export class Runner {
 
   // Before a pool thread's turn starts: if its login isn't OK (blocked or
   // under the minimum room) or isn't in its pool any more, it moves first
-  // (docs/protocol.md, "Pools"). With nowhere better, the turn starts
+  // (docs/protocol/settings.md, "Pools"). With nowhere better, the turn starts
   // where it is. A pinned thread (no poolId) never moves.
   beforeTurn(st: ThreadState): void {
     const { rec } = st;
@@ -3511,7 +3511,7 @@ export class Runner {
 
   // byMike: his Stop, in the app or on the phone. Everything else that stops
   // a turn (an agent's interrupt_thread, an archive, a move) mustn't reach
-  // the agent as his decision (docs/protocol.md, "Who stopped it").
+  // the agent as his decision (docs/protocol/needs-you.md, "Who stopped it").
   interrupt(threadId: string, opts: { byMike?: boolean } = {}): Record<string, never> {
     const st = this.mustGet(threadId);
     const { rt } = st;
@@ -3572,7 +3572,7 @@ export class Runner {
     verdict?: ArchiveVerdict;
     starred?: boolean;
     // Out from under the thread that started it in the sidebar, or back
-    // (docs/protocol.md, "Nested threads").
+    // (docs/protocol/threads.md, "Nested threads").
     detached?: boolean;
     // Whether a turn that hits its login's limit waits for room and
     // carries on by itself (the limit box's menu). false also ends a wait
@@ -4518,7 +4518,7 @@ export class Runner {
       status: rec.status,
       live: Boolean(rt.session),
       // A finished turn that said it needs nothing isn't waiting on Mike
-      // (docs/protocol.md, "Needs you"). A pending design review only
+      // (docs/protocol/needs-you.md, "Needs you"). A pending design review only
       // counts once the turn ends: show_options doesn't block, and Mike
       // didn't want a "Needs you" (or a phone push) mid-turn.
       needsYou: (!unfinished && Boolean(rec.reviews?.some(r => r.status === 'pending'))) || rec.status === 'waiting' || Boolean(rec.forceUnread) || (!unfinished && rec.lastTurnCompletedSeq > rec.lastSeenSeq && !this.saidNothing(rec)),
@@ -4608,7 +4608,7 @@ export class Runner {
   // ------------------------------------------------------- showing panels
 
   // Whether anyone with the link can read the thread on the website
-  // (docs/protocol.md, "Sharing"). The mirror carries it to Convex, which
+  // (docs/protocol/runners.md, "Sharing"). The mirror carries it to Convex, which
   // serves the link. The slug stays when sharing goes off, so sharing
   // again brings the same link back, as a doc's sharing does; newLink
   // makes a fresh one, which stops the old link for good.
@@ -5015,7 +5015,7 @@ export function fromMike(text: string, opts: SendOptions): boolean {
 export const WROTE_INSTEAD = "The user didn't answer this; they wrote you a message instead, which comes next. Read it before asking again.";
 
 // What a pool thread is told when it carries on by itself after its login
-// ran dry (docs/protocol.md, "Pools").
+// ran dry (docs/protocol/settings.md, "Pools").
 export const CARRY_ON_SIGNED_OUT = 'Your last login was signed out, so this thread has moved to another one. Carry on from where you left off.';
 export const CARRY_ON_MOVED = 'Your last login hit its usage limit partway through that turn, so this thread has moved to another one. Carry on from where you left off.';
 export const CARRY_ON_RESTART = 'The runner stopped partway through that turn (Threadbear or the Mac restarted) and is back now. Carry on from where you left off.';
@@ -5154,7 +5154,7 @@ export function askedLine(m: { text: string; origin?: MessageOrigin; reviewId?: 
   return oneLine(text, max) || undefined;
 }
 
-// The first of those lines, longer: what the thread is for (docs/protocol.md,
+// The first of those lines, longer: what the thread is for (docs/protocol/threads.md,
 // "What Mike first asked").
 export const REQUEST_CHARS = 200;
 export function requestLine(m: Parameters<typeof askedLine>[0], reviews?: DesignReview[]): string | undefined {

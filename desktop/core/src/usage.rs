@@ -165,7 +165,7 @@ pub struct LimitHistory {
     pub samples: Vec<Sample>,
 }
 
-/// `UsageStats` (docs/protocol.md, "Usage history"): what the runner has
+/// `UsageStats` (docs/protocol/settings.md, "Usage history"): what the runner has
 /// kept about each login's spending, for the panel's numbers and charts.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stats {
@@ -1797,7 +1797,7 @@ impl LoginStatus {
     }
 }
 
-// ---- Sign-ins that end (docs/protocol.md, Pools, "Signed out") ----
+// ---- Sign-ins that end (docs/protocol/settings.md, Pools, "Signed out") ----
 
 /// How long before a Claude sign-in ends its row and the Usage button say
 /// so: from Claude Code 2.1.325 a sign-in lasts 28 days and can't be

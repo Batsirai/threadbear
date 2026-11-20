@@ -210,7 +210,7 @@ final class AppModel {
     /// with the sample Mac's as if it came in a pairing link.
     private let demoRunnerKeys = MemoryRunnerKeyStore(FakeBackend.sampleRunnerKeys)
     /// Where the runner keys a secret may be sealed to are kept
-    /// (docs/protocol.md, "Trusting the key"), per paired deployment.
+    /// (docs/protocol/threads.md, "Trusting the key"), per paired deployment.
     var runnerKeys: any RunnerKeyStore {
         guard !isFake, let pairing else { return demoRunnerKeys }
         return Self.runnerKeys(for: pairing)

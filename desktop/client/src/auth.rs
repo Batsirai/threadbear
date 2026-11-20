@@ -1,4 +1,4 @@
-// The client's side of the runner's challenge auth (docs/protocol.md,
+// The client's side of the runner's challenge auth (docs/protocol/connection.md,
 // "Auth"), the same HMAC as runner/src/rpc-auth.ts. The token never goes
 // over the socket and never reaches the web view: only proofs do.
 use hmac::{Hmac, Mac};

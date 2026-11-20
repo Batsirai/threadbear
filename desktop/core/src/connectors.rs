@@ -1,5 +1,5 @@
 // Mike's Connectors gateway, as the runner last heard from its /health
-// (docs/protocol.md, "Connectors"): `connectors.status` and
+// (docs/protocol/panels.md, "Connectors"): `connectors.status` and
 // `connectors.updated`, and what the Connectors panel and its activity bar
 // icon say about it, a port of Connectors.swift and ConnectorsText.swift.
 // The accent dot only when a service is signed out, as only Mike can sign it

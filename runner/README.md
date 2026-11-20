@@ -174,8 +174,8 @@ of date.
 ## Restarts
 
 `runner.restart` (`tb restart`, and the deploy script's restart step)
-restarts the runner without cutting a turn short; `docs/protocol.md` has
-the details.
+restarts the runner without cutting a turn short; `docs/protocol/updates.md`
+has the details.
 
 - It waits until no thread is starting, running or waiting on an approval
   or a question, and no CLI is running background shells or subagents
@@ -267,7 +267,7 @@ installed runner leaves it out; `scripts/dev-runner.sh` sets it.
 and restart onto main by itself (`docs/dev-tools.md`, "The runner updating
 itself"); `THREADBEAR_FOLLOW_MAIN=0` does the same for one run.
 `models` is for the runner's own small-model calls
-(`src/models/`, docs/protocol.md "Settings and models"): `pool`, the pool
+(`src/models/`, docs/protocol/settings.md "Settings and models"): `pool`, the pool
 whose Claude logins answer them through the CLI (default `"claude"`,
 `null` for none, which turns titles and the librarian off), and folders
 whose threads are never sent. The app's Settings window and `tb settings`
@@ -424,7 +424,7 @@ name the same thread:
   thread.
 - **The environment.** `THREADBEAR_THREAD_ID`, `THREADBEAR_HOME`,
   `THREADBEAR_RUNNER_HOME` and `THREADBEAR_RUNNER_VERSION` (what each is
-  for is in `docs/protocol.md`), with the runner's own `bin/` at the front
+  for is in `docs/protocol/tools.md`), with the runner's own `bin/` at the front
   of `PATH`, so `tb self`, `tb restart` and the deploy script know which
   thread and runner they're in.
 

@@ -983,7 +983,7 @@ test('every CLI gets THREADBEAR_THREAD_ID, THREADBEAR_HOME and THREADBEAR_RUNNER
   assert.equal(env.THREADBEAR_THREAD_ID, thread.id);
   assert.equal(env.THREADBEAR_HOME, h.home);
   assert.equal(env.THREADBEAR_RUNNER_HOME, h.home);
-  // Where a picture goes to be on the thread's shared page (docs/protocol.md, "Sharing").
+  // Where a picture goes to be on the thread's shared page (docs/protocol/runners.md, "Sharing").
   assert.equal(env.THREADBEAR_MEDIA_DIR, path.join(h.home, 'threads', thread.id, 'media'));
   assert.match(env.THREADBEAR_RUNNER_VERSION, /^\d+\.\d+\.\d+\+/);
   // The Node it runs on, for the repo's scripts (scripts/find-node.sh).

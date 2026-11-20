@@ -8,7 +8,7 @@ import { noHooksPath } from './platform.ts';
 // `git worktree add`. Settings given with -c beat the repo's own, so these
 // turn it off (and the untracked cache, which feeds from it) whatever the
 // folder says. Every git the runner runs in a thread's folder goes through
-// these (docs/protocol.md, "Trusting a folder's patches").
+// these (docs/protocol/trust.md, "Trusting a folder's patches").
 export const UNTRUSTED_GIT_CONFIG: readonly string[] = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false'];
 
 // The arguments for `git -C <dir> ...args` with those settings first.

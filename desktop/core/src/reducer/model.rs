@@ -452,7 +452,7 @@ impl TranscriptModel {
         }
         if rewound {
             // The runner drops messages queued behind an edited one
-            // (docs/protocol.md, "Editing a message").
+            // (docs/protocol/threads.md, "Editing a message").
             self.pending.retain(|m| !m.queued);
             let before = self.rows.len();
             self.rebuild();

@@ -387,7 +387,7 @@ test('ask mode: approval card, waiting status, allow resolves the CLI callback',
   assert.throws(() => h.runner.respondApproval({ threadId: thread.id, approvalId: req.approvalId, decision: 'allow' }), /no longer pending/);
 });
 
-// docs/protocol.md, "Queued calls".
+// docs/protocol/threads.md, "Queued calls".
 test('calls queued on a card: listed by approval.queued, grown, and answered in the same click, only those it listed', async () => {
   const h = makeHarness();
   const { thread } = create(h, { permissionMode: 'ask' });
@@ -2085,7 +2085,7 @@ test('hooks don\'t run after an interrupted or failed turn, or a turn the runner
   assert.equal(h.events(thread.id).filter((e) => e.type === 'action.run').length, 1);
 });
 
-// docs/protocol.md, "Needs you".
+// docs/protocol/needs-you.md, "Needs you".
 const END_TURN = 'mcp__threadbear__end_turn';
 
 function endTurnCall(s: ReturnType<typeof makeHarness>['adapter']['last'], itemId: string, input: Record<string, unknown>) {

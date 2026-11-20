@@ -1,7 +1,7 @@
 // Settings › Phone & browser (DevicesSettings.swift, DevicesModel.swift): pair
 // the iPhone app with a QR code it scans, open the website signed in, and the
 // list of what's paired, each with Revoke. The runner issues every token
-// (docs/protocol.md, "Devices"), and a token is only ever inside the QR code on
+// (docs/protocol/moves.md, "Devices"), and a token is only ever inside the QR code on
 // screen or the link handed to the browser: the link is drawn into the code and
 // dropped, never kept, logged or put in the dump. The words and the code are
 // threadbear_core::devices.

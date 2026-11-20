@@ -1,4 +1,4 @@
-// Reply buttons in the transcript (docs/protocol.md, "Reply buttons"; Swift's
+// Reply buttons in the transcript (docs/protocol/events.md, "Reply buttons"; Swift's
 // MarkdownRenderer.replyButton and ReplyButtons): `[title](button:<id>)` in a
 // reply is drawn as a pill in its state's colours, inside the text where the
 // agent put it, and a click presses it through the runner, once. The latest

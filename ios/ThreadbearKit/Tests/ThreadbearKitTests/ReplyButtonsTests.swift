@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import ThreadbearKit
 
-/// Reply buttons (docs/protocol.md, "Reply buttons"): a daily brief's
+/// Reply buttons (docs/protocol/events.md, "Reply buttons"): a daily brief's
 /// `[Fill in the form](button:<id>)` drawn as a button that starts a thread.
 @Suite struct ReplyButtonsTests {
     let start = MessageButton(id: "abcd1234", title: "Fill in the form", kind: .start, target: "pebble")

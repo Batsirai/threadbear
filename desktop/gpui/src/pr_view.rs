@@ -1,7 +1,7 @@
 // A GitHub pull request open as a tab in the side pane (the inlinePrs
 // experiment): a PR link clicked in a reply or in Highlights opens here
 // rather than in the browser, with what's needed to decide on it and the
-// buttons to act (docs/protocol.md, "Pull requests"; the rules and words are
+// buttons to act (docs/protocol/panels.md, "Pull requests"; the rules and words are
 // threadbear_core::pull_requests). Mike picked this layout, option A of three
 // mockups (18 Nov 2026), after trying Capy.
 //

@@ -141,7 +141,7 @@ export const BIN_DIR = path.resolve(import.meta.dirname, '..', 'bin');
 // tb reads, and agents point it at a dev runner; THREADBEAR_RUNNER_HOME
 // always names the runner the thread is on, so the scripts' guards against
 // restarting it from inside one of its threads go by that.
-// `key` is the thread's own RPC credential (docs/protocol.md, "A thread's own
+// `key` is the thread's own RPC credential (docs/protocol/connection.md, "A thread's own
 // key"), only for a thread's CLI: a patch's action and a worktree's setup run
 // on the runner's say-so, so tb there still reads the token. The empty value
 // matters: a dev runner started from a thread would otherwise pass its parent
@@ -154,7 +154,7 @@ export function threadEnv(threadId: string, home: string, basePath = process.env
     THREADBEAR_RUNNER_HOME: home,
     THREADBEAR_RUNNER_VERSION: RUNNER_VERSION,
     // A picture copied in here can be on the thread's shared page; one
-    // anywhere else can't (docs/protocol.md, "Sharing").
+    // anywhere else can't (docs/protocol/runners.md, "Sharing").
     THREADBEAR_MEDIA_DIR: paths.media(home, threadId),
     // The Node this runner runs on, which the repo's scripts take before
     // looking on PATH (scripts/find-node.sh): a thread's checks, landing and

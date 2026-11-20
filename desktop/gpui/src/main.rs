@@ -328,7 +328,7 @@ fn main() {
     // The new copy of a handover says it's started (handover.rs).
     handover::announce_start();
     // What it was built from, for the runner to tell a thread waiting for
-    // the app to restart (docs/protocol.md, "App restarts").
+    // the app to restart (docs/protocol/updates.md, "App restarts").
     app_update::announce_build();
     // Before anything else, to catch a panic at launch. Only the installed
     // release, and a scripted app into its own folder (crash_reporting.rs).

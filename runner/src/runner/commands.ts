@@ -1,4 +1,4 @@
-// Slash commands from the message box (docs/protocol.md, "Slash commands"):
+// Slash commands from the message box (docs/protocol/threads.md, "Slash commands"):
 // the ones the runner does itself, and the picker's list.
 // Each method's `this` is the Runner; runner.ts puts them on its prototype.
 import crypto from 'node:crypto';

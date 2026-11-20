@@ -1,4 +1,4 @@
-// Projects in the app (docs/protocol.md, "Projects"), a port of the Swift app's
+// Projects in the app (docs/protocol/projects.md, "Projects"), a port of the Swift app's
 // Projects.swift: the list the runner keeps (`projects.list`, then
 // `projects.updated`), whose page is open, and what Mike can do to a project
 // by hand. Each change shows at once and goes back, with the runner's reason,

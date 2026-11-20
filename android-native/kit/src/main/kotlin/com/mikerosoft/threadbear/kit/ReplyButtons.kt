@@ -2,7 +2,7 @@ package com.mikerosoft.threadbear.kit
 
 /**
  * An agent's `[title](button:<id>)` links drawn as buttons (ReplyButtons.swift,
- * docs/protocol.md "Reply buttons", backend API 59): blue starts a thread,
+ * docs/protocol/events.md "Reply buttons", backend API 59): blue starts a thread,
  * purple sends a message, green with a tick once pressed. The web page's
  * reply-buttons.ts says the same; keep them alike. A row carries what a
  * button says and where it goes (MessageButton), never the brief or message

@@ -39,7 +39,7 @@ private val SendPurple = Color(0xFFBF5AF2)
 private val PressedGreen = Color(0xFF30D158)
 
 /**
- * A reply button (docs/protocol.md, "Reply buttons"): blue starts a thread,
+ * A reply button (docs/protocol/events.md, "Reply buttons"): blue starts a thread,
  * purple sends a message, green with a tick once pressed, which then opens
  * the thread it started or messaged. A spinner while a press is on its way,
  * and the error under it if the press failed. The kit's ReplyButtons says

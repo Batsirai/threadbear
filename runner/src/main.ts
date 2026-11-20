@@ -271,7 +271,7 @@ async function main(): Promise<void> {
   // Token Stats' limits.json as a baseline, plus what the threads' own
   // turns report; the registry puts it on every account.
   // What each login shows over time, and its tokens by the hour, for the
-  // Usage panel's charts (docs/protocol.md, "Usage history").
+  // Usage panel's charts (docs/protocol/settings.md, "Usage history").
   const usageHistory = new UsageHistory({ dataDir: cfg.home, clock: realClock, log });
   const usage = new UsageStore({ limitsFile: cfg.tokenStatsLimitsFile, dataDir: cfg.home, clock: realClock, log, history: usageHistory });
   usage.start();
@@ -306,7 +306,7 @@ async function main(): Promise<void> {
   let restarter!: Restarter;
   // Where the agent tools reach threads this runner doesn't have: draining
   // runners' (Peers) while this is the primary, the primary's once this one
-  // is draining (docs/protocol.md, "Handovers").
+  // is draining (docs/protocol/updates.md, "Handovers").
   let elsewhere: Elsewhere | undefined;
   let primaryLink: PrimaryLink | undefined;
   const router = (): ThreadRouter => (routerCache ??= new ThreadRouter(runner, () => elsewhere, () => crossHooks));
@@ -319,7 +319,7 @@ async function main(): Promise<void> {
   const scheduleControl = () => scheduleRouter(scheduler, () => primaryLink);
   // Projects belong to the primary: a draining runner's agent tools change
   // them there rather than write projects.json beside it, and a kept thread
-  // joins or leaves one here (docs/protocol.md, "Handovers").
+  // joins or leaves one here (docs/protocol/updates.md, "Handovers").
   const projectControl = () => projectRouter(projects, () => primaryLink, { draining: () => draining, holds: (threadId) => runner.has(threadId) });
   // Keeps both CLIs current (E). Its hooks call back into the runner and
   // the Restarter, made below; nothing calls them before start().
@@ -483,7 +483,7 @@ async function main(): Promise<void> {
     adapters: { claude, codex, ...acpAdapters },
     accounts,
     // A draining runner's readings go to the primary, which owns
-    // usage.json (docs/protocol.md, "Handovers").
+    // usage.json (docs/protocol/updates.md, "Handovers").
     usage: {
       record: (accountId, reading) => (draining ? runner.publish({ method: 'drain.usage', params: { accountId, reading } }) : usage.record(accountId, reading)),
       onChange: (fn) => usage.onChange(fn),
@@ -560,7 +560,7 @@ async function main(): Promise<void> {
   elsewhere = peersElsewhere(peers);
   runner.start({ skip: kept });
   bootStep('threads');
-  // Answers to ask_secret go after a day (docs/protocol.md, "Secrets").
+  // Answers to ask_secret go after a day (docs/protocol/threads.md, "Secrets").
   runner.secrets.startSweeping((e) => log.warn('secret sweep failed', { error: String(e) }));
   // Its runner id and name are the mirror's (sync.ts), since that's how other
   // runners and the backend know this one (step 6, docs/archive/step6-plan.md).
@@ -616,7 +616,7 @@ async function main(): Promise<void> {
     : undefined;
   macScreen?.start();
   // The Connectors gateway's /health, for the app's Connectors panel
-  // (docs/protocol.md, "Connectors"). Off when there's no gateway.
+  // (docs/protocol/panels.md, "Connectors"). Off when there's no gateway.
   const connectors = new ConnectorsMonitor({
     url: cfg.connectorsUrl,
     ...(cfg.connectorsRefused ? { offReason: cfg.connectorsRefused } : {}),
@@ -642,7 +642,7 @@ async function main(): Promise<void> {
   // Whether this runner has an app of its own lately (app-seen.ts).
   const appSeen = new AppSeen(cfg.home, () => Date.now());
   // Pools shared with the other runners through the backend, once it has
-  // them (docs/protocol.md, "Pools"); the last list seen is kept on disk.
+  // them (docs/protocol/settings.md, "Pools"); the last list seen is kept on disk.
   const sharedPools = new SharedPools({
     cachePath: `${cfg.home}/shared-pools.json`,
     runnerId: syncRunnerId,
@@ -674,7 +674,7 @@ async function main(): Promise<void> {
   }
   // A box whose key the backend turns down has been superseded by a newer
   // box for its thread: it stops its CLI and exits, so the provider's
-  // machine stops (docs/protocol.md, "Box mode"). `stop` is made further
+  // machine stops (docs/protocol/boxes.md, "Box mode"). `stop` is made further
   // down; one that comes before it waits for it.
   let stopRef: ((signal: string) => void) | undefined;
   let supersededWanted = false;
@@ -748,7 +748,7 @@ async function main(): Promise<void> {
   let relayRef: Relay | undefined;
   // Other runners' threads that are moving, as this (the main Mac's) runner
   // knows: one it started between two other runners, or one coming here
-  // (docs/protocol.md, "Moving a thread to another runner"). The backend's
+  // (docs/protocol/moves.md, "Moving a thread to another runner"). The backend's
   // sidebar rows don't carry it, so it's put on them for the app.
   // How long such a row shows a move this runner can't follow to its end
   // (one between two other runners): the backend fails a frozen move after
@@ -1245,11 +1245,11 @@ async function main(): Promise<void> {
     const behind = sync.behindRunners();
     return { ...(restartStatus(p) as Record<string, unknown>), ...(behind.length ? { behindRunners: behind } : {}), webRuntimeProblem: webRuntimeUpdates.problem(), clis: updates.list(), sync: sync.status(), secretCheck: secretCheck.status(), archive: agentArchive.status(), relay: relay.status(), upstream: upstream.status(), ...(draining.length ? { draining } : {}), ...(macScreen ? { macScreen: macScreen.status() } : {}) };
   };
-  // tb profile (docs/protocol.md, "runner.profile"): where this runner's CPU goes.
+  // tb profile (docs/protocol/connection.md, "runner.profile"): where this runner's CPU goes.
   Object.assign(methods, profileMethods(new SelfProfiler({ dir: path.join(cfg.home, 'profiles'), log })));
-  // tb updates (docs/protocol.md, "Mike's releases").
+  // tb updates (docs/protocol/updates.md, "Mike's releases").
   methods['upstream.status'] = () => ({ upstream: upstream.status() });
-  // The Updates panel's Update it (docs/protocol.md, "Runner updates").
+  // The Updates panel's Update it (docs/protocol/updates.md, "Runner updates").
   methods['runner.reinstall'] = () => ({ reinstall: reinstaller.request() ?? null });
   // Other runners' threads, for the Mac app's sidebar (step 6 part 2).
   // `forTools`: a draining runner's agent tools (handover.ts primaryRemote),
@@ -1261,7 +1261,7 @@ async function main(): Promise<void> {
   };
   // Every runner's machine figures, for the Mac app's Runners panel.
   methods['runners.stats'] = async () => ({ stats: await sync.runnerStats() });
-  // Mike's runner order (docs/protocol.md, "Other runners' threads"): every
+  // Mike's runner order (docs/protocol/runners.md, "Other runners' threads"): every
   // runner's id, this one's too. The answer comes back as remoteThreads.updated.
   methods['runners.setOrder'] = async (p) => {
     const ids = (p as { runnerIds?: unknown } | undefined)?.runnerIds;
@@ -1273,7 +1273,7 @@ async function main(): Promise<void> {
   // another Mac (files.ts).
   Object.assign(methods, filesMethods());
   methods['upstream.check'] = async () => ({ upstream: await upstream.check() });
-  // The Updates panel's "Not in the new app yet" (docs/protocol.md, "Your
+  // The Updates panel's "Not in the new app yet" (docs/protocol/updates.md, "Your
   // changes to the old app").
   const swiftCommit = (p: unknown): string => {
     const c = (p as { commit?: unknown } | undefined)?.commit;
@@ -1337,7 +1337,7 @@ async function main(): Promise<void> {
   methods['cloudTokens.useMac'] = (p) => virtualRunners.useMac(String(p.login ?? ''));
   methods['cloudTokens.list'] = () => virtualRunners.list();
   // Starting threads on other runners, and a runner key's requests for
-  // that (docs/protocol.md, "Asking another runner").
+  // that (docs/protocol/runners.md, "Asking another runner").
   // A request's mode as the card showed it: none is the default (full
   // access, as the card says), and one this runner doesn't know is refused
   // rather than dropped to that default (Daybreak, 7 Nov 2026).
@@ -1427,7 +1427,7 @@ async function main(): Promise<void> {
   runner.appCanAllow = () => (rpcServer?.appConnected() ?? false) || appSeen.recently();
   runner.ownName = cfg.sync.name ?? defaultRunnerName();
   // Previews shown (the Move sheet, tb move, move_thread), by the one-use
-  // id threads.move takes (moves.ts MovePreviews; docs/protocol.md,
+  // id threads.move takes (moves.ts MovePreviews; docs/protocol/moves.md,
   // "Preview binding").
   const previews = new MovePreviews();
   const moves = (movesRef = new Moves({
@@ -1585,7 +1585,7 @@ async function main(): Promise<void> {
       throw new RpcError(ErrorCode.badParams, e instanceof Error ? e.message : String(e));
     }
   };
-  // The Move sheet's guess (docs/protocol.md, "Moving a thread to another
+  // The Move sheet's guess (docs/protocol/moves.md, "Moving a thread to another
   // runner").
   methods['threads.movePreview'] = async (p) => {
     moveOn();
@@ -1810,7 +1810,7 @@ async function main(): Promise<void> {
   };
 
   // ------------------------------------------------------------ handover
-  // docs/protocol.md, "Handovers". This runner keeps `keeps` (busy threads)
+  // docs/protocol/updates.md, "Handovers". This runner keeps `keeps` (busy threads)
   // until their turns end and launch.mjs starts the current release beside
   // it, which takes everything else. The order matters: the new runner
   // must find this one's drain file, a free port and a free lock.

@@ -1,5 +1,5 @@
 // Ports of the model parts of app/Tests/ThreadbearCoreTests/NeedsYouTests.swift
-// (docs/protocol.md, "Needs you"): a finished turn's asks as a card. The
+// (docs/protocol/needs-you.md, "Needs you"): a finished turn's asks as a card. The
 // sidebar and ThreadSummary tests in that file aren't transcript rules.
 #![allow(non_snake_case)]
 
@@ -541,7 +541,7 @@ fn an_asks_link_opens_a_page_a_file_or_a_review_and_nothing_else() {
 /// The turn that answered another lab's findings carries the ledger on its
 /// `turn.completed`, read leniently, and it shows as a quiet row in the
 /// transcript over the reply (Mike moved it off the done card, 12 Nov;
-/// docs/protocol.md, "Review by another lab").
+/// docs/protocol/needs-you.md, "Review by another lab").
 #[test]
 fn a_reviewed_turns_ledger_is_a_row_over_the_reply() {
     let review = json!({

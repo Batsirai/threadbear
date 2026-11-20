@@ -1,4 +1,4 @@
-// What a thread may do over the RPC (docs/protocol.md, "A thread's own key").
+// What a thread may do over the RPC (docs/protocol/connection.md, "A thread's own key").
 // The app and tb outside a thread have the runner's token and answer to
 // nobody. A connection that belongs to a thread answers to the same rules as
 // that thread's own threadbear tools (threadbear-mcp.ts, "Raising access"),

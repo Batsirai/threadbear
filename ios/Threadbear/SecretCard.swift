@@ -1,7 +1,7 @@
 import SwiftUI
 import ThreadbearKit
 
-/// A secret the agent asked for (`ask_secret`, docs/protocol.md "Secrets"):
+/// A secret the agent asked for (`ask_secret`, docs/protocol/threads.md "Secrets"):
 /// typed here, sealed to the runner's key before it leaves the phone, so the
 /// Convex mirror only carries ciphertext. The value lives in this view's
 /// state until Save, which clears it at once; it's never logged, put in a

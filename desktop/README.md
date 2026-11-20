@@ -93,7 +93,7 @@ the same runner.
 The installed app then follows main as the Swift app does
 (`gpui/src/app_update.rs`, built on a check host), so after landing a change an
 agent calls `wait_for_app_restart` and hears when it's back on the new build
-(docs/protocol.md, "App restarts"), then checks it with `tb export` of the
+(docs/protocol/updates.md, "App restarts"), then checks it with `tb export` of the
 thread and the scripted app (below) rather than asking Mike.
 
 ## Hangs and crashes

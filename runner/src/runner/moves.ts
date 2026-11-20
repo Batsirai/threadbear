@@ -1,5 +1,5 @@
 // Moving a thread to another runner: this runner's side of each step
-// (src/moves.ts decides when; docs/protocol.md, "Moving a thread to
+// (src/moves.ts decides when; docs/protocol/moves.md, "Moving a thread to
 // another runner"). Part of the Runner (runner.ts); each method's `this` is
 // the Runner.
 //

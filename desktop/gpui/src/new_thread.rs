@@ -39,7 +39,7 @@ pub(crate) struct NewThreadState {
     /// The box should take the cursor at the next render (⌘N, or the button).
     pub(crate) focus_pending: bool,
     /// The settings last sent to `threads.warm`, and the id the runner gave
-    /// for them (docs/protocol.md, "Warm start"): sent back with
+    /// for them (docs/protocol/connection.md, "Warm start"): sent back with
     /// `threads.create` while the box still has those settings.
     pub(crate) warm_asked: Option<Value>,
     pub(crate) warm: Option<(Value, String)>,
@@ -125,7 +125,7 @@ impl Threadbear {
     }
 
     /// Asks the runner to start the new thread's CLI now, while its first
-    /// message is written (docs/protocol.md, "Warm start"), unless it was
+    /// message is written (docs/protocol/connection.md, "Warm start"), unless it was
     /// already asked for these settings. On ⌘N or the button, and as the box
     /// changes, so a folder or model picked after opening gets its own.
     pub(crate) fn warm_new_thread(&mut self, cx: &mut Context<Self>) {

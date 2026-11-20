@@ -1,4 +1,4 @@
-// The Convex panel's data and rules, with nothing drawn (docs/protocol.md,
+// The Convex panel's data and rules, with nothing drawn (docs/protocol/patches.md,
 // "The Convex panel"): what the runner answers, the one sign-in page the app
 // will open, and the script that hands Convex's embedded dashboard its deploy
 // key. A port of the Swift app's ConvexDeployment, ConvexDeploymentChoice,

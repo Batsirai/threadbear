@@ -1,4 +1,4 @@
-// Handovers: draining this runner after a new release takes over, and adopting threads from the old one (docs/protocol.md, "Handovers").
+// Handovers: draining this runner after a new release takes over, and adopting threads from the old one (docs/protocol/updates.md, "Handovers").
 // Part of the Runner (runner.ts), split out on 4 Nov 2026 as a plain move so a
 // fork's change to one area doesn't clash with another's. Each method's `this`
 // is the Runner; runner.ts puts them on its prototype.

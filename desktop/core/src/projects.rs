@@ -1,4 +1,4 @@
-// Projects (docs/protocol.md, "Projects") with no UI in them, ported from the
+// Projects (docs/protocol/projects.md, "Projects") with no UI in them, ported from the
 // Swift app: the project itself and its icon and task board (Project.swift),
 // what `projects.update` changes (ProjectUpdate in RunnerAPI.swift), the
 // sidebar's sections with parts nested under their parent

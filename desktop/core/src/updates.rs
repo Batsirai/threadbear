@@ -1,6 +1,6 @@
 // What the Updates panel and its activity bar icon say, a port of
 // UpdatesText.swift and `CliText` (AccountUsageText.swift): the runner's own
-// update (docs/protocol.md, "Runner updates"), Mike's releases on a fork
+// update (docs/protocol/updates.md, "Runner updates"), Mike's releases on a fork
 // ("Mike's releases"), and the agent CLIs' versions (`clis.list`,
 // `CliStatus`). Plain sentences, one per thing going on; the view adds the
 // buttons.

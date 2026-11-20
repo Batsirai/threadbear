@@ -6,7 +6,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
 
-/** Reply buttons (docs/protocol.md, "Reply buttons"): a daily brief's `[Fill in the form](button:<id>)` drawn as a button that starts a thread. */
+/** Reply buttons (docs/protocol/events.md, "Reply buttons"): a daily brief's `[Fill in the form](button:<id>)` drawn as a button that starts a thread. */
 class ReplyButtonsTest {
     private val start = MessageButton("abcd1234", "Fill in the form", "start", target = "pebble")
 

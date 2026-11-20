@@ -1,5 +1,5 @@
 // Ports of app/Tests/ThreadbearCoreTests/MessageEditTests.swift: editing a
-// message (docs/protocol.md, "Editing a message"), where the cut events make
+// message (docs/protocol/threads.md, "Editing a message"), where the cut events make
 // no rows, and only Mike's turn-starting messages can be edited.
 #![allow(non_snake_case)]
 

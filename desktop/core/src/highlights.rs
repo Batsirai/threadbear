@@ -2,7 +2,7 @@
 // Highlights, HighlightSections, HighlightFold, HighlightProjects, PreviewRules,
 // FileIcon, HighlightText, PanelIcon, PanelItem.headings, ScheduleRows,
 // StartedThreadRows and PatchGroups, with the protocol types they read
-// (docs/protocol.md, "Highlights" and "Patches"). `desktop/gpui/src/highlights.rs`
+// (docs/protocol/panels.md, "Highlights" and "Patches"). `desktop/gpui/src/highlights.rs`
 // draws from these, and the tests are the Swift ones (HighlightsTests,
 // StartedThreadRowsTests).
 use crate::inbox::{parse_ms, Project, ThreadSummary};
@@ -1131,7 +1131,7 @@ pub struct Schedule {
     pub runs: i64,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub last_run: Option<LastRun>,
-    /// The runner it runs on, its name and icon (docs/protocol.md, "Schedules").
+    /// The runner it runs on, its name and icon (docs/protocol/projects.md, "Schedules").
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub runner_id: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
@@ -1326,7 +1326,7 @@ pub struct Panel {
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub project_id: Option<String>,
     /// The built-in Convex panel's deployment: shown as Convex's embedded
-    /// dashboard rather than `url` (docs/protocol.md, "The Convex panel").
+    /// dashboard rather than `url` (docs/protocol/patches.md, "The Convex panel").
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub convex: Option<crate::convex_panel::Deployment>,
 }
@@ -1466,7 +1466,7 @@ pub struct PanelItem {
     pub toggle: Option<PanelToggle>,
 }
 
-/// A list row's switch (`PanelItem.toggle`, docs/protocol.md "Row toggles").
+/// A list row's switch (`PanelItem.toggle`, docs/protocol/patches.md "Row toggles").
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct PanelToggle {

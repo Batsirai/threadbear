@@ -1,7 +1,7 @@
 // The Browser pane: the pages a thread's agents are using through BrowserBear,
 // in the agents' own browser (Helium, in real windows behind Mike's) or in his
 // own Chrome profiles. A port of the Swift app's AgentBrowserPanel.swift,
-// BrowserBearPipe.swift and BrowserBear.swift (docs/protocol.md, "The Browser
+// BrowserBearPipe.swift and BrowserBear.swift (docs/protocol/panels.md, "The Browser
 // panel"). Each row has a still of the page and Show window, which brings the
 // real window forward. Nothing is streamed or drawn live here: Mike disliked
 // the page drawn inside Threadbear (6 Nov 2026), so since 8 Nov he uses a page

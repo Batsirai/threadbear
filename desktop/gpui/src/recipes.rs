@@ -1,4 +1,4 @@
-// The Recipes view (the `recipes` experiment, docs/protocol.md "Recipes"):
+// The Recipes view (the `recipes` experiment, docs/protocol/projects.md "Recipes"):
 // techniques worth keeping that an agent sets up for anyone. The sidebar
 // lists the ones added, each with its switch and its latest runs; the main
 // panel shows them all as a gallery of cards, or one recipe's page: what it

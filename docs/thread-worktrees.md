@@ -9,14 +9,14 @@ when its checks pass.
 
 ## Opting in
 
-Only repos that ask. A patch (docs/protocol.md, "Patches") can say:
+Only repos that ask. A patch (docs/protocol/patches.md, "Patches") can say:
 
 ```ts
 export default {
   worktree: {
     // Run in the new worktree before the first turn. Optional. One
     // script in the repo and plain words, as it runs by itself
-    // (docs/protocol.md, "Trusting a folder's patches").
+    // (docs/protocol/trust.md, "Trusting a folder's patches").
     setup: "./scripts/setup.sh",
     // Run by `tb land` before main moves. Optional; a failure stops it.
     check: "./check.sh --quick",
@@ -58,7 +58,7 @@ for a folder inside an opted-in repo:
    "worktree.setup"`). A failure is shown and the turn starts anyway.
    It's the worktree's own copy of the patch that's read, and only when
    that copy (with the scripts it names, as they are in the worktree) is
-   trusted; otherwise a note says the setup was skipped (docs/protocol.md,
+   trusted; otherwise a note says the setup was skipped (docs/protocol/trust.md,
    "Trusting a folder's patches").
 4. The record keeps `worktree: { repo, mainCheckout, path, branch, base }`
    (`base` is main's commit when it was made); the summary carries

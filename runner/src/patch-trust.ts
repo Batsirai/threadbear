@@ -1,4 +1,4 @@
-// Which patch files the runner may load (docs/protocol.md, "Trusting a
+// Which patch files the runner may load (docs/protocol/trust.md, "Trusting a
 // folder's patches").
 //
 // A patch file is code: the runner imports it, and its hooks, live

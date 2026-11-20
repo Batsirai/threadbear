@@ -16,7 +16,7 @@ runs under is the thing being changed. Today that's fragile:
 The built-in `threadbear` MCP server every session gets (create, update,
 delete and move threads; `runner/src/threadbear-mcp.ts`) was built
 separately and merged alongside this. Both are bound to the same thread
-(see "Tools for agents" in `docs/protocol.md`). A `restart_runner` MCP
+(see "Tools for agents" in `docs/protocol/tools.md`). A `restart_runner` MCP
 tool would be a thin wrapper over `runner.restart` below; it isn't built,
 since from a thread runner changes go out through the deploy script.
 
@@ -79,7 +79,7 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   it tries again itself after 5 s. SIGTERM (launchctl, a reboot) goes to
   every child, which get 20 s before SIGKILL (the plist's ExitTimeOut is
   30). A child that loses its IPC channel stops.
-- **Handovers** (docs/protocol.md, "Handovers"). An idle restart with busy
+- **Handovers** (docs/protocol/updates.md, "Handovers"). An idle restart with busy
   threads (a deploy, the runner following main) doesn't wait for them.
   The runner lets go of its idle threads and the port, writes
   `run/drain-<pid>.json`, and sends `{ type: "handover" }`; the
@@ -164,7 +164,7 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
 
 ### 2. Restarting without killing the turn
 
-- **Protocol** (update `docs/protocol.md` first):
+- **Protocol** (update `docs/protocol/updates.md` first):
   - `runner.restart { when?: "idle" | "now", resume?: { threadId, text },
     reason?: string }` returns `{ scheduled: boolean, waitingFor: string[] }`
     (`waitingFor`: the ids of threads keeping it from restarting).

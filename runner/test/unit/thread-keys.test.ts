@@ -1,5 +1,5 @@
 // A thread's own key on the RPC, and what it can't do with it
-// (docs/protocol.md, "A thread's own key"). The tests go through a real
+// (docs/protocol/connection.md, "A thread's own key"). The tests go through a real
 // server and the real tb, as an agent's shell would.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

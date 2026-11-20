@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The most a note on one option and the reply may be, in UTF-16 units, as
-/// the runner counts them (docs/protocol.md, "Design reviews").
+/// the runner counts them (docs/protocol/events.md, "Design reviews").
 pub const NOTE_LIMIT: usize = 4000;
 pub const REPLY_LIMIT: usize = 8000;
 

@@ -417,7 +417,7 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   const by = picks.card === t.asksSeq ? picks.by : {};
   const finished = !busy(t) && !t.needsYou && !t.pendingApproval && !asks.length && !t.archivedAt && !t.working;
   const next = finished ? (t.next ?? []) : [];
-  // What the runner found still open (docs/protocol.md, "Loose ends"), as
+  // What the runner found still open (docs/protocol/threads.md, "Loose ends"), as
   // on the Mac and the phone: open ones first, then booked check-ins.
   const ends = finished ? [...(t.looseEnds ?? []).filter((e) => e.kind !== 'scheduled'), ...(t.looseEnds ?? []).filter((e) => e.kind === 'scheduled')] : [];
   const follow = ticked.seq === lastSeq ? [...ticked.set].sort().map((i) => next[i]).filter((x): x is string => !!x) : [];
@@ -651,7 +651,7 @@ function ApprovalCard({ token, threadId, approval }: { token: string; threadId: 
   }
 
   if (approval.kind === 'secret') {
-    // The browser doesn't take secrets (docs/protocol.md, "Secrets"): the
+    // The browser doesn't take secrets (docs/protocol/threads.md, "Secrets"): the
     // Mac app and the iPhone app do, the phone sealing it to the runner.
     return (
       <section className="card">

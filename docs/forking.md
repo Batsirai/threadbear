@@ -249,7 +249,7 @@ the Convex and web typechecks and an iPhone build all passed afterwards.
 15. `docs/guide.md`: the Pocket paragraph under the phone, and the sentence
     saying the librarian looks after cards. `docs/convex-backend.md`: "The
     Pocket (API 19)" and its mention in the usage notes.
-    `docs/on-your-mac.md` and `docs/protocol.md` have nothing on it.
+    `docs/on-your-mac.md` and `docs/protocol/` have nothing on it.
 
 What a first list of the cuts missed and the trial found: the `-ThreadbearPocket`
 launch argument, the positional parameter shifting the tools test, and the

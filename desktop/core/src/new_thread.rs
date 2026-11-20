@@ -32,7 +32,7 @@ pub struct AccountUsage {
 /// The account's usage, if the runner sent any.
 pub fn usage_of(account: &Account) -> Option<AccountUsage> {
     // A signed-out login has no room for anything, as the runner's pools
-    // have it (docs/protocol.md, Pools, "Signed out").
+    // have it (docs/protocol/settings.md, Pools, "Signed out").
     if (account.signed_out || account.plan_ended) && account.usage.is_none() {
         return Some(AccountUsage {
             windows: Vec::new(),
@@ -595,7 +595,7 @@ pub fn has_room(account: &Account) -> bool {
     !usage.blocked && !room(&usage).is_some_and(|r| r < PICK_FLOOR)
 }
 
-/// `usage.resets`: a Codex login's usage resets left (docs/protocol.md,
+/// `usage.resets`: a Codex login's usage resets left (docs/protocol/settings.md,
 /// Pools, "Usage resets"), and when the soonest expires (ms).
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageResets {

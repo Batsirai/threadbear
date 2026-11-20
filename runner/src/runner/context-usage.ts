@@ -1,4 +1,4 @@
-// What fills a thread's context (docs/protocol.md, "Context breakdown"):
+// What fills a thread's context (docs/protocol/threads.md, "Context breakdown"):
 // the composer ring's popover asks when it opens. Claude's CLI answers it
 // with its own /context rows, so it's asked of the thread's live CLI and the
 // answer kept with the thread for when the CLI has gone (idle CLIs stop

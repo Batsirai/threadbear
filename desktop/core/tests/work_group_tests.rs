@@ -1093,7 +1093,7 @@ fn end_turn_call(seq: i64, id: &str) -> Event {
 }
 
 /// A sign-off shorter than the bullets loses to them, unless the summary
-/// was written with bullet replies off (docs/protocol.md, "The summary").
+/// was written with bullet replies off (docs/protocol/needs-you.md, "The summary").
 #[test]
 fn testASummaryThatGivesWayLosesToAShortMessage() {
     fn model(gives_way: bool) -> TranscriptModel {
@@ -1122,7 +1122,7 @@ fn testASummaryThatGivesWayLosesToAShortMessage() {
     );
 }
 
-/// One reply (docs/protocol.md, "One reply"): the message after end_turn is
+/// One reply (docs/protocol/needs-you.md, "One reply"): the message after end_turn is
 /// the reply, even under a longer message before it (a narration block or a
 /// draft), which folds into the work.
 #[test]

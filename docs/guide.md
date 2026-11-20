@@ -2150,7 +2150,7 @@ with a Back), so the patch's page stays put; if the page moves on to
 another of its own pages, a Back shows in the panel's bar, and Reload goes
 back to where it started. Closing a panel, or picking another thread,
 pauses anything it's playing. A panel's address can carry the thread
-it's beside, as `{threadId}` (docs/protocol.md, "Patches"), and an agent
+it's beside, as `{threadId}` (docs/protocol/patches.md, "Patches"), and an agent
 that has changed a panel's page can have it load afresh as it shows you
 (`show_panel` with `reload`). The new desktop app shows a panel's page, and the Convex dashboard, with the same
 Chromium it draws diagrams with: until that's installed the panel asks for
@@ -2189,8 +2189,8 @@ panel ("only in my acceptance testing threads").
 You don't need to write one yourself. In a thread in that folder, ask
 "add a button that runs the tests" or "add a panel showing localhost:3000",
 and the agent writes the patch into the folder's `.threadbear/patches/`
-(the format is under "Patches" in `docs/protocol.md`, in your Threadbear
-folder). It shows up within a few seconds. A patch is code that runs on your
+(the format is under "Patches" in `docs/protocol/patches.md`, in your
+Threadbear folder). It shows up within a few seconds. A patch is code that runs on your
 Mac, so keep only the ones you'd be happy to run.
 
 Patches only run once you've trusted them. One the agent writes for you in

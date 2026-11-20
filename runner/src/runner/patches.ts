@@ -180,7 +180,7 @@ export const patchesPart = {
     if (entry.live) this.armLivePoll();
   },
 
-  // Panel buttons' panels (docs/protocol.md, "Reply buttons"): each pressed
+  // Panel buttons' panels (docs/protocol/events.md, "Reply buttons"): each pressed
   // one's panel as a thread in its folder has it, its badge and summary run
   // there (a patch's server starts from them), under an id of its own and
   // with `{threadId}` left empty: the thread beside it isn't one of that

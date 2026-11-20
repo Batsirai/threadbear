@@ -815,7 +815,7 @@ impl Threadbear {
     /// asks whether he needed to see the thread at all, in a menu at the
     /// button: the runner keeps his answer beside a model's guess, to find
     /// out whether threads like it could skip his inbox (Mike, 18 Nov 2026;
-    /// docs/protocol.md, "Inbox guess"). Either answer archives. Only for a
+    /// docs/protocol/threads.md, "Inbox guess"). Either answer archives. Only for a
     /// thread on this Mac's runner: another's wouldn't be sent the answer.
     /// ⌘E, a row's box and a swipe stay one step.
     pub(crate) fn archive_from_card(

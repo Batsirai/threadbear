@@ -1,6 +1,6 @@
 //! BrowserBear (github.com/mikecann/browserbear), the agents' browser, as the
 //! app sees it: the Browser pane's pages and the sign-in handoff
-//! (docs/protocol.md, "The Browser panel" and "Showing panels"). A port of the
+//! (docs/protocol/panels.md, "The Browser panel" and "Showing panels"). A port of the
 //! Swift app's `AgentBrowserPanel.swift`, `BrowserBear.swift` and
 //! `BrowserBearPipe.swift`; the socket itself is the GPUI app's
 //! (`agent_browser.rs`), this is what's said over it and what it means.

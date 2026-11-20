@@ -1,5 +1,5 @@
 // What fills a Claude thread's context, in Claude's own words
-// (`threads.contextUsage`, docs/protocol.md "Context breakdown"), as the
+// (`threads.contextUsage`, docs/protocol/threads.md "Context breakdown"), as the
 // composer's ring's popover shows it (ContextBreakdown.swift, after Ghostex's
 // panel): "32% used", "323k / 1M", a stacked bar, then a row each for what's
 // in the window, the buffer kept for compacting, the free space, and the tool

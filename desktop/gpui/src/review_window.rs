@@ -1,4 +1,4 @@
-// The window that answers an agent's `show_options` (docs/protocol.md, "Design
+// The window that answers an agent's `show_options` (docs/protocol/events.md, "Design
 // reviews"), a port of the Swift app's ReviewWindow.swift: the option on show
 // big on the stage with a mark for every shot of every option under it, then
 // all of them side by side; down the right, the options with their reasons,
