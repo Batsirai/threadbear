@@ -291,7 +291,7 @@ swift_needed() {
 # 9 Nov a change to one under app/ used a type the kit didn't have, the
 # kit's tests didn't run as nothing under ios/ had changed, and the iPhone
 # app stopped building on main.
-IOS_NEEDS='^ios/'
+IOS_NEEDS='^ios/|^shared/cases/'
 ROOT_REAL="$(cd "$ROOT" && pwd -P)"
 while IFS= read -r link; do
   to="$(readlink "$link")"
@@ -562,7 +562,7 @@ fi
 # (cargo check of the GPUI app, the dock and every test), a few minutes from
 # cold. On a check host cargo's target folder is kept between runs
 # (scripts/check-remote.sh), so --quick stays about a minute.
-DESKTOP_NEEDS='^desktop/|^rust-toolchain\.toml$|^features/support/sample\.png$|^site/app-doc-slugs\.json$|^app/Tools/mock-runner/|^runner/src/|^app/Tests/Fixtures/|^app/Sources/Threadbear/Resources/Art/|^app/Sources/Threadbear/Resources/Rich/'
+DESKTOP_NEEDS='^desktop/|^rust-toolchain\.toml$|^features/support/sample\.png$|^site/app-doc-slugs\.json$|^app/Tools/mock-runner/|^runner/src/|^app/Tests/Fixtures/|^shared/cases/|^app/Sources/Threadbear/Resources/Art/|^app/Sources/Threadbear/Resources/Rich/'
 # What cargo builds from outside desktop/ (include_bytes!, include_str!), folders
 # or files, for the hashing below.
 DESKTOP_BUILT_IN=(app/Sources/Threadbear/Resources/Art app/Sources/Threadbear/Resources/Rich site/app-doc-slugs.json features/support/sample.png)

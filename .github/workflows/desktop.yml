@@ -35,6 +35,7 @@ on:
       - app/Sources/Threadbear/Resources/Rich/**
       - app/Sources/Threadbear/Views/Tour.swift
       - app/Tests/Fixtures/**
+      - shared/cases/**
       - site/app-doc-slugs.json
       - features/**
       - .github/workflows/desktop.yml
@@ -53,6 +54,7 @@ on:
       - app/Sources/Threadbear/Resources/Rich/**
       - app/Sources/Threadbear/Views/Tour.swift
       - app/Tests/Fixtures/**
+      - shared/cases/**
       - site/app-doc-slugs.json
       - features/**
       - .github/workflows/desktop.yml

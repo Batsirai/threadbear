@@ -1,8 +1,8 @@
 // The Desktop app workflow (.github/workflows/desktop.yml) only runs when a
 // file in its `paths:` changes, and tb land's hold reads the same list
 // (land-gate.ts). The desktop app builds and tests from files outside
-// desktop/ too: the Swift app's pictures and pele.js, the shared inbox
-// fixture, the site's doc names, the runner files the mock runner imports.
+// desktop/ too: the Swift app's pictures and pele.js, the shared cases
+// (shared/cases), the site's doc names, the runner files the mock runner imports.
 // A change to only those ran no desktop CI and wasn't held, so a break
 // showed up on the next unrelated desktop landing (16 Nov). This finds every
 // such file in the code and checks the workflow runs for it.
@@ -54,7 +54,7 @@ const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/desktop.yml'
 test('the desktop app reads some files from outside desktop/, and the scan finds them', () => {
   const outside = readFromOutside();
   // Known ones, so a scan that quietly finds nothing fails here.
-  for (const f of ['app/Sources/Threadbear/Resources/Rich/pele.js', 'app/Tests/Fixtures/inbox-urgency-cases.json', 'site/app-doc-slugs.json', 'runner/src/samples.ts']) {
+  for (const f of ['app/Sources/Threadbear/Resources/Rich/pele.js', 'shared/cases/inbox-urgency.json', 'site/app-doc-slugs.json', 'runner/src/samples.ts']) {
     assert.ok(outside.includes(f), `${f} among ${outside.join(', ')}`);
   }
 });

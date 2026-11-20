@@ -1952,13 +1952,13 @@ mod tests {
         );
     }
 
-    /// The shared urgency rule (`app/Tests/Fixtures/inbox-urgency-cases.json`):
+    /// The shared urgency rule (`shared/cases/inbox-urgency.json`):
     /// the Mac, the phone and the website read this file too.
     #[test]
     fn urgency_matches_the_shared_cases() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../app/Tests/Fixtures/inbox-urgency-cases.json"
+            "/../../shared/cases/inbox-urgency.json"
         );
         let cases: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();

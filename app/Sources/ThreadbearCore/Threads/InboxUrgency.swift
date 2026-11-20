@@ -6,7 +6,7 @@ import Foundation
 /// read. The phone's ThreadbearKit links to this file, as it does to
 /// SlashCommands.swift. The website keeps a copy (`urgency` in
 /// web/src/sections.ts), and all three run the cases in
-/// app/Tests/Fixtures/inbox-urgency-cases.json, so they can't drift apart.
+/// shared/cases/inbox-urgency.json, so they can't drift apart.
 ///
 /// 0: stuck on his answer (a question, an approval, a design review).
 /// 1: finished, wanting him, with a failed or stopped turn.

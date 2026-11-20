@@ -33,6 +33,7 @@ on:
       - 'app/**'
       - 'dock/**'
       - 'ios/**'
+      - 'shared/cases/**'
       - '.github/workflows/xcode-26.yml'
   pull_request:
     # The same list as push's, kept in step by hand.
@@ -40,6 +41,7 @@ on:
       - 'app/**'
       - 'dock/**'
       - 'ios/**'
+      - 'shared/cases/**'
       - '.github/workflows/xcode-26.yml'
   workflow_dispatch:
 
