@@ -891,6 +891,19 @@ test("end_turn: a Done card in a project still going is told once of the project
   r = await endTurn({ needs: 'nothing', next: ["Load the rest of Peter's photos once he sends them"] });
   assert.equal(r.error, false, r.text);
 
+  // A Codex sub-agent's call runs through the same handler and never reaches
+  // the thread's events, so the note is capped at once a turn in memory too.
+  s.result('completed');
+  h.runner.send(thread.id, 'next bit');
+  s = h.adapter.sessions.filter((x) => x.opts.threadId === thread.id).at(-1)!;
+  s.init();
+  const codexEnd = buildThreadbearTools(h.runner, thread.id, Date.now, undefined, projects, undefined, { provider: 'codex', oneReply: () => true, plainCardNote: false, tryFirstNote: false, sleep: async () => {} }).find((x) => x.name === 'end_turn')! as unknown as { formFor?: (a: unknown) => { handler: (a: unknown, e: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> }; handler: (a: unknown, e: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> };
+  const child = codexEnd.formFor?.({ needs: 'nothing' }) ?? codexEnd;
+  const first = await child.handler({ needs: 'nothing' }, {});
+  assert.ok(first.content[0].text.startsWith(PROJECT_STEP_NUDGE), first.content[0].text);
+  const second = await child.handler({ needs: 'nothing' }, {});
+  assert.ok(!second.content[0].text.startsWith(PROJECT_STEP_NUDGE), second.content[0].text);
+
   // A thread another thread started, in the same project: its Done is about its own brief.
   const helper = h.runner.create({ text: 'Fix the review window', accountId: 'claude-3', cwd: app, startedBy: { kind: 'thread', label: 'Agent', threadId: thread.id } }).thread;
   const p = projects.list()[0];

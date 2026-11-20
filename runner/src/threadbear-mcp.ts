@@ -335,11 +335,17 @@ export function buildThreadbearTools(
     const out: PersistedEvent[] = [];
     let before: number | undefined;
     let seen = 0;
+    // Only turns that left a card count, and not ones an edit cut out: a
+    // thread.rewound comes after the range it cuts, so walking back meets it first.
+    const cuts: { from: number; to: number }[] = [];
     for (let pages = 0; pages < 20 && seen < turns; pages++) {
       const page = await control.events(selfId, { beforeSeq: before, limit: 500 });
       const evs = page.events as PersistedEvent[];
       out.unshift(...evs);
-      seen += evs.filter((e) => e.type === 'turn.completed').length;
+      for (const e of [...evs].reverse()) {
+        if (e.type === 'thread.rewound') cuts.push({ from: e.fromSeq, to: e.toSeq });
+        else if (e.type === 'turn.completed' && e.needs && !cuts.some((c) => e.seq >= c.from && e.seq <= c.to)) seen++;
+      }
       if (!evs.length || page.firstSeq <= 1) break;
       before = page.firstSeq;
     }
@@ -354,10 +360,18 @@ export function buildThreadbearTools(
   // thread's events, so the once-a-turn mark would never be seen and it
   // would be refused every time (refuseUnread, likewise). A project it
   // can't read in time is left out rather than holding the turn's end.
+  // The turn (its turn.started's seq) the note last went to. A Codex
+  // sub-agent's call runs through these handlers but never reaches the
+  // thread's events either, so the mark in them alone would let it be
+  // refused every time; this caps it at once a turn whoever asks (Codex
+  // and Gemini's second review, 20 Nov).
+  let projectNotedTurn: number | undefined;
   const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
     if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
     if (input.archive === true || snoozeFromTool({ ...input, needs: 'nothing' }) || (Array.isArray(input.waitFor) && input.waitFor.length) || projectStepNudged(events)) return undefined;
     if (appRestarts?.isWatching(selfId)) return undefined;
+    const turn = events.findLast((e) => e.type === 'turn.started')?.seq;
+    if (turn !== undefined && turn === projectNotedTurn) return undefined;
     if (!codex && !(await replied()).landed) return undefined;
     const me = await inTime((async () => control.get(selfId))(), ID_LIST_TIMEOUT_MS, "couldn't read the thread").catch(() => undefined);
     if (!me || me.startedBy || !me.projects?.length) return undefined;
@@ -367,6 +381,7 @@ export function buildThreadbearTools(
       if (got && !got.project.archived) live.push({ title: got.project.title, state: got.project.state });
     }
     if (!live.length) return undefined;
+    projectNotedTurn = turn;
     return projectStepNudge(live, unansweredItems(await recentEvents(), next ?? []));
   };
 

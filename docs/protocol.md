@@ -3390,11 +3390,14 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   asks and follow-ups from the cards earlier turns ended with
   (`turn.completed`, the last ten turns or 10,000 events) that no message
   from Mike answered since (`unansweredItems`: a card answer naming the
-  ask, or a message with its words; not the runner's, a schedule's or
+  ask, a message with its words, or his pick in a show_options review the
+  ask links to; not the runner's, a schedule's or
   another agent's, and nothing an edit cut out), leaving it to the agent
   which still matter. A card that archives, snoozes or waits on threads or
   the app restarting is left alone, and so is a sub-agent's call, as it
-  isn't in the thread's events. A project it can't read within 2 seconds
+  isn't in the thread's events (a Codex sub-agent's, which runs through the
+  same handler, is capped at one note a turn in memory). Turns an edit cut
+  out don't count towards the ten. A project it can't read within 2 seconds
   is left out. Called again, it's taken as it is. Since 20 Nov
   2026: the calendar site's thread said Done twice with its project's state
   saying "Next is Peter's review of the live site" and three follow-ups

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersistedEvent } from '../../src/protocol.ts';
-import { handsOverAStep, offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, tryFirstNudge, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
+import { AGENT_MESSAGE_PREFIX } from '../../src/protocol.ts';
+import { handsOverAStep, offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, tryFirstNudge, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply, unansweredItems } from '../../src/needs.ts';
 import { END_TURN_TOOL } from '../../src/needs.ts';
 import { SERVER_NAME } from '../../src/threadbear-mcp.ts';
 import { ClaudeNormalizer, fileContext } from '../../src/adapters/claude/normalize.ts';
@@ -654,4 +655,26 @@ test('replyAsksNudge quotes the sentence, clipped, and says the reply stands', (
   // a thread sent ask and options as end_turn's own keys (19 Nov).
   assert.match(n, /asks: \[\{ question, options: \[\{ label \}\] \}\]/);
   assert.ok(replyAsksNudge(`Should I ${'really '.repeat(60)}do it?`).length < 800);
+});
+
+// The Done-in-a-project note's list of earlier items (needs.ts, unansweredItems).
+test('unansweredItems: cards Mike saw, less what he answered by card, words or a review pick; not agents, and not what an edit cut', () => {
+  let seq = 0;
+  const ev = (body: Record<string, unknown>) => ({ seq: ++seq, ts: '', threadId: 't', turnId: 'x', ...body }) as unknown as PersistedEvent;
+  const done = (next: string[]) => ev({ type: 'turn.completed', turnId: 'x', outcome: 'completed', durationMs: 1, needs: 'nothing', next });
+  const asks = (list: { action: string; links?: { title: string; url: string }[] }[]) => ev({ type: 'turn.completed', turnId: 'x', outcome: 'completed', durationMs: 1, needs: 'you', asks: list });
+  const said = (text: string, extra: Record<string, unknown> = {}) => ev({ type: 'user.message', text, images: [], ...extra });
+  const events = [
+    done(['Email Peter the link', 'Load the rest of the photos']),
+    said('Load the rest of the photos'),
+    asks([{ action: 'Pick a look for the site', links: [{ title: 'Compare', url: 'review:abcdef12-3456' }] }, { action: 'Send it to the list now?' }]),
+    said('Review: looks (abcdef12-3456-7890)\n\nPicked A.', { reviewId: 'abcdef12-3456-7890' }),
+    said(`${AGENT_MESSAGE_PREFIX}x] Email Peter the link`),
+    said('Send it to the list now?\nWait', { origin: 'runner' }),
+    done(['Old idea that got cut']),
+  ];
+  events.push(ev({ type: 'thread.rewound', fromSeq: events.at(-1)!.seq, toSeq: events.at(-1)!.seq, files: {} }));
+  assert.deepEqual(unansweredItems(events), ['Email Peter the link', 'Send it to the list now?']);
+  // A card answer names the ask; what the new card already carries isn't listed again.
+  assert.deepEqual(unansweredItems([...events, said('x', { answers: [{ action: 'Send it to the list now?', answer: 'Wait' }] })], ['Email Peter the link']), []);
 });

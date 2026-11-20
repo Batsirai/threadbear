@@ -659,30 +659,36 @@ export function projectStepNudged(events: PersistedEvent[]): boolean {
 // which Mike never saw, isn't here, and the turn still running has none
 // yet. An ask counts as answered by a card answer naming it or a message
 // quoting it, a follow-up by a message with its words (ticking one sends
-// them), however late: one sent into the running turn too. Only Mike's
+// them) or, for an ask linking a show_options review, his pick in it,
+// however late: one sent into the running turn too. Only Mike's
 // messages answer (fromMike: not the runner's, a schedule's or another
 // agent's), and what an edit cut out (thread.rewound) never happened.
 // What `now` already lists is left out.
 const plainKey = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
 export function unansweredItems(events: PersistedEvent[], now: string[] = []): string[] {
   const cuts = events.flatMap((e) => (e.type === 'thread.rewound' ? [{ from: e.fromSeq, to: e.toSeq }] : []));
-  const open = new Map<string, string>();
+  // Each open item's words, and the show_options reviews its ask links to:
+  // picking in the review window answers it, with words of its own.
+  const open = new Map<string, { text: string; reviews: string[] }>();
   for (const e of events) {
     if (cuts.some((c) => e.seq >= c.from && e.seq <= c.to)) continue;
     if (e.type === 'turn.completed') {
-      const items = e.needs === 'you' ? (e.asks ?? []).map((a) => a.action) : e.needs === 'nothing' ? (e.next ?? []) : [];
-      for (const t of items) {
-        open.delete(plainKey(t));
-        open.set(plainKey(t), t);
+      const items = e.needs === 'you' ? (e.asks ?? []).map((a) => ({ text: a.action, reviews: (a.links ?? []).flatMap((l) => (l.url.startsWith('review:') ? [l.url.slice('review:'.length)] : [])) })) : e.needs === 'nothing' ? (e.next ?? []).map((t) => ({ text: t, reviews: [] })) : [];
+      for (const item of items) {
+        open.delete(plainKey(item.text));
+        open.set(plainKey(item.text), item);
       }
     } else if (e.type === 'user.message' && (!e.origin || e.origin === 'phone') && !sentByAgent(e.text ?? '')) {
       const said = plainKey(e.text ?? '');
       const answered = new Set((e.answers ?? []).map((x) => plainKey(x.action)));
-      for (const k of [...open.keys()]) if (answered.has(k) || (k && said.includes(k))) open.delete(k);
+      const review = e.reviewId;
+      for (const [k, item] of [...open]) {
+        if (answered.has(k) || (k && said.includes(k)) || (review && item.reviews.some((r) => r.length >= 8 && review.startsWith(r)))) open.delete(k);
+      }
     }
   }
   for (const t of now) open.delete(plainKey(t));
-  return [...open.values()].slice(-MAX_OPEN_ITEMS);
+  return [...open.values()].map((i) => i.text).slice(-MAX_OPEN_ITEMS);
 }
 
 // Whether this turn has had the note (connectors.ts, nudgedThisTurn, is the same).
