@@ -48,16 +48,18 @@
 //
 //   event       from                               none     spare    starting  live      closing
 //   claim       threads.create took the spare      spare    spare!   +stray!   +stray!   +stray!
-//   spareGone   the claim's timer: never started   -        none     -         -         -
+//   spareGone   the claim's timer: never started   -        none     (a stray one cleared)
 //   begin       startSession, first: gen up,       none     spare    starting! live!     closing!
 //               resumed, started/leave/versionMove off
-//   takeSpare   startSession: taken or stopped     none     none     -         -         -
+//   takeSpare   startSession: taken or stopped     none     none     (a stray one taken)
 //   spawned     startSession: the CLI is running   starting starting! starting! starting! closing!
+//               (live, not starting, if its version came first: a spare's replay)
 //   init *      its session output: there          retriedFresh off, in every state
 //   version *   its cliVersion output              none+    spare+   live      live      closing
 //               (+: started set, so spawned makes it live)
 //   tasks *     its background work list           (tasks, in every state)
 //   exited *    its exit (onExited)                none!    spare!   none      none      closing (session gone)
+//               (its tasks stay until onExited's stopTasks, after the cards close)
 //   retryFresh  onExited, resuming once            (retriedFresh on)
 //   leave       a setting it can't take, etc.      (leave on, in every state; *
 //               when it's a refusal that came back)
@@ -65,10 +67,11 @@
 //               a put-away thread back
 //   versionMove releaseIdle: a CLI update          !        !        (on or off)         !
 //   release     releaseSession                     leave off          closing   closing   - (leave off if exited)
-//   closed      that release's end settled         !        !        !         !         none (or live! if another came)
-//   drop        delete (forgets the session),      (gen up; delete: starting/live → none)
-//               letGo, shutdown
-//   stopTasks   shutdown, once the work is noted   (tasks emptied)
+//   closed      that release's end settled         !        !        none!*    none!*    none (starting!/live! if another came)
+//               (*: when it's that CLI; another is kept)
+//   drop        delete (forgets the session),      (gen up; delete: starting/live → none,
+//               letGo, shutdown                     closing keeps its kind without the session)
+//   stopTasks   onExited, shutdown                 (tasks emptied)
 //
 //   * carries the generation it is for: one for an older CLI is refused
 //     ('stale') and changes nothing, in this one place. The output events
@@ -262,7 +265,8 @@ export function moveCli(s: Cli, e: CliEvent): CliMove {
       if (e.gen !== m.gen) return no(STALE);
       const out: CliOut = { released: Boolean(m.released), started: Boolean(m.started) };
       const marks = without(m, 'released');
-      const tasks = s.tasks.length ? [] : s.tasks;
+      // Its background work goes after, with stopTasks (onExited).
+      const tasks = s.tasks;
       const why = s.kind === 'none' || s.kind === 'spare' ? 'an exit heard after its release had settled' : undefined;
       if (s.kind === 'closing') return ok({ kind: 'closing', done: s.done, tasks, marks }, out);
       if (s.kind === 'spare') return ok({ ...s, tasks, marks }, out, why);

@@ -85,7 +85,6 @@ function byHand(rt: F, e: CliEvent): Outcome {
       if (rt.generation !== e.gen) return { stale: true };
       const o: Outcome = { released: rt.releasedGen === e.gen, started: Boolean(rt.started) };
       rt.session = undefined;
-      rt.tasks = [];
       if (rt.releasedGen === e.gen) rt.releasedGen = undefined;
       return o;
     }
@@ -125,7 +124,8 @@ function byHand(rt: F, e: CliEvent): Outcome {
       return s ? { forgot: s } : {};
     }
     case 'stopTasks':
-      if (rt.tasks.length) rt.tasks = [];
+      // shutdown's (only with work) and onExited's (always: the same).
+      rt.tasks = [];
       return {};
   }
 }
@@ -291,7 +291,7 @@ function sendable(rt: F): string[] {
   if (s.kind === 'none' || s.kind === 'spare') out.push('beginFresh', 'beginResume');
   if (s.kind === 'none' && rt.generation === 0) out.push('claim');
   if (s.kind === 'spare') out.push('spareGone');
-  if (live || s.kind === 'closing') out.push('exited');
+  if (live || s.kind === 'closing') out.push('exited', 'stopTasks');
   if (live) out.push('versionMove', 'versionStays');
   if (s.kind === 'closing' && rt.closing) out.push(rt.session === B ? 'closedB' : 'closedA');
   return out;
@@ -315,7 +315,8 @@ test('random walks move as the writes by hand did, and the ones the runner sends
       // A real start is begin, takeSpare and spawned in one go.
       if (real && cliOf(want).kind !== 'none' && cliOf(want).kind !== 'spare') names = names.filter((n) => !n.startsWith('begin'));
       const name = names[Math.floor(rand() * names.length)];
-      const steps1 = real && name.startsWith('begin') ? [name, 'takeSpare', sessions++ % 2 ? 'spawnedB' : 'spawnedA'] : [name];
+      // onExited sends stopTasks after the cards close.
+      const steps1 = real && name.startsWith('begin') ? [name, 'takeSpare', sessions++ % 2 ? 'spawnedB' : 'spawnedA'] : real && name === 'exited' ? [name, 'stopTasks'] : [name];
       for (const n of steps1) {
         trail.push(n);
         const e = events(want)[n];
@@ -472,7 +473,10 @@ test('only cli-session.ts writes a thread`s CLI', () => {
     'adapters/claude/adapter.ts': ['this'],
   };
   // rt['session'] = …, delete rt['closing'].
-  const bracket = new RegExp(`(?:delete\\s+[\\w.]+\\[['"\`](?:${fieldRe})['"\`]\\])|(?:\\[['"\`](?:${fieldRe})['"\`]\\]\\s*(?:=(?!=)|\\?\\?=))`, 'g');
+  const ops = `(?:=(?!=)|[-+*/%|&^]=|\\?\\?=|\\|\\|=|&&=|<<=|>>=|\\+\\+|--)`;
+  const bracket = new RegExp(`(?:delete\\s+[\\w.!?]+\\[['"\`](?:${fieldRe})['"\`]\\])|(?:\\[['"\`](?:${fieldRe})['"\`]\\]\\s*${ops})|(?:(?:\\+\\+|--)\\s*[\\w.!?]+\\[['"\`](?:${fieldRe})['"\`]\\])`, 'g');
+  // (rt as Runtime).session = …, and Reflect.set(rt, 'session', …).
+  const wrapped = new RegExp(`\\)\\s*\\.(?:${fieldRe})\\s*${ops}|Reflect\\.(?:set|deleteProperty|defineProperty)\\([^,]+,\\s*['"\`](?:${fieldRe})['"\`]`, 'g');
   // Object.assign(rt, …) or Object.assign(st.rt, …): a write of any field.
   const assign = /Object\.assign\(\s*(?:[\w.!?]+\.)?rt\b/g;
   // rt.tasks.push(…) and the like: the list changed in place.
@@ -489,6 +493,7 @@ test('only cli-session.ts writes a thread`s CLI', () => {
         for (const m of text.matchAll(bracket)) found.push(`${rel}: ${m[0]}`);
         for (const m of text.matchAll(assign)) found.push(`${rel}: ${m[0]}`);
         for (const m of text.matchAll(mutate)) found.push(`${rel}: ${m[0]}`);
+        for (const m of text.matchAll(wrapped)) found.push(`${rel}: ${m[0]}`);
         for (const m of text.matchAll(write)) {
           const receiver = (m[1] ?? m[3] ?? m[5]).split('.').at(-1)!;
           if (!(notRuntimes[rel] ?? []).includes(receiver)) found.push(`${rel}: ${m[0]}`);

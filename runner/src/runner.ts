@@ -3326,8 +3326,8 @@ export class Runner {
 
   onExited(st: ThreadState, gen: number, err?: Error): void {
     const { rec, rt } = st;
-    // An older CLI's exit is stale: nothing moves. Else the session and its
-    // background work go, and it says whether it was asked to stop.
+    // An older CLI's exit is stale: nothing moves. Else the session goes,
+    // and it says whether it was asked to stop.
     const exit = this.cli(st, { kind: 'exited', gen });
     if (!exit.ok) return;
     const released = exit.out.released === true;
@@ -3339,6 +3339,10 @@ export class Runner {
     // Nothing's left to answer them: a subagent's card can be open with no
     // turn running, and no turn ending would close it.
     this.expireApprovals(st, 'The CLI stopped.');
+    // Its background work went with it: only now, as the cards closing
+    // above can look at the thread (a handover's readiness check) and must
+    // still see the work.
+    this.cli(st, { kind: 'stopTasks' });
     rt.finished = [];
     rt.taskEndedInTurn = false;
     // Its sub-agents went with it.

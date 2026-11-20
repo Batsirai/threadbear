@@ -2642,3 +2642,24 @@ test('a setting an old CLI refuses late leaves the next CLI alone', async () => 
     assert.equal(next.sent.length, 2, which);
   }
 });
+
+// From Gemini's review of cli-session.ts: a release whose end() throws
+// straight away still settles, so the next message isn't left waiting on it.
+test('a CLI whose end throws at once is still let go', async () => {
+  const h = makeHarness();
+  const { thread } = create(h);
+  const first = h.adapter.last;
+  first.init();
+  first.result();
+  first.end = () => {
+    throw new Error('broken pipe');
+  };
+  h.runner.update({ threadId: thread.id, archived: true });
+  await tick();
+  const st = h.runner.threads.get(thread.id)!;
+  assert.equal(st.rt.closing, undefined, 'not left closing');
+  assert.equal(st.rt.session, undefined);
+  h.runner.send(thread.id, 'back again');
+  await tick();
+  assert.notEqual(h.adapter.last, first, 'a new CLI took the message');
+});

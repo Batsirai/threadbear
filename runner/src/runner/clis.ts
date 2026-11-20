@@ -86,9 +86,16 @@ export const clisPart = {
       }
     }
     rt.finished = [];
-    this.log.info('releasing CLI', { threadId: rec.id, hard });
-    session
-      .end({ hard })
+    // A synchronous throw from end() still settles `done`, or every turn
+    // after it would wait on it for ever (Gemini's review).
+    let ending: Promise<void>;
+    try {
+      this.log.info('releasing CLI', { threadId: rec.id, hard });
+      ending = session.end({ hard });
+    } catch (e) {
+      ending = Promise.reject(e instanceof Error ? e : new Error(String(e)));
+    }
+    ending
       .catch((e: unknown) => this.log.warn('release failed', { threadId: rec.id, error: String(e) }))
       .finally(() => {
         try {
