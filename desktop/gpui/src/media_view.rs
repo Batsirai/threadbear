@@ -277,9 +277,17 @@ fn say(said: Said) {
 }
 
 /// native/media_views.m: a PDF's link was clicked.
+///
+/// # Safety
+///
+/// `url` and `base` are each null or a NUL-terminated string that stays
+/// alive through the call.
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub extern "C" fn tb_media_said_link(url: *const std::ffi::c_char, base: *const std::ffi::c_char) {
+pub unsafe extern "C" fn tb_media_said_link(
+    url: *const std::ffi::c_char,
+    base: *const std::ffi::c_char,
+) {
     let text = |p: *const std::ffi::c_char| {
         if p.is_null() {
             String::new()
@@ -321,9 +329,15 @@ fn drag_folder() -> Option<std::path::PathBuf> {
 /// native/media_views.m: a private copy of the open file `fd` (still the
 /// view's, not closed here) named `name`, for a drag out, its path written
 /// into `out` (`threadbear_core::private_file::snapshot`).
+///
+/// # Safety
+///
+/// `name` is null or a NUL-terminated string, and `out` is null or writable
+/// for `capacity` bytes, both alive through the call; `fd` is an open file the
+/// caller keeps open until it returns.
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub extern "C" fn tb_media_snapshot(
+pub unsafe extern "C" fn tb_media_snapshot(
     fd: i32,
     name: *const std::ffi::c_char,
     out: *mut std::ffi::c_char,
@@ -337,9 +351,14 @@ pub extern "C" fn tb_media_snapshot(
 
 /// Quick Look reads a private copy too, made off the main thread. It is
 /// removed after thumbnail generation; interrupted copies expire in a day.
+///
+/// # Safety
+///
+/// As `tb_media_snapshot`: `name` null or NUL-terminated, `out` null or
+/// writable for `capacity` bytes, `fd` open, all through the call.
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub extern "C" fn tb_preview_snapshot(
+pub unsafe extern "C" fn tb_preview_snapshot(
     fd: i32,
     name: *const std::ffi::c_char,
     out: *mut std::ffi::c_char,
@@ -986,20 +1005,21 @@ mod tests {
             256 * 1024 * 1024
         )
         .is_err());
-        assert_eq!(
-            super::tb_preview_snapshot(-1, std::ptr::null(), std::ptr::null_mut(), 0, 0),
-            -1
-        );
-        assert_eq!(
+        // SAFETY: null pointers are allowed, and the limit is checked first.
+        let refused =
+            unsafe { super::tb_preview_snapshot(-1, std::ptr::null(), std::ptr::null_mut(), 0, 0) };
+        assert_eq!(refused, -1);
+        // SAFETY: null pointers are allowed, and the limit is checked first.
+        let refused = unsafe {
             super::tb_preview_snapshot(
                 -1,
                 std::ptr::null(),
                 std::ptr::null_mut(),
                 0,
-                256 * 1024 * 1024 + 1
-            ),
-            -1
-        );
+                256 * 1024 * 1024 + 1,
+            )
+        };
+        assert_eq!(refused, -1);
     }
 
     /// Stepping from one clip to the next on the stage: the next starts at
