@@ -804,6 +804,9 @@ fn login_row(key: &str, open_key: &str, login: &LoginRow, accounts: &[Account], 
     let hover = p.bar_track;
     let row = h_flex()
         .id(id("row"))
+        .role(gpui_kit::Role::Button)
+        .aria_expanded(open)
+        .aria_label(SharedString::from(login.name.clone()))
         .w_full()
         .gap(px(10.))
         .items_center()
