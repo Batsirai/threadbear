@@ -91,7 +91,9 @@ const GIT_SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false
 function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   // Ones that point git at some other repo or index (set inside a git hook).
-  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX', 'GIT_OBJECT_DIRECTORY']) delete env[k];
+  // And config handed down from a `git -c` or a hook, which would beat GIT_SAFE.
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT']) delete env[k];
+  for (const k of Object.keys(env)) if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(k)) delete env[k];
   return { ...env, GIT_TERMINAL_PROMPT: '0', ...extra };
 }
 
@@ -150,26 +152,38 @@ export async function formatCommitsIn(cwd: string, ref: string): Promise<FormatC
     }
     // And it has to be only what it formats: anything else in it would be
     // lost from a fork's merge across it (mergeAcross).
-    if (commit && (await onlyWithin(cwd, commit, entry.paths))) found.push({ entry, commit });
+    if (commit && (await onlyWithin(cwd, commit, entry))) found.push({ entry, commit });
   }
+  if (found.length < 2) return found;
   // Oldest first: an ancestor has fewer commits behind it than its descendants.
   const rank = new Map<string, number>();
   for (const f of found) rank.set(f.commit, Number(await out(cwd, ['rev-list', '--count', f.commit])));
   return found.sort((a, b) => (rank.get(a.commit) ?? 0) - (rank.get(b.commit) ?? 0));
 }
 
-// Whether `commit` (not a merge) changes nothing outside `paths`.
-async function onlyWithin(cwd: string, commit: string, paths: string[]): Promise<boolean> {
+// Whether `commit` (not a merge) changes nothing outside the folders it
+// formats, and none of its config: a fork's merge across it takes its
+// changes from formatting this copy's tree, which leaves config as it was.
+async function onlyWithin(cwd: string, commit: string, entry: FormatEntry): Promise<boolean> {
+  const paths = entry.paths;
   const parents = (await git(cwd, ['rev-list', '--parents', '-n', '1', commit])).stdout.trim().split(' ');
   if (parents.length !== 2) return false;
   const changed = await git(cwd, ['diff', '--name-only', '-z', `${commit}^`, commit]);
   if (!changed.ok) return false;
-  return changed.stdout.split('\0').filter(Boolean).every((p) => paths.some((s) => p === s || p.startsWith(`${s}/`)));
+  return changed.stdout.split('\0').filter(Boolean).every((p) => !entry.config.includes(p) && paths.some((s) => p === s || p.startsWith(`${s}/`)));
 }
 
 // The format commits `onto` has that `tip` doesn't: what carrying `tip`
 // onto `onto` crosses.
 export async function crossings(cwd: string, tip: string, onto: string): Promise<FormatCommit[]> {
+  // Most landings: every listed id is already in the branch, so nothing more to look up.
+  const list = await git(cwd, ['show', `${onto}:${FORMAT_LIST}`]);
+  if (!list.ok) return [];
+  const entries = parseFormatList(list.stdout);
+  if (!entries.length) return [];
+  let known = true;
+  for (const e of entries) if (!e.id || !(await isAncestor(cwd, e.id, tip))) known = false;
+  if (known) return [];
   const all = await formatCommitsIn(cwd, onto);
   const out: FormatCommit[] = [];
   for (const f of all) if (!(await isAncestor(cwd, f.commit, tip))) out.push(f);
@@ -180,7 +194,8 @@ export async function crossings(cwd: string, tip: string, onto: string): Promise
 export async function touchesFormatted(cwd: string, range: string, formats: FormatCommit[]): Promise<boolean> {
   const paths = [...new Set(formats.flatMap((f) => f.entry.paths))];
   if (!paths.length) return false;
-  const changed = await out(cwd, ['log', '--format=', '--name-only', range, '--', ...paths]);
+  // -m: a merge's own resolution counts too.
+  const changed = await out(cwd, ['log', '-m', '--format=', '--name-only', range, '--', ...paths]);
   return changed.length > 0;
 }
 
@@ -194,7 +209,10 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ 
     // stops the formatter's children too, and with them the output pipes
     // this waits on.
     const shell = process.platform === 'win32' ? 'bash' : '/bin/sh';
-    const child = spawn(shell, ['-c', command], { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+    // The format commit's own toolchain file decides, not one set outside.
+    const env = cleanEnv();
+    delete env.RUSTUP_TOOLCHAIN;
+    const child = spawn(shell, ['-c', command], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let text = '';
     let done = false;
     const finish = (ok: boolean, extra = '') => {
@@ -280,7 +298,7 @@ export class TreeFormatter {
       }
       return { tree: await out(this.cwd, ['write-tree'], env), failed: made.failed };
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      rmQuietly(dir);
     }
   }
 
@@ -296,14 +314,19 @@ export class TreeFormatter {
       const env = { GIT_INDEX_FILE: path.join(dir, 'index') };
       await out(this.cwd, ['read-tree', tree], env);
       const files = (await out(this.cwd, ['ls-files', '-z', '--', ...f.entry.paths], env)).split('\0').filter(Boolean);
-      await stdinGit(this.cwd, ['checkout-index', '-u', '-z', '--stdin', `--prefix=${work}/`], files.join('\0'), env);
+      // Attributes (eol, filters) from the tree itself both ways, so what
+      // comes back differs only by what the formatter did.
+      const attr = `--attr-source=${tree}`;
+      await stdinGit(this.cwd, [attr, 'checkout-index', '-u', '-z', '--stdin', `--prefix=${work}/`], files.join('\0'), env);
       // The format commit's own config, in place of the tree's (or none).
       // Never through a link the tree has there: it's taken away first, and
       // the tree's own entry checked out again afterwards.
-      const inTree = new Set((await out(this.cwd, ['ls-files', '-z', '--', ...f.entry.config], env)).split('\0').filter(Boolean));
+      const inTree = new Set((f.entry.config.length ? await out(this.cwd, ['ls-files', '-z', '--', ...f.entry.config], env) : '').split('\0').filter(Boolean));
       for (const c of f.entry.config) {
         const target = path.join(work, c);
-        fs.rmSync(target, { force: true });
+        // Not under a link the tree has for a folder on the way, either.
+        if (!realFoldersTo(work, c)) return { tree, failed: `${c} is under a link in this tree, so it wasn't formatted` };
+        fs.rmSync(target, { force: true, recursive: true });
         const blob = await gitBuffer(this.cwd, `${f.commit}:${c}`);
         if (blob) {
           fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -314,20 +337,20 @@ export class TreeFormatter {
       // Config files go back to the tree's own, so only formatting is read.
       for (const c of f.entry.config) fs.rmSync(path.join(work, c), { force: true });
       const back = f.entry.config.filter((c) => inTree.has(c));
-      if (back.length) await stdinGit(this.cwd, ['checkout-index', '-f', '-u', '-z', '--stdin', `--prefix=${work}/`], back.join('\0'), env);
-      await out(this.cwd, [`--work-tree=${work}`, 'add', '-u', '--', ...f.entry.paths], env);
+      if (back.length) await stdinGit(this.cwd, [attr, 'checkout-index', '-f', '-u', '-z', '--stdin', `--prefix=${work}/`], back.join('\0'), env);
+      await out(this.cwd, [attr, `--work-tree=${work}`, 'add', '-u', '--', ...f.entry.paths], env);
       const made = await out(this.cwd, ['write-tree'], env);
       const failed = ran.ok ? undefined : `${f.entry.command} failed: ${lastLines(ran.text, 6)}`;
       return { tree: made, failed };
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      rmQuietly(dir);
     }
   }
 }
 
 function stdinGit(cwd: string, args: string[], input: string, extra: NodeJS.ProcessEnv): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const child = execFile('git', [...GIT_SAFE, '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 16 * 1024 * 1024 }, (err, _o, stderr) =>
+    const child = execFile('git', [...GIT_SAFE, '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000, killSignal: 'SIGKILL' }, (err, _o, stderr) =>
       err ? reject(new Error(`git ${args.join(' ')}: ${String(stderr).trim()}`)) : resolve(),
     );
     child.stdin?.end(input);
@@ -336,10 +359,35 @@ function stdinGit(cwd: string, args: string[], input: string, extra: NodeJS.Proc
 
 function gitBuffer(cwd: string, object: string): Promise<Buffer | undefined> {
   return new Promise((resolve) => {
-    execFile('git', [...GIT_SAFE, '-C', cwd, 'cat-file', 'blob', object], { env: cleanEnv(), encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 }, (err, stdout) =>
+    execFile('git', [...GIT_SAFE, '-C', cwd, 'cat-file', 'blob', object], { env: cleanEnv(), encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, killSignal: 'SIGKILL' }, (err, stdout) =>
       resolve(err ? undefined : stdout),
     );
   });
+}
+
+// Whether every folder on the way to `rel` under `root` is a real folder
+// (or not there yet), never a link.
+function realFoldersTo(root: string, rel: string): boolean {
+  const parts = rel.split('/').slice(0, -1);
+  let cur = root;
+  for (const p of parts) {
+    cur = path.join(cur, p);
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    } catch {
+      return true;
+    }
+  }
+  return true;
+}
+
+function rmQuietly(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // A formatter still holding a file there (Windows): the temp folder keeps it.
+  }
 }
 
 function lastLines(text: string, n: number): string {
@@ -370,7 +418,7 @@ export async function carryAcross(cwd: string, a: { base: string; tip: string; o
   // carry nothing formatted: say so rather than leave the work half done.
   const baseTree = await out(cwd, ['rev-parse', `${a.base}^{tree}`]);
   const first = await a.formatter.format(baseTree);
-  if (first.failed.length && first.tree === baseTree) {
+  if (first.failed.length) {
     return { ok: false, error: `Couldn't format ${short(a.base)}, the commit this work starts from: ${first.failed.join('; ')}`, notes };
   }
   const asCommit = async (tree: string) => out(cwd, ['commit-tree', tree, '-m', 'formatted'], IDENT);
@@ -381,9 +429,8 @@ export async function carryAcross(cwd: string, a: { base: string; tip: string; o
   for (const c of list) {
     const orig = await out(cwd, ['rev-parse', `${c}^{tree}`]);
     const parentTree = await out(cwd, ['rev-parse', `${c}^^{tree}`]).catch(() => '');
-    const formatted = await a.formatter.format(orig);
     const subject = await out(cwd, ['log', '-1', '--format=%s', c]);
-    for (const why of formatted.failed) notes.push(`${short(c)} (${subject}) was left partly unformatted: ${why}`);
+    const formatted = await formatCommit(cwd, a.formatter, c, prev, notes, subject);
     const fc = await asCommit(formatted.tree);
     const merged = await git(cwd, ['merge-tree', '--write-tree', '--name-only', `--merge-base=${prevCommit}`, tip, fc]);
     if (!merged.ok) {
@@ -416,6 +463,42 @@ export async function carryAcross(cwd: string, a: { base: string; tip: string; o
   return { ok: true, tip, count, notes };
 }
 
+// Commit `c`'s tree formatted. Where the formatter fails on it (a file that
+// doesn't parse, a crate root it can't read), only the files `c` changes
+// are taken as it left them; the rest come from `prev`, its parent
+// formatted, so a failure never takes the formatting back out of files the
+// commit didn't touch.
+async function formatCommit(cwd: string, formatter: TreeFormatter, c: string, prev: string, notes: string[], subject: string): Promise<{ tree: string }> {
+  const orig = await out(cwd, ['rev-parse', `${c}^{tree}`]);
+  const r = await formatter.format(orig);
+  if (!r.failed.length) return r;
+  for (const why of r.failed) notes.push(`${short(c)} (${subject}) was left partly unformatted: ${why}`);
+  const changed = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${c}^`, c])).stdout.split('\0').filter(Boolean);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-fmt-pick-'));
+  try {
+    const env = { GIT_INDEX_FILE: path.join(dir, 'index') };
+    await out(cwd, ['read-tree', prev], env);
+    if (changed.length) {
+      // Each changed file as the formatter left it in `c`, or gone.
+      const listed = (await git(cwd, ['ls-tree', '-r', '-z', r.tree, '--', ...changed])).stdout.split('\0').filter(Boolean);
+      const present = new Set<string>();
+      const lines: string[] = [];
+      for (const l of listed) {
+        const tab = l.indexOf('\t');
+        const [mode, , id] = l.slice(0, tab).split(' ');
+        const name = l.slice(tab + 1);
+        present.add(name);
+        lines.push(`${mode} ${id}\t${name}`);
+      }
+      for (const n of changed) if (!present.has(n)) lines.push(`0 ${'0'.repeat(40)}\t${n}`);
+      await stdinGit(cwd, ['update-index', '-z', '--index-info'], lines.map((l) => `${l}\0`).join(''), env);
+    }
+    return { tree: await out(cwd, ['write-tree'], env) };
+  } finally {
+    rmQuietly(dir);
+  }
+}
+
 // Only for the throwaway commits that hold a formatted tree for merge-tree.
 const IDENT = { GIT_AUTHOR_NAME: 'format', GIT_AUTHOR_EMAIL: 'format@localhost', GIT_COMMITTER_NAME: 'format', GIT_COMMITTER_EMAIL: 'format@localhost', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' };
 
@@ -428,10 +511,18 @@ export async function formattedChain(cwd: string, base: string, tip: string, for
   const baseTree = (await formatter.format(await out(cwd, ['rev-parse', `${base}^{tree}`]))).tree;
   const first = await out(cwd, ['commit-tree', baseTree, '-p', base, '-m', `Formatted copy of ${short(base)} (replay-over-format.sh)`]);
   let cur = first;
+  let prev = baseTree;
   for (const c of (await out(cwd, ['rev-list', '--reverse', '--topo-order', `${base}..${tip}`])).split('\n').filter(Boolean)) {
-    const r = await formatter.format(await out(cwd, ['rev-parse', `${c}^{tree}`]));
     const subject = await out(cwd, ['log', '-1', '--format=%s', c]);
-    for (const why of r.failed) notes.push(`${short(c)} (${subject}) was left partly unformatted: ${why}`);
+    const r = await formatCommit(cwd, formatter, c, prev, notes, subject);
+    const wasEmpty = (await out(cwd, ['rev-parse', `${c}^{tree}`])) === (await out(cwd, ['rev-parse', `${c}^^{tree}`]).catch(() => ''));
+    // One that only reformatted is nothing once formatted: rebase would keep
+    // it as an empty commit, so it's left out here, as carryAcross does.
+    if (r.tree === prev && !wasEmpty) {
+      notes.push(`${short(c)} (${subject}) was left out: formatted, it changes nothing.`);
+      continue;
+    }
+    prev = r.tree;
     const meta = await out(cwd, ['log', '-1', '--format=%an%x00%ae%x00%ad', '--date=raw', c]);
     const message = (await git(cwd, ['log', '-1', '--format=%B', c])).stdout.replace(/\n+$/, '');
     const [name, email, date] = meta.split('\0');
@@ -456,17 +547,26 @@ export async function mergeAcross(cwd: string, target: string, opts: { message?:
   const notes: string[] = [];
   const head = await out(cwd, ['rev-parse', 'HEAD']);
   const cross = await crossings(cwd, head, target);
-  const undo = async () => {
+  // Back to where it started; says so when it couldn't be.
+  const undo = async (): Promise<string> => {
     await git(cwd, ['merge', '--abort']);
-    await git(cwd, ['reset', '--keep', head]);
+    const back = await git(cwd, ['reset', '--keep', head]);
+    return back.ok ? '' : ` It couldn't go back to ${short(head)} by itself (${(back.stderr || back.stdout).trim().split('\n')[0]}): git reset --hard ${short(head)} does.`;
   };
+  // Only a conflict is left for a person (opts.leave); anything else goes back.
+  const failWith = async (error: string): Promise<Merged> => ({ ok: false, error: error + (await undo()), notes });
   const merge = async (what: string, message: string, step: string): Promise<Merged | undefined> => {
     const m = await git(cwd, ['merge', '--no-ff', '-m', message, what]);
     if (m.ok) return undefined;
     const conflict = (await out(cwd, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).split('\n').filter(Boolean);
-    if (!opts.leave) await undo();
-    if (conflict.length) return { ok: false, conflict, step, notes };
-    return { ok: false, error: `git merge ${what} failed: ${(m.stderr || m.stdout).trim().split('\n')[0]}`, notes };
+    if (conflict.length) {
+      if (!opts.leave) {
+        const stuck = await undo();
+        if (stuck) return { ok: false, error: `Conflicts ${step}, in ${conflict.join(', ')}.${stuck}`, notes };
+      }
+      return { ok: false, conflict, step, notes };
+    }
+    return failWith(`git merge ${what} failed: ${(m.stderr || m.stdout).trim().split('\n')[0]}`);
   };
   for (const f of cross) {
     const parent = await out(cwd, ['rev-parse', `${f.commit}^`]);
@@ -474,8 +574,7 @@ export async function mergeAcross(cwd: string, target: string, opts: { message?:
     const changed = (await git(cwd, ['diff', '--name-only', '-z', parent, f.commit])).stdout.split('\0').filter(Boolean);
     const outside = changed.filter((p) => !f.entry.paths.some((s) => p === s || p.startsWith(`${s}/`)));
     if (outside.length) {
-      if (!opts.leave) await undo();
-      return { ok: false, error: `${short(f.commit)} (${f.entry.subject}) changes files outside what it formats (${outside.slice(0, 5).join(', ')}), so it isn't only formatting. Merge it by hand.`, notes };
+      return failWith(`${short(f.commit)} (${f.entry.subject}) changes files outside what it formats (${outside.slice(0, 5).join(', ')}), so it isn't only formatting. Merge it by hand.`);
     }
     if (!(await isAncestor(cwd, parent, 'HEAD'))) {
       const r = await merge(parent, `Bring in the changes before ${f.entry.subject}`, `merging ${short(parent)}, the commit before ${short(f.commit)} (${f.entry.subject})`);
@@ -486,16 +585,10 @@ export async function mergeAcross(cwd: string, target: string, opts: { message?:
     const r = await formatter.format(await out(cwd, ['rev-parse', 'HEAD^{tree}']));
     // A merge made from a tree the formatter couldn't do would take F's
     // formatting back out of whatever it missed.
-    if (r.failed.length) {
-      if (!opts.leave) await undo();
-      return { ok: false, error: `Couldn't format this copy's tree as ${short(f.commit)} (${f.entry.subject}) was made, so it isn't merged yet: ${r.failed.join('; ')}`, notes };
-    }
+    if (r.failed.length) return failWith(`Couldn't format this copy's tree as ${short(f.commit)} (${f.entry.subject}) was made, so it isn't merged: ${r.failed.join('; ')}.`);
     const made = await out(cwd, ['commit-tree', r.tree, '-p', now, '-p', f.commit, '-m', `Bring in ${f.entry.subject}\n\nWith this copy's own changes formatted the same way (scripts/replay-over-format.sh).`]);
     const moved = await git(cwd, ['reset', '--keep', made]);
-    if (!moved.ok) {
-      if (!opts.leave) await undo();
-      return { ok: false, error: `Couldn't move to the formatted merge: ${moved.stderr.trim()}`, notes };
-    }
+    if (!moved.ok) return failWith(`Couldn't move to the formatted merge: ${moved.stderr.trim()}.`);
     notes.push(`Crossed ${short(f.commit)} (${f.entry.subject}) with this copy's own changes formatted the same way.`);
   }
   if (opts.final !== false && !(await isAncestor(cwd, target, 'HEAD'))) {
@@ -589,11 +682,12 @@ async function cli(argv: string[]): Promise<number> {
   // rebase stop at it, as it would for any rebase.
   say(`${short(r.at)} (${r.subject}) conflicts with ${onto} in: ${r.conflict.join(', ')}. Rebasing formatted copies so you can sort it out.`);
   const chain = await formattedChain(top, base, head, formatter);
+  for (const n of chain.notes) say(n);
   await out(top, ['reset', '--keep', chain.tip]);
   const rb = await git(top, ['rebase', '--onto', onto, chain.first]);
   process.stdout.write(rb.stdout);
   process.stderr.write(rb.stderr);
-  say(rb.ok ? `Done. It was at ${short(head)} before.` : `Sort out the conflict, then git rebase --continue (git rebase --abort, then git reset --hard ${short(head)}, goes back to where it was).`);
+  say(rb.ok ? `Done. It was at ${short(head)} before.` : `Sort out the conflict, then git rebase --continue. To give up instead: git rebase --abort, then git reset --hard ${short(head)} (the abort alone leaves ${branch} on the formatted copies).`);
   return rb.ok ? 0 : 1;
 }
 

@@ -18,6 +18,9 @@ const FMT = `import fs from 'node:fs';
 import path from 'node:path';
 if (!fs.existsSync('fmt.toml')) { console.error('no fmt.toml'); process.exit(3); }
 let failed = false;
+const all = (d) => !fs.existsSync(d) ? [] : fs.readdirSync(d).flatMap((n) => { const p = path.join(d, n); return fs.statSync(p).isDirectory() ? all(p) : [p]; });
+// As cargo fmt does with a crate root it can't read: nothing formatted at all.
+if (all('src').some((p) => fs.readFileSync(p, 'utf8').includes('FATAL'))) { console.error('error: FATAL'); process.exit(2); }
 const walk = (d) => {
   if (!fs.existsSync(d)) return;
   for (const n of fs.readdirSync(d)) {
@@ -255,4 +258,21 @@ test('a branch with a link where the config goes neither writes through it nor l
   assert.ok(!fs.existsSync(outside), 'nothing written through the link');
   assert.equal(sh(main, `git ls-tree ${r.tip} src/fmt.toml | cut -c1-6`), '120000', 'the link is still there');
   assert.equal(sh(main, `git show ${r.tip}:src/a.rs`), 'fn a() { 1 }');
+});
+
+test('a commit the formatter gives up on entirely keeps the formatting of every file it didn\'t touch', async () => {
+  const { main, fmt, list } = setup();
+  commit(main, { 'src/a.rs': 'fn  a()  {}\n', 'src/b.rs': 'fn  b()  {}\n', 'fmt.toml': 'style = 1\n', '.git-blame-ignore-revs': list }, 'Code');
+  const p = sh(main, 'git rev-parse HEAD');
+  const t = makeBranch(main);
+  commit(t.path, { 'src/c.rs': 'fn  c() { FATAL }\n' }, 'Break it');
+  commit(t.path, { 'src/c.rs': 'fn  c()  {}\n' }, 'Mend it');
+  const tip = sh(t.path, 'git rev-parse HEAD');
+  formatOnMain(main, fmt);
+  const r = await carryAcross(main, { base: p, tip, onto: sh(main, 'git rev-parse main'), formatter: new TreeFormatter(main, await crossings(main, tip, 'main')) });
+  assert.ok(r.ok, JSON.stringify(r));
+  const first = sh(main, `git rev-list --reverse main..${r.tip} | head -1`);
+  assert.equal(sh(main, `git diff --name-only main ${first}`), 'src/c.rs', 'only its own file differs from main');
+  assert.equal(sh(main, `git show ${first}:src/a.rs`), 'fn a() {}');
+  assert.equal(sh(main, `git rev-parse ${r.tip}^{tree}`), formattedTree(main, fmt, tip));
 });

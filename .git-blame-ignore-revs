@@ -14,7 +14,8 @@
 #   format-paths    the folders it formats (and only reads from)
 #   format-config   files taken from the format commit itself while
 #                   formatting an older tree, so it's formatted the same way
-# The tree's own config files are put back afterwards.
+# The tree's own config files are put back afterwards. A format commit
+# that's reverted comes out of this list in the same commit.
 
 # format-subject: Format desktop/'s Rust with cargo fmt --all, nothing else
 # format-command: cd desktop && cargo fmt --all

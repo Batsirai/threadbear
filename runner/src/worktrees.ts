@@ -1141,7 +1141,7 @@ async function replayFormatted(cwd: string, from: string, to: string, onto: stri
       return r.ok ? r.tip : undefined;
     }
   } catch {
-    return undefined;
+    // Couldn't tell: as before there were format commits.
   }
   return replay(cwd, from, to, onto);
 }

@@ -116,8 +116,8 @@ one; rustup fetches the pinned toolchain itself). If this checkout doesn't
 have the script yet, run the release's own copy:
 
 ```sh
-git show <commit>:runner/src/format-replay.ts > "$TMPDIR/format-replay.ts"
-node "$TMPDIR/format-replay.ts" --merge <commit> -m "Bring in Mike's release <date>"
+git show <commit>:runner/src/format-replay.ts > "${TMPDIR:-/tmp}/format-replay.ts"
+node "${TMPDIR:-/tmp}/format-replay.ts" --merge <commit> -m "Bring in Mike's release <date>"
 ```
 
 Your own branches made before it then land across it by themselves:

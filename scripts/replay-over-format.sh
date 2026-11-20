@@ -11,4 +11,4 @@
 #   scripts/replay-over-format.sh --merge <commit> [-m <message>]
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
-exec node "$here/runner/src/format-replay.ts" "$@"
+exec "${THREADBEAR_NODE:-node}" "$here/runner/src/format-replay.ts" "$@"

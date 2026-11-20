@@ -50,20 +50,44 @@ clean --attr-source="$empty" diff --no-ext-diff --no-textconv --stat "$base_id" 
 # lines; runner/src/format-replay.ts) that main doesn't have clashes with
 # every change main made to the files it formatted, though only formatting
 # differs. Nothing formats here (that would run the release's toolchain), so
-# say so, and show the real clashes: merging the commit before it.
-list=$(clean show "$commit_id:.git-blame-ignore-revs" 2>/dev/null || true)
+# say so, and show the real clashes: merging the commit before the oldest.
+# Found as format-replay.ts finds them: the id written under its block, or
+# else the one commit with its subject (none when two have it).
+list=$(clean show "$commit_id:.git-blame-ignore-revs" 2>/dev/null | tr -d '\r' || true)
 [ -n "$list" ] || exit 0
-printf '%s\n' "$list" | sed -n 's/^#[[:space:]]*format-subject:[[:space:]]*//p' | while IFS= read -r subject; do
-  [ -n "$subject" ] || continue
-  f=$(clean log --no-merges --format='%H%x09%s' "$commit_id" | awk -F '\t' -v s="$subject" '$2 == s { print $1; exit }')
+printf '%s\n' "$list" | awk '
+  /^#[[:space:]]*format-subject:/ { if (s != "") print s "\t"; sub(/^#[[:space:]]*format-subject:[[:space:]]*/, ""); s = $0; next }
+  /^[0-9a-f]{40}([0-9a-f]{24})?$/ { if (s != "") { print s "\t" $0; s = "" } next }
+  /^[^#]/ && NF { if (s != "") print s "\t"; s = "" }
+  END { if (s != "") print s "\t" }
+' > "$tmp/entries"
+clean log --no-merges --format='%H%x09%s' "$commit_id" > "$tmp/subjects"
+: > "$tmp/new"
+while IFS="$(printf '\t')" read -r subject id; do
+  f=""
+  if [ -n "$id" ] && clean merge-base --is-ancestor "$id" "$commit_id" 2>/dev/null; then
+    f=$id
+  else
+    # ENVIRON, not -v: awk would read backslashes in -v as escapes.
+    n=$(S=$subject awk -F '\t' 'substr($0, index($0, "\t") + 1) == ENVIRON["S"]' "$tmp/subjects" | wc -l | tr -d ' ')
+    [ "$n" = 1 ] && f=$(S=$subject awk -F '\t' 'substr($0, index($0, "\t") + 1) == ENVIRON["S"] { print $1 }' "$tmp/subjects")
+  fi
   [ -n "$f" ] || continue
   if clean merge-base --is-ancestor "$f" "$base_id"; then continue; fi
-  echo
+  printf '%s\t%s\t%s\n' "$(clean rev-list --count "$f")" "$f" "$subject" >> "$tmp/new"
+done < "$tmp/entries"
+[ -s "$tmp/new" ] || exit 0
+sort -n "$tmp/new" > "$tmp/sorted"
+echo
+while IFS="$(printf '\t')" read -r _ f subject; do
   echo "The release has a format commit main doesn't: $f ($subject)."
-  echo "Clashes in the files it formatted are formatting only: after they say go, merge with"
-  echo "scripts/replay-over-format.sh --merge $commit_id (docs/bringing-in-updates.md, section 4),"
-  echo "which settles those by itself. The real clashes up to it, merging the commit before it:"
-  st=0
-  clean --attr-source="$empty" merge-tree --write-tree --name-only "$base_id" "$f^" > "$tmp/before" || st=$?
-  if [ "$st" -eq 0 ]; then echo "  none"; else sed -n '2,/^$/p' "$tmp/before" | sed '/^$/d; s/^/  /'; fi
-done
+done < "$tmp/sorted"
+oldest=$(head -n 1 "$tmp/sorted" | cut -f 2)
+echo "Clashes in the files they formatted are formatting only: after they say go, merge with"
+echo "scripts/replay-over-format.sh --merge $commit_id (docs/bringing-in-updates.md, section 4),"
+echo "which settles those by itself. The real clashes up to it, merging the commit before it:"
+st=0
+clean --attr-source="$empty" merge-tree --write-tree --name-only "$base_id" "$oldest^" > "$tmp/before" 2>&1 || st=$?
+if [ "$st" -eq 0 ]; then echo "  none"
+elif [ "$st" -eq 1 ]; then sed -n '2,/^$/p' "$tmp/before" | sed '/^$/d; s/^/  /'
+else echo "  (git merge-tree failed, $st: $(head -n 1 "$tmp/before"))"; fi
