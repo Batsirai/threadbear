@@ -109,6 +109,8 @@ impl ThreadPane {
             column = column.child(
                 div()
                     .id(("lab-review-thread", ix))
+                    .role(Role::Button)
+                    .aria_label("Open the review's thread")
                     .mt(px(6.))
                     .ml(px(TITLE_INDENT))
                     .text_size(px(size::SMALL))
