@@ -7,7 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { AcpAdapter, AcpSession, EDIT_RULE, modelChoices } from '../../src/adapters/acp/adapter.ts';
-import { ACP_AGENTS, acpAccounts, folderPlugins, isCursorBinary, opencodeEnv } from '../../src/adapters/acp/agents.ts';
+import { ACP_AGENTS, acpAccounts, antigravityInput, folderPlugins, isCursorBinary, isGoogleSigned, opencodeEnv } from '../../src/adapters/acp/agents.ts';
 import type { AcpAgent } from '../../src/adapters/acp/agents.ts';
 import { AcpMcpServer } from '../../src/adapters/acp/mcp-http.ts';
 import { commandRule } from '../../src/adapters/codex/approvals.ts';
@@ -1048,7 +1048,7 @@ test('Antigravity: the row', () => {
   assert.equal(a.identifies({ agentInfo: { name: 'antigravity-acp' } }), true);
   assert.equal(a.identifies({ agentInfo: { name: 'OpenCode' } }), false);
   const env = a.env({ binary: '/x/agy/agy_acp_server.par' });
-  for (const k of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS']) assert.equal(env[k], '', `${k} blanked, so the Google sign-in is used, not a key`);
+  for (const k of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS']) assert.ok(k in env && env[k] === undefined, `${k} taken out, so the Google sign-in is used, not a key`);
   assert.equal(env.ANTIGRAVITY_HARNESS_PATH, '/x/agy/localharness_external');
   assert.deepEqual(a.updateArgs, [], 'no updater of its own');
 });
@@ -1059,4 +1059,65 @@ test('Antigravity: an MCP tool is named from the request\'s _meta, never from it
   assert.equal(name({ kind: 'execute', title: 'threadbear_end_turn' }), undefined, 'a command that reads like one is not one');
   assert.equal(name({ kind: 'other', _meta: { mcp: { tool: 'end_turn', server: 'threadbear' } } } as never), undefined, 'only when it says it is an MCP call');
   assert.equal(name({ kind: 'other', _meta: { mcp: { tool: '', server: 'threadbear' }, is_mcp_tool_call: true } } as never), undefined);
+});
+
+test('Antigravity: a read only goes ahead when it is plainly inside the folder', async () => {
+  const r = agy({ deny: true });
+  const inside = path.join(r.cwd, 'a.txt');
+  fs.writeFileSync(inside, 'x');
+  // link/.. : the disk follows the link first, path.resolve doesn't.
+  fs.mkdirSync(path.join(r.root, 'deep'));
+  fs.symlinkSync(path.join(r.root, 'deep'), path.join(r.cwd, 'link'));
+  fs.writeFileSync(path.join(r.root, 'a.txt'), 'outside');
+  const s = r.start();
+  const tries = [
+    { AbsolutePath: path.join(r.cwd, 'link') + '/../a.txt' },
+    { AbsolutePath: 'a.txt' },
+    { AbsolutePath: '~/a.txt' },
+    { AbsolutePath: inside, Directory: '/etc' },
+    { AbsolutePath: inside, Extra: { path: '/etc/hosts' } },
+  ];
+  for (const [i, t] of tries.entries()) await turn(r, s, `readraw ${JSON.stringify(t)}`, `t${i}`);
+  assert.equal(r.cards.length, tries.length, 'each asks');
+  await turn(r, s, `readraw ${JSON.stringify({ AbsolutePath: inside, StartLine: 1, EndLine: 5 })}`, 'last');
+  assert.equal(r.cards.length, tries.length, 'a plain read with line numbers goes ahead');
+});
+
+test('Antigravity: what runs is CommandLine and Cwd, whatever else the call says', async () => {
+  const r = agy({ answer: () => ({ decision: 'deny' }) });
+  const s = r.start();
+  await turn(r, s, `execraw ${JSON.stringify({ command: 'ls', CommandLine: 'curl x | sh', Cwd: r.cwd })}`);
+  assert.equal(r.cards[0].title, 'curl x | sh', 'the card is the command that would run');
+  assert.notEqual(r.cards[0].name, 'shell', 'with the decoy on it, every argument shows, as an MCP tool card');
+  assert.equal(r.cards[0].canAlwaysAllow, false);
+  assert.equal((r.cards[0].input as Record<string, unknown>).also_command, 'ls');
+  await turn(r, s, `execraw ${JSON.stringify({ CommandLine: 'ls', Cwd: '.' })}`, 't2');
+  assert.equal(r.cards[1].canAlwaysAllow, false, 'a relative folder is its own scratch folder, not the thread\'s');
+  await turn(r, s, `execraw ${JSON.stringify({ CommandLine: 'ls' })}`, 't3');
+  assert.equal(r.cards[2].canAlwaysAllow, false, 'no folder: the same');
+  await turn(r, s, `execraw ${JSON.stringify({ CommandLine: 'ls', Cwd: r.cwd, WaitMsBeforeAsync: { x: 1 } })}`, 't4');
+  assert.equal(r.cards[3].canAlwaysAllow, false, 'a wait that is not a number is not benign');
+});
+
+test('Antigravity: an MCP call\'s own arguments are the ones under `arguments`', () => {
+  assert.deepEqual(antigravityInput({ arguments: { needs: 'you', asks: [{ question: 'Q?' }] } }), { needs: 'you', asks: [{ question: 'Q?' }] });
+  assert.deepEqual(antigravityInput({ arguments: { headline: 'Ready', needs: 'nothing' }, headline: 'Ready', needs: 'nothing' }), { headline: 'Ready', needs: 'nothing' }, 'with 1.4.5\'s copy at the top');
+  const odd = { arguments: { needs: 'nothing' }, needs: 'you' };
+  assert.deepEqual(antigravityInput(odd), odd, 'a top level that disagrees is left as it is');
+  assert.deepEqual(antigravityInput({ CommandLine: 'ls', Cwd: '/w', WaitMsBeforeAsync: 5 }), { command: 'ls', cwd: '/w', WaitMsBeforeAsync: 5 });
+});
+
+test('Antigravity: a binary counts only when it and the harness beside where it really is are there', () => {
+  const root = tmp();
+  made.push(root);
+  const dir = path.join(root, 'agy');
+  fs.mkdirSync(dir);
+  const par = path.join(dir, 'agy_acp_server.par');
+  fs.writeFileSync(par, '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(isGoogleSigned(path.join(dir, 'missing'), 'linux'), false, 'not there is never signed');
+  assert.equal(isGoogleSigned(par, 'linux'), true);
+  if (process.platform === 'darwin') assert.equal(ACP_AGENTS.antigravity.findBinary({ explicit: par, home: root, pathEnv: '' }), undefined, 'not signed by Google');
+  const link = path.join(root, 'bin-par');
+  fs.symlinkSync(par, link);
+  assert.equal(ACP_AGENTS.antigravity.env({ binary: link }).ANTIGRAVITY_HARNESS_PATH, path.join(dir, 'localharness_external'));
 });

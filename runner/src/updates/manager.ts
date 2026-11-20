@@ -273,7 +273,8 @@ export class CliUpdates {
       managedBy: 'cli',
       status: fresh ? 'current' : 'unknown',
       policy: 'off',
-      canUpdateNow: true,
+      // An agent with no updater of its own (Antigravity) can't be updated here.
+      canUpdateNow: (this.d.acp?.updateArgs(p).length ?? 0) > 0,
       inUse: this.d.hooks.versionsInUse(p),
       ...(installedVersion ? { installedVersion } : {}),
       ...(fresh ? { latestVersion: installedVersion, checkedAt: u!.finishedAt } : {}),

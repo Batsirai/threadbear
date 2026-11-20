@@ -33,6 +33,9 @@ import { AcpNormalizer, absolutePath, isPlainEdit, isPlainObject, requestPaths, 
 const FOLDER_KEYS = ['workdir', 'cwd', 'workingDirectory', 'directory', 'dir'];
 // What an execute call can carry that doesn't change what runs or where.
 const BENIGN_KEYS = new Set(['description', 'timeout', 'WaitMsBeforeAsync']);
+// What a call shown as a shell card may carry: the rest says nothing about
+// what runs or where (Grok's `variant` names its tool, "Bash").
+const SHELL_CARD_KEYS = new Set(['command', 'variant', ...FOLDER_KEYS, ...BENIGN_KEYS]);
 
 function realFolder(p: string): string | undefined {
   try {
@@ -160,9 +163,15 @@ export class AcpAdapter implements AgentAdapter {
   // agent can.
   async models(account: Account): Promise<ModelChoice[]> {
     const { deps } = this;
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
     const bin = this.binary();
-    const p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, binary: bin }), env: this.env(account, bin), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
+    let p: AcpProcess;
+    try {
+      p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, binary: bin }), env: this.env(account, bin), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
+    } catch (e) {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      throw e;
+    }
     try {
       const init = await p.start();
       if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
@@ -171,7 +180,7 @@ export class AcpAdapter implements AgentAdapter {
       return modelChoices(r?.configOptions, r?.models);
     } finally {
       await p.close().catch(() => undefined);
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeQuietly(cwd);
     }
   }
 }
@@ -327,7 +336,10 @@ export class AcpSession implements AgentSession {
     const caps = this.init.agentCapabilities;
     // An agent that writes into its session's folder gets an empty one, and
     // the thread's folder as an extra one (where the work is).
-    if (this.deps.agent.ownSessionFolder) this.ownFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-session-'));
+    if (this.deps.agent.ownSessionFolder) {
+      if (this.state !== 'starting') return Promise.reject(new Error('The session ended before it opened.'));
+      this.ownFolder = sessionFolder();
+    }
     const where = this.ownFolder ? { cwd: this.ownFolder, additionalDirectories: [opts.cwd] } : { cwd: opts.cwd };
     if (!opts.resume) return this.proc.request<SessionResult>('session/new', { ...where, mcpServers });
     this.sessionId = opts.sessionId;
@@ -493,12 +505,24 @@ export class AcpSession implements AgentSession {
     return { ...u, rawInput: map(u.rawInput) };
   }
 
-  // Every path inside the thread's folder, as the disk has it: a link out of
-  // the folder is where it goes, and one that can't be resolved isn't inside.
-  private allInFolder(paths: string[]): boolean {
+  // A read the agent's own rules would allow (AcpAgent.readsInFolderGoAhead):
+  // only the arguments its read tools have, each path spelled whole (no
+  // `..`, which the disk reads after a link and path.resolve before it, and
+  // no `~`), and inside the thread's folder as the disk has it, a link out
+  // of the folder being where it goes. Anything else gets a card (Codex's
+  // and Gemini's reviews, 20 Nov 2026). The file is opened by the agent
+  // after this: a link swapped in between is the same race other agents'
+  // own read rules have.
+  private readGoesAhead(call: AcpToolCall, earlier: string[]): boolean {
+    const keys = this.deps.agent.readsInFolderGoAhead;
+    const raw = call.rawInput;
+    if (!keys || !isPlainObject(raw) || !Object.keys(raw).length) return false;
+    if (!Object.entries(raw).every(([k, v]) => keys.has(k) && (typeof v === 'string' || typeof v === 'number'))) return false;
+    const paths = [...new Set([...earlier, ...requestPaths(call)])];
     const folder = realFolder(this.opts.cwd);
     if (!folder || !paths.length) return false;
     return paths.every((p) => {
+      if (!path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) return false;
       const real = realFolder(p);
       return real !== undefined && (real === folder || real.startsWith(folder + path.sep));
     });
@@ -567,7 +591,7 @@ export class AcpSession implements AgentSession {
     const { kind } = seen;
     // A read of the thread's own files, for an agent whose own rules can't
     // say so (Antigravity asks before every tool).
-    if (kind === 'read' && this.deps.agent.readsInFolderGoAhead && this.allInFolder([...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))])) return this.answer(id, options, true);
+    if (kind === 'read' && p.toolCall && this.readGoesAhead(p.toolCall, seen.paths)) return this.answer(id, options, true);
     // What this request names and what earlier updates to the call said:
     // more names only makes the check stricter.
     const paths = [...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
@@ -597,7 +621,11 @@ export class AcpSession implements AgentSession {
     // change what runs (an env, a shell, a folder under a name not listed
     // here), and it can't be known which applies: no rule covers it, Always
     // allow isn't offered, and the card shows the lot (Daybreak, 10 Nov).
-    const exact = Boolean(command) && !unknownPlace && said.length <= 1 && Object.entries(input).every(([k, v]) => k === 'command' || BENIGN_KEYS.has(k) || (FOLDER_KEYS.includes(k) && (typeof v === 'string' || v === undefined)));
+    // An agent whose session runs from a folder of its own (ownSessionFolder)
+    // runs a command with no folder, or a relative one, from there, not the
+    // thread's: only a whole path says where.
+    const placeKnown = !this.deps.agent.ownSessionFolder || (named.length > 0 && named.every((d) => path.isAbsolute(d)));
+    const exact = Boolean(command) && placeKnown && !unknownPlace && said.length <= 1 && Object.entries(input).every(([k, v]) => k === 'command' || (BENIGN_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number')) || (FOLDER_KEYS.includes(k) && (typeof v === 'string' || v === undefined)));
     const rule = exact && argv?.length && ruleMayCover(argv) ? commandRule(argv, where) : null;
 
     let code: CodeWrite = false;
@@ -637,7 +665,12 @@ export class AcpSession implements AgentSession {
         toolUseId: typeof p.toolCall?.toolCallId === 'string' ? p.toolCall.toolCallId : undefined,
         // As an MCP tool's, for anything else: a card whose arguments say
         // what it does can only be allowed where all of them are shown.
-        name: command ? 'shell' : writesFiles(kind) ? 'apply_patch' : `mcp__acp__${kind ?? 'tool'}`,
+        // A shell card shows only the command and folder (and can be allowed
+        // from the phone), so it's only for a call that says nothing else
+        // that matters; anything more shows every argument, as an MCP tool's
+        // card does (Gemini's review, 20 Nov 2026: a decoy `command` beside
+        // Antigravity's CommandLine).
+        name: command && Object.keys(input).every((k) => SHELL_CARD_KEYS.has(k)) ? 'shell' : writesFiles(kind) ? 'apply_patch' : `mcp__acp__${kind ?? 'tool'}`,
         title: code ? `${title} (${codeWriteNote(code)})` : title,
         input: card.input,
         wholeInput: input,
@@ -902,9 +935,47 @@ export class AcpSession implements AgentSession {
     this.mcp?.close();
     this.emit(this.normalizer.closeOpen('Interrupted'));
     this.turn = undefined;
-    if (this.ownFolder) fs.rmSync(this.ownFolder, { recursive: true, force: true });
+    if (this.ownFolder) removeQuietly(this.ownFolder);
     this.resolveExit();
     this.sink.exited(error);
+  }
+}
+
+// A folder a session of an agent with ownSessionFolder opens in, named for
+// the runner's pid. Ones left by a runner that's gone (a crash) are swept
+// first.
+const SESSION_PREFIX = 'threadbear-acp-session-';
+function sessionFolder(): string {
+  const tmp = os.tmpdir();
+  try {
+    for (const name of fs.readdirSync(tmp)) {
+      if (!name.startsWith(SESSION_PREFIX)) continue;
+      const pid = Number(/^(\d+)-/.exec(name.slice(SESSION_PREFIX.length))?.[1]);
+      if (!pid || pid === process.pid || pidAlive(pid)) continue;
+      removeQuietly(path.join(tmp, name));
+    }
+  } catch {
+    // An unreadable temp folder only means nothing is swept.
+  }
+  return fs.mkdtempSync(path.join(tmp, `${SESSION_PREFIX}${process.pid}-`));
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+// Removing a scratch folder never stops a session ending: whatever the agent
+// left unremovable stays until the next sweep.
+function removeQuietly(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Left for the next sweep.
   }
 }
 

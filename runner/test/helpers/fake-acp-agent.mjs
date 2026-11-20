@@ -303,6 +303,12 @@ async function agyPrompt(id, p, s, word, rest) {
   const where = s.dirs?.[0] ?? s.cwd;
   if (word === 'exec') await tool('execute', rest.join(' '), { CommandLine: rest.join(' '), Cwd: where, WaitMsBeforeAsync: 5000 }, {}, () => log({ ran: rest.join(' '), in: where }));
   else if (word === 'read') await tool('read', 'Running view_file', { AbsolutePath: rest[0] }, { locations: [{ path: rest[0] }] }, () => log({ read: rest[0] }));
+  // Any arguments, as JSON: "execraw {...}", "readraw {...}".
+  else if (word === 'execraw') await tool('execute', 'cmd', JSON.parse(rest.join(' ')), {}, () => log({ ran: JSON.parse(rest.join(' ')) }));
+  else if (word === 'readraw') {
+    const input = JSON.parse(rest.join(' '));
+    await tool('read', 'Running view_file', input, input.AbsolutePath ? { locations: [{ path: input.AbsolutePath }] } : {}, () => log({ read: input }));
+  }
   else if (word === 'mcp') {
     const [server, name] = rest[0].split('__');
     await tool('other', `${server}_${name}`, { arguments: {}, }, { _meta: { mcp: { tool: name, server }, is_mcp_tool_call: true } }, () => log({ mcp: rest[0] }));
