@@ -1,20 +1,16 @@
-// The card reviewer (experiment cardReviewer, runner/card-review.ts): an Auto
+// The card reviewer (runner/card-review.ts): an Auto
 // thread's approval card goes past a model first, which lets it through or
 // leaves it for Alex with its reason.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import { FakeAccounts, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
-import { EXPERIMENTS } from '../../src/experiments.ts';
 import { CARD_REVIEW_MAX_INPUT, readVerdict } from '../../src/runner/card-review.ts';
 import type { GenerateParams, ModelResult } from '../../src/models/index.ts';
 
 type Ask = GenerateParams;
 
-function setup(o: { on?: boolean; answer?: string | ModelResult<string> | (() => Promise<ModelResult<string>>) } = {}) {
+function setup(o: { answer?: string | ModelResult<string> | (() => Promise<ModelResult<string>>) } = {}) {
   const home = tmpDir();
-  if (o.on !== false) fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { cardReviewer: true } }));
   const asked: Ask[] = [];
   const models = {
     generate: async (p: GenerateParams): Promise<ModelResult<string>> => {
@@ -38,19 +34,6 @@ function thread(h: ReturnType<typeof setup>, mode: 'auto' | 'ask' | 'full' = 'au
 
 const edit = (s: any) =>
   s.sink.requestApproval({ toolUseId: 'tu-1', name: 'Edit', title: 'Edit memory.md (Threadbear runs this file as code)', input: { file_path: '/w/memory.md', old_string: 'a', new_string: 'b' }, canAlwaysAllow: false, signal: new AbortController().signal });
-
-test('cardReviewer: off by default', () => {
-  assert.equal(EXPERIMENTS.find((x) => x.id === 'cardReviewer')?.on, false);
-});
-
-test('cardReviewer: off, an Auto thread\'s card goes straight to Alex', async () => {
-  const h = setup({ on: false });
-  const { id, s } = thread(h);
-  void edit(s);
-  await tick();
-  assert.equal(h.asked.length, 0);
-  assert.ok(h.events(id).some((e) => e.type === 'approval.requested'));
-});
 
 test('cardReviewer: an allowed card never reaches Alex, and the transcript says why', async () => {
   const h = setup();

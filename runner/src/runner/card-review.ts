@@ -1,5 +1,5 @@
-// A reviewer for an Auto thread's approval cards (experiment `cardReviewer`,
-// experiments.ts). Before a card in a thread on Auto reaches Mike, a model
+// A reviewer for an Auto thread's approval cards (an experiment from 9 Nov,
+// standard since 20 Nov 2026). Before a card in a thread on Auto reaches Mike, a model
 // with no tools reads it, with what the thread was asked to do, and either
 // lets it through or hands it to Mike with its reason.
 //
@@ -19,11 +19,9 @@
 // before. Ask before edits is left alone: that mode means a person looks.
 import crypto from 'node:crypto';
 import type { Runner, ThreadState } from '../runner.ts';
-import { experimentOn } from '../experiments.ts';
 import { cutOut } from '../store.ts';
 import { fromMike } from '../runner.ts';
 
-export const CARD_REVIEWER = 'cardReviewer';
 // The most of a card's input the reviewer is shown. More than this and it
 // can't vouch for what it didn't see, so the card goes to Mike.
 export const CARD_REVIEW_MAX_INPUT = 40_000;
@@ -54,7 +52,7 @@ export const NEVER_REVIEWED = new Set(['create_thread', 'update_thread', 'schedu
 
 // Whether this thread's cards go past the reviewer first.
 export function reviewsCards(runner: Runner, st: ThreadState): boolean {
-  return Boolean(runner.models) && st.rec.permissionMode === 'auto' && experimentOn(runner.cfg.home, CARD_REVIEWER);
+  return Boolean(runner.models) && st.rec.permissionMode === 'auto';
 }
 
 // What the reviewer is shown: the thread, why it's running, and the card.

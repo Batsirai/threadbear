@@ -500,7 +500,7 @@ Size is `none` throughout: the planning docs don't size these, and work the app 
 | `planned.exp.instructions` | Standing instructions | A Settings box applied to every session (standard since 11 Nov) | `settings.instructions`. | kit | none | none |
 | `planned.exp.movetorunner` | Move to runner (standard since 12 Nov) | Move a thread to another machine | `sidebar.move` plus the row menu and moving row, started only from the first Mac today. | build | none | none |
 | `planned.exp.acpagents` | ACP agents (`acpAgents`) | OpenCode and Cursor threads | Drive every provider choice from `ProviderInfo` rather than hardcoding two, and don't copy the web's `modelLabel`. | build | none | none |
-| `planned.exp.cardreviewer` | Card reviewer (`cardReviewer`) | Opus pre-reviews Auto cards | No new UI: a transcript note says "Allowed by the reviewer". | build | none | none |
+| `planned.exp.cardreviewer` | Card reviewer (standard since 20 Nov) | Opus pre-reviews Auto cards | No new UI: a transcript note says "Allowed by the reviewer". | build | none | none |
 | `planned.exp.fastmode` | Fast mode (`fastMode`) | Standard or Fast per Claude thread, `/fast` | The Speed row in `composer.modelpicker` and a chip suffix. | build | none | none |
 
 ## Route counts

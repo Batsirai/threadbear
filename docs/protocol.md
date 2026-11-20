@@ -3655,8 +3655,7 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   `check` from API 51 and `checkTimeoutSecs` from API 55; the agent
   tools take `check` and `checkTimeoutSecs` only while the experiment
   is on.
-- **Card reviewer** (experiment `cardReviewer`, off unless `runner.json`
-  has `"experiments": { "cardReviewer": true }`;
+- **Card reviewer** (standard since 20 Nov 2026, an experiment before;
   `runner/src/runner/card-review.ts`). In a thread whose `permissionMode`
   is `auto`, a Claude tool approval (`requestApproval`, except
   `ExitPlanMode`; a Codex one isn't reviewed, as its file change card names
