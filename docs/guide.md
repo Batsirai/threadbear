@@ -1452,7 +1452,8 @@ The switch happens only when you click.
 
 OpenCode, Cursor and Grok, and other agent CLIs that speak the Agent Client
 Protocol, get threads of their own too. If one is installed and logged in
-it turns up as a login and a pool, with its models in the picker. OpenCode's
+it turns up as a login and a pool, with its models in the picker. A pool
+with logins of several kinds lists each one's models under its name. OpenCode's
 free models work with no login; Cursor needs `agent login` first, and Grok
 `grok login`.
 Everything the agent wants to do comes through Threadbear first: on Ask and
