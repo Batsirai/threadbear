@@ -815,6 +815,8 @@ test('update_project editNotes: changes one line in place, refuses what doesn\'t
   const done = projects.editNotes(p.id, [{ old: 'Decided: npm.', new: 'Decided: pnpm.' }], { ifNotes: projects.list()[0].notes, state: 'Moving', appendNote: 'Last.' });
   assert.equal(done.notes, 'Decided: pnpm.\n\n- Host: Fly, picked 20 Nov\n\nGotcha: tags.\n\nLast.');
   assert.equal(done.state, 'Moving');
+});
+
 // 20 Nov 2026: the calendar site's thread said Done with its project's state
 // naming a next step for Mike and earlier follow-ups never answered.
 test("end_turn: a Done card in a project still going is told once of the project's state and earlier items nobody answered", async () => {
