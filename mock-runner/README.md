@@ -4,8 +4,8 @@ A stand-in Threadbear runner that speaks the protocol (docs/protocol/) with
 demo threads and no CLIs, for testing and looking at the apps without a real
 runner: the desktop app's tests and dev tools (desktop/client/tests/mock_runner.rs,
 desktop/core/tests/golden.rs, desktop/scripts/dev-app.sh `--mock`), the
-behaviour specs in features/, and the frozen Swift app (its `app/Tools/mock-runner`
-is a link here).
+behaviour specs in features/, and the frozen Swift app (its tests and
+app/Tools scripts point here).
 
     npm ci                      # once, for ws
     node server.mjs --data-dir /tmp/tb-mock [--port 0] [--fixtures DIR]...

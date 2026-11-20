@@ -1,5 +1,5 @@
 // scripts/fix-link-kinds.sh: before rsync copies a checkout over an older
-// copy of it, a path that became a link (app/Tools/mock-runner, 21 Nov 2026)
+// copy of it, a path that became a link (the Swift app's Resources/Art, 21 Nov 2026)
 // or stopped being one (the iPhone kit's Swift files) is taken out of the
 // copy, as macOS's rsync can't swap those over itself.
 import { test } from 'node:test';

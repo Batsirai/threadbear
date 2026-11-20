@@ -5,8 +5,9 @@
 # won't swap a folder for a link while the folder holds what it leaves out
 # (a node_modules), and it writes a file into the old link instead of in its
 # place, through a loop when the link now points back (21 Nov 2026, when the
-# mock runner moved out of app/Tools and app/ began linking to it; every
-# checkout's copy on the check hosts had the old layout).
+# Swift app's art and Pele moved to shared/ and app/ began linking to them,
+# and the iPhone kit's linked Swift files became real; every checkout's copy
+# on the check hosts had the old layout).
 #
 #   fix-link-kinds.sh <copy> [<link>...]   the paths that are links in what's
 #                                          being copied, from its top

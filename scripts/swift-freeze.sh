@@ -37,7 +37,8 @@ set -f
 # What in app/ the GPUI app still used (the mock runner, the real-screen
 # test tools, the art, Pele, the icon, Sentry's package and the three Swift
 # files the iPhone kit builds) moved out on 21 Nov 2026, to mock-runner/,
-# shared/, features/tools and ios/, and app/ links to them now. An edit
+# shared/, features/tools and ios/. The Swift app's tests and tools point
+# at mock-runner/ directly, and app/ links to the rest. An edit
 # through one of those links counts as the real file's (inside() follows
 # them), so it isn't frozen; the links themselves are. Nothing new that
 # another app uses goes in app/: runner/test/unit/swift-app-paths.test.ts

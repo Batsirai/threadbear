@@ -3,7 +3,7 @@
 // 2026 live things reached into it: the desktop app's tests ran its mock
 // runner, the GPUI app built in its art and Pele, the iPhone kit linked its
 // Swift files. Those moved out (mock-runner/, shared/, features/tools,
-// ios/), and app/ links to them now, not the other way round.
+// ios/), and the Swift app points out at them now, not the other way round.
 //
 // This keeps it that way: it fails when a file outside app/ and dock/ names a
 // real path inside them (in code, a script, a workflow, a config file, or a
@@ -40,7 +40,6 @@ const ALLOWED: Record<string, string> = {
   'runner/test/unit/shared-cases.test.ts': 'the Swift app (mac) is one of the apps a shared case can name',
   'runner/test/unit/reviews.test.ts': "checks the Swift app's design review decoder against the protocol",
   'eslint.config.mjs': "lint leaves the Swift app's folders alone",
-  'runner/src/tb-dev.ts': "finds a fork's checkout from before the mock runner moved by its old path (app/Tools/mock-runner); once app/ is gone here this stops matching, and the fallback stays for forks",
 };
 
 // Text that only looks like a use: sample paths in tests and data, and old
@@ -53,8 +52,7 @@ const LOOKALIKES: Record<string, string[]> = {
   'runner/test/fixtures/pool-folder-cases.json': ['app/Tests/Fixtures'],
   'runner/test/unit/agent-write-trust.test.ts': ['app/Sources/ThreadbearCore/Protocol/Models.swift'],
   'runner/test/unit/project-icons.test.ts': ['app/icons/threadbear.png'],
-  'runner/test/unit/swift-changes.test.ts': ['app/Tools/mock-runner/server.mjs', 'app/Sources/Threadbear/Resources/Art/librarian.png', 'app/Sources/Threadbear/Resources/Rich/pele.js'],
-  'runner/test/unit/tb-dev.test.ts': ['app/Tools/mock-runner', 'app/Tools/mock-runner/server.mjs'],
+  'runner/test/unit/swift-changes.test.ts': ['app/Sources/Threadbear/Resources/Art/librarian.png', 'app/Sources/Threadbear/Resources/Rich/pele.js'],
   'site/scripts/clips/turns.json': ['app/Sources'],
 };
 
