@@ -51,6 +51,10 @@ pub fn proof(
         "{AUTH_CONTEXT} {}\n{runner_nonce}\n{client_nonce}\n{server} {port}",
         role.as_str()
     );
+    #[expect(
+        clippy::expect_used,
+        reason = "HMAC takes a key of any length, so making one never fails"
+    )]
     let mut mac =
         Hmac::<Sha256>::new_from_slice(token.as_bytes()).expect("HMAC takes any key length");
     mac.update(text.as_bytes());

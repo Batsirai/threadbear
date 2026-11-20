@@ -666,6 +666,19 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
       step "mock runner packages" "$ROOT/app/Tools/mock-runner" npm ci --no-audit --no-fund
     fi
     cargo_step "desktop core tests" test --locked --no-fail-fast -p threadbear-core -p threadbear-client
+    # Clippy over the whole workspace, with desktop/Cargo.toml's
+    # [workspace.lints] (each says why it's there) and desktop/clippy.toml,
+    # --quick included, when the Rust or the toolchain changed: a warning
+    # fails it.
+    if needed '^desktop/|^rust-toolchain\.toml$'; then
+      lint_before="$FAILED"
+      cargo_step "desktop lint" clippy --locked --workspace --all-targets -- -D warnings
+      if [ "$FAILED" != "$lint_before" ] && [ -f "$LOGS/desktop-lint.log" ]; then
+        printf '\nClippy found the problems above. To see them: cd desktop && cargo clippy --workspace --all-targets -- -D warnings\n(desktop/Cargo.toml says what each lint is for; an exception needs #[expect(clippy::..., reason = "...")]).\n' >>"$LOGS/desktop-lint.log"
+      fi
+    else
+      skip "desktop lint" "nothing in desktop/ changed"
+    fi
     # The GPUI app itself, which the core tests never build: main's app
     # stopped compiling twice in the week to 13 Nov (tour.rs's
     # panel_available, fixed in 92c48ee73) with every landing's --quick

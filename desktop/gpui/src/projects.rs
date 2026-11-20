@@ -1327,7 +1327,7 @@ pub(crate) fn project_icon(
     if let Some(path) = icon.and_then(|i| i.image_path.clone()) {
         // The letter stands in if the file can't be read (a project on
         // another Mac's disk, or a picture this app can't draw).
-        let fallback = letter_tile.clone();
+        let fallback = letter_tile;
         return img(PathBuf::from(path))
             .size(px(size))
             .flex_none()

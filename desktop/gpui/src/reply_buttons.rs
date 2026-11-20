@@ -293,7 +293,7 @@ impl MarkdownPlugin for Pills {
             .whitespace_nowrap()
             .cursor_pointer()
             .hover(|s| s.opacity(0.85))
-            .tip(tip.clone())
+            .tip(tip)
             // Not the start of a selection in the text around it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, window, cx| {

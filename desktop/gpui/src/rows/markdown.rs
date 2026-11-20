@@ -50,7 +50,7 @@ pub(crate) fn reading_style(cx: &App) -> TextViewStyle {
         .px(px(2.5))
         .py(px(1.))
         .text_size(px(size::CODE))
-        .font_family(mono.clone())
+        .font_family(mono)
         .text_color(label);
     // A rule under the header and hairlines between rows, none around them
     // (renderTable). No cell backgrounds.

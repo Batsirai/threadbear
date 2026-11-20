@@ -1901,7 +1901,7 @@ pub(crate) async fn automation(
         clicked.map_err(|e| e.to_string())??;
     }
     if cmd["closeViewer"].as_bool() == Some(true) {
-        view.update(cx, |v, cx| crate::viewer::close(v, cx));
+        view.update(cx, crate::viewer::close);
     }
     let busy = |view: &Entity<ReviewWindow>, cx: &mut AsyncApp| {
         view.read_with(cx, |v, _| v.session.saving() || v.session.submitting())

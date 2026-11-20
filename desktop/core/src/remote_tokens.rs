@@ -395,7 +395,7 @@ mod tests {
             ..Default::default()
         };
         let logins = RunnerLogins {
-            accounts: vec![a.clone(), codex],
+            accounts: vec![a, codex],
             ..Default::default()
         };
         assert_eq!(claude_logins(&logins).len(), 1);

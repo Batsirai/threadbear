@@ -497,7 +497,7 @@ mod tests {
         );
         // A profile tab not marked as bridged isn't one of the profiles' pages.
         let stray = tab(r#"{"tabId":25,"url":"https://x.com/","title":"X","profile":"p"}"#);
-        let merged = merge(&[agent.clone()], &[chrome.clone(), stray]);
+        let merged = merge(std::slice::from_ref(&agent), &[chrome, stray]);
         assert_eq!(
             merged.iter().map(AgentTab::id).collect::<Vec<_>>(),
             vec!["agent-chrome/24", "p/24"]

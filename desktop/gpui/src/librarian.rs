@@ -462,7 +462,7 @@ impl Threadbear {
                             .text_size(px(style::size::SIDEBAR_META))
                             .line_height(px(14.))
                             .text_color(p.faint)
-                            .tip(full.clone())
+                            .tip(full)
                             .child(due),
                     ),
             )
@@ -597,7 +597,7 @@ impl Threadbear {
                             .text_size(px(style::size::SIDEBAR_META))
                             .line_height(px(14.))
                             .text_color(p.faint)
-                            .tip(full.clone())
+                            .tip(full)
                             .child(ago),
                     )
                 }),
@@ -768,8 +768,8 @@ impl Threadbear {
         };
         let app = cx.entity().downgrade();
         let tip = "Which pool's Claude logins it uses, the one with the most room. It waits when they're all out of room. Titles use the same pool (Settings › Models)";
-        let choices = pools.clone();
-        let set_for_menu = set.clone();
+        let choices = pools;
+        let set_for_menu = set;
         Some(
             div()
                 .id("librarian-pool")

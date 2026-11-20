@@ -9,6 +9,11 @@
 // turn.completed); only the root, background work and loose-ends check
 // come from thread.json, as in ThreadSession.open. Nothing in the row text
 // depends on the time or the machine, so nothing is normalised out.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "a test: a panic is its failure, with the line"
+)]
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};

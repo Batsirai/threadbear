@@ -615,7 +615,7 @@ impl Threadbear {
                     .text_size(px(style::size::SIDEBAR_META))
                     .line_height(px(14.))
                     .text_color(faint)
-                    .tip(full.clone())
+                    .tip(full)
                     .child(next)
                     .into_any_element()
             })
@@ -650,7 +650,7 @@ impl Threadbear {
                     .max_w(px(100.))
                     .gap(px(3.))
                     .items_center()
-                    .tip(tip.clone())
+                    .tip(tip)
                     .child(icon(
                         self.schedule_runner_symbol(schedule),
                         style::size::SIDEBAR_META,
@@ -690,7 +690,7 @@ impl Threadbear {
                 .text_size(px(style::size::SIDEBAR_META))
                 .line_height(px(14.))
                 .text_color(color)
-                .tip(tip.clone())
+                .tip(tip)
                 .child(text)
         });
 
@@ -706,7 +706,7 @@ impl Threadbear {
             // Named by its tip, as the Swift app's rows are found.
             .role(Role::ListItem)
             .aria_label(tip.clone())
-            .tip(tip.clone())
+            .tip(tip)
             .relative()
             .gap(px(3.))
             .pt(px(8.))

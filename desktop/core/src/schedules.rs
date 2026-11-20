@@ -251,7 +251,11 @@ const MONTHS: [&str; 12] = [
 /// "2:05 pm", with its minutes always (`formatted(date: .omitted, time: .shortened)`).
 pub fn time_of_day<Tz: TimeZone>(d: &DateTime<Tz>) -> String {
     let hour = d.hour();
-    let twelve = if hour % 12 == 0 { 12 } else { hour % 12 };
+    let twelve = if hour.is_multiple_of(12) {
+        12
+    } else {
+        hour % 12
+    };
     format!(
         "{twelve}:{:02} {}",
         d.minute(),

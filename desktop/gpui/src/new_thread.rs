@@ -310,7 +310,10 @@ impl Threadbear {
         .detach();
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
     fn finish_new_thread(
         &mut self,
         res: Result<Value, RpcError>,
@@ -350,20 +353,20 @@ impl Threadbear {
         // as used. A thread started on another runner doesn't move this
         // Mac's last login (`sendNewThread` doesn't remember one).
         if runner.is_none() {
-            let used = if used_pool {
-                thread.account_id.clone()
+            let used: &str = if used_pool {
+                &thread.account_id
             } else {
-                account
+                &account
             };
             let provider = self
                 .logins
-                .account(&used)
+                .account(used)
                 .map_or("claude", |a| a.provider_id())
                 .to_owned();
             self.new_thread
                 .prefs
                 .remembered
-                .used_account(&used, &provider);
+                .used_account(used, &provider);
             self.new_thread.save();
         }
         // The folder and a picked login or pool were for this thread; the
@@ -945,7 +948,7 @@ impl Threadbear {
             .text_size(px(size::LABEL))
             .text_color(style::faint_text(cx))
             .child(note)
-            .tip(note_tip.clone());
+            .tip(note_tip);
         let error = self.new_thread.error.clone();
         let danger = cx.theme().danger;
         let notes = v_flex()
@@ -1164,7 +1167,7 @@ impl Threadbear {
             .border_1()
             .border_color(edge)
             .cursor_pointer()
-            .tip(tip.clone())
+            .tip(tip)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 // Pins the draft to that login, like the picker's "Pin to a login".
                 this.new_thread.picks.pool = None;

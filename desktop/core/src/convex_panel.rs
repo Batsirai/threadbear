@@ -315,7 +315,7 @@ mod tests {
             deployment_url: "https://busy-bear-456.convex.cloud".into(),
             label: "Production".into(),
         }];
-        let choices = with_configured(listed.clone(), &configured);
+        let choices = with_configured(listed, &configured);
         assert_eq!(choices.len(), 2);
         assert_eq!(choices[0].label, "Configured");
         assert_eq!(label(&choices, "busy-bear-456"), "Production");

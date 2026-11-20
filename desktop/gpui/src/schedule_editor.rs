@@ -181,7 +181,7 @@ impl Threadbear {
             permission_mode: if settings.permission_mode.is_empty() {
                 "full".into()
             } else {
-                settings.permission_mode.clone()
+                settings.permission_mode
             },
             ..EditorState::default()
         };
@@ -222,7 +222,7 @@ impl Threadbear {
             permission_mode: if settings.permission_mode.is_empty() {
                 "full".into()
             } else {
-                settings.permission_mode.clone()
+                settings.permission_mode
             },
             ..EditorState::default()
         };
@@ -267,12 +267,11 @@ impl Threadbear {
             Some(name) => {
                 state.runner_id = schedule.runner_id.clone();
                 state.runner_name = Some(name);
-                state.cwd = schedule.cwd.clone().unwrap_or_default();
+                state.cwd = schedule.cwd.unwrap_or_default();
             }
             None => {
                 state.cwd = schedule
                     .cwd
-                    .clone()
                     .unwrap_or_else(|| self.logins.defaults.cwd.clone())
             }
         }
@@ -1047,6 +1046,10 @@ fn form_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
 }
 
 impl Render for ScheduleEditor {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "baselined at 508 lines when the lint was turned on (20 Nov 2026); split it when it's next worked on"
+    )]
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
@@ -1364,7 +1367,7 @@ impl Render for ScheduleEditor {
                     .child(
                         div()
                             .id("schedule-away-folder")
-                            .tip(tip.clone())
+                            .tip(tip)
                             .child(Input::new(&self.away_folder).small()),
                     )
                     .child(crate::home_page::info_tip(

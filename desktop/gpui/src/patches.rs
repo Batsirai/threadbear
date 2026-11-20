@@ -363,7 +363,7 @@ impl SidePane {
                         if let Some(items) = t.panels.renders.get_mut(&key).and_then(|r| r.items.as_mut()) {
                             PanelItem::set_switch(items, &toggle_id, !on);
                         }
-                        t.note_error(e.message.clone(), cx);
+                        t.note_error(e.message, cx);
                     }
                 }
                 cx.notify();
@@ -406,7 +406,7 @@ impl SidePane {
             },
             "image" => {
                 let picture = self.panels.pictures.get(&key).cloned();
-                if self.panels.renders.get(&key).is_none() {
+                if !self.panels.renders.contains_key(&key) {
                     self.refresh_panel(&thread.id, id, cx);
                 }
                 match picture {
@@ -571,7 +571,10 @@ impl SidePane {
     }
 
     /// A row with a link or a file opens it the way a highlight does.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
     fn list_row(
         &mut self,
         panel_id: &str,
@@ -693,7 +696,7 @@ impl SidePane {
             vec![words::PatchGroup {
                 project_id: None,
                 title: None,
-                patches: patches.clone(),
+                patches,
             }]
         } else {
             words::group(thread, &patches, project_title)
@@ -1188,12 +1191,7 @@ impl SidePane {
                         tip,
                     )
                     .child(icon("lock.shield", 11., style::needs_you(cx)))
-                    .child(
-                        div()
-                            .text_size(chip_size)
-                            .text_color(p.fg)
-                            .child(label.clone()),
-                    )
+                    .child(div().text_size(chip_size).text_color(p.fg).child(label))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.show_patches(cx))),
                 ),
             );

@@ -672,7 +672,7 @@ pub(crate) fn link_aware(
     let thread = thread.to_owned();
     let row_id = row.id.clone();
     let (moved_pane, moved_thread, moved_row) = (weak.clone(), thread.clone(), row_id.clone());
-    let (left_thread, left_row) = (thread.clone(), row_id.clone());
+    let (left_thread, left_row) = (thread, row_id);
     let pressed_pane = weak.clone();
     let menu_row = row.clone();
     div()

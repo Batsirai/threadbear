@@ -1265,7 +1265,7 @@ mod tests {
             .iter_mut()
             .find(|a| a.id == "claude-main")
             .unwrap()
-            .usage = Some(out.clone());
+            .usage = Some(out);
         assert_eq!(
             reset_target(l.accounts.iter().filter(|a| a.id == "claude-main"))
                 .map(|a| a.id.as_str()),
@@ -1488,7 +1488,7 @@ mod tests {
             id: "e".into(),
             provider: "claude".into(),
             plan_ended: true,
-            usage: out.usage.clone(),
+            usage: out.usage,
             ..Default::default()
         };
         assert_eq!(chip_badge(Some(&ended)), Some(ChipBadge::PlanEnded));
@@ -1536,7 +1536,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            pick_account(&[unknown.clone()], Some("x")).as_deref(),
+            pick_account(std::slice::from_ref(&unknown), Some("x")).as_deref(),
             Some("x")
         );
         // Nothing eligible on the provider: the last used, if there is one.

@@ -89,7 +89,7 @@ impl Threadbear {
         cx.notify();
         let client = self.client.clone();
         let params = json!({ "threadId": request.thread_id, "runnerId": request.runner_id });
-        let put_back = before.clone();
+        let put_back = before;
         let thread_id = request.thread_id.clone();
         cx.spawn_in(window, async move |this, cx| {
             let answer = call(client, "threads.movePreview", params).await;
@@ -189,6 +189,10 @@ impl Threadbear {
     /// `threads.move` for the pick `token`. Its answer starts the short wait
     /// for the runner to show the move (starting_moves), and a pick Mike
     /// cancelled meanwhile is cancelled on the runner as soon as it has one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
     fn send_move(
         &mut self,
         request: MoveRequest,
@@ -210,7 +214,7 @@ impl Threadbear {
         if let Some(preview_id) = preview_id {
             params["previewId"] = json!(preview_id);
         }
-        let thread_id = request.thread_id.clone();
+        let thread_id = request.thread_id;
         cx.spawn(async move |this, cx| {
             let res = call(client, "threads.move", params).await;
             let started = this
@@ -416,7 +420,10 @@ pub(crate) struct MoveSheet {
 }
 
 impl MoveSheet {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
     fn new(
         app: WeakEntity<Threadbear>,
         client: Arc<Client>,
@@ -772,7 +779,7 @@ impl Render for MoveSheet {
                             .gap(px(10.))
                             .items_center()
                             .child(label("Folder"))
-                            .child(div().id("move-folder").flex_1().min_w_0().tip(folder_tip.clone()).child(Input::new(&self.folder).small().font_family(cx.theme().mono_font_family.clone()))),
+                            .child(div().id("move-folder").flex_1().min_w_0().tip(folder_tip).child(Input::new(&self.folder).small().font_family(cx.theme().mono_font_family.clone()))),
                     )
                     .child(h_flex().gap(px(10.)).items_center().child(label("Login")).child(div().flex_1().min_w_0().child(login_picker))),
             )

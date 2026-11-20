@@ -1167,7 +1167,7 @@ impl crate::app::Threadbear {
         }
         self.browser_handoff_seen = key.clone();
         if key.is_some() && !self.dock.read(cx).controller.is_showing(BROWSER) {
-            let (side, id) = (self.side.clone(), thread.id.clone());
+            let (side, id) = (self.side.clone(), thread.id);
             side.update(cx, |side, cx| side.choose_section(&id, BROWSER, cx));
             self.show_pane(BROWSER, cx);
         }

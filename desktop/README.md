@@ -153,6 +153,35 @@ they are. Everything was formatted at once in one commit, listed in
 lands across it by itself; `../scripts/replay-over-format.sh` does the same
 by hand.
 
+### Lints
+
+Clippy runs with the lints in `Cargo.toml`'s `[workspace.lints.clippy]`
+(each says why it's there) and the settings in `clippy.toml`, and
+`../check.sh` (`--quick` included, when `desktop/` changed) and the Desktop
+workflow (Mac and Linux) fail on any warning. To see what it says, on a
+check host:
+
+```bash
+scripts/remote.sh tinker-desk --build -- bash -c 'cd desktop && cargo clippy --workspace --all-targets -- -D warnings'
+```
+
+- An exception is `#[expect(clippy::<lint>, reason = "...")]` on the
+  smallest item that needs it, not `allow`: an expect that's no longer
+  needed fails, so a fixed site comes off the list. A bare `allow` without
+  a reason fails too. `allow` (with a reason) is for code where the lint
+  only fires on some platforms or features.
+- `unwrap()` and `expect()` warn outside tests: handle the error, or mark
+  the line with why it can't fail. A lock's poisoning is taken with
+  `.unwrap_or_else(|e| e.into_inner())`.
+- Every `unsafe` block has a `// SAFETY:` comment right above it saying why
+  it holds; a public function that dereferences a raw pointer it's handed is
+  an `unsafe fn` with a `# Safety` section.
+- The baselines (functions over 200 lines, more than 7 arguments, and a few
+  `expect`s) are marked "baselined ... 20 Nov 2026": take the mark off when
+  the code is split up.
+- The automation feature's code isn't in the gate (its builds differ by
+  feature), and nor is Windows'.
+
 `scripts/spec.sh` is the one-command version for use through `remote.sh`: it
 builds the app (Swift or GPUI), keeps its own copy of the GPUI binary so another
 checkout's build can't swap it mid-run (the cargo target folder is shared), and

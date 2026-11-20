@@ -105,6 +105,7 @@ pub fn tooltip(s: Option<&ConnectorsStatus>) -> String {
     let mut lines = vec!["Connectors".to_owned()];
     match s.map(|s| s.state.as_str()) {
         Some("ok") => {
+            #[expect(clippy::expect_used, reason = "this arm is only reached with a status")]
             let all = &s.expect("ok has a status").services;
             let out: Vec<&str> = signed_out(s).iter().map(|x| x.title.as_str()).collect();
             if !out.is_empty() {

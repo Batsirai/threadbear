@@ -1555,12 +1555,7 @@ pub fn is_inside(path: &str, folder: &str) -> bool {
         }
     };
     let (p, f) = (trim(path), trim(folder));
-    p == f
-        || p.starts_with(&if f.ends_with('/') {
-            f.clone()
-        } else {
-            format!("{f}/")
-        })
+    p == f || p.starts_with(&if f.ends_with('/') { f } else { format!("{f}/") })
 }
 
 /// What a thread has from the project (`ProjectPane.patches`): patches
@@ -2407,7 +2402,7 @@ mod tests {
 
     #[test]
     fn searching_cards_looks_through_what_a_project_is_about() {
-        let projects = vec![
+        let projects = [
             Project {
                 state: "The deterrent speaks through a Pi".into(),
                 ..project("state", "Porch Cam")

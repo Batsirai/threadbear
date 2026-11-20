@@ -54,7 +54,7 @@ fn int_value(v: &Value) -> Option<i64> {
         return Some(i);
     }
     let f = v.as_f64()?;
-    if f.fract() == 0.0 && (-9.223372036854775808e18..9.223372036854775808e18).contains(&f) {
+    if f.fract() == 0.0 && (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f) {
         Some(f as i64)
     } else {
         None
@@ -574,10 +574,7 @@ pub fn is_web_address(url: &str) -> bool {
         return false;
     }
     let rest = &url[colon + 3..];
-    let authority = rest
-        .split(|c| c == '/' || c == '?' || c == '#')
-        .next()
-        .unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or("");
     let host = host.split(':').next().unwrap_or("");
     !host.is_empty()

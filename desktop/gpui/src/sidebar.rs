@@ -256,7 +256,10 @@ pub(crate) struct OpenMenu {
     position: Point<Pixels>,
     view: Entity<PopupMenu>,
     /// What's on it, for scripts (`menu-popover`, `realMenu`).
-    #[cfg_attr(not(feature = "automation"), allow(dead_code))]
+    #[cfg_attr(
+        not(feature = "automation"),
+        allow(dead_code, reason = "read only by the scripted control")
+    )]
     pub(crate) rows: Vec<MenuRow>,
     /// Hibernate choices ask first if the thread's busy: the moon's menu does,
     /// the row's right-click one doesn't (`SnoozeNSMenu`, `SnoozeMenuItems`).
@@ -1889,16 +1892,16 @@ impl Threadbear {
                     let ms = when
                         .and_then(|w| Local.from_local_datetime(&w).earliest())
                         .map(|d| d.timestamp_millis());
-                    if ms.is_none_or(|ms| ms <= now_ms()) {
+                    let Some(ms) = ms.filter(|ms| *ms > now_ms()) else {
                         // Keep the chosen day and time in place so they can be
                         // corrected, including a time skipped by the local clock.
                         already_gone_read.set(true);
                         window.refresh();
                         return false;
-                    }
+                    };
                     let id = id.clone();
                     entity
-                        .update(cx, |this, cx| this.snooze_row(id, ms.unwrap(), window, cx))
+                        .update(cx, |this, cx| this.snooze_row(id, ms, window, cx))
                         .ok();
                     true
                 })
@@ -1929,6 +1932,10 @@ impl Threadbear {
     }
 
     /// The whole list: search and new-thread line, then the sections.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "baselined at 263 lines when the lint was turned on (20 Nov 2026); split it when it's next worked on"
+    )]
     pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut p = palette(cx);
         p.selected = style::sidebar_selection(cx, self.milestone.active);
@@ -2361,6 +2368,10 @@ impl Threadbear {
 
     /// An inbox heading: its symbol, folding the section, and the Inbox's
     /// sort button at its end.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
     fn render_heading(
         &mut self,
         key: &'static str,
@@ -2430,7 +2441,10 @@ impl Threadbear {
     /// its rows away when clicked (unless `foldable` is false, as while
     /// searching). Folded, it says how many. The Scheduled list's headings
     /// are these too (scheduled.rs).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
     pub(crate) fn section_heading(
         &mut self,
         key: &str,
@@ -2462,7 +2476,7 @@ impl Threadbear {
             )
         });
         let label = h_flex()
-            .group(group.clone())
+            .group(group)
             .flex_1()
             .min_w_0()
             .gap(px(6.))
@@ -2652,7 +2666,14 @@ impl Threadbear {
 
     /// `ThreadRowView`: tile, title, place line, status or hover buttons.
     /// `nest`: as the head of a group of nested threads, or one of them.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "baselined at 349 lines when the lint was turned on (20 Nov 2026); split it when it's next worked on"
+    )]
     pub(crate) fn render_row_with(
         &mut self,
         t: &ThreadSummary,
@@ -2774,8 +2795,8 @@ impl Threadbear {
         };
         let place = t.place();
         let runner_label = self.runner_label(t);
-        let place_tip_text = if byline.is_some() {
-            byline.as_ref().unwrap().tip.clone()
+        let place_tip_text = if let Some(byline) = &byline {
+            byline.tip.clone()
         } else {
             rows::place_tip(t)
         };
@@ -2880,7 +2901,7 @@ impl Threadbear {
                     .items_baseline()
                     .gap(px(4.))
                     .text_color(secondary)
-                    .tip(place_tip_text.clone())
+                    .tip(place_tip_text)
                     .when_some(byline.as_ref(), |s, b| {
                         s.child(
                             icons::try_symbol(&b.symbol)
@@ -2916,7 +2937,7 @@ impl Threadbear {
                         .text_size(px(style::size::SIDEBAR_META + 1.))
                         .line_height(px(15.))
                         .text_color(secondary)
-                        .tip(tip.clone())
+                        .tip(tip)
                         // A middle dot, as the app's other separators: Allo's bullet is
                         // much bigger than the system font's (18 Nov).
                         .child(format!("\u{b7} {runner}")),
@@ -2978,7 +2999,7 @@ impl Threadbear {
             .role(Role::ListItem)
             .aria_selected(selected)
             .aria_label(tip.clone())
-            .tip(tip.clone())
+            .tip(tip)
             .when(offline, |s| s.opacity(0.5))
             .relative()
             .items_center()
@@ -3792,7 +3813,7 @@ fn render_tile(
         .flex_none()
         .size(px(tile_size + 4.))
         .id(ElementId::Name(format!("tile-{}", t.id).into()))
-        .tip(help.clone())
+        .tip(help)
         .when(stacked, |s| {
             // A second project's edge showing behind, up and to the right.
             s.child(
@@ -3963,12 +3984,12 @@ fn trailing_words(trailing: &rows::Trailing, id: String, p: &Palette) -> AnyElem
         Some(tip) if keeps_width => div()
             .flex_none()
             .id(ElementId::Name(format!("trailing-{id}").into()))
-            .tip(tip.clone())
+            .tip(tip)
             .child(el)
             .into_any_element(),
         Some(tip) => gives_way(div())
             .id(ElementId::Name(format!("trailing-{id}").into()))
-            .tip(tip.clone())
+            .tip(tip)
             .child(el)
             .into_any_element(),
         None => el,
@@ -4014,6 +4035,10 @@ fn render_loading_rows(p: &Palette) -> impl IntoElement {
 }
 
 /// `SubagentRowView`: one indented row, hanging off the thread's tile.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+)]
 fn render_subagent_row(
     t: &ThreadSummary,
     row: &rows::SubagentRow,
@@ -4056,11 +4081,11 @@ fn render_subagent_row(
     };
     let (thread_id, sub_id) = (t.id.clone(), sub.id.clone());
     let shown_tip: SharedString = format!("{tip}. Click to read its transcript.").into();
-    let tooltip_text = shown_tip.clone();
+    let tooltip_text = shown_tip;
     let hover = p.hover;
     div()
         .id(ElementId::Name(format!("sub-{}-{}", t.id, sub.id).into()))
-        .tip(tooltip_text.clone())
+        .tip(tooltip_text)
         .relative()
         .pt(px(5.))
         .pb(px(6.))
@@ -4377,7 +4402,7 @@ pub(crate) fn automation(
                 window
                     .elements()
                     .into_iter()
-                    .filter(|e| e.visible() && e.label().is_some_and(&matches))
+                    .filter(|e| e.visible() && e.label().is_some_and(matches))
                     .collect::<Vec<_>>()
             };
             let mut found = shown(window);
@@ -4395,8 +4420,8 @@ pub(crate) fn automation(
                     window
                         .elements()
                         .into_iter()
-                        .filter(|e| e.label().is_some_and(&matches))
-                        .last()
+                        .filter(|e| e.label().is_some_and(matches))
+                        .next_back()
                 });
                 if let Some(bounds) = target.map(|t| t.bounds()) {
                     if settings {
@@ -4463,7 +4488,7 @@ pub(crate) fn automation(
                 .elements()
                 .into_iter()
                 .filter(|e| e.visible() && e.label().is_some_and(|l| l.starts_with(prefix)))
-                .last()
+                .next_back()
             else {
                 return Err(format!("no row with the tip {prefix:?} on screen"));
             };

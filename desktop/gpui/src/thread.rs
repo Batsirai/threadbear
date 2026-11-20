@@ -649,7 +649,7 @@ impl ThreadPane {
                 .text_color(secondary)
                 .child(div().flex_none().child("Started by"))
                 .child(title)
-                .when_some(line.why.clone(), |s, why| {
+                .when_some(line.why, |s, why| {
                     s.child(div().min_w_0().truncate().child(format!("\u{b7} {why}")))
                 })
                 .into_any_element(),
@@ -1467,9 +1467,11 @@ impl ThreadPane {
             .filter(|m| !m.queued && !list.iter().any(|n| n.id == m.id))
             .map(|m| m.id)
             .collect();
-        let hold = shown
-            .iter()
-            .fold(false, |hold, pending_id| taken(id, pending_id) || hold);
+        // Every one is taken (each clears its own record), not just the first.
+        let mut hold = false;
+        for pending_id in &shown {
+            hold |= taken(id, pending_id);
+        }
         if hold {
             hold_for_summary(id, self.app.clone(), cx);
         }

@@ -266,7 +266,7 @@ fn hour_row(row: &Value) -> Option<Hour> {
     }
     let count = |i: usize| -> Option<i64> {
         let x = row[i].as_f64()?;
-        (x.is_finite() && x >= 0. && x <= 1e13 && x.trunc() == x).then_some(x as i64)
+        (x.is_finite() && (0. ..=1e13).contains(&x) && x.trunc() == x).then_some(x as i64)
     };
     Some(Hour {
         start: start as i64,
@@ -3629,9 +3629,9 @@ mod tests {
             None,
             "already out says signed out instead"
         );
-        assert!(!sign_in_needed(&[fine.clone()], now));
+        assert!(!sign_in_needed(std::slice::from_ref(&fine), now));
         assert!(sign_in_needed(&[fine.clone(), ending.clone()], now));
-        assert!(sign_in_needed(&[out.clone()], now));
+        assert!(sign_in_needed(std::slice::from_ref(&out), now));
         let pools = vec![Pool {
             id: "claude".into(),
             title: "Claude".into(),
@@ -3683,7 +3683,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(sign_in_ends(&ended, now), None);
-        assert!(!sign_in_needed(&[ended.clone()], now));
+        assert!(!sign_in_needed(std::slice::from_ref(&ended), now));
         assert!(
             !sign_in_needed(
                 &[Account {
@@ -3694,7 +3694,7 @@ mod tests {
             ),
             "signing in wouldn't help"
         );
-        assert!(sign_in_lines(&[ended.clone()], now, &zone()).is_empty());
+        assert!(sign_in_lines(std::slice::from_ref(&ended), now, &zone()).is_empty());
         let accounts = vec![ended];
         let cards = cards(&[], &accounts, None, false, now, &zone());
         let row = &cards[0].sections[0].logins[0];

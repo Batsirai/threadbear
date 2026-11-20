@@ -325,6 +325,10 @@ pub struct Threadbear {
 }
 
 impl Threadbear {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "baselined at 342 lines when the lint was turned on (20 Nov 2026); split it when it's next worked on"
+    )]
     pub(crate) fn new(settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut settings = settings;
         if settings.saved.thread_milestone_shown.is_none()
@@ -1015,6 +1019,10 @@ impl Threadbear {
         RT.spawn(async move { client.call("threads.panelShown", params).await });
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "baselined at 241 lines when the lint was turned on (20 Nov 2026); split it when it's next worked on"
+    )]
     fn on_seen(&mut self, seen: Seen, cx: &mut Context<Self>) {
         match seen {
             Seen::Status(status) => {

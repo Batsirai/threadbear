@@ -147,6 +147,15 @@ jobs:
       - name: The specs' steps typecheck
         working-directory: features
         run: npm run typecheck
+      # Clippy with desktop/Cargo.toml's [workspace.lints], on Linux and the
+      # Mac (each lints its own platform's code); a warning fails it.
+      - name: Clippy
+        if: runner.os != 'Windows' && !matrix.specsOnly
+        run: |
+          cargo clippy --locked --manifest-path desktop/Cargo.toml --workspace --all-targets -- -D warnings || {
+            echo "::error::Clippy found problems. To see them: cd desktop && cargo clippy --workspace --all-targets -- -D warnings (desktop/Cargo.toml says what each lint is for)."
+            exit 1
+          }
       - name: Rust tests (with the mock runner)
         if: ${{ !matrix.specsOnly }}
         run: cargo test --locked --manifest-path desktop/Cargo.toml

@@ -351,7 +351,7 @@ impl Composer {
         } else {
             self.token_field = None;
         }
-        if let Some(error) = state.error.clone() {
+        if let Some(error) = state.error {
             column = column.child(
                 div()
                     .id("token-error")

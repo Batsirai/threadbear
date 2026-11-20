@@ -714,8 +714,8 @@ pub(crate) fn automation(
             let found = window
                 .elements()
                 .into_iter()
-                .filter(|e| e.visible() && e.label().is_some_and(|l| l.to_string() == target))
-                .last()
+                .filter(|e| e.visible() && e.label().is_some_and(|l| l == target))
+                .next_back()
                 .ok_or_else(|| format!("no control {target:?} in Settings"))?;
             let at = found.visible_bounds().center();
             window.pointer_move(at, None, cx);

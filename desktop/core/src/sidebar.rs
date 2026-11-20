@@ -318,7 +318,11 @@ fn same_day<Tz: TimeZone>(a: &DateTime<Tz>, b: &DateTime<Tz>) -> bool {
 /// "5:00 am", with its minutes always (`Pools.waitingParts`' clock).
 fn clock<Tz: TimeZone>(d: &DateTime<Tz>) -> String {
     let hour = d.hour();
-    let twelve = if hour % 12 == 0 { 12 } else { hour % 12 };
+    let twelve = if hour.is_multiple_of(12) {
+        12
+    } else {
+        hour % 12
+    };
     format!(
         "{twelve}:{:02} {}",
         d.minute(),
@@ -1285,8 +1289,11 @@ pub fn preview_plain(text: &str) -> String {
         if at_start && (c == '#' || c == '>') {
             let mut run = String::from(c);
             if c == '#' {
-                while chars.peek() == Some(&'#') && run.len() < 6 {
-                    run.push(chars.next().unwrap());
+                while run.len() < 6 {
+                    let Some(hash) = chars.next_if_eq(&'#') else {
+                        break;
+                    };
+                    run.push(hash);
                 }
             }
             if chars.peek().is_some_and(|n| n.is_whitespace()) {

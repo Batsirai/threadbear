@@ -397,10 +397,7 @@ pub fn web_links(text: &str) -> Vec<Range<usize>> {
             .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`'))
             .unwrap_or(rest.len());
         let mut end = start + len;
-        loop {
-            let Some(last) = text[start..end].chars().next_back() else {
-                break;
-            };
+        while let Some(last) = text[start..end].chars().next_back() {
             let unopened = |open: char| {
                 text[start..end].matches(open).count() < text[start..end].matches(last).count()
             };

@@ -975,7 +975,7 @@ pub fn started_rows<'a>(
         })
         .collect();
     // Keys worked out once per row: a time is text to read (inbox.rs, `sections_ordered`).
-    rows.sort_by_cached_key(|r| (r.state.clone(), std::cmp::Reverse(r.thread.activity_ms())));
+    rows.sort_by_cached_key(|r| (r.state, std::cmp::Reverse(r.thread.activity_ms())));
     rows
 }
 

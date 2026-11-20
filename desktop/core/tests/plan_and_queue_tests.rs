@@ -2,7 +2,10 @@
 // the plan card, its approval and the checklist it turns into) and
 // QueuedCallsTests.swift (docs/protocol/threads.md, "Queued calls": a reply's other
 // calls that will ask, shown on the first one's card).
-#![allow(non_snake_case)]
+#![allow(
+    non_snake_case,
+    reason = "test names follow the Swift tests they mirror (testSomethingHappens)"
+)]
 
 mod support;
 

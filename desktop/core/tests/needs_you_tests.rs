@@ -1,7 +1,10 @@
 // Ports of the model parts of app/Tests/ThreadbearCoreTests/NeedsYouTests.swift
 // (docs/protocol/needs-you.md, "Needs you"): a finished turn's asks as a card. The
 // sidebar and ThreadSummary tests in that file aren't transcript rules.
-#![allow(non_snake_case)]
+#![allow(
+    non_snake_case,
+    reason = "test names follow the Swift tests they mirror (testSomethingHappens)"
+)]
 
 mod support;
 

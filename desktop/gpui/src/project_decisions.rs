@@ -451,7 +451,10 @@ impl Threadbear {
     /// Sends a decision's answers to its thread (`sendDecision`, by way of
     /// `post`): it needs the runner there to take it, as a message from the
     /// thread's own box does.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
+    )]
     pub(crate) fn send_decision(
         &mut self,
         thread: String,
@@ -666,13 +669,7 @@ impl Threadbear {
                         .min_w_0()
                         .text_color(secondary)
                         .child(div().flex_none().child("Sending to "))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_semibold()
-                                .child(title.clone()),
-                        )
+                        .child(div().min_w_0().truncate().font_semibold().child(title))
                         .child(div().flex_none().child("…")),
                 )
                 .child(
@@ -708,7 +705,7 @@ impl Threadbear {
                                     .text_size(px(style::size::LABEL))
                                     .line_height(px(16.))
                                     .font_semibold()
-                                    .child(title.clone()),
+                                    .child(title),
                             )
                             .child(
                                 div()

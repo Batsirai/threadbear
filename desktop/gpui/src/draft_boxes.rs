@@ -303,9 +303,7 @@ fn start_edit(key: String, thread: String, draft: &DraftBlock, window: &mut Wind
 fn finish_edit(key: &str, cx: &mut App) {
     let dropped = EDITS.with(|e| {
         let mut edits = e.borrow_mut();
-        let Some(edit) = edits.get_mut(key) else {
-            return None;
-        };
+        let edit = edits.get_mut(key)?;
         edit.editing = false;
         if edit.changed(cx).is_none() {
             return edits.remove(key);
@@ -624,7 +622,7 @@ impl DraftText {
                 }
                 if span.code {
                     look.background_color = Some(code_bg);
-                    code.push((range.clone(), mono.clone().into()));
+                    code.push((range.clone(), mono.clone()));
                 }
                 if let Some(url) = &span.link {
                     look.color = Some(link);

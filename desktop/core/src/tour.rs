@@ -388,7 +388,7 @@ impl Tour {
 
     /// On to the next step: true if there is one, false when it's the end
     /// (call `finish`).
-    pub fn next(&mut self) -> bool {
+    pub fn forward(&mut self) -> bool {
         match self.step {
             Some(i) if i + 1 < self.shown.len() => {
                 self.step = Some(i + 1);
@@ -681,7 +681,7 @@ mod tests {
     fn next_on_the_last_step_ends_it() {
         let mut tour = Tour::default();
         tour.start(true, &none);
-        while tour.next() {}
+        while tour.forward() {}
         assert!(tour.is_last());
         assert_eq!(tour.finish(), Some(Finished::Tour));
         assert!(!tour.is_on());

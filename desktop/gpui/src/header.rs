@@ -753,8 +753,8 @@ impl Threadbear {
             )
             .into_any_element(),
         ];
-        let id_for_new = id.clone();
-        let link_row = link.clone().map(|link| {
+        let id_for_new = id;
+        let link_row = link.map(|link| {
             let (copy, open) = (link.clone(), link.clone());
             h_flex()
                 .gap(px(6.))
@@ -1668,7 +1668,7 @@ impl Threadbear {
             return Value::Null;
         };
         // "Yes" or "No" when the box offers to carry on by itself.
-        let carry_on = advice.stopped.then(|| {
+        let carry_on = advice.stopped.then_some({
             if thread.carry_on_at_reset {
                 "Yes"
             } else {
@@ -1821,7 +1821,7 @@ impl Threadbear {
         self.limit_pick.remove(thread);
         // At once, so the box goes and can't be pressed twice: pinned to
         // that login, and no longer waiting. A refusal puts it back.
-        let to = account.clone();
+        let to = account;
         self.update_thread(
             thread,
             move |t| {
@@ -2536,7 +2536,7 @@ impl Threadbear {
         let title = if note.title.is_empty() {
             "Untitled".to_string()
         } else {
-            note.title.clone()
+            note.title
         };
         let shift = self.toast_swipe.x;
         let fade = (1. - (f32::from(shift).abs() / (SWIPE_AWAY * 2.))).clamp(0.3, 1.);

@@ -1,6 +1,9 @@
 // Ports of app/Tests/ThreadbearCoreTests/WorkGroupTests.swift: folding runs
 // of work into group rows, the working line and the changed files card.
-#![allow(non_snake_case)]
+#![allow(
+    non_snake_case,
+    reason = "test names follow the Swift tests they mirror (testSomethingHappens)"
+)]
 
 mod support;
 

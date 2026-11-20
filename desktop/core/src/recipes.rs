@@ -335,7 +335,7 @@ impl RecipeDetail {
                 })
             })
             .collect();
-        runs.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+        runs.sort_by_key(|a| std::cmp::Reverse(a.at_ms));
         Some(RecipeDetail {
             recipe,
             about: text(&v["about"]).unwrap_or_default(),

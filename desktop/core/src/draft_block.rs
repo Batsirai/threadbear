@@ -223,8 +223,8 @@ impl DraftBlock {
                     };
                 }
                 if line.starts_with("> ") || line == ">" || line.starts_with("&gt; ") {
-                    let rest = if line.starts_with("&gt; ") {
-                        &line[5..]
+                    let rest = if let Some(rest) = line.strip_prefix("&gt; ") {
+                        rest
                     } else {
                         &line[line.len().min(2)..]
                     };
