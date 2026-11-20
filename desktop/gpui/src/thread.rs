@@ -1910,6 +1910,12 @@ impl ThreadPane {
                 if matches!(row.content, RowContent::Group(_) | RowContent::Tool(_) | RowContent::Reasoning(_)) || row.kind() == threadbear_core::reducer::RowKind::Diff {
                     out["expanded"] = json!(self.row_open(row));
                 }
+                // A review folds only with answered findings to tuck away.
+                if let RowContent::LabReview(review) = &row.content {
+                    if review.folds() {
+                        out["expanded"] = json!(self.row_open(row));
+                    }
+                }
                 #[cfg(feature = "automation")]
                 if let RowContent::Assistant(item) = &row.content {
                     if let Some(labels) = crate::reply_buttons::dump_labels(&item.text, &self.summary.id) {

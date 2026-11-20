@@ -131,7 +131,7 @@ pub(crate) fn work_line(
 }
 
 impl ThreadPane {
-    fn toggle_listener(&self, row: &Row, cx: &mut Context<Self>) -> Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static> {
+    pub(super) fn toggle_listener(&self, row: &Row, cx: &mut Context<Self>) -> Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static> {
         let row = row.clone();
         Box::new(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_row(&row, cx)))
     }

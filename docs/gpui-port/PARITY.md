@@ -261,6 +261,33 @@ run or a screenshot from the running app. A slice with no runtime check doesn't
 count. (Ghostex's port log is where this shape comes from; its slices 214 to 268
 built parsers and gates with no launch of the app, which is the trap.)
 
+### 2026-11-20 Another lab's review folds like the line of work (`card.review`, GPUI-only)
+
+- Mike, 20 Nov: a review panel's eight answered findings ran a screen tall
+  between the wake-up note and the reply that already said what was fixed;
+  he wanted them "collapsed down, almost like the working section". The
+  review row is now a work line (the checklist icon, the heading as it was,
+  the chevron after it, the hover fill) that opens on click, from the row's
+  menu (Expand/Collapse) or `expand`/`collapse`, to every finding and an
+  "Open the review's thread" line under them.
+- Folded, it still shows any finding that's open (left for Mike or not
+  answered), as those may need him (core's `ReviewFinding::is_open`,
+  `LabReview::folds` and `shown_findings`). A review with nothing to fold
+  (no findings, or every one open) has no chevron and its line opens the
+  review's thread, as before. The dump has `expanded` on a review that folds.
+- The Swift app is frozen: its row stays as it was, and the scenario is
+  already `@swift-pending`.
+- Files: `desktop/core/src/reducer/event.rs`,
+  `desktop/core/tests/needs_you_tests.rs`, `desktop/gpui/src/rows/{lab_review,work,export}.rs`,
+  `desktop/gpui/src/{rows,thread}.rs`, `features/composer-cards.feature` and
+  its steps, `docs/guide.md`.
+- Verification: `cargo test -p threadbear-core --test needs_you_tests` on
+  the cloud box, 17 of 17 with the new `a_review_row_folds_its_answered_findings_away`;
+  the `@card.review` scenario there with the GPUI app, passed (folded, then
+  opened). Shots from a debug app on the mock: a panel's eight fixed findings
+  folded to one line and opened, and a review with two open findings folded
+  to those two; a click on the line opened and closed it.
+
 ### 2026-11-20 Code and data links open in the pane, at the lines they name, ready to type in (`rich.filerefs`, `file.editor`, GPUI-only)
 
 - From David Clark's fork (DavidClarkTucson/threadbear), written fresh here.

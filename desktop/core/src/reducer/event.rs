@@ -1235,6 +1235,12 @@ pub struct ReviewFinding {
 }
 
 impl ReviewFinding {
+    /// Still open: left for Mike, or not answered at all. The row keeps these
+    /// in sight while it's folded (LabReview::shown_findings).
+    pub fn is_open(&self) -> bool {
+        matches!(self.outcome.as_deref(), None | Some("left"))
+    }
+
     fn decode(v: &Value) -> Option<ReviewFinding> {
         let c = v.as_object()?;
         Some(ReviewFinding {
@@ -1331,6 +1337,20 @@ impl LabReview {
         Some(if twin { by.to_owned() } else { name.to_owned() })
     }
 
+    /// Whether the row folds: it has answered findings to tuck away. Folded,
+    /// it's its heading and any finding still open; the agent's reply says
+    /// what it fixed, so a panel's answered findings (eight of them a screen
+    /// tall, 20 Nov 2026) fold away as the line of work does.
+    pub fn folds(&self) -> bool {
+        self.findings.iter().any(|f| !f.is_open())
+    }
+
+    /// The findings the row draws: every one once Mike opens it; folded, only
+    /// those still open, as they may need him.
+    pub fn shown_findings(&self, open: bool) -> Vec<&ReviewFinding> {
+        self.findings.iter().filter(|f| open || f.is_open()).collect()
+    }
+
     /// The one line over the findings: who, how many rounds, how it came out
     /// (LabReview.heading). The reviewer's login ("Codex (codex-1)") is left
     /// off: which account reviewed is noise here (Mike, 12 Nov 2026).
@@ -1350,7 +1370,7 @@ impl LabReview {
             None => format!("Reviewed by {}", one(&self.reviewer, self.independent)),
         };
         let rounds = if self.rounds > 1 { format!(", {} rounds", self.rounds) } else { String::new() };
-        let open = self.findings.iter().filter(|f| f.outcome.is_none() || f.outcome.as_deref() == Some("left")).count();
+        let open = self.findings.iter().filter(|f| f.is_open()).count();
         let result = if self.unstructured {
             "see its reply".to_owned()
         } else if self.unchecked {

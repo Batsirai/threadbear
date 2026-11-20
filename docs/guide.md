@@ -1618,8 +1618,10 @@ thread wakes with them numbered, and it can't finish until it has answered
 each one: fixed, disputed (saying why), or left for you to decide, which
 comes to you as a question. Anything it fixed gets reviewed again, just the
 new change, until a round finds nothing. A quiet line in the thread, over
-the reply, shows who reviewed and how it came out, with each finding and
-what was done about it under it; the line opens the review thread. It
+the reply, shows who reviewed and how it came out. It folds like the
+agent's work: click it for each finding and what was done about it, and
+the review thread's link under them. Findings still open (left for you,
+or not answered) show under it even while it's folded. It
 stays off the done card, as it happens in the background. The review thread is archived when it's
 done, so it stays out of your inbox. That holds however the review ends:
 if it gives no verdict, asks you something or stops with an error, your
