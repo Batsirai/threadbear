@@ -1258,7 +1258,9 @@ if that's a folder; if no such folder is here, the card says so, and
 Start it sends the request back for the agent to ask again with one that
 is. The new thread is told which thread asked, and can
 message it back. Agents on this Mac start threads on the other Macs
-without asking.
+without asking, and each reply such a thread ends a turn with comes back
+to the thread that started it as a message (the other Macs can't message
+this one's threads themselves).
 To start a thread on another Mac, pick it with the machine chip on the composer: the
 folder, account and model are then that Mac's. New threads start on the
 starred one: change it under Default in that chip's menu, or in

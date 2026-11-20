@@ -6907,7 +6907,26 @@ runner that's this one is the usual create.
 - **Reporting back.** The started thread is told the asking thread's id.
   The main Mac's agents can `send_message` to another runner's thread by
   its full id (through the relay); a runner key's agents can't message the
-  main Mac's threads, so the asking thread hears only from them.
+  main Mac's threads. So for a thread the main Mac starts there, its runner
+  passes the replies back itself (`runner/src/far-reports.ts`, added 20 Nov
+  2026, after a thread on the Pixel couldn't report to the M5 thread that
+  started it): the thread's first line is `[Started by thread <id> on
+  <name>. Each reply you end a turn with goes back to that thread, so put
+  your report in your reply.]`, and the main Mac's runner keeps it in
+  `far-reports.json` with its starter. Each time the sidebar's list shows
+  that thread stopped (`idle`, `error` or `stopped`) with a newer
+  `lastActivityAt`, it waits five seconds (the row can say so before the
+  last reply arrives), reads the thread's newest events through the relay
+  and sends the last turn's last agent text to the starter, queued, as an
+  agent's message: `[Sent by the agent in the thread "<title>" (<id8>) on
+  <runner>, which this thread started there. Its reply as its turn ended,
+  passed on by this Mac's runner.]`. A reply it passed on before (by hash)
+  isn't sent again; one not there yet is looked for again at the list's
+  next change, until a minute after the turn ended. It stops once that
+  thread is archived, and forgets one gone for 30 days. That thread's
+  `send_message` to its starter, which its runner can't find, is refused
+  saying the reply goes back by itself. The words passed on are what
+  `read_thread` would show the starter anyway.
 
 What a tampered runner can do with this is put a card in front of Mike:
 the most it can start is what he read and allowed.

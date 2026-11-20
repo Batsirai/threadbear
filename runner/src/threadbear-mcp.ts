@@ -45,7 +45,7 @@ import type { ConvexSync } from './sync.ts';
 import type { RemoteThread, RemoteThreads } from './thread-index.ts';
 import { POCKET_ICONS } from './pocket-icons.ts';
 import type { SecretAnswer, SecretRequest } from './runner/approvals.ts';
-import type { StartRequest } from './cross-runner.ts';
+import { starterIn, type StartRequest } from './cross-runner.ts';
 import { SECRET_TIMEOUT_DEFAULT_MIN, SECRET_TIMEOUT_MAX_MIN } from './secrets.ts';
 import { cutSafely, firstLineSafely } from './safe-cut.ts';
 import { pickRunner } from './moves.ts';
@@ -707,6 +707,13 @@ export function buildThreadbearTools(
   // once, before any card, which shows it: what goes is what was allowed.
   const from = async (): Promise<string> => `${AGENT_MESSAGE_PREFIX}"${(await control.get(selfId)).title.replace(/\s+/g, ' ').trim()}" (${selfId.slice(0, 8)})]\n\n`;
 
+  // This thread's first message, which says who started it from another Mac
+  // (cross-runner.ts startedHeader).
+  const firstMessage = async (): Promise<string> => {
+    const page = await control.events(selfId, { afterSeq: 0, limit: 20 });
+    const e = (page.events as PersistedEvent[]).find((x) => x.type === 'user.message');
+    return e?.type === 'user.message' ? e.text : '';
+  };
 
   const titleOf = async (id: string): Promise<string> => {
     try {
@@ -2114,7 +2121,15 @@ export function buildThreadbearTools(
       handle(async ({ threadId, id: alias, text }, extra) => {
         const asked = threadId ?? alias;
         if (!asked) throw new Error('threadId is required. list_threads shows the ids.');
-        const hit = await find(asked);
+        const hit = await find(asked).catch(async (e: unknown) => {
+          // The thread on another Mac that started this one, which this
+          // runner's key may not reach: the main Mac passes this thread's
+          // replies back to it (far-reports.ts).
+          const starter = await firstMessage().then(starterIn, () => undefined);
+          if (starter && starter.length >= 8 && (starter === asked || starter.startsWith(asked)))
+            throw new Error(`Not sent: thread ${starter} started this one from another Mac, which this runner can't message. The reply you end this turn with goes back to it, so put your report in your reply.`);
+          throw e;
+        });
         const id = hit.id;
         if (id === selfId) throw new Error("That's this thread. Just carry on here.");
         // Another runner's thread counts as full access (modeOf), so a

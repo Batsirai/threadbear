@@ -184,7 +184,10 @@ File references are where to look.
   `desktop-drafts.json`, what's typed but not sent in each message box and card's Something else box, so
   a quit or relaunch doesn't lose it, and
   `sync-sent.json`, hashes of what's already in your
-  Convex mirror so a restart sends only what changed, and
+  Convex mirror so a restart sends only what changed,
+  `far-reports.json`, the threads this Mac's agents started on your other
+  Macs and which thread here each one's replies go back to (ids and a hash
+  of the last reply passed on), and
   `shared-pools.json`, the last pools your Convex backend had, which every
   runner shares, so one starts with them while the backend can't be reached,
   `profiles/`, the last ten CPU profiles of the runner, made only when
