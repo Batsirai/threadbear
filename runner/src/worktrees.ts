@@ -1071,7 +1071,7 @@ async function remadeOwn(t: LandTarget, main: string, out: (line: string) => voi
     const moved = await git(t.path, ['reset', '--keep', r.tip]);
     if (!moved.ok) return [`Couldn't move ${t.branch} to its remade commits in ${t.path}, so nothing landed: ${firstLine(moved.stderr || moved.stdout)}`];
     for (const n of r.notes) out(n);
-    out(`Made ${r.remade.map((c) => c.slice(0, 10)).join(', ')} again on ${MAIN} with the tool its .git-blame-ignore-revs entry names, as main has moved on in what it rewrites (${t.branch} was at ${before.slice(0, 10)}).`);
+    out(`Made ${r.remade.map((c) => c.slice(0, 10)).join(', ')} again on ${MAIN} with the tool its .git-blame-ignore-revs entry names, so it's that tool's output on ${MAIN} as it is now (${t.branch} was at ${before.slice(0, 10)}).`);
     return 'done';
   } catch (e) {
     out(`Couldn't make its format commit again (${e instanceof Error ? e.message : String(e)}).`);
