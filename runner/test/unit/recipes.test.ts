@@ -82,7 +82,7 @@ function world(): World {
     threads: () => w.threads,
     start: (p) => {
       w.started.push(p);
-      return `t${w.started.length}`;
+      return thread(`t${w.started.length}`, { title: p.title });
     },
   };
   w.recipes = new Recipes(w.deps);
@@ -151,8 +151,9 @@ test('recipes: a broken file is left out, not the whole list', () => {
 test('recipes: adding one starts a thread in its working folder, and the schedule that thread makes becomes its own', async () => {
   const w = world();
   const file = writeRecipe(w.builtin, 'daily-brief', { name: 'Daily brief', icon: '☀️', description: 'A short note.' });
-  const { threadId } = w.recipes.add('daily-brief');
+  const { threadId, thread: made } = w.recipes.add('daily-brief');
   assert.equal(threadId, 't1');
+  assert.equal(made.id, 't1', 'the thread comes back too, so the app can open it at once');
   const start = w.started[0];
   assert.equal(start.cwd, path.join(w.folder, 'daily-brief'));
   assert.ok(fs.statSync(start.cwd).isDirectory(), 'the folder is made');

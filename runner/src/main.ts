@@ -1145,7 +1145,7 @@ async function main(): Promise<void> {
     setExperiment: (id, on) => settings.update({ experiments: { [id]: on } }),
     schedules: { list: () => scheduler.list(), update: (p) => scheduler.update(p), delete: (id) => scheduler.delete(id) },
     threads: (since) => runner.scheduledSince(since),
-    start: (p) => runner.create({ text: p.text, title: p.title, cwd: p.cwd, worktree: false, startedBy: { kind: 'runner', label: 'Recipes', why: p.title } }).thread.id,
+    start: (p) => runner.create({ text: p.text, title: p.title, cwd: p.cwd, worktree: false, startedBy: { kind: 'runner', label: 'Recipes', why: p.title } }).thread,
     log: (msg) => log.warn(msg),
   });
   if (!box && !copyOfReal) recipes.start();

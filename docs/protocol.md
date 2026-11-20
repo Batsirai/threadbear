@@ -6375,10 +6375,10 @@ that ended needing the user, and those they've read (`lastSeenSeq` at
 |---|---|---|
 | `recipes.list` | `{}` | `{ recipes: RecipeSummary[] }`, on first, then the rest by name |
 | `recipes.get` | `{ id }` | `{ recipe: RecipeSummary & { about, example?, file, runs: RecipeRun[] } }`. `about` and `example` are Markdown (the file's sections); `file` is the `RECIPE.md` path. `RecipeRun` is `{ threadId, title, at, headline?, needsYou, seen, archived }`, the threads its schedules started in the last 30 days, newest first, 60 at most |
-| `recipes.add` | `{ id }` | `{ threadId }`: starts a thread in `<recipes folder>/<id>` (made if need be), on the default pool and Full access, whose message points its agent at the recipe's file and has it set the recipe up with the user. The recipe is `settingUp` from now |
+| `recipes.add` | `{ id }` | `{ threadId, thread }` (`thread` its `ThreadSummary`, so a client opens it at once): starts a thread in `<recipes folder>/<id>` (made if need be), on the default pool and mode, whose message points its agent at the recipe's file and has it set the recipe up with the user. The recipe is `settingUp` from now |
 | `recipes.setOn` | `{ id, on }` | `{ recipe }`. Off pauses each of its schedules (and turns its experiment off); on resumes them (and turns it on). A recipe still setting up just records the choice |
 | `recipes.remove` | `{ id }` | `{ removed: true }`: deletes its schedules, turns its experiment off and forgets it, so it's `add` again. Its files stay |
-| `recipes.create` | `{ text?, fromThreadId?, editId? }` | `{ threadId }`: starts a thread in the recipes folder whose agent writes a new recipe with the user (from `text`, or from what went well in `fromThreadId`), and a header picture if it can make one. A new recipe shows as `add` until it's added. With `editId` the agent changes that recipe instead, writing a built-in's changed copy into the recipes folder as the user's own |
+| `recipes.create` | `{ text?, fromThreadId?, editId? }` | `{ threadId, thread }`: starts a thread in the recipes folder whose agent writes a new recipe with the user (from `text`, or from what went well in `fromThreadId`), and a header picture if it can make one. A new recipe shows as `add` until it's added. With `editId` the agent changes that recipe instead, writing a built-in's changed copy into the recipes folder as the user's own |
 
 `recipes.updated` (notification, no params) says the list has changed: a
 recipe's file, its state, its schedules or the threads they started. The

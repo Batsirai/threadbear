@@ -99,8 +99,8 @@ export type RecipesDeps = {
   };
   // The threads a schedule started since then (ms), archived ones too.
   threads: (since: number) => ThreadSummary[];
-  // Starts a thread and returns its id.
-  start: (p: { text: string; title: string; cwd: string }) => string;
+  // Starts a thread.
+  start: (p: { text: string; title: string; cwd: string }) => ThreadSummary;
   log?: (msg: string) => void;
 };
 
@@ -221,17 +221,17 @@ export class Recipes {
     return { ...s, about: f.about, ...(f.example ? { example: f.example } : {}), file: f.file, runs: this.runs(s, threads) };
   }
 
-  add(id: string): { threadId: string } {
+  add(id: string): { threadId: string; thread: ThreadSummary } {
     const f = this.file(id);
     const current = this.summary(f, []);
     if (current.state !== 'add') throw new RpcError(ErrorCode.badParams, `${f.name} is already added`);
     const cwd = path.join(this.deps.folder(), id);
     fs.mkdirSync(cwd, { recursive: true });
     if (f.experiment) this.deps.setExperiment(f.experiment, true);
-    const threadId = this.deps.start({ text: setupBrief(f, cwd), title: `Set up ${f.name}`, cwd });
-    this.kept[id] = { on: true, setupThreadId: threadId, schedules: [], addedAt: new Date(this.deps.now()).toISOString() };
+    const thread = this.deps.start({ text: setupBrief(f, cwd), title: `Set up ${f.name}`, cwd });
+    this.kept[id] = { on: true, setupThreadId: thread.id, schedules: [], addedAt: new Date(this.deps.now()).toISOString() };
     this.changed();
-    return { threadId };
+    return { threadId: thread.id, thread };
   }
 
   async setOn(id: string, on: boolean): Promise<RecipeSummary> {
@@ -266,7 +266,7 @@ export class Recipes {
     return { removed: true };
   }
 
-  create(p: { text?: string; fromThreadId?: string; editId?: string }): { threadId: string } {
+  create(p: { text?: string; fromThreadId?: string; editId?: string }): { threadId: string; thread: ThreadSummary } {
     const folder = this.deps.folder();
     fs.mkdirSync(folder, { recursive: true });
     const format = path.join(BUILTIN_RECIPES_DIR, 'FORMAT.md');
@@ -277,12 +277,12 @@ export class Recipes {
         ? `It comes with Threadbear, so don't edit it there: write your changed copy to ${target} (copy its header picture too, if it has one), and that copy is used in its place.`
         : 'Change it where it is.';
       const text = `Change the recipe "${f.name}" with the user. Its file is ${f.file}. ${where}\n\nThe format is in ${format}. Ask what they want changed first${p.text ? `; they said: ${p.text}` : ''}. If it's set up and the change affects its schedule or its TASK.md in ${path.join(folder, f.id)}, change those too.`;
-      return { threadId: this.deps.start({ text, title: `Change ${f.name}`, cwd: folder }) };
+      return started(this.deps.start({ text, title: `Change ${f.name}`, cwd: folder }));
     }
     const from = p.fromThreadId ? `\n\nBase it on what went well in the thread ${p.fromThreadId}: read it with read_thread first.` : '';
     const what = p.text ? `\n\nWhat they said: ${p.text}` : '\n\nAsk them what they want it to do.';
     const text = `Write a new Threadbear recipe with the user: a technique worth keeping, written so an agent can set it up for anyone. The format, and how to keep it shareable, are in ${format}: read it first.${what}${from}\n\nMake a folder for it in ${folder} (a short kebab-case name) with its RECIPE.md. If you can make pictures (an image model you can reach), make its header picture too, as the format says; otherwise give it a color. Don't set it up: once the file is there it shows in Threadbear's Recipes, switched off, for the user to add.`;
-    return { threadId: this.deps.start({ text, title: 'New recipe', cwd: folder }) };
+    return started(this.deps.start({ text, title: 'New recipe', cwd: folder }));
   }
 
   // ------------------------------------------------------------- inside
@@ -381,6 +381,10 @@ export class Recipes {
   private save(): void {
     atomicWriteFileSync(path.join(this.deps.home, STATE_FILE), JSON.stringify({ version: 1, recipes: this.kept }, null, 2) + '\n');
   }
+}
+
+function started(thread: ThreadSummary): { threadId: string; thread: ThreadSummary } {
+  return { threadId: thread.id, thread };
 }
 
 function seen(t: ThreadSummary): boolean {
