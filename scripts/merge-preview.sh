@@ -60,7 +60,8 @@ printf '%s\n' "$list" | awk '
   /^#[[:space:]]*format-subject:/ { out(""); sub(/^#[[:space:]]*format-subject:[[:space:]]*/, ""); s = $0; next }
   /^#[[:space:]]*format-paths:/ { sub(/^#[[:space:]]*format-paths:[[:space:]]*/, ""); p = $0; next }
   /^#[[:space:]]*format-config:/ { sub(/^#[[:space:]]*format-config:[[:space:]]*/, ""); c = $0; next }
-  /^[0-9a-f]{40}([0-9a-f]{24})?$/ { out($0); next }
+  # (Lengths, not {40}: mawk, the awk on Debian and Android, panics on an interval.)
+  /^[0-9a-f]+$/ && (length($0) == 40 || length($0) == 64) { out($0); next }
   /^[^#]/ && NF { out("") }
   END { out("") }
 ' > "$tmp/entries"
