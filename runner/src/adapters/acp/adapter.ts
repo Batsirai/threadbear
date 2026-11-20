@@ -550,6 +550,15 @@ export class AcpSession implements AgentSession {
     for (; ; dir = path.dirname(dir)) {
       real = realFolder(dir);
       if (real !== undefined || path.dirname(dir) === dir) break;
+      // There but not resolvable: a link to somewhere that doesn't exist yet
+      // (or a loop), which a write would follow outside (Codex's and
+      // Gemini's seventh reviews, 20 Nov 2026).
+      try {
+        fs.lstatSync(dir);
+        return false;
+      } catch {
+        // Not there at all: a new file or folder, judged by its parent.
+      }
     }
     if (real === undefined) return false;
     const whole = path.join(real, path.relative(dir, f));
@@ -654,12 +663,13 @@ export class AcpSession implements AgentSession {
     // every argument it carried here too with the same value (Grok adds
     // `variant` when it asks). If not, no saved rule covers it and no short
     // card stands for it.
-    // Only a command's arguments must agree: an edit's files are taken from
-    // every frame anyway, and OpenCode's frames name an edit's arguments
-    // differently from its request ({filePath, content}, then {filepath,
-    // diff}; Gemini's sixth review, 20 Nov 2026).
+    // Every frame's arguments must agree, except an edit's: its files are
+    // taken from every frame and each frame must be a plain edit, as
+    // OpenCode names an edit's arguments differently while it runs and when
+    // it asks ({filePath, content}, then {filepath, diff}; Gemini's sixth
+    // review, 20 Nov 2026).
     const last = frames?.inputs.at(-1) ?? {};
-    const consistent = !frames || (frames.kinds.size <= 1 && (seen.kind !== 'execute' || frames.inputs.every((i) => Object.entries(i).every(([k, v]) => Object.hasOwn(last, k) && JSON.stringify(v) === JSON.stringify(last[k])))));
+    const consistent = !frames || (frames.kinds.size <= 1 && (writesFiles(seen.kind) || frames.inputs.every((i) => Object.entries(i).every(([k, v]) => Object.hasOwn(last, k) && JSON.stringify(v) === JSON.stringify(last[k])))));
     // A key a plain object can't hold as its own would go missing from the
     // card (cardInput): such a call is refused, never shown short.
     if (Object.hasOwn(input, '__proto__')) {
@@ -703,11 +713,15 @@ export class AcpSession implements AgentSession {
     let outside = false;
     // An agent whose session has a folder of its own reads a relative path
     // from there, not the thread's: which file it is isn't known.
-    const relative = Boolean(this.deps.agent.ownSessionFolder) && [...seen.paths, ...requestPaths(p.toolCall ?? {})].some((f) => !path.isAbsolute(f));
+    // Every path as the agent spelled it, before any tidying: `link/..` is
+    // somewhere else on the disk than it reads, and `~` is the home folder
+    // to some tools, so a path with either says no file for certain.
+    const spelled = [...seen.paths, ...(frames?.paths ?? []), ...requestPaths(p.toolCall ?? {})];
+    const relative = spelled.some((f) => f.split(/[\\/]/).includes('..') || f.startsWith('~')) || (Boolean(this.deps.agent.ownSessionFolder) && spelled.some((f) => !path.isAbsolute(f)));
     if (edits) {
       // An edit with no named files can't be checked: it asks every time.
       code = paths.length ? this.runsAsCode(paths) : 'unsure';
-      if (!code && (!isPlainEdit(input) || !consistent || relative)) code = 'unsure';
+      if (!code && (!isPlainEdit(input) || !(frames?.inputs ?? []).every(isPlainEdit) || !consistent || relative)) code = 'unsure';
       // The edit rule is for the thread's own files: one outside its folder
       // always asks (Antigravity has no gate of its own for that, as
       // OpenCode's external_directory is; Gemini's sixth review).
@@ -759,8 +773,9 @@ export class AcpSession implements AgentSession {
       const m = isPlainObject(meta) && isPlainObject(meta.mcp) ? meta.mcp : undefined;
       return mcpName ?? (m && typeof m.server === 'string' && typeof m.tool === 'string' ? `${m.server}__${m.tool}` : 'not named');
     })();
+    const unshown = paths.filter((f) => !stringsIn(input).some((v) => v === f || absolutePath(v, this.opts.cwd) === f));
     const shown: Record<string, unknown> = external
-      ? { 'MCP tool': mcpTool, arguments: input }
+      ? { 'MCP tool': mcpTool, arguments: input, ...(unshown.length ? { 'files it names': paths } : {}) }
       : command
         ? shellCard
           ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
@@ -769,16 +784,19 @@ export class AcpSession implements AgentSession {
           ? { 'runs in': runsIn, arguments: input }
           : edits
             ? // Arguments as well when the paths can't say it all.
-              paths.length === 0 || Object.hasOwn(input, 'arguments as sent') || relative ? { paths, arguments: input } : { paths }
+              paths.length === 0 || Object.hasOwn(input, 'arguments as sent') || relative || code === 'unsure' ? { paths, ...(relative ? { 'paths as given': [...new Set(spelled)] } : {}), arguments: input } : { paths }
             : // Any other tool: its arguments, and every file it names that
               // they don't show (locations), so none is allowed unseen.
-              paths.length && !paths.every((f) => stringsIn(input).some((v) => v === f || absolutePath(v, this.opts.cwd) === f))
+              unshown.length || (relative && paths.length)
               ? { arguments: input, 'files it names': paths }
               : input;
     // Earlier frames that said something else go on the card too, and make
     // it the Mac's to allow.
     if (!consistent && frames) Object.assign(shown, { 'said earlier': { kinds: [...frames.kinds], arguments: frames.inputs } });
-    const card = cardInput(shown, command ? 'all' : edits ? ['paths'] : 'all');
+    // An edit's card that's only its paths shows each path whole; anything
+    // more on it (arguments, earlier frames) must fit whole too, or it isn't
+    // put up.
+    const card = cardInput(shown, edits && Object.keys(shown).length === 1 ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
       return this.answer(id, options, false);
