@@ -419,6 +419,9 @@ export class RpcServer {
       conn.authTimer?.clear();
       conn.queue.length = 0;
       this.conns.delete(conn);
+      // The app gone (quit, or reconnecting): the CLI it had started ahead
+      // of a new thread isn't left running.
+      if (conn.authed) this.opts.runner.dropSpare?.('app disconnected', conn.id);
       if (conn.authed && (conn.client === 'threadbear-mac' || conn.client === 'threadbear-desktop')) this.opts.appSeen?.();
     });
     // A protocol error (a frame over the limit, bad UTF-8): ws closes with
@@ -729,8 +732,28 @@ export class RpcServer {
           // Not to nest under the thread in startedBy (Nested threads).
           ...(p.detached === true ? { detached: true } : {}),
           ...optProjectIds(p),
+          // A CLI this connection had started ahead of it (threads.warm).
+          ...(typeof p.warmId === 'string' ? { warmId: p.warmId } : {}),
         });
         return { thread: res.thread, turnId: res.turnId };
+      }
+      // A CLI started ahead of the new thread the app is writing
+      // (docs/protocol.md, "Warm start"; runner/warm-start.ts).
+      case 'threads.warm': {
+        if (p.cancel === true) {
+          r.dropSpare('page left', conn.id);
+          return {};
+        }
+        return r.warm({
+          cwd: optString(p, 'cwd'),
+          accountId: optString(p, 'accountId'),
+          poolId: optString(p, 'poolId'),
+          model: optString(p, 'model'),
+          effort: optEffort(p),
+          permissionMode: optMode(p),
+          ...(p.worktree === false ? { worktree: false } : {}),
+          ...optProjectIds(p),
+        }, conn.id);
       }
       case 'threads.samples':
         return r.samples({ cwd: reqString(p, 'cwd'), remove: p.remove === true });

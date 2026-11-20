@@ -60,6 +60,9 @@ export const handoversPart = {
       ready: opts.ready ?? (() => true),
     };
     this.draining = d;
+    // New threads start on the new runner, so a CLI started ahead of one here
+    // would never be used.
+    this.dropSpare('handing over');
     // Accounts are the primary's to watch now.
     this.rescanTimer?.cancel();
     this.accountsTimer?.cancel();

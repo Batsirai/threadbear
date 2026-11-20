@@ -121,6 +121,13 @@ export class CallerGate {
     // Any agent's move, Full's too: it never starts a turn by itself
     // (Runner.update's carry-on after a limit is Mike's pick from the menu).
     if (method === 'threads.update' && (p.cwd !== undefined || p.accountId !== undefined || p.poolId !== undefined)) p = { ...p, byAgent: true };
+    // A CLI started ahead of a new thread is for the app's new-thread page
+    // (runner/warm-start.ts): a thread neither starts one nor takes the app's.
+    if (method === 'threads.warm') throw new RpcError(ErrorCode.notAllowed, "Starting a CLI ahead of a new thread is the app's to do.");
+    if (method === 'threads.create' && p.warmId !== undefined) {
+      const { warmId: _w, ...rest } = p;
+      p = rest;
+    }
     // Reinstalling stops every thread's runner; an agent hands that to the
     // user (install-runner.sh refuses from a thread too), Full access or not.
     if (method === 'runner.reinstall') throw new RpcError(ErrorCode.notAllowed, "Reinstalling the runner stops every thread's turn, so it's the user's to do: Reinstall now in the app's Updates panel.");

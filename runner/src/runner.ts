@@ -5,7 +5,7 @@ import { HELD_EXTRA } from './schedule-check.ts';
 // server in rpc.ts is a thin layer over the public methods here.
 import type { ReinstallStatus } from './reinstall.ts';
 import { RELEASE } from './release.ts';
-import type { UserInput } from './adapters/types.ts';
+import type { StartSessionOptions, UserInput } from './adapters/types.ts';
 import { INSTRUCTIONS_CLEARED, INSTRUCTIONS_REWOUND } from './instructions.ts';
 import { reachable, type Reachable } from './net-probe.ts';
 import type { UpstreamStatus } from './upstream.ts';
@@ -164,6 +164,7 @@ import { contextUsagePart, type ContextUsageAnswer, type ContextUsagePart } from
 import type { SlashCommand } from './slash-commands.ts';
 import { hibernationPart, leastAuthority, type HibernationPart } from './runner/hibernation.ts';
 import { newThreadsPart, type NewThreadsPart } from './runner/new-threads.ts';
+import { warmStartPart, type WarmStartPart, type Spare } from './runner/warm-start.ts';
 import { LAB_REVIEW_ROUNDS, applyAnswers, fixedSinceLastRound, labReviewPart, ledgerCard, openFindings, parseVerdict, type LabReviewPart } from './runner/lab-review.ts';
 import { looseEndsPart, WAITING_TO_LAND_RECHECK_MS, type LooseEndsPart } from './runner/loose-ends.ts';
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
@@ -431,6 +432,9 @@ type Runtime = {
   // stopping save waits for.
   restoreSetup?: Promise<void>;
   session?: AgentSession;
+  // A CLI started ahead of this new thread (runner/warm-start.ts), until
+  // its first start takes it or finds it doesn't fit.
+  spare?: Spare;
   generation: number;
   closing?: Promise<void>;
   releasedGen?: number; // generation of the session being released on purpose
@@ -768,7 +772,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -858,6 +862,9 @@ export class Runner {
   // Set while this runner drains after a handover (docs/protocol.md,
   // "Handovers"): the threads it still keeps, and who hears when one goes.
   draining?: Drain;
+  // The CLI started ahead of a new thread the app is writing
+  // (runner/warm-start.ts).
+  spare?: Spare;
   refusing?: string;
   startedAt = 0;
   startupNotices: { level: 'info' | 'warning' | 'error'; message: string }[] = [];
@@ -1415,6 +1422,7 @@ export class Runner {
   // recovery would end them, rather than as failures when their CLI dies.
   async shutdown(): Promise<void> {
     this.stopping = true;
+    this.dropSpare('runner stopping');
     this.tokenMaker?.stopAll();
     this.snoozeTimer?.cancel();
     this.roomTimer?.cancel();
@@ -2492,6 +2500,46 @@ export class Runner {
     }
   }
 
+  // What a thread's CLI starts with, for startSession and for a CLI started
+  // ahead of a new thread (runner/warm-start.ts), which only fits it while
+  // these come out the same.
+  sessionOptions(st: ThreadState, account: Account, looks: ClaudeLook[] | undefined, resume: boolean): { opts: StartSessionOptions; claude?: ClaudeVerdict; claudeSkipped?: string; heldGrants: boolean } {
+    const { rec } = st;
+    // Read now, not from the patch list's cache: a pull just before this
+    // message may have brought hooks.
+    // One the old sandbox experiment shut in, or in a folder it named.
+    const retired = this.retiredSandbox(rec.cwd, rec);
+    if (retired) throw new Error(retired);
+    const claude = rec.provider === 'claude' ? this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(looks, rec.cwd, claudeOptions(rec))) : undefined;
+    const claudeSkipped = claude && !claude.trusted ? claude.hash : undefined;
+    const heldGrants = Boolean(claude?.trusted && rec.permissionMode === 'full' && !this.patchTrust.checkClaude(rec.cwd, { grants: true }, lookFor(looks, rec.cwd, { grants: true })).trusted);
+    const id = rec.id;
+    const opts: StartSessionOptions = {
+      threadId: rec.id,
+      cwd: rec.cwd,
+      account,
+      model: rec.model,
+      effort: rec.effort,
+      permissionMode: rec.permissionMode,
+      sessionId: rec.nativeSessionId!,
+      resume,
+      ...(resume && rec.resumeAt ? { resumeAt: rec.resumeAt } : {}),
+      mediaDir: this.store.mediaDir(rec.id),
+      blobsDir: this.store.blobsDir(rec.id),
+      tmpDir: path.join(paths.run(this.cfg.home), 'tmp'),
+      allowRules: rec.allowRules ?? [],
+      env: threadEnv(rec.id, this.cfg.home, undefined, this.threadKey?.(rec.id)),
+      ...this.briefFor(rec, resume),
+      ...(claudeSkipped ? { untrustedProjectSettings: claudeSettingsWithoutCommands(rec.cwd) } : {}),
+      // Read at each call, from the thread's folder then (the thread's own
+      // record once there is one: a CLI started ahead of it was started
+      // with a stand-in).
+      runsAsCode: (file) => this.writeRunsAsCode(this.threads.get(id)?.rec ?? rec, file),
+      ...(heldGrants ? { heldGrants: true } : {}),
+    };
+    return { opts, claude, claudeSkipped, heldGrants };
+  }
+
   // `looks`: deliver's look at the folder's Claude Code settings, taken with
   // no wait since; without one, it looks here.
   startSession(st: ThreadState, account: Account, looks?: ClaudeLook[]): void {
@@ -2530,38 +2578,12 @@ export class Runner {
     rt.sessionProvider = rec.provider;
     rt.started = false;
     rt.startVersion = this.cliList()?.find((c) => c.provider === rec.provider)?.installedVersion;
-    // Read now, not from the patch list's cache: a pull just before this
-    // message may have brought hooks.
-    // One the old sandbox experiment shut in, or in a folder it named.
-    const retired = this.retiredSandbox(rec.cwd, rec);
-    if (retired) throw new Error(retired);
-    const claude = rec.provider === 'claude' ? this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(looks, rec.cwd, claudeOptions(rec))) : undefined;
-    rt.claudeSkipped = claude && !claude.trusted ? claude.hash : undefined;
-    rt.claudeHeldGrants = Boolean(claude?.trusted && rec.permissionMode === 'full' && !this.patchTrust.checkClaude(rec.cwd, { grants: true }, lookFor(looks, rec.cwd, { grants: true })).trusted);
-    rt.session = adapter.start(
-      {
-        threadId: rec.id,
-        cwd: rec.cwd,
-        account,
-        model: rec.model,
-        effort: rec.effort,
-        permissionMode: rec.permissionMode,
-        sessionId: rec.nativeSessionId,
-        resume,
-        ...(resume && rec.resumeAt ? { resumeAt: rec.resumeAt } : {}),
-        mediaDir: this.store.mediaDir(rec.id),
-        blobsDir: this.store.blobsDir(rec.id),
-        tmpDir: path.join(paths.run(this.cfg.home), 'tmp'),
-        allowRules: rec.allowRules ?? [],
-        env: threadEnv(rec.id, this.cfg.home, undefined, this.threadKey?.(rec.id)),
-        ...this.briefFor(rec, resume),
-        ...(rt.claudeSkipped ? { untrustedProjectSettings: claudeSettingsWithoutCommands(rec.cwd) } : {}),
-        // Read at each call, from the thread's folder then.
-        runsAsCode: (file) => this.writeRunsAsCode(rec, file),
-        ...(rt.claudeHeldGrants ? { heldGrants: true } : {}),
-      },
-      sink,
-    );
+    const { opts, claude, claudeSkipped, heldGrants } = this.sessionOptions(st, account, looks, resume);
+    rt.claudeSkipped = claudeSkipped;
+    rt.claudeHeldGrants = heldGrants;
+    // A CLI started ahead of this thread with these same options takes the
+    // place of a new one (runner/warm-start.ts).
+    rt.session = this.takeSpare(st, opts, sink) ?? adapter.start(opts, sink);
     // Every input to the CLI (a turn, a steer, a retry after the session
     // went) sends only the thread's own pictures (ownInput), whichever path
     // it took (Codex's review, 17 Nov: a retry re-sent a logged message's
@@ -4929,7 +4951,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart]) {
+for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart, warmStartPart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }
