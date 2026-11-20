@@ -1562,19 +1562,23 @@ to see who spent what. The tokens are read from the Claude and Codex
 transcripts on your Mac, so work done outside Threadbear counts too; the
 first read takes a minute or so after the runner updates.
 
-Below that, each pool has a card for each login in it, with its
-provider's logo, a ring with how much of its week is left, and one line
-saying how it stands: in red, that it's used up and when it's back; in
-orange, when it runs out and how long before the reset; in green, how much
-of the week will go unused, so it's worth leaning on that login; otherwise
-that it's on track, or when it resets. Under that is a small chart of the
-last seven days, rolling, with the days along the bottom: last week's
-readings stay on it after a reset, and your current pace is dashed on to
-the next reset. At the foot is the 5-hour window as a small chip, where
-the login has one, and what it's spent today. Hover the ring, the chart
-or the chip for its rate.
+Below that, each pool has a card with a row for each login in it: a ring
+with how much of its week is left, the provider's logo and the login, and
+one line saying how it stands: in red, that it's used up and when it's
+back; in orange, when it runs out and how long before the reset; in green,
+how much of the week will go unused, so it's worth leaning on that login;
+otherwise that it's on track, or when it resets. At the right is what it's
+spent today.
 
-A login with no number yet says why on its card, with a dashed ring: a
+Click a row to open it. Under it is a small chart of the last seven days,
+rolling, with the days along the bottom: last week's readings stay on it
+after a reset, and your current pace is dashed on to the next reset. Then
+the 5-hour window as a small chip, where the login has one, and the
+login's buttons. Hover the ring, the chart or the chip for its rate. A
+sign-in that's ending or has ended shows under its row even when it's
+shut.
+
+A login with no number yet says why on its row, with a dashed ring: a
 Claude or Codex login that hasn't run a turn here yet; Grok, which shows
 its plan's limit only through its own background service; or OpenCode,
 whose own models spend a balance rather than a weekly limit.
@@ -1585,8 +1589,8 @@ A Claude login with a limit of its own on Fable shows that week too,
 other models, so it never makes a login look full. If you don't use Fable,
 turn off "Show models' own weeks" in Settings › General › Usage.
 
-When a login's week will go partly unused (the green line), its card has
-**Find work for it**. It starts a thread on that login that looks through
+When a login's week will go partly unused (the green line), its open row
+has **Find work for it**. It starts a thread on that login that looks through
 your projects and threads, suggests 2 to 4 jobs worth spending the rest of
 the week on (a deep review, the tests a report said were missing, rough
 options for something you're exploring), and asks before starting any.
