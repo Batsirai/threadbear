@@ -13,6 +13,7 @@ import { clearStateV } from './clearStates';
 import { boxStateV } from './boxStates';
 import { requiredUnlessStepping } from './stepping';
 import { tokenStateV } from './cloudTokenStates';
+import { installStateV } from './relayInstallStates';
 
 // A thread's sharing, as the runner mirrors it (ThreadShare in
 // docs/protocol.md): "link" is readable by anyone with /s/<slug>; "off"
@@ -1351,12 +1352,24 @@ export const appSchema = defineSchema({
     d: v.string(),
     createdAt: v.number(),
   }),
+  // The install saved before relayRegistrations (20 Nov 2026): the first
+  // send after the update takes it over (devices.ts takeRelayInstall) and
+  // deletes it. Nothing writes it now.
   relayInstall: defineTable({
     installId: v.string(),
     installKey: v.string(),
     url: v.string(),
     createdAt: v.number(),
   }),
+
+  // This deployment's install with the push relay, one row per relay
+  // address (push.ts), its lifecycle on a machine (relayInstallMachine.ts):
+  // registering, registered with its id and key, or unregistered.
+  relayRegistrations: defineTable({
+    url: v.string(),
+    installState: installStateV,
+    installStateTimers: machineTimers,
+  }).index('by_url', ['url']),
 
   // Whether pushes are getting through (pushHealth.ts): one row, written
   // by push.ts after each send, read by the owner runner's heartbeat.
@@ -1372,10 +1385,13 @@ export const appSchema = defineSchema({
   // A registration with the push relay in progress (push.ts relayInstall):
   // the nonce sent with it, which the relay posts back to /relay/verify
   // (http.ts) to check the request came from this deployment. Used once,
-  // and gone within minutes either way.
+  // and gone within minutes either way. `attempt` (20 Nov 2026): the
+  // registration it's for (relayInstallStates.ts), which must still hold the
+  // install, with time to spare, for the relay to be told yes.
   relayChecks: defineTable({
     nonce: v.string(),
     createdAt: v.number(),
+    attempt: v.optional(v.string()),
   }).index('by_nonce', ['nonce']),
 
   // Shared memory (API 84, memorySync.ts): the main Mac's global CLAUDE.md
