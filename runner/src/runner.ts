@@ -92,7 +92,8 @@ import type { Models } from './models/index.ts';
 import { localWhen } from './wake-when.ts';
 import { parseWhen } from './when.ts';
 import { SERVER_NAME } from './threadbear-mcp.ts';
-import { archiveFromTool, bylineFromTool, END_TURN_TOOL, endTurnAccepted, endTurnAddedArchive, endTurnAddedSnooze, snoozeFromTool, waitForFromTool, endTurnAsksForMessage, endTurnIsOneReply, endTurnMessageStands, endTurnOwesReply, endTurnRefusedRepeat, endTurnRefusedUnread, endTurnTaken, endTurnWantsReply, needsFromText, needsFromTool, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, WakeRead } from './needs.ts';
+import { archiveFromTool, bylineFromTool, END_TURN_TOOL, snoozeFromTool, waitForFromTool, WakeRead } from './needs.ts';
+import { dropsStream, replyTurn, turnNeeds, type ReplyEvent, type ReplyMove, type ReplyOut } from './reply-phase.ts';
 import type { Needs } from './needs.ts';
 import { asksForAppRestart, MAX_AGE_MS as APP_RESTART_MAX_AGE_MS } from './app-restarts.ts';
 import type { ConnectorsStatus } from './connectors.ts';
@@ -321,6 +322,8 @@ export type Turn = {
   // Folders its shell commands worked in (commandFolders), so the
   // librarian knows the repo a thread in a catch-all folder works on.
   workedIn?: Set<string>;
+  // The reply phase, from endTurn to finalTexts: written only by
+  // reply-phase.ts's replyTurn (Runner.reply), which says how they move.
   // The agent's own end_turn input and last text, for what the turn needs
   // from Mike (needs.ts). Never a sub-agent's.
   endTurn?: Record<string, unknown>;
@@ -374,11 +377,9 @@ export type Turn = {
   // the next end_turn is that card, not a repeat (needs.ts, REPLY_ASKS).
   cardReopened?: boolean;
   // The reply a one-reply turn wrote after its last end_turn (the texts
-  // marked final, by item: a reply can come as several blocks), and, once a
-  // reopened turn's card is taken, that reply waiting to be written again
-  // under it (onOutput).
+  // marked final, by item: a reply can come as several blocks), written
+  // again under a reopened turn's card once it's taken (onOutput).
   finalTexts?: Map<string, string>;
-  restateReply?: string;
   // ...for a reply that links files that aren't there (needs.ts,
   // missingLinksNudge): that end_turn asks for a whole new reply, which the
   // apps show in the first one's place, as they do after any later card.
@@ -2121,17 +2122,10 @@ export class Runner {
     this.markOlderInputs(st, msg);
     (turn.inputs ??= new Map()).set(msg.turnId, event.seq);
     turn.messages.push(msg.turnId);
-    // He wrote again, so the turn owes him another reply.
-    turn.ended = false;
-    turn.owedReply = undefined;
-    // ...and a card it was sent back for (needs.ts, REPLY_ASKS) gives way to
-    // this message's own: the reply written before it isn't its answer, so
-    // it isn't written again under that card (from Codex's review).
-    turn.cardReopened = false;
-    turn.replyRewrite = false;
-    // ...and an archive it asked for before reading this is off: "wait, one
-    // more thing" shouldn't send the thread away. It can ask again.
-    if (turn.endTurn) turn.endTurn = { ...turn.endTurn, archive: false, snooze: undefined, waitFor: undefined };
+    // He wrote again, so the turn owes him another reply; a card it was sent
+    // back for (needs.ts, REPLY_ASKS) gives way to this message's own (from
+    // Codex's review); an archive it asked for before reading this is off.
+    this.reply(st, { kind: 'message' });
     this.markDirty(st);
     // A change reaches a running turn too, or a clear could wait out as many
     // messages as were sent into it (Codex review).
@@ -2150,14 +2144,22 @@ export class Runner {
   // stop without another. A one-reply turn's text stays its reply (replyAfter,
   // marked final), so a report written after the wake shows even without a
   // new end_turn (TranscriptReducer, reply(of:), picks among them).
-  seeWake(turn: Turn, ev: { type: string; itemId?: string; wake?: true }): void {
+  seeWake(st: ThreadState, ev: { type: string; itemId?: string; wake?: true }): void {
+    const turn = st.rt.turn;
+    if (!turn) return;
     turn.wake ??= new WakeRead();
-    if (!turn.wake.see(ev) || !(turn.ended || turn.tookEndTurn)) return;
-    turn.ended = false;
-    turn.owedReply = undefined;
-    turn.headline = false;
-    turn.summarized = false;
-    turn.narrationItem = undefined;
+    if (turn.wake.see(ev)) this.reply(st, { kind: 'wakeRead' });
+  }
+
+  // Moves the running turn's reply phase (reply-phase.ts), the only way
+  // its fields change. A refusal (fields that fit no phase) leaves them
+  // and is logged; the event then goes as in a turn with no end_turn.
+  reply(st: ThreadState, e: ReplyEvent): ReplyMove | undefined {
+    const turn = st.rt.turn;
+    if (!turn) return undefined;
+    const res = replyTurn(turn, e);
+    if (!res.ok) this.log.warn('refused a reply phase move', { threadId: st.rec.id, event: e.kind, reason: res.reason });
+    return res;
   }
 
   private markOlderInputs(st: ThreadState, msg: QueuedSend): void {
@@ -2598,48 +2600,37 @@ export class Runner {
       }
       case 'event': {
         let ev = o.event;
-        if (rt.turn) this.seeWake(rt.turn, ev);
+        this.seeWake(st, ev);
         // The CLI's own line for a compaction this runner asked for ahead of
         // the turn says why (runner/cold-compact.ts).
         if (ev.type === 'system.note' && ev.text === 'Compacted the conversation' && rt.turn?.precompact && !rt.turn.precompact.noted) {
           rt.turn.precompact.noted = true;
           ev = { ...ev, text: this.coldNote(rt.turn.precompact) };
         }
-        // Text after an accepted end_turn (see Turn.ended), dropped before
-        // it can become the preview or a second message. Unless the reply
-        // was a narration block's summary: then this is the reply, in the
-        // summary's place. Thinking after it is dropped too: Opus mused
-        // "I'd already wrapped up" under its summary (29 Oct 2026).
-        if (rt.turn?.replyAfter && (ev.type === 'assistant.text' || ev.type === 'reasoning') && !ev.itemId.includes('/')) {
-          // One reply: this is the reply (or the thinking before it, which
-          // folds into the work), not text to drop. A "What I need from
-          // you" section comes off it when end_turn brought no card of its
-          // own, and becomes the card (needs.ts, splitReplySection). When
-          // end_turn did bring asks, one repeating them just comes off
-          // (replyWithoutRepeat).
-          if (ev.type === 'assistant.text') {
-            const tool = rt.turn.endTurn ? needsFromTool(rt.turn.endTurn) : undefined;
-            const split = !tool?.asks?.length && !tool?.next?.length ? splitReplySection(ev.text) : undefined;
-            if (split?.needs) {
-              rt.turn.replyNeeds = split.needs;
-              this.log.info('took the card from the reply', { threadId: rec.id, needs: split.needs.needs, asks: split.needs.asks?.length ?? 0 });
-            }
-            const text = split?.needs ? split.reply : tool?.asks?.length ? replyWithoutRepeat(ev.text, tool) : ev.text;
-            ev = { type: 'assistant.text', itemId: ev.itemId, text, final: true, ...(ev.narration ? { narration: true as const } : {}) };
-            if (text.trim()) (rt.turn.finalTexts ??= new Map()).set(ev.itemId, text);
+        // A Codex child's items carry its prefix (<child>/<id>); Claude's
+        // sub-agents never reach the thread's events.
+        const own = !('itemId' in ev && ev.itemId?.includes('/'));
+        // The agent's own words after an accepted end_turn (reply-phase.ts):
+        // dropped before they can become the preview or a second message,
+        // thinking too (Opus mused "I'd already wrapped up" under its
+        // summary, 29 Oct 2026). Unless it's the reply (one reply), the real
+        // message a narration block's summary stood for, in its place, or
+        // the message bullets stood for.
+        if (own && (ev.type === 'assistant.text' || ev.type === 'reasoning')) {
+          const said = this.reply(st, ev.type === 'assistant.text' ? { kind: 'text', itemId: ev.itemId, text: ev.text, ...(ev.narration ? { narration: true } : {}) } : { kind: 'reasoning', itemId: ev.itemId });
+          const out = said?.ok ? said.out : undefined;
+          if (out?.tookCard) this.log.info('took the card from the reply', { threadId: rec.id, needs: out.tookCard.needs, asks: out.tookCard.asks?.length ?? 0 });
+          if (out?.route === 'dropped') {
+            rt.inProgress.delete(ev.itemId);
+            this.log.info('dropped text after end_turn', { threadId: rec.id, chars: ev.text.length });
+            break;
           }
-        } else if (ev.type === 'assistant.text' && rt.turn?.ended && !ev.itemId.includes('/') && rt.turn.narrationItem && !rt.turn.summarized && ev.text.trim()) {
-          rt.inProgress.delete(ev.itemId);
-          this.log.info('replaced a summary with the text after end_turn', { threadId: rec.id, chars: ev.text.length });
-          ev = { type: 'assistant.text', itemId: rt.turn.narrationItem, text: ev.text };
-          rt.turn.narrationItem = undefined;
-        } else if (ev.type === 'assistant.text' && rt.turn?.ended && rt.turn.owedReply !== undefined && !ev.itemId.includes('/') && ev.text.trim().length > rt.turn.owedReply) {
-          this.log.info('kept the message after end_turn its bullets stood for', { threadId: rec.id, chars: ev.text.length });
-          rt.turn.owedReply = undefined;
-        } else if ((ev.type === 'assistant.text' || ev.type === 'reasoning') && rt.turn?.ended && !ev.itemId.includes('/')) {
-          rt.inProgress.delete(ev.itemId);
-          this.log.info('dropped text after end_turn', { threadId: rec.id, chars: ev.text.length });
-          break;
+          if (out?.route === 'summaryReplaced') {
+            rt.inProgress.delete(ev.itemId);
+            this.log.info('replaced a summary with the text after end_turn', { threadId: rec.id, chars: ev.text.length });
+          }
+          if (out?.route === 'owedKept') this.log.info('kept the message after end_turn its bullets stood for', { threadId: rec.id, chars: ev.text.length });
+          if (out?.text && (out.route === 'reply' || out.route === 'summaryReplaced')) ev = { type: 'assistant.text', ...out.text };
         }
         if (ev.type === 'assistant.text' || ev.type === 'reasoning') {
           this.flushDeltas(st);
@@ -2649,66 +2640,17 @@ export class Runner {
         // Once the turn has its summary, that is the reply: Codex's final
         // answer after it folds away in the app and isn't the preview.
         if (ev.type === 'assistant.text' && !rt.turn?.summarized && !rt.turn?.headline && ev.text.trim()) rec.preview = oneLine(ev.text, LIMITS.previewChars);
+        // end_turn's call and its result move the reply phase (reply-phase.ts):
+        // what the result took, refused or added, and what it writes.
+        let ended: ReplyOut | undefined;
         if (rt.turn) {
-          // A Codex child's items carry its prefix (<child>/<id>); Claude's
-          // sub-agents never reach the thread's events.
-          const own = !('itemId' in ev && ev.itemId?.includes('/'));
-          if (ev.type === 'assistant.text' && own && !rt.turn.summarized) {
-            rt.turn.lastText = ev.text;
-            rt.turn.narrationItem = ev.narration ? ev.itemId : undefined;
-          }
           if (ev.type === 'tool.call' && own && ev.name === `mcp__${SERVER_NAME}__${END_TURN_TOOL}`) {
-            rt.turn.endTurnBefore = rt.turn.endTurn;
-            rt.turn.endTurn = ev.input;
-            rt.turn.endTurnBy = leastAuthority(rt.turn.endTurnBy, this.authorityNow(rec.id));
-            rt.turn.endTurnCall = ev.itemId;
+            this.reply(st, { kind: 'call', itemId: ev.itemId, input: ev.input, by: leastAuthority(rt.turn.endTurnBy, this.authorityNow(rec.id)) });
           }
-          // A refused repeat changes nothing: its archive once took effect
-          // under a result saying it hadn't, and its card replaced the one
-          // Mike was told about. One that adds archive adds only that.
-          if (ev.type === 'tool.result' && ev.itemId === rt.turn.endTurnCall) {
-            // Any refusal after one it took, not just ALREADY_ENDED: a bad
-            // snooze or waitFor on a repeat once turned an ask into Done.
-            // ...nor does one refused for a message it was written without
-            // (needs.ts, UNREAD_MESSAGE): a first call's arguments otherwise
-            // stand as the card of a turn that ends with no other, and this
-            // one's are about the turn before that message.
-            if (endTurnRefusedRepeat(ev) || endTurnRefusedUnread(ev) || (!ev.ok && (rt.turn.ended || rt.turn.tookEndTurn))) rt.turn.endTurn = rt.turn.endTurnBefore;
-            else if (endTurnTaken(ev)) {
-              rt.turn.tookEndTurn = true;
-              // The card a reopened turn was sent back for, told "your
-              // message above is the reply": the apps take a turn's reply
-              // from after its last card, and fold a final message before
-              // it away as one a wake replaced, so the reply is written
-              // again under this card (below, once the result is out).
-              // All of its blocks, or the Mac kept only the closing
-              // question of a reply written as two (from Codex's review).
-              rt.turn.restateReply = rt.turn.cardReopened && endTurnMessageStands(ev) && rt.turn.finalTexts?.size ? [...rt.turn.finalTexts.values()].join('\n\n') : undefined;
-              rt.turn.cardReopened = false;
-              rt.turn.replyRewrite = false;
-              // A reply asked for now is a new one.
-              if (endTurnWantsReply(ev)) rt.turn.finalTexts = undefined;
-              // Every taken one, Codex's older "Noted." too: one that isn't
-              // one-reply means text after it isn't the reply (from Codex's
-              // review). A "Done." after one took a full reply's place on
-              // 11 Nov 2026 (dcdc60a3).
-              rt.turn.replyAfter = endTurnWantsReply(ev);
-            }
-            else if (endTurnAddedArchive(ev)) rt.turn.endTurn = { ...rt.turn.endTurnBefore, archive: true };
-            else if (endTurnAddedSnooze(ev)) rt.turn.endTurn = { ...rt.turn.endTurnBefore, snooze: rt.turn.endTurn?.snooze };
-          }
-          if (ev.type === 'tool.result' && ev.itemId === rt.turn.endTurnCall && endTurnAccepted(ev)) {
-            rt.turn.ended = true;
-            const headline = typeof rt.turn.endTurn?.headline === 'string' ? rt.turn.endTurn.headline.trim() : '';
-            if (headline) {
-              rt.turn.headline = true;
-              rec.preview = oneLine(headline, LIMITS.previewChars);
-            }
-            // A "What I need from you" taken from a reply before a wake
-            // stands until now (reopenForWake).
-            rt.turn.replyNeeds = undefined;
-            const bullets = endTurnIsOneReply(ev) ? undefined : summaryFromTool(rt.turn.endTurn);
-            rt.turn.owedReply = !bullets ? undefined : endTurnAsksForMessage(ev) ? 0 : endTurnOwesReply(ev) ? summaryMarkdown(bullets).length : undefined;
+          if (ev.type === 'tool.result') {
+            const res = this.reply(st, { kind: 'result', itemId: ev.itemId, ok: ev.ok, text: ev.text });
+            ended = res?.ok ? res.out : undefined;
+            if (ended?.headline) rec.preview = oneLine(ended.headline, LIMITS.previewChars);
           }
           // For hooks and the librarian only, never trust: these include
           // previews (an edit.diff before approval) and edits that were
@@ -2726,22 +2668,16 @@ export class Runner {
           }
         }
         this.emit(st, ev, rt.turn?.turnId);
-        if (ev.type === 'tool.result' && rt.turn?.restateReply !== undefined && ev.itemId === rt.turn.endTurnCall) {
-          const text = rt.turn.restateReply;
-          rt.turn.restateReply = undefined;
-          this.emit(st, { type: 'assistant.text', itemId: `${ev.itemId}.reply`, text, final: true }, rt.turn.turnId);
+        // The reply a reopened turn wrote, again under the card it was sent
+        // back for: the apps take a turn's reply from after its last card.
+        if (ev.type === 'tool.result' && ended?.restate !== undefined) {
+          this.emit(st, { type: 'assistant.text', itemId: `${ev.itemId}.reply`, text: ended.restate, final: true }, rt.turn?.turnId);
         }
         // end_turn's summary, written as the turn's reply straight after
         // the call it came in (docs/protocol/needs-you.md, "The summary").
-        if (ev.type === 'tool.result' && rt.turn && ev.itemId === rt.turn.endTurnCall && endTurnTaken(ev)) {
-          const bullets = endTurnIsOneReply(ev) ? undefined : summaryFromTool(rt.turn.endTurn);
-          if (bullets) {
-            const text = summaryMarkdown(bullets);
-            rt.turn.summarized = true;
-            rt.turn.lastText = text;
-            rec.preview = oneLine(text, LIMITS.previewChars);
-            this.emit(st, { type: 'assistant.text', itemId: `${ev.itemId}.summary`, text, summary: true, ...(this.cfg.bulletReplies ? {} : { givesWay: true as const }) }, rt.turn.turnId);
-          }
+        if (ev.type === 'tool.result' && ended?.summary !== undefined) {
+          rec.preview = oneLine(ended.summary, LIMITS.previewChars);
+          this.emit(st, { type: 'assistant.text', itemId: `${ev.itemId}.summary`, text: ended.summary, summary: true, ...(this.cfg.bulletReplies ? {} : { givesWay: true as const }) }, rt.turn?.turnId);
         }
         break;
       }
@@ -2750,8 +2686,8 @@ export class Runner {
         // above, so it doesn't flash up and vanish.
         // That includes the message an owed reply keeps (owedReply): it
         // lands whole, as a sign-off line it drops would leave a row behind.
-        if (rt.turn && (o.delta.type === 'assistant.text.delta' || o.delta.type === 'reasoning.delta')) this.seeWake(rt.turn, { type: 'assistant.text', itemId: o.delta.itemId });
-        if (rt.turn?.ended && !rt.turn.replyAfter && (o.delta.type === 'assistant.text.delta' || o.delta.type === 'reasoning.delta') && !o.delta.itemId.includes('/')) break;
+        if (o.delta.type === 'assistant.text.delta' || o.delta.type === 'reasoning.delta') this.seeWake(st, { type: 'assistant.text', itemId: o.delta.itemId });
+        if (rt.turn && dropsStream(rt.turn) && (o.delta.type === 'assistant.text.delta' || o.delta.type === 'reasoning.delta') && !o.delta.itemId.includes('/')) break;
         this.addDelta(st, o.delta);
         break;
       case 'session':
@@ -2825,14 +2761,9 @@ export class Runner {
         if (o.note) this.emit(st, { type: 'system.note', text: o.note }, rt.turn!.turnId);
         break;
       case 'endTurnNudge':
-        if (rt.turn) rt.turn.endTurnNudged = true;
         // Sent back for a card under a reply already written: that reply
         // stands, so words from here are dropped like any after end_turn.
-        if (rt.turn && o.reopen && rt.turn.ended) {
-          rt.turn.cardReopened = true;
-          rt.turn.replyAfter = false;
-          rt.turn.replyRewrite = o.rewrite === true;
-        }
+        this.reply(st, { kind: 'nudge', reopen: o.reopen === true, rewrite: o.rewrite === true });
         break;
       case 'tasks': {
         const endedTasks = rt.tasks.filter((t) => !o.tasks.some((n) => n.id === t.id));
@@ -5124,17 +5055,6 @@ export function cleanTitle(text: string): string {
   const at = (text ?? '').indexOf(t);
   if (t && (at < 0 || !isSafeSlice(text, at, at + t.length))) return '';
   return t;
-}
-
-// What a completed turn needs from Mike: its end_turn call, then its last
-// text's "What I need from you" section, else nothing said.
-function turnNeeds(turn: Turn): (Needs & { from: 'tool' | 'text' }) | undefined {
-  const tool = turn.endTurn && needsFromTool(turn.endTurn);
-  if (turn.replyNeeds) return { ...turn.replyNeeds, from: 'text' };
-  if (tool) return { ...tool, from: 'tool' };
-  if (turn.command) return undefined;
-  const text = turn.lastText && needsFromText(turn.lastText);
-  return text ? { ...text, from: 'text' } : undefined;
 }
 
 // The sidebar's "You: ..." line: what Mike last said to a thread, in one
