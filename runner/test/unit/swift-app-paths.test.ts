@@ -83,12 +83,15 @@ const PROSE = /\.(md|html|txt|svg|png|jpg|jpeg|gif|pdf|mp4|mov|webm|ico|icns|ttf
 // every path inside them (folders too) and the links there, to check a
 // reference against. Git's, not the disk's: a build folder isn't a use, and
 // the disk's app/readme.md is app/README.md on a Mac.
-type Tracked = { files: string[]; links: string[]; inside: Set<string>; insideLinks: Set<string> };
+// links: each link outside app/ and dock/, and where it points, from git (a
+// Windows checkout may write one as a file, a link or a copy).
+type Tracked = { files: string[]; links: Map<string, string>; inside: Set<string>; insideLinks: Set<string> };
 let cached: Tracked | undefined;
 function tracked(): Tracked {
   if (cached) return cached;
   const out = execFileSync('git', ['-C', ROOT, 'ls-files', '-s', '-z'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-  const t: Tracked = { files: [], links: [], inside: new Set(), insideLinks: new Set() };
+  const t: Tracked = { files: [], links: new Map(), inside: new Set(), insideLinks: new Set() };
+  const linkBlobs: [string, string][] = [];
   for (const entry of out.split('\0').filter(Boolean)) {
     const file = entry.slice(entry.indexOf('\t') + 1);
     const link = entry.startsWith('120000 ');
@@ -96,7 +99,20 @@ function tracked(): Tracked {
       if (link) t.insideLinks.add(file);
       for (let p = file; p.includes('/'); p = p.slice(0, p.lastIndexOf('/'))) t.inside.add(p);
     } else if (!file.startsWith('docs/archive/') && !file.startsWith('.check-') && file !== SELF) {
-      (link ? t.links : t.files).push(file);
+      if (link) linkBlobs.push([file, entry.split(' ')[1]]);
+      else t.files.push(file);
+    }
+  }
+  if (linkBlobs.length) {
+    // A link's blob is where it points: one cat-file for them all.
+    const out = execFileSync('git', ['-C', ROOT, 'cat-file', '--batch'], { input: linkBlobs.map(([, blob]) => blob).join('\n') + '\n', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    let at = 0;
+    for (const [file] of linkBlobs) {
+      const header = out.slice(at, out.indexOf('\n', at));
+      const size = Number(header.split(' ')[2]);
+      const start = at + header.length + 1;
+      t.links.set(file, out.slice(start, start + size));
+      at = start + size + 1;
     }
   }
   cached = t;
@@ -160,9 +176,8 @@ function scan(): Map<string, string[]> {
     const refs = references(file).filter((r) => !LOOKALIKES[file]?.includes(r));
     if (refs.length) hits.set(file, refs);
   }
-  for (const link of links) {
+  for (const [link, target] of links) {
     // A Windows checkout writes a link as a file holding where it points.
-    const target = process.platform === 'win32' ? fs.readFileSync(path.join(ROOT, link), 'utf8').trim() : fs.readlinkSync(path.join(ROOT, link));
     const to = path.posix.normalize(path.posix.join(path.posix.dirname(link), target));
     if (/^(app|dock)\//.test(to)) hits.set(link, [to]);
   }
