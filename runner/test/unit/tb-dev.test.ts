@@ -21,7 +21,7 @@ const TB = path.resolve(import.meta.dirname, '..', '..', 'bin', 'tb');
 // How tb prints itself: quoted when the checkout path has a space (the
 // runner's update checkout is under ~/Library/Application Support).
 const TB_SH = shQuote(TB);
-const MOCK = path.join(import.meta.dirname, '..', '..', '..', 'app', 'Tools', 'mock-runner');
+const MOCK = path.join(import.meta.dirname, '..', '..', '..', 'mock-runner');
 
 const T: ThreadSummary = {
   id: 'abcdef12-0000-4000-8000-000000000000',

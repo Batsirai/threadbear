@@ -20,6 +20,16 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '../../..');
 const SELF = path.relative(ROOT, import.meta.filename).split(path.sep).join('/');
 
+// Where each moved on 21 Nov 2026. git's rename detection carries a branch's
+// edits to the files across, but a file it adds in a new folder (a new demo
+// fixture) stays where it was made, silently, where nothing reads it.
+const MOVED: Record<string, string> = {
+  'app/Tools/mock-runner/': 'mock-runner/',
+  'app/Tools/droptarget.swift': 'features/tools/droptarget.swift',
+  'app/Tools/post-gesture.swift': 'features/tools/post-gesture.swift',
+  'app/Tools/realdrag.swift': 'features/tools/realdrag.swift',
+};
+
 // file → why it still names the Swift app's folders. Deletion day: each of
 // these changes or goes with them.
 const ALLOWED: Record<string, string> = {
@@ -52,7 +62,11 @@ const LOOKALIKES: Record<string, string[]> = {
   'runner/test/fixtures/pool-folder-cases.json': ['app/Tests/Fixtures'],
   'runner/test/unit/agent-write-trust.test.ts': ['app/Sources/ThreadbearCore/Protocol/Models.swift'],
   'runner/test/unit/project-icons.test.ts': ['app/icons/threadbear.png'],
-  'runner/test/unit/swift-changes.test.ts': ['app/Sources/Threadbear/Resources/Art/librarian.png', 'app/Sources/Threadbear/Resources/Rich/pele.js'],
+  // A fork's checkout from before the move, found by its old mock runner.
+  'runner/src/tb-dev.ts': ['app/Tools/mock-runner/server.mjs'],
+  'runner/test/unit/tb-dev.test.ts': ['app/Tools/mock-runner', 'app/Tools/mock-runner/server.mjs'],
+  'runner/test/unit/fix-link-kinds.test.ts': ['app/Tools/mock-runner'],
+  'runner/test/unit/swift-changes.test.ts': ['app/Tools/mock-runner/server.mjs', 'app/Tools/realdrag.swift', 'app/Sources/Threadbear/Resources/Art/librarian.png', 'app/Sources/Threadbear/Resources/Rich/pele.js'],
   'site/scripts/clips/turns.json': ['app/Sources'],
 };
 
@@ -89,9 +103,10 @@ function tracked(): Tracked {
   return t;
 }
 
-// Whether the part of a line before a match is a comment.
+// Whether the part of a line before a match is a comment: one starting the
+// line, or a // or # one after code (not a ` -- ` or ` * `, which are code).
 function inComment(before: string): boolean {
-  return /(^|\s)(\/\/|#|\/\*|\*|<!--|--)(\s|$)/.test(before) || /^\s*(\/\/|#|\*|\/\*)/.test(before);
+  return /^\s*(\/\/|#|\*|\/\*|<!--)/.test(before) || /(^|\s)(\/\/|#)(\s|$)/.test(before);
 }
 
 // A real path in app/ or dock/ (a glob's fixed part; anything under one of
@@ -102,11 +117,13 @@ function real(top: string, rest: string): string | undefined {
   const glob = parts.findIndex((p) => p.includes('*'));
   const fixed = [top, ...(glob < 0 ? parts : parts.slice(0, glob))];
   if (fixed.some((p) => p === '.' || p === '..' || p === '')) return undefined;
+  const rel = fixed.join('/');
+  // An old home of something that moved out, which is gone now.
+  if (Object.keys(MOVED).some((from) => (from.endsWith('/') ? `${rel}/`.startsWith(from) : rel === from))) return rel;
   const { inside, insideLinks } = tracked();
   for (let n = 2; n <= fixed.length; n++) {
     if (insideLinks.has(fixed.slice(0, n).join('/'))) return fixed.join('/');
   }
-  const rel = fixed.join('/');
   return inside.has(rel) || (fixed.length === 1 && inside.size > 0) ? rel : undefined;
 }
 
@@ -144,7 +161,9 @@ function scan(): Map<string, string[]> {
     if (refs.length) hits.set(file, refs);
   }
   for (const link of links) {
-    const to = path.relative(ROOT, path.resolve(path.dirname(path.join(ROOT, link)), fs.readlinkSync(path.join(ROOT, link)))).split(path.sep).join('/');
+    // A Windows checkout writes a link as a file holding where it points.
+    const target = process.platform === 'win32' ? fs.readFileSync(path.join(ROOT, link), 'utf8').trim() : fs.readlinkSync(path.join(ROOT, link));
+    const to = path.posix.normalize(path.posix.join(path.posix.dirname(link), target));
     if (/^(app|dock)\//.test(to)) hits.set(link, [to]);
   }
   return hits;
@@ -165,16 +184,6 @@ test('everything in ALLOWED still uses them, so the list is exactly what deletio
   const stale = Object.keys(ALLOWED).filter((file) => !hits.has(file));
   assert.deepEqual(stale, [], 'These no longer name app/ or dock/: take them out of ALLOWED');
 });
-
-// Where each moved on 21 Nov 2026. git's rename detection carries a branch's
-// edits to the files across, but a file it adds in a new folder (a new demo
-// fixture) stays where it was made, silently, where nothing reads it.
-const MOVED: Record<string, string> = {
-  'app/Tools/mock-runner/': 'mock-runner/',
-  'app/Tools/droptarget.swift': 'features/tools/droptarget.swift',
-  'app/Tools/post-gesture.swift': 'features/tools/post-gesture.swift',
-  'app/Tools/realdrag.swift': 'features/tools/realdrag.swift',
-};
 
 test('nothing is left in the old homes of what moved out of app/', () => {
   const out = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', 'app/Tools'], { encoding: 'utf8' }).split('\0').filter(Boolean);

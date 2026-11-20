@@ -2,12 +2,14 @@
 // copy of it, a path that became a link (the Swift app's Resources/Art, 21 Nov 2026)
 // or stopped being one (the iPhone kit's Swift files) is taken out of the
 // copy, as macOS's rsync can't swap those over itself.
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
+import { testSkippedOnWindows } from '../helpers/platform.ts';
+
+const test = testSkippedOnWindows('it fixes copies on the Mac and Linux check hosts, with links and bash');
 
 const SCRIPT = path.resolve(import.meta.dirname, '../../../scripts/fix-link-kinds.sh');
 

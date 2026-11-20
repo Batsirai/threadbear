@@ -208,6 +208,12 @@ for a in "$@"; do
   args+=("$a")
 done
 
+# And the slot is left without links when done: an older checkout's copy of
+# this script (one not rebased onto that change) has no such step, and its
+# rsync fails on links this one left; with none there it makes them anew.
+if [ -f "$copy/scripts/fix-link-kinds.sh" ]; then
+  trap 'bash "$copy/scripts/fix-link-kinds.sh" "$dir/src"' EXIT
+fi
 rc=0
 (
   cd "$dir/src$rel" || exit 1

@@ -28,16 +28,17 @@ fi
 copy="${1:?usage: fix-link-kinds.sh <copy> [<link>...]}"
 shift
 cd "$copy" 2>/dev/null || exit 0
-# A path that's a link in the checkout and something else here.
-for p in "$@"; do
-  if [ -e "$p" ] && [ ! -L "$p" ]; then rm -rf -- "$p"; fi
-done
-# A link here that isn't one in the checkout.
+# A link here that isn't one in the checkout. First, so the loop below never
+# reaches through an old link to a folder (it would delete what's there).
 find . "${prune[@]}" -type l -print | sed 's|^\./||' | while IFS= read -r p; do
   keep=0
   for l in "$@"; do
     if [ "$l" = "$p" ]; then keep=1; break; fi
   done
   [ "$keep" = 1 ] || rm -f -- "$p"
+done
+# A path that's a link in the checkout and something else here.
+for p in "$@"; do
+  if [ -e "$p" ] && [ ! -L "$p" ]; then rm -rf -- "$p"; fi
 done
 exit 0

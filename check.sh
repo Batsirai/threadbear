@@ -292,8 +292,9 @@ links_out() {
   while IFS= read -r link; do
     to="$(readlink "$link")"
     dir="$(cd "$(dirname "$link")" && cd "$(dirname "$to")" 2>/dev/null && pwd -P)" || continue
-    to="${dir#"$ROOT_REAL"/}/$(basename "$to")"
     case "$dir/" in "$ROOT_REAL/$from"/*|"$ROOT_REAL/$from/") continue ;; "$ROOT_REAL"/*) ;; *) continue ;; esac
+    to="$dir/$(basename "$to")"
+    to="${to#"$ROOT_REAL"/}"
     printf '%s\n' "$to" | grep -E "$into" >/dev/null || continue
     out="$out|^$(printf '%s' "$to" | sed 's/[][\\.*^$()+?{}|]/\\&/g')"
     [ -d "$ROOT_REAL/$to" ] && out="$out/"

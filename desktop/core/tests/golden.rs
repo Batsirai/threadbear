@@ -289,7 +289,10 @@ fn a_rewrite_changes_nothing() {
     for entry in fs::read_dir(&golden).expect("the golden folder") {
         let path = entry.expect("an entry").path();
         if path.extension().is_some_and(|e| e == "json") {
-            let text = fs::read_to_string(&path).expect("a golden file");
+            // As committed: a Windows checkout may have made the ends CRLF.
+            let text = fs::read_to_string(&path)
+                .expect("a golden file")
+                .replace("\r\n", "\n");
             let value: Value = serde_json::from_str(&text).expect("a golden file parses");
             assert!(
                 swift_json(&value) == text,
