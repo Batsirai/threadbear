@@ -140,6 +140,39 @@ test('looseEnds: a done turn gets a check on its summary, kept up to date, and o
   assert.equal(s.looseEnds, undefined);
 });
 
+// 20 Nov 2026: a review-window fix ended its turn with its second review
+// round running in a shell and no end_turn. The sidebar had it under Running,
+// but its starter's done card said it "is waiting for you".
+test("looseEnds: a thread it started with a job in the background is still working, not waiting for Alex", async () => {
+  const h = setup();
+  const parent = h.runner.create({ text: 'Build the site', accountId: 'claude-main', cwd: fs.realpathSync(tmpDir('tb-loose-parent-')) }).thread.id;
+  finish(h, parent);
+  await until(() => Boolean(h.runner.get(parent).looseEnds), "the starter's check");
+  const child = h.runner.create({ text: 'Fix the review window', accountId: 'claude-main', cwd: fs.realpathSync(tmpDir('tb-loose-child-')), startedBy: { kind: 'thread', label: 'Agent', threadId: parent } }).thread.id;
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === child).at(-1)!;
+  s.init();
+  s.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'Second review round' }] });
+  // Its turn ends with words and no end_turn: unread, and no card saying it needs nothing.
+  s.text('m1', 'The second round of reviews is running.');
+  s.result('completed');
+  const line = () => h.runner.get(parent).looseEnds?.ends.find((e) => e.threadId === child)?.text;
+  await until(() => Boolean(line()), 'the child listed');
+  assert.match(line()!, /is still working$/);
+  // Once the job is done and its turn asks nothing more, it's off the card.
+  (h.adapter as { wakesAfterTasks?: boolean }).wakesAfterTasks = false;
+  s.out({ kind: 'tasks', tasks: [] });
+  await until(() => /waiting for you$/.test(line() ?? ''), 'the child waiting once its job is done');
+  // A card asking Alex something wins over a job still going, as in the sidebar.
+  h.runner.send(child, 'and this');
+  const s2 = h.adapter.sessions.filter((x) => x.opts.threadId === child).at(-1)!;
+  s2.init();
+  s2.out({ kind: 'tasks', tasks: [{ id: 'b2', type: 'local_bash', kind: 'shell', description: 'npm test' }] });
+  finish(h, child, { needs: 'you', asks: [{ question: 'Deploy it?' }] });
+  await until(() => Boolean(h.runner.get(child).background?.length) && h.runner.get(child).needs === 'you', 'the ask with a job going');
+  h.runner.recheckLooseEnds(h.runner.threads.get(parent)!);
+  await until(() => /waiting for you$/.test(line() ?? ''), 'the ask winning');
+});
+
 test('looseEnds: a thread hibernating to wait for its own landing is checked again, so it leaves Running once landed', async () => {
   const h = setup();
   const parent = h.runner.create({ text: 'Plan it', accountId: 'claude-main' }).thread.id;

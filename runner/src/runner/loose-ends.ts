@@ -60,7 +60,13 @@ export const looseEndsPart = {
       // restarting onto what it landed) is still working, as the sidebar has it.
       // So is hibernating until something it watches for with its commits not on main yet.
       const waiting = Boolean(s.waitingOn?.some((w) => !w.done) || s.awaitingAppRestart || (s.wakeWhen?.agent && s.wakeWhen.topic && s.looseEnds?.ends.some((e) => e.kind === 'unlanded')));
-      children.push({ id: o.id, title: o.title, working: o.status === 'running' || o.status === 'starting' || waiting, needsYou: s.needsYou && s.needs !== 'nothing' });
+      // So is one with a job still going in the background, unless its card
+      // asks Mike for something: the sidebar has it under Running too
+      // (inbox.rs, section_of). On 20 Nov a review-window fix whose turn
+      // ended with its second review round running in a shell sat under
+      // Running, but its starter's done card said it "is waiting for you".
+      const background = Boolean(s.background?.length) && s.needs !== 'you';
+      children.push({ id: o.id, title: o.title, working: o.status === 'running' || o.status === 'starting' || waiting || background, needsYou: s.needsYou && s.needs !== 'nothing' });
     }
     return childLooseEnds(children);
   },

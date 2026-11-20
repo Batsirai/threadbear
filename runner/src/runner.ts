@@ -2876,8 +2876,10 @@ export class Runner {
         // pending restart waits on background work and re-checks on
         // thread.updated.
         this.markDirty(st);
-        // A done card that lists a job as still running (loose-ends.ts).
+        // A done card that lists a job as still running (loose-ends.ts),
+        // and its starter's, which counts it as working while one runs.
         this.recheckLooseEnds(st);
+        this.recheckStarter(st);
         // Background work keeps the CLI live; once it's done the idle
         // countdown starts again.
         if (o.tasks.length) {

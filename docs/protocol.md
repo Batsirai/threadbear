@@ -4063,7 +4063,11 @@ itself), the runner checks:
   start one while another is running. Added 11 Nov 2026, when a thread said Done with three draft
   PRs unmerged;
 - `thread`: a thread it started (`startedBy.threadId`), not archived,
-  that's running or waiting on Mike, with `threadId`;
+  that's running or waiting on Mike, with `threadId`. One with background
+  work going and no card asking Mike anything "is still working", as the
+  sidebar has it under Running (since 20 Nov 2026: one whose turn ended
+  with a review round running in a shell read "is waiting for you"), and
+  its starter's card is checked again when that work starts or ends;
 - `scheduled`: a schedule that sends to it and will run again (`at`:
   `nextRunAt`), at most three. It doesn't stop an archive: an archived
   thread comes back when one runs;
