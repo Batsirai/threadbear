@@ -75,6 +75,11 @@ test('a call run under another id than its request takes over the request\'s row
   assert.equal((run[0] as { event: { itemId: string } }).event.itemId, seen.id);
   const end = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 's:3', status: 'completed' });
   assert.deepEqual(end.map((o) => (o as { event: { itemId: string; ok: boolean } }).event).map((e) => [e.itemId, e.ok]), [[seen.id, true]]);
+  // One allowed without a card that never ran is gone at the turn's end.
+  const n2 = new AcpNormalizer(ctx);
+  n2.noteCall({ toolCallId: 'ask2', kind: 'edit', rawInput: { TargetFile: '/w/a.js' } });
+  n2.closeOpen('Stopped');
+  assert.equal((n2.handle({ sessionUpdate: 'tool_call', toolCallId: 's:9', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } })[0] as { event: { itemId: string } }).event.itemId, 's:9', 'a later turn\'s edit is its own row');
   // Taken once: a second call on the same file is a row of its own.
   assert.equal((n.handle({ sessionUpdate: 'tool_call', toolCallId: 's:4', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/a.js' } })[0] as { event: { itemId: string } }).event.itemId, 's:4');
 });

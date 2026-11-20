@@ -349,6 +349,9 @@ export class AcpNormalizer {
     const asked = this.tools.has(u.toolCallId) ? undefined : this.askedFor(u);
     if (asked) this.tools.set(u.toolCallId, asked);
     const t = this.tool(u.toolCallId);
+    // Closed at a turn's end before it was ever shown: a row now would never
+    // get its result.
+    if (t.done && !t.emitted) return;
     t.framed = true;
     this.merge(t, u);
     // Agents can open a call with nothing filled in yet (OpenCode: title
@@ -416,8 +419,11 @@ export class AcpNormalizer {
   closeOpen(reason: string): AdapterOutput[] {
     const out = this.flush();
     for (const t of this.tools.values()) {
-      if (t.done || !t.emitted) continue;
+      if (t.done) continue;
       t.done = true;
+      // Never shown (a request allowed without a card that didn't run): no
+      // row, and nothing later can take it over (askedFor).
+      if (!t.emitted) continue;
       out.push({ kind: 'event', event: { type: 'tool.result', itemId: t.id, ok: false, text: reason, truncated: false, images: [] } });
     }
     return out;
