@@ -261,6 +261,7 @@ export const handoversPart = {
     // recovery, not the handover (Runner.recoveryFailed).
     try {
       if (rec.asked === undefined && !rec.archivedAt) this.backfillAsked(rec);
+      if (rec.request === undefined && !rec.archivedAt) this.backfillRequest(rec);
       this.recoverReviews(st);
       // Handed over before its worktree cleanup finished (letGo's limit).
       void this.settleLostCleanups([st], false);

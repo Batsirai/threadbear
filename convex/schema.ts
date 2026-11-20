@@ -509,6 +509,8 @@ export const appSchema = defineSchema({
     startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
     // What Mike last said to it, one line: the Mac row's "You: ...". Since API 32.
     asked: v.optional(v.string()),
+    // What Mike first asked it, one line: another Mac's Feed card. Since API 96.
+    request: v.optional(v.string()),
     recap: v.optional(v.string()), // the recap box's, gone 11 Nov; kept so old rows load
     keywords: v.optional(v.string()), // the librarian's search words, since API 74
     // Its access mode, so another Mac's composer shows it. Since API 88.

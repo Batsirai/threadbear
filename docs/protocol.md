@@ -383,6 +383,8 @@ type ThreadSummary = {
                         // nest under it in the sidebar (Nested threads)
   asked?: string        // Mike's last message to it, one line, <= 140 chars
                         // (What Mike last asked)
+  request?: string      // Mike's first message to it, one line, <= 200
+                        // chars (What Mike first asked)
   keywords?: string     // the librarian's search words, lowercase and
                         // space-separated, <= 200 chars (Search)
   woke?: { at: string, since?: string } // came back from hibernating by
@@ -3251,6 +3253,21 @@ went back to the project on 4 Nov. A thread's row in the backend carries
 `asked` too, from API 31, and so does a `threadIndex` row, from API 32, so
 a Mac's tooltip has it for another runner's threads. The phone doesn't
 show it.
+
+## What Mike first asked
+
+A thread's summary carries `request` too: the first message Mike wrote to
+it, as one line of at most 200 characters, by the same rules as `asked`
+(not the runner's own messages, a schedule's or another agent's; a design
+review's reply as his words). Once set it stays, so it says what the thread
+is for while `asked` follows the conversation. It's absent until he's sent
+something. A thread from a runner before it learns it from the first 300
+events of its log when the runner starts, unless it's archived; a thread
+whose first message of his is past those has none, and a reader shows its
+title instead. The Mac app's Feed (experiment `feed`) heads each thread's
+card with it. A `threadIndex` row carries it from backend API 96, so the
+Feed has it for another runner's threads; the phone's thread rows don't
+(the phone has no Feed).
 
 ## Needs you
 

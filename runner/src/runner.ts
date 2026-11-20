@@ -1020,6 +1020,7 @@ export class Runner {
       // recovery, not the runner.
       try {
         if (rec.asked === undefined && !rec.archivedAt) this.backfillAsked(rec);
+        if (rec.request === undefined && !rec.archivedAt) this.backfillRequest(rec);
         this.recoverReviews(st);
         if (this.recover(st)) stopped++;
       } catch (e) {
@@ -4403,6 +4404,11 @@ export class Runner {
     if (body.type === 'user.message') {
       const asked = askedLine(body, st.rec.reviews);
       if (asked) st.rec.asked = asked;
+      // His first only: once set it stays.
+      if (st.rec.request === undefined) {
+        const request = requestLine(body, st.rec.reviews);
+        if (request) st.rec.request = request;
+      }
     }
     this.markDirty(st);
     this.notify({ method: 'thread.event', params: { threadId: st.rec.id, event } });
@@ -4634,6 +4640,7 @@ export class Runner {
     if (rec.startedBy) s.startedBy = { ...rec.startedBy };
     if (rec.detached) s.detached = true;
     if (rec.asked) s.asked = rec.asked;
+    if (rec.request) s.request = rec.request;
     if (rec.keywords) s.keywords = rec.keywords;
     if (rec.panelRequest) s.panelRequest = { ...rec.panelRequest };
     // A record from 28 Oct may say "people" (sharing with specific people,
@@ -4928,6 +4935,21 @@ export class Runner {
     }
   }
 
+  // Threads from before `request` (20 Nov 2026) learn it from the start of
+  // their log, once, like backfillAsked. A log longer than that with none
+  // of his in it gets "" (none, and his next message isn't his first).
+  backfillRequest(rec: ThreadRecord): void {
+    const log = this.store.log(rec.id);
+    for (const e of log.read(1, Math.min(300, log.lastSeq))) {
+      const request = e.type === 'user.message' ? requestLine(e, rec.reviews) : undefined;
+      if (request) {
+        rec.request = request;
+        return;
+      }
+    }
+    if (log.lastSeq > 300) rec.request = '';
+  }
+
   // A note outside any turn (restart.ts: "Runner restarted: ...").
   note(threadId: string, text: string): void {
     this.emit(this.mustGet(threadId), { type: 'system.note', text });
@@ -5168,7 +5190,7 @@ function turnNeeds(turn: Turn): (Needs & { from: 'tool' | 'text' }) | undefined 
 // line. Not the runner's, a schedule's or another agent's messages, which
 // he didn't write. A design review's reply is his words (reply, then
 // notes), or which ones he picked, without the "Review: <title> (<id>)" heading.
-export function askedLine(m: { text: string; origin?: MessageOrigin; reviewId?: string; reviewResponse?: ReviewDraft }, reviews?: DesignReview[]): string | undefined {
+export function askedLine(m: { text: string; origin?: MessageOrigin; reviewId?: string; reviewResponse?: ReviewDraft }, reviews?: DesignReview[], max = LIMITS.previewChars): string | undefined {
   if (!fromMike(m.text, m)) return undefined;
   let text = m.text;
   if (m.reviewId && m.reviewResponse) {
@@ -5178,7 +5200,14 @@ export function askedLine(m: { text: string; origin?: MessageOrigin; reviewId?: 
     const picked = (r.pickedIds ?? (r.pickedId ? [r.pickedId] : [])).map(id => options.find(o => o.id === id)?.title).filter(Boolean);
     text = words.length ? words.join(' ') : picked.length ? `Picked ${picked.join(' + ')}` : r.none ? 'None of them' : '';
   }
-  return oneLine(text, LIMITS.previewChars) || undefined;
+  return oneLine(text, max) || undefined;
+}
+
+// The first of those lines, longer: what the thread is for (docs/protocol.md,
+// "What Mike first asked").
+export const REQUEST_CHARS = 200;
+export function requestLine(m: Parameters<typeof askedLine>[0], reviews?: DesignReview[]): string | undefined {
+  return askedLine(m, reviews, REQUEST_CHARS);
 }
 
 export function oneLine(text: string, max: number): string {

@@ -468,6 +468,7 @@ export const RUNNER_KEY_CAPS = {
   recap: 1_000, // the librarian's 200 + 600, with room for multi-byte text
   threadText: 1_000, // title, preview, cwd, working line, each
   keywords: 400, // the runner's 200 characters (keywords.ts), with room for multi-byte text
+  request: 400, // a threadIndex row's, the runner's 200 characters (requestLine), likewise
   threadsInView: 300, // per view the phone reads whole (inbox, hibernating)
   // Projects a thread is in: each is a lookup when the phones read it
   // (phone.ts projectOwners), so 300 inbox threads stay under 4,096 index reads.
@@ -716,6 +717,7 @@ function sameButtons(a: unknown[] | undefined, b: unknown[] | undefined): boolea
 function fitIndexRow<T extends Record<string, any>>(r: T): T | undefined {
   const out: Record<string, any> = { ...r };
   for (const f of ['title', 'preview', 'cwd', 'asked']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 300);
+  if (typeof out.request === 'string') out.request = cutBytes(out.request, CAP.request);
   if (typeof out.recap === 'string') out.recap = cutBytes(out.recap, CAP.recap);
   if (typeof out.keywords === 'string') out.keywords = cutBytes(out.keywords, CAP.keywords);
   // Only something a Mac shows as a mode: anything else would be just room.
@@ -3871,6 +3873,7 @@ const indexDoc = v.object({
   starredAt: v.optional(v.string()),
   startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
   asked: v.optional(v.string()), // since API 32
+  request: v.optional(v.string()), // since API 96
   recap: v.optional(v.string()), // since API 70
   keywords: v.optional(v.string()), // since API 74
   permissionMode: v.optional(v.string()), // since API 88

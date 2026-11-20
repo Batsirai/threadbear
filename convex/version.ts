@@ -466,4 +466,8 @@
 //    phoneImage carries `mediaType` for a reply's media, so the phones run
 //    a page in a sealed view rather than decode it. A runner sends pages
 //    only to a backend of 95 or later.
-export const API_VERSION = 95;
+// 96: a threadIndex row (sync:setThreadIndex) takes `request`, Mike's first
+//    message to the thread as one line (docs/protocol.md, "What Mike first
+//    asked"), for the Mac's Feed of another runner's threads. A runner sends
+//    it only to a backend of 96 or later.
+export const API_VERSION = 96;
