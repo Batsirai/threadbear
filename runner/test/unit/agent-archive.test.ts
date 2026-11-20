@@ -121,7 +121,8 @@ test('a new commit on main is built and installed once, then pushed', async () =
   const s = setup({ pushTo: [{ host: 'cloud', node: '/n/node' }] });
   await s.a.tick();
   const written = JSON.parse(fs.readFileSync(path.join(s.home, SESSIONS_FILE), 'utf8')) as SessionsFile;
-  assert.deepEqual([written.claudeRoots, written.codexRoots], [['/a/claude-4/projects'], ['/a/codex-1/sessions']]);
+  // Joined as the runner joins them, so Windows' backslashes match.
+  assert.deepEqual([written.claudeRoots, written.codexRoots], [[path.join('/a/claude-4', 'projects')], [path.join('/a/codex-1', 'sessions')]]);
   assert.equal(s.a.status()?.sync?.service, 'running');
   assert.equal(s.calls.filter(isInstall).length, 2, 'here and on cloud');
   assert.equal(s.a.status()?.update?.sha, 'a'.repeat(40));
