@@ -210,7 +210,7 @@ test('mailWatch: a standing decision that covers it, checked by the strong model
   assert.equal(out?.acted, 1);
   assert.equal(t.calls.filter((c) => c.strong).length, 1);
   assert.deepEqual(t.sent.map((x) => x.id), [WALKIES.id]);
-  assert.match(t.sent[0].text, /standing decision of his: "Resubmit to App Review without asking"/);
+  assert.match(t.sent[0].text, /standing decision of theirs: "Resubmit to App Review without asking"/);
   assert.match(t.sent[0].text, /archive: true/);
   assert.match(t.state().done[0].line, /Fix and resubmit Walkies/);
 });
@@ -267,7 +267,7 @@ test('mailWatch: the pieces', () => {
   const sorted = readSort('```json\n{"emails":[{"id":"a","wake":"x","tell":["b"],"act":{"what":"w"},"pile":"null"}]}\n```');
   assert.deepEqual(sorted?.get('a'), { wake: [], tell: ['b'] });
   assert.equal(readSort('nope'), undefined);
-  assert.match(digestText([], [{ line: 'Woke "x".', at: '' }]), /Done without asking him/);
+  assert.match(digestText([], [{ line: 'Woke "x".', at: '' }]), /Done without asking them/);
 });
 
 // ------------------------------------------------------- the runner's side
