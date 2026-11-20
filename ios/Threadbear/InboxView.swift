@@ -81,7 +81,8 @@ struct InboxView: View {
                     }
                     let sections = model.sections
                     if !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                        results(ThreadSearch(query, sections: sections, hibernating: model.hibernating, archived: model.den, olderArchived: olderArchived))
+                        results(ThreadSearch(query, sections: sections, hibernating: model.searchable(model.hibernating), archived: model.searchable(model.den),
+                                            olderArchived: model.searchable(olderArchived)))
                     } else if !model.loaded.contains(.inbox) {
                         LoadingRows()
                     }

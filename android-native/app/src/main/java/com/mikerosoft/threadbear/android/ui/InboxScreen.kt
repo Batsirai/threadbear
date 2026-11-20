@@ -318,8 +318,11 @@ private fun SearchResults(
         delay(300)
         older = shell.searchOlderArchived(text)
     }
-    val search = remember(text, sections, asleep, archived, older, wakes, back) {
-        ThreadSearch.of(text, sections, asleep.filter { it.threadId !in back }, archived.filter { it.threadId !in back }, older, wakes)
+    // Put-away ones less those brought back from here, with the changes tapped here on top.
+    val pending by model.commands.entries.collectAsStateWithLifecycle()
+    fun searchable(list: List<PhoneThread>) = list.filter { it.threadId !in back }.map { model.shown(it, pending) }
+    val search = remember(text, sections, asleep, archived, older, wakes, back, pending) {
+        ThreadSearch.of(text, sections, searchable(asleep), searchable(archived), searchable(older), wakes)
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
         if (search.isEmpty) {

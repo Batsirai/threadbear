@@ -528,6 +528,12 @@ final class AppModel {
         return t
     }
 
+    /// Put-away threads as a search shows them: less those brought back from
+    /// here, with the changes tapped here on top (`shown`).
+    func searchable(_ list: [PhoneThread]) -> [PhoneThread] {
+        list.filter { !commands[.wake($0.threadId)].holdsChange && !commands[.unarchive($0.threadId)].holdsChange }.map(shown)
+    }
+
     /// A star, wake, mark read or bring back from a row, its menu or the
     /// thread's: shown at once (`shown`), put back with why if the runner
     /// refuses it, and said if the Mac hasn't picked it up in a while.
