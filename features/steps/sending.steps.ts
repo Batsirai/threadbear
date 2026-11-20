@@ -210,13 +210,12 @@ When('I click away from the message box', async function (this: ThreadbearWorld)
   await this.app.do({ cmd: 'click-at', x: box.x, y: box.y - 150 });
 });
 
-// Off the words: in the controls' row just left of Send, where only the box
-// itself is (ADEMark's click at 860,400 on 19 Nov). Send is 28 wide; the
-// chips end well before it, even in the specs' narrow window.
-When('I click the message box beside its controls', async function (this: ThreadbearWorld) {
+// Off the words: in the box's padding under Send, where only the box itself
+// is (ADEMark's click at 860,400 on 19 Nov). Not beside Send: in a narrow
+// window the chips give way until only the row's gaps are left between them,
+// and a thread's machine chip did that on GitHub's Mac (19 Nov). The padding
+// is 14 points whatever the width; Send is 28 tall, so 21 below its middle.
+When('I click the message box under its controls', async function (this: ThreadbearWorld) {
   const send = await pointOf(this, 'Send');
-  const labels = JSON.parse(await this.app.do({ cmd: 'labels' })) as { label: string; x: number; y: number }[];
-  const chips = labels.filter((l) => l.label !== 'Send' && Math.abs(l.y - send.y) < 4 && l.x < send.x).map((l) => l.x);
-  assert.ok(chips.length && send.x - Math.max(...chips) > 70, `no room between the chips and Send: ${JSON.stringify(labels.filter((l) => Math.abs(l.y - send.y) < 4))}`);
-  await this.app.do({ cmd: 'click-at', x: send.x - 24, y: send.y });
+  await this.app.do({ cmd: 'click-at', x: send.x, y: send.y + 21 });
 });

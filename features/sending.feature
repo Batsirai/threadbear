@@ -72,7 +72,7 @@ Feature: Sending a message
   Scenario: A click in the box off its words puts the cursor in it
     When I start a new thread
     And I click away from the message box
-    And I click the message box beside its controls
+    And I click the message box under its controls
     And I type "on the page" where the cursor is
     Then the composer says "on the page"
 
@@ -80,7 +80,7 @@ Feature: Sending a message
   Scenario: A click in a thread's box off its words puts the cursor in it
     Given I open the thread "Morning brief"
     When I click away from the message box
-    And I click the message box beside its controls
+    And I click the message box under its controls
     And I type "in the thread" where the cursor is
     Then the composer says "in the thread"
 
