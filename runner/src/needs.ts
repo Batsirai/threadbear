@@ -531,7 +531,7 @@ const END_TURN_SNOOZE =
 // 2 Nov 2026). The button stays for what's left after a real try.
 export const TRY_IT_FIRST =
   'Before you give the user a step, try it yourself with the tools you have, including any that drive their browser, apps or phone, and if it works there is no ask. ' +
-  'Hand it over only when it really needs them (a payment, something physical, an approval that is theirs to give) or after a real attempt, and say in your reply what you tried and what stopped it. ' +
+  'Hand it over only when it really needs them (a payment, something physical, a change to their credentials (~/.aws, ~/.ssh, Keychain, tokens), an approval that is theirs to give) or after a real attempt, and say in your reply what you tried and what stopped it. ' +
   'Get a key yourself when you can (one shown on a page in a signed-in browser), and use a password you set up yourself; ask with ask_secret only for one only they know, and carry on. ' +
   'If there is still something you could try, offer "Can you do it?" next to Done and say what in its answer: it lets them send the step back to you, and is no reason to skip trying. ';
 
@@ -550,9 +550,12 @@ export const TRY_IT_FIRST =
 // password it had made for him to type, and a removable-volume prompt, each
 // with "Done" and "Stuck" (0b6b183c, 854d950f), and five times told it to do
 // them itself. So it comes to any card that hands over a step (handsOverAStep).
+// Credentials count as needing the user: on 18 Nov this note, on a "Do it for
+// me / I'll do it" card about ~/.aws/config, got an agent to rewrite it
+// unasked (David Clark's fork, 32cda3c2d).
 export const TRY_FIRST_NUDGE = 'Not ended: this card hands the user a step to do.';
 export function tryFirstNudge(): string {
-  return `${TRY_FIRST_NUDGE} If you could do it yourself and haven't tried, try it now with the tools you have (a setting or dialog on a Mac you can reach with ComputerCub or Screen Sharing, a key shown on a page in a signed-in browser, a password you set for a test account, which you can type yourself), then call end_turn again with whatever is left. If you already tried, it really needs the user (a password or code only they know, a payment, something physical, an approval that is theirs to give), or it's a choice rather than a step, call end_turn again as you were, and say in your reply what you tried or why it needs them: this note comes once a turn.`;
+  return `${TRY_FIRST_NUDGE} If you could do it yourself and haven't tried, try it now with the tools you have (a setting or dialog on a Mac you can reach with ComputerCub or Screen Sharing, a key shown on a page in a signed-in browser, a password you set for a test account, which you can type yourself), then call end_turn again with whatever is left. If you already tried, it really needs the user (a password or code only they know, a payment, something physical, a change to their credentials (~/.aws, ~/.ssh, Keychain, tokens), an approval that is theirs to give), or it's a choice rather than a step, call end_turn again as you were, and say in your reply what you tried or why it needs them: this note comes once a turn.`;
 }
 
 // An ask about another thread with no answers and no link: "Pick a

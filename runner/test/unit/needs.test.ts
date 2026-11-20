@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersistedEvent } from '../../src/protocol.ts';
-import { handsOverAStep, offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
+import { handsOverAStep, offersToTakeItBack, PLAIN_CARD_NUDGE, plainCardNudge, wantsPlainCard, TRY_IT_FIRST, tryFirstNudge, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyAsks, replyAsksNudge, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
 import { END_TURN_TOOL } from '../../src/needs.ts';
 import { SERVER_NAME } from '../../src/threadbear-mcp.ts';
 import { ClaudeNormalizer, fileContext } from '../../src/adapters/claude/normalize.ts';
@@ -490,6 +490,13 @@ test('every form of end_turn says to try a step first', () => {
       assert.doesNotMatch(d, /when you could plausibly do it yourself/);
     }
   }
+});
+
+// On 18 Nov the try-first note, on a "Do it for me / I'll do it" card about
+// ~/.aws/config, got an agent to rewrite the file without the user's answer
+// (David Clark's fork, 32cda3c2d). Their credentials are theirs to change.
+test("the try-first wording counts a change to the user's credentials as theirs", () => {
+  for (const text of [TRY_IT_FIRST, tryFirstNudge()]) assert.match(text, /credentials \(~\/\.aws, ~\/\.ssh, Keychain, tokens\)/);
 });
 
 test('offersToTakeItBack knows the answers real cards used, and leaves others alone', () => {
