@@ -7,7 +7,6 @@ import type { RunnerPart } from './part.ts';
 import { SAMPLE_THREADS, WELCOME_PATCH } from '../samples.ts';
 import type { Account, EffortLevel, ImageRef, MessageOrigin, PermissionMode, Provider, ThreadStartedBy, ThreadSummary } from '../protocol.ts';
 import { ErrorCode, LIMITS, RpcError } from '../protocol.ts';
-import type { Schedule } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import { expandHome, peekRunnerJson } from '../config.ts';
 import { isDirectory } from '../fsutil.ts';

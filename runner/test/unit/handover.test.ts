@@ -291,7 +291,7 @@ test('a stopped wait started again wakes the thread at most three times until so
 
 test('a thread whose background work a plain restart stopped is told once the next runner is up', async () => {
   const h = makeHarness();
-  const t = create(h).thread;
+  create(h);
   const s = h.adapter.last;
   s.init();
   s.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'Wait for the scan' }] });

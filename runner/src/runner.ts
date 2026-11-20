@@ -13,18 +13,13 @@ import type { SwiftChangesStatus } from './swift-changes.ts';
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import os from 'node:os';
-import { SAMPLE_THREADS, WELCOME_PATCH } from './samples.ts';
-import { keepPictureMarkers, reviewInput, reviewDraft, reviewReply, sameDraft, type ReviewInput } from './reviews.ts';
+import { keepPictureMarkers } from './reviews.ts';
 import path from 'node:path';
-import { ConvexKeys, convexFolderFor, type ConvexKey, type ConvexDeployments, type ConvexKeysOptions, type ConvexLogin } from './convex-keys.ts';
+import { ConvexKeys, type ConvexKeysOptions } from './convex-keys.ts';
 import crypto from 'node:crypto';
 import type {
-  Panel,
   Account,
-  Action,
   AnyEvent,
-  ApprovalDecision,
-  BackgroundTask as ProtocolBackgroundTask,
   CliPolicy,
   CliStatus,
   DeltaBody,
@@ -40,8 +35,6 @@ import type {
   AskAnswer,
   MessageOrigin,
   ModelChoice,
-  PanelPlace,
-  PanelRequest,
   ShareAccess,
   PermissionMode,
   PersistedEvent,
@@ -49,10 +42,8 @@ import type {
   Provider,
   ProviderInfo,
   Question,
-  RewoundFiles,
   RunnerDefaults,
   Subagent,
-  ThreadStartedBy,
   ThreadStatus,
   ThreadSummary,
   TurnOutcome,
@@ -68,74 +59,52 @@ import type {
   AdapterOutput,
   BackgroundTask,
   QuestionAnswer,
-  QuestionRequest,
   SessionSink,
   SubagentUpdate,
   ToolApprovalAnswer,
-  ToolApprovalRequest,
   TurnResult,
 } from './adapters/types.ts';
 import { SessionNotFoundError } from './adapters/types.ts';
-import type { RewindResult, UseResetOutcome } from './adapters/types.ts';
+import type { UseResetOutcome } from './adapters/types.ts';
 import type { EventLog, ThreadRecord, ThreadStore, QueuedSend, SubagentRecord } from './store.ts';
 import { cutOut } from './store.ts';
 
 // The presses a thread keeps for its agent to hear of (Runner.notePress).
 const MAX_PRESS_NOTES = 20;
-import { appliedChanges, undoChanges } from './undo-edits.ts';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import { LimitRecheck } from './limit-recheck.ts';
-import { BIN_DIR, threadEnv } from './restart.ts';
-import { cleanUpWorktree, makeWorktree, sameSubfolder, worktreeInstructions } from './worktrees.ts';
+import { threadEnv } from './restart.ts';
+import { worktreeInstructions } from './worktrees.ts';
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
 import type { SignInState } from './sign-in-state.ts';
-import { pickAccount as pickByRoom, resetTime, type UsageReading } from './usage.ts';
-import { DEFAULT_POOL_FOLDERS, RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
-import { WAIT_SLACK_MS, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from './pools.ts';
+import { pickAccount as pickByRoom, type UsageReading } from './usage.ts';
+import { RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
+import { limitWhy, loginOk, nextLogin, pickInPool, poolAccounts } from './pools.ts';
 import { copyImageInto, imageRefFor } from './media.ts';
 import { isDirectory } from './fsutil.ts';
 import { commandFolders } from './tools.ts';
 import { copySessionTranscript, subagentTranscriptPath } from './transcripts.ts';
-import { historyItems, selectHistory } from './handoff-history.ts';
 import { readSubagentTranscript } from './adapters/claude/subagents.ts';
 import { fileContext } from './adapters/claude/normalize.ts';
-import { ASK_CODEX_MODEL, HAIKU, type Models } from './models/index.ts';
-import { EXPLAIN_SYSTEM, RECENT_CHARS, RECENT_MESSAGES, explainPrompt } from './explain.ts';
-import type { ExplainTurn } from './explain.ts';
-import { SAID_MAX, WAKE_SYSTEM, awayFor, hibernateNote, localWhen, readWakeAnswer, wakePrompt } from './wake-when.ts';
+import type { Models } from './models/index.ts';
+import { localWhen } from './wake-when.ts';
 import { parseWhen } from './when.ts';
-import { emptyHighlights, observe as observeHighlights, pinItem, remove as removeHighlight, unpin as unpinHighlight, upsert as upsertHighlight, view as highlightsView, absolute, type ThreadHighlights } from './highlights.ts';
-import { SERVER_NAME, approvalTitle } from './threadbear-mcp.ts';
-import { PANEL_ACK_WAIT_MS, PANEL_PLACES, resolvePanel } from './panel-requests.ts';
+import { SERVER_NAME } from './threadbear-mcp.ts';
 import { archiveFromTool, bylineFromTool, END_TURN_TOOL, endTurnAccepted, endTurnAddedArchive, endTurnAddedSnooze, snoozeFromTool, waitForFromTool, endTurnAsksForMessage, endTurnIsOneReply, endTurnMessageStands, endTurnOwesReply, endTurnRefusedRepeat, endTurnRefusedUnread, endTurnTaken, endTurnWantsReply, needsFromText, needsFromTool, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, WakeRead } from './needs.ts';
 import type { Needs } from './needs.ts';
 import { asksForAppRestart, MAX_AGE_MS as APP_RESTART_MAX_AGE_MS } from './app-restarts.ts';
 import type { ConnectorsStatus } from './connectors.ts';
 import type { TrustOffThread } from './trust-off-thread.ts';
-import { isPatchFile, PatchTrust, type ClaudeLook, type ClaudeVerdict, type PatchTrustStore } from './patch-trust.ts';
+import { PatchTrust, type ClaudeLook, type ClaudeVerdict, type PatchTrustStore } from './patch-trust.ts';
 import { claudeOptions, claudeSettingsWithoutCommands, type ClaudeOptions } from './claude-trust.ts';
 import {
-  EMPTY_PATCH_SET,
-  findWorktreePatch,
-  hookApplies,
-  isInside,
-  loadPatchSet,
-  applyLive,
-  hasLive,
-  projectPanels,
-  renderListPanel,
-  renderPanel,
   runCommand,
   simctlScreenshot,
   type CommandOutcome,
-  type PanelRender,
   type PatchCache,
   type PatchSet,
-  type ProjectFolder,
   type Screenshot,
-  worktreePatchFiles,
-  projectPatchFiles,
   webPage,
 } from './patches.ts';
 import { cutSafely, firstLineSafely, isSafeSlice } from './safe-cut.ts';

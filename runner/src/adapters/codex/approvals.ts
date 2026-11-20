@@ -14,7 +14,6 @@ import type {
   CommandExecutionRequestApprovalParams,
   DynamicToolCallParams,
   DynamicToolCallResponse,
-  ElicitationProperty,
   ExecCommandApprovalParams,
   FileChangeRequestApprovalParams,
   McpServerElicitationRequestParams,

@@ -752,7 +752,7 @@ export function buildThreadbearTools(
           reference: z.boolean().optional().describe('Context to compare against, not to pick.'),
         })).min(1).max(12),
       },
-      handle(async (input, extra) => {
+      handle(async (input) => {
         if (!control.createReview) throw new Error('This runner does not support image reviews yet.');
         const { review } = await control.createReview(selfId, input);
         return `Review ${review.id}: ${review.title} (${review.options.length} options). The user can compare them and send their picks and a reply. You can finish this turn; their reply will arrive as a later message. To open it from an end_turn ask, link to review:${review.id}.${oversizeShotsNote(review)}`;
@@ -788,7 +788,7 @@ export function buildThreadbearTools(
               panel: z.string().min(1).describe('Its web panel, by id or title.'),
             }).optional(),
           },
-          handle(async ({ title, start, send, panel }, extra) => {
+          handle(async ({ title, start, send, panel }) => {
             if (!control.createButton) throw new Error("This runner can't make buttons.");
             const input: Parameters<Runner['createButton']>[1] = { title };
             if (start) {
@@ -901,7 +901,7 @@ export function buildThreadbearTools(
         note: z.string().max(500).optional().describe('One line on why the user should look at it.'),
         show: z.boolean().optional().describe('Open it in the side pane now.'),
       },
-      handle(async (input, extra) => {
+      handle(async (input) => {
         if (!control.pin) throw new Error("This runner doesn't keep highlights yet.");
         const { id, scriptsOff, shown } = await control.pin(selfId, input);
         // Older runners (a handover) don't say whether it showed.
@@ -936,7 +936,7 @@ export function buildThreadbearTools(
           .describe('Where a closed panel opens: tab (beside the thread, closing when the user moves on), left, right, top or bottom (along that side of the window), or window (its own). Default: its usual place.'),
         reload: z.boolean().optional().describe("Load a web panel's page afresh, after you've changed it."),
       },
-      handle(async (input, extra) => {
+      handle(async (input) => {
         if (!control.showPanel) throw new Error("This runner can't show panels yet.");
         const { request, shown } = await control.showPanel(selfId, input);
         return shown

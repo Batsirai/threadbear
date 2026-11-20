@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from './config.ts';
 import { expandHome, peekRunnerJson, readRunnerJson, writeRunnerJson } from './config.ts';
-import type { Clock } from './clock.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import type { Notification } from './runner.ts';
 import type { Models } from './models/index.ts';

@@ -578,7 +578,7 @@ test('MCP: tools/list and an unknown tool answer as MCP says', async () => {
 
 // ---- Each of these is something a review got past the first version
 
-function fakeRequest(r: ReturnType<typeof rig>, s: AcpSession, call: Record<string, unknown>, options = [{ optionId: 'once', kind: 'allow_once' }, { optionId: 'reject', kind: 'reject_once' }]) {
+function fakeRequest(_r: ReturnType<typeof rig>, s: AcpSession, call: Record<string, unknown>, options = [{ optionId: 'once', kind: 'allow_once' }, { optionId: 'reject', kind: 'reject_once' }]) {
   const replies: unknown[] = [];
   const proc = (s as unknown as { proc: { respond(id: unknown, v: unknown): void; onRequest: (id: number, m: string, p: unknown) => void } }).proc;
   const real = proc.respond.bind(proc);

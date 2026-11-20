@@ -336,7 +336,7 @@ export function memoryBackend(root = CONVEX) {
       files.delete(id);
     },
     // An HTTP action's store (convex/uploads.ts takeUpload).
-    async store(blob: Blob) {
+    async store(_blob: Blob) {
       const id = `stored${++next}`;
       files.add(id);
       return id;
