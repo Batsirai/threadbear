@@ -3,7 +3,7 @@
 // "Worked for 4m 12s" and its reply, and the agent's card of asks joined to
 // the composer. A shared thread (/s/<slug>) is share.tsx.
 import { Component, Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { useMutation, useQuery } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { useLiveQuery } from './live';
 import { InboxProvider, useInbox } from './inbox';
 import { useTranscript } from './transcript';
@@ -90,11 +90,11 @@ function SignIn({ expired }: { expired?: boolean }) {
 // Auth and missing-thread errors from Convex land here rather than as a
 // blank page.
 class Catch extends Component<{ children: ReactNode }, { error: unknown }> {
-  state = { error: null as unknown };
+  override state = { error: null as unknown };
   static getDerivedStateFromError(error: unknown) {
     return { error };
   }
-  render() {
+  override render() {
     const { error } = this.state;
     if (!error) return this.props.children;
     const kind = error instanceof ConvexError ? (error.data as { kind?: string })?.kind : undefined;

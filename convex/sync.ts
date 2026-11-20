@@ -3,7 +3,7 @@
 // twice is harmless, and a runner that was offline writes each changed
 // row once when it's back.
 import { ConvexError, v } from 'convex/values';
-import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { messageButton, threadFields, updateFailedValidator, views } from './schema';
@@ -4257,7 +4257,6 @@ const AUDIT_CARDS = 5;
 const AUDIT_MESSAGES = 5;
 const AUDIT_PICTURES = 5;
 const sections = ['tokens', 'runnerKeys', 'schedules', 'runnerSchedules', 'cards', 'messages', 'replyImages', 'shareImages'] as const;
-type Section = (typeof sections)[number];
 
 // What a row was when the audit showed it: auditRemove touches it only if it still is.
 function versionOf(kind: string, row: Record<string, any>): string {

@@ -26,14 +26,14 @@ import { v, type Infer } from 'convex/values';
 import { internalAction, internalMutation, internalQuery, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
-import { box as boxMachine, machines, queued } from './machines';
+import { box as boxMachine, machines } from './machines';
 import { newestAttempt } from './boxMachine';
 import { SAVE_MS, WAKE_GRACE_MS } from './boxStates';
 import { activeMove, archive, askToSave, BOOT_PREFIX, BOX_LIMITS, isKeyMachine, mayMintAttempt, newAttempt, overHours, randomHex, usedTodayMs } from './boxes';
 import { sha256 } from './lib';
 import { deleteIfUnused, purgeRunnerRows } from './sync';
 import { FLY_SUSPEND_MAX_MB, flyFromEnv } from './boxProviders/fly';
-import { notFound, ProviderError, transient } from './boxProviders/types';
+import { notFound, transient } from './boxProviders/types';
 import type { BoxProvider, ListedBox } from './boxProviders/types';
 
 export const RETRY_MS = [300, 1500];
