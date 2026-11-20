@@ -585,9 +585,12 @@ test('markers follow the pictures kept', () => {
 test('with reviews as a page, show_options tells the agent not to repeat the options in its reply', async () => {
   const {h,thread,input}=fixture();
   const tool=buildThreadbearTools(h.runner,thread.id).find(t=>t.name==='show_options')!;
-  assert.doesNotMatch(JSON.stringify(await tool.handler(input as any,{} as any)),/don't list or describe the options again/);
+  // Typed as what the tool is handed, whichever tool the list's type says.
+  const show=tool.handler as unknown as (options: object, extra: object)=>Promise<unknown>;
+  const none={};
+  assert.doesNotMatch(JSON.stringify(await show(input,none)),/don't list or describe the options again/);
   fs.writeFileSync(path.join(h.home,'runner.json'),JSON.stringify({experiments:{reviewPage:true}}));
-  const said=JSON.stringify(await tool.handler({...input,title:'Second look'} as any,{} as any));
+  const said=JSON.stringify(await show({...input,title:'Second look'},none));
   assert.match(said,/don't list or describe the options again in your reply/);
   assert.match(said,/review:[0-9a-f-]{36}/);
 });
