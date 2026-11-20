@@ -45,10 +45,12 @@ test('a Codex sub-agent thread is listed under its parent thread', () => {
   assert.deepEqual(f.sessions.map((s) => [s.sessionId, s.agent, s.threadId]), [['s1', 'codex', 't1'], ['sub1', 'codex', 't1']]);
 });
 
-test("every Claude login's projects folder is listed for the sync, once each", () => {
-  const f = sessionsFor([], () => undefined, 'M5', undefined, T0, ['/b/projects', '/a/projects', '/b/projects']);
+test("every login's sessions folder is listed for the sync, once each", () => {
+  const f = sessionsFor([], () => undefined, 'M5', undefined, T0, { claude: ['/b/projects', '/a/projects', '/b/projects'], codex: ['/c/sessions'] });
   assert.deepEqual(f.claudeRoots, ['/a/projects', '/b/projects']);
-  assert.equal('claudeRoots' in sessionsFor([], () => undefined, 'M5', undefined, T0), false);
+  assert.deepEqual(f.codexRoots, ['/c/sessions']);
+  const none = sessionsFor([], () => undefined, 'M5', undefined, T0);
+  assert.equal('claudeRoots' in none || 'codexRoots' in none, false);
 });
 
 test('a broken or unknown previous file is started over', () => {
@@ -95,7 +97,7 @@ function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boo
     records: () => [rec({})],
     projectTitles: () => new Map(),
     runnerName: () => 'M5',
-    claudeDirs: () => ['/a/claude-4'],
+    loginDirs: () => [{ provider: 'claude', configDir: '/a/claude-4' }, { provider: 'codex', configDir: '/a/codex-1' }],
     settings: () => (opts.repo === false ? undefined : { repo: 'git@example:aa.git', ...(opts.pushTo ? { pushTo: opts.pushTo } : {}) }),
     dir,
     serverDir: sdir,
@@ -118,7 +120,8 @@ const isInstall = (c: Call) => c.args.some((x) => x === 'install-runtime' || x.i
 test('a new commit on main is built and installed once, then pushed', async () => {
   const s = setup({ pushTo: [{ host: 'cloud', node: '/n/node' }] });
   await s.a.tick();
-  assert.deepEqual((JSON.parse(fs.readFileSync(path.join(s.home, SESSIONS_FILE), 'utf8')) as SessionsFile).claudeRoots, ['/a/claude-4/projects']);
+  const written = JSON.parse(fs.readFileSync(path.join(s.home, SESSIONS_FILE), 'utf8')) as SessionsFile;
+  assert.deepEqual([written.claudeRoots, written.codexRoots], [['/a/claude-4/projects'], ['/a/codex-1/sessions']]);
   assert.equal(s.a.status()?.sync?.service, 'running');
   assert.equal(s.calls.filter(isInstall).length, 2, 'here and on cloud');
   assert.equal(s.a.status()?.update?.sha, 'a'.repeat(40));

@@ -625,8 +625,8 @@ File references are where to look.
   experiment archive, off unless you turn it on): every ten minutes it
   writes `archive-sessions.json` in the data folder, saying which Claude
   or Codex session is which thread (its title, project and folder), and
-  each Claude login's `projects` folder, for Agent Archive's own sync to
-  read. With Agent Archive installed it also
+  each Claude login's `projects` and Codex login's `sessions` folder, for
+  Agent Archive's own sync to read. With Agent Archive installed it also
   runs that sync's `status --json` for `tb status`. With `archive.repo`
   in `runner.json` it checks that repo's main with `git ls-remote`, and
   when main moves, builds the sync in `~/Library/Caches/Threadbear/agent-archive`

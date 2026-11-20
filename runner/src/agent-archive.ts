@@ -57,11 +57,13 @@ export type SessionEntry = {
   folder?: string;
   updatedAt: string;
 };
-// claudeRoots: the projects folder of every Claude login this runner runs,
-// which the sync reads as well as its own list. A login added to Threadbear
-// was otherwise never archived until someone listed it there by hand: on
-// 20 Nov the M5's fourth login had 762 sessions since 12 Nov that weren't.
-export type SessionsFile = { version: 1; runner: string; claudeRoots?: string[]; sessions: SessionEntry[] };
+// claudeRoots and codexRoots: where every login this runner runs keeps its
+// sessions (a Claude login's projects folder, a Codex login's sessions
+// folder), which the sync reads as well as its own list. A login added to
+// Threadbear was otherwise never archived until someone listed it there by
+// hand: on 20 Nov the M5's fourth Claude login had 762 sessions since
+// 12 Nov that weren't, and its Codex login's were never read.
+export type SessionsFile = { version: 1; runner: string; claudeRoots?: string[]; codexRoots?: string[]; sessions: SessionEntry[] };
 
 // What `agent-archive status --json` prints. Every field may be missing:
 // an older sync knows fewer.
@@ -130,7 +132,7 @@ export function sessionsFor(
   runner: string,
   prev: SessionsFile | undefined,
   now: Date,
-  claudeRoots: readonly string[] = [],
+  roots: { claude?: readonly string[]; codex?: readonly string[] } = {},
 ): SessionsFile {
   const at = now.toISOString();
   const byThread = new Map<string, Omit<SessionEntry, 'sessionId' | 'agent' | 'updatedAt'>>();
@@ -163,7 +165,10 @@ export function sessionsFor(
     if (next.title !== e.title || next.project !== e.project || next.folder !== e.folder) out.set(id, { ...next, updatedAt: at });
   }
   const sessions = [...out.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-  return { version: 1, runner, ...(claudeRoots.length ? { claudeRoots: [...new Set(claudeRoots)].sort() } : {}), sessions };
+  const listed = (r: readonly string[] = []) => [...new Set(r)].sort();
+  const claudeRoots = listed(roots.claude);
+  const codexRoots = listed(roots.codex);
+  return { version: 1, runner, ...(claudeRoots.length ? { claudeRoots } : {}), ...(codexRoots.length ? { codexRoots } : {}), sessions };
 }
 
 export function readSyncState(stdout: string): ArchiveSyncState | undefined {
@@ -203,8 +208,9 @@ export type AgentArchiveDeps = {
   // Project ids to titles, archived ones too, asked once a write.
   projectTitles: () => ReadonlyMap<string, string>;
   runnerName: () => string;
-  // Each Claude login's config folder (its `projects` folder is the one read).
-  claudeDirs: () => readonly string[];
+  // Each login's config folder: a Claude login's `projects` folder and a
+  // Codex login's `sessions` folder (CODEX_HOME's) are the ones read.
+  loginDirs: () => readonly { provider: string; configDir: string }[];
   settings: () => ArchiveSettings | undefined;
   dir?: string;
   serverDir?: string;
@@ -261,7 +267,11 @@ export class AgentArchive {
     const file = path.join(this.d.home, SESSIONS_FILE);
     const prev = readJsonSync<SessionsFile>(file);
     const titles = this.d.projectTitles();
-    const roots = this.d.claudeDirs().map((dir) => path.join(dir, 'projects'));
+    const logins = this.d.loginDirs();
+    const roots = {
+      claude: logins.filter((l) => l.provider === 'claude').map((l) => path.join(l.configDir, 'projects')),
+      codex: logins.filter((l) => l.provider === 'codex').map((l) => path.join(l.configDir, 'sessions')),
+    };
     const next = sessionsFor(this.d.records(), (id) => titles.get(id), this.d.runnerName(), prev, this.d.now(), roots);
     this.sessions = next.sessions.length;
     const text = JSON.stringify(next) + '\n';
