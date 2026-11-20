@@ -28,6 +28,7 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const FORMAT_LIST = '.git-blame-ignore-revs';
 
@@ -126,7 +127,7 @@ export async function formatCommitsIn(cwd: string, ref: string): Promise<FormatC
   if (!list.ok) return [];
   const entries = parseFormatList(list.stdout);
   if (!entries.length) return [];
-  let subjects: Map<string, string> | undefined;
+  let subjects: Map<string, string[]> | undefined;
   const found: FormatCommit[] = [];
   for (const entry of entries) {
     let commit: string | undefined;
@@ -138,18 +139,32 @@ export async function formatCommitsIn(cwd: string, ref: string): Promise<FormatC
         const log = await out(cwd, ['log', '--no-merges', '--format=%H%x00%s', ref]);
         for (const line of log.split('\n')) {
           const [id, s] = line.split('\0');
-          // The newest of any with the same subject, as log lists newest first.
-          if (id && s !== undefined && !subjects.has(s)) subjects.set(s, id);
+          if (id && s !== undefined) subjects.set(s, [...(subjects.get(s) ?? []), id]);
         }
       }
-      commit = subjects.get(entry.subject);
+      // Only one: a second with the same subject (a revert's is different,
+      // but a cherry-pick or a copy isn't) can't say which was the format
+      // commit, so nothing is crossed until its id is written down.
+      const ids = subjects.get(entry.subject) ?? [];
+      if (ids.length === 1) commit = ids[0];
     }
-    if (commit) found.push({ entry, commit });
+    // And it has to be only what it formats: anything else in it would be
+    // lost from a fork's merge across it (mergeAcross).
+    if (commit && (await onlyWithin(cwd, commit, entry.paths))) found.push({ entry, commit });
   }
   // Oldest first: an ancestor has fewer commits behind it than its descendants.
   const rank = new Map<string, number>();
   for (const f of found) rank.set(f.commit, Number(await out(cwd, ['rev-list', '--count', f.commit])));
   return found.sort((a, b) => (rank.get(a.commit) ?? 0) - (rank.get(b.commit) ?? 0));
+}
+
+// Whether `commit` (not a merge) changes nothing outside `paths`.
+async function onlyWithin(cwd: string, commit: string, paths: string[]): Promise<boolean> {
+  const parents = (await git(cwd, ['rev-list', '--parents', '-n', '1', commit])).stdout.trim().split(' ');
+  if (parents.length !== 2) return false;
+  const changed = await git(cwd, ['diff', '--name-only', '-z', `${commit}^`, commit]);
+  if (!changed.ok) return false;
+  return changed.stdout.split('\0').filter(Boolean).every((p) => paths.some((s) => p === s || p.startsWith(`${s}/`)));
 }
 
 // The format commits `onto` has that `tip` doesn't: what carrying `tip`
@@ -175,22 +190,36 @@ export type FormatNote = { commit?: string; what: string };
 
 function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ ok: boolean; text: string }> {
   return new Promise((resolve) => {
-    const child = spawn('/bin/sh', ['-c', command], { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    // Git Bash on Windows; a group of its own elsewhere, so a time limit
+    // stops the formatter's children too, and with them the output pipes
+    // this waits on.
+    const shell = process.platform === 'win32' ? 'bash' : '/bin/sh';
+    const child = spawn(shell, ['-c', command], { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let text = '';
+    let done = false;
+    const finish = (ok: boolean, extra = '') => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ ok, text: text + extra });
+    };
     const add = (b: Buffer) => {
       if (text.length < 64_000) text += b.toString();
     };
     child.stdout.on('data', add);
     child.stderr.on('data', add);
-    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      resolve({ ok: false, text: String(e) });
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0, text });
-    });
+    const timer = setTimeout(() => {
+      try {
+        if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        // Gone already.
+      }
+      // Whatever still holds the pipes, this has waited long enough.
+      setTimeout(() => finish(false, `\nStopped after ${Math.round(timeoutMs / 1000)} s.`), 2000).unref();
+    }, timeoutMs);
+    child.on('error', (e) => finish(false, String(e)));
+    child.on('close', (code) => finish(code === 0));
   });
 }
 
@@ -269,25 +298,23 @@ export class TreeFormatter {
       const files = (await out(this.cwd, ['ls-files', '-z', '--', ...f.entry.paths], env)).split('\0').filter(Boolean);
       await stdinGit(this.cwd, ['checkout-index', '-u', '-z', '--stdin', `--prefix=${work}/`], files.join('\0'), env);
       // The format commit's own config, in place of the tree's (or none).
-      const own = new Map<string, Buffer | undefined>();
+      // Never through a link the tree has there: it's taken away first, and
+      // the tree's own entry checked out again afterwards.
+      const inTree = new Set((await out(this.cwd, ['ls-files', '-z', '--', ...f.entry.config], env)).split('\0').filter(Boolean));
       for (const c of f.entry.config) {
         const target = path.join(work, c);
-        own.set(c, fs.existsSync(target) ? fs.readFileSync(target) : undefined);
+        fs.rmSync(target, { force: true });
         const blob = await gitBuffer(this.cwd, `${f.commit}:${c}`);
         if (blob) {
           fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.writeFileSync(target, blob);
-        } else {
-          fs.rmSync(target, { force: true });
+          fs.writeFileSync(target, blob, { flag: 'wx' });
         }
       }
       const ran = await runCommand(f.entry.command, work, this.limitMs);
       // Config files go back to the tree's own, so only formatting is read.
-      for (const [c, text] of own) {
-        const target = path.join(work, c);
-        if (text === undefined) fs.rmSync(target, { force: true });
-        else fs.writeFileSync(target, text);
-      }
+      for (const c of f.entry.config) fs.rmSync(path.join(work, c), { force: true });
+      const back = f.entry.config.filter((c) => inTree.has(c));
+      if (back.length) await stdinGit(this.cwd, ['checkout-index', '-f', '-u', '-z', '--stdin', `--prefix=${work}/`], back.join('\0'), env);
       await out(this.cwd, [`--work-tree=${work}`, 'add', '-u', '--', ...f.entry.paths], env);
       const made = await out(this.cwd, ['write-tree'], env);
       const failed = ran.ok ? undefined : `${f.entry.command} failed: ${lastLines(ran.text, 6)}`;
@@ -444,7 +471,7 @@ export async function mergeAcross(cwd: string, target: string, opts: { message?:
   for (const f of cross) {
     const parent = await out(cwd, ['rev-parse', `${f.commit}^`]);
     // Only formatting, or its tree can't stand in for it.
-    const changed = (await out(cwd, ['diff', '--name-only', parent, f.commit])).split('\n').filter(Boolean);
+    const changed = (await git(cwd, ['diff', '--name-only', '-z', parent, f.commit])).stdout.split('\0').filter(Boolean);
     const outside = changed.filter((p) => !f.entry.paths.some((s) => p === s || p.startsWith(`${s}/`)));
     if (outside.length) {
       if (!opts.leave) await undo();
@@ -578,7 +605,7 @@ function same(a: string, b: string): boolean {
   }
 }
 
-if (process.argv[1] && same(process.argv[1], new URL(import.meta.url).pathname)) {
+if (process.argv[1] && same(process.argv[1], fileURLToPath(import.meta.url))) {
   cli(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e) => {

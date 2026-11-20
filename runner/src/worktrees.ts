@@ -1381,7 +1381,7 @@ async function findBroken(a: {
       left++;
       continue;
     }
-    const alone = await replay(a.t.path, g.entry.base, g.entry.commit, a.main);
+    const alone = await replayFormatted(a.t.path, g.entry.base, g.entry.commit, a.main);
     const r = alone && alone !== a.main ? await run(g.entry.branch, alone, only) : { state: 'unknown' as const, text: '' };
     if (r.state === 'failed') failed.set(g.entry.id, r.text);
     else if (r.state === 'passed') passed.add(g.entry.id);
@@ -1554,14 +1554,14 @@ async function landLocked(
     }
     if (!opts.dryRun && !ready.hasMerge && !alone) {
       let stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes, true, allowed);
-      let top = stacked.group.length ? await replay(t.path, main, own, stacked.tip) : undefined;
+      let top = stacked.group.length ? await replayFormatted(t.path, main, own, stacked.tip) : undefined;
       // Held on GitHub for what the others change (not a fix's, which is
       // the repair): then only the fixes go with it, and the others go by
       // themselves later, each hearing why. Still held with only the fixes
       // (this one's own change, moved by one): it goes alone.
       if (opts.hold && top && (await groupHeld(t, main, stacked.group, top, opts))) {
         stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes, false, allowed);
-        top = stacked.group.length ? await replay(t.path, main, own, stacked.tip) : undefined;
+        top = stacked.group.length ? await replayFormatted(t.path, main, own, stacked.tip) : undefined;
         if (top && (await groupHeld(t, main, stacked.group, top, opts))) top = undefined;
       }
       if (stacked.group.length) {

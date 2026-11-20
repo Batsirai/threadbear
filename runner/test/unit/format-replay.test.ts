@@ -36,12 +36,12 @@ process.exit(failed ? 1 : 0);
 
 const SUBJECT = 'Format src with fmt.mjs, nothing else';
 
-function setup(): { main: string; fmt: string; list: string } {
+function setup(): { root: string; main: string; fmt: string; list: string } {
   const { root, main } = makeRepo();
   const fmt = path.join(root, 'fmt.mjs');
   fs.writeFileSync(fmt, FMT);
   const list = `# Whole-tree format commits.\n# format-subject: ${SUBJECT}\n# format-command: node '${fmt}'\n# format-paths: src\n# format-config: fmt.toml\n`;
-  return { main, fmt, list };
+  return { root, main, fmt, list };
 }
 
 // What formatting a commit's whole tree by hand gives: the expected end.
@@ -218,4 +218,41 @@ test('the script carries a branch, and with a real conflict leaves a rebase to f
   assert.equal(sh(t.path, 'git show HEAD:src/b.rs'), 'fn b() { 2 }');
   assert.equal(sh(t.path, 'git rev-parse --abbrev-ref HEAD'), t.branch);
   void fmt;
+});
+
+test('a format commit found by subject must be the only one with it, and only change what it formats', async () => {
+  const { main, fmt, list } = setup();
+  commit(main, { 'src/a.rs': 'fn  a()  {}\n', 'fmt.toml': 'style = 1\n', '.git-blame-ignore-revs': list }, 'Code');
+  const f = formatOnMain(main, fmt);
+  assert.deepEqual((await formatCommitsIn(main, 'main')).map((x) => x.commit), [f]);
+  // A second commit with its subject: which one is it? Neither, until the id is written.
+  commit(main, { 'src/a.rs': 'fn a() { changed }\n' }, SUBJECT);
+  assert.deepEqual(await formatCommitsIn(main, 'main'), []);
+  commit(main, { '.git-blame-ignore-revs': `${list}${f}\n` }, 'Write its id');
+  assert.deepEqual((await formatCommitsIn(main, 'main')).map((x) => x.commit), [f]);
+  // One that changes something outside what it formats isn't one.
+  const { main: other, fmt: fmt2, list: list2 } = setup();
+  commit(other, { 'src/a.rs': 'fn  a()  {}\n', 'fmt.toml': 'style = 1\n', '.git-blame-ignore-revs': list2 }, 'Code');
+  execFileSync('node', [fmt2], { cwd: other, stdio: 'ignore' });
+  write(other, { 'README.md': 'changed\n' });
+  sh(other, `git add -A && git commit -qm "${SUBJECT}"`);
+  assert.deepEqual(await formatCommitsIn(other, 'main'), []);
+});
+
+test('a branch with a link where the config goes neither writes through it nor loses it', async () => {
+  const { root, main, fmt, list } = setup();
+  const list2 = list.replace('# format-config: fmt.toml', '# format-config: fmt.toml src/fmt.toml');
+  commit(main, { 'src/a.rs': 'fn  a()  {}\n', 'fmt.toml': 'style = 1\n', 'src/fmt.toml': 'x\n', '.git-blame-ignore-revs': list2 }, 'Code');
+  const p = sh(main, 'git rev-parse HEAD');
+  const t = makeBranch(main);
+  const outside = path.join(root, 'outside.toml');
+  sh(t.path, `rm src/fmt.toml && ln -s '${outside}' src/fmt.toml && git add -A && git commit -qm "Link it"`);
+  commit(t.path, { 'src/a.rs': 'fn  a()  { 1 }\n' }, 'Edit a');
+  const tip = sh(t.path, 'git rev-parse HEAD');
+  formatOnMain(main, fmt);
+  const r = await carryAcross(main, { base: p, tip, onto: sh(main, 'git rev-parse main'), formatter: new TreeFormatter(main, await crossings(main, tip, 'main')) });
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.ok(!fs.existsSync(outside), 'nothing written through the link');
+  assert.equal(sh(main, `git ls-tree ${r.tip} src/fmt.toml | cut -c1-6`), '120000', 'the link is still there');
+  assert.equal(sh(main, `git show ${r.tip}:src/a.rs`), 'fn a() { 1 }');
 });
