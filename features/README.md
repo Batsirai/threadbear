@@ -57,6 +57,7 @@ Each scenario starts its own app on its own mock runner, about 6 seconds apiece.
 ```bash
 npm ci                                  # once, in this folder
 npm run check                           # steps line up, no apps needed
+npm run typecheck                       # the steps, support and tools (tsconfig.json)
 
 # Build the app first, then:
 TB_APP=gpui  node_modules/.bin/cucumber-js        # or swift

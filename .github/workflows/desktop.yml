@@ -132,6 +132,9 @@ jobs:
       - name: The specs line up with their steps
         working-directory: features
         run: node verify-pairing.mjs
+      - name: The specs' steps typecheck
+        working-directory: features
+        run: npm run typecheck
       - name: Rust tests (with the mock runner)
         if: ${{ !matrix.specsOnly }}
         run: cargo test --manifest-path desktop/Cargo.toml

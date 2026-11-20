@@ -43,7 +43,7 @@ export class ThreadbearWorld extends World {
   }
 
   /** Waits until a dump passes `check` (it's slow to land, as everything is). */
-  async until<T>(what: string, check: (d: Dump) => T | undefined | false | null, ms = 15_000): Promise<T> {
+  async until<T>(what: string, check: (d: Dump) => T | undefined | false | null | '' | 0, ms = 15_000): Promise<T> {
     const deadline = Date.now() + ms;
     let last: Dump | undefined;
     for (;;) {
