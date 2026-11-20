@@ -86,8 +86,9 @@ pub enum Event {
     /// client knows of stops being one (None for none), as for each event
     /// from it.
     Connecting { restart_ends: Option<Instant> },
-    /// Signed in, and hello answered.
-    Connected,
+    /// Signed in, and hello answered, with any restart the client has
+    /// heard of since (the new runner's notice can reach the app first).
+    Connected { restart_ends: Option<Instant> },
     /// The connection went, or a try failed.
     Disconnected {
         gone: Gone,
@@ -144,17 +145,21 @@ impl ConnectionPhase {
         matches!(self, ConnectionPhase::Connected { .. })
     }
 
-    /// The only way the phase moves.
+    /// The only way the phase moves: from the phase as it is at `now`, so
+    /// an event that beats a late Clock finds its deadlines passed.
     pub fn next(self, event: Event, now: Instant) -> ConnectionPhase {
         use ConnectionPhase as P;
+        let phase = self.at(now);
         let moved = match event {
-            Event::Connected => P::Connected { restart_ends: None },
-            Event::Clock => self,
-            Event::Connecting { restart_ends } => self.away(None, restart_ends, now),
-            Event::Disconnected { gone, restart_ends } => self.away(Some(gone), restart_ends, now),
+            Event::Connected { restart_ends } => P::Connected {
+                restart_ends: restart_ends.filter(|e| *e > now),
+            },
+            Event::Clock => phase,
+            Event::Connecting { restart_ends } => phase.away(None, restart_ends, now),
+            Event::Disconnected { gone, restart_ends } => phase.away(Some(gone), restart_ends, now),
             Event::Restart { ends } => {
                 let ends = ends.filter(|e| *e > now);
-                match (self, ends) {
+                match (phase, ends) {
                     (P::Connected { .. }, ends) => P::Connected { restart_ends: ends },
                     // The first restart this outage belongs to stays it.
                     (restarting @ P::Restarting { .. }, _) => restarting,
@@ -187,9 +192,14 @@ impl ConnectionPhase {
                 }
             }
             // Forget what the drop was, so the banner says "Connecting"
-            // until this try has an answer and the click shows.
-            Event::TryAgain | Event::RunnerStarted => match self {
+            // until this try has an answer and the click shows. Start
+            // runner's launch is still under way, though: it keeps
+            // spinning, and can't be pressed again, until that answers.
+            Event::TryAgain | Event::RunnerStarted => match phase {
                 connected @ P::Connected { .. } => connected,
+                P::StartingRunner { reason } if event == Event::TryAgain => {
+                    P::StartingRunner { reason }
+                }
                 P::Quiet { quiet_until, .. } => P::Quiet {
                     gone: None,
                     quiet_until,
@@ -210,7 +220,7 @@ impl ConnectionPhase {
                 | P::StartingRunner { .. }
                 | P::Lost { .. } => P::Connecting,
             },
-            Event::StartRunner => match self {
+            Event::StartRunner => match phase {
                 P::Unreachable { reason } => P::StartingRunner { reason },
                 other @ (P::Connected { .. }
                 | P::Quiet { .. }
@@ -307,11 +317,11 @@ impl ConnectionPhase {
                         quiet_until,
                     },
                     // Start runner keeps spinning while its runner is still
-                    // out of reach.
+                    // out of reach (or went before saying hello).
                     (
                         None,
                         Some(Gone {
-                            cause: Cause::Down,
+                            cause: Cause::Down | Cause::Lost,
                             reason,
                         }),
                     ) if starting => P::StartingRunner { reason },

@@ -2415,7 +2415,7 @@ impl Threadbear {
         use threadbear_core::connection::{Cause, Event, Gone};
         let restart_ends = self.restart_ends();
         match status {
-            Status::Connected { .. } => Event::Connected,
+            Status::Connected { .. } => Event::Connected { restart_ends },
             Status::Connecting { .. } => Event::Connecting { restart_ends },
             Status::Disconnected { kind, reason, .. } => Event::Disconnected {
                 gone: Gone {
@@ -2424,7 +2424,13 @@ impl Threadbear {
                         Disconnect::Down => Cause::Down,
                         Disconnect::Refused => Cause::Refused,
                     },
-                    reason: threadbear_client::runner::plain_reason(reason),
+                    // A refusal is the runner's own words, as they are.
+                    reason: match kind {
+                        Disconnect::Refused => reason.clone(),
+                        Disconnect::Lost | Disconnect::Down => {
+                            threadbear_client::runner::plain_reason(reason)
+                        }
+                    },
                 },
                 restart_ends,
             },
@@ -2489,7 +2495,9 @@ impl Threadbear {
     /// service takes a little while to listen (`startRunner`).
     pub(crate) fn start_runner(&mut self, cx: &mut Context<Self>) {
         // Only from the banner's Start runner, and once: it spins until
-        // launchctl has answered and the app has tried again.
+        // launchctl has answered and the app has tried again. The banner
+        // may be drawn past a deadline whose Clock hasn't come: catch up.
+        self.advance_connection(threadbear_core::connection::Event::Clock, cx);
         if !matches!(
             self.connection,
             threadbear_core::connection::ConnectionPhase::Unreachable { .. }

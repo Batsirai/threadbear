@@ -57,7 +57,7 @@ fn every_phase_with_every_event() {
         Event::Connecting {
             restart_ends: Some(soon),
         },
-        Event::Connected,
+        Event::Connected { restart_ends: None },
         Event::Disconnected {
             gone: gone(Cause::Down, "d"),
             restart_ends: None,
@@ -185,7 +185,8 @@ fn every_phase_with_every_event() {
             restarting(soon, down("x"), now),
             starting("x"),
             starting("x"),
-            P::Connecting,
+            // Try again while launchctl works: it keeps spinning.
+            starting("x"),
             starting("x"),
             P::Connecting,
         ],
@@ -446,7 +447,7 @@ mod races {
             text(&p, t + s(8)),
             Some("The runner is restarting. Reconnecting…")
         );
-        p = p.next(Event::Connected, t + s(8));
+        p = p.next(Event::Connected { restart_ends: None }, t + s(8));
         assert_eq!(text(&p, t + s(8)), None);
     }
 
@@ -517,7 +518,7 @@ mod specs {
         let b = banner(&p, t + DROP_GRACE).unwrap();
         assert_eq!(b.text, "Can't reach the runner.");
         assert_eq!(b.detail.as_deref(), Some("why"));
-        p = p.next(Event::Connected, t + s(8));
+        p = p.next(Event::Connected { restart_ends: None }, t + s(8));
         assert_eq!(banner(&p, t + s(8)), None);
         assert_eq!(p.name(), "connected");
     }
@@ -549,7 +550,10 @@ mod specs {
             let b = banner(&p, t + s(at)).unwrap();
             assert!(b.quiet && b.buttons == Buttons::None && b.detail.is_none());
         }
-        assert_eq!(p.next(Event::Connected, t + s(6)), connected());
+        assert_eq!(
+            p.next(Event::Connected { restart_ends: None }, t + s(6)),
+            connected()
+        );
     }
 
     /// A restart whose "restarting now" went down with the socket: the
@@ -644,7 +648,10 @@ mod specs {
         assert_eq!(p.clone().next(Event::StartRunner, t + s(4)), p);
         p = p.next(Event::RunnerStarted, t + s(5));
         assert_eq!(text(&p, t + s(5)), Some("Connecting to the runner…"));
-        assert_eq!(p.next(Event::Connected, t + s(5)), connected());
+        assert_eq!(
+            p.next(Event::Connected { restart_ends: None }, t + s(5)),
+            connected()
+        );
     }
 
     /// A refused token is said at once: it won't put itself right.
@@ -678,6 +685,75 @@ mod specs {
         let p = p.next(Event::Clock, t + PATIENCE);
         assert_eq!(text(&p, t + PATIENCE), None);
         assert_eq!(p.deadline(), None);
+    }
+}
+
+/// What the other labs' reviews of the phase found (20 Nov), replayed.
+mod reviews {
+    use super::*;
+
+    /// Codex: the new runner's "restarting now" can reach the app before
+    /// the Connected it follows; Connected brings the client's restart.
+    #[test]
+    fn a_restart_heard_before_connected_survives_it() {
+        let t = Instant::now();
+        let ends = Some(t + PATIENCE);
+        let p = ConnectionPhase::opening(t)
+            .next(Event::Restart { ends }, t)
+            .next(Event::Connected { restart_ends: ends }, t);
+        assert_eq!(text(&p, t + s(1)), Some("The runner is restarting now."));
+    }
+
+    /// Codex and Gemini: Try again, or a try that goes before hello, while
+    /// launchctl works left Start runner pressable again.
+    #[test]
+    fn start_runner_stays_spinning_until_its_launch_answers() {
+        let t = Instant::now();
+        let mut p = ConnectionPhase::Unreachable { reason: "x".into() }
+            .next(Event::StartRunner, t)
+            .next(Event::TryAgain, t);
+        for gone_ in [gone(Cause::Lost, "closed"), gone(Cause::Down, "x")] {
+            p = p.next(Event::Connecting { restart_ends: None }, t).next(
+                Event::Disconnected {
+                    gone: gone_,
+                    restart_ends: None,
+                },
+                t,
+            );
+            assert_eq!(
+                banner(&p, t).map(|b| b.buttons),
+                Some(Buttons::StartRunnerAndTryAgain { starting: true })
+            );
+        }
+        assert_eq!(p.next(Event::RunnerStarted, t), ConnectionPhase::Connecting);
+    }
+
+    /// Gemini: an event that beats a late Clock finds the phase as the
+    /// banner already showed it. Start runner, drawn once the grace is
+    /// over, starts it.
+    #[test]
+    fn an_event_before_a_late_clock_sees_the_deadline_passed() {
+        let t = Instant::now();
+        let quiet = ConnectionPhase::Quiet {
+            gone: Some(gone(Cause::Down, "x")),
+            quiet_until: t + DROP_GRACE,
+        };
+        let late = t + DROP_GRACE + Duration::from_millis(10);
+        assert_eq!(
+            quiet.next(Event::StartRunner, late),
+            ConnectionPhase::StartingRunner { reason: "x".into() }
+        );
+        // And a restart past its patience gives way to a new one.
+        let old = ConnectionPhase::Restarting {
+            ends: t + s(90),
+            gone: Some(gone(Cause::Down, "x")),
+            quiet_until: t,
+        };
+        let new = Some(t + s(200));
+        assert!(matches!(
+            old.next(Event::Restart { ends: new }, t + s(100)),
+            ConnectionPhase::Restarting { ends, .. } if Some(ends) == new
+        ));
     }
 }
 
@@ -881,9 +957,13 @@ enum Step {
     /// `runner.status`'s answer says the restart is now.
     StatusNow,
     TryAgain,
-    /// Start runner, launchctl taking `.0` ms, a failed try meanwhile or
-    /// not.
-    StartRunner(u64, bool),
+    /// The runner said hello, and the new runner's "restarting now" reached
+    /// the app first.
+    ConnectAndRestart,
+    /// Start runner, launchctl taking `.0` ms, and meanwhile: 0 nothing, 1
+    /// a failed try, 2 Try again and a failed try, 3 a try that went before
+    /// hello and a failed one.
+    StartRunner(u64, u8),
 }
 
 /// Old and new side by side, every event delivered as the app hears it.
@@ -921,7 +1001,7 @@ impl Both {
         let ends = self.ends();
         self.old.status(&status, self.now, ends);
         self.deliver(match status {
-            legacy::St::Connected => Event::Connected,
+            legacy::St::Connected => Event::Connected { restart_ends: None },
             legacy::St::Connecting => Event::Connecting { restart_ends: ends },
             legacy::St::Gone(gone) => Event::Disconnected {
                 gone,
@@ -953,6 +1033,14 @@ impl Both {
                 self.restart = Restart::None;
                 self.connected = true;
                 self.status(legacy::St::Connected);
+            }
+            Step::ConnectAndRestart => {
+                self.connected = true;
+                self.restart = Restart::Under(self.now);
+                let ends = self.ends();
+                self.deliver(Event::Restart { ends });
+                self.old.status(&legacy::St::Connected, self.now, ends);
+                self.deliver(Event::Connected { restart_ends: ends });
             }
             Step::Drop(cause) => {
                 let cause = if self.connected { Cause::Lost } else { cause };
@@ -988,7 +1076,7 @@ impl Both {
                 // The client stops waiting and tries.
                 self.status(legacy::St::Connecting);
             }
-            Step::StartRunner(ms, fails) => {
+            Step::StartRunner(ms, meanwhile) => {
                 let shown = banner(&self.new, self.now);
                 if !matches!(
                     shown.map(|b| b.buttons),
@@ -999,9 +1087,22 @@ impl Both {
                 self.old.starting_runner = true;
                 self.deliver(Event::StartRunner);
                 self.compare("pressed Start runner");
-                if fails {
-                    self.step(Step::Try);
-                    self.step(Step::Drop(Cause::Down));
+                match meanwhile {
+                    1 => {
+                        self.step(Step::Try);
+                        self.step(Step::Drop(Cause::Down));
+                    }
+                    2 => {
+                        self.step(Step::TryAgain);
+                        self.step(Step::Drop(Cause::Down));
+                    }
+                    3 => {
+                        self.step(Step::Try);
+                        self.status(legacy::St::Gone(gone(Cause::Lost, "closed")));
+                        self.step(Step::Try);
+                        self.step(Step::Drop(Cause::Down));
+                    }
+                    _ => {}
                 }
                 self.wait(ms);
                 self.compare("launchctl working");
@@ -1122,7 +1223,7 @@ fn old_and_new_say_the_same_for_the_spec_sequences() {
         Wait(2500),
         Try,
         down,
-        StartRunner(700, true),
+        StartRunner(700, 1),
         Wait(100),
         down,
         Wait(500),
@@ -1170,7 +1271,7 @@ fn old_and_new_say_the_same_for_made_up_sequences() {
     for _ in 0..3000 {
         let len = 4 + next(24) as usize;
         let steps: Vec<Step> = (0..len)
-            .map(|_| match next(13) {
+            .map(|_| match next(14) {
                 0 | 1 => Step::Wait(waits[next(waits.len() as u64) as usize]),
                 2 => Step::Connect,
                 3 | 4 => Step::Drop(causes[next(3) as usize]),
@@ -1180,7 +1281,8 @@ fn old_and_new_say_the_same_for_made_up_sequences() {
                 9 => Step::Cancelled,
                 10 => Step::StatusNow,
                 11 => Step::TryAgain,
-                _ => Step::StartRunner(200 + next(1500), next(2) == 0),
+                12 => Step::ConnectAndRestart,
+                _ => Step::StartRunner(200 + next(1500), next(4) as u8),
             })
             .collect();
         run(&steps);
