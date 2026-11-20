@@ -7,7 +7,7 @@
 // So a picture over the limit is shrunk to just fit before it's drawn: the
 // stage zooms, so it keeps as much detail as the GPU can hold.
 
-use gpui_kit::{App, Asset, Image, ImageCacheError, ImageFormat, RenderImage};
+use gpui_kit::{App, Asset, ImageCacheError, ImageFormat, RenderImage};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -36,18 +36,34 @@ pub(crate) fn size_of(bytes: &[u8]) -> Option<(u32, u32)> {
     image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
 }
 
-/// Decodes and shrinks a picture to `fitted`'s size. None when it can't be
-/// read (a format this build doesn't decode, or bigger than the decoder's
-/// memory limit).
+/// Decodes and shrinks a picture to `fitted`'s size, turned the way its
+/// EXIF says (as gpui's own loader turns it). None when it can't be read (a
+/// format this build doesn't decode), or it's too many pixels to decode and
+/// shrink within MAX_PIXELS, whatever the file's size on disk.
 fn shrunk(bytes: &[u8]) -> Option<image::RgbaImage> {
+    use image::ImageDecoder as _;
+    let (width, height) = size_of(bytes)?;
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return None;
+    }
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
     let mut limits = image::Limits::default();
-    limits.max_alloc = Some(1024 * 1024 * 1024);
+    limits.max_alloc = Some(MAX_PIXELS * 4);
     reader.limits(limits);
-    let picture = reader.decode().ok()?;
+    let mut decoder = reader.into_decoder().ok()?;
+    let orientation = decoder.orientation().ok();
+    let mut picture = image::DynamicImage::from_decoder(decoder).ok()?;
+    if let Some(orientation) = orientation {
+        picture.apply_orientation(orientation);
+    }
     let (width, height) = fitted((picture.width(), picture.height()));
     Some(picture.resize_exact(width, height, image::imageops::FilterType::Triangle).into_rgba8())
 }
+
+/// The most pixels a picture may have to be shrunk: 128 million, 512 MB
+/// decoded (a 780 x 18,000 phone shot is 14 million). Bigger shows the
+/// picture's fallback (its "can't show" mark) rather than taking the memory.
+const MAX_PIXELS: u64 = 128 * 1024 * 1024;
 
 /// Encoded bytes ready for `Image::from_bytes`: as they are when the picture
 /// fits (or can't be read, so nothing is lost), otherwise shrunk and
@@ -67,22 +83,20 @@ pub(crate) fn fit_bytes(format: ImageFormat, bytes: Vec<u8>) -> (ImageFormat, Ve
 }
 
 /// A picture file read and drawn shrunk, for one `file_picture` found too
-/// big. Checked as `checked_picture_bytes` checks Windows' pictures.
+/// big, keyed by its path, size and time. Checked as
+/// `checked_picture_bytes` checks Windows' pictures.
 pub(crate) struct FittedPicture;
 
 impl Asset for FittedPicture {
-    type Source = PathBuf;
+    type Source = (PathBuf, u64, Option<std::time::SystemTime>);
     type Output = Result<Arc<RenderImage>, ImageCacheError>;
 
-    fn load(path: Self::Source, cx: &mut App) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
-        let renderer = cx.svg_renderer();
+    fn load((path, _, _): Self::Source, _cx: &mut App) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
         async move {
             let bytes = crate::rows::markdown::checked_picture_bytes(&path)?;
-            let Some(mut small) = shrunk(&bytes) else {
-                // Not one it can shrink: drawn as it is, which may still work.
-                let format = crate::viewer::format_of(&path.to_string_lossy(), &bytes).ok_or_else(|| std::io::Error::other("Not a picture"))?;
-                return Image::from_bytes(format, bytes).to_image_data(renderer).map_err(Into::into);
-            };
+            // Drawn as it is, it would be a blank box: the fallback says
+            // it can't be shown instead.
+            let mut small = shrunk(&bytes).ok_or_else(|| std::io::Error::other("Too big to show"))?;
             // GPUI's pictures are BGRA (as `Image::to_image_data` makes them).
             for pixel in small.chunks_exact_mut(4) {
                 pixel.swap(0, 2);
@@ -91,6 +105,10 @@ impl Asset for FittedPicture {
         }
     }
 }
+
+/// How much of a file is read for its size. A JPEG's size comes after its
+/// EXIF and colour profile, which are at most a few hundred KB.
+const HEADER_BYTES: u64 = 1024 * 1024;
 
 /// A picture file's size from its header, remembered by its size and time
 /// (rows ask on every frame). None when it can't be read.
@@ -102,9 +120,16 @@ pub(crate) fn file_size(path: &Path, meta: &std::fs::Metadata) -> Option<(u32, u
     if let Some(known) = SEEN.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return *known;
     }
+    // A header's worth at most, read from a regular file: what's after it
+    // never reaches the decoder, whatever is at the path by now.
     let size = threadbear_core::open_policy::local_open(path)
         .ok()
-        .and_then(|file| image::ImageReader::new(std::io::BufReader::new(file)).with_guessed_format().ok()?.into_dimensions().ok());
+        .filter(|file| file.metadata().is_ok_and(|meta| meta.is_file()))
+        .and_then(|file| {
+            use std::io::Read as _;
+            let head = std::io::BufReader::new(file.take(HEADER_BYTES));
+            image::ImageReader::new(head).with_guessed_format().ok()?.into_dimensions().ok()
+        });
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
     if seen.len() > 2000 {
         seen.clear();

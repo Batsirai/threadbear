@@ -476,12 +476,12 @@ pub(crate) fn file_picture(path: &str) -> ImageSource {
         let path = picture_file(path);
         // Over the GPU's limit, gpui's own loader's picture would draw
         // nothing: read and shrunk to fit instead (fit_picture.rs).
-        let too_big = !path.as_os_str().is_empty()
-            && threadbear_core::open_policy::local_metadata(&path).ok().and_then(|meta| crate::fit_picture::file_size(&path, &meta)).is_some_and(crate::fit_picture::too_big);
-        if !too_big {
-            return path.into();
-        }
-        ImageSource::Custom(std::sync::Arc::new(move |window, cx| window.use_asset::<crate::fit_picture::FittedPicture>(&path, cx)))
+        // Keyed by its size and time too, so a picture written again at the
+        // same path is read again.
+        let meta = threadbear_core::open_policy::local_metadata(&path).ok().filter(|_| !path.as_os_str().is_empty());
+        let Some(meta) = meta.filter(|meta| crate::fit_picture::file_size(&path, meta).is_some_and(crate::fit_picture::too_big)) else { return path.into() };
+        let key = (path, meta.len(), meta.modified().ok());
+        ImageSource::Custom(std::sync::Arc::new(move |window, cx| window.use_asset::<crate::fit_picture::FittedPicture>(&key, cx)))
     }
 }
 

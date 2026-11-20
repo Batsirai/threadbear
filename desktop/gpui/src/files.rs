@@ -158,7 +158,9 @@ pub(crate) enum FileBody {
     /// Code or plain text: a read-only editor, coloured for code. The editor
     /// is made at the next frame, as it needs a window.
     Text { editor: Option<Entity<EditorState>>, text: Arc<str>, language: Option<&'static str> },
-    Picture { image: Arc<Image>, size: Option<(u32, u32)> },
+    /// `image` is the file as it is (Copy Image copies it); `drawn` the same
+    /// one, or shrunk when it's bigger than the GPU draws (fit_picture.rs).
+    Picture { image: Arc<Image>, drawn: Arc<Image>, size: Option<(u32, u32)> },
     /// Something only its own app can show.
     Opaque { note: String },
     /// A video or a PDF on this Mac, in the system's own view over the pane
@@ -546,6 +548,18 @@ impl SidePane {
         }
         cx.spawn(async move |this, cx| {
             let res = call(client, "files.read", params).await;
+            // A picture too big for the GPU, shrunk off this thread to draw.
+            let big = match (&res, image_format(&path)) {
+                (Ok(v), Some(format)) => FileRead::decode(v).map(|read| read.data).filter(|data| crate::fit_picture::size_of(data).is_some_and(crate::fit_picture::too_big)).map(|data| (format, data)),
+                _ => None,
+            };
+            let fitted = match big {
+                Some((format, data)) => Some(cx.background_executor().spawn(async move {
+                    let (format, data) = crate::fit_picture::fit_bytes(format, data);
+                    Arc::new(Image::from_bytes(format, data))
+                }).await),
+                None => None,
+            };
             this.update(cx, |this, cx| {
                 // A newer file opened while this one was on its way.
                 let current = this.previews.get(&thread_id).and_then(|p| p.file_path().map(str::to_owned));
@@ -554,7 +568,7 @@ impl SidePane {
                 }
                 match res {
                     Ok(v) => match FileRead::decode(&v) {
-                        Some(read) => this.show_read(&thread_id, &path, opened, read, here, cx),
+                        Some(read) => this.show_read(&thread_id, &path, opened, read, here, fitted, cx),
                         None => this.fail_file(&thread_id, &path, opened, "Couldn't read that answer from the runner.".into(), cx),
                     },
                     Err(e) if e.message.starts_with("Not a file") => {
@@ -616,13 +630,14 @@ impl SidePane {
         cx.notify();
     }
 
-    fn show_read(&mut self, thread_id: &str, path: &str, opened: u64, read: FileRead, here: bool, cx: &mut Context<Self>) {
+    fn show_read(&mut self, thread_id: &str, path: &str, opened: u64, read: FileRead, here: bool, fitted: Option<Arc<Image>>, cx: &mut Context<Self>) {
         let viewer = core::viewer_for_path(path);
         let is_picture = viewer == Viewer::Picture && (core::looks_like_picture(path) || image_format(path).is_some());
         let body = if is_picture {
             match image_format(path) {
                 Some(format) => {
-                    FileBody::Picture { size: picture_size(&read.data), image: Arc::new(Image::from_bytes(format, read.data)) }
+                    let image = Arc::new(Image::from_bytes(format, read.data));
+                    FileBody::Picture { size: picture_size(image.bytes()), drawn: fitted.unwrap_or_else(|| image.clone()), image }
                 }
                 None => FileBody::Opaque { note: "This kind of picture opens in its own app.".into() },
             }
@@ -1039,8 +1054,8 @@ impl SidePane {
                     Err(why) => pane_note(&why, p).into_any_element(),
                 }
             }
-            FileBody::Picture { image, .. } => {
-                let source = ImageSource::Image(image.clone());
+            FileBody::Picture { drawn, .. } => {
+                let source = ImageSource::Image(drawn.clone());
                 let (path2, entity) = (path.to_owned(), cx.entity().downgrade());
                 // Dragged, it's the file itself, from this Mac's own threads
                 // only (file_drag.rs, `FilePreviewView`'s drag).

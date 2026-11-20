@@ -168,15 +168,21 @@ impl SidePane {
             let picture = match render.image.as_ref() {
                 Some(image) => {
                     let read = call(client, "files.read", json!({ "path": image.path })).await.ok().as_ref().and_then(threadbear_core::folders::FileRead::decode);
-                    read.map(|r| r.data)
+                    match read {
+                        // Shrunk, off this thread, when it's bigger than the GPU draws (fit_picture.rs).
+                        Some(read) => {
+                            let jpeg = image.media_type.contains("jpeg");
+                            let format = if jpeg { ImageFormat::Jpeg } else { ImageFormat::Png };
+                            Some(cx.background_executor().spawn(async move { crate::fit_picture::fit_bytes(format, read.data) }).await)
+                        }
+                        None => None,
+                    }
                 }
                 None => None,
             };
             this.update(cx, |t, cx| {
                 match picture {
-                    Some(bytes) => {
-                        let format = render.image.as_ref().map(|i| i.media_type.clone()).unwrap_or_default();
-                        let format = if format.contains("jpeg") { ImageFormat::Jpeg } else { ImageFormat::Png };
+                    Some((format, bytes)) => {
                         t.panels.pictures.insert(key.clone(), Arc::new(Image::from_bytes(format, bytes)));
                     }
                     None if render.image.is_none() => {
