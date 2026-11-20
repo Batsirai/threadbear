@@ -431,12 +431,21 @@ export async function carryAcross(cwd: string, a: { base: string; tip: string; o
   if (first.failed.length) {
     return { ok: false, error: `Couldn't format ${short(a.base)}, the commit this work starts from: ${first.failed.join('; ')}`, notes };
   }
+  const landed = await alreadyOn(cwd, a.onto, a.tip, a.base);
   const asCommit = async (tree: string) => out(cwd, ['commit-tree', tree, '-m', 'formatted'], IDENT);
   let prev = first.tree;
   let prevCommit = await asCommit(prev);
   let tip = a.onto;
   let count = 0;
   for (const c of list) {
+    if (landed.has(c)) {
+      // Formatted it may not go on cleanly, and it isn't needed: rebase
+      // leaves it out the same way.
+      notes.push(`${short(c)} (${await out(cwd, ['log', '-1', '--format=%s', c])}) was left out: it's on ${short(a.onto)} already.`);
+      prev = (await formatCommit(cwd, a.formatter, c, prev, notes, '')).tree;
+      prevCommit = await asCommit(prev);
+      continue;
+    }
     const orig = await out(cwd, ['rev-parse', `${c}^{tree}`]);
     const parentTree = await out(cwd, ['rev-parse', `${c}^^{tree}`]).catch(() => '');
     const subject = await out(cwd, ['log', '-1', '--format=%s', c]);
@@ -509,6 +518,29 @@ async function formatCommit(cwd: string, formatter: TreeFormatter, c: string, pr
   }
 }
 
+// The commits of `tip` whose change is on `onto` already (landed as a
+// rebased copy), as rebase finds them: by patch id. An empty one never is
+// (rebase keeps those).
+async function alreadyOn(cwd: string, onto: string, tip: string, base: string): Promise<Set<string>> {
+  const marked = await git(cwd, ['rev-list', '--right-only', '--cherry-mark', '--no-merges', `${onto}...${tip}`]);
+  const same = new Set<string>();
+  if (!marked.ok) return same;
+  // And any of base..tip that is on it as it is (the same commit, landed).
+  const own = await git(cwd, ['rev-list', `${onto}..${tip}`]);
+  if (own.ok) {
+    const mine = new Set(own.stdout.split('\n').filter(Boolean));
+    for (const c of (await git(cwd, ['rev-list', `${base}..${tip}`])).stdout.split('\n').filter(Boolean)) if (!mine.has(c)) same.add(c);
+  }
+  for (const line of marked.stdout.split('\n')) {
+    if (line[0] !== '=') continue;
+    const c = line.slice(1).trim();
+    const t = await git(cwd, ['rev-parse', `${c}^{tree}`, `${c}^^{tree}`]);
+    const [a, b] = t.stdout.trim().split('\n');
+    if (a !== b) same.add(c);
+  }
+  return same;
+}
+
 // Only for the throwaway commits that hold a formatted tree for merge-tree.
 const IDENT = { GIT_AUTHOR_NAME: 'format', GIT_AUTHOR_EMAIL: 'format@localhost', GIT_COMMITTER_NAME: 'format', GIT_COMMITTER_EMAIL: 'format@localhost', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' };
 
@@ -516,12 +548,13 @@ const IDENT = { GIT_AUTHOR_NAME: 'format', GIT_AUTHOR_EMAIL: 'format@localhost',
 // base (whose parent is the real base), so an ordinary `git rebase --onto
 // <onto> <first>` puts them on `onto` with conflicts a person can sort out
 // as usual. Returns the formatted base and tip.
-export async function formattedChain(cwd: string, base: string, tip: string, formatter: TreeFormatter): Promise<{ first: string; tip: string; notes: string[] }> {
+export async function formattedChain(cwd: string, base: string, tip: string, formatter: TreeFormatter): Promise<{ first: string; tip: string; notes: string[]; copies: Map<string, string> }> {
   const notes: string[] = [];
   const baseTree = (await formatter.format(await out(cwd, ['rev-parse', `${base}^{tree}`]))).tree;
   const first = await out(cwd, ['commit-tree', baseTree, '-p', base, '-m', `Formatted copy of ${short(base)} (replay-over-format.sh)`]);
   let cur = first;
   let prev = baseTree;
+  const copies = new Map<string, string>();
   for (const c of (await out(cwd, ['rev-list', '--reverse', '--topo-order', `${base}..${tip}`])).split('\n').filter(Boolean)) {
     const subject = await out(cwd, ['log', '-1', '--format=%s', c]);
     const r = await formatCommit(cwd, formatter, c, prev, notes, subject);
@@ -537,8 +570,9 @@ export async function formattedChain(cwd: string, base: string, tip: string, for
     const message = (await git(cwd, ['log', '-1', '--format=%B', c])).stdout.replace(/\n+$/, '');
     const [name, email, date] = meta.split('\0');
     cur = await out(cwd, ['commit-tree', r.tree, '-p', cur, '-m', message], { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date });
+    copies.set(c, cur);
   }
-  return { first, tip: cur, notes };
+  return { first, tip: cur, notes, copies };
 }
 
 // --------------------------------------------------------------- merging across
@@ -703,11 +737,26 @@ async function cli(argv: string[]): Promise<number> {
   const chain = await formattedChain(top, base, head, formatter);
   for (const n of chain.notes) say(n);
   await out(top, ['reset', '--keep', chain.tip]);
-  const rb = await git(top, ['rebase', '--onto', onto, chain.first]);
+  // Commits already on `onto` are left out of the rebase, as a plain one
+  // would leave them: their formatted copies don't match by patch id, so
+  // the todo list drops them by name. Each pick still merges from its own
+  // parent, so what comes after is right.
+  const landed = await alreadyOn(top, onto, head, base);
+  const drop = [...landed].map((c) => chain.copies.get(c)).filter((c): c is string => Boolean(c));
+  for (const c of landed) say(`${short(c)} is on ${onto} already, so it's left out.`);
+  const editor = `node -e ${shellQuote(`const fs=require('fs');const f=process.argv[1];const drop=${JSON.stringify(drop)};fs.writeFileSync(f,fs.readFileSync(f,'utf8').split('\\n').filter((l)=>!drop.includes((l.split(' ')[1]||''))).join('\\n'))`)}`;
+  // Full ids and the long command names in the todo, whatever the config says.
+  const rb = drop.length
+    ? await git(top, ['-c', 'core.abbrev=no', '-c', 'rebase.abbreviateCommands=false', 'rebase', '-i', '--onto', onto, chain.first], { GIT_SEQUENCE_EDITOR: editor })
+    : await git(top, ['rebase', '--onto', onto, chain.first]);
   process.stdout.write(rb.stdout);
   process.stderr.write(rb.stderr);
   say(rb.ok ? `Done. It was at ${short(head)} before.` : `Sort out the conflict, then git rebase --continue. To give up instead: git rebase --abort, then git reset --hard ${short(head)} (the abort alone leaves ${branch} on the formatted copies).`);
   return rb.ok ? 0 : 1;
+}
+
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 function same(a: string, b: string): boolean {
