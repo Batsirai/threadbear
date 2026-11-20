@@ -57,7 +57,11 @@ export type SessionEntry = {
   folder?: string;
   updatedAt: string;
 };
-export type SessionsFile = { version: 1; runner: string; sessions: SessionEntry[] };
+// claudeRoots: the projects folder of every Claude login this runner runs,
+// which the sync reads as well as its own list. A login added to Threadbear
+// was otherwise never archived until someone listed it there by hand: on
+// 20 Nov the M5's fourth login had 762 sessions since 12 Nov that weren't.
+export type SessionsFile = { version: 1; runner: string; claudeRoots?: string[]; sessions: SessionEntry[] };
 
 // What `agent-archive status --json` prints. Every field may be missing:
 // an older sync knows fewer.
@@ -126,6 +130,7 @@ export function sessionsFor(
   runner: string,
   prev: SessionsFile | undefined,
   now: Date,
+  claudeRoots: readonly string[] = [],
 ): SessionsFile {
   const at = now.toISOString();
   const byThread = new Map<string, Omit<SessionEntry, 'sessionId' | 'agent' | 'updatedAt'>>();
@@ -158,7 +163,7 @@ export function sessionsFor(
     if (next.title !== e.title || next.project !== e.project || next.folder !== e.folder) out.set(id, { ...next, updatedAt: at });
   }
   const sessions = [...out.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-  return { version: 1, runner, sessions };
+  return { version: 1, runner, ...(claudeRoots.length ? { claudeRoots: [...new Set(claudeRoots)].sort() } : {}), sessions };
 }
 
 export function readSyncState(stdout: string): ArchiveSyncState | undefined {
@@ -198,6 +203,8 @@ export type AgentArchiveDeps = {
   // Project ids to titles, archived ones too, asked once a write.
   projectTitles: () => ReadonlyMap<string, string>;
   runnerName: () => string;
+  // Each Claude login's config folder (its `projects` folder is the one read).
+  claudeDirs: () => readonly string[];
   settings: () => ArchiveSettings | undefined;
   dir?: string;
   serverDir?: string;
@@ -254,7 +261,8 @@ export class AgentArchive {
     const file = path.join(this.d.home, SESSIONS_FILE);
     const prev = readJsonSync<SessionsFile>(file);
     const titles = this.d.projectTitles();
-    const next = sessionsFor(this.d.records(), (id) => titles.get(id), this.d.runnerName(), prev, this.d.now());
+    const roots = this.d.claudeDirs().map((dir) => path.join(dir, 'projects'));
+    const next = sessionsFor(this.d.records(), (id) => titles.get(id), this.d.runnerName(), prev, this.d.now(), roots);
     this.sessions = next.sessions.length;
     const text = JSON.stringify(next) + '\n';
     if (prev && JSON.stringify(prev) + '\n' === text) return;

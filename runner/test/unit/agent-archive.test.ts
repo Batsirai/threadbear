@@ -45,6 +45,12 @@ test('a Codex sub-agent thread is listed under its parent thread', () => {
   assert.deepEqual(f.sessions.map((s) => [s.sessionId, s.agent, s.threadId]), [['s1', 'codex', 't1'], ['sub1', 'codex', 't1']]);
 });
 
+test("every Claude login's projects folder is listed for the sync, once each", () => {
+  const f = sessionsFor([], () => undefined, 'M5', undefined, T0, ['/b/projects', '/a/projects', '/b/projects']);
+  assert.deepEqual(f.claudeRoots, ['/a/projects', '/b/projects']);
+  assert.equal('claudeRoots' in sessionsFor([], () => undefined, 'M5', undefined, T0), false);
+});
+
 test('a broken or unknown previous file is started over', () => {
   const f = sessionsFor([rec({})], () => undefined, 'M5', { version: 2 } as unknown as SessionsFile, T0);
   assert.equal(f.sessions.length, 1);
@@ -89,6 +95,7 @@ function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boo
     records: () => [rec({})],
     projectTitles: () => new Map(),
     runnerName: () => 'M5',
+    claudeDirs: () => ['/a/claude-4'],
     settings: () => (opts.repo === false ? undefined : { repo: 'git@example:aa.git', ...(opts.pushTo ? { pushTo: opts.pushTo } : {}) }),
     dir,
     serverDir: sdir,
@@ -111,7 +118,7 @@ const isInstall = (c: Call) => c.args.some((x) => x === 'install-runtime' || x.i
 test('a new commit on main is built and installed once, then pushed', async () => {
   const s = setup({ pushTo: [{ host: 'cloud', node: '/n/node' }] });
   await s.a.tick();
-  assert.ok(fs.existsSync(path.join(s.home, SESSIONS_FILE)));
+  assert.deepEqual((JSON.parse(fs.readFileSync(path.join(s.home, SESSIONS_FILE), 'utf8')) as SessionsFile).claudeRoots, ['/a/claude-4/projects']);
   assert.equal(s.a.status()?.sync?.service, 'running');
   assert.equal(s.calls.filter(isInstall).length, 2, 'here and on cloud');
   assert.equal(s.a.status()?.update?.sha, 'a'.repeat(40));

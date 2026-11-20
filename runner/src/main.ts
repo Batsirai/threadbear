@@ -1128,6 +1128,7 @@ async function main(): Promise<void> {
     records: () => [...runner.threads.values()].map((t) => t.rec),
     projectTitles: () => new Map(projects.list({ archived: true }).map((p) => [p.id, p.title])),
     runnerName: () => cfg.sync.name ?? os.hostname(),
+    claudeDirs: () => accounts.list().filter((a) => a.provider === 'claude').map((a) => a.configDir),
     settings: () => peekRunnerJson(cfg.home).archive,
   });
   if (!box && !copyOfReal) agentArchive.start();
