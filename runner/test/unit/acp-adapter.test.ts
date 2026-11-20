@@ -1518,3 +1518,25 @@ test('round ten: no id, no own-tool pass; files beside a command; git rename hea
   }
   assert.notEqual(r.cards[1].name, 'shell');
 });
+
+test('a patch whose file headers cannot be read for certain is never covered by the edit rule', async () => {
+  const r = rig({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const home = fs.realpathSync(r.cwd);
+  (s as unknown as { rules: Set<string> }).rules.add(EDIT_RULE);
+  const odd = [
+    `--- "${home}/\\056\\056/x"\n+++ "${home}/\\056\\056/x"\n@@ -1 +1 @@\n-a\n+b\n`,
+    '---\t/outside/t\n+++\t/outside/t\n@@ -1 +1 @@\n-a\n+b\n',
+    `--- ${home}/link 2026-11-20\n+++ ${home}/link 2026-11-20\n@@ -1 +1 @@\n-a\n+b\n`,
+    'diff --git /w/n /outside/t\nGIT binary patch\n',
+  ];
+  for (const [i, diff] of odd.entries()) {
+    const replies = fakeRequest(r, s, { toolCallId: `p${i}`, kind: 'edit', rawInput: { path: path.join(home, 'notes.txt'), diff } });
+    await until(() => replies.length === 1);
+    assert.equal(r.cards.length, i + 1, `header ${i}`);
+  }
+  const plain = fakeRequest(r, s, { toolCallId: 'ok', kind: 'edit', rawInput: { path: path.join(home, 'notes.txt'), diff: `--- ${home}/notes.txt\n+++ ${home}/notes.txt\n@@ -1 +1 @@\n-a\n+b\n` } });
+  await until(() => plain.length === 1);
+  assert.equal(r.cards.length, odd.length, 'a plain one is still covered');
+});

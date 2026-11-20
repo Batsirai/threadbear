@@ -107,10 +107,38 @@ export function requestPaths(call: AcpToolCall): string[] {
 // of its tools as `variant` ("Write"), which names no place.
 const PLAIN_EDIT_KEYS = new Set(['filepath', 'file_path', 'path', 'content', 'oldstring', 'newstring', 'old_string', 'new_string', 'diff', 'replaceall', 'replace_all', 'description', 'variant']);
 
+// Whether a patch among the arguments has a file header that can't be read
+// for certain: a quoted or escaped name, a name with spaces in it, a tab
+// right after the marker, or a `diff --git` line without a/ and b/. Such a
+// patch could name a file the paths above don't (Gemini's eleventh review,
+// 20 Nov 2026), so it's an edit nobody has checked.
+const HEADER_LINE = /^(\*\*\* (?:Add|Update|Delete) File:|\*\*\* Move to:|\+\+\+|---|Index:|(?:rename|copy) (?:from|to)|diff --git)([ \t])(.*)$/gm;
+export function hasOddPatchHeader(v: unknown, depth = 0): boolean {
+  if (depth > 8) return true;
+  if (typeof v === 'string') {
+    if (!v.includes('\n')) return false;
+    for (const m of v.matchAll(HEADER_LINE)) {
+      const [, marker, sep, rest] = m;
+      if (marker === 'diff --git') {
+        if (!/^a\/\S+ b\/\S+$/.test(rest)) return true;
+        continue;
+      }
+      // A unified diff's name may be followed by a tab and a timestamp.
+      const name = rest.split('\t')[0];
+      if (sep !== ' ' || /[\s"\\]/.test(name)) return true;
+    }
+    return false;
+  }
+  if (Array.isArray(v)) return v.some((x) => hasOddPatchHeader(x, depth + 1));
+  if (v && typeof v === 'object') return Object.values(v).some((x) => hasOddPatchHeader(x, depth + 1));
+  return false;
+}
+
 // Grok's tool names, as `variant`, that only write the files they name.
 const EDIT_VARIANTS = new Set(['Write', 'Edit', 'MultiEdit', 'StrReplace']);
 
 export function isPlainEdit(input: Record<string, unknown>): boolean {
+  if (hasOddPatchHeader(input)) return false;
   return Object.entries(input).every(([k, v]) => PLAIN_EDIT_KEYS.has(k.toLowerCase()) && (typeof v === 'string' || typeof v === 'boolean') && (k.toLowerCase() !== 'variant' || EDIT_VARIANTS.has(String(v))));
 }
 
