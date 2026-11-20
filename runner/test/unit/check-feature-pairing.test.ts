@@ -102,7 +102,9 @@ test('a change nowhere near the specs skips it', () => {
 // that spec. --quick typechecks them when they, or the one file outside
 // features/ they import, changed.
 test("a type error in the specs' steps fails --quick, and a change to what they import runs it", () => {
-  const root = checkout(perScenario, 'echo "steps/board.steps.ts(1,1): error TS2339: nope"; exit 2');
+  // node, not `echo ...; exit 2`: npm runs scripts with cmd.exe on Windows,
+  // where ; doesn't end a command and the stand-in passed.
+  const root = checkout(perScenario, `node -e "console.log('steps/board.steps.ts(1,1): error TS2339: nope'); process.exit(2)"`);
   try {
     for (const changed of ['features/steps/board.steps.ts', 'desktop/scripts/own-folder.ts']) {
       const r = quick(root, [changed]);
