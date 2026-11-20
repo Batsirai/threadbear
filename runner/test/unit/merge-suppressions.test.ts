@@ -42,8 +42,11 @@ test('merge-suppressions: writes what ESLint writes, so the same file on every s
   const ours = file({ 'b.ts': { y: 1, x: 2 }, 'a.ts': { x: 3 } });
   const merged: string = mergeSuppressions(ours, ours, ours);
   assert.equal(merged, file({ 'a.ts': { x: 3 }, 'b.ts': { x: 2, y: 1 } }), 'keys sorted, two spaces, no newline at the end');
+  // As checked out, CRLF on a Windows checkout with core.autocrlf: kept so.
   const real = fs.readFileSync(path.join(ROOT, 'eslint-suppressions.json'), 'utf8');
   assert.equal(mergeSuppressions(real, real, real), real);
+  const crlf = ours.replace(/\n/g, '\r\n');
+  assert.equal(mergeSuppressions(crlf, crlf, crlf), file({ 'a.ts': { x: 3 }, 'b.ts': { x: 2, y: 1 } }).replace(/\n/g, '\r\n'));
 });
 
 test('merge-suppressions: as a git merge driver, a rebase of two neighbouring changes merges clean', () => {
@@ -65,7 +68,8 @@ test('merge-suppressions: as a git merge driver, a rebase of two neighbouring ch
     git('commit', '-qam', 'main fixes one');
     git('checkout', '-q', 'thread');
     git('rebase', '-q', 'main');
-    assert.equal(fs.readFileSync(path.join(dir, 'eslint-suppressions.json'), 'utf8'), file({ 'a.ts': { x: 2, z: 4 }, 'b.ts': { x: 2, y: 1 } }));
+    // Line endings evened out: git on Windows may check it out with CRLF.
+    assert.equal(fs.readFileSync(path.join(dir, 'eslint-suppressions.json'), 'utf8').replace(/\r\n/g, '\n'), file({ 'a.ts': { x: 2, z: 4 }, 'b.ts': { x: 2, y: 1 } }));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

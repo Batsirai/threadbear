@@ -55,7 +55,9 @@ export function mergeSuppressions(base, ours, theirs) {
     const [file, rule] = JSON.parse(key);
     (out[file] ??= {})[rule] = { count };
   }
-  return JSON.stringify(sorted(out), null, 2);
+  const text = JSON.stringify(sorted(out), null, 2);
+  // A Windows checkout may have the file with CRLF (core.autocrlf): keep ours'.
+  return ours.includes('\r\n') ? text.replace(/\n/g, '\r\n') : text;
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
