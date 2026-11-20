@@ -189,8 +189,9 @@ each other.
 - The archive's sync reads that file each poll and sends what changed
   through a new RPC operation, `annotateSessions`, with its own token. The
   host keeps them in a table of their own beside the imported threads (an
-  annotation never edits the faithful record). Built in agent-archive's
-  `threadbear-sessions` branch.
+  annotation never edits the faithful record). Merged in agent-archive
+  #93 on 20 Nov, with `status --json` and the sync reading every login's
+  folders from the file (`claudeRoots`, `codexRoots`).
 - The archive's tools and reader say "Threadbear thread: <title>" with a
   `threadbear://thread/<id>` link, and search can filter by project.
 - Threadbear can then use the archive: "Threads already on it" (the
