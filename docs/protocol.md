@@ -979,6 +979,33 @@ later offer one as a new follow-up. The Mac, phone and GPUI apps read that
 wording back for Mike's bubble (`ReviewAnswer`), leaving the passed-over
 paragraph out, so change them with it.
 
+As a page beside the thread (the `reviewPage` experiment; Mike, 20 Nov
+2026): he went into the window for the pictures and back out to the thread
+to read about them, as the window drew each option's words at 12pt grey in
+a column 270pt wide, and agents wrote the options out again in their reply.
+With it on, the GPUI app opens this Mac's reviews as a page in the side
+pane: the note, then each option with its words at the thread's reading
+size and its shots under them, made by the app from the review
+(`desktop/core/src/review_page.rs`) and shown sealed, scripts off, reading
+only the review's own folder. Nothing changes in these RPCs. A tick on the
+page saves the draft's picks with `reviews.save`, and they show as chips
+over the thread's message box, which is the reply box: sending it calls
+`reviews.respond` with the picks as the page shows them, the box's words as
+`reply` and its pictures as `images` (they're in `inbox/`, as a reply's
+are), so the answer is the same one the window sends, taken whole or not at
+all. Ticks alone can be sent. A message starting with `/`, or sent with
+answers picked on a card of asks, is an ordinary message, and with nothing
+ticked a message supersedes the review, as before. (A first version had the
+runner turn a plain `threads.send` into the answer; Codex and Gemini's
+reviews found it could be sent twice after a restart, lose its pictures and
+swallow a command.) A picture on the page opens the review window at that
+shot, as a closer look: the stage across the window with that option's
+words under it, and no column down the right. The pane opens 640pt wide for
+a review, 920pt when a shot is a wide design (1000px or more across and
+wider than tall), keeps the transcript 420pt, and goes back when the page
+closes unless the divider was dragged meanwhile. The phone and the website
+keep their own sheets.
+
 Reply pictures: a picture pasted or dropped in the window's reply box is a
 chip, as in the thread's box, imported with `media.import` and sent in the
 draft's `images` with `[Picture N]` markers in `reply` (Mike, 17 Nov 2026:

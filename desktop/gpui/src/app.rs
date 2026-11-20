@@ -71,6 +71,9 @@ pub struct Threadbear {
     pub(crate) frame_rate: Option<Entity<crate::frame_stats::FrameRate>>,
     /// The pane sections Hide Panels closed, for Show Panels (`hiddenPanes`).
     pub(crate) hidden_panes: Vec<String>,
+    /// The pane sections made wide for a page, and what that changed, for
+    /// putting each back (`show_pane_wide`).
+    pub(crate) pane_widths: HashMap<String, threadbear_dock::Widened>,
     pub(crate) mode: SidebarMode,
     /// When the activity bar last switched the sidebar's view, for the new
     /// one to settle in (shell.rs `render_threads_panel`).
@@ -518,6 +521,7 @@ impl Threadbear {
             #[cfg(feature = "frame-stats")]
             frame_rate: None,
             hidden_panes: Vec::new(),
+            pane_widths: HashMap::new(),
             mode: SidebarMode::Inbox,
             view_switched: None,
             history: NavigationHistory::default(),
@@ -868,6 +872,7 @@ impl Threadbear {
                     self.logins = RunnerLogins::from_hello(hello);
                     self.remote.experiments = hello["experiments"].as_array().into_iter().flatten().filter_map(|e| e.as_str().map(str::to_owned)).collect();
                     crate::live_pages::set_on(self.remote.experiments.iter().any(|e| e == crate::live_pages::EXPERIMENT), self.main_window, cx);
+                    crate::review_pane::set_on(self.remote.experiments.iter().any(|e| e == crate::review_pane::EXPERIMENT), cx);
                     self.runner_version = hello["runnerVersion"].as_str().unwrap_or("").to_owned();
                     self.upstream_on = hello["updates"]["upstream"]["state"].as_str().is_some_and(|s| s != "off");
                     self.upstream_checkout = hello["updates"]["upstream"]["checkout"].as_str().filter(|c| !c.is_empty()).map(str::to_owned);
@@ -1065,6 +1070,13 @@ impl Threadbear {
                     // An open review window hears its review change whichever
                     // thread is open here (review_window.rs).
                     crate::review_window::receive_event(&params, cx);
+                    // And its page in the pane, if that's how it's open
+                    // (review_pane.rs).
+                    if params["event"]["type"].as_str() == Some("review.updated") {
+                        if let (Some(thread_id), Some(review)) = (params["threadId"].as_str(), threadbear_core::reducer::DesignReview::decode(&params["event"]["review"])) {
+                            self.side.update(cx, |side, cx| side.review_updated(thread_id, &review, cx));
+                        }
+                    }
                     // Each pane takes its own thread's events only: the open
                     // ones, and those kept loaded, which stay subscribed.
                     let id = params["threadId"].as_str().unwrap_or("");
@@ -1873,6 +1885,10 @@ impl Threadbear {
             // The picks shown as chips under a folded card (composer_answers.rs).
             if let Some(answers) = composer.answer_chip_lines(cx) {
                 out["answers"] = json!(answers);
+            }
+            // The options ticked on a review's page, over the words.
+            if let Some(picks) = composer.review_pick_lines(cx) {
+                out["reviewPicks"] = json!(picks);
             }
         }
         out

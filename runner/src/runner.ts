@@ -80,6 +80,7 @@ import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from 
 import type { SignInState } from './sign-in-state.ts';
 import { pickAccount as pickByRoom, type UsageReading } from './usage.ts';
 import { RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
+import { experimentOn } from './experiments.ts';
 import { limitWhy, loginOk, nextLogin, pickInPool, poolAccounts } from './pools.ts';
 import { copyImageInto, imageRefFor } from './media.ts';
 import { isDirectory } from './fsutil.ts';
@@ -1680,6 +1681,12 @@ export class Runner {
   // UNREAD_MESSAGE). It counts as a refusal for each (adapters/types.ts).
   unreadMessage(threadId: string): boolean {
     return this.threads.get(threadId)?.rt.session?.unreadMessage?.() === true;
+  }
+
+  // Whether one of the experiments is on here (experiments.ts), for what
+  // a tool tells the agent (threadbear-mcp.ts).
+  experiment(id: string): boolean {
+    return experimentOn(this.cfg.home, id);
   }
 
   get(threadId: string): ThreadSummary {

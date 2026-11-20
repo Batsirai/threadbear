@@ -478,6 +478,8 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
     // The Feed, with TB_MOCK_FEED (addDemoFeed).
     ...(process.env.TB_MOCK_FEED ? ['feed'] : []),
+    // Reviews as a page beside the thread, with TB_MOCK_REVIEW_PAGE.
+    ...(process.env.TB_MOCK_REVIEW_PAGE ? ['reviewPage'] : []),
   ];
 }
 
@@ -2674,7 +2676,7 @@ function applyScriptedThreads() {
         if (event.type !== 'review.updated') continue;
         const options = o.review.options.map((option) => ({ reference: false, ...option,
           image: { mediaType: 'image/png', ...option.image, path: path.resolve(dir, option.image.path) } }));
-        event.review = { ...event.review, title: o.review.title, note: o.review.note, options };
+        event.review = keptForReview(id, { ...event.review, title: o.review.title, note: o.review.note, options });
         t.reviews.set(event.review.id, event.review);
       }
       for (const event of t.events) {
@@ -4592,6 +4594,25 @@ function askedLine(e) {
   return e.text.replace(/\s+/g, ' ').trim().slice(0, 140) || undefined;
 }
 
+// With TB_MOCK_REVIEW_PAGE, a review's pictures as the runner keeps them:
+// copied into a folder of the review's own under the thread's media, which
+// is all its page beside the thread may read (desktop/gpui/src/review_pane.rs).
+function keptForReview(threadId, review) {
+  if (!process.env.TB_MOCK_REVIEW_PAGE) return review;
+  const dir = path.join(dataDir, 'threads', threadId, 'media', 'reviews', review.id);
+  fs.mkdirSync(dir, { recursive: true });
+  const keep = (image) => {
+    const kept = path.join(dir, path.basename(image.path));
+    try {
+      fs.copyFileSync(image.path, kept);
+    } catch {
+      return image;
+    }
+    return { ...image, path: kept };
+  };
+  return { ...review, options: review.options.map((option) => ({ ...option, image: keep(option.image), ...(option.shots ? { shots: option.shots.map((shot) => ({ ...shot, image: keep(shot.image), ...(shot.media ? { media: keep(shot.media) } : {}) })) } : {}) })) };
+}
+
 function loadFixtures() {
   for (const root of fixtureDirs) {
     if (!fs.existsSync(root)) continue;
@@ -4610,7 +4631,10 @@ function loadFixtures() {
         const event = JSON.parse(line);
         event.threadId = summary.id;
         if (event.images) event.images = fixPaths(event.images);
-        if (event.type === 'review.updated') event.review.options = event.review.options.map((option) => ({ ...option, image: fixPaths([option.image])[0] }));
+        if (event.type === 'review.updated') {
+          event.review.options = event.review.options.map((option) => ({ ...option, image: fixPaths([option.image])[0] }));
+          event.review = keptForReview(summary.id, event.review);
+        }
         return event;
       });
       summary.lastSeq = events.at(-1)?.seq ?? 0;

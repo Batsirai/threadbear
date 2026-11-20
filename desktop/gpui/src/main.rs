@@ -103,6 +103,7 @@ mod remote;
 mod remote_pictures;
 mod reply_buttons;
 mod reply_links;
+mod review_pane;
 mod review_window;
 mod rich_boxes;
 mod live_pages;

@@ -61,6 +61,7 @@ pub mod rich_block;
 pub mod row_motion;
 pub mod row_swipe;
 pub mod review;
+pub mod review_page;
 pub mod runner_settings;
 pub mod remote_tokens;
 pub mod runners;
