@@ -26,6 +26,11 @@ function commit(dir: string, msg: string): string {
   return git(dir, 'rev-parse', '--short', 'HEAD').trim();
 }
 
+// On Windows npm runs a package script with cmd.exe, which patch trust
+// doesn't follow (script-trust.ts), so there package.json is never hashed
+// and these have nothing to describe.
+const npmScript = { skip: process.platform === 'win32' && "npm runs package scripts with cmd.exe on Windows, so patch trust doesn't hash package.json there" };
+
 // A repo whose patch runs `npm run stats`, so its package.json is hashed.
 function repo(): { dir: string; patch: string } {
   const dir = fs.realpathSync(tmpDir());
@@ -38,7 +43,7 @@ function repo(): { dir: string; patch: string } {
   return { dir, patch: path.join(dir, '.threadbear', 'patches', 't.ts') };
 }
 
-test('a commit that changes package.json is named, with its lines', async () => {
+test('a commit that changes package.json is named, with its lines', npmScript, async () => {
   const { dir, patch } = repo();
   const store = path.join(tmpDir(), 'patch-trust.json');
   const trust = new PatchTrust({ file: store });
@@ -82,7 +87,7 @@ test('an uncommitted edit to the patch file says so, and the diff is of what Tru
   assert.match(f[0].diff ?? '', /Evil/);
 });
 
-test('a new helper the patch now runs is "added"; nothing on record says nothing', async () => {
+test('a new helper the patch now runs is "added"; nothing on record says nothing', npmScript, async () => {
   const { dir, patch } = repo();
   const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
   assert.ok(trust.trust(patch, patchHash(patch).hash));
@@ -114,7 +119,7 @@ test('a folder trusted only before version 3 says it is the recheck', async () =
   assert.deepEqual(!v.trusted && v.reason === 'changed' ? v.changes : undefined, { recheck: true });
 });
 
-test('still trusted only by hash: describing a change trusts nothing', async () => {
+test('still trusted only by hash: describing a change trusts nothing', npmScript, async () => {
   const { dir, patch } = repo();
   const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
   assert.ok(trust.trust(patch, patchHash(patch).hash));
@@ -123,7 +128,7 @@ test('still trusted only by hash: describing a change trusts nothing', async () 
   for (let i = 0; i < 2; i++) assert.equal((await trust.check(patch, 0)).trusted, false);
 });
 
-test('a version trusted before versions were kept is recorded when next seen trusted', async () => {
+test('a version trusted before versions were kept is recorded when next seen trusted', npmScript, async () => {
   const { dir, patch } = repo();
   const store = path.join(tmpDir(), 'patch-trust.json');
   fs.writeFileSync(store, JSON.stringify({ version: 3, folders: { [dir]: [patchHash(patch).hash] } }));
@@ -133,7 +138,7 @@ test('a version trusted before versions were kept is recorded when next seen tru
   assert.equal((!v.trusted && v.reason === 'changed' && v.changes?.files?.[0]?.path) || undefined, 'package.json');
 });
 
-test('a script named __proto__ is listed like any file', async () => {
+test('a script named __proto__ is listed like any file', npmScript, async () => {
   const { dir, patch } = repo();
   write(dir, { '.threadbear/patches/t.ts': `export default { actions: [{ title: 'Go', run: './__proto__' }, { title: 'Stats', run: 'npm run stats' }] };\n`, ['__proto__']: '#!/bin/sh\necho hi\n' });
   fs.chmodSync(path.join(dir, '__proto__'), 0o755);
@@ -164,7 +169,7 @@ test('a brand-new patch in a folder trusted only before version 3 does not claim
   assert.match(why, /can't say whether this patch was trusted before/);
 });
 
-test("an old branch's trusted version doesn't become the one a re-ask compares with", async () => {
+test("an old branch's trusted version doesn't become the one a re-ask compares with", npmScript, async () => {
   const { dir, patch } = repo();
   const store = path.join(tmpDir(), 'patch-trust.json');
   const trust = new PatchTrust({ file: store });
