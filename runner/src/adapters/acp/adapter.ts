@@ -217,7 +217,7 @@ export class AcpSession implements AgentSession {
   // can't wash out what an earlier one said (Codex's and Gemini's third
   // reviews, 20 Nov 2026). Kept for the session's life: a call can ask after
   // its turn.
-  private callFrames = new Map<string, { mcp: boolean; inputs: Record<string, unknown>[]; kinds: Set<string>; paths: Set<string> }>();
+  private callFrames = new Map<string, { mcp: boolean; ids: Set<string>; inputs: Record<string, unknown>[]; kinds: Set<string>; paths: Set<string> }>();
   private configOptions: ConfigOption[] = [];
   // The plugin whose hook must be reported running before the model does
   // anything in a turn (Grok's guard), and whether it has been this turn.
@@ -567,7 +567,9 @@ export class AcpSession implements AgentSession {
 
   private noteFrame(u: unknown): void {
     if (!isPlainObject(u) || typeof u.toolCallId !== 'string' || u.toolCallId === '') return;
-    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, inputs: [], kinds: new Set<string>(), paths: new Set<string>() };
+    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, ids: new Set<string>(), inputs: [], kinds: new Set<string>(), paths: new Set<string>() };
+    const id = mcpIdOf(u);
+    if (id) f.ids.add(id);
     for (const p of requestPaths(u as AcpToolCall)) f.paths.add(p);
     if (isMcpFrame(u)) f.mcp = true;
     if (typeof u.kind === 'string') f.kinds.add(u.kind);
@@ -641,7 +643,10 @@ export class AcpSession implements AgentSession {
     // the tool needs it (tool-gate.ts), so a card here would be a second one.
     // Grok names the tool exactly, and a name it can't find doesn't run.
     const mcpName = p.toolCall ? this.deps.agent.mcpToolName?.(p.toolCall) : undefined;
-    if (mcpName && this.ownTools.has(mcpName)) return this.answer(id, options, true);
+    // Only when every frame of the call said it was that same tool, and one
+    // kind of call: a later frame can't make another server's tool ours
+    // (Codex's eighth review, 20 Nov 2026).
+    if (mcpName && this.ownTools.has(mcpName) && (!frames || ([...frames.ids].every((i) => i === mcpName) && frames.kinds.size <= 1))) return this.answer(id, options, true);
 
     const { kind } = seen;
     // A read of the thread's own files, for an agent whose own rules can't
@@ -669,7 +674,7 @@ export class AcpSession implements AgentSession {
     // it asks ({filePath, content}, then {filepath, diff}; Gemini's sixth
     // review, 20 Nov 2026).
     const last = frames?.inputs.at(-1) ?? {};
-    const consistent = !frames || (frames.kinds.size <= 1 && (writesFiles(seen.kind) || frames.inputs.every((i) => Object.entries(i).every(([k, v]) => Object.hasOwn(last, k) && JSON.stringify(v) === JSON.stringify(last[k])))));
+    const consistent = !frames || (frames.kinds.size <= 1 && ((writesFiles(seen.kind) && !mcpCall) || frames.inputs.every((i) => Object.entries(i).every(([k, v]) => Object.hasOwn(last, k) && JSON.stringify(v) === JSON.stringify(last[k])))));
     // A key a plain object can't hold as its own would go missing from the
     // card (cardInput): such a call is refused, never shown short.
     if (Object.hasOwn(input, '__proto__')) {
@@ -762,41 +767,36 @@ export class AcpSession implements AgentSession {
     // or not, so the phone (which allows only a card whose one value is the
     // line it shows) never allows it.
     const runsIn = !placeKnown ? 'not known: its own scratch folder, unless the command says' : unknownPlace || said.length > 1 ? 'not known' : where;
-    let runsInKey = 'runs in';
-    while (Object.hasOwn(input, runsInKey)) runsInKey = `${runsInKey}, as Threadbear reads it`;
-    // Another server's MCP tool, or a command in a shape nobody has checked:
-    // its arguments as they came, under a heading, with which tool it is.
-    // An object among a card's values is never the phone's to allow, and
-    // nothing in it can be drawn as a shell command.
     const mcpTool = (() => {
       const meta = (p.toolCall as { _meta?: unknown } | undefined)?._meta;
       const m = isPlainObject(meta) && isPlainObject(meta.mcp) ? meta.mcp : undefined;
-      return mcpName ?? (m && typeof m.server === 'string' && typeof m.tool === 'string' ? `${m.server}__${m.tool}` : 'not named');
+      return mcpName ?? (m && typeof m.server === 'string' && typeof m.tool === 'string' ? `${m.server}__${m.tool}` : undefined);
     })();
-    const unshown = paths.filter((f) => !stringsIn(input).some((v) => v === f || absolutePath(v, this.opts.cwd) === f));
-    const shown: Record<string, unknown> = external
-      ? { 'MCP tool': mcpTool, arguments: input, ...(unshown.length ? { 'files it names': paths } : {}) }
-      : command
-        ? shellCard
-          ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
-          : { ...input, command, [runsInKey]: runsIn }
-        : kind === 'execute'
-          ? { 'runs in': runsIn, arguments: input }
-          : edits
-            ? // Arguments as well when the paths can't say it all.
-              paths.length === 0 || Object.hasOwn(input, 'arguments as sent') || relative || code === 'unsure' ? { paths, ...(relative ? { 'paths as given': [...new Set(spelled)] } : {}), arguments: input } : { paths }
-            : // Any other tool: its arguments, and every file it names that
-              // they don't show (locations), so none is allowed unseen.
-              unshown.length || (relative && paths.length)
-              ? { arguments: input, 'files it names': paths }
-              : input;
-    // Earlier frames that said something else go on the card too, and make
-    // it the Mac's to allow.
-    if (!consistent && frames) Object.assign(shown, { 'said earlier': { kinds: [...frames.kinds], arguments: frames.inputs } });
-    // An edit's card that's only its paths shows each path whole; anything
-    // more on it (arguments, earlier frames) must fit whole too, or it isn't
-    // put up.
-    const card = cardInput(shown, edits && Object.keys(shown).length === 1 ? ['paths'] : 'all');
+    // Only two kinds of card are short: a plain shell command whose folder is
+    // known (shellCard), and a plain edit of files inside the folder, where
+    // every frame was a plain edit and every path is spelled whole. Every
+    // other card shows the lot: which tool, its arguments as sent, whatever
+    // earlier frames said differently, and every file it names as it was
+    // spelled. Its arguments are an object, so the phone never allows it,
+    // and nothing in it is drawn as a shell command (Codex's and Gemini's
+    // eighth reviews, 20 Nov 2026: patching card shapes one at a time kept
+    // leaving one short).
+    const plainEdit = edits && !relative && isPlainEdit(input) && (frames?.inputs ?? []).every(isPlainEdit) && consistent && paths.length > 0 && !Object.hasOwn(input, 'arguments as sent');
+    const lastSent = JSON.stringify(frames?.inputs.at(-1) ?? rawIn ?? {});
+    const earlier = [...new Set((frames?.inputs ?? []).map((i) => JSON.stringify(i)))].filter((i) => i !== lastSent).map((i) => JSON.parse(i) as unknown);
+    const full = (): Record<string, unknown> => ({
+      tool: { kind: kind ?? 'not said', ...(frames && frames.kinds.size > 1 ? { 'kinds it said': [...frames.kinds] } : {}), title: seen.title || p.toolCall?.title || 'not said', ...(typeof p.toolCall?.name === 'string' ? { name: p.toolCall.name } : {}), ...(external ? { 'MCP tool': mcpTool ?? 'not named', ...(frames && [...frames.ids].some((i) => i !== mcpTool) ? { 'MCP tools it said': [...frames.ids] } : {}) } : {}) },
+      ...(command ? { command, 'runs in': runsIn } : kind === 'execute' && !external ? { 'runs in': runsIn } : {}),
+      arguments: input,
+      ...(earlier.length ? { 'said earlier': earlier } : {}),
+      ...(spelled.length ? { 'files it names': [...new Set(spelled)] } : {}),
+    });
+    const shown: Record<string, unknown> = shellCard
+      ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
+      : plainEdit
+        ? { paths }
+        : full();
+    const card = cardInput(shown, plainEdit ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
       return this.answer(id, options, false);
@@ -1086,6 +1086,12 @@ function stringsIn(v: unknown, depth = 0): string[] {
   if (typeof v === 'string') return [v];
   if (depth > 8 || !v || typeof v !== 'object') return [];
   return Object.values(v as Record<string, unknown>).flatMap((x) => stringsIn(x, depth + 1));
+}
+
+// The MCP tool a frame says it is, as <server>__<tool>.
+function mcpIdOf(u: Record<string, unknown>): string | undefined {
+  const m = isPlainObject(u._meta) && isPlainObject(u._meta.mcp) ? u._meta.mcp : undefined;
+  return m && typeof m.server === 'string' && typeof m.tool === 'string' ? `${m.server}__${m.tool}` : undefined;
 }
 
 // Whether a tool call's frame says it's an MCP server's (Antigravity's _meta).
