@@ -10,7 +10,7 @@
 // colours and font, shown in the pane's sealed page view with its scripts
 // off (web_panels::made_page). A tick or a picture is a link the view hands
 // here (`review_asked`): a tick saves the review's draft on the runner, and
-// the page is loaded again where it is with the tick on; a picture opens
+// shows on the page where it stands; a picture opens
 // full size in the review window, at that shot. The ticks show over the
 // message box, and sending it sends them with its words as the review's
 // answer (composer.rs, `send_review_answer`), so there's no reply box here.
@@ -285,7 +285,17 @@ impl SidePane {
             match open.site.as_ref().filter(|_| same_look) {
                 Some(site) if made.html != open.html => {
                     site.remake(made.html.clone().into_bytes(), &made.assets);
-                    crate::web_panels::reload_made_page(&open.key, cx);
+                    // Only its ticks changed (the page as it was, with the
+                    // ticks as they were, is what's showing): set on the
+                    // page where it stands, so it stays where Mike's
+                    // reading. Anything else, and it's loaded again.
+                    let before = open.made_from.as_ref().map(|(_, picked, _)| picked.clone()).unwrap_or_default();
+                    if rules::page(&open.review, &before, &now, &|image| source(&folder, image)).html == open.html {
+                        let changes: Vec<(usize, bool)> = open.review.options.iter().enumerate().filter(|(_, o)| before.contains(&o.id) != open.picked.contains(&o.id)).map(|(index, o)| (index, open.picked.contains(&o.id))).collect();
+                        crate::web_panels::run_in_made_page(&open.key, rules::tick_script(&changes), cx);
+                    } else {
+                        crate::web_panels::reload_made_page(&open.key, cx);
+                    }
                 }
                 Some(_) => {}
                 None => {

@@ -549,6 +549,22 @@ pub(crate) fn reload_made_page(key: &str, cx: &App) {
     }
 }
 
+/// Runs a script of the app's own in a made page, through its DevTools (the
+/// page's own scripts stay off): a tick set where the page stands. If it
+/// doesn't answer true, the page is loaded again, which shows the same
+/// from its top. Nothing for a page not made yet: it loads as it now is.
+pub(crate) fn run_in_made_page(key: &str, script: String, cx: &mut App) {
+    let Some(page) = panels(cx).and_then(|p| p.read(cx).page(key).cloned()) else { return };
+    let answer = page.devtools("Runtime.evaluate", json!({ "expression": script, "returnByValue": true }));
+    cx.spawn(async move |_| {
+        let done = matches!(answer.await, Ok(Ok(said)) if said["result"]["value"] == json!(true));
+        if !done {
+            page.reload();
+        }
+    })
+    .detach();
+}
+
 /// Closes a made page's view, when what it showed is closed.
 pub(crate) fn close_made_page(key: &str, cx: &mut App) {
     if let Some(panels) = panels(cx) {

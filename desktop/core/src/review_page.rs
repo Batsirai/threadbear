@@ -80,6 +80,18 @@ pub fn ask(rest: &str, review: &DesignReview, links: usize) -> Option<Ask> {
     }
 }
 
+/// A script of the app's own that ticks or unticks options on the page as
+/// it stands: each option's index and whether it's ticked now. The page's
+/// own scripts are off, so the app runs this through the view's DevTools
+/// (web_panels::run_in_made_page). Loading the page again for a tick took
+/// it back to its top, away from the option just ticked (the first build
+/// did, 20 Nov 2026). Only digits and true or false go into it; it answers
+/// true when every option was on the page.
+pub fn tick_script(changes: &[(usize, bool)]) -> String {
+    let list = changes.iter().map(|(option, on)| format!("[{option},{on}]")).collect::<Vec<_>>().join(",");
+    format!("(()=>{{let ok=true;for(const [i,on] of [{list}]){{const s=document.getElementById('o'+i);if(s){{s.classList.toggle('picked',on)}}else{{ok=false}}}}return ok}})()")
+}
+
 /// The app's look, for the page to match the thread beside it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Look {
@@ -502,6 +514,13 @@ mod tests {
         // Once it's answered there's nothing to pick.
         assert_eq!(ask("pick/0", &review("answered"), 1), None);
         assert_eq!(ask("open/0/0", &review("answered"), 1), Some(Ask::Open(0, 0)));
+    }
+
+    #[test]
+    fn the_tick_script_names_options_by_number_only() {
+        assert_eq!(tick_script(&[(1, true), (3, false)]), "(()=>{let ok=true;for(const [i,on] of [[1,true],[3,false]]){const s=document.getElementById('o'+i);if(s){s.classList.toggle('picked',on)}else{ok=false}}return ok})()");
+        // The sections it looks for are the ones the page has.
+        assert!(page(&review("pending"), &[], &look(), &under_r).html.contains("<section id=\"o1\" class=\"opt\">"));
     }
 
     #[test]

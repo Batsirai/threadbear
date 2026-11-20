@@ -894,8 +894,10 @@ impl ThreadPane {
     }
 }
 
-/// An option's small picture on its review's card: this wide and tall.
-const REVIEW_TILE: (f32, f32) = (176., 106.);
+/// An option's small picture on its review's card: this wide and tall, so
+/// two fit a row beside a review's page, when the transcript is at its
+/// narrowest, and four when it has its full width.
+const REVIEW_TILE: (f32, f32) = (150., 90.);
 
 /// The picture cut to the tile from its top left corner, where a mockup's
 /// name and navigation are, scaled to fill it.
