@@ -2647,7 +2647,7 @@ export class Runner {
           if (ev.type === 'tool.call' && own && ev.name === `mcp__${SERVER_NAME}__${END_TURN_TOOL}`) {
             this.reply(st, { kind: 'call', itemId: ev.itemId, input: ev.input, by: leastAuthority(rt.turn.endTurnBy, this.authorityNow(rec.id)) });
           }
-          if (ev.type === 'tool.result') {
+          if (ev.type === 'tool.result' && ev.itemId === rt.turn.endTurnCall) {
             const res = this.reply(st, { kind: 'result', itemId: ev.itemId, ok: ev.ok, text: ev.text });
             ended = res?.ok ? res.out : undefined;
             if (ended?.headline) rec.preview = oneLine(ended.headline, LIMITS.previewChars);

@@ -311,7 +311,9 @@ function result(s: Exclude<ReplyState, { kind: 'odd' }>, e: Extract<ReplyEvent, 
   // message. A first call refused for anything else stands as the card of a
   // turn that ends with no other.
   if (endTurnRefusedRepeat(r) || endTurnRefusedUnread(r) || (!e.ok && took)) return ok({ ...s, call: { ...s.call, input: s.call.before } });
-  if (endTurnAddedArchive(r)) return ok({ ...s, call: { ...s.call, input: { ...s.call.before, archive: true } } });
+  // A repeat that only adds archive adds only that. Unless a message came
+  // between the call and its result, which turned the archive off.
+  if (endTurnAddedArchive(r)) return ok({ ...s, call: { ...s.call, input: { ...s.call.before, archive: s.call.input?.archive === true } } });
   if (endTurnAddedSnooze(r)) return ok({ ...s, call: { ...s.call, input: { ...s.call.before, snooze: s.call.input?.snooze } } });
   if (!endTurnTaken(r)) return ok(s);
   const out: ReplyOut = {};

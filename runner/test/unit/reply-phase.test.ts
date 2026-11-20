@@ -45,7 +45,7 @@ function byHand(t: T, e: ReplyEvent): Outcome {
           t.replyRewrite = false;
           if (endTurnWantsReply(ev)) t.finalTexts = undefined;
           t.replyAfter = endTurnWantsReply(ev);
-        } else if (endTurnAddedArchive(ev)) t.endTurn = { ...t.endTurnBefore, archive: true };
+        } else if (endTurnAddedArchive(ev)) t.endTurn = { ...t.endTurnBefore, archive: t.endTurn?.archive === true }; // fixed with reply-phase.ts (below)
         else if (endTurnAddedSnooze(ev)) t.endTurn = { ...t.endTurnBefore, snooze: t.endTurn?.snooze };
       }
       if (ev.itemId === t.endTurnCall && endTurnAccepted(ev)) {
@@ -360,6 +360,17 @@ test('a message cancels the archive of a call refused for it, not just the lates
     replyTurn(u as unknown as Turn, { kind: 'result', itemId: 'c-next', ...RESULTS.repeat });
     assert.deepEqual(u.endTurn, { ...input, archive: false, snooze: undefined, waitFor: undefined });
   }
+});
+
+// From Gemini's review: the repeat was taken as adding archive, and Mike's
+// message landed before its result, which put archive back on.
+test('a message before a repeat\'s ARCHIVE_ADDED result keeps the archive off', () => {
+  const t = walk('call.next', 'result.bulletsDone', 'call.archive');
+  replyTurn(t as unknown as Turn, { kind: 'message' });
+  replyTurn(t as unknown as Turn, { kind: 'result', itemId: 'c-archive', ...RESULTS.archiveAdded });
+  assert.equal(t.endTurn?.archive, false);
+  const u = walk('call.next', 'result.bulletsDone', 'call.archive', 'result.archiveAdded');
+  assert.equal(u.endTurn?.archive, true);
 });
 
 test('moveReply is pure', () => {
