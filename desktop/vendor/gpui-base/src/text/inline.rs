@@ -1111,9 +1111,9 @@ impl Inline {
 
 impl Inline {
     /// Paints the sheen of a link that was just pressed over its words, and
-    /// asks for the next frame until it has crossed (`link_glint`).
+    /// asks for the next frame until it has rippled off (`link_glint`).
     fn paint_link_glint(&self, text_layout: &TextLayout, window: &mut Window, cx: &mut App) {
-        let Some((range, t)) = super::link_glint::playing(&self.state, cx) else {
+        let Some((range, pressed, t)) = super::link_glint::playing(&self.state, cx) else {
             return;
         };
         if range.end > self.text.len() {
@@ -1134,7 +1134,8 @@ impl Inline {
         let runs = text_runs(self.text.len(), &text_style, &self.highlights);
         let origin = text_layout.bounds().origin;
         let line_height = text_layout.line_height();
-        let (whole, strips) = super::link_glint::frame(t, width);
+        let at = super::link_glint::along(&rows, origin, line_height, pressed);
+        let (whole, strips) = super::link_glint::frame(t, width, at);
 
         // Each row of the link, with its own words shaped again lighter.
         let mut along = Pixels::ZERO;
@@ -1544,7 +1545,7 @@ impl Element for Inline {
                     if let Some(range) =
                         Self::link_range_for_position(&text_layout, &links, event.position)
                     {
-                        super::link_glint::start(&glint_state, range, cx);
+                        super::link_glint::start(&glint_state, range, event.position, cx);
                         cx.notify(current_view);
                     }
                 }
