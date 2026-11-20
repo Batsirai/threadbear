@@ -430,8 +430,10 @@ pub(crate) fn picture_source(uri: &gpui_kit::SharedUri, local: bool) -> gpui_kit
     }
     #[cfg(not(windows))]
     {
-        let path = picture_path(uri.as_ref()).filter(|path| local && is_picture_file(path)).map(|path| picture_file(&path.to_string_lossy())).unwrap_or_default();
-        gpui_kit::ImageSource::Resource(gpui_kit::Resource::Path(std::sync::Arc::from(path.as_path())))
+        match picture_path(uri.as_ref()).filter(|path| local && is_picture_file(path)) {
+            Some(path) => file_picture(&path.to_string_lossy()),
+            None => gpui_kit::ImageSource::Resource(gpui_kit::Resource::Path(std::sync::Arc::from(std::path::Path::new("")))),
+        }
     }
 }
 
@@ -471,7 +473,15 @@ pub(crate) fn file_picture(path: &str) -> ImageSource {
     }
     #[cfg(not(windows))]
     {
-        picture_file(path).into()
+        let path = picture_file(path);
+        // Over the GPU's limit, gpui's own loader's picture would draw
+        // nothing: read and shrunk to fit instead (fit_picture.rs).
+        let too_big = !path.as_os_str().is_empty()
+            && threadbear_core::open_policy::local_metadata(&path).ok().and_then(|meta| crate::fit_picture::file_size(&path, &meta)).is_some_and(crate::fit_picture::too_big);
+        if !too_big {
+            return path.into();
+        }
+        ImageSource::Custom(std::sync::Arc::new(move |window, cx| window.use_asset::<crate::fit_picture::FittedPicture>(&path, cx)))
     }
 }
 
@@ -487,8 +497,7 @@ struct PictureRetries {
 #[cfg(windows)]
 impl Global for PictureRetries {}
 
-#[cfg(windows)]
-fn checked_picture_bytes(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+pub(crate) fn checked_picture_bytes(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut file = threadbear_core::open_policy::local_open(path)?;
     let meta = file.metadata()?;
@@ -517,6 +526,7 @@ impl Asset for LocalPicture {
         async move {
             let bytes = checked_picture_bytes(&path)?;
             let format = crate::viewer::format_of(&path.to_string_lossy(), &bytes).ok_or_else(|| std::io::Error::other("Not a picture"))?;
+            let (format, bytes) = crate::fit_picture::fit_bytes(format, bytes);
             Image::from_bytes(format, bytes).to_image_data(renderer).map_err(Into::into)
         }
     }
@@ -914,7 +924,6 @@ mod tests {
     fn source_path(url: &str, local: bool) -> String {
         match super::picture_source(&url.to_owned().into(), local) {
             gpui_kit::ImageSource::Resource(gpui_kit::Resource::Path(path)) => path.to_string_lossy().into_owned(),
-            #[cfg(windows)]
             gpui_kit::ImageSource::Custom(_) => super::picture_path(url).filter(|p| super::checked_picture_bytes(p).is_ok()).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
             _ => panic!("a path"),
         }

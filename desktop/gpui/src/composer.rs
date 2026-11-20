@@ -1463,7 +1463,7 @@ impl Composer {
             let image = chip.and_then(|c| c.image.as_ref());
             let tile = div().relative().size(side).rounded(radius).border_1().border_color(edge).overflow_hidden().bg(style::chip_fill(cx));
             let tile = match image {
-                Some(image) => tile.child(img(PathBuf::from(&image.path)).size(side).rounded(radius).object_fit(ObjectFit::Cover)),
+                Some(image) => tile.child(img(crate::rows::markdown::file_picture(&image.path)).size(side).rounded(radius).object_fit(ObjectFit::Cover)),
                 None if chip.is_none() => tile.flex().items_center().justify_center().child(crate::icons::symbol("exclamationmark.triangle").size(px(14.)).text_color(style::quiet_text(cx))),
                 None => tile.flex().items_center().justify_center().child(Spinner::new().color(style::quiet_text(cx)).with_size(px(14.))),
             };
@@ -1737,7 +1737,7 @@ impl Composer {
         Some(
             deferred(
                 anchored().position(bounds.origin).anchor(Anchor::BottomLeft).snap_to_window().offset(point(px(0.), px(-8.))).child(
-                    div().p(px(4.)).rounded(px(10.)).bg(cx.theme().popover).border_1().border_color(style::hairline(cx)).shadow_lg().child(img(path).max_w(px(320.)).max_h(px(240.)).rounded(px(6.))),
+                    div().p(px(4.)).rounded(px(10.)).bg(cx.theme().popover).border_1().border_color(style::hairline(cx)).shadow_lg().child(img(crate::rows::markdown::file_picture(&path.to_string_lossy())).max_w(px(320.)).max_h(px(240.)).rounded(px(6.))),
                 ),
             )
             .with_priority(1)
@@ -1972,7 +1972,7 @@ pub(crate) fn picture_chip(path: Option<PathBuf>, number: usize, dimmed: bool, s
                 .border_color(edge)
                 // A click opens the picture (`open_picture`).
                 .when(path.is_some(), |s| s.cursor_pointer())
-                .when_some(path, |s, path| s.child(img(path).size(px(14.)).rounded(px(3.)).object_fit(ObjectFit::Cover).when(dimmed, |s| s.opacity(0.5))))
+                .when_some(path, |s, path| s.child(img(crate::rows::markdown::file_picture(&path.to_string_lossy())).size(px(14.)).rounded(px(3.)).object_fit(ObjectFit::Cover).when(dimmed, |s| s.opacity(0.5))))
                 .child(div().text_size(px(13.)).text_color(label_color).child(format!("Picture {number}"))),
         )
         .into_any_element()

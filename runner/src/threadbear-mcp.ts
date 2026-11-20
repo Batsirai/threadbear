@@ -11,7 +11,7 @@ import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-
 import { z } from 'zod';
 import type { Runner } from './runner.ts';
 import { diffLines, splitLines } from './diff.ts';
-import type { Account, EffortLevel, PermissionMode, PersistedEvent, Project, Schedule, ThreadSummary } from './protocol.ts';
+import type { Account, EffortLevel, ImageRef, PermissionMode, PersistedEvent, Project, Schedule, ThreadSummary } from './protocol.ts';
 import type { ToolApprovalAnswer } from './adapters/types.ts';
 import { cardInput, tooLongForCard } from './tools.ts';
 import { resetTime, usageLine } from './usage.ts';
@@ -694,7 +694,7 @@ export function buildThreadbearTools(
       handle(async (input, extra) => {
         if (!control.createReview) throw new Error('This runner does not support image reviews yet.');
         const { review } = await control.createReview(selfId, input);
-        return `Review ${review.id}: ${review.title} (${review.options.length} options). The user can compare them and send their picks and a reply. You can finish this turn; their reply will arrive as a later message. To open it from an end_turn ask, link to review:${review.id}.`;
+        return `Review ${review.id}: ${review.title} (${review.options.length} options). The user can compare them and send their picks and a reply. You can finish this turn; their reply will arrive as a later message. To open it from an end_turn ask, link to review:${review.id}.${oversizeShotsNote(review)}`;
       }),
     ),
   ];
@@ -2242,6 +2242,20 @@ function snoozeEnd(t: ThreadSummary): string {
 
 function clip(text: string, max = 2000): string {
   return text.length > max ? `${text.slice(0, max)}… (${text.length - max} more characters)` : text;
+}
+
+// The app draws a picture at most this many pixels a side as it is (the
+// GPU's texture limit); a bigger one is shrunk to fit, so a full-page phone
+// shot 18,000 px tall loses detail (desktop/gpui/src/fit_picture.rs, 20 Nov).
+export const SHOT_MAX_SIDE = 16384;
+
+// A line for show_options' answer naming the shots over SHOT_MAX_SIDE.
+export function oversizeShotsNote(review: { options: { id: string; image: ImageRef; shots?: { image: ImageRef }[] }[] }): string {
+  const big = review.options.flatMap(option => (option.shots ?? [{ image: option.image }]).map((shot, i) => ({ option: option.id, i, image: shot.image })))
+    .filter(({ image }) => (image.width ?? 0) > SHOT_MAX_SIDE || (image.height ?? 0) > SHOT_MAX_SIDE);
+  if (!big.length) return '';
+  const named = big.map(({ option, i, image }) => `${option} shot ${i + 1} (${image.width} x ${image.height})`).join(', ');
+  return ` Over ${SHOT_MAX_SIDE} px a side, so shown shrunk with less detail: ${named}. For full detail, split each into shots no more than ${SHOT_MAX_SIDE} px a side and call show_options again.`;
 }
 
 // In the server's instructions, which every thread sees from its first

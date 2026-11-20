@@ -59,7 +59,11 @@ pub(crate) fn picture(runner: &str, path: &str, client: &Arc<Client>, redraw: An
             Ok(value) => match FileRead::decode(&value) {
                 Some(read) if read.truncated => Picture::Truncated,
                 Some(read) => match crate::viewer::format_of(&key.1, &read.data) {
-                    Some(format) => Picture::Ready(Arc::new(Image::from_bytes(format, read.data))),
+                    Some(format) => {
+                        // Shrunk to what the GPU can draw (fit_picture.rs), off this thread.
+                        let (format, data) = cx.background_executor().spawn(async move { crate::fit_picture::fit_bytes(format, read.data) }).await;
+                        Picture::Ready(Arc::new(Image::from_bytes(format, data)))
+                    }
                     None => Picture::Failed("It isn't a picture this app can show.".into()),
                 },
                 None => Picture::Failed("Couldn't read the runner's answer.".into()),

@@ -244,6 +244,9 @@ fn read_picture<T: HostsViewer>(host: &mut T, index: usize, cx: &mut Context<T>)
         let res = crate::call(client, "files.read", params).await;
         // Only its start, from another Mac, won't draw.
         let read = res.ok().as_ref().and_then(threadbear_core::folders::FileRead::decode).filter(|read| runner.is_none() || !read.truncated);
+        // Shrunk to what the GPU can draw (fit_picture.rs), off this thread.
+        let path2 = path.clone();
+        let picture = cx.background_executor().spawn(async move { read.and_then(|read| format_of(&path2, &read.data).map(|format| crate::fit_picture::fit_bytes(format, read.data))) }).await;
         this.update(cx, |t, cx| {
             let viewer = t.viewer_state();
             // Only into the opening that asked for it.
@@ -251,7 +254,7 @@ fn read_picture<T: HostsViewer>(host: &mut T, index: usize, cx: &mut Context<T>)
                 return;
             }
             let Some(slot) = viewer.pictures.iter_mut().find(|p| p.path == path) else { return };
-            match read.and_then(|read| format_of(&path, &read.data).map(|format| (format, read.data))) {
+            match picture {
                 Some((format, data)) => {
                     slot.size = picture_size(&data);
                     slot.image = Some(Arc::new(Image::from_bytes(format, data)));
