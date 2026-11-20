@@ -215,6 +215,11 @@ export class AcpSession implements AgentSession {
   private ownEfforts = new Map<string, { levels: EffortLevel[]; defaultEffort?: EffortLevel }>();
   // The threadbear tools this session's MCP server offers, as the agent names them.
   private ownTools = new Set<string>();
+  // Every frame of a tool call, by id, as the agent sent it: whether any said
+  // it's an MCP call, and every argument list it carried. A later frame
+  // can't wash out what an earlier one said (Codex's and Gemini's third
+  // reviews, 20 Nov 2026).
+  private callFrames = new Map<string, { mcp: boolean; inputs: Record<string, unknown>[] }>();
   private configOptions: ConfigOption[] = [];
   // The plugin whose hook must be reported running before the model does
   // anything in a turn (Grok's guard), and whether it has been this turn.
@@ -458,6 +463,7 @@ export class AcpSession implements AgentSession {
     if (this.guard && !this.replaying && this.checkGuard(method, params)) return;
     if (this.replaying || method !== 'session/update' || !isPlainObject(params)) return;
     if (this.sessionId && params.sessionId !== undefined && params.sessionId !== this.sessionId) return;
+    this.noteFrame(params.update);
     const update = this.mapInput(params.update);
     if (isPlainObject(update)) {
       if (update.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string') this.currentMode = update.currentModeId;
@@ -513,16 +519,16 @@ export class AcpSession implements AgentSession {
   // and Gemini's reviews, 20 Nov 2026). The file is opened by the agent
   // after this: a link swapped in between is the same race other agents'
   // own read rules have.
-  private readGoesAhead(call: AcpToolCall, earlier: string[], earlierInput: Record<string, unknown>): boolean {
+  private readGoesAhead(call: AcpToolCall, earlier: string[]): boolean {
     const keys = this.deps.agent.readsInFolderGoAhead;
     const raw = call.rawInput;
     if (!keys || !isPlainObject(raw) || !Object.keys(raw).length) return false;
-    // Never an MCP server's tool, whatever kind it says it is.
-    const meta = (call as { _meta?: unknown })._meta;
-    if (isPlainObject(meta) && (meta.is_mcp_tool_call !== undefined || meta.mcp !== undefined)) return false;
-    const plain = (o: Record<string, unknown>) => Object.entries(o).every(([k, v]) => keys.has(k) && typeof v === keys.get(k));
-    // Its own arguments, and what earlier updates to the call said.
-    if (!plain(raw) || !plain(earlierInput)) return false;
+    // Never an MCP server's tool, whatever kind it says it is, in any frame.
+    const frames = typeof call.toolCallId === 'string' ? this.callFrames.get(call.toolCallId) : undefined;
+    if (frames?.mcp || isMcpFrame(call)) return false;
+    const plain = (o: Record<string, unknown>) => Object.entries(o).every(([k, v]) => keys.has(k) && typeof v === keys.get(k) && v !== '');
+    // Its own arguments, and every argument list earlier frames carried.
+    if (!plain(raw) || !(frames?.inputs ?? []).every(plain)) return false;
     if (!Object.keys(raw).some((k) => keys.get(k) === 'string')) return false;
     const paths = [...new Set([...earlier, ...requestPaths(call)])];
     const folder = realFolder(this.opts.cwd);
@@ -532,6 +538,16 @@ export class AcpSession implements AgentSession {
       const real = realFolder(p);
       return real !== undefined && (real === folder || real.startsWith(folder + path.sep));
     });
+  }
+
+  private noteFrame(u: unknown): void {
+    if (!isPlainObject(u) || typeof u.toolCallId !== 'string') return;
+    // Old calls go first: a long session needn't keep every one.
+    if (!this.callFrames.has(u.toolCallId) && this.callFrames.size >= 500) this.callFrames.delete(this.callFrames.keys().next().value!);
+    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, inputs: [] };
+    if (isMcpFrame(u)) f.mcp = true;
+    if (isPlainObject(u.rawInput) && Object.keys(u.rawInput).length) f.inputs.push(u.rawInput);
+    this.callFrames.set(u.toolCallId, f);
   }
 
   private noteCommands(raw: unknown[]): void {
@@ -583,6 +599,8 @@ export class AcpSession implements AgentSession {
 
   private async permission(id: RequestId, p: { toolCall?: AcpToolCall; options?: PermissionOption[] }): Promise<void> {
     const options = Array.isArray(p.options) ? p.options : [];
+    const frames = typeof p.toolCall?.toolCallId === 'string' ? this.callFrames.get(p.toolCall.toolCallId) : undefined;
+    const mcpCall = Boolean(frames?.mcp) || (p.toolCall !== undefined && isMcpFrame(p.toolCall));
     const seen = this.normalizer.noteCall(p.toolCall ?? {});
     this.emit(this.normalizer.flush());
     this.emit(seen.events);
@@ -597,12 +615,22 @@ export class AcpSession implements AgentSession {
     const { kind } = seen;
     // A read of the thread's own files, for an agent whose own rules can't
     // say so (Antigravity asks before every tool).
-    if (kind === 'read' && p.toolCall && !mcpName && this.readGoesAhead(p.toolCall, seen.paths, seen.input)) return this.answer(id, options, true);
+    if (kind === 'read' && p.toolCall && !mcpName && !mcpCall && this.readGoesAhead(p.toolCall, seen.paths)) return this.answer(id, options, true);
+    // Another MCP server's tool, whatever kind it says it is: never a local
+    // command or edit, so no saved rule covers it and its card shows every
+    // argument as an MCP tool's does.
+    const external = mcpCall || mcpName !== undefined;
     // What this request names and what earlier updates to the call said:
     // more names only makes the check stricter.
     const paths = [...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
     const input = isPlainObject(p.toolCall?.rawInput) && Object.keys(p.toolCall.rawInput).length ? p.toolCall.rawInput : seen.input;
-    const command = kind === 'execute' && typeof input.command === 'string' ? input.command : '';
+    // A key a plain object can't hold as its own would go missing from the
+    // card (cardInput): such a call is refused, never shown short.
+    if (Object.hasOwn(input, '__proto__')) {
+      this.sink.output({ kind: 'event', event: { type: 'system.note', text: "A tool call had an argument named __proto__, which a card can't show, so it was refused." } });
+      return this.answer(id, options, false);
+    }
+    const command = !external && kind === 'execute' && typeof input.command === 'string' ? input.command : '';
     const argv = command ? shellWords(command) : null;
     // A tool can name its own folder (OpenCode's workdir): the rule and the
     // card go by where the command really runs.
@@ -635,7 +663,8 @@ export class AcpSession implements AgentSession {
     const rule = exact && argv?.length && ruleMayCover(argv) ? commandRule(argv, where) : null;
 
     let code: CodeWrite = false;
-    if (writesFiles(kind)) {
+    const edits = !external && writesFiles(kind);
+    if (edits) {
       // An edit with no named files can't be checked: it asks every time.
       code = paths.length ? this.runsAsCode(paths) : 'unsure';
       if (!code && !isPlainEdit(input)) code = 'unsure';
@@ -649,7 +678,7 @@ export class AcpSession implements AgentSession {
 
     const title = command
       ? firstLineSafely(command, 200, '…')
-      : writesFiles(kind) && paths.length === 1
+      : edits && paths.length === 1
         ? `Edit ${displayPath(paths[0], this.opts.cwd)}`
         : firstLineSafely(seen.title || kind || 'Use a tool', 200, '…');
     // The folder as the agent gave it goes on the card too when it reads
@@ -664,23 +693,29 @@ export class AcpSession implements AgentSession {
     // anything more shows every argument, as an MCP tool's card does
     // (Gemini's and Codex's reviews, 20 Nov 2026). Grok's `variant` names
     // its tool ("Bash").
-    const shellCard = Boolean(command) && placeKnown && !unknownPlace && said.length <= 1 && Object.entries(input).every(([k, v]) => SHELL_CARD_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number' || v === undefined));
+    const shellCard =
+      Boolean(command) &&
+      placeKnown &&
+      !unknownPlace &&
+      said.length <= 1 &&
+      Object.entries(input).every(([k, v]) => k === 'command' || (FOLDER_KEYS.includes(k) && (typeof v === 'string' || v === undefined)) || (k === 'variant' && typeof v === 'string') || (BENIGN_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number')));
+    // Any other command card says where it runs as a line of its own, known
+    // or not, so the phone (which allows only a card whose one value is the
+    // line it shows) never allows it.
+    const runsIn = !placeKnown ? 'not known: its own scratch folder, unless the command says' : unknownPlace || said.length > 1 ? 'not known' : where;
     const shown: Record<string, unknown> = command
-      ? exact || shellCard
+      ? shellCard
         ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
-        : // With no folder of its own, a command runs in the thread's folder,
-          // except for an agent whose session has a folder of its own: there
-          // it's not known, so none is shown.
-          { ...input, command, ...(FOLDER_KEYS.some((k) => k in input) || this.deps.agent.ownSessionFolder ? {} : { cwd: where }) }
-      : writesFiles(kind)
+        : { ...input, command, 'runs in': runsIn }
+      : edits
         ? { paths }
         : input;
-    const card = cardInput(shown, command ? 'all' : writesFiles(kind) ? ['paths'] : 'all');
+    const card = cardInput(shown, command ? 'all' : edits ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
       return this.answer(id, options, false);
     }
-    const editRule = writesFiles(kind) && !code && paths.length > 0;
+    const editRule = edits && !code && paths.length > 0;
     const pending: Pending = { abort: new AbortController(), options };
     this.pending.set(id, pending);
     let a: ToolApprovalAnswer;
@@ -689,7 +724,7 @@ export class AcpSession implements AgentSession {
         toolUseId: typeof p.toolCall?.toolCallId === 'string' ? p.toolCall.toolCallId : undefined,
         // As an MCP tool's, for anything else: a card whose arguments say
         // what it does can only be allowed where all of them are shown.
-        name: shellCard ? 'shell' : writesFiles(kind) ? 'apply_patch' : `mcp__acp__${kind ?? 'tool'}`,
+        name: shellCard ? 'shell' : edits ? 'apply_patch' : `mcp__acp__${external ? 'mcp' : (kind ?? 'tool')}`,
         title: code ? `${title} (${codeWriteNote(code)})` : title,
         input: card.input,
         wholeInput: input,
@@ -958,6 +993,12 @@ export class AcpSession implements AgentSession {
     this.resolveExit();
     this.sink.exited(error);
   }
+}
+
+// Whether a tool call's frame says it's an MCP server's (Antigravity's _meta).
+function isMcpFrame(u: unknown): boolean {
+  if (!isPlainObject(u) || !isPlainObject(u._meta)) return false;
+  return u._meta.is_mcp_tool_call === true || isPlainObject(u._meta.mcp);
 }
 
 // A folder a session of an agent with ownSessionFolder opens in, named for

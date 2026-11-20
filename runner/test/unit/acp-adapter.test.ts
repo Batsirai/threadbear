@@ -671,7 +671,7 @@ test('a saved command rule covers that folder only: another, two at once, or any
   await until(() => c.length === 1);
   assert.equal(r.cards.length, 2);
   assert.equal(r.cards[1].canAlwaysAllow, false);
-  assert.deepEqual(r.cards[1].input, { command, workdir: r.cwd, cwd: '/elsewhere' });
+  assert.deepEqual(r.cards[1].input, { command, workdir: r.cwd, cwd: '/elsewhere', 'runs in': 'not known' });
   assert.notEqual(r.cards[1].name, 'shell', 'not a shell card the phone could allow, showing one folder (Codex, 20 Nov 2026)');
   // Through a link: `link/..` is packages/app on the disk, though it reads as
   // the thread's folder, so the rule doesn't cover it (Codex's review, 10 Nov).
@@ -1151,4 +1151,70 @@ test('Antigravity: no read goes ahead for an MCP tool, or with a line number tha
   await turn(r, s, `readraw ${JSON.stringify({ AbsolutePath: inside, StartLine: '/etc/passwd' })}`);
   await turn(r, s, `readraw ${JSON.stringify({ StartLine: 1 })}`, 't2');
   assert.equal(r.cards.length, 2);
+});
+
+const frame = (s: AcpSession, update: Record<string, unknown>) =>
+  (s as unknown as { proc: { onNotification: (m: string, p: unknown) => void } }).proc.onNotification('session/update', { update: { sessionUpdate: 'tool_call', ...update } });
+
+test('Antigravity: another MCP server\'s tool is never taken for a local command or edit, and no saved rule covers it', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const home = fs.realpathSync(r.cwd);
+  const rules = (s as unknown as { rules: Set<string> }).rules;
+  rules.add(commandRule(['rm', '-rf', 'generated'], home));
+  rules.add(EDIT_RULE);
+  const meta = { is_mcp_tool_call: true, mcp: { server: 'production', tool: 'exec' } };
+  const a = fakeRequest(r, s, { toolCallId: 'm1', kind: 'execute', _meta: meta, rawInput: { arguments: { command: 'rm -rf generated', cwd: home } } });
+  await until(() => a.length === 1);
+  assert.equal(r.cards.length, 1, 'the saved command rule does not cover it');
+  assert.equal(r.cards[0].name, 'mcp__acp__mcp');
+  // An earlier frame said it's MCP; the request itself doesn't.
+  frame(s, { toolCallId: 'm2', kind: 'edit', _meta: meta, rawInput: { path: path.join(home, 'n.txt'), content: 'x' } });
+  const b = fakeRequest(r, s, { toolCallId: 'm2', kind: 'edit', rawInput: { path: path.join(home, 'n.txt'), content: 'x' } });
+  await until(() => b.length === 1);
+  assert.equal(r.cards.length, 2, 'the saved edit rule does not cover it either');
+  assert.equal(r.cards[1].name, 'mcp__acp__mcp');
+});
+
+test('Antigravity: a read an earlier frame said more about, or an empty path, gets a card', async () => {
+  const r = agy({ deny: true });
+  const inside = path.join(fs.realpathSync(r.cwd), 'a.txt');
+  fs.writeFileSync(inside, 'x');
+  const s = r.start();
+  await ready(r, s);
+  frame(s, { toolCallId: 'r1', kind: 'read', rawInput: { AbsolutePath: inside, Directory: '/etc' } });
+  const a = fakeRequest(r, s, { toolCallId: 'r1', kind: 'read', rawInput: { AbsolutePath: inside } });
+  await until(() => a.length === 1);
+  assert.equal(r.cards.length, 1);
+  const b = fakeRequest(r, s, { toolCallId: 'r2', kind: 'read', locations: [{ path: inside }], rawInput: { AbsolutePath: inside, DirectoryPath: '' } });
+  await until(() => b.length === 1);
+  assert.equal(r.cards.length, 2);
+  const c = fakeRequest(r, s, { toolCallId: 'r3', kind: 'read', rawInput: { AbsolutePath: inside } });
+  await until(() => c.length === 1);
+  assert.equal(r.cards.length, 2, 'a plain one still goes ahead');
+});
+
+test('a command card that is not a plain shell one always says where it runs, so only the Mac can allow it', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  for (const [id, rawInput] of [['n1', { CommandLine: 'rm -rf x' }], ['n2', { CommandLine: 'ls', Cwd: null }], ['n3', { CommandLine: 'ls', Cwd: r.cwd, variant: 1 }]] as const) {
+    const before = r.cards.length;
+    const replies = fakeRequest(r, s, { toolCallId: id, kind: 'execute', rawInput });
+    await until(() => replies.length === 1);
+    const card = r.cards[before];
+    assert.notEqual(card.name, 'shell', id);
+    assert.equal(remoteCardShowsAll(card.name, card.input, r.cwd, card.title), false, `${id}: not from the phone`);
+  }
+});
+
+test('a call with an argument named __proto__ is refused, as a card would lose it', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const a = fakeRequest(r, s, { toolCallId: 'p1', kind: 'other', rawInput: JSON.parse('{"__proto__":"/outside/file"}') });
+  await until(() => a.length === 1);
+  assert.equal(r.cards.length, 0);
+  assert.deepEqual(a[0], { outcome: { outcome: 'selected', optionId: 'reject' } });
 });
