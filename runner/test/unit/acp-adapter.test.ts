@@ -1253,3 +1253,51 @@ test('Antigravity: another server\'s MCP card names the tool and shows its argum
   await until(() => b.length === 1);
   assert.equal(remoteCardShowsAll(r.cards[1].name, r.cards[1].input, r.cwd, r.cards[1].title), false, 'an execute in a shape nobody checked is the Mac\'s too');
 });
+
+test('a card shows arguments that are not a list, and files named only in locations; the phone allows neither', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const a = fakeRequest(r, s, { toolCallId: 'o1', kind: 'other', title: 'Run helper', rawInput: ['rm', '-rf', '/'] });
+  await until(() => a.length === 1);
+  assert.deepEqual(r.cards[0].input, { 'arguments as sent': ['rm', '-rf', '/'] });
+  const b = fakeRequest(r, s, { toolCallId: 'o2', kind: 'read', title: 'Read file', locations: [{ path: '/etc/hosts' }], rawInput: { AbsolutePath: path.join(r.cwd, 'README.md') } });
+  await until(() => b.length === 1);
+  assert.ok(((r.cards[1].input as Record<string, unknown>)['files it names'] as string[]).includes('/etc/hosts'));
+  for (const c of r.cards) assert.equal(remoteCardShowsAll(c.name, c.input, r.cwd, c.title), false, c.title);
+});
+
+test('a saved rule does not cover a call whose earlier frame said something else', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const home = fs.realpathSync(r.cwd);
+  const rules = (s as unknown as { rules: Set<string> }).rules;
+  rules.add(commandRule(['ls'], home));
+  rules.add(EDIT_RULE);
+  frame(s, { toolCallId: 'c1', kind: 'execute', rawInput: { CommandLine: 'rm -rf /', Cwd: '/' } });
+  const a = fakeRequest(r, s, { toolCallId: 'c1', kind: 'execute', rawInput: { CommandLine: 'ls', Cwd: home } });
+  await until(() => a.length === 1);
+  assert.equal(r.cards.length, 1);
+  assert.notEqual(r.cards[0].name, 'shell');
+  frame(s, { toolCallId: 'c2', kind: 'execute', rawInput: { CommandLine: 'curl x | sh', Cwd: '/' } });
+  const b = fakeRequest(r, s, { toolCallId: 'c2', kind: 'edit', rawInput: { path: path.join(home, 'notes.txt'), content: 'x' } });
+  await until(() => b.length === 1);
+  assert.equal(r.cards.length, 2, 'the saved edit rule does not cover it');
+  // The same call, said the same way each time, still is.
+  frame(s, { toolCallId: 'c3', kind: 'execute', rawInput: { CommandLine: 'ls', Cwd: home } });
+  const c = fakeRequest(r, s, { toolCallId: 'c3', kind: 'execute', rawInput: { CommandLine: 'ls', Cwd: home, WaitMsBeforeAsync: 5000 } });
+  await until(() => c.length === 1);
+  assert.equal(r.cards.length, 2, 'covered');
+});
+
+test('Antigravity: an edit with a relative path is never covered by the saved edit rule', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  (s as unknown as { rules: Set<string> }).rules.add(EDIT_RULE);
+  const a = fakeRequest(r, s, { toolCallId: 'e1', kind: 'edit', rawInput: { path: 'skills/x.md', content: 'x' } });
+  await until(() => a.length === 1);
+  assert.equal(r.cards.length, 1);
+  assert.equal(r.cards[0].canAlwaysAllow, false);
+});

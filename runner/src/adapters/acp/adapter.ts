@@ -215,7 +215,7 @@ export class AcpSession implements AgentSession {
   // Every frame of a tool call, by id, as the agent sent it: whether any said
   // it's an MCP call, and every argument list it carried. A later frame
   // can't wash out what an earlier one said (Codex's and Gemini's third
-  // reviews, 20 Nov 2026).
+  // reviews, 20 Nov 2026). Kept for the turn, never cut short within it.
   private callFrames = new Map<string, { mcp: boolean; inputs: Record<string, unknown>[]; kinds: Set<string> }>();
   private configOptions: ConfigOption[] = [];
   // The plugin whose hook must be reported running before the model does
@@ -541,8 +541,6 @@ export class AcpSession implements AgentSession {
 
   private noteFrame(u: unknown): void {
     if (!isPlainObject(u) || typeof u.toolCallId !== 'string' || u.toolCallId === '') return;
-    // Old calls go first: a long session needn't keep every one.
-    if (!this.callFrames.has(u.toolCallId) && this.callFrames.size >= 500) this.callFrames.delete(this.callFrames.keys().next().value!);
     const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, inputs: [], kinds: new Set<string>() };
     if (isMcpFrame(u)) f.mcp = true;
     if (typeof u.kind === 'string') f.kinds.add(u.kind);
@@ -629,7 +627,17 @@ export class AcpSession implements AgentSession {
     // What this request names and what earlier updates to the call said:
     // more names only makes the check stricter.
     const paths = [...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
-    const input = isPlainObject(p.toolCall?.rawInput) && Object.keys(p.toolCall.rawInput).length ? p.toolCall.rawInput : seen.input;
+    // Arguments that aren't a list of names and values are shown as they came
+    // (Codex's and Gemini's fifth reviews, 20 Nov 2026: they made an empty card).
+    const rawIn = p.toolCall?.rawInput;
+    const input: Record<string, unknown> = isPlainObject(rawIn) && Object.keys(rawIn).length ? rawIn : rawIn !== undefined && rawIn !== null && !isPlainObject(rawIn) ? { 'arguments as sent': rawIn } : seen.input;
+    // Whether every frame of this call agrees with this request (its own
+    // frame, as sent, is the last kept): each earlier one the same kind, and
+    // every argument it carried here too with the same value (Grok adds
+    // `variant` when it asks). If not, no saved rule covers it and no short
+    // card stands for it.
+    const last = frames?.inputs.at(-1) ?? {};
+    const consistent = !frames || (frames.kinds.size <= 1 && frames.inputs.every((i) => Object.entries(i).every(([k, v]) => Object.hasOwn(last, k) && JSON.stringify(v) === JSON.stringify(last[k]))));
     // A key a plain object can't hold as its own would go missing from the
     // card (cardInput): such a call is refused, never shown short.
     if (Object.hasOwn(input, '__proto__')) {
@@ -666,14 +674,17 @@ export class AcpSession implements AgentSession {
     // thread's: only a whole path says where.
     const placeKnown = !this.deps.agent.ownSessionFolder || (named.length > 0 && named.every((d) => path.isAbsolute(d)));
     const exact = Boolean(command) && placeKnown && !unknownPlace && said.length <= 1 && Object.entries(input).every(([k, v]) => k === 'command' || (BENIGN_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number')) || (FOLDER_KEYS.includes(k) && (typeof v === 'string' || v === undefined)));
-    const rule = exact && argv?.length && ruleMayCover(argv) ? commandRule(argv, where) : null;
+    const rule = exact && consistent && argv?.length && ruleMayCover(argv) ? commandRule(argv, where) : null;
 
     let code: CodeWrite = false;
     const edits = !external && writesFiles(kind);
+    // An agent whose session has a folder of its own reads a relative path
+    // from there, not the thread's: which file it is isn't known.
+    const relative = Boolean(this.deps.agent.ownSessionFolder) && [...seen.paths, ...requestPaths(p.toolCall ?? {})].some((f) => !path.isAbsolute(f));
     if (edits) {
       // An edit with no named files can't be checked: it asks every time.
       code = paths.length ? this.runsAsCode(paths) : 'unsure';
-      if (!code && !isPlainEdit(input)) code = 'unsure';
+      if (!code && (!isPlainEdit(input) || !consistent || relative)) code = 'unsure';
       if (!code && this.rules.has(EDIT_RULE)) return this.answer(id, options, true);
     } else if (paths.length && kind !== 'read' && kind !== 'search' && kind !== 'fetch' && kind !== 'think') {
       // A kind that doesn't say what it does, naming a file that runs.
@@ -701,6 +712,7 @@ export class AcpSession implements AgentSession {
     // its tool ("Bash").
     const shellCard =
       Boolean(command) &&
+      consistent &&
       placeKnown &&
       !unknownPlace &&
       said.length <= 1 &&
@@ -709,7 +721,8 @@ export class AcpSession implements AgentSession {
     // or not, so the phone (which allows only a card whose one value is the
     // line it shows) never allows it.
     const runsIn = !placeKnown ? 'not known: its own scratch folder, unless the command says' : unknownPlace || said.length > 1 ? 'not known' : where;
-    const runsInKey = Object.hasOwn(input, 'runs in') ? 'runs in, as Threadbear reads it' : 'runs in';
+    let runsInKey = 'runs in';
+    while (Object.hasOwn(input, runsInKey)) runsInKey = `${runsInKey}, as Threadbear reads it`;
     // Another server's MCP tool, or a command in a shape nobody has checked:
     // its arguments as they came, under a heading, with which tool it is.
     // An object among a card's values is never the phone's to allow, and
@@ -729,7 +742,11 @@ export class AcpSession implements AgentSession {
           ? { 'runs in': runsIn, arguments: input }
           : edits
             ? { paths }
-            : input;
+            : // Any other tool: its arguments, and every file it names that
+              // they don't show (locations), so none is allowed unseen.
+              paths.length && !paths.every((f) => JSON.stringify(input).includes(JSON.stringify(f).slice(1, -1)))
+              ? { arguments: input, 'files it names': paths }
+              : input;
     const card = cardInput(shown, command ? 'all' : edits ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
@@ -761,7 +778,7 @@ export class AcpSession implements AgentSession {
     const allow = a.decision === 'allow' || a.decision === 'allowAlways';
     // A link pointed somewhere else while the card waited: what was allowed
     // isn't where it would run now (Codex's second look, 10 Nov).
-    if (allow && command && named.length && JSON.stringify(resolve()) !== JSON.stringify(places)) {
+    if (allow && !external && kind === 'execute' && named.length && JSON.stringify(resolve()) !== JSON.stringify(places)) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: `The folder for "${firstLineSafely(command, 80, '…')}" changed while it waited for an answer, so it wasn't run. The agent can ask again.` } });
       return this.answer(id, options, false);
     }
@@ -889,6 +906,8 @@ export class AcpSession implements AgentSession {
     }
     if (this.turn !== turn) return;
     this.turn = undefined;
+    // A turn's calls are over with it: their history goes too.
+    this.callFrames.clear();
     if (this.state === 'turn') this.state = 'ready';
     if (this.mode === 'plan' && result.outcome === 'completed') {
       const text = this.normalizer.takeLastAssistantText();
