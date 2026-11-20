@@ -994,10 +994,20 @@ while :; do
       echo "Couldn't take the lock on this checkout's copy ($copylock; its folder must be this user's own, mode 700)." >&2
       exit 1
     fi
+    # A path that became a link, or stopped being one, since the mirror was
+    # made (scripts/fix-link-kinds.sh): rsync can't swap those over itself.
+    links=()
+    while IFS= read -r -d '' f; do
+      [ ! -L "$ROOT/$f" ] || links+=("$f")
+    done <"$files"
+    fix_links=":"
+    [ ! -f "$ROOT/scripts/fix-link-kinds.sh" ] \
+      || fix_links="bash -c $(printf '%q' "$(cat "$ROOT/scripts/fix-link-kinds.sh")") _ $(printf '%q ' "$mirror" ${links[@]+"${links[@]}"})"
     # By content (-c), not size and time: an edit that keeps both would
     # otherwise leave the mirror's old copy in the run.
     copy_it() {
       "${SSH[@]}" "$HOST" "umask 022 && mkdir -p '$mirror' '$remote_run' && touch '$mirror' && for d in '$remote_base/mirror' '$mirror' '$remote_run'; do [ -d \"\$d\" ] && [ ! -L \"\$d\" ] && [ -O \"\$d\" ] && chmod go-w \"\$d\" || { echo \"\$d on the check host isn't this account's own\" >&2; exit 1; }; done" \
+        && "${SSH[@]}" "$HOST" "$fix_links" \
         && rsync -azc --from0 --files-from="$files" -e "${SSH[*]}" "$ROOT/" "$HOST:$mirror/" \
         && rsync -a -e "${SSH[*]}" "$files" "$HOST:$remote_run.files" \
         && "${SSH[@]}" "$HOST" "rsync -a --from0 --files-from='$remote_run.files' '$mirror/' '$remote_run/' && rm -f '$remote_run.files'" \

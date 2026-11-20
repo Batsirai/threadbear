@@ -228,6 +228,11 @@ fi
 # passed on stale code (11 Nov, thread 699f31d2). Unchanged files keep their
 # time, so they don't rebuild. desktop/scripts/test-remote-freshness.sh <host>
 # plays that case.
+# First, a path that became a link, or stopped being one, since the copy there
+# was made (scripts/fix-link-kinds.sh): rsync can't swap those over itself.
+links=()
+while IFS= read -r l; do links+=("$l"); done < <(bash "$root/scripts/fix-link-kinds.sh" --links "$root")
+"${SSH[@]}" "$host" "bash -c $(printf '%q' "$(cat "$root/scripts/fix-link-kinds.sh")") _ $(printf '%q ' "$src" ${links[@]+"${links[@]}"})" </dev/null
 rsync -rlpDcz -e "${SSH[*]}" --delete --exclude .git --exclude node_modules --exclude .build --exclude target --exclude reports \
   --exclude .fixtures --exclude .swiftpm --exclude dist --exclude DerivedData --exclude .DS_Store \
   "$root/" "$host:$src/"

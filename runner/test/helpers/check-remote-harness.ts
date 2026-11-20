@@ -221,6 +221,7 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
   // What it reads to tell which changes run the Swift tests of the mock runner.
   fs.copyFileSync(path.join(path.dirname(SCRIPT), 'swift-freeze.sh'), path.join(repo, 'scripts', 'swift-freeze.sh'));
   fs.chmodSync(path.join(repo, 'scripts', 'swift-freeze.sh'), 0o755);
+  fs.copyFileSync(path.join(path.dirname(SCRIPT), 'fix-link-kinds.sh'), path.join(repo, 'scripts', 'fix-link-kinds.sh'));
   const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' });
   git('init', '-q', '-b', 'main');
   git('add', '-A');

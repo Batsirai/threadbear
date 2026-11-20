@@ -153,6 +153,13 @@ touch "$dir/.in-use" "$target" 2>/dev/null || true
 
 # The checkout's copy, by content. The same leave-outs as remote.sh's copy,
 # and node_modules, which cargo never reads and is most of a copy's size.
+# A path that became a link, or stopped being one, since this slot last had a
+# copy (scripts/fix-link-kinds.sh): rsync can't swap those over itself.
+if [ -f "$copy/scripts/fix-link-kinds.sh" ]; then
+  links=()
+  while IFS= read -r l; do links+=("$l"); done < <(bash "$copy/scripts/fix-link-kinds.sh" --links "$copy")
+  bash "$copy/scripts/fix-link-kinds.sh" "$dir/src" ${links[@]+"${links[@]}"}
+fi
 if ! rsync -rlpDc --delete --exclude node_modules --exclude .build --exclude target --exclude reports \
   --exclude .fixtures --exclude .swiftpm --exclude dist --exclude DerivedData --exclude .DS_Store \
   "$copy/" "$dir/src/"; then
