@@ -1551,6 +1551,20 @@ where it installs (Antigravity: an `agy_acp_server.par` on the PATH).
   its MCP calls say `_meta.mcp: { server, tool }`. Keys for Google's API in
   the runner's environment are blanked, so its Google sign-in is what's used.
   It has no updater, so Update does nothing for it.
+- **Cards for ACP tools.** Every frame of a tool call (its updates and its
+  permission requests) is kept by id for the session, and a call is judged
+  on all of them: what it said earlier can't be washed out by a later
+  frame. Only two cards are short: a plain shell command whose single
+  folder is known (the phone may allow it) and a plain edit of files inside
+  the folder (every frame a plain edit, every path spelled whole, no
+  `..`, `~`, dangling link or unreadable patch header). Every other card
+  shows which tool it is, its arguments as sent, whatever earlier frames
+  said differently and every file it names as spelled; only the Mac allows
+  it. A saved command rule needs every frame to agree and no files named
+  beside the command; the edit rule covers only files inside the folder.
+  Another server's MCP tool never counts as a local command or edit, and
+  Threadbear's own MCP tools go ahead unasked only when every frame that
+  carried anything named that tool.
 - **Plan first** uses the agent's plan mode, and the last reply of a turn is
   proposed as the plan.
 - **The threadbear tools** reach the agent as an MCP server over HTTP on
