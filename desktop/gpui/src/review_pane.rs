@@ -62,10 +62,15 @@ struct Ticks {
     thread_id: String,
     /// The runner's copy, the newest the app has heard.
     review: DesignReview,
-    /// The ticks on show.
+    /// The ticks on show, and None of them (from its window or the
+    /// phone: the page has no None, but its chip can be taken off).
     picked: Vec<String>,
+    none: bool,
     /// They're on their way to the runner.
     saving: bool,
+    /// The message box is sending them as the answer (composer.rs): no
+    /// tick changes until that's back, as it's these that are going.
+    answering: bool,
     /// One changed meanwhile: saved again when that's back.
     again: bool,
     error: Option<String>,
@@ -99,13 +104,11 @@ pub(crate) struct ReviewPanes {
     wide: Option<(String, f32)>,
 }
 
-/// The ticks a review shows: its draft's while it waits, what was sent after.
-fn shown_picks(review: &DesignReview) -> Vec<String> {
-    if review.is_pending() {
-        review.draft.picked_ids.clone()
-    } else {
-        review.response.as_ref().map(|r| r.picked_ids.clone()).unwrap_or_default()
-    }
+/// The ticks a review shows, and None of them: its draft's while it waits,
+/// what was sent after.
+fn shown_picks(review: &DesignReview) -> (Vec<String>, bool) {
+    let shown = if review.is_pending() { Some(&review.draft) } else { review.response.as_ref() };
+    shown.map(|draft| (draft.picked_ids.clone(), draft.none)).unwrap_or_default()
 }
 
 /// The folder a review's pictures are in, real, for the page's site: the
@@ -170,13 +173,11 @@ fn fonts(look: &Look) -> Vec<(String, Vec<u8>)> {
 }
 
 /// `reviews.save` for `review` with these ticks, the rest of its draft kept.
-fn picks_params(thread_id: &str, review: &DesignReview, picked: &[String]) -> Value {
+fn picks_params(thread_id: &str, review: &DesignReview, picked: &[String], none: bool) -> Value {
     let mut draft = review.draft.clone();
     draft.picked_ids = picked.to_vec();
     // Ticks or None, never both.
-    if !picked.is_empty() {
-        draft.none = false;
-    }
+    draft.none = none && picked.is_empty();
     json!({ "threadId": thread_id, "reviewId": review.id, "revision": review.revision, "draft": draft.to_json() })
 }
 
@@ -185,9 +186,10 @@ impl SidePane {
     /// none, and brought up to it if that's newer and no tick of the app's
     /// own is on its way.
     fn review_ticks(&mut self, thread_id: &str, review: &DesignReview) -> &mut Ticks {
-        let ticks = self.reviews.ticks.entry(review.id.clone()).or_insert_with(|| Ticks { thread_id: thread_id.to_owned(), review: review.clone(), picked: shown_picks(review), saving: false, again: false, error: None });
+        let (picked, none) = shown_picks(review);
+        let ticks = self.reviews.ticks.entry(review.id.clone()).or_insert_with(|| Ticks { thread_id: thread_id.to_owned(), review: review.clone(), picked, none, saving: false, answering: false, again: false, error: None });
         if review.revision > ticks.review.revision && !ticks.saving && !ticks.again {
-            ticks.picked = shown_picks(review);
+            (ticks.picked, ticks.none) = shown_picks(review);
             ticks.review = review.clone();
         }
         ticks
@@ -217,14 +219,11 @@ impl SidePane {
 
     /// The preview that was a review's page has gone (Back, another file in
     /// its place, the review answered): its view closes, and the pane's
-    /// width goes back. Its ticks stay while the review's still waiting, or
-    /// one of them is still on its way.
+    /// width goes back. The app's copy of the review stays: it's what says
+    /// the review is over when the transcript hasn't heard yet.
     pub(crate) fn review_closed(&mut self, thread_id: &str, cx: &mut Context<Self>) {
         if let Some(old) = self.reviews.open.remove(thread_id) {
             crate::web_panels::close_made_page(&old.key, cx);
-            if self.reviews.ticks.get(&old.review_id).is_some_and(|t| !t.review.is_pending() && !t.saving) {
-                self.reviews.ticks.remove(&old.review_id);
-            }
         }
         self.sync_review_width(cx);
         self.review_ticks_changed(thread_id, cx);
@@ -287,8 +286,12 @@ impl SidePane {
         let mine = |ticks: &Ticks| {
             let mut review = ticks.review.clone();
             review.draft.picked_ids = ticks.picked.clone();
+            review.draft.none = ticks.none;
             review
         };
+        // With two waiting, the one whose page is open here, if it has
+        // anything ticked: it's the one he's looking at.
+        let open = self.reviews.open.get(thread_id).map(|o| o.review_id.clone());
         let ids: HashSet<String> = known.iter().map(|r| r.id.clone()).collect();
         let mut all: Vec<DesignReview> = known
             .into_iter()
@@ -308,7 +311,26 @@ impl SidePane {
                 }
                 (!review.draft.picked_ids.is_empty() || review.draft.none).then_some(review)
             })
-            .max_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)))
+            .max_by(|a, b| (Some(&a.id) == open.as_ref()).cmp(&(Some(&b.id) == open.as_ref())).then_with(|| a.created_at.cmp(&b.created_at)).then_with(|| a.id.cmp(&b.id)))
+    }
+
+    /// The message box is sending this review's ticks as its answer, or has
+    /// finished trying (composer.rs): while it is, the page's ticks don't
+    /// change, and one queued behind a save isn't saved, as the answer
+    /// carries them. With `answered`, the review as the runner answered
+    /// with: an answer that went on a second try has no event of its own
+    /// (Gemini's fourth review, 20 Nov), so this is how the app hears.
+    pub(crate) fn review_answering(&mut self, thread_id: &str, review: &DesignReview, on: bool, answered: Option<&DesignReview>, cx: &mut Context<Self>) {
+        let ticks = self.review_ticks(thread_id, review);
+        ticks.answering = on;
+        if on {
+            ticks.again = false;
+        }
+        if let Some(answered) = answered {
+            self.review_updated(thread_id, answered, cx);
+        }
+        self.review_ticks_changed(thread_id, cx);
+        cx.notify();
     }
 
     /// The runner says a review changed (`review.updated`, whichever thread
@@ -335,7 +357,7 @@ impl SidePane {
         let was_pending = ticks.review.is_pending();
         // Ticks being saved are ahead of this.
         if !ticks.saving && !ticks.again {
-            ticks.picked = shown_picks(review);
+            (ticks.picked, ticks.none) = shown_picks(review);
         }
         ticks.review = review.clone();
         if was_pending && !review.is_pending() {
@@ -345,9 +367,6 @@ impl SidePane {
                 side.update(cx, |side, cx| {
                     if side.previews.get(&thread_id).is_some_and(|p| matches!(&p.target, Target::Review(id) if *id == review_id)) {
                         side.close_preview(&thread_id, cx);
-                    } else if side.reviews.ticks.get(&review_id).is_some_and(|t| !t.review.is_pending() && !t.saving) {
-                        // No page of it open: done with.
-                        side.reviews.ticks.remove(&review_id);
                     }
                 });
             });
@@ -361,6 +380,11 @@ impl SidePane {
         let now = look(cx);
         let main = self.app.upgrade().is_some_and(|app| app.read(cx).main_window == window.window_handle());
         let closed = "This review isn't open any more. Its card in the thread opens it again.";
+        // The experiment switched off, or the thread moved to another Mac,
+        // with its page open: the message box no longer goes by its ticks.
+        if !is_on(cx) || thread.is_remote() {
+            return note(closed);
+        }
         // The transcript may know better: it catches up on what the app
         // missed while the runner was away (one answered or put aside from
         // somewhere else), and no event comes for that.
@@ -454,13 +478,17 @@ impl SidePane {
     /// still waiting: shown at once, then saved. In the review's order, as
     /// the runner keeps them.
     fn set_review_pick(&mut self, review_id: &str, option: &str, on: Option<bool>, cx: &mut Context<Self>) {
-        let Some(ticks) = self.reviews.ticks.get_mut(review_id).filter(|t| t.review.is_pending()) else { return };
+        let Some(ticks) = self.reviews.ticks.get_mut(review_id).filter(|t| t.review.is_pending() && !t.answering) else { return };
         let has = ticks.picked.iter().any(|p| p == option);
         let want = on.unwrap_or(!has);
         if want == has {
             return;
         }
         ticks.picked = ticks.review.options.iter().map(|o| o.id.clone()).filter(|id| if id == option { want } else { ticks.picked.contains(id) }).collect();
+        // Ticks or None, never both.
+        if !ticks.picked.is_empty() {
+            ticks.none = false;
+        }
         self.review_ticks_edited(review_id, cx);
     }
 
@@ -483,7 +511,7 @@ impl SidePane {
         let Some(ticks) = self.reviews.ticks.get_mut(review_id) else { return };
         ticks.saving = true;
         ticks.again = false;
-        let params = picks_params(&ticks.thread_id, &ticks.review, &ticks.picked);
+        let params = picks_params(&ticks.thread_id, &ticks.review, &ticks.picked, ticks.none);
         let (thread_id, review_id) = (ticks.thread_id.clone(), review_id.to_owned());
         cx.spawn(async move |this, cx| {
             let saved = call(client.clone(), "reviews.save", params).await;
@@ -515,19 +543,24 @@ impl SidePane {
                 // while this was out, and was held back for it, shows now
                 // (Codex's fourth review, 20 Nov).
                 if !save_again {
-                    ticks.picked = shown_picks(&ticks.review);
+                    (ticks.picked, ticks.none) = shown_picks(&ticks.review);
                 }
             }
             Ok(None) => ticks.error = Some("The runner's answer to that tick didn't make sense.".to_owned()),
             Err(e) => {
+                // Back to what the runner last had, so what shows is what's
+                // so: a tick that didn't save comes off again, on the page
+                // and over the message box.
                 ticks.error = Some(format!("That tick wasn't saved: {}", e.message));
-                if let Some(latest) = latest {
-                    ticks.picked = shown_picks(&latest);
-                    ticks.review = latest;
-                }
+                (ticks.picked, ticks.none) = shown_picks(&ticks.review);
             }
         }
         let thread_id = ticks.thread_id.clone();
+        // The runner's copy as it now is, read after a save it turned down:
+        // taken as any change is, so one that's over closes its page.
+        if let Some(latest) = latest {
+            self.take_review(&thread_id, &latest, cx);
+        }
         if save_again {
             self.save_review_picks(review_id, cx);
         }
@@ -543,8 +576,8 @@ impl SidePane {
         if !option.is_empty() {
             return self.set_review_pick(&review.id, option, Some(false), cx);
         }
-        if ticks.review.is_pending() && ticks.review.draft.none {
-            ticks.review.draft.none = false;
+        if ticks.review.is_pending() && !ticks.answering && ticks.none {
+            ticks.none = false;
             self.review_ticks_edited(&review.id, cx);
         }
     }
@@ -564,7 +597,9 @@ impl crate::thread::ThreadPane {
     /// (`SidePane::review_to_answer`). None unless the experiment's on and
     /// the thread is this Mac's own: another Mac's reviews open there.
     pub(crate) fn known_reviews(&self, cx: &App) -> Option<Vec<DesignReview>> {
-        if !is_on(cx) || self.summary.runner_id.is_some() {
+        // Not until the transcript's read: with nothing to go by, the
+        // app's copy of one that's since ended would count as waiting.
+        if !is_on(cx) || self.summary.runner_id.is_some() || !self.is_loaded() {
             return None;
         }
         let reviews = self.feed.model().rows().iter().filter_map(|row| match &row.content {

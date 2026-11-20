@@ -122,6 +122,9 @@ pub struct Composer {
     /// with the ticks that went: its chips show dimmed with a spinner, and
     /// nothing else is sent from here until it's back.
     review_sending: Option<threadbear_core::reducer::DesignReview>,
+    /// The box as it was when that answer went, for a quit while it's out:
+    /// kept with the drafts, so words not yet with the runner aren't lost.
+    review_out: Option<RestoreDraft>,
     /// An answer given back because the runner never said whether it took
     /// it: the review, the answer as sent, and the box's words and how many
     /// pictures as given back. If the review then turns out answered with
@@ -283,6 +286,7 @@ impl Composer {
             editing: None,
             pending_box: None,
             review_sending: None,
+            review_out: None,
             review_given_back: None,
             pending_saved: None,
             held_extras: Vec::new(),
@@ -490,6 +494,11 @@ impl Composer {
         if let Some(restore) = &self.restore {
             all = RestoreDraft::joined(restore.clone(), all);
         }
+        // A review's answer still on its way: its words left the box when
+        // it went, and aren't the runner's until it says so.
+        if let Some(out) = &self.review_out {
+            all = RestoreDraft::joined(out.clone(), all);
+        }
         let (mut text, images) = all.for_saving();
         for mention in &self.pending_mentions { text = threadbear_core::board::adding(&mention.reference, &text); }
         (text, images)
@@ -695,12 +704,23 @@ impl Composer {
             return true;
         }
         let mut answer = review.draft.clone();
-        answer.reply = (!words.is_empty()).then_some(words);
-        answer.images = draft.images.clone();
+        // The box's words and pictures are the reply. With nothing in it,
+        // a reply already written in the review's window or on the phone
+        // goes as it is, rather than being wiped.
+        if !words.is_empty() || !draft.images.is_empty() {
+            answer.reply = (!words.is_empty()).then_some(words);
+            answer.images = draft.images.clone();
+        }
         crate::activity::sent(Some(&thread_id), answer.images.len(), 0, false);
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
         self.forget_chips();
         self.review_sending = Some(review.clone());
+        self.review_out = Some(draft.clone());
+        // Its ticks are what's going: they hold still until it's back.
+        let side = self.app.upgrade().map(|app| app.read(cx).side.clone());
+        if let Some(side) = &side {
+            side.update(cx, |side, cx| side.review_answering(&thread_id, &review, true, None, cx));
+        }
         cx.notify();
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
@@ -710,9 +730,18 @@ impl Composer {
                 tries += 1;
                 let params = json!({ "threadId": thread_id, "reviewId": review.id, "revision": revision, "draft": answer.to_json() });
                 let refused = match crate::review_window::riding_out(client.clone(), "reviews.respond", params, cx).await {
-                    Ok(_) => break Ok(()),
+                    Ok(said) => {
+                        // The review as answered: one that went on a second
+                        // try brings no event of its own.
+                        latest = DesignReview::decode(&said["review"]);
+                        break Ok(());
+                    }
                     Err(e) => e,
                 };
+                // Two minutes with no answer is one try too many already.
+                if refused.code == -3 {
+                    tries += 1;
+                }
                 // No answer came, which isn't a no: the client's own errors
                 // (not connected, the connection dropped with the call out,
                 // no answer in time) and a runner handing over.
@@ -736,6 +765,13 @@ impl Composer {
             };
             this.update(cx, |this, cx| {
                 this.review_sending = None;
+                this.review_out = None;
+                // The ticks are free again, and the app's copy is the
+                // runner's as last read: answered, or whatever it now is,
+                // so chips for one that's over don't stay.
+                if let Some(side) = &side {
+                    side.update(cx, |side, cx| side.review_answering(&thread_id, &review, false, latest.as_ref(), cx));
+                }
                 match sent {
                     Ok(()) => {
                         // The draft blocks' changes that went with it, if
@@ -750,19 +786,16 @@ impl Composer {
                             this.review_given_back = Some((review.id.clone(), answer.clone(), draft.text.clone(), draft.images.len()));
                         }
                         this.restore_draft(draft, cx);
-                        // The review as the runner has it now, so chips for
-                        // one that's over don't stay.
-                        if let (Some(now), Some(app)) = (latest, this.app.upgrade()) {
-                            let side = app.read(cx).side.clone();
-                            side.update(cx, |side, cx| side.review_updated(&thread_id, &now, cx));
-                        }
                         let said = if unsure {
                             "Your answer may not have reached the runner. If it shows in the thread it went; if not, send it again.".to_owned()
                         } else {
                             format!("Your answer wasn't sent: {why}")
                         };
-                        if let Some(pane) = this.pane() {
-                            pane.update(cx, |p, cx| p.show_error(said, cx));
+                        // On the thread if it's still open, else the window.
+                        match (this.pane(), this.app.upgrade()) {
+                            (Some(pane), _) => pane.update(cx, |p, cx| p.show_error(said, cx)),
+                            (None, Some(app)) => app.update(cx, |app, cx| app.show_error(said, cx)),
+                            _ => {}
                         }
                     }
                 }
