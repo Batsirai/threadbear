@@ -18,7 +18,7 @@ use gpui_kit::*;
 use crate::style::px;
 use crate::tips::Tip as _;
 use serde_json::{json, Value};
-use threadbear_client::runner::{RpcError, Status};
+use threadbear_client::runner::RpcError;
 use threadbear_core::inbox::ThreadSummary;
 use threadbear_core::logins::RunnerLogins;
 use threadbear_core::new_thread::{self as draft_rules, Draft, NewThreadPicks, RoomCard, RoomLook};
@@ -108,7 +108,7 @@ impl Threadbear {
     fn warm_params(&self) -> Option<Value> {
         if self.new_thread.picks.runner.is_some()
             || self.new_thread.picks.service.is_some()
-            || !matches!(self.status, Status::Connected { .. })
+            || !self.connected()
         {
             return None;
         }
@@ -218,7 +218,7 @@ impl Threadbear {
         if self.new_thread.creating {
             return;
         }
-        if !matches!(self.status, Status::Connected { .. }) {
+        if !self.connected() {
             self.new_thread.error = Some(
                 "Not connected to the runner, so that wasn't sent. It's still in the box."
                     .to_owned(),

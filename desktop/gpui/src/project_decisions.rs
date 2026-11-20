@@ -21,7 +21,6 @@ use gpui_kit::*;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use threadbear_client::runner::Status;
 use threadbear_core::composer::{self, OWN_ANSWER};
 use threadbear_core::inbox::ThreadSummary;
 use threadbear_core::projects::{self as rules, Project, Sections};
@@ -477,8 +476,7 @@ impl Threadbear {
         // Connected by the client's own word too: it says so a moment before
         // the app hears it, and the restart it held for is already over then
         // (Codex's review, 13 Nov).
-        let connected = matches!(self.status, Status::Connected { .. })
-            || self.client.connected_session().is_some();
+        let connected = self.connected() || self.client.connected_session().is_some();
         if !connected && !holding {
             self.show_error(
                 "Not connected to the runner, so that wasn't sent.".to_owned(),

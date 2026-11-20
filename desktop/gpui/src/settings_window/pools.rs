@@ -84,10 +84,7 @@ impl SettingsWindow {
             (
                 t.logins.pools.clone(),
                 t.logins.accounts.clone(),
-                matches!(
-                    t.status,
-                    threadbear_client::runner::Status::Connected { .. }
-                ),
+                t.connected(),
             )
         };
         if runner_pools.is_empty() {

@@ -27,7 +27,7 @@ use serde_json::json;
 #[cfg(feature = "automation")]
 use serde_json::Value;
 use std::sync::Arc;
-use threadbear_client::runner::{Client, Status};
+use threadbear_client::runner::Client;
 use threadbear_core::remote::{MovePreview, RunnerInfo};
 
 /// `AppModel.MoveRequest`: which thread, to which runner.
@@ -68,7 +68,7 @@ impl Threadbear {
         cx: &mut Context<Self>,
     ) {
         let before = self.threads.get(&request.thread_id).cloned();
-        if !matches!(self.status, Status::Connected { .. }) {
+        if !self.connected() {
             // The sheet opens too, and waits for a connection.
             self.show_move_sheet(request, None, window, cx);
             return;
@@ -468,9 +468,7 @@ impl MoveSheet {
     }
 
     fn connected(&self, cx: &App) -> bool {
-        self.app
-            .upgrade()
-            .is_some_and(|a| matches!(a.read(cx).status, Status::Connected { .. }))
+        self.app.upgrade().is_some_and(|a| a.read(cx).connected())
     }
 
     /// Asks again for what the fields say, leaving out whatever is still the

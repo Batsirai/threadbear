@@ -32,7 +32,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use threadbear_client::runner::Client;
-use threadbear_client::runner::Status;
 use threadbear_core::chrono::{Local, NaiveTime, TimeZone as _, Timelike as _};
 use threadbear_core::composer::effort_title;
 use threadbear_core::inbox::{iso_time, parse_ms};
@@ -670,7 +669,7 @@ impl ScheduleEditor {
         let Some(app) = self.app.upgrade() else {
             return;
         };
-        if !matches!(app.read(cx).status, Status::Connected { .. }) {
+        if !app.read(cx).connected() {
             self.save_error = Some("Not connected to the runner.".into());
             cx.notify();
             return;

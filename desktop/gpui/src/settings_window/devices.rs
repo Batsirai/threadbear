@@ -58,12 +58,7 @@ pub(crate) struct DevicesDraft {
 
 impl SettingsWindow {
     fn devices_connected(&self, cx: &App) -> bool {
-        self.app.upgrade().is_some_and(|a| {
-            matches!(
-                a.read(cx).status,
-                threadbear_client::runner::Status::Connected { .. }
-            )
-        })
+        self.app.upgrade().is_some_and(|a| a.read(cx).connected())
     }
 
     /// The section came on show: the list afresh (`onAppear`), and again

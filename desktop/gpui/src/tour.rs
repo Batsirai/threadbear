@@ -541,12 +541,7 @@ impl Threadbear {
             }
         });
         // Someone's first launch: once the runner's there.
-        if !self.tour.checked_new
-            && matches!(
-                self.status,
-                threadbear_client::runner::Status::Connected { .. }
-            )
-        {
+        if !self.tour.checked_new && self.connected() {
             cx.defer_in(window, |this, window, cx| {
                 this.tour_start_if_new(window, cx)
             });

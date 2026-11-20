@@ -863,11 +863,7 @@ impl Threadbear {
     pub(crate) fn restart_moment(&self, windows: WindowsNow, cx: &App) -> rules::RestartMoment {
         rules::RestartMoment {
             staged: self.updater.staged.is_some(),
-            loaded: self.sidebar.loaded
-                && matches!(
-                    self.status,
-                    threadbear_client::runner::Status::Connected { .. }
-                ),
+            loaded: self.sidebar.loaded && self.connected(),
             has_drafts: self.has_unsent_words(cx),
             held: windows.held || self.under_way(cx),
             other_window_input: windows.other_window_input,

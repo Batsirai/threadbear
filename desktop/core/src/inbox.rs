@@ -393,7 +393,8 @@ impl ThreadSummary {
             && !self.busy()
             && self.background.as_ref().is_none_or(|b| b.is_empty())
     }
-    fn needs_answer(&self) -> bool {
+    /// Waiting on an answer from Mike (a card, a question).
+    pub fn needs_answer(&self) -> bool {
         self.status == "waiting"
     }
     /// Its turn is stuck on a card only Mike can answer (a permission, a

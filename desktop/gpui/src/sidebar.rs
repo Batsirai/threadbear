@@ -1070,6 +1070,7 @@ impl Threadbear {
                 // older than runner.status: its notices are all there is.
                 if let Some(status) = &status {
                     this.client.restart_status(&status["pendingRestart"]);
+                    this.restart_news(cx);
                 }
                 this.website_url = status.as_ref().and_then(crate::header::website_url);
                 // Where Investigate's thread works (`ownCheckout`); kept from
@@ -1096,21 +1097,6 @@ impl Threadbear {
                 .timer(std::time::Duration::from_millis(300))
                 .await;
             this.update(cx, |this, cx| this.refresh_restart(cx)).ok();
-        }));
-    }
-
-    /// A restart under way that goes on past its patience means the runner
-    /// is down, not restarting: the banner says so then, with Try again
-    /// (`restartExpiry`).
-    pub(crate) fn watch_restart_expiry(&mut self, cx: &mut Context<Self>) {
-        let Some(since) = self.client.restart().restarting_since() else {
-            return;
-        };
-        let left = threadbear_client::restart::PATIENCE.saturating_sub(since.elapsed())
-            + std::time::Duration::from_secs(1);
-        self.restart_expiry = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(left).await;
-            this.update(cx, |_, cx| cx.notify()).ok();
         }));
     }
 

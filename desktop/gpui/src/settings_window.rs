@@ -1832,10 +1832,7 @@ fn waiting_text(app: &WeakEntity<Threadbear>, cx: &App) -> String {
     let t = app.read(cx);
     if t.settings_unsupported {
         "This runner is too old for settings. It gets them when it next updates.".into()
-    } else if !matches!(
-        t.status,
-        threadbear_client::runner::Status::Connected { .. }
-    ) {
+    } else if !t.connected() {
         "Not connected to the runner.".into()
     } else {
         "Loading…".into()

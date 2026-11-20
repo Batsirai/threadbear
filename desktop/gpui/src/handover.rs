@@ -518,13 +518,6 @@ impl Threadbear {
         .detach();
     }
 
-    fn connected(&self) -> bool {
-        matches!(
-            self.status,
-            threadbear_client::runner::Status::Connected { .. }
-        )
-    }
-
     /// The thread that was open has its first page (a project page, the
     /// schedules or nothing open count as loaded).
     fn selection_loaded(&self, cx: &App) -> bool {
