@@ -1301,3 +1301,63 @@ test('Antigravity: an edit with a relative path is never covered by the saved ed
   assert.equal(r.cards.length, 1);
   assert.equal(r.cards[0].canAlwaysAllow, false);
 });
+
+test("OpenCode's edit, named one way while it runs and another when it asks, is still covered by the saved edit rule", async () => {
+  const r = rig({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const file = path.join(fs.realpathSync(r.cwd), 'a.txt');
+  (s as unknown as { rules: Set<string> }).rules.add(EDIT_RULE);
+  frame(s, { toolCallId: 'oc1', kind: 'edit', locations: [{ path: file }], rawInput: { filePath: file, content: 'hi' } });
+  const a = fakeRequest(r, s, { toolCallId: 'oc1', kind: 'edit', locations: [{ path: file }], rawInput: { filepath: file, diff: 'x' }, content: [{ type: 'diff', path: file, oldText: '', newText: 'hi' }] });
+  await until(() => a.length === 1);
+  assert.equal(r.cards.length, 0);
+});
+
+test('the saved edit rule never covers a file outside the thread\'s folder, by path or through a link', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const home = fs.realpathSync(r.cwd);
+  (s as unknown as { rules: Set<string> }).rules.add(EDIT_RULE);
+  fs.writeFileSync(path.join(r.root, 'rc'), '');
+  fs.symlinkSync(path.join(r.root, 'rc'), path.join(home, 'notes.txt'));
+  for (const [id, f] of [['w1', path.join(r.root, 'rc')], ['w2', path.join(home, 'notes.txt')], ['w3', path.join(home, 'new', 'deep', 'file.txt')]] as const) {
+    const before = r.cards.length;
+    const replies = fakeRequest(r, s, { toolCallId: id, kind: 'edit', rawInput: { path: f, content: 'x' } });
+    await until(() => replies.length === 1);
+    if (id === 'w3') assert.equal(r.cards.length, before, 'a new file inside goes ahead');
+    else {
+      assert.equal(r.cards.length, before + 1, id);
+      assert.equal(r.cards.at(-1)!.canAlwaysAllow, false, id);
+      assert.match(r.cards.at(-1)!.title, /outside this thread's folder/);
+    }
+  }
+});
+
+test('earlier frames that said something else go on the card, and a file named as part of a longer one still shows', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  frame(s, { toolCallId: 'z1', kind: 'execute', rawInput: { CommandLine: 'rm -rf /', Cwd: '/' } });
+  const a = fakeRequest(r, s, { toolCallId: 'z1', kind: 'other', title: 'Read README', rawInput: { path: path.join(r.cwd, 'README.md') } });
+  await until(() => a.length === 1);
+  assert.ok('said earlier' in (r.cards[0].input as Record<string, unknown>));
+  assert.equal(remoteCardShowsAll(r.cards[0].name, r.cards[0].input, r.cwd, r.cards[0].title), false);
+  const b = fakeRequest(r, s, { toolCallId: 'z2', kind: 'other', title: 'Inspect', locations: [{ path: path.dirname(r.cwd) }], rawInput: { path: path.join(r.cwd, 'README.md') } });
+  await until(() => b.length === 1);
+  assert.ok(((r.cards[1].input as Record<string, unknown>)['files it names'] as string[]).includes(path.dirname(r.cwd)));
+});
+
+test("a call's MCP mark is remembered after its turn", async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const inside = path.join(fs.realpathSync(r.cwd), 'a.txt');
+  fs.writeFileSync(inside, 'x');
+  frame(s, { toolCallId: 'bg1', kind: 'read', _meta: { is_mcp_tool_call: true, mcp: { server: 'prod', tool: 'x' } }, rawInput: { AbsolutePath: inside } });
+  await turn(r, s, 'hello', 'next');
+  const a = fakeRequest(r, s, { toolCallId: 'bg1', kind: 'read', rawInput: { AbsolutePath: inside } });
+  await until(() => a.length === 1);
+  assert.equal(r.cards.length, 1);
+});

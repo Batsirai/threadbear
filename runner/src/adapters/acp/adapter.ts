@@ -215,8 +215,9 @@ export class AcpSession implements AgentSession {
   // Every frame of a tool call, by id, as the agent sent it: whether any said
   // it's an MCP call, and every argument list it carried. A later frame
   // can't wash out what an earlier one said (Codex's and Gemini's third
-  // reviews, 20 Nov 2026). Kept for the turn, never cut short within it.
-  private callFrames = new Map<string, { mcp: boolean; inputs: Record<string, unknown>[]; kinds: Set<string> }>();
+  // reviews, 20 Nov 2026). Kept for the session's life: a call can ask after
+  // its turn.
+  private callFrames = new Map<string, { mcp: boolean; inputs: Record<string, unknown>[]; kinds: Set<string>; paths: Set<string> }>();
   private configOptions: ConfigOption[] = [];
   // The plugin whose hook must be reported running before the model does
   // anything in a turn (Grok's guard), and whether it has been this turn.
@@ -529,7 +530,7 @@ export class AcpSession implements AgentSession {
     // Its own arguments, and every argument list earlier frames carried.
     if (!plain(raw) || !frames.inputs.every(plain)) return false;
     if (!Object.keys(raw).some((k) => keys.get(k) === 'string')) return false;
-    const paths = [...new Set([...earlier, ...requestPaths(call)])];
+    const paths = [...new Set([...earlier, ...frames.paths, ...requestPaths(call)])];
     const folder = realFolder(this.opts.cwd);
     if (!folder || !paths.length) return false;
     return paths.every((p) => {
@@ -539,9 +540,26 @@ export class AcpSession implements AgentSession {
     });
   }
 
+  // Whether a file is inside the thread's folder, as the disk has it: the
+  // nearest part of its path that exists, links followed.
+  private inFolder(f: string): boolean {
+    const folder = realFolder(this.opts.cwd);
+    if (!folder || !path.isAbsolute(f) || f.split(/[\\/]/).includes('..')) return false;
+    let dir = f;
+    let real: string | undefined;
+    for (; ; dir = path.dirname(dir)) {
+      real = realFolder(dir);
+      if (real !== undefined || path.dirname(dir) === dir) break;
+    }
+    if (real === undefined) return false;
+    const whole = path.join(real, path.relative(dir, f));
+    return whole === folder || whole.startsWith(folder + path.sep);
+  }
+
   private noteFrame(u: unknown): void {
     if (!isPlainObject(u) || typeof u.toolCallId !== 'string' || u.toolCallId === '') return;
-    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, inputs: [], kinds: new Set<string>() };
+    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, inputs: [], kinds: new Set<string>(), paths: new Set<string>() };
+    for (const p of requestPaths(u as AcpToolCall)) f.paths.add(p);
     if (isMcpFrame(u)) f.mcp = true;
     if (typeof u.kind === 'string') f.kinds.add(u.kind);
     // Anything but a plain list of arguments is kept as one that no rule
@@ -626,7 +644,7 @@ export class AcpSession implements AgentSession {
     const external = mcpCall || mcpName !== undefined;
     // What this request names and what earlier updates to the call said:
     // more names only makes the check stricter.
-    const paths = [...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
+    const paths = [...new Set([...seen.paths, ...(frames?.paths ?? []), ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
     // Arguments that aren't a list of names and values are shown as they came
     // (Codex's and Gemini's fifth reviews, 20 Nov 2026: they made an empty card).
     const rawIn = p.toolCall?.rawInput;
@@ -636,8 +654,12 @@ export class AcpSession implements AgentSession {
     // every argument it carried here too with the same value (Grok adds
     // `variant` when it asks). If not, no saved rule covers it and no short
     // card stands for it.
+    // Only a command's arguments must agree: an edit's files are taken from
+    // every frame anyway, and OpenCode's frames name an edit's arguments
+    // differently from its request ({filePath, content}, then {filepath,
+    // diff}; Gemini's sixth review, 20 Nov 2026).
     const last = frames?.inputs.at(-1) ?? {};
-    const consistent = !frames || (frames.kinds.size <= 1 && frames.inputs.every((i) => Object.entries(i).every(([k, v]) => Object.hasOwn(last, k) && JSON.stringify(v) === JSON.stringify(last[k]))));
+    const consistent = !frames || (frames.kinds.size <= 1 && (seen.kind !== 'execute' || frames.inputs.every((i) => Object.entries(i).every(([k, v]) => Object.hasOwn(last, k) && JSON.stringify(v) === JSON.stringify(last[k])))));
     // A key a plain object can't hold as its own would go missing from the
     // card (cardInput): such a call is refused, never shown short.
     if (Object.hasOwn(input, '__proto__')) {
@@ -678,6 +700,7 @@ export class AcpSession implements AgentSession {
 
     let code: CodeWrite = false;
     const edits = !external && writesFiles(kind);
+    let outside = false;
     // An agent whose session has a folder of its own reads a relative path
     // from there, not the thread's: which file it is isn't known.
     const relative = Boolean(this.deps.agent.ownSessionFolder) && [...seen.paths, ...requestPaths(p.toolCall ?? {})].some((f) => !path.isAbsolute(f));
@@ -685,7 +708,11 @@ export class AcpSession implements AgentSession {
       // An edit with no named files can't be checked: it asks every time.
       code = paths.length ? this.runsAsCode(paths) : 'unsure';
       if (!code && (!isPlainEdit(input) || !consistent || relative)) code = 'unsure';
-      if (!code && this.rules.has(EDIT_RULE)) return this.answer(id, options, true);
+      // The edit rule is for the thread's own files: one outside its folder
+      // always asks (Antigravity has no gate of its own for that, as
+      // OpenCode's external_directory is; Gemini's sixth review).
+      outside = !paths.every((f) => this.inFolder(f));
+      if (!code && !outside && this.rules.has(EDIT_RULE)) return this.answer(id, options, true);
     } else if (paths.length && kind !== 'read' && kind !== 'search' && kind !== 'fetch' && kind !== 'think') {
       // A kind that doesn't say what it does, naming a file that runs.
       code = this.runsAsCode(paths);
@@ -741,18 +768,22 @@ export class AcpSession implements AgentSession {
         : kind === 'execute'
           ? { 'runs in': runsIn, arguments: input }
           : edits
-            ? { paths }
+            ? // Arguments as well when the paths can't say it all.
+              paths.length === 0 || Object.hasOwn(input, 'arguments as sent') || relative ? { paths, arguments: input } : { paths }
             : // Any other tool: its arguments, and every file it names that
               // they don't show (locations), so none is allowed unseen.
-              paths.length && !paths.every((f) => JSON.stringify(input).includes(JSON.stringify(f).slice(1, -1)))
+              paths.length && !paths.every((f) => stringsIn(input).some((v) => v === f || absolutePath(v, this.opts.cwd) === f))
               ? { arguments: input, 'files it names': paths }
               : input;
+    // Earlier frames that said something else go on the card too, and make
+    // it the Mac's to allow.
+    if (!consistent && frames) Object.assign(shown, { 'said earlier': { kinds: [...frames.kinds], arguments: frames.inputs } });
     const card = cardInput(shown, command ? 'all' : edits ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
       return this.answer(id, options, false);
     }
-    const editRule = edits && !code && paths.length > 0;
+    const editRule = edits && !code && !outside && paths.length > 0;
     const pending: Pending = { abort: new AbortController(), options };
     this.pending.set(id, pending);
     let a: ToolApprovalAnswer;
@@ -762,7 +793,7 @@ export class AcpSession implements AgentSession {
         // As an MCP tool's, for anything else: a card whose arguments say
         // what it does can only be allowed where all of them are shown.
         name: shellCard ? 'shell' : edits ? 'apply_patch' : `mcp__acp__${external ? 'mcp' : (kind ?? 'tool')}`,
-        title: code ? `${title} (${codeWriteNote(code)})` : title,
+        title: code ? `${title} (${codeWriteNote(code)})` : outside ? `${title} (outside this thread's folder)` : title,
         input: card.input,
         wholeInput: input,
         canAlwaysAllow: !code && (editRule || Boolean(rule)),
@@ -906,8 +937,6 @@ export class AcpSession implements AgentSession {
     }
     if (this.turn !== turn) return;
     this.turn = undefined;
-    // A turn's calls are over with it: their history goes too.
-    this.callFrames.clear();
     if (this.state === 'turn') this.state = 'ready';
     if (this.mode === 'plan' && result.outcome === 'completed') {
       const text = this.normalizer.takeLastAssistantText();
@@ -1032,6 +1061,13 @@ export class AcpSession implements AgentSession {
     this.resolveExit();
     this.sink.exited(error);
   }
+}
+
+// Every string inside a value, however deep.
+function stringsIn(v: unknown, depth = 0): string[] {
+  if (typeof v === 'string') return [v];
+  if (depth > 8 || !v || typeof v !== 'object') return [];
+  return Object.values(v as Record<string, unknown>).flatMap((x) => stringsIn(x, depth + 1));
 }
 
 // Whether a tool call's frame says it's an MCP server's (Antigravity's _meta).
