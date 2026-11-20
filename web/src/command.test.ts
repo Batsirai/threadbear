@@ -1,7 +1,7 @@
 // node --test web/src/command.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COMMAND_SLOW_MS, idle, locked, step, type CommandState } from './command.ts';
+import { COMMAND_SLOW_MS, commandNote, idle, locked, step, type CommandState } from './command.ts';
 
 type P = { text: string };
 const start: CommandState<P> = idle();
@@ -26,7 +26,11 @@ test('the runner taking it, then finishing it, ends at done with the thread it m
   assert.equal(s.kind === 'waiting' && s.threadId, 't9');
   s = step(s, { kind: 'report', id: 'c1', report: { state: 'done', threadId: 't9' }, at: 600 });
   assert.deepEqual(s, { kind: 'done', attempt: 1, id: 'c1', threadId: 't9', payload: { text: 'hi' } });
-  assert.equal(locked(s), false);
+  // Still locked a moment, until the rows it changed have caught up.
+  assert.equal(locked(s), true);
+  const settled = step(s, { kind: 'settle' });
+  assert.deepEqual(settled, { kind: 'idle', attempt: 1 });
+  assert.equal(locked(settled), false);
 });
 
 test('a send the backend refuses fails with its error and keeps what was sent', () => {
@@ -84,6 +88,18 @@ test('a send that never reaches the backend goes slow too, and its late answer s
   assert.deepEqual(slow, { kind: 'slow', attempt: 1, taken: false, payload: { text: 'hi' } });
   assert.equal(step(slow, { kind: 'queued', attempt: 1, id: 'c1', at: 50_000 }).kind, 'waiting');
   assert.equal(step(slow, { kind: 'queueFailed', attempt: 1, error: 'offline' }).kind, 'failed');
+  // No letting go of it: the client is still retrying, so pressing again would send it twice.
+  assert.equal(step(slow, { kind: 'dismiss' }), slow);
+  assert.equal(locked(slow), true);
+  assert.equal(commandNote(slow)?.dismiss, false);
+});
+
+test('only a slow command the backend has can be dismissed, and sending says so only when asked', () => {
+  const w = step(sent(0), { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  assert.equal(commandNote(step(w, { kind: 'tick', at: COMMAND_SLOW_MS }))?.dismiss, true);
+  assert.equal(commandNote(sent()), null);
+  assert.equal(commandNote(sent(), { sending: true })?.text, 'Sending…');
+  assert.equal(step(start, { kind: 'settle' }), start);
 });
 
 test('answers from an earlier attempt, or another command, are ignored', () => {
@@ -94,8 +110,9 @@ test('answers from an earlier attempt, or another command, are ignored', () => {
   assert.equal(step(w, { kind: 'report', id: 'c2', report: { state: 'done' }, at: 0 }), w);
   // Dismissed while still sending is refused: there's no taking it back.
   assert.equal(step(s, { kind: 'dismiss' }), s);
-  // A late queued after a dismiss doesn't bring the old send back.
-  const gone = step(step(step(s, { kind: 'tick', at: COMMAND_SLOW_MS }), { kind: 'dismiss' }), { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  // A late report after a dismiss doesn't bring the old command back.
+  const q = step(s, { kind: 'queued', attempt: 1, id: 'c1', at: 0 });
+  const gone = step(step(step(q, { kind: 'tick', at: COMMAND_SLOW_MS }), { kind: 'dismiss' }), { kind: 'report', id: 'c1', report: { state: 'failed' }, at: 0 });
   assert.equal(gone.kind, 'idle');
 });
 

@@ -335,7 +335,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
       </div>
 
       <div className="dock">
-        <CommandNote command={change} />
+        <CommandNote command={change} sending />
         <Dock token={token} thread={t} lastSeq={lastSeq} onArchive={() => act({ archive: true })} archiving={change.busy} linkTo={linkTo} />
       </div>
     </article>
@@ -386,35 +386,40 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   const send = useMutation(api.phone.send);
   const interrupt = useMutation(api.phone.interrupt);
   const [text, setText] = useState('');
-  // Stop pressed: a spinner in its place until the turn has stopped (or the
-  // press failed), so it can't be pressed twice meanwhile.
-  const [stopping, setStopping] = useState(false);
-  useEffect(() => {
-    if (!busy(t)) setStopping(false);
-  }, [t.status]);
-  const stop = async () => {
-    setStopping(true);
-    try {
-      await interrupt({ token, threadId: t.threadId });
-    } catch {
-      setStopping(false);
-    }
-  };
+  // Stop pressed: a spinner in its place until its runner has stopped the
+  // turn, or a note saying why it couldn't.
+  const stopCmd = useCommand(token);
+  const stop = () => void stopCmd.run(() => interrupt({ token, threadId: t.threadId }), undefined);
   // Picks on the card of asks: ask index to choice index, for one card.
   const [picks, setPicks] = useState<Draft['picks']>({ by: {} });
   const [ticked, setTicked] = useState<Draft['ticked']>({ set: new Set() });
+  // What's in the composer now, for putting a failed draft back.
+  const draft = useRef<Draft>({ text, picks, ticked });
+  useEffect(() => {
+    draft.current = { text, picks, ticked };
+  });
   // The composer keeps what's typed and picked until the backend has the
-  // message, and gets it back if it fails, unless something new is there.
+  // message, and gets it back if it fails: all of it into an empty
+  // composer, else its words above whatever is there now, so neither is
+  // lost and two drafts' picks never mix.
   const sending = useCommand<Draft>(token, {
     onQueued: () => {
       setText('');
       setPicks({ by: {} });
       setTicked({ set: new Set() });
     },
-    onFailed: (_error, d) => {
-      setText((cur) => (cur.trim() ? cur : d.text));
-      setPicks((cur) => (Object.keys(cur.by).length ? cur : d.picks));
-      setTicked((cur) => (cur.set.size ? cur : d.ticked));
+    onFailed: (_error, d, queued) => {
+      // Never queued: it was never taken out of the composer.
+      if (!queued) return;
+      const now = draft.current;
+      const empty = !now.text.trim() && !Object.values(now.picks.by).some((n) => n >= 0) && now.ticked.set.size === 0;
+      if (empty) {
+        setText(d.text);
+        setPicks(d.picks);
+        setTicked(d.ticked);
+      } else if (d.text.trim()) {
+        setText(`${d.text.trim()}\n\n${now.text}`);
+      }
     },
   });
   const holding = unqueued(sending.state);
@@ -480,7 +485,7 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
           {choices(a).length ? (
             <div className="choices">
               {choices(a).map((c, n) => (
-                <button key={n} className={`choice ${by[i] === n ? 'on' : ''}`} onClick={() => setPicks({ card: t.asksSeq, by: { ...by, [i]: by[i] === n ? -1 : n } })}>
+                <button key={n} className={`choice ${by[i] === n ? 'on' : ''}`} disabled={holding} onClick={() => setPicks({ card: t.asksSeq, by: { ...by, [i]: by[i] === n ? -1 : n } })}>
                   <span className="radio" />
                   <span>
                     {c}
@@ -534,6 +539,7 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
             <button
               key={i}
               className={`choice ${on ? 'on' : ''}`}
+              disabled={holding}
               onClick={() => {
                 const set = new Set(ticked.seq === lastSeq ? ticked.set : []);
                 if (on) set.delete(i);
@@ -553,7 +559,9 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   const ready = !!text.trim() || Object.values(by).some((n) => n >= 0) || follow.length > 0;
   return (
     <>
+    {sending.watch}
     <CommandNote command={sending} />
+    <CommandNote command={stopCmd} />
     <div className={`box ${t.pendingApproval || asks.length ? 'asking' : ''}`}>
       {card}
       <form
@@ -583,8 +591,8 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
           {busy(t) && !ready ? (
             // Stop only while nothing's typed, as on the Mac: a message
             // typed during a turn goes into it.
-            <button type="button" className="send" disabled={stopping} onClick={() => void stop()} aria-label={stopping ? 'Stopping' : 'Stop'} title={stopping ? 'Stopping' : 'Stop'}>
-              {stopping ? <span className="spinner" /> : <Icon.Stop />}
+            <button type="button" className="send" disabled={stopCmd.busy} onClick={stop} aria-label={stopCmd.busy ? 'Stopping' : 'Stop'} title={stopCmd.busy ? 'Stopping' : 'Stop'}>
+              {stopCmd.busy ? <span className="spinner" /> : <Icon.Stop />}
             </button>
           ) : (
             <button className="send" disabled={!ready || holding} aria-label={holding ? 'Sending' : 'Send'} title={holding ? 'Sending' : 'Send'}>

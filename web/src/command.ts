@@ -8,7 +8,11 @@
 //                  │                   │ └──report failed──▶ failed
 //                  └──queueFailed──▶ failed
 // sending and waiting go slow when nothing is heard in COMMAND_SLOW_MS,
-// still listening; slow, done and failed are dismissed back to idle.
+// still listening. done settles back to idle a moment later (so the row the
+// command changed has caught up before the control takes clicks again);
+// failed, and slow once the backend has the command, are dismissed to idle.
+// A slow send the backend hasn't got yet can't be dismissed: the Convex
+// client is still retrying it, so a second press would send it twice.
 //
 // The backend says pending, taken, done or failed (phone:command); a taken
 // command that lapses (convex/commandMachine.ts) reads as failed.
@@ -41,15 +45,18 @@ export type CommandEvent<P> =
   | { kind: 'report'; id: string; report: CommandReport; at: number }
   // The clock, for going slow.
   | { kind: 'tick'; at: number }
+  // A moment after done: the control takes clicks again.
+  | { kind: 'settle' }
   | { kind: 'dismiss' };
 
 export function idle<P>(): CommandState<P> {
   return { kind: 'idle', attempt: 0 };
 }
 
-// While the control stops taking clicks.
+// While the control stops taking clicks: on its way, or just done and
+// waiting for the rows it changed to catch up.
 export function locked(s: CommandState<unknown>): boolean {
-  return s.kind === 'sending' || s.kind === 'waiting' || s.kind === 'slow';
+  return s.kind === 'sending' || s.kind === 'waiting' || s.kind === 'slow' || s.kind === 'done';
 }
 
 // While the send itself hasn't reached the backend: a composer keeps its
@@ -89,8 +96,10 @@ export function step<P>(s: CommandState<P>, e: CommandEvent<P>): CommandState<P>
       if (s.kind === 'sending') return { kind: 'slow', attempt: s.attempt, taken: false, payload: s.payload };
       return { kind: 'slow', attempt: s.attempt, id: s.id, taken: s.taken, ...(s.threadId ? { threadId: s.threadId } : {}), payload: s.payload };
     }
+    case 'settle':
+      return s.kind === 'done' ? { kind: 'idle', attempt: s.attempt } : s;
     case 'dismiss':
-      return s.kind === 'slow' || s.kind === 'done' || s.kind === 'failed' ? { kind: 'idle', attempt: s.attempt } : s;
+      return (s.kind === 'slow' && s.id) || s.kind === 'done' || s.kind === 'failed' ? { kind: 'idle', attempt: s.attempt } : s;
   }
 }
 
@@ -99,16 +108,20 @@ export function slowAt(s: CommandState<unknown>): number | undefined {
   return s.kind === 'sending' || s.kind === 'waiting' ? s.since + COMMAND_SLOW_MS : undefined;
 }
 
-// The line shown near the control, or null for nothing to say.
-export function commandNote(s: CommandState<unknown>): { tone: 'muted' | 'failed'; text: string; dismiss: boolean } | null {
+// The line shown near the control, or null for nothing to say. `sending`:
+// say so while it's sending too, for a control with no spinner of its own
+// (a menu item that closes on click).
+export function commandNote(s: CommandState<unknown>, opts: { sending?: boolean } = {}): { tone: 'muted' | 'failed'; text: string; dismiss: boolean } | null {
   switch (s.kind) {
+    case 'sending':
+      return opts.sending ? { tone: 'muted', text: 'Sending…', dismiss: false } : null;
     case 'waiting':
       return { tone: 'muted', text: s.taken ? 'Sent to the Mac…' : 'Waiting for the Mac to pick this up…', dismiss: false };
     case 'slow':
       return {
         tone: 'muted',
-        text: !s.id ? 'Still trying to reach Threadbear’s server. Check this device is online.' : s.taken ? 'The Mac has this but hasn’t said how it went yet.' : 'The Mac hasn’t picked this up. It may be asleep or offline; it runs when the Mac is back.',
-        dismiss: true,
+        text: !s.id ? 'Still trying to reach Threadbear’s server. It goes once this device is back online.' : s.taken ? 'The Mac has this but hasn’t said how it went yet.' : 'The Mac hasn’t picked this up. It may be asleep or offline; it runs when the Mac is back.',
+        dismiss: !!s.id,
       };
     case 'failed':
       return { tone: 'failed', text: `Didn’t work: ${s.error}`, dismiss: true };

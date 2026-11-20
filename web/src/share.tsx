@@ -415,11 +415,12 @@ export function ShareControl({ token, threadId, share, onSharePage, preview }: {
         {shared && !onSharePage ? (
           <div className="buttons">
             <button className="btn" disabled={cmd.busy} onClick={() => run('link', true)} title="The old link stops working">
+              {cmd.spinning ? <span className="spinner" /> : null}
               New link
             </button>
           </div>
         ) : null}
-        <CommandNote command={cmd} />
+        <CommandNote command={cmd} sending />
       </div>
     </details>
   );

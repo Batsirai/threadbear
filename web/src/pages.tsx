@@ -741,6 +741,7 @@ export function NewThread({ token }: { token: string }) {
             <textarea
               autoFocus
               value={text}
+              readOnly={cmd.busy}
               rows={Math.min(10, Math.max(2, text.split('\n').length))}
               placeholder="What should it do?"
               aria-label="What should it do?"
@@ -754,7 +755,7 @@ export function NewThread({ token }: { token: string }) {
             />
             <div className="tools-row">
               {online.length > 1 ? (
-                <select value={runnerId} onChange={(e) => setRunnerId(e.target.value)} aria-label="Runner" title="Which runner it starts on">
+                <select value={runnerId} disabled={cmd.busy} onChange={(e) => setRunnerId(e.target.value)} aria-label="Runner" title="Which runner it starts on">
                   <option value="">Main runner</option>
                   {online.map((r) => (
                     <option key={r.runnerId} value={r.runnerId}>

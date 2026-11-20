@@ -25,7 +25,7 @@ export function buttonLook(b: MessageButton, press: CommandState<unknown>): Butt
   if (press.kind === 'done') return { kind: 'pressed', threadId: press.threadId, tip: 'Pressed.' };
   if (press.kind === 'sending') return { kind: 'pressing', tip: 'Sending' };
   if (press.kind === 'waiting') return { kind: 'pressing', tip: press.taken ? 'Sent to the Mac' : 'Waiting for the Mac to pick this up' };
-  if (press.kind === 'slow') return { kind: 'slow', tip: press.id ? 'The Mac hasn’t picked this up yet' : 'Still trying to reach the server' };
+  if (press.kind === 'slow') return { kind: 'slow', tip: !press.id ? 'Still trying to reach the server' : press.taken ? 'The Mac has this but hasn’t said how it went yet' : 'The Mac hasn’t picked this up yet' };
   const error = press.kind === 'failed' ? press.error : b.failed;
   if (error) return { kind: 'failed', error, tip: `Didn't work: ${error}. Press to try again.` };
   return { kind: 'ready', tip: where };
