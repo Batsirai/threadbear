@@ -38,6 +38,7 @@ import { StuckJobs } from './stuck-jobs.ts';
 import { FrozenClis } from './frozen-cli.ts';
 import { KeepAwake } from './keep-awake.ts';
 import { experimentOn } from './experiments.ts';
+import { AgentArchive, ARCHIVE_EXPERIMENT } from './agent-archive.ts';
 import { MemorySync } from './memory-sync.ts';
 import { Reinstaller } from './reinstall.ts';
 import { MacScreen } from './mac-screen.ts';
@@ -1119,6 +1120,17 @@ async function main(): Promise<void> {
     isPrivate: (cwd) => models.isPrivateFolder(cwd),
   });
   if (!box && !copyOfReal) mailWatch.start();
+  // Agent Archive through Threadbear (agent-archive.ts, docs/agent-archive-plan.md).
+  const agentArchive = new AgentArchive({
+    home: cfg.home,
+    log,
+    on: () => experimentOn(cfg.home, ARCHIVE_EXPERIMENT),
+    records: () => [...runner.threads.values()].map((t) => t.rec),
+    projectTitles: () => new Map(projects.list({ archived: true }).map((p) => [p.id, p.title])),
+    runnerName: () => cfg.sync.name ?? os.hostname(),
+    settings: () => peekRunnerJson(cfg.home).archive,
+  });
+  if (!box && !copyOfReal) agentArchive.start();
   const upstream = new Upstream({
     home: cfg.home,
     checkout: thisRelease?.checkout,
@@ -1212,7 +1224,7 @@ async function main(): Promise<void> {
   methods['runner.status'] = (p) => {
     const draining = peers.status();
     const behind = sync.behindRunners();
-    return { ...(restartStatus(p) as Record<string, unknown>), ...(behind.length ? { behindRunners: behind } : {}), webRuntimeProblem: webRuntimeUpdates.problem(), clis: updates.list(), sync: sync.status(), secretCheck: secretCheck.status(), relay: relay.status(), upstream: upstream.status(), ...(draining.length ? { draining } : {}), ...(macScreen ? { macScreen: macScreen.status() } : {}) };
+    return { ...(restartStatus(p) as Record<string, unknown>), ...(behind.length ? { behindRunners: behind } : {}), webRuntimeProblem: webRuntimeUpdates.problem(), clis: updates.list(), sync: sync.status(), secretCheck: secretCheck.status(), archive: agentArchive.status(), relay: relay.status(), upstream: upstream.status(), ...(draining.length ? { draining } : {}), ...(macScreen ? { macScreen: macScreen.status() } : {}) };
   };
   // tb profile (docs/protocol.md, "runner.profile"): where this runner's CPU goes.
   Object.assign(methods, profileMethods(new SelfProfiler({ dir: path.join(cfg.home, 'profiles'), log })));

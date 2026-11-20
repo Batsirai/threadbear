@@ -7,6 +7,7 @@ import { atomicWriteFileSync } from './fsutil.ts';
 import { RELEASE } from './release.ts';
 import { gatewayBase, gatewayUrlFrom } from './connectors.ts';
 import type { MailWatchSettings } from './mail-watch.ts';
+import type { ArchiveSettings } from './agent-archive.ts';
 import { credentialUrlProblem } from './secure-url.ts';
 import { reviewerLists, type LabReviewer } from './lab-reviewers.ts';
 import { findGatewayClient } from './notion-tasks.ts';
@@ -280,6 +281,8 @@ export type RunnerJson = {
   // that prints new emails, how often, when the pile comes, and the
   // decisions it may act on.
   mailWatch?: MailWatchSettings;
+  // Agent Archive through Threadbear (agent-archive.ts): its repo and the machines its sync is pushed to.
+  archive?: ArchiveSettings;
 };
 
 // What defaults.permissionMode may be. Not Plan first: that waits for Mike
