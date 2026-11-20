@@ -170,9 +170,11 @@ for people running Agent Archive.
 - The services already installed on the M5 and Bruce are kept as they are,
   with their tokens and checkpoints: nothing is re-sent and nothing moves.
 - Mike's runner.json on the M5: `"archive": { "repo":
-  "git@github.com:mikecann/agent-archive.git", "pushTo": [{ "host":
+  "https://github.com/mikecann/agent-archive.git", "pushTo": [{ "host":
   "cloud", "node": "<its node>" }] }`, and the experiment on there, on
-  Bruce and on cloud.
+  Bruce and on cloud. The repo is the https address, not ssh: the runner's
+  LaunchAgent has no ssh agent, so `git@github.com:` is refused there,
+  while https goes through git's own credential helper (`gh`).
 
 ### 2. The archive knows Threadbear's threads
 
