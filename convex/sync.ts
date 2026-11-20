@@ -3762,16 +3762,42 @@ const MAX_DEVICES_PER_TOKEN = 5;
 async function markSet(ctx: QueryCtx | MutationCtx, name: string): Promise<boolean> {
   return (await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', name)).first()) !== null;
 }
+// LIMITS_STARTED's mark holds where the next run starts (`cursor`, as
+// limitsAt writes it) and when a run last moved it (`at`). A run that throws
+// schedules nothing, as Convex rolls it back, so a mark no run has moved for
+// LIMITS_STALE_MS has the migration started again from there, by the next
+// heartbeat or pruneFiles (every 6 hours): before that, one bad run left
+// pruneFiles waiting and storageInUse on its slow path for good. A mark from
+// before this (no `at`) is started again too, from the beginning: every
+// step is safe to run twice.
+const LIMITS_STALE_MS = 10 * 60_000;
+const limitsAt = (step: number, cursor: string | null) => JSON.stringify({ step, cursor });
 async function startLimitsMigration(ctx: MutationCtx): Promise<void> {
-  if (await markSet(ctx, LIMITS_STARTED)) return;
-  await ctx.db.insert('backendMarks', { name: LIMITS_STARTED });
-  await ctx.scheduler.runAfter(0, internal.sync.limitsMigration, { step: 0, cursor: null });
+  if (await markSet(ctx, LIMITS_DONE)) return;
+  const started = await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', LIMITS_STARTED)).first();
+  if (started && (started.at ?? 0) > Date.now() - LIMITS_STALE_MS) return;
+  // Anything but a position limitsAt wrote: from the beginning.
+  let from: { step: number; cursor: string | null } = { step: 0, cursor: null };
+  try {
+    const at = started?.cursor ? (JSON.parse(started.cursor) as { step?: unknown; cursor?: unknown } | null) : null;
+    if (at && Number.isInteger(at.step) && (at.step as number) >= 0 && (at.step as number) <= MIGRATE_STEPS.length && (at.cursor === null || typeof at.cursor === 'string')) from = { step: at.step as number, cursor: at.cursor as string | null };
+  } catch {
+    // Not JSON.
+  }
+  const mark = { at: Date.now(), cursor: limitsAt(from.step, from.cursor) };
+  if (started) await ctx.db.patch('backendMarks', started._id, mark);
+  else await ctx.db.insert('backendMarks', { name: LIMITS_STARTED, ...mark });
+  await ctx.scheduler.runAfter(0, internal.sync.limitsMigration, from);
 }
 const MIGRATE_STEPS = ['heldPictures', 'shareImages', 'replyImages', 'projectIcons', 'devices', 'deviceCap', 'pending', 'taken'] as const;
 export const limitsMigration = internalMutation({
   args: { step: v.number(), cursor: v.union(v.string(), v.null()) },
   returns: v.null(),
   handler: async (ctx, { step, cursor }) => {
+    // A run the mark doesn't name belongs to a chain that was taken over
+    // (started again while it was still going): it ends here, so only one goes on.
+    const started = await ctx.db.query('backendMarks').withIndex('by_name', (q) => q.eq('name', LIMITS_STARTED)).first();
+    if (started?.cursor !== undefined && started.cursor !== limitsAt(step, cursor)) return null;
     const what = MIGRATE_STEPS[step];
     if (!what) {
       if (!(await markSet(ctx, LIMITS_DONE))) await ctx.db.insert('backendMarks', { name: LIMITS_DONE });
@@ -3797,9 +3823,13 @@ export const limitsMigration = internalMutation({
         if (row.tokenId && !newest.some((d) => d._id === row._id)) await ctx.db.delete(row._id);
       } else if (what === 'pending' || what === 'taken') {
         for (const image of Array.isArray(row.args?.images) ? row.args.images.slice(0, MAX_COMMAND_FILES) : []) {
-          if (!image?.storageId) continue;
+          // A command's args aren't checked (v.any()): an image that names no
+          // stored file can't be in use, and inserting it would throw on every
+          // run, so the migration could never finish.
+          const storageId = typeof image?.storageId === 'string' ? ctx.db.system.normalizeId('_storage', image.storageId) : null;
+          if (!storageId) continue;
           const had = await ctx.db.query('commandFiles').withIndex('by_commandId', (x) => x.eq('commandId', row._id)).take(MAX_COMMAND_FILES);
-          if (!had.some((f) => f.storageId === image.storageId)) await ctx.db.insert('commandFiles', { storageId: image.storageId, commandId: row._id });
+          if (!had.some((f) => f.storageId === storageId)) await ctx.db.insert('commandFiles', { storageId, commandId: row._id });
         }
       } else if (docBytes(row) > 8 * 1024) {
         const cut: Record<string, string> = {};
@@ -3809,7 +3839,11 @@ export const limitsMigration = internalMutation({
         if (Object.keys(cut).length) await ctx.db.patch(row._id, cut);
       }
     }
-    await ctx.scheduler.runAfter(0, internal.sync.limitsMigration, page.isDone ? { step: step + 1, cursor: null } : { step, cursor: page.continueCursor });
+    const next = page.isDone ? { step: step + 1, cursor: null } : { step, cursor: page.continueCursor as string };
+    const mark = { at: Date.now(), cursor: limitsAt(next.step, next.cursor) };
+    if (started) await ctx.db.patch('backendMarks', started._id, mark);
+    else await ctx.db.insert('backendMarks', { name: LIMITS_STARTED, ...mark });
+    await ctx.scheduler.runAfter(0, internal.sync.limitsMigration, next);
     return null;
   },
 });
