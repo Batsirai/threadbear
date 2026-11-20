@@ -496,6 +496,22 @@ fn testOriginIsReadAndCarriedToTheRow() {
 }
 
 #[test]
+fn testRunnerNoteSaysWhyFromItsWakeReason() {
+    let header = |fields: Value| {
+        let model = from_events(vec![event(1, "user.message", fields)]);
+        let RowContent::User(message) = &model.items()[0].content else { panic!("a user") };
+        message.runner_header()
+    };
+    // A login move isn't a restart, so it mustn't say one.
+    assert_eq!(header(json!({"text": "Carry on.", "images": [], "origin": "runner", "wakeReason": "Moved to another login"})), "Sent by the runner: moved to another login");
+    assert_eq!(header(json!({"text": "Carry on.", "images": [], "origin": "runner", "wakeReason": "The login had room again"})), "Sent by the runner: the login had room again");
+    // A restart, or an older runner that sends no reason, keeps the old line.
+    assert_eq!(header(json!({"text": "Carry on.", "images": [], "origin": "runner", "wakeReason": "The runner restarted"})), "Sent by the runner after it restarted");
+    assert_eq!(header(json!({"text": "Carry on.", "images": [], "origin": "runner", "wakeReason": "The runner came back"})), "Sent by the runner after it restarted");
+    assert_eq!(header(json!({"text": "Carry on.", "images": [], "origin": "runner"})), "Sent by the runner after it restarted");
+}
+
+#[test]
 fn testAnUnknownOriginIsNotTheRunner() {
     let e = event(1, "user.message", json!({"text": "hi", "images": [], "origin": "somethingNew"}));
     let model = from_events(vec![e]);

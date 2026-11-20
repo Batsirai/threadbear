@@ -403,7 +403,7 @@ impl ThreadPane {
                 None => ("Sent by a schedule".to_owned(), message.text.clone()),
             }
         } else {
-            ("Sent by the runner after it restarted".to_owned(), message.text.clone())
+            (message.runner_header(), message.text.clone())
         };
         if message.is_from_schedule() {
             // Clock glyph in the text's place (`symbol("clock", ...)`).

@@ -821,6 +821,7 @@ impl TranscriptModel {
                     text: text.clone(),
                     images: images.clone(),
                     origin: origin.clone(),
+                    wake_reason: wake_reason.clone(),
                     answers: answers.clone(),
                     edit_of: *edit_of,
                     review: review.clone(),

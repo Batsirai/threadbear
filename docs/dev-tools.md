@@ -323,7 +323,9 @@ driving it from a script") and in AGENTS.md ("Seeing and driving the app").
   from `runner.notice` and `runner.status`; while the runner is down it
   says "The runner is restarting. Reconnecting…" with a spinner and the
   app retries every half second. A `user.message` with `origin: "runner"`
-  is a centred note, "Sent by the runner after it restarted" over its text.
+  is a centred note over its text, saying why from its `wakeReason` ("Sent
+  by the runner: moved to another login"; the Swift app and a restart or
+  missing reason say "Sent by the runner after it restarted").
   The mock has `runner.status`, `mock.restartPending` and `mock.restart`,
   and `Tools/screenshots.sh --only 11` shoots all three states.
 - A thread whose turn ended with background sub-agents or shell jobs
