@@ -884,6 +884,11 @@ their own (A2, A3) that couldn't be picked; Mike also picked more than one
 or none, and answered most reviews in the thread in his own words (4 Nov
 2026), hence several picks, `none` and `reply`.
 
+It's only for options that are seen: images, videos, page designs. A
+thread put a research shortlist in one as a page of text per option, and
+Mike found comparing words there pointless (20 Nov 2026), so the tool and
+the instructions send options in words to the reply instead.
+
 `recommended` is the agent's own pick, marked with a star and "Recommended" in the rail and
 over its picture, worded as an asks card marks `suggested`. Both notes are
 inline markdown. Mike, 7 Nov 2026: the note was drawn raw in grey, so

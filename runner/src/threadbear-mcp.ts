@@ -673,7 +673,7 @@ export function buildThreadbearTools(
   const reviewTools = [
     tool(
       'show_options',
-      'Shows the user design options (mockups, wireframes, screenshots, videos or HTML pages of variants) in a review window to choose between, instead of pinning them, listing them or reading every image into the transcript. Give an option\u2019s other screens or states as its shots, never as options of their own. The window steps through every shot in order, then shows the options side by side; the user can pick any number or none, and reply. Returns a review ID promptly; finish your turn and the answer arrives later as a message. A reference option (today\u2019s version, say) can\u2019t be picked.',
+      'Shows the user design options (mockups, wireframes, screenshots, videos or HTML pages of variants) in a review window to choose between, instead of pinning them, listing them or reading every image into the transcript. Only for options whose look or motion is the point: options that are words (names, plans, approaches, a shortlist) go in your reply, not on pages made for this. Give an option\u2019s other screens or states as its shots, never as options of their own. The window steps through every shot in order, then shows the options side by side; the user can pick any number or none, and reply. Returns a review ID promptly; finish your turn and the answer arrives later as a message. A reference option (today\u2019s version, say) can\u2019t be picked.',
       {
         title: z.string().min(1).max(200).describe('What the user is reviewing.'),
         note: z.string().max(4000).optional().describe('A short lead, markdown: **bold** what matters.'),
@@ -2255,7 +2255,7 @@ function clip(text: string, max = 2000): string {
 // AGENTS.md, which those threads read, and other people's threads don't
 // get it (30 Oct).
 export const SHOWING_THE_USER =
-  'When you have design options, mockups or wireframes for the user to choose between, put them in front of them with show_options (a review window that steps through them one at a time, then has them pick one and leave notes), not as pins or a list in your reply; their answer comes back as a message. ' +
+  'When you have design options, mockups or wireframes for the user to choose between, put them in front of them with show_options (a review window that steps through them one at a time, then has them pick one and leave notes), not as pins or a list in your reply; their answer comes back as a message. It is for things seen (images, videos, page designs): options in words (names, plans, approaches) go in your reply. ' +
   "For a single file or link they should look at (a doc, a screenshot, a preview URL, a PR), use pin, with show: true to open it in Threadbear's side pane rather than running `open`. " +
   "To put one of Threadbear's own panels in front of them (this thread's Highlights, a patch panel such as the Convex dashboard, Usage), use show_panel.";
 
