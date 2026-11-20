@@ -149,6 +149,7 @@ For Mike:
   agent-written script under it, so a Chromium exploit in one would have
   Mike's user's access. Turning the sandbox on means bundling the runtime
   in the app (docs/gpui-port.md, "Choice 1", option B).
+  Mike, 20 Nov: not yet. Asked again at the experiment's check-in.
 
 Not fixed, lower:
 
