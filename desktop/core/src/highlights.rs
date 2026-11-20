@@ -456,12 +456,21 @@ pub fn looks_like_text(sample: &[u8]) -> bool {
     (1..=3.min(sample.len())).any(|cut| std::str::from_utf8(&sample[..sample.len() - cut]).is_ok())
 }
 
-/// The kinds of file Mike reviews rather than edits: a transcript link to one
-/// of these opens in the pane, not in its app (⌘-click still does that).
-const REVIEW_EXTENSIONS: &[&str] = &["md", "html", "htm", "pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "mp4", "mov", "csv", "txt"];
+/// The kinds of file a transcript link opens in the pane, not in its app
+/// (⌘-click still does that): documents, pictures and films, plain text,
+/// data and logs (their app is often a big IDE: Xcode claims `.json`), and
+/// below, every kind of code the pane colours, as code an agent links to is
+/// there to be looked over, and the pane opens it ready to type in.
+const REVIEW_EXTENSIONS: &[&str] = &[
+    "md", "html", "htm", "pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "mp4", "mov", "txt", "text",
+    // data and logs
+    "json", "jsonc", "jsonl", "ndjson", "yaml", "yml", "toml", "csv", "tsv", "log",
+];
 
 pub fn previews_in_pane(path: &str) -> bool {
-    REVIEW_EXTENSIONS.contains(&extension(path).as_str())
+    let ext = extension(path);
+    // A plist can be binary, which the text view can't draw.
+    REVIEW_EXTENSIONS.contains(&ext.as_str()) || (code_language(path).is_some() && ext != "plist")
 }
 
 /// A picture the viewer may show: an image by its extension. Anything
@@ -1542,7 +1551,32 @@ mod tests {
         for path in ["/tmp/a.md", "/tmp/b.HTML", "/tmp/c.pdf", "/tmp/d.png", "/tmp/e.mov", "/tmp/f.csv", "/tmp/g.svg"] {
             assert!(previews_in_pane(path), "{path}");
         }
-        for path in ["/tmp/a.swift", "/tmp/b.ts", "/tmp/folder", "/tmp/c.zip"] {
+        // Data and logs, drawn by the pane's text view rather than left to
+        // whichever IDE claims them (Xcode takes `.json`).
+        for path in ["/tmp/put-1.json", "/tmp/a.JSONC", "/tmp/b.jsonl", "/tmp/c.ndjson", "/tmp/d.yaml", "/tmp/e.yml", "/tmp/f.toml", "/tmp/g.tsv", "/tmp/h.log", "/tmp/i.text"] {
+            assert!(previews_in_pane(path), "{path}");
+            assert_eq!(viewer_for_path(path), Viewer::Text, "{path}");
+        }
+        // And code, every kind the pane colours.
+        for (path, language) in [
+            ("/tmp/a.ts", "typescript"),
+            ("/tmp/b.TSX", "typescript"),
+            ("/tmp/c.mts", "typescript"),
+            ("/tmp/export.py", "python"),
+            ("/tmp/main.rs", "rust"),
+            ("/tmp/run.sh", "bash"),
+            ("/tmp/a.swift", "swift"),
+            ("/tmp/b.js", "javascript"),
+            ("/tmp/q.sql", "sql"),
+            ("/tmp/Makefile", "makefile"),
+            ("/tmp/Dockerfile", "dockerfile"),
+        ] {
+            assert!(previews_in_pane(path), "{path}");
+            assert_eq!(viewer_for_path(path), Viewer::Text, "{path}");
+            assert_eq!(code_language(path), Some(language), "{path}");
+        }
+        // Not a plist, which can be binary; not folders, archives or bundles.
+        for path in ["/tmp/Info.plist", "/tmp/folder", "/tmp/c.zip", "/tmp/d.xcodeproj", "/tmp/e.command"] {
             assert!(!previews_in_pane(path), "{path}");
         }
     }

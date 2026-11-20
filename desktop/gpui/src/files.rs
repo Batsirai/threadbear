@@ -22,7 +22,7 @@ use crate::files_store::FilePrefs;
 use crate::highlights::{palette, with_scroll_bar, Palette, PanePreview, SidePane, Target, FILES};
 use crate::{call, icons, style};
 use gpui_kit::base::{TestSupportExt as _, TextViewState, TextViewStyle};
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::input::{Editor, EditorState, GutterDecoration, GutterDecorationCollection, RangeDecoration, RangeDecorationCollection, RangeDecorationStyle};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Selectable, Sizable as _};
 use gpui_kit::prelude::*;
@@ -89,11 +89,17 @@ pub(crate) struct OpenFile {
     /// rather than saying "Not connected" until it's opened again. A link
     /// on an ask's card opened onto a blank pane like this (17 Nov).
     pub waiting_for_runner: bool,
+    /// The opening whose lines (`a.ts:12-18`) have been tinted, so they're
+    /// tinted once, not on every draw.
+    lines_shown: Option<u64>,
+    /// The tint and gutter mark on those lines, kept to be cleared when the
+    /// file's opened again at other lines (or none), or typed in.
+    line_marks: Option<(RangeDecorationCollection, GutterDecorationCollection)>,
 }
 
 impl OpenFile {
     fn new(path: String, opened: u64, body: FileBody) -> Self {
-        OpenFile { path, opened, body, truncated: false, size: 0, find: None, edit: None, page_scroll: ScrollHandle::new(), _page_watch: None, _file_watch: None, _reread: None, changed_away: false, waiting_for_runner: false }
+        OpenFile { path, opened, body, truncated: false, size: 0, find: None, edit: None, page_scroll: ScrollHandle::new(), _page_watch: None, _file_watch: None, _reread: None, changed_away: false, waiting_for_runner: false, lines_shown: None, line_marks: None }
     }
 
     /// The raw text's editor, while it's showing.
@@ -672,6 +678,8 @@ impl SidePane {
                 open.edit = previous.edit;
             }
             open._file_watch = previous._file_watch;
+            open.lines_shown = previous.lines_shown;
+            open.line_marks = previous.line_marks;
         }
         // Text on this machine is watched, so an agent's rewrite shows up by
         // itself; another Mac's is that Mac's to say.
@@ -894,14 +902,61 @@ impl SidePane {
     pub(crate) fn render_preview(&mut self, thread: &ThreadSummary, preview: &PanePreview, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         match &preview.target {
-            Target::File(path) => self.render_file(thread, path, preview.editing, window, cx),
+            Target::File(path) => self.render_file(thread, path, preview.editing, preview.lines.map(|l| (l, preview.opened)), window, cx),
             Target::Page(url) => pane_note(&format!("{url} opened in your browser."), p).into_any_element(),
             Target::Folder(path) => self.render_folder(thread, path, preview, window, cx),
             Target::Pr(url) => self.render_pr(thread, url, window, cx),
         }
     }
 
-    fn render_file(&mut self, thread: &ThreadSummary, path: &str, editing: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The lines a link named (`a.ts:12-18`), in whichever editor is showing
+    /// the file (its own text up to type in, or the one to read): tinted,
+    /// marked in the gutter, and scrolled to once laid out (the editor
+    /// scrolls only to what it has drawn). Opened again with other lines, or
+    /// none, the old tint goes; typing takes it off (`clear_line_marks`).
+    /// `lines` come with the opening they were asked for.
+    fn show_lines(&mut self, thread_id: &str, path: &str, lines: Option<((usize, usize), u64)>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(open) = self.files.open.get_mut(thread_id).filter(|f| f.path == path) else { return };
+        let editor = match (&open.edit, &open.body) {
+            (Some(edit), _) => edit.editor.clone(),
+            (None, FileBody::Text { editor: Some(editor), .. }) => editor.clone(),
+            _ => return,
+        };
+        let opened = open.opened;
+        let wanted = lines.filter(|(_, o)| *o == opened).map(|(l, _)| l);
+        if open.lines_shown == Some(opened) || (wanted.is_none() && open.line_marks.is_none()) {
+            return;
+        }
+        open.lines_shown = Some(opened);
+        // Marks made on the other editor (read, then put up to type in) go
+        // with it; these are this one's.
+        if let Some((fill, mark)) = open.line_marks.take() {
+            fill.set(vec![], cx);
+            mark.set(vec![], cx);
+        }
+        let Some((first, last)) = wanted else { return };
+        let text = editor.read(cx).value().to_string();
+        let range = threadbear_core::file_refs::line_bytes(&text, first, last);
+        // Through the last line's newline, so its tint is the whole line
+        // wide as the others' are.
+        let range = range.start..(range.end + 1).min(text.len());
+        let accent = style::accent(cx);
+        let fill = RangeDecoration::new(range.clone()).with_style(RangeDecorationStyle::Fill).with_color(accent.opacity(0.18));
+        let mark = GutterDecoration::new(range.clone()).with_color(accent);
+        open.line_marks = Some(editor.update(cx, |state, cx| (state.create_range_decorations_collection(vec![fill], cx), state.create_gutter_decorations_collection(vec![mark], cx))));
+        window.on_next_frame(move |_, cx| editor.update(cx, |state, cx| state.set_selected_range(range.start..range.start, cx)));
+    }
+
+    /// Typing in the file takes the tint off the lines a link named: they're
+    /// being changed, so it would only mislead.
+    pub(crate) fn clear_line_marks(&mut self, thread_id: &str, cx: &mut App) {
+        if let Some((fill, mark)) = self.files.open.get_mut(thread_id).and_then(|o| o.line_marks.take()) {
+            fill.set(vec![], cx);
+            mark.set(vec![], cx);
+        }
+    }
+
+    fn render_file(&mut self, thread: &ThreadSummary, path: &str, editing: bool, lines: Option<((usize, usize), u64)>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         // A file's text that's waiting for its editor gets one now.
         if let Some(open) = self.files.open.get_mut(&thread.id).filter(|f| f.path == path) {
@@ -909,10 +964,10 @@ impl SidePane {
                 if editor.is_none() {
                     let (value, language) = (text.to_string(), *language);
                     let made = cx.new(|cx| {
-                        // Reading, as the Swift app's text view is until its
-                        // pencil: no line numbers, folds or guides, and ⌘F
-                        // left to the pane's own find bar.
-                        let state = EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).indent_guides(false).searchable(false);
+                        // Reading: line numbers, so a line an agent names can
+                        // be found, but no folds or guides, and ⌘F left to
+                        // the pane's own find bar.
+                        let state = EditorState::new(window, cx).soft_wrap(true).line_number(true).folding(false).indent_guides(false).searchable(false);
                         match language {
                             Some(language) => state.language(language),
                             None => state,
@@ -926,6 +981,7 @@ impl SidePane {
         if editing {
             self.ensure_edit(thread, window, cx);
         }
+        self.show_lines(&thread.id, path, lines, window, cx);
         self.files.window = Some(window.window_handle());
         let focus = self.files.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let Some(open) = self.files.open.get(&thread.id).filter(|f| f.path == path) else {
@@ -1146,6 +1202,9 @@ impl SidePane {
             Target::File(path) => {
                 let Some(thread) = self.thread(cx) else { return };
                 let Some(open) = self.files.open.get(&thread.id).filter(|f| &f.path == path) else { return };
+                if let Some(lines) = tinted_lines(open, cx) {
+                    pane.insert("previewLines".into(), json!(lines));
+                }
                 if let Some(find) = self.find_line(&thread.id, cx) {
                     pane.insert("previewFind".into(), json!(find));
                 }
@@ -1378,4 +1437,19 @@ pub(crate) fn preview_command(side: &Entity<SidePane>, thread: &ThreadSummary, c
 /// The Files panel has no preview stored: its section shows the thread's folder.
 pub(crate) fn files_section_preview(thread: &ThreadSummary) -> PanePreview {
     PanePreview::new(Target::Folder(thread.cwd.clone()), "Files".into(), FILES.to_owned())
+}
+
+/// The lines tinted for a link (`a.ts:12-18`), as they stand now: "12-18",
+/// for `dump`'s `previewLines`.
+#[cfg(feature = "automation")]
+fn tinted_lines(open: &OpenFile, cx: &App) -> Option<String> {
+    let (fill, _) = open.line_marks.as_ref()?;
+    let range = fill.get_ranges(cx).into_iter().next()?;
+    let editor = open.edit.as_ref().map(|e| e.editor.clone()).or_else(|| match &open.body {
+        FileBody::Text { editor, .. } => editor.clone(),
+        _ => None,
+    })?;
+    let text = editor.read(cx).value().to_string();
+    let line_of = |at: usize| text.as_bytes().get(..at).map_or(0, |b| b.iter().filter(|&&c| c == b'\n').count()) + 1;
+    Some(format!("{}-{}", line_of(range.start), line_of(range.end.saturating_sub(1).max(range.start))))
 }

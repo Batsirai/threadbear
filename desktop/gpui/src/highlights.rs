@@ -81,11 +81,14 @@ pub(crate) struct PanePreview {
     /// A live page opened big from its card (live_pages.rs, Full size): the
     /// running page shows here in place of the file's own preview.
     pub live: bool,
+    /// The lines a reply's link named (`a.ts:12-18`), first and last,
+    /// counted from 1: tinted and scrolled to once its text is up.
+    pub lines: Option<(usize, usize)>,
 }
 
 impl PanePreview {
     pub(crate) fn new(target: Target, title: String, from: String) -> Self {
-        PanePreview { target, title, from, opened: 0, back: vec![], memory: Default::default(), editing: false, live: false }
+        PanePreview { target, title, from, opened: 0, back: vec![], memory: Default::default(), editing: false, live: false, lines: None }
     }
 
     pub(crate) fn file_path(&self) -> Option<&str> {
@@ -729,11 +732,17 @@ impl SidePane {
     }
 
     pub(crate) fn preview_path(&mut self, path: &str, title: Option<String>, thread: &ThreadSummary, cx: &mut Context<Self>) {
+        self.preview_path_at(path, title, None, thread, cx);
+    }
+
+    /// `preview_path`, with lines of its text to tint and scroll to.
+    pub(crate) fn preview_path_at(&mut self, path: &str, title: Option<String>, lines: Option<(usize, usize)>, thread: &ThreadSummary, cx: &mut Context<Self>) {
         let section = self.section_for(thread);
         // A folder browsed in place of its picture; the runner says which it is.
         let target = if self.files.is_known_folder(path) { Target::Folder(path.to_owned()) } else { Target::File(path.to_owned()) };
         let title = title.unwrap_or_else(|| core::last_component(path).to_owned());
-        let preview = PanePreview::new(target, title, section);
+        let mut preview = PanePreview::new(target, title, section);
+        preview.lines = lines;
         self.show_preview(preview, &thread.id.clone(), cx);
     }
 
@@ -743,8 +752,9 @@ impl SidePane {
         // A file being worked on is saved before anything takes its place.
         self.leave_edit(thread_id, cx);
         preview.opened = self.previews.get(thread_id).map_or(0, |p| p.opened) + 1;
-        // A Markdown file opens as its bar's menu last left it, on this
-        // runner's machine (`MarkdownView.opensRaw`).
+        // A Markdown file opens as its bar's menu last left it, and code and
+        // plain text ready to type in, on this runner's machine
+        // (`MarkdownView.opensRaw`).
         let here = self.thread(cx).is_some_and(|t| t.id == thread_id && !t.is_remote());
         if let Some(path) = preview.file_path() {
             preview.editing = here && threadbear_core::text_file::MarkdownView::opens_raw(path, self.files.prefs.markdown_view);

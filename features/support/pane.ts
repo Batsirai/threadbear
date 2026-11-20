@@ -21,6 +21,8 @@ export type Pane = {
   previewNote?: string | null;
   /** What the bar offers: "preview" or "markdown" (a Markdown file's menu), "reading" or "editing" (the pencil and Done). */
   previewMode?: string | null;
+  /** The lines tinted for a link that named them (`a.ts:2-3`): "2-3". */
+  previewLines?: string | null;
   folder?: string | null;
 };
 
@@ -29,6 +31,9 @@ type WithPane = Dump & { panels?: { preview?: string | null; highlights?: string
 export const pane = (d: Dump): Pane | undefined => (d as WithPane).panels?.pane ?? undefined;
 // With / between its parts whatever the system: on Windows a path has backslashes.
 export const previewLine = (d: Dump): string | undefined => (d as WithPane).panels?.preview?.replaceAll('\\', '/') ?? undefined;
+// The preview line without " (editing)": code and plain text open with their
+// own text up to type in, which is still that file showing.
+export const previewShown = (d: Dump): string | undefined => previewLine(d)?.replace(/ \(editing\)$/, '');
 export const paneItems = (d: Dump) => (d as WithPane).panels?.items ?? [];
 export const highlightsFetching = (d: Dump): boolean => (d as WithPane).panels?.fetchingHighlights ?? false;
 export const sections = (d: Dump): PaneSection[] => pane(d)?.sections ?? [];

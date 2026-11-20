@@ -310,7 +310,13 @@ Needs you card's buttons, to see where it goes: a picture of the file, or
 the page's address. On a Mac a local PDF shows its first page and a video
 its first frame. A PDF over 16 MB or a file that can't be previewed keeps
 its file symbol. Click it to open it (the middle mouse button works
-too). If an agent already has that page
+too). A file the side pane can draw opens there: Markdown, text, a page, a
+picture, a PDF, data and logs (JSON, YAML, TOML, CSV, `.log`) and code
+(TypeScript, Python, Rust, shell scripts and the rest), data and code
+coloured. Anything else opens in its own app, and ⌘-click opens any file
+there. A path with lines after it, in a link or in a reply's code
+(`server.ts:12` or `server.ts:121-125`), opens with those lines tinted,
+marked beside their numbers and scrolled to. If an agent already has that page
 open in Chrome through [BrowserBear](https://github.com/mikecann/browserbear)
 (say, a sign-in page it wants you to use), the click brings the agent's tab
 into your Chrome window rather than opening a second one. A link to a file
@@ -392,9 +398,10 @@ Documents over 256 MB can be opened in their own app instead.
 Files, the folder on a thread's right-hand rail, opens the thread's own
 folder that way, without a link to it. Click it again to close it.
 
-A text file in the side pane opens for reading. The pencil in its bar
-switches to the raw text for editing, with line numbers down the side.
-What you type is saved a moment after you stop, and ⌘S saves it straight
+Code and plain text in the side pane open ready to type in, with line
+numbers down the side; the check mark in its bar puts the file away to
+read, and the pencil brings it back. Nothing is written until you type.
+Lines a link named lose their tint as soon as you do. What you type is saved a moment after you stop, and ⌘S saves it straight
 away. If the file changes on disk while you have unsaved edits (an agent
 rewrote it), nothing is written over: a bar asks whether to take the
 file's version or keep yours.
@@ -1005,10 +1012,9 @@ you've folded, between launches and for every thread: fold Sub-agents once
 and it stays folded everywhere. A project's heading folds for that project.
 
 Click a file and it opens in the panel, with Back to return to the list
-(a text file there has Edit too). A link opens in your browser, unless you
-change Default in its right-click menu to open pages in the panel. An
-edited code file opens in its own app, and a Tandem project opens in
-Tandem, here and in a reply. Right-click any of them for more,
+(code and text open there ready to type in). A link opens in your browser,
+unless you change Default in its right-click menu to open pages in the
+panel. A Tandem project opens in Tandem, here and in a reply. Right-click any of them for more,
 such as Reveal in Finder, or Remove to take it off the list. You can drag
 files out of Highlights into other apps.
 

@@ -680,16 +680,11 @@ fn spaced_path_ok(path: &str) -> bool {
     !last.contains(' ') || last.rsplit_once('.').is_some()
 }
 
-/// `Foo.swift:12` or `Foo.swift:12:4` names the file, and a line in it.
+/// `Foo.swift:12`, `Foo.swift:12:4` or `Foo.swift:12-18` names the file, and
+/// a line (or lines) in it: core's rule, so what reads as a path here is what
+/// a click finds.
 fn strip_line(text: &str) -> &str {
-    let mut path = text;
-    for _ in 0..2 {
-        match path.rsplit_once(':') {
-            Some((head, tail)) if !head.is_empty() && !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) => path = head,
-            _ => break,
-        }
-    }
-    path
+    threadbear_core::file_refs::strip_line(text)
 }
 
 /// A file and any `?query` or `#fragment` for its page, split at the first.
@@ -984,7 +979,7 @@ mod tests {
 
     #[test]
     fn reads_paths_as_paths_and_commands_as_commands() {
-        for path in ["app/Sources/Foo.swift", "Foo.swift:12", "/tmp/a.txt:12:4", "~/.zshrc", "./check.sh", "runner/src/", "guide.md#links"] {
+        for path in ["app/Sources/Foo.swift", "Foo.swift:12", "/tmp/a.txt:12:4", "src/a.ts:121-125", "~/.zshrc", "./check.sh", "runner/src/", "guide.md#links"] {
             assert!(looks_like_path(path), "{path} should read as a path");
         }
         for not_path in ["npm test", "tb land", "example.com", "readme", "-rf", "a*b", "https://x.y/z", "open exports/a.mp4"] {
@@ -998,6 +993,8 @@ mod tests {
     #[test]
     fn code_paths_become_links_outside_fences_and_links() {
         assert_eq!(prepare("see `src/a.rs` here", "t"), "see [`src/a.rs`](tbpath:?p=src/a.rs) here");
+        // With its lines, which the click takes to the pane.
+        assert_eq!(prepare("see `src/a.ts:121-125`", "t"), "see [`src/a.ts:121-125`](tbpath:?p=src/a.ts%3A121-125)");
         assert_eq!(prepare("`npm test` stays", "t"), "`npm test` stays");
         // Already a link's words, or in a code block: left as they are.
         assert_eq!(prepare("[`src/a.rs`](https://x.y)", "t"), "[`src/a.rs`](https://x.y)");

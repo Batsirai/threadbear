@@ -57,7 +57,7 @@ impl FileLinkAction {
     /// in ("Xcode"), for "Open in Xcode".
     pub fn title(self, app: Option<&str>) -> String {
         match self {
-            FileLinkAction::Automatic => "Panel for Docs and Pictures, App for the Rest".to_owned(),
+            FileLinkAction::Automatic => "Panel for Docs, Code and Pictures, App for the Rest".to_owned(),
             FileLinkAction::Panel => "Open in Panel".to_owned(),
             FileLinkAction::App => app.map_or_else(|| "Open in Default App".to_owned(), |name| format!("Open in {name}")),
             FileLinkAction::Finder => finder_title().to_owned(),
@@ -75,9 +75,9 @@ impl FileLinkAction {
         chosen
     }
 
-    /// Automatic made definite for one file: the kinds Mike reviews rather
-    /// than edits (docs, pictures, pages) and folders in the pane, the rest
-    /// in its app (`openTranscriptFile`).
+    /// Automatic made definite for one file: the kinds the pane draws (docs,
+    /// pictures, pages, text, data and code) and folders in the pane, the
+    /// rest in its app (`openTranscriptFile`).
     pub fn resolved(self, path: &str, is_folder: bool) -> FileLinkAction {
         match self {
             FileLinkAction::Automatic if is_folder || highlights::previews_in_pane(path) => FileLinkAction::Panel,
@@ -396,10 +396,12 @@ mod tests {
         assert_eq!(FileLinkAction::for_click(true, false, false, FileLinkAction::Panel), FileLinkAction::App, "⌘ always means its app");
         assert_eq!(FileLinkAction::for_click(false, false, true, FileLinkAction::Panel), FileLinkAction::App, "a project file goes to its app");
         assert_eq!(FileLinkAction::for_click(false, true, true, FileLinkAction::Panel), FileLinkAction::Panel, "another Mac's copy has none of its media");
-        // Automatic made definite: docs and pictures in the pane, code in its app.
+        // Automatic made definite: docs, code and pictures in the pane, the rest in its app.
         assert_eq!(FileLinkAction::Automatic.resolved("/w/notes.md", false), FileLinkAction::Panel);
         assert_eq!(FileLinkAction::Automatic.resolved("/w/shot.PNG", false), FileLinkAction::Panel);
-        assert_eq!(FileLinkAction::Automatic.resolved("/w/main.rs", false), FileLinkAction::App);
+        assert_eq!(FileLinkAction::Automatic.resolved("/w/main.rs", false), FileLinkAction::Panel);
+        assert_eq!(FileLinkAction::Automatic.resolved("/w/put-1.json", false), FileLinkAction::Panel);
+        assert_eq!(FileLinkAction::Automatic.resolved("/w/build.zip", false), FileLinkAction::App);
         assert_eq!(FileLinkAction::Automatic.resolved("/w/src", true), FileLinkAction::Panel, "a folder is browsed in the pane");
         assert_eq!(FileLinkAction::Finder.resolved("/w/notes.md", false), FileLinkAction::Finder);
         assert_eq!(WebLinkAction::for_click(true, WebLinkAction::Panel), WebLinkAction::Browser);
@@ -424,7 +426,7 @@ mod tests {
         let LinkMenuEntry::Defaults { choices } = menu.last().unwrap() else { panic!() };
         let named: Vec<(&str, bool)> = choices.iter().map(|(t, _, _, on)| (t.as_str(), *on)).collect();
         // Default App, not this file's app: the choice is for every file link.
-        assert_eq!(named, [("Panel for Docs and Pictures, App for the Rest", false), ("Open in Panel", true), ("Open in Default App", false), (finder_title(), false)]);
+        assert_eq!(named, [("Panel for Docs, Code and Pictures, App for the Rest", false), ("Open in Panel", true), ("Open in Default App", false), (finder_title(), false)]);
         assert_eq!(file_link_menu(false, None, FileLinkAction::Automatic).iter().map(LinkMenuEntry::title).collect::<Vec<_>>(), ["Couldn't Find This File"]);
         // With no app found for it.
         assert_eq!(file_link_menu(true, None, FileLinkAction::Automatic)[1].title(), "Open in Default App");
