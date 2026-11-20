@@ -64,11 +64,12 @@ export type AcpAgent = {
   folderNote?(cwd: string): string;
   // A tool call's arguments in the names the runner reads (command, cwd),
   // for an agent that names them its own way.
-  toolInput?(raw: Record<string, unknown>): Record<string, unknown>;
+  // call: the whole tool call, for what its _meta says.
+  toolInput?(raw: Record<string, unknown>, call: Record<string, unknown>): Record<string, unknown>;
   // In an asking mode, a read with only these arguments, whose files are all
   // inside the thread's folder, is allowed without a card, as other agents'
   // own rules do.
-  readsInFolderGoAhead?: ReadonlySet<string>;
+  readsInFolderGoAhead?: ReadonlyMap<string, 'string' | 'number'>;
   // Why a thread in this folder and mode can't run, if it can't. trusted: what
   // trusts said when its process started, which outlasts the trust file.
   // binary: the program the thread runs, for a refusal that depends on its version.
@@ -268,8 +269,7 @@ export function opencodeMajor(binary: string | undefined): number | undefined {
 // Google's team id, which signs antigravity-acp's binaries. A file counts
 // only when macOS says Google signed it, remembered per file while it's the
 // same file: same inode and change time, which a replacement can't keep
-// (Codex's review, 20 Nov 2026: size and mtime can be). A failure isn't
-// remembered. Elsewhere there's no such check to make, only that it's there.
+// (Codex's review, 20 Nov 2026: size and mtime can be). Elsewhere there's no such check to make, only that it's there.
 export const GOOGLE_TEAM_ID = 'EQHXZ8M8AV';
 const signed = new Map<string, { key: string; ok: boolean }>();
 export function isGoogleSigned(file: string, platform: NodeJS.Platform = process.platform): boolean {
@@ -285,13 +285,18 @@ export function isGoogleSigned(file: string, platform: NodeJS.Platform = process
   const known = signed.get(file);
   if (known?.key === key) return known.ok;
   let ok: boolean;
+  let definite = true;
   try {
     execFileSync('/usr/bin/codesign', ['--verify', '--strict', `-R=anchor apple generic and certificate leaf[subject.OU] = "${GOOGLE_TEAM_ID}"`, file], { timeout: 20_000, stdio: 'ignore' });
     ok = true;
-  } catch {
+  } catch (e) {
     ok = false;
+    // codesign said no (an exit code), rather than timing out or not
+    // starting: remembered too, so an unsigned file isn't checked again on
+    // every rescan of the logins (Gemini's review, 20 Nov 2026).
+    definite = typeof (e as { status?: unknown }).status === 'number';
   }
-  if (ok) signed.set(file, { key, ok });
+  if (definite) signed.set(file, { key, ok });
   return ok;
 }
 
@@ -317,30 +322,37 @@ function geminiHome(home: string): string {
 }
 
 // Its shell tool's CommandLine and Cwd are what run, so they're read as
-// command and cwd, and a command or cwd also there is kept under another
-// name: it shows on the card and stops an Always allow, but is never taken
-// for what runs (Gemini's review, 20 Nov 2026).
-const ACP_TOOL_KEYS = new Map([['CommandLine', 'command'], ['Cwd', 'cwd']]);
-export function antigravityInput(raw: Record<string, unknown>): Record<string, unknown> {
+// command and cwd. Any other command or folder key it might carry (command,
+// cwd, workdir...) is never taken for what runs or where: it's kept as
+// also_<key>, so it shows on the card and stops an Always allow (Gemini's and
+// Codex's reviews, 20 Nov 2026). Every key is kept, whatever it's called.
+const AGY_SHELL_KEYS = new Map([['CommandLine', 'command'], ['Cwd', 'cwd']]);
+const RENAMED = new Set(['command', 'cwd', 'workdir', 'workingDirectory', 'directory', 'dir']);
+export function antigravityInput(raw: Record<string, unknown>, call: Record<string, unknown> = {}): Record<string, unknown> {
   // An MCP call's arguments come under `arguments` (with a copy at the top,
-  // in 1.4.5): the tool's own arguments are those.
+  // in 1.4.5): the tool's own arguments are those. Only for a call that says
+  // it's an MCP one.
+  const meta = call._meta;
+  const mcp = Boolean(meta) && typeof meta === 'object' && (meta as Record<string, unknown>).is_mcp_tool_call === true;
   const args = raw.arguments;
-  if (args && typeof args === 'object' && !Array.isArray(args)) {
+  if (mcp && args && typeof args === 'object' && !Array.isArray(args)) {
     const a = args as Record<string, unknown>;
     if (Object.keys(raw).every((k) => k === 'arguments' || (Object.hasOwn(a, k) && JSON.stringify(a[k]) === JSON.stringify(raw[k])))) return a;
   }
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    const name = ACP_TOOL_KEYS.get(k);
-    if (name) out[name] = v;
-    else if ([...ACP_TOOL_KEYS.values()].includes(k) && [...ACP_TOOL_KEYS].some(([from, to]) => to === k && from in raw)) out[`also_${k}`] = v;
-    else if (!(k in out)) out[k] = v;
-  }
-  return out;
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const free = (name: string) => {
+    let n = name;
+    while (Object.hasOwn(out, n) || (Object.hasOwn(raw, n) && n !== name)) n = `also_${n}`;
+    return n;
+  };
+  for (const [k, v] of Object.entries(raw)) if (!AGY_SHELL_KEYS.has(k) && !RENAMED.has(k)) out[k] = v;
+  for (const [k, v] of Object.entries(raw)) if (RENAMED.has(k)) out[free(`also_${k}`)] = v;
+  for (const [k, v] of Object.entries(raw)) if (AGY_SHELL_KEYS.has(k)) out[AGY_SHELL_KEYS.get(k)!] = v;
+  return { ...out };
 }
 
-// What its view_file and list_dir send (1.4.5).
-const ANTIGRAVITY_READ_KEYS: ReadonlySet<string> = new Set(['AbsolutePath', 'DirectoryPath', 'StartLine', 'EndLine']);
+// What its view_file and list_dir send (1.4.5), and each one's type.
+const ANTIGRAVITY_READ_KEYS: ReadonlyMap<string, 'string' | 'number'> = new Map([['AbsolutePath', 'string'], ['DirectoryPath', 'string'], ['StartLine', 'number'], ['EndLine', 'number']]);
 
 const ANTIGRAVITY: AcpAgent = {
   provider: 'antigravity',

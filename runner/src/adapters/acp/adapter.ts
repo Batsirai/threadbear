@@ -502,7 +502,7 @@ export class AcpSession implements AgentSession {
   private mapInput(u: unknown): unknown {
     const map = this.deps.agent.toolInput;
     if (!map || !isPlainObject(u) || !isPlainObject(u.rawInput)) return u;
-    return { ...u, rawInput: map(u.rawInput) };
+    return { ...u, rawInput: map(u.rawInput, u) };
   }
 
   // A read the agent's own rules would allow (AcpAgent.readsInFolderGoAhead):
@@ -513,11 +513,17 @@ export class AcpSession implements AgentSession {
   // and Gemini's reviews, 20 Nov 2026). The file is opened by the agent
   // after this: a link swapped in between is the same race other agents'
   // own read rules have.
-  private readGoesAhead(call: AcpToolCall, earlier: string[]): boolean {
+  private readGoesAhead(call: AcpToolCall, earlier: string[], earlierInput: Record<string, unknown>): boolean {
     const keys = this.deps.agent.readsInFolderGoAhead;
     const raw = call.rawInput;
     if (!keys || !isPlainObject(raw) || !Object.keys(raw).length) return false;
-    if (!Object.entries(raw).every(([k, v]) => keys.has(k) && (typeof v === 'string' || typeof v === 'number'))) return false;
+    // Never an MCP server's tool, whatever kind it says it is.
+    const meta = (call as { _meta?: unknown })._meta;
+    if (isPlainObject(meta) && (meta.is_mcp_tool_call !== undefined || meta.mcp !== undefined)) return false;
+    const plain = (o: Record<string, unknown>) => Object.entries(o).every(([k, v]) => keys.has(k) && typeof v === keys.get(k));
+    // Its own arguments, and what earlier updates to the call said.
+    if (!plain(raw) || !plain(earlierInput)) return false;
+    if (!Object.keys(raw).some((k) => keys.get(k) === 'string')) return false;
     const paths = [...new Set([...earlier, ...requestPaths(call)])];
     const folder = realFolder(this.opts.cwd);
     if (!folder || !paths.length) return false;
@@ -591,7 +597,7 @@ export class AcpSession implements AgentSession {
     const { kind } = seen;
     // A read of the thread's own files, for an agent whose own rules can't
     // say so (Antigravity asks before every tool).
-    if (kind === 'read' && p.toolCall && this.readGoesAhead(p.toolCall, seen.paths)) return this.answer(id, options, true);
+    if (kind === 'read' && p.toolCall && !mcpName && this.readGoesAhead(p.toolCall, seen.paths, seen.input)) return this.answer(id, options, true);
     // What this request names and what earlier updates to the call said:
     // more names only makes the check stricter.
     const paths = [...new Set([...seen.paths, ...requestPaths(p.toolCall ?? {})].map((f) => absolutePath(f, this.opts.cwd)))];
@@ -649,8 +655,26 @@ export class AcpSession implements AgentSession {
     // The folder as the agent gave it goes on the card too when it reads
     // differently (a link): what the card says it resolved to is checked
     // again once it's answered, below.
-    const given = Object.fromEntries(FOLDER_KEYS.filter((k) => typeof input[k] === 'string' && input[k] !== where).map((k) => [k, input[k]]));
-    const shown: Record<string, unknown> = command ? (exact ? { command, cwd: where, ...given } : { ...input, command, ...(FOLDER_KEYS.some((k) => k in input) ? {} : { cwd: where }) }) : writesFiles(kind) ? { paths } : input;
+    // The folder as given, when it differs from where it resolved; `cwd`
+    // itself always says where it runs.
+    const given = Object.fromEntries(FOLDER_KEYS.filter((k) => typeof input[k] === 'string' && input[k] !== where).map((k) => [k === 'cwd' ? 'cwd as given' : k, input[k]]));
+    // A shell card shows only the command and the folder it runs in (and can
+    // be allowed from the phone), so it's only for a call whose folder is
+    // known and one, with nothing else that matters, each a plain value;
+    // anything more shows every argument, as an MCP tool's card does
+    // (Gemini's and Codex's reviews, 20 Nov 2026). Grok's `variant` names
+    // its tool ("Bash").
+    const shellCard = Boolean(command) && placeKnown && !unknownPlace && said.length <= 1 && Object.entries(input).every(([k, v]) => SHELL_CARD_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number' || v === undefined));
+    const shown: Record<string, unknown> = command
+      ? exact || shellCard
+        ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
+        : // With no folder of its own, a command runs in the thread's folder,
+          // except for an agent whose session has a folder of its own: there
+          // it's not known, so none is shown.
+          { ...input, command, ...(FOLDER_KEYS.some((k) => k in input) || this.deps.agent.ownSessionFolder ? {} : { cwd: where }) }
+      : writesFiles(kind)
+        ? { paths }
+        : input;
     const card = cardInput(shown, command ? 'all' : writesFiles(kind) ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
@@ -665,12 +689,7 @@ export class AcpSession implements AgentSession {
         toolUseId: typeof p.toolCall?.toolCallId === 'string' ? p.toolCall.toolCallId : undefined,
         // As an MCP tool's, for anything else: a card whose arguments say
         // what it does can only be allowed where all of them are shown.
-        // A shell card shows only the command and folder (and can be allowed
-        // from the phone), so it's only for a call that says nothing else
-        // that matters; anything more shows every argument, as an MCP tool's
-        // card does (Gemini's review, 20 Nov 2026: a decoy `command` beside
-        // Antigravity's CommandLine).
-        name: command && Object.keys(input).every((k) => SHELL_CARD_KEYS.has(k)) ? 'shell' : writesFiles(kind) ? 'apply_patch' : `mcp__acp__${kind ?? 'tool'}`,
+        name: shellCard ? 'shell' : writesFiles(kind) ? 'apply_patch' : `mcp__acp__${kind ?? 'tool'}`,
         title: code ? `${title} (${codeWriteNote(code)})` : title,
         input: card.input,
         wholeInput: input,

@@ -672,6 +672,7 @@ test('a saved command rule covers that folder only: another, two at once, or any
   assert.equal(r.cards.length, 2);
   assert.equal(r.cards[1].canAlwaysAllow, false);
   assert.deepEqual(r.cards[1].input, { command, workdir: r.cwd, cwd: '/elsewhere' });
+  assert.notEqual(r.cards[1].name, 'shell', 'not a shell card the phone could allow, showing one folder (Codex, 20 Nov 2026)');
   // Through a link: `link/..` is packages/app on the disk, though it reads as
   // the thread's folder, so the rule doesn't cover it (Codex's review, 10 Nov).
   fs.symlinkSync(path.join(other, 'deep'), path.join(home, 'link'));
@@ -682,6 +683,7 @@ test('a saved command rule covers that folder only: another, two at once, or any
     assert.notDeepEqual(replies[0], allowed, id);
     assert.equal(r.cards.length, before + 1, id);
     assert.equal(r.cards.at(-1)!.canAlwaysAllow, false, `${id}: which folder it is depends on who reads the path`);
+    assert.notEqual(r.cards.at(-1)!.name, 'shell', id);
   }
   // A rule saved for a link's folder doesn't follow the link somewhere new.
   (s as unknown as { rules: Set<string> }).rules.add(commandRule(['rm', '-rf', 'generated'], path.join(other, 'deep')));
@@ -702,6 +704,7 @@ test('a saved command rule covers that folder only: another, two at once, or any
     assert.equal(r.cards.length, before + 1, id);
     const card = r.cards.at(-1)!;
     assert.equal(card.canAlwaysAllow, false, id);
+    assert.notEqual(card.name, 'shell', id);
     for (const k of Object.keys(extra)) assert.ok(k in card.input, `${id}: ${k} on the card`);
   }
 });
@@ -1100,11 +1103,17 @@ test('Antigravity: what runs is CommandLine and Cwd, whatever else the call says
 });
 
 test('Antigravity: an MCP call\'s own arguments are the ones under `arguments`', () => {
-  assert.deepEqual(antigravityInput({ arguments: { needs: 'you', asks: [{ question: 'Q?' }] } }), { needs: 'you', asks: [{ question: 'Q?' }] });
-  assert.deepEqual(antigravityInput({ arguments: { headline: 'Ready', needs: 'nothing' }, headline: 'Ready', needs: 'nothing' }), { headline: 'Ready', needs: 'nothing' }, 'with 1.4.5\'s copy at the top');
+  const mcp = { _meta: { is_mcp_tool_call: true, mcp: { server: 'threadbear', tool: 'end_turn' } } };
+  assert.deepEqual(antigravityInput({ arguments: { needs: 'you', asks: [{ question: 'Q?' }] } }, mcp), { needs: 'you', asks: [{ question: 'Q?' }] });
+  assert.deepEqual(antigravityInput({ arguments: { headline: 'Ready', needs: 'nothing' }, headline: 'Ready', needs: 'nothing' }, mcp), { headline: 'Ready', needs: 'nothing' }, 'with 1.4.5\'s copy at the top');
   const odd = { arguments: { needs: 'nothing' }, needs: 'you' };
-  assert.deepEqual(antigravityInput(odd), odd, 'a top level that disagrees is left as it is');
+  assert.deepEqual(antigravityInput(odd, mcp), odd, 'a top level that disagrees is left as it is');
+  assert.deepEqual(antigravityInput({ arguments: { CommandLine: 'x' } }), { arguments: { CommandLine: 'x' } }, 'only an MCP call is unwrapped');
   assert.deepEqual(antigravityInput({ CommandLine: 'ls', Cwd: '/w', WaitMsBeforeAsync: 5 }), { command: 'ls', cwd: '/w', WaitMsBeforeAsync: 5 });
+  assert.deepEqual(antigravityInput({ CommandLine: 'ls', cwd: '/w', workdir: '/v' }), { command: 'ls', also_cwd: '/w', also_workdir: '/v' }, 'only Cwd says where it runs');
+  assert.deepEqual(antigravityInput({ CommandLine: 'ls', command: 'a', also_command: 'b' }), { command: 'ls', also_command: 'b', also_also_command: 'a' }, 'nothing is lost to a name already taken');
+  const proto = antigravityInput(JSON.parse('{"AbsolutePath":"/w/a","constructor":{"path":"/etc/passwd"},"toString":1}'));
+  assert.deepEqual(Object.keys(proto).sort(), ['AbsolutePath', 'constructor', 'toString'], 'keys named like Object.prototype\'s are kept');
 });
 
 test('Antigravity: a binary counts only when it and the harness beside where it really is are there', () => {
@@ -1120,4 +1129,26 @@ test('Antigravity: a binary counts only when it and the harness beside where it 
   const link = path.join(root, 'bin-par');
   fs.symlinkSync(par, link);
   assert.equal(ACP_AGENTS.antigravity.env({ binary: link }).ANTIGRAVITY_HARNESS_PATH, path.join(dir, 'localharness_external'));
+});
+
+test('Antigravity: a folder key that is not its Cwd never says where a command runs', async () => {
+  let n = 0;
+  const r = agy({ answer: () => ({ decision: n++ === 0 ? 'allowAlways' : 'deny' }) });
+  const s = r.start();
+  await turn(r, s, `execraw ${JSON.stringify({ CommandLine: 'ls', Cwd: r.cwd })}`);
+  assert.equal(r.cards.length, 1);
+  await turn(r, s, `execraw ${JSON.stringify({ CommandLine: 'ls', cwd: r.cwd })}`, 't2');
+  assert.equal(r.cards.length, 2, 'the saved rule does not cover it: with no Cwd it runs from its own folder');
+  assert.notEqual(r.cards[1].name, 'shell');
+  assert.equal((r.cards[1].input as Record<string, unknown>).cwd, undefined, 'no folder shown as if it were where it runs');
+});
+
+test('Antigravity: no read goes ahead for an MCP tool, or with a line number that is not a number', async () => {
+  const r = agy({ deny: true });
+  const inside = path.join(r.cwd, 'a.txt');
+  fs.writeFileSync(inside, 'x');
+  const s = r.start();
+  await turn(r, s, `readraw ${JSON.stringify({ AbsolutePath: inside, StartLine: '/etc/passwd' })}`);
+  await turn(r, s, `readraw ${JSON.stringify({ StartLine: 1 })}`, 't2');
+  assert.equal(r.cards.length, 2);
 });
