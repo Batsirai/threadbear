@@ -770,6 +770,13 @@ test('applyNoteEdits: like Edit, each old matches once, in order, all or none', 
   assert.equal(applyNoteEdits('- a\r\n- b\r\n- c', [{ old: '- b', new: '' }]), '- a\n- c');
   assert.equal(applyNoteEdits('a\nb', [{ old: 'a\r\nb', new: 'a\rb, c' }]), 'a\nb, c');
   assert.throws(() => applyNoteEdits('x'.repeat(49_990) + ' END', [{ old: 'END', new: 'y'.repeat(100) }]), /past the 50000/);
+  // The size is of the notes as saved: trimmed, with the paragraph on the end (Codex and Gemini, round two).
+  assert.equal(applyNoteEdits('x'.repeat(49_999) + 'a', [{ old: 'a', new: 'b\n' }]).length, 50_000);
+  assert.throws(() => applyNoteEdits('A' + 'x'.repeat(49_989), [{ old: 'A', new: 'B' }], '0123456789'), /past the 50000/);
+  // A long run of line breaks before a removal is linear work.
+  const t0 = Date.now();
+  applyNoteEdits('MARKER DELETE', [{ old: 'MARKER', new: 'A' + '\n'.repeat(45_000) + 'B' }, { old: 'DELETE', new: '' }]);
+  assert.ok(Date.now() - t0 < 1000);
   const fails = (edits: unknown, re: RegExp) => assert.throws(() => applyNoteEdits(notes, edits), (e: any) => e instanceof RpcError && re.test(e.message));
   fails([{ old: '- four', new: 'x' }], /old isn't in the notes, so nothing changed/);
   fails([{ old: '- t', new: 'x' }], /more than once/);

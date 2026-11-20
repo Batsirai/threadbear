@@ -24,7 +24,7 @@ import type { ProjectFolder } from './patches.ts';
 import { atomicWriteFileSync, isDirectory, readJsonSync } from './fsutil.ts';
 import { expandHome } from './config.ts';
 import { fileHash, removeIcons, storeIcon } from './project-icons.ts';
-import { trimEndOf } from './linear-text.ts';
+import { trimEndOf, trimStartOf } from './linear-text.ts';
 import type { TaskBoards } from './notion-tasks.ts';
 
 // What projects.json holds for each: the counts are worked out from the
@@ -452,9 +452,7 @@ export class Projects {
     if (ifNotes !== undefined && rec.notes !== ifNotes) {
       throw bad(`The notes changed while this waited for an OK, so nothing changed. Read them again (read_project) and redo the edit on what they say now.`);
     }
-    const edited = applyNoteEdits(rec.notes, edits);
-    const add = appendNote?.trim();
-    return this.update(projectId, { ...rest, notes: add ? (edited.trim() ? `${edited.trimEnd()}\n\n${add}` : add) : edited });
+    return this.update(projectId, { ...rest, notes: applyNoteEdits(rec.notes, edits, appendNote) });
   }
 
   // Adds links, or retitles ones it already has (same url), keeping the
@@ -817,7 +815,10 @@ export type NoteEdit = { old: string; new: string };
 // match throws, and nothing is saved. Before this, changing one stale line
 // meant sending all the notes back, which a copy could quietly corrupt and
 // which reached the card reviewer as a rewrite (thread c21654fd, 17 Nov 2026).
-export function applyNoteEdits(notes: string, edits: unknown): string {
+// With append, a paragraph on the end after them. The result is the notes
+// as they'd be saved (trimmed), and its size is checked here, so an edit too
+// big is refused before anyone is asked.
+export function applyNoteEdits(notes: string, edits: unknown, append?: string): string {
   if (!Array.isArray(edits) || !edits.length) throw bad('editNotes must be a list of { old, new }.');
   // Line ends as LF throughout, as the card reviewer's diff compares them,
   // so a \r can't change the notes without showing there (Gemini review).
@@ -846,13 +847,15 @@ export function applyNoteEdits(notes: string, edits: unknown): string {
     }
     // Text alone taken out leaves the line breaks of one side, not both: a
     // bullet taken out of a list doesn't split it with a blank line.
-    const b = before.replace(/\n+$/, '');
-    const a = after.replace(/^\n+/, '');
+    const b = trimEndOf(before, '\n');
+    const a = trimStartOf(after, '\n');
     const breaks = b && a ? Math.max(before.length - b.length, after.length - a.length) : 0;
     out = b + '\n'.repeat(breaks) + a;
   }
-  // Checked here too, so an edit too big is refused before anyone is asked.
-  if (out.trim().length > NOTES_MAX) throw bad(`The notes would be ${out.trim().length} characters, past the ${NOTES_MAX} they can hold. Make the edit shorter, or rewrite the notes shorter with notes.`);
+  out = out.trim();
+  const add = append?.trim();
+  if (add) out = out ? `${out}\n\n${add}` : add;
+  if (out.length > NOTES_MAX) throw bad(`The notes would be ${out.length} characters, past the ${NOTES_MAX} they can hold. Make the edit shorter, or rewrite the notes shorter with notes.`);
   return out;
 }
 

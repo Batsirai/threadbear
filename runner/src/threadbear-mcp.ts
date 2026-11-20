@@ -1338,7 +1338,7 @@ export function buildThreadbearTools(
         const p = await project(q);
         if (editNotes !== undefined && notes !== undefined) throw new Error('Give notes or editNotes, not both: notes replaces them all.');
         // Edits that don't match fail here, before anyone is asked.
-        if (editNotes !== undefined) applyNoteEdits(p.notes ?? '', editNotes);
+        if (editNotes !== undefined) applyNoteEdits(p.notes ?? '', editNotes, appendNote);
         // Raising access (above): the brief its threads are told (title,
         // goals, state, notes, folders) is a message to each of them. Its
         // threads are the project's own list and every thread that says it's
