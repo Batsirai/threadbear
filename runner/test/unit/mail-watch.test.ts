@@ -11,7 +11,7 @@ import { PATIENCE_MS } from '../helpers/patience.ts';
 import type { Logger } from '../../src/log.ts';
 import type { ModelResult } from '../../src/models/index.ts';
 import { HELD_MAIL_HEAD } from '../../src/runner/mail.ts';
-import { MailWatch, digestText, dueSlot, parseEmails, quoted, readSort, type Email, type MailThread, type MailWatchSettings } from '../../src/mail-watch.ts';
+import { MailWatch, UNTRUSTED, digestText, dueSlot, parseEmails, quoted, readSort, type Email, type MailThread, type MailWatchSettings } from '../../src/mail-watch.ts';
 
 const quietLog = { info() {}, warn() {}, error() {}, debug() {} } as unknown as Logger;
 
@@ -31,7 +31,7 @@ function watcher(opts: { emails?: Email[][]; answers?: string[]; settings?: Mail
   const woke: { id: string; text: string }[] = [];
   const held: { id: string; text: string }[] = [];
   const sent: { id: string; text: string }[] = [];
-  const started: { text: string; title: string; cwd: string }[] = [];
+  const started: { text: string; title: string; cwd: string; careful?: boolean }[] = [];
   const opened = new Set<string>();
   const mailbox = [...(opts.emails ?? [])];
   const answers = [...(opts.answers ?? [])];
@@ -99,6 +99,7 @@ test('mailWatch: an email a hibernating thread waits on wakes it, with the email
   assert.deepEqual(t.woke.map((x) => x.id), [PARKED.id]);
   assert.match(t.woke[0].text, /From: Peter <pb@example.com>/);
   assert.match(t.woke[0].text, /1st, 2nd and 3rd/);
+  assert.ok(t.woke[0].text.startsWith(UNTRUSTED), 'said to be untrusted before the email');
   // The model saw the wait, and both emails; both are now seen.
   assert.match(t.calls[0].prompt, /403bb720 HIBERNATING until: Peter replies to the email/);
   assert.deepEqual(t.state().seen, [PETER.id, NEWSLETTER.id]);
@@ -252,6 +253,9 @@ test('mailWatch: at most four acts a day', async () => {
   const out = await t.w.look();
   assert.equal(out?.acted, 4);
   assert.equal(t.state().pile.length, 2);
+  // No thread named: each starts one, never on full access.
+  assert.equal(t.started.length, 4);
+  assert.ok(t.started.every((r) => r.careful === true));
 });
 
 test('mailWatch: the pieces', () => {

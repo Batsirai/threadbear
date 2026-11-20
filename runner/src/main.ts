@@ -1092,7 +1092,9 @@ async function main(): Promise<void> {
         runner.send(threadId, text, [], { origin: 'runner', queue: true, wakeReason: why });
         return true;
       },
-      start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, startedBy: { kind: 'runner', label: 'Email', why: r.why } }).thread.id,
+      // A thread acting on an email runs on Auto, so Claude Code checks what it
+      // does, as the email's words came from outside.
+      start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, ...(r.careful ? { permissionMode: 'auto' as const } : {}), startedBy: { kind: 'runner', label: 'Email', why: r.why } }).thread.id,
       open: openThread,
     },
     on: () => experimentOn(cfg.home, MAIL_WATCH),
