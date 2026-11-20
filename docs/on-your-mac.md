@@ -186,8 +186,9 @@ File references are where to look.
   `sync-sent.json`, hashes of what's already in your
   Convex mirror so a restart sends only what changed,
   `far-reports.json`, the threads this Mac's agents started on your other
-  Macs and which thread here each one's replies go back to (ids and a hash
-  of the last reply passed on), and
+  Macs and which thread here each one's replies go back to (ids, the last
+  turn passed on and when), read from your Convex backend every 15 seconds
+  while one is busy (every five minutes once it's quiet), and
   `shared-pools.json`, the last pools your Convex backend had, which every
   runner shares, so one starts with them while the backend can't be reached,
   `profiles/`, the last ten CPU profiles of the runner, made only when

@@ -6913,20 +6913,29 @@ runner that's this one is the usual create.
   started it): the thread's first line is `[Started by thread <id> on
   <name>. Each reply you end a turn with goes back to that thread, so put
   your report in your reply.]`, and the main Mac's runner keeps it in
-  `far-reports.json` with its starter. Each time the sidebar's list shows
-  that thread stopped (`idle`, `error` or `stopped`) with a newer
-  `lastActivityAt`, it waits five seconds (the row can say so before the
-  last reply arrives), reads the thread's newest events through the relay
-  and sends the last turn's last agent text to the starter, queued, as an
-  agent's message: `[Sent by the agent in the thread "<title>" (<id8>) on
-  <runner>, which this thread started there. Its reply as its turn ended,
-  passed on by this Mac's runner.]`. A reply it passed on before (by hash)
-  isn't sent again; one not there yet is looked for again at the list's
-  next change, until a minute after the turn ended. It stops once that
-  thread is archived, and forgets one gone for 30 days. That thread's
-  `send_message` to its starter, which its runner can't find, is refused
-  saying the reply goes back by itself. The words passed on are what
-  `read_thread` would show the starter anyway.
+  `far-reports.json` with its starter (a thread already there keeps its
+  first starter). Every 15 seconds, on a timer of its own (the sidebar's
+  list is only watched while an app is connected), and not while sync is
+  off or the runner is draining, it reads the row of each such thread
+  that's been active in the last half hour (`relay:remoteThread`; the
+  others every five minutes). Once it isn't running, it reads the newest
+  events through the relay and takes the newest ended turn
+  (`turn.completed`) not passed on yet, and its reply: the agent's text
+  after its last tool call, a proposed plan included, else its last text,
+  else a line saying it ended or failed with none. Only when a second
+  look finds the same turn, newest seq and reply (the row can say the turn
+  ended before its last reply reaches the backend) does it send it to the
+  starter, queued, as an agent's message: `[Sent by the agent in the
+  thread "<title>" (<id8>)]`, then `From <runner>, where this thread
+  started it. Its reply as its turn ended, passed on by this Mac's runner
+  (thread <id>):` and the reply. The title and runner name lose quotes,
+  brackets and newlines, and the reply is cut at 20,000 characters. A
+  starter that isn't on this runner (a handover's other runner has it)
+  waits; a send that fails is tried at the next look. At most 40 go per
+  thread a day, as each wakes the starter. A thread gone from the backend,
+  or quiet, for 30 days is forgotten. That thread's `send_message` to its
+  starter (8 characters of the id or more), which its runner can't find,
+  is refused saying the reply goes back by itself.
 
 What a tampered runner can do with this is put a card in front of Mike:
 the most it can start is what he read and allowed.

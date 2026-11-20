@@ -2125,8 +2125,9 @@ export function buildThreadbearTools(
           // The thread on another Mac that started this one, which this
           // runner's key may not reach: the main Mac passes this thread's
           // replies back to it (far-reports.ts).
+          if (!(e instanceof Error && e.message.startsWith('No thread with id')) || asked.length < 8) throw e;
           const starter = await firstMessage().then(starterIn, () => undefined);
-          if (starter && starter.length >= 8 && (starter === asked || starter.startsWith(asked)))
+          if (starter?.startsWith(asked))
             throw new Error(`Not sent: thread ${starter} started this one from another Mac, which this runner can't message. The reply you end this turn with goes back to it, so put your report in your reply.`);
           throw e;
         });

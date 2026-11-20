@@ -2455,6 +2455,7 @@ test('send_message to the thread on another Mac that started this one says to pu
     assert.equal(r.error, true);
     assert.match(r.text, /Not sent: thread 02888d03-bca0-4aa4-9f9d-ce61750f0dae started this one from another Mac.*put your report in your reply/);
   }
-  // Any other id it can't find is still "No thread".
+  // A few characters of it, or any other id it can't find, is still "No thread".
+  assert.match((await call('send_message', { threadId: '0288', text: 'x' })).text, /No thread with id 0288/);
   assert.match((await call('send_message', { threadId: '0000dead-0000-0000-0000-000000000000', text: 'x' })).text, /No thread with id 0000dead/);
 });

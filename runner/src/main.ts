@@ -108,7 +108,7 @@ import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, build
 import { CrossRunner } from './cross-runner.ts';
 import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
 import type { RemoteThreads } from './thread-index.ts';
-import { FarReports, lastReplyOf } from './far-reports.ts';
+import { FarReports, TICK_MS as FAR_TICK_MS, type FarEvent } from './far-reports.ts';
 import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel, type PermissionMode } from './protocol.ts';
 
 // Tells launch.mjs this runner calls its listening() hook (release.ts), so
@@ -746,7 +746,6 @@ async function main(): Promise<void> {
   };
   // Set once the relay is made, further down; sync's list goes through it.
   let relayRef: Relay | undefined;
-  let farReports: FarReports | undefined;
   // Other runners' threads that are moving, as this (the main Mac's) runner
   // knows: one it started between two other runners, or one coming here
   // (docs/protocol.md, "Moving a thread to another runner"). The backend's
@@ -888,7 +887,6 @@ async function main(): Promise<void> {
       // Another runner's followProblem comes in with these rows.
       if (n.method === 'remoteThreads.updated') {
         publishUpdates();
-        void farReports?.seen(sync.remoteThreads());
       }
     },
     home: cfg.home,
@@ -1350,16 +1348,25 @@ async function main(): Promise<void> {
   };
   // Replies from threads started on other runners for threads here, passed
   // back to them (far-reports.ts).
-  farReports = new FarReports({
+  const farReports = new FarReports({
     file: path.join(cfg.home, 'far-reports.json'),
-    lastReply: async (threadId) => lastReplyOf(((await relay.call(threadId, 'threads.events', { limit: 200 })) as { events: { type: string; text?: string }[] }).events),
+    row: async (threadId) => {
+      const src = sync.relaySource();
+      if (!src) throw new Error('sync is off');
+      return (await src.post('query', 'relay:remoteThread', { key: src.key, threadId })) as { status: string; lastActivityAt?: string } | null;
+    },
+    events: async (threadId) => ((await relay.call(threadId, 'threads.events', { limit: 200 })) as { events: FarEvent[] }).events,
+    title: (threadId) => sync.remoteThreads().threads.find((t) => t.threadId === threadId)?.title,
     has: (id) => runner.has(id),
     deliver: (starter, text) => {
       runner.send(starter, text, [], { queue: true });
     },
+    // Not while sync is off, nor on a draining runner: its replacement does it.
+    active: () => !runner.draining && Boolean(sync.relaySource()),
     log,
     now: () => Date.now(),
   });
+  setInterval(() => void farReports.tick(), FAR_TICK_MS).unref();
   const cross = new CrossRunner({
     self: () => ({ id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName() }),
     backend: () => sync,
@@ -1373,7 +1380,7 @@ async function main(): Promise<void> {
       const r = (await relay.create(runnerId, { ...p })) as { thread: { id: string } };
       return { id: r.thread.id };
     },
-    startedThere: (p) => farReports?.add(p),
+    startedThere: (p) => farReports.add(p),
     card: (threadId, c) => runner.requestCard(threadId, c),
     openCard: async (threadId) => {
       const src = sync.relaySource();
