@@ -873,6 +873,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // Unix paths: `/w/garden.html` isn't a whole path on Windows, where the
+    // rewrite rightly leaves it (Desktop app run 44601898647).
+    #[cfg(unix)]
     #[test]
     fn a_page_in_a_reply_becomes_a_live_page_card() {
         let fence = crate::live_pages::fence();
