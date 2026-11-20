@@ -52,6 +52,7 @@ pub mod nested;
 pub mod new_thread;
 pub mod open_anything;
 pub mod open_policy;
+pub mod outbox;
 pub mod panel_requests;
 pub mod pinned_panels;
 pub mod pools;
