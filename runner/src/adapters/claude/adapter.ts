@@ -1033,7 +1033,7 @@ class ClaudeSession implements AgentSession {
       default:
         return {
           behavior: 'deny',
-          message: ans.message || 'The user denied this. Ask them how to proceed.',
+          message: [ans.message || 'The user denied this. Ask them how to proceed.', ans.reviewer].filter(Boolean).join(' '),
           toolUseID: o.toolUseID,
           decisionClassification: 'user_reject',
         };

@@ -208,9 +208,10 @@ export const approvalsPart = {
     this.emit(st, { type: 'system.note', text: `The reviewer left this one for you: ${why}` }, rt.turn?.turnId);
     // The agent sees only the answer, so without this it guessed why it was
     // asked and told Mike it was Claude's own safety check (20 Nov 2026).
+    // Only on Mike's no (a click or writing instead): a card closed without
+    // him isn't his to explain.
     const a = await show();
-    if (a.decision === 'allow' || a.decision === 'allowAlways' || a.stopped || a.noApp) return a;
-    return { ...a, message: `${a.message ? `${a.message.replace(/\.?$/, '.')} ` : ''}${reviewerLeftIt(why)}` };
+    return a.decision === 'deny' && !a.stopped && !a.noApp ? { ...a, reviewer: reviewerLeftIt(why) } : a;
   },
 
   // The card itself, for Mike.

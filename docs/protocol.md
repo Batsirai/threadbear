@@ -3696,13 +3696,17 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   switched out of Auto meanwhile gets the card. Ask, Full access and plans
   are never reviewed. An `update_project` card also shows the reviewer
   what the brief changes (`review` on the agent approval request, never on
-  the card): for each of title, goals, state and notes it was given, the
+  the card): for each of title, goals, state and notes it changes, the
   line counts before and after and the changed lines with one line round
-  them, worked out from the project as it is, as `notes` replaces them
-  whole. When the reviewer left a card for Mike with a reason and he
-  doesn't allow it (denies it, writes instead, or it expires; not Stop),
-  that reason goes to the agent with the answer's `message`, so it can
-  tell him why he was asked.
+  them, worked out from the project as it is (notes as they'd be saved,
+  with `appendNote`, trimmed and with CRLF as LF), and the names of the
+  other fields it changes, which the reviewer judges from the input. Over
+  20,000 characters and there's no diff. If the title, goals, state or
+  notes changed while the card was up, the call is refused, as a whole
+  new notes would undo that change. When the reviewer left a card for
+  Mike with a reason and he says no (Deny, or writing instead), the
+  answer carries it as `reviewer`, which the agent is told after the
+  denial, so it can tell him why he was asked.
 - **Review by another lab** (`Settings.labReview`, on unless
   `runner.json` has `"labReview": false`, Settings > General > Code
   review; `runner/src/runner/lab-review.ts`. An experiment from 6 Nov

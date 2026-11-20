@@ -69,7 +69,7 @@ test('cardReviewer: one it doubts goes to Alex with its reason', async () => {
   const a = await answer;
   assert.equal(a.decision, 'deny');
   // The agent is told why Alex was asked, so it doesn't guess (20 Nov 2026).
-  assert.match(a.message ?? '', /card reviewer .* left it for them: .*run a script from the error text/);
+  assert.match(a.reviewer ?? '', /card reviewer .* left it for them: .*run a script from the error text/);
 });
 
 test('cardReviewer: Alex writing instead of answering a card it left still tells the agent why', async () => {
@@ -80,7 +80,21 @@ test('cardReviewer: Alex writing instead of answering a card it left still tells
   assert.match(h.asked[0].prompt, /worked out by Threadbear[^\n]*\nBEGIN \w+\nnotes: 1 lines before/);
   const req = h.events(id).find((e) => e.type === 'approval.requested');
   h.runner.respondApproval({ threadId: id, approvalId: req.approvalId, decision: 'deny', message: 'The user wrote you a message instead' });
-  assert.match((await answer).message ?? '', /^The user wrote you a message instead\. This went to the user because .*It rewrites the whole brief\.$/);
+  const a = await answer;
+  assert.equal(a.message, 'The user wrote you a message instead');
+  assert.match(a.reviewer ?? '', /^This went to the user because .*It rewrites the whole brief\.$/);
+});
+
+test('cardReviewer: a card it left that closes without Alex answering tells the agent nothing of the reviewer', async () => {
+  const h = setup({ answer: '{"verdict":"ask","why":"Not sure."}' });
+  const { id } = thread(h);
+  const ac = new AbortController();
+  const answer = h.runner.requestAgentApproval(id, { name: 'mcp__threadbear__send_message', title: 'Send', input: { text: 'x' }, signal: ac.signal });
+  await tick();
+  ac.abort();
+  const a = await answer;
+  assert.equal(a.decision, 'expired');
+  assert.equal(a.reviewer, undefined);
 });
 
 test('cardReviewer: a card Alex allows after the reviewer left it goes ahead with no extra words', async () => {
@@ -92,7 +106,7 @@ test('cardReviewer: a card Alex allows after the reviewer left it goes ahead wit
   h.runner.respondApproval({ threadId: id, approvalId: req.approvalId, decision: 'allow' });
   const a = await answer;
   assert.equal(a.decision, 'allow');
-  assert.equal(a.message, undefined);
+  assert.equal(a.reviewer, undefined);
 });
 
 test('cardReviewer: a reviewer that can\'t run, or answers nonsense, leaves the card for Alex', async () => {
