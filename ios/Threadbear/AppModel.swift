@@ -44,6 +44,11 @@ final class AppModel {
     private(set) var slidingOff: Set<String> = []
     /// Whether a thread's page is over the inbox (InboxView says).
     @ObservationIgnored var threadOpen = false
+    /// Hibernates asked for whose row hasn't started to sink yet (`hibernate`).
+    @ObservationIgnored private var startingHibernate: Set<String> = []
+    /// Bumped on each unpair and leaving the demo, so a hibernate waiting on
+    /// its animation then lets go rather than tucking the old pairing's row.
+    @ObservationIgnored private var connectionEpoch = 0
     /// Rows sinking towards the Hibernating heading on their way out (`hibernate`): the animation only.
     private(set) var sinking: Set<String> = []
     /// Hibernated from this phone, kept out of the lists and on the heading's
@@ -655,11 +660,17 @@ final class AppModel {
     /// is under Hibernating already, so neither has anywhere to sink to.
     func hibernate(_ threadId: String, _ change: ThreadChange, leavingThread: Bool = false) {
         guard backend != nil, !commands[.archive(threadId)].holdsChange, !slidingOff.contains(threadId),
-              !sinking.contains(threadId), !tucks.hidden.contains(threadId), !commands[.hibernate(threadId)].locked else { return }
+              !sinking.contains(threadId), !tucks.hidden.contains(threadId), !commands[.hibernate(threadId)].locked,
+              !startingHibernate.contains(threadId) else { return }
+        // Taken at once: a second tap in the moment before the row starts to
+        // sink would tuck it twice, and the heading's count would stay one up.
+        startingHibernate.insert(threadId)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         func hasRow() -> Bool { (sections.inbox + sections.running).contains { $0.threadId == threadId } }
         let sinks = hasRow()
+        let pairing = connectionEpoch
         Task {
+            defer { startingHibernate.remove(threadId) }
             if sinks {
                 try? await Task.sleep(for: .milliseconds(280))
                 if leavingThread {
@@ -670,8 +681,11 @@ final class AppModel {
                     while threadOpen, Date.now < giveUp { try? await Task.sleep(for: .milliseconds(30)) }
                     try? await Task.sleep(for: .milliseconds(420))
                 }
+                // Unpaired or left the demo meanwhile: nothing of it stays.
+                guard connectionEpoch == pairing else { return }
                 withAnimation(.easeIn(duration: 0.24)) { _ = sinking.insert(threadId) }
                 try? await Task.sleep(for: .milliseconds(240))
+                guard connectionEpoch == pairing else { sinking.remove(threadId); return }
                 // The Mac may have moved it during the wait; `tucks` only
                 // lets go of an id when a list update says so.
                 if hasRow() {
@@ -944,6 +958,7 @@ final class AppModel {
         pocketSeenUpTo = UserDefaults.standard.string(forKey: "pocketSeenUpTo")
         backend = nil
         commands.use(nil)
+        connectionEpoch += 1
         slidingOff = []
         sinking = []
         starting = []
@@ -993,6 +1008,7 @@ final class AppModel {
         stop()
         backend = nil
         commands.use(nil)
+        connectionEpoch += 1
         slidingOff = []
         sinking = []
         starting = []
