@@ -17,10 +17,10 @@ export function heldBackTitle(h: HeldBack): string {
 
 export function heldBackBrief(h: HeldBack, home: string): string {
   const tools = path.join(home, 'tools', 'codex');
-  const binary = (v: string) => `"${path.join(tools, v, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')}"`;
+  const binary = (v: string) => `node "${path.join(tools, v, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')}"`;
   const added = h.added.length ? `\n\nIt also has these that the runner doesn't know (they don't hold anything back): ${h.added.join(', ')}.` : '';
   const diff = h.current
-    ? `Both versions are kept: ${binary(h.current)} (the one running) and ${binary(h.version)}. \`<codex> app-server generate-ts --experimental --out <dir>\` writes each one's protocol offline, and a \`diff -r\` of the two shows what changed.`
+    ? `Both versions are kept: ${binary(h.current)} (the one running) and ${binary(h.version)}. \`<codex> app-server generate-ts --experimental --out <dir>\` writes each one's protocol offline, and comparing the two folders shows what changed.`
     : `${binary(h.version)} is kept; \`<codex> app-server generate-ts --experimental --out <dir>\` writes its protocol offline.`;
   return `Threadbear's update check held Codex ${h.version} back${h.current ? ` and kept ${h.current} running` : ''}: its app-server protocol no longer has ${h.missing.join(', ')}, which the runner's list in runner/src/adapters/codex/surface.ts says it relies on.${added}
 

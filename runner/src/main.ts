@@ -338,17 +338,23 @@ async function main(): Promise<void> {
         if (!checkout || !cfg.followMain || followOriginOn(cfg.home)) return undefined;
         return startOwnThread(runner, { text: heldBackBrief(h, cfg.home), title: heldBackTitle(h), why: 'a Codex update held back by the protocol check' }, checkout);
       },
-      threadOpen: (threadId) => {
+      threadState: (threadId) => {
         try {
-          return !runner.get(threadId).archivedAt;
+          return runner.get(threadId).archivedAt ? 'archived' : 'open';
         } catch {
-          return false;
+          return undefined;
         }
       },
     },
     codex: { resolve: (start) => resolveCodexBinary(start), checkSurface, testedVersion },
     notice: (level, message) => runner.notice(level, message),
     acp: { providers: ACP_PROVIDERS, binary: (p) => acpBinary(p as AcpProvider)(), updateArgs: (p) => ACP_AGENTS[p as AcpProvider].updateArgs },
+  });
+  // The thread on a held Codex version: archiving or deleting it changes
+  // what its Updates row says.
+  runner.onNotification((n) => {
+    if (n.method === 'thread.updated') updates.threadChanged(n.params.thread.id);
+    else if (n.method === 'thread.deleted') updates.threadChanged(n.params.threadId);
   });
   // Other CLIs you use alongside Threadbear (Grok, Muse...), from runner.json.
   const extraUpdates = new ExtraUpdates({ home: cfg.home, log, clock: realClock, extra: cfg.cliUpdates.extra ?? [] });
