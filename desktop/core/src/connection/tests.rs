@@ -206,7 +206,7 @@ fn every_phase_with_every_event() {
         [
             refused("z", grace),
             restarting(soon, refused_z.clone(), grace),
-            connected.clone(),
+            connected,
             quiet(down("d"), grace),
             refused("r", grace),
             restarting(soon, refused_z, grace),
@@ -665,7 +665,7 @@ mod specs {
         );
         assert_eq!(p.name(), "unauthorized");
         // Try again: Connecting, once the drop's grace is over.
-        let again = p.clone().next(Event::TryAgain, t + s(10));
+        let again = p.next(Event::TryAgain, t + s(10));
         assert_eq!(again, ConnectionPhase::Connecting);
     }
 
