@@ -283,6 +283,9 @@ export type RunnerJson = {
   mailWatch?: MailWatchSettings;
   // Agent Archive through Threadbear (agent-archive.ts): its repo and the machines its sync is pushed to.
   archive?: ArchiveSettings;
+  // Recipes (experiment recipes, recipes.ts): where the user's own recipes
+  // and set-up recipes' working files go. Default ~/ThreadbearThreads/recipes.
+  recipes?: { folder?: string };
 };
 
 // What defaults.permissionMode may be. Not Plan first: that waits for Mike

@@ -192,6 +192,7 @@ export type Notification =
   | { method: 'projects.updated'; params: { projects: Project[] } }
   | { method: 'librarian.updated'; params: { librarian: LibrarianStatus } }
   | { method: 'connectors.updated'; params: { connectors: ConnectorsStatus } }
+  | { method: 'recipes.updated'; params: Record<string, never> }
   // Only from a draining runner, to the primary (handover.ts).
   | { method: 'drain.handedOver'; params: { threadId: string } }
   | { method: 'drain.usage'; params: { accountId: string; reading: UsageReading } };
@@ -1658,6 +1659,17 @@ export class Runner {
       if (want.has(this.bucket(st.rec))) out.push(this.summary(st));
     }
     return sortByActivity(out);
+  }
+
+  // Threads a schedule started since `since` (ms), archived ones too, for
+  // Recipes' run counts (recipes.ts): only those are summarised, as it looks
+  // every 30 seconds and a runner can have thousands of threads.
+  scheduledSince(since: number): ThreadSummary[] {
+    const out: ThreadSummary[] = [];
+    for (const st of this.threads.values()) {
+      if (st.rec.schedule && Date.parse(st.rec.createdAt) >= since) out.push(this.summary(st));
+    }
+    return out;
   }
 
   bucket(rec: ThreadRecord): 'inbox' | 'snoozed' | 'archived' {

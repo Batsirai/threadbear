@@ -14,7 +14,7 @@ import { CallerGate } from './rpc-gate.ts';
 import { threadOfSocket } from './peer.ts';
 import { threadKey as makeThreadKey } from './rpc-auth.ts';
 import { makePrivate } from './win-acl.ts';
-import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, peekRunnerJson, writeRunnerJson } from './config.ts';
+import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION, RunnerJsonError, readRunnerJson, peekRunnerJson, writeRunnerJson, expandHome } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
 import { startBorrowSweep } from './runner/worktrees.ts';
 import { win32Helper } from './win32-helper.ts';
@@ -45,6 +45,7 @@ import { MacScreen } from './mac-screen.ts';
 import { Projects, drainProjectMethods, projectMethods } from './projects.ts';
 import { Librarian, librarianMethods } from './librarian.ts';
 import { ConnectorsMonitor, connectorsMethods } from './connectors.ts';
+import { DEFAULT_RECIPES_FOLDER, RECIPES_EXPERIMENT, Recipes, recipeMethods } from './recipes.ts';
 import { TaskBoards, gatewayCaller, helperHeaders } from './notion-tasks.ts';
 import { createLogger } from './log.ts';
 import { hidIdleMs, isAtMac, screenLocked } from './presence.ts';
@@ -1132,6 +1133,22 @@ async function main(): Promise<void> {
     settings: () => peekRunnerJson(cfg.home).archive,
   });
   if (!box && !copyOfReal) agentArchive.start();
+  // Recipes (recipes.ts): the main Mac's techniques worth keeping, each set
+  // up by a thread of its own and switched on and off from the app.
+  const recipes = new Recipes({
+    home: cfg.home,
+    folder: () => expandHome(peekRunnerJson(cfg.home).recipes?.folder || DEFAULT_RECIPES_FOLDER),
+    now: () => realClock.now(),
+    on: () => experimentOn(cfg.home, RECIPES_EXPERIMENT),
+    publish: () => runner.publish({ method: 'recipes.updated', params: {} }),
+    experimentOn: (id) => experimentOn(cfg.home, id),
+    setExperiment: (id, on) => settings.update({ experiments: { [id]: on } }),
+    schedules: { list: () => scheduler.list(), update: (p) => scheduler.update(p), delete: (id) => scheduler.delete(id) },
+    threads: (since) => runner.scheduledSince(since),
+    start: (p) => runner.create({ text: p.text, title: p.title, cwd: p.cwd, worktree: false, startedBy: { kind: 'runner', label: 'Recipes', why: p.title } }).thread.id,
+    log: (msg) => log.warn(msg),
+  });
+  if (!box && !copyOfReal) recipes.start();
   const upstream = new Upstream({
     home: cfg.home,
     checkout: thisRelease?.checkout,
@@ -1219,7 +1236,7 @@ async function main(): Promise<void> {
     if (n.method === 'thread.updated') updates.threadChanged(n.params.thread.id);
     else if (n.method === 'thread.deleted') updates.threadChanged(n.params.threadId);
   });
-  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
+  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...recipeMethods(recipes), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
   // runner.status carries the CLI statuses too (protocol, "runner.status").
   const restartStatus = methods['runner.status'];
   methods['runner.status'] = (p) => {
@@ -1731,6 +1748,7 @@ async function main(): Promise<void> {
     usage.stop();
     spareWeek.stop();
     mailWatch.stop();
+    recipes.stop();
     signIn.stop();
     tally.stop();
     webRuntimeUpdates.stop();

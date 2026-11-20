@@ -635,6 +635,16 @@ File references are where to look.
   then copies the build to the machines in `archive.pushTo` over ssh and
   installs it there. It remembers the last build in
   `agent-archive-update.json`. It never reads the archive's credentials.
+- **Recipes, if you turn them on** (`runner/src/recipes.ts`, the
+  experiment recipes, off unless you turn it on): every 30 seconds the
+  runner reads the recipes that come with Threadbear (`runner/src/recipes/`)
+  and your own, in `~/ThreadbearThreads/recipes` (runner.json's
+  `recipes.folder`). Nothing is fetched or sent anywhere. It keeps
+  `recipes.json` in the data folder (which recipes you added, the thread that
+  set each up and the schedules that are its). Adding a recipe makes its
+  folder there and starts a thread in it; the schedules that thread makes are
+  ordinary schedules. Switching one off pauses them, and for the email
+  watcher's recipe turns that experiment off.
 - **Your changes to the old Mac app** (`runner/src/swift-changes.ts`): a
   couple of minutes after the runner starts, then hourly, after each
   release check and when the new desktop app connects, it reads your
