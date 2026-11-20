@@ -54,7 +54,8 @@
 //   takeSpare   startSession: taken or stopped     none     none     -         -         -
 //   spawned     startSession: the CLI is running   starting starting! starting! starting! closing!
 //   init *      its session output: there          retriedFresh off, in every state
-//   version *   its cliVersion output              live     live     live      live      closing
+//   version *   its cliVersion output              none+    spare+   live      live      closing
+//               (+: started set, so spawned makes it live)
 //   tasks *     its background work list           (tasks, in every state)
 //   exited *    its exit (onExited)                none!    spare!   none      none      closing (session gone)
 //   retryFresh  onExited, resuming once            (retriedFresh on)

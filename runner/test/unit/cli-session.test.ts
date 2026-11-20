@@ -454,7 +454,7 @@ test('only cli-session.ts writes a thread`s CLI', () => {
   const src = path.resolve(import.meta.dirname, '../../src');
   const fieldRe = CLI_FIELDS.join('|');
   const write = new RegExp(
-    `(?:delete\\s+([\\w.!?\\[\\]]+?)\\.(${fieldRe})\\b)|(?:([\\w.!?\\[\\]]+?)\\.(${fieldRe})\\s*(?:=(?!=)|\\?\\?=|\\|\\|=|&&=|\\+\\+|--))|(?:(?:\\+\\+|--)\\s*([\\w.!?\\[\\]]+?)\\.(${fieldRe})\\b)`,
+    `(?:delete\\s+([\\w.!?\\[\\]]+?)\\.(${fieldRe})\\b)|(?:([\\w.!?\\[\\]]+?)\\.(${fieldRe})\\s*(?:=(?!=)|[-+*/%|&^]=|\\?\\?=|\\|\\|=|&&=|<<=|>>=|\\+\\+|--))|(?:(?:\\+\\+|--)\\s*([\\w.!?\\[\\]]+?)\\.(${fieldRe})\\b)`,
     'g',
   );
   // file: the receivers in it that aren't a Runtime.
@@ -475,6 +475,8 @@ test('only cli-session.ts writes a thread`s CLI', () => {
   const bracket = new RegExp(`(?:delete\\s+[\\w.]+\\[['"\`](?:${fieldRe})['"\`]\\])|(?:\\[['"\`](?:${fieldRe})['"\`]\\]\\s*(?:=(?!=)|\\?\\?=))`, 'g');
   // Object.assign(rt, …) or Object.assign(st.rt, …): a write of any field.
   const assign = /Object\.assign\(\s*(?:[\w.!?]+\.)?rt\b/g;
+  // rt.tasks.push(…) and the like: the list changed in place.
+  const mutate = /\brt\??\.tasks\??\.(?:push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin)\(|\brt\??\.tasks\.length\s*=(?!=)/g;
   const found: string[] = [];
   const walkDir = (dir: string): void => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -486,6 +488,7 @@ test('only cli-session.ts writes a thread`s CLI', () => {
         const text = fs.readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
         for (const m of text.matchAll(bracket)) found.push(`${rel}: ${m[0]}`);
         for (const m of text.matchAll(assign)) found.push(`${rel}: ${m[0]}`);
+        for (const m of text.matchAll(mutate)) found.push(`${rel}: ${m[0]}`);
         for (const m of text.matchAll(write)) {
           const receiver = (m[1] ?? m[3] ?? m[5]).split('.').at(-1)!;
           if (!(notRuntimes[rel] ?? []).includes(receiver)) found.push(`${rel}: ${m[0]}`);
