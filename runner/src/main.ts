@@ -562,7 +562,7 @@ async function main(): Promise<void> {
   // Answers to ask_secret go after a day (docs/protocol.md, "Secrets").
   runner.secrets.startSweeping((e) => log.warn('secret sweep failed', { error: String(e) }));
   // Its runner id and name are the mirror's (sync.ts), since that's how other
-  // runners and the backend know this one (step 6, docs/step6-plan.md).
+  // runners and the backend know this one (step 6, docs/archive/step6-plan.md).
   const syncRunnerId = cfg.sync.runnerId ?? ensureRunnerId(cfg.home);
   // When this process started: the heartbeat sends it, and runners.list
   // gives it for this runner too (the app's Runners panel says "up 3h").

@@ -227,7 +227,7 @@
 //    before. phone:project still returns them whole.
 // 51: an owned schedule can carry `check`, a shell command its runner runs
 //    before each run. An older runner sends none.
-// 52: full sync (docs/full-convex.md step 4). eventBodies, sync:appendBodies,
+// 52: full sync (docs/archive/full-convex.md step 4). eventBodies, sync:appendBodies,
 //    sync:remoteBody and phone:eventBody: a tool's output, input and diffs under
 //    the seq of its row, only from a runner with sync.full on. heldPictures,
 //    phone:requestPicture, phone:heldPicture and a `picture` command: one tool

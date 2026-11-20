@@ -266,7 +266,7 @@ export type RunnerJson = {
   // icon: an SF Symbol for this runner in lists (machine.ts works one out).
   // An rpcUrl left from the direct link between Macs (gone 13 Nov 2026) is ignored.
   // full: true sends tool output to your Convex deployment as well, scrubbed first
-  // (docs/full-convex.md). Off unless set. fullAsked, fullAskedThread and
+  // (docs/convex-backend.md, "Full sync"). Off unless set. fullAsked, fullAskedThread and
   // fullAskedQuestion are left from the once-only offer (taken out 16 Nov 2026).
   // usageWarning: false hides tb status's warning near Convex's Free limits.
   // pastedPictures: false keeps pictures you paste off your Convex deployment

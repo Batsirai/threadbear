@@ -5,8 +5,8 @@ The Mac app for Threadbear: a native window onto the threads the runner
 updating the app never stops a turn; the runner owns every CLI.
 
 It talks to the runner over the WebSocket JSON-RPC protocol in
-[`../docs/protocol.md`](../docs/protocol.md). The plan it's built from is
-[`../docs/plan.md`](../docs/plan.md).
+[`../docs/protocol.md`](../docs/protocol.md). The plan it was first built
+from, history now, is [`../docs/archive/plan.md`](../docs/archive/plan.md).
 
 ## Build and run
 
@@ -389,7 +389,9 @@ filler threads, then runs the app with `--perf-run`:
    biggest, and reads phys_footprint after 1 s and 6 s, plus the peak over
    the whole run.
 
-It ends with each bar from the plan marked met or NOT MET. Intervals are
+It ends with each bar from the plan (docs/archive/plan.md, "Performance
+bar": on the M5 and Tinker Desk, the five in the table below other than live
+resize) marked met or NOT MET. Intervals are
 also marked with `os_signpost` (subsystem `com.mikerosoft.threadbear`,
 category `perf`) for Instruments. The report prints and is saved to
 `.fixtures/perf/`. `--perf-debug` adds the transcript's cells, layer tree and
@@ -410,6 +412,17 @@ Latest run, `.fixtures/perf/perf-20261026-170313` (M5 Pro, 64 GB, macOS
 | Live resize (not a plan bar; the 100 ms hang rule) | 28 ms median, 34 ms max per 4 pt step with all 4,295 rows shown; the rest re-measured off the main thread 366 ms after the last step |
 | 60 s of 30 Hz streaming while scrolled up, 30% of a core or less | 8.3% with a tool call and result persisted every 1.5 s; the row being read stayed put. Pinned to the bottom for 60 s: 16.9%, flat (13 to 18% in each 10 s) |
 | 200 MB or less with 20 threads loaded and the biggest open | Not met 1 s after the last switch: 253 MB, of which 105 MB is GPU memory (see below). 152 MB 6 s later, with 7 MB of graphics. The other 16 threads are real-size copies of the fixtures |
+
+A later run, 29 Oct on Tinker Desk at 10fedd8 (after the dock, panels and
+link peeks), met every bar but the first open after launch: 185 ms for the
+biggest thread (later first opens 74 to 95 ms), which Mike said wasn't
+worth chasing then. Switches p95 45 ms, fling max frame gap 53 ms with no
+jumps, streaming scrolled up 9.4% of a core, memory 164 MB (174 MB peak) on
+its 1080p display. The reducer now folds more events into each row, so the
+"4,100-row" fixture is about 2,450 rows. On Tinker Desk the run needs
+`caffeinate -u -d`: with the display asleep the app gets no frames and the
+fling waits forever. `Tools/fixture-export` turns real Claude JSONL into
+event fixtures (gitignored, as they hold private text) for these runs.
 
 The memory number 1 s after a burst of opens includes about 87 to 105 MB of
 "owned unmapped (graphics)" memory. It's allocated, all at once, the first

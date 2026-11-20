@@ -1,4 +1,4 @@
-/* The Mac app's look (docs/design-pass.md, app Theme.swift): neutral greys,
+/* The Mac app's look (docs/archive/design-pass.md, app Theme.swift): neutral greys,
    system blue used only where it means something (unread, the agent's pick,
    the primary button, a card waiting on you), orange for waiting on you. */
 :root {

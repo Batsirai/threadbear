@@ -487,7 +487,7 @@ export const appSchema = defineSchema({
   // Mac app can list other runners' threads without the busy fields of
   // `threads`: a runner writes a row only when one of these changes, apart
   // from preview and lastActivityAt, which ride along but never cause a
-  // write (docs/step6-plan.md, part 2).
+  // write (docs/archive/step6-plan.md, part 2).
   threadIndex: defineTable({
     runnerId: v.string(),
     threadId: v.string(),
@@ -894,7 +894,7 @@ export const appSchema = defineSchema({
     // The Machines page's counts and lists of requests in a state (viewer.ts).
     .index('by_request_state', ['requestState.kind']),
 
-  // Full sync (API 52, docs/full-convex.md step 4; sync.full in runner.json).
+  // Full sync (API 52, docs/archive/full-convex.md step 4; sync.full in runner.json).
   // One row per tool call, under the seq of its one-line `messages` row, with
   // its output, input, diffs and the reasoning before it. Convex charges a read
   // for the whole document, so these are never in a list read: each is fetched
@@ -915,7 +915,7 @@ export const appSchema = defineSchema({
     diffs: v.optional(v.string()),
     reasoning: v.optional(v.string()),
     images: v.optional(v.number()), // how many pictures the tool handed back (see heldPictures)
-    cut: v.optional(v.boolean()), // shortened to fit (docs/full-convex.md)
+    cut: v.optional(v.boolean()), // shortened to fit (docs/convex-backend.md, "Full sync")
   })
     .index('by_thread_seq', ['threadId', 'seq'])
     .index('by_at', ['at'])

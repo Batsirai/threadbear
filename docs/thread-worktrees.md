@@ -737,5 +737,5 @@ the fetch: everything has to be inside the one locked command.
 - Moving a thread with a worktree to another folder (allowed, the worktree
   just stays where it is until the thread is archived).
 - Showing the branch in the app beyond the summary field.
-- Projects (docs/projects-design.md): when patches load from project
+- Projects (docs/archive/projects-design.md): when patches load from project
   folders, `worktree` still only counts from the thread's own folder chain.

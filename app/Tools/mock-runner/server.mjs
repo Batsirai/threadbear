@@ -252,7 +252,7 @@ const defaults = {
   cwd: '/Users/alex/code/misc', accountId: 'claude-main',
   models: { codex: 'gpt-6-luna' }, efforts: { codex: 'low' }, poolId: 'claude',
 };
-// Pools (docs/pools-plan.md). The built-in ones as the runner works them
+// Pools (docs/archive/pools-plan.md). The built-in ones as the runner works them
 // out from these logins (one per provider of the logins with no note, one
 // per noted login titled from its note), then two of Mike's own: a mixed
 // one, Codex first, and one whose only login is at its limit, so a thread

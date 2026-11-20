@@ -10,7 +10,7 @@ provider has "a minimum set of functionality that we would require".
 
 This replaces the sandboxed-threads experiment (a container around Claude
 Code on a shared runner, taken out on 16 Nov) and is the "cloud sandboxes"
-half of step 6 (docs/plan.md). Coordinators are a separate experiment and
+half of step 6 (docs/archive/plan.md). Coordinators are a separate experiment and
 out of scope here.
 
 Status: the spike passed (Order, 1), and the backend is built in two

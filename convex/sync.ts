@@ -3326,7 +3326,7 @@ export const commandEnded = internalMutation({
 });
 
 // ------------------------------------------------------------ tool output
-// Full sync (docs/full-convex.md step 4; sync.full in the runner's runner.json).
+// Full sync (docs/archive/full-convex.md step 4; sync.full in the runner's runner.json).
 // A runner with it off never calls these. See schema.ts eventBodies.
 export const BODY_KEEP_MS = 30 * 24 * 60 * 60_000;
 // Rows pruneBodies deletes a run. Deleting reads the whole row, so this and the
@@ -3851,7 +3851,7 @@ export const limitsMigration = internalMutation({
 });
 
 // ------------------------------------------------------------ thread index (API 12)
-// The Mac app's view of other runners' threads (docs/step6-plan.md, part 2).
+// The Mac app's view of other runners' threads (docs/archive/step6-plan.md, part 2).
 // A runner writes its own rows when what a sidebar shows changes; a Mac
 // app's runner watches the other runners' rows and hands them to the app.
 

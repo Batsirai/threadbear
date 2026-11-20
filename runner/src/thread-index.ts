@@ -1,4 +1,4 @@
-// The sidebar table (step 6 part 2, docs/step6-plan.md): this runner's
+// The sidebar table (step 6 part 2, docs/archive/step6-plan.md): this runner's
 // threads as small `threadIndex` rows in the backend, and the other
 // runners' rows watched live and handed to the Mac app as
 // `remoteThreads.updated`, so the app lists every runner's threads and only

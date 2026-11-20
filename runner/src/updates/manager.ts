@@ -1,5 +1,5 @@
 // Keeps the Claude and Codex CLIs up to date ("E. CLI updates" in
-// docs/step4-plan.md). It checks an hour apart, installs by each provider's
+// docs/archive/step4-plan.md). It checks an hour apart, installs by each provider's
 // policy, never while a runner restart is pending, and reports everything
 // through onChange so no RPC waits on an install.
 //

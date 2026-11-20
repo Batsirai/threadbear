@@ -813,7 +813,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       return 0;
     }
     case 'settings': {
-      // tb settings full on|off: full sync (docs/full-convex.md).
+      // tb settings full on|off: full sync (docs/convex-backend.md, "Full sync").
       if (args[0] === 'full') {
         const v = args[1];
         if (v !== 'on' && v !== 'off') {

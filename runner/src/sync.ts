@@ -146,7 +146,7 @@ export type SyncConfig = {
   runnerId?: string;
   icon?: string;
   pastedPictures?: boolean;
-  // Full sync (docs/full-convex.md step 4): tool output, input and diffs go up too.
+  // Full sync (docs/archive/full-convex.md step 4): tool output, input and diffs go up too.
   // Off unless it's asked for; off, nothing here writes eventBodies.
   // false hides the estimate's warning near Convex's Free limits (convex-use.ts).
   usageWarning?: boolean;
@@ -2157,7 +2157,7 @@ export class ConvexSync {
   // rows still refused are left out with a log line, so one can't stall the
   // whole mirror; anything else (an outage) throws, for the flush's retry.
   // Rows the backend left out itself (`skipped`) are said the same way.
-  // ---- Full sync: tool output (docs/full-convex.md step 4). Nothing here runs with
+  // ---- Full sync: tool output (docs/archive/full-convex.md step 4). Nothing here runs with
   // sync.full off.
 
   private queueBodies(found: RawBody[]): void {

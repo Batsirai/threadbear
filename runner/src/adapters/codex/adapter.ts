@@ -323,7 +323,7 @@ export function codexModelChoices(rows: unknown[]): ModelChoice[] {
   return out;
 }
 
-// Threadbear's two permission modes in Codex's terms (step4-plan.md,
+// Threadbear's two permission modes in Codex's terms (docs/archive/step4-plan.md,
 // "Permission modes"). approvalsReviewer is always sent: another account's
 // config.toml could route approvals to Codex's auto-reviewer instead.
 export function threadPolicy(mode: PermissionMode): Pick<ThreadStartParams, 'approvalPolicy' | 'approvalsReviewer' | 'sandbox'> {

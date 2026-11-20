@@ -860,7 +860,7 @@ type Settings = {
                         // from an older runner: clients show no switch
   fullSync: boolean     // full sync, as runner.json's sync.full says; it
                         // takes effect when the runner next starts
-                        // (docs/full-convex.md; `tb settings full on|off`)
+                        // (docs/convex-backend.md, "Full sync"; `tb settings full on|off`)
   models: {
     pool: string | null      // the pool whose Claude logins answer small
                              // jobs; "claude" by default, null: none, so
@@ -6274,7 +6274,7 @@ kept in `schedules.json` in the data dir.
 - **Runners.** With sync on and a backend of API 9 or later, schedules
   live in the backend's `schedules` table rather than `schedules.json`,
   so every runner sees one list and a schedule can be made for another
-  runner (step 6, docs/step6-plan.md). Each row names its `runnerId`, and
+  runner (step 6, docs/archive/step6-plan.md). Each row names its `runnerId`, and
   only that runner sends it. The runner keeps a live subscription to the
   table (`sync:schedules`) and a copy in `schedules.json` (`version: 2`)
   for when the backend can't be reached. Its own timer finds a due run,
@@ -6437,7 +6437,7 @@ the experiment off every method fails with `-32601`.
 
 ## Other runners' threads
 
-Step 6 part 2 (docs/step6-plan.md). The Mac app lists every runner's
+Step 6 part 2 (docs/archive/step6-plan.md). The Mac app lists every runner's
 threads: this runner's from this runner as always, the others' from the
 backend. It opens them through its own runner and the backend ("Other
 runners' threads through the backend", below). Runners never talk to each
@@ -6892,7 +6892,7 @@ In the backend a request is a state machine (`convex/requestMachine.ts`,
 
 ## Moving a thread to another runner
 
-Added 8 Nov 2026 (docs/move-plan.md) as the experiment `moveToRunner`, on
+Added 8 Nov 2026 (docs/archive/move-plan.md) as the experiment `moveToRunner`, on
 for everyone from 12 Nov (a runner from between those dates takes part only
 with it on). The thread itself moves: the same id, its whole
 event log, pictures and Highlights, its Claude session, and the git work in
@@ -7486,8 +7486,8 @@ the mirror back as state. The Mac app doesn't use it.
   scrubbed, so one whose text holds a secret runs with `[REDACTED]`. Pictures
   aren't scrubbed. `src/withhold.ts` says which tool calls' output must never
   upload.
-- **Full sync** (API 52, docs/full-convex.md step 4). `sync.full: true` in
-  `runner.json`, off by default and never offered (docs/full-convex.md step 6); off, none of this runs. Each finished tool goes up
+- **Full sync** (API 52, docs/archive/full-convex.md step 4). `sync.full: true` in
+  `runner.json`, off by default and never offered (docs/archive/full-convex.md step 6); off, none of this runs. Each finished tool goes up
   as one `eventBodies` row under its call's seq, the same seq as its `messages` row
   (`sync:appendBodies`, at most 50 rows or about 512 KB a mutation, behind the
   mirror's own writes): `text`, `ok`, `truncated`, `input` and `diffs` as JSON text,
