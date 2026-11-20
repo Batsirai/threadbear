@@ -1136,8 +1136,8 @@ impl Threadbear {
                             self.remote.recent.note(&from_runner);
                         }
                         // The runner's word on it: a message it just took no
-                        // longer holds it under Running (`thread::AWAITING`).
-                        crate::thread::summary_arrived(&t.id);
+                        // longer holds it under Running (`Outbox::sending`).
+                        crate::thread::summary_arrived(&t.id, cx);
                         let before = self.threads.insert(t.id.clone(), Arc::new(t.clone()));
                         self.note_failed_account(before.as_deref(), &t);
                         self.note_failed_move(before.as_deref(), &t, cx);
@@ -1414,7 +1414,7 @@ impl Threadbear {
                                 .get(&thread.id)
                                 .is_none_or(|old| **old != *thread)
                             {
-                                crate::thread::summary_arrived(&thread.id);
+                                crate::thread::summary_arrived(&thread.id, cx);
                             }
                         }
                         let before = (*this.threads).clone();
@@ -2327,7 +2327,7 @@ impl Threadbear {
         let changes = self.threads.changes();
         // A thread with a message on its way sorts under Running
         // (`inbox::as_sending`), so the outbox changing counts too.
-        let outbox = crate::thread::outbox_changes();
+        let outbox = crate::thread::outbox_changes(cx);
         // Nested threads (nested.rs) only with the experiment on, and not
         // while searching: a search lists what it found, each on its own row.
         let nested = query.is_empty() && self.nested_threads_on();
@@ -2349,7 +2349,7 @@ impl Threadbear {
         // in the Inbox with a spinner on its bubble. Only these few are
         // copied; the rest are shared rows, so working them out again copies
         // pointers (thread_map.rs).
-        let sending: Vec<Arc<ThreadSummary>> = crate::thread::sending()
+        let sending: Vec<Arc<ThreadSummary>> = crate::thread::sending(cx)
             .iter()
             .filter_map(|id| self.threads.get(id))
             .map(|t| Arc::new(inbox::as_sending(t)))

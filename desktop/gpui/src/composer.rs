@@ -640,7 +640,7 @@ impl Composer {
         let (text, images) = self.draft(cx);
         let mut all = RestoreDraft::plain(text, images);
         if let Some(id) = &self.thread_id {
-            for held in crate::thread::held_drafts(id).into_iter().rev() {
+            for held in crate::thread::held_drafts(id, cx).into_iter().rev() {
                 all = RestoreDraft::joined(held, all);
             }
         }
@@ -706,7 +706,7 @@ impl Composer {
         if self
             .thread_id
             .as_deref()
-            .is_some_and(crate::thread::sending_now)
+            .is_some_and(|id| crate::thread::sending_now(id, cx))
         {
             return Some("the message on its way in “{t}” has gone");
         }

@@ -303,9 +303,9 @@ impl Threadbear {
                 .threads
                 .insert(summary.id.clone(), std::sync::Arc::new(summary.clone()));
             // Every row comes again with any one's change: only one that
-            // changed is that runner's word on it (`thread::AWAITING`).
+            // changed is that runner's word on it (`Outbox::sending`).
             if before.as_deref() != Some(&summary) {
-                crate::thread::summary_arrived(&summary.id);
+                crate::thread::summary_arrived(&summary.id, cx);
             }
             if waiting
                 || before

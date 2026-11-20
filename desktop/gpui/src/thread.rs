@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use threadbear_client::runner::{Client, Progress, ProgressFn, Resend, RpcError};
 use threadbear_core::inbox::ThreadSummary;
+use threadbear_core::outbox::{Answer, Effects, Event as OutboxEvent, Outbox, Send as Sending};
 use threadbear_core::reducer::{
     BackgroundTask, Event, EventsPage, FeedAction, ImageRef, PendingMessage, Row, RowContent,
     ThreadFeed, TranscriptChange, TranscriptModel,
@@ -190,228 +191,128 @@ pub(crate) fn window_key(window: &Window) -> u64 {
     window.window_handle().window_id().as_u64()
 }
 
-thread_local! {
-    /// Messages on their way, by thread, kept outside any pane (the Swift
-    /// app keeps its sessions, and with them their pending messages): a pane
-    /// goes when another thread is opened, and a message held for a
-    /// restarting runner can wait a minute and more. A pane opened on the
-    /// thread shows them, and a send's task finds whichever pane is showing
-    /// its thread by then (`Threadbear::pane_for`). The main thread's only.
-    static OUTBOX: std::cell::RefCell<HashMap<String, Vec<PendingMessage>>> = std::cell::RefCell::new(HashMap::new());
+/// Every message on its way, every thread's (core's outbox.rs), kept for
+/// the whole app rather than in a pane: a pane goes when another thread is
+/// opened, and a message held for a restarting runner can wait a minute and
+/// more. A global, not the app's own field, so a pane, the sidebar and a
+/// composer saving its draft can each read it from inside another update
+/// without updating the app again. It's only ever moved by `move_outbox`,
+/// whose closure reads nothing else, and its clock by `arm_clock`.
+#[derive(Default)]
+struct Shared {
+    outbox: Outbox<crate::composer::RestoreDraft>,
+    /// The app, for a deadline to show what it moved.
+    app: Option<WeakEntity<crate::app::Threadbear>>,
+    /// The timer that delivers the outbox's next deadline, and when.
+    clock: Option<(std::time::Instant, Task<()>)>,
 }
 
-fn outbox(thread_id: &str) -> Vec<PendingMessage> {
-    OUTBOX.with(|o| o.borrow().get(thread_id).cloned().unwrap_or_default())
+impl Global for Shared {}
+
+fn read_outbox<R>(cx: &App, f: impl FnOnce(&Outbox<crate::composer::RestoreDraft>) -> R) -> R {
+    match cx.try_global::<Shared>() {
+        Some(shared) => f(&shared.outbox),
+        None => f(&Outbox::default()),
+    }
 }
 
-thread_local! {
-    /// Goes up whenever any thread's outbox changes, so the sidebar's
-    /// sections, which sort a thread with a message on its way under Running
-    /// (`sending`), are worked out again.
-    static OUTBOX_CHANGES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+/// The only way the outbox moves: the event, then its clock set for its
+/// next deadline.
+fn move_outbox(
+    event: OutboxEvent<crate::composer::RestoreDraft>,
+    app: Option<&WeakEntity<crate::app::Threadbear>>,
+    cx: &mut App,
+) -> Effects<crate::composer::RestoreDraft> {
+    let shared = cx.default_global::<Shared>();
+    if let Some(app) = app {
+        shared.app = Some(app.clone());
+    }
+    let effects = shared.outbox.next(event, std::time::Instant::now());
+    arm_clock(cx);
+    effects
+}
+
+/// Delivers `Clock` when the outbox's next deadline comes.
+fn arm_clock(cx: &mut App) {
+    let shared = cx.default_global::<Shared>();
+    let deadline = shared.outbox.deadline();
+    if shared.clock.as_ref().map(|(at, _)| *at) == deadline {
+        return;
+    }
+    let Some(at) = deadline else {
+        shared.clock = None;
+        return;
+    };
+    let task = cx.spawn(async move |cx| {
+        let wait = at.saturating_duration_since(std::time::Instant::now());
+        cx.background_executor().timer(wait).await;
+        cx.update(clock_came);
+    });
+    cx.default_global::<Shared>().clock = Some((at, task));
+}
+
+/// A deadline came: a taken message is called queued, a hold runs out.
+fn clock_came(cx: &mut App) {
+    cx.default_global::<Shared>().clock = None;
+    let effects = move_outbox(OutboxEvent::Clock, None, cx);
+    let app = cx.try_global::<Shared>().and_then(|s| s.app.clone());
+    let Some(app) = app else { return };
+    for thread in &effects.moved {
+        show_outbox_in(&app, thread, cx);
+    }
+    if effects.moved.is_empty() && effects.let_go {
+        app.update(cx, |_, cx| cx.notify()).ok();
+    }
+}
+
+/// What's on its way to a thread, for its transcript.
+pub(crate) fn outbox(thread_id: &str, cx: &App) -> Vec<PendingMessage> {
+    read_outbox(cx, |o| o.pending(thread_id))
 }
 
 /// How many times the outbox has changed, for the sidebar's cache.
-pub(crate) fn outbox_changes() -> u64 {
-    OUTBOX_CHANGES.with(|c| c.get())
+pub(crate) fn outbox_changes(cx: &App) -> u64 {
+    read_outbox(cx, Outbox::changes)
 }
 
-/// The threads with a message the runner hasn't taken yet (the spinner by
-/// its bubble), or has taken without a summary since (`AWAITING`): the
-/// sidebar has them under Running rather than in the Inbox
-/// (`inbox::as_sending`). A queued one is left out: the runner has it, and
-/// its summary says what the thread is doing. That also bounds the guess to
-/// the send's own call, whose task marks it queued or takes it out whether
-/// or not a pane is open, so no bubble left behind keeps a thread in Running.
-pub(crate) fn sending() -> Vec<String> {
-    let mut ids: Vec<String> = OUTBOX.with(|o| {
-        o.borrow()
-            .iter()
-            .filter(|(_, list)| list.iter().any(|m| !m.queued))
-            .map(|(id, _)| id.clone())
-            .collect()
-    });
-    AWAITING.with(|a| {
-        ids.extend(
-            a.borrow()
-                .keys()
-                .filter(|id| !ids.contains(id))
-                .cloned()
-                .collect::<Vec<_>>(),
-        )
-    });
-    ids
+/// The threads the sidebar has under Running for a message on its way
+/// (`Outbox::sending`).
+pub(crate) fn sending(cx: &App) -> Vec<String> {
+    read_outbox(cx, Outbox::sending)
 }
-
-thread_local! {
-    /// Threads the runner has just taken a message for, by the hold's own
-    /// number, until its next summary of them (`summary_arrived`). The
-    /// runner sends the message's `user.message` first and the summary
-    /// saying its turn has started just after, later on a busy Mac or from
-    /// another runner; until then its summary still has the last turn's
-    /// "needs you". Ending the guess as the bubble went put the thread back
-    /// in the Inbox for that moment, and out again a second later (18 Nov).
-    /// Any summary after the message is the runner's word, whatever it
-    /// says: one that failed at once goes straight back to the Inbox.
-    static AWAITING: std::cell::RefCell<HashMap<String, u64>> = std::cell::RefCell::new(HashMap::new());
-    /// Numbers each hold, so a hold's grace only ends that one.
-    static HOLDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    /// How many summaries of each thread have come, so a send can tell
-    /// whether one has since its click (`taken`).
-    static SUMMARIES: std::cell::RefCell<HashMap<String, u64>> = std::cell::RefCell::new(HashMap::new());
-    /// Each message on its way, by its pending id: `SUMMARIES` for its
-    /// thread when it was sent.
-    static SENT_AT: std::cell::RefCell<HashMap<String, u64>> = std::cell::RefCell::new(HashMap::new());
-}
-
-/// Notes a message as sent now, for `taken`.
-fn note_sent(thread_id: &str, pending_id: &str) {
-    let at = summaries_of(thread_id);
-    SENT_AT.with(|s| s.borrow_mut().insert(pending_id.to_owned(), at));
-}
-
-/// This Mac's runner has shown a message on its way: it sends the summary
-/// that goes with it after the event, so only one from now on counts as its
-/// word on the send. One between the click and here (opening the thread
-/// marked it seen, say) is older news (Codex's review, 18 Nov). Another
-/// runner's summary can beat its transcript here, so theirs keep the click.
-fn shown_here(thread_id: &str, pending_id: &str) {
-    let now = summaries_of(thread_id);
-    SENT_AT.with(|s| {
-        if let Some(at) = s.borrow_mut().get_mut(pending_id) {
-            *at = now;
-        }
-    });
-}
-
-/// The runner has taken a message on its way (shown, by any path, or
-/// queued): whether the thread should stay under Running until its next
-/// summary. Only if none has come since the click: one that has is the
-/// runner's word already (a turn that failed at once, or asked something,
-/// from another runner whose summary can beat its transcript here), and
-/// holding past it would hide a thread that needs Mike.
-fn taken(thread_id: &str, pending_id: &str) -> bool {
-    SENT_AT
-        .with(|s| s.borrow_mut().remove(pending_id))
-        .is_some_and(|at| at == summaries_of(thread_id))
-}
-
-/// How long a taken message holds its thread under Running if no summary
-/// comes (a dropped connection, another runner that's gone quiet): the
-/// guess never outlives this.
-const HOLD_GRACE: Duration = Duration::from_secs(5);
 
 /// The runner said something new about a thread (`thread.updated`, or a
 /// changed row in this Mac's list or another runner's): what it says now
 /// goes, and a message it took no longer holds the thread under Running.
-pub(crate) fn summary_arrived(thread_id: &str) {
-    SUMMARIES.with(|s| *s.borrow_mut().entry(thread_id.to_owned()).or_default() += 1);
-    if AWAITING.with(|a| a.borrow_mut().remove(thread_id).is_some()) {
-        OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
-    }
-}
-
-/// How many summaries of a thread have come so far.
-fn summaries_of(thread_id: &str) -> u64 {
-    SUMMARIES.with(|s| s.borrow().get(thread_id).copied().unwrap_or(0))
-}
-
-/// Holds a thread under Running until the runner's next summary of it, or
-/// `HOLD_GRACE`, whichever comes first. Returns the hold's number.
-fn hold(thread_id: &str) -> u64 {
-    let n = HOLDS.with(|h| {
-        h.set(h.get() + 1);
-        h.get()
-    });
-    AWAITING.with(|a| a.borrow_mut().insert(thread_id.to_owned(), n));
-    OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
-    n
-}
-
-/// Ends hold `n` on a thread if it's still that one: true if it did.
-fn let_go(thread_id: &str, n: u64) -> bool {
-    let gone = AWAITING.with(|a| {
-        let mut a = a.borrow_mut();
-        let ours = a.get(thread_id) == Some(&n);
-        if ours {
-            a.remove(thread_id);
-        }
-        ours
-    });
-    if gone {
-        OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
-    }
-    gone
-}
-
-/// `hold`, with its grace run out by a task of the app's own, so a pane
-/// closed meanwhile doesn't leave the thread under Running.
-fn hold_for_summary(thread_id: &str, app: WeakEntity<crate::app::Threadbear>, cx: &App) {
-    let n = hold(thread_id);
-    let id = thread_id.to_owned();
-    cx.spawn(async move |cx| {
-        cx.background_executor().timer(HOLD_GRACE).await;
-        if let_go(&id, n) {
-            app.update(cx, |_, cx| cx.notify()).ok();
-        }
-    })
-    .detach();
-}
-
-fn set_outbox(thread_id: &str, list: Vec<PendingMessage>) {
-    OUTBOX_CHANGES.with(|c| c.set(c.get() + 1));
-    OUTBOX.with(|o| {
-        let mut o = o.borrow_mut();
-        if list.is_empty() {
-            o.remove(thread_id);
-        } else {
-            o.insert(thread_id.to_owned(), list);
-        }
-    });
-}
-
-thread_local! {
-    /// What each message on its way was in the box, by its pending id with
-    /// its thread, so one still held for a restarting runner when the app
-    /// quits is kept with the drafts and comes back in the box next time
-    /// (Swift's `heldForResend` into DraftStore), rather than lost.
-    /// With whether it's not yet on its way (held, or behind another): set
-    /// from the connection's task as it says so, not from the transcript's
-    /// copy, which hears a moment later.
-    static OUTBOX_DRAFTS: std::cell::RefCell<HashMap<String, (String, crate::composer::RestoreDraft, Arc<std::sync::atomic::AtomicBool>)>> = std::cell::RefCell::new(HashMap::new());
+pub(crate) fn summary_arrived(thread_id: &str, cx: &mut App) {
+    move_outbox(
+        OutboxEvent::Summary {
+            thread: thread_id.to_owned(),
+        },
+        None,
+        cx,
+    );
 }
 
 /// The boxes' words of a thread's messages not yet on their way (held for
 /// the new runner, or behind another), oldest first, for the drafts file.
-pub(crate) fn held_drafts(thread_id: &str) -> Vec<crate::composer::RestoreDraft> {
-    use std::sync::atomic::Ordering;
-    outbox(thread_id)
-        .iter()
-        .filter_map(|m| {
-            OUTBOX_DRAFTS.with(|d| {
-                d.borrow()
-                    .get(&m.id)
-                    .filter(|(t, _, held)| t == thread_id && held.load(Ordering::SeqCst))
-                    .map(|(_, draft, _)| draft.clone())
+pub(crate) fn held_drafts(thread_id: &str, cx: &App) -> Vec<crate::composer::RestoreDraft> {
+    read_outbox(cx, |o| {
+        o.held_drafts(thread_id)
+            .into_iter()
+            // Their words as they went, a card's answers included.
+            .map(|draft| {
+                let (text, images) = draft.for_saving();
+                crate::composer::RestoreDraft::plain(text, images)
             })
-        })
-        // Their words as they went, a card's answers included.
-        .map(|draft| {
-            let (text, images) = draft.for_saving();
-            crate::composer::RestoreDraft::plain(text, images)
-        })
-        .collect()
+            .collect()
+    })
 }
 
 /// A message of the thread's on its way to the runner and not answered yet:
 /// a refusal would put its words back in a box a restart had already saved.
-pub(crate) fn sending_now(thread_id: &str) -> bool {
-    use std::sync::atomic::Ordering;
-    OUTBOX_DRAFTS.with(|d| {
-        d.borrow()
-            .values()
-            .any(|(t, _, held)| t == thread_id && !held.load(Ordering::SeqCst))
-    })
+pub(crate) fn sending_now(thread_id: &str, cx: &App) -> bool {
+    read_outbox(cx, |o| o.sending_now(thread_id))
 }
 
 /// How a send got on, as the connection's task reports it.
@@ -524,7 +425,7 @@ impl ThreadPane {
             _subs: vec![scrolled],
         };
         // Messages still on their way to it from before it was last open.
-        let _ = pane.feed.set_pending(outbox(&pane.summary.id));
+        let _ = pane.feed.set_pending(outbox(&pane.summary.id, cx));
         // Its diagrams and pages drawing, and the web runtime (rich_boxes.rs).
         pane._subs.extend(crate::rich_boxes::watch(cx));
         pane.load(cx);
@@ -942,7 +843,7 @@ impl ThreadPane {
                 this.feed = ThreadFeed::new(model);
                 // What's still on its way stays at the end, less what this
                 // page shows arrived (a reload after a restart brings them).
-                let _ = this.feed.set_pending(outbox(&this.summary.id));
+                let _ = this.feed.set_pending(outbox(&this.summary.id, cx));
                 this.keep_outbox(cx);
                 // Another runner's thread through this Mac's runner has
                 // gaps in its seqs (`feed.sparse = viaRelay`).
@@ -1318,12 +1219,15 @@ impl ThreadPane {
                 cx.notify();
             }
             if self.subagent_id.is_none() && self.summary.runner_id.is_none() {
-                for m in outbox(&self.summary.id)
-                    .iter()
-                    .filter(|m| !m.queued && m.is_landed_by(&event))
-                {
-                    shown_here(&self.summary.id, &m.id);
-                }
+                // This Mac's runner shows a message before its summary.
+                move_outbox(
+                    OutboxEvent::Heard {
+                        thread: self.summary.id.clone(),
+                        event: event.clone(),
+                    },
+                    None,
+                    cx,
+                );
             }
             let action = self.feed.receive(event);
             self.handle(action, cx);
@@ -1452,30 +1356,19 @@ impl ThreadPane {
         );
     }
 
-    /// What the model shows as on its way, kept in the outbox, so it
-    /// outlives this pane. A sub-agent's pane never sends.
+    /// What the model shows as on its way, told to the outbox: what it no
+    /// longer has has landed (or an edit cut it). A sub-agent's pane never
+    /// sends.
     fn keep_outbox(&self, cx: &mut Context<Self>) {
         if self.subagent_id.is_some() {
             return;
         }
-        let id = &self.summary.id;
         let list = self.feed.model().pending().to_vec();
-        // Gone from the model's list: shown, whether live, in a catch-up or
-        // in a reload (a failed send leaves the outbox before the pane hears).
-        let shown: Vec<String> = outbox(id)
-            .into_iter()
-            .filter(|m| !m.queued && !list.iter().any(|n| n.id == m.id))
-            .map(|m| m.id)
-            .collect();
-        // Every one is taken (each clears its own record), not just the first.
-        let mut hold = false;
-        for pending_id in &shown {
-            hold |= taken(id, pending_id);
-        }
-        if hold {
-            hold_for_summary(id, self.app.clone(), cx);
-        }
-        set_outbox(id, list);
+        let event = OutboxEvent::Transcript {
+            thread: self.summary.id.clone(),
+            list,
+        };
+        move_outbox(event, Some(&self.app), cx);
     }
 
     /// The outbox's messages for this thread on show again, after a send's
@@ -1484,7 +1377,7 @@ impl ThreadPane {
         if self.subagent_id.is_some() {
             return;
         }
-        let change = self.feed.set_pending(outbox(&self.summary.id));
+        let change = self.feed.set_pending(outbox(&self.summary.id, cx));
         self.apply(change, cx);
         self.check_queued(cx);
         cx.notify();
@@ -1533,13 +1426,6 @@ impl ThreadPane {
         let remote = self.summary.runner_id.is_some();
         let holding =
             !remote && self.client.connected_session().is_none() && self.client.restart_under_way();
-        // Shown straight away and put right when the runner echoes it back.
-        // Unique across panes: the outbox outlives each one.
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let pending_id = format!(
-            "local-{}",
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
-        );
         // Only a user.message after this can be it: the thread's last seq as
         // the summary has it, if the transcript hasn't caught up (a pane
         // that's still loading), so an older one with the same words isn't.
@@ -1547,20 +1433,6 @@ impl ThreadPane {
             .feed
             .accepted_seq()
             .max(i64::try_from(self.summary.last_seq).unwrap_or(i64::MAX));
-        let mut message = PendingMessage::new(&pending_id, &text, after_seq);
-        message.images = images.clone();
-        message.waiting_for_runner = holding;
-        let mut list = outbox(&thread_id);
-        list.push(message.clone());
-        // Idle when sent and the only one on its way: nothing on the runner
-        // could queue it, so one cut off by a restart can be looked for and
-        // sent again if it never arrived (`Resend::was_idle`).
-        let was_idle = !self.summary.busy() && list.len() == 1;
-        set_outbox(&thread_id, list);
-        // Not yet on its way: held for a restart, or waiting behind another
-        // message to this thread. What a quit keeps in the drafts file
-        // (`held_drafts`), as `stop_holding` stops it going.
-        let held = Arc::new(std::sync::atomic::AtomicBool::new(!remote));
         // A card's answers aren't in the box's words: the message as it
         // goes, back in the box's form, so a quit keeps them too, held or
         // given back (`RestoreDraft::for_saving`).
@@ -1575,14 +1447,22 @@ impl ThreadPane {
                     .collect(),
             ));
         }
-        if let Some(draft) = &draft {
-            OUTBOX_DRAFTS.with(|d| {
-                d.borrow_mut().insert(
-                    pending_id.clone(),
-                    (thread_id.clone(), draft.clone(), held.clone()),
-                )
-            });
-        }
+        // Shown straight away and put right when the runner echoes it back.
+        let sending = Sending {
+            thread: thread_id.clone(),
+            text: text.clone(),
+            images: images.clone(),
+            after_seq,
+            remote,
+            holding,
+            busy: self.summary.busy(),
+            draft,
+        };
+        let Some((pending_id, ticket)) =
+            move_outbox(OutboxEvent::Send(sending), Some(&self.app), cx).ticket
+        else {
+            return;
+        };
         self.show_outbox(cx);
         // The sidebar watches the app, not this pane: it moves the thread out
         // of the Inbox now (`thread::sending`).
@@ -1604,20 +1484,18 @@ impl ThreadPane {
         }
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<SendStep>();
         let told = tx.clone();
+        let gate = ticket.gate.clone();
         let progress: ProgressFn = Arc::new(move |p| {
             // At once, from the connection's task: the quit's drafts read it
             // straight after `stop_holding` (`held_drafts`).
-            held.store(p == Progress::Held, std::sync::atomic::Ordering::SeqCst);
+            gate.set(p == Progress::Held);
             let _ = told.unbounded_send(SendStep::Progress(p));
         });
-        let probe = message.clone();
-        // Whether the runner says anything about the thread before it takes
-        // the message (`taken`).
-        note_sent(&thread_id, &pending_id);
+        let probe = ticket.message.clone();
         let resend = Resend {
             thread_id: thread_id.clone(),
-            after_seq: message.after_seq,
-            was_idle,
+            after_seq: ticket.message.after_seq,
+            was_idle: ticket.was_idle,
             landed: Arc::new(move |v: &Value| {
                 Event::decode(v).is_some_and(|e| probe.is_landed_by(&e))
             }),
@@ -1648,11 +1526,13 @@ impl ThreadPane {
                 match step {
                     // Held for the new runner, or going now: the bubble's note.
                     SendStep::Progress(p) => {
-                        let id = pending_id.clone();
-                        change_outbox(&app, &thread_id, cx, move |list| {
-                            if let Some(m) = list.iter_mut().find(|m| m.id == id) {
-                                m.waiting_for_runner = p == Progress::Held;
-                            }
+                        let event = OutboxEvent::Progress {
+                            id: pending_id.clone(),
+                            still_to_go: p == Progress::Held,
+                        };
+                        cx.update(|cx| {
+                            move_outbox(event, None, cx);
+                            show_outbox_in(&app, &thread_id, cx);
                         });
                     }
                     SendStep::Done(done) => {
@@ -1661,63 +1541,36 @@ impl ThreadPane {
                     }
                 }
             }
-            // Gone or taken: no longer one to keep through a quit.
-            OUTBOX_DRAFTS.with(|d| d.borrow_mut().remove(&pending_id));
-            // Already shown in the transcript, as the runner echoed it: it
-            // went, whatever became of the answer (a stalled runner's that
-            // came too late, a lookup that failed after it, a connection
-            // that closed after it arrived).
-            let shown = !outbox(&thread_id).iter().any(|m| m.id == pending_id);
-            if shown
-                && res.as_ref().is_err_and(|e| {
-                    matches!(
+            // A connection that closed with it on its way, or no answer in
+            // time: it may have arrived, which its echo says.
+            let answer = match &res {
+                Ok(_) => Answer::Took,
+                Err(e)
+                    if matches!(
                         e.code,
                         threadbear_client::runner::TIMED_OUT | threadbear_client::runner::CLOSED
-                    )
-                })
-            {
-                SENT_AT.with(|s| s.borrow_mut().remove(&pending_id));
-                return;
-            }
-            if let Err(e) = res {
-                SENT_AT.with(|s| s.borrow_mut().remove(&pending_id));
-                // Off the end of the transcript and back in the box, and the
-                // error bar says so, naming the thread, until it's dismissed.
-                let id = pending_id.clone();
-                change_outbox(&app, &thread_id, cx, move |list| {
-                    list.retain(|m| m.id != id)
-                });
-                if let (Some(composer), Some(draft)) = (composer.upgrade(), draft) {
-                    composer.update(cx, |c, cx| c.restore_draft(draft, cx));
+                    ) =>
+                {
+                    Answer::MayHaveArrived
                 }
-                let held = holding;
-                app.update(cx, |app, cx| app.show_send_failed(&e, &title, held, cx))
-                    .ok();
+                Err(_) => Answer::Refused,
+            };
+            let event = OutboxEvent::Answered {
+                id: pending_id,
+                answer,
+            };
+            let effects = cx.update(|cx| move_outbox(event, None, cx));
+            let (Some(draft), Err(e)) = (effects.gave_back, res) else {
                 return;
+            };
+            // Off the end of the transcript and back in the box, and the
+            // error bar says so, naming the thread, until it's dismissed.
+            cx.update(|cx| show_outbox_in(&app, &thread_id, cx));
+            if let (Some(composer), Some(draft)) = (composer.upgrade(), draft) {
+                composer.update(cx, |c, cx| c.restore_draft(draft, cx));
             }
-            // Taken but not shown: it's queued behind the running turn. Its
-            // user.message usually comes just before this answer, so wait a
-            // moment rather than flash the clock on every send (`markQueued`).
-            cx.background_executor()
-                .timer(Duration::from_millis(600))
-                .await;
-            // Taken with no word from the runner since the click (another
-            // runner's mirror can lag): it's queued now, which ends the
-            // guess, so it holds the thread under Running until the summary
-            // comes, as a shown one does (`AWAITING`).
-            let unshown = outbox(&thread_id)
-                .iter()
-                .any(|m| m.id == pending_id && !m.queued);
-            if unshown && taken(&thread_id, &pending_id) {
-                let app = app.clone();
-                cx.update(|cx| hold_for_summary(&thread_id, app, cx));
-            }
-            change_outbox(&app, &thread_id, cx, move |list| {
-                if let Some(m) = list.iter_mut().find(|m| m.id == pending_id) {
-                    m.queued = true;
-                    m.waiting_for_runner = false;
-                }
-            });
+            app.update(cx, |app, cx| app.show_send_failed(&e, &title, holding, cx))
+                .ok();
         })
         .detach();
     }
@@ -1737,9 +1590,10 @@ impl ThreadPane {
             this.update(cx, |this, cx| {
                 this.queued_check = None;
                 if !this.summary.busy() && this.feed.model().pending().iter().any(|m| m.queued) {
-                    let mut list = outbox(&this.summary.id);
-                    list.retain(|m| !m.queued);
-                    set_outbox(&this.summary.id, list);
+                    let event = OutboxEvent::QueuedLost {
+                        thread: this.summary.id.clone(),
+                    };
+                    move_outbox(event, None, cx);
                     this.show_outbox(cx);
                 }
             })
@@ -2900,18 +2754,11 @@ impl Render for ThreadPane {
 pub(crate) const NOT_CONNECTED_TEXT: &str =
     "Not connected to the runner, so that wasn't sent. It's still in the box.";
 
-/// Changes the messages on their way to a thread, then shows them in
-/// whichever pane has the thread open now, if one does: not necessarily the
-/// one the message was sent from, which may have gone.
-fn change_outbox(
-    app: &WeakEntity<crate::app::Threadbear>,
-    thread_id: &str,
-    cx: &mut AsyncApp,
-    change: impl FnOnce(&mut Vec<PendingMessage>),
-) {
-    let mut list = outbox(thread_id);
-    change(&mut list);
-    set_outbox(thread_id, list);
+/// Shows the messages on their way to a thread in whichever pane has the
+/// thread open now, if one does: not necessarily the one the message was
+/// sent from, which may have gone. At the top of the app's updates only:
+/// from a send's task or the outbox's clock.
+fn show_outbox_in(app: &WeakEntity<crate::app::Threadbear>, thread_id: &str, cx: &mut App) {
     let pane = app
         .read_with(cx, |app, cx| app.pane_for(thread_id, cx))
         .ok()
@@ -2933,56 +2780,4 @@ fn change_outbox(
 /// `thread:` link or `tb show` takes it.
 pub(crate) fn short_id(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
-}
-
-#[cfg(test)]
-mod hold_tests {
-    use super::{
-        hold, let_go, note_sent, sending, shown_here, summaries_of, summary_arrived, taken,
-    };
-
-    #[test]
-    fn on_this_macs_runner_only_a_summary_after_the_message_counts() {
-        // Opening the thread marked it seen, and that summary came after
-        // the click: older news than the message, which this runner shows
-        // before its own summary.
-        note_sent("t3", "p1");
-        summary_arrived("t3");
-        shown_here("t3", "p1");
-        assert!(taken("t3", "p1"));
-        // Nothing to move for a message that isn't on its way.
-        shown_here("t3", "p9");
-        assert!(!taken("t3", "p9"));
-    }
-
-    #[test]
-    fn a_message_taken_holds_only_if_the_runner_said_nothing_since_the_click() {
-        note_sent("t2", "p1");
-        assert!(taken("t2", "p1"));
-        // Once only: it's spoken for.
-        assert!(!taken("t2", "p1"));
-        // Another runner's "needs you" beat the message's own echo here:
-        // that's its word already, so no hold hides it.
-        note_sent("t2", "p2");
-        summary_arrived("t2");
-        assert!(!taken("t2", "p2"));
-        assert!(!taken("t2", "never-sent"));
-    }
-
-    #[test]
-    fn a_taken_message_holds_its_thread_until_the_next_summary() {
-        let n = hold("t1");
-        assert!(sending().contains(&"t1".to_string()));
-        // The runner's next word ends it, whatever it says.
-        let before = summaries_of("t1");
-        summary_arrived("t1");
-        assert_eq!(summaries_of("t1"), before + 1);
-        assert!(!sending().contains(&"t1".to_string()));
-        // An old hold's grace running out leaves a newer one be.
-        assert!(!let_go("t1", n));
-        let newer = hold("t1");
-        assert!(!let_go("t1", n));
-        assert!(let_go("t1", newer));
-        assert!(sending().is_empty());
-    }
 }
