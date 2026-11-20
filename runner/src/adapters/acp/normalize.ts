@@ -67,7 +67,7 @@ function toolKind(acp: string | undefined): ToolKind {
 // A check takes all of them: more names only makes it stricter.
 const PATH_KEY = /path|file|dest|target|document|^to$|^from$/i;
 // The files a patch body names: unified diffs and the `*** Update File:` kind.
-const PATCH_HEADER = /^(?:\*\*\* (?:Add|Update|Delete) File: |\*\*\* Move to: |\+\+\+ |--- |Index: )(.+)$/gm;
+const PATCH_HEADER = /^(?:\*\*\* (?:Add|Update|Delete) File: |\*\*\* Move to: |\+\+\+ |--- |Index: |(?:rename|copy) (?:from|to) |diff --git )(.+)$/gm;
 
 function pathsIn(v: unknown, key: string, out: Set<string>, depth: number): void {
   if (depth > 8) return;
@@ -75,8 +75,15 @@ function pathsIn(v: unknown, key: string, out: Set<string>, depth: number): void
     if (v && PATH_KEY.test(key)) out.add(v);
     if (v.includes('\n')) {
       for (const m of v.matchAll(PATCH_HEADER)) {
-        const p = m[1].trim().replace(/^[ab]\//, '').split('\t')[0];
-        if (p && p !== '/dev/null') out.add(p);
+        // A git header names two (`diff --git a/x b/y`), and git quotes a
+        // name with odd characters in it: each one counts, unquoted
+        // (Gemini's tenth review, 20 Nov 2026).
+        const line = m[1].trim();
+        const names = m[0].startsWith('diff --git ') ? line.split(/ (?=["]?b\/)/) : [line];
+        for (const name of names) {
+          const p = name.trim().replace(/^"(.*)"$/, '$1').replace(/^[ab]\//, '').split('\t')[0].replace(/^"(.*)"$/, '$1');
+          if (p && p !== '/dev/null') out.add(p);
+        }
       }
     }
   } else if (Array.isArray(v)) {
@@ -100,8 +107,11 @@ export function requestPaths(call: AcpToolCall): string[] {
 // of its tools as `variant` ("Write"), which names no place.
 const PLAIN_EDIT_KEYS = new Set(['filepath', 'file_path', 'path', 'content', 'oldstring', 'newstring', 'old_string', 'new_string', 'diff', 'replaceall', 'replace_all', 'description', 'variant']);
 
+// Grok's tool names, as `variant`, that only write the files they name.
+const EDIT_VARIANTS = new Set(['Write', 'Edit', 'MultiEdit', 'StrReplace']);
+
 export function isPlainEdit(input: Record<string, unknown>): boolean {
-  return Object.entries(input).every(([k, v]) => PLAIN_EDIT_KEYS.has(k.toLowerCase()) && (typeof v === 'string' || typeof v === 'boolean'));
+  return Object.entries(input).every(([k, v]) => PLAIN_EDIT_KEYS.has(k.toLowerCase()) && (typeof v === 'string' || typeof v === 'boolean') && (k.toLowerCase() !== 'variant' || EDIT_VARIANTS.has(String(v))));
 }
 
 // Kinds whose paths say what a call will change.

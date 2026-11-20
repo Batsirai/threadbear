@@ -1494,3 +1494,27 @@ test('an edit outside the folder shows what it writes; a delete says so', async 
   await until(() => c.length === 1);
   assert.ok(JSON.stringify(r.cards[2].input).includes('switched'), 'what this request writes, not only the first preview');
 });
+
+test('round ten: no id, no own-tool pass; files beside a command; git rename headers; odd variants', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const home = fs.realpathSync(r.cwd);
+  (s as unknown as { ownTools: Set<string> }).ownTools.add('threadbear__end_turn');
+  const rules = (s as unknown as { rules: Set<string> }).rules;
+  rules.add(commandRule(['rm', '-rf', 'generated'], home));
+  rules.add(EDIT_RULE);
+  const ours = { is_mcp_tool_call: true, mcp: { server: 'threadbear', tool: 'end_turn' } };
+  const tries: Record<string, unknown>[] = [
+    { toolCallId: '', kind: 'other', _meta: ours, rawInput: { arguments: { needs: 'nothing' } } },
+    { toolCallId: 's1', kind: 'execute', locations: [{ path: '/outside/prod.env' }], rawInput: { CommandLine: 'rm -rf generated', Cwd: home } },
+    { toolCallId: 'g1', kind: 'edit', rawInput: { path: path.join(home, 'notes.txt'), diff: 'diff --git a/notes.txt b/.mcp.json\nrename from notes.txt\nrename to .mcp.json\n' } },
+    { toolCallId: 'v1', kind: 'edit', rawInput: { path: path.join(home, 'notes.txt'), content: 'x', variant: 'RemoteExec' } },
+  ];
+  for (const [i, t] of tries.entries()) {
+    const replies = fakeRequest(r, s, t);
+    await until(() => replies.length === 1);
+    assert.equal(r.cards.length, i + 1, `call ${i} gets a card`);
+  }
+  assert.notEqual(r.cards[1].name, 'shell');
+});

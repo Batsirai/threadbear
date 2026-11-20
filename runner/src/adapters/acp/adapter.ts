@@ -574,10 +574,16 @@ export class AcpSession implements AgentSession {
     // for one of Threadbear's own tools only when every such frame named it
     // (Codex's and Gemini's ninth reviews, 20 Nov 2026).
     const raw = isPlainObject(u.rawInput) ? u.rawInput : undefined;
-    const id = mcpIdOf(u) ?? (typeof raw?.tool_name === 'string' && raw.tool_name ? raw.tool_name : undefined);
+    const id = mcpIdOf(u) ?? (this.deps.agent.provider === 'grok' && typeof raw?.tool_name === 'string' && raw.tool_name ? raw.tool_name : undefined);
     if (id) f.ids.add(id);
     if (typeof u.name === 'string' && u.name) f.names.add(u.name);
-    const acting = (raw !== undefined && Object.keys(raw).length > 0) || (u.rawInput !== undefined && u.rawInput !== null && raw === undefined) || isMcpFrame(u);
+    const acting =
+      (raw !== undefined && Object.keys(raw).length > 0) ||
+      (u.rawInput !== undefined && u.rawInput !== null && raw === undefined) ||
+      isMcpFrame(u) ||
+      (typeof u.name === 'string' && u.name !== '') ||
+      (Array.isArray(u.locations) && u.locations.length > 0) ||
+      (Array.isArray(u.content) && u.content.length > 0);
     if (acting) {
       f.acting++;
       if (id) f.named.set(id, (f.named.get(id) ?? 0) + 1);
@@ -658,7 +664,9 @@ export class AcpSession implements AgentSession {
     // Only when every frame of the call said it was that same tool, and one
     // kind of call: a later frame can't make another server's tool ours
     // (Codex's eighth review, 20 Nov 2026).
-    if (mcpName && this.ownTools.has(mcpName) && (!frames || ([...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k))))) return this.answer(id, options, true);
+    // A call with no id has no history to check, so it never goes ahead this
+    // way (Codex's tenth review, 20 Nov 2026).
+    if (mcpName && this.ownTools.has(mcpName) && frames && [...frames.ids].every((i) => i === mcpName) && frames.named.get(mcpName) === frames.acting && frames.kinds.size <= 1 && ![...frames.kinds].some((k) => k === 'execute' || writesFiles(k))) return this.answer(id, options, true);
 
     const { kind } = seen;
     // A read of the thread's own files, for an agent whose own rules can't
@@ -725,7 +733,12 @@ export class AcpSession implements AgentSession {
     // thread's: only a whole path says where.
     const placeKnown = !this.deps.agent.ownSessionFolder || (named.length > 0 && named.every((d) => path.isAbsolute(d)));
     const exact = Boolean(command) && placeKnown && !unknownPlace && said.length <= 1 && Object.entries(input).every(([k, v]) => k === 'command' || (BENIGN_KEYS.has(k) && (typeof v === 'string' || typeof v === 'number')) || (FOLDER_KEYS.includes(k) && (typeof v === 'string' || v === undefined)));
-    const rule = exact && consistent && argv?.length && ruleMayCover(argv) ? commandRule(argv, where) : null;
+    // A command that also names files of its own (locations, a path among its
+    // arguments) says more than its command and folder: no rule covers it,
+    // and its card shows the lot (Gemini's tenth review, 20 Nov 2026). A tool
+    // name doesn't change what a command runs.
+    const saysMore = paths.length > 0;
+    const rule = exact && consistent && !saysMore && argv?.length && ruleMayCover(argv) ? commandRule(argv, where) : null;
 
     let code: CodeWrite = false;
     const edits = !external && writesFiles(kind);
@@ -773,6 +786,7 @@ export class AcpSession implements AgentSession {
     const shellCard =
       Boolean(command) &&
       consistent &&
+      !saysMore &&
       placeKnown &&
       !unknownPlace &&
       said.length <= 1 &&
