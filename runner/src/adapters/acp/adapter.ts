@@ -1119,13 +1119,6 @@ export class AcpSession implements AgentSession {
   }
 }
 
-// Every string inside a value, however deep.
-function stringsIn(v: unknown, depth = 0): string[] {
-  if (typeof v === 'string') return [v];
-  if (depth > 8 || !v || typeof v !== 'object') return [];
-  return Object.values(v as Record<string, unknown>).flatMap((x) => stringsIn(x, depth + 1));
-}
-
 // The MCP tool a frame says it is, as <server>__<tool>.
 function mcpIdOf(u: Record<string, unknown>): string | undefined {
   const m = isPlainObject(u._meta) && isPlainObject(u._meta.mcp) ? u._meta.mcp : undefined;
