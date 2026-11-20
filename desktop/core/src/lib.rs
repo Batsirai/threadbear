@@ -9,6 +9,7 @@ pub mod app_update;
 pub mod chips;
 pub mod completion_sound;
 pub mod den;
+pub mod feed;
 pub mod composer;
 pub mod confetti;
 pub mod connectors;

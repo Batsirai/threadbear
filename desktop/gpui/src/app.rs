@@ -268,6 +268,8 @@ pub struct Threadbear {
     /// The projects themselves, the page that's open and the views' own
     /// state (projects.rs).
     pub(crate) projects: crate::projects::ProjectsState,
+    /// The Feed's cards, folds and replies (inbox_feed.rs).
+    pub(crate) inbox_feed: crate::inbox_feed::FeedState,
 
     /// The new-thread page's box and what it's set to (new_thread.rs).
     pub(crate) new_thread: crate::new_thread::NewThreadState,
@@ -571,6 +573,7 @@ impl Threadbear {
             scheduled,
             schedule_editor: None,
             shows_home: false,
+            inbox_feed: Default::default(),
             restoring_place: false,
             librarian: crate::librarian::LibrarianState::new(),
             recipes: crate::recipes::RecipesState::new(),
@@ -1404,6 +1407,7 @@ impl Threadbear {
             // Open already, behind a page (a schedule's target was clicked,
             // or a project's page): the page goes.
             if self.shows_home || self.projects.open.is_some() {
+                self.leave_feed_for_thread();
                 self.shows_home = false;
                 self.projects.open = None;
                 self.note_navigation();
@@ -1430,6 +1434,7 @@ impl Threadbear {
         let client = self.client.clone();
         let composer = self.composer_for(&id, window, cx);
         self.selected = Some(id);
+        self.leave_feed_for_thread();
         self.shows_home = false;
         self.projects.open = None;
         let pane = match (moved, kept) {
@@ -1541,6 +1546,7 @@ impl Threadbear {
         self.close_subagent(cx);
         self.leave_pane(cx);
         self.selected = None;
+        self.leave_feed_for_thread();
         self.shows_home = false;
         self.projects.open = None;
         self.note_navigation();
@@ -1701,6 +1707,7 @@ impl Threadbear {
             "homePage": match self.home_page() {
                 Some(SidebarMode::Scheduled) => self.scheduled_home_dump(),
                 Some(SidebarMode::Projects) => json!({ "title": "Projects" }),
+                Some(SidebarMode::Feed) => self.feed_dump(),
                 Some(_) => self.librarian_home_dump(),
                 None => Value::Null,
             },

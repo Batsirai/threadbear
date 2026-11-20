@@ -476,6 +476,8 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_LIVE_PAGES ? ['livePages'] : []),
     // The Recipes view, with TB_MOCK_RECIPES (addRecipesDemo).
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
+    // The Feed, with TB_MOCK_FEED (addDemoFeed).
+    ...(process.env.TB_MOCK_FEED ? ['feed'] : []),
   ];
 }
 
@@ -654,6 +656,9 @@ if (process.env.TB_MOCK_DECISIONS) addDemoDecisions();
 // threads it started, as in mockup sub-A. Only when asked, as it adds rows
 // other specs count.
 if (process.env.TB_MOCK_NESTED) addDemoNested();
+// The Feed (the feed experiment): the threads of mockup r3-c-status, as cards.
+// Only when asked, as it adds rows other specs count.
+if (process.env.TB_MOCK_FEED) addDemoFeed();
 // Parts of a project (docs/protocol.md, Projects, "Parts"): Photo sync as a
 // part of Threadbear, for features/projects.feature.
 if (process.env.TB_MOCK_PARTS) {
@@ -3904,6 +3909,113 @@ function addDemoNested() {
   // Moved out from under it: a row of its own, and Put Back Under in its menu.
   make('nest_detached', 'Fix the BrowserBear focus bug', 25, 'idle', {
     answer: 'Fixed in BrowserBear: the handoff window now takes focus.', needs: 'nothing', startedBy: by('a tooling fix'), detached: true, unread: true,
+  });
+}
+
+/**
+ * TB_MOCK_FEED: the Feed's demo (docs/protocol.md, "What Mike first asked";
+ * runner/src/experiments/feed.md), the cards of the mockup Mike picked on 20
+ * Nov: one he started that needs him with a card of two asks (the agent's
+ * pick starred), one started by another thread asking him something, one
+ * working with a job in the background, one finished with a long
+ * conversation, one a schedule started, and one running a turn. Every thread
+ * carries `request`, its first message of Mike's, as the runner gives it.
+ */
+function addDemoFeed() {
+  const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const cwd = '/Users/mike/dev/me/threadbear';
+  const make = (id, title, minutes, { status = 'idle', said = [], needs, asks, startedBy, schedule, background, unread } = {}) => {
+    const summary = {
+      id, title, cwd, accountId: 'claude-main', provider: 'claude', model: 'claude-opus-5-5', permissionMode: 'full',
+      status, live: status !== 'idle', needsYou: needs === 'you', createdAt: ago(minutes + 90), updatedAt: ago(minutes), lastActivityAt: ago(minutes),
+      preview: '', lastSeq: 0, lastSeenSeq: 0,
+      ...(needs ? { needs } : {}), ...(startedBy ? { startedBy } : {}), ...(schedule ? { schedule } : {}), ...(background ? { background } : {}),
+    };
+    const events = [];
+    const push = (fields, turnId, at) => events.push({ seq: events.length + 1, ts: at, threadId: id, ...(turnId ? { turnId } : {}), ...fields });
+    // `said`: [who, words] in order, "mike" or "agent", each turn a pair.
+    let turn = 0;
+    said.forEach(([who, words], i) => {
+      const at = ago(minutes + (said.length - i) * 7);
+      if (who === 'mike') {
+        turn++;
+        push({ type: 'user.message', text: words, images: [] }, `${id}_t${turn}`, at);
+        push({ type: 'turn.started' }, `${id}_t${turn}`, at);
+      } else {
+        push({ type: 'assistant.text', itemId: `${id}_m${i}`, text: words }, `${id}_t${turn}`, at);
+        const last = i === said.length - 1;
+        if (!(last && status === 'running')) push({ type: 'turn.completed', outcome: 'completed', durationMs: 42_000, ...(last && needs ? { needs } : {}), ...(last && asks ? { asks } : {}) }, `${id}_t${turn}`, at);
+      }
+    });
+    const lastReply = said.filter(([who]) => who === 'agent').at(-1);
+    if (lastReply) summary.preview = lastReply[1].replace(/\s+/g, ' ').slice(0, 140);
+    const firstMine = said.find(([who]) => who === 'mike');
+    if (firstMine && !startedBy) summary.request = firstMine[1].replace(/\s+/g, ' ').slice(0, 200);
+    if (asks) {
+      summary.asks = asks;
+      summary.asksSeq = events.findLast((e) => e.type === 'turn.completed')?.seq ?? events.length;
+    }
+    summary.lastSeq = events.length;
+    summary.lastSeenSeq = unread ? Math.max(0, events.length - 2) : events.length;
+    threads.set(id, { summary, events, inProgress: new Map(), timers: [] });
+    return summary;
+  };
+  make('feed_limit', 'Explain the Claude 5-hour limit', 40, {
+    needs: 'you', unread: true,
+    said: [
+      ['mike', 'Explain the Claude 5-hour limit in the guide and FAQ'],
+      ['agent', 'The guide and FAQ are written. A T3 contributor found a 4th bug caused by the custom label: Claude Code switches off MCP Tasks for a label it doesn\'t recognise.'],
+    ],
+    asks: [{ action: 'Keep holding, or drop the custom label idea?', options: ['Drop the idea', 'Keep holding till 4 Dec'], suggested: 0 }],
+  });
+  make('feed_back_button', 'Browser pane: back button', 9, {
+    needs: 'you', unread: true,
+    startedBy: { kind: 'thread', label: 'Agent', threadId: 'feed_coordinator', threadTitle: 'GPUI Port Coordinator', why: 'building the Browser pane' },
+    said: [
+      ['mike', 'Take this on: the Browser pane\'s back button.'],
+      ['agent', 'Back works when the pane has history. A fresh pane has nowhere to go back to.'],
+    ],
+    asks: [{ action: 'Should Back go to the last page or close the pane when there\'s no history?', options: ['Close the pane', 'Do nothing'], suggested: 0 }],
+  });
+  make('feed_bedtime', 'Bedtime Tube', 20, {
+    said: [
+      ['mike', 'Bedtime Tube hasn\'t put anything on my phone for ages, can you have a look?'],
+      ['agent', 'Found it. Nothing has saved since 8 Nov: the Save step lost its link to VLC\'s folder after VLC moved it, so every download stopped at the last step and the files sat on Bruce. I put the link back and saved the backlog.'],
+      ['mike', 'Can you get Codex and Gemini to try to break it?'],
+      ['agent', 'Codex found a timing gap: if a save is still running when the next fetch starts, the same video can be sent to the phone twice.'],
+      ['agent', 'Gemini found that the new 48 h alert will fire after a quiet spell with no new videos, even though nothing is broken.'],
+      ['mike', 'Fix both'],
+      ['agent', 'Fixed both. A video is sent once, even if two runs overlap, and the alert only counts time when there was something to save.'],
+      ['mike', 'Thanks, and check again tonight?'],
+      ['agent', 'Fixed, and the backlog is on your phone: 50 videos saved, 2 left for tonight. Codex and Gemini each found a hole in the fix; both are closed. I\'ll check again at 6:20 pm.'],
+    ],
+    needs: 'nothing',
+  });
+  make('feed_main_green', 'Keep main green', 6, {
+    said: [
+      ['mike', 'main keeps going red and forks aren\'t getting releases, sort it out'],
+      ['agent', 'The Mac job wasn\'t failing, it was running out of time at 60 min. I split the specs into two jobs and landed it as 2c9638768.'],
+    ],
+    background: [{ kind: 'monitor', description: 'Waiting on the next Desktop run' }],
+  });
+  make('feed_kite', 'Kite watch', 3, {
+    startedBy: { kind: 'schedule', label: 'Schedule' }, schedule: { id: 'sched_kite', title: 'Kite watch' },
+    said: [['agent', 'Port Geographe tomorrow 7 to 10 am: 19 kn WSW, 24\u00b0C.']],
+    needs: 'nothing',
+  });
+  make('feed_hotel', 'San Francisco hotel', 50, {
+    said: [
+      ['mike', 'Find me somewhere near the office for the holiday party week'],
+      ['agent', 'Keep Beck\'s, A$777 under today\'s price.'],
+    ],
+    needs: 'nothing',
+  });
+  make('feed_running', 'Sort the Ramp receipts', 1, {
+    status: 'running',
+    said: [
+      ['mike', 'Can you sort this month\'s Ramp receipts?'],
+      ['agent', 'Reading the receipts in the mail.'],
+    ],
   });
 }
 

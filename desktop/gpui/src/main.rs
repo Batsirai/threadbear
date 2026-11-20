@@ -71,6 +71,7 @@ mod highlights_board;
 mod highlights_project;
 mod highlights_store;
 mod home_page;
+mod inbox_feed;
 mod icons;
 mod installed;
 mod key_hints;

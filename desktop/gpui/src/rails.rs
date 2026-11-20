@@ -334,6 +334,7 @@ impl Threadbear {
             SidebarMode::Projects => "rail-projects",
             SidebarMode::Librarian => "rail-librarian",
             SidebarMode::Recipes => "rail-recipes",
+            SidebarMode::Feed => "rail-feed",
         }
         .into();
         let sliding = lit(Some(lit_id.clone()), cx.reduce_motion());
@@ -350,6 +351,13 @@ impl Threadbear {
             this.unfold_threads(cx);
             this.set_mode(SidebarMode::Inbox, cx)
         }, cx));
+        // The Feed (experiment `feed`, inbox_feed.rs): the Inbox as cards in
+        // the main panel, the list staying as it is.
+        if self.feed_on() {
+            let mut button = view_button(RailButton::new("rail-feed", "text.alignleft", "Feed", mode == SidebarMode::Feed));
+            button.tip = "Feed: your Inbox as cards, one after another".into();
+            views.push(rail_button(button, |this, _, cx| this.show_feed(cx), cx));
+        }
         if self.schedules_supported {
             let mut button = view_button(RailButton::new("rail-scheduled", "clock", "Scheduled", mode == SidebarMode::Scheduled));
             button.tip = self.shortcut_tip("Scheduled", ShortcutCommand::ShowScheduled);
@@ -548,6 +556,9 @@ impl Threadbear {
         use serde_json::json;
         let mode = self.mode;
         let mut activity = vec![json!({ "title": "Threads", "badge": self.inbox_count(cx), "active": mode == SidebarMode::Inbox })];
+        if self.feed_on() {
+            activity.push(json!({ "title": "Feed", "active": mode == SidebarMode::Feed }));
+        }
         if self.schedules_supported {
             activity.push(json!({ "title": "Scheduled", "badge": self.scheduled.active_count(), "active": mode == SidebarMode::Scheduled }));
         }

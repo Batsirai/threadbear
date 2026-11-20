@@ -170,6 +170,9 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   else delete process.env.TB_MOCK_NESTED;
   if (nestedOff) process.env.TB_MOCK_NESTED_OFF = '1';
   else delete process.env.TB_MOCK_NESTED_OFF;
+  // The Feed: the feed experiment on in the hello, and its demo threads.
+  if (pickle.tags.some((t) => t.name === '@feed')) process.env.TB_MOCK_FEED = '1';
+  else delete process.env.TB_MOCK_FEED;
   // The done card's Archive menu: the inboxGuess experiment on in the hello.
   if (pickle.tags.some((t) => t.name === '@inbox-guess')) process.env.TB_MOCK_INBOX_GUESS = '1';
   else delete process.env.TB_MOCK_INBOX_GUESS;

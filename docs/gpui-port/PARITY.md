@@ -5182,3 +5182,22 @@ Fixes from Codex's review of the slice before:
 - Rules and their tests: `desktop/core/src/open_policy.rs` (`Opener`,
   `still_same`, `checked_copy`), the gate: `desktop/gpui/src/open_gate.rs`
   (`open_checked`), `desktop/core/tests/open_gate_source.rs`.
+
+### 2026-11-20 The Feed (`inbox.feed`)
+
+- Experiment `feed` (runner/src/experiments/feed.md), GPUI app only; the frozen
+  Swift app has no Feed, so the spec is `@swift-pending` there. The Feed button
+  in the activity bar and Go > Show Feed put the Inbox in the main panel as one
+  card per thread, as in the mockup Mike picked on 20 Nov (r3-c-status), a
+  column about 680 wide. The sidebar stays on the Inbox (`SidebarMode::Feed`
+  draws the Inbox list). A card leads with the summary's `request` (Mike's first
+  message; docs/protocol.md, "What Mike first asked"), else the title, or for a
+  thread he didn't start, who started it. Its asks are the composer's buttons
+  and rows through `DecisionCard::for_feed`, which keeps the picks while the
+  answer is on its way so the pressed button spins and the rest take no clicks.
+  Done archives at once (rolled back with the runner's reason) and leaves a
+  one-line row with Undo until the Feed is left. Not in v1: the compose box at
+  the top and asking several models at once from one card.
+- Rules and their tests: `desktop/core/src/feed.rs`. Drawing:
+  `desktop/gpui/src/inbox_feed.rs`. The mock's `TB_MOCK_FEED` demo set,
+  `features/feed.feature`.

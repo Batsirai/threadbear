@@ -527,6 +527,7 @@ fn step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &mut App
         // page's search, and the sidebar's folded project rows.
         "project" | "projectParent" => crate::projects::automation(app, cmd, window, cx),
         "decision" => crate::project_decisions::automation(app, cmd, window, cx),
+        "feed" => crate::inbox_feed::automation(app, cmd, window, cx),
         "projectTab" => crate::project_decisions::tab_automation(app, cmd, cx),
         "search" if cmd["projects"].as_bool() == Some(true) => crate::projects::automation(app, cmd, window, cx),
         "expand" | "collapse" if cmd.get("projectRow").is_some() => crate::projects_list::fold_automation(app, cmd, cx),
@@ -1232,6 +1233,7 @@ fn shell_step(app: &Entity<Threadbear>, cmd: &Value, window: &mut Window, cx: &m
                 "projects" => shell::SidebarMode::Projects,
                 "librarian" => shell::SidebarMode::Librarian,
                 "recipes" => shell::SidebarMode::Recipes,
+                "feed" => shell::SidebarMode::Feed,
                 "archive" => {
                     app.update(cx, |t, cx| t.run_command(shell::Command::ShowArchived, window, cx));
                     return Ok(json!("ok"));
