@@ -66,6 +66,7 @@ what the iPhone has.
 | ThreadSearch (Inbox.swift) | `Search.kt` | 5 |
 | NotifyMode, AppModel's runner order and offline line | `Settings.kt` | 5 |
 | AppModel's StartingThread (new threads on their way) | `Starting.kt` | 5 |
+| PendingCommand.swift, PendingCommands.swift (a command sent and waited on, and its one watcher; shared/cases/pending-commands.json) | `PendingCommand.kt`, `PendingCommands.kt` | 6 |
 
 Dictation uses Android's own SpeechRecognizer (on-device where the phone
 has it), not Whisper; there's one recognizer, so no "Dictate with" choice.

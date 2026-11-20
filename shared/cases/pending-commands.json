@@ -1,6 +1,6 @@
 {
   "about": "A command a phone or the website sends a runner and waits on (an archive, a star, a reply button, a card's answer, Stop), from the tap to the runner saying how it went: idle, sending (the mutation hasn't answered), queued (the backend has it, the runner hasn't taken it), taken, done (with the thread it made, if any), failed (with why, if it said) or timedOut (nothing heard in 20 s, still listening). input is the events in order, times in ms: tap, sent (the backend's command id), sendFailed (the mutation threw), row (phone:command's answer: pending, taken, done, failed, or null once it's gone from the backend), deadline (the clock), reconnected (the connection dropped and came back), cancelled (the backend took it back) and settle (a moment after done). expect is where it ends and whether the control takes taps (locked). The iPhone (ThreadbearKit PendingCommand.swift), Android (kit PendingCommand.kt) and the website (web/src/command.ts, whose waiting is queued or taken and whose slow is timedOut).",
-  "platforms": ["ios", "web"],
+  "platforms": ["ios", "android", "web"],
   "cases": [
     {"name": "a tap starts sending, and takes no more taps", "input": [{"event": "tap", "at": 0}], "expect": {"state": "sending", "locked": true}},
     {"name": "the backend's id makes it queued", "input": [{"event": "tap", "at": 0}, {"event": "sent", "id": "c1", "at": 100}], "expect": {"state": "queued", "id": "c1", "locked": true}},

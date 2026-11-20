@@ -51,8 +51,8 @@ fun ReplyButtonPill(button: MessageButton) {
     val extras = ThreadExtras.of(model, LocalContext.current)
     val threadId = LocalButtonThread.current
     val push = LocalPushThread.current
-    val presses by extras.presses.collectAsStateWithLifecycle()
-    val look = threadId?.let { extras.look(button, it, presses) } ?: ReplyButtons.Look.Ready
+    val pending by model.commands.entries.collectAsStateWithLifecycle()
+    val look = threadId?.let { extras.look(button, it, pending) } ?: ReplyButtons.Look.Ready
     val pressed = look is ReplyButtons.Look.Pressed
     val failed = look as? ReplyButtons.Look.Failed
     // Nothing to open: the thread it went to isn't known.

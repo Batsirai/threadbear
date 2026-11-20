@@ -62,6 +62,21 @@ object ReplyButtons {
         return Look.Ready
     }
 
+    /**
+     * What a button shows with this phone's press as a [PendingCommand]: one
+     * the Mac hasn't picked up in time can be pressed again (the runner
+     * presses it once however many times it's asked), saying why, rather
+     * than spinning for ever.
+     */
+    fun look(button: MessageButton, pending: PendingCommand): Look = when (pending) {
+        PendingCommand.Idle -> look(button, null, asking = false)
+        is PendingCommand.Sending, is PendingCommand.Queued, is PendingCommand.Taken -> look(button, null, asking = true)
+        is PendingCommand.Done -> look(button, pending.result ?: CommandStatus(CommandState.DONE), asking = false)
+        is PendingCommand.Failed -> look(button, CommandStatus(CommandState.FAILED, note = pending.reason), asking = false)
+        is PendingCommand.TimedOut -> button.pressedThreadId?.let { Look.Pressed(it) }
+            ?: Look.Failed(pending.timedOutNote ?: "The Mac hasn't picked this up yet.")
+    }
+
     /** What a screen reader says, and where it goes. */
     fun hint(button: MessageButton): String = when (button.kind) {
         "start" -> button.target?.let { "Starts a thread in $it" } ?: "Starts a thread"
