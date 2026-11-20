@@ -2557,7 +2557,60 @@ async function playScripted(threadId, turnId, started, turn, interrupted) {
   const finalText = t.inProgress.get(itemId).text;
   t.inProgress.delete(itemId);
   persist(threadId, { type: 'assistant.text', itemId, text: finalText }, turnId);
+  if (turn.limit && !interrupted()) return limitHit(threadId, turnId, started, turn.limit);
   finishTurn(threadId, turnId, started, interrupted() ? 'interrupted' : 'completed', turn.end);
+}
+
+// A scripted turn with `limit` stops partway at its login's usage limit, as
+// the runner sees Claude's "You've hit your limit" (errorKind usageLimit),
+// and the runner's pool move follows (moveLogin and carryOn in
+// runner/src/runner/pools.ts): the login's marked out of room, the thread
+// moves to another with the note the app keeps on show, and its own
+// message carries the turn on there, a moment later so a recording catches
+// each step. `limit: { to }` names the login it moves to (as if its pool
+// held that one too: Codex, for the X series' clip); otherwise the pool's
+// other login with the most room.
+const CARRY_ON_MOVED = 'Your last login hit its usage limit partway through that turn, so this thread has moved to another one. Carry on from where you left off.';
+function limitHit(threadId, turnId, started, limit) {
+  const t = threads.get(threadId);
+  const s = t.summary;
+  const was = accounts.find((a) => a.id === s.accountId);
+  const error = "You've hit your limit · resets Mon 9am";
+  persist(threadId, { type: 'error', message: error }, turnId);
+  persist(threadId, { type: 'turn.completed', turnId, outcome: 'failed', durationMs: Date.now() - started, error, errorKind: 'usageLimit' }, turnId);
+  t.interrupt = undefined;
+  setStatus(threadId, 'error');
+  const pool = poolOf(s.poolId);
+  const to = typeof limit === 'object' && limit.to
+    ? accounts.find((a) => a.id === limit.to)
+    : [...(pool?.accountIds ?? [])].filter((id) => id !== s.accountId).map((id) => accounts.find((a) => a.id === id)).filter((a) => a && roomOf(a) >= 1).sort((a, b) => roomOf(b) - roomOf(a))[0];
+  if (!was || !to) return;
+  const window = was.usage?.windows?.find((w) => w.kind === 'weekly') ?? was.usage?.windows?.[0];
+  if (was.usage) {
+    was.usage.blocked = true;
+    for (const w of was.usage.windows ?? []) if (w.kind === 'weekly' || w.kind === 'five_hour') w.remainingPercent = 0;
+  }
+  broadcast('accounts.updated', { accounts: publicAccounts() });
+  const name = window?.kind === 'five_hour' ? '5-hour' : 'weekly';
+  const back = window?.resetsAt ? new Date(window.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).replace(/:00/, '').replace(/ ([AP]M)$/, (_, m) => ` ${m.toLowerCase()}`) : undefined;
+  t.timers.push(setTimeout(() => {
+    if (!threads.has(threadId) || s.archivedAt || t.interrupt) return;
+    let note = `Moved to ${to.title}: ${was.title} hit its ${name} limit${back ? `, back at ${back}` : ''}.`;
+    if (to.provider !== s.provider) {
+      s.provider = to.provider;
+      s.model = defaults.models[to.provider] ?? to.defaultModel;
+      s.effort = defaults.efforts[to.provider];
+      const model = (to.models ?? []).find((m) => m.id === s.model)?.title ?? s.model;
+      note += ` It's on ${to.provider === 'codex' ? 'Codex' : 'Claude'} now, with ${model} and a summary of the thread so far.`;
+    }
+    s.accountId = to.id;
+    if (pool && !pool.accountIds.includes(to.id)) delete s.poolId;
+    persist(threadId, { type: 'system.note', text: note, login: true });
+    broadcastSummary(threadId);
+    t.timers.push(setTimeout(() => {
+      if (threads.has(threadId) && !s.archivedAt && !t.interrupt) fakeTurn(threadId, CARRY_ON_MOVED, [], undefined, 'runner');
+    }, 1500));
+  }, 1500));
 }
 
 function finishTurn(threadId, turnId, started, outcome, said) {
