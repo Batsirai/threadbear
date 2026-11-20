@@ -108,6 +108,8 @@ function byHand(t: T, e: ReplyEvent): Outcome {
       t.cardReopened = false;
       t.replyRewrite = false;
       if (t.endTurn) t.endTurn = { ...t.endTurn, archive: false, snooze: undefined, waitFor: undefined };
+      // Fixed with reply-phase.ts: the call before loses them too (below).
+      if (t.endTurnBefore) t.endTurnBefore = { ...t.endTurnBefore, archive: false, snooze: undefined, waitFor: undefined };
       return o;
     case 'wakeRead':
       if (!(t.ended || t.tookEndTurn)) return o;
@@ -340,6 +342,24 @@ test('a second end_turn that adds archive or snooze keeps the card taken', () =>
   replyTurn(t as unknown as Turn, { kind: 'result', itemId: 'c2', ...RESULTS.archiveAdded });
   assert.deepEqual(t.endTurn, { ...CALLS.asks, archive: true });
   assert.equal(replyOf(t).kind, 'replying');
+});
+
+// Found by the table: Mike writes while the agent's second end_turn is being
+// written, and that call is refused for it (UNREAD_MESSAGE), which put back
+// the first call's arguments, archive and all. A turn that then ended with no
+// other end_turn archived the thread he had just written to.
+test('a message cancels the archive of a call refused for it, not just the latest', () => {
+  const t = walk('call.archive', 'result.bulletsDone');
+  replyTurn(t as unknown as Turn, { kind: 'call', itemId: 'c2', input: { needs: 'nothing', next: ['More'] }, by: { mode: 'full' } });
+  replyTurn(t as unknown as Turn, { kind: 'message' });
+  replyTurn(t as unknown as Turn, { kind: 'result', itemId: 'c2', ...RESULTS.unread });
+  assert.equal(t.endTurn?.archive, false);
+  for (const [n, input] of [['snooze', CALLS.snooze], ['archive', CALLS.archive]] as const) {
+    const u = walk(`call.${n}`, 'result.bulletsDone', 'call.next');
+    replyTurn(u as unknown as Turn, { kind: 'message' });
+    replyTurn(u as unknown as Turn, { kind: 'result', itemId: 'c-next', ...RESULTS.repeat });
+    assert.deepEqual(u.endTurn, { ...input, archive: false, snooze: undefined, waitFor: undefined });
+  }
 });
 
 test('moveReply is pure', () => {

@@ -269,9 +269,11 @@ export function moveReply(s: ReplyState, e: ReplyEvent): ReplyMove {
       // He wrote again, so the turn owes him another reply; a card it was
       // sent back for gives way to this message's own; and an archive,
       // snooze or wait it asked for before reading this is off ("wait, one
-      // more thing" shouldn't send the thread away). It can ask again.
-      const input = s.call.input ? { ...s.call.input, archive: false, snooze: undefined, waitFor: undefined } : undefined;
-      const c = { call: { ...s.call, input }, said: s.said };
+      // more thing" shouldn't send the thread away). It can ask again. The
+      // call before too: a call written before the message is refused for it
+      // (UNREAD_MESSAGE), which puts those arguments back.
+      const off = (a: Record<string, unknown> | undefined) => (a ? { ...a, archive: false, snooze: undefined, waitFor: undefined } : undefined);
+      const c = { call: { ...s.call, input: off(s.call.input), before: off(s.call.before) }, said: s.said };
       if (s.kind === 'working') return ok({ kind: 'working', ...c });
       return ok({ kind: 'open', ...(replyAfter(s) ? { replyAfter: true } : {}), ...c, ...finals(s) });
     }
