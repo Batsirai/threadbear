@@ -1,0 +1,589 @@
+// Carrying work across a whole-tree format commit: a commit that is only a
+// formatter's output (`cargo fmt --all` over desktop/, say) conflicts with
+// every branch and every fork that changed those files before it, all over,
+// though nothing about the code clashes.
+//
+// Formatting is deterministic, so none of that needs a person. Each of the
+// branch's commits is made again with its tree run through the same
+// formatter, and its change, in formatted terms (formatted parent to
+// formatted commit), goes onto main as a rebase would put it. For a branch
+// based on the format commit's parent that is exactly "each commit's tree,
+// formatted, on top of the format commit"; a branch based further back gets
+// the same three-way merge a rebase would do, only with both sides formatted,
+// so the conflicts left are real ones.
+//
+// The format commits are listed in .git-blame-ignore-revs (git blame and
+// GitHub look past them), each under `# format-...:` lines saying how it was
+// made: the commit's subject (to find it before its id is written down, as
+// tb land and scripts/sync-main.sh may both rebase it), the command, run from
+// the top of a copy of the tree, the folders it formats, and the config files
+// it formats with (taken from the format commit itself, so an older tree is
+// formatted as the format commit was, toolchain included).
+//
+// Used by `tb land` (worktrees.ts) and scripts/replay-over-format.sh (the CLI
+// at the bottom), which a fork also runs to bring in a release with a format
+// commit in it (docs/bringing-in-updates.md). Only node's own modules, so a
+// fork that doesn't have this file yet can run the release's copy of it.
+import { execFile, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export const FORMAT_LIST = '.git-blame-ignore-revs';
+
+export type FormatEntry = {
+  subject: string;
+  command: string;
+  paths: string[];
+  config: string[];
+  id?: string;
+};
+
+export type FormatCommit = { entry: FormatEntry; commit: string };
+
+// --------------------------------------------------------------- the list
+
+const HEX = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+// The entries in a .git-blame-ignore-revs. A block of `# format-<key>: value`
+// lines describes one; the id on the line after it, if there is one, is the
+// commit. Other ids (plain blame skips) and comments are left alone.
+export function parseFormatList(text: string): FormatEntry[] {
+  const out: FormatEntry[] = [];
+  let cur: Partial<FormatEntry> | undefined;
+  const finish = (id?: string) => {
+    if (cur?.subject && cur.command && cur.paths?.length) {
+      out.push({ subject: cur.subject, command: cur.command, paths: cur.paths, config: cur.config ?? [], ...(id ? { id } : {}) });
+    }
+    cur = undefined;
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = /^#\s*format-(subject|command|paths|config):\s*(.*)$/.exec(line);
+    if (m) {
+      const [, key, value] = m;
+      if (key === 'subject') {
+        finish();
+        cur = { subject: value.trim() };
+      } else if (cur) {
+        if (key === 'command') cur.command = value.trim();
+        else cur[key as 'paths' | 'config'] = value.split(/\s+/).filter(Boolean).map((p) => p.replace(/\/+$/, ''));
+      }
+      continue;
+    }
+    if (HEX.test(line)) {
+      finish(line);
+      continue;
+    }
+    if (line && !line.startsWith('#')) finish();
+  }
+  finish();
+  return out;
+}
+
+// --------------------------------------------------------------- git
+
+type Run = { ok: boolean; code: number; stdout: string; stderr: string };
+
+const GIT_SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false'];
+
+function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Ones that point git at some other repo or index (set inside a git hook).
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX', 'GIT_OBJECT_DIRECTORY']) delete env[k];
+  return { ...env, GIT_TERMINAL_PROMPT: '0', ...extra };
+}
+
+export function git(cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}): Promise<Run> {
+  return new Promise((resolve) => {
+    execFile('git', [...GIT_SAFE, '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 64 * 1024 * 1024, timeout: 10 * 60_000, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
+      const e = err as { code?: unknown; signal?: unknown } | null;
+      const code = !e ? 0 : typeof e.code === 'number' ? e.code : e.signal ? -1 : 1;
+      resolve({ ok: !err, code, stdout: String(stdout), stderr: String(stderr) });
+    });
+  });
+}
+
+async function out(cwd: string, args: string[], extra?: NodeJS.ProcessEnv): Promise<string> {
+  const r = await git(cwd, args, extra);
+  if (!r.ok) throw new Error(`git ${args.join(' ')} failed: ${(r.stderr || r.stdout).trim().split('\n')[0]}`);
+  return r.stdout.trim();
+}
+
+async function isAncestor(cwd: string, a: string, b: string): Promise<boolean> {
+  return (await git(cwd, ['merge-base', '--is-ancestor', a, b])).ok;
+}
+
+const short = (id: string) => id.slice(0, 10);
+
+// --------------------------------------------------------------- finding them
+
+// The format commits in `ref`'s history, oldest first, from the list as
+// `ref` has it. One whose id isn't written down yet (or isn't in `ref`) is
+// found by its subject.
+export async function formatCommitsIn(cwd: string, ref: string): Promise<FormatCommit[]> {
+  const list = await git(cwd, ['show', `${ref}:${FORMAT_LIST}`]);
+  if (!list.ok) return [];
+  const entries = parseFormatList(list.stdout);
+  if (!entries.length) return [];
+  let subjects: Map<string, string> | undefined;
+  const found: FormatCommit[] = [];
+  for (const entry of entries) {
+    let commit: string | undefined;
+    if (entry.id && (await git(cwd, ['rev-parse', '--verify', '--quiet', `${entry.id}^{commit}`])).ok && (await isAncestor(cwd, entry.id, ref))) {
+      commit = entry.id;
+    } else {
+      if (!subjects) {
+        subjects = new Map();
+        const log = await out(cwd, ['log', '--no-merges', '--format=%H%x00%s', ref]);
+        for (const line of log.split('\n')) {
+          const [id, s] = line.split('\0');
+          // The newest of any with the same subject, as log lists newest first.
+          if (id && s !== undefined && !subjects.has(s)) subjects.set(s, id);
+        }
+      }
+      commit = subjects.get(entry.subject);
+    }
+    if (commit) found.push({ entry, commit });
+  }
+  // Oldest first: an ancestor has fewer commits behind it than its descendants.
+  const rank = new Map<string, number>();
+  for (const f of found) rank.set(f.commit, Number(await out(cwd, ['rev-list', '--count', f.commit])));
+  return found.sort((a, b) => (rank.get(a.commit) ?? 0) - (rank.get(b.commit) ?? 0));
+}
+
+// The format commits `onto` has that `tip` doesn't: what carrying `tip`
+// onto `onto` crosses.
+export async function crossings(cwd: string, tip: string, onto: string): Promise<FormatCommit[]> {
+  const all = await formatCommitsIn(cwd, onto);
+  const out: FormatCommit[] = [];
+  for (const f of all) if (!(await isAncestor(cwd, f.commit, tip))) out.push(f);
+  return out;
+}
+
+// Whether any commit in `range` changes a file one of these formats.
+export async function touchesFormatted(cwd: string, range: string, formats: FormatCommit[]): Promise<boolean> {
+  const paths = [...new Set(formats.flatMap((f) => f.entry.paths))];
+  if (!paths.length) return false;
+  const changed = await out(cwd, ['log', '--format=', '--name-only', range, '--', ...paths]);
+  return changed.length > 0;
+}
+
+// --------------------------------------------------------------- formatting a tree
+
+export type FormatNote = { commit?: string; what: string };
+
+function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ ok: boolean; text: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('/bin/sh', ['-c', command], { cwd, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let text = '';
+    const add = (b: Buffer) => {
+      if (text.length < 64_000) text += b.toString();
+    };
+    child.stdout.on('data', add);
+    child.stderr.on('data', add);
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, text: String(e) });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0, text });
+    });
+  });
+}
+
+// Formats trees the way the given format commits did, each in turn, with a
+// cache: what a formatter makes depends only on the folders it formats.
+export class TreeFormatter {
+  private readonly cache = new Map<string, { tree: string; failed?: string }>();
+  readonly limitMs: number;
+  private readonly cwd: string;
+  readonly formats: FormatCommit[];
+
+  constructor(cwd: string, formats: FormatCommit[], opts: { limitMs?: number } = {}) {
+    this.cwd = cwd;
+    this.formats = formats;
+    this.limitMs = opts.limitMs ?? 10 * 60_000;
+  }
+
+  // The tree, formatted, and why a formatter failed on it if one did. A
+  // formatter that fails still leaves what it managed (rustfmt formats every
+  // crate it can parse), and the rest of the tree as it was.
+  async format(tree: string): Promise<{ tree: string; failed: string[] }> {
+    let cur = tree;
+    const failed: string[] = [];
+    for (const f of this.formats) {
+      const r = await this.formatOne(cur, f);
+      cur = r.tree;
+      if (r.failed) failed.push(r.failed);
+    }
+    return { tree: cur, failed };
+  }
+
+  private async formatOne(tree: string, f: FormatCommit): Promise<{ tree: string; failed?: string }> {
+    const parts: string[] = [];
+    for (const p of f.entry.paths) {
+      const r = await git(this.cwd, ['rev-parse', '--verify', '--quiet', `${tree}:${p}`]);
+      parts.push(r.ok ? r.stdout.trim() : '-');
+    }
+    // Nothing it formats is in this tree.
+    if (parts.every((p) => p === '-')) return { tree };
+    const key = `${f.commit}\0${parts.join('\0')}`;
+    let made = this.cache.get(key);
+    if (!made) {
+      made = await this.materialize(tree, f);
+      this.cache.set(key, made);
+    }
+    // The formatted folders, put into this tree.
+    if (made.tree === tree) return made;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-fmt-idx-'));
+    try {
+      const env = { GIT_INDEX_FILE: path.join(dir, 'index') };
+      await out(this.cwd, ['read-tree', tree], env);
+      for (const p of f.entry.paths) {
+        // From the temp index only: never anything to do with a working tree.
+        const inIt = (await out(this.cwd, ['ls-files', '-z', '--', p], env)).split('\0').filter(Boolean);
+        if (inIt.length) await stdinGit(this.cwd, ['update-index', '-z', '--force-remove', '--stdin'], inIt.join('\0'), env);
+        const sub = await git(this.cwd, ['rev-parse', '--verify', '--quiet', `${made.tree}:${p}`]);
+        if (sub.ok) await out(this.cwd, ['read-tree', `--prefix=${p}/`, sub.stdout.trim()], env);
+      }
+      return { tree: await out(this.cwd, ['write-tree'], env), failed: made.failed };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // Checks the folders out into a temp folder with the format commit's
+  // config files, runs the command there, and reads back what it changed.
+  // Only files the tree already has are read back: a formatter has no
+  // business making new ones.
+  private async materialize(tree: string, f: FormatCommit): Promise<{ tree: string; failed?: string }> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-fmt-'));
+    const work = path.join(dir, 'tree');
+    fs.mkdirSync(work);
+    try {
+      const env = { GIT_INDEX_FILE: path.join(dir, 'index') };
+      await out(this.cwd, ['read-tree', tree], env);
+      const files = (await out(this.cwd, ['ls-files', '-z', '--', ...f.entry.paths], env)).split('\0').filter(Boolean);
+      await stdinGit(this.cwd, ['checkout-index', '-u', '-z', '--stdin', `--prefix=${work}/`], files.join('\0'), env);
+      // The format commit's own config, in place of the tree's (or none).
+      const own = new Map<string, Buffer | undefined>();
+      for (const c of f.entry.config) {
+        const target = path.join(work, c);
+        own.set(c, fs.existsSync(target) ? fs.readFileSync(target) : undefined);
+        const blob = await gitBuffer(this.cwd, `${f.commit}:${c}`);
+        if (blob) {
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, blob);
+        } else {
+          fs.rmSync(target, { force: true });
+        }
+      }
+      const ran = await runCommand(f.entry.command, work, this.limitMs);
+      // Config files go back to the tree's own, so only formatting is read.
+      for (const [c, text] of own) {
+        const target = path.join(work, c);
+        if (text === undefined) fs.rmSync(target, { force: true });
+        else fs.writeFileSync(target, text);
+      }
+      await out(this.cwd, [`--work-tree=${work}`, 'add', '-u', '--', ...f.entry.paths], env);
+      const made = await out(this.cwd, ['write-tree'], env);
+      const failed = ran.ok ? undefined : `${f.entry.command} failed: ${lastLines(ran.text, 6)}`;
+      return { tree: made, failed };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
+
+function stdinGit(cwd: string, args: string[], input: string, extra: NodeJS.ProcessEnv): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = execFile('git', [...GIT_SAFE, '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 16 * 1024 * 1024 }, (err, _o, stderr) =>
+      err ? reject(new Error(`git ${args.join(' ')}: ${String(stderr).trim()}`)) : resolve(),
+    );
+    child.stdin?.end(input);
+  });
+}
+
+function gitBuffer(cwd: string, object: string): Promise<Buffer | undefined> {
+  return new Promise((resolve) => {
+    execFile('git', [...GIT_SAFE, '-C', cwd, 'cat-file', 'blob', object], { env: cleanEnv(), encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 }, (err, stdout) =>
+      resolve(err ? undefined : stdout),
+    );
+  });
+}
+
+function lastLines(text: string, n: number): string {
+  const lines = text.trim().split('\n').filter(Boolean);
+  return lines.slice(-n).join(' | ') || '(no output)';
+}
+
+// --------------------------------------------------------------- carrying a branch
+
+export type Carried =
+  | { ok: true; tip: string; count: number; notes: string[] }
+  | { ok: false; conflict: string[]; at: string; subject: string; notes: string[] }
+  | { ok: false; error: string; notes: string[] };
+
+// `base..tip`'s commits made again on `onto` (which has the format
+// commits), formatted, as a rebase would: each one's change from its
+// formatted parent to it formatted, merged onto the commits carried so far.
+// Touches no working tree. A commit made empty is dropped, as rebase drops
+// it, unless it was empty to start with. `tip` must have no merges past
+// `base`.
+export async function carryAcross(cwd: string, a: { base: string; tip: string; onto: string; formatter: TreeFormatter }): Promise<Carried> {
+  const notes: string[] = [];
+  const list = (await out(cwd, ['rev-list', '--reverse', '--topo-order', `${a.base}..${a.tip}`])).split('\n').filter(Boolean);
+  if ((await out(cwd, ['rev-list', '--merges', `${a.base}..${a.tip}`])) !== '') {
+    return { ok: false, error: `${short(a.tip)} has a merge on it past ${short(a.base)}, so it can't be carried commit by commit.`, notes };
+  }
+  // A formatter that can't format the base at all (not installed, say) would
+  // carry nothing formatted: say so rather than leave the work half done.
+  const baseTree = await out(cwd, ['rev-parse', `${a.base}^{tree}`]);
+  const first = await a.formatter.format(baseTree);
+  if (first.failed.length && first.tree === baseTree) {
+    return { ok: false, error: `Couldn't format ${short(a.base)}, the commit this work starts from: ${first.failed.join('; ')}`, notes };
+  }
+  const asCommit = async (tree: string) => out(cwd, ['commit-tree', tree, '-m', 'formatted'], IDENT);
+  let prev = first.tree;
+  let prevCommit = await asCommit(prev);
+  let tip = a.onto;
+  let count = 0;
+  for (const c of list) {
+    const orig = await out(cwd, ['rev-parse', `${c}^{tree}`]);
+    const parentTree = await out(cwd, ['rev-parse', `${c}^^{tree}`]).catch(() => '');
+    const formatted = await a.formatter.format(orig);
+    const subject = await out(cwd, ['log', '-1', '--format=%s', c]);
+    for (const why of formatted.failed) notes.push(`${short(c)} (${subject}) was left partly unformatted: ${why}`);
+    const fc = await asCommit(formatted.tree);
+    const merged = await git(cwd, ['merge-tree', '--write-tree', '--name-only', `--merge-base=${prevCommit}`, tip, fc]);
+    if (!merged.ok) {
+      if (merged.code === 1) {
+        const lines = merged.stdout.split('\n');
+        const files: string[] = [];
+        for (const l of lines.slice(1)) {
+          if (!l.trim()) break;
+          files.push(l.trim());
+        }
+        return { ok: false, conflict: [...new Set(files)], at: c, subject, notes };
+      }
+      return { ok: false, error: `git merge-tree failed on ${short(c)}: ${(merged.stderr || merged.stdout).trim().split('\n')[0]}`, notes };
+    }
+    const tree = merged.stdout.split('\n')[0].trim();
+    const wasEmpty = orig === parentTree;
+    const tipTree = await out(cwd, ['rev-parse', `${tip}^{tree}`]);
+    prev = formatted.tree;
+    prevCommit = fc;
+    if (!wasEmpty && tree === tipTree) {
+      notes.push(`${short(c)} (${subject}) was left out: formatted, its change is already there.`);
+      continue;
+    }
+    const meta = await out(cwd, ['log', '-1', '--format=%an%x00%ae%x00%ad', '--date=raw', c]);
+    const message = (await git(cwd, ['log', '-1', '--format=%B', c])).stdout.replace(/\n+$/, '');
+    const [name, email, date] = meta.split('\0');
+    tip = await out(cwd, ['commit-tree', tree, '-p', tip, '-m', message], { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date });
+    count++;
+  }
+  return { ok: true, tip, count, notes };
+}
+
+// Only for the throwaway commits that hold a formatted tree for merge-tree.
+const IDENT = { GIT_AUTHOR_NAME: 'format', GIT_AUTHOR_EMAIL: 'format@localhost', GIT_COMMITTER_NAME: 'format', GIT_COMMITTER_EMAIL: 'format@localhost', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' };
+
+// The branch's commits as formatted copies on a formatted copy of their
+// base (whose parent is the real base), so an ordinary `git rebase --onto
+// <onto> <first>` puts them on `onto` with conflicts a person can sort out
+// as usual. Returns the formatted base and tip.
+export async function formattedChain(cwd: string, base: string, tip: string, formatter: TreeFormatter): Promise<{ first: string; tip: string; notes: string[] }> {
+  const notes: string[] = [];
+  const baseTree = (await formatter.format(await out(cwd, ['rev-parse', `${base}^{tree}`]))).tree;
+  const first = await out(cwd, ['commit-tree', baseTree, '-p', base, '-m', `Formatted copy of ${short(base)} (replay-over-format.sh)`]);
+  let cur = first;
+  for (const c of (await out(cwd, ['rev-list', '--reverse', '--topo-order', `${base}..${tip}`])).split('\n').filter(Boolean)) {
+    const r = await formatter.format(await out(cwd, ['rev-parse', `${c}^{tree}`]));
+    const subject = await out(cwd, ['log', '-1', '--format=%s', c]);
+    for (const why of r.failed) notes.push(`${short(c)} (${subject}) was left partly unformatted: ${why}`);
+    const meta = await out(cwd, ['log', '-1', '--format=%an%x00%ae%x00%ad', '--date=raw', c]);
+    const message = (await git(cwd, ['log', '-1', '--format=%B', c])).stdout.replace(/\n+$/, '');
+    const [name, email, date] = meta.split('\0');
+    cur = await out(cwd, ['commit-tree', r.tree, '-p', cur, '-m', message], { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date });
+  }
+  return { first, tip: cur, notes };
+}
+
+// --------------------------------------------------------------- merging across
+
+export type Merged = { ok: true; notes: string[] } | { ok: false; conflict: string[]; step: string; notes: string[] } | { ok: false; error: string; notes: string[] };
+
+// For a history that brings things in with merges (a fork bringing in
+// Mike's release): before merging `target`, each format commit F it has and
+// HEAD doesn't comes in as two merges: F's parent (an ordinary merge, whose
+// conflicts are real ones), then F itself, with HEAD's tree formatted the
+// way F was made as the result (F is only formatting, so that is everything
+// both sides have). Then `target` merges as usual, both sides formatted.
+// Runs in the checkout at `cwd`, which must be clean. A conflict is left
+// in place for a person when `leave` is set, and undone otherwise.
+export async function mergeAcross(cwd: string, target: string, opts: { message?: string; leave?: boolean; final?: boolean } = {}): Promise<Merged> {
+  const notes: string[] = [];
+  const head = await out(cwd, ['rev-parse', 'HEAD']);
+  const cross = await crossings(cwd, head, target);
+  const undo = async () => {
+    await git(cwd, ['merge', '--abort']);
+    await git(cwd, ['reset', '--keep', head]);
+  };
+  const merge = async (what: string, message: string, step: string): Promise<Merged | undefined> => {
+    const m = await git(cwd, ['merge', '--no-ff', '-m', message, what]);
+    if (m.ok) return undefined;
+    const conflict = (await out(cwd, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).split('\n').filter(Boolean);
+    if (!opts.leave) await undo();
+    if (conflict.length) return { ok: false, conflict, step, notes };
+    return { ok: false, error: `git merge ${what} failed: ${(m.stderr || m.stdout).trim().split('\n')[0]}`, notes };
+  };
+  for (const f of cross) {
+    const parent = await out(cwd, ['rev-parse', `${f.commit}^`]);
+    // Only formatting, or its tree can't stand in for it.
+    const changed = (await out(cwd, ['diff', '--name-only', parent, f.commit])).split('\n').filter(Boolean);
+    const outside = changed.filter((p) => !f.entry.paths.some((s) => p === s || p.startsWith(`${s}/`)));
+    if (outside.length) {
+      if (!opts.leave) await undo();
+      return { ok: false, error: `${short(f.commit)} (${f.entry.subject}) changes files outside what it formats (${outside.slice(0, 5).join(', ')}), so it isn't only formatting. Merge it by hand.`, notes };
+    }
+    if (!(await isAncestor(cwd, parent, 'HEAD'))) {
+      const r = await merge(parent, `Bring in the changes before ${f.entry.subject}`, `merging ${short(parent)}, the commit before ${short(f.commit)} (${f.entry.subject})`);
+      if (r) return r;
+    }
+    const formatter = new TreeFormatter(cwd, [f]);
+    const now = await out(cwd, ['rev-parse', 'HEAD']);
+    const r = await formatter.format(await out(cwd, ['rev-parse', 'HEAD^{tree}']));
+    // A merge made from a tree the formatter couldn't do would take F's
+    // formatting back out of whatever it missed.
+    if (r.failed.length) {
+      if (!opts.leave) await undo();
+      return { ok: false, error: `Couldn't format this copy's tree as ${short(f.commit)} (${f.entry.subject}) was made, so it isn't merged yet: ${r.failed.join('; ')}`, notes };
+    }
+    const made = await out(cwd, ['commit-tree', r.tree, '-p', now, '-p', f.commit, '-m', `Bring in ${f.entry.subject}\n\nWith this copy's own changes formatted the same way (scripts/replay-over-format.sh).`]);
+    const moved = await git(cwd, ['reset', '--keep', made]);
+    if (!moved.ok) {
+      if (!opts.leave) await undo();
+      return { ok: false, error: `Couldn't move to the formatted merge: ${moved.stderr.trim()}`, notes };
+    }
+    notes.push(`Crossed ${short(f.commit)} (${f.entry.subject}) with this copy's own changes formatted the same way.`);
+  }
+  if (opts.final !== false && !(await isAncestor(cwd, target, 'HEAD'))) {
+    const r = await merge(target, opts.message ?? `Merge ${target}`, `merging ${target}`);
+    if (r) return r;
+  }
+  return { ok: true, notes };
+}
+
+// --------------------------------------------------------------- the CLI
+
+const USAGE = `scripts/replay-over-format.sh: carry work across a format commit (${FORMAT_LIST}).
+
+  scripts/replay-over-format.sh [<onto>]
+      Rebase the checked-out branch onto <onto> (main by default), formatting
+      each of its commits as the format commits it crosses were made. Stops
+      at a real conflict as git rebase does: sort it out, git rebase --continue.
+
+  scripts/replay-over-format.sh --merge <commit> [-m <message>]
+      Merge <commit> (Mike's release) into the checked-out branch, crossing
+      any format commit in it without hand-resolving formatting
+      (docs/bringing-in-updates.md). Stops at a real conflict: sort it out,
+      git commit, and run it again.
+`;
+
+async function cli(argv: string[]): Promise<number> {
+  const say = (s: string) => process.stdout.write(`${s}\n`);
+  const cwd = process.cwd();
+  if (argv.includes('-h') || argv.includes('--help')) {
+    say(USAGE);
+    return 0;
+  }
+  const top = (await git(cwd, ['rev-parse', '--show-toplevel'])).stdout.trim();
+  if (!top) {
+    say('Not in a git checkout.');
+    return 2;
+  }
+  const status = await out(top, ['status', '--porcelain', '--untracked-files=no']);
+  if (status) {
+    say(`There are uncommitted changes in ${top}; commit or stash them first.`);
+    return 1;
+  }
+  if (argv[0] === '--merge') {
+    const target = argv[1];
+    if (!target) {
+      say(USAGE);
+      return 2;
+    }
+    const mi = argv.indexOf('-m');
+    const message = mi > 0 ? argv[mi + 1] : undefined;
+    const r = await mergeAcross(top, target, { message, leave: true });
+    for (const n of r.notes) say(n);
+    if (r.ok) {
+      say(`Merged ${target}.`);
+      return 0;
+    }
+    if ('conflict' in r) {
+      say(`Conflicts ${r.step}, in:\n${r.conflict.map((f) => `  ${f}`).join('\n')}\nSort them out, git commit, then run this again.`);
+      return 1;
+    }
+    say(r.error);
+    return 1;
+  }
+  const onto = argv[0] ?? 'main';
+  const head = await out(top, ['rev-parse', 'HEAD']);
+  const branch = (await git(top, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
+  if (!branch) {
+    say('HEAD is detached: check out the branch to carry first.');
+    return 1;
+  }
+  const cross = await crossings(top, head, onto);
+  if (!cross.length) {
+    say(`${branch} doesn't cross a format commit on its way to ${onto}: git rebase ${onto} is all it needs.`);
+    return 0;
+  }
+  const base = await out(top, ['merge-base', head, onto]);
+  const formatter = new TreeFormatter(top, cross);
+  say(`Carrying ${branch} across ${cross.map((f) => `${short(f.commit)} (${f.entry.subject})`).join(', ')}...`);
+  const r = await carryAcross(top, { base, tip: head, onto: await out(top, ['rev-parse', onto]), formatter });
+  for (const n of r.notes) say(n);
+  if (r.ok) {
+    await out(top, ['reset', '--keep', r.tip]);
+    say(`Done: ${r.count} commit${r.count === 1 ? '' : 's'} on ${onto}, formatted. It was at ${short(head)} before (git reset --hard ${short(head)} goes back).`);
+    return 0;
+  }
+  if ('error' in r) {
+    say(r.error);
+    return 1;
+  }
+  // A real conflict: put the formatted copies on the branch and let git
+  // rebase stop at it, as it would for any rebase.
+  say(`${short(r.at)} (${r.subject}) conflicts with ${onto} in: ${r.conflict.join(', ')}. Rebasing formatted copies so you can sort it out.`);
+  const chain = await formattedChain(top, base, head, formatter);
+  await out(top, ['reset', '--keep', chain.tip]);
+  const rb = await git(top, ['rebase', '--onto', onto, chain.first]);
+  process.stdout.write(rb.stdout);
+  process.stderr.write(rb.stderr);
+  say(rb.ok ? `Done. It was at ${short(head)} before.` : `Sort out the conflict, then git rebase --continue (git rebase --abort, then git reset --hard ${short(head)}, goes back to where it was).`);
+  return rb.ok ? 0 : 1;
+}
+
+function same(a: string, b: string): boolean {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+if (process.argv[1] && same(process.argv[1], new URL(import.meta.url).pathname)) {
+  cli(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (e) => {
+      process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+      process.exit(1);
+    },
+  );
+}

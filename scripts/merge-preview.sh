@@ -45,3 +45,25 @@ if [ "$status" -eq 1 ]; then echo "It clashes in the files above."; elif [ "$sta
 echo
 echo "What it changes against main:"
 clean --attr-source="$empty" diff --no-ext-diff --no-textconv --stat "$base_id" "$tree"
+
+# A format commit in the release (.git-blame-ignore-revs, "# format-subject:"
+# lines; runner/src/format-replay.ts) that main doesn't have clashes with
+# every change main made to the files it formatted, though only formatting
+# differs. Nothing formats here (that would run the release's toolchain), so
+# say so, and show the real clashes: merging the commit before it.
+list=$(clean show "$commit_id:.git-blame-ignore-revs" 2>/dev/null || true)
+[ -n "$list" ] || exit 0
+printf '%s\n' "$list" | sed -n 's/^#[[:space:]]*format-subject:[[:space:]]*//p' | while IFS= read -r subject; do
+  [ -n "$subject" ] || continue
+  f=$(clean log --no-merges --format='%H%x09%s' "$commit_id" | awk -F '\t' -v s="$subject" '$2 == s { print $1; exit }')
+  [ -n "$f" ] || continue
+  if clean merge-base --is-ancestor "$f" "$base_id"; then continue; fi
+  echo
+  echo "The release has a format commit main doesn't: $f ($subject)."
+  echo "Clashes in the files it formatted are formatting only: after they say go, merge with"
+  echo "scripts/replay-over-format.sh --merge $commit_id (docs/bringing-in-updates.md, section 4),"
+  echo "which settles those by itself. The real clashes up to it, merging the commit before it:"
+  st=0
+  clean --attr-source="$empty" merge-tree --write-tree --name-only "$base_id" "$f^" > "$tmp/before" || st=$?
+  if [ "$st" -eq 0 ]; then echo "  none"; else sed -n '2,/^$/p' "$tmp/before" | sed '/^$/d; s/^/  /'; fi
+done

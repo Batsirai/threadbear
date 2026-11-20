@@ -91,6 +91,17 @@ stays. Separate repos do not block one another.
    docs/bringing-in-updates.md) is never rebased, since that would flatten
    the merge and rewrite Mike's commits: if main has moved, main is merged
    into it instead, with the same undo-and-name-the-files on a conflict.
+   A format commit on main that the branch doesn't have (one that only ran
+   a formatter over a folder, like `cargo fmt --all` over desktop/, listed
+   in `.git-blame-ignore-revs`) would conflict with every change the branch
+   made there, so when the branch changes anything it formats, each of its
+   commits is made again with its tree formatted as that commit was, and
+   its change in formatted terms goes onto main, the same three-way merge
+   a rebase does (`runner/src/format-replay.ts`). Only real conflicts are
+   left; one is named with `scripts/replay-over-format.sh`, which does the
+   same in the worktree and stops at the conflict for `git rebase
+   --continue`. A commit the formatter can't parse is left as it is there
+   and said. Waiting landings are stacked into a group check the same way.
    Then it refuses a commit whose `Important:` line git doesn't read as a
    trailer (not in the last paragraph with `Co-Authored-By`), as a release
    would not flag it and forks wouldn't hear. And it holds a landing while
