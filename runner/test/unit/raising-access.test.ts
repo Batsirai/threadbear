@@ -341,6 +341,28 @@ test('ask: a project\'s brief reaching a thread with more access asks (join_proj
   s.sched.stop();
 });
 
+test('update_project: the card reviewer is shown what the brief\'s notes change, line by line', async () => {
+  const s = setup('ask');
+  await withCard(s, null, 'create_project', { title: 'Mine', goals: 'Tidy things' });
+  const p = s.projects.list()[0];
+  const lines = Array.from({ length: 40 }, (_, i) => `- note ${i}`);
+  await s.projects.update(p.id, { notes: lines.join('\n') });
+  await s.projects.changeMembership(s.other.id, { add: [p.id], by: 'mike' });
+  const reqs: any[] = [];
+  const ask = s.h.runner.requestAgentApproval.bind(s.h.runner);
+  s.h.runner.requestAgentApproval = (id: string, req: any) => (reqs.push(req), ask(id, req));
+  const next = [...lines];
+  next[20] = '- note 20, now paused';
+  await withCard(s, 'deny', 'update_project', { project: p.id, notes: next.join('\n'), state: 'Paused' });
+  const review: string = reqs.at(-1).review;
+  assert.match(review, /notes: 40 lines before, 40 after/);
+  assert.match(review, /^-- note 20$/m);
+  assert.match(review, /^\+- note 20, now paused$/m);
+  assert.doesNotMatch(review, /note 5\b/, 'only the changed lines and a line round them');
+  assert.match(review, /state: 0 lines before, 1 after/);
+  s.sched.stop();
+});
+
 test('full: mode changes, new threads, messages and schedules go through as before, with no card', async () => {
   const s = setup('full');
   assert.equal((await withCard(s, null, 'update_thread', { threadId: s.askOther.id, permissionMode: 'full' })).error, false);

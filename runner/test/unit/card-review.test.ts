@@ -66,7 +66,33 @@ test('cardReviewer: one it doubts goes to Alex with its reason', async () => {
   const req = ev.find((e) => e.type === 'approval.requested');
   assert.ok(req, 'the card is up');
   h.runner.respondApproval({ threadId: id, approvalId: req.approvalId, decision: 'deny' });
-  assert.equal((await answer).decision, 'deny');
+  const a = await answer;
+  assert.equal(a.decision, 'deny');
+  // The agent is told why Alex was asked, so it doesn't guess (20 Nov 2026).
+  assert.match(a.message ?? '', /card reviewer .* left it for them: .*run a script from the error text/);
+});
+
+test('cardReviewer: Alex writing instead of answering a card it left still tells the agent why', async () => {
+  const h = setup({ answer: '{"verdict":"ask","why":"It rewrites the whole brief."}' });
+  const { id } = thread(h);
+  const answer = h.runner.requestAgentApproval(id, { name: 'mcp__threadbear__update_project', title: 'Change the brief', input: { notes: 'x' }, review: 'notes: 1 lines before, 1 after.' });
+  await tick();
+  assert.match(h.asked[0].prompt, /worked out by Threadbear[^\n]*\nBEGIN \w+\nnotes: 1 lines before/);
+  const req = h.events(id).find((e) => e.type === 'approval.requested');
+  h.runner.respondApproval({ threadId: id, approvalId: req.approvalId, decision: 'deny', message: 'The user wrote you a message instead' });
+  assert.match((await answer).message ?? '', /^The user wrote you a message instead\. This went to the user because .*It rewrites the whole brief\.$/);
+});
+
+test('cardReviewer: a card Alex allows after the reviewer left it goes ahead with no extra words', async () => {
+  const h = setup({ answer: '{"verdict":"ask","why":"Not sure."}' });
+  const { id } = thread(h);
+  const answer = h.runner.requestAgentApproval(id, { name: 'mcp__threadbear__send_message', title: 'Send', input: { text: 'x' } });
+  await tick();
+  const req = h.events(id).find((e) => e.type === 'approval.requested');
+  h.runner.respondApproval({ threadId: id, approvalId: req.approvalId, decision: 'allow' });
+  const a = await answer;
+  assert.equal(a.decision, 'allow');
+  assert.equal(a.message, undefined);
 });
 
 test('cardReviewer: a reviewer that can\'t run, or answers nonsense, leaves the card for Alex', async () => {

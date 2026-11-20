@@ -3694,7 +3694,15 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   before he wrote), and deleting the thread
   `expired`, with no card. A thread
   switched out of Auto meanwhile gets the card. Ask, Full access and plans
-  are never reviewed.
+  are never reviewed. An `update_project` card also shows the reviewer
+  what the brief changes (`review` on the agent approval request, never on
+  the card): for each of title, goals, state and notes it was given, the
+  line counts before and after and the changed lines with one line round
+  them, worked out from the project as it is, as `notes` replaces them
+  whole. When the reviewer left a card for Mike with a reason and he
+  doesn't allow it (denies it, writes instead, or it expires; not Stop),
+  that reason goes to the agent with the answer's `message`, so it can
+  tell him why he was asked.
 - **Review by another lab** (`Settings.labReview`, on unless
   `runner.json` has `"labReview": false`, Settings > General > Code
   review; `runner/src/runner/lab-review.ts`. An experiment from 6 Nov

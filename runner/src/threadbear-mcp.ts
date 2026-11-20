@@ -10,6 +10,7 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { Runner } from './runner.ts';
+import { diffLines, splitLines } from './diff.ts';
 import type { Account, EffortLevel, PermissionMode, PersistedEvent, Project, Schedule, ThreadSummary } from './protocol.ts';
 import type { ToolApprovalAnswer } from './adapters/types.ts';
 import { cardInput, tooLongForCard } from './tools.ts';
@@ -123,7 +124,9 @@ export type ProjectControl = Async<Projects, 'list' | 'get' | 'find' | 'create' 
 
 export const SERVER_NAME = 'threadbear';
 
-export type AgentApprovalRequest = { name: string; title: string; input: Record<string, unknown>; signal?: AbortSignal };
+// `review`: what the call changes, worked out by Threadbear itself (a project
+// brief's line diff), for the card reviewer (runner/card-review.ts) alone.
+export type AgentApprovalRequest = { name: string; title: string; input: Record<string, unknown>; review?: string; signal?: AbortSignal };
 
 // Permission modes by how much an agent may do in them without asking.
 // Plan first ranks with ask: its agent changes nothing, and only Mike's
@@ -518,7 +521,7 @@ export function buildThreadbearTools(
       return { mode: 'full', title: t.title };
     }
   };
-  const confirm = async (tool: string, reasons: string[], input: Record<string, unknown>, signal?: AbortSignal): Promise<void> => {
+  const confirm = async (tool: string, reasons: string[], input: Record<string, unknown>, signal?: AbortSignal, review?: string): Promise<void> => {
     if (!reasons.length) return;
     const ask = control.requestAgentApproval?.bind(control);
     if (!ask) throw new Error(`${reasons.join('; ')}: that needs the user's OK, which this runner can't ask for here. Nothing changed; ask them to do it in the app.`);
@@ -527,7 +530,7 @@ export function buildThreadbearTools(
     // (tools.ts, cardInput; Daybreak, 7 Nov 2026).
     const card = cardInput(input, 'all');
     if (card.tooLong) throw new Error(`${reasons.join('; ')}: that needs the user's OK. ${tooLongForCard(card.tooLong)}`);
-    const a = await ask(selfId, { name: `mcp__${SERVER_NAME}__${tool}`, title: reasons.join('; '), input: card.input, ...(signal ? { signal } : {}) });
+    const a = await ask(selfId, { name: `mcp__${SERVER_NAME}__${tool}`, title: reasons.join('; '), input: card.input, ...(review ? { review } : {}), ...(signal ? { signal } : {}) });
     if (a.decision === 'allow' || a.decision === 'allowAlways') return;
     if (a.noApp) throw new Error(a.message ?? 'No card could be put up for this, so nothing changed.');
     if (a.decision === 'expired') throw new Error(`No answer from the user${a.message ? ` (${a.message})` : ''}, so nothing changed.`);
@@ -1096,6 +1099,20 @@ export function buildThreadbearTools(
     if (!projects) throw new Error("This runner doesn't have projects yet.");
     return projects;
   };
+  // What an update_project changes in the brief, line by line, for the card
+  // reviewer: `notes` replaces them whole, so a two-line fix sent the reviewer
+  // the whole notes and read to it as a rewrite (Mike, 20 Nov 2026).
+  const briefChanges = (p: Pick<Project, 'title' | 'goals' | 'state' | 'notes'>, next: Partial<Record<'title' | 'goals' | 'state' | 'notes', string>>): string | undefined => {
+    const parts = (Object.keys(next) as (keyof typeof next)[]).flatMap((k) => {
+      const after = next[k];
+      if (after === undefined) return [];
+      const before = p[k] ?? '';
+      if (after === before) return [`${k}: unchanged`];
+      const lines = diffLines(before, after, 1).flatMap((h) => [`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, ...h.lines]);
+      return [`${k}: ${splitLines(before).length} lines before, ${splitLines(after).length} after. Changed lines (- before, + after):\n${lines.join('\n')}`];
+    });
+    return parts.length ? parts.join('\n\n') : undefined;
+  };
   const project = async (q: string) => {
     const p = await mustProjects().find(q);
     if (!p) throw new Error(`No project ${q}. list_projects shows them.`);
@@ -1314,7 +1331,7 @@ export function buildThreadbearTools(
           if (top) {
             const parentShown = newParent ? { title: newParent.title, id: newParent.id, ...(newParent.goals ? { goals: newParent.goals } : {}) } : parent;
             const fields = Object.fromEntries(Object.entries({ title, goals, state, notes, appendNote, addFolders: added, notion, links, addLinks, parent: parentShown }).filter(([, v]) => v !== undefined));
-            await confirm('update_project', [`Change the brief of the project "${p.title}", which "${top.title}" (${accessName(top)}) is told`], { project: { title: p.title, id: p.id }, ...fields }, extra?.signal);
+            await confirm('update_project', [`Change the brief of the project "${p.title}", which "${top.title}" (${accessName(top)}) is told`], { project: { title: p.title, id: p.id }, ...fields }, extra?.signal, briefChanges(p, { title, goals, state, notes }));
             if (addFolders?.length) for (const [i, f] of addFolders.entries()) await sameFolder(f, added![i]!);
             // The title and goals shown are what it gets: a parent changed
             // while the card waited is refused.
