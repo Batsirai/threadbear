@@ -1560,12 +1560,17 @@ impl ThreadPane {
                 answer,
             };
             let effects = cx.update(|cx| move_outbox(event, None, cx));
+            // Shown again, and the drafts file written again, whatever the
+            // answer: a message once held is in that file until then, and
+            // one that turned out to have arrived mustn't stay there to come
+            // back after a crash (Codex's review, 21 Nov). Off the end of
+            // the transcript if it failed.
+            cx.update(|cx| show_outbox_in(&app, &thread_id, cx));
             let (Some(draft), Err(e)) = (effects.gave_back, res) else {
                 return;
             };
-            // Off the end of the transcript and back in the box, and the
-            // error bar says so, naming the thread, until it's dismissed.
-            cx.update(|cx| show_outbox_in(&app, &thread_id, cx));
+            // Back in the box, and the error bar says so, naming the thread,
+            // until it's dismissed.
             if let (Some(composer), Some(draft)) = (composer.upgrade(), draft) {
                 composer.update(cx, |c, cx| c.restore_draft(draft, cx));
             }
