@@ -1391,7 +1391,8 @@ async function findBroken(a: {
     // group's: another one, or a host named by one and not the other (the
     // group's own line can be lost off the front of a long output; with no
     // host known the runs aren't sent to one, and then none may name one).
-    if (r.stopped || times.host !== a.host) return { state: 'unknown', text: r.text };
+    // Nor one no host could run (out of disk, every host unreachable).
+    if (r.stopped || times.host !== a.host || r.code === CHECK_HOSTS_UNAVAILABLE) return { state: 'unknown', text: r.text };
     // Failed means the check ran to its end and named a step that failed.
     return { state: r.ok ? 'passed' : onlyFailed(r.text) ? 'failed' : 'unknown', text: r.text };
   };
@@ -1695,6 +1696,22 @@ async function landLocked(
         check,
         ...(intact ? { intact: true } : {}),
       });
+      // No check host could run it: one ran out of disk partway (and again
+      // when tried elsewhere), or none had room or answered. That's the
+      // hosts' trouble, not any landing's, so nothing is halved or looked
+      // for: on 20 Nov a group failed when the cloud box ran out of disk,
+      // and each landing in it was checked alone for a fault none had.
+      if (!r.ok && r.code === CHECK_HOSTS_UNAVAILABLE) {
+        if (!(await back())) return fail(`No check host could run the check, so nothing landed. ${stuck}`);
+        if (carried) return fail(committedMeanwhile);
+        return fail(
+          `No check host could run the check${group.length ? ` of ${group.length + 1} landings together` : ''}, so ${MAIN} wasn't touched. That's the hosts' trouble, not ${group.length ? 'any landing in it' : 'this landing'}. The last lines of its output:`,
+          '',
+          ...r.text.trimEnd().split('\n').slice(-CHECK_TAIL_LINES),
+          '',
+          'Run tb land again: the lines above say which host and why.',
+        );
+      }
       if (!r.ok && group.length) {
         lastFailed = group.map((g) => g.entry);
         // The halving goes on the others' entries before anything slow
@@ -2153,6 +2170,12 @@ export function overwrittenFiles(text: string): string[] {
 // where a test runner says what failed).
 // With `limitMs` (findBroken's runs), it's stopped past that, its whole
 // process group, and says so: `stopped`.
+// The exit a check sent to the check hosts (scripts/check-remote.sh) ends
+// with when no host could run it, rather than a failed step's: none had room,
+// none could be reached, or each ran out of disk partway. EX_UNAVAILABLE, as
+// the runner's self-update has it (runner/scripts/deploy-steps.mjs).
+export const CHECK_HOSTS_UNAVAILABLE = 69;
+
 function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extraEnv: NodeJS.ProcessEnv = {}, limitMs?: number): Promise<{ ok: boolean; code?: number; text: string; durationMs: number; stopped?: boolean }> {
   const started = Date.now();
   // At background priority: a land's check is the full quick suite.
@@ -2170,6 +2193,7 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extra
     if (!extraEnv.THREADBEAR_CHECK_GROUP) delete env.THREADBEAR_CHECK_GROUP;
     if (!extraEnv.THREADBEAR_CHECK_ONLY) delete env.THREADBEAR_CHECK_ONLY;
     if (!extraEnv.THREADBEAR_CHECK_HOST_ONLY) delete env.THREADBEAR_CHECK_HOST_ONLY;
+    env.THREADBEAR_CHECK_BUSY_EXIT = extraEnv.THREADBEAR_CHECK_BUSY_EXIT ?? String(CHECK_HOSTS_UNAVAILABLE);
     if (!extraEnv.THREADBEAR_CHECK_MAX_SECS && limitMs !== undefined) delete env.THREADBEAR_CHECK_MAX_SECS;
     // A group of its own when it has a limit, so the ssh and whatever else
     // it started go with it.

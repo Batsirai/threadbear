@@ -129,6 +129,8 @@ if [ "${1:-}" = "--on-host" ]; then
   # Mac to fetch, and everything else goes.
   keep_logs() {
     local rc=$?
+    # The disk sampler (below) writes the lowest it saw and stops.
+    if [ -n "${sampler:-}" ]; then kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null; fi
     cd "$base" || return
     stop_left_in_run
     # A failed run's free space, before its temp files go: if they're what
@@ -199,14 +201,61 @@ if [ "${1:-}" = "--on-host" ]; then
   # change (cargo_step there says why).
   export CARGO_TARGET_DIR="$base/build/desktop-target" THREADBEAR_CHECK_SHARED_TARGET=1 \
     CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10
+  # Smaller builds, as remote.sh has them: line numbers but not the rest of
+  # the debug info, and no incremental files. On the cloud box on 21 Nov the
+  # incremental folder was 2.8 of the target's 6.1 GiB, and nothing reuses
+  # it: every run is a fresh copy at src/, its crates touched by check.sh.
+  export CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_INCREMENTAL=0
   free_kb="$(cd "$base" && eval "$free_cmd")"
   case "$free_kb" in
     ""|*[!0123456789]*) ;;
-    *) if [ "$free_kb" -lt $((12 * 1048576)) ] && [ -d "$CARGO_TARGET_DIR" ]; then
-         echo "Short of disk here, so the desktop app's cargo target goes; it builds from cold this time."
-         rm -rf "$CARGO_TARGET_DIR"
+    *) if [ "$free_kb" -lt $((12 * 1048576)) ]; then
+         # Idle build folders first, longest unused first, until there's room
+         # (desktop/scripts/trim-remote-cache.sh): the GPUI ones remote.sh
+         # keeps, and cargo targets agents left here by hand, ~13 GiB of
+         # them on the cloud box when a group check ran it out of disk on
+         # 20 Nov. "held": this check has the host's lock it would take.
+         trim="$src/desktop/scripts/trim-remote-cache.sh"
+         if [ -f "$trim" ] && [ -d "$base/gpui" ]; then
+           (cd "$base/gpui" && bash "$trim" - held) 2>&1
+           free_kb="$(cd "$base" && eval "$free_cmd")"
+         fi
+         case "$free_kb" in ""|*[!0123456789]*) free_kb=0 ;; esac
+         if [ "$free_kb" -lt $((12 * 1048576)) ] && [ -d "$CARGO_TARGET_DIR" ]; then
+           echo "Short of disk here, so the desktop app's cargo target goes; it builds from cold this time."
+           rm -rf "$CARGO_TARGET_DIR"
+         fi
        fi ;;
   esac
+  # The lowest the disk goes during the run, every few seconds, for this Mac
+  # to read if it fails: a full disk breaks a build in ways that say nothing
+  # about space, and the disk can have room again by the time anyone asks
+  # (20 Nov: 0.1 GiB free mid-check, 8.3 after). Written over in place, in a
+  # file made now while there's room, as a full disk can't take a new one.
+  # A run that went under 1 GiB is tried again on another host.
+  min_file="$base/kept-$id/min-free-kb"
+  sampler=""
+  start_kb="$free_kb"
+  case "$start_kb" in ""|*[!0123456789]*) start_kb=999999999999999 ;; esac
+  [ "${#start_kb}" -le 15 ] || start_kb=999999999999999
+  if mkdir -p "$base/kept-$id" && printf '%015d' "$((10#$start_kb))" >"$min_file" 2>/dev/null; then
+    (
+      low="" kb=""
+      # On TERM, the lowest seen once more, in case a write failed then.
+      trap '[ -z "$low" ] || printf "%015d" "$low" 1<>"$min_file"; exit 0' TERM
+      while :; do
+        kb="$(cd "$base" && eval "$free_cmd")"
+        case "$kb" in ""|*[!0123456789]*) ;; *)
+          if [ "${#kb}" -le 15 ] && { [ -z "$low" ] || [ "$((10#$kb))" -lt "$low" ]; }; then
+            low="$((10#$kb))"
+            printf '%015d' "$low" 1<>"$min_file" 2>/dev/null
+          fi ;;
+        esac
+        sleep "${THREADBEAR_CHECK_SAMPLE_SECS:-5}" & wait $!
+      done
+    ) </dev/null >/dev/null 2>&1 &
+    sampler=$!
+  fi
 
   cd "$src" || exit 1
   # Under a limit of its own as well: this Mac giving up on it (a dropped
@@ -491,6 +540,26 @@ fi
 # says which) writes only the node_modules and its temp files.
 MIN_FREE_GIB=8
 [ "$linux_ok" = 0 ] || MIN_FREE_GIB=2
+# A run that builds desktop/'s Rust wants as much as one with Swift, Linux
+# or not: cargo test, clippy and the app's two checks each build a set of
+# their own into its target, several GiB from cold, where 2 GiB is all a
+# Linux run asked for until the cloud box ran out during one (20 Nov).
+# Whether it does
+# is check.sh's own DESKTOP_NEEDS, read from it so the two can't differ:
+# what changed matches it, or nothing has (main runs everything), or --only
+# names a desktop step. Not --runner, which builds none.
+DESKTOP_NEEDS="$(sed -n "s/^DESKTOP_NEEDS='\(.*\)'\$/\1/p" "$ROOT/check.sh" 2>/dev/null | head -1)"
+builds_rust=0
+if [ -n "$DESKTOP_NEEDS" ] && [ "$RUNNER_ONLY" = 0 ]; then
+  if [ -n "$ONLY" ]; then
+    rust_steps=';desktop (core tests|lint|app check|build)'
+    [[ ";$ONLY" =~ $rust_steps ]] && builds_rust=1
+  elif [ "$ALL" = 1 ] || [ ! -s "$changed" ] || grep -E "$DESKTOP_NEEDS|^check\.sh\$" "$changed" >/dev/null; then
+    builds_rust=1
+  fi
+fi
+RUST_FREE_GIB=8
+[ "$builds_rust" = 0 ] || [ "$MIN_FREE_GIB" -ge "$RUST_FREE_GIB" ] || MIN_FREE_GIB=$RUST_FREE_GIB
 
 # Whether a df answer is under the limit: 0 yes, and FREE_GIB is it to one
 # place, rounded down; 1 no; 2 it isn't a number we can use. It's the host's
@@ -505,6 +574,17 @@ low_on_room() {
   local kb=$((10#$1))
   [ "$kb" -lt $((MIN_FREE_GIB * 1048576)) ] || return 1
   FREE_GIB="$((kb / 1048576)).$(((kb % 1048576) * 10 / 1048576))"
+}
+# Whether the disk ran out during a run: under 1 GiB at its lowest, which
+# remote.sh treats as a run that may have failed for want of space too.
+# OUT_GIB is it to one place. Only a number we can read counts.
+OUT_GIB=""
+ran_out() {
+  case "$1" in ""|*[!0123456789]*) return 1 ;; esac
+  [ "${#1}" -le 15 ] || return 1
+  local kb=$((10#$1))
+  [ "$kb" -lt 1048576 ] || return 1
+  OUT_GIB="$((kb / 1048576)).$(((kb % 1048576) * 10 / 1048576))"
 }
 # The host just used, asked again after something failed there: true, with
 # FREE_GIB set, if it's low. Not if it's fine or can't be asked.
@@ -716,6 +796,11 @@ left_out="$(mktemp)"
 BASE_ARGS=(${ARGS[@]+"${ARGS[@]}"})
 SKIP=""
 tries=0
+# Checks that failed on a host that ran out of disk during them, run again
+# elsewhere (below): at most DISK_RETRIES, so a change whose own tests fill
+# a disk still ends.
+disk_tries=0
+DISK_RETRIES="${THREADBEAR_CHECK_DISK_RETRIES:-2}"
 # The copy lock: a kernel lock (lockf, or flock on Linux) held by a small
 # helper until this run lets go or ends, so one a killed run held frees
 # itself. The helper looks every second for its release file and for
@@ -1019,16 +1104,47 @@ while :; do
     tries=$((tries + 1))
     continue
   fi
+  # The lowest the disk went during the run (the sampler --on-host keeps),
+  # else the disk as the failure left it (keep_logs), else as it is now. -s:
+  # a full disk can leave a file empty. Leading zeros go: it's written
+  # padded, so it can be written over in place.
+  fail_kb=""
+  if [ "$code" != 0 ]; then
+    fail_kb="$(watched "$HOST" "${SSH[@]}" "$HOST" "cd '$remote_base' && if [ -s 'kept-$id/min-free-kb' ]; then cat 'kept-$id/min-free-kb'; elif [ -s 'kept-$id/free-kb' ]; then cat 'kept-$id/free-kb'; else $free_cmd; fi" 2>/dev/null)"
+    case "$fail_kb" in *[!0]*) [[ "$fail_kb" =~ ^0+ ]] && fail_kb="${fail_kb#"${BASH_REMATCH[0]}"}" ;; esac
+  fi
+  # A host that ran out of disk during the check: what failed failed for want
+  # of space, not for anything in what it checks, and counting it as the
+  # landing's would have tb land halve a group and look for a culprit that
+  # isn't there (20 Nov, the cloud box at 0.1 GiB). So it's run again on
+  # another host that can take it, or this one once idle build folders there
+  # are given back if it's the only one.
+  if [ "$code" != 0 ] && ran_out "$fail_kb"; then
+    if [ "$disk_tries" -lt "$DISK_RETRIES" ]; then
+      disk_tries=$((disk_tries + 1))
+      others=""
+      for h in "${HOSTS[@]}"; do
+        case "$h" in -*|""|"$HOST") continue ;; esac
+        case " $SKIP " in *" $h "*) continue ;; esac
+        others+=" $h"
+      done
+      if [ -n "$others" ]; then
+        echo "$HOST ran out of disk during this check (${OUT_GIB} GiB free at the lowest), so what failed there may have failed for want of space. Running it again on another host." >&2
+        SKIP+=" $HOST"
+      else
+        echo "$HOST ran out of disk during this check (${OUT_GIB} GiB free at the lowest), so what failed there may have failed for want of space. Running it again there, after giving back idle build folders." >&2
+        make_room "$HOST" "$remote_base" >/dev/null 2>&1
+      fi
+      watched "$HOST" "${SSH[@]}" "$HOST" "rm -rf '$remote_base/kept-$id' '$remote_run'" 2>/dev/null
+      rm -rf "$local_logs"
+      copied_host=""
+      continue
+    fi
+    DISK_OUT=1
+  fi
   break
 done
 rm -f "$files" "$changed" "$left_out"
-
-# The disk as the failure left it (keep_logs), or as it is now if that couldn't
-# be written. -s: a full disk can leave the file empty.
-fail_kb=""
-if [ "$code" != 0 ]; then
-  fail_kb="$(watched "$HOST" "${SSH[@]}" "$HOST" "cd '$remote_base' && if [ -s 'kept-$id/free-kb' ]; then cat 'kept-$id/free-kb'; else $free_cmd; fi" 2>/dev/null)"
-fi
 
 # find, not a glob: the host's login shell may be zsh, which complains
 # out loud when a glob matches nothing.
@@ -1045,6 +1161,13 @@ if [ -n "$SHOTS" ]; then
 fi
 # Last, so it's the line read: what a full disk breaks often looks nothing like
 # one (a CodeSign error, 7 Nov).
+if [ "${DISK_OUT:-0}" = 1 ]; then
+  # Tried again and out of disk every time: the hosts' trouble, not the
+  # check's, so it ends as one that no host could take (BUSY_EXIT; tb land
+  # then blames none of the landings in it).
+  echo "This check failed because $HOST ran out of disk during it (${OUT_GIB} GiB free at the lowest), not because of anything it checks: each of its $((disk_tries + 1)) tries ran a host out of disk. Free some space there (desktop/scripts/trim-remote-cache.sh gives back idle build folders) and run it again." >&2
+  exit "$BUSY_EXIT"
+fi
 if low_on_room "$fail_kb"; then
   echo "$HOST had only $FREE_GIB GiB free when this failed, and this check wants $MIN_FREE_GIB GiB, which may be why. Free some space there and run it again." >&2
 fi

@@ -396,6 +396,10 @@ So a failed check says what failed, and that alone is run on each landing:
   by itself: its own, then each of the others replayed onto main without
   the rest. A few test files are seconds each, plus the copy to the check
   host.
+- A group check no host could run (exit 69: each host it tried ran out of
+  disk during it, or none had room or answered; `scripts/check-remote.sh`)
+  is nobody's failure: nothing is run alone or halved, the holder's
+  `tb land` stops with the hosts' lines, and the rest go on in the line.
 - Main runs it first, with every step it names run whether or not
   anything changed (`THREADBEAR_CHECK_ALL`, check.sh's `--all`: the Swift
   steps never run on main with nothing changed, and a skip is no pass).

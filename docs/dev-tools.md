@@ -314,8 +314,16 @@ rest, and `tb <command> --help` explains one.
   copies the checkout over, runs it, brings back failed steps' logs and
   deletes the copy (`scripts/check-remote.sh`); one run at a time, so it may
   say it's waiting for another thread's. A host short of disk is passed over
-  (8 GiB free for Swift, 2 otherwise), and if none has room the check fails
-  and names them. A host that stops answering partway is dropped for the
+  (8 GiB free for Swift or desktop/'s Rust, 2 otherwise), and if none has
+  room the check fails and names them. A check that fails on a host that ran
+  under 1 GiB free during it is run again on another host (or the same one,
+  after idle build folders there are given back), twice at most; out of disk
+  every time, it ends as no host able to run it (exit 69 under `tb land`),
+  which blames no landing. Under 12 GiB free, a run first gives back idle
+  build folders, including cargo targets made by hand in
+  `~/.cache/threadbear-check` (longest unused first; any idle three days go
+  anyway), so build into those only through `desktop/scripts/remote.sh`.
+  A host that stops answering partway is dropped for the
   next one; if none can be reached it runs here at low priority. `--e2e`
   always runs here, as it needs the claude login.
 - Tinker Desk's GPUI build folder (`~/.cache/threadbear-check/gpui`) is a
