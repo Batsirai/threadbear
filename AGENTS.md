@@ -105,6 +105,14 @@ thing on Tinker Desk's desktop from a throwaway copy (`ssh tinker-desk
   code against it); `docs/forking.md` (where features live, anything of Mike's in the
   code; what only his setup needs goes in his runner.json). Patches here show in every
   fork: a chip for Mike's accounts needs a `when` only his Mac passes.
+- Rust in `desktop/`: `cd desktop && cargo fmt --all` before committing (light, fine
+  here). Clippy runs with `-D warnings`; an exception is `#[expect(clippy::x, reason =
+  "...")]`, never a bare `allow` (desktop/README.md, "Lints").
+- A branch from before a format commit (`.git-blame-ignore-revs`) lands across it by
+  itself; on a real conflict, `scripts/replay-over-format.sh`.
+- TypeScript: a promise is awaited, ends in `.catch`, or is marked `void` only when its
+  failure truly doesn't matter. Don't hand-edit `eslint-suppressions.json`: `npx eslint
+  <files> --suppress-rule <rule>` adds, `--prune-suppressions` removes.
 - When Mike asks for a button or panel for a project, write a `.threadbear/patches/*.ts`
   patch (docs/protocol/patches.md, "Patches") with Edit or Write, not the shell, so it's trusted.
 
