@@ -724,7 +724,11 @@ File references are where to look.
   trusted in the same `patch-trust.json`. Beside it,
   `patch-trust-unvouched.json` lists worktrees a thread moved from another
   Mac changed the patches or Claude settings of, which Threadbear's own
-  checkout's standing trust doesn't reach.
+  checkout's standing trust doesn't reach. And `patch-trust-versions.json` keeps,
+  for the last few versions of each patch you trusted, the SHA-256 of each
+  file and the repo's HEAD, so a patch asked about again can say what
+  changed: for that it runs `git rev-list`, `git cat-file` and
+  `git rev-parse` in the folder (`runner/src/patch-changes.ts`).
 - **Menus on macOS 27.2** (`app/Sources/Threadbear/DragSpace.swift`): every
   5 seconds, and before a button opens a menu, the app asks the window
   server which Spaces its own windows are on, and takes them off the drag

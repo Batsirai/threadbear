@@ -613,9 +613,27 @@ export type PatchInfo = {
   untrusted?: 'new' | 'changed';
   hash?: string;
   helpers?: string[]; // with untrusted: the local files it imports, which the hash covers too
+  // With untrusted "changed": what differs from the version last trusted
+  // there (docs/protocol/trust.md, "What changed"). Says only; trusts nothing.
+  changes?: PatchChanges;
   grants?: string[]; // with untrusted, a folder's Claude settings in a thread that asks first: what they'd let run without asking, in words
   icon?: string; // the patch file's icon, an SF Symbol
   iconFile?: string; // or its picture (absolute path: an image or a .app)
+};
+
+// What changed in a waiting patch since the version last trusted in its
+// folder (docs/protocol/trust.md, "What changed").
+export type PatchChanges = {
+  since?: string; // ISO time that version was trusted
+  recheck?: true; // nothing on record, and all that was trusted there was before 6 Nov's change to how patches are checked
+  files?: {
+    path: string; // relative to the folder holding .threadbear/ (absolute outside it)
+    was: 'changed' | 'added' | 'removed'; // added: now in the hash, not then (a new helper, or one Threadbear now follows)
+    commits?: { sha: string; subject: string }[]; // commits since then that touched it, newest first
+    moreCommits?: number;
+    uncommitted?: true; // what's on disk isn't what HEAD has (or git doesn't track it)
+    diff?: string; // `- `, `+ ` and `  ` lines, `…` between hunks; only when both sides could be checked against their hashes
+  }[];
 };
 
 // A panel a patch gives a thread (docs/protocol/patches.md, "Patches"). The runner

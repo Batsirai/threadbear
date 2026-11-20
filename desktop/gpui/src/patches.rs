@@ -845,6 +845,31 @@ impl SidePane {
                         s.child(Spinner::new().with_size(px(11.)).color(p.secondary))
                     }),
             );
+            // What changed since it was last trusted, and where from, with
+            // the lines: a re-ask after your own merge reads differently
+            // from new code (nightly retro, 20 Nov 2026).
+            for line in words::change_lines(patch) {
+                row = row.child(
+                    div()
+                        .text_size(px(style::size::SMALL))
+                        .text_color(p.secondary)
+                        .child(line),
+                );
+            }
+            // Only for a patch that changed, not the 6 Nov recheck.
+            let diffs = patch
+                .changes
+                .as_ref()
+                .filter(|c| {
+                    patch.untrusted.as_deref() == Some("changed") && c.recheck != Some(true)
+                })
+                .and_then(|c| c.files.as_ref())
+                .into_iter()
+                .flatten()
+                .filter_map(|f| f.diff.as_ref().map(|d| (f.path.clone(), d.clone())));
+            for (file, diff) in diffs {
+                row = row.child(diff_block(&file, &diff, p, cx));
+            }
             for grant in patch.grants.iter().flatten() {
                 row = row.child(
                     div()
@@ -1407,6 +1432,8 @@ impl SidePane {
                     "id": patch.id,
                     "source": words::source_name(&patch.source),
                     "waiting": patch.untrusted.as_ref().map(|_| words::waiting_text(patch)),
+                    "changes": words::change_lines(patch),
+                    "diffs": patch.changes.as_ref().and_then(|c| c.files.as_ref()).into_iter().flatten().filter(|f| f.diff.is_some()).map(|f| f.path.clone()).collect::<Vec<_>>(),
                     "trusting": patch.untrusted.is_some().then_some(trusting),
                     "gives": (patch.untrusted.is_none() && patch.error.is_none()).then(|| words::gives(&patch.id, &actions, &panels, &hooks)),
                     "error": patch.error.clone().or(patch.live_error.clone()),
@@ -1613,6 +1640,46 @@ fn chip_tip(action: &Action) -> String {
     format!("{what}\nFrom the {} patch{folder}", action.patch)
 }
 
+/// A changed file's lines since it was last trusted: `-` red, `+` green,
+/// in the code font, under the file's name.
+fn diff_block(file: &str, diff: &str, p: Palette, cx: &App) -> AnyElement {
+    let mono = cx.theme().mono_font_family.clone();
+    let mut block = v_flex()
+        .mt(px(2.))
+        .px(px(6.))
+        .py(px(4.))
+        .rounded(px(4.))
+        .bg(style::primary_opacity(
+            cx,
+            if cx.theme().is_dark() { 0.05 } else { 0.035 },
+        ))
+        .child(
+            div()
+                .text_size(px(style::size::SMALL))
+                .text_color(p.faint)
+                .child(words::plain(file)),
+        );
+    for line in diff.lines() {
+        let line = words::plain(line);
+        let color = if line.starts_with("+ ") {
+            style::added_text(cx)
+        } else if line.starts_with("- ") {
+            style::removed_text(cx)
+        } else {
+            p.secondary
+        };
+        block = block.child(
+            div()
+                .font_family(mono.clone())
+                .text_size(px(style::size::SMALL))
+                .text_color(color)
+                // Wrapped, never cut: a payload could sit past the edge.
+                .child(line),
+        );
+    }
+    block.into_any_element()
+}
+
 /// "1 patch to trust", or the folder's Claude Code hooks when they're what
 /// waits (`WaitingPatchesChip.label`).
 fn trust_label(waiting: &[PatchInfo]) -> String {
@@ -1630,6 +1697,11 @@ fn trust_label(waiting: &[PatchInfo]) -> String {
 }
 
 fn trust_tip(waiting: &[PatchInfo]) -> String {
+    if let [one] = waiting {
+        if let Some(tip) = words::changed_tip(one) {
+            return tip;
+        }
+    }
     if waiting.iter().any(|p| p.source == "claude") {
         "This folder has Claude Code hooks, environment settings or patch files that haven't been used, because you haven't trusted them yet. Each can run code on your Mac. Open Patches to read and trust them".to_owned()
     } else {

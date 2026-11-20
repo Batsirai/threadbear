@@ -4379,6 +4379,14 @@ ${process.env.MOCK_SCRIPTED_TURNS ? '' : "<p>The mock runner's stand-in for the 
       { id: 'convex', source: 'builtin' },
       { id: 'release', source: 'project', file: '/Users/alex/dev/walkies/.threadbear/patches/release.ts', folder: '/Users/alex/dev/walkies',
         untrusted: 'new', hash: 'a'.repeat(64) },
+      // One trusted before, asked about again after a merge changed the
+      // package.json it runs from: it says what changed and where from.
+      { id: 'stats', source: 'project', file: '/Users/alex/dev/walkies/.threadbear/patches/stats.ts', folder: '/Users/alex/dev/walkies',
+        untrusted: 'changed', hash: 'b'.repeat(64), helpers: ['/Users/alex/dev/walkies/package.json'],
+        changes: { since: '2026-11-18T01:33:17.000Z', files: [
+          { path: 'package.json', was: 'changed', commits: [{ sha: '5c3fc77', subject: 'Upgrade fluent-convex to 0.15 (#57)' }],
+            diff: '    "dependencies": {\n-     "fluent-convex": "^0.13.0",\n+     "fluent-convex": "^0.15.0",\n      "react": "^19.3.1"' },
+        ] } },
     ];
     waitingPatchGives.set('/Users/alex/dev/walkies/.threadbear/patches/release.ts', [
       { id: 'release.upload-build', title: 'Upload build', kind: 'command', command: './scripts/upload.sh', patch: 'release' },

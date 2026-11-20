@@ -2205,7 +2205,12 @@ cloned or with a `git pull`, waits: a "patch to trust" chip shows above the
 composer, and Patches lists it as "Not run yet" (or "Changed since you
 trusted it") with a Trust button. Open its file to read it first, and
 any files it imports or runs (a setup script, say), which Patches lists
-under it: a change to one of those asks again too. A patch that loads code
+under it: a change to one of those asks again too. When it changed since you
+trusted it, Patches says which files changed, in which commits (or that
+it isn't committed), and shows the changed lines, so a re-ask after your
+own merge reads differently from code you've never seen. In a folder
+last trusted before Threadbear changed how it checks patches (on 6 Nov),
+it says it can't tell what changed. A patch that loads code
 by a name it works out as it runs (`import(name)`) can't be checked, so it
 never runs and Patches says why: import its files by a plain path instead.
 The same goes for a command a patch runs by itself, a worktree's setup or
