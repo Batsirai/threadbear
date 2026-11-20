@@ -75,7 +75,7 @@ const REFUSED: Record<string, string[]> = {
   wordsFailed: allBut('wordsPending'),
   waitOn: allBut('time', 'timePassed'),
   forApp: allBut('time', 'timePassed'),
-  checked: allBut('words', 'wordsTopicOnly', 'archivedWords'),
+  checked: allBut('wordsPending', 'words', 'wordsTopicOnly', 'archivedWords', 'oddSleep'),
 };
 function allBut(...keep: string[]): string[] {
   return Object.keys(STATES).filter((s) => !keep.includes(s));
@@ -284,6 +284,13 @@ test('every shape of the fields reads as a Place and writes back as it was', () 
   assert.ok(count > 25_000);
 });
 
+// The events whose callers check first (each has a refusal in REFUSED).
+const MAY_REFUSE: PlaceEvent['kind'][] = ['wordsAsked', 'wordsAnswered', 'wordsFailed', 'waitOn', 'forApp', 'checked'];
+
+test('a pending wait in words that is no boolean still wakes on a start, as before', () => {
+  assert.equal(wakesOnStart(placeOf({ snoozedUntil: FAR_OFF, wakeWhen: { said: 'x', pending: 1 as unknown as true } }), 'r1'), true);
+});
+
 test('every event on every shape matches the writes by hand, or is refused', () => {
   let seed = 11;
   const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
@@ -294,6 +301,7 @@ test('every event on every shape matches the writes by hand, or is refused', () 
       const rec = clone(f);
       const res = parkRecord(rec, e, NOW);
       if (!res.ok) {
+        assert.ok(MAY_REFUSE.includes(e.kind), `${name} refused on ${JSON.stringify(f)}: ${res.reason}`);
         assert.deepEqual(rec, clone(f));
         continue;
       }
@@ -345,7 +353,13 @@ test('only place.ts writes where a thread is parked', () => {
     'threadbear-mcp.ts': ['change', 'upd'],
     // Load-time clean-up of a moved record's waits, before anything reads it.
     'store.ts': ['rec'],
+    // Not checked here: real-copy.ts neutraliseCopied, which deletes the
+    // wait fields by a list of names from a dev runner's copy of real
+    // threads (so a copy never wakes or waits), and Object.assign onto a
+    // record (reviews.ts copies a record whole). Keep those to copies.
   };
+  // rec['archivedAt'] = …, delete rec['woke'].
+  const bracket = new RegExp(`(?:delete\\s+[\\w.]+\\[['"\`](?:${fieldRe})['"\`]\\])|(?:\\[['"\`](?:${fieldRe})['"\`]\\]\\s*(?:=(?!=)|\\?\\?=))`, 'g');
   const found: string[] = [];
   const walk = (dir: string): void => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -353,7 +367,9 @@ test('only place.ts writes where a thread is parked', () => {
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.ts') && e.name !== 'place.ts') {
         const rel = path.relative(src, p);
-        const text = fs.readFileSync(p, 'utf8');
+        // Comments out, so a line quoting the old code isn't a write.
+        const text = fs.readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+        for (const m of text.matchAll(bracket)) found.push(`${rel}: ${m[0]}`);
         for (const m of text.matchAll(write)) {
           const receiver = (m[1] ?? m[3]).split('.').at(-1)!;
           const field = m[2] ?? m[4];

@@ -41,7 +41,7 @@
 //   waitOn        end_turn's waitFor or a lab review; needs a time sleep.
 //   forApp        wait_for_app_restart; needs a time sleep.
 //   checked       the librarian woke an agent's wait to check (wakeChecked);
-//                 needs a sleep in words that isn't pending.
+//                 needs a sleep with words.
 //   wake          by itself: its time, a restart or new release, a topic,
 //                 the threads it waited on (Runner.wake).
 //   message       anything sent to it (Runner.sendTo): a sleep or the archive
@@ -235,7 +235,7 @@ export function placeBucket(place: Place, now: number): 'inbox' | 'snoozed' | 'a
 // quietly (Runner.wake).
 export function wakesOnStart(place: Place, release: string | undefined): boolean {
   const f = place.kind === 'inbox' ? undefined : place.sleep?.for;
-  if (f?.kind === 'words') return f.wakeWhen.pending === true;
+  if (f?.kind === 'words') return Boolean(f.wakeWhen.pending);
   if (f?.kind === 'restart') return !f.release || f.release !== release;
   // Fields as found, in an odd sleep or with no sleep at all: read as they
   // always were.
@@ -287,9 +287,12 @@ export function movePlace(place: Place, e: PlaceEvent, now: number): PlaceMove {
       return ok({ ...place, sleep: { until: sleep.until, for: f } } as Place);
     }
     case 'checked': {
+      // Any sleep with words, odd ones from an older runner too, as the
+      // librarian's topic wake takes them.
       const f = place.kind === 'inbox' ? undefined : place.sleep?.for;
-      if (f?.kind !== 'words' || f.wakeWhen.pending) return no('it has no sleep in words to check');
-      const said = f.wakeWhen.said;
+      const wakeWhen = f?.kind === 'words' ? f.wakeWhen : f?.kind === 'odd' ? f.fields.wakeWhen : undefined;
+      if (!wakeWhen || typeof wakeWhen !== 'object') return no('it has no sleep in words to check');
+      const said = wakeWhen.said;
       const before = marks.wakeChecked?.said === said ? marks.wakeChecked.from : undefined;
       return ok({ ...place, marks: { ...marks, wakeChecked: { said, from: { ...before, [e.threadId]: e.seq } } } });
     }

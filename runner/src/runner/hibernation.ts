@@ -190,7 +190,8 @@ export const hibernationPart = {
     if (!until || Date.parse(until) <= now) until = new Date(now + WAIT_FOR_DEFAULT_MS).toISOString();
     this.update({ threadId: rec.id, snoozedUntil: until });
     const by = leastAuthority(askedBy, this.authorityNow(rec.id));
-    this.park(st, { kind: 'waitOn', waits: list.map((x) => ({ ...x, by })) });
+    // Refused only if it has woken already (its time passed meanwhile).
+    if (!this.park(st, { kind: 'waitOn', waits: list.map((x) => ({ ...x, by })) })) return;
     this.markDirty(st);
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const also = skipped.length ? ` (${skipped.join(', ')} isn't a thread here that's still going, so it isn't waited on.)` : '';
