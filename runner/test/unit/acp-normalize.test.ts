@@ -83,6 +83,11 @@ test('a call run under another id than its request takes over the request\'s row
   assert.deepEqual(n.noteCall({ toolCallId: 's:3', kind: 'edit', rawInput: { file_path: '/w/a.js' } }).input, { file_path: '/w/a.js' });
   const end = n.handle({ sessionUpdate: 'tool_call_update', toolCallId: 's:3', status: 'completed' });
   assert.deepEqual(end.map((o) => (o as { event: { itemId: string; ok: boolean } }).event).map((e) => [e.itemId, e.ok]), [[seen.id, true]]);
+  // A new file's text with a patch-like line in it still matches by its file.
+  const n3 = new AcpNormalizer(ctx);
+  n3.noteCall({ toolCallId: 'ask3', kind: 'edit', rawInput: { TargetFile: '/w/doc.md', CodeContent: 'title\n--- section\nbody' }, content: [{ type: 'diff', path: '/w/doc.md', oldText: null, newText: 'title\n--- section\nbody' }] });
+  n3.answered('ask3', true);
+  assert.equal((n3.handle({ sessionUpdate: 'tool_call', toolCallId: 's:5', kind: 'edit', status: 'in_progress', rawInput: { file_path: '/w/doc.md' } })[0] as { event: { itemId: string } }).event.itemId, 'ask3');
   // One allowed without a card that never ran is gone at the turn's end.
   const n2 = new AcpNormalizer(ctx);
   n2.noteCall({ toolCallId: 'ask2', kind: 'edit', rawInput: { TargetFile: '/w/a.js' } });

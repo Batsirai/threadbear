@@ -50,6 +50,8 @@ type Tool = {
   framed?: boolean;
   // Whether the request was let go ahead, once it's answered.
   allowed?: boolean;
+  // The files the request named outright (namedFiles).
+  askedFiles?: string[];
   askedDiffs?: AcpToolContent[];
 };
 
@@ -104,6 +106,18 @@ function pathsIn(v: unknown, key: string, out: Set<string>, depth: number): void
   } else if (isPlainObject(v)) {
     for (const [k, x] of Object.entries(v)) pathsIn(x, k, out, depth + 1);
   }
+}
+
+// The files a call names outright: its locations and diffs, or failing
+// those, every path its arguments name. Not what requestPaths finds in a
+// file's new text (a `--- ` line in a Markdown file), which would keep a
+// call from being matched with its request (askedFor; Gemini's review, 20
+// Nov 2026).
+function namedFiles(call: AcpToolCall): string[] {
+  const out = new Set<string>();
+  for (const l of Array.isArray(call.locations) ? call.locations : []) if (typeof l?.path === 'string' && l.path) out.add(l.path);
+  for (const c of Array.isArray(call.content) ? call.content : []) if (c?.type === 'diff' && typeof c.path === 'string' && c.path) out.add(c.path);
+  return out.size ? [...out] : requestPaths(call);
 }
 
 export function requestPaths(call: AcpToolCall): string[] {
@@ -317,6 +331,7 @@ export class AcpNormalizer {
     this.merge(t, call);
     const diffs = (Array.isArray(call.content) ? call.content : []).filter((c) => c?.type === 'diff');
     if (diffs.length) t.askedDiffs = diffs;
+    t.askedFiles = namedFiles(call);
     return { id, paths: [...t.paths], kind: t.acpKind, input: t.input, title: t.title };
   }
 
@@ -347,7 +362,7 @@ export class AcpNormalizer {
   // its own, as the permission checks read it (Codex's review, 20 Nov 2026).
   private askedFor(u: AcpToolCall): Tool | undefined {
     if (!writesFiles(u.kind)) return undefined;
-    const paths = requestPaths(u);
+    const paths = namedFiles(u);
     if (!paths.length || !paths.every((p) => path.isAbsolute(p))) return undefined;
     const same = (a: string[], b: string[]) => {
       const x = new Set(a.map((p) => path.resolve(p)));
@@ -355,7 +370,7 @@ export class AcpNormalizer {
       return x.size === y.size && [...x].every((p) => y.has(p));
     };
     // The oldest first: an agent runs what it asked for in turn.
-    const found = [...this.tools.values()].find((t) => t.asked && t.allowed === true && !t.framed && !t.done && t.acpKind === u.kind && t.paths.length > 0 && t.paths.every((p) => path.isAbsolute(p)) && same(t.paths, paths));
+    const found = [...this.tools.values()].find((t) => t.asked && t.allowed === true && !t.framed && !t.done && t.acpKind === u.kind && (t.askedFiles ?? []).every((p) => path.isAbsolute(p)) && same(t.askedFiles ?? [], paths));
     return found;
   }
 
@@ -445,6 +460,7 @@ export class AcpNormalizer {
       // Never shown (a request allowed without a card that didn't run): no
       // row, and nothing later can take it over (askedFor).
       if (!t.emitted) continue;
+      this.emitDiffs(t, out);
       out.push({ kind: 'event', event: { type: 'tool.result', itemId: t.row, ok: false, text: reason, truncated: false, images: [] } });
     }
     return out;
