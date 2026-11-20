@@ -762,6 +762,14 @@ test('applyNoteEdits: like Edit, each old matches once, in order, all or none', 
   assert.equal(applyNoteEdits(notes, [{ old: '- two', new: '' }]), 'Intro.\n\n- one\n- three\n\nOutro.');
   assert.equal(applyNoteEdits(notes, [{ old: '- one\n- two\n- three', new: '' }]), 'Intro.\n\nOutro.');
   assert.equal(applyNoteEdits(notes, [{ old: 'Intro.', new: '' }]), '- one\n- two\n- three\n\nOutro.');
+  // An old with its own line break comes out exactly; CRLF is LF, so a \r
+  // can't hide from the reviewer's diff.
+  const doc = '## Decisions\n- Keep X\n- Drop Y\n\n## Gotchas\n- Z';
+  assert.equal(applyNoteEdits(doc, [{ old: '- Drop Y\n', new: '' }]), '## Decisions\n- Keep X\n\n## Gotchas\n- Z');
+  assert.equal(applyNoteEdits('## A\n\n- Drop\n- Keep', [{ old: '\n- Drop', new: '' }]), '## A\n\n- Keep');
+  assert.equal(applyNoteEdits('- a\r\n- b\r\n- c', [{ old: '- b', new: '' }]), '- a\n- c');
+  assert.equal(applyNoteEdits('a\nb', [{ old: 'a\r\nb', new: 'a\rb, c' }]), 'a\nb, c');
+  assert.throws(() => applyNoteEdits('x'.repeat(49_990) + ' END', [{ old: 'END', new: 'y'.repeat(100) }]), /past the 50000/);
   const fails = (edits: unknown, re: RegExp) => assert.throws(() => applyNoteEdits(notes, edits), (e: any) => e instanceof RpcError && re.test(e.message));
   fails([{ old: '- four', new: 'x' }], /old isn't in the notes, so nothing changed/);
   fails([{ old: '- t', new: 'x' }], /more than once/);

@@ -819,10 +819,15 @@ export type NoteEdit = { old: string; new: string };
 // which reached the card reviewer as a rewrite (thread c21654fd, 17 Nov 2026).
 export function applyNoteEdits(notes: string, edits: unknown): string {
   if (!Array.isArray(edits) || !edits.length) throw bad('editNotes must be a list of { old, new }.');
-  let out = notes;
+  // Line ends as LF throughout, as the card reviewer's diff compares them,
+  // so a \r can't change the notes without showing there (Gemini review).
+  const lf = (t: string) => t.replace(/\r\n?/g, '\n');
+  let out = lf(notes);
   for (const [i, e] of edits.entries()) {
-    const { old, new: next } = (e ?? {}) as Record<string, unknown>;
-    if (typeof old !== 'string' || typeof next !== 'string') throw bad('Each of editNotes is { old, new }, both text.');
+    const raw = (e ?? {}) as Record<string, unknown>;
+    if (typeof raw.old !== 'string' || typeof raw.new !== 'string') throw bad('Each of editNotes is { old, new }, both text.');
+    const old = lf(raw.old);
+    const next = lf(raw.new);
     const which = edits.length > 1 ? `editNotes[${i}]` : 'editNotes';
     if (!old) throw bad(`${which}'s old is empty: name the text to change. appendNote adds a paragraph.`);
     if (old === next) throw bad(`${which}'s old and new are the same.`);
@@ -833,17 +838,21 @@ export function applyNoteEdits(notes: string, edits: unknown): string {
     if (out.indexOf(old, at + 1) >= 0) throw bad(`${which}'s old is in the notes more than once, so nothing changed. Take in more of the text round it.`);
     const before = out.slice(0, at);
     const after = out.slice(at + old.length);
-    if (next) {
+    // An old that names its own line break is taken out exactly, as Edit
+    // would (Gemini review: "- Drop\n" ate the blank line after it).
+    if (next || old.startsWith('\n') || old.endsWith('\n')) {
       out = before + next + after;
       continue;
     }
-    // Text taken out leaves the line breaks of one side, not both: a bullet
-    // taken out of a list doesn't split it with a blank line.
+    // Text alone taken out leaves the line breaks of one side, not both: a
+    // bullet taken out of a list doesn't split it with a blank line.
     const b = before.replace(/\n+$/, '');
     const a = after.replace(/^\n+/, '');
     const breaks = b && a ? Math.max(before.length - b.length, after.length - a.length) : 0;
     out = b + '\n'.repeat(breaks) + a;
   }
+  // Checked here too, so an edit too big is refused before anyone is asked.
+  if (out.trim().length > NOTES_MAX) throw bad(`The notes would be ${out.trim().length} characters, past the ${NOTES_MAX} they can hold. Make the edit shorter, or rewrite the notes shorter with notes.`);
   return out;
 }
 
