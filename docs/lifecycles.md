@@ -20,7 +20,11 @@ reading the code, unless it says it was tested.
 Commands, moves, runner requests and thread clears are now state machines (below).
 A virtual runner's box (`boxes.boxState`, docs/virtual-runners.md) was
 born one on 18 Nov 2026 (`convex/boxMachine.ts`): a new table, so nothing
-to backfill and no stepping stone. A login's cloud token for boxes
+to backfill and no stepping stone. From 20 Nov 2026 an `expired` box is purged
+(`PURGE`, to `purged`, deleted in the same step) once its virtual runner's
+`deleteAfterDays` have passed again and the provider has no box of it, with
+its thread's and runner's rows (`boxService.ts purgeExpiredBoxes`, a cron that hands each box to `purgeBox` and `forgetBox`, in runs of its own):
+before, every virtual-runner thread left its `runners` row for good. A login's cloud token for boxes
 (`cloudTokens.tokenState`: valid, dead once a box's turn on it is refused)
 became one on 19 Nov 2026 (`convex/cloudTokenMachine.ts`), with a
 `tokenState` backfill (rows set before it are valid), and boxes gained

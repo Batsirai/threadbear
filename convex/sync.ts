@@ -4337,7 +4337,7 @@ export const auditRemove = mutation({
 // with their pictures, accounts, its runner row. A batch a call, so a big
 // runner takes a few; `done` says when there's nothing left.
 const PURGE_BATCH = 50;
-const PURGE_MESSAGES = 200;
+const PURGE_BYTES = 2 * 1024 * 1024;
 export const purgeRunner = mutation({
   args: { key: v.string(), runnerId: v.string() },
   returns: v.object({ done: v.boolean() }),
@@ -4351,56 +4351,80 @@ export const purgeRunner = mutation({
     if (!(await ctx.db.query('runnerKeys').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first())) throw new ConvexError({ kind: 'badArgs', message: `Runner ${runnerId} never had a key of its own: not purging it.` });
     // Never the main Mac's own: its schedules there are the only copy.
     if (await ctx.db.query('ownerRunnerIds').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first()) throw new ConvexError({ kind: 'badArgs', message: `${runnerId} is a runner id the main key has named as its own: not purging it.` });
-    let left = PURGE_BATCH;
-    // A thread at a time, its messages and pictures a page a call, so a long
-    // one takes a few calls rather than one too big to finish.
-    const t = await ctx.db.query('threads').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first();
-    if (t) {
-      const msgs = await ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', t.threadId)).take(PURGE_MESSAGES);
-      for (const m of msgs) await ctx.db.delete(m._id);
-      if (msgs.length === PURGE_MESSAGES) return { done: false };
-      for (const table of ['replyImages', 'shareImages'] as const) {
-        const imgs = await ctx.db.query(table).withIndex('by_thread_seq', (q) => q.eq('threadId', t.threadId)).take(PURGE_BATCH);
-        for (const img of imgs) {
-          await ctx.db.delete(img._id);
-          await deleteIfUnused(ctx, img.storageId);
-        }
-        if (imgs.length === PURGE_BATCH) return { done: false };
-      }
-      await dropThread(ctx, t.threadId, t);
-      return { done: false };
-    }
-    for (const table of ['threadIndex', 'pocketCards', 'runnerRequests', 'schedules', 'projects', 'projectHeads', 'projectNotes', 'accounts', 'runnerLogins'] as const) {
-      if (left <= 0) break;
-      for (const r of await ctx.db.query(table).withIndex('by_runnerId', (q: any) => q.eq('runnerId', runnerId)).take(left)) {
-        await ctx.db.delete(r._id);
-        // The owner's runner holds a copy of every schedule, this one's too.
-        if (table === 'schedules') {
-          await ctx.db.insert('scheduleGone', { id: (r as Doc<'schedules'>).id, runnerId, at: Date.now() });
-          // An old mirror row can share its id with another runner's live schedule,
-          // whose wake this is then, so it stays.
-          if (!(await scheduleRow(ctx, (r as Doc<'schedules'>).id))) await dropWake(ctx, (r as Doc<'schedules'>).id);
-        }
-        left--;
-      }
-    }
-    if (left > 0) {
-      for (const icon of await ctx.db.query('projectIcons').withIndex('by_runner_project', (q) => q.eq('runnerId', runnerId)).take(left)) {
-        await ctx.db.delete(icon._id);
-        await deleteIfUnused(ctx, icon.storageId);
-        left--;
-      }
-    }
-    if (left > 0) {
-      for (const table of ['runners', 'viewCounts'] as const) {
-        const row = await ctx.db.query(table).withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique();
-        if (row) await ctx.db.delete(row._id);
-      }
-      return { done: true };
-    }
-    return { done: false };
+    return { done: await purgeRunnerRows(ctx, runnerId) };
   },
 });
+
+// A runner's rows, a batch a call: true once they're all gone, the
+// `runners` row last. Its storage and memory-offer counts stay, as the rows
+// they count may (a runner key made again for the id goes on from them). purgeRunner's, and an expired box's after its days
+// (boxService.ts purgeExpiredBoxes). Its threads go a thread at a time.
+export async function purgeRunnerRows(ctx: MutationCtx, runnerId: string): Promise<boolean> {
+  // What a call reads, counted as it goes (rows from before the caps can be
+  // a MiB each), so none goes past Convex's limits: the rest in the next.
+  let rows = 0;
+  let bytes = 0;
+  const spent = () => rows >= PURGE_BATCH * 4 || bytes >= PURGE_BYTES;
+  // A file's check (storageInUse) is charged as clearRows charges it: more
+  // before limitsMigration, when the rows it reads can be big (checkCost).
+  const check = await checkCost(ctx, clearBudget(ctx));
+  const read = (doc: unknown, checks = 0) => {
+    rows++;
+    bytes += docBytes(doc) + checks * check;
+  };
+  // A thread at a time: its messages and pictures, then (in a call of its
+  // own, as it has its own allowance, CLEAR_BYTES) dropThread for the rest.
+  const t = await ctx.db.query('threads').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first();
+  if (t) {
+    const freed = new Map<string, number>();
+    for await (const m of ctx.db.query('messages').withIndex('by_thread_seq', (q) => q.eq('threadId', t.threadId))) {
+      read(m);
+      await ctx.db.delete('messages', m._id);
+      if (m.runnerId) freed.set(m.runnerId, (freed.get(m.runnerId) ?? 0) + storedBytes(m));
+      if (spent()) break;
+    }
+    // Its runner's count of message bytes goes down with them, as clearRows' does.
+    for (const [id, n] of freed) await countMessageBytes(ctx, id, -n);
+    for (const table of ['replyImages', 'shareImages'] as const) {
+      if (spent()) break;
+      for await (const img of ctx.db.query(table).withIndex('by_thread_seq', (q) => q.eq('threadId', t.threadId))) {
+        read(img, 1);
+        await ctx.db.delete(table, img._id);
+        await deleteIfUnused(ctx, img.storageId);
+        if (spent()) break;
+      }
+    }
+    if (rows === 0) await dropThread(ctx, t.threadId, t);
+    return false;
+  }
+  for (const table of ['threadIndex', 'pocketCards', 'runnerRequests', 'schedules', 'projects', 'projectHeads', 'projectNotes', 'accounts', 'runnerLogins'] as const) {
+    if (spent()) return false;
+    for await (const r of ctx.db.query(table).withIndex('by_runnerId', (q: any) => q.eq('runnerId', runnerId)) as AsyncIterable<Doc<typeof table>>) {
+      read(r);
+      await ctx.db.delete(r._id);
+      // The owner's runner holds a copy of every schedule, this one's too.
+      if (table === 'schedules') {
+        await ctx.db.insert('scheduleGone', { id: (r as Doc<'schedules'>).id, runnerId, at: Date.now() });
+        // An old mirror row can share its id with another runner's live schedule,
+        // whose wake this is then, so it stays.
+        if (!(await scheduleRow(ctx, (r as Doc<'schedules'>).id))) await dropWake(ctx, (r as Doc<'schedules'>).id);
+      }
+      if (spent()) return false;
+    }
+  }
+  for await (const icon of ctx.db.query('projectIcons').withIndex('by_runner_project', (q) => q.eq('runnerId', runnerId))) {
+    read(icon, 1);
+    await ctx.db.delete('projectIcons', icon._id);
+    await deleteIfUnused(ctx, icon.storageId);
+    if (spent()) return false;
+  }
+  // One row each. Its figures too: runnerStats is read whole (lib.ts).
+  for (const table of ['runnerStats', 'viewCounts', 'runners'] as const) {
+    const row = await ctx.db.query(table).withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).first();
+    if (row) await ctx.db.delete(table, row._id);
+  }
+  return true;
+}
 
 // ------------------------------------------------------------ rewriting what's stored
 // Today's rules over rows stored before them: `appendMessages` never rewrites a

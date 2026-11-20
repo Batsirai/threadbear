@@ -464,6 +464,13 @@ Its box and its save are gone: the
 thread can't come back, and what's sent
 to it fails saying so.
   end note
+  state "purged" as purged
+  purged : at
+  note right of purged
+Gone for good, with its thread and its
+runner: the row is deleted in the step
+that put it here.
+  end note
   state "failed" as failed
   failed : at, error
   note right of failed
@@ -558,10 +565,12 @@ kept, and no key works for it.
   gone --> waking : WAKE (server) / wake
   gone --> expired : EXPIRE (server) / expire
   expired --> expired : DESTROYED (server) / forgetProvider
+  expired --> purged : PURGE (server) / purged
   failed --> waking : WAKE (server) / wake
   failed --> failed : CREATED(providerBoxId, attempt?) (server) [notStale] / noteBox
   failed --> shelved : ARCHIVE (owner) [1. holdsWork] / shelve
   failed --> destroying : ARCHIVE (owner) [else] / archive
+  purged --> [*]
 ```
 
 How a row is born:
@@ -703,6 +712,7 @@ From `gone`:
 From `expired`:
 
 - `DESTROYED (server)` stays put. A kept box it had is deleted too.
+- `PURGE (server)` → `purged`. Its virtual runner's deleteAfterDays more have passed, and the provider has no box of it left: its thread and runner rows have gone (boxService.ts purgeExpiredBoxes), and this row goes in the same step.
 
 From `failed`:
 
