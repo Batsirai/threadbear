@@ -113,8 +113,11 @@ export class CliUpdates {
   private regated = new Set<string>();
   private rechecking?: Promise<void>;
   // The hold thread's state as last sent, so only a change re-sends the list.
-  private shownThreadId?: string;
-  private shownThreadState?: 'open' | 'archived';
+  // The hold's thread and where it was, as status() last read it and as
+  // the last clis.updated sent it: a read in between (clis.list) mustn't
+  // pass for telling the app.
+  private readThread?: { id: string; state?: 'open' | 'archived' };
+  private sentThread?: { id: string; state?: 'open' | 'archived' };
 
   constructor(d: CliUpdatesDeps) {
     this.d = d;
@@ -336,12 +339,11 @@ export class CliUpdates {
       out.hold = shown;
       // A deleted thread isn't linked; an archived one is, as what it found.
       const state = threadId ? this.d.hooks.threadState?.(threadId) : undefined;
-      this.shownThreadId = threadId;
-      this.shownThreadState = state;
+      this.readThread = threadId ? { id: threadId, state } : undefined;
       if (threadId && state) out.hold.threadId = threadId;
       if (state === 'open') out.hold.investigating = true;
-    } else {
-      this.shownThreadId = undefined;
+    } else if (p === 'codex') {
+      this.readThread = undefined;
     }
     if (s.update) out.update = { ...s.update };
     return out;
@@ -475,13 +477,18 @@ export class CliUpdates {
           this.changed();
           return;
         }
-        if (r.missing.join('\n') !== hold.missing.join('\n')) this.copies.updateHold(hold.version, { missing: r.missing, added: r.added.length ? r.added : undefined });
+        if (r.missing.join('\n') !== hold.missing.join('\n')) {
+          this.copies.updateHold(hold.version, { missing: r.missing, added: r.added.length ? r.added : undefined });
+          this.changed();
+        }
       } finally {
         this.copies.unlock();
       }
     }
+    // An install asked for meanwhile (Update anyway, Go back) settles the
+    // hold itself; a newer release is what the update goes to instead.
     const latest = this.st.codex?.latestVersion;
-    if (latest && compareVersions(latest, hold.version) > 0) return;
+    if (this.running.codex || (latest && compareVersions(latest, hold.version) > 0)) return;
     this.investigate(hold.version);
   }
 
@@ -507,9 +514,8 @@ export class CliUpdates {
   // Every thread's every summary change comes through here, so it goes by
   // what status() last saw rather than reading state.json.
   threadChanged(threadId: string): void {
-    if (threadId !== this.shownThreadId) return;
-    const state = this.d.hooks.threadState?.(threadId);
-    if (state === this.shownThreadState) return;
+    if (threadId !== this.sentThread?.id) return;
+    if (this.d.hooks.threadState?.(threadId) === this.sentThread.state) return;
     this.changed();
   }
 
@@ -693,6 +699,7 @@ export class CliUpdates {
 
   private changed(): void {
     const clis = this.list();
+    this.sentThread = this.readThread;
     for (const fn of this.listeners) {
       try {
         fn(clis);

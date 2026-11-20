@@ -294,6 +294,8 @@ test('codex: a protocol hold starts one thread looking into it, and a runner sta
   t.u.threadChanged('some-other-thread');
   assert.equal(t.changes.length, sent, 'nothing changed, nothing sent');
   threads.set('thread-1', 'archived');
+  // A client reading the list first (clis.list) doesn't count as telling it.
+  t.u.list();
   t.u.threadChanged('thread-1');
   assert.equal(t.changes.length, sent + 1);
   assert.deepEqual(of(t.changes.at(-1)!, 'codex').hold, { version: '0.166.0', reason: 'the app-server protocol changed', missing: ['turn/steer'], threadId: 'thread-1' });

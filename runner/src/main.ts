@@ -350,12 +350,6 @@ async function main(): Promise<void> {
     notice: (level, message) => runner.notice(level, message),
     acp: { providers: ACP_PROVIDERS, binary: (p) => acpBinary(p as AcpProvider)(), updateArgs: (p) => ACP_AGENTS[p as AcpProvider].updateArgs },
   });
-  // The thread on a held Codex version: archiving or deleting it changes
-  // what its Updates row says.
-  runner.onNotification((n) => {
-    if (n.method === 'thread.updated') updates.threadChanged(n.params.thread.id);
-    else if (n.method === 'thread.deleted') updates.threadChanged(n.params.threadId);
-  });
   // Other CLIs you use alongside Threadbear (Grok, Muse...), from runner.json.
   const extraUpdates = new ExtraUpdates({ home: cfg.home, log, clock: realClock, extra: cfg.cliUpdates.extra ?? [] });
   // The gateway's own word on which services are signed out, asked fresh
@@ -1206,6 +1200,12 @@ async function main(): Promise<void> {
   updaterReady = true;
 
   runner.attachClis(updates);
+  // The thread on a held Codex version: archiving or deleting it changes
+  // what its Updates row says. (Here, as the runner is made after updates.)
+  runner.onNotification((n) => {
+    if (n.method === 'thread.updated') updates.threadChanged(n.params.thread.id);
+    else if (n.method === 'thread.deleted') updates.threadChanged(n.params.threadId);
+  });
   const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
   // runner.status carries the CLI statuses too (protocol, "runner.status").
   const restartStatus = methods['runner.status'];
