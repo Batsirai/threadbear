@@ -208,9 +208,20 @@ public struct DraftBlock: Hashable, Sendable {
             return .mention("\(first)\(name)")
         }
         guard !target.contains(" "), let url = URL(string: target), let scheme = url.scheme?.lowercased(),
-              ["http", "https", "mailto"].contains(scheme) else { return nil }
+              ["http", "https", "mailto"].contains(scheme), names(target, scheme: scheme) else { return nil }
         let shown = label.map(decode) ?? (scheme == "mailto" ? String(target.dropFirst("mailto:".count)) : target)
         return .link(url, shown)
+    }
+
+    /// Enough of an address to be one: a web one names a host, a mail one
+    /// someone. URL(string:) takes "https://" and "mailto:" alone, which
+    /// go nowhere (the desktop app's is_address; shared/cases/draft-blocks.json).
+    private static func names(_ target: String, scheme: String) -> Bool {
+        let rest = target.dropFirst(scheme.count + 1)
+        guard !rest.isEmpty else { return false }
+        if scheme == "mailto" { return true }
+        guard let first = rest.drop(while: { $0 == "/" }).first else { return false }
+        return first != "?" && first != "#"
     }
 
     enum Piece: Equatable {

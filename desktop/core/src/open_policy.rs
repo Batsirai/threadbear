@@ -3050,6 +3050,30 @@ mod tests {
         assert!(is_own_scheme("threadbear://thread/x"));
     }
 
+    /// The cases the iPhone, Android and the website run too
+    /// (`shared/cases/link-policy.json`): only the kind, not the path.
+    #[test]
+    fn links_follow_the_shared_cases() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../shared/cases/link-policy.json"
+        );
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cases = file["cases"].as_array().unwrap();
+        assert!(cases.len() >= 40);
+        for case in cases.iter().filter(|c| c["differs"]["desktop"].is_null()) {
+            let name = case["name"].as_str().unwrap();
+            let kind = match link_kind(case["input"].as_str().unwrap()) {
+                LinkKind::Web(_) => "web",
+                LinkKind::Ask(_) => "ask",
+                LinkKind::File(_) => "file",
+                LinkKind::Refuse => "refuse",
+            };
+            assert_eq!(kind, case["expect"].as_str().unwrap(), "{name}");
+        }
+    }
+
     #[test]
     fn file_urls_escape_what_a_url_would_read() {
         assert_eq!(

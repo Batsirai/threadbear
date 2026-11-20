@@ -435,32 +435,14 @@ impl ThreadPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase());
-        let rest = url.split_once(':').map_or("", |(_, r)| r);
-        match scheme.as_deref() {
-            Some("work") => {
-                return self.open_work_link(
-                    &crate::rows::markdown::percent_decode(rest),
-                    row_id,
-                    window,
-                    cx,
-                )
+        // A button: link is its pill's to press, so it goes on as any other.
+        match rules::thread_link(url) {
+            Some(rules::ThreadLink::Step(words)) => {
+                return self.open_work_link(&words, row_id, window, cx)
             }
-            Some("thread") => {
-                return self.open_thread_link(
-                    &crate::rows::markdown::percent_decode(rest),
-                    window,
-                    cx,
-                )
-            }
-            Some("review") => {
-                return self.open_review_link(
-                    &crate::rows::markdown::percent_decode(rest),
-                    window,
-                    cx,
-                )
-            }
-            _ => {}
+            Some(rules::ThreadLink::Thread(id)) => return self.open_thread_link(&id, window, cx),
+            Some(rules::ThreadLink::Review(id)) => return self.open_review_link(&id, window, cx),
+            Some(rules::ThreadLink::Button(_)) | None => {}
         }
         match self.link_target(url) {
             Some(LinkTarget::File(Some(file))) => self.open_file_link(file, None, command, cx),

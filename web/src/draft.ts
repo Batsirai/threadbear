@@ -46,6 +46,9 @@ export function draftFrom(language: string | null | undefined, code: string): Dr
 // the text, and it stays plain code until it's done, as on the Mac and the
 // phone.
 export function fenceClosed(source: string, start: number, end: number): boolean {
+  // The block's last line, not the line break after it (as the desktop
+  // app's fence_closed has it).
+  while (end > start && (source[end - 1] === '\n' || source[end - 1] === '\r')) end--;
   const openingStart = source.lastIndexOf('\n', start - 1) + 1;
   const closingStart = source.lastIndexOf('\n', end - 1) + 1;
   if (closingStart <= start) return false;
@@ -217,6 +220,9 @@ export function token(inside: string): Token | undefined {
   // (a URL object would add a "/" to "https://x.dev").
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(target)?.[1]?.toLowerCase();
   if (target.includes(' ') || !scheme || !['http', 'https', 'mailto'].includes(scheme) || !URL.canParse(target)) return undefined;
+  // A mail link names someone: "mailto:" alone parses, but goes nowhere
+  // (desktop/core/src/draft_block.rs is_address; shared/cases/draft-blocks.json).
+  if (target.length === scheme.length + 1) return undefined;
   const shown = label !== undefined ? decode(label) : scheme === 'mailto' ? target.slice('mailto:'.length) : target;
   return { kind: 'link', url: target, label: shown };
 }

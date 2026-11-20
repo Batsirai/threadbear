@@ -123,48 +123,9 @@ pub(crate) fn is_pressing(thread: &str, id: &str) -> bool {
 /// run's, which only its card presses. The kit draws a pill as one piece that can't wrap, so these go
 /// back to plain words before the text is parsed, and wrap as words do.
 pub(crate) fn unknown_as_words<'a>(text: &'a str, thread: &str) -> std::borrow::Cow<'a, str> {
-    if !text.contains("](button:") {
-        return std::borrow::Cow::Borrowed(text);
-    }
-    let pillable = |id: &str| known(thread, id).is_some_and(|b| b.run.is_none());
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find("](button:") {
-        let (before, after) = rest.split_at(at);
-        let link_end = after.find(')');
-        // The link's words: back to the `[` that opens them, minding brackets inside.
-        let mut depth = 0i32;
-        let open = before.char_indices().rev().find_map(|(i, c)| match c {
-            ']' => {
-                depth += 1;
-                None
-            }
-            '[' if depth == 0 => Some(i),
-            '[' => {
-                depth -= 1;
-                None
-            }
-            _ => None,
-        });
-        match (open, link_end) {
-            (Some(open), Some(end)) => {
-                let id = after["](button:".len()..end].trim();
-                if pillable(id) {
-                    out.push_str(&rest[..at + end + 1]);
-                } else {
-                    out.push_str(&before[..open]);
-                    out.push_str(&before[open + 1..]);
-                }
-                rest = &after[end + 1..];
-            }
-            _ => {
-                out.push_str(&rest[..at + 1]);
-                rest = &after[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    std::borrow::Cow::Owned(out)
+    buttons::unlink(text, |id| {
+        known(thread, id).is_some_and(|b| b.run.is_none())
+    })
 }
 
 /// What a pill's click calls with (the thread whose transcript it's drawn

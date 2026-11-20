@@ -1210,4 +1210,94 @@ mod tests {
             ["bold: Hi", "link: there <https://x.dev>", "code: x"]
         );
     }
+
+    /// The cases every app runs (`shared/cases/draft-blocks.json`): here,
+    /// the iPhone, Android and the website. A case whose `differs` names
+    /// desktop is a known difference, skipped.
+    #[test]
+    fn draft_blocks_follow_the_shared_cases() {
+        use serde_json::{json, Value};
+        fn neutral(spans: &[Span]) -> Value {
+            Value::Array(
+                spans
+                    .iter()
+                    .map(|s| {
+                        let mut o = serde_json::Map::new();
+                        o.insert("text".into(), json!(s.text));
+                        for (key, on) in [
+                            ("bold", s.bold),
+                            ("italic", s.italic),
+                            ("strike", s.strike),
+                            ("code", s.code),
+                        ] {
+                            if on {
+                                o.insert(key.into(), json!(true));
+                            }
+                        }
+                        if let Some(link) = &s.link {
+                            o.insert("link".into(), json!(link));
+                        }
+                        Value::Object(o)
+                    })
+                    .collect(),
+            )
+        }
+        fn kind(word: &str) -> DraftKind {
+            DraftKind::from_word(word).unwrap_or_else(|| panic!("kind {word}"))
+        }
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../shared/cases/draft-blocks.json"
+        );
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cases = file["cases"].as_array().unwrap();
+        assert!(cases.len() >= 50);
+        for case in cases {
+            if case["differs"].get("desktop").is_some() {
+                continue;
+            }
+            let name = case["name"].as_str().unwrap();
+            let input = &case["input"];
+            let text = |key: &str| {
+                input[key]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{name}: {key}"))
+                    .to_owned()
+            };
+            let draft = || DraftBlock {
+                kind: kind(&text("kind")),
+                source: text("source"),
+            };
+            let got = match input["op"].as_str().unwrap() {
+                "from" => match DraftBlock::from(input["language"].as_str(), &text("code")) {
+                    Some(d) => {
+                        json!({ "kind": d.kind.fence_word(), "source": d.source, "label": d.label() })
+                    }
+                    None => Value::Null,
+                },
+                "lines" => Value::Array(
+                    draft()
+                        .lines()
+                        .iter()
+                        .map(|l| json!({ "quote": l.quote, "spans": neutral(&l.spans) }))
+                        .collect(),
+                ),
+                "plainText" => json!(draft().plain_text()),
+                "html" => json!(draft().html()),
+                "spans" => neutral(&slack_spans(&text("line"))),
+                "bareLinks" => neutral(&bare_links(&text("text"))),
+                "closed" => {
+                    let t = text("text");
+                    let start = [t.find("```"), t.find("~~~")]
+                        .into_iter()
+                        .flatten()
+                        .min()
+                        .unwrap_or(0);
+                    json!(fence_closed(&t, start, t.len()))
+                }
+                op => panic!("{name}: unknown op {op}"),
+            };
+            assert_eq!(got, case["expect"], "{name}");
+        }
+    }
 }

@@ -4,7 +4,8 @@
 // DraftBlockTests check the same cases.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bareLinks, draftFrom, fenceClosed, maxFormattedLine, maxSource, draftHTML, draftLabel, draftLines, draftPlainText, slackSpans, type Draft } from './draft.ts';
+import { readFileSync } from 'node:fs';
+import { bareLinks, draftFrom, fenceClosed, maxFormattedLine, maxSource, draftHTML, draftLabel, draftLines, draftPlainText, slackSpans, type Draft, type DraftKind, type Line, type Span } from './draft.ts';
 
 const joined = (draft: Draft) => draftLines(draft).map((l) => l.spans.map((s) => s.text).join(''));
 
@@ -158,4 +159,57 @@ test('only a closed fence makes a draft', () => {
   // Offsets pick the block out of the whole reply.
   const reply = 'Here:\n\n```slack\nhi\n```\n\nThanks';
   assert.ok(fenceClosed(reply, reply.indexOf('```'), reply.indexOf('```', 10) + 3));
+});
+
+// The cases every app runs (shared/cases/draft-blocks.json): the desktop
+// app, the iPhone, Android and here. A case whose `differs` names web is
+// a known difference, skipped.
+test('draft blocks follow the shared cases', () => {
+  type Input =
+    | { op: 'from'; language: string | null; code: string }
+    | { op: 'lines' | 'plainText' | 'html'; kind: DraftKind; source: string }
+    | { op: 'spans'; line: string }
+    | { op: 'bareLinks'; text: string }
+    | { op: 'closed'; text: string };
+  type Case = { name: string; input: Input; expect: unknown; differs?: Record<string, string> };
+  const file = new URL('../../shared/cases/draft-blocks.json', import.meta.url);
+  const { cases } = JSON.parse(readFileSync(file, 'utf8')) as { cases: Case[] };
+  // Only the looks a span has, so { bold: false } and no bold are the same.
+  const neutral = (spans: Span[]) =>
+    spans.map((s) => ({
+      text: s.text,
+      ...(s.bold ? { bold: true } : {}),
+      ...(s.italic ? { italic: true } : {}),
+      ...(s.strike ? { strike: true } : {}),
+      ...(s.code ? { code: true } : {}),
+      ...(s.link ? { link: s.link } : {}),
+    }));
+  const lines = (ls: Line[]) => ls.map((l) => ({ quote: l.quote, spans: neutral(l.spans) }));
+  const run = (input: Input): unknown => {
+    switch (input.op) {
+      case 'from': {
+        const d = draftFrom(input.language, input.code);
+        return d ? { kind: d.kind, source: d.source, label: draftLabel(d.kind) } : null;
+      }
+      case 'lines':
+        return lines(draftLines({ kind: input.kind, source: input.source }));
+      case 'plainText':
+        return draftPlainText({ kind: input.kind, source: input.source });
+      case 'html':
+        return draftHTML({ kind: input.kind, source: input.source });
+      case 'spans':
+        return neutral(slackSpans(input.line));
+      case 'bareLinks':
+        return neutral(bareLinks(input.text));
+      case 'closed': {
+        const start = input.text.search(/[`~]{3}/);
+        return fenceClosed(input.text, start, input.text.length);
+      }
+    }
+  };
+  assert.ok(cases.length >= 50);
+  for (const c of cases) {
+    if (c.differs?.web) continue;
+    assert.deepEqual(run(c.input), c.expect, c.name);
+  }
 });
