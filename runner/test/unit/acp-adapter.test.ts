@@ -1218,3 +1218,38 @@ test('a call with an argument named __proto__ is refused, as a card would lose i
   assert.equal(r.cards.length, 0);
   assert.deepEqual(a[0], { outcome: { outcome: 'selected', optionId: 'reject' } });
 });
+
+test('Antigravity: an earlier permission request for the same call counts, and so does an earlier kind', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const home = fs.realpathSync(r.cwd);
+  (s as unknown as { rules: Set<string> }).rules.add(commandRule(['rm', '-rf', 'generated'], home));
+  const meta = { is_mcp_tool_call: true, mcp: { server: 'production', tool: 'exec' } };
+  const a = fakeRequest(r, s, { toolCallId: 'x1', kind: 'execute', _meta: meta, rawInput: { arguments: { command: 'rm -rf generated', cwd: home } } });
+  await until(() => a.length === 1);
+  const b = fakeRequest(r, s, { toolCallId: 'x1', kind: 'execute', rawInput: { CommandLine: 'rm -rf generated', Cwd: home } });
+  await until(() => b.length === 1);
+  assert.equal(r.cards.length, 2, 'the second, without the MCP mark, is still that MCP call');
+  const inside = path.join(home, 'a.txt');
+  fs.writeFileSync(inside, 'x');
+  frame(s, { toolCallId: 'k1', kind: 'execute', rawInput: {} });
+  const c = fakeRequest(r, s, { toolCallId: 'k1', kind: 'read', rawInput: { AbsolutePath: inside } });
+  await until(() => c.length === 1);
+  assert.equal(r.cards.length, 3, 'a call that was something else earlier is not a read');
+});
+
+test('Antigravity: another server\'s MCP card names the tool and shows its arguments as they came; the phone never allows it', async () => {
+  const r = agy({ deny: true });
+  const s = r.start();
+  await ready(r, s);
+  const meta = { is_mcp_tool_call: true, mcp: { server: 'issues', tool: 'create' } };
+  const a = fakeRequest(r, s, { toolCallId: 'i1', kind: 'other', _meta: meta, rawInput: { arguments: { command: 'create', dir: 'prod', description: 'secret' } } });
+  await until(() => a.length === 1);
+  const card = r.cards[0];
+  assert.deepEqual(card.input, { 'MCP tool': 'issues__create', arguments: { command: 'create', dir: 'prod', description: 'secret' } }, 'not renamed, nothing dropped');
+  assert.equal(remoteCardShowsAll(card.name, card.input, r.cwd, card.title), false);
+  const b = fakeRequest(r, s, { toolCallId: 'e1', kind: 'execute', rawInput: { cmd: 'rm -rf x', Cwd: null } });
+  await until(() => b.length === 1);
+  assert.equal(remoteCardShowsAll(r.cards[1].name, r.cards[1].input, r.cwd, r.cards[1].title), false, 'an execute in a shape nobody checked is the Mac\'s too');
+});

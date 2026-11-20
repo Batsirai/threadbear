@@ -33,9 +33,6 @@ import { AcpNormalizer, absolutePath, isPlainEdit, isPlainObject, requestPaths, 
 const FOLDER_KEYS = ['workdir', 'cwd', 'workingDirectory', 'directory', 'dir'];
 // What an execute call can carry that doesn't change what runs or where.
 const BENIGN_KEYS = new Set(['description', 'timeout', 'WaitMsBeforeAsync']);
-// What a call shown as a shell card may carry: the rest says nothing about
-// what runs or where (Grok's `variant` names its tool, "Bash").
-const SHELL_CARD_KEYS = new Set(['command', 'variant', ...FOLDER_KEYS, ...BENIGN_KEYS]);
 
 function realFolder(p: string): string | undefined {
   try {
@@ -219,7 +216,7 @@ export class AcpSession implements AgentSession {
   // it's an MCP call, and every argument list it carried. A later frame
   // can't wash out what an earlier one said (Codex's and Gemini's third
   // reviews, 20 Nov 2026).
-  private callFrames = new Map<string, { mcp: boolean; inputs: Record<string, unknown>[] }>();
+  private callFrames = new Map<string, { mcp: boolean; inputs: Record<string, unknown>[]; kinds: Set<string> }>();
   private configOptions: ConfigOption[] = [];
   // The plugin whose hook must be reported running before the model does
   // anything in a turn (Grok's guard), and whether it has been this turn.
@@ -508,7 +505,8 @@ export class AcpSession implements AgentSession {
   private mapInput(u: unknown): unknown {
     const map = this.deps.agent.toolInput;
     if (!map || !isPlainObject(u) || !isPlainObject(u.rawInput)) return u;
-    return { ...u, rawInput: map(u.rawInput, u) };
+    const mcp = typeof u.toolCallId === 'string' && u.toolCallId !== '' && this.callFrames.get(u.toolCallId)?.mcp === true;
+    return { ...u, rawInput: map(u.rawInput, mcp ? { ...u, mcp: true } : u) };
   }
 
   // A read the agent's own rules would allow (AcpAgent.readsInFolderGoAhead):
@@ -524,11 +522,12 @@ export class AcpSession implements AgentSession {
     const raw = call.rawInput;
     if (!keys || !isPlainObject(raw) || !Object.keys(raw).length) return false;
     // Never an MCP server's tool, whatever kind it says it is, in any frame.
-    const frames = typeof call.toolCallId === 'string' ? this.callFrames.get(call.toolCallId) : undefined;
-    if (frames?.mcp || isMcpFrame(call)) return false;
+    const frames = typeof call.toolCallId === 'string' && call.toolCallId !== '' ? this.callFrames.get(call.toolCallId) : undefined;
+    // Its history is needed: every frame must have been a read.
+    if (!frames || frames.mcp || isMcpFrame(call) || [...frames.kinds].some((k) => k !== 'read')) return false;
     const plain = (o: Record<string, unknown>) => Object.entries(o).every(([k, v]) => keys.has(k) && typeof v === keys.get(k) && v !== '');
     // Its own arguments, and every argument list earlier frames carried.
-    if (!plain(raw) || !(frames?.inputs ?? []).every(plain)) return false;
+    if (!plain(raw) || !frames.inputs.every(plain)) return false;
     if (!Object.keys(raw).some((k) => keys.get(k) === 'string')) return false;
     const paths = [...new Set([...earlier, ...requestPaths(call)])];
     const folder = realFolder(this.opts.cwd);
@@ -541,12 +540,17 @@ export class AcpSession implements AgentSession {
   }
 
   private noteFrame(u: unknown): void {
-    if (!isPlainObject(u) || typeof u.toolCallId !== 'string') return;
+    if (!isPlainObject(u) || typeof u.toolCallId !== 'string' || u.toolCallId === '') return;
     // Old calls go first: a long session needn't keep every one.
     if (!this.callFrames.has(u.toolCallId) && this.callFrames.size >= 500) this.callFrames.delete(this.callFrames.keys().next().value!);
-    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, inputs: [] };
+    const f = this.callFrames.get(u.toolCallId) ?? { mcp: false, inputs: [], kinds: new Set<string>() };
     if (isMcpFrame(u)) f.mcp = true;
-    if (isPlainObject(u.rawInput) && Object.keys(u.rawInput).length) f.inputs.push(u.rawInput);
+    if (typeof u.kind === 'string') f.kinds.add(u.kind);
+    // Anything but a plain list of arguments is kept as one that no rule
+    // passes.
+    if (isPlainObject(u.rawInput)) {
+      if (Object.keys(u.rawInput).length) f.inputs.push(u.rawInput);
+    } else if (u.rawInput !== undefined && u.rawInput !== null) f.inputs.push({ '': u.rawInput });
     this.callFrames.set(u.toolCallId, f);
   }
 
@@ -564,6 +568,8 @@ export class AcpSession implements AgentSession {
   private request(id: RequestId, method: string, params: unknown): void {
     if (method === 'session/request_permission' && !this.replaying) {
       const p = (isPlainObject(params) ? params : {}) as { toolCall?: AcpToolCall; options?: PermissionOption[]; _meta?: unknown };
+      // Its own frame counts in the call's history too, as sent.
+      this.noteFrame(p.toolCall);
       const call = isPlainObject(p.toolCall) ? withoutHookNote(this.mapInput(p.toolCall) as AcpToolCall, p._meta) : p.toolCall;
       // Never left unanswered: the turn would hang with session/prompt open.
       this.permission(id, { ...p, toolCall: call }).catch((e: unknown) => {
@@ -599,7 +605,7 @@ export class AcpSession implements AgentSession {
 
   private async permission(id: RequestId, p: { toolCall?: AcpToolCall; options?: PermissionOption[] }): Promise<void> {
     const options = Array.isArray(p.options) ? p.options : [];
-    const frames = typeof p.toolCall?.toolCallId === 'string' ? this.callFrames.get(p.toolCall.toolCallId) : undefined;
+    const frames = typeof p.toolCall?.toolCallId === 'string' && p.toolCall.toolCallId !== '' ? this.callFrames.get(p.toolCall.toolCallId) : undefined;
     const mcpCall = Boolean(frames?.mcp) || (p.toolCall !== undefined && isMcpFrame(p.toolCall));
     const seen = this.normalizer.noteCall(p.toolCall ?? {});
     this.emit(this.normalizer.flush());
@@ -703,13 +709,27 @@ export class AcpSession implements AgentSession {
     // or not, so the phone (which allows only a card whose one value is the
     // line it shows) never allows it.
     const runsIn = !placeKnown ? 'not known: its own scratch folder, unless the command says' : unknownPlace || said.length > 1 ? 'not known' : where;
-    const shown: Record<string, unknown> = command
-      ? shellCard
-        ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
-        : { ...input, command, 'runs in': runsIn }
-      : edits
-        ? { paths }
-        : input;
+    const runsInKey = Object.hasOwn(input, 'runs in') ? 'runs in, as Threadbear reads it' : 'runs in';
+    // Another server's MCP tool, or a command in a shape nobody has checked:
+    // its arguments as they came, under a heading, with which tool it is.
+    // An object among a card's values is never the phone's to allow, and
+    // nothing in it can be drawn as a shell command.
+    const mcpTool = (() => {
+      const meta = (p.toolCall as { _meta?: unknown } | undefined)?._meta;
+      const m = isPlainObject(meta) && isPlainObject(meta.mcp) ? meta.mcp : undefined;
+      return mcpName ?? (m && typeof m.server === 'string' && typeof m.tool === 'string' ? `${m.server}__${m.tool}` : 'not named');
+    })();
+    const shown: Record<string, unknown> = external
+      ? { 'MCP tool': mcpTool, arguments: input }
+      : command
+        ? shellCard
+          ? { command, ...given, ...(typeof input.variant === 'string' ? { variant: input.variant } : {}), cwd: where }
+          : { ...input, command, [runsInKey]: runsIn }
+        : kind === 'execute'
+          ? { 'runs in': runsIn, arguments: input }
+          : edits
+            ? { paths }
+            : input;
     const card = cardInput(shown, command ? 'all' : edits ? ['paths'] : 'all');
     if (card.tooLong) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: tooLongForCard(card.tooLong) } });
@@ -741,7 +761,7 @@ export class AcpSession implements AgentSession {
     const allow = a.decision === 'allow' || a.decision === 'allowAlways';
     // A link pointed somewhere else while the card waited: what was allowed
     // isn't where it would run now (Codex's second look, 10 Nov).
-    if (allow && named.length && JSON.stringify(resolve()) !== JSON.stringify(places)) {
+    if (allow && command && named.length && JSON.stringify(resolve()) !== JSON.stringify(places)) {
       this.sink.output({ kind: 'event', event: { type: 'system.note', text: `The folder for "${firstLineSafely(command, 80, '…')}" changed while it waited for an answer, so it wasn't run. The agent can ask again.` } });
       return this.answer(id, options, false);
     }

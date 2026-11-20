@@ -332,12 +332,18 @@ export function antigravityInput(raw: Record<string, unknown>, call: Record<stri
   // An MCP call's arguments come under `arguments` (with a copy at the top,
   // in 1.4.5): the tool's own arguments are those. Only for a call that says
   // it's an MCP one.
+  // An MCP call's own arguments are never renamed: they're its server's.
+  // `mcp` comes from the caller when an earlier frame said so.
   const meta = call._meta;
-  const mcp = Boolean(meta) && typeof meta === 'object' && (meta as Record<string, unknown>).is_mcp_tool_call === true;
-  const args = raw.arguments;
-  if (mcp && args && typeof args === 'object' && !Array.isArray(args)) {
-    const a = args as Record<string, unknown>;
-    if (Object.keys(raw).every((k) => k === 'arguments' || (Object.hasOwn(a, k) && JSON.stringify(a[k]) === JSON.stringify(raw[k])))) return a;
+  const m = Boolean(meta) && typeof meta === 'object' ? (meta as Record<string, unknown>) : {};
+  const mcp = call.mcp === true || m.is_mcp_tool_call === true || (Boolean(m.mcp) && typeof m.mcp === 'object');
+  if (mcp) {
+    const args = raw.arguments;
+    if (args && typeof args === 'object' && !Array.isArray(args)) {
+      const a = args as Record<string, unknown>;
+      if (Object.keys(raw).every((k) => k === 'arguments' || (Object.hasOwn(a, k) && JSON.stringify(a[k]) === JSON.stringify(raw[k])))) return a;
+    }
+    return raw;
   }
   const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const free = (name: string) => {
