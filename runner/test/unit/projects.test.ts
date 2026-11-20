@@ -792,6 +792,12 @@ test('update_project editNotes: changes one line in place, refuses what doesn\'t
   assert.equal((await call('update_project', { project: p.id, notes: 'x', editNotes: [{ old: 'a', new: 'b' }] })).error, true);
   assert.equal((await call('update_project', { project: p.id, editNotes: [{ old: '- Owed: docs', new: '' }], appendNote: 'Gotcha: tags.' })).error, false);
   assert.equal(projects.list()[0].notes, 'Decided: npm.\n\n- Host: Fly, picked 20 Nov\n\nGotcha: tags.');
+  // One step where the notes live: the notes judged, or nothing.
+  assert.throws(() => projects.editNotes(p.id, [{ old: 'Decided: npm.', new: 'Decided: pnpm.' }], { ifNotes: 'what the card showed', state: 'x' }), /changed while this waited/);
+  assert.equal(projects.list()[0].state, '');
+  const done = projects.editNotes(p.id, [{ old: 'Decided: npm.', new: 'Decided: pnpm.' }], { ifNotes: projects.list()[0].notes, state: 'Moving', appendNote: 'Last.' });
+  assert.equal(done.notes, 'Decided: pnpm.\n\n- Host: Fly, picked 20 Nov\n\nGotcha: tags.\n\nLast.');
+  assert.equal(done.state, 'Moving');
 });
 
 // The primary's side of a handover in these tests: projects with no
@@ -839,6 +845,16 @@ test('a thread finishing its turn on a draining runner changes projects on the n
   assert.equal(primary.record(p.id)?.state, 'Releases live');
   const saved = JSON.parse(fs.readFileSync(path.join(h.home, 'projects.json'), 'utf8'));
   assert.equal(saved.projects[0].notes, 'Forks follow tags.', "in the new runner's projects.json");
+  // editNotes is made on the primary, in one step.
+  assert.equal((await call('update_project', { project: p.id, editNotes: [{ old: 'Forks', new: 'Forks and mirrors' }] })).error, false);
+  assert.equal(primary.record(p.id)?.notes, 'Forks and mirrors follow tags.');
+  // An older primary without it refuses, rather than saving edits made here.
+  const older = link;
+  link = { call: async (method, params: any = {}) => (params.op === 'editNotes' ? Promise.reject(new Error('drain.projects has no editNotes')) : older!.call(method, params)) };
+  assert.equal((await call('update_project', { project: p.id, editNotes: [{ old: 'mirrors', new: 'clones' }] })).error, true);
+  assert.equal(primary.record(p.id)?.notes, 'Forks and mirrors follow tags.');
+  link = older;
+  assert.equal((await call('update_project', { project: p.id, editNotes: [{ old: 'Forks and mirrors', new: 'Forks' }] })).error, false);
   assert.match((await call('read_project', { project: p.id })).text, /\nState: Releases live\n[\s\S]*\nForks follow tags\.\n/);
 
   // A project made now is the new runner's. The kept thread joins it here,

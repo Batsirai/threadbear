@@ -2032,7 +2032,7 @@ restart wait for busy threads. It hands over instead:
   thread's project tools read and change them there with
   `drain.projects { op, args }`: `op` is the `Projects` call the tool
   would have made on its own runner (`list`, `get`, `find`, `create`,
-  `update`, `appendNote`, `addLinks`, `removeLinks`, `changeMembership`,
+  `update`, `editNotes`, `appendNote`, `addLinks`, `removeLinks`, `changeMembership`,
   `chooseIcon`), with the same `args` and the agent as the maker, and the
   answer is `{ result }`. A primary older than this answers `-32601`.
   Joining or leaving changes the thread itself, so for a thread the
@@ -6020,7 +6020,9 @@ must be in the notes exactly once, after the edits before it, and an empty
 `new` takes it out; one that doesn't match refuses the whole call),
 `appendNote` (a paragraph on the end, which can follow `editNotes` in the
 same call) and `notes` (all of them, for a restructure; not with
-`editNotes`). Edits apply to the notes as they are just before the write.
+`editNotes`). The runner that keeps the projects reads, edits and saves
+the notes in one step (`editNotes` on it, a `drain.projects` op too), and
+after a card it refuses the call if the notes aren't the ones judged.
 
 ### Project tasks
 

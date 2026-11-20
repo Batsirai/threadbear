@@ -119,7 +119,7 @@ export type ScheduleControl = Async<Scheduler, 'create' | 'list' | 'find' | 'upd
 
 // On a draining runner these are the primary's projects (projectRouter in
 // handover.ts), so they may be promises too.
-export type ProjectControl = Async<Projects, 'list' | 'get' | 'find' | 'create' | 'update' | 'appendNote' | 'changeMembership'> &
+export type ProjectControl = Async<Projects, 'list' | 'get' | 'find' | 'create' | 'update' | 'editNotes' | 'appendNote' | 'changeMembership'> &
   Partial<Async<Projects, 'chooseIcon' | 'addLinks' | 'removeLinks'>>;
 
 export const SERVER_NAME = 'threadbear';
@@ -1387,17 +1387,18 @@ export function buildThreadbearTools(
             throw new Error(`"${p.title}"'s brief changed while this waited for an OK, so nothing changed. Read it again (read_project) and redo the change on what it says now.`);
           }
         }
-        // Edits go on the notes as they are now, read just before the write
-        // (judged, they're the notes the card was shown), so a note another
-        // thread changed meanwhile isn't undone.
-        const edited = editNotes !== undefined ? applyNoteEdits((await pc.get(p.id)).project.notes ?? '', editNotes) : undefined;
+        const fields = { title, goals, state, links, folders, notion, ...(parent !== undefined ? { parent: newParent?.id ?? '' } : {}), by: mikeAsked ? ('mike' as const) : ('agent' as const) };
         // New notes and a paragraph on the end are saved as one, as they were
         // judged: saved in two steps, the notes stood for a moment without it.
         const add = appendNote?.trim();
-        const base = notes ?? edited;
-        const whole = base !== undefined && add ? (base.trim() ? `${base.trimEnd()}\n\n${add}` : add) : base;
-        let out = await pc.update(p.id, { title, goals, state, notes: whole, links, folders, notion, ...(parent !== undefined ? { parent: newParent?.id ?? '' } : {}), by: mikeAsked ? 'mike' : 'agent' });
-        if (add && base === undefined) out = await pc.appendNote(p.id, appendNote!);
+        const whole = notes !== undefined && add ? (notes.trim() ? `${notes.trimEnd()}\n\n${add}` : add) : notes;
+        // Edits are read, made and saved in one step where the notes live,
+        // with the rest of the call; judged, only on the notes judged.
+        let out =
+          editNotes !== undefined
+            ? await pc.editNotes(p.id, editNotes, { ...fields, appendNote, ...(judged ? { ifNotes: p.notes } : {}) })
+            : await pc.update(p.id, { ...fields, notes: whole });
+        if (add && notes === undefined && editNotes === undefined) out = await pc.appendNote(p.id, appendNote!);
         if (addLinks?.length || removeLinks?.length) {
           if (!pc.addLinks || !pc.removeLinks) throw new Error("This runner can't change project links yet.");
           if (removeLinks?.length) out = await pc.removeLinks(p.id, removeLinks);

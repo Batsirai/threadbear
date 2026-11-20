@@ -440,6 +440,23 @@ export class Projects {
     return this.update(projectId, { notes: rec.notes.trim() ? `${rec.notes.trimEnd()}\n\n${add}` : add });
   }
 
+  // update_project's editNotes: the edits (applyNoteEdits), a paragraph on
+  // the end and the call's other fields, saved as one change. It reads, edits
+  // and writes the notes in one step on the runner that owns them, so an
+  // edit can't land on notes another thread changed meanwhile, or undo that
+  // change; ifNotes, the notes a card reviewer or Mike judged, refuses it
+  // when they're not those any more (Codex review, 20 Nov 2026).
+  editNotes(projectId: string, edits: NoteEdit[], opts: Omit<UpdateProjectParams, 'notes'> & { appendNote?: string; ifNotes?: string } = {}): Project {
+    const rec = this.must(projectId);
+    const { appendNote, ifNotes, ...rest } = opts;
+    if (ifNotes !== undefined && rec.notes !== ifNotes) {
+      throw bad(`The notes changed while this waited for an OK, so nothing changed. Read them again (read_project) and redo the edit on what they say now.`);
+    }
+    const edited = applyNoteEdits(rec.notes, edits);
+    const add = appendNote?.trim();
+    return this.update(projectId, { ...rest, notes: add ? (edited.trim() ? `${edited.trimEnd()}\n\n${add}` : add) : edited });
+  }
+
   // Adds links, or retitles ones it already has (same url), keeping the
   // rest. For agents and the librarian, which add one at a time.
   addLinks(projectId: string, links: LinkInput[]): Project {
@@ -958,7 +975,7 @@ function bool(p: Record<string, unknown>, k: string): boolean | undefined {
 
 // The Projects calls the agent tools make, which a draining runner's tools
 // make on the primary instead (projectRouter in handover.ts).
-export const DRAIN_PROJECT_OPS = ['list', 'get', 'find', 'create', 'update', 'appendNote', 'addLinks', 'removeLinks', 'changeMembership', 'chooseIcon'] as const;
+export const DRAIN_PROJECT_OPS = ['list', 'get', 'find', 'create', 'update', 'editNotes', 'appendNote', 'addLinks', 'removeLinks', 'changeMembership', 'chooseIcon'] as const;
 export type DrainProjectOp = (typeof DRAIN_PROJECT_OPS)[number];
 
 // drain.projects (docs/protocol.md, "Handovers"): a kept thread's project

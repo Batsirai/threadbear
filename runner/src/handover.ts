@@ -1062,6 +1062,12 @@ export function projectRouter(
       const l = primary();
       return l ? there(l, 'update', [projectId, params]) : local.update(projectId, params);
     },
+    // An older primary has no editNotes, and refuses it rather than saving
+    // edits worked out here on notes it may have changed.
+    editNotes: async (projectId, edits, o) => {
+      const l = primary();
+      return l ? there(l, 'editNotes', [projectId, edits, o]) : local.editNotes(projectId, edits, o);
+    },
     appendNote: async (projectId, text) => {
       const l = primary();
       return l ? there(l, 'appendNote', [projectId, text]) : local.appendNote(projectId, text);
