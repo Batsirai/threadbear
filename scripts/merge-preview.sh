@@ -56,14 +56,18 @@ clean --attr-source="$empty" diff --no-ext-diff --no-textconv --stat "$base_id" 
 list=$(clean show "$commit_id:.git-blame-ignore-revs" 2>/dev/null | tr -d '\r' || true)
 [ -n "$list" ] || exit 0
 printf '%s\n' "$list" | awk '
-  /^#[[:space:]]*format-subject:/ { if (s != "") print s "\t"; sub(/^#[[:space:]]*format-subject:[[:space:]]*/, ""); s = $0; next }
-  /^[0-9a-f]{40}([0-9a-f]{24})?$/ { if (s != "") { print s "\t" $0; s = "" } next }
-  /^[^#]/ && NF { if (s != "") print s "\t"; s = "" }
-  END { if (s != "") print s "\t" }
+  function out(id) { if (s != "") print s "\037" id "\037" p "\037" c; s = ""; p = ""; c = "" }
+  /^#[[:space:]]*format-subject:/ { out(""); sub(/^#[[:space:]]*format-subject:[[:space:]]*/, ""); s = $0; next }
+  /^#[[:space:]]*format-paths:/ { sub(/^#[[:space:]]*format-paths:[[:space:]]*/, ""); p = $0; next }
+  /^#[[:space:]]*format-config:/ { sub(/^#[[:space:]]*format-config:[[:space:]]*/, ""); c = $0; next }
+  /^[0-9a-f]{40}([0-9a-f]{24})?$/ { out($0); next }
+  /^[^#]/ && NF { out("") }
+  END { out("") }
 ' > "$tmp/entries"
 clean log --no-merges --format='%H%x09%s' "$commit_id" > "$tmp/subjects"
 : > "$tmp/new"
-while IFS="$(printf '\t')" read -r subject id; do
+# (A separator that isn't whitespace, so an empty field stays a field.)
+while IFS="$(printf '\037')" read -r subject id paths config; do
   f=""
   if [ -n "$id" ] && clean merge-base --is-ancestor "$id" "$commit_id" 2>/dev/null; then
     f=$id
@@ -74,6 +78,18 @@ while IFS="$(printf '\t')" read -r subject id; do
   fi
   [ -n "$f" ] || continue
   if clean merge-base --is-ancestor "$f" "$base_id"; then continue; fi
+  # Only what it formats, none of its config, one parent: else the replay
+  # won't take it as a format commit, so neither does this.
+  [ "$(clean rev-list --parents -n 1 "$f" | wc -w | tr -d ' ')" = 2 ] || continue
+  ok=1
+  clean diff --name-only "$f^" "$f" > "$tmp/changed"
+  while IFS= read -r file; do
+    inside=0
+    for d in $paths; do d=${d%/}; case "$file" in "$d"|"$d"/*) inside=1 ;; esac; done
+    for c in $config; do [ "$file" = "$c" ] && inside=0; done
+    [ "$inside" = 1 ] || { ok=0; break; }
+  done < "$tmp/changed"
+  [ "$ok" = 1 ] || continue
   printf '%s\t%s\t%s\n' "$(clean rev-list --count "$f")" "$f" "$subject" >> "$tmp/new"
 done < "$tmp/entries"
 [ -s "$tmp/new" ] || exit 0

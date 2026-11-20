@@ -182,7 +182,7 @@ export async function crossings(cwd: string, tip: string, onto: string): Promise
   const entries = parseFormatList(list.stdout);
   if (!entries.length) return [];
   let known = true;
-  for (const e of entries) if (!e.id || !(await isAncestor(cwd, e.id, tip))) known = false;
+  for (const e of entries) if (!e.id || !(await isAncestor(cwd, e.id, tip)) || !(await isAncestor(cwd, e.id, onto))) known = false;
   if (known) return [];
   const all = await formatCommitsIn(cwd, onto);
   const out: FormatCommit[] = [];
@@ -277,6 +277,16 @@ export class TreeFormatter {
     }
     // Nothing it formats is in this tree.
     if (parts.every((p) => p === '-')) return { tree };
+    // The attributes above those folders count too (eol, filters): the
+    // top's and each folder's on the way down.
+    for (const p of f.entry.paths) {
+      const dirs = p.split('/').slice(0, -1);
+      for (let i = 0; i <= dirs.length; i++) {
+        const at = [...dirs.slice(0, i), '.gitattributes'].join('/');
+        const r = await git(this.cwd, ['rev-parse', '--verify', '--quiet', `${tree}:${at}`]);
+        parts.push(r.ok ? r.stdout.trim() : '-');
+      }
+    }
     const key = `${f.commit}\0${parts.join('\0')}`;
     let made = this.cache.get(key);
     if (!made) {
@@ -568,6 +578,14 @@ export async function mergeAcross(cwd: string, target: string, opts: { message?:
     }
     return failWith(`git merge ${what} failed: ${(m.stderr || m.stdout).trim().split('\n')[0]}`);
   };
+  try {
+    return await crossAll();
+  } catch (e) {
+    // Thrown partway (git failing under it): back to where it started.
+    return failWith(`Couldn't bring it in: ${e instanceof Error ? e.message : String(e)}.`);
+  }
+
+  async function crossAll(): Promise<Merged> {
   for (const f of cross) {
     const parent = await out(cwd, ['rev-parse', `${f.commit}^`]);
     // Only formatting, or its tree can't stand in for it.
@@ -596,6 +614,7 @@ export async function mergeAcross(cwd: string, target: string, opts: { message?:
     if (r) return r;
   }
   return { ok: true, notes };
+  }
 }
 
 // --------------------------------------------------------------- the CLI
