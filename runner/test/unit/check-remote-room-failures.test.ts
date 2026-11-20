@@ -61,8 +61,20 @@ test('a check only the host that ran out can take runs there again, not given up
   fs.writeFileSync(path.join(s.repo, 'app', 'x.swift'), '\n');
   const r = s.run('h1,h2', 3600);
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stderr, /No other host could take it, so it runs on h1 again/);
+  assert.match(r.stderr, /No other host could take it, so h1 is tried again/);
   assert.deepEqual(r.copies, ['h1', 'h1']);
+});
+
+test('every host set aside for running out of disk comes back when none of the rest can take it', () => {
+  // h1 and h2 (Macs) each run out once; h3 is Linux and can't take a Mac check.
+  const s = setup({ h1: { state: 'free', outOfDisk: 1 }, h2: { state: 'free', outOfDisk: 1 }, h3: { state: 'free', os: 'Linux' } });
+  fs.mkdirSync(path.join(s.repo, 'app'));
+  fs.writeFileSync(path.join(s.repo, 'app', 'x.swift'), '\n');
+  const r = s.run('h1,h2,h3', 3600);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /so h1 is tried again/);
+  assert.match(r.stderr, /so h2 is tried again/);
+  assert.deepEqual(r.copies, ['h1', 'h2', 'h1']);
 });
 
 test('a check that runs out of disk every time ends as no host able to run it, and says so last', () => {

@@ -821,18 +821,21 @@ tries=0
 # a disk still ends.
 disk_tries=0
 DISK_RETRIES="${THREADBEAR_CHECK_DISK_RETRIES:-2}"
-# The host set aside after running out of disk, while the others are tried.
-# back_to_out_host: none of them could take it, so that host goes back in,
-# with its idle build folders given back, and it's chosen again.
-OUT_HOST=""
+# The hosts set aside after running out of disk, while the others are tried.
+# back_to_out_host: none of those could take it, so they all go back in,
+# with their idle build folders given back, and it's chosen again among them
+# (one may have room again now its run's files have gone; Codex's review).
+OUT_HOSTS=""
 back_to_out_host() {
-  [ -n "$OUT_HOST" ] || return 1
-  local h="$OUT_HOST" rest="" s
-  OUT_HOST=""
-  for s in $SKIP; do [ "$s" = "$h" ] || rest+=" $s"; done
+  [ -n "$OUT_HOSTS" ] || return 1
+  local hs="$OUT_HOSTS" rest="" s h
+  OUT_HOSTS=""
+  for s in $SKIP; do case " $hs " in *" $s "*) ;; *) rest+=" $s" ;; esac; done
   SKIP="$rest"
-  echo "No other host could take it, so it runs on $h again, after giving back idle build folders there." >&2
-  make_room "$h" '$HOME/'"$BASE_REL" >/dev/null 2>&1
+  for h in $hs; do
+    echo "No other host could take it, so $h is tried again, after giving back idle build folders there." >&2
+    make_room "$h" '$HOME/'"$BASE_REL" >/dev/null 2>&1
+  done
   choose
 }
 # The copy lock: a kernel lock (lockf, or flock on Linux) held by a small
@@ -1176,7 +1179,7 @@ while :; do
         # one for a check that needs a Mac, one that's gone), it's run here
         # again after all (Codex's and Gemini's reviews).
         SKIP+=" $HOST"
-        OUT_HOST="$HOST"
+        OUT_HOSTS+=" $HOST"
       else
         echo "$HOST ran out of disk during this check (${OUT_GIB} GiB free at the lowest), so what failed there may have failed for want of space. Running it again there, after giving back idle build folders." >&2
         make_room "$HOST" "$remote_base" >/dev/null 2>&1
