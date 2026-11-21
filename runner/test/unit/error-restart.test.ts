@@ -10,7 +10,7 @@ import { tmpDir } from '../helpers/fakes.ts';
 import { readToken } from '../../src/config.ts';
 import { RunnerClient } from '../../src/client.ts';
 import { patiently } from '../helpers/patience.ts';
-import { ERROR_EXIT_CODE, ERROR_EXITS, readErrorExits, writeErrorExits } from '../../src/error-exits.ts';
+import { ERROR_EXIT_CODE, ERROR_EXITS, errorExitsPath, readErrorExits, writeErrorExits } from '../../src/error-exits.ts';
 
 const RUNNER_DIR = path.join(import.meta.dirname, '..', '..');
 
@@ -118,6 +118,38 @@ test('a dev runner exits with an error code after an uncaught error, so dev-runn
     assert.match(logOf(home), /exiting after an uncaught error/);
   } finally {
     r.proc.kill('SIGKILL');
+  }
+});
+
+test('a dev runner exits however many errors it has had, and leaves the count alone', async () => {
+  const home = tmpDir();
+  const now = Date.now();
+  writeErrorExits(home, { exits: [1, 2, 3].map((i) => new Date(now - i * 60_000).toISOString()), tripped: { at: new Date(now).toISOString(), lastErrorAt: new Date(now).toISOString(), errors: 1 } });
+  const before = fs.readFileSync(errorExitsPath(home), 'utf8');
+  const r = startRunner(home, { THREADBEAR_TEST_THROW: 'rejection', THREADBEAR_TEST_THROW_MS: '200', THREADBEAR_DEV_RUNNER: '1' }, false);
+  try {
+    await r.listening;
+    assert.equal(await r.exited, ERROR_EXIT_CODE, r.out());
+    assert.equal(fs.readFileSync(errorExitsPath(home), 'utf8'), before);
+  } finally {
+    r.proc.kill('SIGKILL');
+  }
+});
+
+test("a supervised runner whose count can't be saved carries on rather than restart uncounted", async () => {
+  const home = tmpDir();
+  // A folder where the file goes: every write fails.
+  fs.mkdirSync(errorExitsPath(home), { recursive: true });
+  const r = startRunner(home, { THREADBEAR_TEST_THROW: 'exception', THREADBEAR_TEST_THROW_MS: '200' }, true);
+  try {
+    await r.listening;
+    await patiently(() => /couldn't be saved/.test(logOf(home)));
+    assert.match(logOf(home), /carrying on after an uncaught error: the restart guard's count couldn't be saved/);
+    assert.doesNotMatch(logOf(home), /restarting after an uncaught error/);
+    assert.equal(r.proc.exitCode, null);
+  } finally {
+    r.proc.kill('SIGTERM');
+    await r.exited;
   }
 });
 

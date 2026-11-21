@@ -80,6 +80,18 @@ test('the state round-trips through run/error-exits.json, and a broken file read
   assert.deepEqual(readErrorExits(home), { exits: [new Date(T0).toISOString()] });
 });
 
+test("another release's count and guard don't carry over, so a fixed release starts clean", () => {
+  const home = tmpDir();
+  let s: ErrorExitState = readErrorExits(home, 'broken');
+  for (let i = 0; i <= ERROR_EXITS; i++) s = decideErrorExit(s, T0 + i * MIN).state;
+  assert.ok(s.tripped);
+  assert.equal(s.release, 'broken');
+  writeErrorExits(home, s);
+  assert.deepEqual(readErrorExits(home, 'broken'), s);
+  assert.deepEqual(readErrorExits(home, 'fixed'), { release: 'fixed', exits: [] });
+  assert.deepEqual(readErrorExits(home), { exits: [] }, 'a checkout (no release) is another release too');
+});
+
 test('only a supervised runner restarts; a dev runner exits; anything else carries on', () => {
   assert.equal(errorMode({ supervised: true, devRunner: false }), 'restart');
   assert.equal(errorMode({ supervised: true, devRunner: true }), 'restart');

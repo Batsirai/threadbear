@@ -485,9 +485,12 @@ export class Restarter {
   // (launchctl kickstart, a reboot, the restart itself). A pending restart
   // counts as done from here, so a resume's age starts now rather than when
   // the restart was first asked for.
-  stopping(): void {
+  // `clean: false`: leaving after an uncaught error before the release was
+  // marked good, which launch.mjs counts as a failed start, so the restart
+  // this runner handled may need handling again on the last good release.
+  stopping(clean = true): void {
     // Stopping cleanly isn't crashing: the restart this runner handled is done.
-    this.proven();
+    if (clean) this.proven();
     if (!this.pending || this.pending.shutdownAt) return;
     this.pending.shutdownAt = this.isoNow();
     this.save();

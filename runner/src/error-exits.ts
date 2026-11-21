@@ -23,15 +23,14 @@ export const ERROR_QUIET_MS = 60 * 60_000;
 // anyway: a stop that hangs (a write that never returns, a second error
 // mid-shutdown) must not leave a runner that serves nothing.
 export const ERROR_STOP_DEADLINE_MS = 30_000;
-// How long a runner that handed over after an error may go on finishing its
-// busy threads' turns before it stops them. A deploy's handover has no such
-// limit, but this process is the one that had the error.
-export const ERROR_DRAIN_DEADLINE_MS = 60 * 60_000;
 // Exit code for a runner nothing restarts (a dev runner): EX_SOFTWARE, so
 // dev-runner.sh stops and keeps its data dir rather than starting it again.
 export const ERROR_EXIT_CODE = 70;
 
 export type ErrorExitState = {
+  // The release they happened on: a new one starts with a clean slate, so
+  // a fix isn't held back by the broken release's count.
+  release?: string;
   // When each recent restart for an error happened (ISO).
   exits: string[];
   // Set while the guard holds: the runner carries on after errors.
@@ -44,16 +43,19 @@ export function errorExitsPath(home: string): string {
 
 const isoOk = (s: unknown): s is string => typeof s === 'string' && Number.isFinite(Date.parse(s));
 
-// Whatever is there, read leniently: a missing or broken file is no history.
-export function readErrorExits(home: string): ErrorExitState {
+// Whatever is there, read leniently: a missing or broken file is no
+// history, and so is another release's (`release`: this runner's, if any).
+export function readErrorExits(home: string, release?: string): ErrorExitState {
+  const fresh: ErrorExitState = release ? { release, exits: [] } : { exits: [] };
   try {
     const raw = JSON.parse(fs.readFileSync(errorExitsPath(home), 'utf8')) as Partial<ErrorExitState>;
+    if ((raw?.release ?? undefined) !== release) return fresh;
     const exits = Array.isArray(raw?.exits) ? raw.exits.filter(isoOk) : [];
     const t = raw?.tripped;
     const tripped = t && isoOk(t.at) && isoOk(t.lastErrorAt) ? { at: t.at, lastErrorAt: t.lastErrorAt, errors: Number.isFinite(t.errors) ? t.errors : 1 } : undefined;
-    return tripped ? { exits, tripped } : { exits };
+    return { ...fresh, exits, ...(tripped ? { tripped } : {}) };
   } catch {
-    return { exits: [] };
+    return fresh;
   }
 }
 
@@ -79,17 +81,18 @@ export type ErrorExitDecision = {
 // or this error trips it. Pure; the caller writes `state`.
 export function decideErrorExit(state: ErrorExitState, now: number): ErrorExitDecision {
   const at = new Date(now).toISOString();
+  const rel = state.release ? { release: state.release } : {};
   if (guardHolds(state, now)) {
     const t = state.tripped!;
-    return { exit: false, tripped: false, state: { exits: state.exits, tripped: { ...t, lastErrorAt: at, errors: t.errors + 1 } } };
+    return { exit: false, tripped: false, state: { ...rel, exits: state.exits, tripped: { ...t, lastErrorAt: at, errors: t.errors + 1 } } };
   }
   // Quiet long enough (or never tripped): only recent restarts count.
   const recent = state.exits.filter((e) => {
     const t = Date.parse(e);
     return t > now - ERROR_EXIT_WINDOW_MS && t <= now;
   });
-  if (recent.length >= ERROR_EXITS) return { exit: false, tripped: true, state: { exits: recent, tripped: { at, lastErrorAt: at, errors: 1 } } };
-  return { exit: true, tripped: false, state: { exits: [...recent, at] } };
+  if (recent.length >= ERROR_EXITS) return { exit: false, tripped: true, state: { ...rel, exits: recent, tripped: { at, lastErrorAt: at, errors: 1 } } };
+  return { exit: true, tripped: false, state: { ...rel, exits: [...recent, at] } };
 }
 
 // What this runner can do after an uncaught error:
@@ -131,6 +134,22 @@ export function guardNotice(state: ErrorExitState): string {
   );
 }
 
+// The same folder, through symlinks and case-insensitive file systems too.
+function samePath(a: string, b: string): boolean {
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const ra = real(a);
+  const rb = real(b);
+  if (ra === rb) return true;
+  // macOS and Windows file systems usually ignore case.
+  return process.platform !== 'linux' && ra.toLowerCase() === rb.toLowerCase();
+}
+
 // A test-only hook: THREADBEAR_TEST_THROW=exception|rejection throws one of
 // those THREADBEAR_TEST_THROW_MS (default 500) after the runner is listening.
 // Only from a checkout (never a release, which is what installed runners
@@ -138,7 +157,7 @@ export function guardNotice(state: ErrorExitState): string {
 export function testThrow(env: NodeJS.ProcessEnv, o: { release: string | undefined; home: string; realHome: string }): { kind: 'exception' | 'rejection'; afterMs: number } | undefined {
   const kind = env.THREADBEAR_TEST_THROW;
   if (kind !== 'exception' && kind !== 'rejection') return undefined;
-  if (o.release || path.resolve(o.home) === path.resolve(o.realHome)) return undefined;
+  if (o.release || samePath(o.home, o.realHome)) return undefined;
   const ms = Number(env.THREADBEAR_TEST_THROW_MS);
   return { kind, afterMs: Number.isFinite(ms) && ms >= 0 ? ms : 500 };
 }

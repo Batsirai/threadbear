@@ -227,20 +227,23 @@ exactly as after a deploy. Under the same release, as nothing changed.
   code 70 and `dev-runner.sh` doesn't start it again. Anything else (tests,
   `npm start` by hand, a `--from-source` install) logs and carries on, as
   before.
-- A loop guard: after 3 such restarts in 10 minutes (`run/error-exits.json`)
-  the next error is only logged, a `runner.notice` warning goes to every
-  client (and again after each hello while it holds), and the log says
-  "stopped restarting for uncaught errors". An hour without an uncaught
-  error clears it. `launch.mjs` doesn't count these restarts as crashes:
-  they exit 0 after listening.
-- Deadlines: once the stop after an error begins it has 30 s before the
-  process exits anyway; a handover after an error keeps its busy threads an
-  hour at most, then stops them (the new runner carries them on as after a
-  crash). A second error while handing over, finishing turns or stopping
-  stops it at once, never another restart request.
-- Errors that are known and harmless are handled where they happen, so
-  this stays for the unexpected (a Convex sync flush that throws is logged
-  and retried, `sync.ts`).
+- A loop guard: after 3 such restarts in 10 minutes (`run/error-exits.json`,
+  per release, so a fixed release starts clean) the next error is only
+  logged, a `runner.notice` warning goes to every client (and again after
+  each hello while it holds), and the log says "stopped restarting for
+  uncaught errors". An hour without an uncaught error clears it. If the
+  count can't be saved it carries on rather than restart uncounted.
+- A release not yet marked good (its first minute) exits 1 rather than 0,
+  so `launch.mjs` counts it as a failed start and three of them roll back
+  to the last good release, as a crash would. After that it exits 0, which
+  `launch.mjs` doesn't count.
+- Deadlines and second errors: once the stop after an error begins it has
+  30 s before the process exits anyway. A second error before the handover
+  or stop has begun stops it at once (busy turns end and are carried on, as
+  after `tb restart --now`); one while a handover is starting or its turns
+  are finishing is only logged, as the new runner already serves the rest
+  and stopping would cut those turns; one while stopping arms the deadline.
+  The drain itself is a deploy's, with a deploy's limits.
 
 ## A dev runner
 
