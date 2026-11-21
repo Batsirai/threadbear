@@ -211,9 +211,15 @@ const asPath = (p: string): string => {
     return p;
   }
 };
+// The home folder out of a frame path, matched whole (up to a separator),
+// with either slash, and any case on Windows.
 const withoutHome = (p: string): string => {
   const f = asPath(p);
-  return HOME && HOME.length > 1 && f.startsWith(HOME) ? `~${f.slice(HOME.length)}` : f;
+  if (!HOME || HOME.length < 2) return f;
+  const norm = (x: string) => (process.platform === 'win32' ? x.replace(/\\/g, '/').toLowerCase() : x);
+  const h = norm(HOME).replace(/\/+$/, '');
+  const n = norm(f);
+  return n.startsWith(h) && (n.length === h.length || n[h.length] === '/' || n[h.length] === '\\') ? `~${f.slice(h.length)}` : f;
 };
 // The runner's own code: this package (src/, node_modules/) and Node's.
 const RUNNER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -229,7 +235,9 @@ const ROOT = comparable(RUNNER_ROOT);
 function ownFrame(file: string): boolean {
   // Node's own; not '<anonymous>', which is eval'd code and could be a patch's.
   if (/^node:[a-z_/]+$/.test(file)) return true;
-  if (!file || file.startsWith('<')) return false;
+  // A relative name (vm's evalmachine, a sourceURL) isn't a file of ours,
+  // whatever folder the runner runs in.
+  if (!file || file.startsWith('<') || !path.isAbsolute(asPath(file))) return false;
   const f = comparable(file);
   return f === ROOT || f.startsWith(ROOT + path.sep);
 }

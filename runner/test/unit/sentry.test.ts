@@ -239,3 +239,17 @@ test("eval'd code's frames go as outside the runner, and a frame keeps only its 
   assert.equal(own!.function, 'ok');
   assert.deepEqual(Object.keys(own!).sort(), ['filename', 'function', 'lineno']);
 });
+
+test("a relative frame name isn't the runner's own, and the home folder comes out only whole", () => {
+  const home = os.homedir();
+  const e = scrubEvent({ exception: { values: [{ type: 'Error', value: 'x', stacktrace: { frames: [
+    { filename: 'evalmachine.<anonymous>', function: 'secretVm', lineno: 1 },
+    { filename: 'src/secret-source-url.ts', function: 'secretUrl', lineno: 2 },
+    { filename: path.join(import.meta.dirname, 'x.ts'), function: 'ok', lineno: 3 },
+  ] } }] } }) as { exception: { values: { stacktrace: { frames: Record<string, unknown>[] } }[] } };
+  const [vm, rel, own] = e.exception.values[0]!.stacktrace.frames;
+  assert.equal(vm!.function, '<outside the runner>');
+  assert.equal(rel!.function, '<outside the runner>');
+  assert.equal(own!.function, 'ok');
+  if (import.meta.dirname.startsWith(home + path.sep)) assert.ok(String(own!.filename).startsWith('~' + path.sep));
+});
