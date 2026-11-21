@@ -2505,6 +2505,16 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     const merged = await git(w.mainCheckout, ['merge-base', '--is-ancestor', w.branch, MAIN]);
     if (!merged.ok) return { removed: false, reason: `${w.branch} has commits that aren't on ${MAIN}` };
   }
+  // The branch goes only as it is now, and only if that's all on main: a
+  // commit made since the look above stays on it (Codex's review, 21 Nov:
+  // -D after one look took a commit made meanwhile). Why not, or undefined.
+  const dropBranch = async (): Promise<string | undefined> => {
+    const at = await gitOut(w.mainCheckout, ['rev-parse', '--verify', '--quiet', `refs/heads/${w.branch}`]);
+    if (!at) return `git couldn't read it`;
+    if (!(await git(w.mainCheckout, ['merge-base', '--is-ancestor', at, MAIN])).ok) return `it has commits that aren't on ${MAIN}`;
+    const del = await git(w.mainCheckout, ['update-ref', '-d', `refs/heads/${w.branch}`, at]);
+    return del.ok ? undefined : firstLine(del.stderr);
+  };
   // A record can outlive its worktree without hearing (THREADBEAR-16: a
   // handover saved it while the cleanup ran), and slot folders are reused.
   // So the folder is only touched if it's still this branch's checkout:
@@ -2520,9 +2530,9 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     if (!ours) {
       if (branchThere) {
         if (!stillOurs()) return LET_GO;
-        const del = await git(w.mainCheckout, ['branch', '-D', w.branch]);
+        const left = await dropBranch();
         // The folder's someone else's either way, so it counts as removed.
-        if (!del.ok) return { removed: true, taken: true, branchLeft: `deleting ${w.branch} failed: ${firstLine(del.stderr)}` };
+        if (left) return { removed: true, taken: true, branchLeft: `deleting ${w.branch} failed: ${left}` };
       }
       return { removed: true, taken: true };
     }
@@ -2567,11 +2577,16 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
       if (!here) return CHANGED;
       const tip = await gitOut(here, ['rev-parse', 'HEAD']);
       if (!tip) return { removed: false, reason: `git couldn't read ${w.path}` };
+      // What it's set aside at must be on main too: a commit made since the
+      // branch was looked at would be left on no branch (Codex's review).
+      if (!(await git(w.mainCheckout, ['merge-base', '--is-ancestor', tip, MAIN])).ok) return { removed: false, reason: `${w.branch} has commits that aren't on ${MAIN}` };
+      if (!stillOurs()) return LET_GO;
+      if (!(here = worktreeFolderNow(w, head))) return CHANGED;
       if ((await git(here, ['checkout', '-q', '--detach'])).ok) {
         // From here it's on that commit, detached, not on the branch.
         head = tip;
         if (!stillOurs()) return LET_GO;
-        if (branchThere && (await git(w.mainCheckout, ['branch', '-D', w.branch])).ok) branchThere = false;
+        if (branchThere && !(await dropBranch())) branchThere = false;
         if (!stillOurs()) return LET_GO;
         if (!branchThere) {
           if (!(here = worktreeFolderNow(w, head))) return CHANGED;
@@ -2593,6 +2608,10 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     if (!(here = worktreeFolderNow(w, head))) return CHANGED;
     const edited = await editedSince(here);
     if (edited) return edited;
+    // And what's checked out there is still all on main (a commit made
+    // since the first look stays, with its folder).
+    const at = await gitOut(here, ['rev-parse', 'HEAD']);
+    if (!at || !(await git(w.mainCheckout, ['merge-base', '--is-ancestor', at, MAIN])).ok) return { removed: false, reason: `${w.branch} has commits that aren't on ${MAIN}` };
     if (!stillOurs()) return LET_GO;
     if (!worktreeFolderNow(w, head)) return CHANGED;
     const rm = await git(w.mainCheckout, args);
@@ -2601,11 +2620,10 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     if (!stillOurs()) return LET_GO;
     await git(w.mainCheckout, ['worktree', 'prune']);
   }
-  // Checked above that it's all on main, so -D loses nothing.
   if (branchThere) {
     if (!stillOurs()) return LET_GO;
-    const del = await git(w.mainCheckout, ['branch', '-D', w.branch]);
-    if (!del.ok) return { removed: true, branchLeft: `deleting ${w.branch} failed: ${firstLine(del.stderr)}` };
+    const left = await dropBranch();
+    if (left) return { removed: true, branchLeft: `deleting ${w.branch} failed: ${left}` };
   }
   // The <repo>-threads folder, once it's empty.
   try {
