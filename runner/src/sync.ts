@@ -3737,14 +3737,10 @@ export class ConvexSync {
     }
   }
 
+  // A draining runner's thread that isn't here yet has its folder there: a
+  // relative pin, or a file of secrets it touched, needs it now.
   private cwdOf(threadId: string): string | undefined {
-    try {
-      return this.deps.runner.get(threadId).cwd;
-    } catch {
-      // A draining runner's thread that isn't here yet: only a relative
-      // pin needs it, and the look through on coming across finds that.
-      return undefined;
-    }
+    return this.threadCwd(threadId);
   }
 
   // Threads in use that haven't been looked through since this runner

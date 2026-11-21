@@ -1105,6 +1105,13 @@ test("handover: a draining runner's command card can still be allowed from the p
   f.h.runner.publish({ method: 'thread.event', params: { threadId: draining.id, event: card('other', 12, '/elsewhere') } } as never);
   assert.deepEqual((f.sync as never as { pending: Map<string, { options: string[] }> }).pending.get(draining.id)?.options, ['deny']);
   await f.sync.stop();
+  // The folder a handover reads with the card is enough by itself.
+  const g = setupFull();
+  g.sync.start({ hold: true });
+  g.sync.seedCards([{ thread: draining, events: [card('alone', 10, cwd)] as never }]);
+  assert.deepEqual((g.sync as never as { pending: Map<string, { options: string[] }> }).pending.get(draining.id)?.options, ['allow', 'deny']);
+  g.sync.release();
+  await g.sync.stop();
 });
 
 test('handover: a card answered while the log was read is not put back', async () => {
