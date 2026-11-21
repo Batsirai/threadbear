@@ -32,10 +32,14 @@ test('THREADBEAR_SENTRY=off and NODE_ENV=test turn it off', () => {
   assert.equal(sentryWanted(defaultHome(), { NODE_ENV: 'test' }, RELEASE_ID, MIKES), false);
 });
 
-test('only the named fields of a log line go, strings cut short', () => {
-  const out = safeFields({ error: 'x'.repeat(1200), threadId: 't1', pid: 4, prompt: 'private words', file: '/Users/someone/notes.md', nested: { a: 1 } });
-  assert.deepEqual(Object.keys(out).sort(), ['error', 'pid', 'threadId']);
-  assert.equal((out.error as string).length, 1001);
+test('only the named fields of a log line go, the error as its kind alone', () => {
+  const out = safeFields({ error: 'x'.repeat(1200), threadId: 't1', pid: 4, prompt: 'private words', file: '/Users/someone/notes.md', nested: { a: 1 }, method: 'm'.repeat(300) });
+  assert.deepEqual(Object.keys(out).sort(), ['error', 'method', 'pid', 'threadId']);
+  assert.equal(out.error, 'Error');
+  assert.equal((out.method as string).length, 200);
+  assert.equal(safeFields({ error: "TypeError: Cannot read properties of undefined (reading 'secret words')" }).error, 'TypeError');
+  assert.equal(safeFields({ error: "Error: ENOENT: no such file or directory, open '/Users/x/private.md'" }).error, 'Error (ENOENT)');
+  assert.equal(safeFields({ error: 'Error: git fetch failed: fatal: EXAMPLESECRETKEY rejected' }).error, 'Error', "a capitals word isn't a code");
 });
 
 test('a WARN line goes as a warning, grouped by its message with ids taken out', () => {
@@ -82,8 +86,10 @@ test('the RPC method goes in the title, so different requests failing are separa
 const GIT_URL = 'https://x-access-token:ghs_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789@github.com/mikecann/private.git';
 const BARE = 'https://ghp_SecretTokenValue0123456789abcdefABCDEF@example.com/repo.git';
 const PRIVATE = 'zebra-private-marker-4471';
+// Text no rule or known value knows: an error quoting a thread's words.
+const THREAD_TEXT = 'my landlord owes me four hundred dollars';
 // Built, so the SDK's source lines around a frame (this file, in a test) don't hold them.
-const LEAKS = [['ghs', 'AbCd'].join('_'), ['ghp', 'Secret'].join('_'), ['x', 'access', 'token'].join('-'), PRIVATE];
+const LEAKS = [['ghs', 'AbCd'].join('_'), ['ghp', 'Secret'].join('_'), ['x', 'access', 'token'].join('-'), PRIVATE, ['landlord', 'owes'].join(' ')];
 
 async function capture(fn: (S: typeof import('@sentry/node')) => void | Promise<void>): Promise<string> {
   const S = await import('@sentry/node');
@@ -112,24 +118,26 @@ async function capture(fn: (S: typeof import('@sentry/node')) => void | Promise<
 
 test('a credential in a git URL or a known private value never leaves in a log line event', async () => {
   useSentryMask((text) => text.split(PRIVATE).join('[REDACTED]'));
-  const ev = logLineEvent('warning', `upstream check failed ${PRIVATE}`, { error: `Error: git fetch ${GIT_URL} failed: fatal: could not read from ${BARE} (${PRIVATE})`, prompt: PRIVATE }, 9_000_000);
+  const ev = logLineEvent('warning', `upstream check failed ${PRIVATE} in /Users/someone/secret-project/x`, { error: `Error: git fetch ${GIT_URL} failed: fatal: could not read from ${BARE} (${PRIVATE}) ${THREAD_TEXT}`, prompt: PRIVATE }, 9_000_000);
   assert.ok(ev);
   const local = JSON.stringify(ev);
   for (const bad of LEAKS) assert.ok(!local.includes(bad), `${bad} in ${local}`);
-  assert.match(local, /github\.com\/mikecann\/private\.git/, 'the rest of the URL stays, to tell what failed');
+  assert.ok(!local.includes('secret-project'), 'a path in the message');
+  assert.equal(ev.extra.error, 'Error');
   useSentryMask((t) => t);
 });
 
 test('exceptions, their causes and extras are scrubbed by beforeSend in the real SDK', async () => {
   const out = await capture((S) => {
-    const cause = new Error(`git fetch ${BARE} failed: ${PRIVATE}`);
-    const e = new Error(`fetch from ${GIT_URL} failed`, { cause });
+    const cause = new Error(`git fetch ${BARE} failed: ${PRIVATE} ${THREAD_TEXT}`);
+    const e = new TypeError(`fetch from ${GIT_URL} failed: ${THREAD_TEXT}`, { cause });
     S.captureException(e, { tags: { what: 'upstream' }, extra: { error: `${PRIVATE} ${GIT_URL}` } });
     S.captureMessage(`could not reach ${GIT_URL}`, { level: 'warning', extra: { error: `stderr: ${BARE} ${PRIVATE}` } });
   });
   assert.ok(out.length > 0, 'events went out');
   for (const bad of LEAKS) assert.ok(!out.includes(bad), `${bad} left the runner: ${out.slice(Math.max(0, out.indexOf(bad) - 300), out.indexOf(bad) + 100)}`);
-  assert.match(out, /fetch from https:\/\/github\.com\/mikecann\/private\.git failed/);
+  assert.match(out, /"type":"TypeError","value":"TypeError"/, 'the kind goes');
+  assert.match(out, /sentry\.test\.ts/, 'and the stack');
 });
 
 test("an event whose scrub fails isn't sent", () => {

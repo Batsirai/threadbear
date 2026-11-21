@@ -1173,7 +1173,7 @@ async function main(): Promise<void> {
     schedules: { list: () => scheduler.list(), update: (p) => scheduler.update(p), delete: (id) => scheduler.delete(id) },
     threads: (since) => runner.scheduledSince(since),
     start: (p) => runner.create({ text: p.text, title: p.title, cwd: p.cwd, worktree: false, startedBy: { kind: 'runner', label: 'Recipes', why: p.title } }).thread,
-    log: (msg) => log.warn(msg),
+    log: (msg, extra) => log.warn(msg, extra),
   });
   if (!box && !copyOfReal) recipes.start();
   const upstream = new Upstream({

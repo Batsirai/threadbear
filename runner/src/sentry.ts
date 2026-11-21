@@ -12,9 +12,12 @@
 // Errors only: no tracing, no breadcrumbs (CLI output and URLs can carry
 // a thread's text or a token), no PII or local variables. What it sends is the
 // runner's own uncaught exceptions and its ERROR and WARN log lines, by
-// message (WARN as Sentry warnings).
+// message (WARN as Sentry warnings). An error's own words never go, only its
+// kind and stack (errorKind; Daybreak finding 155), and every event is
+// scrubbed as it leaves (scrubEvent), or not sent.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { defaultHome } from './config.ts';
 import { RELEASE, readRelease } from './release.ts';
@@ -136,6 +139,28 @@ export function scrubForSentry(text: string): string {
   return out.length > MAX_TEXT ? `${out.slice(0, MAX_TEXT)}…` : out;
 }
 
+// What an error is, without what it says: its class (TypeError, RpcError,
+// AbortError) and any errno-style code (ENOENT, EACCES), the words of a fixed
+// vocabulary. For the `error` field of a log line and an exception's message,
+// which quote whatever they were looking at (Daybreak finding 155): the
+// watcher that picks up an issue runs on this Mac and reads runner.log for the
+// rest.
+const ERROR_CLASS = /^\s*(?:Uncaught\s+)?([A-Z][A-Za-z0-9]{0,40}(?:Error|Exception|Rejection))\b/;
+// Codes only from the system's own list, so an all-capitals word from the
+// error's text can't ride along as one.
+const ERRNO_CODES = new Set(Object.keys(os.constants.errno));
+const CODE = /\b(E[A-Z0-9]{2,15}|ERR_[A-Z_]{2,40})\b/g;
+
+export function errorKind(text: string, type?: string): string {
+  const cls = ERROR_CLASS.exec(text)?.[1] ?? (type && /^[A-Za-z][A-Za-z0-9]{0,40}(?:Error|Exception|Rejection)$/.test(type) ? type : 'Error');
+  const code = [...text.matchAll(CODE)].map((m) => m[1]!).find((c) => ERRNO_CODES.has(c) || c.startsWith('ERR_'));
+  return code ? `${cls} (${code})` : cls;
+}
+
+// A log line's title: its fixed message, a path in it (housekeeping names the
+// file it couldn't tidy) taken out, then scrubbed.
+const PATHS = /(?:~|(?<![\w.])\/)[^\s'"`]*\/[^\s'"`]*/g;
+
 type Json = unknown;
 function scrubDeep(v: Json, depth = 0): Json {
   if (typeof v === 'string') return scrubForSentry(v);
@@ -177,7 +202,10 @@ export function scrubEvent<E>(event: E): E | null {
     }
     for (const ex of e.exception?.values ?? []) {
       if (typeof ex.type === 'string') ex.type = scrubForSentry(ex.type);
-      if (typeof ex.value === 'string') ex.value = scrubForSentry(ex.value);
+      // An exception's message is free text (git's stderr, a parse error
+      // quoting its input), so only its kind goes; runner.log has the whole of
+      // it, beside the stack. The stack itself is the runner's own code.
+      if (typeof ex.value === 'string') ex.value = errorKind(ex.value, typeof ex.type === 'string' ? ex.type : undefined);
       if (ex.mechanism?.data !== undefined) ex.mechanism.data = scrubDeep(ex.mechanism.data);
       for (const f of ex.stacktrace?.frames ?? []) {
         delete f.vars;
@@ -215,8 +243,9 @@ export function reportException(e: unknown, what: string): void {
 const REPORTED_AS_EXCEPTIONS = new Set(['uncaught exception', 'unhandled rejection']);
 // Fields of a log line worth sending. Others (paths, prompts, a CLI's
 // output under some other name) stay in runner.log. A name is no promise
-// about what's in it, so their text is scrubbed too (scrubForSentry), here
-// and again in beforeSend.
+// about what's in it, so `error` goes only as its kind (errorKind), and the
+// rest, the runner's own words, are scrubbed too (scrubForSentry), here and
+// again in beforeSend.
 const SAFE_FIELDS = new Set(['error', 'method', 'kind', 'provider', 'commit', 'port', 'pid', 'threadId', 'reviewId']);
 // One event per message an hour is plenty for the watcher, and keeps a
 // failure that repeats every second from using up the month's quota.
@@ -243,7 +272,7 @@ export function logLineEvent(level: LogLevel, msg: string, extra: Record<string,
   // One message can cover many causes: 'request failed' is logged for every
   // RPC method, so the method goes in the title to keep their issues apart.
   const method = typeof extra?.method === 'string' ? extra.method : undefined;
-  const title = scrubForSentry((method ? `${msg} (${method})` : msg).replace(UUID, '<id>'));
+  const title = scrubForSentry((method ? `${msg} (${method})` : msg).replace(UUID, '<id>').replace(PATHS, '<path>'));
   const key = `${level} ${title}`;
   const last = lastSent.get(key);
   if (last !== undefined && now - last < SAME_MESSAGE_MS) return null;
@@ -276,7 +305,7 @@ export function safeFields(extra: Record<string, unknown> | undefined): Record<s
   for (const [k, v] of Object.entries(extra ?? {})) {
     if (!SAFE_FIELDS.has(k)) continue;
     if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
-    else if (typeof v === 'string') out[k] = scrubForSentry(v);
+    else if (typeof v === 'string') out[k] = k === 'error' ? errorKind(v) : scrubForSentry(v.length > 200 ? v.slice(0, 200) : v);
   }
   return out;
 }
