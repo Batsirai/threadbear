@@ -665,6 +665,8 @@ export type RunnerDeps = {
   // Whether the thread is waiting to hear the app restarted onto a new
   // build (wait_for_app_restart), so a done turn hibernates until it has.
   awaitingAppRestart?: (threadId: string) => boolean;
+  // The commit it waits for the app to have (AppRestarts.waitingFor).
+  appRestartWant?: (threadId: string) => { commit?: string; short?: string } | undefined;
   // Whether Mike is at this Mac, as presence last found it (presence.ts);
   // undefined when it hasn't been checked. Only read for phone messages.
   atMac?: () => boolean | undefined;
@@ -880,6 +882,7 @@ export class Runner {
   reachable: Reachable;
   appRestartAsked?: (threadId: string) => void;
   awaitingAppRestart?: (threadId: string) => boolean;
+  appRestartWant?: (threadId: string) => { commit?: string; short?: string } | undefined;
   atMac?: () => boolean | undefined;
 
   private threadKey?: (threadId: string) => string;
@@ -914,6 +917,7 @@ export class Runner {
     this.standingInstructions = deps.standingInstructions;
     this.appRestartAsked = deps.appRestartAsked;
     this.awaitingAppRestart = deps.awaitingAppRestart;
+    this.appRestartWant = deps.appRestartWant;
     this.atMac = deps.atMac;
     this.adapters = deps.adapters;
     this.accounts = deps.accounts;
@@ -4500,6 +4504,10 @@ export class Runner {
     // Only while something still listens for the restart: one archived when
     // it came isn't told, and its watch is spent (Codex's review, 19 Nov).
     if (rec.hibernatedForApp && rec.snoozedUntil && this.awaitingAppRestart?.(rec.id)) s.awaitingAppRestart = true;
+    // Any thread waiting on the app, hibernating or not: the Updates panel
+    // lists them with whether the build on its way has their commit.
+    const appWant = rec.archivedAt ? undefined : this.appRestartWant?.(rec.id);
+    if (appWant) s.awaitingApp = appWant;
     if (rec.woke && rec.forceUnread) s.woke = { ...rec.woke };
     if (rec.archivedAt) {
       s.archivedAt = rec.archivedAt;

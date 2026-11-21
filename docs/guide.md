@@ -2402,7 +2402,10 @@ version (or a runner release) is building, a short arc goes round the
 icon; once the app's next version is ready to restart into, the icon turns
 green. A grey dot means something else is in progress and will sort itself
 out, and a coloured dot means it needs you. Right-click it for a quick
-Restart to Update.
+Restart to Update. Threads waiting for the app to restart onto what they
+landed are listed in the panel's App section, each saying whether its fix
+is in the version that's building, in the one that's ready, or still to
+come in the next build; click one to open it.
 
 A few parts of the runner (the program that keeps it going, and the small
 Threadbear Runner app macOS names in its privacy prompts) don't come with
