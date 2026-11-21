@@ -382,16 +382,15 @@ impl Element for Img {
                                         let task = window.spawn(cx, async move |cx| {
                                             cx.background_executor().timer(due).await;
                                             flag.set(true);
-                                            // Tried again while the app is busy (a
-                                            // nested event loop), so one refused
-                                            // update doesn't stop the GIF for good.
-                                            for _ in 0..5 {
-                                                if cx.update(move |_, cx| cx.notify(view)).is_ok() {
-                                                    return;
-                                                }
-                                                cx.background_executor()
-                                                    .timer(Duration::from_millis(16))
-                                                    .await;
+                                            // Tried until it lands while the app is
+                                            // busy (a nested event loop: a menu, a
+                                            // sheet), so a refused update doesn't stop
+                                            // the GIF for good. The task goes with the
+                                            // element, and with its window.
+                                            let mut backoff = Duration::from_millis(16);
+                                            while cx.update(move |_, cx| cx.notify(view)).is_err() {
+                                                cx.background_executor().timer(backoff).await;
+                                                backoff = (backoff * 2).min(Duration::from_millis(250));
                                             }
                                         });
                                         state.next_frame = Some(NextFrame {

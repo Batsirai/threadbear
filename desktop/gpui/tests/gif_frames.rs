@@ -53,12 +53,20 @@ impl Render for Picture {
     }
 }
 
-/// Draws the picture with its window not the key one. If `gap` is given, the
-/// clock then moves that far with nothing drawn (the window hidden) and it's
-/// drawn once more. Then it runs for `run` in 10 ms steps, drawing whenever
-/// it's woken, and says how many milliseconds after the last draw before the
-/// run each wake came.
-fn wakes(picture: Arc<Image>, gap: Option<Duration>, run: Duration) -> Vec<u128> {
+/// What happens between the first draw and the run.
+enum Before {
+    Nothing,
+    /// The clock moves this far while the app is busy (a nested event loop:
+    /// a wake is refused, and nothing draws), then it's drawn once more.
+    BusyThenDrawn(Duration),
+    /// The same, with no draw after it.
+    Busy(Duration),
+}
+
+/// Draws the picture with its window not the key one, then `before`, then
+/// runs for `run` in 10 ms steps, drawing whenever it's woken, and says how
+/// many milliseconds after the run started each wake came.
+fn wakes(picture: Arc<Image>, before: Before, run: Duration) -> Vec<u128> {
     let mut cx = TestAppContext::single();
     let window = cx.add_window(move |_, _| Picture(picture));
     let view = window.update(&mut cx, |_, _, cx| cx.entity()).unwrap();
@@ -71,8 +79,11 @@ fn wakes(picture: Arc<Image>, gap: Option<Duration>, run: Duration) -> Vec<u128>
         assert!(!window.is_window_active());
         window.render_frame(cx);
     });
-    if let Some(gap) = gap {
-        cx.executor().advance_clock(gap);
+    if let Before::Busy(gap) | Before::BusyThenDrawn(gap) = before {
+        let executor = cx.executor();
+        cx.update(|_, _| executor.advance_clock(gap));
+    }
+    if let Before::BusyThenDrawn(_) = before {
         cx.update(|window, cx| window.render_frame(cx));
     }
     let start = cx.executor().now();
@@ -104,7 +115,11 @@ fn a_gif_steps_through_its_frames_when_its_window_is_not_the_key_one() {
     // Frames of 50, 200 and 50 ms: woken as each is due, round and round.
     // Stuck on its first frame, it would be woken every 50 ms, or not at all.
     assert_eq!(
-        wakes(gif(&[50, 200, 50]), None, Duration::from_millis(700)),
+        wakes(
+            gif(&[50, 200, 50]),
+            Before::Nothing,
+            Duration::from_millis(700)
+        ),
         vec![50, 250, 300, 350, 550, 600, 650]
     );
 }
@@ -112,29 +127,60 @@ fn a_gif_steps_through_its_frames_when_its_window_is_not_the_key_one() {
 #[test]
 fn a_frame_of_no_time_shows_for_a_tenth_of_a_second() {
     assert_eq!(
-        wakes(gif(&[0, 0]), None, Duration::from_millis(350)),
+        wakes(gif(&[0, 0]), Before::Nothing, Duration::from_millis(350)),
         vec![100, 200, 300]
     );
 }
 
 #[test]
 fn a_gif_drawn_after_a_long_gap_starts_its_clock_again() {
-    // Hidden for 300 ms (six frames), it steps once and shows that frame its
-    // whole 50 ms, rather than racing through the ones it missed.
+    // Frames of 200, 50 and 50 ms, drawn again 260 ms in (the app busy
+    // meanwhile): it steps once, and as the 60 ms it's late is longer than
+    // the next frame, that frame gets its whole 50 ms rather than being
+    // raced through.
+    assert_eq!(
+        wakes(
+            gif(&[200, 50, 50]),
+            Before::BusyThenDrawn(Duration::from_millis(260)),
+            Duration::from_millis(320)
+        ),
+        vec![50, 100, 300]
+    );
+}
+
+#[test]
+fn a_frame_drawn_a_little_late_keeps_the_gif_in_time() {
+    // Drawn 20 ms late, the next frame is 20 ms shorter, so the frames
+    // after it land where they would have.
     assert_eq!(
         wakes(
             gif(&[50, 50, 50]),
-            Some(Duration::from_millis(300)),
-            Duration::from_millis(120)
+            Before::BusyThenDrawn(Duration::from_millis(70)),
+            Duration::from_millis(140)
         ),
-        vec![50, 100]
+        vec![30, 80, 130]
     );
 }
 
 #[test]
 fn a_still_picture_is_never_woken() {
     assert_eq!(
-        wakes(gif(&[50]), None, Duration::from_secs(1)),
+        wakes(gif(&[50]), Before::Nothing, Duration::from_secs(1)),
         Vec::<u128>::new()
+    );
+}
+
+#[test]
+fn a_wake_refused_while_the_app_is_busy_lands_after() {
+    // Its 50 ms wake is refused while the app's busy for 100 ms. It's tried
+    // again, backing off (16, 32, 64 ms), until it lands, and the GIF plays
+    // on, rather than staying stopped until something else draws.
+    assert_eq!(
+        wakes(
+            gif(&[50, 50, 50]),
+            Before::Busy(Duration::from_millis(100)),
+            Duration::from_millis(270)
+        ),
+        vec![62, 112, 162, 212, 262]
     );
 }
