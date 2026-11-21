@@ -162,6 +162,10 @@ export async function formatCommitsIn(cwd: string, ref: string, listFrom = ref):
       const ids = subjects.get(entry.subject) ?? [];
       if (ids.length === 1) commit = ids[0];
     }
+    // From another ref's list, a commit only that ref has: never one of the
+    // waiting branches a group check stacks on main, whose config would be
+    // theirs (Gemini's second review, 21 Nov).
+    if (commit && listFrom !== ref && !(await isAncestor(cwd, commit, listFrom))) commit = undefined;
     // And it has to be only what it formats: anything else in it would be
     // lost from a fork's merge across it (mergeAcross).
     if (commit && (await onlyWithin(cwd, commit, entry))) found.push({ entry, commit });
@@ -260,12 +264,12 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ 
 // runs, or run one of their own: a toolchain file (rustup runs whatever a
 // `path` toolchain names), cargo's config (an alias for `fmt`), a version
 // manager's (mise, once rtx, runs an env script from any of its names, or
-// under .config). Where a tree has one the format
+// under .config; proto loads plugins). Where a tree has one the format
 // commit's config doesn't name, or a link (a formatter writes through it),
 // the command isn't run on it. Matched as the disk will open the name: a
 // Mac's disk ignores case (`.CARGO` is `.cargo` to cargo there; Codex's
 // review, 21 Nov) and treats Unicode forms alike.
-const STEERS = /(^|\/)(rust-toolchain(\.toml)?|\.cargo|\.?(mise|rtx)(\.[^/]*)?|\.config|\.tool-versions)(\/|$)/i;
+const STEERS = /(^|\/)(rust-toolchain(\.toml)?|\.cargo|\.?(mise|rtx)(\.[^/]*)?\.toml|\.?(mise|rtx)(?=\/)|\.config|\.tool-versions|\.prototools)(\/|$)/i;
 const asDiskSees = (p: string) => p.normalize('NFKC').replace(/\p{Default_Ignorable_Code_Point}/gu, '').toLowerCase();
 const steers = (p: string, config: string[]) => STEERS.test(asDiskSees(p)) && !config.some((c) => asDiskSees(c) === asDiskSees(p));
 
@@ -598,19 +602,43 @@ async function alreadyOn(cwd: string, onto: string, tip: string, base: string): 
 
 // --------------------------------------------------------------- what a branch adds
 
-// The recipes `tip`'s list has that `base`'s doesn't: commands a landing of
-// `tip` would make trusted for every later tb land. With an id that stands
-// for exactly those, for `tb land --allow-format <id>`.
-export async function addedRecipes(cwd: string, base: string, tip: string): Promise<{ entries: FormatEntry[]; id: string }> {
+// What a landing of `tip` onto `base` would change in what later landings
+// run on this Mac: recipes its list has that `base`'s doesn't, and config
+// files of any listed recipe (a format tool's own script, the toolchain
+// file) it changes. With an id that stands for exactly those, recipes and
+// file contents both, for `tb land --allow-format <id>`. Throws when the
+// list can't be read, rather than calling that no change.
+export async function formatChanges(cwd: string, base: string, tip: string): Promise<{ entries: FormatEntry[]; configs: string[]; id: string }> {
   const read = async (ref: string) => {
+    const at = await git(cwd, ['ls-tree', '--name-only', ref, '--', FORMAT_LIST]);
+    if (!at.ok) throw new Error(`couldn't read ${ref}'s tree`);
+    if (!at.stdout.trim()) return [];
     const r = await git(cwd, ['show', `${ref}:${FORMAT_LIST}`]);
-    return r.ok ? parseFormatList(r.stdout) : [];
+    if (!r.ok) throw new Error(`couldn't read ${ref}:${FORMAT_LIST}`);
+    return parseFormatList(r.stdout);
   };
-  const known = new Set((await read(base)).map(recipe));
+  const before = await read(base);
+  const after = await read(tip);
+  const known = new Set(before.map(recipe));
   const seen = new Set<string>();
-  const entries = (await read(tip)).filter((e) => !known.has(recipe(e)) && !seen.has(recipe(e)) && seen.add(recipe(e)));
-  const id = createHash('sha256').update(JSON.stringify([...seen].sort())).digest('hex').slice(0, 12);
-  return { entries, id };
+  const entries = after.filter((e) => !known.has(recipe(e)) && !seen.has(recipe(e)) && seen.add(recipe(e)));
+  const paths = [...new Set([...before, ...after].flatMap((e) => e.config))].sort();
+  const configs: string[] = [];
+  const blobs: string[] = [];
+  for (const p of paths) {
+    const blob = async (ref: string) => {
+      const r = await git(cwd, ['ls-tree', ref, '--', p]);
+      if (!r.ok) throw new Error(`couldn't read ${ref}:${p}`);
+      return r.stdout.trim();
+    };
+    const now = await blob(tip);
+    if ((await blob(base)) !== now) {
+      configs.push(p);
+      blobs.push(`${p}\0${now}`);
+    }
+  }
+  const id = createHash('sha256').update(JSON.stringify([[...seen].sort(), blobs])).digest('hex').slice(0, 12);
+  return { entries, configs, id };
 }
 
 // --------------------------------------------------------------- a branch with one

@@ -129,12 +129,53 @@ test('a branch that only adds a list entry for a commit already on main is asked
   commit(t.path, { '.git-blame-ignore-revs': TRUSTED + `\n# format-subject: Protocol and the script\n# format-command: touch /tmp/x\n# format-paths: docs\n` }, 'List an old commit');
   const c = capture();
   assert.notEqual(await land(t, c.opts), 0);
-  assert.match(c.err.join('\n'), /adds format commands/);
+  assert.match(c.err.join('\n'), /changes what later tb lands run/);
   // A list change that adds no command (a comment, an id filled in) isn't.
   const t2 = makeBranch(main, 'comment1');
   commit(t2.path, { '.git-blame-ignore-revs': '# A comment\n' + TRUSTED }, 'Comment');
   const c2 = capture();
   assert.equal(await land(t2, c2.opts), 0, c2.err.join('\n'));
+});
+
+test('a branch that changes a format tool\'s own script lands only once that\'s asked for by id, with every name shown escaped', async () => {
+  const { main } = setup(TRUSTED);
+  const t = makeBranch(main);
+  commit(t.path, { 'scripts/split-protocol.mjs': SCRIPT + '\n// changed\n' }, 'Change the script');
+  const c = capture();
+  assert.notEqual(await land(t, c.opts), 0);
+  const said = c.err.join('\n');
+  assert.match(said, /config file "scripts\/split-protocol\.mjs" changed/);
+  const id = /--allow-format ([0-9a-f]{12})/.exec(said)![1];
+  // An id for other contents doesn't do.
+  commit(t.path, { 'scripts/split-protocol.mjs': SCRIPT + '\n// changed again\n' }, 'Again');
+  const c2 = capture();
+  assert.notEqual(await land(t, { ...c2.opts, allowFormat: id }), 0);
+  const id2 = /--allow-format ([0-9a-f]{12})/.exec(c2.err.join('\n'))![1];
+  assert.notEqual(id2, id);
+  const ok = capture();
+  assert.equal(await land(t, { ...ok.opts, allowFormat: id2 }), 0, ok.err.join('\n'));
+  // A path with an escape in it is shown as a JSON string, so it can't redraw the line.
+  const t2 = makeBranch(main, 'escape12');
+  commit(t2.path, { '.git-blame-ignore-revs': TRUSTED + '\n# format-subject: S\n# format-command: true\n# format-paths: docs\u001b[2K\n' }, 'Escape');
+  const c3 = capture();
+  assert.notEqual(await land(t2, c3.opts), 0);
+  assert.ok(!c3.err.join('\n').includes('\u001b'), 'the escape went out raw');
+  assert.match(c3.err.join('\n'), /format-command "true" over "docs\\u001b\[2K"/);
+});
+
+test('crossing onto a stack never takes a format commit from the waiting branches, even one main lists by subject', async () => {
+  const { main, marker } = setup();
+  // Main lists a format commit by subject that isn't on main yet.
+  commit(main, { '.git-blame-ignore-revs': entry('node scripts/split-protocol.mjs', 'Split later') }, 'List it ahead');
+  const p = sh(main, 'git rev-parse HEAD');
+  const w = makeBranch(main, 'waiting2');
+  commit(w.path, { 'scripts/split-protocol.mjs': `import * as markIt from 'node:fs';\nmarkIt.writeFileSync(${JSON.stringify(marker)}, '');\n${SCRIPT.replace(/^#!.*\n/, '')}` }, 'Script');
+  commit(w.path, { 'docs/protocol.md': DOC + 'w\n' }, 'Split later');
+  const stacked = sh(w.path, 'git rev-parse HEAD');
+  const t = makeBranch(main, 'mine5678');
+  commit(t.path, { 'docs/protocol.md': DOC + 'mine\n' }, 'Mine');
+  assert.deepEqual(await crossings(main, sh(t.path, 'git rev-parse HEAD'), stacked, p), []);
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test('crossing onto a stack of waiting branches takes its commands from main\'s list, not theirs', async () => {

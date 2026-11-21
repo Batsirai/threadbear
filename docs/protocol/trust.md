@@ -791,9 +791,9 @@ just wrote until it has got past a step that's asked about. Land itself runs
 nothing else from the branch on this Mac: a format command in the branch's
 `.git-blame-ignore-revs` runs only when main's list has the same command,
 paths and config, with config the branch didn't change, and stops the land
-before anything runs otherwise; a branch adding a command to main's list
-lands only with `tb land --allow-format <id>` for exactly the commands
-shown (docs/thread-worktrees.md). Its `teardown`
+before anything runs otherwise; a branch adding a command to main's list,
+or changing a config file one runs with, lands only with `tb land
+--allow-format <id>` for exactly what's shown (docs/thread-worktrees.md). Its `teardown`
 does count, as it runs in the worktree as the agent left it. A repo's setup has to
 keep that true: `worktree-setup.sh` won't `npm install` in the main checkout while
 it has uncommitted changes. A patch using `this` or a getter gets none of this. A settings hook that can't be followed all

@@ -157,9 +157,9 @@ const HELP = `tb: talk to the Threadbear runner
                                   --dry-run stops before main moves. A GitHub workflow
                                   marked "# tb land: hold while red" holds the landings it
                                   would run for while it's red on main; --despite-red
-                                  lands anyway, for the fix; a branch adding a format command
-                                  to .git-blame-ignore-revs lands only with the --allow-format
-                                  id it shows for exactly those commands
+                                  lands anyway, for the fix; a branch changing a format command
+                                  in .git-blame-ignore-revs or a config file one runs with lands
+                                  only with the --allow-format id it shows for exactly those
   tb runner add <name> (--ssh <host> | --out <file>) [--id <runnerId>]
                                   on the main Mac: a backend key for another runner that acts
                                   as that runner alone, written over ssh into its

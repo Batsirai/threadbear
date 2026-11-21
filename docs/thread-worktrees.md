@@ -127,11 +127,13 @@ stays. Separate repos do not block one another.
    or a link where it formats (names matched without case, as a Mac's disk
    opens them), as those can change what the command runs. A group check
    crossing format commits takes their commands from main's list, never
-   from the waiting branches stacked on it. And since main's list is what
-   later landings run, a branch that adds or changes a command in it stops
-   with the commands shown, and lands only with `tb land --allow-format
-   <id>`, the id it gives for exactly those commands (the Land chip never
-   passes it).
+   from the waiting branches stacked on it, nor a format commit of theirs.
+   And since main's list is what later landings run, a branch that adds or
+   changes a command in it, or changes a config file one runs with (the
+   split tool's script, the toolchain file), stops with what changed shown,
+   and lands only with `tb land --allow-format <id>`, the id it gives for
+   exactly those commands and file contents (the Land chip never passes
+   it; such a branch never rides in another's group check).
    Then it refuses a commit whose `Important:` line git doesn't read as a
    trailer (not in the last paragraph with `Co-Authored-By`), as a release
    would not flag it and forks wouldn't hear. And it holds a landing while

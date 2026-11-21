@@ -15,7 +15,7 @@ import type { WorktreePatch } from './patches.ts';
 import { inBackground } from './background.ts';
 import { mainCheckoutOf as linkedMainCheckout } from './patch-trust.ts';
 import { untrustedGitArgs } from './safe-git.ts';
-import { addedRecipes, carryAcross, crossings, mergeAcross, remakeOwn, touchesFormatted, TreeFormatter, type FormatCommit } from './format-replay.ts';
+import { carryAcross, formatChanges, crossings, mergeAcross, remakeOwn, touchesFormatted, TreeFormatter, type FormatCommit } from './format-replay.ts';
 import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, readRunning, ridesFree, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
 
 // What a thread's record keeps about its worktree.
@@ -338,9 +338,9 @@ export type LandOptions = {
   // has the one way it's left out).
   despiteRed?: boolean;
   // `tb land --allow-format <id>`: the format commands this landing adds to
-  // .git-blame-ignore-revs, which later landings run on this Mac, were shown
-  // and are meant (addedRecipes' id for exactly those). The Land chip never
-  // passes it.
+  // .git-blame-ignore-revs, or config files they run with that it changes,
+  // which later landings run on this Mac, were shown and are meant
+  // (formatChanges' id for exactly those). The Land chip never passes it.
   allowFormat?: string;
   // Where readCheck looks from, relative to the worktree's root (a
   // subfolder's patch can ask for its own check). Only landings that look
@@ -1045,13 +1045,17 @@ async function prepare(
   // .git-blame-ignore-revs: tb land runs main's on this Mac in later
   // landings, so it lands only once it's been shown and asked for by its id
   // (Gemini's review of finding 151, 21 Nov).
-  const added = await addedRecipes(t.path, base, t.branch).catch(() => undefined);
-  if (!added) return fail(`Couldn't read ${t.branch}'s .git-blame-ignore-revs in ${t.path}, so nothing landed. Run tb land again.`);
-  if (added.entries.length && allowFormat !== added.id) {
+  // A config file one of them runs with (a tool's own script, the
+  // toolchain file) counts the same.
+  const added = await formatChanges(t.path, base, t.branch).catch(() => undefined);
+  if (!added) return fail(`Couldn't read ${t.branch}'s .git-blame-ignore-revs or its format config in ${t.path}, so nothing landed. Run tb land again.`);
+  if ((added.entries.length || added.configs.length) && allowFormat !== added.id) {
+    const q = (s: string) => JSON.stringify(s);
     return fail(
-      `${t.branch} adds format commands to .git-blame-ignore-revs, which later tb lands would run on this Mac, so nothing landed:`,
-      ...added.entries.map((e) => `  ${JSON.stringify(e.command)} over ${e.paths.join(' ')}${e.config.length ? `, config ${e.config.join(' ')}` : ''} (${JSON.stringify(e.subject)})`),
-      `If those are meant to run, land it with tb land --allow-format ${added.id}.`,
+      `${t.branch} changes what later tb lands run on this Mac to format code (.git-blame-ignore-revs), so nothing landed:`,
+      ...added.entries.map((e) => `  ${e.adds ? 'format-tool' : 'format-command'} ${q(e.command)} over ${e.paths.map(q).join(' ')}${e.config.length ? `, config ${e.config.map(q).join(' ')}` : ''} (${q(e.subject)})`),
+      ...added.configs.map((p) => `  config file ${q(p)} changed`),
+      `If that's meant, land it with tb land --allow-format ${added.id}.`,
     );
   }
   // 2c. Held while something it would set off on GitHub is red on main.
@@ -1294,6 +1298,10 @@ async function stackWaiting(
     if ((await gitOut(t.path, ['rev-list', '--merges', `${e.base}..${e.commit}`])) !== '') continue;
     const next = await replayFormatted(t.path, e.base, e.commit, tip, main);
     if (!next || next === tip) continue;
+    // One that would change what format commands main runs lands alone,
+    // through its own tb land and its --allow-format, never as a rider.
+    const fmt = await formatChanges(t.path, tip, next).catch(() => undefined);
+    if (!fmt || fmt.entries.length || fmt.configs.length) continue;
     const commits = await gitOut(t.path, ['log', '--oneline', '--first-parent', `${tip}..${next}`]);
     if (commits === undefined) continue;
     group.push({ entry: e, tip: next, commits });
