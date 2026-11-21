@@ -11,6 +11,7 @@ import { ErrorCode, RpcError } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import type { Drain, ThreadState } from '../runner.ts';
 import { DRAIN_AGENT_MS, DRAIN_BACKGROUND_MS, DRAIN_CHECK_MS, DRAIN_MAX_OLD_MS, DRAIN_SETTLE_MS, newRuntime } from '../runner.ts';
+import { runningSession } from '../cli-session.ts';
 
 // Runner.openCards: events read from a log at once, kept small as each
 // chunk is read and parsed in one go on a runner still running turns, and
@@ -184,7 +185,7 @@ export const handoversPart = {
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
     this.flushDeltas(st);
-    if (rt.session && !rt.closing) {
+    if (runningSession(rt)) {
       this.rememberStoppedWork(st);
       this.releaseSession(st);
     }

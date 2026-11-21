@@ -4,6 +4,7 @@
 // is the Runner; runner.ts puts them on its prototype.
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
+import { runningSession } from '../cli-session.ts';
 import type { CliStatus, Provider } from '../protocol.ts';
 import type { AgentAdapter } from '../adapters/types.ts';
 import type { BinaryReporter, CliControl, CliHooks, ThreadState } from '../runner.ts';
@@ -13,7 +14,7 @@ export const clisPart = {
     const { rec, rt } = st;
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
-    if (!rt.session || rt.closing || rt.turn || rt.approvals.size) return;
+    if (!runningSession(rt) || rt.turn || rt.approvals.size) return;
     // Snoozed or archived: the CLI goes now, stopping any background work
     // (with a note), as Mike or the agent put the thread away. Before the
     // queue's check: a put-away thread keeps its queue until it's back, and
@@ -129,7 +130,7 @@ export const clisPart = {
     this.wantedVersion[provider] = keepVersion;
     for (const st of this.threads.values()) {
       const { rec, rt } = st;
-      if (rec.provider !== provider || !rt.session || rt.closing) continue;
+      if (rec.provider !== provider || !runningSession(rt)) continue;
       if (rt.cliVersion === keepVersion) {
         this.cli(st, { kind: 'versionMove', move: false });
         continue;

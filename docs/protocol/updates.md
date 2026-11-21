@@ -612,7 +612,10 @@ goes straight back to `none`, and a turn it was running fails, or starts
 again once on a fresh session when the one to resume can't be found. Every
 start, delete, handover and shutdown moves the generation on, and anything an
 older CLI says or a step that waited on it brings back (its output, its exit,
-a setting it refused) is dropped by that one check.
+a setting it refused) is dropped by that one check. A card a CLI asks for
+expires unless it's the thread's current CLI and not closing; the runner asks
+the machine (`cliHears`) rather than checking the fields itself, and code that
+needs the CLI it can send to reads `runningSession` (starting or live).
 
 ```mermaid
 stateDiagram-v2

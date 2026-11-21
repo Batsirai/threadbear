@@ -94,7 +94,7 @@ import { parseWhen } from './when.ts';
 import { SERVER_NAME } from './threadbear-mcp.ts';
 import { archiveFromTool, bylineFromTool, END_TURN_TOOL, snoozeFromTool, waitForFromTool, WakeRead } from './needs.ts';
 import { dropsStream, replyTurn, turnNeeds, type ReplyEvent, type ReplyMove, type ReplyOut } from './reply-phase.ts';
-import { cliHears, cliOf, cliRuntime, STALE, type CliEvent, type CliMove } from './cli-session.ts';
+import { cliHears, cliOf, cliRuntime, runningSession, STALE, type CliEvent, type CliMove } from './cli-session.ts';
 import type { Needs } from './needs.ts';
 import { asksForAppRestart, MAX_AGE_MS as APP_RESTART_MAX_AGE_MS } from './app-restarts.ts';
 import type { ConnectorsStatus } from './connectors.ts';
@@ -2052,7 +2052,7 @@ export class Runner {
   // or be refused (handover.ts sendScheduled), so it looks as before.
   needsPreLook(st: ThreadState): boolean {
     const { rec, rt } = st;
-    return rec.provider === 'claude' && Boolean(this.offThread && this.patchTrust.lookClaude) && Boolean(rt.session) && !rt.closing && !this.draining;
+    return rec.provider === 'claude' && Boolean(this.offThread && this.patchTrust.lookClaude) && Boolean(runningSession(rt)) && !this.draining;
   }
 
   // Whether the look still answers for the front of the queue as it is.
@@ -2089,7 +2089,7 @@ export class Runner {
   canSteer(st: ThreadState): boolean {
     const { rec, rt } = st;
     const turn = rt.turn;
-    if (!turn || !rt.session || rt.closing || this.stopping || rt.editing) return false;
+    if (!turn || !runningSession(rt) || this.stopping || rt.editing) return false;
     if (rec.queue.some(q => !isAutomaticInput(q)) || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
     // Nor into a compaction or review (a skill's turn takes them).
     if (turn.noSteer || turn.local) return false;
@@ -2248,7 +2248,7 @@ export class Runner {
     if (rec.netCarryOn && rec.netCarryOn.turnId !== msg.turnId) delete rec.netCarryOn;
     this.beforeTurn(st);
     // A subagent's card can still be open (docs/protocol/needs-you.md, "A subagent's card").
-    rec.status = rt.session && !rt.closing ? (rt.approvals.size ? 'waiting' : 'running') : 'starting';
+    rec.status = runningSession(rt) ? (rt.approvals.size ? 'waiting' : 'running') : 'starting';
     this.markDirty(st);
     // A message to the thread (not a turn the CLI opened by itself), so the
     // librarian can file a new thread before its first turn is over.
@@ -2290,14 +2290,15 @@ export class Runner {
       return gone() ? 'gone' : looks;
     };
     // A folder, account or settings change asked for a fresh CLI, or a CLI
-    // update came in since this one started.
-    if (rt.session && (rt.releaseWhenIdle || rec.handoff || (rt.versionMove && rt.tasks.length === 0))) this.releaseSession(st);
+    // update came in since this one started. (One already closing goes
+    // anyway: the turn waits for it below.)
+    if (runningSession(rt) && (rt.releaseWhenIdle || rec.handoff || (rt.versionMove && rt.tasks.length === 0))) this.releaseSession(st);
     // The folder's Claude Code hooks were trusted since the CLI started
     // without them, or new ones came that aren't (a pull): a fresh CLI
     // reads the folder's settings again.
     // Not for one already closing: the turn waits for it below, then looks
     // for the new one.
-    else if (rt.session && !rt.closing && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(live && !('failed' in live) ? live : undefined, rec.cwd, claudeOptions(rec))).trusted) this.releaseSession(st);
+    else if (runningSession(rt) && rec.provider === 'claude' && Boolean(rt.claudeSkipped) === this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec), lookFor(live && !('failed' in live) ? live : undefined, rec.cwd, claudeOptions(rec))).trusted) this.releaseSession(st);
     // Never two live CLIs on one session: wait for a releasing one to exit.
     while (rt.closing) await rt.closing;
     // An archive's worktree cleanup still running: where this turn starts
@@ -2487,7 +2488,7 @@ export class Runner {
   }
 
   makeRoomForCli(starting: ThreadState): void {
-    const live = [...this.threads.values()].filter((t) => t !== starting && t.rt.session && !t.rt.closing);
+    const live = [...this.threads.values()].filter((t) => t !== starting && runningSession(t.rt));
     if (live.length < this.cfg.maxLive) return;
     const idle = live
       .filter((t) => !t.rt.turn && t.rt.approvals.size === 0 && t.rec.queue.length === 0 && t.rt.tasks.length === 0)
@@ -3227,7 +3228,7 @@ export class Runner {
     if (rt.taskEndedInTurn) {
       rt.taskEndedInTurn = false;
       // Only while the CLI is there to start that turn.
-      if (rt.session && !rt.closing && !this.stopping) this.startWakeGrace(st);
+      if (runningSession(rt) && !this.stopping) this.startWakeGrace(st);
     }
     rt.activeAt = this.clock.now();
     rec.turnId = undefined;
@@ -3470,10 +3471,10 @@ export class Runner {
     }
     turn.interruptRequested = true;
     this.expireApprovals(st, 'Interrupted.', closing);
-    const session = rt.session;
+    const session = runningSession(rt);
     // Nothing is running in the CLI for a turn that was only opened for a
     // background subagent's approval, so nothing would end it.
-    if (!session || rt.closing || (turn.auto && !turn.cliStarted)) {
+    if (!session || (turn.auto && !turn.cliStarted)) {
       this.failTurn(st, 'Interrupted.');
       return {};
     }
@@ -3607,8 +3608,8 @@ export class Runner {
       if (rec.sessionUsed || rt.session) rec.moved ??= { fromCwd: rec.cwd };
       rec.cwd = newCwd!;
       if (rec.moved?.fromCwd === rec.cwd) delete rec.moved;
-      const session = rt.session;
-      if (session && !rt.closing) {
+      const session = runningSession(rt);
+      if (session) {
         const gen = rt.generation;
         const fallback = () => {
           // Couldn't move the live session: a fresh CLI resumes there,
