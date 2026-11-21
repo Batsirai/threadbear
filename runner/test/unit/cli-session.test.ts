@@ -235,6 +235,7 @@ const STATES: Record<string, () => F> = {
   liveTasks: () => walk('beginFresh', 'spawnedA', 'version', 'tasks'),
   liveRetried: () => walk('beginResume', 'spawnedA', 'exited', 'retryFresh', 'beginFresh', 'spawnedB'),
   closing: () => walk('beginFresh', 'spawnedA', 'version', 'release'),
+  closingUnstarted: () => walk('beginFresh', 'spawnedA', 'release'),
   closingHard: () => walk('beginFresh', 'spawnedA', 'version', 'tasks', 'release'),
   closingExited: () => walk('beginFresh', 'spawnedA', 'version', 'release', 'exited'),
   closingTasksAfter: () => walk('beginFresh', 'spawnedA', 'version', 'release', 'tasks'),
@@ -257,7 +258,7 @@ const STATES: Record<string, () => F> = {
 const KINDS: Record<string, string> = {
   fresh: 'none', spare: 'spare', afterBegin: 'none', starting: 'starting', startingResumed: 'starting', startingFromSpare: 'starting',
   live: 'live', liveLeave: 'live', liveVersionMove: 'live', liveTasks: 'live', liveRetried: 'starting',
-  closing: 'closing', closingHard: 'closing', closingExited: 'closing', closingTasksAfter: 'closing', closingLeave: 'closing',
+  closing: 'closing', closingUnstarted: 'closing', closingHard: 'closing', closingExited: 'closing', closingTasksAfter: 'closing', closingLeave: 'closing',
   released: 'none', closedFirst: 'none', closedFirstTasks: 'none', crashed: 'none', crashedLeave: 'none', noneLeave: 'none',
   dropped: 'none', droppedClosing: 'closing', spareBesideLive: 'live', spareBesideClosing: 'closing', twoStarts: 'starting',
 };
@@ -292,6 +293,20 @@ test('the readers see what the checks by hand saw, in every state', () => {
     const rt = make();
     assert.deepEqual(readers(rt), readersByHand(rt), name);
     assert.equal(cliKind(rt), cliOf(rt).kind, name);
+  }
+});
+
+// deliver's first release check read rt.session alone, so it also asked a
+// closing CLI to go; it reads runningSession now. That only holds while a
+// release of a closing CLI that still has its session does nothing.
+test('a release asked of a CLI already closing with its session does nothing', () => {
+  for (const [name, make] of Object.entries(STATES)) {
+    const rt = make();
+    if (!(rt.session && rt.closing)) continue;
+    const before = norm(rt);
+    const res = cliRuntime(rt, { kind: 'release', done: done('again') });
+    assert.ok(res.ok && !res.out.end, name);
+    assert.deepEqual(norm(rt), before, name);
   }
 });
 

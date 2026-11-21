@@ -256,6 +256,9 @@ export function runningSession(rt: CliFields): AgentSession | undefined {
 // nowhere). The one answer to "is this still my CLI", for the steps that
 // waited on it (its output, an approval it asked for, a compaction sent
 // to it), each of which used to check the generation and rt.closing itself.
+// `current` is about the generation only, not that a CLI is running: it
+// holds in none and spare too (a spare's held output replays between begin
+// and spawned). Use runningSession for "is there one to send to".
 export type CliHears = 'current' | 'closing' | 'stale';
 export function cliHears(rt: CliFields, gen: number): CliHears {
   if (gen !== rt.generation) return 'stale';
