@@ -236,7 +236,16 @@ these strings, written from it. Its one state runners don't see is
   off), folder, login, mode or runner. The thread's `allowRules` ("Always
   allow" answers), its reply buttons and an open card's commands are
   dropped too (as it's placed, and again as it's adopted): asked or made
-  again on T. On the main Mac (the owner key), a thread from another
+  again on T. Its design reviews, in the record and in `events.ndjson`'s
+  `review.updated` events (which the apps draw cards from, and which
+  `recoverReviews` reads back), keep only files that came in the bundle as
+  `<thread id>/media/reviews/<review id>/<name>` (or a page's
+  `<folder>/<name>`), regular files, not links, rewritten to T's own copy:
+  any other path goes, a shot with no picture left goes, an option with
+  none goes, and a review with no options left goes (a `system.note` takes
+  its event's place, so seqs stay gapless). A note's links to anything but
+  a web page become words, and `url` is kept only when it's http(s)
+  (Daybreak 159). On the main Mac (the owner key), a thread from another
   runner arrives with at most Ask: Full or Auto becomes Ask, and so does
   the mode Plan first would go back to, with a line in its note saying
   what it had (Mike, 10 Nov 2026: the mode is that runner's word, and the

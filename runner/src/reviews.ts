@@ -117,15 +117,100 @@ export function reviewInput(raw: unknown, cwd: string): { title: string; note?: 
   return { title, ...(note ? { note } : {}), ...(recommended ? { recommended } : {}), options };
 }
 
+// Where a moved thread's media is: `now`, the folder that came with the move
+// as it is (staging, or the live folder), and `final`, this thread's media
+// folder here, which `now` becomes.
+export type MovedMedia = { threadId: string; now: string; final: string };
+
+// A moved review's file, as this thread's copy here: only one that came with
+// the move, as `<thread id>/media/reviews/<review id>/<name>` (or a page's
+// `<folder>/<name>`) at any runner's path, a real file in `now` with real
+// folders on the way, never a link. Anything else is undefined: a path alone
+// is the other runner's word, and an extra Mac could name any file on this
+// one with it, which the review window would read as this Mac's once the
+// thread is here (Daybreak 159, 21 Nov 2026).
+function movedReviewFile(file: unknown, reviewId: string, media: MovedMedia): string | undefined {
+  if (typeof file !== 'string' || file.includes('\0')) return undefined;
+  if (!/^[a-zA-Z0-9-]{1,200}$/.test(reviewId)) return undefined;
+  const parts = file.replace(/\\/g, '/').split('/');
+  let at = -1;
+  for (let i = parts.length - 5; i >= 0; i--) {
+    if (parts[i] === media.threadId && parts[i + 1] === 'media' && parts[i + 2] === 'reviews' && parts[i + 3] === reviewId) {
+      at = i + 4;
+      break;
+    }
+  }
+  if (at < 0) return undefined;
+  const rest = parts.slice(at);
+  if (rest.length < 1 || rest.length > 2 || rest.some(p => !p || p === '.' || p === '..' || p.length > 255)) return undefined;
+  try {
+    let dir = media.now;
+    for (const seg of ['reviews', reviewId, ...rest.slice(0, -1)]) {
+      dir = path.join(dir, seg);
+      if (!fs.lstatSync(dir).isDirectory()) return undefined;
+    }
+    if (!fs.lstatSync(path.join(dir, rest.at(-1)!)).isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return path.join(media.final, 'reviews', reviewId, ...rest);
+}
+
+// The ImageRef as this thread's copy (movedReviewFile), or undefined.
+function movedRef(ref: unknown, reviewId: string, media: MovedMedia): ImageRef | undefined {
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return undefined;
+  const here = movedReviewFile((ref as ImageRef).path, reviewId, media);
+  return here ? { ...(ref as ImageRef), path: here } : undefined;
+}
+
+// A moved note's links, but for web pages, as their words: the review window
+// opens a note's link on this Mac, relative to the thread's folder here, and
+// the other runner's agent wrote them (Daybreak 159). Every [ that doesn't
+// start a web link is escaped, so no pairing of brackets the window's parser
+// finds makes one; an escape already there (a backslash and punctuation, as
+// the parser reads it) stays as it is, so doing it again changes nothing.
+const WEB_LINK = /\[[^[\]\\]*\]\(\s*https?:\/\/[^\s()\\]*\s*\)/iy;
+export function webLinksOnly(note: string): string {
+  let out = '';
+  for (let i = 0; i < note.length; ) {
+    const ch = note[i]!;
+    if (ch === '\\' && i + 1 < note.length && /[!-/:-@[-`{-~]/.test(note[i + 1]!)) {
+      out += note.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (ch === '[') {
+      WEB_LINK.lastIndex = i;
+      const m = WEB_LINK.exec(note);
+      if (m) {
+        out += m[0];
+        i += m[0].length;
+        continue;
+      }
+      out += '\\[';
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 // A stored review cut to what reviewInput and reviewDraft take, for one this
 // runner didn't make: a moved thread's reviews are the other runner's word
 // (runner/moves.ts fitMovedReviews). Its words are cut rather than refused,
-// so a review that fits is kept exactly. Undefined for something that isn't
-// a review.
-export function fitReview(raw: unknown): DesignReview | undefined {
+// so a review that fits keeps its words exactly. Its files are this thread's
+// copies of the ones that came with the move (movedReviewFile); a shot with
+// none goes, an option with none left goes, and a review with no options
+// left goes. Undefined for something that isn't a review. `replies` keeps
+// the draft's and response's pictures, for a review recoverReviews reads
+// from the thread's log, which ownReplyImages checks itself.
+export function fitReview(raw: unknown, media: MovedMedia, replies = false): DesignReview | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const r = { ...(raw as Record<string, any>) };
   if (typeof r.id !== 'string' || !Array.isArray(r.options)) return undefined;
+  const reviewId = r.id;
   const cut = (v: unknown, max: number) => (typeof v === 'string' ? cutText(v, max) : undefined);
   const set = (o: Record<string, any>, key: string, max: number) => {
     if (o[key] === undefined) return;
@@ -136,15 +221,41 @@ export function fitReview(raw: unknown): DesignReview | undefined {
   set(r, 'title', 200);
   set(r, 'note', 4000);
   set(r, 'recommended', 200);
+  if (typeof r.note === 'string') r.note = webLinksOnly(r.note);
   r.options = r.options.slice(0, 12).flatMap((raw: unknown) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
     const o = { ...(raw as Record<string, any>) };
+    if (typeof o.id !== 'string') return [];
     set(o, 'title', 200);
     set(o, 'note', 4000);
     set(o, 'url', 2000);
-    if (Array.isArray(o.shots)) o.shots = o.shots.slice(0, maxReviewShots);
+    if (typeof o.note === 'string') o.note = webLinksOnly(o.note);
+    // Open live is for a web page only, as show_options takes.
+    if (o.url !== undefined && !/^https?:\/\/\S+$/i.test(o.url)) delete o.url;
+    if (Array.isArray(o.shots)) {
+      o.shots = o.shots.slice(0, maxReviewShots).flatMap((raw: unknown) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+        const shot: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+        const image = movedRef(shot.image, reviewId, media);
+        if (!image) return [];
+        shot.image = image;
+        // Without its video or page, the shot is its still.
+        if (shot.media !== undefined) {
+          const m = movedRef(shot.media, reviewId, media);
+          if (m) shot.media = m;
+          else delete shot.media;
+        }
+        return [shot];
+      });
+      if (!o.shots.length) delete o.shots;
+    } else delete o.shots;
+    o.image = movedRef(o.image, reviewId, media) ?? o.shots?.[0]?.image;
+    if (!o.image) return [];
     return [o];
   });
+  if (!r.options.length) return undefined;
+  const ids = new Set<string>(r.options.map((o: { id: string }) => o.id));
+  if (r.recommended !== undefined && !ids.has(r.recommended)) delete r.recommended;
   for (const key of ['draft', 'response'] as const) {
     const d = r[key];
     if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
@@ -153,16 +264,21 @@ export function fitReview(raw: unknown): DesignReview | undefined {
     // A reply's pictures name the other runner's files, which an extra Mac
     // could point anywhere on this one (Codex's review, 17 Nov): they don't
     // come with the move, and the words say so where they were.
-    if (Array.isArray(draft.images) && typeof draft.reply === 'string') draft.reply = keepPictureMarkers(draft.reply, draft.images.map(() => false));
-    delete draft.images;
+    if (!replies) {
+      if (Array.isArray(draft.images) && typeof draft.reply === 'string') draft.reply = keepPictureMarkers(draft.reply, draft.images.map(() => false));
+      delete draft.images;
+    }
     if (draft.notes && typeof draft.notes === 'object' && !Array.isArray(draft.notes)) {
       const notes: Record<string, string> = Object.create(null);
       for (const [id, note] of Object.entries(draft.notes).slice(0, 12)) {
         const fitted = cut(note, 4000);
-        if (fitted !== undefined) notes[id] = fitted;
+        if (fitted !== undefined && ids.has(id)) notes[id] = fitted;
       }
       draft.notes = { ...notes };
     }
+    // Picks of options that didn't come go with them.
+    if (Array.isArray(draft.pickedIds)) draft.pickedIds = draft.pickedIds.filter((id: unknown) => typeof id === 'string' && ids.has(id));
+    if (draft.pickedId !== undefined && !ids.has(draft.pickedId)) delete draft.pickedId;
     r[key] = draft;
   }
   return r as DesignReview;
