@@ -23,6 +23,10 @@ export const ERROR_QUIET_MS = 60 * 60_000;
 // anyway: a stop that hangs (a write that never returns, a second error
 // mid-shutdown) must not leave a runner that serves nothing.
 export const ERROR_STOP_DEADLINE_MS = 30_000;
+// How long the restart after an error may take to begin (a stop, or a
+// handover's new runner starting) before the runner stops instead. A
+// handover first waits up to 3 minutes for a mail look to finish.
+export const ERROR_LEAVE_DEADLINE_MS = 5 * 60_000;
 // Exit code for a runner nothing restarts (a dev runner): EX_SOFTWARE, so
 // dev-runner.sh stops and keeps its data dir rather than starting it again.
 export const ERROR_EXIT_CODE = 70;

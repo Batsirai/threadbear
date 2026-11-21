@@ -104,7 +104,7 @@ import { machineIcon } from './machine.ts';
 import { filesMethods } from './files.ts';
 import { devicesMethods } from './devices.ts';
 import { flushSentry, reportException, reportLoggedError, reportLoggedWarning, startSentry } from './sentry.ts';
-import { ERROR_EXIT_CODE, ERROR_STOP_DEADLINE_MS, decideErrorExit, errorMode, guardHolds, guardNotice, readErrorExits, takeErrorEnv, testThrow, writeErrorExits } from './error-exits.ts';
+import { ERROR_EXIT_CODE, ERROR_LEAVE_DEADLINE_MS, ERROR_STOP_DEADLINE_MS, decideErrorExit, errorMode, guardHolds, guardNotice, readErrorExits, takeErrorEnv, testThrow, writeErrorExits } from './error-exits.ts';
 import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
 import { CrossRunner } from './cross-runner.ts';
 import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
@@ -174,7 +174,8 @@ async function main(): Promise<void> {
   // code it exits with (a dev runner's says not to start it again).
   const errorEnv = takeErrorEnv(process.env);
   let errorExits = readErrorExits(cfg.home, RELEASE.release);
-  let markedGood = false;
+  // A handover after an error got as far as launch.mjs starting the new runner.
+  let newRunnerUp = false;
   let leavingAfterError = false;
   let exitCode = 0;
   let stopDeadline: NodeJS.Timeout | undefined;
@@ -1719,7 +1720,6 @@ async function main(): Promise<void> {
   // data dir only: a dev runner's threads aren't the ones that borrowed.
   const stopBorrowSweep = cfg.home === defaultHome() && !box ? startBorrowSweep(runner, log) : () => {};
   const cancelMarkGood = markGoodLater(cfg.home, RELEASE.release, log, process.env, () => {
-    markedGood = true;
     restarter.proven();
     // A box never updates itself or anything else: a new release is a new image.
     if (box) return;
@@ -1784,8 +1784,7 @@ async function main(): Promise<void> {
     log.info('runner stopping', { signal });
     // Whatever stopped it, a pending restart has now happened. A draining
     // runner's restart was the handover, which the new runner has taken.
-    // Leaving after an error with a failing code isn't a clean stop.
-    if (!draining) restarter.stopping(!(leavingAfterError && exitCode !== 0));
+    if (!draining) restarter.stopping();
     // A restart "now" stops the draining runners too (docs/protocol.md).
     if (signal === 'restart' && restarter.status().pendingRestart?.when === 'now') await peers.stopAll();
     peers.close();
@@ -1962,6 +1961,7 @@ async function main(): Promise<void> {
       return;
     }
     log.info('the new runner is starting', { pid: reply.pid });
+    newRunnerUp = true;
     if (runner.keeping()?.length === 0) finishDrain();
   };
   // Every kept thread has gone across: nothing left to do here.
@@ -2018,6 +2018,8 @@ async function main(): Promise<void> {
     // a deadline now.
     if (stopping) {
       leavingAfterError = true;
+      // A dev runner's code says not to start it again, whatever stop it was.
+      if (mode === 'exit') exitCode = ERROR_EXIT_CODE;
       armStopDeadline();
       log.warn('an uncaught error while stopping; the stop goes on');
       return;
@@ -2030,34 +2032,26 @@ async function main(): Promise<void> {
       log.warn('an uncaught error while finishing turns after a handover; the handover goes on');
       return;
     }
-    // A handover already on its way (waiting for a mail look to finish):
-    // the runner is leaving, so this error is no new restart.
-    if (mailFirst) {
-      leavingAfterError = true;
-      log.warn('an uncaught error while a handover starts; the handover goes on');
+    // Already leaving (this error's restart or a deploy's, under way or
+    // about to hand over): no new restart, and no stop that would cut the
+    // turns a handover keeps. A leave that hangs has its own deadline.
+    if (leavingAfterError || mailFirst || restarter.underway) {
+      log.warn('an uncaught error while the runner is already restarting; the restart goes on');
       return;
     }
-    // A second error before the handover or stop has begun: stop now. Busy
-    // threads are cut off and carried on by the next runner, as after
-    // `tb restart --now`.
-    if (leavingAfterError) {
-      log.error('another uncaught error while leaving after one; stopping now');
-      void stop('restart');
-      return;
-    }
-    leavingAfterError = true;
     // A dev runner stops whatever the count, so the error is seen.
     if (mode === 'exit') {
+      leavingAfterError = true;
       exitCode = ERROR_EXIT_CODE;
       log.error(`exiting after an uncaught error with code ${ERROR_EXIT_CODE}: a dev runner, so nothing starts it again`);
       void stop('uncaught error');
       return;
     }
     const d = decideErrorExit(errorExits, Date.now());
-    errorExits = d.state;
     let saved = true;
     try {
       writeErrorExits(cfg.home, d.state);
+      errorExits = d.state;
     } catch (err) {
       saved = false;
       log.warn('could not save run/error-exits.json', { error: String(err) });
@@ -2065,7 +2059,6 @@ async function main(): Promise<void> {
     // Uncounted, a restart could loop for ever: launch.mjs doesn't count
     // clean exits either. So no count, no restart.
     if (!d.exit || !saved) {
-      leavingAfterError = false;
       if (!saved) log.warn("carrying on after an uncaught error: the restart guard's count couldn't be saved");
       else if (d.tripped) {
         log.warn('stopped restarting for uncaught errors: too many restarts for them lately; carrying on until an hour passes without one', { restarts: d.state.exits.length });
@@ -2073,15 +2066,24 @@ async function main(): Promise<void> {
       } else log.warn('carrying on after an uncaught error: the restart guard holds', { errors: d.state.tripped?.errors });
       return;
     }
-    // A release not yet marked good exits 1, which launch.mjs counts as a
-    // failed start, so a release that keeps hitting an error in its first
-    // minute goes back to the last good one, as one that crashes does.
-    if (RELEASE.release && !markedGood) exitCode = 1;
-    log.warn('restarting after an uncaught error', { restarts: d.state.exits.length, ...(exitCode ? { exitCode, why: 'not marked good yet' } : {}) });
+    leavingAfterError = true;
+    log.warn('restarting after an uncaught error', { restarts: d.state.exits.length });
     // runner.restart's own path, as a deploy's: busy threads finish their
     // turns here while launch.mjs starts the new runner beside it (a
-    // handover), and with none busy it stops and is started again.
+    // handover), and with none busy it stops and is started again. Exit 0,
+    // as a planned restart: launch.mjs starts it again in half a second on
+    // every platform, where a failing code leaves it to launchd, systemd or
+    // the Scheduled Task (a minute on Windows); the guard above stands in
+    // for launch.mjs's crash count.
     restarter.request({ when: 'idle', reason: 'An unexpected error (see the runner log)' });
+    // A handover that never gets as far as starting the new runner (a CLI
+    // that won't let go, a mail look past its time) would leave this
+    // process holding the port with its services stopped: stop instead.
+    setTimeout(() => {
+      if (stopping || newRunnerUp) return;
+      log.error(`the restart after an uncaught error hadn't begun after ${ERROR_LEAVE_DEADLINE_MS / 60_000} minutes; stopping now`);
+      void stop('restart');
+    }, ERROR_LEAVE_DEADLINE_MS).unref();
   };
   process.on('uncaughtException', (e) => onUncaught('uncaught exception', e));
   process.on('unhandledRejection', (e) => onUncaught('unhandled rejection', e));

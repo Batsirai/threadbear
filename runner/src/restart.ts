@@ -481,16 +481,19 @@ export class Restarter {
     this.defer(() => this.deps.restart());
   }
 
+  // A restart or handover has begun (main.ts: an uncaught error then is no
+  // reason for another).
+  get underway(): boolean {
+    return this.restarting;
+  }
+
   // main.ts calls this whenever the runner stops, whatever stopped it
   // (launchctl kickstart, a reboot, the restart itself). A pending restart
   // counts as done from here, so a resume's age starts now rather than when
   // the restart was first asked for.
-  // `clean: false`: leaving after an uncaught error before the release was
-  // marked good, which launch.mjs counts as a failed start, so the restart
-  // this runner handled may need handling again on the last good release.
-  stopping(clean = true): void {
+  stopping(): void {
     // Stopping cleanly isn't crashing: the restart this runner handled is done.
-    if (clean) this.proven();
+    this.proven();
     if (!this.pending || this.pending.shutdownAt) return;
     this.pending.shutdownAt = this.isoNow();
     this.save();

@@ -233,17 +233,21 @@ exactly as after a deploy. Under the same release, as nothing changed.
   each hello while it holds), and the log says "stopped restarting for
   uncaught errors". An hour without an uncaught error clears it. If the
   count can't be saved it carries on rather than restart uncounted.
-- A release not yet marked good (its first minute) exits 1 rather than 0,
-  so `launch.mjs` counts it as a failed start and three of them roll back
-  to the last good release, as a crash would. After that it exits 0, which
-  `launch.mjs` doesn't count.
-- Deadlines and second errors: once the stop after an error begins it has
-  30 s before the process exits anyway. A second error before the handover
-  or stop has begun stops it at once (busy turns end and are carried on, as
-  after `tb restart --now`); one while a handover is starting or its turns
-  are finishing is only logged, as the new runner already serves the rest
-  and stopping would cut those turns; one while stopping arms the deadline.
-  The drain itself is a deploy's, with a deploy's limits.
+- It exits 0, as a planned restart, so `launch.mjs` starts it again in half
+  a second; a failing code would leave that to launchd, systemd or the
+  Scheduled Task (a minute on Windows), and lose the resumes a crash
+  rollback replays. So `launch.mjs` doesn't count these restarts, and the
+  guard stands in for its crash count: a release that hits an error in its
+  first minute every time restarts three times and then carries on, rather
+  than going back to the last good release.
+- Deadlines and second errors: the restart has 5 minutes to begin (a stop,
+  or a handover's new runner starting) before the runner stops instead, and
+  once the stop begins it has 30 s before the process exits anyway. A
+  second error while it's already restarting (this error's restart or a
+  deploy's), handing over or finishing kept turns is only logged: the new
+  runner already serves the rest, and stopping would cut those turns and
+  drop their queued messages. One while stopping arms the deadline. The
+  drain itself is a deploy's, with a deploy's limits.
 
 ## A dev runner
 
