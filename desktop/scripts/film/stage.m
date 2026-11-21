@@ -101,11 +101,13 @@ int main(int argc, char **argv) {
     // Only the display that took its settings may end the stage when it goes:
     // one dropped after a refusal can say it's gone at any time.
     static int live = -1;
-    CGVirtualDisplay *display = nil;
-    NSTimeInterval began = NSProcessInfo.processInfo.systemUptime, took = 0;
+    // Precise: ARC could otherwise let it go after its last use, and the
+    // display goes with it.
+    __attribute__((objc_precise_lifetime)) CGVirtualDisplay *display = nil;
+    NSTimeInterval began = NSProcessInfo.processInfo.systemUptime;
     int tries = 0;
     BOOL woke = NO, made = NO;
-    while (!made && (took = NSProcessInfo.processInfo.systemUptime - began) < 20) {
+    while (!made && NSProcessInfo.processInfo.systemUptime - began < 20) {
       if (active) IOPMAssertionRelease(active);
       active = 0;
       if (IOPMAssertionCreateWithName(CFSTR("UserIsActive"), kIOPMAssertionLevelOn, CFSTR("Threadbear filming stage"), &active) ==
@@ -145,7 +147,8 @@ int main(int argc, char **argv) {
       return 1;
     }
     if (tries > 1)
-      say([NSString stringWithFormat:@"made the display on try %d, %.1f seconds after waking the screen", tries, took]);
+      say([NSString stringWithFormat:@"made the display on try %d, after %.1f seconds%@", tries,
+                                     NSProcessInfo.processInfo.systemUptime - began, woke ? @" (woke the screen for it)" : @""]);
     CGDirectDisplayID id_ = display.displayID;
 
     // The window, once the app has one and the display has its mode.
