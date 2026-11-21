@@ -19,7 +19,8 @@
 #                 desktop app's Rust tests and build (desktop/), and the
 #                 Swift Mac app's swift build and swift test, and BearDock's
 #                 tests, when they changed (below)
-#   --quick       runner typecheck and unit tests (about a minute), plus
+#   --quick       runner typecheck and unit tests (all but the slow tooling
+#                 tests nothing they read changed: runner/test/tooling-tests.mjs), plus
 #                 the Swift Mac app's release build when it changed,
 #                 the desktop app's core and client tests when
 #                 desktop/ changed, the public site's build (site/)
@@ -437,11 +438,23 @@ runner_unit_tests() {
       return
     fi
   fi
+  # --quick (tb land's check) leaves out the slow tooling tests when nothing
+  # they read changed (runner/test/tooling-tests.mjs says which and how).
+  local left=()
+  if [ "$QUICK" = 1 ] && [ "$ALL" = 0 ] && [ -n "$CHANGED" ] && [ "$asked" = "${asked#*=}" ]; then
+    while IFS= read -r f; do [ -n "$f" ] && left+=("$f"); done < <(printf '%s\n' "$CHANGED" | node "$dir/test/tooling-tests.mjs" "$ROOT" 2>/dev/null || true)
+    if [ "${#left[@]}" -gt 0 ]; then
+      targets=()
+      while IFS= read -r f; do
+        case " ${left[*]} " in *" $f "*) ;; *) targets+=("$f") ;; esac
+      done < <(cd "$dir" && find test/unit -name '*.test.ts' -type f | LC_ALL=C sort)
+    fi
+  fi
   local run=(node --import=./test/helpers/clean-env.ts --test --test-timeout=300000 --test-force-exit --test-reporter=spec)
   if (cd "$dir" && "${run[@]}" --test-reporter-destination=stdout \
       --test-reporter=./test/helpers/failed-files-reporter.mjs --test-reporter-destination="$list" \
       "${targets[@]}") >"$log" 2>&1; then
-    printf 'ok    %-20s %4ss\n' "$name" "$((SECONDS - start))"
+    printf 'ok    %-20s %4ss%s\n' "$name" "$((SECONDS - start))" "${left[0]:+  (left out ${#left[@]} tooling test files nothing they read changed)}"
     return
   fi
   local files=()
@@ -504,6 +517,7 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
   # Old problems fixed by hand don't fail it (--pass-on-unpruned-suppressions):
   # `npx eslint . --prune-suppressions` tidies the file whenever.
   # grep to /dev/null, not -q (see swift_needed).
+  lint_before="$FAILED"
   if [ "$ALL" = 1 ] || [ -z "$CHANGED" ] \
     || printf '%s\n' "$CHANGED" | grep -E '^(eslint\.config\.mjs|eslint-suppressions\.json|package(-lock)?\.json)$' >/dev/null; then
     # Node's own heap limit (about 2 GB) is under what the whole lint takes,
@@ -519,6 +533,12 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
     else
       skip "lint" "no code changed"
     fi
+  fi
+  # One problem over a file's count in eslint-suppressions.json brings back
+  # every old one of that rule in the file, so a single new `any` read as
+  # dozens (Ville, 22 Nov). The log says so.
+  if [ "$FAILED" != "$lint_before" ] && [ -f "$LOGS/lint.log" ]; then
+    printf '\nA file over its count in eslint-suppressions.json shows every old problem of that rule in it, not just the new one.\nFix the one this change added (git diff shows which); the rest were there before. Never hand-edit the file: npx eslint <file> --suppress-rule <rule> records one that must stay.\n' >>"$LOGS/lint.log"
   fi
   # The public site (site/) makes its docs pages from docs/guide.md (and the
   # experiments list from docs/experiments.md), and its build refuses some
@@ -629,13 +649,38 @@ cargo_step() {
   step "$name" "$ROOT/desktop" "${LIMITED[@]}" "$CARGO" "$@"
   [ -z "$record" ] || [ "$FAILED" != "$before" ] || mv "$sums" "$record"
 }
+# The cargo for desktop/: the first on the PATH, unless it says it's another
+# version than rust-toolchain.toml pins and rustup's is here. Homebrew's
+# cargo ignores the pin, and its newer clippy failed code nobody had changed
+# (Ville, 22 Nov). Only a cargo that names another version is passed over,
+# so a stand-in that names none (the tests' fakes) is still used.
+pick_cargo() {
+  local c v pin r=""
+  c="$(command -v cargo || true)"
+  [ -n "$c" ] || [ ! -x "$HOME/.cargo/bin/cargo" ] || c="$HOME/.cargo/bin/cargo"
+  [ -n "$c" ] || return 0
+  pin="$(sed -n 's/^channel *= *"\([0-9][0-9.]*\)".*/\1/p' "$ROOT/rust-toolchain.toml" 2>/dev/null)"
+  v="$(cd "$ROOT/desktop" 2>/dev/null && "$c" --version 2>/dev/null | sed -n 's/^cargo \([0-9][0-9.]*\).*/\1/p')"
+  if [ -n "$pin" ] && [ -n "$v" ] && [ "$v" != "$pin" ]; then
+    if [ -x "$HOME/.cargo/bin/rustup" ] && [ -x "$HOME/.cargo/bin/cargo" ]; then
+      r="$HOME/.cargo/bin/cargo"
+    else
+      r="$(command -v rustup || true)"
+      # Homebrew's rustup links into bin/ and keeps its cargo beside the real one.
+      [ -z "$r" ] || r="$(realpath "$r" 2>/dev/null || echo "$r")"
+      if [ -n "$r" ] && [ -x "${r%/*}/cargo" ]; then r="${r%/*}/cargo"; else r=""; fi
+    fi
+    if [ -n "$r" ]; then echo "$r"; return; fi
+    printf 'note  %s is cargo %s, not the %s rust-toolchain.toml pins, and there is no rustup: rustup.rs installs it\n' "$c" "$v" "$pin" >&2
+  fi
+  echo "$c"
+}
 # desktop/'s Rust as cargo fmt writes it (desktop/rustfmt.toml, with the
 # rustfmt of rust-toolchain.toml), --quick included: no build, a few seconds,
 # so it runs wherever this does, this Mac included. The log ends with the fix.
 if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
   if needed '^desktop/|^rust-toolchain\.toml$'; then
-    FMT_CARGO="$(command -v cargo || true)"
-    [ -n "$FMT_CARGO" ] || [ ! -x "$HOME/.cargo/bin/cargo" ] || FMT_CARGO="$HOME/.cargo/bin/cargo"
+    FMT_CARGO="$(pick_cargo)"
     if [ -n "$FMT_CARGO" ]; then
       step "desktop format" "$ROOT/desktop" bash -c '"$1" fmt --all -- --check && exit 0
         printf "\ndesktop/ is not formatted as cargo fmt writes it (the diff is above).\nFix: cd desktop && cargo fmt --all, then commit what it changed.\n"
@@ -674,8 +719,24 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
       printf 'skip  %-20s (%s)\n' "desktop core tests" "$why"
     fi
   else
-    CARGO="$(command -v cargo || true)"
-    [ -n "$CARGO" ] || [ ! -x "$HOME/.cargo/bin/cargo" ] || CARGO="$HOME/.cargo/bin/cargo"
+    CARGO="$(pick_cargo)"
+    # On a Mac with no check host (anyone else's copy), each worktree built
+    # desktop/ from cold in a target of its own: minutes a check and gigabytes
+    # a worktree (Ville, 21 Nov). So these go through the shared targets a
+    # check host's builds use (desktop/scripts/shared-cargo/cargo says how and
+    # why it copies first): one warm target in ~/.cache/threadbear-check, the
+    # checks taking turns. Not on a check host, whose runs set their own.
+    if [ -n "$CARGO" ] && [ -z "${THREADBEAR_CHECK_CHANGED_FILE:-}" ] && [ -z "${THREADBEAR_SHARED_CARGO_BASE:-}" ] \
+      && [ -x "$ROOT/desktop/scripts/shared-cargo/cargo" ]; then
+      export THREADBEAR_SHARED_CARGO_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/threadbear-check/local-builds"
+      export THREADBEAR_SHARED_CARGO_SRC="$ROOT" THREADBEAR_SHARED_CARGO_KEY="${ROOT##*/}"
+      # The wrapper runs this one, not whichever cargo the PATH finds first.
+      export THREADBEAR_SHARED_CARGO_REAL="$CARGO"
+      # After the pinned node, not before it: cargo's folder can hold
+      # another node (Homebrew's, the system's).
+      export PATH="$PATH:${CARGO%/*}"
+      CARGO="$ROOT/desktop/scripts/shared-cargo/cargo"
+    fi
     # The client's tests start the mock runner, which needs its packages.
     if [ -n "$CARGO" ] && [ ! -d "$ROOT/mock-runner/node_modules" ]; then
       step "mock runner packages" "$ROOT/mock-runner" npm ci --no-audit --no-fund

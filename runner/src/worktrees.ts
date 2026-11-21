@@ -1769,7 +1769,24 @@ async function landLocked(
       await back();
       return fail(`Couldn't read the repo's patches for its check: ${(e as Error).message}`);
     }
-    if (check) {
+    // Nothing to check when this landing changes no file from main (a
+    // commit with only a trailer, say): a check of main's own tree finds
+    // nothing new and cost a fork 10 to 30 minutes a time (Ville, 21 Nov).
+    // No line in the times log either, as the updater takes a passing one as
+    // proof the tests ran on that commit.
+    // `check` itself stays set: pushMain checks a merge with GitHub's main
+    // by it (Gemini's review). And a git that answers neither question never
+    // counts as the same tree.
+    let skipCheck = false;
+    if (check && !group.length && !opts.dryRun) {
+      const ownTree = await gitOut(t.path, ['rev-parse', `${checked}^{tree}`]);
+      const mainTree = await gitOut(t.path, ['rev-parse', `${main}^{tree}`]);
+      if (ownTree && /^[0-9a-f]{40,64}$/.test(ownTree) && ownTree === mainTree) {
+        out('No file changes from main, so it lands without the check.');
+        skipCheck = true;
+      }
+    }
+    if (check && !skipCheck) {
       out(group.length
         ? `Running the check, together with ${together.join(', ')}: ${check}`
         : `Running the check: ${check}`);

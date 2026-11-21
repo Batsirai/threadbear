@@ -264,6 +264,26 @@ test("land never rebases a branch with a merge on it (Mike's release), so his co
   assert.ok(fs.existsSync(path.join(main, 'other.txt')) && fs.existsSync(path.join(main, 'more.txt')));
 });
 
+test('land: a commit that changes no file lands without running the check', async () => {
+  // Ville's fork, 21 Nov: an empty commit (a trailer only) waited for a full
+  // check that couldn't find anything.
+  const { main } = makeRepo();
+  const t = makeBranch(main);
+  sh(t.path, 'git commit -q --allow-empty -m "Ports: nothing changes"');
+  const c = capture();
+  assert.equal(await land({ ...t, check: 'echo ran > ../check-ran; exit 1' }, c.opts), 0, c.err.join('\n'));
+  assert.equal(c.out[0], 'No file changes from main, so it lands without the check.');
+  assert.equal(c.out[1], `Landed on main in ${main}:`);
+  assert.ok(!fs.existsSync(path.join(t.path, '..', 'check-ran')), 'the check never ran');
+  assert.equal(sh(main, 'git log -1 --format=%s main'), 'Ports: nothing changes');
+
+  // A commit that changes something still runs it.
+  commit(t.path, { 'runner/b.ts': '2\n' }, 'Add b');
+  const again = capture();
+  assert.equal(await land({ ...t, check: 'exit 3' }, again.opts), 1);
+  assert.match(again.err.join('\n'), /The check failed \(exit 3\)/);
+});
+
 test('land: a failing check stops it with the last lines of output, and main stays put', async () => {
   const { main } = makeRepo();
   const t = makeBranch(main);

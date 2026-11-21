@@ -318,6 +318,13 @@ File references are where to look.
   stopping the `tb` can't stop a check partway: it writes its output to a
   `tb-land-*` folder under `$TMPDIR`, deleted once the `tb` you ran has
   shown it (left for macOS to clear if that `tb` was stopped first).
+  With no check host, the check's Rust builds (only when `desktop/`
+  changed) run here through `desktop/scripts/shared-cargo/cargo`: it copies
+  the worktree's files (not `node_modules` or build folders) into
+  `~/.cache/threadbear-check/local-builds/shared-1/src` and builds into
+  `shared-1/target` beside it, one warm target for every worktree, a few
+  GB, holding `shared-1.lock` while it builds. Delete the folder to get the
+  space back; the next check builds it again from cold.
 - **Borrowed worktrees** (`runner/src/borrows.ts`): `borrow-worktree.sh`
   writes a small `threadbear-borrow` file in the borrowed worktree's git
   folder (the borrowing thread's id, a process id for a script's borrow,
@@ -443,9 +450,10 @@ File references are where to look.
   (`desktop/gpui/src/app_update.rs`): it reads main's `desktop/` tree with
   `git rev-parse` 20 seconds after it opens, every 5 minutes and within
   seconds of main changing. When that differs from what it runs, it waits
-  until that tree has stayed the same for ten minutes, then runs
-  `stage-update.sh` from its own bundle at background priority
-  (`desktop/scripts/stage-update.sh`). That clones the checkout into
+  until that tree has stayed the same for two minutes (`updateQuietMinutes`
+  in `runner.json`), then runs `stage-update.sh` from its own bundle at the
+  priority `jobPriority` says (`nice` unless it says otherwise;
+  `desktop/scripts/stage-update.sh`). That clones the checkout into
   `~/Library/Caches/Threadbear/update-desktop`, and with `updateBuildHosts` in
   `runner.json` (never `checkHosts`), copies the clone's files (not its history) with rsync over
   ssh to the first of them that's a Mac, answers and is free, builds there under

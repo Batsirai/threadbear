@@ -99,11 +99,24 @@ gone from your fork, not just quiet.
   absolute path (letters, digits, `.`, `_`, `/`, `-`), or that host is
   passed over.
 - The builds and tests Threadbear starts itself (`tb land`'s check, a
-  worktree's setup, turn hooks, the runner's update builds) run `nice`d,
-  or as runner.json's `"jobPriority"` says: `"normal"`, or `"background"`
-  for macOS's `taskpolicy -b`, which Mike's runners use. Background keeps
-  a Mac quiet but makes a check several times slower, and timing tests
-  can fail under it (`runner/src/background.ts`).
+  worktree's setup, turn hooks, the runner's update builds, the GPUI app's
+  update build) run `nice`d, or as runner.json's `"jobPriority"` says:
+  `"normal"`, or `"background"` for macOS's `taskpolicy -b`, which Mike's
+  runners use. Background keeps a Mac quiet but makes a check several
+  times slower, and timing tests can fail under it
+  (`runner/src/background.ts`).
+- Once main's `desktop/` changes, the GPUI app waits until it has stayed
+  the same for two minutes before building it, so a few landings in a row
+  make one build: runner.json's `"updateQuietMinutes"` sets how long
+  (Mike's says 10, as his threads land all day).
+- With no check host, `tb land`'s check runs on your Mac. Its Rust builds
+  share one warm target in `~/.cache/threadbear-check/local-builds` rather
+  than starting cold in each worktree, and `--quick` leaves out the slow
+  tests of the dev tooling (check hosts, landing, the build locks) when
+  nothing they read changed (`runner/test/tooling-tests.mjs`); GitHub's CI
+  still runs them all on Mike's main. Its cargo is rustup's, so clippy is
+  the version `rust-toolchain.toml` pins: Homebrew's cargo ignores the pin
+  and a newer clippy fails code nobody changed, so install rustup.
 
 ### Optional, with a switch
 

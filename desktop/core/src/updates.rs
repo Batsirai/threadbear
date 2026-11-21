@@ -431,6 +431,8 @@ pub struct AppSide {
     pub building: bool,
     /// Main changed recently; let nearby desktop changes settle first.
     pub settling: bool,
+    /// How long that wait is (runner.json's `updateQuietMinutes`).
+    pub quiet_minutes: u32,
     pub failed: bool,
     /// The GPUI app's build found no Mac to build on, and tries again at its
     /// next look (the Swift app builds where it is, so never).
@@ -1062,6 +1064,19 @@ pub fn tooltip(app: &AppSide, runner: Option<&RunnerUpdates>) -> String {
     .to_owned()
 }
 
+/// "two quiet minutes", "a quiet minute", "15 quiet minutes".
+fn quiet_wait(minutes: u32) -> String {
+    const WORDS: [&str; 11] = [
+        "no", "a", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    ];
+    match minutes {
+        0 => "main to settle".to_owned(),
+        1 => "a quiet minute".to_owned(),
+        n if n <= 10 => format!("{} quiet minutes", WORDS[n as usize]),
+        n => format!("{n} quiet minutes"),
+    }
+}
+
 pub fn app_line(a: &AppSide) -> String {
     if let Some(staged) = &a.staged {
         use crate::app_update::RestartWait;
@@ -1099,8 +1114,10 @@ pub fn app_line(a: &AppSide) -> String {
         return "The app has a new version on main, waiting for a Mac to build it on.".to_owned();
     }
     if a.settling {
-        return "The app has a new version on main, waiting for ten quiet minutes before building."
-            .to_owned();
+        return format!(
+            "The app has a new version on main, waiting for {} before building.",
+            quiet_wait(a.quiet_minutes)
+        );
     }
     if a.failed {
         return "The app's last build from main failed. The log says why.".to_owned();
@@ -2077,6 +2094,7 @@ mod tests {
     fn an_app_waiting_for_main_to_settle_is_pending() {
         let app = AppSide {
             settling: true,
+            quiet_minutes: 10,
             ..Default::default()
         };
         assert!(app.is_pending() && shown(&app, None) && !needs_you(&app, None));
@@ -2084,6 +2102,29 @@ mod tests {
             app_line(&app),
             "The app has a new version on main, waiting for ten quiet minutes before building."
         );
+        let two = AppSide {
+            quiet_minutes: 2,
+            ..app.clone()
+        };
+        assert_eq!(
+            app_line(&two),
+            "The app has a new version on main, waiting for two quiet minutes before building."
+        );
+        assert!(app_line(&AppSide {
+            quiet_minutes: 1,
+            ..app.clone()
+        })
+        .contains("for a quiet minute before"));
+        assert!(app_line(&AppSide {
+            quiet_minutes: 30,
+            ..app.clone()
+        })
+        .contains("for 30 quiet minutes before"));
+        assert!(app_line(&AppSide {
+            quiet_minutes: 0,
+            ..app
+        })
+        .contains("waiting for main to settle before"));
     }
 
     // Mike, 13 Nov: a countdown that starts again when he does something,

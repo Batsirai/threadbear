@@ -137,6 +137,14 @@ messages and diffs, and write code that does both:
   change back onto Mike's new code rather than keeping the old shape.
 - If you can't do both, stop and ask them which they'd rather have, with
   what each does.
+- If both sides used the same backend API numbers (`API_VERSION` in
+  `convex/version.ts`, `BACKEND_API_VERSION` in `runner/src/sync.ts`), keep
+  Mike's: phones from the App Store and every runner on his backend go by
+  them. Move this copy's own after his last, in both files and anything that
+  checks for its old numbers.
+- A lint failure listing many old problems in one file is ESLint's
+  suppressions: one over a file's count in `eslint-suppressions.json` shows
+  every one of that rule there. Fix the new one; don't hand-edit the file.
 
 Their patches (`.threadbear/patches/`, `~/.threadbear/patches/`) and
 settings (`runner.json`) aren't part of the merge. Check they still work

@@ -37,8 +37,8 @@ checkout is the one with `main` checked out.
 runner's own update builds, so a land's test suite doesn't take the Mac
 over: `nice -n 10` by default, or as runner.json's `jobPriority` says
 (`normal`, or `background` for macOS's `taskpolicy -b`, which Mike's
-runners use; `runner/src/background.ts`). The app's update build always
-runs at background priority. Action buttons you press run as normal.
+runners use; `runner/src/background.ts`). The GPUI app's update build goes
+by it too. Action buttons you press run as normal.
 
 ## A new thread
 
@@ -140,7 +140,9 @@ stays. Separate repos do not block one another.
    a GitHub workflow it would set off is red on main (below, "Red on
    GitHub").
 3. Reads the patch's `check` after rebasing, and runs it in the worktree,
-   if there is one, together with everyone waiting (below). A patch load error or failing check stops here, with
+   if there is one, together with everyone waiting (below). A landing that
+   changes no file from main (a commit with only a trailer) skips the check
+   and lands at once; it leaves no line in the times log, as it ran nothing. A patch load error or failing check stops here, with
    the last lines of its output. Changing the branch or leaving changed
    or untracked files during the check also stops it.
 4. `git -C <mainCheckout> merge --ff-only <checked commit>`. If main's working
