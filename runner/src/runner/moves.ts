@@ -242,8 +242,10 @@ function fitMovedLog(file: string, media: MovedMedia): void {
     return;
   }
   let changed = false;
+  // Every line parsed: a type written with JSON escapes (review\u002eupdated)
+  // reads the same to every later reader (Codex's and Gemini's reviews).
   const lines = text.split('\n').map((line) => {
-    if (!line.includes('"review.updated"')) return line;
+    if (!line) return line;
     let ev: { type?: unknown; seq?: unknown; ts?: unknown; review?: unknown } | null;
     try {
       ev = JSON.parse(line) as typeof ev;
@@ -1110,7 +1112,14 @@ export const movesPart = {
       fitMovedLog(path.join(stage, 'thread', 'events.ndjson'), { threadId: row.threadId, now: path.join(stage, 'thread', 'media'), final: this.store.mediaDir(row.threadId) });
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.renameSync(path.join(stage, 'thread'), dest);
-    } else clean(path.join(dest, 'thread.json'));
+    } else {
+      clean(path.join(dest, 'thread.json'));
+      // A runner from before placed it and put it live, then stopped: its
+      // log too, and the copy of the log this runner may have opened at
+      // start is read again (Codex's and Gemini's reviews).
+      fitMovedLog(path.join(dest, 'events.ndjson'), { threadId: row.threadId, now: this.store.mediaDir(row.threadId), final: this.store.mediaDir(row.threadId) });
+      this.store.forget(row.threadId);
+    }
     this.adopt(row.threadId);
     const st = this.threads.get(row.threadId);
     if (!st) throw new Error("The moved thread didn't load.");

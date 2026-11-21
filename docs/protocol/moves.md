@@ -240,11 +240,16 @@ these strings, written from it. Its one state runners don't see is
   `review.updated` events (which the apps draw cards from, and which
   `recoverReviews` reads back), keep only files that came in the bundle as
   `<thread id>/media/reviews/<review id>/<name>` (or a page's
-  `<folder>/<name>`), regular files, not links, rewritten to T's own copy:
+  `<folder>/<name>`), regular files, not links, rewritten to T's own copy,
+  with the type and size the file itself has (a page called a video is a
+  page; a file that's neither goes):
   any other path goes, a shot with no picture left goes, an option with
   none goes, and a review with no options left goes (a `system.note` takes
-  its event's place, so seqs stay gapless). A note's links to anything but
-  a web page become words, and `url` is kept only when it's http(s)
+  its event's place, so seqs stay gapless; every line is parsed, so an
+  escaped type is no way round it, and a thread an older runner put live
+  before adopting has its live log fitted as it's adopted). A note's links
+  to anything but a web page become words (every `](` not followed by a
+  web address alone becomes `]\(`), and `url` is kept only when it's http(s)
   (Daybreak 159). On the main Mac (the owner key), a thread from another
   runner arrives with at most Ask: Full or Auto becomes Ask, and so does
   the mode Plan first would go back to, with a line in its note saying

@@ -537,7 +537,12 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
   const media={threadId:id,now,final};
   // What came with the move: a picture, a video's still and copy, a page in its folder.
   fs.mkdirSync(path.join(now,'reviews',rid,'pagedir'),{recursive:true});
-  for (const f of ['a.png','still.png','clip.mp4','pagedir/index.html']) fs.writeFileSync(path.join(now,'reviews',rid,f),'x');
+  for (const f of ['a.png','still.png']) fs.writeFileSync(path.join(now,'reviews',rid,f),makePng(12,8));
+  fs.writeFileSync(path.join(now,'reviews',rid,'clip.mp4'),fakeMp4());
+  fs.writeFileSync(path.join(now,'reviews',rid,'pagedir/index.html'),'<p>page</p>');
+  // A page the other runner calls a video, and a file that's neither.
+  fs.writeFileSync(path.join(now,'reviews',rid,'payload.html'),'<script>x()</script>');
+  fs.writeFileSync(path.join(now,'reviews',rid,'payload.bin'),'x');
   // This Mac's own files, at paths the other runner named.
   const local=path.join(root,'mine');
   fs.mkdirSync(local);
@@ -556,10 +561,11 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
         {image:theirs('still.png'),media:{path:path.join(local,'home.mp4'),mediaType:'video/mp4'}},
         {image:theirs('link.png')},
         {image:theirs('../../../../../mine/secret.png')},
+        {image:theirs('still.png'),media:{...theirs('payload.html'),mediaType:'video/mp4'}},
       ]},
       {id:'gone',title:'Local only',image:{path:path.join(local,'secret.png'),mediaType:'image/png'},shots:[{image:{path:path.join(local,'notes.html'),mediaType:'text/html'}}]},
       {id:'other',title:'Another review\'s',image:{path:`/x/${id}/media/reviews/other-review/a.png`,mediaType:'image/png'}},
-      {id:'fallback',title:'First shot stands in',image:{path:path.join(local,'secret.png'),mediaType:'image/png'},shots:[{image:theirs('a.png')}]},
+      {id:'fallback',title:'First shot stands in',image:{path:path.join(local,'secret.png'),mediaType:'image/png'},shots:[{image:theirs('a.png')},{image:theirs('still.png'),media:{...theirs('payload.bin'),mediaType:'video/mp4'}},{image:{...theirs('payload.bin'),width:99999,height:1}}]},
     ],
     draft:{notes:{ok:'fine',gone:'gone too'},pickedIds:['ok','gone'],pickedId:'gone'}};
   const fitted=fitReview(raw,media)!;
@@ -573,7 +579,13 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
     [here('still.png'),here('pagedir/index.html')],
     // Its video wasn't one that came: the still alone.
     [here('still.png'),undefined],
+    // A page is a page, whatever it was called.
+    [here('still.png'),here('payload.html')],
   ]);
+  assert.deepEqual(ok.shots!.map(s=>s.media?.mediaType),[undefined,'video/mp4','text/html',undefined,'text/html']);
+  // Neither a video nor a picture: its video goes, and the shot whose picture it was.
+  assert.deepEqual(fitted.options[1]!.shots!.map(s=>[s.image.path,s.media?.path]),[[here('a.png'),undefined],[here('still.png'),undefined]]);
+  assert.deepEqual([ok.image.mediaType,ok.image.width,ok.image.height],['image/png',12,8],'its type and size are the file\'s');
   assert.equal(ok.url,undefined,'Open live is for web pages only');
   assert.equal(fitted.options[1]!.image.path,here('a.png'));
   const every=JSON.stringify(fitted);
@@ -584,15 +596,21 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
   assert.deepEqual(fitted.draft.pickedIds,['ok']);
   assert.equal(fitted.draft.pickedId,undefined);
   // A note's links but web pages are only words, and doing it again changes nothing.
-  assert.equal(fitted.note,'See \\[the file](/etc/passwd) or [the site](https://example.com/x) and \\[kept](./x)');
-  assert.equal(ok.note,'\\[open](file:///Users/m/secret.png)');
+  assert.equal(fitted.note,'See [the file]\\(/etc/passwd) or [the site](https://example.com/x) and \\[kept]\\(./x)');
+  assert.equal(ok.note,'[open]\\(file:///Users/m/secret.png)');
   assert.deepEqual(fitReview(fitted,{threadId:id,now:final,final:final}) ?? 'gone','gone','the copies are where now will be, not there yet');
   fs.mkdirSync(path.dirname(final),{recursive:true});
   fs.renameSync(now,final);
   assert.deepEqual(fitReview(fitted,{threadId:id,now:final,final}),fitted,'again, once adopted');
-  for (const note of ['[[x](https://a.b)](/etc/passwd)','\\\\[x](/etc)','`a\\`[x](/etc)`','[a [b] c](/etc)','[x]( /etc )','plain']) {
-    assert.equal(webLinksOnly(webLinksOnly(note)),webLinksOnly(note),note);
-    assert.ok(!/(^|[^\\])(\\\\)*\[[^\]]*\]\((?!https?:)/.test(webLinksOnly(note)),webLinksOnly(note));
+  // The window's parser makes a link only from a ]( and takes the address
+  // to the next parenthesis: none is left but before a web address alone.
+  // The second is Codex's and Gemini's: a code span the parser ends inside a
+  // web link's address.
+  for (const note of ['[[x](https://a.b)](/etc/passwd)','`[x](https://example.test/`[open)](/Users/victim/private.md)','\\\\[x](/etc)','`a\\`[x](/etc)`','[a [b] c](/etc)','[x]( /etc )','[x](https://a.b/(y))','[x](https://a b)','[x](\nhttps://a.b)','plain']) {
+    const out=webLinksOnly(note);
+    assert.equal(webLinksOnly(out),out,note);
+    for (let i=out.indexOf(']('); i>=0; i=out.indexOf('](',i+1)) assert.match(out.slice(i+1),/^\(\s*https?:\/\/[^\s()]*\s*\)/i,out);
+    assert.equal(out.replaceAll(']\\(','](') ,note.replaceAll(']\\(','](') ,'the words stay');
   }
   // A review with nothing that came isn't a review here.
   assert.equal(fitReview({...raw,options:[raw.options[1]]},media),undefined);
@@ -617,7 +635,8 @@ test('a review recovered from the log keeps only this thread\'s own copies', () 
   assert.equal(got.revision,99,'the later revision is recovered');
   assert.deepEqual(got.options.map((o:any)=>o.id),['B','D'],'without the option naming a file of this Mac\'s');
   assert.ok(!JSON.stringify(st.rec.reviews).includes(secret));
-  assert.equal(got.note,'\\[x](/etc/passwd)');
+  // Its words as they were: a log of this Mac's own (a moved one is fitted as it's placed).
+  assert.equal(got.note,'[x](/etc/passwd)');
   assert.equal(st.rec.reviews.some((r:any)=>r.id===nothing.id),false,'one with nothing of its own is not recovered');
 });
 

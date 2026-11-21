@@ -594,7 +594,7 @@
   },
   "runner/test/unit/move-schedules.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 12
+      "count": 14
     }
   },
   "runner/test/unit/moves-backend.test.ts": {

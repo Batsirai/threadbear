@@ -481,7 +481,9 @@ test("a compromised old runner's oversized review notes arrive cut to what show_
   assert.equal(big!.draft.notes.o0!.length, 4000);
   assert.equal(big!.draft.reply!.length, 8000);
   // Words exactly; its picture this thread's copy here.
-  const fitsHere = { ...fits, options: [{ ...fits.options[0]!, image: { ...theirs('fits'), path: path.join(t.store.mediaDir(id), 'reviews', 'fits', 'a.png') } }] };
+  // Its type and size the file's own.
+  const fitsHere = { ...fits, options: [{ ...fits.options[0]!, image: { ...theirs('fits'), path: path.join(t.store.mediaDir(id), 'reviews', 'fits', 'a.png'), width: kept!.options[0]!.image.width, height: kept!.options[0]!.image.height } }] };
+  assert.ok(kept!.options[0]!.image.width! > 0);
   assert.deepEqual(t.runner.getReview(id, 'fits').review, fitsHere);
   assert.deepEqual(kept, fitsHere);
   assert.ok(fs.existsSync(fitsHere.options[0]!.image.path));
@@ -516,12 +518,18 @@ test("a moved review never names a file of this Mac's; the ones that came are th
   const rid = '1b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9';
   const theirs = (rest: string, mediaType = 'image/png') => ({ path: `/Users/other/.threadbear/threads/${id}/media/reviews/${rid}/${rest}`, mediaType });
   packed.push({ path: `thread/media/reviews/${rid}/a.png`, data: sample } as any);
+  // A clip and a page that came, which stay usable here.
+  const mp4 = Buffer.alloc(16);
+  mp4.writeUInt32BE(16, 0);
+  mp4.write('ftypisom', 4, 'ascii');
+  packed.push({ path: `thread/media/reviews/${rid}/clip.mp4`, data: mp4 } as any);
+  packed.push({ path: `thread/media/reviews/${rid}/p1/index.html`, data: Buffer.from('<p>page</p>') } as any);
   const local = (f: string, mediaType: string) => ({ path: path.join(mine, f), mediaType });
   const review = {
     id: rid, title: 'Pick', status: 'pending', revision: 1, createdAt: 'c', updatedAt: 'c', draft: { notes: {} },
     note: `Compare with [mine](${path.join(mine, 'notes.md')})`,
     options: [
-      { id: 'came', title: 'Came', image: theirs('a.png'), shots: [{ image: theirs('a.png') }, { image: theirs('a.png'), media: local('home.mp4', 'video/mp4') }, { image: local('secret.png', 'image/png') }] },
+      { id: 'came', title: 'Came', image: theirs('a.png'), shots: [{ image: theirs('a.png') }, { image: theirs('a.png'), media: local('home.mp4', 'video/mp4') }, { image: local('secret.png', 'image/png') }, { image: theirs('a.png'), media: theirs('clip.mp4', 'video/mp4') }, { image: theirs('a.png'), media: theirs('p1/index.html', 'text/html') }] },
       { id: 'raster', title: 'Raster', image: local('secret.png', 'image/png') },
       { id: 'video', title: 'Video', image: local('secret.png', 'image/png'), shots: [{ image: local('secret.png', 'image/png'), media: local('home.mp4', 'video/mp4') }] },
       { id: 'page', title: 'Page', image: local('secret.png', 'image/png'), shots: [{ image: local('secret.png', 'image/png'), media: local('page.html', 'text/html') }] },
@@ -537,6 +545,9 @@ test("a moved review never names a file of this Mac's; the ones that came are th
   const ts = new Date().toISOString();
   lines.push(JSON.stringify({ seq: lines.length + 1, ts, type: 'review.updated', review: { ...review, revision: 7 } }));
   lines.push(JSON.stringify({ seq: lines.length + 1, ts, type: 'review.updated', review: onlyLocal }));
+  // The type with a JSON escape in it, which reads the same to every later
+  // reader (Codex's and Gemini's reviews).
+  lines.push(JSON.stringify({ seq: lines.length + 1, ts, type: 'review.updated', review: { ...onlyLocal, id: '3b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9' } }).replace('"review.updated"', '"review\\u002eupdated"'));
   logEntry.data = Buffer.from(lines.join('\n') + '\n');
   await t.runner.placeMove(r, packed);
   await t.runner.adoptMoved(r);
@@ -548,20 +559,59 @@ test("a moved review never names a file of this Mac's; the ones that came are th
   assert.equal(got.revision, 7, "the log's later revision, fitted the same way");
   assert.deepEqual(got.options.map((o) => o.id), ['came']);
   assert.equal(got.options[0]!.image.path, here);
-  assert.deepEqual(got.options[0]!.shots!.map((x) => [x.image.path, x.media?.path]), [[here, undefined], [here, undefined]]);
+  const dir = path.dirname(here);
+  assert.deepEqual(got.options[0]!.shots!.map((x) => [x.image.path, x.media?.path, x.media?.mediaType]), [[here, undefined, undefined], [here, undefined, undefined], [here, path.join(dir, 'clip.mp4'), 'video/mp4'], [here, path.join(dir, 'p1', 'index.html'), 'text/html']]);
+  assert.ok(fs.existsSync(path.join(dir, 'clip.mp4')) && fs.existsSync(path.join(dir, 'p1', 'index.html')));
   assert.ok(fs.existsSync(here), 'the copy that came is usable here');
-  assert.equal(got.note, `Compare with \\[mine](${path.join(mine, 'notes.md')})`, 'a note link to a file is only words');
+  assert.equal(got.note, `Compare with [mine]\\(${path.join(mine, 'notes.md')})`, 'a note link to a file is only words');
   const events = t.runner.events(id, { limit: 1000 }).events;
   const all = JSON.stringify([t.runner.listReviews(id), events, t.store.load(id)]);
   assert.ok(!all.includes(path.join(mine, 'secret.png')) && !all.includes('home.mp4') && !all.includes('page.html'), 'no file of this Mac named anywhere');
   assert.ok(!all.includes('/Users/other/'), "nor the other runner's paths");
   const seqs = events.map((e) => e.seq);
   assert.deepEqual(seqs, seqs.map((_, i) => seqs[0]! + i), 'the log stays gapless');
-  assert.ok(events.some((e: any) => e.type === 'system.note' && /review that came with the move was left out/.test(e.text)));
+  assert.equal(events.filter((e: any) => e.type === 'system.note' && /review that came with the move was left out/.test(e.text)).length, 2);
   // And again after a restart, as recoverReviews reads the log at start.
   const again = t.restart();
   const reread = JSON.stringify(again.runner.listReviews(id));
   assert.ok(!reread.includes(path.join(mine, 'secret.png')) && reread.includes(here), reread);
+});
+
+// Codex's and Gemini's reviews of the Daybreak 159 fix: a runner from
+// before placed the move, put the thread live and stopped before adopting.
+// The updated runner's adopt fits the live log too.
+test("a move an older runner put live before stopping has its log's reviews fitted as it's adopted", async () => {
+  const s = machine([{ id: 'claude-main', provider: 'claude', title: 'S', configDir: tmpDir() }]);
+  const t = machine([{ id: 'claude-1', provider: 'claude', title: 'T', configDir: tmpDir() }]);
+  t.runner.movedInAtMostAsk = () => true;
+  const id = s.runner.create({ text: 'x', accountId: 'claude-main', cwd: tmpDir('tb-move-work-') }).thread.id;
+  s.adapter.last.init();
+  s.adapter.last.result('completed');
+  await tick();
+  const r: MoveRow = { moveId: 'ff77aa88bb99', threadId: id, from: 'S1', to: 'T1', state: 'unpacking', createdAt: 1, updatedAt: 1, info: (await s.runner.describeForMove(id, 0))! };
+  const plan = await t.runner.planMove(r);
+  if ('problem' in plan) assert.fail(plan.problem);
+  r.plan = plan;
+  const packed = (await s.runner.packForMove(id, r)).entries;
+  await t.runner.placeMove(r, packed);
+  // As the older runner left it: a review naming a file of this Mac's in
+  // the log, and the thread folder live.
+  const secret = path.join(fs.realpathSync(tmpDir('tb-move-mine-')), 'secret.png');
+  fs.writeFileSync(secret, fs.readFileSync(path.join(import.meta.dirname, '..', '..', '..', 'features', 'support', 'sample.png')));
+  const stage = path.join(t.home, 'moves', r.moveId);
+  const log = path.join(stage, 'thread', 'events.ndjson');
+  const n = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
+  const review = { id: '4b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9', title: 'P', status: 'pending', revision: 1, createdAt: 'c', updatedAt: 'c', draft: { notes: {} }, options: [{ id: 'a', title: 'A', image: { path: secret, mediaType: 'image/png' } }] };
+  fs.appendFileSync(log, JSON.stringify({ seq: n + 1, ts: new Date().toISOString(), type: 'review.updated', review }) + '\n');
+  const dest = path.join(t.home, 'threads', id);
+  fs.renameSync(path.join(stage, 'thread'), dest);
+  await t.runner.adoptMoved(r);
+  await tick();
+  const events = t.runner.events(id, { limit: 1000 }).events;
+  assert.ok(!JSON.stringify(events).includes(secret), 'no file of this Mac named');
+  assert.equal(events.at(-2)?.type, 'system.note', 'the review is a note saying it was left out');
+  const seqs = events.map((e) => e.seq);
+  assert.deepEqual(seqs, seqs.map((_, i) => seqs[0]! + i), 'the log stays gapless');
 });
 
 test("a move whose thread id isn't a thread id's shape is refused before anything is placed or adopted", async () => {

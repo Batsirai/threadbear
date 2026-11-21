@@ -129,7 +129,7 @@ export type MovedMedia = { threadId: string; now: string; final: string };
 // is the other runner's word, and an extra Mac could name any file on this
 // one with it, which the review window would read as this Mac's once the
 // thread is here (Daybreak 159, 21 Nov 2026).
-function movedReviewFile(file: unknown, reviewId: string, media: MovedMedia): string | undefined {
+function movedReviewFile(file: unknown, reviewId: string, media: MovedMedia): { now: string; here: string } | undefined {
   if (typeof file !== 'string' || file.includes('\0')) return undefined;
   if (!/^[a-zA-Z0-9-]{1,200}$/.test(reviewId)) return undefined;
   const parts = file.replace(/\\/g, '/').split('/');
@@ -150,51 +150,50 @@ function movedReviewFile(file: unknown, reviewId: string, media: MovedMedia): st
       if (!fs.lstatSync(dir).isDirectory()) return undefined;
     }
     if (!fs.lstatSync(path.join(dir, rest.at(-1)!)).isFile()) return undefined;
+    return { now: path.join(dir, rest.at(-1)!), here: path.join(media.final, 'reviews', reviewId, ...rest) };
   } catch {
     return undefined;
   }
-  return path.join(media.final, 'reviews', reviewId, ...rest);
 }
 
-// The ImageRef as this thread's copy (movedReviewFile), or undefined.
-function movedRef(ref: unknown, reviewId: string, media: MovedMedia): ImageRef | undefined {
+// The ImageRef as this thread's copy (movedReviewFile), or undefined. Its
+// type is the file's own, as reviewInput works it out, never the other
+// runner's word: a page called a video would be opened in the browser by the
+// window's Play the clip, scripts and all (Gemini's review). `still` is a
+// shot's picture; otherwise its video or page.
+function movedRef(ref: unknown, reviewId: string, media: MovedMedia, still: boolean): ImageRef | undefined {
   if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return undefined;
-  const here = movedReviewFile((ref as ImageRef).path, reviewId, media);
-  return here ? { ...(ref as ImageRef), path: here } : undefined;
+  const file = movedReviewFile((ref as ImageRef).path, reviewId, media);
+  if (!file) return undefined;
+  // Its size too, as the file says.
+  const page = !still && /\.html?$/i.test(file.now);
+  const info = page ? { mediaType: 'text/html' } : still ? readImageInfo(file.now) : readVideoInfo(file.now);
+  if (!info) return undefined;
+  const { width: _w, height: _h, ...rest } = ref as ImageRef;
+  return { ...rest, path: file.here, mediaType: info.mediaType, ...('width' in info && info.width ? { width: info.width } : {}), ...('height' in info && info.height ? { height: info.height } : {}) };
 }
 
 // A moved note's links, but for web pages, as their words: the review window
 // opens a note's link on this Mac, relative to the thread's folder here, and
-// the other runner's agent wrote them (Daybreak 159). Every [ that doesn't
-// start a web link is escaped, so no pairing of brackets the window's parser
-// finds makes one; an escape already there (a backslash and punctuation, as
-// the parser reads it) stays as it is, so doing it again changes nothing.
-const WEB_LINK = /\[[^[\]\\]*\]\(\s*https?:\/\/[^\s()\\]*\s*\)/iy;
+// the other runner's agent wrote them (Daybreak 159). The window's parser
+// makes a link only where a ] is followed straight by a ( and takes the
+// address up to the next parenthesis, so every ]( not followed by a web
+// address (and nothing after it up to its closing parenthesis) becomes ]\(,
+// which shows the same and is no link, however the parser reads the
+// brackets and code spans before it (Codex's and Gemini's reviews: a check
+// of whole [words](address) runs read a code span differently). Doing it
+// again changes nothing.
+const WEB_ADDRESS = /\(\s*https?:\/\/[^\s()]*\s*\)/iy;
 export function webLinksOnly(note: string): string {
   let out = '';
-  for (let i = 0; i < note.length; ) {
-    const ch = note[i]!;
-    if (ch === '\\' && i + 1 < note.length && /[!-/:-@[-`{-~]/.test(note[i + 1]!)) {
-      out += note.slice(i, i + 2);
-      i += 2;
-      continue;
-    }
-    if (ch === '[') {
-      WEB_LINK.lastIndex = i;
-      const m = WEB_LINK.exec(note);
-      if (m) {
-        out += m[0];
-        i += m[0].length;
-        continue;
-      }
-      out += '\\[';
-      i += 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
+  let last = 0;
+  for (let i = note.indexOf(']('); i >= 0; i = note.indexOf('](', i + 1)) {
+    WEB_ADDRESS.lastIndex = i + 1;
+    if (WEB_ADDRESS.test(note)) continue;
+    out += note.slice(last, i + 1) + '\\';
+    last = i + 1;
   }
-  return out;
+  return out + note.slice(last);
 }
 
 // A stored review cut to what reviewInput and reviewDraft take, for one this
@@ -203,10 +202,12 @@ export function webLinksOnly(note: string): string {
 // so a review that fits keeps its words exactly. Its files are this thread's
 // copies of the ones that came with the move (movedReviewFile); a shot with
 // none goes, an option with none left goes, and a review with no options
-// left goes. Undefined for something that isn't a review. `replies` keeps
-// the draft's and response's pictures, for a review recoverReviews reads
-// from the thread's log, which ownReplyImages checks itself.
-export function fitReview(raw: unknown, media: MovedMedia, replies = false): DesignReview | undefined {
+// left goes. Undefined for something that isn't a review. `recovering` is
+// for a review recoverReviews reads from the thread's own log: its files are
+// checked the same way, but its draft's and response's pictures stay (for
+// ownReplyImages to check), and its notes' links stay, as they're this
+// Mac's agent's (a moved log is fitted as it's placed, fitMovedLog).
+export function fitReview(raw: unknown, media: MovedMedia, recovering = false): DesignReview | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const r = { ...(raw as Record<string, any>) };
   if (typeof r.id !== 'string' || !Array.isArray(r.options)) return undefined;
@@ -221,7 +222,7 @@ export function fitReview(raw: unknown, media: MovedMedia, replies = false): Des
   set(r, 'title', 200);
   set(r, 'note', 4000);
   set(r, 'recommended', 200);
-  if (typeof r.note === 'string') r.note = webLinksOnly(r.note);
+  if (typeof r.note === 'string' && !recovering) r.note = webLinksOnly(r.note);
   r.options = r.options.slice(0, 12).flatMap((raw: unknown) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
     const o = { ...(raw as Record<string, any>) };
@@ -229,19 +230,19 @@ export function fitReview(raw: unknown, media: MovedMedia, replies = false): Des
     set(o, 'title', 200);
     set(o, 'note', 4000);
     set(o, 'url', 2000);
-    if (typeof o.note === 'string') o.note = webLinksOnly(o.note);
+    if (typeof o.note === 'string' && !recovering) o.note = webLinksOnly(o.note);
     // Open live is for a web page only, as show_options takes.
     if (o.url !== undefined && !/^https?:\/\/\S+$/i.test(o.url)) delete o.url;
     if (Array.isArray(o.shots)) {
       o.shots = o.shots.slice(0, maxReviewShots).flatMap((raw: unknown) => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
         const shot: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
-        const image = movedRef(shot.image, reviewId, media);
+        const image = movedRef(shot.image, reviewId, media, true);
         if (!image) return [];
         shot.image = image;
         // Without its video or page, the shot is its still.
         if (shot.media !== undefined) {
-          const m = movedRef(shot.media, reviewId, media);
+          const m = movedRef(shot.media, reviewId, media, false);
           if (m) shot.media = m;
           else delete shot.media;
         }
@@ -249,7 +250,7 @@ export function fitReview(raw: unknown, media: MovedMedia, replies = false): Des
       });
       if (!o.shots.length) delete o.shots;
     } else delete o.shots;
-    o.image = movedRef(o.image, reviewId, media) ?? o.shots?.[0]?.image;
+    o.image = movedRef(o.image, reviewId, media, true) ?? o.shots?.[0]?.image;
     if (!o.image) return [];
     return [o];
   });
@@ -264,7 +265,7 @@ export function fitReview(raw: unknown, media: MovedMedia, replies = false): Des
     // A reply's pictures name the other runner's files, which an extra Mac
     // could point anywhere on this one (Codex's review, 17 Nov): they don't
     // come with the move, and the words say so where they were.
-    if (!replies) {
+    if (!recovering) {
       if (Array.isArray(draft.images) && typeof draft.reply === 'string') draft.reply = keepPictureMarkers(draft.reply, draft.images.map(() => false));
       delete draft.images;
     }
