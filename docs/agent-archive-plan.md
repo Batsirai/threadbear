@@ -60,7 +60,7 @@ nothing to do with this.
   The cloud runner has no daemon, so its threads aren't archived. (Tinker
   Desk runs no Threadbear and isn't part of this.)
 - **The host** (`server/`, 26k lines): one Node process on Bruce since
-  24 Oct, at `https://bruce.tail9ef766.ts.net:9443` (tailnet only). 27 GB
+  24 Oct, at `https://bruce.<tailnet>.ts.net:9443` (tailnet only). 27 GB
   on 20 Nov: `archive.db` 6 GB, files 12 GB, vectors 8.6 GB (LanceDB and
   `vectors.db`). Hybrid search, the indexer (embeddings through Mike's
   OpenRouter key), the reader, Quick Ask. Its own LaunchAgent and deployer.
@@ -87,7 +87,7 @@ nothing to do with this.
 | Sync | a daemon LaunchAgent on the M5 and Bruce, updated by hand on the M5 | the same service on every runner's machine (cloud too), kept on main and watched by Threadbear |
 | Host | Bruce, its own LaunchAgent and deployer | Bruce, started by Bruce's runner, updated with Threadbear's releases |
 | Agents' tools | the agent-archive MCP server, global config | the same seven tools, same names, from the runner's release |
-| Reader | `bruce.tail9ef766.ts.net:9443` | the same, plus an Archive panel in Threadbear and links both ways |
+| Reader | `bruce.<tailnet>.ts.net:9443` | the same, plus an Archive panel in Threadbear and links both ways |
 | Quick Ask | the host's `/api/quick/ask` | unchanged |
 | The 27 GB | on Bruce | stays on Bruce. Nothing is copied |
 | Code | the agent-archive repo | Threadbear's repo, once Mike makes it public (stage 4) |

@@ -133,3 +133,21 @@ test("text that runs in a fork names none of Mike's machines or addresses", () =
   }
   assert.deepEqual(found, []);
 });
+
+// The repo is public and forked, so a real address of Mike's in it is in
+// every copy for good. 21 Nov 2026: two docs named his real tailnet (the
+// `tail…` part of bruce's and the Pixel's MagicDNS names). Write
+// `<tailnet>` or `example` instead; secrets are GitHub push protection's job.
+test('the repo names no real tailnet', () => {
+  const FAKE = new Set(['example', 'tail1', 'tail1234', 'x']);
+  const r = spawnSync('git', ['grep', '-hoIE', '[A-Za-z0-9-]+\\.ts\\.net'], { cwd: REPO, encoding: 'utf8' });
+  assert.ok(r.status === 0 || r.status === 1, r.stderr);
+  const real = new Set(
+    r.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((name) => name.replace(/\.ts\.net$/, ''))
+      .filter((tailnet) => !FAKE.has(tailnet)),
+  );
+  assert.deepEqual([...real], [], 'a real tailnet name is in the repo: write <tailnet> or example.ts.net');
+});

@@ -40,7 +40,7 @@
 # The app keeps every other safety dev-app.sh gives it: the mock's own data
 # folder, never the real one, and a pasteboard of its own. dev-app.sh's
 # --film refuses to start without THREADBEAR_FILM_HOST=1, which only this
-# sets, on the host. FILM_HOST picks another Mac (default tinker-desk) and
+# sets, on the host. FILM_HOST picks another Mac (default tinker-desk, in Mike's copy only) and
 # FILM_DIR the folder there (default /Volumes/TinkerSSD/threadbear-film, as
 # Tinker Desk's own disk is nearly full).
 #
@@ -53,7 +53,12 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-host="${FILM_HOST:-tinker-desk}"
+# tinker-desk is Mike's own Mac: only his copy defaults to it. A fork's agent
+# read the default and tried to ssh there (21 Nov 2026).
+case "$(git -C "$root" remote get-url origin 2>/dev/null)" in
+  *mikecann/threadbear*) host="${FILM_HOST:-tinker-desk}" ;;
+  *) host="${FILM_HOST:-}" ;;
+esac
 key="$(printf '%s' "$root" | shasum | cut -c1-10)"
 base="${FILM_DIR:-/Volumes/TinkerSSD/threadbear-film}/$key"
 SSH=(ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes)
@@ -68,6 +73,7 @@ there() { "${SSH[@]}" "$host" "$env_there; $1"; }
 desk() { "${SSH[@]}" "$host" "~/.local/bin/desk $(q "$env_there; $1")"; }
 devapp() { there "desktop/scripts/dev-app.sh $(q "$@") --id film"; }
 die() { echo "film: $*" >&2; exit 1; }
+[ -n "$host" ] || die "set FILM_HOST to an ssh host of yours (a Mac with a screen to film on); tinker-desk is Mike's own"
 # Who has the host's screen: with fast user switching another account's
 # session can be on the console while ours sits behind it, and then the
 # stage's virtual display comes up 0x0 (19 Nov: an ADEMark run's ademark

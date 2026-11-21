@@ -20,7 +20,7 @@ what the iPhone has.
   pair, no Kotlin daemon), on the Hetzner box or the M5. On a Mac it takes
   the SDK from ~/Library/Android/sdk and its lock through lockf, and goes
   through `scripts/one-build.sh` like any other build there. Installs and
-  screenshots go over `adb connect pixel.tail9ef766.ts.net:5555`. A box
+  screenshots go over `adb connect pixel.<tailnet>.ts.net:5555`. A box
   whose adb key the Pixel hasn't allowed keeps putting "Allow USB
   debugging?" over the app until it's disconnected (`adb disconnect`).
 

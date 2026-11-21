@@ -17,7 +17,8 @@ the doc that owns it ("Doing X? Read Y"). Put detail there and link it, not here
 
 This is written for Mike's copy. The machines it names (the M5, `bruce`, `cloud`,
 `tinker-desk`) and paths under `~/dev/me` are his: in anyone else's copy (`origin` isn't
-mikecann/threadbear), skip those steps and ask the user what they use. There, a release of
+mikecann/threadbear) they don't exist, so check `origin` before any ssh or path here,
+skip those steps and ask the user what they use. There, a release of
 Mike's comes in through docs/bringing-in-updates.md, never a plain `git merge
 upstream/main` (it skips the checks, and the release's new checks then fail every other
 landing); one change they ask for by name can be cherry-picked.
