@@ -876,3 +876,29 @@ test('schedule check: writing files it never runs stays followable: state files,
     'git pull -q',
   ]) assert.equal(checkDigest(check, dir).problem, undefined, check);
 });
+
+// verify-fix on 153: an owner's or Full thread's check that can't be
+// followed is approved bound only as far as it can be, which for one that
+// writes what it runs leaves out the payload. No one can approve one, and
+// none runs on an approval it somehow has.
+test("schedule check: one that writes what it runs can't be approved by the owner or a Full thread either, the file there or not", async () => {
+  const dir = repo({ 'payload.dat': 'echo safe\n', 'run.sh': '#!/bin/sh\necho old\n', 'check.py': 'print(1)\n' });
+  const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
+  for (const check of ['cp payload.dat run.sh; sh run.sh', 'cp payload.dat new.sh; sh new.sh', 'git pull -q && ./run.sh']) {
+    assert.throws(() => trust.approveCheck(check, dir), /writes a file it then runs/, check);
+    assert.equal(trust.checkApproved(check, dir).approved, false, check);
+  }
+  // Other checks it can't follow are still the owner's to approve, as before.
+  trust.approveCheck(`python3 ${dir}/check.py`, dir);
+  assert.equal(trust.checkApproved(`python3 ${dir}/check.py`, dir).approved, true);
+
+  const { h, sched, ran, call } = askTools(dir, 'full');
+  h.adapter.last.init();
+  h.adapter.last.result('completed');
+  const r = await call('schedule_message', { text: 'Look', title: 'Poll', cron: '*/5 * * * *', new_thread: true, folder: dir, check: 'cp payload.dat run.sh; sh run.sh' });
+  assert.ok(r.isError, 'refused');
+  assert.match(r.content[0].text, /writes a file it then runs/);
+  await due(h);
+  assert.equal(ran.length, 0);
+  sched.stop();
+});

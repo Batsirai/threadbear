@@ -47,7 +47,9 @@ import { bareImport, inNodeModules, linkedPackages, packageFiles } from './track
 // names one can't have its files hashed, even where `problem` is let go.
 // `writes`: what it writes, for followOutside to hold one reach's writes
 // against another's runs (writeProblem).
-export type ScriptReach = { files: string[]; missing: string[]; problem?: string; outside?: { file: string; dirs: string[] }[]; refused?: string; writes?: Writes };
+// `writeProblem`: `problem` when it's that (writeProblem), which nobody can
+// approve a schedule's check past.
+export type ScriptReach = { files: string[]; missing: string[]; problem?: string; outside?: { file: string; dirs: string[] }[]; refused?: string; writes?: Writes; writeProblem?: string };
 export type Writes = { written: [string, string][]; somewhere?: string; reached: string[] };
 
 // The most of one file patch trust reads (a patch, a helper, a script, a
@@ -812,6 +814,7 @@ class Reach {
   // as `tar x` and `git checkout` do), which could be any of them.
   readonly written = new Map<string, string>();
   writesSomewhere?: string;
+  writeFailed?: string;
   readonly reached = new Set<string>();
   // Writes to a path made from variables, settled at the end: one the
   // reach assigns anywhere (other than from a plain mktemp) or a
@@ -1866,7 +1869,12 @@ class Reach {
     for (const p of this.pendingWrites) {
       if (p.worked || p.names.some((n) => !/^[A-Za-z_]\w*$/.test(n) || this.assigned.has(n))) this.writesSomewhere ??= p.where;
     }
-    this.problem ??= writeProblem(this.writes(), this.o.top);
+    // Over a problem found first, as that's often the run of a file the
+    // check writes (`cp p run.sh; sh run.sh` with no run.sh yet), and an
+    // owner's check that can't be followed is still approved, bound only
+    // as far as it can be: this one mustn't be (PatchTrust.approveCheck).
+    const wp = writeProblem(this.writes(), this.o.top);
+    if (wp) this.problem = this.writeFailed = wp;
   }
 
   writes(): Writes {
@@ -2882,7 +2890,7 @@ export function reachOf(file: string, opts: FollowOptions): ScriptReach {
     // A bug here mustn't let the script through: it fails closed.
     r.problem ??= `couldn't be followed (${(e as Error).message}).`;
   }
-  return { files: [...r.files], missing: [...r.missing], ...(r.problem ? { problem: r.problem } : {}), ...(r.refused ? { refused: r.refused } : {}), ...outsideOf(r), writes: r.writes() };
+  return { files: [...r.files], missing: [...r.missing], ...(r.problem ? { problem: r.problem } : {}), ...(r.refused ? { refused: r.refused } : {}), ...outsideOf(r), writes: r.writes(), ...(r.writeFailed ? { writeProblem: r.writeFailed } : {}) };
 }
 
 // The same for a command a patch writes (an action's `run`, a live
@@ -2898,7 +2906,7 @@ export function reachOfCommand(command: string, label: string, opts: FollowOptio
   } catch (e) {
     r.problem ??= `couldn't be followed (${(e as Error).message}).`;
   }
-  return { files: [...r.files], missing: [...r.missing], ...(r.problem ? { problem: r.problem } : {}), ...(r.refused ? { refused: r.refused } : {}), ...outsideOf(r), writes: r.writes() };
+  return { files: [...r.files], missing: [...r.missing], ...(r.problem ? { problem: r.problem } : {}), ...(r.refused ? { refused: r.refused } : {}), ...outsideOf(r), writes: r.writes(), ...(r.writeFailed ? { writeProblem: r.writeFailed } : {}) };
 }
 
 function outsideOf(r: Reach): { outside?: { file: string; dirs: string[] }[] } {

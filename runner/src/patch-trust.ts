@@ -554,6 +554,11 @@ export class PatchTrust implements PatchTrustStore {
 
   approveCheck(command: string, cwd: string, card?: CheckCard): void {
     if (this.checksHeld(cwd)) throw new Error(WINDOWS_CHECK);
+    // Bound as far as it can be is how an owner's check that can't be
+    // followed is approved, and for one that writes what it runs that
+    // leaves out what runs (Daybreak 153's verify-fix): never approved.
+    const writes = this.digestOf(command, cwd).writes;
+    if (writes) throw new CheckRefused(`A schedule's check runs by itself, and this one writes a file it then runs, so no approval can cover what will run: ${writes} Nothing changed. Have the check run only files already in the repo, and do any writing in the thread it wakes.`);
     if (card) {
       const now = checkDigest(command, cwd);
       if (now.problem) throw new Error(`A schedule's check runs by itself, so what it runs must be something Threadbear can hash, and it can't follow this: ${now.problem} Nothing changed. Put it in a shell script or JavaScript it can follow.`);
@@ -567,8 +572,9 @@ export class PatchTrust implements PatchTrustStore {
   // a row the backend (or another runner) wrote finds nothing here.
   checkApproved(command: string, cwd: string): { approved: boolean; hash: string; why?: string } {
     this.load();
-    const { hash } = this.digestOf(command, cwd);
+    const { hash, writes } = this.digestOf(command, cwd);
     if (this.checksHeld(cwd)) return { approved: false, hash, why: WINDOWS_CHECK };
+    if (writes) return { approved: false, hash, why: writes };
     return { approved: (this.folders.get(folderKeyOfDir(cwd)) ?? []).includes(CHECK_PREFIX + hash), hash };
   }
 
@@ -1397,7 +1403,7 @@ export function actionCommandProblem(command: string, folder: string, files: str
 // repo too, each followed from its own folder and repo (checkDigest, and the
 // commands of a patch that loads without a hash). `missing`: files it names
 // that aren't there yet.
-function followOutside(command: string, label: string, start: FollowOptions, reads: Reads): { files: Set<string>; missing: Set<string>; problem?: string } {
+function followOutside(command: string, label: string, start: FollowOptions, reads: Reads): { files: Set<string>; missing: Set<string>; problem?: string; writeProblem?: string } {
   const files = new Set<string>();
   const missing = new Set<string>();
   const seen = new Set<string>();
@@ -1406,7 +1412,9 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
   // Each reach's writes, held against all of their runs at the end: a
   // script outside the repo that writes one the check runs (Daybreak 153).
   const writes: Writes = { written: [], reached: [] };
+  let wrote: string | undefined;
   const take = (reach: ScriptReach) => {
+    wrote ??= reach.writeProblem;
     if (reach.writes) {
       writes.written.push(...reach.writes.written);
       writes.reached.push(...reach.writes.reached);
@@ -1432,8 +1440,9 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
     // folder it runs in: its `./x` is there, not beside it.
     take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true }));
   }
-  problem ??= writeProblem(writes, start.top);
-  return { files, missing, ...(problem ? { problem } : {}) };
+  wrote ??= writeProblem(writes, start.top);
+  if (wrote) problem = wrote;
+  return { files, missing, ...(problem ? { problem } : {}), ...(wrote ? { writeProblem: wrote } : {}) };
 }
 
 // What a schedule's check runs, for binding its approval to (a card, or an
@@ -1445,7 +1454,12 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
 // that runs in turn isn't: a thread that asks first can't approve one
 // (threadbear-mcp.ts). Programs on PATH and installed packages aren't
 // followed, as for patches. `commandOnly`: nothing but the command counts.
-export type CheckDigest = { hash: string; files: string[]; problem?: string };
+// `writes`: it writes a file it then runs (Daybreak 153), so no approval,
+// an owner's included, can cover what will run.
+// A check no one can approve, said to whoever made it, owner included.
+export class CheckRefused extends Error {}
+
+export type CheckDigest = { hash: string; files: string[]; problem?: string; writes?: string };
 // What a card was put up for (threadbear-mcp.ts, checkGuard): the digest and
 // folder as it went up, neither when they couldn't be read here.
 export type CheckCard = { hash?: string; folder?: string };
@@ -1478,7 +1492,7 @@ export function checkDigest(command: string, cwd: string, commandOnly = false): 
   if (huge) problem ??= `the check reaches ${huge}, over ${MAX_READ_BYTES / 1024 / 1024} MB, more than patch trust reads.`;
   // Whether it stopped, not its wording: the bytes say what changed, and a
   // reworded message shouldn't hold every such check.
-  return { hash: sha256(Buffer.from(JSON.stringify([CHECK_TAG, command, pairs, Boolean(problem)]))), files: pairs.map(([f]) => f), ...(problem ? { problem } : {}) };
+  return { hash: sha256(Buffer.from(JSON.stringify([CHECK_TAG, command, pairs, Boolean(problem)]))), files: pairs.map(([f]) => f), ...(problem ? { problem } : {}), ...(followed.writeProblem ? { writes: followed.writeProblem } : {}) };
 }
 
 // Every file a schedule's check reaches from `cwd`, as checkDigest follows

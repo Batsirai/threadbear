@@ -341,7 +341,8 @@ of=`, `sed -i`, `curl -o`; a folder copied over one's folder counts), in
 any order, and so can't a write to somewhere worked out as it runs or
 named by the data (`> "$f"` after `f=$(cat x)`, `tar x`, `unzip`, `patch`,
 `curl -O`, `git checkout`, `pull`, `reset` and the like) once it runs
-anything at all. A file in the temp folder from a plain `$(mktemp)`, and a
+anything at all. A schedule's check like that can't be approved, an
+owner's included. A file in the temp folder from a plain `$(mktemp)`, and a
 variable the script never sets (the runner's own, like
 `$THREADBEAR_CHECK_STATE`), aren't the repo's to steer. What a program on
 PATH writes by its own rules beyond those isn't known (below), and nor is
