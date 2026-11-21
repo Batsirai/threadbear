@@ -33,8 +33,13 @@ struct ThreadbearApp: App {
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     quick.scenePhaseChanged(to: phase)
                     switch phase {
-                    case .background: model.wentToBackground()
-                    case .active: model.comingBack()
+                    case .background:
+                        model.wentToBackground()
+                        // About 1.2 GB, and the GPU's off limits in the background.
+                        WhisperEngine.shared.unload()
+                    case .active:
+                        model.comingBack()
+                        Dictation.prepare()
                     default: break
                     }
                 }
