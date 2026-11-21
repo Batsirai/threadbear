@@ -139,16 +139,23 @@ async function claimable(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
 //   'retired': only this thread ever had it, and it was retired (Share again,
 //     or the row went in a prune and the runner sends the thread again): the
 //     row goes in without it (keeping the link it has, if any), so the
-//     thread keeps mirroring and the retired link stays dead. Also a link still live on this row that was retired
-//     before this check (brought back then): it goes.
+//     thread keeps mirroring and the retired link stays dead. Also a link
+//     still live on this row that was retired before this check (brought
+//     back then, from this thread or another): it goes. A write that stops
+//     sharing stops it, whichever link it names. share.ts never serves a
+//     retired slug either.
 // The owner may use any; the other rows then lose it, and its tombstones go
 // (the owner putting a link on a thread un-retires it).
 async function slugState(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string, slug: string): Promise<'free' | 'retired' | 'taken'> {
   if (caller.owner) return 'free';
-  for await (const t of ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug))) if (t.threadId !== threadId) return 'taken';
+  let liveHere = false;
+  for await (const t of ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug))) {
+    if (t.threadId !== threadId) return 'taken';
+    liveHere = true;
+  }
   let retired = false;
   for await (const t of ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug))) {
-    if (t.threadId !== threadId) return 'taken';
+    if (t.threadId !== threadId && !liveHere) return 'taken';
     retired = true;
   }
   return retired ? 'retired' : 'free';
@@ -944,8 +951,10 @@ export const upsertThreads = mutation({
         if (state === 'retired') {
           // The row keeps the link it has, if that one's still good (a late
           // write mustn't take down the current link); else none.
-          const { share: _retired, ...rest } = t;
-          const kept = existing?.runnerId === t.runnerId && existing.share?.slug && (await slugState(ctx, caller, t.threadId, existing.share.slug)) === 'free' ? existing.share : undefined;
+          // A write that stops sharing stops it on the kept link too.
+          const { share: given, ...rest } = t;
+          const good = existing?.runnerId === t.runnerId && existing.share?.slug && (await slugState(ctx, caller, t.threadId, existing.share.slug)) === 'free' ? existing.share : undefined;
+          const kept = good && given && given.access !== 'link' ? { ...good, access: given.access } : good;
           t = kept ? { ...rest, share: kept } : rest;
           slug = kept?.slug;
         }

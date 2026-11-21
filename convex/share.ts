@@ -54,7 +54,11 @@ async function threadBySlug(ctx: QueryCtx, slug: string): Promise<Doc<'threads'>
     .query('threads')
     .withIndex('by_share_slug', (q) => q.eq('share.slug', slug))
     .take(2);
-  return rows.length === 1 ? rows[0]! : null;
+  if (rows.length !== 1) return null;
+  // A retired link shows nothing, whatever row has it (Codex Security, 21
+  // Nov 2026, finding 161): the owner putting one back clears its tombstones.
+  if (await ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug)).first()) return null;
+  return rows[0]!;
 }
 
 async function isMike(ctx: QueryCtx, token?: string): Promise<boolean> {

@@ -262,6 +262,31 @@ test('a retired link still live on its row from before this check goes on the ne
   assert.equal(await call(s.ctx, load('share').preview, { slug: 'resurrected' }), null);
 });
 
+// Codex's and Gemini's second reviews: stopping sharing with a write that
+// names a retired link stops the link the row has; and a slug brought onto
+// another thread before the fix stops showing, and that thread still mirrors.
+test('a stop-sharing write naming a retired link stops the current one', async () => {
+  const s = await setup();
+  const view = async (slug: string) => (await call(s.ctx, load('share').preview, { slug })) !== null;
+  await s.mini.upsert(thread('T', MINI, { share: { access: 'link', slug: 'linkA' } }));
+  await s.mini.upsert(thread('T', MINI, { share: { access: 'link', slug: 'linkB' } }));
+  assert.equal(await view('linkB'), true);
+  assert.equal(await outcome(s.mini.upsert(thread('T', MINI, { share: { access: 'off', slug: 'linkA' } }))), 'ok');
+  assert.equal(s.rows('threads').find((t) => t.threadId === 'T')!.share.access, 'off');
+  assert.equal(await view('linkB'), false);
+});
+
+test('a retired slug moved onto another thread before the fix stops showing, and that thread still mirrors', async () => {
+  const s = await setup();
+  const view = async (slug: string) => (await call(s.ctx, load('share').preview, { slug })) !== null;
+  await s.mini.upsert(thread('M2', MINI, { share: { access: 'link', slug: 'old' } }));
+  await s.ctx.db.insert('threadTombstones', { threadId: 'M1', runnerId: MINI, slug: 'old', at: 1 });
+  assert.equal(await view('old'), false, 'share.ts serves no retired slug');
+  assert.equal(await outcome(s.mini.upsert(thread('M2', MINI, { title: 'next', share: { access: 'link', slug: 'old' } }))), 'ok');
+  const row = s.rows('threads').find((t) => t.threadId === 'M2')!;
+  assert.deepEqual([row.title, row.share], ['next', undefined]);
+});
+
 test("the owner taking a thread id over from Mac mini's runner starts it clean", async () => {
   const s = await setup();
   await s.mini.upsert(thread('T', MINI, { share: { access: 'link', slug: 'minis' } }));

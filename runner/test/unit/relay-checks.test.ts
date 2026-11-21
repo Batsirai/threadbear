@@ -13,7 +13,7 @@ import { call, load, memoryBackend, outcome, RELAY } from '../helpers/convex-mem
 import { checkRegistration } from '../../../relay/convex/verify.ts';
 
 const relay = load('relay', RELAY);
-const { MAX_CHECKS_IN_FLIGHT, MAX_NEW_CHECKS_IN_FLIGHT, NO_COOLDOWN_MS, NEW_CHECKS_PER_HOUR, KNOWN_CHECKS_PER_HOUR, CHECK_LEASE_MS, REGISTRATIONS_PER_DEPLOYMENT_PER_DAY, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS } = relay;
+const { MAX_KNOWN_CHECKS_IN_FLIGHT, MAX_NEW_CHECKS_IN_FLIGHT, NO_COOLDOWN_MS, NEW_CHECKS_PER_HOUR, CHECK_LEASE_MS, REGISTRATIONS_PER_DEPLOYMENT_PER_DAY, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS } = relay;
 
 const T0 = Date.parse('2026-11-21T01:00:00Z');
 let clock = T0;
@@ -170,7 +170,6 @@ test("made-up names using up the hour's call-backs and slots can't stop an estab
   assert.equal(await r.attempt(real, async () => true), 'yes');
   release();
   await Promise.all(burst);
-  assert.ok(MAX_CHECKS_IN_FLIGHT > MAX_NEW_CHECKS_IN_FLIGHT);
 });
 
 test("a call-back whose action died stops counting after its lease, and expire clears it", async () => {
@@ -207,26 +206,41 @@ test("an install under a week old shares the made-up names' slots and pool", asy
   assert.equal(started, 'limited');
 });
 
-test('every call-back counts against the relay-wide ceiling, and established ones against their own hourly pool', async () => {
+test('established backends have their own slots at once, apart from made-up names', async () => {
   const b = memoryBackend(RELAY);
   const known: string[] = [];
-  for (let n = 0; n < MAX_CHECKS_IN_FLIGHT + 1; n++) {
+  for (let n = 0; n < MAX_KNOWN_CHECKS_IN_FLIGHT + 1; n++) {
     known.push(`https://known-${n}.convex.site`);
     await call(b.ctx, relay.registerVerified, { deployment: known[n]! });
   }
   clock += NEW_INSTALL_MS;
   const held = [];
-  for (let n = 0; n < MAX_CHECKS_IN_FLIGHT; n++) held.push(await call(b.ctx, relay.startCheck, { deployment: known[n]! }));
+  for (let n = 0; n < MAX_KNOWN_CHECKS_IN_FLIGHT; n++) held.push(await call(b.ctx, relay.startCheck, { deployment: known[n]! }));
   assert.ok(held.every((h) => typeof h === 'object'));
-  assert.equal(await call(b.ctx, relay.startCheck, { deployment: known[MAX_CHECKS_IN_FLIGHT]! }), 'limited');
-  for (const h of held) await call(b.ctx, relay.endCheck, { check: h.check, vouched: true });
-  // The hour's pool for established ones: say yes, so no hold, until it's gone.
-  let made = MAX_CHECKS_IN_FLIGHT;
-  for (let k = 0; made < KNOWN_CHECKS_PER_HOUR + 5; k++) {
-    const h = await call(b.ctx, relay.startCheck, { deployment: known[k % known.length]! });
-    if (h === 'limited') break;
-    await call(b.ctx, relay.endCheck, { check: h.check, vouched: true });
-    made++;
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: known[MAX_KNOWN_CHECKS_IN_FLIGHT]! }), 'limited');
+  // Made-up names still get theirs, and use none of the established ones'.
+  for (let n = 0; n < MAX_NEW_CHECKS_IN_FLIGHT; n++) assert.equal(typeof (await call(b.ctx, relay.startCheck, { deployment: site(n) })), 'object');
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: site('x') }), 'limited');
+  await call(b.ctx, relay.endCheck, { check: held[0]!.check, vouched: true });
+  assert.equal(typeof (await call(b.ctx, relay.startCheck, { deployment: known[MAX_KNOWN_CHECKS_IN_FLIGHT]! })), 'object');
+});
+
+// Codex's second review: an hourly pool shared by established backends let
+// someone naming twenty of them use it up and lock every other one out
+// until the hour turned, after they'd stopped.
+test('naming many established backends for an hour leaves an unrelated one free to register the moment it stops', async () => {
+  const b = memoryBackend(RELAY);
+  const r = registrar(b.ctx);
+  const named = Array.from({ length: 20 }, (_, n) => `https://named-${n}.convex.site`);
+  const other = 'https://unrelated-backend.convex.site';
+  for (const d of [...named, other]) await call(b.ctx, relay.registerVerified, { deployment: d });
+  clock += NEW_INSTALL_MS;
+  const start = clock;
+  while (clock < start + 3_000_000) {
+    for (const d of named) await r.attempt(d);
+    clock += NO_COOLDOWN_MS + 1_000;
   }
-  assert.equal(made, KNOWN_CHECKS_PER_HOUR);
+  assert.ok(r.calls.length >= 1_200, `${r.calls.length}`);
+  assert.equal(await r.attempt(other, async () => true), 'yes');
+  assert.equal(await r.attempt(named[0]!, async () => true), 'yes', 'and a named one, once its cool-down is over');
 });
