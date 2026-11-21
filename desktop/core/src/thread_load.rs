@@ -204,9 +204,18 @@ impl ThreadLoad {
 
     /// What it shows may be old, so a turn it shows running while the
     /// thread's summary says none is says "Catching up…" rather than
-    /// counting on (`ThreadPane::shows_old_turn`).
+    /// counting on (`ThreadPane::shows_old_turn`): behind, or with its newest
+    /// page being read again under the rows. That read is what a kept pane
+    /// of another runner's thread, or one far behind, catches up with, and a
+    /// pane on show reads as the connection comes back; it used to count on
+    /// meanwhile, a turn that had ended while the app was away.
     pub fn shows_old(&self) -> bool {
-        self.behind()
+        match self {
+            ThreadLoad::Shown { behind, rereading } => *behind || *rereading,
+            ThreadLoad::Reading { .. } | ThreadLoad::Failed { .. } | ThreadLoad::NoRecord => {
+                self.behind()
+            }
+        }
     }
 
     /// The automation dump's name for it (the Swift dump's), a failure with

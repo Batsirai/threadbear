@@ -281,6 +281,7 @@ fn what_each_state_draws() {
     assert_eq!(shown(true, true).name(), "loaded");
     assert!(shown(false, false).is_shown() && !reading(false).is_shown());
     assert!(shown(true, false).shows_old() && !shown(false, false).shows_old());
+    assert!(shown(false, true).shows_old());
 }
 
 /// The specs as event sequences.
@@ -404,6 +405,45 @@ fn the_error_line_leaves_the_spinner_be() {
         "the old pane"
     );
     assert_eq!(ThreadLoad::opening().view(), View::Spinner);
+}
+
+/// Fixed 21 Nov: a kept thread of another runner's, or one far behind,
+/// shown again after the connection came back, read its newest page under
+/// the old rows with its stale mark already taken, so meanwhile its working
+/// line counted on ("Bear with me · 31m") for a turn that had ended while
+/// the app was away, the bug b9c8a3e4a fixed for the other way of catching
+/// up. A pane on show read again as the connection comes back did the same.
+#[test]
+fn a_read_under_the_rows_shows_its_turn_as_old() {
+    // Kept across a reconnect, then shown again.
+    let mut old = legacy::Pane::default();
+    old.landed();
+    old.subscribed();
+    old.not_subscribed();
+    assert!(old.shown_again());
+    old.try_again();
+    assert!(
+        !old.stale,
+        "the old pane, reading again: its turn counted on"
+    );
+
+    let (l, _) = ThreadLoad::opening().next(Event::Landed);
+    let (l, _) = l.next(Event::Subscribed);
+    let (l, _) = l.next(Event::ConnectionBack);
+    let (l, then) = l.next(Event::ShownAgain);
+    assert_eq!(then, Then::CatchUp);
+    let (l, _) = l.next(Event::TryAgain);
+    let (l, _) = l.next(Event::Read);
+    assert!(l.shows_old(), "reading its newest page again");
+    let (l, _) = l.next(Event::Landed);
+    // From here the feed's catching up says so till the subscribe answers.
+    let (l, _) = l.next(Event::Subscribed);
+    assert!(!l.shows_old());
+    // A pane on show, read again as the connection comes back.
+    let (l, _) = l.next(Event::Read);
+    assert!(l.shows_old());
+    let (l, _) = l.next(read_failed("Not connected to the runner."));
+    assert!(l.shows_old(), "a read that failed leaves it behind");
 }
 
 /// The fields thread.rs kept before, and what it did with them, as it was
@@ -684,10 +724,19 @@ impl Both {
         );
         assert_eq!(self.error, self.old.error, "error line, after {}", at());
         // Old turns only matter where there are rows to show one.
+        // Fixed 21 Nov: a read under the rows counts as old too
+        // (`a_read_under_the_rows_shows_its_turn_as_old`).
+        let rereading = matches!(
+            self.new,
+            ThreadLoad::Shown {
+                rereading: true,
+                ..
+            }
+        );
         if self.new.is_shown() {
             assert_eq!(
                 self.new.shows_old(),
-                self.old.stale,
+                self.old.stale || rereading,
                 "old turn, after {}",
                 at()
             );
