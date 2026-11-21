@@ -1648,7 +1648,12 @@ async function landLocked(
     } catch (e) {
       return fail(`Couldn't read the repo's patches for its check: ${(e as Error).message}`);
     }
-    if (!opts.dryRun && !ready.hasMerge && !alone) {
+    // One that changes what format commands main runs (its --allow-format
+    // covers only its own change) is checked and landed by itself, so no
+    // other landing's change rides in under that yes (Gemini's third review).
+    const ownFormat = await formatChanges(t.path, main, own).catch(() => undefined);
+    const formatAlone = !ownFormat || ownFormat.entries.length > 0 || ownFormat.configs.length > 0;
+    if (!opts.dryRun && !ready.hasMerge && !alone && !formatAlone) {
       let stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes, true, allowed);
       let top = stacked.group.length ? await replayFormatted(t.path, main, own, stacked.tip, main) : undefined;
       // Held on GitHub for what the others change (not a fix's, which is

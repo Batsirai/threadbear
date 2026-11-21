@@ -130,6 +130,20 @@ test('a branch that only adds a list entry for a commit already on main is asked
   const c = capture();
   assert.notEqual(await land(t, c.opts), 0);
   assert.match(c.err.join('\n'), /changes what later tb lands run/);
+  // Nor can it name another commit for a recipe main trusts: a new subject,
+  // or an id changed (Gemini's third review).
+  const t3 = makeBranch(main, 'subject1');
+  commit(t3.path, { '.git-blame-ignore-revs': TRUSTED + entry('node scripts/split-protocol.mjs', 'Refresh protocol index') }, 'Same recipe, new subject');
+  const c3 = capture();
+  assert.notEqual(await land(t3, c3.opts), 0);
+  const t4 = makeBranch(main, 'idmoved1');
+  commit(t4.path, { '.git-blame-ignore-revs': TRUSTED + 'a'.repeat(40) + '\n' }, 'Fill in an id');
+  const c4 = capture();
+  assert.equal(await land(t4, c4.opts), 0, c4.err.join('\n'));
+  const t5 = makeBranch(main, 'idmoved2');
+  commit(t5.path, { '.git-blame-ignore-revs': TRUSTED + 'b'.repeat(40) + '\n' }, 'Move the id');
+  const c5 = capture();
+  assert.notEqual(await land(t5, c5.opts), 0);
   // A list change that adds no command (a comment, an id filled in) isn't.
   const t2 = makeBranch(main, 'comment1');
   commit(t2.path, { '.git-blame-ignore-revs': '# A comment\n' + TRUSTED }, 'Comment');

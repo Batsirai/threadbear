@@ -145,12 +145,13 @@ export async function formatCommitsIn(cwd: string, ref: string, listFrom = ref):
   const found: FormatCommit[] = [];
   for (const entry of entries) {
     let commit: string | undefined;
-    if (entry.id && (await git(cwd, ['rev-parse', '--verify', '--quiet', `${entry.id}^{commit}`])).ok && (await isAncestor(cwd, entry.id, ref))) {
+    if (entry.id && (await git(cwd, ['rev-parse', '--verify', '--quiet', `${entry.id}^{commit}`])).ok && (await isAncestor(cwd, entry.id, ref)) && (listFrom === ref || (await isAncestor(cwd, entry.id, listFrom)))) {
       commit = entry.id;
     } else {
       if (!subjects) {
         subjects = new Map();
-        const log = await out(cwd, ['log', '--no-merges', '--format=%H%x00%s', ref]);
+        // Another ref's list names commits of that ref's history only.
+        const log = await out(cwd, ['log', '--no-merges', '--format=%H%x00%s', listFrom === ref ? ref : listFrom]);
         for (const line of log.split('\n')) {
           const [id, s] = line.split('\0');
           if (id && s !== undefined) subjects.set(s, [...(subjects.get(s) ?? []), id]);
@@ -269,7 +270,7 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ 
 // the command isn't run on it. Matched as the disk will open the name: a
 // Mac's disk ignores case (`.CARGO` is `.cargo` to cargo there; Codex's
 // review, 21 Nov) and treats Unicode forms alike.
-const STEERS = /(^|\/)(rust-toolchain(\.toml)?|\.cargo|\.?(mise|rtx)(\.[^/]*)?\.toml|\.?(mise|rtx)(?=\/)|\.config|\.tool-versions|\.prototools)(\/|$)/i;
+const STEERS = /(^|\/)(rust-toolchain(\.toml)?|\.cargo|\.?(mise|rtx)(\.[^/]*)?\.toml|\.?(mise|rtx)(?=\/)|\.config|\.tool-versions|\.prototools(\.[^/]*)?)(\/|$)/i;
 const asDiskSees = (p: string) => p.normalize('NFKC').replace(/\p{Default_Ignorable_Code_Point}/gu, '').toLowerCase();
 const steers = (p: string, config: string[]) => STEERS.test(asDiskSees(p)) && !config.some((c) => asDiskSees(c) === asDiskSees(p));
 
@@ -619,9 +620,20 @@ export async function formatChanges(cwd: string, base: string, tip: string): Pro
   };
   const before = await read(base);
   const after = await read(tip);
-  const known = new Set(before.map(recipe));
+  // By recipe and subject: an entry naming another commit for a recipe main
+  // trusts (a new subject) says which tree's config that recipe later runs
+  // with, so it counts too. Only an id written in under the same subject
+  // and recipe (filled in once the commit is on main) doesn't; one changed
+  // to name another commit does.
+  const ident = (e: FormatEntry) => JSON.stringify([recipe(e), e.subject]);
+  const ids = new Map<string, Set<string | undefined>>();
+  for (const e of before) ids.set(ident(e), (ids.get(ident(e)) ?? new Set()).add(e.id));
+  const fresh = (e: FormatEntry) => {
+    const had = ids.get(ident(e));
+    return !had || (e.id !== undefined && !had.has(e.id) && !had.has(undefined));
+  };
   const seen = new Set<string>();
-  const entries = after.filter((e) => !known.has(recipe(e)) && !seen.has(recipe(e)) && seen.add(recipe(e)));
+  const entries = after.filter((e) => fresh(e) && !seen.has(ident(e) + (e.id ?? '')) && seen.add(ident(e) + (e.id ?? '')));
   const paths = [...new Set([...before, ...after].flatMap((e) => e.config))].sort();
   const configs: string[] = [];
   const blobs: string[] = [];
