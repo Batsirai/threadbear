@@ -1434,7 +1434,7 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
   let problem: string | undefined;
   // Each reach's writes, held against all of their runs at the end: a
   // script outside the repo that writes one the check runs (Daybreak 153).
-  const writes: Writes = { written: [], reached: [], pending: [], deps: [] };
+  const writes: Writes = { written: [], reached: [], pending: [], deps: [], exported: [], cleared: [] };
   let wrote: string | undefined;
   const take = (reach: ScriptReach) => {
     wrote ??= reach.writeProblem;
@@ -1446,6 +1446,8 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
       writes.pending!.push(...(reach.writes.pending ?? []));
       writes.deps!.push(...(reach.writes.deps ?? []));
       if (reach.writes.assignsAny) writes.assignsAny = true;
+      writes.exported!.push(...(reach.writes.exported ?? []));
+      writes.cleared!.push(...(reach.writes.cleared ?? []));
     }
     for (const f of reach.files) files.add(f);
     for (const f of reach.missing) missing.add(f);

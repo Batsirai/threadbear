@@ -69,7 +69,9 @@ export type Deps = { direct: boolean; names: string[]; values?: string[]; forms?
 // `srcs`: the names of what's copied there, when known: into a folder,
 // that's what's written.
 export type Pending = { where: string; direct: boolean; names: string[]; tpl: Tpl; dirs: string[]; flag?: boolean; into?: boolean; srcs?: string[] };
-export type Writes = { written: [string, string][]; somewhere?: string; reached: string[]; pending?: Pending[]; deps?: [string, Deps][]; assignsAny?: boolean };
+// `exported`: variables a shell it starts still has; `cleared`: ones some
+// `env -u` takes away.
+export type Writes = { written: [string, string][]; somewhere?: string; reached: string[]; pending?: Pending[]; deps?: [string, Deps][]; assignsAny?: boolean; exported?: string[]; cleared?: string[] };
 
 // The most of one file patch trust reads (a patch, a helper, a script, a
 // config file); it reads one bigger than this not at all, and fails closed.
@@ -855,6 +857,8 @@ class Reach {
   // Functions any script followed defines, for what they're handed.
   private definedFns = new Set<string>();
   private writesDepth = 0;
+  private exported = new Set<string>();
+  private cleared = new Set<string>();
   private deps = new Map<string, Deps>();
   private assignsAny = false;
   private home: string;
@@ -1743,8 +1747,13 @@ class Reach {
       // A name reference makes a later assignment to one name write
       // another (declare -n d=HOME; d=x), which isn't followed.
       if (name !== 'export' && args.some((w) => /^[-+][a-zA-Z]*n/.test(litOf(w) ?? ''))) return this.fail(ctx, line, `makes a name reference (${name} -n), which patch trust doesn't follow.`);
+      const exports = name === 'export' || args.some((w) => /^-[a-zA-Z]*x/.test(litOf(w) ?? ''));
       for (const w of args) {
         const as = this.assignment(w);
+        if (exports) {
+          const n = as?.name ?? /^([A-Za-z_]\w*)/.exec(this.str(w, ctx) ?? '')?.[1];
+          if (n) this.exported.add(n);
+        }
         if (as) this.assign(as.name, as.value, as.append, ctx, line);
         else if (this.quotedAssignment(w, ctx, line)) return;
       }
@@ -1939,6 +1948,14 @@ class Reach {
     for (const r of cmd.redirs) {
       if (r.target && WRITE_REDIRS.has(r.op) && !(r.op === '>&' && /^(\d+-?|-)$/.test(litOf(r.target) ?? ''))) this.wrote(this.values(r.target, ctx), r.target, ctx, cmd.line);
     }
+    // Assignments still set what later writes are made from.
+    for (const w of cmd.words) {
+      const a = this.assignment(w);
+      if (!a) continue;
+      const v = this.values(a.value, ctx);
+      ctx.vars.set(a.name, a.append ? undefined : v);
+      this.dependsOn(a.name, v && !a.append ? { direct: false, names: [], values: v } : this.depsOf(a.value, ctx));
+    }
     const words = cmd.words.filter((w) => !RESERVED.has(bareOf(w) ?? '') && !this.assignment(w));
     let i = 0;
     // Past wrappers by name, as their options can't be told apart here.
@@ -1956,15 +1973,25 @@ class Reach {
       const c = args.findIndex((w) => litOf(w) === '-c');
       if (SHELLS.includes(prog) && c >= 0) {
         const code = args[c + 1] && litOf(args[c + 1]!);
+        const own = `${ctx.file}\u0000-c${cmd.line}`;
+        this.handed(args.slice(c + 2), [own], ctx);
         if (code === undefined) this.writesSomewhere ??= `${ctx.label} line ${cmd.line}`;
-        else this.writesOnlyText(code, ctx);
+        else this.writesOnlyText(code, { ...ctx, file: own, vars: new Map() });
       } else if (prog === 'find') {
-        const at = args.findIndex((w) => /^-(exec|ok|execdir|okdir)$/.test(litOf(w) ?? ''));
-        if (at >= 0) this.writesOnly({ words: args.slice(at + 1).filter((w) => !/^[;+]$/.test(litOf(w) ?? '')), redirs: [], line: cmd.line, arrays: [] }, ctx);
+        // Each -exec, as the main follower does.
+        for (let at = 0; at < args.length; at++) {
+          if (!/^-(exec|ok|execdir|okdir)$/.test(litOf(args[at]!) ?? '')) continue;
+          const end = args.findIndex((w, j) => j > at && /^[;+]$/.test(litOf(w) ?? ''));
+          this.writesOnly({ words: args.slice(at + 1, end < 0 ? args.length : end), redirs: [], line: cmd.line, arrays: [] }, ctx);
+          if (end < 0) break;
+          at = end;
+        }
       } else {
         // A script by path, by a shell, or sourced: its text, if it's there.
         const file = name.includes('/') ? name : SHELLS.includes(prog) || prog === 'source' || prog === '.' ? args.map((w) => this.str(w, ctx)).find((v) => v !== undefined && !v.startsWith('-')) : undefined;
-        for (const f of file ? this.abs(file, ctx) ?? [] : []) {
+        const files = file ? this.abs(file, ctx) ?? [] : [];
+        this.handed(args.slice(name.includes('/') ? 0 : args.findIndex((w) => this.str(w, ctx) === file) + 1), files, ctx);
+        for (const f of files) {
           this.reached.add(f);
           const text = isFile(f) && this.inRepo(f) ? this.text(f) : undefined;
           if (text !== undefined && text.length <= MAX_CONFIG_BYTES) this.writesOnlyText(text, { ...ctx, file: f, label: this.rel(f), vars: new Map() });
@@ -2053,8 +2080,12 @@ class Reach {
       if (extra) return somewhere();
       // rsync's options that take the next word, wherever they are.
       const ops = name === 'rsync' ? args.filter((w, i) => !(lit(w) ?? '').startsWith('-') && !RSYNC_VALUED.test(lit(args[i - 1]!) ?? '')) : operands();
+      // What lands in a folder is a source by its own name only when it's a
+      // file named plainly: a folder (or `dir/`, which copies what's in it),
+      // -R or a list of files puts other names there (Grok's review).
       const srcs = ops.slice(0, -1).map((w) => this.values(w, ctx));
-      const names = srcs.every((v) => v && v.length === 1) ? srcs.map((v) => path.basename(v![0]!.replace(/\/+$/, ''))) : undefined;
+      const listed = args.some((w) => /^(-[A-Za-z]*R|--relative|--files-from|--include-from)/.test(lit(w) ?? ''));
+      const names = !listed && srcs.every((v) => v && v.length === 1 && !v[0]!.endsWith('/') && (path.isAbsolute(v[0]!) ? isFile(v[0]!) : [...ctx.dirs].every((d) => isFile(path.resolve(d, v[0]!))))) ? srcs.map((v) => path.basename(v![0]!)) : undefined;
       if (ops.length >= 2) return into(ops.at(-1), names);
       return;
     }
@@ -2072,14 +2103,16 @@ class Reach {
       // `w file`, `s/a/b/w file`: a file the program names (and `e` runs one).
       // After an address or any delimiter (`1,$w f`, `s|a|b|w f`), so any w,
       // W or e that isn't inside a word (Grok's review).
-      if (args.some((w) => /(^|[^A-Za-z])[wWe](\s|;|$)/.test(lit(w) ?? ''))) return somewhere();
+      // GNU's `w/tmp/x` needs no space; `r` reads a file into what's written.
+      if (args.some((w) => /(^|[^A-Za-z])[wWeRr](\s|;|$|\/)/.test(lit(w) ?? ''))) return somewhere();
       const inPlace = args.find((w) => /^-[A-Za-z]*i|^--in-place/.test(lit(w) ?? ''));
       if (!inPlace) return;
       // The files: past the program, unless -e gave it.
       const all = operands();
       // BSD's `-i ''` and `-i .bak` give a suffix as the next word.
       if (lit(inPlace) === '-i' && args[args.indexOf(inPlace) + 1] === all[0] && /^(|\..*)$/.test(lit(all[0]) ?? 'x')) all.shift();
-      const ops = args.some((w) => /^-[A-Za-z]*e$|^--expression/.test(lit(w) ?? '')) ? all : all.slice(1);
+      // -e gives the program, its own word or run on (`-e'1r x'`, `-ne...`).
+      const ops = args.some((w) => /^-[A-Za-z]*e|^--expression/.test(lit(w) ?? '')) ? all : all.slice(1);
       for (const o of ops) if (!this.values(o, ctx)) this.wrote(undefined, o, ctx, line, true);
       ops.forEach(to);
       // A backup beside each: `-i.bak`, BSD's `-i .bak` (its next word).
@@ -2172,6 +2205,8 @@ class Reach {
       reached: [...this.reached, ...this.files, ...this.missing],
       pending: this.pendingWrites,
       deps: [...this.deps],
+      exported: [...this.exported],
+      cleared: [...this.cleared],
       ...(this.assignsAny ? { assignsAny: true } : {}),
     };
   }
@@ -2278,6 +2313,7 @@ class Reach {
               return { words: [], extra: false };
             }
             if (v && this.unfollowableVar(v, ctx, line)) return { words: [], extra: false };
+            this.cleared.add(v);
             i++;
             continue;
           }
@@ -2285,6 +2321,7 @@ class Reach {
           const joined = /^(?:-u|--unset=)(.+)$/s.exec(s);
           if (joined) {
             if (this.unfollowableVar(joined[1]!, ctx, line)) return { words: [], extra: false };
+            this.cleared.add(joined[1]!);
             continue;
           }
           // A cleared environment loses NoDefaultCurrentDirectoryInExePath.
@@ -2301,6 +2338,8 @@ class Reach {
             i++;
             continue;
           }
+          // -i: none of the environment (Grok's review).
+          if (s === '-i' || s === '--ignore-environment' || s === '-') this.cleared.add('*');
           if (s.startsWith('-')) continue;
           let as = this.assignment(args[i]!);
           // `env 'X=1' cmd` is an assignment too, after its quotes come off
@@ -2353,7 +2392,11 @@ class Reach {
       if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(s)) {
         const code = args[i + 1] ? litOf(args[i + 1]!) : undefined;
         if (code === undefined) return this.fail(ctx, line, `runs \`${name} -c\` with code worked out as it runs, which patch trust can't follow.`);
-        return this.shell(code, { ...ctx, argv0: [], vars: new Map(), dirs: new Set(ctx.dirs) }, line);
+        // Its own positionals: the words after the code ($0, $1...), not
+        // the caller's (Grok's review).
+        const own = `${ctx.file}\u0000-c${line}`;
+        this.handed(args.slice(i + 2), [own], ctx);
+        return this.shell(code, { ...ctx, file: own, argv0: [], vars: new Map(), dirs: new Set(ctx.dirs) }, line);
       }
       if (/^-[a-zA-Z]*s[a-zA-Z]*$/.test(s)) return this.fail(ctx, line, `runs ${name} reading what to run from its input, which patch trust can't follow.`);
       if (s.startsWith('-') || s.startsWith('+')) continue;
@@ -3263,6 +3306,8 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
     const had = deps.get(n);
     deps.set(n, had ? { direct: had.direct || d.direct, names: [...had.names, ...d.names], values: [...(had.values ?? []), ...(d.values ?? [])], forms: [...(had.forms ?? []), ...(d.forms ?? [])] } : d);
   }
+  const exported = new Set(w.exported ?? []);
+  const cleared = new Set(w.cleared ?? []);
   const tainted = new Map<string, boolean>();
   const isTainted = (n: string): boolean => {
     if (tainted.has(n)) return tainted.get(n)!;
@@ -3279,7 +3324,8 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
     if (!d || depth > 6) return [''];
     // Empty too: a shell it starts doesn't have a variable it didn't
     // export, `env -u` takes one away, `shift` empties a positional.
-    return ['', ...(d.values ?? []), ...(d.forms ?? []).flatMap((f) => expand(f, depth + 1))].slice(0, 32);
+    const empty = n.startsWith('#args:') || !exported.has(n) || cleared.has(n) || cleared.has('*') ? [''] : [];
+    return [...empty, ...(d.values ?? []), ...(d.forms ?? []).flatMap((f) => expand(f, depth + 1))].slice(0, 32);
   };
   const expand = (t: Tpl, depth: number): string[] => {
     let outs = [''];

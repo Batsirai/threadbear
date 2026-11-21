@@ -894,6 +894,14 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
     "sed -n '1,$w run.sh' payload.dat; sh run.sh",
     "sed 's|.*|&|w run.sh' payload.dat; sh run.sh",
     "eval :; sh -c 'cp payload.dat run.sh'; sh run.sh",
+    // Grok's second.
+    "sh -c 'cp payload.dat \"$1\"' _ run.sh; sh run.sh",
+    'eval :; sh writer.sh run.sh; sh run.sh',
+    "prefix=safe; eval :; sh -c 'cp payload.dat \"${prefix}run.sh\"'; sh run.sh",
+    "eval :; sh -c 'dest=run.sh; cp payload.dat \"$dest\"'; sh run.sh",
+    'eval :; find . -exec true \\; -exec cp payload.dat run.sh \\; ; sh run.sh',
+    "sed -i '' -e'1r payload.dat' run.sh; sh run.sh",
+    "gsed -n 'w/tmp/tb-153-run.sh' payload.dat; sh /tmp/tb-153-run.sh",
   ];
   const dir = repo({ ...files, 'payload-dir/env.sh': 'X=2\n', 'target.txt': 'run.sh\n', 'writer.sh': 'cat payload.dat > "$1"\n' });
   // A link made before the check: the same file by another name.
@@ -911,6 +919,10 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
   // A copy into a folder a variable names (another shell's), then run there.
   const tmp = fs.realpathSync(tmpDir());
   assert.match(checkDigest(`export dest=${tmp}; sh -c 'cp payload.dat "$dest"'; sh ${tmp}/payload.dat`, dir).problem ?? '', /writes/);
+  // A folder copied (by its contents) into a folder a variable names.
+  fs.mkdirSync(path.join(dir, 'payload_dir'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'payload_dir', 'run.sh'), 'echo\n');
+  assert.match(checkDigest(`export dest=${tmp}; sh -c 'rsync -a payload_dir/ "$dest/"'; sh ${tmp}/run.sh`, dir).problem ?? '', /writes/);
   // node --import by a file: URL as Node decodes it.
   assert.match(checkDigest(`cp payload.dat ${tmp}/payload.mjs; node --import file://${tmp}/pay%6coad.mjs run.js`, repo({ ...files, 'run.js': '1;\n' })).problem ?? '', /writes/);
   // awk's program from a file, run on: refused as one it can't follow.
@@ -947,6 +959,7 @@ test('schedule check: writing files it never runs stays followable: state files,
     'tar -cf out.tar extra; tar -tzf index.tgz; ./run.sh',
     'export OUT=state.txt; sh writer.sh; ./run.sh',
     "sed -i '' \"s/old/$(date +%F)/\" state.txt; ./run.sh",
+    "export prefix=safe; sh -c 'cp notes.txt \"${prefix}run.sh\"'; ./run.sh",
   ]) assert.equal(checkDigest(check, dir).problem, undefined, check);
   // A variable the check sets is an outside script's to write to too.
   fs.chmodSync(path.join(dir, 'payload.dat'), 0o644);
