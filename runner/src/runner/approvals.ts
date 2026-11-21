@@ -16,6 +16,7 @@ import { START_CARD, type RequestAnswer } from '../cross-runner.ts';
 import { noAppToAllow } from '../app-seen.ts';
 import { REMOTE_ALLOW_REFUSED, remoteCardShowsAll } from '../tools.ts';
 import { reviewCard, reviewerLeftIt, reviewsCards, type CardForReview, type CardVerdict } from './card-review.ts';
+import { cliHears } from '../cli-session.ts';
 
 export type SecretRequest = { label: string; reason: string; placeholder?: string; timeoutMinutes?: number; toolUseId?: string; signal?: AbortSignal };
 export type SecretAnswer = ({ status: 'saved' } & SecretFiles) | { status: 'declined' | 'expired'; message?: string };
@@ -149,7 +150,7 @@ export const approvalsPart = {
   // card").
   turnForRequest(this: Runner, st: ThreadState, gen: number, main = true): boolean {
     const { rt } = st;
-    if (rt.generation !== gen || rt.closing || this.stopping) return false;
+    if (cliHears(rt, gen) !== 'current' || this.stopping) return false;
     if (main && !rt.turn) this.openCliTurn(st);
     return true;
   },
@@ -198,7 +199,7 @@ export const approvalsPart = {
       rt.reviews?.delete(id);
       signal?.removeEventListener('abort', onAbort);
     }
-    if (rt.generation !== gen || rt.closing || rt.deleted || this.stopping) return { decision: 'expired', message: 'The thread is shutting down.' };
+    if (cliHears(rt, gen) !== 'current' || rt.deleted || this.stopping) return { decision: 'expired', message: 'The thread is shutting down.' };
     // Still on Auto: switched to Ask or Plan meanwhile, it's Mike's card.
     if (verdict.allow && !entry.stale && reviewsCards(this, st)) {
       this.emit(st, { type: 'system.note', text: `Allowed by the reviewer: ${card.title}. ${verdict.why}` }, rt.turn?.turnId);

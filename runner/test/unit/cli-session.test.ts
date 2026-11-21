@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CLI_FIELDS, STALE, cliFields, cliOf, cliRuntime, moveCli, type CliEvent, type CliFields, type CliOut } from '../../src/cli-session.ts';
+import { CLI_FIELDS, STALE, cliFields, cliHears, cliKind, cliOf, cliRuntime, moveCli, runningSession, type CliEvent, type CliFields, type CliOut } from '../../src/cli-session.ts';
 import type { AgentSession, BackgroundTask } from '../../src/adapters/types.ts';
 import type { Spare } from '../../src/runner/warm-start.ts';
 
@@ -30,7 +30,7 @@ const S2 = spareOf('s2');
 // What the old code handed on, the same for both: what a release ends and
 // says it stopped, what delete stops, the spare startSession takes, and the
 // flags onExited and the version output read before writing.
-type Outcome = { end?: { session: AgentSession; hard: boolean; stopped: string[] }; forgot?: AgentSession; spare?: Spare; released?: boolean; started?: boolean; first?: boolean; stale?: true };
+type Outcome = { end?: { session: AgentSession; hard: boolean; stopped: string[] }; forgot?: AgentSession; spare?: Spare; released?: boolean; reportStart?: boolean; stale?: true };
 
 // ---- The reference: the writes by hand before cli-session.ts ----
 // (as they were at d32fa7944: startSession, onOutput's session, cliVersion
@@ -69,10 +69,11 @@ function byHand(rt: F, e: CliEvent): Outcome {
       return {};
     case 'version': {
       if (rt.generation !== e.gen) return { stale: true };
-      const o: Outcome = { first: false };
+      const o: Outcome = {};
+      // onOutput's cliVersion: tellStarted(…, true) the first time.
       if (!rt.started) {
         rt.started = true;
-        o.first = true;
+        o.reportStart = true;
       }
       if (e.atWanted) rt.versionMove = false;
       return o;
@@ -83,7 +84,10 @@ function byHand(rt: F, e: CliEvent): Outcome {
       return {};
     case 'exited': {
       if (rt.generation !== e.gen) return { stale: true };
-      const o: Outcome = { released: rt.releasedGen === e.gen, started: Boolean(rt.started) };
+      const o: Outcome = { released: rt.releasedGen === e.gen };
+      // onExited: `if (err && !started && !missing && !released)
+      // tellStarted(…, false)`, with failed for err && !missing.
+      if (e.failed && !rt.started && !o.released) o.reportStart = false;
       rt.session = undefined;
       if (rt.releasedGen === e.gen) rt.releasedGen = undefined;
       return o;
@@ -145,11 +149,8 @@ function outcome(e: CliEvent, out: CliOut): Outcome {
   if (out.end) o.end = { session: out.end.session, hard: out.end.hard, stopped: out.end.stopped.map((t) => t.id) };
   if (out.forgot) o.forgot = out.forgot;
   if (out.spare) o.spare = out.spare;
-  if (e.kind === 'exited') {
-    o.released = out.released;
-    o.started = out.started;
-  }
-  if (e.kind === 'version') o.first = out.first;
+  if (e.kind === 'exited') o.released = out.released;
+  if (out.reportStart !== undefined) o.reportStart = out.reportStart;
   return o;
 }
 
@@ -196,7 +197,9 @@ function events(rt: F): Record<string, CliEvent> {
     tasksNone: { kind: 'tasks', gen: g, tasks: [] },
     tasksStale: { kind: 'tasks', gen: g - 1, tasks: [task('t9')] },
     exited: { kind: 'exited', gen: g },
+    exitedFailed: { kind: 'exited', gen: g, failed: true },
     exitedStale: { kind: 'exited', gen: g - 1 },
+    exitedFailedStale: { kind: 'exited', gen: g - 1, failed: true },
     retryFresh: { kind: 'retryFresh' },
     leave: { kind: 'leave' },
     stay: { kind: 'stay' },
@@ -259,6 +262,39 @@ const KINDS: Record<string, string> = {
   dropped: 'none', droppedClosing: 'closing', spareBesideLive: 'live', spareBesideClosing: 'closing', twoStarts: 'starting',
 };
 
+// ---- The readers' reference: the checks by hand the machine answers now ----
+// runningSession was `rt.session && !rt.closing` (makeRoomForCli, canSteer,
+// needsPreLook, deliver, interrupt, update's setters, letGo, moves, the idle
+// timer, releaseIdle, quietTurns, the wake grace); cliHears was the sink's
+// `rt.generation !== gen` (stale), turnForRequest's and reviewThenCard's
+// `rt.generation !== gen || rt.closing` (not current), and the compaction's
+// `turn.precompact.gen === rt.generation` (not stale).
+function readersByHand(rt: F): Record<string, unknown> {
+  const g = rt.generation;
+  return {
+    running: rt.session && !rt.closing ? rt.session : undefined,
+    kind: rt.closing ? 'closing' : rt.session ? (rt.started ? 'live' : 'starting') : rt.spare ? 'spare' : 'none',
+    ...Object.fromEntries([g, g - 1, g + 1].map((gen, i) => [`gen${i}`, { sinkDrops: rt.generation !== gen, cardExpires: rt.generation !== gen || Boolean(rt.closing), compactionIsIt: gen === rt.generation }])),
+  };
+}
+
+function readers(rt: F): Record<string, unknown> {
+  const g = rt.generation;
+  return {
+    running: runningSession(rt),
+    kind: cliKind(rt),
+    ...Object.fromEntries([g, g - 1, g + 1].map((gen, i) => [`gen${i}`, { sinkDrops: cliHears(rt, gen) === 'stale', cardExpires: cliHears(rt, gen) !== 'current', compactionIsIt: cliHears(rt, gen) !== 'stale' }])),
+  };
+}
+
+test('the readers see what the checks by hand saw, in every state', () => {
+  for (const [name, make] of Object.entries(STATES)) {
+    const rt = make();
+    assert.deepEqual(readers(rt), readersByHand(rt), name);
+    assert.equal(cliKind(rt), cliOf(rt).kind, name);
+  }
+});
+
 test('each state reads as its kind', () => {
   const kinds = Object.fromEntries(Object.entries(STATES).map(([n, f]) => [n, cliOf(f()).kind]));
   assert.deepEqual(kinds, KINDS);
@@ -291,7 +327,7 @@ function sendable(rt: F): string[] {
   if (s.kind === 'none' || s.kind === 'spare') out.push('beginFresh', 'beginResume');
   if (s.kind === 'none' && rt.generation === 0) out.push('claim');
   if (s.kind === 'spare') out.push('spareGone');
-  if (live || s.kind === 'closing') out.push('exited', 'stopTasks');
+  if (live || s.kind === 'closing') out.push('exited', 'exitedFailed', 'stopTasks');
   if (live) out.push('versionMove', 'versionStays');
   if (s.kind === 'closing' && rt.closing) out.push(rt.session === B ? 'closedB' : 'closedA');
   return out;
@@ -316,7 +352,7 @@ test('random walks move as the writes by hand did, and the ones the runner sends
       if (real && cliOf(want).kind !== 'none' && cliOf(want).kind !== 'spare') names = names.filter((n) => !n.startsWith('begin'));
       const name = names[Math.floor(rand() * names.length)];
       // onExited sends stopTasks after the cards close.
-      const steps1 = real && name.startsWith('begin') ? [name, 'takeSpare', sessions++ % 2 ? 'spawnedB' : 'spawnedA'] : real && name === 'exited' ? [name, 'stopTasks'] : [name];
+      const steps1 = real && name.startsWith('begin') ? [name, 'takeSpare', sessions++ % 2 ? 'spawnedB' : 'spawnedA'] : real && name.startsWith('exited') && !name.endsWith('Stale') ? [name, 'stopTasks'] : [name];
       for (const n of steps1) {
         trail.push(n);
         const e = events(want)[n];
@@ -327,6 +363,7 @@ test('random walks move as the writes by hand did, and the ones the runner sends
         assert.deepEqual(norm(got), norm(want), trail.join(' > '));
         assert.deepEqual(gotOut, wantOut, `${trail.join(' > ')}: what it hands on`);
         assert.ok(got.generation >= genBefore, `${trail.join(' > ')}: the generation went down`);
+        assert.deepEqual(readers(got), readersByHand(got), `${trail.join(' > ')}: what the readers see`);
         if (real && res.ok && res.unexpected) assert.equal(res.unexpected, 'an exit heard after its release had settled', trail.join(' > '));
         // A release leaves no work on the books.
         if (res.ok && res.out.end) assert.deepEqual(got.tasks, [], trail.join(' > '));
@@ -349,7 +386,7 @@ test('an older CLI`s output, exit or refused setting changes nothing', () => {
   for (const [name, make] of Object.entries(STATES)) {
     for (const e of [
       { kind: 'init', gen: -1 }, { kind: 'version', gen: -1, atWanted: true }, { kind: 'tasks', gen: -1, tasks: [task('x')] },
-      { kind: 'exited', gen: -1 }, { kind: 'leave', gen: -1 },
+      { kind: 'exited', gen: -1 }, { kind: 'exited', gen: -1, failed: true }, { kind: 'leave', gen: -1 },
     ] satisfies CliEvent[]) {
       const rt = make();
       const before = { ...rt };

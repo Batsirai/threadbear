@@ -8,11 +8,19 @@
 //
 // The Runtime keeps those fields: readers that just want one (rt.session to
 // send to it, rt.closing to wait for it, rt.tasks for the summary) stay on
-// the field. `cliOf` reads them as a Cli, `cliFields` writes one back, and
-// every write goes through `cliRuntime(rt, event)`, the only writer, which
-// cli-session.test.ts holds the rest of runner/src to (Runner.cli calls it
-// and logs what it says). It lives in memory only: nothing here is stored,
-// sent or handed over (a handover lets the CLI go first, letGo).
+// the field. Readers that branched on several read the kind instead
+// (`cliKind`, and `runningSession` for the old `rt.session && !rt.closing`),
+// and a step that waited on a CLI asks `cliHears(rt, gen)` whether it's
+// still this thread's, rather than checking the generation and rt.closing
+// itself (22 Nov 2026). `cliOf` reads the fields as a Cli, `cliFields` writes
+// one back, and every write goes through `cliRuntime(rt, event)`, the only
+// writer, which cli-session.test.ts holds the rest of runner/src to
+// (Runner.cli calls it and logs what it says). What a move means for the
+// runner to do comes back in its `out` (the CLI to end and the work stopped
+// with it, the one to stop on delete, the spare to take, what to tell E's
+// CLI updates of the start), so call sites act on it rather than read the
+// fields again. It lives in memory only: nothing here is stored, sent or
+// handed over (a handover lets the CLI go first, letGo).
 //
 // The states, by the fields (docs/protocol/updates.md, "A thread's CLI",
 // draws them):
@@ -56,10 +64,11 @@
 //               (live, not starting, if its version came first: a spare's replay)
 //   init *      its session output: there          retriedFresh off, in every state
 //   version *   its cliVersion output              none+    spare+   live      live      closing
-//               (+: started set, so spawned makes it live)
+//               (+: started set, so spawned makes it live; the first: a start to report)
 //   tasks *     its background work list           (tasks, in every state)
 //   exited *    its exit (onExited)                none!    spare!   none      none      closing (session gone)
-//               (its tasks stay until onExited's stopTasks, after the cards close)
+//               (its tasks stay until onExited's stopTasks, after the cards close;
+//               failed, before its version and unasked: a failed start to report)
 //   retryFresh  onExited, resuming once            (retriedFresh on)
 //   leave       a setting it can't take, etc.      (leave on, in every state; *
 //               when it's a refusal that came back)
@@ -87,8 +96,8 @@
 // leaves the background work it stopped on the books.
 //
 // What isn't an event: the CLI's output a turn reads (text, tool calls,
-// approvals), which the generation filters in startSession's sink before
-// it gets here; the CLI's version and start time (cliVersion,
+// approvals), which cliHears filters in startSession's sink before it gets
+// here; the CLI's version and start time (cliVersion,
 // startVersion), the provider it runs (sessionProvider), the folder
 // settings it started with (claudeSkipped, claudeHeldGrants) and where its
 // transcript came from (carried), all set at start and read beside it;
@@ -149,7 +158,10 @@ export type CliEvent =
   | { kind: 'init'; gen: number }
   | { kind: 'version'; gen: number; atWanted: boolean }
   | { kind: 'tasks'; gen: number; tasks: BackgroundTask[] }
-  | { kind: 'exited'; gen: number }
+  // `failed`: it went with an error that isn't a missing session to resume
+  // (the CLI itself fell over), which E's CLI updates hear of when it
+  // hadn't got going and nobody asked it to stop.
+  | { kind: 'exited'; gen: number; failed?: boolean }
   | { kind: 'retryFresh' }
   // `gen`: from a step that waited on the CLI (a setting it refused), the
   // generation it was asked of: a later CLI started with the setting.
@@ -170,11 +182,12 @@ export type CliOut = {
   gen?: number;
   // takeSpare: the spare it took off the thread.
   spare?: Spare;
-  // version: the first time this CLI said it.
-  first?: boolean;
-  // exited: whether its exit was asked for, and whether it had said its version.
+  // What to tell E's CLI updates of this start: version, the first time
+  // this CLI said it (true); exited, a CLI that fell over before it said
+  // it and wasn't asked to go (false).
+  reportStart?: boolean;
+  // exited: whether its exit was asked for.
   released?: boolean;
-  started?: boolean;
   // release: the CLI to end, and the background work stopped with it.
   end?: { session: AgentSession; hard: boolean; stopped: BackgroundTask[] };
   // drop with forget: the CLI to stop.
@@ -198,10 +211,11 @@ export function cliOf(rt: CliFields): Cli {
     ...(rt.versionMove ? { versionMove: true as const } : {}),
   };
   const tasks = rt.tasks;
-  if (rt.closing) return { kind: 'closing', ...(rt.session ? { session: rt.session } : {}), done: rt.closing, tasks, marks: withStray(marks, rt.spare) };
-  if (rt.session) return { kind: rt.started ? 'live' : 'starting', session: rt.session, tasks, marks: withStray(marks, rt.spare) };
-  if (rt.spare) return { kind: 'spare', spare: rt.spare, tasks, marks };
-  return { kind: 'none', tasks, marks };
+  const kind = cliKind(rt);
+  if (kind === 'closing') return { kind, ...(rt.session ? { session: rt.session } : {}), done: rt.closing!, tasks, marks: withStray(marks, rt.spare) };
+  if (kind === 'starting' || kind === 'live') return { kind, session: rt.session!, tasks, marks: withStray(marks, rt.spare) };
+  if (kind === 'spare') return { kind, spare: rt.spare!, tasks, marks };
+  return { kind, tasks, marks };
 }
 
 export function cliFields(s: Cli): { [K in CliField]: CliFields[K] | undefined } {
@@ -219,6 +233,33 @@ export function cliFields(s: Cli): { [K in CliField]: CliFields[K] | undefined }
     versionMove: m.versionMove,
     tasks: s.tasks,
   };
+}
+
+// The kind alone, for readers that branch on it (cliOf without building
+// the state).
+export function cliKind(rt: CliFields): Cli['kind'] {
+  if (rt.closing) return 'closing';
+  if (rt.session) return rt.started ? 'live' : 'starting';
+  return rt.spare ? 'spare' : 'none';
+}
+
+// The CLI a thread can send to and change now: starting or live, not one
+// on its way out. Was `rt.session && !rt.closing` at each reader.
+export function runningSession(rt: CliFields): AgentSession | undefined {
+  const kind = cliKind(rt);
+  return kind === 'starting' || kind === 'live' ? rt.session : undefined;
+}
+
+// What a CLI of generation `gen` is to the thread now: its own (current),
+// its own but asked to go (closing: what it says still counts, but it
+// can't be asked anything new), or an older one (stale: what it says goes
+// nowhere). The one answer to "is this still my CLI", for the steps that
+// waited on it (its output, an approval it asked for, a compaction sent
+// to it), each of which used to check the generation and rt.closing itself.
+export type CliHears = 'current' | 'closing' | 'stale';
+export function cliHears(rt: CliFields, gen: number): CliHears {
+  if (gen !== rt.generation) return 'stale';
+  return cliKind(rt) === 'closing' ? 'closing' : 'current';
 }
 
 // ---- Moves ----
@@ -256,14 +297,14 @@ export function moveCli(s: Cli, e: CliEvent): CliMove {
       if (e.gen !== m.gen) return no(STALE);
       const marks: CliMarks = { ...(e.atWanted ? without(m, 'versionMove') : m), started: true };
       const next: Cli = s.kind === 'starting' ? { kind: 'live', session: s.session, tasks: s.tasks, marks } : { ...s, marks };
-      return ok(next, { first: !m.started });
+      return ok(next, m.started ? {} : { reportStart: true });
     }
     case 'tasks':
       if (e.gen !== m.gen) return no(STALE);
       return ok({ ...s, tasks: e.tasks });
     case 'exited': {
       if (e.gen !== m.gen) return no(STALE);
-      const out: CliOut = { released: Boolean(m.released), started: Boolean(m.started) };
+      const out: CliOut = { released: Boolean(m.released), ...(e.failed && !m.started && !m.released ? { reportStart: false } : {}) };
       const marks = without(m, 'released');
       // Its background work goes after, with stopTasks (onExited).
       const tasks = s.tasks;

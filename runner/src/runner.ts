@@ -94,7 +94,7 @@ import { parseWhen } from './when.ts';
 import { SERVER_NAME } from './threadbear-mcp.ts';
 import { archiveFromTool, bylineFromTool, END_TURN_TOOL, snoozeFromTool, waitForFromTool, WakeRead } from './needs.ts';
 import { dropsStream, replyTurn, turnNeeds, type ReplyEvent, type ReplyMove, type ReplyOut } from './reply-phase.ts';
-import { cliOf, cliRuntime, STALE, type CliEvent, type CliMove } from './cli-session.ts';
+import { cliHears, cliOf, cliRuntime, STALE, type CliEvent, type CliMove } from './cli-session.ts';
 import type { Needs } from './needs.ts';
 import { asksForAppRestart, MAX_AGE_MS as APP_RESTART_MAX_AGE_MS } from './app-restarts.ts';
 import type { ConnectorsStatus } from './connectors.ts';
@@ -2556,7 +2556,7 @@ export class Runner {
     const gen = rt.generation;
     const sink: SessionSink = {
       output: (o) => {
-        if (rt.generation !== gen) return;
+        if (cliHears(rt, gen) === 'stale') return;
         rt.lastOutputAt = this.clock.now();
         try {
           this.onOutput(st, o, gen);
@@ -2750,7 +2750,7 @@ export class Runner {
         rt.cliVersion = o.version;
         // Started on the version an update wants: nothing to move.
         const said = this.cli(st, { kind: 'version', gen, atWanted: this.wantedVersion[rec.provider] === o.version });
-        if (said.ok && said.out.first) this.tellStarted(rec.provider, o.version, true);
+        if (said.ok && said.out.reportStart) this.tellStarted(rec.provider, o.version, true);
         if (rec.cliVersion && rec.cliVersion !== o.version) {
           this.emit(st, { type: 'system.note', text: `${cliName(rec.provider)} ${o.version} from this turn on (was ${rec.cliVersion})` }, rt.turn?.turnId);
         }
@@ -2853,7 +2853,7 @@ export class Runner {
         if (!turn) break;
         // The compaction sent ahead of the message (runner/cold-compact.ts).
         // A turn the CLI ran by itself meanwhile isn't it: keep waiting.
-        if (turn.precompact?.gen === rt.generation) {
+        if (turn.precompact && cliHears(rt, turn.precompact.gen) !== 'stale') {
           if (compactionResult(turn.precompact, r)) this.compactDone(st, r);
           break;
         }
@@ -3328,13 +3328,13 @@ export class Runner {
     const { rec, rt } = st;
     // An older CLI's exit is stale: nothing moves. Else the session goes,
     // and it says whether it was asked to stop.
-    const exit = this.cli(st, { kind: 'exited', gen });
+    // A session to resume that was missing isn't the CLI failing: it was fine.
+    const missing = err && (err instanceof SessionNotFoundError || err.name === 'SessionNotFoundError' || /no conversation found/i.test(err.message));
+    const exit = this.cli(st, { kind: 'exited', gen, ...(err && !missing ? { failed: true } : {}) });
     if (!exit.ok) return;
     const released = exit.out.released === true;
-    // A CLI that died before it got going, other than one asked to stop or
-    // one whose session to resume was missing (the CLI itself was fine).
-    const missing = err && (err instanceof SessionNotFoundError || err.name === 'SessionNotFoundError' || /no conversation found/i.test(err.message));
-    if (err && !exit.out.started && !missing && !released) this.tellStarted(rec.provider, rt.startVersion, false);
+    // One that fell over before it got going (and wasn't asked to stop).
+    if (exit.out.reportStart === false) this.tellStarted(rec.provider, rt.startVersion, false);
     rt.frozen = false;
     // Nothing's left to answer them: a subagent's card can be open with no
     // turn running, and no turn ending would close it.
