@@ -3929,24 +3929,19 @@ export class Runner {
   }
 
   // media.import from a thread's own key (Daybreak finding 157): off the
-  // event loop, and below Full access metered (media-quota.ts). The owner's
-  // imports (the app's paste and drop) are importMedia's.
-  private importQuota = new ImportQuota();
+  // event loop, and below Full access metered (media-quota.ts). Whether it's
+  // metered is the caller gate's call, by the thread's saved mode, as for
+  // everything else it may do. The owner's imports (the app's paste and drop)
+  // are importMedia's.
+  readonly importQuota = new ImportQuota();
 
-  async importMediaForThread(threadId: string, p: string): Promise<{ image: ImageRef }> {
+  async importMediaForThread(threadId: string, p: string, metered: boolean): Promise<{ image: ImageRef }> {
     const src = path.resolve(expandHome(p));
-    let access: PermissionMode | undefined;
+    const dir = paths.inbox(this.cfg.home);
+    if (metered) return { image: await this.importQuota.run(threadId, src, dir) };
     try {
-      access = this.accessOf(threadId);
-    } catch {
-      // A thread a draining runner has: metered like any below Full.
-    }
-    const work = () => importImageInto(paths.inbox(this.cfg.home), src);
-    try {
-      const image = access === 'full' ? await work() : await this.importQuota.run(threadId, src, work);
-      return { image };
+      return { image: await importImageInto(dir, src) };
     } catch (e) {
-      if (e instanceof RpcError) throw e;
       throw new RpcError(ErrorCode.badParams, (e as Error).message);
     }
   }

@@ -295,12 +295,16 @@ export class RpcServer {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
-  // Connections waiting to authenticate, and authenticated ones whose process
-  // lookup hasn't finished: both hold frames the runner hasn't acted on, so
-  // both take one of the slots (Daybreak finding 158).
+  // Connections waiting to authenticate, and process lookups still running
+  // for authenticated ones: both are work the runner holds for a client it
+  // doesn't know yet, so both take one of the slots (Daybreak finding 158). A
+  // lookup counts until it settles, even after its client has gone, so
+  // connecting and leaving can't start them without end.
+  private lookups = 0;
+
   private pendingAuth(): number {
-    let n = 0;
-    for (const c of this.conns) if (!c.authed || c.identifying) n++;
+    let n = this.lookups;
+    for (const c of this.conns) if (!c.authed) n++;
     return n;
   }
 
@@ -326,7 +330,10 @@ export class RpcServer {
       const m = /^Bearer\s+(.+)$/i.exec(header);
       if (!m || !this.tokenOk(m[1].trim())) return refuse(401, 'Unauthorized');
       authed = true;
-    } else if (this.pendingAuth() >= (this.opts.maxPendingAuth ?? MAX_PENDING_AUTH)) {
+    }
+    // A bearer client is in, but its process lookup is still to come, so it
+    // waits its turn too (Gemini's review of the fix for finding 158).
+    if ((!authed || this.opts.callerOf) && this.pendingAuth() >= (this.opts.maxPendingAuth ?? MAX_PENDING_AUTH)) {
       return refuse(503, 'Service Unavailable');
     }
     const { remoteAddress, remotePort, localAddress, localPort } = req.socket;
@@ -349,6 +356,7 @@ export class RpcServer {
     conn.caller = keyThread;
     const find = this.opts.callerOf;
     if (find && conn.peer !== undefined) {
+      this.lookups++;
       conn.identifying = find(conn.peer)
         .then((t) => {
           if (keyThread !== undefined && t !== undefined && t !== keyThread) {
@@ -362,9 +370,10 @@ export class RpcServer {
           this.dropConn(conn);
         })
         .finally(() => {
+          this.lookups--;
           conn.identifying = undefined;
           conn.queuedBytes = 0;
-          if (conn.dropped) return;
+          if (conn.dropped || conn.ws.readyState !== WebSocket.OPEN) return;
           this.raiseFrameLimit(conn);
           for (const raw of conn.queue.splice(0)) this.onMessage(conn, raw);
         });
@@ -979,8 +988,17 @@ export class RpcServer {
       case 'pools.save':
         return r.savePools(p.pools);
       case 'media.import':
-        // A thread's key gets the metered import (Daybreak finding 157).
-        return conn.caller === undefined ? r.importMedia(reqString(p, 'path')) : r.importMediaForThread(conn.caller, reqString(p, 'path'));
+        // A thread's key gets the background import, metered below Full
+        // (Daybreak finding 157); one whose client has gone by the time it's
+        // done is removed at once.
+        if (conn.caller === undefined) return r.importMedia(reqString(p, 'path'));
+        return r.importMediaForThread(conn.caller, reqString(p, 'path'), this.opts.gate?.whoami(conn.caller).limited ?? true).then((res) => {
+          if (conn.ws.readyState !== WebSocket.OPEN) {
+            r.importQuota.discard(res.image);
+            throw new RpcError(ErrorCode.other, 'the client went away');
+          }
+          return res;
+        });
       case 'panels.render':
         return r.renderPanel(reqString(p, 'threadId'), reqString(p, 'panelId'));
       case 'panels.toggle':

@@ -3,7 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultHome } from '../../src/config.ts';
-import { logLineEvent, safeFields, scrubEvent, sentryOptions, sentryWanted, useSentryMask } from '../../src/sentry.ts';
+import { cleanError, ERROR_CLASSES, errorKind, logLineEvent, safeFields, scrubEvent, scrubForSentry, sentryOptions, sentryWanted, useSentryMask } from '../../src/sentry.ts';
+import fs from 'node:fs';
+import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
 
 const RELEASE_ID = '20261029T012558Z-3e0bd5d';
@@ -150,4 +152,43 @@ test("an event whose scrub fails isn't sent", () => {
     useSentryMask((t) => t);
   }
   assert.deepEqual(scrubEvent({ message: 'fine', breadcrumbs: [{ message: PRIVATE }], user: { id: 'x' } }), { message: 'fine' });
+});
+
+test("an error's kind is from fixed lists: a made-up class or code from its text never goes", () => {
+  assert.equal(errorKind('LandlordOwesMeError: x'), 'Error');
+  assert.equal(errorKind('Error: spawn git ENOENT'), 'Error (ENOENT)');
+  assert.equal(errorKind('Error: ERR_LANDLORD_OWES_ME and EXAMPLESECRET'), 'Error');
+  assert.equal(errorKind('RpcError: Thread not found'), 'RpcError');
+  assert.equal(errorKind('anything', 'MadeUpError'), 'Error');
+});
+
+test('every error class in src/ is on the list errorKind knows', () => {
+  const src = path.join(import.meta.dirname, '..', '..', 'src');
+  const names = new Set<string>();
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(path.join(dir, e.name));
+      else if (e.name.endsWith('.ts')) for (const m of fs.readFileSync(path.join(dir, e.name), 'utf8').matchAll(/class ([A-Za-z0-9]+) extends [A-Za-z]*Error\b/g)) names.add(m[1]!);
+    }
+  };
+  walk(src);
+  const missing = [...names].filter((n) => !ERROR_CLASSES.has(n));
+  assert.deepEqual(missing, [], 'add these to ERROR_CLASSES in sentry.ts');
+});
+
+test("a URL's whole userinfo goes, an @ or a quote in the password too", () => {
+  for (const url of ["https://user:p@ssword123@github.com/org/repo.git", "https://carol@corp.com:pass1@host/repo", `https://bob:it's"secret@host/x`]) {
+    const out = scrubForSentry(`fatal: ${url} failed`);
+    for (const bad of ['ssword123', 'pass1', 'secret', 'carol', 'bob']) assert.ok(!out.includes(bad), `${bad} in ${out}`);
+  }
+});
+
+test("lines in an error's message that look like stack frames never become frames", async () => {
+  const out = await capture((S) => {
+    const e = new Error(`boom\n    at fetch (https://${['al', 'ice'].join('')}:${['hunter2', 'pass'].join('')}@${['exam', 'ple.com'].join('')}/a.js:1:1)\n    at ${THREAD_TEXT} (x.js:2:2)`);
+    S.captureException(cleanError(e));
+  });
+  assert.ok(out.length > 0);
+  for (const bad of [['hunter2', 'pass'].join(''), ['al', 'ice'].join(''), ['exam', 'ple.com'].join(''), ...LEAKS]) assert.ok(!out.includes(bad), `${bad} left the runner: ${out.slice(Math.max(0, out.indexOf(bad) - 200), out.indexOf(bad) + 60)}`);
+  assert.match(out, /sentry\.test\.ts/, 'the real frames stay');
 });

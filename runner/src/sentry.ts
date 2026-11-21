@@ -131,7 +131,9 @@ export function useSentryMask(mask: (text: string) => string): void {
 }
 
 // The lookbehind keeps it linear on runs like "ab-ab-ab-..." (as redaction.ts's URL rule).
-const USERINFO = /((?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/)[^@/\s'"]+@/gi;
+// Up to the last @ before the path, so a password holding an @ or a quote
+// goes whole too (Gemini's review of the fix); bounded, to stay linear.
+const USERINFO = /((?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/)[^/\s?#<>]{1,512}@/gi;
 const MAX_TEXT = 1000;
 
 export function scrubForSentry(text: string): string {
@@ -145,21 +147,55 @@ export function scrubForSentry(text: string): string {
 // which quote whatever they were looking at (Daybreak finding 155): the
 // watcher that picks up an issue runs on this Mac and reads runner.log for the
 // rest.
-const ERROR_CLASS = /^\s*(?:Uncaught\s+)?([A-Z][A-Za-z0-9]{0,40}(?:Error|Exception|Rejection))\b/;
-// Codes only from the system's own list, so an all-capitals word from the
+// Error classes by name: JavaScript's and Node's own, and the runner's (a
+// unit test keeps this list up to date with the classes in src/).
+export const ERROR_CLASSES: ReadonlySet<string> = new Set([
+  'Error', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'EvalError', 'URIError', 'AggregateError',
+  'AbortError', 'TimeoutError', 'SystemError', 'DOMException',
+  'AcpExitedError', 'AcpRpcError', 'AmbiguousPeer', 'BoxBootRefused', 'BoxFolderBroken', 'CodexExitedError', 'CodexRpcError',
+  'ConvexAdminError', 'CronError', 'GaveUp', 'HeldLocal', 'KeysBusy', 'NoSwitches', 'Refused', 'RewindRefusedError',
+  'RpcClientError', 'RpcError', 'RunnerJsonError', 'RunnerNotProvedError', 'SessionNotFoundError', 'SpawnRefused',
+  'SpecialFile', 'StaleProcess', 'TooBig', 'Unknown', 'Waiting',
+]);
+const LEADING_CLASS = /^\s*(?:Uncaught\s+)?([A-Za-z][A-Za-z0-9]{0,40})\b/;
+// Codes only from the system's own errno list, so a capitals word from the
 // error's text can't ride along as one.
-const ERRNO_CODES = new Set(Object.keys(os.constants.errno));
-const CODE = /\b(E[A-Z0-9]{2,15}|ERR_[A-Z_]{2,40})\b/g;
+const ERRNO_CODES: ReadonlySet<string> = new Set(Object.keys(os.constants.errno));
+const CODE = /\b(E[A-Z0-9]{2,15})\b/g;
 
 export function errorKind(text: string, type?: string): string {
-  const cls = ERROR_CLASS.exec(text)?.[1] ?? (type && /^[A-Za-z][A-Za-z0-9]{0,40}(?:Error|Exception|Rejection)$/.test(type) ? type : 'Error');
-  const code = [...text.matchAll(CODE)].map((m) => m[1]!).find((c) => ERRNO_CODES.has(c) || c.startsWith('ERR_'));
+  const lead = LEADING_CLASS.exec(text)?.[1];
+  const cls = lead && ERROR_CLASSES.has(lead) ? lead : type && ERROR_CLASSES.has(type) ? type : 'Error';
+  const code = [...text.matchAll(CODE)].map((m) => m[1]!).find((c) => ERRNO_CODES.has(c));
   return code ? `${cls} (${code})` : cls;
+}
+
+// The error to hand the SDK in place of the one thrown: its kind for a
+// message, and the stack lines that come after the message, never the
+// message's own lines (one could read "    at x (https://user:pw@host/)",
+// which the SDK would take for a frame; Codex's review of the fix). Causes
+// the same way, a few deep. A stack that doesn't start with the message as
+// expected goes without its frames.
+export function cleanError(e: unknown, depth = 0): Error {
+  const err = e instanceof Error ? e : undefined;
+  const name = err && ERROR_CLASSES.has(err.name) ? err.name : 'Error';
+  const kind = err ? errorKind(`${err.name}: ${err.message}`, err.name) : 'Error';
+  const out = new Error(kind);
+  out.name = name;
+  const stack = typeof err?.stack === 'string' ? err.stack : '';
+  const head = err ? (err.message ? `${err.name}: ${err.message}` : err.name) : '';
+  const frames = err && stack.startsWith(head) && /^(?:\n\s+at [^\n]*)*$/.test(stack.slice(head.length)) ? stack.slice(head.length) : '';
+  out.stack = `${name}: ${kind}${frames}`;
+  if (err && err.cause !== undefined && depth < 4) out.cause = cleanError(err.cause, depth + 1);
+  return out;
 }
 
 // A log line's title: its fixed message, a path in it (housekeeping names the
 // file it couldn't tidy) taken out, then scrubbed.
 const PATHS = /(?:~|(?<![\w.])\/)[^\s'"`]*\/[^\s'"`]*/g;
+
+const HOME = os.homedir();
+const withoutHome = (p: string): string => (HOME && HOME.length > 1 && p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p);
 
 type Json = unknown;
 function scrubDeep(v: Json, depth = 0): Json {
@@ -180,8 +216,9 @@ function scrubDeep(v: Json, depth = 0): Json {
 // nothing goes, if any of it fails.
 type SentryEventLike = {
   message?: unknown;
-  logentry?: { message?: unknown; params?: unknown };
-  exception?: { values?: { type?: unknown; value?: unknown; mechanism?: { data?: unknown }; stacktrace?: { frames?: Record<string, unknown>[] } }[] };
+  logentry?: { message?: unknown; formatted?: unknown; params?: unknown };
+  contexts?: Record<string, unknown>;
+  exception?: { values?: { type?: unknown; value?: unknown; mechanism?: Record<string, unknown>; stacktrace?: { frames?: Record<string, unknown>[] } }[] };
   extra?: unknown;
   tags?: unknown;
   fingerprint?: unknown;
@@ -198,6 +235,7 @@ export function scrubEvent<E>(event: E): E | null {
     if (typeof e.message === 'string') e.message = scrubForSentry(e.message);
     if (e.logentry) {
       if (typeof e.logentry.message === 'string') e.logentry.message = scrubForSentry(e.logentry.message);
+      if (typeof e.logentry.formatted === 'string') e.logentry.formatted = scrubForSentry(e.logentry.formatted);
       if (e.logentry.params !== undefined) e.logentry.params = scrubDeep(e.logentry.params);
     }
     for (const ex of e.exception?.values ?? []) {
@@ -206,9 +244,17 @@ export function scrubEvent<E>(event: E): E | null {
       // quoting its input), so only its kind goes; runner.log has the whole of
       // it, beside the stack. The stack itself is the runner's own code.
       if (typeof ex.value === 'string') ex.value = errorKind(ex.value, typeof ex.type === 'string' ? ex.type : undefined);
-      if (ex.mechanism?.data !== undefined) ex.mechanism.data = scrubDeep(ex.mechanism.data);
+      if (ex.mechanism) {
+        const { type, handled, ...rest } = ex.mechanism as Record<string, unknown>;
+        ex.mechanism = { ...(scrubDeep(rest) as Record<string, unknown>), ...(type !== undefined ? { type: scrubForSentry(String(type)) } : {}), ...(handled !== undefined ? { handled } : {}) };
+      }
       for (const f of ex.stacktrace?.frames ?? []) {
         delete f.vars;
+        // The runner's own files and functions; scrubbed all the same, and
+        // the home folder (the Mac account's name) taken out.
+        for (const k of ['filename', 'abs_path', 'function', 'module'] as const) {
+          if (typeof f[k] === 'string') f[k] = scrubForSentry(withoutHome(f[k] as string));
+        }
         // The source lines around a frame: the runner's own code, but scrubbed
         // all the same, as a line can hold a literal.
         if (typeof f.context_line === 'string') f.context_line = scrubForSentry(f.context_line);
@@ -220,6 +266,12 @@ export function scrubEvent<E>(event: E): E | null {
     if (e.tags !== undefined) e.tags = scrubDeep(e.tags);
     if (e.fingerprint !== undefined) e.fingerprint = scrubDeep(e.fingerprint);
     if (typeof e.transaction === 'string') e.transaction = scrubForSentry(e.transaction);
+    // The SDK's own (os, runtime, app, device, culture): scrubbed, but for the
+    // trace's ids, which no rule should touch.
+    if (e.contexts) {
+      const { trace, ...rest } = e.contexts;
+      e.contexts = { ...(scrubDeep(rest) as Record<string, unknown>), ...(trace !== undefined ? { trace } : {}) };
+    }
     delete e.breadcrumbs;
     delete e.request;
     delete e.user;
@@ -233,7 +285,7 @@ export function scrubEvent<E>(event: E): E | null {
 export function reportException(e: unknown, what: string): void {
   if (!sentry) return;
   try {
-    sentry.captureException(e, { tags: { what } });
+    sentry.captureException(cleanError(e), { tags: { what } });
   } catch {
     // never mind
   }

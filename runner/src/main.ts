@@ -1661,7 +1661,7 @@ async function main(): Promise<void> {
     remote: peers,
     relay,
     virtualStart: (p) => virtualRunners.start(p),
-    gate: new CallerGate({ runner, remote: peers, schedules: scheduler }),
+    gate: new CallerGate({ runner, remote: peers, schedules: scheduler, images: runner.importQuota }),
     callerOf: (sock) => threadOfSocket(sock, { registry, known: (id) => runner.has(id) || peers.owns(id), log }),
     updates: () => (draining ? undefined : runnerUpdates()),
     appHello: (build, app) => appRestarts.appHello(build, app),
@@ -1925,7 +1925,7 @@ async function main(): Promise<void> {
         onlyOwn: true,
         // Its port is on disk too (drain-<pid>.json), so a thread's shell can
         // reach this one as well as the primary.
-        gate: new CallerGate({ runner, schedules: scheduler }),
+        gate: new CallerGate({ runner, schedules: scheduler, images: runner.importQuota }),
         callerOf: (sock) => threadOfSocket(sock, { registry, known: (id) => runner.has(id), log }),
         methods: {
           ...scheduledSendMethods(runner),

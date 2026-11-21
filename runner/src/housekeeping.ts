@@ -9,6 +9,7 @@ import type { Logger } from './log.ts';
 // so every transcript stays readable; only pictures and leftovers go.
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 export const LOG_CAP_BYTES = 20 * 1024 * 1024; // the same cap Agent Archive's logs have
 // Pasted images are copied into the thread when the message is sent
 // (runner.ts sendTo), so the inbox copy only matters for a draft.
@@ -86,7 +87,10 @@ export function tidy(opts: { home: string; logs: LogToCap[]; now: number; log?: 
   const inbox = paths.inbox(home);
   for (const name of entries(inbox)) {
     const file = path.join(inbox, name);
-    if (olderThan(file, INBOX_KEEP_MS, now)) attempt(file, () => {
+    // A thread's import's half-made copy (media.ts importOpened), left by a
+    // runner that stopped mid-copy, goes after an hour, not a week.
+    const leftover = /\.import\.tmp$|\.tmp\.(?:png|jpg)$/.test(name);
+    if (olderThan(file, leftover ? HOUR : INBOX_KEEP_MS, now)) attempt(file, () => {
       fs.rmSync(file, { recursive: true, force: true });
       done.inbox++;
     });

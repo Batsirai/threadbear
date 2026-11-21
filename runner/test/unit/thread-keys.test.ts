@@ -3,7 +3,7 @@
 // server and the real tb, as an agent's shell would.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PATIENCE_MS } from '../helpers/patience.ts';
+import { PATIENCE_MS, patiently } from '../helpers/patience.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -437,6 +437,9 @@ test('a request frame sent before the process lookup finishes waits for it', asy
   }
 });
 
+// Until the server has seen every client close.
+const patientlyClosed = (server: RpcServer) => patiently(() => (server as unknown as { conns: Set<unknown> }).conns.size === 0);
+
 // The close code, or 'open' if it's still open after a few seconds.
 const closedWithin = (c: RunnerClient, ms = 3000) =>
   Promise.race([c.waitClosed().then((i) => i.code), new Promise<string>((r) => setTimeout(() => r('open'), ms).unref())]);
@@ -487,9 +490,21 @@ test('connections whose process lookup is still running count against the client
     const third = await as(url, token, me.id).catch(() => undefined);
     third?.close();
     assert.equal(third, undefined, 'a third, with two still being looked up, is turned away');
+    // A bearer client too: its lookup is still to come.
+    const bearer = await RunnerClient.connect(url, token, { legacyHeader: true }).catch(() => undefined);
+    bearer?.close();
+    assert.equal(bearer, undefined, 'a bearer client waits its turn');
+    // Leaving doesn't free a slot while its lookup still runs.
+    for (const c of open.splice(0)) c.close();
+    await patientlyClosed(server);
+    const fourth = await as(url, token, me.id).catch(() => undefined);
+    fourth?.close();
+    assert.equal(fourth, undefined, 'lookups still running count after their clients have gone');
     release();
-    await Promise.all(open.map((c) => c.call('auth.whoami')));
-    open.push(await as(url, token, me.id));
+    await patiently(() => (server as unknown as { lookups: number }).lookups === 0);
+    const after = await as(url, token, me.id);
+    open.push(after);
+    await after.call('auth.whoami');
   } finally {
     release();
     for (const c of open) c.close();
@@ -856,6 +871,27 @@ test("a login's cloud token and a thread on a virtual runner are the user's, fro
     app.close();
     assert.equal(started.length, 1);
   } finally {
+    await server.close();
+  }
+});
+
+// The reviews of the fix for finding 158: frames stay small until the lookup
+// is done, so a client that sends a big call straight after auth could be cut
+// off. A draining runner's link to the primary waits for hello's answer, which
+// comes once the lookup is done.
+test("a draining runner's link sends a big first call after a slow process lookup", async () => {
+  const { PrimaryLink } = await import('../../src/handover.ts');
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  const { server, token, port } = await serve({ callerOf: async () => { await held; return undefined; } });
+  const link = new PrimaryLink('127.0.0.1', port, token);
+  try {
+    const call = link.call('auth.whoami', { pad: 'x'.repeat(200 * 1024) });
+    setTimeout(release, 100).unref();
+    assert.deepEqual(await call, {});
+  } finally {
+    release();
+    link.close();
     await server.close();
   }
 });

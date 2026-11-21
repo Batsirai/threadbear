@@ -200,63 +200,81 @@ export function copyImageInto(dir: string, src: string): ImageRef {
   return ref;
 }
 
-// copyImageInto for a thread's media.import (Daybreak finding 157): nothing
-// here holds the runner's event loop. The file is opened once and read only
-// up to the size it had then, so it can't grow past the cap (or be swapped
-// for another) between the check and the copy; one that needs converting is
-// converted from that private copy, in the background, and every leftover
-// goes when it fails.
-export async function importImageInto(dir: string, src: string): Promise<ImageRef> {
+// copyImageInto for a thread's media.import (Daybreak finding 157), in two
+// steps so the quota (media-quota.ts) sizes, keys and copies the same open
+// file: it can't be swapped or grown between the check and the copy, and
+// nothing here holds the runner's event loop.
+export type OpenedImport = { fh: fs.promises.FileHandle; st: fs.Stats; name: string };
+
+export async function openForImport(src: string): Promise<OpenedImport> {
   const name = path.basename(src);
   let fh: fs.promises.FileHandle;
   try {
+    // Non-blocking, so a named pipe can't hold the open; it's refused below.
     fh = await fs.promises.open(src, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   } catch (e) {
-    throw new Error(unreadable(src) ?? `Couldn't read ${name} (${(e as NodeJS.ErrnoException).code ?? 'error'})`);
+    const code = (e as NodeJS.ErrnoException).code;
+    throw new Error(code === 'ENOENT' ? `File not found: ${name}` : code === 'EACCES' || code === 'EPERM' ? `Threadbear isn't allowed to read ${name}` : `Couldn't read ${name}${code ? ` (${code})` : ''}`);
   }
-  const id = crypto.randomUUID();
-  const raw = path.join(dir, `${id}.import.tmp`);
   try {
     const st = await fh.stat();
     if (!st.isFile()) throw new Error(`Not a file: ${name}`);
     if (st.size === 0) throw new Error(`${name} is empty`);
     if (st.size > MAX_IMAGE_BYTES) throw new Error(`${name} is too big to add (over 100 MB)`);
-    await fs.promises.mkdir(dir, { recursive: true });
+    return { fh, st, name };
+  } catch (e) {
+    await fh.close();
+    throw e;
+  }
+}
+
+// Copies an opened file into `dir`: only the bytes it had when opened, and
+// only once its first bytes say it's a picture. One that needs converting is
+// converted from that private copy, in the background, and refused if the
+// result is over `maxOut` bytes. Leaves nothing behind when it fails. The
+// caller closes the file.
+export async function importOpened(dir: string, o: OpenedImport, opts: { maxOut?: number } = {}): Promise<ImageRef> {
+  const { fh, st, name } = o;
+  const unsupported = () => new Error(`Not a supported image: ${name}`);
+  const head = Buffer.alloc(Math.min(st.size, 512 * 1024));
+  const { bytesRead } = await fh.read(head, 0, head.length, 0);
+  const first = head.subarray(0, bytesRead);
+  const direct = sniffImage(first);
+  const kind = direct ? null : convertibleKind(first);
+  if (!direct && !kind) throw unsupported();
+  await fs.promises.mkdir(dir, { recursive: true });
+  const id = crypto.randomUUID();
+  const raw = path.join(dir, `${id}.import.tmp`);
+  try {
     const out = await fs.promises.open(raw, 'wx', 0o600);
     try {
+      await out.write(first, 0, first.length);
       const buf = Buffer.alloc(Math.min(st.size, 1024 * 1024));
-      let at = 0;
+      let at = first.length;
       while (at < st.size) {
-        const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, st.size - at), at);
-        if (bytesRead === 0) break;
-        await out.write(buf, 0, bytesRead);
-        at += bytesRead;
+        const r = await fh.read(buf, 0, Math.min(buf.length, st.size - at), at);
+        if (r.bytesRead === 0) break;
+        await out.write(buf, 0, r.bytesRead);
+        at += r.bytesRead;
       }
     } finally {
       await out.close();
     }
-  } catch (e) {
-    await fs.promises.rm(raw, { force: true });
-    throw e;
-  } finally {
-    await fh.close();
-  }
-  try {
-    const info = readImageInfo(raw);
-    if (info) {
+    if (direct) {
+      const info = readImageInfo(raw);
+      if (!info) throw unsupported();
       const file = path.join(dir, `${id}.${extForMediaType(info.mediaType)}`);
       await fs.promises.rename(raw, file);
       return refFrom(file, info);
     }
-    const kind = convertibleKind(readHead(raw));
-    if (!kind) throw new Error(`Not a supported image: ${name}`);
     const [format, ext] = kind === 'heic' ? (['jpeg', 'jpg'] as const) : (['png', 'png'] as const);
     const file = path.join(dir, `${id}.${ext}`);
     const tmp = `${file}.tmp.${ext}`;
     try {
       const made = await convertImage(raw, tmp, { format, ...(format === 'jpeg' ? { quality: 90 } : {}) });
       const converted = made ? readImageInfo(tmp) : null;
-      if (!converted) throw new Error(`Not a supported image: ${name}`);
+      if (!converted) throw unsupported();
+      if ((await fs.promises.stat(tmp)).size > Math.min(opts.maxOut ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES)) throw new Error(`${name} is too big once converted`);
       await fs.promises.rename(tmp, file);
       return refFrom(file, converted);
     } finally {
@@ -264,6 +282,15 @@ export async function importImageInto(dir: string, src: string): Promise<ImageRe
     }
   } finally {
     await fs.promises.rm(raw, { force: true });
+  }
+}
+
+export async function importImageInto(dir: string, src: string): Promise<ImageRef> {
+  const o = await openForImport(src);
+  try {
+    return await importOpened(dir, o);
+  } finally {
+    await o.fh.close();
   }
 }
 
