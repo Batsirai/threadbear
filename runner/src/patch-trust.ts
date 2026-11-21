@@ -55,7 +55,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSync } from 'oxc-parser';
 import { atomicWriteFileSync } from './fsutil.ts';
-import { claudeCommands, type ClaudeCommands, type ClaudeOptions } from './claude-trust.ts';
+import { claudeCommands, claudeCommandsKinds, type ClaudeCommands, type ClaudeOptions } from './claude-trust.ts';
 import type { Lane, TrustOffThread } from './trust-off-thread.ts';
 import { isBinary, looksRunnable, MAX_READ_BYTES, reachOf, reachOfCommand, Reads, type FollowOptions, type ScriptReach } from './script-trust.ts';
 import { bareImport } from './tracked-packages.ts';
@@ -477,7 +477,7 @@ export class PatchTrust implements PatchTrustStore {
     this.load();
     // Trusted whatever it holds: nothing to look at.
     if (this.alwaysFor(folderKeyOfDir(cwd), cwd)) return grants.map((g) => ({ cwd, grants: g, found: undefined, skipped: true }));
-    const found = this.offThread ? await this.offThread.claudeCommands(cwd, this.claudeHome ?? os.homedir(), grants, lane) : grants.map((g) => claudeCommands(cwd, this.claudeHome, { grants: g }));
+    const found = this.offThread ? await this.offThread.claudeCommands(cwd, this.claudeHome ?? os.homedir(), grants, lane) : claudeCommandsKinds(cwd, this.claudeHome, grants);
     return grants.map((g, i) => ({ cwd, grants: g, found: found[i] }));
   }
 
