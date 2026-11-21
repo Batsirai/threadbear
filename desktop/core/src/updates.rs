@@ -492,7 +492,11 @@ impl BuildPhase {
 }
 
 fn minutes(n: u64) -> String {
-    if n == 1 { "1 minute".to_owned() } else { format!("{n} minutes") }
+    if n == 1 {
+        "1 minute".to_owned()
+    } else {
+        format!("{n} minutes")
+    }
 }
 
 impl AppSide {
@@ -1043,7 +1047,11 @@ pub fn popover_line(a: &AppSide) -> String {
     if a.staged.is_some() {
         return "A new version of the app is ready.".to_owned();
     }
-    if a.building && a.phase.as_ref().is_some_and(|p| matches!(p.state, BuildState::Queued { .. })) {
+    if a.building
+        && a.phase
+            .as_ref()
+            .is_some_and(|p| matches!(p.state, BuildState::Queued { .. }))
+    {
         return "The app's next version is queued behind other work.".to_owned();
     }
     if a.building {
@@ -1932,11 +1940,20 @@ mod tests {
             "The app has a new version on main, waiting for tinker-desk, which has been busy with other work for 20 minutes."
         );
         // A phase left from another state, or unreadable, says what it did before.
-        assert_eq!(app_line(&at("busy tinker-desk 8800", true)), "Building the app from main.");
-        assert_eq!(app_line(&at("compiling tinker-desk 1", true)), "Building the app from main.");
+        assert_eq!(
+            app_line(&at("busy tinker-desk 8800", true)),
+            "Building the app from main."
+        );
+        assert_eq!(
+            app_line(&at("compiling tinker-desk 1", true)),
+            "Building the app from main."
+        );
         assert_eq!(BuildPhase::parse("queued tinker-desk", 5), None);
         // Still the ring, whatever the phase.
-        assert_eq!(next_version(&at("queued tinker-desk 1 2", true), None), NextVersion::Coming);
+        assert_eq!(
+            next_version(&at("queued tinker-desk 1 2", true), None),
+            NextVersion::Coming
+        );
     }
 
     #[test]

@@ -1237,12 +1237,12 @@ impl Threadbear {
         u.phase = match state {
             "queued" => Some(threadbear_core::updates::BuildPhase {
                 state: threadbear_core::updates::BuildState::Queued { ahead: 2 },
-                host: "tinker-desk".into(),
+                host: "build-mac".into(),
                 minutes: 12,
             }),
             "building" => Some(threadbear_core::updates::BuildPhase {
                 state: threadbear_core::updates::BuildState::Building,
-                host: "tinker-desk".into(),
+                host: "build-mac".into(),
                 minutes: 4,
             }),
             _ => None,

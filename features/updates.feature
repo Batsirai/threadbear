@@ -127,7 +127,7 @@ Feature: The Updates panel
   Scenario: A build queued behind other work on its Mac says so, and how long it's waited
     When the app's next version is queued behind other work on its Mac
     And I open the Updates panel
-    Then the Updates panel lists "The app's next version is queued on tinker-desk behind 2 other runs (12 minutes so far)."
+    Then the Updates panel lists "The app's next version is queued on build-mac behind 2 other runs (12 minutes so far)."
 
   @system.selfupdate @swift-pending
   Scenario: A new version waits for nearby changes to settle before building
