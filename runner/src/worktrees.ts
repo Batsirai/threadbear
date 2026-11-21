@@ -221,8 +221,12 @@ async function makeWorktreeNow(opts: { cwd: string; threadId: string; patch: Wor
 
   if (keep) {
     for (const spare of await spares(mainCheckout, threads)) {
-      if (!(await claimSpare(spare))) continue;
-      if (await reuse(spare, branch, base, keep)) return done(spare);
+      const claim = await claimSpare(spare);
+      if (!claim) continue;
+      if (await reuse(spare, branch, base, keep)) {
+        fs.rmSync(claim, { force: true });
+        return done(spare);
+      }
       // Couldn't be put right: it stays unlocked, out of the pool, for
       // someone to look at, and the thread gets a new slot.
     }
@@ -309,19 +313,34 @@ async function spares(mainCheckout: string, threads: string): Promise<string[]> 
 // one's unlink finding no file still counts as success, so both took the
 // spare (Codex, 8 Nov). A rename of git's lock file is atomic, so only
 // one claimer wins; borrow-worktree.sh claims the same way.
-async function claimSpare(spare: string): Promise<boolean> {
+//
+// The renamed file stays, touched, until the spare is set up, and the borrow
+// sweep counts it as the folder being used (borrows.ts lastUsed): between
+// the claim and the checkout the folder is detached and unlocked, which the
+// sweep would otherwise take for a spare claimed and never set up, and put
+// back in the pool under the thread setting it up (Codex's review, 21 Nov).
+// Returns the claim's file, or undefined when another got there first.
+async function claimSpare(spare: string): Promise<string | undefined> {
   const admin = await gitOut(spare, ['rev-parse', '--absolute-git-dir']);
-  if (!admin) return false;
+  if (!admin) return undefined;
   const lock = path.join(admin, 'locked');
-  const claimed = `${lock}.claimed-${process.pid}-${Date.now()}`;
+  const claimed = `${lock}${CLAIMED}${process.pid}-${Date.now()}`;
   try {
     fs.renameSync(lock, claimed);
   } catch {
-    return false;
+    return undefined;
   }
-  fs.rmSync(claimed, { force: true });
-  return true;
+  const now = new Date();
+  try {
+    fs.utimesSync(claimed, now, now);
+  } catch {
+    // Gone already: nothing for the sweep to read.
+  }
+  return claimed;
 }
+
+// What a claimed spare's lock file is renamed to: locked<CLAIMED><pid>-<ms>.
+export const CLAIMED = '.claimed-';
 
 // A claimed spare, made like new on `branch` at `base`. The kept folders
 // are left as they are; everything else git doesn't track goes, ignored

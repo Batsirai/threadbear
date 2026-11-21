@@ -32,7 +32,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { git, listCheckouts, MAIN, MAX_SPARES, readPlainFile, realpath, SPARE } from './worktrees.ts';
+import { CLAIMED, git, listCheckouts, MAIN, MAX_SPARES, readPlainFile, realpath, SPARE } from './worktrees.ts';
 import { readSlots, type SlotClaim } from './slot.ts';
 
 export const BORROW_FILE = 'threadbear-borrow';
@@ -314,7 +314,14 @@ function holds(folders: Iterable<string>, dir: string): boolean {
 // plain `git status` (this sweep's own) rewrites.
 function lastUsed(admin: string): number {
   let last = 0;
-  for (const f of [path.join(admin, 'logs', 'HEAD'), path.join(admin, 'HEAD'), path.join(admin, BORROW_FILE)]) {
+  // A claim being set up (worktrees.ts claimSpare, borrow-worktree.sh).
+  let claims: string[] = [];
+  try {
+    claims = fs.readdirSync(admin).filter((f) => f.startsWith(`locked${CLAIMED}`));
+  } catch {
+    // Gone.
+  }
+  for (const f of [path.join(admin, 'logs', 'HEAD'), path.join(admin, 'HEAD'), path.join(admin, BORROW_FILE), ...claims.map((c) => path.join(admin, c))]) {
     try {
       last = Math.max(last, fs.statSync(f).mtimeMs);
     } catch {
