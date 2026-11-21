@@ -284,26 +284,33 @@ phone doesn't show them. This needs your backend on API 86 or newer. If
 the review changes on the Mac while you're answering, your answer stays
 in the sheet while it reloads, ready for you to check and send again.
 
-The comparison window starts on the first option's first picture. An option
-can have several (its overview, how it looks mid-drag, a detail), shown in a
-strip under the picture. Next and back (or the left and right arrow keys)
-step through every picture of every option, up and down jump to the option
-before or after, and after the last one they're all side by side. Click an
-option on the right, one of its small pictures, or a dot under the stage, to
-go straight to it, and Open live to try one the agent has running (a web
+In the thread, a review's card shows the agent's lead and each option's
+small picture and name. Click one to open the comparison window on that
+option, or the card's button to start on the first. The picture has the
+whole width of the window, with back and next beside it. Under it is a tab
+for each option, with its tick, and under the tabs the name of the option on
+show and the agent's reasons for it, at the size you read replies in the
+thread, so you read about each one while you're looking at it. An option
+can have several pictures (its overview, how it looks mid-drag, a detail),
+shown in a strip under the picture. Next and back (or the left and right
+arrow keys) step through every picture of every option, up and down jump to
+the option before or after, and after the last one they're all side by
+side, with the agent's lead under them. Click a tab or one of the strip's
+small pictures to go straight to it, the first tab to see them all, and
+Open live at the end of the tabs to try one the agent has running (a web
 page only). A review from a thread on another Mac opens on that Mac. An
 agent can show a video or an HTML page in place of a picture: videos play
 quietly on a loop, side by side when they're all showing, with controls
 for sound when one is big; a page shows as it does in the side pane, with
 its scripts off. When
 the agent includes today's version to compare against, hold Space (or click
-its button over the picture) to flick to it and back. To look closer at a
+its button at the end of the tabs) to flick to it and back. To look closer at a
 picture, scroll or pinch over it to zoom in where the pointer is (a long page
 starts small enough to see whole). Then scroll or drag to move around, or use
 the small picture in the corner to jump to a part. Pinching out, ⌘0, Esc or a
 double-click goes back to the whole thing, and ⌘+ and ⌘- zoom too. Tick as
-many as you like, or None if none of them will do, write what you think in
-the box at the bottom, and Send takes it all back to the thread.
+many as you like, or None of them if none will do, write what you think in
+the box at the bottom right, and Send takes it all back to the thread.
 Pasting with the keyboard outside the reply box puts the words in it and moves
 the cursor there, so you can dictate just after ticking an option.
 

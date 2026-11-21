@@ -1,7 +1,7 @@
 Feature: Design reviews
   As someone an agent shows design options to (its show_options)
   I want them in a window of their own, big enough to compare
-  So I can step through them, tick one or several, say why and send it
+  So I can step through them, read why under each, tick one or several, say why and send it
 
   # The demo thread's review has four options, each one picture: A, B and C to
   # pick from, C the agent's pick, and D for reference only.
@@ -13,6 +13,14 @@ Feature: Design reviews
   Scenario: The card opens the review on its first option, one at a time
     When I press "Compare 4 images"
     Then the review window is open on option "A", one at a time
+
+  # The card shows each option's small picture and name (Mike, 20 Nov: the
+  # reply needn't list them), and a click on one opens the window on it. The
+  # Swift app's card has only the button.
+  @review.window @transcript.review @swift-pending
+  Scenario: An option's picture on the card opens the review on that option
+    When I press "Open the review on C. Account pools"
+    Then the review window is open on option "C", one at a time
 
   @review.window
   Scenario: A review: link in the agent's reply opens that review
@@ -124,6 +132,24 @@ Feature: Design reviews
     Then the review shows them all
     When I press "Back to the last one (←)" in the review
     Then the review is on option "D", shot 1
+
+  # Mike, 20 Nov: the options' words were small and grey in a column down the
+  # right, so he went back to the thread to read them. They're under the
+  # picture now, at the thread's size, for the option on show; the agent's
+  # lead is there with all of them side by side. The Swift window keeps its
+  # column.
+  @review.window @swift-pending
+  Scenario: The words under the picture are the option on show's
+    When I open the review
+    Then the review's words start "A. Auto account"
+    And the review's words say "Keep the account menu and add Auto."
+    When I press "Next (→)" in the review
+    Then the review's words start "B. One picker"
+    When I press "C. Account pools" in the review
+    Then the review's words start "C. Account pools"
+    When I press "See them all and choose (Esc)" in the review
+    Then the review shows them all
+    And the review's words start "Three ways to let you pick"
 
   @review.nav
   Scenario: Every shot of an option comes before the next option

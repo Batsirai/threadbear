@@ -579,18 +579,16 @@ test('markers follow the pictures kept', () => {
   assert.equal(keepPictureMarkers('same [Picture 1]',[true]),'same [Picture 1]');
 });
 
-// The reviewPage experiment: the review is a page beside the thread, with
-// each option's note at reading size, so the agent is told not to write the
-// options out again in its reply (Mike, 20 Nov).
-test('with reviews as a page, show_options tells the agent not to repeat the options in its reply', async () => {
+// Each option's note is read in the review window, under its pictures at
+// reading size, so the agent is told not to write the options out again in
+// its reply (Mike, 20 and 21 Nov).
+test('show_options tells the agent not to repeat the options in its reply', async () => {
   const {h,thread,input}=fixture();
   const tool=buildThreadbearTools(h.runner,thread.id).find(t=>t.name==='show_options')!;
   // Typed as what the tool is handed, whichever tool the list's type says.
   const show=tool.handler as unknown as (options: object, extra: object)=>Promise<unknown>;
-  const none={};
-  assert.doesNotMatch(JSON.stringify(await show(input,none)),/don't list or describe the options again/);
-  fs.writeFileSync(path.join(h.home,'runner.json'),JSON.stringify({experiments:{reviewPage:true}}));
-  const said=JSON.stringify(await show({...input,title:'Second look'},none));
+  const said=JSON.stringify(await show(input,{}));
+  assert.match(said,/reads each option's note under its pictures in the review window/);
   assert.match(said,/don't list or describe the options again in your reply/);
   assert.match(said,/review:[0-9a-f-]{36}/);
 });
