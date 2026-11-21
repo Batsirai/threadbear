@@ -171,4 +171,4 @@ brings one in. CONTRIBUTING.md, "How my agents take PRs and forks".
 - Shipping a runner change, deploys, rollbacks, the launcher app: docs/dev-tools.md, "The
   runner updating itself". Driving the desktop app, real-thread and cursor bugs, freezes:
   desktop/README.md. The Swift app: app/README.md, "Rules for changing it". The iPhone
-  app: ios/README.md. Real-screen tests: features/README.md. Parity: docs/parity.md.
+  app: ios/README.md. Real-screen tests: features/README.md. Parity: docs/parity.md, and the nightly screenshot run (Mike's only): docs/parity-run.md.
