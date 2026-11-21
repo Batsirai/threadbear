@@ -181,11 +181,12 @@ impl ThreadLoad {
         }
     }
 
-    /// What goes where the transcript goes. `error_line`: the pane's error
-    /// line is showing.
-    pub fn view(&self, error_line: bool) -> View {
+    /// What goes where the transcript goes. The error line above it has no
+    /// say: something going wrong while the first page is read (a picture
+    /// that couldn't be added) used to take the spinner away and leave an
+    /// empty pane, as the Swift app never did.
+    pub fn view(&self) -> View {
         match self {
-            ThreadLoad::Reading { .. } if error_line => View::Transcript,
             ThreadLoad::Reading { .. } => View::Spinner,
             ThreadLoad::Failed { message, .. } => View::Failed {
                 message: message.clone(),

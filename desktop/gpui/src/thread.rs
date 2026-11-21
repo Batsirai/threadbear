@@ -2296,7 +2296,7 @@ impl ThreadPane {
             c.map(|c| json!({ "seq": c.seq, "count": c.ends.len() }))
         };
         let loose_ends = json!({ "summary": ends(self.summary.loose_ends_check().as_ref()), "transcript": ends(self.feed.model().loose_ends()) });
-        json!({ "threadId": self.summary.id, "state": self.load_state(), "error": self.error, "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "spinner": self.load.view(self.error.is_some()) == View::Spinner, "timing": self.timing_json(), "looseEnds": loose_ends, "rows": rows })
+        json!({ "threadId": self.summary.id, "state": self.load_state(), "error": self.error, "atBottom": scroller.at_bottom(), "hasMoreAbove": self.has_more_above(), "spinner": self.load.view() == View::Spinner, "timing": self.timing_json(), "looseEnds": loose_ends, "rows": rows })
     }
 
     /// The Swift dump's names, a failure with its message.
@@ -2509,7 +2509,7 @@ impl Render for ThreadPane {
             });
         }
         // What goes where the transcript goes, from the load state alone.
-        let view = self.load.view(self.error.is_some());
+        let view = self.load.view();
         let loading = view == View::Spinner;
         // Coming in as it opens, once it has its rows (open_motion.rs).
         let entering = self.entering.transcript(self.load.is_shown(), window);

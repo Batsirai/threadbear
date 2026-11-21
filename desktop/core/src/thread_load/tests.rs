@@ -261,19 +261,18 @@ fn every_state_with_every_event() {
 
 #[test]
 fn what_each_state_draws() {
-    assert_eq!(reading(false).view(false), View::Spinner);
-    assert_eq!(reading(true).view(false), View::Spinner);
+    assert_eq!(reading(false).view(), View::Spinner);
+    assert_eq!(reading(true).view(), View::Spinner);
     assert_eq!(
-        failed("Couldn't read it.", false).view(false),
+        failed("Couldn't read it.", false).view(),
         View::Failed {
             message: "Couldn't read it.".into()
         }
     );
-    assert_eq!(ThreadLoad::NoRecord.view(false), View::NoRecord);
+    assert_eq!(ThreadLoad::NoRecord.view(), View::NoRecord);
     for behind in [false, true] {
         for rereading in [false, true] {
-            assert_eq!(shown(behind, rereading).view(false), View::Transcript);
-            assert_eq!(shown(behind, rereading).view(true), View::Transcript);
+            assert_eq!(shown(behind, rereading).view(), View::Transcript);
         }
     }
     assert_eq!(reading(false).name(), "loading");
@@ -304,10 +303,10 @@ mod specs {
     #[test]
     fn a_thread_being_read_shows_a_spinner() {
         let (l, _) = run(vec![Event::Read]);
-        assert_eq!(l.view(false), View::Spinner);
+        assert_eq!(l.view(), View::Spinner);
         let (l, _) = run(vec![Event::Read, Event::Landed, Event::Subscribed]);
         assert_eq!(l, shown(false, false));
-        assert_eq!(l.view(false), View::Transcript);
+        assert_eq!(l.view(), View::Transcript);
     }
 
     /// connection.feature, "A thread that can't be read says so, and Try
@@ -316,16 +315,16 @@ mod specs {
     fn a_thread_that_cant_be_read_says_so_and_try_again_reads_it() {
         let (l, _) = run(vec![Event::Read, read_failed("Couldn't read it.")]);
         assert_eq!(
-            l.view(false),
+            l.view(),
             View::Failed {
                 message: "Couldn't read it.".into()
             }
         );
         let (l, _) = l.next(Event::TryAgain);
-        assert_eq!(l.view(false), View::Spinner);
+        assert_eq!(l.view(), View::Spinner);
         let (l, _) = l.next(Event::Read);
         let (l, _) = l.next(Event::Landed);
-        assert_eq!(l.view(false), View::Transcript);
+        assert_eq!(l.view(), View::Transcript);
     }
 
     /// switching-threads.feature, "Going back to a thread shows it straight
@@ -338,7 +337,7 @@ mod specs {
             Event::Subscribed,
             Event::ShownAgain,
         ]);
-        assert_eq!(l.view(false), View::Transcript);
+        assert_eq!(l.view(), View::Transcript);
         assert_eq!(thens.last(), Some(&Then::Nothing));
     }
 
@@ -364,7 +363,7 @@ mod specs {
     #[test]
     fn a_sub_agent_with_no_record() {
         let (l, _) = run(vec![Event::Read, Event::NoRecord]);
-        assert_eq!(l.view(false), View::NoRecord);
+        assert_eq!(l.view(), View::NoRecord);
         assert_eq!(l.failure().as_deref(), Some(NO_RECORD));
     }
 }
@@ -385,10 +384,26 @@ fn a_read_starting_after_a_failure_shows_the_spinner() {
     );
     let (l, _) = ThreadLoad::opening().next(read_failed("Not connected to the runner."));
     let (l, _) = l.next(Event::Read);
-    assert_eq!(l.view(false), View::Spinner);
+    assert_eq!(l.view(), View::Spinner);
     assert_eq!(l.name(), "loading");
     let (l, _) = l.next(Event::Landed);
-    assert_eq!(l.view(false), View::Transcript);
+    assert_eq!(l.view(), View::Transcript);
+}
+
+/// Fixed 21 Nov: something on the error line while a thread's first page
+/// was read (a picture that couldn't be added, a send that failed) took the
+/// spinner away, leaving an empty pane until the read answered.
+#[test]
+fn the_error_line_leaves_the_spinner_be() {
+    let mut old = legacy::Pane::default();
+    old.read();
+    old.error = Some("Couldn't add that picture.".into());
+    assert_eq!(
+        old.drawn_unfixed(),
+        legacy::Drawn::Transcript,
+        "the old pane"
+    );
+    assert_eq!(ThreadLoad::opening().view(), View::Spinner);
 }
 
 /// The fields thread.rs kept before, and what it did with them, as it was
@@ -475,6 +490,18 @@ pub(super) mod legacy {
         }
 
         pub fn drawn(&self) -> Drawn {
+            match self.load_failed.clone() {
+                Some(m) if !self.loaded && self.subagent_missing => Drawn::NoRecord(m),
+                Some(m) if !self.loaded => Drawn::Failed(m),
+                // Fixed 21 Nov: the error line no longer takes the spinner
+                // away (`drawn_unfixed`).
+                _ if !self.loaded => Drawn::Spinner,
+                _ => Drawn::Transcript,
+            }
+        }
+
+        /// `drawn` as it was.
+        pub fn drawn_unfixed(&self) -> Drawn {
             match self.load_failed.clone() {
                 Some(m) if !self.loaded && self.subagent_missing => Drawn::NoRecord(m),
                 Some(m) if !self.loaded => Drawn::Failed(m),
@@ -635,7 +662,7 @@ impl Both {
     }
 
     fn compare(&self) {
-        let drawn = match self.new.view(self.error.is_some()) {
+        let drawn = match self.new.view() {
             View::Spinner => legacy::Drawn::Spinner,
             View::Transcript => legacy::Drawn::Transcript,
             View::Failed { message } => legacy::Drawn::Failed(message),
