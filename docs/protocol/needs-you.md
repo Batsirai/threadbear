@@ -105,7 +105,17 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   "Nothing needed from you" line, under an `end_turn` with no asks or
   next of its own, loses it, and the card comes from it instead
   (`splitReplySection`): Sonnet wrote one there in a quarter of its eval
-  sessions. Under an `end_turn` that has asks, a "What I need from you"
+  sessions. The "Nothing needed from you" line comes off only as a closing
+  section the done card shows all of: the line says no more than that; a
+  list straight under it, with no lead-in, has every item as a row on the
+  card that is the item as written (no link's address, second sentence,
+  line under it, full stop or cut for length left out); and nothing comes
+  after.
+  Otherwise the card is still read from it and the reply stays as written,
+  as it does when the section is all the reply has: on 21 Nov 2026 a reply
+  that opened with the line lost both its paragraphs, and Mike got a blank
+  answer (thread 649fc651).
+  Under an `end_turn` that has asks, a "What I need from you"
   section loses its place too, and the card stays `end_turn`'s, so a reply
   can't say what the card under it says (`replyWithoutRepeat`; Mike took
   thread 7ac017b7's repeats on 3 Nov 2026 for it not having used the card).

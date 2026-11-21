@@ -2027,6 +2027,29 @@ test("one reply: a reply that ends in a What I need from you section gives the c
   assert.equal(h.runner.get(thread.id).needs, 'you');
 });
 
+// Thread 649fc651 (21 Nov 2026): Mike asked "Anything you need from me
+// here?", the agent called end_turn first and then answered "Nothing needed
+// from you. ..." with two paragraphs. The line took the whole reply off as a
+// closing section, the event was written with no text, and the Stop hook
+// didn't ask for a reply, as the agent had written one.
+test('one reply: a reply that opens "Nothing needed from you" reaches the thread whole', async () => {
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  const { call } = tools(h, thread.id, undefined, () => true);
+  const input = { needs: 'nothing', headline: 'Nothing needed; waiting on the re-test' };
+  toolCall(s, 'e1', END_TURN, input);
+  const r = await call('end_turn', input);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: true, text: r.text, truncated: false, images: [] } });
+  const words = 'Nothing needed from you. The sprinklers are on Auto, and the next run is Monday at 6:00.\n\nThe only thing outstanding is the re-test. This thread is asleep until then.';
+  s.text('m1', words);
+  const reply = h.events(thread.id).find((e) => e.type === 'assistant.text' && e.itemId === 'm1');
+  assert.ok(reply?.type === 'assistant.text' && reply.final);
+  assert.equal(reply.text, words);
+  s.result('completed');
+  await tick();
+  assert.equal(h.runner.get(thread.id).needs, 'nothing');
+});
+
 // ------------------------------------------------------------ other runners' threads
 
 // Another runner's thread, reached through the backend as the Mac app does
