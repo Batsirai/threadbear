@@ -142,31 +142,32 @@ export const mayRegister = internalQuery({
 //   NEW_INSTALL_MS old: anyone can make up names, or make deployments and
 //   register them): at most MAX_NEW_CHECKS_IN_FLIGHT at once and
 //   NEW_CHECKS_PER_HOUR an hour, relay-wide.
-// - Established ones: at most MAX_KNOWN_CHECKS_IN_FLIGHT at once, counted
-//   apart (their own index range, so a flood of made-up names neither uses
-//   their slots nor contends with their writes).
+// - Established ones: at most MAX_KNOWN_CHECKS_IN_FLIGHT at once and
+//   KNOWN_CHECKS_PER_HOUR an hour, relay-wide, counted apart from the
+//   made-up names (their own index range and row, so a flood of those
+//   neither uses their allowance nor contends with their writes). Past the
+//   hour's pool, each established deployment still gets its first
+//   RESERVED_CHECKS_PER_HOUR of the hour, so someone naming others to drain
+//   the pool can't stop one they didn't name registering again.
 // - One at a time to any one deployment, and none to it for NO_COOLDOWN_MS
-//   after it said no. With registerVerified's REGISTRATIONS_PER_DEPLOYMENT_PER_DAY
-//   (a deployment saying yes stops being called back once that's used up),
-//   that bounds what each established deployment can be made to take.
+//   after it said no.
 //
-// No allowance is shared across deployments that a call-back saying no
-// can use up past the hour's end for anyone else, and none per deployment
-// that outlasts its cool-down (both reviews: either kept real backends
-// locked out after an attack stopped). Real use is far below all of these
-// (16 Nov: at most 11 registrations a day, relay-wide). What's left:
-// someone who knows a deployment's name can keep it from registering again
-// (not from sending: a working install never calls /register) while they
-// keep sending a no for it at least every NO_COOLDOWN_MS, and no longer;
-// made-up names can hold back new installs (and an install under a week
-// old registering again) for the hour, as made-up deployments already
-// could the day's new installs (NEW_INSTALLS_PER_DAY); and established
-// deployments someone registered and kept a week can hold the established
-// slots while they keep answering slowly.
+// Real use is far below all of these (16 Nov: at most 11 registrations a
+// day, relay-wide). What's left: someone who knows a deployment's name can
+// keep it from registering again (not from sending: a working install
+// never calls /register) while they keep sending a no for it at least
+// every NO_COOLDOWN_MS, and, if they drain the established pool as well,
+// for the rest of that hour; made-up names can hold back new installs (and
+// an install under a week old registering again) for the hour, as made-up
+// deployments already could the day's new installs (NEW_INSTALLS_PER_DAY);
+// and established deployments someone registered and kept a week can hold
+// the established slots while they keep answering slowly.
 export const MAX_NEW_CHECKS_IN_FLIGHT = 15;
 export const MAX_KNOWN_CHECKS_IN_FLIGHT = 10;
 export const NO_COOLDOWN_MS = 30_000;
 export const NEW_CHECKS_PER_HOUR = 600;
+export const KNOWN_CHECKS_PER_HOUR = 1_200;
+export const RESERVED_CHECKS_PER_HOUR = 5;
 // How long a started call-back counts as still going: past verify.ts's
 // VERIFY_TIMEOUT_MS with room to spare, for one whose action died before
 // endCheck.
@@ -180,12 +181,13 @@ export const startCheck = internalMutation({
   handler: async (ctx, { deployment }) => {
     const now = Date.now();
     const live = now - CHECK_LEASE_MS;
+    const hour = hourOf(now);
     if (await ctx.db.query('checks').withIndex('by_deployment', (q) => q.eq('deployment', deployment).gt('startedAt', live)).first()) return 'limited';
     const hold = await ctx.db
       .query('checkHolds')
       .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
       .unique();
-    if (hold && hold.noUntil > now) return 'limited';
+    if (hold?.noUntil !== undefined && hold.noUntil > now) return 'limited';
     const install = await ctx.db
       .query('installs')
       .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
@@ -194,19 +196,20 @@ export const startCheck = internalMutation({
     const going = await ctx.db
       .query('checks')
       .withIndex('by_known', (q) => q.eq('known', known).gt('startedAt', live))
-      .take(MAX_NEW_CHECKS_IN_FLIGHT);
+      .take(known ? MAX_KNOWN_CHECKS_IN_FLIGHT : MAX_NEW_CHECKS_IN_FLIGHT);
     if (going.length >= (known ? MAX_KNOWN_CHECKS_IN_FLIGHT : MAX_NEW_CHECKS_IN_FLIGHT)) return 'limited';
-    if (!known) {
-      const hour = hourOf(now);
-      const pool = await ctx.db
-        .query('checkHours')
-        .withIndex('by_hour', (q) => q.eq('hour', hour))
-        .unique();
-      const newChecks = pool?.newChecks ?? 0;
-      if (newChecks >= NEW_CHECKS_PER_HOUR) return 'limited';
-      if (pool) await ctx.db.patch('checkHours', pool._id, { newChecks: newChecks + 1 });
-      else await ctx.db.insert('checkHours', { hour, newChecks: 1 });
-    }
+    const pool = await ctx.db
+      .query('checkHours')
+      .withIndex('by_hour', (q) => q.eq('hour', hour).eq('known', known))
+      .unique();
+    const used = pool?.checks ?? 0;
+    const mine = hold?.hour === hour ? (hold.count ?? 0) : 0;
+    const reserved = known && mine < RESERVED_CHECKS_PER_HOUR;
+    if (used >= (known ? KNOWN_CHECKS_PER_HOUR : NEW_CHECKS_PER_HOUR) && !reserved) return 'limited';
+    if (pool) await ctx.db.patch('checkHours', pool._id, { checks: used + 1 });
+    else await ctx.db.insert('checkHours', { hour, known, checks: 1 });
+    if (hold) await ctx.db.patch('checkHolds', hold._id, { at: now, hour, count: mine + 1 });
+    else await ctx.db.insert('checkHolds', { deployment, at: now, hour, count: 1 });
     return { check: await ctx.db.insert('checks', { deployment, known, startedAt: now }) };
   },
 });
@@ -228,10 +231,9 @@ export const endCheck = internalMutation({
       .query('checkHolds')
       .withIndex('by_deployment', (q) => q.eq('deployment', row.deployment))
       .unique();
-    if (vouched) {
-      if (hold) await ctx.db.delete('checkHolds', hold._id);
-    } else if (hold) await ctx.db.patch('checkHolds', hold._id, { noUntil: now + NO_COOLDOWN_MS });
-    else await ctx.db.insert('checkHolds', { deployment: row.deployment, noUntil: now + NO_COOLDOWN_MS });
+    const noUntil = vouched ? undefined : now + NO_COOLDOWN_MS;
+    if (hold) await ctx.db.patch('checkHolds', hold._id, { at: now, noUntil });
+    else if (noUntil !== undefined) await ctx.db.insert('checkHolds', { deployment: row.deployment, at: now, noUntil });
     return null;
   },
 });
@@ -399,12 +401,12 @@ export const expire = internalMutation({
       .withIndex('by_hour', (q) => q.lt('hour', hourOf(now - 2 * 86_400_000)))
       .take(EXPIRE_BATCH);
     for (const row of old) await ctx.db.delete(row._id);
-    // Call-back records (startCheck, endCheck): holds a day after they
-    // ended, hourly counts after two days, and any left going by an action
+    // Call-back records (startCheck, endCheck): a deployment's a day after
+    // it was last touched, hourly counts after two days, and any left going by an action
     // that died.
     const holds = await ctx.db
       .query('checkHolds')
-      .withIndex('by_noUntil', (q) => q.lt('noUntil', now - 86_400_000))
+      .withIndex('by_at', (q) => q.lt('at', now - 86_400_000))
       .take(EXPIRE_BATCH);
     for (const row of holds) await ctx.db.delete('checkHolds', row._id);
     const checkHours = await ctx.db

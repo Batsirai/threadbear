@@ -285,6 +285,29 @@ test('a retired slug moved onto another thread before the fix stops showing, and
   assert.equal(await outcome(s.mini.upsert(thread('M2', MINI, { title: 'next', share: { access: 'link', slug: 'old' } }))), 'ok');
   const row = s.rows('threads').find((t) => t.threadId === 'M2')!;
   assert.deepEqual([row.title, row.share], ['next', undefined]);
+  // Gemini's third review: and the write after that (the runner still has the link).
+  assert.equal(await outcome(s.mini.upsert(thread('M2', MINI, { title: 'third', share: { access: 'link', slug: 'old' } }))), 'ok');
+  assert.equal(s.rows('threads').find((t) => t.threadId === 'M2')!.title, 'third');
+  // Still not on a thread that never had it.
+  assert.equal(await outcome(s.mini.upsert(thread('M3', MINI, { share: { access: 'link', slug: 'old' } }))), 'forbidden');
+});
+
+// Codex's third review: a late stop-sharing write naming a link another
+// thread retired still stops the row's current link.
+test("a stop-sharing write naming another thread's retired link stops the current one", async () => {
+  const s = await setup();
+  const view = async (slug: string) => (await call(s.ctx, load('share').preview, { slug })) !== null;
+  await s.mini.upsert(thread('T2', MINI, { share: { access: 'link', slug: 'linkB' } }));
+  await s.ctx.db.insert('threadTombstones', { threadId: 'T1', runnerId: MINI, slug: 'linkA', at: 1 });
+  assert.equal(await outcome(s.mini.upsert(thread('T2', MINI, { share: { access: 'off', slug: 'linkA' } }))), 'ok');
+  assert.equal(s.rows('threads').find((t) => t.threadId === 'T2')!.share.access, 'off');
+  assert.equal(await view('linkB'), false);
+  // And naming another row's live link while stopping: the same.
+  await s.mini.upsert(thread('T3', MINI, { share: { access: 'link', slug: 'linkC' } }));
+  await s.owner.upsert(thread('O', LAPTOP, { share: { access: 'link', slug: 'ownersLink' } }));
+  assert.equal(await outcome(s.mini.upsert(thread('T3', MINI, { share: { access: 'off', slug: 'ownersLink' } }))), 'ok');
+  assert.equal(await view('linkC'), false);
+  assert.equal(await view('ownersLink'), true);
 });
 
 test("the owner taking a thread id over from Mac mini's runner starts it clean", async () => {

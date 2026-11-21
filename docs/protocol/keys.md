@@ -160,7 +160,7 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   on the same row is fine. A retired slug only ever that thread's (a pruned
   row sent again, a late write) doesn't refuse the row: it goes in without
   it, keeping the link it has if that's still good (and stopping it if the
-  write stops sharing); any other is refused. `/s/<slug>` never shows a
+  write stops sharing); any other is refused, unless the write stops sharing (then the row's own link stops). `/s/<slug>` never shows a
   retired slug. The owner key may use any, which un-retires it, and other
   rows with it lose it. `/s/<slug>` and its card show nothing if two rows
   have one slug (from before this).

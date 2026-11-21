@@ -134,8 +134,9 @@ async function claimable(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
 // `slug`. Retiring a link is how it's revoked, so for a runner or box key a
 // retired slug stays retired, its own runner's and its own thread's included
 // (Codex Security, 21 Nov 2026, finding 161):
-//   'taken': another row has it, or another thread ever did: the write is
-//     refused.
+//   'taken': another row has it, or another thread ever did (and this one
+//     never): a write that would show it is refused; one that stops sharing
+//     goes in, stopping the link the row has.
 //   'retired': only this thread ever had it, and it was retired (Share again,
 //     or the row went in a prune and the runner sends the thread again): the
 //     row goes in without it (keeping the link it has, if any), so the
@@ -153,11 +154,17 @@ async function slugState(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
     if (t.threadId !== threadId) return 'taken';
     liveHere = true;
   }
+  // Another thread's tombstone refuses it, unless this thread has (or had)
+  // it too: brought over before this check, its own writes still go in.
+  let here = liveHere;
   let retired = false;
+  let elsewhere = false;
   for await (const t of ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug))) {
-    if (t.threadId !== threadId && !liveHere) return 'taken';
     retired = true;
+    if (t.threadId === threadId) here = true;
+    else elsewhere = true;
   }
+  if (elsewhere && !here) return 'taken';
   return retired ? 'retired' : 'free';
 }
 
@@ -947,8 +954,10 @@ export const upsertThreads = mutation({
       let slug = t.share?.slug;
       if (slug) {
         const state = await slugState(ctx, caller, t.threadId, slug);
-        if (state === 'taken') throw forbidden('use that share link');
-        if (state === 'retired') {
+        // A write that stops sharing always goes in (on the link the row
+        // has): only one that would show a link is refused.
+        if (state === 'taken' && t.share?.access === 'link') throw forbidden('use that share link');
+        if (state !== 'free') {
           // The row keeps the link it has, if that one's still good (a late
           // write mustn't take down the current link); else none.
           // A write that stops sharing stops it on the kept link too.

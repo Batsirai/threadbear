@@ -80,21 +80,27 @@ export default defineSchema({
     .index('by_known', ['known', 'startedAt'])
     .index('by_deployment', ['deployment', 'startedAt']),
 
-  // Until when a deployment that said no isn't called back (relay.ts
-  // endCheck). Removed a day after (relay.ts expire).
+  // Per deployment: until when it isn't called back after saying no, and
+  // its call-backs this UTC hour (relay.ts startCheck, endCheck). Removed a
+  // day after it was last touched (relay.ts expire).
   checkHolds: defineTable({
     deployment: v.string(),
-    noUntil: v.number(),
+    at: v.number(),
+    noUntil: v.optional(v.number()),
+    hour: v.optional(v.string()),
+    count: v.optional(v.number()),
   })
     .index('by_deployment', ['deployment'])
-    .index('by_noUntil', ['noUntil']),
+    .index('by_at', ['at']),
 
-  // Call-backs /register made this UTC hour, relay-wide, to deployments
-  // with no install a week old here (relay.ts startCheck). Apart from
-  // `hours`, so /register never holds up /send's writes. Removed after two
-  // days (relay.ts expire). Since 21 Nov 2026.
+  // Call-backs /register made this UTC hour, relay-wide: one row for
+  // deployments with no install a week old here, one for established ones
+  // (relay.ts startCheck), so neither kind's writes contend with the
+  // other's. Apart from `hours`, so /register never holds up /send's writes.
+  // Removed after two days (relay.ts expire). Since 21 Nov 2026.
   checkHours: defineTable({
     hour: v.string(),
-    newChecks: v.number(),
-  }).index('by_hour', ['hour']),
+    known: v.boolean(),
+    checks: v.number(),
+  }).index('by_hour', ['hour', 'known']),
 });
