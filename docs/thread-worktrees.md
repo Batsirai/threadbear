@@ -115,7 +115,16 @@ stays. Separate repos do not block one another.
    single file comes across into the file its section went to. The branch
    that brings in such a commit itself, rather than rebasing it onto a
    main that has moved on in what it rewrote, has it made again there with
-   the same tool, its other commits picked as usual.
+   the same tool, its other commits picked as usual. Only a tool main's own
+   `.git-blame-ignore-revs` already lists, command, paths and config exactly,
+   is run, and only with config the branch hasn't changed: the branch's
+   list is anyone's who can commit to it, and Land runs on this Mac, not a
+   check host. One main doesn't list stops the landing before anything
+   runs, with the command shown and how to make that commit again by hand
+   (rebase, run it yourself, commit); one already made on main as it is now
+   lands as a plain commit. A formatter isn't run on a tree that brings its
+   own toolchain file, cargo config, mise config or a link where it
+   formats, as those can change what the command runs.
    Then it refuses a commit whose `Important:` line git doesn't read as a
    trailer (not in the last paragraph with `Co-Authored-By`), as a release
    would not flag it and forks wouldn't hear. And it holds a landing while

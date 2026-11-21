@@ -787,7 +787,11 @@ command, the first time an edit asks for it) and the patch's entry in
 Patches has `editsAsk`: which file, the line and command, why, and what to
 change. A patch's `worktree` setup or check doesn't count either: setup runs what's committed, in a new
 worktree, and the check when a land is asked for, so neither runs what an agent
-just wrote until it has got past a step that's asked about. Its `teardown`
+just wrote until it has got past a step that's asked about. Land itself runs
+nothing else from the branch on this Mac: a format command in the branch's
+`.git-blame-ignore-revs` runs only when main's list has the same command,
+paths and config, with config the branch didn't change, and stops the land
+before anything runs otherwise (docs/thread-worktrees.md). Its `teardown`
 does count, as it runs in the worktree as the agent left it. A repo's setup has to
 keep that true: `worktree-setup.sh` won't `npm install` in the main checkout while
 it has uncommitted changes. A patch using `this` or a getter gets none of this. A settings hook that can't be followed all

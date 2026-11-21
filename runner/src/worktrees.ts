@@ -1062,6 +1062,15 @@ async function remadeOwn(t: LandTarget, main: string, out: (line: string) => voi
         out(r.error);
         return undefined;
       }
+      // A tool the branch's own list names and main's doesn't: never run
+      // here, so it's made again by hand (format-replay.ts, remakeOwn).
+      if ('untrusted' in r) {
+        return [
+          `${t.branch} brings in a format commit made by a command that ${MAIN}'s .git-blame-ignore-revs doesn't list, so it wasn't run here and nothing landed:`,
+          ...r.untrusted.map((u) => `  ${u.commit.slice(0, 10)} (${JSON.stringify(u.subject)}): ${JSON.stringify(u.command)}${u.why === 'config' ? `, with config files ${t.branch} changes` : ''}`),
+          `tb land only runs a format command main already lists, exactly, with config main has. In ${t.path}: git rebase ${MAIN}, keep ${MAIN}'s side of that commit's files, run the command yourself and commit it with the same subject, then run tb land again.`,
+        ];
+      }
       return [
         `${t.branch} brings in a format commit, made again on ${MAIN}, but ${r.at.slice(0, 10)} (${r.subject}) conflicts with ${MAIN} in:`,
         ...r.conflict.map((f) => `  ${f}`),

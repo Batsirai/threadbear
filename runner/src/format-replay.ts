@@ -252,6 +252,14 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ 
   });
 }
 
+// Files in a tree being formatted that would pick the program its command
+// runs, or run one of their own: a toolchain file (rustup runs whatever a
+// `path` toolchain names), cargo's config (an alias for `fmt`), a version
+// manager's (mise runs an env script). Where a tree has one the format
+// commit's config doesn't name, or a link (a formatter writes through it),
+// the command isn't run on it.
+const STEERS = /(^|\/)(rust-toolchain(\.toml)?|\.cargo|\.?mise(\.[\w-]+)?\.toml|\.mise|\.tool-versions)(\/|$)/;
+
 // Formats trees the way the given format commits did, each in turn, with a
 // cache: what a formatter makes depends only on the folders it formats.
 export class TreeFormatter {
@@ -339,7 +347,17 @@ export class TreeFormatter {
     try {
       const env = { GIT_INDEX_FILE: path.join(dir, 'index') };
       await out(this.cwd, ['read-tree', tree], env);
-      const files = (await out(this.cwd, ['ls-files', '-z', '--', ...f.entry.paths], env)).split('\0').filter(Boolean);
+      const staged = (await out(this.cwd, ['ls-files', '-s', '-z', '--', ...f.entry.paths], env)).split('\0').filter(Boolean);
+      const files = staged.map((l) => l.slice(l.indexOf('\t') + 1));
+      // The tree is a branch's, so what's in it is data for the command, never
+      // what decides which program runs.
+      // (A config file is swapped for the format commit's below, link or not.)
+      const ours = (l: string) => f.entry.config.includes(l.slice(l.indexOf('\t') + 1));
+      const link = staged.find((l) => l.startsWith('120000 ') && !ours(l));
+      const steer = link ? link.slice(link.indexOf('\t') + 1) : files.find((p) => STEERS.test(p) && !f.entry.config.includes(p));
+      if (steer) {
+        return { tree, failed: `${steer} is ${link ? 'a link' : 'a file that can change what the command runs'}, and the format commit's own config doesn't name it, so ${f.entry.command} wasn't run on this tree` };
+      }
       // Attributes (eol, filters) from the tree itself both ways, so what
       // comes back differs only by what the formatter did.
       const attr = `--attr-source=${tree}`;
@@ -571,7 +589,20 @@ async function alreadyOn(cwd: string, onto: string, tip: string, base: string): 
 
 // --------------------------------------------------------------- a branch with one
 
-export type Remade = { ok: true; tip: string; remade: string[]; notes: string[] } | { ok: false; conflict: string[]; at: string; subject: string } | { ok: false; error: string };
+export type Untrusted = { commit: string; subject: string; command: string; why: 'unlisted' | 'config' };
+
+export type Remade =
+  | { ok: true; tip: string; remade: string[]; notes: string[] }
+  | { ok: false; conflict: string[]; at: string; subject: string }
+  | { ok: false; error: string }
+  | { ok: false; untrusted: Untrusted[] };
+
+// How an entry makes its commit: what runs, whether it may add files, what
+// it formats and the config it formats with. Two entries that agree on all
+// of that run the same thing, whatever their subjects.
+function recipe(e: FormatEntry): string {
+  return JSON.stringify([e.command, Boolean(e.adds), e.paths, e.config]);
+}
 
 // A branch that is itself bringing in a format commit (the commit that ran
 // the formatter, listed in its own .git-blame-ignore-revs and not on `onto`
@@ -582,6 +613,14 @@ export type Remade = { ok: true; tip: string; remade: string[]; notes: string[] 
 // other commits are picked as a rebase picks them. Undefined when the branch
 // has no such commit. Touches no working tree; a commit made empty is
 // dropped, as rebase drops it.
+//
+// The list comes from the branch, which anyone who can commit to it writes,
+// so its command is never trusted for that (Codex Security, 21 Nov): only an
+// entry whose recipe (command, kind, paths and config) `onto`'s own list has,
+// byte for byte, is run, with config no commit of the branch changed. Any
+// other that would have to be run comes back as `untrusted`, before anything
+// has run, for a person to make again by hand. One the branch already made
+// on `onto` as it is now needs no running: it's picked as it is.
 export async function remakeOwn(cwd: string, onto: string, tip: string, opts: { toolsOnly?: boolean } = {}): Promise<Remade | undefined> {
   const list = await git(cwd, ['show', `${tip}:${FORMAT_LIST}`]);
   if (!list.ok) return undefined;
@@ -595,6 +634,12 @@ export async function remakeOwn(cwd: string, onto: string, tip: string, opts: { 
   if ((await out(cwd, ['rev-list', '--merges', `${onto}..${tip}`])) !== '') return undefined;
   const picks: { c: string; format?: FormatEntry }[] = [];
   let any = false;
+  const onMain = await git(cwd, ['show', `${onto}:${FORMAT_LIST}`]);
+  const trusted = new Set((onMain.ok ? parseFormatList(onMain.stdout) : []).map(recipe));
+  const untrusted: Untrusted[] = [];
+  // Config files the branch's commits so far change: a tool run with one of
+  // those would run the branch's version (a script, a toolchain file).
+  const touched = new Set<string>();
   // A subject that's on more than one of them can't say which ran the tool
   // (a later fix with the same words would be run away): only its id can.
   const seen = new Map<string, number>();
@@ -609,10 +654,19 @@ export async function remakeOwn(cwd: string, onto: string, tip: string, opts: { 
     if (line[0] === '=' && tree !== parent) continue;
     const subject = await out(cwd, ['log', '-1', '--format=%s', c]);
     const entry = entries.find((e) => e.subject === subject && (e.id ? e.id === c : seen.get(subject) === 1));
-    const format = entry && (await onlyWithin(cwd, c, entry)) ? entry : undefined;
+    let format = entry && (await onlyWithin(cwd, c, entry)) ? entry : undefined;
+    if (format) {
+      const why = !trusted.has(recipe(format)) ? 'unlisted' : format.config.some((p) => touched.has(p)) ? 'config' : undefined;
+      if (why) {
+        if (await isAncestor(cwd, onto, c)) format = undefined;
+        else untrusted.push({ commit: c, subject, command: format.command, why });
+      }
+    }
     if (format) any = true;
+    else for (const p of (await out(cwd, ['diff', '--name-only', '--no-renames', '-z', `${c}^`, c])).split('\0')) if (p) touched.add(p);
     picks.push({ c, format });
   }
+  if (untrusted.length) return { ok: false, untrusted };
   if (!any) return undefined;
   let cur = await out(cwd, ['rev-parse', `${onto}^{commit}`]);
   const remade: string[] = [];
