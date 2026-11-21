@@ -245,3 +245,14 @@ test("a box's message turn and time are held to their real shapes", async () => 
   assert.equal(two!.turn, 'ae376077');
   assert.equal(two!.at, AT);
 });
+
+// Codex Security, 21 Nov (finding 152): a box never reports a failed update
+// for the main Mac to start a fix thread on; only a following Mac's key can.
+test('a box\'s heartbeat drops any updateFailed it sends', async () => {
+  const s = await setup();
+  const updateFailed = { kind: 'build' as const, commit: 'a'.repeat(40), subject: 's', error: 'e', logFile: '/tmp/l' };
+  await call(s.ctx, sync.heartbeat, { key: s.boxKey, runner: { runnerId: BOX_RUNNER, name: 'box', version: 'v', startedAt: AT, draining: false, threadCount: 1, updateFailed } });
+  assert.equal(s.rows('runners').find((r) => r.runnerId === BOX_RUNNER)!.updateFailed, undefined);
+  await call(s.ctx, sync.heartbeat, { key: MINI_KEY, runner: { runnerId: MINI, name: 'mini', version: 'v', startedAt: AT, draining: false, threadCount: 1, updateFailed } });
+  assert.equal((s.rows('runners').find((r) => r.runnerId === MINI)!.updateFailed as { commit: string }).commit, updateFailed.commit);
+});
