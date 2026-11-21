@@ -257,30 +257,37 @@ function fitMovedLog(file: string, media: MovedMedia): void {
   // Line by line from the bytes, as EventLog reads it: the whole log as one
   // string fails past V8's string limit (half a gigabyte), which a bundle
   // can unpack to (Gemini's second review). A line too long to read throws,
-  // and the move fails, rather than going unfitted.
+  // and the move fails, rather than going unfitted. Only changed lines are
+  // kept as pieces, the rest copied as runs of the log, so a log of a
+  // hundred million empty lines costs no more (Codex's third review).
   const out: Buffer[] = [];
+  let copied = 0;
   let changed = false;
   for (let start = 0; start < buf.length; ) {
     let end = buf.indexOf(0x0a, start);
     if (end < 0) end = buf.length;
-    const raw = buf.subarray(start, end);
-    let line: Buffer = raw;
-    // Every line parsed: a type written with JSON escapes (review\u002eupdated)
-    // reads the same to every later reader (Codex's and Gemini's reviews).
-    const ev = parsedLine(raw);
-    if (ev && typeof ev === 'object' && ev.type === 'review.updated') {
-      const review = fitReview(ev.review, media);
-      const next = review ? { ...ev, review } : { seq: ev.seq, ts: ev.ts, type: 'system.note', text: LEFT_OUT_REVIEW };
-      line = Buffer.from(JSON.stringify(next), 'utf8');
-      if (!line.equals(raw)) changed = true;
+    if (end > start) {
+      // Every line parsed: a type written with JSON escapes (review\u002eupdated)
+      // reads the same to every later reader (Codex's and Gemini's reviews).
+      const raw = buf.subarray(start, end);
+      const ev = parsedLine(raw);
+      if (ev && typeof ev === 'object' && ev.type === 'review.updated') {
+        const review = fitReview(ev.review, media);
+        const next = review ? { ...ev, review } : { seq: ev.seq, ts: ev.ts, type: 'system.note', text: LEFT_OUT_REVIEW };
+        const line = Buffer.from(JSON.stringify(next), 'utf8');
+        if (!line.equals(raw)) {
+          changed = true;
+          out.push(buf.subarray(copied, start), line);
+          copied = end;
+        }
+      }
     }
-    out.push(line);
-    if (end < buf.length) out.push(Buffer.from('\n'));
     start = end + 1;
   }
   if (!changed) return;
   // Into place whole: it may be the live log (Codex's second review).
   const tmp = `${file}.fitting-${process.pid}`;
+  out.push(buf.subarray(copied));
   fs.writeFileSync(tmp, Buffer.concat(out), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }

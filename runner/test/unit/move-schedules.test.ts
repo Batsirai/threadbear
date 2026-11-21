@@ -529,7 +529,7 @@ test("a moved review never names a file of this Mac's; the ones that came are th
     id: rid, title: 'Pick', status: 'pending', revision: 1, createdAt: 'c', updatedAt: 'c', draft: { notes: {} },
     note: `Compare with [mine](${path.join(mine, 'notes.md')})`,
     options: [
-      { id: 'came', title: 'Came', image: theirs('a.png'), shots: [{ image: theirs('a.png') }, { image: theirs('a.png'), media: local('home.mp4', 'video/mp4') }, { image: local('secret.png', 'image/png') }, { image: theirs('a.png'), media: theirs('clip.mp4', 'video/mp4') }, { image: theirs('a.png'), media: theirs('p1/index.html', 'text/html') }] },
+      { id: 'came', title: 'Came', image: theirs('a.png'), shots: [{ image: theirs('a.png') }, { image: theirs('a.png'), media: local('home.mp4', 'video/mp4') }, { image: local('secret.png', 'image/png') }, { image: theirs('a.png'), media: theirs('clip.mp4', 'video/mp4') }, { image: theirs('a.png'), media: theirs('p1/index.html', 'text/html') }, { image: theirs('a.png'), media: local('page.html', 'text/html') }] },
       { id: 'raster', title: 'Raster', image: local('secret.png', 'image/png') },
       { id: 'video', title: 'Video', image: local('secret.png', 'image/png'), shots: [{ image: local('secret.png', 'image/png'), media: local('home.mp4', 'video/mp4') }] },
       { id: 'page', title: 'Page', image: local('secret.png', 'image/png'), shots: [{ image: local('secret.png', 'image/png'), media: local('page.html', 'text/html') }] },
@@ -560,7 +560,7 @@ test("a moved review never names a file of this Mac's; the ones that came are th
   assert.deepEqual(got.options.map((o) => o.id), ['came']);
   assert.equal(got.options[0]!.image.path, here);
   const dir = path.dirname(here);
-  assert.deepEqual(got.options[0]!.shots!.map((x) => [x.image.path, x.media?.path, x.media?.mediaType]), [[here, undefined, undefined], [here, undefined, undefined], [here, path.join(dir, 'clip.mp4'), 'video/mp4'], [here, path.join(dir, 'p1', 'index.html'), 'text/html']]);
+  assert.deepEqual(got.options[0]!.shots!.map((x) => [x.image.path, x.media?.path, x.media?.mediaType]), [[here, undefined, undefined], [here, undefined, undefined], [here, path.join(dir, 'clip.mp4'), 'video/mp4'], [here, path.join(dir, 'p1', 'index.html'), 'text/html'], [here, undefined, undefined]]);
   assert.ok(fs.existsSync(path.join(dir, 'clip.mp4')) && fs.existsSync(path.join(dir, 'p1', 'index.html')));
   assert.ok(fs.existsSync(here), 'the copy that came is usable here');
   assert.equal(got.note, `Compare with [mine]\\(${path.join(mine, 'notes.md')})`, 'a note link to a file is only words');

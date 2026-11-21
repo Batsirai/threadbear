@@ -177,7 +177,8 @@ function movedRef(ref: unknown, reviewId: string, media: MovedMedia, still: bool
   }
   const page = !still && /\.html?$/i.test(file.now);
   let info: { mediaType: string; width?: number; height?: number } | null;
-  if (page) info = size <= maxPageBytes ? { mediaType: 'text/html' } : null;
+  // A page's copy may have a charset tag more than show_options took (withCharset).
+  if (page) info = size <= maxPageBytes + 1024 ? { mediaType: 'text/html' } : null;
   else if (still) info = /\.(png|jpe?g|gif|webp)$/i.test(file.now) && size <= maxImageBytes ? readImageInfo(file.now) : null;
   else info = /\.(mp4|m4v|mov)$/i.test(file.now) && size <= maxVideoBytes ? readVideoInfo(file.now) : null;
   if (!info) return undefined;
@@ -272,10 +273,16 @@ export function fitReview(raw: unknown, media: MovedMedia, recovering = false): 
   if (!r.options.length) return undefined;
   const ids = new Set<string>(r.options.map((o: { id: string }) => o.id));
   if (r.recommended !== undefined && !ids.has(r.recommended)) delete r.recommended;
+  // A draft with notes, as the runner takes every review to have, and a
+  // response only if it's one (Gemini's third review: a response with no
+  // notes threw in recoverReviews).
+  if (!r.draft || typeof r.draft !== 'object' || Array.isArray(r.draft)) r.draft = { notes: {} };
+  if (r.response !== undefined && (!r.response || typeof r.response !== 'object' || Array.isArray(r.response))) delete r.response;
   for (const key of ['draft', 'response'] as const) {
     const d = r[key];
     if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
     const draft = { ...d };
+    if (!draft.notes || typeof draft.notes !== 'object' || Array.isArray(draft.notes)) draft.notes = {};
     set(draft, 'reply', 8000);
     // A reply's pictures name the other runner's files, which an extra Mac
     // could point anywhere on this one (Codex's review, 17 Nov): they don't

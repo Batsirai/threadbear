@@ -618,6 +618,12 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
     for (let i=out.indexOf(']('); i>=0; i=out.indexOf('](',i+1)) assert.match(out.slice(i+1),/^\([ \t\r\n]*https?:\/\/[!-'*-~]*[ \t\r\n]*\)/i,out);
     assert.equal(out.replaceAll(']\\(','](') ,note.replaceAll(']\\(','](') ,'the words stay');
   }
+  // A draft and response in shapes the runner works with (Gemini's third review).
+  const here2={threadId:id,now:final,final};
+  const shaped=fitReview({...raw,draft:null,response:{reply:'ok'}},here2)!;
+  assert.deepEqual(shaped.draft,{notes:{}});
+  assert.deepEqual(shaped.response,{reply:'ok',notes:{}});
+  assert.equal(fitReview({...raw,response:'x'},here2)!.response,undefined);
   // A review with nothing that came isn't a review here.
   assert.equal(fitReview({...raw,options:[raw.options[1]]},media),undefined);
   fs.rmSync(root,{recursive:true,force:true});
