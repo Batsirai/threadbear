@@ -584,7 +584,11 @@ worktree: { setup: "...", check: "...", keep: ["app/.build", "dock/.build"] },
 With `keep`:
 
 - New worktrees are `<repo>-threads/slot-<n>`, not `<id8>`, as the folder
-  outlives the thread.
+  outlives the thread: the first number with no folder that git doesn't
+  still have registered (its folder removed by hand), trying the next when
+  git refuses one, a few times, and deleting the branch a refused add made.
+  On 21 Nov a slot removed by hand would have left every new thread with no
+  spare in the main checkout, and its branch refusing its next try.
 - Cleaning up a landed one detaches it, deletes its branch and locks it
   (`git worktree lock --reason "threadbear spare"`): a spare. Past six
   spares (`MAX_SPARES`), it's removed as before.

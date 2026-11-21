@@ -228,16 +228,53 @@ async function makeWorktreeNow(opts: { cwd: string; threadId: string; patch: Wor
     }
   }
 
-  let where = path.join(threads, id8);
-  if (keep) {
-    let n = 1;
-    while (fs.existsSync(path.join(threads, `slot-${n}`))) n++;
-    where = path.join(threads, `slot-${n}`);
-  }
   fs.mkdirSync(threads, { recursive: true });
+  if (!keep) {
+    const where = path.join(threads, id8);
+    const add = await addWorktree(mainCheckout, branch, where, base);
+    return add === true ? done(where) : { ok: false, reason: `git worktree add failed: ${add}` };
+  }
+  // The first free slot number: no folder there, and not a path git still
+  // has registered after its folder went (git refuses to add there). One
+  // git refuses all the same (borrow-worktree.sh took it at that moment)
+  // tries the next, a few times, as the script does. 21 Nov: a slot folder
+  // removed by hand left every new thread without a worktree.
+  const registered = new Set(((await listCheckouts(mainCheckout)) ?? []).map((c) => path.resolve(c.path)));
+  let refused = '';
+  for (let n = 1, tries = 0; tries < 5; n++) {
+    const where = path.join(threads, `slot-${n}`);
+    if (lexists(where) || registered.has(path.resolve(where)) || registered.has(realpath(where))) continue;
+    const add = await addWorktree(mainCheckout, branch, where, base);
+    if (add === true) return done(where);
+    refused = add;
+    tries++;
+  }
+  return { ok: false, reason: `git worktree add failed: ${refused}` };
+}
+
+// `git worktree add -b`, which makes the branch before it looks at the
+// folder: when it then refuses, the branch it made goes too (it was checked
+// not to be there before, and is at `base` with nothing checked out), or the
+// thread's next try would be refused for it. true, or why not.
+async function addWorktree(mainCheckout: string, branch: string, where: string, base: string): Promise<true | string> {
   const add = await git(mainCheckout, ['worktree', 'add', '-b', branch, where, base]);
-  if (!add.ok) return { ok: false, reason: `git worktree add failed: ${firstLine(add.stderr)}` };
-  return done(where);
+  if (add.ok) return true;
+  const left = await gitOut(mainCheckout, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+  const checkouts = left === base ? await listCheckouts(mainCheckout) : undefined;
+  // Deleted only if it's still at base as git deletes it (update-ref's old
+  // value), so a branch moved on meanwhile stays (Codex's review, 21 Nov).
+  if (checkouts && !checkouts.some((c) => c.branch === branch)) await git(mainCheckout, ['update-ref', '-d', `refs/heads/${branch}`, base]);
+  return firstLine(add.stderr.split('\n').filter((l) => !l.startsWith('Preparing worktree')).join('\n'));
+}
+
+// Whether anything is at `p`, a link to nowhere too.
+function lexists(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------- spares
