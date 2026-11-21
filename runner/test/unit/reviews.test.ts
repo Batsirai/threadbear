@@ -543,6 +543,11 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
   // A page the other runner calls a video, and a file that's neither.
   fs.writeFileSync(path.join(now,'reviews',rid,'payload.html'),'<script>x()</script>');
   fs.writeFileSync(path.join(now,'reviews',rid,'payload.bin'),'x');
+  // A video's first bytes under names that aren't a video's, and a picture's
+  // under a page's name (Codex's and Gemini's second reviews).
+  fs.writeFileSync(path.join(now,'reviews',rid,'clip.svg'),Buffer.concat([fakeMp4(),Buffer.from('<svg onload="x()"/>')]));
+  fs.writeFileSync(path.join(now,'reviews',rid,'clip.pdf'),Buffer.concat([fakeMp4(),Buffer.from('%PDF-1.4')]));
+  fs.writeFileSync(path.join(now,'reviews',rid,'still.html'),makePng(12,8));
   // This Mac's own files, at paths the other runner named.
   const local=path.join(root,'mine');
   fs.mkdirSync(local);
@@ -565,7 +570,7 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
       ]},
       {id:'gone',title:'Local only',image:{path:path.join(local,'secret.png'),mediaType:'image/png'},shots:[{image:{path:path.join(local,'notes.html'),mediaType:'text/html'}}]},
       {id:'other',title:'Another review\'s',image:{path:`/x/${id}/media/reviews/other-review/a.png`,mediaType:'image/png'}},
-      {id:'fallback',title:'First shot stands in',image:{path:path.join(local,'secret.png'),mediaType:'image/png'},shots:[{image:theirs('a.png')},{image:theirs('still.png'),media:{...theirs('payload.bin'),mediaType:'video/mp4'}},{image:{...theirs('payload.bin'),width:99999,height:1}}]},
+      {id:'fallback',title:'First shot stands in',image:{path:path.join(local,'secret.png'),mediaType:'image/png'},shots:[{image:theirs('a.png')},{image:theirs('still.png'),media:{...theirs('payload.bin'),mediaType:'video/mp4'}},{image:{...theirs('payload.bin'),width:99999,height:1}},{image:theirs('still.png'),media:{...theirs('clip.svg'),mediaType:'video/mp4'}},{image:theirs('still.png'),media:{...theirs('clip.pdf'),mediaType:'video/mp4'}},{image:theirs('still.html')}]},
     ],
     draft:{notes:{ok:'fine',gone:'gone too'},pickedIds:['ok','gone'],pickedId:'gone'}};
   const fitted=fitReview(raw,media)!;
@@ -584,7 +589,7 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
   ]);
   assert.deepEqual(ok.shots!.map(s=>s.media?.mediaType),[undefined,'video/mp4','text/html',undefined,'text/html']);
   // Neither a video nor a picture: its video goes, and the shot whose picture it was.
-  assert.deepEqual(fitted.options[1]!.shots!.map(s=>[s.image.path,s.media?.path]),[[here('a.png'),undefined],[here('still.png'),undefined]]);
+  assert.deepEqual(fitted.options[1]!.shots!.map(s=>[s.image.path,s.media?.path]),[[here('a.png'),undefined],[here('still.png'),undefined],[here('still.png'),undefined],[here('still.png'),undefined]]);
   assert.deepEqual([ok.image.mediaType,ok.image.width,ok.image.height],['image/png',12,8],'its type and size are the file\'s');
   assert.equal(ok.url,undefined,'Open live is for web pages only');
   assert.equal(fitted.options[1]!.image.path,here('a.png'));
@@ -606,10 +611,11 @@ test('a moved review keeps only the files that came with it, as this thread\'s c
   // to the next parenthesis: none is left but before a web address alone.
   // The second is Codex's and Gemini's: a code span the parser ends inside a
   // web link's address.
-  for (const note of ['[[x](https://a.b)](/etc/passwd)','`[x](https://example.test/`[open)](/Users/victim/private.md)','\\\\[x](/etc)','`a\\`[x](/etc)`','[a [b] c](/etc)','[x]( /etc )','[x](https://a.b/(y))','[x](https://a b)','[x](\nhttps://a.b)','plain']) {
+  for (const note of ['[[x](https://a.b)](/etc/passwd)','`[x](https://example.test/`[open)](/Users/victim/private.md)','\\\\[x](/etc)','`a\\`[x](/etc)`','[a [b] c](/etc)','[x]( /etc )','[x](https://a.b/(y))','[x](https://a b)','[x](\nhttps://a.b)','[open](\uFEFFhttps://x/../../private.png)','[open](\u00A0https://x)','[open](https://x\u3000)','plain']) {
     const out=webLinksOnly(note);
     assert.equal(webLinksOnly(out),out,note);
-    for (let i=out.indexOf(']('); i>=0; i=out.indexOf('](',i+1)) assert.match(out.slice(i+1),/^\(\s*https?:\/\/[^\s()]*\s*\)/i,out);
+    // Only ASCII spaces round the address, which Rust's trim takes too.
+    for (let i=out.indexOf(']('); i>=0; i=out.indexOf('](',i+1)) assert.match(out.slice(i+1),/^\([ \t\r\n]*https?:\/\/[!-'*-~]*[ \t\r\n]*\)/i,out);
     assert.equal(out.replaceAll(']\\(','](') ,note.replaceAll(']\\(','](') ,'the words stay');
   }
   // A review with nothing that came isn't a review here.
@@ -638,6 +644,22 @@ test('a review recovered from the log keeps only this thread\'s own copies', () 
   // Its words as they were: a log of this Mac's own (a moved one is fitted as it's placed).
   assert.equal(got.note,'[x](/etc/passwd)');
   assert.equal(st.rec.reviews.some((r:any)=>r.id===nothing.id),false,'one with nothing of its own is not recovered');
+});
+
+// Gemini's second review: a thread whose record is rebuilt from its log
+// took each review.updated as it was.
+test('a review rebuilt from the log keeps only this thread\'s own copies', () => {
+  const {h,thread,input}=fixture();
+  const {review}=h.runner.createReview(thread.id,input);
+  const secret=path.join(h.home,'secret.png');
+  fs.writeFileSync(secret,makePng(10,10));
+  const log=h.store.log(thread.id);
+  const other={...review,id:'21111111-2222-4333-8444-555566667777',options:[{...review.options[0],image:{path:secret,mediaType:'image/png'}}]};
+  log.append({seq:log.lastSeq+1,ts:new Date().toISOString(),type:'review.updated',review:other} as any);
+  log.append({seq:log.lastSeq+1,ts:new Date().toISOString(),type:'review.updated',review:null} as any);
+  const rec=h.runner.rebuild(thread.id)!;
+  assert.deepEqual(rec.reviews!.map(r=>r.id),[review.id]);
+  assert.ok(!JSON.stringify(rec.reviews).includes(secret));
 });
 
 test('a queued message only sends the thread\'s own pictures', async () => {

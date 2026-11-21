@@ -165,9 +165,21 @@ function movedRef(ref: unknown, reviewId: string, media: MovedMedia, still: bool
   if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return undefined;
   const file = movedReviewFile((ref as ImageRef).path, reviewId, media);
   if (!file) return undefined;
-  // Its size too, as the file says.
+  // Its kind by its name as well as its bytes, as createReview names its
+  // copies, and within show_options' sizes: a file with a video's first
+  // bytes called .svg or .pdf went to Play the clip too (Codex's and
+  // Gemini's second reviews). Its size as the file says.
+  let size: number;
+  try {
+    size = fs.statSync(file.now).size;
+  } catch {
+    return undefined;
+  }
   const page = !still && /\.html?$/i.test(file.now);
-  const info = page ? { mediaType: 'text/html' } : still ? readImageInfo(file.now) : readVideoInfo(file.now);
+  let info: { mediaType: string; width?: number; height?: number } | null;
+  if (page) info = size <= maxPageBytes ? { mediaType: 'text/html' } : null;
+  else if (still) info = /\.(png|jpe?g|gif|webp)$/i.test(file.now) && size <= maxImageBytes ? readImageInfo(file.now) : null;
+  else info = /\.(mp4|m4v|mov)$/i.test(file.now) && size <= maxVideoBytes ? readVideoInfo(file.now) : null;
   if (!info) return undefined;
   const { width: _w, height: _h, ...rest } = ref as ImageRef;
   return { ...rest, path: file.here, mediaType: info.mediaType, ...('width' in info && info.width ? { width: info.width } : {}), ...('height' in info && info.height ? { height: info.height } : {}) };
@@ -183,7 +195,10 @@ function movedRef(ref: unknown, reviewId: string, media: MovedMedia, still: bool
 // brackets and code spans before it (Codex's and Gemini's reviews: a check
 // of whole [words](address) runs read a code span differently). Doing it
 // again changes nothing.
-const WEB_ADDRESS = /\(\s*https?:\/\/[^\s()]*\s*\)/iy;
+// Only ASCII spaces around it: JavaScript's \s takes characters (U+FEFF)
+// the window's Rust trim keeps, and the address would be a file's then
+// (Codex's and Gemini's second reviews).
+const WEB_ADDRESS = /\([ \t\r\n]*https?:\/\/[^\s()]*[ \t\r\n]*\)/iy;
 export function webLinksOnly(note: string): string {
   let out = '';
   let last = 0;

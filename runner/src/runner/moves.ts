@@ -234,32 +234,55 @@ function fitMovedReviews(rec: Record<string, any>, media: MovedMedia): boolean {
 // seqs gapless. Only for a log nothing has opened yet (staging). Lines that
 // aren't events stay as they are.
 const LEFT_OUT_REVIEW = 'A review that came with the move was left out: none of its pictures came with it.';
-function fitMovedLog(file: string, media: MovedMedia): void {
-  let text: string;
+type LoggedEvent = { type?: unknown; seq?: unknown; ts?: unknown; review?: unknown };
+// A log line's event, or null for one that isn't JSON. Too long to read is thrown.
+function parsedLine(raw: Buffer): LoggedEvent | null {
+  if (!raw.length) return null;
+  const text = raw.toString('utf8');
   try {
-    text = fs.readFileSync(file, 'utf8');
+    return JSON.parse(text) as LoggedEvent | null;
   } catch {
-    return;
+    return null;
   }
+}
+
+function fitMovedLog(file: string, media: MovedMedia): void {
+  let buf: Buffer;
+  try {
+    buf = fs.readFileSync(file);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
+  }
+  // Line by line from the bytes, as EventLog reads it: the whole log as one
+  // string fails past V8's string limit (half a gigabyte), which a bundle
+  // can unpack to (Gemini's second review). A line too long to read throws,
+  // and the move fails, rather than going unfitted.
+  const out: Buffer[] = [];
   let changed = false;
-  // Every line parsed: a type written with JSON escapes (review\u002eupdated)
-  // reads the same to every later reader (Codex's and Gemini's reviews).
-  const lines = text.split('\n').map((line) => {
-    if (!line) return line;
-    let ev: { type?: unknown; seq?: unknown; ts?: unknown; review?: unknown } | null;
-    try {
-      ev = JSON.parse(line) as typeof ev;
-    } catch {
-      return line;
+  for (let start = 0; start < buf.length; ) {
+    let end = buf.indexOf(0x0a, start);
+    if (end < 0) end = buf.length;
+    const raw = buf.subarray(start, end);
+    let line: Buffer = raw;
+    // Every line parsed: a type written with JSON escapes (review\u002eupdated)
+    // reads the same to every later reader (Codex's and Gemini's reviews).
+    const ev = parsedLine(raw);
+    if (ev && typeof ev === 'object' && ev.type === 'review.updated') {
+      const review = fitReview(ev.review, media);
+      const next = review ? { ...ev, review } : { seq: ev.seq, ts: ev.ts, type: 'system.note', text: LEFT_OUT_REVIEW };
+      line = Buffer.from(JSON.stringify(next), 'utf8');
+      if (!line.equals(raw)) changed = true;
     }
-    if (!ev || typeof ev !== 'object' || ev.type !== 'review.updated') return line;
-    const review = fitReview(ev.review, media);
-    const next = review ? { ...ev, review } : { seq: ev.seq, ts: ev.ts, type: 'system.note', text: LEFT_OUT_REVIEW };
-    const out = JSON.stringify(next);
-    if (out !== line) changed = true;
-    return out;
-  });
-  if (changed) fs.writeFileSync(file, lines.join('\n'));
+    out.push(line);
+    if (end < buf.length) out.push(Buffer.from('\n'));
+    start = end + 1;
+  }
+  if (!changed) return;
+  // Into place whole: it may be the live log (Codex's second review).
+  const tmp = `${file}.fitting-${process.pid}`;
+  fs.writeFileSync(tmp, Buffer.concat(out), { mode: 0o600 });
+  fs.renameSync(tmp, file);
 }
 
 // A queued answer to a review names its reply's pictures as the other

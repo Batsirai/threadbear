@@ -1075,9 +1075,8 @@ const RUNS_WHAT_ITS_GIVEN: &[&str] = &[
 /// Where an app may be for an Always to name it: directly in /Applications,
 /// /System/Applications or ~/Applications (or their Utilities), at its real
 /// path, so a link to it isn't what's remembered. Narrower than
-/// `installed_where_apps_are`: a thread may work in a folder under
-/// ~/Library/Application Support and put an app there (Codex's review,
-/// 19 Nov), and Always is for apps Mike installed himself.
+/// `installed_where_apps_are` (no Setapp folder, no system folders but
+/// /System/Applications): Always is for apps Mike installed himself.
 fn rememberable_place(app: &Path) -> bool {
     if real_path(app).ok().as_deref() != Some(app) {
         return false;

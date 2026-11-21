@@ -13,7 +13,7 @@ import type { SwiftChangesStatus } from './swift-changes.ts';
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import os from 'node:os';
-import { keepPictureMarkers } from './reviews.ts';
+import { fitReview, keepPictureMarkers } from './reviews.ts';
 import path from 'node:path';
 import { ConvexKeys, type ConvexKeysOptions } from './convex-keys.ts';
 import crypto from 'node:crypto';
@@ -1289,8 +1289,16 @@ export class Runner {
       pendingApprovals: [],
       handoff: { fromCwd: this.cfg.defaults.cwd, fromAccountId: accountId, rebuilt: true },
     };
+    // Each only with this thread's own copies of its files, as recoverReviews
+    // takes one from the log (Daybreak 159, Gemini's second review): a moved
+    // thread's log is the other runner's word.
     const reviews = new Map<string, DesignReview>();
-    for (const event of events) if (event.type === 'review.updated') reviews.set(event.review.id, event.review);
+    const media = this.store.mediaDir(id);
+    for (const event of events) {
+      if (event.type !== 'review.updated') continue;
+      const review = fitReview(event.review, { threadId: id, now: media, final: media }, true);
+      if (review) reviews.set(review.id, review);
+    }
     if (reviews.size) rec.reviews = [...reviews.values()];
     const buttons = new Map<string, ReplyButton>();
     for (const event of events) if (event.type === 'button.updated') buttons.set(event.button.id, event.button);
