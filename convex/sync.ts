@@ -129,17 +129,23 @@ async function claimable(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
 
 // ------------------------------------------------------------ share links
 // A link's slug is one thread's for good: /s/<slug> must never start showing
-// another thread. A runner key may take one only if no other row has it and
-// no other runner's thread ever did (a deleted thread's, or one replaced by
-// Share again with a new link: tombstones with `slug`). The owner may; the
-// other rows then lose it.
+// another thread, and a retired one never comes back. A runner or box key may
+// take one only if no other row has it and no thread ever had it before (a
+// deleted thread's, or one replaced by Share again with a new link:
+// tombstones with `slug`), its own runner's and its own thread's included:
+// retiring a link is how it's revoked (Codex Security, 21 Nov 2026, finding
+// 161). Keeping a link that's still live on the same row is fine. The owner
+// may; the other rows then lose it.
 
 async function slugFree(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string, slug: string): Promise<boolean> {
   if (caller.owner) return true;
-  for await (const t of ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug))) if (t.threadId !== threadId) return false;
-  // A box: only a link its own thread had, not another thread's under its runner id.
-  for await (const t of ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug))) if (t.runnerId !== caller.runnerId || !ownThreadOnly(caller, t.threadId)) return false;
-  return true;
+  let liveHere = false;
+  for await (const t of ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug))) {
+    if (t.threadId !== threadId) return false;
+    liveHere = true;
+  }
+  if (liveHere) return true;
+  return (await ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug)).first()) === null;
 }
 
 async function retireSlug(ctx: MutationCtx, threadId: string, runnerId: string, slug: string): Promise<void> {

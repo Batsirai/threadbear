@@ -207,6 +207,33 @@ test("a share slug is one thread's: Mac mini's key can't take a live or retired 
   assert.equal(await call(s.ctx, share.preview, { slug: 'dup' }), null);
 });
 
+// Codex Security, 21 Nov 2026 (finding 161): a retired link stays retired
+// for a runner key, its own runner's tombstones too: not back on the thread
+// that had it, nor on another of its threads. Keeping a link that's still
+// live on the same row is fine.
+test("Mac mini's key can't bring back a retired link of its own, on the same thread or another", async () => {
+  const s = await setup();
+  const view = async (slug: string) => (await call(s.ctx, load('share').preview, { slug })) !== null;
+  await s.mini.upsert(thread('M1', MINI, { share: { access: 'link', slug: 'oldLink' } }));
+  await s.mini.upsert(thread('M2', MINI));
+  // Still live on its own row: writing it again is fine.
+  assert.equal(await outcome(s.mini.upsert(thread('M1', MINI, { share: { access: 'link', slug: 'oldLink' } }))), 'ok');
+  // Share again: old -> new retires the old one.
+  assert.equal(await outcome(s.mini.upsert(thread('M1', MINI, { share: { access: 'link', slug: 'newLink' } }))), 'ok');
+  assert.ok(s.rows('threadTombstones').some((t) => t.slug === 'oldLink' && t.runnerId === MINI));
+  assert.equal(await outcome(s.mini.upsert(thread('M1', MINI, { share: { access: 'link', slug: 'oldLink' } }))), 'forbidden');
+  assert.equal(await outcome(s.mini.upsert(thread('M2', MINI, { share: { access: 'link', slug: 'oldLink' } }))), 'forbidden');
+  assert.equal(await view('oldLink'), false);
+  assert.equal(await view('newLink'), true);
+  // A deleted thread's link likewise, on a fresh id or the old one.
+  await call(s.ctx, sync.removeThreads, { key: MINI_KEY, threadIds: ['M1'], runnerId: MINI });
+  assert.equal(await outcome(s.mini.upsert(thread('M2', MINI, { share: { access: 'link', slug: 'newLink' } }))), 'forbidden');
+  assert.equal(await outcome(s.mini.upsert(thread('M1', MINI, { share: { access: 'link', slug: 'newLink' } }))), 'forbidden');
+  assert.equal(await view('newLink'), false);
+  // The owner may still put a retired link back (its key is Mike's own).
+  assert.equal(await outcome(s.owner.upsert(thread('L1', LAPTOP, { share: { access: 'link', slug: 'oldLink' } }))), 'ok');
+});
+
 test("the owner taking a thread id over from Mac mini's runner starts it clean", async () => {
   const s = await setup();
   await s.mini.upsert(thread('T', MINI, { share: { access: 'link', slug: 'minis' } }));
