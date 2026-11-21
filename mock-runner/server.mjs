@@ -2700,6 +2700,7 @@ function applyScriptedThreads() {
 
 async function playScripted(threadId, turnId, started, turn, interrupted) {
   const t = threads.get(threadId);
+  if (turn.usage) scriptUsage(threadId, turn.usage);
   await sleep(turn.firstMs ?? 500);
   if (turn.thinking) persist(threadId, { type: 'reasoning', itemId: 'r_' + crypto.randomBytes(4).toString('hex'), text: turn.thinking }, turnId);
   for (const tool of turn.tools ?? []) {
@@ -2723,6 +2724,25 @@ async function playScripted(threadId, turnId, started, turn, interrupted) {
   persist(threadId, { type: 'assistant.text', itemId, text: finalText }, turnId);
   if (turn.limit && !interrupted()) return limitHit(threadId, turnId, started, turn.limit);
   finishTurn(threadId, turnId, started, interrupted() ? 'interrupted' : 'completed', turn.end);
+}
+
+// A scripted turn's `usage`: [{ ms, left }] sets the room left on the
+// thread's login (every window it has, as a percent) `ms` after the
+// turn starts, as the runner's usage polls would see it spent, so a recording
+// catches the activity bar's honey pot draining. A step back up to 95 or more
+// is a reset, which the pot shows as a refill with a drip. Steps can land
+// after the turn's over.
+function scriptUsage(threadId, steps) {
+  for (const { ms = 0, left } of steps) {
+    setTimeout(() => {
+      const s = threads.get(threadId)?.summary;
+      const a = s && accounts.find((x) => x.id === s.accountId);
+      if (!a?.usage) return;
+      for (const w of a.usage.windows ?? []) w.remainingPercent = left;
+      a.usage.blocked = left <= 0;
+      broadcast('accounts.updated', { accounts: publicAccounts() });
+    }, ms);
+  }
 }
 
 // A scripted turn with `limit` stops partway at its login's usage limit, as
