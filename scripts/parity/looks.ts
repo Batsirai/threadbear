@@ -48,7 +48,7 @@ type Look = { name: string; differences: Difference[]; error?: string };
 const SYSTEM = `You compare screenshots of one chat thread in Threadbear, an app for running AI agent threads, as drawn by different apps. The first picture is the Mac app: the reference. The others are the same thread on other apps (named before each picture). Your job is to find where another app draws the thread's content differently from the reference, in a way a careful user would call a bug.
 
 Report only clear differences in content or structure inside the thread itself:
-- something the reference shows that another app leaves out (a message, a card, a card's note or explanation under an option, a link or button on a card, a picture, a header line on a message);
+- something the reference shows that another app leaves out (a message, a card, a card's note or explanation under an option, a link to open or show something, a picture, a line of status in the thread, a header line on a message);
 - something in a different order (options, messages, a card above instead of below a message);
 - a card or structured block drawn as plain text, or plain text drawn as a card;
 - a part drawn in a clearly different role: e.g. a question shown small and grey above its answer on the reference but as a heading or as the answer's own text elsewhere, a message's header line missing or replaced, a done card's follow-ups shown as plain bullets.
@@ -59,6 +59,8 @@ Never report these, they are expected between platforms:
 - the message box (composer) and its controls, placeholders, model or account pickers;
 - fonts, sizes, colours, spacing, corner radii, icons, line wrapping, widths, dark shades, native control styles (a checkbox vs a radio circle), button wording like "Archive" vs an archive icon;
 - a card's own chrome: its heading label ("Decision needed", "Needs you", "Done"), a collapse chevron, an archive button, a free-answer row like "Something else..." (the message box covers it); and a card holding nothing but that chrome (a bare "Done" with Archive) being left out. Its content (questions, options, notes, follow-ups, links, findings) still counts;
+- buttons that act on the thread (Send back, Approve, Archive, Retry): not every app has every action, by design;
+- a picture the reference itself couldn't load (a grey box saying "Couldn't get it ..."): the run's pictures don't reach every app, so its absence elsewhere isn't a difference;
 - collapsed activity rows ("Worked", "Used a tool", tool rows) differing in wording, timings like "0 ms", or being shown vs folded;
 - timestamps and dates;
 - text cut off at the edge of a picture or scrolled out of view on a smaller screen, if the rest of the picture agrees with it.

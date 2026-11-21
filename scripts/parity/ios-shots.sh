@@ -43,7 +43,7 @@ i=0
 results=()
 for id in $(python3 -c 'import json,sys; [print(t["threadId"]) for t in json.load(open(sys.argv[1]))["threads"]]' "$SEED"); do
   i=$((i + 1))
-  xcrun simctl launch --terminate-running-process "$SIM" com.mikerosoft.threadbear -ThreadbearPair "$LINK" -ThreadbearOpen "$id" >/dev/null
+  xcrun simctl launch --terminate-running-process "$SIM" com.mikecann.threadbear -ThreadbearPair "$LINK" -ThreadbearOpen "$id" >/dev/null
   # Pairing, the live query and the thread's first page: until its words
   # show, or 25 s. Never under 4 s, so a card still settling isn't caught
   # half drawn.
