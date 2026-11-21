@@ -44,6 +44,7 @@ type Conn = {
   // ahead of it (a stolen token's first request, say).
   identifying?: Promise<void>;
   queue: string[];
+  queuedBytes?: number;
 };
 
 // Until a connection has authenticated (docs/protocol/connection.md, "Auth"), it gets
@@ -55,8 +56,11 @@ const AUTH_TIMEOUT_MS = 3000;
 const PREAUTH_MAX_PAYLOAD = 64 * 1024;
 const MAX_PENDING_AUTH = 16;
 // Frames that may wait for the process lookup (a few, in practice; the client
-// has only just proved itself).
+// has only just proved itself). The frame limit stays at PREAUTH_MAX_PAYLOAD
+// until the lookup is done, and the queue has a byte budget too: a thread's
+// key alone mustn't let it park gigabytes in the runner (Daybreak finding 158).
 const MAX_QUEUED_FRAMES = 256;
+const MAX_QUEUED_BYTES = 1024 * 1024;
 // What an authenticated client may send in one frame.
 const MAX_PAYLOAD = 64 * 1024 * 1024;
 // Backpressure for a client that stops reading (a hung app, a debugger):
@@ -291,9 +295,12 @@ export class RpcServer {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
+  // Connections waiting to authenticate, and authenticated ones whose process
+  // lookup hasn't finished: both hold frames the runner hasn't acted on, so
+  // both take one of the slots (Daybreak finding 158).
   private pendingAuth(): number {
     let n = 0;
-    for (const c of this.conns) if (!c.authed) n++;
+    for (const c of this.conns) if (!c.authed || c.identifying) n++;
     return n;
   }
 
@@ -356,13 +363,21 @@ export class RpcServer {
         })
         .finally(() => {
           conn.identifying = undefined;
+          conn.queuedBytes = 0;
           if (conn.dropped) return;
+          this.raiseFrameLimit(conn);
           for (const raw of conn.queue.splice(0)) this.onMessage(conn, raw);
         });
     }
     conn.authed = true;
     conn.authTimer?.clear();
     conn.challenge = undefined;
+    // Only once the runner knows who it's talking to does a frame get bigger
+    // than before auth (Daybreak finding 158).
+    if (!conn.identifying) this.raiseFrameLimit(conn);
+  }
+
+  private raiseFrameLimit(conn: Conn): void {
     const receiver = (conn.ws as unknown as { _receiver?: { _maxPayload?: unknown } })._receiver;
     if (receiver && typeof receiver._maxPayload === 'number') receiver._maxPayload = MAX_PAYLOAD;
     else this.opts.log.warn('could not raise the frame limit for an authenticated client', { conn: conn.id });
@@ -502,10 +517,15 @@ export class RpcServer {
     if (conn.dropped) return;
     if (!conn.authed) return this.onAuthMessage(conn, raw);
     if (conn.identifying) {
-      if (conn.queue.length >= MAX_QUEUED_FRAMES) {
-        conn.ws.close(4408, 'too many frames before identification');
+      const bytes = (conn.queuedBytes ?? 0) + Buffer.byteLength(raw);
+      if (conn.queue.length >= MAX_QUEUED_FRAMES || bytes > MAX_QUEUED_BYTES) {
+        conn.dropped = true;
+        conn.queue.length = 0;
+        conn.ws.close(4408, 'too much sent before identification');
+        setTimeout(() => conn.ws.terminate(), 1000).unref();
         return;
       }
+      conn.queuedBytes = bytes;
       conn.queue.push(raw);
       return;
     }
@@ -959,7 +979,8 @@ export class RpcServer {
       case 'pools.save':
         return r.savePools(p.pools);
       case 'media.import':
-        return r.importMedia(reqString(p, 'path'));
+        // A thread's key gets the metered import (Daybreak finding 157).
+        return conn.caller === undefined ? r.importMedia(reqString(p, 'path')) : r.importMediaForThread(conn.caller, reqString(p, 'path'));
       case 'panels.render':
         return r.renderPanel(reqString(p, 'threadId'), reqString(p, 'panelId'));
       case 'panels.toggle':

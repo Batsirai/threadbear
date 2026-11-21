@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultHome } from '../../src/config.ts';
-import { logLineEvent, safeFields, sentryWanted } from '../../src/sentry.ts';
+import { logLineEvent, safeFields, scrubEvent, sentryOptions, sentryWanted, useSentryMask } from '../../src/sentry.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 
 const RELEASE_ID = '20261029T012558Z-3e0bd5d';
@@ -73,4 +73,73 @@ test('the RPC method goes in the title, so different requests failing are separa
   const b = logLineEvent('error', 'request failed', { method: 'runners.list', error: 'fetch failed' }, now);
   assert.equal(a?.title, 'request failed (panels.convexKey)');
   assert.notDeepEqual(a?.fingerprint, b?.fingerprint);
+});
+
+// Daybreak finding 155: errors quote what they were looking at (git's stderr
+// names a remote with its token in the URL), and the `error` field and
+// exceptions went to Sentry as they were. Every event is scrubbed as it
+// leaves, by the real SDK's beforeSend, and dropped if the scrub fails.
+const GIT_URL = 'https://x-access-token:ghs_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789@github.com/mikecann/private.git';
+const BARE = 'https://ghp_SecretTokenValue0123456789abcdefABCDEF@example.com/repo.git';
+const PRIVATE = 'zebra-private-marker-4471';
+// Built, so the SDK's source lines around a frame (this file, in a test) don't hold them.
+const LEAKS = [['ghs', 'AbCd'].join('_'), ['ghp', 'Secret'].join('_'), ['x', 'access', 'token'].join('-'), PRIVATE];
+
+async function capture(fn: (S: typeof import('@sentry/node')) => void | Promise<void>): Promise<string> {
+  const S = await import('@sentry/node');
+  const sent: string[] = [];
+  useSentryMask((text) => text.split(PRIVATE).join('[REDACTED]'));
+  S.init({
+    ...sentryOptions(),
+    dsn: 'https://public@o1.ingest.sentry.io/1',
+    transport: () => ({
+      send: async (envelope: unknown) => {
+        sent.push(JSON.stringify(envelope));
+        return {};
+      },
+      flush: async () => true,
+    }),
+  });
+  try {
+    await fn(S);
+    await S.flush(2000);
+  } finally {
+    await S.close(2000);
+    useSentryMask((t) => t);
+  }
+  return sent.join('\n');
+}
+
+test('a credential in a git URL or a known private value never leaves in a log line event', async () => {
+  useSentryMask((text) => text.split(PRIVATE).join('[REDACTED]'));
+  const ev = logLineEvent('warning', `upstream check failed ${PRIVATE}`, { error: `Error: git fetch ${GIT_URL} failed: fatal: could not read from ${BARE} (${PRIVATE})`, prompt: PRIVATE }, 9_000_000);
+  assert.ok(ev);
+  const local = JSON.stringify(ev);
+  for (const bad of LEAKS) assert.ok(!local.includes(bad), `${bad} in ${local}`);
+  assert.match(local, /github\.com\/mikecann\/private\.git/, 'the rest of the URL stays, to tell what failed');
+  useSentryMask((t) => t);
+});
+
+test('exceptions, their causes and extras are scrubbed by beforeSend in the real SDK', async () => {
+  const out = await capture((S) => {
+    const cause = new Error(`git fetch ${BARE} failed: ${PRIVATE}`);
+    const e = new Error(`fetch from ${GIT_URL} failed`, { cause });
+    S.captureException(e, { tags: { what: 'upstream' }, extra: { error: `${PRIVATE} ${GIT_URL}` } });
+    S.captureMessage(`could not reach ${GIT_URL}`, { level: 'warning', extra: { error: `stderr: ${BARE} ${PRIVATE}` } });
+  });
+  assert.ok(out.length > 0, 'events went out');
+  for (const bad of LEAKS) assert.ok(!out.includes(bad), `${bad} left the runner: ${out.slice(Math.max(0, out.indexOf(bad) - 300), out.indexOf(bad) + 100)}`);
+  assert.match(out, /fetch from https:\/\/github\.com\/mikecann\/private\.git failed/);
+});
+
+test("an event whose scrub fails isn't sent", () => {
+  useSentryMask(() => {
+    throw new Error('check broke');
+  });
+  try {
+    assert.equal(scrubEvent({ message: 'anything at all' }), null);
+  } finally {
+    useSentryMask((t) => t);
+  }
+  assert.deepEqual(scrubEvent({ message: 'fine', breadcrumbs: [{ message: PRIVATE }], user: { id: 'x' } }), { message: 'fine' });
 });

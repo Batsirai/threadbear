@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { ImageRef } from './protocol.ts';
-import { convertImageSync } from './images.ts';
+import { convertImage, convertImageSync } from './images.ts';
 
 export type ImageInfo = { mediaType: string; width?: number; height?: number };
 
@@ -198,6 +198,73 @@ export function copyImageInto(dir: string, src: string): ImageRef {
   if (info.width) ref.width = info.width;
   if (info.height) ref.height = info.height;
   return ref;
+}
+
+// copyImageInto for a thread's media.import (Daybreak finding 157): nothing
+// here holds the runner's event loop. The file is opened once and read only
+// up to the size it had then, so it can't grow past the cap (or be swapped
+// for another) between the check and the copy; one that needs converting is
+// converted from that private copy, in the background, and every leftover
+// goes when it fails.
+export async function importImageInto(dir: string, src: string): Promise<ImageRef> {
+  const name = path.basename(src);
+  let fh: fs.promises.FileHandle;
+  try {
+    fh = await fs.promises.open(src, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+  } catch (e) {
+    throw new Error(unreadable(src) ?? `Couldn't read ${name} (${(e as NodeJS.ErrnoException).code ?? 'error'})`);
+  }
+  const id = crypto.randomUUID();
+  const raw = path.join(dir, `${id}.import.tmp`);
+  try {
+    const st = await fh.stat();
+    if (!st.isFile()) throw new Error(`Not a file: ${name}`);
+    if (st.size === 0) throw new Error(`${name} is empty`);
+    if (st.size > MAX_IMAGE_BYTES) throw new Error(`${name} is too big to add (over 100 MB)`);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const out = await fs.promises.open(raw, 'wx', 0o600);
+    try {
+      const buf = Buffer.alloc(Math.min(st.size, 1024 * 1024));
+      let at = 0;
+      while (at < st.size) {
+        const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, st.size - at), at);
+        if (bytesRead === 0) break;
+        await out.write(buf, 0, bytesRead);
+        at += bytesRead;
+      }
+    } finally {
+      await out.close();
+    }
+  } catch (e) {
+    await fs.promises.rm(raw, { force: true });
+    throw e;
+  } finally {
+    await fh.close();
+  }
+  try {
+    const info = readImageInfo(raw);
+    if (info) {
+      const file = path.join(dir, `${id}.${extForMediaType(info.mediaType)}`);
+      await fs.promises.rename(raw, file);
+      return refFrom(file, info);
+    }
+    const kind = convertibleKind(readHead(raw));
+    if (!kind) throw new Error(`Not a supported image: ${name}`);
+    const [format, ext] = kind === 'heic' ? (['jpeg', 'jpg'] as const) : (['png', 'png'] as const);
+    const file = path.join(dir, `${id}.${ext}`);
+    const tmp = `${file}.tmp.${ext}`;
+    try {
+      const made = await convertImage(raw, tmp, { format, ...(format === 'jpeg' ? { quality: 90 } : {}) });
+      const converted = made ? readImageInfo(tmp) : null;
+      if (!converted) throw new Error(`Not a supported image: ${name}`);
+      await fs.promises.rename(tmp, file);
+      return refFrom(file, converted);
+    } finally {
+      await fs.promises.rm(tmp, { force: true });
+    }
+  } finally {
+    await fs.promises.rm(raw, { force: true });
+  }
 }
 
 // Why a file can't be read at all, or undefined when it can, so a missing or

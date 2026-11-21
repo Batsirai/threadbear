@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { defaultHome } from './config.ts';
 import { RELEASE, readRelease } from './release.ts';
+import { redactSecrets } from './redaction.ts';
 import { repoKey } from './upstream.ts';
 
 const MIKES_REPO = 'github.com/mikecann/threadbear';
@@ -60,47 +61,144 @@ export function sentryWanted(home: string, env: NodeJS.ProcessEnv = process.env,
   return realPath(home) === realPath(defaultHome());
 }
 
+// What the SDK is started with; the tests start it with these too, and a
+// transport of their own.
+export function sentryOptions(): import('@sentry/node').NodeOptions {
+  return {
+    dsn: DSN,
+    environment: 'production',
+    release: `threadbear-runner@${RELEASE.version}`,
+    // Not the Mac's own name, which the SDK sends by default.
+    serverName: 'threadbear-runner',
+    // v11's replacement for sendDefaultPii: false. Its defaults collect
+    // all of these, local variables included (a thread's text, a token).
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpHeaders: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      graphQL: { document: false, variables: false },
+      genAI: { inputs: false, outputs: false },
+      mcp: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      queues: false,
+      stackFrameVariables: false,
+    },
+    // The runtime module hooks are for tracing's instrumentation.
+    enableRuntimeChannelInjection: false,
+    beforeBreadcrumb: () => null,
+    // v11 attaches a stack to captureMessage by default, which turns each
+    // log line into a nameless exception titled after reportLogLine.
+    // Without it the issue is titled with the log message.
+    attachStacktrace: false,
+    integrations: (all) => all.filter((i) => !LEFT_OUT.has(i.name)),
+    // The last word on every event, whatever made it: its text scrubbed
+    // (scrubEvent), or nothing sent if the scrub fails.
+    beforeSend: (event) => scrubEvent(event),
+    initialScope: { tags: { component: 'runner' } },
+  };
+}
+
 // Loads the SDK only when it's wanted, so a dev runner or a test never
 // even imports it. Never throws: reporting must not stop the runner.
 export async function startSentry(home: string): Promise<boolean> {
   if (!sentryWanted(home)) return false;
   try {
     const S = await import('@sentry/node');
-    S.init({
-      dsn: DSN,
-      environment: 'production',
-      release: `threadbear-runner@${RELEASE.version}`,
-      // Not the Mac's own name, which the SDK sends by default.
-      serverName: 'threadbear-runner',
-      // v11's replacement for sendDefaultPii: false. Its defaults collect
-      // all of these, local variables included (a thread's text, a token).
-      dataCollection: {
-        userInfo: false,
-        cookies: false,
-        httpHeaders: false,
-        httpBodies: [],
-        urlQueryParams: false,
-        graphQL: { document: false, variables: false },
-        genAI: { inputs: false, outputs: false },
-        mcp: { inputs: false, outputs: false },
-        databaseQueryData: false,
-        queues: false,
-        stackFrameVariables: false,
-      },
-      // The runtime module hooks are for tracing's instrumentation.
-      enableRuntimeChannelInjection: false,
-      beforeBreadcrumb: () => null,
-      // v11 attaches a stack to captureMessage by default, which turns each
-      // log line into a nameless exception titled after reportLogLine.
-      // Without it the issue is titled with the log message.
-      attachStacktrace: false,
-      integrations: (all) => all.filter((i) => !LEFT_OUT.has(i.name)),
-      initialScope: { tags: { component: 'runner' } },
-    });
+    S.init(sentryOptions());
     sentry = S;
     return true;
   } catch {
     return false;
+  }
+}
+
+// What every string an event carries goes through (Daybreak finding 155).
+// Errors quote what they were looking at: git's stderr names a remote with
+// its token in the URL, a parse error quotes its input. So a URL's userinfo
+// goes whole (a bare token before the @ is the usual leak), then the
+// runner's known secret values (main.ts hands them over), then the same
+// shape rules as everything sent to Convex (redaction.ts), and it's cut
+// short. Throws when the check fails, for scrubEvent to drop the event.
+let maskKnown: (text: string) => string = (text) => text;
+
+export function useSentryMask(mask: (text: string) => string): void {
+  maskKnown = mask;
+}
+
+// The lookbehind keeps it linear on runs like "ab-ab-ab-..." (as redaction.ts's URL rule).
+const USERINFO = /((?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/)[^@/\s'"]+@/gi;
+const MAX_TEXT = 1000;
+
+export function scrubForSentry(text: string): string {
+  const out = redactSecrets(maskKnown(text.replace(USERINFO, '$1'))).text;
+  return out.length > MAX_TEXT ? `${out.slice(0, MAX_TEXT)}…` : out;
+}
+
+type Json = unknown;
+function scrubDeep(v: Json, depth = 0): Json {
+  if (typeof v === 'string') return scrubForSentry(v);
+  if (depth > 8 || v === null || typeof v !== 'object') return typeof v === 'number' || typeof v === 'boolean' || v === null ? v : undefined;
+  if (Array.isArray(v)) return v.map((x) => scrubDeep(x, depth + 1));
+  const out: Record<string, Json> = {};
+  for (const [k, x] of Object.entries(v)) out[scrubForSentry(k)] = scrubDeep(x, depth + 1);
+  return out;
+}
+
+// The event as it leaves: its message, every exception's text (a cause's
+// too: each is one of exception.values), the mechanism's data, extras and
+// tags and a frame's source lines scrubbed; anything that could carry a
+// thread's text and isn't needed (breadcrumbs, request, user, a frame's
+// variables) taken out. Stacks keep their file and function names, which are
+// the runner's own. Null, so
+// nothing goes, if any of it fails.
+type SentryEventLike = {
+  message?: unknown;
+  logentry?: { message?: unknown; params?: unknown };
+  exception?: { values?: { type?: unknown; value?: unknown; mechanism?: { data?: unknown }; stacktrace?: { frames?: Record<string, unknown>[] } }[] };
+  extra?: unknown;
+  tags?: unknown;
+  fingerprint?: unknown;
+  transaction?: unknown;
+  breadcrumbs?: unknown;
+  request?: unknown;
+  user?: unknown;
+  threads?: unknown;
+};
+
+export function scrubEvent<E>(event: E): E | null {
+  try {
+    const e = event as SentryEventLike;
+    if (typeof e.message === 'string') e.message = scrubForSentry(e.message);
+    if (e.logentry) {
+      if (typeof e.logentry.message === 'string') e.logentry.message = scrubForSentry(e.logentry.message);
+      if (e.logentry.params !== undefined) e.logentry.params = scrubDeep(e.logentry.params);
+    }
+    for (const ex of e.exception?.values ?? []) {
+      if (typeof ex.type === 'string') ex.type = scrubForSentry(ex.type);
+      if (typeof ex.value === 'string') ex.value = scrubForSentry(ex.value);
+      if (ex.mechanism?.data !== undefined) ex.mechanism.data = scrubDeep(ex.mechanism.data);
+      for (const f of ex.stacktrace?.frames ?? []) {
+        delete f.vars;
+        // The source lines around a frame: the runner's own code, but scrubbed
+        // all the same, as a line can hold a literal.
+        if (typeof f.context_line === 'string') f.context_line = scrubForSentry(f.context_line);
+        if (f.pre_context !== undefined) f.pre_context = scrubDeep(f.pre_context);
+        if (f.post_context !== undefined) f.post_context = scrubDeep(f.post_context);
+      }
+    }
+    if (e.extra !== undefined) e.extra = scrubDeep(e.extra);
+    if (e.tags !== undefined) e.tags = scrubDeep(e.tags);
+    if (e.fingerprint !== undefined) e.fingerprint = scrubDeep(e.fingerprint);
+    if (typeof e.transaction === 'string') e.transaction = scrubForSentry(e.transaction);
+    delete e.breadcrumbs;
+    delete e.request;
+    delete e.user;
+    delete e.threads;
+    return event;
+  } catch {
+    return null;
   }
 }
 
@@ -116,7 +214,9 @@ export function reportException(e: unknown, what: string): void {
 // Logged errors that main.ts reports as exceptions, with their stacks.
 const REPORTED_AS_EXCEPTIONS = new Set(['uncaught exception', 'unhandled rejection']);
 // Fields of a log line worth sending. Others (paths, prompts, a CLI's
-// output under some other name) stay in runner.log.
+// output under some other name) stay in runner.log. A name is no promise
+// about what's in it, so their text is scrubbed too (scrubForSentry), here
+// and again in beforeSend.
 const SAFE_FIELDS = new Set(['error', 'method', 'kind', 'provider', 'commit', 'port', 'pid', 'threadId', 'reviewId']);
 // One event per message an hour is plenty for the watcher, and keeps a
 // failure that repeats every second from using up the month's quota.
@@ -143,7 +243,7 @@ export function logLineEvent(level: LogLevel, msg: string, extra: Record<string,
   // One message can cover many causes: 'request failed' is logged for every
   // RPC method, so the method goes in the title to keep their issues apart.
   const method = typeof extra?.method === 'string' ? extra.method : undefined;
-  const title = (method ? `${msg} (${method})` : msg).replace(UUID, '<id>');
+  const title = scrubForSentry((method ? `${msg} (${method})` : msg).replace(UUID, '<id>'));
   const key = `${level} ${title}`;
   const last = lastSent.get(key);
   if (last !== undefined && now - last < SAME_MESSAGE_MS) return null;
@@ -162,9 +262,9 @@ export function reportLoggedWarning(msg: string, extra?: Record<string, unknown>
 
 function reportLogLine(level: LogLevel, msg: string, extra: Record<string, unknown> | undefined): void {
   if (!sentry) return;
-  const event = logLineEvent(level, msg, extra);
-  if (!event) return;
   try {
+    const event = logLineEvent(level, msg, extra);
+    if (!event) return;
     sentry.captureMessage(event.title, { level: event.level, fingerprint: event.fingerprint, extra: event.extra });
   } catch {
     // never mind
@@ -176,7 +276,7 @@ export function safeFields(extra: Record<string, unknown> | undefined): Record<s
   for (const [k, v] of Object.entries(extra ?? {})) {
     if (!SAFE_FIELDS.has(k)) continue;
     if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
-    else if (typeof v === 'string') out[k] = v.length > 1000 ? `${v.slice(0, 1000)}…` : v;
+    else if (typeof v === 'string') out[k] = scrubForSentry(v);
   }
   return out;
 }

@@ -15,8 +15,10 @@ import { above, MODE_NAMES, raises, scheduleModes, type Authority } from './thre
 type Params = Record<string, unknown>;
 
 // Anyone holding a thread's key may read: these change nothing outside the
-// connection. media.import only copies a file into the runner's inbox for a
-// tb --image, which the thread's shell could already read.
+// connection. media.import is the exception: it copies a file the thread's
+// shell could already read into the runner's inbox for a tb --image, so it's
+// open to every thread but metered below Full access (Runner.importMediaForThread,
+// media-quota.ts; Daybreak finding 157).
 export const GATED_READS: ReadonlySet<string> = new Set([
   'auth',
   'auth.whoami',

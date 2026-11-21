@@ -81,7 +81,8 @@ import type { SignInState } from './sign-in-state.ts';
 import { pickAccount as pickByRoom, type UsageReading } from './usage.ts';
 import { RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
 import { limitWhy, loginOk, nextLogin, pickInPool, poolAccounts } from './pools.ts';
-import { copyImageInto, imageRefFor } from './media.ts';
+import { copyImageInto, imageRefFor, importImageInto } from './media.ts';
+import { ImportQuota } from './media-quota.ts';
 import { isDirectory } from './fsutil.ts';
 import { commandFolders } from './tools.ts';
 import { copySessionTranscript, subagentTranscriptPath } from './transcripts.ts';
@@ -3925,6 +3926,29 @@ export class Runner {
     this.park(st, { kind: 'seen' });
     this.markDirty(st);
     return { thread: this.summary(st) };
+  }
+
+  // media.import from a thread's own key (Daybreak finding 157): off the
+  // event loop, and below Full access metered (media-quota.ts). The owner's
+  // imports (the app's paste and drop) are importMedia's.
+  private importQuota = new ImportQuota();
+
+  async importMediaForThread(threadId: string, p: string): Promise<{ image: ImageRef }> {
+    const src = path.resolve(expandHome(p));
+    let access: PermissionMode | undefined;
+    try {
+      access = this.accessOf(threadId);
+    } catch {
+      // A thread a draining runner has: metered like any below Full.
+    }
+    const work = () => importImageInto(paths.inbox(this.cfg.home), src);
+    try {
+      const image = access === 'full' ? await work() : await this.importQuota.run(threadId, src, work);
+      return { image };
+    } catch (e) {
+      if (e instanceof RpcError) throw e;
+      throw new RpcError(ErrorCode.badParams, (e as Error).message);
+    }
   }
 
   importMedia(p: string): { image: ImageRef } {

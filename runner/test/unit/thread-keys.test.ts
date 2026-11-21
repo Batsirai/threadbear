@@ -437,6 +437,66 @@ test('a request frame sent before the process lookup finishes waits for it', asy
   }
 });
 
+// The close code, or 'open' if it's still open after a few seconds.
+const closedWithin = (c: RunnerClient, ms = 3000) =>
+  Promise.race([c.waitClosed().then((i) => i.code), new Promise<string>((r) => setTimeout(() => r('open'), ms).unref())]);
+
+// Daybreak finding 158: a thread's key used to raise the frame limit to 64 MiB
+// before the process lookup had finished, and up to 256 whole frames could
+// wait for it: about 16 GiB parked in the runner per connection.
+test('while the process lookup runs, frames stay small and the queue has a byte budget', async () => {
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let from: string | undefined;
+  const { h, server, token, url } = await serve({ callerOf: async () => { await held; return from; } });
+  const me = thread(h, 'auto');
+  from = me.id;
+  try {
+    // One frame over the pre-auth limit closes it with 1009.
+    const big = await as(url, token, me.id);
+    void big.call('threads.list', { pad: 'x'.repeat(100 * 1024) }).catch(() => {});
+    assert.equal(await closedWithin(big), 1009);
+    // Frames under it, but more than the budget in all, close it with 4408.
+    const many = await as(url, token, me.id);
+    for (let i = 0; i < 40; i++) void many.call('threads.list', { pad: 'x'.repeat(60 * 1024) }).catch(() => {});
+    assert.equal(await closedWithin(many), 4408);
+    // Once the lookup is done, a big frame is answered.
+    const ok = await as(url, token, me.id);
+    const first = ok.call('auth.whoami');
+    release();
+    await first;
+    await ok.call('auth.whoami', { pad: 'y'.repeat(2 * 1024 * 1024) });
+    assert.equal(ok.closeInfo, undefined);
+    ok.close();
+  } finally {
+    release();
+    await server.close();
+  }
+});
+
+test('connections whose process lookup is still running count against the clients waiting to authenticate', async () => {
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let from: string | undefined;
+  const { h, server, token, url } = await serve({ maxPendingAuth: 2, callerOf: async () => { await held; return from; } });
+  const me = thread(h, 'auto');
+  from = me.id;
+  const open: RunnerClient[] = [];
+  try {
+    open.push(await as(url, token, me.id), await as(url, token, me.id));
+    const third = await as(url, token, me.id).catch(() => undefined);
+    third?.close();
+    assert.equal(third, undefined, 'a third, with two still being looked up, is turned away');
+    release();
+    await Promise.all(open.map((c) => c.call('auth.whoami')));
+    open.push(await as(url, token, me.id));
+  } finally {
+    release();
+    for (const c of open) c.close();
+    await server.close();
+  }
+});
+
 test('reading the runner token file: Claude tools are denied it outside Full access', async () => {
   const { denySecrets } = await import('../../src/secrets-guard.ts');
   const home = fs.realpathSync(fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'tb-keys-')));

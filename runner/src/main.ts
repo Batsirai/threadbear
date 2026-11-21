@@ -103,7 +103,7 @@ import { machineSampler } from './runner-stats.ts';
 import { machineIcon } from './machine.ts';
 import { filesMethods } from './files.ts';
 import { devicesMethods } from './devices.ts';
-import { flushSentry, reportException, reportLoggedError, reportLoggedWarning, startSentry } from './sentry.ts';
+import { flushSentry, reportException, reportLoggedError, reportLoggedWarning, startSentry, useSentryMask } from './sentry.ts';
 import { ERROR_EXIT_CODE, ERROR_LEAVE_DEADLINE_MS, ERROR_STOP_DEADLINE_MS, decideErrorExit, errorMode, guardHolds, guardNotice, readErrorExits, takeErrorEnv, testThrow, writeErrorExits } from './error-exits.ts';
 import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
 import { CrossRunner } from './cross-runner.ts';
@@ -690,6 +690,8 @@ async function main(): Promise<void> {
   // (nor anything the rules know) is split in two (safe-cut.ts). Not counted
   // in the scrubber's status: nothing is taken out here.
   useScrubForCuts((text) => redactSecrets(scrubber.known.mask(text)).text);
+  // Sentry's events lose them too (sentry.ts scrubForSentry).
+  useSentryMask((text) => scrubber.known.mask(text));
   runner.secrets.onWritten = (value) => scrubber.known.add(value);
   if (box) {
     scrubber.known.add(box.secrets.boxKey);
