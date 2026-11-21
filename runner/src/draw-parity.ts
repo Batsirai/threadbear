@@ -26,7 +26,7 @@ export type DrawRow = { what: string; ios: Drawn; android: Drawn; web: Drawn; si
 /** Where each family's kinds are read from, and its heading in the doc. */
 export const FAMILIES: Record<string, string> = {
   row: 'Transcript rows and cards (RowKind, reducer/row.rs)',
-  origin: "Who sent a message, when it isn't Mike (reducer/row.rs)",
+  origin: "Who sent a message, when it isn't the user (reducer/row.rs)",
   message: "A message's fields (TextFields, reducer/event.rs)",
   ask: 'Each ask on a needs-you or decision card (Ask, reducer/event.rs)',
   turn: "A turn's end: the footer, the needs-you and done cards (TurnCompletion, reducer/event.rs)",
@@ -41,7 +41,7 @@ export const FAMILIES: Record<string, string> = {
 const NOT_YET = { no: 'Not drawn yet.' };
 
 export const DRAWN: Record<string, DrawRow> = {
-  'row.user': { what: "Mike's message", ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'UserBubble' } },
+  'row.user': { what: "The user's message", ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'UserBubble' } },
   'row.assistant': { what: "The agent's reply", ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'MessageView' } },
   'row.reasoning': { what: 'Thinking', ios: NOT_YET, android: NOT_YET, web: 'yes' },
   'row.tool': { what: 'A tool line', ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'toolKind', android: 'ToolRunView', web: 'toolKind' } },
@@ -63,15 +63,15 @@ export const DRAWN: Record<string, DrawRow> = {
   'row.gap': { what: '"6 min later" divider before a woken turn', ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'wokeBy', android: 'wokeBy' } },
   'row.planCard': { what: 'Plan first card, waiting for approval', ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'PlanCard', android: 'PlanCard' } },
   'row.labReview': { what: "Another lab's review of the turn", ios: 'yes', android: NOT_YET, web: 'yes', sign: { ios: 'ReviewRow', web: 'ReviewRow' } },
-  'origin.phone': { what: 'Mark on a message sent from the phone', ios: 'yes', android: 'yes', web: { no: 'The website sends as the phone, so the mark would be on Mike\'s own messages.' }, sign: { ios: 'PhoneMark', android: 'PhoneMark' } },
+  'origin.phone': { what: 'Mark on a message sent from the phone', ios: 'yes', android: 'yes', web: { no: 'The website sends as the phone, so the mark would be on the user\'s own messages.' }, sign: { ios: 'PhoneMark', android: 'PhoneMark' } },
   'origin.runner': { what: "The runner's own message, as a quiet line", ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'originText' } },
   'origin.schedule': { what: 'A scheduled message, drawn as a schedule', ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'ScheduledMessageCard' } },
   'message.images': { what: 'Pictures sent with a message', ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'pasted', android: 'pasted', web: 'pastedOf' } },
   'message.origin': { what: "Who sent a message (see the origin rows)", ios: 'yes', android: 'yes', web: 'yes' },
   'message.wakeReason': { what: "Why the runner sent its message", ios: NOT_YET, android: NOT_YET, web: NOT_YET },
-  'message.answers': { what: "Mike's answers to a card, each under its question", ios: 'yes', android: NOT_YET, web: NOT_YET },
+  'message.answers': { what: "The user's answers to a card, each under its question", ios: 'yes', android: NOT_YET, web: NOT_YET },
   'message.editOf': { what: 'An edited message', ios: NOT_YET, android: NOT_YET, web: NOT_YET },
-  'message.reviewId': { what: "Mike's answer to a design review", ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'ReviewAnswer', android: 'ReviewAnswer' } },
+  'message.reviewId': { what: "The user's answer to a design review", ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'ReviewAnswer', android: 'ReviewAnswer' } },
   'message.reviewResponse': { what: "A design review answer's picks and notes", ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'ReviewAnswer', android: 'ReviewLines' } },
   'message.summary': { what: "The turn's summary reply, with the rest folded", ios: 'yes', android: 'yes', web: 'yes' },
   'message.narration': { what: 'Narration (a paraphrase of what the agent wrote)', ios: NOT_YET, android: NOT_YET, web: NOT_YET },
@@ -109,7 +109,7 @@ export const DRAWN: Record<string, DrawRow> = {
   'status.Failed': { what: 'Failed', ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'failed', android: 'FAILED' } },
   'status.Stopped': { what: 'Stopped', ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'stopped', android: 'STOPPED' } },
   'look.unread': { what: 'Unread dot', ios: 'yes', android: 'yes', web: 'yes' },
-  'look.emphasised': { what: 'Bold title when it wants Mike', ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'SemiBold', web: 'needs' } },
+  'look.emphasised': { what: 'Bold title when it wants the user', ios: 'yes', android: 'yes', web: 'yes', sign: { android: 'SemiBold', web: 'needs' } },
   'look.labelled': { what: 'Status in words (a timer only under Running)', ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'underRunning', android: 'underRunning' } },
   'look.done': { what: 'Done tick', ios: 'yes', android: 'yes', web: NOT_YET },
   'look.woke': { what: '"Woke up"', ios: 'yes', android: 'yes', web: NOT_YET },

@@ -61,7 +61,7 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 
 | What | Kind | iPhone | Android | Website |
 |---|---|---|---|---|
-| Mike's message | `row.user` | Yes | Yes | Yes |
+| The user's message | `row.user` | Yes | Yes | Yes |
 | The agent's reply | `row.assistant` | Yes | Yes | Yes |
 | A tool line | `row.tool` | Yes | Yes | Yes |
 | Permission card | `row.approval` | Yes | Yes | Yes |
@@ -84,13 +84,13 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | Plan checklist (plan.updated) | `row.plan` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
 | Changed files card | `row.changes` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
 
-## Who sent a message, when it isn't Mike (reducer/row.rs)
+## Who sent a message, when it isn't the user (reducer/row.rs)
 
 | What | Kind | iPhone | Android | Website |
 |---|---|---|---|---|
 | The runner's own message, as a quiet line | `origin.runner` | Yes | Yes | Yes |
 | A scheduled message, drawn as a schedule | `origin.schedule` | Yes | Yes | Yes |
-| Mark on a message sent from the phone | `origin.phone` | Yes | Yes | No: The website sends as the phone, so the mark would be on Mike's own messages. |
+| Mark on a message sent from the phone | `origin.phone` | Yes | Yes | No: The website sends as the phone, so the mark would be on the user's own messages. |
 
 ## A message's fields (TextFields, reducer/event.rs)
 
@@ -99,9 +99,9 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | Pictures sent with a message | `message.images` | Yes | Yes | Yes |
 | Who sent a message (see the origin rows) | `message.origin` | Yes | Yes | Yes |
 | The turn's summary reply, with the rest folded | `message.summary` | Yes | Yes | Yes |
-| Mike's answer to a design review | `message.reviewId` | Yes | Yes | No: Not drawn yet. |
+| The user's answer to a design review | `message.reviewId` | Yes | Yes | No: Not drawn yet. |
 | A design review answer's picks and notes | `message.reviewResponse` | Yes | Yes | No: Not drawn yet. |
-| Mike's answers to a card, each under its question | `message.answers` | Yes | No: Not drawn yet. | No: Not drawn yet. |
+| The user's answers to a card, each under its question | `message.answers` | Yes | No: Not drawn yet. | No: Not drawn yet. |
 | A summary that gives way to a longer reply | `message.givesWay` | No: Not drawn yet. | Yes | No: Not drawn yet. |
 | Why the runner sent its message | `message.wakeReason` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
 | An edited message | `message.editOf` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
@@ -164,7 +164,7 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | What | Kind | iPhone | Android | Website |
 |---|---|---|---|---|
 | Unread dot | `look.unread` | Yes | Yes | Yes |
-| Bold title when it wants Mike | `look.emphasised` | Yes | Yes | Yes |
+| Bold title when it wants the user | `look.emphasised` | Yes | Yes | Yes |
 | Status in words (a timer only under Running) | `look.labelled` | Yes | Yes | No: Not drawn yet. |
 | Done tick | `look.done` | Yes | Yes | No: Not drawn yet. |
 | "Woke up" | `look.woke` | Yes | Yes | No: Not drawn yet. |
