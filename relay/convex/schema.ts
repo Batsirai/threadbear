@@ -63,5 +63,33 @@ export default defineSchema({
     hour: v.string(),
     sends: v.number(),
     newSends: v.number(),
+    // Call-backs /register made this hour (relay.ts startCheck): to
+    // deployments it has no install for, and to ones it has. Since 21 Nov 2026.
+    newChecks: v.optional(v.number()),
+    knownChecks: v.optional(v.number()),
   }).index('by_hour', ['hour']),
+
+  // A call-back /register is making to a deployment's /relay/verify, from
+  // just before it starts until it's answered (relay.ts startCheck,
+  // endCheck). One that never ends (its action died) stops counting after
+  // CHECK_LEASE_MS and goes in expire. Never the nonce.
+  checks: defineTable({
+    deployment: v.string(),
+    known: v.boolean(),
+    startedAt: v.number(),
+  })
+    .index('by_startedAt', ['startedAt'])
+    .index('by_deployment', ['deployment', 'startedAt']),
+
+  // Call-backs to one deployment this UTC hour, and until when it isn't
+  // called back after saying no (relay.ts startCheck). Removed after two
+  // days (relay.ts expire).
+  checkedDeployments: defineTable({
+    deployment: v.string(),
+    hour: v.string(),
+    count: v.number(),
+    noUntil: v.optional(v.number()),
+  })
+    .index('by_deployment', ['deployment'])
+    .index('by_hour', ['hour']),
 });

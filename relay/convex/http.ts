@@ -17,7 +17,7 @@
 import { httpRouter } from 'convex/server';
 import { httpAction } from './_generated/server';
 import { internal } from './_generated/api';
-import { convexSite, deploymentVouches } from './verify';
+import { checkRegistration, convexSite, deploymentVouches } from './verify';
 import { FCM_TOKEN, androidSealedOk, fcmGone } from './fcmMessage';
 import { reasonKey } from './reasons';
 import { storedVersion } from './versions';
@@ -57,9 +57,18 @@ http.route({
     const site = convexSite(str(b.deployment, 200));
     const nonce = str(b.nonce, 100);
     if (!site || !nonce) return json({ error: 'update Threadbear: this relay only registers Convex cloud deployments that confirm the registration (docs/push-relay.md)' }, 403);
-    // Over a limit already: say so without calling anyone back.
-    if (!(await ctx.runQuery(internal.relay.mayRegister, { deployment: site }))) return json({ error: 'too many new installs today' }, 429);
-    if (!(await deploymentVouches(site, nonce))) return json({ error: "the deployment didn't confirm this registration" }, 403);
+    // Over a limit already: say so without calling anyone back. The
+    // call-back is charged to the relay's budget before it starts (relay.ts
+    // startCheck says why).
+    const checked = await checkRegistration({
+      mayRegister: () => ctx.runQuery(internal.relay.mayRegister, { deployment: site }),
+      startCheck: () => ctx.runMutation(internal.relay.startCheck, { deployment: site }),
+      endCheck: (check, vouched) => ctx.runMutation(internal.relay.endCheck, { check, vouched }),
+      vouches: () => deploymentVouches(site, nonce),
+    });
+    if (checked === 'full') return json({ error: 'too many new installs today' }, 429);
+    if (checked === 'limited') return json({ error: 'the relay is checking too many registrations; try again in a few minutes' }, 429);
+    if (checked === 'no') return json({ error: "the deployment didn't confirm this registration" }, 403);
     try {
       return json(await ctx.runMutation(internal.relay.registerVerified, { deployment: site, ...(version ? { version } : {}) }));
     } catch {

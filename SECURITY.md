@@ -50,7 +50,7 @@ The agents themselves have whatever access you give them. New threads start with
 
 ## Shared services
 
-- **The push relay** is run by me so the App Store app can get notifications. It sees device tokens and encrypted notification text, and only registers Convex deployments that prove who they are, calling them back without following redirects, with relay-wide caps on new installs and their sends, and forgetting installs idle for 90 days. Forks can run their own (`relay/`).
+- **The push relay** is run by me so the App Store app can get notifications. It sees device tokens and encrypted notification text, and only registers Convex deployments that prove who they are, calling them back without following redirects and only within a call-back budget charged before each one, with relay-wide caps on new installs and their sends, and forgetting installs idle for 90 days. Forks can run their own (`relay/`).
 - **Sentry** gets crash reports from release builds only, with no thread text.
 
 ## Out of scope
