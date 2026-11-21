@@ -15,7 +15,7 @@ import type { WorktreePatch } from './patches.ts';
 import { inBackground } from './background.ts';
 import { mainCheckoutOf as linkedMainCheckout } from './patch-trust.ts';
 import { untrustedGitArgs } from './safe-git.ts';
-import { carryAcross, crossings, mergeAcross, remakeOwn, touchesFormatted, TreeFormatter, type FormatCommit } from './format-replay.ts';
+import { addedRecipes, carryAcross, crossings, mergeAcross, remakeOwn, touchesFormatted, TreeFormatter, type FormatCommit } from './format-replay.ts';
 import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, readRunning, ridesFree, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
 
 // What a thread's record keeps about its worktree.
@@ -337,6 +337,11 @@ export type LandOptions = {
   // goes first in any group check, outside the halving's limit (setAside
   // has the one way it's left out).
   despiteRed?: boolean;
+  // `tb land --allow-format <id>`: the format commands this landing adds to
+  // .git-blame-ignore-revs, which later landings run on this Mac, were shown
+  // and are meant (addedRecipes' id for exactly those). The Land chip never
+  // passes it.
+  allowFormat?: string;
   // Where readCheck looks from, relative to the worktree's root (a
   // subfolder's patch can ask for its own check). Only landings that look
   // from the same place are checked together, so the check read on the
@@ -428,7 +433,7 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     // Refusals, and conflicts with main as it is now, come straight away
     // rather than after the wait. It's done again with the lock held, as
     // main will have moved.
-    const ready = await prepare(t, out, err, opts.despiteRed ? undefined : opts.hold);
+    const ready = await prepare(t, out, err, opts.despiteRed ? undefined : opts.hold, opts.allowFormat);
     if (typeof ready === 'number') return ready;
 
     // A dry run, and a branch with a merge on it (it's merged with main,
@@ -906,6 +911,7 @@ async function prepare(
   out: (line: string) => void,
   err: (line: string) => void,
   hold?: LandOptions['hold'],
+  allowFormat?: string,
 ): Promise<number | { hasMerge: boolean; base: string; commit: string; commits: string }> {
   const fail = (...lines: string[]): number => {
     err(lines.join('\n'));
@@ -1033,6 +1039,19 @@ async function prepare(
       `These commits have an Important: line that git doesn't read as a trailer, so a release wouldn't flag them and nothing landed:`,
       ...unread.map((l) => `  ${l}`),
       'Put the Important: line in the same last paragraph as Co-Authored-By (no blank line between them), or at the end of the message if there is none. Use git commit --amend or git rebase to reword, then run tb land again.',
+    );
+  }
+  // 2b'. A format command this landing would add to main's
+  // .git-blame-ignore-revs: tb land runs main's on this Mac in later
+  // landings, so it lands only once it's been shown and asked for by its id
+  // (Gemini's review of finding 151, 21 Nov).
+  const added = await addedRecipes(t.path, base, t.branch).catch(() => undefined);
+  if (!added) return fail(`Couldn't read ${t.branch}'s .git-blame-ignore-revs in ${t.path}, so nothing landed. Run tb land again.`);
+  if (added.entries.length && allowFormat !== added.id) {
+    return fail(
+      `${t.branch} adds format commands to .git-blame-ignore-revs, which later tb lands would run on this Mac, so nothing landed:`,
+      ...added.entries.map((e) => `  ${JSON.stringify(e.command)} over ${e.paths.join(' ')}${e.config.length ? `, config ${e.config.join(' ')}` : ''} (${JSON.stringify(e.subject)})`),
+      `If those are meant to run, land it with tb land --allow-format ${added.id}.`,
     );
   }
   // 2c. Held while something it would set off on GitHub is red on main.
@@ -1187,9 +1206,11 @@ async function replay(cwd: string, from: string, to: string, onto: string): Prom
 // it doesn't have, that changes files it changes) is carried across with
 // each commit formatted as that was made (format-replay.ts), as its own tb
 // land would.
-async function replayFormatted(cwd: string, from: string, to: string, onto: string): Promise<string | undefined> {
+// `trusted` is main: `onto` may have waiting branches stacked on it that
+// haven't landed, whose lists are theirs.
+async function replayFormatted(cwd: string, from: string, to: string, onto: string, trusted: string): Promise<string | undefined> {
   try {
-    const cross = await crossings(cwd, to, onto);
+    const cross = await crossings(cwd, to, onto, trusted);
     if (cross.length && (await touchesFormatted(cwd, `${from}..${to}`, cross))) {
       if (!(await git(cwd, ['merge-base', '--is-ancestor', from, onto])).ok) return undefined;
       const r = await carryAcross(cwd, { base: from, tip: to, onto, formatter: new TreeFormatter(cwd, cross) });
@@ -1271,7 +1292,7 @@ async function stackWaiting(
     if ((await gitOut(e.path, ['rev-parse', 'HEAD'])) !== e.commit) continue;
     if (!(await git(t.path, ['merge-base', '--is-ancestor', e.base, main])).ok) continue;
     if ((await gitOut(t.path, ['rev-list', '--merges', `${e.base}..${e.commit}`])) !== '') continue;
-    const next = await replayFormatted(t.path, e.base, e.commit, tip);
+    const next = await replayFormatted(t.path, e.base, e.commit, tip, main);
     if (!next || next === tip) continue;
     const commits = await gitOut(t.path, ['log', '--oneline', '--first-parent', `${tip}..${next}`]);
     if (commits === undefined) continue;
@@ -1448,7 +1469,7 @@ async function findBroken(a: {
       left++;
       continue;
     }
-    const alone = await replayFormatted(a.t.path, g.entry.base, g.entry.commit, a.main);
+    const alone = await replayFormatted(a.t.path, g.entry.base, g.entry.commit, a.main, a.main);
     const r = alone && alone !== a.main ? await run(g.entry.branch, alone, only) : { state: 'unknown' as const, text: '' };
     if (r.state === 'failed') failed.set(g.entry.id, r.text);
     else if (r.state === 'passed') passed.add(g.entry.id);
@@ -1575,7 +1596,7 @@ async function landLocked(
   };
 
   // Steps 1 and 2 again: main has likely moved while this waited.
-  const ready = await prepare(t, out, err, opts.despiteRed ? undefined : opts.hold);
+  const ready = await prepare(t, out, err, opts.despiteRed ? undefined : opts.hold, opts.allowFormat);
   if (typeof ready === 'number') return ready;
   const own = ready.commit;
   const main = ready.base;
@@ -1621,14 +1642,14 @@ async function landLocked(
     }
     if (!opts.dryRun && !ready.hasMerge && !alone) {
       let stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes, true, allowed);
-      let top = stacked.group.length ? await replayFormatted(t.path, main, own, stacked.tip) : undefined;
+      let top = stacked.group.length ? await replayFormatted(t.path, main, own, stacked.tip, main) : undefined;
       // Held on GitHub for what the others change (not a fix's, which is
       // the repair): then only the fixes go with it, and the others go by
       // themselves later, each hearing why. Still held with only the fixes
       // (this one's own change, moved by one): it goes alone.
       if (opts.hold && top && (await groupHeld(t, main, stacked.group, top, opts))) {
         stacked = await stackWaiting(t, common, main, limit, check ?? null, opts.checkFrom ?? '', withFixes, false, allowed);
-        top = stacked.group.length ? await replayFormatted(t.path, main, own, stacked.tip) : undefined;
+        top = stacked.group.length ? await replayFormatted(t.path, main, own, stacked.tip, main) : undefined;
         if (top && (await groupHeld(t, main, stacked.group, top, opts))) top = undefined;
       }
       if (stacked.group.length) {

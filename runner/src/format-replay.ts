@@ -25,6 +25,7 @@
 // commit in it (docs/bringing-in-updates.md). Only node's own modules, so a
 // fork that doesn't have this file yet can run the release's copy of it.
 import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -133,10 +134,10 @@ const short = (id: string) => id.slice(0, 10);
 // --------------------------------------------------------------- finding them
 
 // The format commits in `ref`'s history, oldest first, from the list as
-// `ref` has it. One whose id isn't written down yet (or isn't in `ref`) is
-// found by its subject.
-export async function formatCommitsIn(cwd: string, ref: string): Promise<FormatCommit[]> {
-  const list = await git(cwd, ['show', `${ref}:${FORMAT_LIST}`]);
+// `listFrom` (`ref` itself by default) has it. One whose id isn't written
+// down yet (or isn't in `ref`) is found by its subject.
+export async function formatCommitsIn(cwd: string, ref: string, listFrom = ref): Promise<FormatCommit[]> {
+  const list = await git(cwd, ['show', `${listFrom}:${FORMAT_LIST}`]);
   if (!list.ok) return [];
   const entries = parseFormatList(list.stdout);
   if (!entries.length) return [];
@@ -185,17 +186,20 @@ async function onlyWithin(cwd: string, commit: string, entry: FormatEntry): Prom
 }
 
 // The format commits `onto` has that `tip` doesn't: what carrying `tip`
-// onto `onto` crosses.
-export async function crossings(cwd: string, tip: string, onto: string): Promise<FormatCommit[]> {
+// onto `onto` crosses. Their commands come from `listFrom`'s list, `onto`'s
+// by default: tb land's group check stacks waiting branches that haven't
+// landed into `onto`, so it names main, whose list is the one trusted
+// (Gemini's review, 21 Nov).
+export async function crossings(cwd: string, tip: string, onto: string, listFrom = onto): Promise<FormatCommit[]> {
   // Most landings: every listed id is already in the branch, so nothing more to look up.
-  const list = await git(cwd, ['show', `${onto}:${FORMAT_LIST}`]);
+  const list = await git(cwd, ['show', `${listFrom}:${FORMAT_LIST}`]);
   if (!list.ok) return [];
   const entries = parseFormatList(list.stdout);
   if (!entries.length) return [];
   let known = true;
   for (const e of entries) if (!e.id || !(await isAncestor(cwd, e.id, tip)) || !(await isAncestor(cwd, e.id, onto))) known = false;
   if (known) return [];
-  const all = await formatCommitsIn(cwd, onto);
+  const all = await formatCommitsIn(cwd, onto, listFrom);
   const out: FormatCommit[] = [];
   for (const f of all) if (!(await isAncestor(cwd, f.commit, tip))) out.push(f);
   return out;
@@ -255,10 +259,15 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ 
 // Files in a tree being formatted that would pick the program its command
 // runs, or run one of their own: a toolchain file (rustup runs whatever a
 // `path` toolchain names), cargo's config (an alias for `fmt`), a version
-// manager's (mise runs an env script). Where a tree has one the format
+// manager's (mise, once rtx, runs an env script from any of its names, or
+// under .config). Where a tree has one the format
 // commit's config doesn't name, or a link (a formatter writes through it),
-// the command isn't run on it.
-const STEERS = /(^|\/)(rust-toolchain(\.toml)?|\.cargo|\.?mise(\.[\w-]+)?\.toml|\.mise|\.tool-versions)(\/|$)/;
+// the command isn't run on it. Matched as the disk will open the name: a
+// Mac's disk ignores case (`.CARGO` is `.cargo` to cargo there; Codex's
+// review, 21 Nov) and treats Unicode forms alike.
+const STEERS = /(^|\/)(rust-toolchain(\.toml)?|\.cargo|\.?(mise|rtx)(\.[^/]*)?|\.config|\.tool-versions)(\/|$)/i;
+const asDiskSees = (p: string) => p.normalize('NFKC').replace(/\p{Default_Ignorable_Code_Point}/gu, '').toLowerCase();
+const steers = (p: string, config: string[]) => STEERS.test(asDiskSees(p)) && !config.some((c) => asDiskSees(c) === asDiskSees(p));
 
 // Formats trees the way the given format commits did, each in turn, with a
 // cache: what a formatter makes depends only on the folders it formats.
@@ -354,7 +363,7 @@ export class TreeFormatter {
       // (A config file is swapped for the format commit's below, link or not.)
       const ours = (l: string) => f.entry.config.includes(l.slice(l.indexOf('\t') + 1));
       const link = staged.find((l) => l.startsWith('120000 ') && !ours(l));
-      const steer = link ? link.slice(link.indexOf('\t') + 1) : files.find((p) => STEERS.test(p) && !f.entry.config.includes(p));
+      const steer = link ? link.slice(link.indexOf('\t') + 1) : files.find((p) => steers(p, f.entry.config));
       if (steer) {
         return { tree, failed: `${steer} is ${link ? 'a link' : 'a file that can change what the command runs'}, and the format commit's own config doesn't name it, so ${f.entry.command} wasn't run on this tree` };
       }
@@ -585,6 +594,23 @@ async function alreadyOn(cwd: string, onto: string, tip: string, base: string): 
     if (a !== b) same.add(c);
   }
   return same;
+}
+
+// --------------------------------------------------------------- what a branch adds
+
+// The recipes `tip`'s list has that `base`'s doesn't: commands a landing of
+// `tip` would make trusted for every later tb land. With an id that stands
+// for exactly those, for `tb land --allow-format <id>`.
+export async function addedRecipes(cwd: string, base: string, tip: string): Promise<{ entries: FormatEntry[]; id: string }> {
+  const read = async (ref: string) => {
+    const r = await git(cwd, ['show', `${ref}:${FORMAT_LIST}`]);
+    return r.ok ? parseFormatList(r.stdout) : [];
+  };
+  const known = new Set((await read(base)).map(recipe));
+  const seen = new Set<string>();
+  const entries = (await read(tip)).filter((e) => !known.has(recipe(e)) && !seen.has(recipe(e)) && seen.add(recipe(e)));
+  const id = createHash('sha256').update(JSON.stringify([...seen].sort())).digest('hex').slice(0, 12);
+  return { entries, id };
 }
 
 // --------------------------------------------------------------- a branch with one

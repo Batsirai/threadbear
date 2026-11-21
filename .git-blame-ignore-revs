@@ -22,7 +22,9 @@
 # that's reverted comes out of this list in the same commit.
 # tb land runs a command from a branch's copy of this file only when main's
 # copy has the same command, paths and config: a branch bringing in a new
-# tool makes its commit by hand, and tb land says how.
+# tool makes its commit by hand, and tb land says how. A branch that adds
+# or changes a command here lands only with tb land --allow-format <id>,
+# the id tb land shows for exactly those commands.
 
 # format-subject: Format desktop/'s Rust with cargo fmt --all, nothing else
 # format-command: cd desktop && cargo fmt --all

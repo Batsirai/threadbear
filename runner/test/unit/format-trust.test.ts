@@ -98,16 +98,59 @@ test('main\'s exact recipe is still made again on a main that moved on', async (
   assert.match(sh(main, 'git show main:docs/protocol/patches.md'), /A patch file, on main\./);
 });
 
-test('an unlisted tool commit already made on main as it is lands as a plain commit, nothing run', async () => {
+test('an unlisted tool commit already made on main as it is runs nothing, and lands only once its command is asked for by id', async () => {
   const { main, marker } = setup();
   mainMoves(main);
   const t = makeBranch(main);
-  splitOn(t.path, entry(`touch ${marker}; node scripts/split-protocol.mjs`));
+  const command = `touch ${marker}; node scripts/split-protocol.mjs`;
+  splitOn(t.path, entry(command));
   assert.equal(await remakeOwn(main, 'main', t.branch), undefined);
+  // Landing it would make the command main's, run by later landings
+  // (Gemini's review): shown, and refused without its id.
+  const before = sh(main, 'git rev-parse main');
   const c = capture();
-  assert.equal(await land(t, c.opts), 0, c.err.join('\n'));
+  assert.notEqual(await land(t, c.opts), 0);
+  const said = c.err.join('\n');
+  assert.ok(said.includes(JSON.stringify(command)), said);
+  const id = /--allow-format ([0-9a-f]{12})/.exec(said)?.[1];
+  assert.ok(id, said);
+  assert.equal(sh(main, 'git rev-parse main'), before);
+  const wrong = capture();
+  assert.notEqual(await land(t, { ...wrong.opts, allowFormat: '000000000000' }), 0);
+  const ok = capture();
+  assert.equal(await land(t, { ...ok.opts, allowFormat: id }), 0, ok.err.join('\n'));
   assert.equal(fs.existsSync(marker), false);
   assert.equal(sh(main, 'git log --format=%s -1'), SUBJECT);
+});
+
+test('a branch that only adds a list entry for a commit already on main is asked about too', async () => {
+  const { main } = setup(TRUSTED);
+  const t = makeBranch(main);
+  commit(t.path, { '.git-blame-ignore-revs': TRUSTED + `\n# format-subject: Protocol and the script\n# format-command: touch /tmp/x\n# format-paths: docs\n` }, 'List an old commit');
+  const c = capture();
+  assert.notEqual(await land(t, c.opts), 0);
+  assert.match(c.err.join('\n'), /adds format commands/);
+  // A list change that adds no command (a comment, an id filled in) isn't.
+  const t2 = makeBranch(main, 'comment1');
+  commit(t2.path, { '.git-blame-ignore-revs': '# A comment\n' + TRUSTED }, 'Comment');
+  const c2 = capture();
+  assert.equal(await land(t2, c2.opts), 0, c2.err.join('\n'));
+});
+
+test('crossing onto a stack of waiting branches takes its commands from main\'s list, not theirs', async () => {
+  const { main, marker } = setup();
+  const p = sh(main, 'git rev-parse HEAD');
+  // A waiting branch, not landed, stacked on main: it lists a command and has its commit.
+  const w = makeBranch(main, 'waiting1');
+  commit(w.path, { '.git-blame-ignore-revs': `# format-subject: Cleanup\n# format-command: touch ${marker}\n# format-paths: docs\n` }, 'List');
+  commit(w.path, { 'docs/protocol.md': DOC + 'w\n' }, 'Cleanup');
+  const stacked = sh(w.path, 'git rev-parse HEAD');
+  const t = makeBranch(main, 'mine1234');
+  commit(t.path, { 'docs/protocol.md': DOC + 'mine\n' }, 'Mine');
+  const tip = sh(t.path, 'git rev-parse HEAD');
+  assert.equal((await crossings(main, tip, stacked)).length, 1, 'as before: the stack\'s own list');
+  assert.deepEqual(await crossings(main, tip, stacked, p), []);
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test('a trusted command isn\'t run over a tree that brings its own toolchain file, cargo config or a link', { skip: process.platform === 'win32' }, async () => {
@@ -115,6 +158,14 @@ test('a trusted command isn\'t run over a tree that brings its own toolchain fil
     ['toolchain', (d: string) => commit(d, { 'docs/protocol/rust-toolchain': '[toolchain]\npath = "./evil"\n' }, 'Toolchain')],
     ['cargo', (d: string) => commit(d, { 'docs/protocol/.cargo/config.toml': '[alias]\nfmt = "run"\n' }, 'Cargo config')],
     ['mise', (d: string) => commit(d, { 'docs/mise.toml': '[env]\n_.source = "./evil.sh"\n' }, 'Mise')],
+    // A Mac's disk ignores case, so cargo opens these as .cargo and rust-toolchain.toml (Codex's review).
+    ['CARGO', (d: string) => commit(d, { 'docs/protocol/.CARGO/config.toml': '[alias]\nfmt = "run"\n' }, 'Upper cargo')],
+    ['TOOLCHAIN', (d: string) => commit(d, { 'docs/RUST-TOOLCHAIN.toml': '[toolchain]\npath = "./evil"\n' }, 'Upper toolchain')],
+    // mise's other names (Gemini's review).
+    ['misedir', (d: string) => commit(d, { 'docs/mise/config.toml': '[env]\n_.source = "./evil.sh"\n' }, 'Mise dir')],
+    ['dotconfig', (d: string) => commit(d, { 'docs/.config/mise.toml': '[env]\n_.source = "./evil.sh"\n' }, 'Dot config')],
+    ['rtx', (d: string) => commit(d, { 'docs/.rtx.toml': '[env]\n_.source = "./evil.sh"\n' }, 'Rtx')],
+    ['multi', (d: string) => commit(d, { 'docs/mise.dev.local.toml': '[env]\n_.source = "./evil.sh"\n' }, 'Multi')],
     ['link', (d: string) => sh(d, 'mkdir -p docs/protocol && ln -s /tmp docs/protocol/out && git add docs/protocol/out && git commit -qm Link')],
   ] as const) {
     const { main, marker } = setup();

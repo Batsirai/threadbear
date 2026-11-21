@@ -123,8 +123,15 @@ stays. Separate repos do not block one another.
    runs, with the command shown and how to make that commit again by hand
    (rebase, run it yourself, commit); one already made on main as it is now
    lands as a plain commit. A formatter isn't run on a tree that brings its
-   own toolchain file, cargo config, mise config or a link where it
-   formats, as those can change what the command runs.
+   own toolchain file, cargo config, mise or rtx config, a `.config` folder
+   or a link where it formats (names matched without case, as a Mac's disk
+   opens them), as those can change what the command runs. A group check
+   crossing format commits takes their commands from main's list, never
+   from the waiting branches stacked on it. And since main's list is what
+   later landings run, a branch that adds or changes a command in it stops
+   with the commands shown, and lands only with `tb land --allow-format
+   <id>`, the id it gives for exactly those commands (the Land chip never
+   passes it).
    Then it refuses a commit whose `Important:` line git doesn't read as a
    trailer (not in the last paragraph with `Co-Authored-By`), as a release
    would not flag it and forks wouldn't hear. And it holds a landing while
