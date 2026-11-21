@@ -1834,7 +1834,7 @@ impl ThreadPane {
                     v_flex()
                         .id(("review-tile", ix * 16 + index))
                         .role(Role::Button)
-                        .aria_label(SharedString::from(option.title.clone()))
+                        .aria_label(SharedString::from(tip.clone()))
                         .flex_none()
                         .cursor_pointer()
                         .tip(tip)
