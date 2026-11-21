@@ -76,6 +76,12 @@ gone from your fork, not just quiet.
   empty it in the dashboard first.
 - Update `docs/guide.md` (what the user sees) and `docs/on-your-mac.md`
   (what it installs, reads and talks to).
+- A new kind of row, card, inbox section or reply block on the desktop
+  needs one line in `runner/src/draw-parity.ts` saying whether the
+  iPhone, Android and the website draw it: `{ no: 'Desktop only for now.' }`
+  for each is a fine answer. `draw-parity.test.ts` fails until it's there
+  and prints the line to paste; `npm run parity-docs` in `runner/` then
+  updates `docs/parity.md`.
 - Then `./check.sh` (`--app` when you touched `app/`). To run it on
   another Mac over ssh, put `"checkHost": "<ssh host>"` in your
   runner.json, or `"checkHosts"` with a list of them (Mike's is

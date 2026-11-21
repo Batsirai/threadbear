@@ -96,7 +96,8 @@ thing on Tinker Desk's desktop from a throwaway copy (`ssh tinker-desk
 - A thread is reached four ways: on this runner, another runner's through Convex
   (`runner/src/relay.ts`), the iPhone and the website (`convex/phone.ts`), and features
   have gone missing on all but the first. A new thread request needs a row in
-  `runner/src/parity.ts`; a change to what a thread shows (a card's field, a message, the
+  `runner/src/parity.ts`, a new kind of thing the desktop draws one in
+  `runner/src/draw-parity.ts`; a change to what a thread shows (a card's field, a message, the
   done card) needs a scenario in `runner/test/unit/scenarios.test.ts`.
 - A change to what the desktop app does gets a spec in `features/`; one to how the
   transcript folds keeps both golden test sets happy (`desktop/core/tests/golden`).
