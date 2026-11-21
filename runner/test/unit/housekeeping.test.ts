@@ -97,7 +97,7 @@ test("without archivedMediaDays, archived threads' pictures are kept however old
   assert.equal(tidy({ home, logs: [], now: NOW }).media, 0);
 });
 
-test("a thread's import's half-made copy goes after an hour; a picture stays its week", () => {
+test("a thread's import's half-made copy, and a send's held copy, go after an hour; a picture stays its week", () => {
   const home = tmpDir();
   ensureHome(home);
   const inbox = paths.inbox(home);
@@ -105,7 +105,9 @@ test("a thread's import's half-made copy goes after an hour; a picture stays its
   const conv = path.join(inbox, 'b.png.tmp.png');
   const fresh = path.join(inbox, 'c.import.tmp');
   const pic = path.join(inbox, 'd.png');
-  for (const f of [half, conv, fresh, pic]) fs.writeFileSync(f, 'x');
+  const held = path.join(inbox, 'e.held.png');
+  for (const f of [half, conv, fresh, pic, held]) fs.writeFileSync(f, 'x');
+  fs.utimesSync(held, new Date(NOW - 2 * 3_600_000), new Date(NOW - 2 * 3_600_000));
   const hours = (f: string, h: number) => fs.utimesSync(f, new Date(NOW - h * 3_600_000), new Date(NOW - h * 3_600_000));
   hours(half, 2);
   hours(conv, 2);

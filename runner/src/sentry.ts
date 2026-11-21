@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defaultHome } from './config.ts';
 import { RELEASE, readRelease } from './release.ts';
 import { redactSecrets } from './redaction.ts';
@@ -33,8 +34,9 @@ const DSN = 'https://c69460318b1f938fd1703c6578a059f6@o4508736647266304.ingest.u
 // uncaught exception and rejection (Sentry's report only the first
 // uncaught one, and may exit the process). ProcessSession sends release
 // health sessions, which aren't errors. The rest only make breadcrumbs
-// or read local variables.
-const LEFT_OUT = new Set(['OnUncaughtException', 'OnUnhandledRejection', 'ProcessSession', 'Console', 'Http', 'NodeFetch', 'LocalVariablesAsync']);
+// or read local variables. ContextLines would send the source lines around
+// each frame, and a frame can be a project's own patch, run in the runner.
+const LEFT_OUT = new Set(['OnUncaughtException', 'OnUnhandledRejection', 'ProcessSession', 'Console', 'Http', 'NodeFetch', 'LocalVariablesAsync', 'ContextLines']);
 
 type SentryModule = typeof import('@sentry/node');
 let sentry: SentryModule | undefined;
@@ -179,7 +181,8 @@ export function errorKind(text: string, type?: string): string {
 export function cleanError(e: unknown, depth = 0): Error {
   const err = e instanceof Error ? e : undefined;
   const name = err && ERROR_CLASSES.has(err.name) ? err.name : 'Error';
-  const kind = err ? errorKind(`${err.name}: ${err.message}`, err.name) : 'Error';
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  const kind = err ? errorKind(`${err.name}: ${err.message}${typeof code === 'string' ? ` ${code}` : ''}`, err.name) : 'Error';
   const out = new Error(kind);
   out.name = name;
   const stack = typeof err?.stack === 'string' ? err.stack : '';
@@ -192,10 +195,29 @@ export function cleanError(e: unknown, depth = 0): Error {
 
 // A log line's title: its fixed message, a path in it (housekeeping names the
 // file it couldn't tidy) taken out, then scrubbed.
-const PATHS = /(?:~|(?<![\w.])\/)[^\s'"`]*\/[^\s'"`]*/g;
+const PATHS = /(?:~|(?<![\w.])\/)[^\s'"`]*\/[^\s'"`]*|\b[A-Za-z]:\\[^\s'"`]+/g;
 
 const HOME = os.homedir();
-const withoutHome = (p: string): string => (HOME && HOME.length > 1 && p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p);
+const asPath = (p: string): string => {
+  if (!p.startsWith('file://')) return p;
+  try {
+    return fileURLToPath(p);
+  } catch {
+    return p;
+  }
+};
+const withoutHome = (p: string): string => {
+  const f = asPath(p);
+  return HOME && HOME.length > 1 && f.startsWith(HOME) ? `~${f.slice(HOME.length)}` : f;
+};
+// The runner's own code: this package (src/, node_modules/) and Node's.
+const RUNNER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const OUTSIDE = '<outside the runner>';
+function ownFrame(file: string): boolean {
+  if (file.startsWith('node:') || file === '<anonymous>') return true;
+  const f = asPath(file);
+  return f === RUNNER_ROOT || f.startsWith(RUNNER_ROOT + path.sep);
+}
 
 type Json = unknown;
 function scrubDeep(v: Json, depth = 0): Json {
@@ -239,7 +261,7 @@ export function scrubEvent<E>(event: E): E | null {
       if (e.logentry.params !== undefined) e.logentry.params = scrubDeep(e.logentry.params);
     }
     for (const ex of e.exception?.values ?? []) {
-      if (typeof ex.type === 'string') ex.type = scrubForSentry(ex.type);
+      if (ex.type !== undefined) ex.type = typeof ex.type === 'string' && ERROR_CLASSES.has(ex.type) ? ex.type : 'Error';
       // An exception's message is free text (git's stderr, a parse error
       // quoting its input), so only its kind goes; runner.log has the whole of
       // it, beside the stack. The stack itself is the runner's own code.
@@ -250,16 +272,22 @@ export function scrubEvent<E>(event: E): E | null {
       }
       for (const f of ex.stacktrace?.frames ?? []) {
         delete f.vars;
-        // The runner's own files and functions; scrubbed all the same, and
-        // the home folder (the Mac account's name) taken out.
+        // No source lines (ContextLines is left out; these would only come
+        // from somewhere else).
+        delete f.context_line;
+        delete f.pre_context;
+        delete f.post_context;
+        // The runner's own files and functions go, scrubbed, the home folder
+        // (the Mac account's name) taken out. Anything else (a project's
+        // patch, run in the runner) goes as no more than that.
+        const file = typeof f.abs_path === 'string' ? f.abs_path : typeof f.filename === 'string' ? f.filename : '';
+        if (!ownFrame(file)) {
+          for (const k of ['filename', 'abs_path', 'function', 'module'] as const) if (f[k] !== undefined) f[k] = OUTSIDE;
+          continue;
+        }
         for (const k of ['filename', 'abs_path', 'function', 'module'] as const) {
           if (typeof f[k] === 'string') f[k] = scrubForSentry(withoutHome(f[k] as string));
         }
-        // The source lines around a frame: the runner's own code, but scrubbed
-        // all the same, as a line can hold a literal.
-        if (typeof f.context_line === 'string') f.context_line = scrubForSentry(f.context_line);
-        if (f.pre_context !== undefined) f.pre_context = scrubDeep(f.pre_context);
-        if (f.post_context !== undefined) f.post_context = scrubDeep(f.post_context);
       }
     }
     if (e.extra !== undefined) e.extra = scrubDeep(e.extra);
@@ -357,7 +385,7 @@ export function safeFields(extra: Record<string, unknown> | undefined): Record<s
   for (const [k, v] of Object.entries(extra ?? {})) {
     if (!SAFE_FIELDS.has(k)) continue;
     if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
-    else if (typeof v === 'string') out[k] = k === 'error' ? errorKind(v) : scrubForSentry(v.length > 200 ? v.slice(0, 200) : v);
+    else if (typeof v === 'string') out[k] = k === 'error' ? errorKind(v) : scrubForSentry(v).slice(0, 200);
   }
   return out;
 }

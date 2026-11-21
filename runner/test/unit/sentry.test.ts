@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { defaultHome } from '../../src/config.ts';
 import { cleanError, ERROR_CLASSES, errorKind, logLineEvent, safeFields, scrubEvent, scrubForSentry, sentryOptions, sentryWanted, useSentryMask } from '../../src/sentry.ts';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { tmpDir } from '../helpers/fakes.ts';
 
 const RELEASE_ID = '20261029T012558Z-3e0bd5d';
@@ -191,4 +193,32 @@ test("lines in an error's message that look like stack frames never become frame
   assert.ok(out.length > 0);
   for (const bad of [['hunter2', 'pass'].join(''), ['al', 'ice'].join(''), ['exam', 'ple.com'].join(''), ...LEAKS]) assert.ok(!out.includes(bad), `${bad} left the runner: ${out.slice(Math.max(0, out.indexOf(bad) - 200), out.indexOf(bad) + 60)}`);
   assert.match(out, /sentry\.test\.ts/, 'the real frames stay');
+});
+
+test("a frame from outside the runner (a project's patch) goes as no more than that, and no source lines go", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-patch-'));
+  const file = path.join(dir, 'secret-client-patch.mjs');
+  fs.writeFileSync(file, `export function confidentialHelper() { throw new Error('x'); }\n`);
+  try {
+    const mod = await import(pathToFileURL(file).href);
+    const out = await capture((S) => {
+      try {
+        mod.confidentialHelper();
+      } catch (e) {
+        S.captureException(cleanError(e));
+      }
+    });
+    assert.ok(out.length > 0);
+    for (const bad of ['secret-client-patch', 'confidentialHelper', 'tb-patch-']) assert.ok(!out.includes(bad), `${bad} left the runner`);
+    assert.match(out, /<outside the runner>/);
+    assert.ok(!/"(?:pre_context|context_line|post_context)"/.test(out), 'no source lines');
+    assert.ok(!out.includes(os.homedir() + '/'), 'no home folder');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an exception type off the list goes as Error', () => {
+  const e = scrubEvent({ exception: { values: [{ type: 'LandlordOwesMeError', value: 'x' }] } }) as { exception: { values: { type: string; value: string }[] } };
+  assert.deepEqual([e.exception.values[0]!.type, e.exception.values[0]!.value], ['Error', 'Error']);
 });

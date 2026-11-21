@@ -88,8 +88,10 @@ export function tidy(opts: { home: string; logs: LogToCap[]; now: number; log?: 
   for (const name of entries(inbox)) {
     const file = path.join(inbox, name);
     // A thread's import's half-made copy (media.ts importOpened), left by a
-    // runner that stopped mid-copy, goes after an hour, not a week.
-    const leftover = /\.import\.tmp$|\.tmp\.(?:png|jpg)$/.test(name);
+    // runner that stopped mid-copy, and the copy a send took (media-quota.ts
+    // take), which the send has copied into the thread by then, go after an
+    // hour, not a week.
+    const leftover = /\.import\.tmp$|\.tmp\.(?:png|jpg)$|\.held\.[a-z0-9]+$/.test(name);
     if (olderThan(file, leftover ? HOUR : INBOX_KEEP_MS, now)) attempt(file, () => {
       fs.rmSync(file, { recursive: true, force: true });
       done.inbox++;

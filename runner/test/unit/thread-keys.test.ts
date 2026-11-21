@@ -437,6 +437,11 @@ test('a request frame sent before the process lookup finishes waits for it', asy
   }
 });
 
+// A connection closed straight after auth: its close code, whether or not the
+// proof got there first.
+const turnedAway = (p: Promise<RunnerClient>) =>
+  p.then((c) => closedWithin(c), (e: Error) => Number(/\((\d+)\)/.exec(e.message)?.[1] ?? NaN));
+
 // Until the server has seen every client close.
 const patientlyClosed = (server: RpcServer) => patiently(() => (server as unknown as { conns: Set<unknown> }).conns.size === 0);
 
@@ -477,31 +482,36 @@ test('while the process lookup runs, frames stay small and the queue has a byte 
   }
 });
 
-test('connections whose process lookup is still running count against the clients waiting to authenticate', async () => {
+test('lookups still running are capped per thread key, even after their clients have gone, and never keep the owner out', async () => {
   let release!: () => void;
   const held = new Promise<void>((r) => (release = r));
   let from: string | undefined;
   const { h, server, token, url } = await serve({ maxPendingAuth: 2, callerOf: async () => { await held; return from; } });
   const me = thread(h, 'auto');
-  from = me.id;
+  const other = thread(h, 'auto', 'other');
   const open: RunnerClient[] = [];
   try {
-    open.push(await as(url, token, me.id), await as(url, token, me.id));
-    const third = await as(url, token, me.id).catch(() => undefined);
-    third?.close();
-    assert.equal(third, undefined, 'a third, with two still being looked up, is turned away');
-    // A bearer client too: its lookup is still to come.
-    const bearer = await RunnerClient.connect(url, token, { legacyHeader: true }).catch(() => undefined);
-    bearer?.close();
-    assert.equal(bearer, undefined, 'a bearer client waits its turn');
-    // Leaving doesn't free a slot while its lookup still runs.
+    for (let i = 0; i < 4; i++) open.push(await as(url, token, me.id));
+    // A fifth from the same thread is closed at once.
+    assert.equal(await turnedAway(as(url, token, me.id)), 4429);
+    // Leaving doesn't free one while its lookup still runs.
     for (const c of open.splice(0)) c.close();
     await patientlyClosed(server);
-    const fourth = await as(url, token, me.id).catch(() => undefined);
-    fourth?.close();
-    assert.equal(fourth, undefined, 'lookups still running count after their clients have gone');
+    assert.equal(await turnedAway(as(url, token, me.id)), 4429, 'lookups still running count after their clients have gone');
+    // Another thread, and the owner, still get in.
+    const theirs = await as(url, token, other.id);
+    open.push(theirs);
+    const owner = await RunnerClient.connect(url, token);
+    open.push(owner);
+    // The owner's own lookups take the waiting slots, a bearer client's too.
+    const owner2 = await RunnerClient.connect(url, token);
+    open.push(owner2);
+    const bearer = await RunnerClient.connect(url, token, { legacyHeader: true }).catch(() => undefined);
+    bearer?.close();
+    assert.equal(bearer, undefined, 'a bearer client waits its turn behind two owner lookups');
     release();
-    await patiently(() => (server as unknown as { lookups: number }).lookups === 0);
+    await Promise.all(open.map((c) => c.call('auth.whoami')));
+    await patiently(() => (server as unknown as { ownerLookups: number; threadLookups: Map<string, number> }).threadLookups.size === 0);
     const after = await as(url, token, me.id);
     open.push(after);
     await after.call('auth.whoami');

@@ -36,23 +36,20 @@ const setQuota = (h: ReturnType<typeof makeHarness>, q: ImportQuota) => {
 };
 const small = (h: ReturnType<typeof makeHarness>, files: number) => setQuota(h, new ImportQuota({ perThread: { files, bytes: 1024 * 1024 }, all: { files: 100, bytes: 100 * 1024 * 1024 } }));
 
-test('an Ask thread gets the same copy back for the same file, and is refused before any work once over its allowance', async () => {
+test('an Ask thread is refused before any work once over its allowance, the same file again counting too', async () => {
   const { h, server, token, url } = await serve();
-  small(h, 2);
+  small(h, 3);
   const me = thread(h, 'ask');
   const c = await RunnerClient.connect(url, threadKey(token, me.id), { threadId: me.id });
   try {
-    const shots = [1, 2, 3].map((n) => {
-      const f = path.join(h.home, `shot-${n}.png`);
-      fs.writeFileSync(f, makePng(10 + n, 10));
-      return f;
-    });
-    const first = (await c.call('media.import', { path: shots[0] })).image;
-    for (let i = 0; i < 5; i++) assert.equal((await c.call('media.import', { path: shots[0] })).image.path, first.path, 'the same file again');
-    assert.equal(inbox(h.home).length, 1);
-    await c.call('media.import', { path: shots[1] });
+    const shot = path.join(h.home, 'shot.png');
+    fs.writeFileSync(shot, makePng(11, 10));
+    const a = (await c.call('media.import', { path: shot })).image;
+    const b = (await c.call('media.import', { path: shot })).image;
+    assert.notEqual(a.path, b.path, 'each import its own copy, so two sends of one file both work');
+    await c.call('media.import', { path: shot });
     const before = inbox(h.home);
-    await assert.rejects(c.call('media.import', { path: shots[2] }), (e: { code: number; message: string }) => e.code === -32602 && /today/.test(e.message));
+    await assert.rejects(c.call('media.import', { path: shot }), (e: { code: number; message: string }) => e.code === -32602 && /today/.test(e.message));
     assert.deepEqual(inbox(h.home), before, 'nothing written once over');
     // Bytes count too: one file over the day's bytes is refused.
     small(h, 100);
@@ -130,7 +127,7 @@ test("a thread's import doesn't hold the event loop, and leaves nothing when it 
 
 // Gemini's review of the fix: threads.send and threads.create took pictures by
 // any path, and the runner copied each into the thread's media, unmetered.
-test("a limited thread's message carries only pictures it imported, each once", async () => {
+test("a limited thread's message carries only pictures it imported, each once, as a copy of what was imported", async () => {
   const { h, server, token, url } = await serve();
   const me = thread(h, 'ask');
   const other = thread(h, 'ask');
@@ -148,10 +145,38 @@ test("a limited thread's message carries only pictures it imported, each once", 
     await assert.rejects(c.call('threads.send', { threadId: me.id, text: 'look', images: [image, image] }), /twice/);
     await assert.rejects(c.call('threads.send', { threadId: me.id, text: 'look', images: Array.from({ length: 11 }, () => image) }), /At most 10/);
     await c.call('threads.send', { threadId: me.id, text: 'look', images: [image] });
+    const sent = h.events(me.id).filter((e) => e.type === 'user.message').at(-1)!;
+    assert.equal(sent.images.length, 1);
+    assert.ok(sent.images[0].path.startsWith(path.join(h.home, 'threads', me.id, 'media')));
+    assert.equal(fs.existsSync(image.path), false, 'the inbox copy is used up');
     await assert.rejects(c.call('threads.send', { threadId: me.id, text: 'again', images: [image] }), notImported, 'used up');
-    // Imported again, it's a fresh copy to send.
-    const again = (await c.call('media.import', { path: src })).image;
-    assert.notEqual(again.path, image.path);
+    // The inbox file is the thread's to write: grown, or swapped for another
+    // file, it's refused rather than copied into the thread.
+    const grown = (await c.call('media.import', { path: src })).image;
+    fs.appendFileSync(grown.path, Buffer.alloc(5 * 1024 * 1024));
+    await assert.rejects(c.call('threads.send', { threadId: me.id, text: 'grown', images: [grown] }), notImported);
+    const swapped = (await c.call('media.import', { path: src })).image;
+    const tiff = path.join(h.home, 'x.tiff');
+    fs.writeFileSync(tiff, Buffer.concat([Buffer.from([0x49, 0x49, 0x2a, 0]), Buffer.alloc(fs.statSync(swapped.path).size - 4)]));
+    fs.renameSync(tiff, swapped.path);
+    await assert.rejects(c.call('threads.send', { threadId: me.id, text: 'swapped', images: [swapped] }), notImported);
+    // The same file, its bytes changed in place to something to convert: refused, not converted.
+    const edited = (await c.call('media.import', { path: src })).image;
+    const size = fs.statSync(edited.path).size;
+    fs.writeFileSync(edited.path, Buffer.concat([Buffer.from([0x49, 0x49, 0x2a, 0]), Buffer.alloc(size - 4)]), { flag: 'r+' });
+    await assert.rejects(c.call('threads.send', { threadId: me.id, text: 'edited', images: [edited] }), notImported);
+    // A path through a link to somewhere else, resolving to the imported name: what's opened is the imported file.
+    const real = (await c.call('media.import', { path: src })).image;
+    const pivot = path.join(h.home, 'pivot');
+    fs.mkdirSync(path.join(h.home, 'decoy', 'a', 'b'), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'decoy', 'a', 'b'), pivot);
+    // Sent as written, not tidied: followed through the link it would reach decoy/<rel>.
+    const rel = path.relative(path.dirname(h.home), real.path);
+    fs.mkdirSync(path.dirname(path.join(h.home, 'decoy', rel)), { recursive: true });
+    fs.writeFileSync(path.join(h.home, 'decoy', rel), Buffer.concat([makePng(3, 3), Buffer.alloc(3 * 1024 * 1024)]));
+    await c.call('threads.send', { threadId: me.id, text: 'pivot', images: [{ ...real, path: `${pivot}/../../${rel}` }] });
+    const last = h.events(me.id).filter((e) => e.type === 'user.message').at(-1)!;
+    assert.deepEqual([last.images[0].width, last.images[0].height], [12, 12]);
   } finally {
     c.close();
     c2.close();

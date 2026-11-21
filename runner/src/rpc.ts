@@ -61,6 +61,10 @@ const MAX_PENDING_AUTH = 16;
 // key alone mustn't let it park gigabytes in the runner (Daybreak finding 158).
 const MAX_QUEUED_FRAMES = 256;
 const MAX_QUEUED_BYTES = 1024 * 1024;
+// Process lookups a thread's key may have running at once, and all thread
+// keys together.
+const MAX_LOOKUPS_PER_THREAD = 4;
+const MAX_THREAD_LOOKUPS = 16;
 // What an authenticated client may send in one frame.
 const MAX_PAYLOAD = 64 * 1024 * 1024;
 // Backpressure for a client that stops reading (a hung app, a debugger):
@@ -295,17 +299,34 @@ export class RpcServer {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
-  // Connections waiting to authenticate, and process lookups still running
-  // for authenticated ones: both are work the runner holds for a client it
-  // doesn't know yet, so both take one of the slots (Daybreak finding 158). A
-  // lookup counts until it settles, even after its client has gone, so
-  // connecting and leaving can't start them without end.
-  private lookups = 0;
+  // Process lookups still running (Daybreak finding 158). Each counts until
+  // it settles, even after its client has gone, so connecting and leaving
+  // can't start them without end. The owner token's take one of the slots
+  // for clients waiting to authenticate; a thread key's have their own,
+  // a few per thread, so one thread can't fill the slots the app and tb
+  // need (the reviews of the fix).
+  private ownerLookups = 0;
+  private threadLookups = new Map<string, number>();
 
   private pendingAuth(): number {
-    let n = this.lookups;
+    let n = this.ownerLookups;
     for (const c of this.conns) if (!c.authed) n++;
     return n;
+  }
+
+  private lookupsOf(keyThread: string | undefined): number {
+    if (keyThread === undefined) return this.ownerLookups;
+    return this.threadLookups.get(keyThread) ?? 0;
+  }
+
+  private countLookup(keyThread: string | undefined, by: 1 | -1): void {
+    if (keyThread === undefined) {
+      this.ownerLookups += by;
+      return;
+    }
+    const n = (this.threadLookups.get(keyThread) ?? 0) + by;
+    if (n > 0) this.threadLookups.set(keyThread, n);
+    else this.threadLookups.delete(keyThread);
   }
 
   private onUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -356,7 +377,17 @@ export class RpcServer {
     conn.caller = keyThread;
     const find = this.opts.callerOf;
     if (find && conn.peer !== undefined) {
-      this.lookups++;
+      let threads = 0;
+      for (const n of this.threadLookups.values()) threads += n;
+      if (keyThread !== undefined && (this.lookupsOf(keyThread) >= MAX_LOOKUPS_PER_THREAD || threads >= MAX_THREAD_LOOKUPS)) {
+        conn.dropped = true;
+        conn.authed = true;
+        conn.authTimer?.clear();
+        conn.ws.close(4429, 'too many connections being looked up');
+        setTimeout(() => conn.ws.terminate(), 1000).unref();
+        return;
+      }
+      this.countLookup(keyThread, 1);
       conn.identifying = find(conn.peer)
         .then((t) => {
           if (keyThread !== undefined && t !== undefined && t !== keyThread) {
@@ -370,7 +401,7 @@ export class RpcServer {
           this.dropConn(conn);
         })
         .finally(() => {
-          this.lookups--;
+          this.countLookup(keyThread, -1);
           conn.identifying = undefined;
           conn.queuedBytes = 0;
           if (conn.dropped || conn.ws.readyState !== WebSocket.OPEN) return;
