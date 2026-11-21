@@ -1098,7 +1098,8 @@ export function scanModule(src: string, file: string): ModuleScan {
     const value = spec && plainString(spec);
     if (value === undefined) return refuse(at);
     if (/^\.{1,2}(\/|$)|^\//.test(value)) specifiers.add(value);
-    else if (value.startsWith('file:')) {
+    // A URL's scheme has no case: `DATA:` and `FILE:` are those (Gemini's review).
+    else if (/^file:/i.test(value)) {
       try {
         specifiers.add(fileURLToPath(value));
       } catch {
@@ -1107,7 +1108,7 @@ export function scanModule(src: string, file: string): ModuleScan {
     }
     // A data: module's own imports are in a string, and `#x` maps through
     // package.json to a local file this doesn't follow.
-    else if (/^(data:|#)/.test(value) || LOADER_MODULES.includes(value)) refuse(at);
+    else if (/^(data:|#)/i.test(value) || /^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('node:') || LOADER_MODULES.includes(value)) refuse(at);
     // A package: hashed only when the repo commits it (tracked-packages.ts).
     else packages.add(value);
   };
@@ -1156,7 +1157,14 @@ export function scanModule(src: string, file: string): ModuleScan {
       }
       case 'Identifier':
         if (handled.has(node) || !isReference(parent, key)) break;
+        // Reflect only called in place (`Reflect.has(o, k)`), below.
+        if (node.name === 'Reflect') break;
         if (LOADER_NAMES.includes(node.name) || CODE_REACH.includes(node.name)) refuse(node);
+        // `process`, `globalThis` and the like as values (`const p = process`,
+        // `Object.entries(process)`): what's on them is then read by a name
+        // this can't see (Gemini's review). Their plain members, `typeof`,
+        // and `module.exports = ...` read nothing that way.
+        if (RISKY_OBJECTS.includes(node.name) && node.name !== 'require' && !(parent?.type === 'MemberExpression' && key === 'object') && parent?.type !== 'UnaryExpression') refuse(node);
         break;
       case 'MemberExpression': {
         const name = propertyName(node);
@@ -1171,11 +1179,14 @@ export function scanModule(src: string, file: string): ModuleScan {
       // pattern's key reads that property, though it isn't a reference
       // (Daybreak 154). A worked-out key could read any of them.
       case 'Property':
+        // `{ __proto__: f }` makes f the prototype: its constructor then reads as o's.
+        if (parent?.type === 'ObjectExpression' && !node.computed && node.kind === 'init' && !node.shorthand && propertyKey(node) === '__proto__') refuse(node);
         if (parent?.type === 'ObjectPattern') {
           const name = propertyKey(node);
           // `{ ['eval']: run }` names it too (Codex's review).
+          // A worked-out key reads like `o[k]` (see CODE_REACH); a number reads no loader.
           const read = name ?? plainString(node.key);
-          if (read === undefined || LOADER_PROPERTIES.includes(read) || CODE_REACH.includes(read) || LOADER_NAMES.includes(read)) refuse(node);
+          if (read !== undefined && (LOADER_PROPERTIES.includes(read) || CODE_REACH.includes(read) || LOADER_NAMES.includes(read))) refuse(node);
         }
         break;
     }
@@ -1190,9 +1201,10 @@ export function scanModule(src: string, file: string): ModuleScan {
       reflectCalls.add(node.callee);
       const method = propertyName(node.callee);
       if (method === undefined) refuse(node);
-      else if (method === 'get' || method === 'getOwnPropertyDescriptor' || method === 'has') {
+      else if (method === 'get' || method === 'getOwnPropertyDescriptor') {
+        // Reads a property by name: only a plain one that isn't a loader's.
         const named = node.arguments[1] && plainString(node.arguments[1]);
-        if (named !== undefined && (CODE_REACH.includes(named) || LOADER_NAMES.includes(named) || LOADER_PROPERTIES.includes(named))) refuse(node);
+        if (named === undefined || CODE_REACH.includes(named) || LOADER_NAMES.includes(named) || LOADER_PROPERTIES.includes(named)) refuse(node);
       }
     }
     for (const k of Object.keys(node)) {
@@ -1218,7 +1230,7 @@ type AstNode = { type: string; start: number; end: number; [field: string]: any 
 
 // Names that load code, or hand out something that can, when used as values.
 const LOADER_NAMES = ['require', 'eval', 'Function', 'createRequire', 'getBuiltinModule', 'dlopen'];
-const LOADER_PROPERTIES = ['require', 'createRequire', 'getBuiltinModule', 'dlopen', '_load'];
+const LOADER_PROPERTIES = ['require', 'createRequire', 'getBuiltinModule', 'dlopen', '_load', 'binding', '_linkedBinding'];
 // What reaches code made from a string or bytes without a loader's name
 // (Daybreak 154, 21 Nov 2026): `eval` and `Function` as properties
 // (`globalThis.eval`), any function's `constructor` (`(() => {}).constructor`
@@ -1236,13 +1248,14 @@ const LOADER_PROPERTIES = ['require', 'createRequire', 'getBuiltinModule', 'dlop
 // by design: the card that trusts it is what reads for those.
 const CODE_REACH = [
   'eval', 'Function', 'constructor', 'AsyncFunction', 'GeneratorFunction', 'AsyncGeneratorFunction',
-  'getOwnPropertyDescriptor', 'getOwnPropertyDescriptors', '__lookupGetter__', 'WebAssembly',
+  'getOwnPropertyDescriptor', 'getOwnPropertyDescriptors', '__lookupGetter__', 'WebAssembly', 'Reflect', '__proto__',
+  'setPrototypeOf',
 ];
 // Modules that load code by a name or from a string: the module system, vm,
 // workers, and inspector and repl, which evaluate what they're sent.
 const LOADER_MODULES = [
   'module', 'node:module', 'vm', 'node:vm', 'worker_threads', 'node:worker_threads', 'inspector', 'node:inspector',
-  'inspector/promises', 'node:inspector/promises', 'repl', 'node:repl',
+  'inspector/promises', 'node:inspector/promises', 'repl', 'node:repl', 'node:test', 'test',
 ];
 // Objects a computed `[k]` on could reach a loader through.
 const RISKY_OBJECTS = ['globalThis', 'global', 'process', 'module', 'require', 'self', 'window'];
@@ -1454,7 +1467,9 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
     // folder it runs in: its `./x` is there, not beside it.
     take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true }));
   }
-  wrote ??= writeProblem(writes, start.top);
+  const cross = writeProblem(writes, start.top);
+  if (cross?.definite) wrote ??= cross.problem;
+  else if (cross) problem ??= cross.problem;
   if (wrote) problem = wrote;
   return { files, missing, ...(problem ? { problem } : {}), ...(wrote ? { writeProblem: wrote } : {}) };
 }

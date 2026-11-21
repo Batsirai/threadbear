@@ -759,8 +759,21 @@ test('dynamic code by any reflective route is refused: aliases, constructors, st
     "const { ['constructor']: F } = f;",
     'const get = Reflect.get;',
     'Reflect[m](globalThis, k);',
+    "globalThis.Reflect.get(globalThis, 'eval');",
+    "const { Reflect: R } = globalThis;",
+    "Reflect.get(...[globalThis, 'eval']);",
+    'Reflect.get(globalThis, k);',
+    "const { binding } = process;",
+    "process.binding('contextify');",
+    "const [, get] = Object.entries(process).find(([k]) => k === 'getBuiltinModule');",
+    'const p = process;',
+    "import 'DATA:text/javascript,1';",
+    "import { run } from 'node:test';",
+    'const o = { __proto__: f };',
   ];
   for (const src of refused) assert.equal(scanModule(src, 'x.ts').problem?.kind, 'computed', src);
+  // A URL's scheme has no case: `FILE:` is a file, followed and hashed like one.
+  assert.deepEqual(scanModule("import 'FILE:///tmp/x.mjs';", 'x.ts').specifiers, ['/tmp/x.mjs']);
   // What only looks like it: a class's own constructor, a key in an object
   // literal, a word inside a longer string, a type.
   for (const src of [
@@ -770,7 +783,10 @@ test('dynamic code by any reflective route is refused: aliases, constructors, st
     "switch (cmd) {\n  case 'eval':\n    break;\n}",
     'const plain = (x: object) => Object.getPrototypeOf(x) === Object.prototype;\nvoid plain;',
     "const own = (r: object) => Object.hasOwn(r, 'constructor') || Object.is(r, 'eval');\nvoid own;",
-    "const has = (o: object, k: string) => Reflect.has(o, k);\nvoid has;",
+    "const has = (o: object, k: string) => Reflect.has(o, k) || Reflect.has(o, 'constructor');\nvoid has;",
+    'const { [0]: first, 1: second } = [1, 2];\nvoid [first, second];',
+    'const { [id]: _, ...rest } = obj;\nvoid rest;',
+    "if (typeof process !== 'undefined') void process.env.HOME;\nmodule.exports = {};",
     'let f: Function | undefined;\nvoid f;',
     'const WORDS: Record<string, string> = { a: "A" };\nexport const w = (v: { state: string }) => WORDS[v.state];',
   ]) assert.equal(scanModule(src, 'x.ts').problem, undefined, src);

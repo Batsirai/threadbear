@@ -124,11 +124,14 @@ for code it didn't cover: one that loads code by a name worked out as it
 runs (`import(name)`, `` import(`./${x}`) ``, `require('./a' + b)`, any
 `createRequire`, `node:module`, `node:vm`, `node:worker_threads`,
 `node:inspector`, `node:repl`, `eval`, `Function`, a `data:` or `#`
-specifier), or that reaches code made from a string or bytes by another
-route (`globalThis.eval`, `window['Function']`, any `.constructor` such as
-`(() => {}).constructor`, `const { eval: run } = globalThis`,
-`Reflect.get(f, 'constructor')`, `getOwnPropertyDescriptors`,
-`WebAssembly`), in the patch file or a helper, one the runner
+specifier, in any case, or any other URL scheme), or that reaches code
+made from a string or bytes by another route (`globalThis.eval`,
+`window['Function']`, any `.constructor` such as `(() => {}).constructor`,
+`const { eval: run } = globalThis`, `Reflect.get` with anything but a
+plain harmless name or `Reflect` handed on, `getOwnPropertyDescriptors`,
+`process.binding`, `node:test`, `{ __proto__: f }`, `WebAssembly`, or
+`process`, `globalThis` and the like used as values, as in
+`Object.entries(process)`), in the patch file or a helper, one the runner
 can't parse, or one that reaches more than 100 local files. Loads are read
 from the parsed syntax (oxc), so comments and strings don't count either way. `patches.trust` can't trust it; changing it to plain
 imports can. An agent's Edit or Write to a helper carries on the trusted
@@ -343,11 +346,20 @@ worked out as it runs or named by the data once it runs anything at all:
 a path from a `$(...)`, `read`, a loop or what a script was handed that
 was, a pattern or brace the shell expands, `find -exec ... {}`, `xargs`, a
 link the check makes (`ln`), `tar x`, `unzip`, `patch`, `curl -O`, `git
-checkout`, `pull`, `reset --hard` and the like. A schedule's check like
-that can't be approved, an owner's included. A file in the temp folder
-from a plain `$(mktemp)`, and a variable nothing it follows sets (the
-runner's own, like `$THREADBEAR_CHECK_STATE`, or a positional handed only
-those), aren't the repo's to steer. What a program on PATH writes by its
+checkout`, `pull`, `reset --hard` and the like. A variable's value is
+followed through what sets it, across the scripts a check reaches: one
+set to a known path counts as a write to that path, and one set from
+something worked out as it runs (`export 'x=..'`, `printf -v`,
+`${x:=..}`, `let`) as a write anywhere. What follows a step it can't
+follow is still read for what it writes, and written files are matched
+by inode too, so a link made before counts. A schedule's check that's
+known to write a file it then runs can't be approved, an owner's
+included; one that writes somewhere it can't tell is one it can't follow,
+like `python3 x.py`. A file in the temp folder from a plain `$(mktemp)`,
+and a variable nothing it follows sets (the runner's own, like
+`$THREADBEAR_CHECK_STATE`, or a positional handed only those), aren't the
+repo's to steer, though the path one makes if it's empty
+(`"${UNSET}run.sh"`) still counts. What a program on PATH writes by its
 own rules beyond those isn't known (below), and nor is what a JavaScript
 or other language's script writes.
 
