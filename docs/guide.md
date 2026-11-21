@@ -2368,7 +2368,10 @@ builds the app by being one. With neither set it builds on this Mac in the
 background. With check hosts set but no update build host it builds
 nothing, and its Updates panel says to name one. With update build hosts
 set but none answering, the panel says it's waiting for a Mac and it tries
-again later. A new version waiting to go in that a Mac off that list built
+again later. When that Mac is busy with other builds and tests, the panel
+names it and says how long it's been busy, then, once the build has taken
+its place in that Mac's queue, how many runs are ahead of it and how long
+it's waited; once it starts, how long it's been building. A new version waiting to go in that a Mac off that list built
 is thrown away. An app installed before 12 Nov 2026 built its updates on a
 check host, so it can't update itself past then: install it again once
 (`desktop/scripts/install-app.sh`, with `--build-on <host>` to build on a
