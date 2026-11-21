@@ -129,23 +129,29 @@ async function claimable(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: 
 
 // ------------------------------------------------------------ share links
 // A link's slug is one thread's for good: /s/<slug> must never start showing
-// another thread, and a retired one never comes back. A runner or box key may
-// take one only if no other row has it and no thread ever had it before (a
-// deleted thread's, or one replaced by Share again with a new link:
-// tombstones with `slug`), its own runner's and its own thread's included:
-// retiring a link is how it's revoked (Codex Security, 21 Nov 2026, finding
-// 161). Keeping a link that's still live on the same row is fine. The owner
-// may; the other rows then lose it.
-
-async function slugFree(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string, slug: string): Promise<boolean> {
-  if (caller.owner) return true;
-  let liveHere = false;
-  for await (const t of ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug))) {
-    if (t.threadId !== threadId) return false;
-    liveHere = true;
+// another thread, and a retired one never comes back. Retired is a deleted
+// thread's, or one replaced by Share again with a new link: tombstones with
+// `slug`. Retiring a link is how it's revoked, so for a runner or box key a
+// retired slug stays retired, its own runner's and its own thread's included
+// (Codex Security, 21 Nov 2026, finding 161):
+//   'taken': another row has it, or another thread ever did: the write is
+//     refused.
+//   'retired': only this thread ever had it, and it was retired (Share again,
+//     or the row went in a prune and the runner sends the thread again): the
+//     row goes in without it (keeping the link it has, if any), so the
+//     thread keeps mirroring and the retired link stays dead. Also a link still live on this row that was retired
+//     before this check (brought back then): it goes.
+// The owner may use any; the other rows then lose it, and its tombstones go
+// (the owner putting a link on a thread un-retires it).
+async function slugState(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string, slug: string): Promise<'free' | 'retired' | 'taken'> {
+  if (caller.owner) return 'free';
+  for await (const t of ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug))) if (t.threadId !== threadId) return 'taken';
+  let retired = false;
+  for await (const t of ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug))) {
+    if (t.threadId !== threadId) return 'taken';
+    retired = true;
   }
-  if (liveHere) return true;
-  return (await ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug)).first()) === null;
+  return retired ? 'retired' : 'free';
 }
 
 async function retireSlug(ctx: MutationCtx, threadId: string, runnerId: string, slug: string): Promise<void> {
@@ -428,7 +434,7 @@ export const armClears = machines.internalMutation({
 });
 
 // A thread's row and everything under it, with a tombstone so a runner key
-// can't take the id or its link later (claimable, slugFree). removeThreads
+// can't take the id or its link later (claimable, slugState). removeThreads
 // and prune; a runner key only ever reaches its own (their callers check).
 // `refillView` false: a box's removal, which brings no other thread under
 // its runner id back into a list (it touches its own thread only).
@@ -931,8 +937,19 @@ export const upsertThreads = mutation({
       // A new row: not under an id another runner has had, or with
       // anything left under it (a pruned thread's messages).
       if (!existing && !(await claimable(ctx, caller, t.threadId))) throw forbidden(`write thread ${t.threadId}`);
-      const slug = t.share?.slug;
-      if (slug && !(await slugFree(ctx, caller, t.threadId, slug))) throw forbidden('use that share link');
+      let slug = t.share?.slug;
+      if (slug) {
+        const state = await slugState(ctx, caller, t.threadId, slug);
+        if (state === 'taken') throw forbidden('use that share link');
+        if (state === 'retired') {
+          // The row keeps the link it has, if that one's still good (a late
+          // write mustn't take down the current link); else none.
+          const { share: _retired, ...rest } = t;
+          const kept = existing?.runnerId === t.runnerId && existing.share?.slug && (await slugState(ctx, caller, t.threadId, existing.share.slug)) === 'free' ? existing.share : undefined;
+          t = kept ? { ...rest, share: kept } : rest;
+          slug = kept?.slug;
+        }
+      }
       // The owner writing a thread another runner had (only the owner can):
       // it starts clean, so nothing that runner wrote under the id (its
       // messages, pictures, link, sidebar row) shows as the new one's.
@@ -990,6 +1007,7 @@ export const upsertThreads = mutation({
         for (const other of await ctx.db.query('threads').withIndex('by_share_slug', (q) => q.eq('share.slug', slug)).collect()) {
           if (other.threadId !== t.threadId) await ctx.db.patch(other._id, { share: undefined, updatedMs: now });
         }
+        for (const gone of await ctx.db.query('threadTombstones').withIndex('by_slug', (q) => q.eq('slug', slug)).take(100)) await ctx.db.delete('threadTombstones', gone._id);
       }
       const before = transfer ? null : existing;
       const wantsPush = t.needsYou && before !== null && !before.needsYou && (before.pushedAt ?? 0) < now - PUSH_COOLDOWN_MS;

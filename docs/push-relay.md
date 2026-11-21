@@ -164,13 +164,15 @@ sized well above real use:
 - Every call-back is charged to the relay's own budget before it starts
   (Codex Security, 21 Nov 2026), never to a deployment's registrations or
   the day's new installs: at most 20 at once relay-wide, of which 15 for
-  deployments with no install here; one at a time to any one deployment,
-  none to it for 30 seconds after it says no, and 20 an hour; and in an
-  hour relay-wide, 600 to deployments with no install and 1,200 to ones
-  with one, so made-up names can't stop a known backend registering
-  again. Someone who knows a deployment's name can still hold up its
-  registering again (not its sends) while they keep at it, and made-up
-  names can hold up new installs for the hour.
+  deployments without an install at least a week old here; one at a time
+  to any one deployment, and none to it for 30 seconds after it says no;
+  and in an hour relay-wide, 600 to deployments without a week-old install
+  and 1,200 to ones with one, so made-up names (or deployments someone
+  just registered) can't stop an established backend registering again.
+  Someone who knows a deployment's name can still hold up its registering
+  again (not its sends) by sending a no for it every 30 seconds, and no
+  longer than they keep that up; made-up names can hold up new installs
+  for the hour.
 - Installs under a week old share 600 sends an hour, and all installs
   together get 6,000. Past either, each install still gets the first 10
   sends of its hour, so no pile of installs can stop a real backend's

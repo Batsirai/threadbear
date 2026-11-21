@@ -157,7 +157,10 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   row has it and no thread ever had it before, its own runner's and its own
   thread's included: a deleted thread's slug, and the old one when Share
   again makes a new link, are tombstoned. Keeping a slug that's still live
-  on the same row is fine. The owner key may, and other
+  on the same row is fine. A retired slug only ever that thread's (a pruned
+  row sent again, a late write) doesn't refuse the row: it goes in without
+  it, keeping the link it has if that's still good; any other is refused.
+  The owner key may use any, which un-retires it, and other
   rows with it lose it. `/s/<slug>` and its card show nothing if two rows
   have one slug (from before this).
 - **Taking a thread over.** Apart from a move (Moving a thread to another runner), threads don't change runner, but if the

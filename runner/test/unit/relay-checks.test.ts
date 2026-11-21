@@ -13,7 +13,7 @@ import { call, load, memoryBackend, outcome, RELAY } from '../helpers/convex-mem
 import { checkRegistration } from '../../../relay/convex/verify.ts';
 
 const relay = load('relay', RELAY);
-const { MAX_CHECKS_IN_FLIGHT, MAX_NEW_CHECKS_IN_FLIGHT, CHECKS_PER_DEPLOYMENT_PER_HOUR, NO_COOLDOWN_MS, NEW_CHECKS_PER_HOUR, CHECK_LEASE_MS, REGISTRATIONS_PER_DEPLOYMENT_PER_DAY, NEW_INSTALLS_PER_DAY } = relay;
+const { MAX_CHECKS_IN_FLIGHT, MAX_NEW_CHECKS_IN_FLIGHT, NO_COOLDOWN_MS, NEW_CHECKS_PER_HOUR, KNOWN_CHECKS_PER_HOUR, CHECK_LEASE_MS, REGISTRATIONS_PER_DEPLOYMENT_PER_DAY, NEW_INSTALLS_PER_DAY, NEW_INSTALL_MS } = relay;
 
 const T0 = Date.parse('2026-11-21T01:00:00Z');
 let clock = T0;
@@ -25,7 +25,7 @@ const site = (n: number | string) => `https://made-up-${n}.convex.site`;
 // Convex runs each mutation as one serializable transaction; the
 // in-memory database doesn't, so the steps here take turns.
 let turn: Promise<unknown> = Promise.resolve();
-const serial = (ctx: unknown, fn: unknown, args: Record<string, unknown>): Promise<any> => {
+const serial = (ctx: unknown, fn: unknown, args: Record<string, unknown>): ReturnType<typeof call> => {
   const next = turn.then(() => call(ctx, fn as never, args));
   turn = next.catch(() => {});
   return next;
@@ -70,7 +70,7 @@ test('a burst of made-up registrations at once: only so many call-backs go at a 
   assert.equal(await r.attempt(site('later')), 'no');
 });
 
-test("one deployment gets one call-back at a time, none for a while after a no, and so many an hour", async () => {
+test('one deployment gets one call-back at a time, and none for a while after a no', async () => {
   const b = memoryBackend(RELAY);
   const r = registrar(b.ctx);
   let release!: () => void;
@@ -82,13 +82,45 @@ test("one deployment gets one call-back at a time, none for a while after a no, 
   assert.equal(await first, 'no');
   assert.equal(await r.attempt(site('x')), 'limited', 'straight after a no');
   assert.deepEqual(r.calls, [site('x')]);
-  let made = 1;
-  for (let i = 0; i < CHECKS_PER_DEPLOYMENT_PER_HOUR * 2; i++) {
+  clock += NO_COOLDOWN_MS;
+  assert.equal(await r.attempt(site('x')), 'no');
+  assert.equal(r.calls.length, 2);
+});
+
+// Gemini's review: a per-deployment hourly cap let someone naming a real
+// backend keep it locked out for the rest of the hour after they stopped.
+test('someone naming a real backend holds it up only while they keep at it', async () => {
+  const b = memoryBackend(RELAY);
+  const r = registrar(b.ctx);
+  const real = 'https://real-backend-1.convex.site';
+  await call(b.ctx, relay.registerVerified, { deployment: real });
+  clock += NEW_INSTALL_MS;
+  // An hour of a no every cool-down.
+  for (let i = 0; i < 3_600_000 / NO_COOLDOWN_MS; i++) {
+    await r.attempt(real);
     clock += NO_COOLDOWN_MS;
-    if ((await r.attempt(site('x'))) === 'no') made++;
   }
-  assert.equal(made, CHECKS_PER_DEPLOYMENT_PER_HOUR);
-  assert.equal(r.calls.length, CHECKS_PER_DEPLOYMENT_PER_HOUR);
+  // They stop: the backend registers again straight away.
+  assert.equal(await r.attempt(real, async () => true), 'yes');
+});
+
+test("a call-back answered after its lease ran out doesn't hold off the deployment", async () => {
+  const b = memoryBackend(RELAY);
+  const r = registrar(b.ctx);
+  const slow = await call(b.ctx, relay.startCheck, { deployment: site('s') });
+  clock += CHECK_LEASE_MS;
+  assert.equal(await r.attempt(site('s'), async () => true), 'yes');
+  await call(b.ctx, relay.endCheck, { check: slow.check, vouched: false });
+  assert.equal(b.rows('checkHolds').length, 0);
+  assert.equal(b.rows('checks').length, 0);
+});
+
+test("call-backs never write /send's hourly row", async () => {
+  const b = memoryBackend(RELAY);
+  const r = registrar(b.ctx);
+  for (let n = 0; n < 5; n++) await r.attempt(site(n));
+  assert.equal(b.rows('hours').length, 0);
+  assert.equal(b.rows('checkHours')[0]!.newChecks, 5);
 });
 
 test('made-up names get only so many call-backs an hour relay-wide', async () => {
@@ -120,11 +152,12 @@ test("failed call-backs use only the relay's budget: a deployment's registration
   assert.ok(REGISTRATIONS_PER_DEPLOYMENT_PER_DAY > 1 && NEW_INSTALLS_PER_DAY > 1);
 });
 
-test("made-up names using up the hour's call-backs and slots can't stop a known backend registering again", async () => {
+test("made-up names using up the hour's call-backs and slots can't stop an established backend registering again", async () => {
   const b = memoryBackend(RELAY);
   const r = registrar(b.ctx);
   const real = 'https://real-backend-1.convex.site';
   await call(b.ctx, relay.registerVerified, { deployment: real });
+  clock += NEW_INSTALL_MS;
   for (let n = 0; n < NEW_CHECKS_PER_HOUR; n++) await r.attempt(site(n));
   assert.equal(await r.attempt(site('one-more')), 'limited');
   // And with every slot for made-up names held.
@@ -150,7 +183,8 @@ test("a call-back whose action died stops counting after its lease, and expire c
   clock += 3 * 86_400_000;
   await call(b.ctx, relay.expire, {});
   assert.equal(b.rows('checks').length, 0);
-  assert.equal(b.rows('checkedDeployments').length, 0);
+  assert.equal(b.rows('checkHolds').length, 0);
+  assert.equal(b.rows('checkHours').length, 0);
 });
 
 test("endCheck for a check that's gone does nothing", async () => {
@@ -158,4 +192,41 @@ test("endCheck for a check that's gone does nothing", async () => {
   const started = await call(b.ctx, relay.startCheck, { deployment: site('gone') });
   await call(b.ctx, relay.endCheck, { check: started.check, vouched: false });
   assert.equal(await outcome(call(b.ctx, relay.endCheck, { check: started.check, vouched: false })), 'ok');
+});
+
+// Gemini's review: an install made today counted as known, so deployments
+// someone registered could take the slots and pool kept for real backends.
+test("an install under a week old shares the made-up names' slots and pool", async () => {
+  const b = memoryBackend(RELAY);
+  const r = registrar(b.ctx);
+  const young = 'https://registered-today.convex.site';
+  await call(b.ctx, relay.registerVerified, { deployment: young });
+  for (let n = 0; n < NEW_CHECKS_PER_HOUR; n++) await r.attempt(site(n));
+  assert.equal(await r.attempt(young), 'limited');
+  const started = await call(b.ctx, relay.startCheck, { deployment: site('fresh') });
+  assert.equal(started, 'limited');
+});
+
+test('every call-back counts against the relay-wide ceiling, and established ones against their own hourly pool', async () => {
+  const b = memoryBackend(RELAY);
+  const known: string[] = [];
+  for (let n = 0; n < MAX_CHECKS_IN_FLIGHT + 1; n++) {
+    known.push(`https://known-${n}.convex.site`);
+    await call(b.ctx, relay.registerVerified, { deployment: known[n]! });
+  }
+  clock += NEW_INSTALL_MS;
+  const held = [];
+  for (let n = 0; n < MAX_CHECKS_IN_FLIGHT; n++) held.push(await call(b.ctx, relay.startCheck, { deployment: known[n]! }));
+  assert.ok(held.every((h) => typeof h === 'object'));
+  assert.equal(await call(b.ctx, relay.startCheck, { deployment: known[MAX_CHECKS_IN_FLIGHT]! }), 'limited');
+  for (const h of held) await call(b.ctx, relay.endCheck, { check: h.check, vouched: true });
+  // The hour's pool for established ones: say yes, so no hold, until it's gone.
+  let made = MAX_CHECKS_IN_FLIGHT;
+  for (let k = 0; made < KNOWN_CHECKS_PER_HOUR + 5; k++) {
+    const h = await call(b.ctx, relay.startCheck, { deployment: known[k % known.length]! });
+    if (h === 'limited') break;
+    await call(b.ctx, relay.endCheck, { check: h.check, vouched: true });
+    made++;
+  }
+  assert.equal(made, KNOWN_CHECKS_PER_HOUR);
 });

@@ -46,7 +46,7 @@ export const shareImage = v.object({
   height: v.optional(v.number()),
 });
 
-// A link is one thread's (sync.ts slugFree). Two rows with one slug, from
+// A link is one thread's (sync.ts slugState). Two rows with one slug, from
 // before that was checked, show neither rather than guess which is meant.
 async function threadBySlug(ctx: QueryCtx, slug: string): Promise<Doc<'threads'> | null> {
   if (!slug || slug.length > 100) return null;

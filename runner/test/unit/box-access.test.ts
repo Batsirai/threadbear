@@ -236,8 +236,10 @@ test("a box can't bring back its own thread's retired share link", async () => {
   const shared = (slug: string) => ({ ...THREAD_BASICS, threadId: THREAD, runnerId: BOX_RUNNER, title: 't', view: 'inbox' as const, needsYou: false, share: { access: 'link' as const, slug } });
   assert.equal(await outcome(call(s.ctx, sync.upsertThreads, { key: s.boxKey, threads: [shared('boxFirstLink1234567890')] })), 'ok');
   assert.equal(await outcome(call(s.ctx, sync.upsertThreads, { key: s.boxKey, threads: [shared('boxSecondLink123456789')] })), 'ok');
-  assert.equal(await outcome(call(s.ctx, sync.upsertThreads, { key: s.boxKey, threads: [shared('boxFirstLink1234567890')] })), 'forbidden');
+  // The row goes in, keeping its current link, not the retired one.
+  assert.equal(await outcome(call(s.ctx, sync.upsertThreads, { key: s.boxKey, threads: [shared('boxFirstLink1234567890')] })), 'ok');
   assert.equal(s.rows('threads').find((t) => t.threadId === THREAD)!.share.slug, 'boxSecondLink123456789');
+  assert.equal(await call(s.ctx, load('share').preview, { slug: 'boxFirstLink1234567890' }), null);
 });
 
 // Codex's third review: a message's turn and time are a box's to fill, and

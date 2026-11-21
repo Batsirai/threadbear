@@ -139,23 +139,28 @@ export const mayRegister = internalQuery({
 // those, so nobody can use up a real backend's allowance by naming it):
 //
 // - At most MAX_CHECKS_IN_FLIGHT at once, relay-wide, of which deployments
-//   with no install here (anyone can make up names) get at most
-//   MAX_NEW_CHECKS_IN_FLIGHT, so the rest stay for backends the relay knows.
-// - One at a time to any one deployment, none to one for NO_COOLDOWN_MS
-//   after it said no, and at most CHECKS_PER_DEPLOYMENT_PER_HOUR an hour.
+//   without an established install here (one at least NEW_INSTALL_MS old:
+//   anyone can make up names, or make deployments and register them) get
+//   at most MAX_NEW_CHECKS_IN_FLIGHT, so the rest stay for real backends
+//   registering again.
+// - One at a time to any one deployment, and none to it for NO_COOLDOWN_MS
+//   after it said no.
 // - An hour's call-backs relay-wide: NEW_CHECKS_PER_HOUR to deployments
-//   with no install, KNOWN_CHECKS_PER_HOUR to ones with one. Made-up names
-//   using up the first can't stop a known backend registering again.
+//   without an established install, KNOWN_CHECKS_PER_HOUR to ones with
+//   one. Made-up names using up the first can't stop an established
+//   backend registering again.
 //
 // Real use is far below all of these (16 Nov: at most 11 registrations a
 // day, relay-wide). What's left: someone who knows a deployment's name can
 // keep it from registering again (not from sending: a working install
-// never calls /register) for as long as they keep at it, and made-up names
-// can hold back new installs for the hour, as made-up deployments already
-// could the day's (NEW_INSTALLS_PER_DAY).
+// never calls /register) while they keep sending a no for it at least
+// every NO_COOLDOWN_MS, and no longer; and made-up names can hold back new
+// installs for the hour, as made-up deployments already could the day's
+// (NEW_INSTALLS_PER_DAY). There's no hourly cap per deployment: one would
+// keep a backend locked out for the rest of the hour after the attack
+// stopped (Gemini's review).
 export const MAX_CHECKS_IN_FLIGHT = 20;
 export const MAX_NEW_CHECKS_IN_FLIGHT = 15;
-export const CHECKS_PER_DEPLOYMENT_PER_HOUR = 20;
 export const NO_COOLDOWN_MS = 30_000;
 export const NEW_CHECKS_PER_HOUR = 600;
 export const KNOWN_CHECKS_PER_HOUR = 1_200;
@@ -171,53 +176,60 @@ export const startCheck = internalMutation({
   returns: v.union(v.object({ check: v.id('checks') }), v.literal('limited')),
   handler: async (ctx, { deployment }) => {
     const now = Date.now();
-    const hour = hourOf(now);
     const live = now - CHECK_LEASE_MS;
     if (await ctx.db.query('checks').withIndex('by_deployment', (q) => q.eq('deployment', deployment).gt('startedAt', live)).first()) return 'limited';
+    const hold = await ctx.db
+      .query('checkHolds')
+      .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
+      .unique();
+    if (hold && hold.noUntil > now) return 'limited';
+    const install = await ctx.db
+      .query('installs')
+      .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
+      .first();
+    const known = install !== null && now - install.createdAt >= NEW_INSTALL_MS;
     const going = await ctx.db
       .query('checks')
       .withIndex('by_startedAt', (q) => q.gt('startedAt', live))
       .take(MAX_CHECKS_IN_FLIGHT);
-    const known = (await ctx.db.query('installs').withIndex('by_deployment', (q) => q.eq('deployment', deployment)).first()) !== null;
     if (going.length >= MAX_CHECKS_IN_FLIGHT) return 'limited';
     if (!known && going.filter((c) => !c.known).length >= MAX_NEW_CHECKS_IN_FLIGHT) return 'limited';
-    const mine = await ctx.db
-      .query('checkedDeployments')
-      .withIndex('by_deployment', (q) => q.eq('deployment', deployment))
-      .unique();
-    if (mine && (mine.noUntil ?? 0) > now) return 'limited';
-    const count = mine?.hour === hour ? mine.count : 0;
-    if (count >= CHECKS_PER_DEPLOYMENT_PER_HOUR) return 'limited';
+    const hour = hourOf(now);
     const pool = await ctx.db
-      .query('hours')
+      .query('checkHours')
       .withIndex('by_hour', (q) => q.eq('hour', hour))
       .unique();
     const newChecks = pool?.newChecks ?? 0;
     const knownChecks = pool?.knownChecks ?? 0;
     if (known ? knownChecks >= KNOWN_CHECKS_PER_HOUR : newChecks >= NEW_CHECKS_PER_HOUR) return 'limited';
-    const counts = known ? { knownChecks: knownChecks + 1 } : { newChecks: newChecks + 1 };
-    if (pool) await ctx.db.patch(pool._id, counts);
-    else await ctx.db.insert('hours', { hour, sends: 0, newSends: 0, ...counts });
-    if (mine) await ctx.db.patch(mine._id, { hour, count: count + 1 });
-    else await ctx.db.insert('checkedDeployments', { deployment, hour, count: 1 });
+    const counts = known ? { newChecks, knownChecks: knownChecks + 1 } : { newChecks: newChecks + 1, knownChecks };
+    if (pool) await ctx.db.patch('checkHours', pool._id, counts);
+    else await ctx.db.insert('checkHours', { hour, ...counts });
     return { check: await ctx.db.insert('checks', { deployment, known, startedAt: now }) };
   },
 });
 
 // A call-back answered: it stops counting as going, and a no keeps the
 // deployment from being called back for NO_COOLDOWN_MS (a yes lifts that).
+// One answered after its lease ran out (a later call-back may have been
+// made and answered since) only stops counting.
 export const endCheck = internalMutation({
   args: { check: v.id('checks'), vouched: v.boolean() },
   returns: v.null(),
   handler: async (ctx, { check, vouched }) => {
-    const row = await ctx.db.get(check);
+    const row = await ctx.db.get('checks', check);
     if (!row) return null;
-    await ctx.db.delete(check);
-    const mine = await ctx.db
-      .query('checkedDeployments')
+    await ctx.db.delete('checks', check);
+    const now = Date.now();
+    if (row.startedAt <= now - CHECK_LEASE_MS) return null;
+    const hold = await ctx.db
+      .query('checkHolds')
       .withIndex('by_deployment', (q) => q.eq('deployment', row.deployment))
       .unique();
-    if (mine) await ctx.db.patch(mine._id, { noUntil: vouched ? undefined : Date.now() + NO_COOLDOWN_MS });
+    if (vouched) {
+      if (hold) await ctx.db.delete('checkHolds', hold._id);
+    } else if (hold) await ctx.db.patch('checkHolds', hold._id, { noUntil: now + NO_COOLDOWN_MS });
+    else await ctx.db.insert('checkHolds', { deployment: row.deployment, noUntil: now + NO_COOLDOWN_MS });
     return null;
   },
 });
@@ -385,19 +397,26 @@ export const expire = internalMutation({
       .withIndex('by_hour', (q) => q.lt('hour', hourOf(now - 2 * 86_400_000)))
       .take(EXPIRE_BATCH);
     for (const row of old) await ctx.db.delete(row._id);
-    // Call-back records (startCheck): per deployment after two days, and
-    // any left going by an action that died.
-    const checked = await ctx.db
-      .query('checkedDeployments')
+    // Call-back records (startCheck, endCheck): holds a day after they
+    // ended, hourly counts after two days, and any left going by an action
+    // that died.
+    const holds = await ctx.db
+      .query('checkHolds')
+      .withIndex('by_noUntil', (q) => q.lt('noUntil', now - 86_400_000))
+      .take(EXPIRE_BATCH);
+    for (const row of holds) await ctx.db.delete('checkHolds', row._id);
+    const checkHours = await ctx.db
+      .query('checkHours')
       .withIndex('by_hour', (q) => q.lt('hour', hourOf(now - 2 * 86_400_000)))
       .take(EXPIRE_BATCH);
-    for (const row of checked) await ctx.db.delete(row._id);
+    for (const row of checkHours) await ctx.db.delete('checkHours', row._id);
+    const checked = [...holds, ...checkHours];
     const stuck = await ctx.db
       .query('checks')
       .withIndex('by_startedAt', (q) => q.lt('startedAt', now - CHECK_LEASE_MS))
       .take(EXPIRE_BATCH);
-    for (const row of stuck) await ctx.db.delete(row._id);
-    if ([idle, gone, old, checked, stuck].some((b) => b.length === EXPIRE_BATCH)) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
+    for (const row of stuck) await ctx.db.delete('checks', row._id);
+    if ([idle, gone, old, holds, checkHours, stuck].some((b) => b.length === EXPIRE_BATCH)) await ctx.scheduler.runAfter(0, internal.relay.expire, {});
     return { installs: idle.length, removed: gone.length, hours: old.length, checks: checked.length + stuck.length };
   },
 });

@@ -60,12 +60,14 @@ http.route({
     // Over a limit already: say so without calling anyone back. The
     // call-back is charged to the relay's budget before it starts (relay.ts
     // startCheck says why).
+    // Anything thrown (the budget's writes contended past Convex's retries)
+    // is a 429, which a backend waits on and tries again (convex/push.ts).
     const checked = await checkRegistration({
       mayRegister: () => ctx.runQuery(internal.relay.mayRegister, { deployment: site }),
       startCheck: () => ctx.runMutation(internal.relay.startCheck, { deployment: site }),
       endCheck: (check, vouched) => ctx.runMutation(internal.relay.endCheck, { check, vouched }),
       vouches: () => deploymentVouches(site, nonce),
-    });
+    }).catch(() => 'limited' as const);
     if (checked === 'full') return json({ error: 'too many new installs today' }, 429);
     if (checked === 'limited') return json({ error: 'the relay is checking too many registrations; try again in a few minutes' }, 429);
     if (checked === 'no') return json({ error: "the deployment didn't confirm this registration" }, 403);
