@@ -470,4 +470,8 @@
 //    message to the thread as one line (docs/protocol/threads.md, "What Mike first
 //    asked"), for the Mac's Feed of another runner's threads. A runner sends
 //    it only to a backend of 96 or later.
-export const API_VERSION = 96;
+// 97: an owned schedule can carry `provider`, with poolId: the kind of
+//    login a pool of several kinds starts its threads on, as the Mac's
+//    picker had it. A runner sends it only to a backend of 97 or later; an
+//    older runner starts the thread on the model's kind.
+export const API_VERSION = 97;

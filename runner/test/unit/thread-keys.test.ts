@@ -392,7 +392,7 @@ for (const mode of MODES) {
       // run on: a login another runner lacks stops it quietly (OpenCode's
       // review of the 138 fix).
       for (const sc of [fullSc, checked]) {
-        for (const change of [{ model: 'haiku' }, { effort: 'low' }, { timezone: 'Pacific/Kiritimati' }, { poolId: 'nope' }, { accountId: 'nonexistent-login' }]) {
+        for (const change of [{ model: 'haiku' }, { provider: 'codex' }, { effort: 'low' }, { timezone: 'Pacific/Kiritimati' }, { poolId: 'nope' }, { accountId: 'nonexistent-login' }]) {
           await assert.rejects(c.call('schedules.update', { scheduleId: sc.id, ...change }), refused, `${sc.title}: ${JSON.stringify(change)}`);
         }
         assert.equal(scheduler.find(sc.id).accountId, 'claude-3');

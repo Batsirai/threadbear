@@ -729,7 +729,7 @@ export function buildThreadbearTools(
   const scheduleLine = async (sc: Schedule): Promise<string> => {
     const state = sc.finishedAt ? 'done' : sc.paused ? 'paused' : sc.nextRunAt ? `next ${relativeFuture(sc.nextRunAt, now())} (${sc.nextRunAt})` : 'no more runs';
     // A new-thread one says what it runs on, so a change to it shows.
-    const on = [sc.accountId, sc.poolId && `${sc.poolId} pool`, sc.model, sc.effort, sc.permissionMode && sc.permissionMode !== 'full' ? sc.permissionMode : undefined].filter(Boolean).join(', ');
+    const on = [sc.accountId, sc.poolId && `${sc.poolId} pool${sc.provider ? ` (${sc.provider})` : ''}`, sc.model, sc.effort, sc.permissionMode && sc.permissionMode !== 'full' ? sc.permissionMode : undefined].filter(Boolean).join(', ');
     const target = sc.threadId ? (sc.threadId === selfId ? 'this thread' : `thread ${sc.threadId.slice(0, 8)} ${await titleOf(sc.threadId)}`) : `a new thread in ${sc.cwd ?? 'its default folder'}${on ? ` (${on})` : ''}`;
     const last = sc.lastRun && sc.lastRun.outcome !== 'sent' ? `; last run ${sc.lastRun.outcome}: ${sc.lastRun.note ?? ''}` : '';
     const checked = sc.check ? `; check: ${sc.check.length > 80 ? sc.check.slice(0, 80) + '…' : sc.check}${sc.checkTimeoutSecs ? ` (up to ${sc.checkTimeoutSecs} s)` : ''}` : '';

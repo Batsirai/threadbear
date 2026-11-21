@@ -595,6 +595,9 @@ type Schedule = {
   poolId?: string       // or this pool picks the login each run (see
                         // Pools); never both. Neither: the folder's pool,
                         // as threads.create picks it
+  provider?: Provider   // with poolId only: the kind of login a pool of
+                        // several kinds starts it on (threads.create's
+                        // provider). Absent: the model's kind
   model?: string
   effort?: EffortLevel
   permissionMode?: "full" | "ask" | "auto" // absent: the runner's

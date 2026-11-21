@@ -1836,7 +1836,7 @@ async function dispatch(client, method, p) {
       // when it runs: kept as sent, and no folder means its default.
       const settings = away
         ? { ...(p.cwd?.trim() ? { cwd: p.cwd.trim() } : {}), accountId: p.accountId, model: p.model, effort: p.effort, permissionMode: p.permissionMode }
-        : { cwd: p.cwd ?? defaults.cwd, accountId: p.accountId ?? defaults.accountId, model: p.model, effort: p.effort, permissionMode: p.permissionMode ?? 'full' };
+        : { cwd: p.cwd ?? defaults.cwd, ...(p.poolId ? { poolId: p.poolId, ...(p.provider ? { provider: p.provider } : {}) } : { accountId: p.accountId ?? defaults.accountId }), model: p.model, effort: p.effort, permissionMode: p.permissionMode ?? 'full' };
       const schedule = {
         id: 'sc_' + crypto.randomBytes(5).toString('hex'), title: p.title || p.text.split('\n')[0].slice(0, 60), text: p.text,
         ...(p.at ? { at: new Date(p.at).toISOString() } : { cron: p.cron }), whenText: when.whenText,
@@ -1854,7 +1854,7 @@ async function dispatch(client, method, p) {
       for (const key of ['title', 'text', 'cwd', 'accountId', 'permissionMode']) if (p[key] !== undefined) schedule[key] = p[key];
       // Another runner's folder, emptied, is its default again.
       if (schedule.runnerId !== SELF_RUNNER.id && !schedule.cwd?.trim()) delete schedule.cwd;
-      for (const key of ['model', 'effort', 'timezone']) if (p[key] !== undefined) schedule[key] = p[key] ?? undefined;
+      for (const key of ['model', 'effort', 'timezone', 'provider']) if (p[key] !== undefined) schedule[key] = p[key] ?? undefined;
       if (p.at || p.cron) {
         const when = readWhen(p);
         if (p.at) { schedule.at = new Date(p.at).toISOString(); delete schedule.cron; delete schedule.finishedAt; }
@@ -2397,10 +2397,12 @@ async function dispatch(client, method, p) {
     case 'mock.thread': {
       const threadId = typeof p.id === 'string' && p.id ? p.id : crypto.randomUUID();
       const now = iso();
-      const accountId = defaults.accountId;
+      // A login and pool of its own when asked (a pool of several kinds).
+      const accountId = typeof p.accountId === 'string' ? p.accountId : defaults.accountId;
       const provider = providerOf(accountId);
       const summary = {
         id: threadId, title: p.title ?? 'A thread', cwd: p.cwd ?? defaults.cwd, accountId, provider,
+        ...(typeof p.poolId === 'string' && poolOf(p.poolId) ? { poolId: p.poolId } : {}),
         model: defaults.models[provider], effort: defaults.efforts[provider], permissionMode: 'full', status: 'idle', live: false,
         needsYou: false, createdAt: now, updatedAt: now, lastActivityAt: now, preview: '', lastSeq: 0, lastSeenSeq: 0,
       };

@@ -1037,6 +1037,9 @@ export type Schedule = {
   // A pool picks its login each run instead (docs/protocol.md, Pools).
   // Never set with accountId.
   poolId?: string;
+  // With poolId only: the kind of login a pool of several kinds starts its
+  // threads on, as the picker's heading had it (else the model's kind).
+  provider?: Provider;
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;

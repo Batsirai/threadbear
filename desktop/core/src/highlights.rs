@@ -1110,6 +1110,10 @@ pub struct Schedule {
     pub account_id: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub pool_id: Option<String>,
+    /// With `pool_id`: the kind of login its threads start on, in a pool of
+    /// several kinds.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub provider: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub model: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]

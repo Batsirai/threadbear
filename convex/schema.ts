@@ -1163,6 +1163,9 @@ export const appSchema = defineSchema({
     check: v.optional(v.string()),
     // Since API 55: how long that check may take, in seconds.
     checkTimeoutSecs: v.optional(v.number()),
+    // Since API 97: with poolId, the kind of login ("opencode") a pool of
+    // several kinds starts its threads on.
+    provider: v.optional(v.string()),
     claim: v.optional(v.object({ holder: v.string(), until: v.number() })),
     runRequestedAt: v.optional(v.string()),
     // When what a runner reads last changed (API 48), for sync:schedulesSince.

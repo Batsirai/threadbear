@@ -1028,6 +1028,18 @@ pub(crate) fn editor_automation(
         }
         return Ok(json!("ok"));
     }
+    // A model in the open editor's menu, by its title, under a kind's
+    // heading ("## Codex") when the pool has several.
+    if let Some(title) = cmd["pickModel"].as_str() {
+        let editor = app
+            .read(cx)
+            .schedule_editor
+            .clone()
+            .ok_or("no schedule editor")?;
+        return editor.update(cx, |e, cx| {
+            e.pick_model_titled(title, cmd["under"].as_str(), cx)
+        });
+    }
     match cmd["id"].as_str() {
         Some(id) => {
             if app.read(cx).schedule(id).is_none() {
@@ -1042,6 +1054,12 @@ pub(crate) fn editor_automation(
                 app.read(cx).selected.clone()
             };
             app.update(cx, |t, cx| t.new_schedule(from, window, cx));
+            // "A new thread each time" rather than this thread.
+            if cmd["sendsTo"].as_str() == Some("new") {
+                if let Some(editor) = app.read(cx).schedule_editor.clone() {
+                    editor.update(cx, |e, cx| e.send_to_new_threads(cx));
+                }
+            }
         }
     }
     Ok(json!("ok"))
