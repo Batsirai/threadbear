@@ -72,7 +72,10 @@ gpui-base = { path = "vendor/gpui-base" }
 # the transcript's bottom and stretched it the wrong way (Ian, 17 Nov).
 # And an `img` with an id steps a GIF's frames whether or not its window is
 # the key one (elements/img.rs): upstream played them only in the active
-# window, so a GIF beside another app stayed still (gpui/tests/gif_frames.rs).
+# window, so a GIF beside another app stayed still. It wakes its view when the
+# next frame is due rather than drawing at every display frame, starts its
+# clock again after a long gap, and shows a 0 ms frame for 100 ms, as browsers
+# do (gpui/tests/gif_frames.rs).
 gpui-pre = { path = "vendor/gpui-pre" }
 # gpui-pre-macos 0.3.11 as published, except that with a native view inside
 # the window holding the keyboard (a web panel's page), a key without ⌘ or

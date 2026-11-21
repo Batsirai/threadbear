@@ -846,7 +846,10 @@ impl ReviewWindow {
             this.enlarge(index, 0, cx);
         }))
         .child(
+            // With an id, so a GIF option plays here too, as it does
+            // enlarged (render_stage's picture).
             img(crate::rows::markdown::file_picture(&path))
+                .id(("review-cell-picture", index))
                 .size_full()
                 .object_fit(ObjectFit::Fill)
                 .with_fallback(move || {

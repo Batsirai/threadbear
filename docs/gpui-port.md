@@ -241,8 +241,9 @@ a gpui-kit bump copies the new version in and puts that back.
 in `desktop/Cargo.toml`. `desktop/vendor/gpui-pre` is GPUI 0.3.11 with file
 drops leaving keyboard mode before hover hit tests, so dropping after typing
 still works, and with an `img` playing a GIF whether or not its window is the
-key one (upstream froze it on its first frame in a window behind another app's;
-`desktop/gpui/tests/gif_frames.rs`). GPUI exposes no input-mode setter for an
+key one (upstream froze it on its first frame in a window behind another app's),
+woken at the GIF's own pace rather than drawn at every display frame
+(`desktop/gpui/tests/gif_frames.rs`). GPUI exposes no input-mode setter for an
 app shim. The published
 crates are separate commits from our changes; retain those patches on an
 update, or remove a patch once upstream includes it.
