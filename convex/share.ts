@@ -30,6 +30,7 @@ const message = v.object({
   toolKind: v.optional(v.string()),
   summary: v.optional(v.boolean()),
   plan: v.optional(v.boolean()), // a Plan first plan (API 72), kept out of the turn's fold
+  planDecision: v.optional(v.union(v.literal('go'), v.literal('revise'))), // what became of it (API 76)
   turn: v.optional(v.string()),
   at: v.string(),
 });
@@ -203,6 +204,7 @@ export const view = query({
         ...(m.toolKind ? { toolKind: m.toolKind } : {}),
         ...(m.summary ? { summary: true } : {}),
         ...(m.plan ? { plan: true } : {}),
+        ...(m.plan && m.planDecision ? { planDecision: m.planDecision } : {}),
         ...(m.turn ? { turn: m.turn } : {}),
         at: m.at,
       });

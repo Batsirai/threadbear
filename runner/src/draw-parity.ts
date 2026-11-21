@@ -61,7 +61,7 @@ export const DRAWN: Record<string, DrawRow> = {
   'row.background': { what: 'Background jobs still going', ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'working', android: 'working' } },
   'row.changes': { what: 'Changed files card', ios: NOT_YET, android: NOT_YET, web: NOT_YET },
   'row.gap': { what: '"6 min later" divider before a woken turn', ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'wokeBy', android: 'wokeBy' } },
-  'row.planCard': { what: 'Plan first card, waiting for approval', ios: 'yes', android: 'yes', web: NOT_YET, sign: { ios: 'PlanCard', android: 'PlanCard' } },
+  'row.planCard': { what: 'Plan first card, waiting for approval', ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'PlanCard', android: 'PlanCard', web: 'PlanCard' } },
   'row.labReview': { what: "Another lab's review of the turn", ios: 'yes', android: NOT_YET, web: 'yes', sign: { ios: 'ReviewRow', web: 'ReviewRow' } },
   'origin.phone': { what: 'Mark on a message sent from the phone', ios: 'yes', android: 'yes', web: { no: 'The website sends as the phone, so the mark would be on the user\'s own messages.' }, sign: { ios: 'PhoneMark', android: 'PhoneMark' } },
   'origin.runner': { what: "The runner's own message, as a quiet line", ios: 'yes', android: 'yes', web: 'yes', sign: { ios: 'originText' } },

@@ -70,11 +70,11 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | Card of asks under a finished turn | `row.asks` | Yes | Yes | Yes |
 | A turn's work folded into one line | `row.group` | Yes | Yes | Yes |
 | Working indicator | `row.working` | Yes | Yes | Yes |
+| Plan first card, waiting for approval | `row.planCard` | Yes | Yes | Yes |
 | System note | `row.note` | Yes | No: Not drawn yet. | Yes |
 | A failed turn's error | `row.error` | Yes | No: Not drawn yet. | Yes |
 | Background jobs still going | `row.background` | Yes | Yes | No: Not drawn yet. |
 | "6 min later" divider before a woken turn | `row.gap` | Yes | Yes | No: Not drawn yet. |
-| Plan first card, waiting for approval | `row.planCard` | Yes | Yes | No: Not drawn yet. |
 | Another lab's review of the turn | `row.labReview` | Yes | No: Not drawn yet. | Yes |
 | Thinking | `row.reasoning` | No: Not drawn yet. | No: Not drawn yet. | Yes |
 | An edit's diff | `row.diff` | No: Not drawn yet. | No: Not drawn yet. | Yes |
