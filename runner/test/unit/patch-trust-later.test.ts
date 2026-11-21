@@ -862,7 +862,6 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
     'cp payload.dat "${UNSET_VAR}run.sh"; sh run.sh',
     'cat payload.dat > "${UNSET_VAR:+ignored}run.sh"; sh run.sh',
     'cp payload.dat ${UNSET_VAR:-"run.sh"}; sh run.sh',
-    'true; cp payload.dat "run$?.sh"; sh run0.sh',
     "env 'X=1' cp payload.dat run.sh; sh run.sh",
     'cp payload.dat /tmp/tb-153-x.sh; . /tmp/tb-153-x.sh',
     'cp payload.dat foo.mk; make -f foo.mk',
@@ -888,6 +887,13 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
     'tee run.{s"h",bak} < payload.dat >/dev/null; sh run.sh',
     'unzip -oq -dout payload.zip; sh run.sh',
     'cat payload.dat > alias.dat; sh run.sh',
+    // Grok's review.
+    'set -e; cp payload.dat "$1run.sh"; sh run.sh',
+    "prefix=safe; sh -c 'cp payload.dat \"${prefix}run.sh\"'; sh run.sh",
+    "export prefix=safe; env -u prefix sh -c 'cp payload.dat \"${prefix}run.sh\"'; sh run.sh",
+    "sed -n '1,$w run.sh' payload.dat; sh run.sh",
+    "sed 's|.*|&|w run.sh' payload.dat; sh run.sh",
+    "eval :; sh -c 'cp payload.dat run.sh'; sh run.sh",
   ];
   const dir = repo({ ...files, 'payload-dir/env.sh': 'X=2\n', 'target.txt': 'run.sh\n', 'writer.sh': 'cat payload.dat > "$1"\n' });
   // A link made before the check: the same file by another name.
@@ -898,6 +904,15 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
     assert.match(checkDigest(check, dir).problem ?? '', /writes/, check);
     assert.match(checkReach(check, dir).problem ?? '', /writes/, `${check}: edits ask too`);
   }
+  // $? could be any status, so a path with it is anywhere.
+  assert.ok(checkDigest('false; cp payload.dat "run$?.sh"; sh run.sh', dir).problem);
+  // After a step it can't follow, a copy that's then run is still beyond an owner's approval.
+  assert.ok(checkDigest("eval :; sh -c 'cp payload.dat run.sh'; sh run.sh", dir).writes);
+  // A copy into a folder a variable names (another shell's), then run there.
+  const tmp = fs.realpathSync(tmpDir());
+  assert.match(checkDigest(`export dest=${tmp}; sh -c 'cp payload.dat "$dest"'; sh ${tmp}/payload.dat`, dir).problem ?? '', /writes/);
+  // node --import by a file: URL as Node decodes it.
+  assert.match(checkDigest(`cp payload.dat ${tmp}/payload.mjs; node --import file://${tmp}/pay%6coad.mjs run.js`, repo({ ...files, 'run.js': '1;\n' })).problem ?? '', /writes/);
   // awk's program from a file, run on: refused as one it can't follow.
   assert.match(checkDigest('awk -fpayload.dat /dev/null', dir).problem ?? '', /awk program from a file/);
   // The finding's attack, played: a payload-only change after approval.
@@ -931,6 +946,7 @@ test('schedule check: writing files it never runs stays followable: state files,
     "awk 'NR > 1 && /^#/ { sub(/^# ?/, \"\"); print; next } NR > 1 { exit }' notes.txt; ./run.sh",
     'tar -cf out.tar extra; tar -tzf index.tgz; ./run.sh',
     'export OUT=state.txt; sh writer.sh; ./run.sh',
+    "sed -i '' \"s/old/$(date +%F)/\" state.txt; ./run.sh",
   ]) assert.equal(checkDigest(check, dir).problem, undefined, check);
   // A variable the check sets is an outside script's to write to too.
   fs.chmodSync(path.join(dir, 'payload.dat'), 0o644);

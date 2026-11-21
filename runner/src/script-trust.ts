@@ -36,6 +36,7 @@ import { IS_WINDOWS, realPathSync, slashes } from './platform.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isBuiltin } from 'node:module';
 import { bareImport, inNodeModules, linkedPackages, packageFiles } from './tracked-packages.ts';
 
@@ -64,7 +65,10 @@ export type Tpl = (string | { v: string; alt?: string })[];
 // `values`: what it was set to where that was known; `forms`: the words it
 // was set to where it wasn't.
 export type Deps = { direct: boolean; names: string[]; values?: string[]; forms?: Tpl[] };
-export type Pending = { where: string; direct: boolean; names: string[]; tpl: Tpl; dirs: string[]; flag?: boolean };
+// `into`: a copy's target, which may be a folder it writes into.
+// `srcs`: the names of what's copied there, when known: into a folder,
+// that's what's written.
+export type Pending = { where: string; direct: boolean; names: string[]; tpl: Tpl; dirs: string[]; flag?: boolean; into?: boolean; srcs?: string[] };
 export type Writes = { written: [string, string][]; somewhere?: string; reached: string[]; pending?: Pending[]; deps?: [string, Deps][]; assignsAny?: boolean };
 
 // The most of one file patch trust reads (a patch, a helper, a script, a
@@ -319,6 +323,7 @@ const WRITERS = new Set(['cp', 'gcp', 'mv', 'gmv', 'install', 'ginstall', 'rsync
 const ARCHIVERS = new Set(['tar', 'gtar', 'bsdtar', 'gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'brotli']);
 // Wrappers writesOnly steps past to the command they run.
 const WRAPPER_NAMES = new Set(['env', 'exec', 'command', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'gtimeout', 'taskpolicy', 'caffeinate', 'stdbuf', 'xargs', 'sudo', 'doas', 'chronic', 'unbuffer', 'noglob', 'nocorrect', 'ionice', 'arch', 'flock']);
+const RSYNC_VALUED = /^(-e|-T|-f|--rsh|--exclude|--include|--filter|--exclude-from|--include-from|--files-from|--log-file|--log-file-format|--password-file|--temp-dir|--partial-dir|--backup-dir|--suffix|--compare-dest|--copy-dest|--link-dest|--chmod|--chown|--usermap|--groupmap|--rsync-path|--out-format|--max-size|--min-size|--timeout|--contimeout|--bwlimit|--port|--sockopts|--iconv|--checksum-choice|--compress-choice|--skip-compress)$/;
 // Programs whose last operand (or -t folder) is what they write.
 const COPIERS = new Set(['cp', 'gcp', 'mv', 'gmv', 'install', 'ginstall', 'rsync', 'ditto', 'scp']);
 // git commands that write the working tree from what git holds or fetches.
@@ -849,6 +854,7 @@ class Reach {
   private pendingWrites: Pending[] = [];
   // Functions any script followed defines, for what they're handed.
   private definedFns = new Set<string>();
+  private writesDepth = 0;
   private deps = new Map<string, Deps>();
   private assignsAny = false;
   private home: string;
@@ -1628,7 +1634,13 @@ class Reach {
     const name = headVals[0]!;
     if (name !== '[' && name !== '[[' && head.parts.some((p) => p.k === 'lit' && !p.q && /[*?[{]/.test(p.s))) return this.fail(ctx, line, `runs a command named by a pattern (\`${shown}\`), which patch trust can't follow.`);
     const args = words.slice(1);
-    if (this.functions.has(name) || this.definedFns.has(name) || name === 'set') this.handed(args, [ctx.file], ctx);
+    if (this.functions.has(name) || this.definedFns.has(name)) this.handed(args, [ctx.file], ctx);
+    else if (name === 'set') {
+      // Its options aren't positionals: what follows `--`, or the first word
+      // that isn't one (`set -e` sets none; Grok's review).
+      const at = args.findIndex((w) => { const v = litOf(w); return v === '--' || v === undefined || !/^[-+]/.test(v); });
+      if (at >= 0) this.handed(args.slice(litOf(args[at]!) === '--' ? at + 1 : at), [ctx.file], ctx);
+    }
     else if (name.includes('/')) this.handed(args, this.abs(name, ctx) ?? [], ctx);
     else if (SHELLS.includes(programName(path.basename(name))) || name === 'source' || name === '.') {
       // The script is one of its words; each is handed the rest.
@@ -1863,7 +1875,8 @@ class Reach {
     for (const p of w.parts) {
       if (p.k === 'lit') out.push(p.s);
       else if (p.k !== 'var') return undefined;
-      else if (p.name === '?') out.push('0');
+      // $? is whatever the last command gave, so a path with it is anywhere.
+      else if (p.name === '?') return undefined;
       else if (/^[$!-]$/.test(p.name)) out.push('');
       else {
         const v = this.depName(p.name.replace(/\[.*$/s, ''), ctx);
@@ -1889,7 +1902,7 @@ class Reach {
 
   // A write to the path a word names (`vals`, its values, when known).
   // `flag`: the word may be an option rather than the path.
-  private wrote(vals: string[] | undefined, w: Word | undefined, ctx: Ctx, line: number, flag = false): void {
+  private wrote(vals: string[] | undefined, w: Word | undefined, ctx: Ctx, line: number, flag = false, into = false, srcs?: string[]): void {
     const where = `${ctx.label}${line ? ` line ${line}` : ''}`;
     // `> run.?h`, `$dest` holding `run.?h`: the shell makes it the file that
     // matches (Codex's reviews).
@@ -1903,7 +1916,7 @@ class Reach {
         this.writesSomewhere ??= where;
         return;
       }
-      this.pendingWrites.push({ where, direct: false, names: t.flatMap((p) => (typeof p === 'string' ? [] : [p.v])), tpl: t, dirs: [...ctx.dirs], ...(flag ? { flag } : {}) });
+      this.pendingWrites.push({ where, direct: false, names: t.flatMap((p) => (typeof p === 'string' ? [] : [p.v])), tpl: t, dirs: [...ctx.dirs], ...(flag ? { flag } : {}), ...(into ? { into } : {}), ...(srcs ? { srcs } : {}) });
       return;
     }
     for (const v of vals) {
@@ -1932,7 +1945,45 @@ class Reach {
     while (i < words.length && WRAPPER_NAMES.has(programName(path.basename(this.str(words[i]!, ctx) ?? '')))) i++;
     const name = words[i] && this.str(words[i]!, ctx);
     if (name === undefined) return void (words.length > i && (this.writesSomewhere ??= `${ctx.label} line ${cmd.line}`));
-    this.writesOf(programName(path.basename(name)), words.slice(i + 1), ctx, cmd.line, i > 0);
+    const prog = programName(path.basename(name));
+    const args = words.slice(i + 1);
+    this.writesOf(prog, args, ctx, cmd.line, i > 0);
+    // What it runs in turn: `sh -c '...'`, a script, a sourced file,
+    // `find -exec`, read for writes the same way (Grok's review).
+    if (this.writesDepth >= 8) return void (this.writesSomewhere ??= `${ctx.label} line ${cmd.line}`);
+    this.writesDepth++;
+    try {
+      const c = args.findIndex((w) => litOf(w) === '-c');
+      if (SHELLS.includes(prog) && c >= 0) {
+        const code = args[c + 1] && litOf(args[c + 1]!);
+        if (code === undefined) this.writesSomewhere ??= `${ctx.label} line ${cmd.line}`;
+        else this.writesOnlyText(code, ctx);
+      } else if (prog === 'find') {
+        const at = args.findIndex((w) => /^-(exec|ok|execdir|okdir)$/.test(litOf(w) ?? ''));
+        if (at >= 0) this.writesOnly({ words: args.slice(at + 1).filter((w) => !/^[;+]$/.test(litOf(w) ?? '')), redirs: [], line: cmd.line, arrays: [] }, ctx);
+      } else {
+        // A script by path, by a shell, or sourced: its text, if it's there.
+        const file = name.includes('/') ? name : SHELLS.includes(prog) || prog === 'source' || prog === '.' ? args.map((w) => this.str(w, ctx)).find((v) => v !== undefined && !v.startsWith('-')) : undefined;
+        for (const f of file ? this.abs(file, ctx) ?? [] : []) {
+          this.reached.add(f);
+          const text = isFile(f) && this.inRepo(f) ? this.text(f) : undefined;
+          if (text !== undefined && text.length <= MAX_CONFIG_BYTES) this.writesOnlyText(text, { ...ctx, file: f, label: this.rel(f), vars: new Map() });
+        }
+      }
+    } finally {
+      this.writesDepth--;
+    }
+  }
+
+  private writesOnlyText(text: string, ctx: Ctx): void {
+    let cmds: Simple[];
+    try {
+      cmds = simpleCommands(new Lexer(text, 1).run().toks);
+    } catch {
+      this.writesSomewhere ??= ctx.label;
+      return;
+    }
+    for (const c of cmds) this.writesOnly(c, ctx);
   }
 
   // What a program writes by its arguments, for the common ones that copy,
@@ -1945,6 +1996,11 @@ class Reach {
       this.writesSomewhere ??= `${ctx.label}${line ? ` line ${line}` : ''} (${name})`;
     };
     const to = (w: Word | undefined) => this.wrote(w ? this.values(w, ctx) : undefined, w, ctx, line);
+    const into = (w: Word | undefined, srcs?: string[]) => {
+      // rsync's and scp's `host:path` is another machine's.
+      if (w && /^[^/]*:/.test(lit(w) ?? '') ) return;
+      this.wrote(w ? this.values(w, ctx) : undefined, w, ctx, line, false, true, srcs);
+    };
     // A word's values with a prefix (`of=`) taken off.
     const after = (w: Word, prefix: string) => {
       const v = this.values(w, ctx);
@@ -1958,7 +2014,8 @@ class Reach {
     // An argument worked out as it runs may be the file, or a flag that
     // writes one (`-o"$f"`, `tar "$f"`): settled like a write to it, so the
     // runner's own variables pass and anything the repo can steer doesn't.
-    if (writer) for (const w of args) if (!this.values(w, ctx)) this.wrote(undefined, w, ctx, line, true);
+    // (sed's own program, worked out or not, is no file: its branch below.)
+    if (writer && name !== 'sed' && name !== 'gsed') for (const w of args) if (!this.values(w, ctx)) this.wrote(undefined, w, ctx, line, true);
     const operands = () => {
       const out: Word[] = [];
       let opts = true;
@@ -1991,13 +2048,14 @@ class Reach {
     if (COPIERS.has(name)) {
       const target = args.findIndex((w) => /^(-t|--target-directory)$/.test(lit(w) ?? ''));
       const joined = args.find((w) => /^--target-directory=/.test(lit(w) ?? ''));
-      if (target >= 0) return to(args[target + 1]);
+      if (target >= 0) return into(args[target + 1]);
       if (joined) return after(joined, '--target-directory=');
       if (extra) return somewhere();
-      const ops = operands();
-      // rsync takes options after its operands too, so any may be the target.
-      if (name === 'rsync') return void ops.slice(1).forEach(to);
-      if (ops.length >= 2) return to(ops.at(-1));
+      // rsync's options that take the next word, wherever they are.
+      const ops = name === 'rsync' ? args.filter((w, i) => !(lit(w) ?? '').startsWith('-') && !RSYNC_VALUED.test(lit(args[i - 1]!) ?? '')) : operands();
+      const srcs = ops.slice(0, -1).map((w) => this.values(w, ctx));
+      const names = srcs.every((v) => v && v.length === 1) ? srcs.map((v) => path.basename(v![0]!.replace(/\/+$/, ''))) : undefined;
+      if (ops.length >= 2) return into(ops.at(-1), names);
       return;
     }
     if (name === 'tee') return void operands().forEach(to);
@@ -2012,10 +2070,17 @@ class Reach {
     if (name === 'sed' || name === 'gsed') {
       if (args.some((w) => /^-[A-Za-z]*f|^--file/.test(lit(w) ?? ''))) return this.fail(ctx, line, "runs a sed program from a file, which can write files or run commands, so patch trust doesn't follow it.");
       // `w file`, `s/a/b/w file`: a file the program names (and `e` runs one).
-      if (args.some((w) => /(^|[;}\n])\s*[wWe]\b|\/[gpiIme0-9]*[we]\s/.test(lit(w) ?? ''))) return somewhere();
+      // After an address or any delimiter (`1,$w f`, `s|a|b|w f`), so any w,
+      // W or e that isn't inside a word (Grok's review).
+      if (args.some((w) => /(^|[^A-Za-z])[wWe](\s|;|$)/.test(lit(w) ?? ''))) return somewhere();
       const inPlace = args.find((w) => /^-[A-Za-z]*i|^--in-place/.test(lit(w) ?? ''));
       if (!inPlace) return;
-      const ops = operands();
+      // The files: past the program, unless -e gave it.
+      const all = operands();
+      // BSD's `-i ''` and `-i .bak` give a suffix as the next word.
+      if (lit(inPlace) === '-i' && args[args.indexOf(inPlace) + 1] === all[0] && /^(|\..*)$/.test(lit(all[0]) ?? 'x')) all.shift();
+      const ops = args.some((w) => /^-[A-Za-z]*e$|^--expression/.test(lit(w) ?? '')) ? all : all.slice(1);
+      for (const o of ops) if (!this.values(o, ctx)) this.wrote(undefined, o, ctx, line, true);
       ops.forEach(to);
       // A backup beside each: `-i.bak`, BSD's `-i .bak` (its next word).
       const flag = lit(inPlace) ?? '';
@@ -2393,7 +2458,18 @@ class Reach {
       if (load) {
         const v = load[2] ?? this.str(args[++i], ctx);
         if (v === undefined) return this.fail(ctx, line, `runs ${name} loading a module worked out as it runs, which patch trust can't follow.`);
-        if (/^\.{0,2}\//.test(v) || v.startsWith('file:')) this.runFile(v.replace(/^file:\/\//, ''), ctx, line);
+        if (/^\.{0,2}\//.test(v)) this.runFile(v, ctx, line);
+        // A file: URL as Node reads it (`%6c`, `file://localhost/`, `?q`),
+        // or not at all (Grok's review).
+        else if (/^file:/i.test(v)) {
+          let file: string;
+          try {
+            file = fileURLToPath(v);
+          } catch {
+            return this.fail(ctx, line, `runs ${name} loading ${v.slice(0, 40)}, a file: URL patch trust can't read.`);
+          }
+          this.runFile(file, ctx, line);
+        }
         // As a module's own import of them is refused (scanModule): a `#`
         // maps through package.json to a file this doesn't follow, and a
         // URL's code isn't a file at all.
@@ -3201,7 +3277,9 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
   const valuesOf = (n: string, depth: number): string[] => {
     const d = deps.get(n);
     if (!d || depth > 6) return [''];
-    return [...(d.values ?? []), ...(d.forms ?? []).flatMap((f) => expand(f, depth + 1))].slice(0, 32);
+    // Empty too: a shell it starts doesn't have a variable it didn't
+    // export, `env -u` takes one away, `shift` empties a positional.
+    return ['', ...(d.values ?? []), ...(d.forms ?? []).flatMap((f) => expand(f, depth + 1))].slice(0, 32);
   };
   const expand = (t: Tpl, depth: number): string[] => {
     let outs = [''];
@@ -3223,7 +3301,16 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
       if (/[*?[]/.test(v) || (p.flag && v.startsWith('-'))) somewhere ??= p.where;
       // A folder can't be written over by a redirect or a file's write, and
       // one is what a variable left empty makes of `"$dest"`.
-      else for (const d of path.isAbsolute(v) ? [''] : p.dirs) if (!isDir(path.resolve(d, v))) written.push([path.resolve(d, v), p.where]);
+      else {
+        for (const d of path.isAbsolute(v) ? [''] : p.dirs) {
+          const at = path.resolve(d, v);
+          // A copy into a folder writes what's copied, by name, in it; one
+          // whose names aren't known could write anything there.
+          if (!isDir(at)) written.push([at, p.where]);
+          else if (p.into && p.srcs) for (const n of p.srcs) written.push([path.join(at, n), p.where]);
+          else if (p.into) somewhere ??= p.where;
+        }
+      }
     }
   }
   if (!written.length && !somewhere) return undefined;
