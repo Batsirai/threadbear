@@ -16,6 +16,7 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <IOKit/pwr_mgt/IOPMLib.h>
 
 @interface CGVirtualDisplayDescriptor : NSObject
 @property(retain, nonatomic) dispatch_queue_t queue;
@@ -98,10 +99,34 @@ int main(int argc, char **argv) {
     CGVirtualDisplaySettings *settings = [S new];
     settings.hiDPI = 1;
     settings.modes = @[ [[M alloc] initWithWidth:w height:h refreshRate:60] ];
-    if (!display || ![display applySettings:settings]) {
-      say(@"error: couldn't make the virtual display");
+    // A host whose screen has gone to sleep refuses the new display's
+    // settings (21 Nov: a retake straight after a stop failed twice on Tinker
+    // Desk until `caffeinate -u` woke its screen). So wake it first as a key
+    // press would, with the "UserIsActive" assertion `caffeinate -u` makes
+    // (IOPMAssertionDeclareUserActivity didn't always wake it), keep it awake
+    // while the stage is up, and try again for a while if it still says no.
+    // CGDisplayIsAsleep can't tell: it said awake there with the screen off.
+    IOPMAssertionID awake = 0, active = 0;
+    IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep, kIOPMAssertionLevelOn,
+                                CFSTR("Threadbear filming stage"), &awake);
+    NSDate *began = [NSDate date];
+    int tries = 0;
+    BOOL made = NO;
+    while (display && !made && -began.timeIntervalSinceNow < 20) {
+      if (active) IOPMAssertionRelease(active);
+      active = 0;
+      IOPMAssertionCreateWithName(CFSTR("UserIsActive"), kIOPMAssertionLevelOn, CFSTR("Threadbear filming stage"), &active);
+      made = [display applySettings:settings];
+      tries++;
+      if (!made) [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+    }
+    if (!made) {
+      say(@"error: couldn't make the virtual display, even after waking the screen and trying for 20 seconds");
       return 1;
     }
+    if (tries > 1)
+      say([NSString stringWithFormat:@"made the display on try %d, %.1f seconds after waking the screen", tries,
+                                     -began.timeIntervalSinceNow]);
     CGDirectDisplayID id_ = display.displayID;
 
     // The window, once the app has one and the display has its mode.
