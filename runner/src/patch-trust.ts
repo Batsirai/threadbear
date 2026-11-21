@@ -57,7 +57,7 @@ import { parseSync } from 'oxc-parser';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { claudeCommands, claudeCommandsKinds, type ClaudeCommands, type ClaudeOptions } from './claude-trust.ts';
 import type { Lane, TrustOffThread } from './trust-off-thread.ts';
-import { isBinary, looksRunnable, MAX_READ_BYTES, reachOf, reachOfCommand, Reads, type FollowOptions, type ScriptReach } from './script-trust.ts';
+import { isBinary, looksRunnable, MAX_READ_BYTES, reachOf, reachOfCommand, Reads, type FollowOptions, type ScriptReach, type Writes, writeProblem } from './script-trust.ts';
 import { bareImport } from './tracked-packages.ts';
 import { fileShas, TrustedVersions, versionKey, type FileShas, type PatchChanges } from './patch-changes.ts';
 import { allowCommand } from './shell-allowlist.ts';
@@ -1148,7 +1148,7 @@ export function scanModule(src: string, file: string): ModuleScan {
       }
       case 'Identifier':
         if (handled.has(node) || !isReference(parent, key)) break;
-        if (LOADER_NAMES.includes(node.name)) refuse(node);
+        if (LOADER_NAMES.includes(node.name) || CODE_REACH.includes(node.name)) refuse(node);
         break;
       case 'MemberExpression': {
         const name = propertyName(node);
@@ -1156,8 +1156,27 @@ export function scanModule(src: string, file: string): ModuleScan {
           // `process[k]`: any property, so any loader, by a name worked out later.
           const o = node.object;
           if (o.type === 'MetaProperty' || (o.type === 'Identifier' && RISKY_OBJECTS.includes(o.name))) refuse(node);
-        } else if (!handled.has(node) && LOADER_PROPERTIES.includes(name)) refuse(node);
+        } else if (!handled.has(node) && (LOADER_PROPERTIES.includes(name) || CODE_REACH.includes(name))) refuse(node);
         break;
+      }
+      // `const { eval: run } = globalThis`, `{ constructor: F } = f`: a
+      // pattern's key reads that property, though it isn't a reference
+      // (Daybreak 154). A worked-out key could read any of them.
+      case 'Property':
+        if (parent?.type === 'ObjectPattern') {
+          const name = propertyKey(node);
+          if (name === undefined ? plainString(node.key) === undefined : LOADER_PROPERTIES.includes(name) || CODE_REACH.includes(name) || LOADER_NAMES.includes(name)) refuse(node);
+        }
+        break;
+    }
+    // `Reflect.get(f, 'constructor')`, `Object.entries(...)`: a string that's
+    // exactly such a name, handed to what reads a property by one, reaches
+    // it without writing it as one (`globalThis['eval']` is a member above).
+    // Not any such string: `case 'eval':` in a CLI's switch reads nothing.
+    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.object.type === 'Identifier' && (node.callee.object.name === 'Reflect' || node.callee.object.name === 'Object')) {
+      for (const arg of node.arguments) {
+        const named = plainString(arg);
+        if (named !== undefined && (CODE_REACH.includes(named) || LOADER_NAMES.includes(named) || LOADER_PROPERTIES.includes(named))) refuse(arg);
       }
     }
     for (const k of Object.keys(node)) {
@@ -1184,8 +1203,31 @@ type AstNode = { type: string; start: number; end: number; [field: string]: any 
 // Names that load code, or hand out something that can, when used as values.
 const LOADER_NAMES = ['require', 'eval', 'Function', 'createRequire', 'getBuiltinModule', 'dlopen'];
 const LOADER_PROPERTIES = ['require', 'createRequire', 'getBuiltinModule', 'dlopen', '_load'];
-// Modules that load code by a name or from a string.
-const LOADER_MODULES = ['module', 'node:module', 'vm', 'node:vm', 'worker_threads', 'node:worker_threads'];
+// What reaches code made from a string or bytes without a loader's name
+// (Daybreak 154, 21 Nov 2026): `eval` and `Function` as properties
+// (`globalThis.eval`), any function's `constructor` (`(() => {}).constructor`
+// is Function, an async one's AsyncFunction), what lists a prototype's
+// hidden properties with their values (`getOwnPropertyDescriptors` hands
+// out `constructor` without naming it), and WebAssembly, which compiles
+// bytes. Not `getPrototypeOf`, everyday code that reaches nothing by
+// itself: from a prototype it's still one of these. As a name, a
+// property, a string or a pattern's key, all refused: a script whose
+// payload is data until it evaluates it isn't one the hash can vouch for.
+// Not a class's own `constructor() {}` or an object literal's key, which
+// define rather than read. What can't be refused by a scan is a script
+// written to hide it (`o[a][b](c)` with keys worked out as it runs), and a
+// child process running whatever it's handed, which a patch's commands do
+// by design: the card that trusts it is what reads for those.
+const CODE_REACH = [
+  'eval', 'Function', 'constructor', 'AsyncFunction', 'GeneratorFunction', 'AsyncGeneratorFunction',
+  'getOwnPropertyDescriptor', 'getOwnPropertyDescriptors', '__lookupGetter__', 'WebAssembly',
+];
+// Modules that load code by a name or from a string: the module system, vm,
+// workers, and inspector and repl, which evaluate what they're sent.
+const LOADER_MODULES = [
+  'module', 'node:module', 'vm', 'node:vm', 'worker_threads', 'node:worker_threads', 'inspector', 'node:inspector',
+  'inspector/promises', 'node:inspector/promises', 'repl', 'node:repl',
+];
 // Objects a computed `[k]` on could reach a loader through.
 const RISKY_OBJECTS = ['globalThis', 'global', 'process', 'module', 'require', 'self', 'window'];
 // TypeScript types: gone before the code runs, so nothing in them loads.
@@ -1361,7 +1403,15 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
   const seen = new Set<string>();
   const queue: { file: string; dir: string }[] = [];
   let problem: string | undefined;
+  // Each reach's writes, held against all of their runs at the end: a
+  // script outside the repo that writes one the check runs (Daybreak 153).
+  const writes: Writes = { written: [], reached: [] };
   const take = (reach: ScriptReach) => {
+    if (reach.writes) {
+      writes.written.push(...reach.writes.written);
+      writes.reached.push(...reach.writes.reached);
+      writes.somewhere ??= reach.writes.somewhere;
+    }
     for (const f of reach.files) files.add(f);
     for (const f of reach.missing) missing.add(f);
     for (const { file, dirs } of reach.outside ?? []) for (const dir of dirs) queue.push({ file, dir });
@@ -1382,6 +1432,7 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
     // folder it runs in: its `./x` is there, not beside it.
     take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true }));
   }
+  problem ??= writeProblem(writes, start.top);
   return { files, missing, ...(problem ? { problem } : {}) };
 }
 

