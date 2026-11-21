@@ -180,7 +180,9 @@ case "$cmd" in
     fi
     pid="$(there "cat \"\$(find \"\$TMPDIR\" -path '*/film/app.json' 2>/dev/null | head -1)\"" | sed -E 's/.*"app":([0-9]+).*/\1/')"
     [[ "$pid" =~ ^[0-9]+$ ]] || { there "touch $base/stage.stop"; die "couldn't find the app's pid"; }
-    there "echo $pid > $base/go; for i in \$(seq 1 150); do [ -f $base/stage.json ] && break; grep -q '^error' $base/stage.log && break; sleep 0.2; done; cat $base/stage.log"
+    # Long enough for all the stage's own waits (making the display 20s, the
+    # window on it 30s, moving it 10s), as an error line ends it at once.
+    there "echo $pid > $base/go; for i in \$(seq 1 375); do [ -f $base/stage.json ] && break; grep -q '^error' $base/stage.log && break; sleep 0.2; done; cat $base/stage.log"
     if ! there "[ -f $base/stage.json ]"; then
       there "desktop/scripts/dev-app.sh stop --id film >/dev/null 2>&1; touch $base/stage.stop"
       # Its own words, in the message itself: on 19 Nov all that showed was
