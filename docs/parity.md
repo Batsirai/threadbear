@@ -66,16 +66,16 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | A tool line | `row.tool` | Yes | Yes | Yes |
 | Permission card | `row.approval` | Yes | Yes | Yes |
 | The agent's question card | `row.question` | Yes | Yes | Yes |
+| System note | `row.note` | Yes | Yes | Yes |
 | Secret request card | `row.secret` | Yes | Yes | Yes |
 | Card of asks under a finished turn | `row.asks` | Yes | Yes | Yes |
 | A turn's work folded into one line | `row.group` | Yes | Yes | Yes |
 | Working indicator | `row.working` | Yes | Yes | Yes |
 | Plan first card, waiting for approval | `row.planCard` | Yes | Yes | Yes |
-| System note | `row.note` | Yes | No: Not drawn yet. | Yes |
+| Another lab's review of the turn | `row.labReview` | Yes | Yes | Yes |
 | A failed turn's error | `row.error` | Yes | No: Not drawn yet. | Yes |
 | Background jobs still going | `row.background` | Yes | Yes | No: Not drawn yet. |
 | "6 min later" divider before a woken turn | `row.gap` | Yes | Yes | No: Not drawn yet. |
-| Another lab's review of the turn | `row.labReview` | Yes | No: Not drawn yet. | Yes |
 | Thinking | `row.reasoning` | No: Not drawn yet. | No: Not drawn yet. | Yes |
 | An edit's diff | `row.diff` | No: Not drawn yet. | No: Not drawn yet. | Yes |
 | A tool's pictures | `row.images` | No: Not drawn yet. | No: Not drawn yet. | Yes |
@@ -130,9 +130,9 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | Needs you or done | `turn.needs` | Yes | Yes | Yes |
 | Needs-you card | `turn.asks` | Yes | Yes | Yes |
 | Done card's follow-ups | `turn.next` | Yes | Yes | Yes |
+| Another lab's review ledger | `turn.review` | Yes | Yes | Yes |
+| Done card's loose ends | `turn.looseEnds` | Yes | Yes | Yes |
 | What it cost | `turn.costUsd` | Yes | No: Not drawn yet. | Yes |
-| Another lab's review ledger | `turn.review` | Yes | No: Not drawn yet. | Yes |
-| Done card's loose ends | `turn.looseEnds` | Yes | No: Not drawn yet. | Yes |
 | Completed, stopped or failed | `turn.outcome` | No: Not drawn yet. | Yes | No: Not drawn yet. |
 | Fix for a known failure (usage limit, context, sign-in, network) | `turn.errorKind` | No: Not drawn yet. | Yes | No: Not drawn yet. |
 | A failed turn's error | `turn.error` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
