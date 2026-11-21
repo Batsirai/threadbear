@@ -75,7 +75,10 @@ stage=$(mktemp -d)
 git -C "$ROOT" archive "$main" | tar -x -C "$stage"
 # Into the same folder each night, so packages and Swift builds stay warm;
 # --delete keeps it to main's files, apart from what builds make.
-"${SSH[@]}" "$HOST" "mkdir -p $REMOTE/src" &&
+# Its symlinks go first, as rsync puts them back: macOS's rsync won't write
+# a file where one was (21 Nov: main turned the iPhone kit's links to the
+# Swift app into files, and the copy failed).
+"${SSH[@]}" "$HOST" "mkdir -p $REMOTE/src && find $REMOTE/src \( -name node_modules -o -name .build -o -name build -o -name .gradle \) -prune -o -type l -exec rm -f {} +" &&
   rsync -a --delete --exclude node_modules --exclude .build --exclude .parity-packages \
     --exclude /android-native/.gradle --exclude /android-native/app/build --exclude /android-native/kit/build -e "${SSH[*]}" "$stage/" "$HOST:$REMOTE/src/" >> "$dest/run.log" 2>&1
 copied=$?
