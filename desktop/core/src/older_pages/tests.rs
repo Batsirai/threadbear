@@ -516,7 +516,7 @@ fn old_and_new_say_the_same_for_made_up_sequences() {
 #[test]
 fn a_broken_transition_is_caught() {
     let sequences = made_up(3000, 0x0b0c_5eed);
-    for broken in [(0, 0), (1, 1), (1, 2), (1, 4)] {
+    for broken in [(0, 0), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5)] {
         BROKEN.with(|b| b.set(Some(broken)));
         let caught = std::panic::catch_unwind(|| {
             for ops in &sequences {

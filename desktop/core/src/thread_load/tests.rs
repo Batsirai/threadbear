@@ -644,7 +644,27 @@ impl Both {
     fn step(&mut self, op: &Op) {
         self.log.push(format!("{op:?}"));
         match *op {
+            // A sub-agent read again under its rows (its thread moved
+            // runners) doesn't move the state: only a page that came replaces
+            // them (`load_subagent`, `first`).
+            Op::Read if self.old.subagent && self.new.is_shown() => {
+                self.old.read();
+                self.reads += 1;
+            }
             Op::Read => self.read(),
+            Op::Answer { landed } if self.old.subagent && self.new.is_shown() => {
+                self.reads -= 1;
+                if landed {
+                    self.old.landed();
+                    self.deliver(Event::Landed);
+                } else {
+                    self.old.read_failed("Not connected to the runner.");
+                }
+            }
+            Op::NoRecord if self.new.is_shown() => {
+                self.reads -= 1;
+                self.old.no_record();
+            }
             Op::Answer { landed } => {
                 self.reads -= 1;
                 if landed {
@@ -752,13 +772,16 @@ impl Both {
         ];
         let try_again_shown = matches!(self.old.drawn(), legacy::Drawn::Failed(_));
         if self.old.subagent {
-            // A sub-agent reads once as it opens, and on Try again.
+            // A sub-agent reads as it opens, on Try again, and again under
+            // its rows when its thread moves runners: one at a time.
             if self.reads > 0 {
                 ops.push(Op::Answer { landed: true });
                 ops.push(Op::Answer { landed: false });
                 ops.push(Op::NoRecord);
             } else if try_again_shown {
                 ops.push(Op::TryAgain);
+            } else if self.new.is_shown() {
+                ops.push(Op::Read);
             }
             return ops;
         }

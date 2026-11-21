@@ -72,7 +72,14 @@ fn the_pane_has_one_writer_of_its_load_state_and_no_old_fields() {
             }
             // Anything that sets the pane's `load` other than through
             // `move_load`: an assignment, a swap, a `&mut` borrow of it.
-            let squashed: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+            // (Comparisons taken out first, so one beside an assignment
+            // doesn't hide it.)
+            let squashed: String = code
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+                .replace(".load==", "")
+                .replace(".load!=", "");
             let sets = [
                 ".load=",
                 "&mutself.load",
@@ -80,7 +87,7 @@ fn the_pane_has_one_writer_of_its_load_state_and_no_old_fields() {
                 "load:ThreadLoad::",
             ]
             .iter()
-            .any(|w| squashed.contains(w) && !squashed.contains(".load=="));
+            .any(|w| squashed.contains(w));
             if sets {
                 writers.push(format!("{name}:{n}: {}", code.trim()));
             }

@@ -1072,7 +1072,7 @@ impl Threadbear {
                     }
                     // Kept ones catch up from their last seq when next shown.
                     for pane in self.kept.panes() {
-                        pane.update(cx, |p, _| p.connection_back());
+                        pane.update(cx, |p, cx| p.connection_back(cx));
                     }
                 }
             }

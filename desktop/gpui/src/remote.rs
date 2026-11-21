@@ -130,7 +130,7 @@ impl Threadbear {
                 pane.update(cx, |p, cx| {
                     p.unsubscribe();
                     p.summary_changed(&kept, cx);
-                    p.connection_back();
+                    p.connection_back(cx);
                 });
             }
         }

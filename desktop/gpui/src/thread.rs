@@ -595,7 +595,13 @@ impl ThreadPane {
         let Some(subagent_id) = self.subagent_id.clone() else {
             return;
         };
-        self.move_load(LoadEvent::Read);
+        // Read again under rows already shown (its thread moved runners), it
+        // only replaces them if it works: a failure stays out of sight, as it
+        // always did, and it's never caught up later, so it isn't a reread.
+        let first = !self.load.is_shown();
+        if first {
+            self.move_load(LoadEvent::Read, cx);
+        }
         let (client, id, root) = (
             self.client.clone(),
             self.summary.id.clone(),
@@ -623,17 +629,18 @@ impl ThreadPane {
                         this.feed = ThreadFeed::new(model);
                         let live = this.subagent_live();
                         let _ = this.feed.set_live_turn(live.map(|_| ""), live);
-                        this.move_load(LoadEvent::Landed);
+                        this.move_load(LoadEvent::Landed, cx);
                         this.scroller
                             .update(cx, |s, cx| s.reset(this.feed.model().rows().len(), cx));
                         this.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
                     }
-                    Err(e) if e.code == -32006 => {
-                        this.move_load(LoadEvent::NoRecord);
+                    Err(e) if e.code == -32006 && first => {
+                        this.move_load(LoadEvent::NoRecord, cx);
                     }
-                    Err(e) => {
-                        this.move_load(LoadEvent::ReadFailed { message: e.message });
+                    Err(e) if first => {
+                        this.move_load(LoadEvent::ReadFailed { message: e.message }, cx);
                     }
+                    Err(_) => {}
                 }
                 cx.notify();
             })
@@ -744,7 +751,7 @@ impl ThreadPane {
         let client = self.client.clone();
         let id = self.summary.id.clone();
         let root = self.summary.cwd.clone();
-        self.move_load(LoadEvent::Read);
+        self.move_load(LoadEvent::Read, cx);
         self.timing = LoadTiming {
             started: Some(std::time::Instant::now()),
             reads: self.timing.reads + 1,
@@ -765,7 +772,7 @@ impl ThreadPane {
                         // A reload over a transcript already shown keeps it,
                         // says so on the error line, and is tried again
                         // when it's next shown from the kept ones.
-                        this.move_load(LoadEvent::ReadFailed { message: e.message });
+                        this.move_load(LoadEvent::ReadFailed { message: e.message }, cx);
                         threadbear_client::log::write(
                             "switch",
                             &format!(
@@ -807,7 +814,14 @@ impl ThreadPane {
                 this.timing.decode_ms = decode_ms;
                 this.timing.fold_ms = fold_ms;
                 // Where the view was reading, if this is a reload.
-                let memory = this.load.is_shown().then(|| this.capture_memory(cx));
+                // A place still being paged back to wins: the page on its way
+                // to it is let go with the old rows (older_pages.rs), so
+                // paging back starts again from the new ones.
+                let memory = this
+                    .rows
+                    .pending_restore
+                    .take()
+                    .or_else(|| this.load.is_shown().then(|| this.capture_memory(cx)));
                 crate::reply_buttons::fold(&buttons, &this.summary.id);
                 // What the thread's summary says now (ThreadSession.load),
                 // not as it was when the read started: what's running in
@@ -826,7 +840,7 @@ impl ThreadPane {
                 this.feed.begin_subscribe();
                 // Its rows show; a reload that worked puts right the one that
                 // didn't, on the error line too.
-                this.move_load(LoadEvent::Landed);
+                this.move_load(LoadEvent::Landed, cx);
                 // Paging starts over from the new newest page.
                 this.older.newest_read();
                 this.scroller
@@ -858,7 +872,7 @@ impl ThreadPane {
                     Some(page) => {
                         // Read and subscribed again: up to date, whatever an
                         // earlier try left (`shows_old_turn`).
-                        this.move_load(LoadEvent::Subscribed);
+                        this.move_load(LoadEvent::Subscribed, cx);
                         let action = this.feed.finish_subscribe(page.events, &page.in_progress);
                         this.handle(action, cx);
                     }
@@ -866,7 +880,7 @@ impl ThreadPane {
                     // so does showing it again from the kept ones (`shown_again`).
                     None => {
                         this.feed.catch_up_failed();
-                        this.move_load(LoadEvent::SubscribeFailed);
+                        this.move_load(LoadEvent::SubscribeFailed, cx);
                     }
                 }
             })
@@ -875,16 +889,23 @@ impl ThreadPane {
         .detach();
     }
 
-    /// The only writer of `load` (thread_load.rs): moves it on, and does what
+    /// The only writer of `load` (thread_load.rs): moves it on, does what
     /// the move says to the error line, which sends and card buttons write
-    /// too. A sub-agent's read never cleared the error line.
-    fn move_load(&mut self, event: LoadEvent) -> LoadThen {
+    /// too, and redraws the pane if anything changed (it's a cached view, so
+    /// its parent redrawing doesn't). A sub-agent's read never cleared the
+    /// error line.
+    fn move_load(&mut self, event: LoadEvent, cx: &mut Context<Self>) -> LoadThen {
+        let was = self.load.clone();
         let (load, then) = std::mem::replace(&mut self.load, ThreadLoad::opening()).next(event);
         self.load = load;
+        let error = self.error.clone();
         match &then {
             LoadThen::SayOnErrorLine(message) => self.error = Some(message.clone()),
             LoadThen::ClearErrorLine if self.subagent_id.is_none() => self.error = None,
             LoadThen::ClearErrorLine | LoadThen::CatchUp | LoadThen::Nothing => {}
+        }
+        if self.load != was || self.error != error {
+            cx.notify();
         }
         then
     }
@@ -911,7 +932,10 @@ impl ThreadPane {
             && !self.feed.has_pending();
         if trim {
             self.feed.trim(EVENTS_PAGE as usize);
+            // Back to the end of it: a place it was paging back to is given
+            // up with the page on its way there.
             self.older.trimmed();
+            self.rows.pending_restore = None;
             self.scroller.update(cx, |s, cx| {
                 s.reset(self.feed.model().rows().len(), cx);
                 s.scroll_to_end(cx);
@@ -935,8 +959,8 @@ impl ThreadPane {
     /// The connection's back while this pane is kept and not shown: it
     /// catches up when it's next shown, rather than every kept thread asking
     /// at once while a restarted runner is busiest.
-    pub(crate) fn connection_back(&mut self) {
-        self.move_load(LoadEvent::ConnectionBack);
+    pub(crate) fn connection_back(&mut self, cx: &mut Context<Self>) {
+        self.move_load(LoadEvent::ConnectionBack, cx);
     }
 
     /// Shown again from the threads kept loaded (pane_cache.rs): straight
@@ -955,7 +979,7 @@ impl ThreadPane {
         }
         // Behind since the connection came back, or its first read failed
         // while it was kept: read now.
-        if self.move_load(LoadEvent::ShownAgain) == LoadThen::CatchUp {
+        if self.move_load(LoadEvent::ShownAgain, cx) == LoadThen::CatchUp {
             self.resubscribe(cx);
         }
         self.mark_seen();
@@ -1034,7 +1058,7 @@ impl ThreadPane {
         let remote = self.summary.runner_id.is_some();
         if !self.load.is_shown() || remote || behind > CATCH_UP_LIMIT {
             // Back to the spinner from a failed first read, as Try again does.
-            self.move_load(LoadEvent::TryAgain);
+            self.move_load(LoadEvent::TryAgain, cx);
             return self.load(cx);
         }
         self.feed.begin_subscribe();
@@ -1058,7 +1082,7 @@ impl ThreadPane {
             this.update(cx, |this, cx| {
                 match sub.ok().and_then(|v| EventsPage::decode(&v)) {
                     Some(page) => {
-                        this.move_load(LoadEvent::Subscribed);
+                        this.move_load(LoadEvent::Subscribed, cx);
                         crate::reply_buttons::fold(&page.events, &this.summary.id);
                         let action = this.feed.finish_subscribe(page.events, &page.in_progress);
                         this.handle(action, cx);
@@ -1066,7 +1090,7 @@ impl ThreadPane {
                     // The next connection, or the next time it's shown, tries again.
                     None => {
                         this.feed.catch_up_failed();
-                        this.move_load(LoadEvent::SubscribeFailed);
+                        this.move_load(LoadEvent::SubscribeFailed, cx);
                     }
                 }
             })
@@ -1077,7 +1101,7 @@ impl ThreadPane {
 
     /// Try again, after the first read failed: back to Loading… at once.
     fn retry_load(&mut self, cx: &mut Context<Self>) {
-        self.move_load(LoadEvent::TryAgain);
+        self.move_load(LoadEvent::TryAgain, cx);
         cx.notify();
         self.load(cx);
     }
@@ -2477,6 +2501,8 @@ impl ThreadPane {
                     let _ = model.set_background(this.background_tasks());
                     let _ = model.set_loose_ends(this.summary.loose_ends_check());
                     this.feed = ThreadFeed::new(model);
+                    // A page on its way belongs to the rows that went.
+                    this.older.newest_read();
                     this.scroller
                         .update(cx, |s, cx| s.reset(this.feed.model().rows().len(), cx));
                     cx.notify();
