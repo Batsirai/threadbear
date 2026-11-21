@@ -755,6 +755,10 @@ test('dynamic code by any reflective route is refused: aliases, constructors, st
     "import { Session } from 'node:inspector';",
     "import repl from 'node:repl';",
     "const i = await import('inspector/promises');",
+    "const { ['eval']: run } = globalThis;",
+    "const { ['constructor']: F } = f;",
+    'const get = Reflect.get;',
+    'Reflect[m](globalThis, k);',
   ];
   for (const src of refused) assert.equal(scanModule(src, 'x.ts').problem?.kind, 'computed', src);
   // What only looks like it: a class's own constructor, a key in an object
@@ -765,6 +769,8 @@ test('dynamic code by any reflective route is refused: aliases, constructors, st
     "const s = 'see the constructor docs';\nvoid s;",
     "switch (cmd) {\n  case 'eval':\n    break;\n}",
     'const plain = (x: object) => Object.getPrototypeOf(x) === Object.prototype;\nvoid plain;',
+    "const own = (r: object) => Object.hasOwn(r, 'constructor') || Object.is(r, 'eval');\nvoid own;",
+    "const has = (o: object, k: string) => Reflect.has(o, k);\nvoid has;",
     'let f: Function | undefined;\nvoid f;',
     'const WORDS: Record<string, string> = { a: "A" };\nexport const w = (v: { state: string }) => WORDS[v.state];',
   ]) assert.equal(scanModule(src, 'x.ts').problem, undefined, src);

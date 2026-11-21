@@ -336,17 +336,20 @@ scripts deep:
 It holds what a script writes against what it runs: a file it (or a
 script it reaches) writes and also runs, sources, loads or hashes as code
 can't be followed, as the bytes that will run were never hashed (`cp
-payload.dat run.sh; sh run.sh`, `cat x > run.sh`, `tee`, `mv`, `ln`, `dd
-of=`, `sed -i`, `curl -o`; a folder copied over one's folder counts), in
-any order, and so can't a write to somewhere worked out as it runs or
-named by the data (`> "$f"` after `f=$(cat x)`, `tar x`, `unzip`, `patch`,
-`curl -O`, `git checkout`, `pull`, `reset` and the like) once it runs
-anything at all. A schedule's check like that can't be approved, an
-owner's included. A file in the temp folder from a plain `$(mktemp)`, and a
-variable the script never sets (the runner's own, like
-`$THREADBEAR_CHECK_STATE`), aren't the repo's to steer. What a program on
-PATH writes by its own rules beyond those isn't known (below), and nor is
-what a JavaScript or other language's script writes.
+payload.dat run.sh; sh run.sh`, `cat x > run.sh`, `tee`, `mv`, `dd of=`,
+`sed -i`, `curl -o`, `${dest:-run.sh}`'s default; a folder copied over
+one's folder counts), in any order, and so can't a write to somewhere
+worked out as it runs or named by the data once it runs anything at all:
+a path from a `$(...)`, `read`, a loop or what a script was handed that
+was, a pattern or brace the shell expands, `find -exec ... {}`, `xargs`, a
+link the check makes (`ln`), `tar x`, `unzip`, `patch`, `curl -O`, `git
+checkout`, `pull`, `reset --hard` and the like. A schedule's check like
+that can't be approved, an owner's included. A file in the temp folder
+from a plain `$(mktemp)`, and a variable nothing it follows sets (the
+runner's own, like `$THREADBEAR_CHECK_STATE`, or a positional handed only
+those), aren't the repo's to steer. What a program on PATH writes by its
+own rules beyond those isn't known (below), and nor is what a JavaScript
+or other language's script writes.
 
 What it can't follow, it doesn't guess at: `eval`, `alias`, `bash -c` or
 `trap` with code worked out as it runs, `$(cat "$f")` or `$(< "$f")`, a

@@ -10,7 +10,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { loadPatchSet } from '../../src/patches.ts';
-import { checkDigest, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
+import { checkDigest, checkReach, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
 import { claudeCommands } from '../../src/claude-trust.ts';
 import { Scheduler, scheduleMethods } from '../../src/schedules.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -845,19 +845,35 @@ test('schedule check: one that writes a file it then runs is unfollowable, so a 
     'unzip -o payload.zip; ./run.sh',
     'patch -p1 < payload.diff; ./run.sh',
     "awk '{ print > \"run.sh\" }' payload.dat; ./run.sh",
+    // Codex's review of the fix: links the check makes, a quoted export,
+    // a default, find's {} and xargs, globs, values and clusters.
+    'ln -s . alias; cp payload.dat alias/run.sh; sh run.sh',
+    'ln run.sh alias.dat; cp payload.dat alias.dat; sh run.sh',
+    "export 'dest=run.sh'; cat payload.dat > \"$dest\"; sh run.sh",
+    'unset dest; cat payload.dat > "${dest:-run.sh}"; sh run.sh',
+    "find . -name run.sh -exec cp payload.dat '{}' \\; ; sh run.sh",
+    "printf 'of=run.sh\\n' | xargs dd if=payload.dat; sh run.sh",
+    'cp payload.dat run.?h; sh run.sh',
+    'cp payload.dat run.{sh,}; sh run.sh',
+    'out=of=run.sh; dd if=payload.dat "$out"; sh run.sh',
+    'curl -sorun.sh "file://$PWD/payload.dat"; sh run.sh',
+    "awk '{ print $0 \";\" > \"run.sh\" }' payload.dat; sh run.sh",
   ];
+  const dir = repo({ ...files, 'payload-dir/env.sh': 'X=2\n', 'target.txt': 'run.sh\n' });
+  // Data, as the finding has it: not runnable, so never hashed by itself.
+  fs.chmodSync(path.join(dir, 'payload.dat'), 0o644);
   for (const check of writes) {
-    const dir = repo({ ...files, 'payload-dir/env.sh': 'X=2\n', 'target.txt': 'run.sh\n' });
-    const d = checkDigest(check, dir);
-    assert.match(d.problem ?? '', /writes/, check);
+    assert.match(checkDigest(check, dir).problem ?? '', /writes/, check);
+    assert.match(checkReach(check, dir).problem ?? '', /writes/, `${check}: edits ask too`);
   }
   // The finding's attack, played: a payload-only change after approval.
-  // Before this, the digest stayed the same and the shell ran the payload.
-  const dir = repo(files);
+  // The payload isn't in the digest, so before this it stayed the same and
+  // the shell ran the payload; now the check can't be approved at all.
   const approved = checkDigest('cp payload.dat run.sh; sh run.sh', dir);
   fs.writeFileSync(path.join(dir, 'payload.dat'), 'touch pwned\n');
   const now = checkDigest('cp payload.dat run.sh; sh run.sh', dir);
-  assert.ok(approved.problem && now.problem, 'unfollowable either way, so it asks each time');
+  assert.equal(approved.hash, now.hash, 'the payload is data, outside the digest');
+  assert.ok(approved.writes && now.writes, 'so it is refused, never approved');
   // A script the check runs is held the same way.
   const deep = repo({ ...files, 'check.sh': '#!/bin/sh\ncp "$(dirname "$0")/payload.dat" "$(dirname "$0")/run.sh"\n"$(dirname "$0")/run.sh"\n' });
   assert.match(checkDigest('./check.sh', deep).problem ?? '', /writes run\.sh/);
@@ -874,7 +890,15 @@ test('schedule check: writing files it never runs stays followable: state files,
     'cp payload.dat backup.dat; ./run.sh',
     'git fetch -q origin 2>/dev/null; ./run.sh',
     'git pull -q',
+    'git stash list; git worktree list; git reset -q; ./run.sh',
+    'gzip -dc data.gz > state.txt; unzip -p data.zip > s2.txt; ./run.sh',
   ]) assert.equal(checkDigest(check, dir).problem, undefined, check);
+  // A variable the check sets is an outside script's to write to too.
+  fs.chmodSync(path.join(dir, 'payload.dat'), 0o644);
+  const tools = fs.realpathSync(tmpDir());
+  write(tools, { 'write.sh': '#!/bin/sh\ncat payload.dat > "$OUT"\n' });
+  assert.match(checkDigest(`export OUT=run.sh; sh ${tools}/write.sh; sh run.sh`, dir).problem ?? '', /writes/);
+  assert.equal(checkDigest(`sh ${tools}/write.sh; sh run.sh`, dir).problem, undefined, "the runner's own OUT");
 });
 
 // verify-fix on 153: an owner's or Full thread's check that can't be

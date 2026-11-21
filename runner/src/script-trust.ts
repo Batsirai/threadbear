@@ -50,7 +50,16 @@ import { bareImport, inNodeModules, linkedPackages, packageFiles } from './track
 // `writeProblem`: `problem` when it's that (writeProblem), which nobody can
 // approve a schedule's check past.
 export type ScriptReach = { files: string[]; missing: string[]; problem?: string; outside?: { file: string; dirs: string[] }[]; refused?: string; writes?: Writes; writeProblem?: string };
-export type Writes = { written: [string, string][]; somewhere?: string; reached: string[] };
+// `pending`: writes to a path made from variables, settled against every
+// reach's `deps` (a variable a caller sets is the script's to steer too):
+// what each variable's value was made from, `direct` when that's worked
+// out as it runs (a `$(...)`, `read`, a loop), `fixed` when it was set to
+// a value known where it was set, which a later write that can't see it
+// (another script's) may be. `#args:<file>` stands for that script's
+// positionals, made from what it (or a function in it) was handed.
+// `assignsAny`: a variable whose name is worked out was set.
+export type Deps = { direct: boolean; names: string[]; fixed?: boolean };
+export type Writes = { written: [string, string][]; somewhere?: string; reached: string[]; pending?: ({ where: string } & Deps)[]; deps?: [string, Deps][]; assignsAny?: boolean };
 
 // The most of one file patch trust reads (a patch, a helper, a script, a
 // config file); it reads one bigger than this not at all, and fails closed.
@@ -299,8 +308,10 @@ const WRITE_REDIRS = new Set(['>', '>>', '>|', '&>', '&>>', '<>', '>&']);
 // `$(mktemp)`, `$(mktemp -d)`, `$(mktemp -t name)`: a new file in the temp
 // folder, not the repo (a template without -t is made in the current one).
 const PLAIN_MKTEMP = /^\s*mktemp(\s+(-[dqu]+|-t\s+[\w.-]+))*\s*$/;
+// What writesOf reads the arguments of for what it writes.
+const WRITERS = new Set(['cp', 'gcp', 'mv', 'gmv', 'install', 'ginstall', 'rsync', 'ditto', 'scp', 'tee', 'dd', 'sed', 'gsed', 'sort', 'base64', 'iconv', 'openssl', 'uniq', 'xxd', 'curl', 'wget']);
 // Programs whose last operand (or -t folder) is what they write.
-const COPIERS = new Set(['cp', 'gcp', 'mv', 'gmv', 'ln', 'gln', 'install', 'ginstall', 'rsync', 'ditto', 'scp']);
+const COPIERS = new Set(['cp', 'gcp', 'mv', 'gmv', 'install', 'ginstall', 'rsync', 'ditto', 'scp']);
 // git commands that write the working tree from what git holds or fetches.
 const GIT_WRITES = new Set([
   'checkout', 'switch', 'restore', 'reset', 'pull', 'merge', 'rebase', 'cherry-pick', 'revert', 'apply', 'am', 'stash',
@@ -681,14 +692,25 @@ function litOf(w: Word): string | undefined {
   return w.parts.every((p) => p.k === 'lit') ? w.parts.map((p) => (p as { s: string }).s).join('') : undefined;
 }
 
-// The literal text a word starts with, up to its first expansion.
-function leadingText(w: Word): string {
+// A word with each `${x:-default}` as its default, when every expansion
+// in it has a plain one: a path it may write.
+function withDefaults(w: Word): string | undefined {
   let out = '';
   for (const p of w.parts) {
-    if (p.k !== 'lit') break;
-    out += p.s;
+    if (p.k === 'lit') out += p.s;
+    else if (p.k === 'var' && /^:?[-=]/.test(p.op) && !/[$`]/.test(p.op)) out += p.op.replace(/^:?[-=]/, '');
+    else return undefined;
   }
-  return out;
+  return out || undefined;
+}
+
+// Whether the shell expands a word into names it finds or makes: an
+// unquoted glob or a brace list.
+function hasPattern(w: Word): boolean {
+  // Across parts, as the lexer may split one; anything quoted or expanded
+  // stands for a character that can't be part of either.
+  const text = w.parts.map((p) => (p.k === 'lit' && !p.q ? p.s : '\u0000')).join('');
+  return /[*?[]/.test(text) || /\{[^}\u0000]*(,|\.\.)[^}\u0000]*\}/.test(text);
 }
 
 // Unquoted, plain: how reserved words and assignments are told apart.
@@ -816,13 +838,10 @@ class Reach {
   writesSomewhere?: string;
   writeFailed?: string;
   readonly reached = new Set<string>();
-  // Writes to a path made from variables, settled at the end: one the
-  // reach assigns anywhere (other than from a plain mktemp) or a
-  // positional could hold anything; one it never sets is the runner's
-  // environment, which no file in the repo can change.
-  private pendingWrites: { names: string[]; where: string; worked: boolean }[] = [];
-  private assigned = new Set<string>();
-  private tempNames = new Set<string>();
+  // Writes to a path made from variables, settled at the end (Writes).
+  private pendingWrites: ({ where: string } & Deps)[] = [];
+  private deps = new Map<string, Deps>();
+  private assignsAny = false;
   private home: string;
   private o: FollowOptions;
   readonly reads: Reads;
@@ -953,6 +972,7 @@ class Reach {
     // it: one too big for a script fails closed.
     if (text.length > MAX_CONFIG_BYTES) return this.fail(ctx, line, `runs ${label}, a shell script over ${MAX_CONFIG_BYTES / 1024} KB, more than patch trust reads.`);
     if (how === 'source' && ctx) {
+      this.dependsOn(`#args:${abs}`, { direct: false, names: [`#args:${ctx.file}`] });
       return this.shell(text, { ...ctx, label, file: abs, argv0: [...ctx.argv0, abs], depth });
     }
     this.shell(text, { label, file: abs, argv0: [abs], dirs: startDirs, vars: new Map(), depth });
@@ -1392,8 +1412,9 @@ class Reach {
 
   private assign(name: string, value: Word | undefined, append: boolean, ctx: Ctx, line: number): void {
     const vals = value ? this.values(value, ctx) : [''];
+    // A plain `$(mktemp)` is a new file in the temp folder, nobody's to steer.
     const temp = !append && value?.parts.length === 1 && value.parts[0]!.k === 'sub' && PLAIN_MKTEMP.test(value.parts[0]!.src);
-    (temp ? this.tempNames : this.assigned).add(name);
+    this.dependsOn(name, temp ? { direct: false, names: [] } : vals ? { direct: false, names: [], fixed: true } : this.depsOf(value!, ctx));
     if (RISKY_ENV.has(name)) return this.fail(ctx, line, `sets ${name}, which makes other code load, so patch trust can't follow what runs.`);
     if (this.unfollowableVar(name, ctx, line)) return;
     if (name === 'NODE_OPTIONS' && (!vals || vals.some((v) => LOADING_FLAG.test(v)))) return this.fail(ctx, line, 'sets NODE_OPTIONS to load other code, which patch trust can\'t follow.');
@@ -1466,6 +1487,9 @@ class Reach {
       text += p.s;
     }
     const m = /^([A-Za-z_]\w*(?:\[[^\]]*\])?)\+?=/.exec(text);
+    // `export 'dest=run.sh'` sets dest all the same (Codex's review of 153).
+    if (m) this.dependsOn(m[1]!.replace(/\[.*$/s, ''), { direct: true, names: [] });
+    else if (w.parts.some((p) => p.k !== 'lit')) this.assignsAny = true;
     return m ? this.unfollowableVar(m[1]!, ctx, line) : false;
   }
 
@@ -1574,6 +1598,13 @@ class Reach {
     const name = headVals[0]!;
     if (name !== '[' && name !== '[[' && head.parts.some((p) => p.k === 'lit' && !p.q && /[*?[{]/.test(p.s))) return this.fail(ctx, line, `runs a command named by a pattern (\`${shown}\`), which patch trust can't follow.`);
     const args = words.slice(1);
+    if (this.functions.has(name) || name === 'set') this.handed(args, [ctx.file], ctx);
+    else if (name.includes('/')) this.handed(args, this.abs(name, ctx) ?? [], ctx);
+    else if (SHELLS.includes(programName(path.basename(name))) || name === 'source' || name === '.') {
+      // The script is one of its words; each is handed the rest.
+      const files = args.flatMap((w) => (this.values(w, ctx) ?? []).flatMap((v) => this.abs(v, ctx) ?? []));
+      this.handed(args, files, ctx);
+    }
     if (!wrappedIn) for (const w of args) this.named(w, ctx);
     if (this.problem) return;
     // A path: the repo's file runs (followed), or a program outside it,
@@ -1656,7 +1687,7 @@ class Reach {
       const v = at >= 0 ? args[at + 1] && this.str(args[at + 1]!, ctx) : undefined;
       if (at >= 0 && v === undefined) return this.fail(ctx, line, "sets a variable with printf -v whose name patch trust can't read.");
       if (v && this.unfollowableVar(v, ctx, line)) return;
-      if (v) this.assigned.add(v);
+      if (v) this.dependsOn(v, { direct: true, names: [] });
     }
     if (name === 'export' || name === 'local' || name === 'declare' || name === 'typeset' || name === 'readonly' || name === 'integer') {
       // A name reference makes a later assignment to one name write
@@ -1682,7 +1713,7 @@ class Reach {
       if (v && this.unfollowableVar(v, ctx, line)) return;
       if (v) {
         ctx.vars.set(v, undefined);
-        this.assigned.add(v);
+        this.dependsOn(v, { direct: true, names: [] });
       }
       return;
     }
@@ -1692,12 +1723,12 @@ class Reach {
         if (v && /^[A-Za-z_]\w*(?:\[.*\])?$/s.test(v) && this.unfollowableVar(v, ctx, line)) return;
         if (v && /^[A-Za-z_]\w*$/.test(v)) {
           ctx.vars.set(v, undefined);
-          this.assigned.add(v);
+          this.dependsOn(v, { direct: true, names: [] });
         }
       }
       if (name === 'getopts' && args[1]) {
         ctx.vars.set(this.str(args[1], ctx) ?? '', undefined);
-        this.assigned.add(this.str(args[1], ctx) ?? '');
+        this.dependsOn(this.str(args[1], ctx) ?? '', { direct: true, names: [] });
       }
       return;
     }
@@ -1755,12 +1786,62 @@ class Reach {
     }
   }
 
+  private dependsOn(name: string, d: Deps): void {
+    const had = this.deps.get(name);
+    this.deps.set(name, had ? { direct: had.direct || d.direct, names: [...new Set([...had.names, ...d.names])], ...(had.fixed || d.fixed ? { fixed: true } : {}) } : d);
+  }
+
+  // What a word's value is made from: nothing when it's known here.
+  private depsOf(w: Word, ctx: Ctx): Deps {
+    if (this.values(w, ctx)) return { direct: false, names: [] };
+    let direct = false;
+    const names: string[] = [];
+    const add = (n: string) => {
+      // $$, $?, $!, $-: a number or flags, no path the repo can pick.
+      if (/^[?$!-]$/.test(n)) return;
+      if (/^([0-9@*#]|[1-9]\d+)$/.test(n)) names.push(`#args:${ctx.file}`);
+      else if (/^[A-Za-z_]\w*$/.test(n)) names.push(n);
+      else direct = true;
+    };
+    for (const p of w.parts) {
+      if (p.k === 'sub' || p.k === 'arith') direct = true;
+      else if (p.k === 'var') {
+        add(p.name.replace(/\[.*$/s, ''));
+        // `${x:-$y}`, `${x:-$(cmd)}`: the default's too.
+        if (/\$\(|`/.test(p.op)) direct = true;
+        for (const m of p.op.matchAll(/\$\{?([A-Za-z_]\w*|[0-9@*#])/g)) add(m[1]!);
+      }
+    }
+    return { direct, names };
+  }
+
+  // What a script or function is handed is what its positionals are:
+  // `files`, each script it may be (a function's are its own script's).
+  private handed(args: Word[], files: string[], ctx: Ctx): void {
+    const d = args.map((w) => this.depsOf(w, ctx));
+    const merged: Deps = { direct: d.some((x) => x.direct), names: d.flatMap((x) => x.names) };
+    for (const f of files) this.dependsOn(`#args:${f}`, merged);
+  }
+
   // A write to the path a word names (`vals`, its values, when known).
   private wrote(vals: string[] | undefined, w: Word | undefined, ctx: Ctx, line: number): void {
     const where = `${ctx.label}${line ? ` line ${line}` : ''}`;
+    // `> run.?h`: the shell makes it the file that matches (Codex's review).
+    if (w && hasPattern(w)) {
+      this.writesSomewhere ??= where;
+      return;
+    }
     if (!vals) {
-      const parts = w?.parts ?? [];
-      this.pendingWrites.push({ names: parts.flatMap((p) => (p.k === 'var' ? [p.name] : [])), where, worked: !w || parts.some((p) => p.k === 'sub' || p.k === 'arith') });
+      if (!w) {
+        this.writesSomewhere ??= where;
+        return;
+      }
+      // `${dest:-run.sh}` may be its default: written as that too.
+      const fallback = withDefaults(w);
+      if (fallback !== undefined) this.wrote([fallback], undefined, ctx, line);
+      const d = this.depsOf(w, ctx);
+      if (d.direct) this.writesSomewhere ??= where;
+      else this.pendingWrites.push({ where, ...d });
       return;
     }
     for (const v of vals) {
@@ -1787,8 +1868,12 @@ class Reach {
     // A word's values with a prefix (`of=`) taken off.
     const after = (w: Word, prefix: string) => {
       const v = this.values(w, ctx);
-      this.wrote(v?.map((x) => x.slice(prefix.length)), v ? undefined : w, ctx, line);
+      this.wrote(v?.map((x) => (x.startsWith(prefix) ? x.slice(prefix.length) : x)), w, ctx, line);
     };
+    // Arguments this can't see (xargs adds them, find puts each file in
+    // `{}`), or a pattern or brace the shell expands into other words, can
+    // make any of them the one written (Codex's review of 153).
+    if (WRITERS.has(name) && (extra || args.some((w) => hasPattern(w) || (litOf(w) ?? '').includes('{}')))) return somewhere();
     const operands = () => {
       const out: Word[] = [];
       let opts = true;
@@ -1804,11 +1889,20 @@ class Reach {
       for (let i = 0; i < args.length; i++) {
         const v = lit(args[i]);
         if (v === undefined) continue;
-        if ((short && new RegExp(`^-[A-Za-z]*${short}$`).test(v)) || (long && v === long)) to(args[i + 1]);
-        else if (short && v.startsWith(`-${short}`) && v.length > 2 && !v.startsWith('--')) after(args[i]!, `-${short}`);
+        if (long && v === long) to(args[i + 1]);
         else if (long && v.startsWith(`${long}=`)) after(args[i]!, `${long}=`);
+        else if (short && /^-[A-Za-z]/.test(v) && v.includes(short)) {
+          // In a cluster, what follows the letter is its value (`-sorun.sh`),
+          // or the next word when nothing does.
+          const rest = v.slice(v.indexOf(short) + 1);
+          if (rest) after(args[i]!, v.slice(0, v.indexOf(short) + 1));
+          else to(args[i + 1]);
+        }
       }
     };
+    // A link the check makes can point a later write, or a later run, at
+    // another file than the path says (Codex's review of 153).
+    if (name === 'ln' || name === 'gln') return somewhere();
     if (COPIERS.has(name)) {
       const target = args.findIndex((w) => /^(-t|--target-directory)$/.test(lit(w) ?? ''));
       const joined = args.find((w) => /^--target-directory=/.test(lit(w) ?? ''));
@@ -1817,15 +1911,17 @@ class Reach {
       if (extra) return somewhere();
       const ops = operands();
       if (ops.length >= 2) return to(ops.at(-1));
-      // `ln -s ../x` makes ./x.
-      if ((name === 'ln' || name === 'gln') && ops.length === 1) {
-        const v = this.values(ops[0]!, ctx);
-        return this.wrote(v?.map((x) => path.basename(x)), v ? undefined : ops[0], ctx, line);
-      }
       return;
     }
     if (name === 'tee') return void operands().forEach(to);
-    if (name === 'dd') return void args.filter((w) => leadingText(w).startsWith('of=')).forEach((w) => after(w, 'of='));
+    if (name === 'dd') {
+      for (const w of args) {
+        const v = this.values(w, ctx);
+        if (!v) somewhere();
+        else if (v.some((x) => x.startsWith('of='))) after(w, 'of=');
+      }
+      return;
+    }
     if ((name === 'sed' || name === 'gsed') && args.some((w) => /^-[A-Za-z]*i|^--in-place/.test(lit(w) ?? ''))) return void operands().forEach(to);
     if (name === 'sort' || name === 'base64' || name === 'iconv') return optionValue('o', '--output');
     if (name === 'openssl') return optionValue(undefined, '-out');
@@ -1849,26 +1945,32 @@ class Reach {
         if (/^(-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)$/.test(v)) i++;
         else if (!v.startsWith('-')) break;
       }
-      if (GIT_WRITES.has(lit(args[i]) ?? '')) somewhere();
+      const sub = lit(args[i]) ?? '';
+      const rest = args.slice(i + 1).map((w) => lit(w));
+      if (sub === 'stash' && ['list', 'show', 'create'].includes(rest[0] ?? '')) return;
+      if (sub === 'worktree' && !['add', 'move'].includes(rest[0] ?? '')) return;
+      if (sub === 'reset' && !rest.some((r) => r === undefined || /^--(hard|merge|keep)$/.test(r) || (r !== undefined && !r.startsWith('-')))) return;
+      if (GIT_WRITES.has(sub)) somewhere();
       return;
     }
     if (['tar', 'gtar', 'bsdtar'].includes(name)) {
       if (args.some((w) => /^-?[A-Za-z]*x[A-Za-z]*$|^--(extract|get)$/.test(lit(w) ?? ''))) somewhere();
       return;
     }
+    // To its output only (`gzip -dc`, `unzip -p`, `unzip -l`), it writes no file.
+    const toOutput = args.some((w) => /^-[A-Za-z]*c|^--(stdout|to-stdout)$/.test(lit(w) ?? ''));
     if (['gzip', 'bzip2', 'xz', 'zstd', 'lz4', 'brotli'].includes(name)) {
-      if (args.some((w) => /^-[A-Za-z]*d|^--(decompress|uncompress)$/.test(lit(w) ?? ''))) somewhere();
+      if (!toOutput && args.some((w) => /^-[A-Za-z]*d|^--(decompress|uncompress)$/.test(lit(w) ?? ''))) somewhere();
       return;
     }
+    if (['gunzip', 'bunzip2', 'unxz', 'unzstd', 'unlz4'].includes(name) && toOutput) return;
+    if (name === 'unzip' && args.some((w) => /^-[A-Za-z]*[plvtZ]/.test(lit(w) ?? ''))) return;
     if (UNPACKERS.has(name)) somewhere();
   }
 
   // Fails when it writes something it runs (Daybreak 153), once all of it
   // has been followed.
   settleWrites(): void {
-    for (const p of this.pendingWrites) {
-      if (p.worked || p.names.some((n) => !/^[A-Za-z_]\w*$/.test(n) || this.assigned.has(n))) this.writesSomewhere ??= p.where;
-    }
     // Over a problem found first, as that's often the run of a file the
     // check writes (`cp p run.sh; sh run.sh` with no run.sh yet), and an
     // owner's check that can't be followed is still approved, bound only
@@ -1878,7 +1980,14 @@ class Reach {
   }
 
   writes(): Writes {
-    return { written: [...this.written], ...(this.writesSomewhere ? { somewhere: this.writesSomewhere } : {}), reached: [...this.reached, ...this.files, ...this.missing] };
+    return {
+      written: [...this.written],
+      ...(this.writesSomewhere ? { somewhere: this.writesSomewhere } : {}),
+      reached: [...this.reached, ...this.files, ...this.missing],
+      pending: this.pendingWrites,
+      deps: [...this.deps],
+      ...(this.assignsAny ? { assignsAny: true } : {}),
+    };
   }
 
   private cd(args: Word[], ctx: Ctx, line: number): void {
@@ -2578,7 +2687,7 @@ class Reach {
       if (prog === undefined) return this.fail(ctx, line, "runs an awk program worked out as it runs, which patch trust can't follow.");
       if (/\bsystem\s*\(|\|\s*getline|\|\s*&/.test(prog) || awkPrintsToCommand(prog)) return this.fail(ctx, line, "runs an awk program that runs commands, which patch trust doesn't follow.");
       // `print > "run.sh"`: a file named in the program, or worked out in it.
-      if (/\bprintf?\b[^;}\n]*>/.test(prog)) this.writesSomewhere ??= `${ctx.label} line ${line} (awk)`;
+      if (awkWritesFile(prog)) this.writesSomewhere ??= `${ctx.label} line ${line} (awk)`;
       return;
     }
   }
@@ -2921,12 +3030,31 @@ function outsideOf(r: Reach): { outside?: { file: string; dirs: string[] }[] } {
 // what's in it. In any order: a loop or a function runs a write before a
 // run that comes earlier in the text, and a script reads itself as it goes.
 export function writeProblem(w: Writes, top: string): string | undefined {
-  if (!w.written.length && !w.somewhere) return undefined;
+  // A write to `$x` where nothing followed sets x is the runner's own
+  // environment (`$THREADBEAR_CHECK_STATE`), which no file can change; a
+  // positional, or one set anywhere, could be the file it runs.
+  const deps = new Map<string, Deps>();
+  for (const [n, d] of w.deps ?? []) {
+    const had = deps.get(n);
+    deps.set(n, had ? { direct: had.direct || d.direct, names: [...had.names, ...d.names], ...(had.fixed || d.fixed ? { fixed: true } : {}) } : d);
+  }
+  const tainted = new Map<string, boolean>();
+  const isTainted = (n: string): boolean => {
+    if (tainted.has(n)) return tainted.get(n)!;
+    tainted.set(n, false); // a cycle adds nothing
+    const d = deps.get(n);
+    const t = !!d && (d.direct || !!d.fixed || d.names.some(isTainted));
+    tainted.set(n, t);
+    return t;
+  };
+  const steered = (w.pending ?? []).find((p) => w.assignsAny || p.direct || p.names.some(isTainted));
+  const somewhere = w.somewhere ?? steered?.where;
+  if (!w.written.length && !somewhere) return undefined;
   const fold = process.platform === 'darwin' || IS_WINDOWS;
   const keys = (p: string) => [...new Set([path.resolve(p), realOrNearest(path.resolve(p))])].map((k) => (fold ? k.toLowerCase() : k));
   const reached = new Set(w.reached.flatMap(keys));
   if (!reached.size) return undefined;
-  if (w.somewhere) return `${w.somewhere} writes files where it works out as it runs (or where its data says), which could be ones it runs, so patch trust can't follow what runs after it.`;
+  if (somewhere) return `${somewhere} writes files where it works out as it runs (or where its data says), which could be ones it runs, so patch trust can't follow what runs after it.`;
   for (const [file, where] of w.written) {
     for (const k of keys(file)) {
       if (reached.has(k) || [...reached].some((r) => r.startsWith(k.endsWith(path.sep) ? k : k + path.sep))) {
@@ -2937,4 +3065,16 @@ export function writeProblem(w: Writes, top: string): string | undefined {
     }
   }
   return undefined;
+}
+
+// Whether an awk program prints to a file (`print > "run.sh"`): a `>` after
+// a print in the same statement, outside strings. Linear: strings out
+// first, then each statement looked at once.
+export function awkWritesFile(prog: string): boolean {
+  const bare = prog.replace(/"(?:[^"\\]|\\.)*"?/g, '""');
+  for (const stmt of bare.split(/[;{}\n]/)) {
+    const at = stmt.search(/\bprintf?\b/);
+    if (at >= 0 && stmt.indexOf('>', at) >= 0) return true;
+  }
+  return false;
 }

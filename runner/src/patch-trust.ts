@@ -1114,6 +1114,8 @@ export function scanModule(src: string, file: string): ModuleScan {
   // Identifiers and members a load handled already, so they aren't
   // refused as bare references to `require`.
   const handled = new Set<AstNode>();
+  // `Reflect.x` members that are called right there: the only use allowed.
+  const reflectCalls = new Set<AstNode>();
   const stack: { node: AstNode; parent?: AstNode; key?: string }[] = [{ node: parsed.program as unknown as AstNode }];
   while (stack.length) {
     const { node, parent, key } = stack.pop()!;
@@ -1171,18 +1173,26 @@ export function scanModule(src: string, file: string): ModuleScan {
       case 'Property':
         if (parent?.type === 'ObjectPattern') {
           const name = propertyKey(node);
-          if (name === undefined ? plainString(node.key) === undefined : LOADER_PROPERTIES.includes(name) || CODE_REACH.includes(name) || LOADER_NAMES.includes(name)) refuse(node);
+          // `{ ['eval']: run }` names it too (Codex's review).
+          const read = name ?? plainString(node.key);
+          if (read === undefined || LOADER_PROPERTIES.includes(read) || CODE_REACH.includes(read) || LOADER_NAMES.includes(read)) refuse(node);
         }
         break;
     }
-    // `Reflect.get(f, 'constructor')`, `Object.entries(...)`: a string that's
-    // exactly such a name, handed to what reads a property by one, reaches
-    // it without writing it as one (`globalThis['eval']` is a member above).
-    // Not any such string: `case 'eval':` in a CLI's switch reads nothing.
-    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.object.type === 'Identifier' && (node.callee.object.name === 'Reflect' || node.callee.object.name === 'Object')) {
-      for (const arg of node.arguments) {
-        const named = plainString(arg);
-        if (named !== undefined && (CODE_REACH.includes(named) || LOADER_NAMES.includes(named) || LOADER_PROPERTIES.includes(named))) refuse(arg);
+    // `Reflect.get(f, 'constructor')`: a string that's exactly such a name,
+    // handed to what reads a property by one, reaches it without writing it
+    // as one (`globalThis['eval']` is a member above). Not any such string:
+    // `case 'eval':` in a CLI's switch, or `Object.hasOwn(o, 'constructor')`,
+    // reads nothing. And Reflect only ever called in place, so it can't be
+    // handed on as `const get = Reflect.get` (Codex's review).
+    if (node.type === 'Identifier' && node.name === 'Reflect' && isReference(parent, key) && !(parent?.type === 'MemberExpression' && key === 'object' && reflectCalls.has(parent))) refuse(node);
+    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.object.type === 'Identifier' && node.callee.object.name === 'Reflect') {
+      reflectCalls.add(node.callee);
+      const method = propertyName(node.callee);
+      if (method === undefined) refuse(node);
+      else if (method === 'get' || method === 'getOwnPropertyDescriptor' || method === 'has') {
+        const named = node.arguments[1] && plainString(node.arguments[1]);
+        if (named !== undefined && (CODE_REACH.includes(named) || LOADER_NAMES.includes(named) || LOADER_PROPERTIES.includes(named))) refuse(node);
       }
     }
     for (const k of Object.keys(node)) {
@@ -1411,7 +1421,7 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
   let problem: string | undefined;
   // Each reach's writes, held against all of their runs at the end: a
   // script outside the repo that writes one the check runs (Daybreak 153).
-  const writes: Writes = { written: [], reached: [] };
+  const writes: Writes = { written: [], reached: [], pending: [], deps: [] };
   let wrote: string | undefined;
   const take = (reach: ScriptReach) => {
     wrote ??= reach.writeProblem;
@@ -1419,6 +1429,10 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
       writes.written.push(...reach.writes.written);
       writes.reached.push(...reach.writes.reached);
       writes.somewhere ??= reach.writes.somewhere;
+      // A variable the check sets is the outside script's to write to too.
+      writes.pending!.push(...(reach.writes.pending ?? []));
+      writes.deps!.push(...(reach.writes.deps ?? []));
+      if (reach.writes.assignsAny) writes.assignsAny = true;
     }
     for (const f of reach.files) files.add(f);
     for (const f of reach.missing) missing.add(f);
