@@ -98,20 +98,33 @@ fn every_phase_with_every_event() {
             Then::Prepend,
         ),
         (fetching(1, 2), Event::NewestRead, idle(2), Then::Nothing),
-        (
-            fetching(1, 2),
-            Event::Trimmed,
-            fetching(1, 2),
-            Then::Nothing,
-        ),
-        // An answer with nothing asked: one asked before a newest read.
-        (idle(0), Event::Failed { ticket: 1 }, idle(1), secs(2)),
-        (idle(1), Event::Empty { ticket: 1 }, idle(0), Then::Skip),
+        (fetching(1, 2), Event::Trimmed, idle(2), Then::Nothing),
+        // An answer to an ask made before a newest read or a trim is let go.
+        (idle(0), Event::Failed { ticket: 1 }, idle(0), Then::Nothing),
+        (idle(1), Event::Empty { ticket: 1 }, idle(1), Then::Nothing),
         (
             idle(1),
             Event::Arrived { ticket: 1 },
-            idle(0),
-            Then::Prepend,
+            idle(1),
+            Then::Nothing,
+        ),
+        (
+            fetching(2, 1),
+            Event::Failed { ticket: 1 },
+            fetching(2, 1),
+            Then::Nothing,
+        ),
+        (
+            fetching(2, 1),
+            Event::Empty { ticket: 1 },
+            fetching(2, 1),
+            Then::Nothing,
+        ),
+        (
+            fetching(2, 1),
+            Event::Arrived { ticket: 1 },
+            fetching(2, 1),
+            Then::Nothing,
         ),
         (idle(1), Event::NewestRead, idle(1), Then::Nothing),
         (idle(1), Event::Trimmed, idle(1), Then::Nothing),
@@ -188,7 +201,49 @@ fn a_newest_read_or_a_trim_starts_over_from_the_newest_page() {
     assert!(!o.fetching());
 }
 
-/// The fields thread.rs kept before, and what it did with them, as it was.
+/// Fixed 21 Nov: an older page on its way as the pane read its newest page
+/// again (the connection back, the thread moved) or was trimmed back to it
+/// (kept with more than 2,000 events, after reading far back) still went in
+/// above the new rows when it came: its events end where the old rows began,
+/// thousands of seqs before the new ones, so the transcript had a hole in
+/// it for good, and paging went on from below the hole. After a newest read
+/// a second ask could also go out beside it. Now only the answer to the ask
+/// on its way counts.
+#[test]
+fn a_page_asked_for_before_a_trim_is_let_go() {
+    // The old code: asked at 3,000, trimmed back to rows from 9,500.
+    let mut old = legacy::Pane::default();
+    let (before, first) = old.load_older(3000, true).expect("an ask");
+    old.older_skip = None; // what trim_kept did, and all it did
+    assert_eq!(
+        old.finish_older(before, first, legacy::Answer::Arrived),
+        legacy::Did::Prepended,
+        "the old pane put the page above rows starting at 9,500"
+    );
+    // And after a newest read, a second ask went out beside the first.
+    let mut old = legacy::Pane::default();
+    old.load_older(3000, true).expect("an ask");
+    old.reload();
+    assert!(
+        old.load_older(9500, true).is_some(),
+        "the old pane asked twice"
+    );
+
+    let mut o = OlderPages::default();
+    let ask = o.ask(3000, true).expect("an ask");
+    o.trimmed();
+    assert_eq!(o.answered(ask, Answer::Arrived), Then::Nothing);
+    let ask = o.ask(3000, true).expect("an ask");
+    o.newest_read();
+    let second = o.ask(9500, true).expect("an ask from the new rows");
+    assert_eq!(o.answered(ask, Answer::Arrived), Then::Nothing, "the first");
+    assert!(o.fetching(), "the second's still on its way");
+    assert_eq!(o.answered(ask, Answer::Failed), Then::Nothing);
+    assert_eq!(o.answered(second, Answer::Arrived), Then::Prepend);
+}
+
+/// The fields thread.rs kept before, and what it did with them, as it was
+/// bar the bugs since fixed, each marked "Fixed".
 pub(super) mod legacy {
     use super::EVENTS_PAGE;
     use std::time::Duration;
@@ -269,9 +324,12 @@ pub(super) mod legacy {
             self.older_skip = None;
         }
 
-        /// `trim_kept`.
+        /// `trim_kept`. Fixed 21 Nov: the page on its way is let go too
+        /// (`a_page_asked_for_before_a_trim_is_let_go`); it left
+        /// `loading_older` alone.
         pub fn trim(&mut self) {
             self.older_skip = None;
+            self.loading_older = false;
         }
     }
 }
@@ -331,6 +389,29 @@ impl Both {
             }
             Op::Answer { which, answer } => {
                 let ((before, first), ask) = self.out.remove(which % self.out.len());
+                // Fixed 21 Nov: the answer to an ask from before the rows
+                // were read again or trimmed is let go. The old code took
+                // it (`a_page_asked_for_before_a_trim_is_let_go`).
+                let current = matches!(
+                    self.new.phase(),
+                    Phase::Fetching { ticket, .. } if ticket == ask.ticket
+                );
+                if !current {
+                    let phase = self.new.phase();
+                    assert_eq!(
+                        self.new.answered(ask, answer),
+                        Then::Nothing,
+                        "{:?}",
+                        self.log
+                    );
+                    assert_eq!(
+                        self.new.phase(),
+                        phase,
+                        "a stale answer moved it: {:?}",
+                        self.log
+                    );
+                    return;
+                }
                 let did = self.old.finish_older(
                     before,
                     first,

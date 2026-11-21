@@ -6,7 +6,8 @@
 //
 // It only runs once the pane's rows show (thread_load.rs, `is_shown`), and
 // the pane asks when its view nears the first row. Each ask has a ticket, and
-// its answer is taken by that ticket.
+// only the answer to the ask on its way counts: a newest read or a trim
+// starts over, and an answer to an ask from before is let go.
 //
 // Besides the phase it keeps where the next page ends (`skip`): a page that
 // came back with nothing before the seq asked for steps back past the range
@@ -76,7 +77,8 @@ impl Phase {
             }
             // One page at a time.
             (fetching @ P::Fetching { .. }, Event::Ask { .. }) => (fetching, Then::Nothing),
-            (P::Idle { .. } | P::Fetching { .. }, Event::Failed { .. }) => {
+            // The answer to the ask on its way.
+            (P::Fetching { ticket: asked, .. }, Event::Failed { ticket }) if ticket == asked => {
                 let failures = failures + 1;
                 let then = if failures <= RETRIES {
                     Then::RetryIn(Duration::from_secs(u64::from(failures) * 2))
@@ -85,17 +87,22 @@ impl Phase {
                 };
                 (P::Idle { failures }, then)
             }
-            (P::Idle { .. } | P::Fetching { .. }, Event::Empty { .. }) => {
+            (P::Fetching { ticket: asked, .. }, Event::Empty { ticket }) if ticket == asked => {
                 (P::Idle { failures: 0 }, Then::Skip)
             }
-            (P::Idle { .. } | P::Fetching { .. }, Event::Arrived { .. }) => {
+            (P::Fetching { ticket: asked, .. }, Event::Arrived { ticket }) if ticket == asked => {
                 (P::Idle { failures: 0 }, Then::Prepend)
             }
-            (P::Idle { .. } | P::Fetching { .. }, Event::NewestRead) => {
+            // Any other answer is to an ask made before the rows were read
+            // again or trimmed: its page would go above rows that no longer
+            // start where it ends, leaving a hole in the transcript, and the
+            // ask after it would be a second one on its way.
+            (
+                phase @ (P::Idle { .. } | P::Fetching { .. }),
+                Event::Failed { .. } | Event::Empty { .. } | Event::Arrived { .. },
+            ) => (phase, Then::Nothing),
+            (P::Idle { .. } | P::Fetching { .. }, Event::NewestRead | Event::Trimmed) => {
                 (P::Idle { failures }, Then::Nothing)
-            }
-            (phase @ (P::Idle { .. } | P::Fetching { .. }), Event::Trimmed) => {
-                (phase, Then::Nothing)
             }
         }
     }
