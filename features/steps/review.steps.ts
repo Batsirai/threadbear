@@ -83,6 +83,11 @@ async function press(world: ThreadbearWorld, tip: string): Promise<void> {
   await world.app.do({ cmd: 'click', tip, review: reviewId(world) });
 }
 
+// An option's small picture on the card in the thread, by its tooltip.
+When('I press the picture of {string} on the review\'s card', async function (this: ThreadbearWorld, label: string) {
+  await this.app.do({ cmd: 'click', tip: `Open the review on ${label}` });
+});
+
 When('I open the review', async function (this: ThreadbearWorld) {
   await review(this);
 });

@@ -19,7 +19,7 @@ Feature: Design reviews
   # Swift app's card has only the button.
   @review.window @transcript.review @swift-pending
   Scenario: An option's picture on the card opens the review on that option
-    When I press "Open the review on C. Account pools"
+    When I press the picture of "C. Account pools" on the review's card
     Then the review window is open on option "C", one at a time
 
   @review.window
@@ -163,7 +163,8 @@ Feature: Design reviews
     Then the review is on option "B", shot 1
     When I press "Previous (←)" in the review
     Then the review is on option "A", shot 3
-    When I press "B. One picker, shot 2" in the review
+    When I press "B. One picker, shot 1" in the review
+    And I press "B. One picker, shot 2" in the review
     Then the review is on option "B", shot 2
 
   # The Swift scripts' keys go to the main window, not a review's.
@@ -229,5 +230,6 @@ Feature: Design reviews
     Given the web runtime is installed
     And the agent shows options with several shots each
     When I open that review
+    And I press "B. One picker, shot 1" in the review
     And I press "B. One picker, shot 2" in the review
     Then the stage shows the page
