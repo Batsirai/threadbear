@@ -636,3 +636,18 @@ for (const keep of [true, false]) {
     assert.ok(!sh(main, 'git worktree list --porcelain').includes('locked threadbear spare'));
   });
 }
+
+// Codex's third look, 21 Nov: the branch is deleted with update-ref (so only
+// as it was checked), which unlike branch -D doesn't refuse a branch some
+// checkout is on: one moved with git worktree move, its record left behind.
+test('a branch a moved checkout is still on is never deleted by the old record`s cleanup', async () => {
+  const { main } = makeRepo();
+  const t = makeBranch(main);
+  const moved = `${t.path}-moved`;
+  sh(main, `git worktree move ${t.path} ${moved}`);
+  const rec = { repo: 'proj', mainCheckout: main, path: t.path, branch: t.branch, base: sh(main, 'git rev-parse main') };
+  const result = await cleanUpWorktree(rec);
+  assert.equal(result.removed, true);
+  assert.ok(result.removed && result.branchLeft?.includes('a checkout is on it'), JSON.stringify(result));
+  assert.equal(sh(moved, 'git rev-parse --abbrev-ref HEAD'), t.branch, 'still on its branch');
+});

@@ -161,6 +161,8 @@ export async function sweepBorrows(mainCheckout: string, opts: SweepOptions, hoo
       // Its borrower may have come back (the thread brought back) since.
       if (who.thread && !elsewhere && who.pid === undefined && opts.thread(who.thread) === 'open') return undefined;
       if (head !== undefined && readHead(admin) !== head) return undefined;
+      // A detached one claimed meanwhile (its claimer is setting it up).
+      if (!c.branch && now - lastUsed(admin) < BORROW_IDLE_MS && !scratch) return undefined;
       return here;
     };
     const CHANGED = 'it changed while it was looked at';

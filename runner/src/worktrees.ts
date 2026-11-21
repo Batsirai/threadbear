@@ -325,16 +325,13 @@ async function claimSpare(spare: string): Promise<string | undefined> {
   if (!admin) return undefined;
   const lock = path.join(admin, 'locked');
   const claimed = `${lock}${CLAIMED}${process.pid}-${Date.now()}`;
+  // Touched before the rename, so it's never there with an old time.
+  const now = new Date();
   try {
+    fs.utimesSync(lock, now, now);
     fs.renameSync(lock, claimed);
   } catch {
     return undefined;
-  }
-  const now = new Date();
-  try {
-    fs.utimesSync(claimed, now, now);
-  } catch {
-    // Gone already: nothing for the sweep to read.
   }
   return claimed;
 }
@@ -2531,6 +2528,11 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     const at = await gitOut(w.mainCheckout, ['rev-parse', '--verify', '--quiet', `refs/heads/${w.branch}`]);
     if (!at) return `git couldn't read it`;
     if (!(await git(w.mainCheckout, ['merge-base', '--is-ancestor', at, MAIN])).ok) return `it has commits that aren't on ${MAIN}`;
+    // Not one some checkout is on (moved there with git worktree move, say):
+    // update-ref, unlike branch -D, would delete it from under it.
+    const using = await listCheckouts(w.mainCheckout);
+    if (!using) return `git couldn't list the worktrees of ${w.mainCheckout}`;
+    if (using.some((c) => c.branch === w.branch)) return 'a checkout is on it';
     const del = await git(w.mainCheckout, ['update-ref', '-d', `refs/heads/${w.branch}`, at]);
     return del.ok ? undefined : firstLine(del.stderr);
   };
@@ -2625,12 +2627,15 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     // On its branch still, or detached just above (a spare that couldn't be
     // locked), and nothing else.
     if (!(here = worktreeFolderNow(w, head))) return CHANGED;
-    const edited = await editedSince(here);
-    if (edited) return edited;
-    // And what's checked out there is still all on main (a commit made
-    // since the first look stays, with its folder).
+    // What's checked out there is still all on main (a commit made since
+    // the first look stays, with its folder). Before the last status, so
+    // nothing slow comes between that and the removal.
     const at = await gitOut(here, ['rev-parse', 'HEAD']);
     if (!at || !(await git(w.mainCheckout, ['merge-base', '--is-ancestor', at, MAIN])).ok) return { removed: false, reason: `${w.branch} has commits that aren't on ${MAIN}` };
+    if (!stillOurs()) return LET_GO;
+    if (!(here = worktreeFolderNow(w, head))) return CHANGED;
+    const edited = await editedSince(here);
+    if (edited) return edited;
     if (!stillOurs()) return LET_GO;
     if (!worktreeFolderNow(w, head)) return CHANGED;
     const rm = await git(w.mainCheckout, args);

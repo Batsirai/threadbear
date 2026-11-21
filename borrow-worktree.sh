@@ -95,11 +95,11 @@ for dir in $(git -C "$MAIN" worktree list --porcelain | awk -v RS= -v d="$THREAD
   # One that can't be read is skipped, as the runner does.
   admin="$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)" || continue
   lock="$admin/locked"
-  # The renamed file stays, touched, until it's set up below: the runner's
+  # The renamed file stays, touched first, until it's set up below: the runner's
   # borrow sweep counts it as the folder in use, so it doesn't take the
   # detached, unlocked folder back meanwhile (runner/src/borrows.ts).
+  touch -c "$lock" 2>/dev/null || true
   if mv "$lock" "$lock.claimed-$$" 2>/dev/null; then
-    touch "$lock.claimed-$$"
     claim="$lock.claimed-$$"
     # Not one with changes to tracked files: a spare never has them, so
     # someone is working there, and the reset below would take their work
