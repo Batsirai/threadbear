@@ -494,3 +494,21 @@ test('a new slot passes over a number git still has registered after its folder 
   assert.deepEqual(branches, ['thread/aaaaaaaa', 'thread/bbbbbbbb', 'thread/cccccccc'], 'one branch each, none left by a failed add');
   assert.equal(sh(three.worktree.path, 'git rev-parse --abbrev-ref HEAD'), 'thread/cccccccc');
 });
+
+// A spare with changes to tracked files has someone working in it (its
+// cleanup saw it clean): the next thread's reset would take them.
+test('a spare with edits to tracked files is passed over, edits kept, and stays out of the pool', async () => {
+  const { root, main } = makeRepo(KEEP);
+  const patch = (await findWorktreePatch(main, root))!;
+  const one = await makeWorktree({ cwd: main, threadId: 'aaaaaaaa-1', patch });
+  assert.ok(one.ok);
+  assert.deepEqual(await cleanUpWorktree(one.worktree), { removed: true, spare: true });
+  write(one.worktree.path, { 'README.md': 'someone is working here\n' });
+  const two = await makeWorktree({ cwd: main, threadId: 'bbbbbbbb-1', patch });
+  assert.ok(two.ok && two.worktree.path !== one.worktree.path, 'a new slot, not the spare');
+  assert.equal(fs.readFileSync(path.join(one.worktree.path, 'README.md'), 'utf8'), 'someone is working here\n');
+  assert.ok(!isLocked(main, one.worktree.path), 'out of the pool');
+  const three = await makeWorktree({ cwd: main, threadId: 'cccccccc-1', patch });
+  assert.ok(three.ok && three.worktree.path !== one.worktree.path);
+  assert.equal(fs.readFileSync(path.join(one.worktree.path, 'README.md'), 'utf8'), 'someone is working here\n');
+});

@@ -326,7 +326,13 @@ async function claimSpare(spare: string): Promise<boolean> {
 // A claimed spare, made like new on `branch` at `base`. The kept folders
 // are left as they are; everything else git doesn't track goes, ignored
 // files too (an old thread's node_modules, say), and setup runs again.
+//
+// Not one with changes to tracked files: a spare never has them (its
+// cleanup or give-back saw it clean), so someone is working there, and the
+// reset would take their work (21 Nov). It stays unlocked, out of the pool.
 async function reuse(where: string, branch: string, base: string, keep: string[]): Promise<boolean> {
+  const status = await git(where, ['status', '--porcelain', '--untracked-files=no']);
+  if (!status.ok || status.stdout.trim()) return false;
   const exclude = keep.flatMap((k) => ['-e', `/${k.replace(/^\/+|\/+$/g, '')}`]);
   for (const args of [['reset', '-q', '--hard'], ['clean', '-ffdxq', ...exclude], ['checkout', '-q', '-b', branch, base]]) {
     if (!(await git(where, args)).ok) return false;

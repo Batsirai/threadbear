@@ -598,6 +598,10 @@ With `keep`:
   isn't: two at once both succeed.) Then `git reset --hard`, `git clean -ffdx` with the kept folders
   left out (an old thread's `node_modules` goes, its build cache stays),
   and `git checkout -b thread/<id8> main`. Setup runs as for a new one.
+  A spare with changes to tracked files is passed over and left unlocked,
+  out of the pool: its cleanup or give-back saw it clean, so someone is
+  working there, and the reset would take their work.
+  `borrow-worktree.sh` does the same.
 - A patch's `teardown` runs before the worktree is set aside, as for one
   that's removed: what the thread made is its own, not the next thread's.
 - A worktree that has to stay (work not on main, uncommitted changes)
