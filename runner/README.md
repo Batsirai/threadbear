@@ -211,6 +211,37 @@ has the details.
   restart and send them when they come back, even when the snooze ended
   while the runner was down.
 
+After an uncaught exception or unhandled rejection the runner logs it
+(and reports it to Sentry where Sentry is on), then restarts the same way
+(`src/error-exits.ts`; Mike, 21 Nov 2026: after one the process may be
+half way through something). It asks `runner.restart` for an idle restart
+with the reason "An unexpected error (see the runner log)": with no thread
+busy it stops and exits 0, and with busy threads it hands over, so they
+finish their turns on this process while the new one takes the rest,
+exactly as after a deploy. Under the same release, as nothing changed.
+
+- Only a runner `launch.mjs` supervises restarts (every installed runner on
+  releases: launchd on a Mac, systemd on Linux, the Scheduled Task on
+  Windows), as only there something starts it again. A dev runner
+  (`THREADBEAR_DEV_RUNNER=1`, which `dev-runner.sh` sets) stops with exit
+  code 70 and `dev-runner.sh` doesn't start it again. Anything else (tests,
+  `npm start` by hand, a `--from-source` install) logs and carries on, as
+  before.
+- A loop guard: after 3 such restarts in 10 minutes (`run/error-exits.json`)
+  the next error is only logged, a `runner.notice` warning goes to every
+  client (and again after each hello while it holds), and the log says
+  "stopped restarting for uncaught errors". An hour without an uncaught
+  error clears it. `launch.mjs` doesn't count these restarts as crashes:
+  they exit 0 after listening.
+- Deadlines: once the stop after an error begins it has 30 s before the
+  process exits anyway; a handover after an error keeps its busy threads an
+  hour at most, then stops them (the new runner carries them on as after a
+  crash). A second error while handing over, finishing turns or stopping
+  stops it at once, never another restart request.
+- Errors that are known and harmless are handled where they happen, so
+  this stays for the unexpected (a Convex sync flush that throws is logged
+  and retried, `sync.ts`).
+
 ## A dev runner
 
 `scripts/dev-runner.sh [--home DIR] [--port N] [--keep]` runs the working
@@ -288,6 +319,8 @@ Environment variables, mainly for tests:
 | `THREADBEAR_DEBUG=1` | Log CLI stderr and other detail. |
 | `THREADBEAR_LOG_STDERR=1` | Also print the log to stderr. |
 | `THREADBEAR_NODE` | The Node binary the scripts use. The runner sets it in every thread to the Node it runs on. Unset, they take the `node` on PATH, else nvm's newest Node 24 or newer, else Homebrew's (`scripts/find-node.sh`). |
+| `THREADBEAR_DEV_RUNNER=1` | Set by `dev-runner.sh`: after an uncaught error the runner exits with 70 rather than restarting. Taken out of the environment at start, so CLIs don't inherit it. |
+| `THREADBEAR_TEST_THROW`, `THREADBEAR_TEST_THROW_MS` | Tests only: `exception` or `rejection` throws one that long after listening (default 500 ms). Ignored by a release and on the real data dir. |
 | `THREADBEAR_GOOD_AFTER_MS` | How long a release has to stay up before it is marked `lastGood` (default 60 s; the tests shorten it). |
 | `THREADBEAR_START_TIMEOUT_MS` | How long `launch.mjs` gives a release to start listening before stopping it (default 90 s). |
 | `THREADBEAR_LAUNCHCTL`, `THREADBEAR_LAUNCH_AGENTS_DIR` | Stand-ins for `launchctl` and `~/Library/LaunchAgents` in the install and deploy scripts (the deploy tests use both). |
@@ -310,6 +343,7 @@ What the runner gives the CLIs it starts is under Tools for agents below.
   run/runner.pid                the lock: pid and start time of the runner that
                                 owns this data dir
   run/resumes.json              when each thread was last resumed after a restart
+  run/error-exits.json          restarts after uncaught errors lately, for the loop guard
   trash/<threadId>-<time>/      deleted threads, kept until removed by hand
   threads/<threadId>/
     thread.json                 summary plus internal state, written atomically

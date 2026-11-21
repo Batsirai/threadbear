@@ -3409,7 +3409,18 @@ export class ConvexSync {
     if (this.retryAt !== undefined) delay = Math.max(delay, this.retryAt - now);
     this.flushTimer = this.deps.clock.setTimeout(() => {
       this.flushTimer = undefined;
-      void this.flush();
+      // flush catches the backend's failures itself; what gets out is a bug
+      // in its own bookkeeping (THREADBEAR-28, a spread too big for the
+      // stack). Logged (so Sentry hears) and tried again later rather than
+      // left as an unhandled rejection, which restarts the runner now
+      // (error-exits.ts) and left the mirror without a next flush before.
+      this.flush().catch((e: unknown) => {
+        this.flushing = false;
+        this.deps.log.error('convex sync flush threw; will retry', { error: (e as Error)?.stack ?? String(e) });
+        this.backoffMs = this.backoffMs ? Math.min(this.backoffMs * 2, BACKOFF_MAX_MS) : BACKOFF_MIN_MS;
+        this.retryAt = this.deps.clock.now() + this.backoffMs;
+        this.scheduleFlush();
+      });
     }, delay);
   }
 

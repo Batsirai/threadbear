@@ -219,13 +219,16 @@ trap stop INT TERM HUP
 # runner sets its own for the CLIs it starts.
 while :; do
   env -u THREADBEAR_DATA_DIR -u THREADBEAR_URL -u THREADBEAR_THREAD_ID -u THREADBEAR_RUNNER_VERSION -u THREADBEAR_RUNNER_HOME \
-    THREADBEAR_HOME="$DATA_HOME" THREADBEAR_PORT="$PORT" THREADBEAR_LOG="$LOG" THREADBEAR_LOG_STDERR=1 THREADBEAR_CLI_UPDATES=off THREADBEAR_TOKEN_TALLY=off \
+    THREADBEAR_HOME="$DATA_HOME" THREADBEAR_PORT="$PORT" THREADBEAR_LOG="$LOG" THREADBEAR_LOG_STDERR=1 THREADBEAR_CLI_UPDATES=off THREADBEAR_DEV_RUNNER=1 THREADBEAR_TOKEN_TALLY=off \
     "$NODE" src/main.ts &
   CHILD=$!
   CODE=0
   wait "$CHILD" || CODE=$?
   CHILD=""
   if [ "$CODE" != 0 ]; then
+    # 70: an uncaught error (src/error-exits.ts). An installed runner
+    # restarts for one; a dev runner stops so it's seen.
+    if [ "$CODE" = 70 ]; then echo "The dev runner stopped after an uncaught error (the log above has it)." >&2; fi
     echo "The dev runner exited with $CODE; not starting it again." >&2
     # Kept, since its log says why.
     echo "Its data (threads, runner.log) is in $DATA_HOME; rm -rf it when you're done." >&2

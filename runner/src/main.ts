@@ -104,6 +104,7 @@ import { machineIcon } from './machine.ts';
 import { filesMethods } from './files.ts';
 import { devicesMethods } from './devices.ts';
 import { flushSentry, reportException, reportLoggedError, reportLoggedWarning, startSentry } from './sentry.ts';
+import { ERROR_DRAIN_DEADLINE_MS, ERROR_EXIT_CODE, ERROR_STOP_DEADLINE_MS, decideErrorExit, errorMode, guardHolds, guardNotice, readErrorExits, takeErrorEnv, testThrow, writeErrorExits } from './error-exits.ts';
 import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
 import { CrossRunner } from './cross-runner.ts';
 import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
@@ -168,6 +169,25 @@ async function main(): Promise<void> {
   const reporting = await startSentry(cfg.home);
   log.info('runner starting', { version: RUNNER_VERSION, home: cfg.home, port: cfg.port, pid: process.pid, sentry: reporting });
   if (secretsAclProblem) log.warn('could not make the secrets folder private', { why: secretsAclProblem });
+  // After an uncaught error (error-exits.ts, onUncaught below): restarts
+  // for errors lately, whether this runner is leaving after one, and the
+  // code it exits with (a dev runner's says not to start it again).
+  const errorEnv = takeErrorEnv(process.env);
+  let errorExits = readErrorExits(cfg.home);
+  let leavingAfterError = false;
+  let exitCode = 0;
+  let stopDeadline: NodeJS.Timeout | undefined;
+  const armStopDeadline = () => {
+    if (stopDeadline) return;
+    process.exitCode = exitCode;
+    stopDeadline = setTimeout(() => {
+      log.error(`the stop after an uncaught error took over ${ERROR_STOP_DEADLINE_MS / 1000} s; exiting now`);
+      // The 'exit' handler stops the CLI groups still running.
+      process.exit(exitCode);
+    }, ERROR_STOP_DEADLINE_MS);
+    // Never what keeps the process alive once everything else has gone.
+    stopDeadline.unref();
+  };
   // A main thread held up for a second or more says so in tb logs (self-profile.ts).
   watchStalls({ log });
 
@@ -1654,6 +1674,8 @@ async function main(): Promise<void> {
         ...(pushFailing ? [{ level: 'warning' as const, message: pushFailingText(pushFailing) }] : []),
         ...(rolledBack ? [{ level: 'warning' as const, message: rolledBack }] : []),
         ...(noCodex ? [{ level: 'warning' as const, message: noCodex }] : []),
+        // Stopped restarting after uncaught errors (error-exits.ts), until an hour passes without one.
+        ...(guardHolds(errorExits, Date.now()) ? [{ level: 'warning' as const, message: guardNotice(errorExits) }] : []),
         ...restarter.helloNotices(),
         ...instructions.helloNotices(),
       ];
@@ -1746,6 +1768,9 @@ async function main(): Promise<void> {
   const stop = async (signal: string) => {
     if (stopping) return;
     stopping = true;
+    // Leaving after an uncaught error: this process may be half way through
+    // something, so the stop gets a deadline (error-exits.ts).
+    if (leavingAfterError) armStopDeadline();
     cancelMarkGood();
     clockJumps.stop();
     updater.stop();
@@ -1767,7 +1792,7 @@ async function main(): Promise<void> {
     // if this one is still here when it ends.
     // launch.mjs gives a runner 20 s after its own SIGTERM (STOP_GRACE_MS);
     // a restart of its own has no deadline.
-    const checksDone = scheduler.settled(/^SIG|supervisor/.test(signal) ? 15_000 : undefined);
+    const checksDone = scheduler.settled(/^SIG|supervisor/.test(signal) || leavingAfterError ? 15_000 : undefined);
     librarian.stop();
     memorySync.stop();
     stuckJobs.stop();
@@ -1805,7 +1830,9 @@ async function main(): Promise<void> {
       await checksDone;
     } finally {
       log.info('runner stopped');
-      process.exit(0);
+      // The error's report, which Sentry sends in the background.
+      if (leavingAfterError) await flushSentry(2000);
+      process.exit(exitCode);
     }
   };
 
@@ -1955,14 +1982,99 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void stop('SIGTERM'));
   process.on('SIGINT', () => void stop('SIGINT'));
   process.on('SIGHUP', () => void stop('SIGHUP'));
-  process.on('uncaughtException', (e) => {
-    log.error('uncaught exception', { error: e?.stack ?? String(e) });
-    reportException(e, 'uncaught exception');
-  });
-  process.on('unhandledRejection', (e) => {
-    log.error('unhandled rejection', { error: (e as Error)?.stack ?? String(e) });
-    reportException(e, 'unhandled rejection');
-  });
+  // An uncaught error: logged and reported, then the runner leaves the way a
+  // planned restart does (Mike, 21 Nov 2026: after one the process may be
+  // half way through something), unless nothing would start it again or
+  // the guard against a restart loop holds (error-exits.ts).
+  const mode = errorMode({ supervised: supervised(), devRunner: errorEnv.devRunner });
+  const onUncaught = (kind: 'uncaught exception' | 'unhandled rejection', e: unknown) => {
+    try {
+      log.error(kind, { error: (e as Error)?.stack ?? String(e) });
+      reportException(e, kind);
+    } catch {
+      // nothing more to say it with
+    }
+    try {
+      leaveAfterError();
+    } catch (err) {
+      // Never a throw from in here, which would come straight back.
+      log.error('could not act on an uncaught error', { error: String(err) });
+      if (leavingAfterError && !stopping) void stop('restart');
+    }
+  };
+  const leaveAfterError = () => {
+    if (mode === 'carry on') {
+      log.warn('nothing would start this runner again, so it carries on after the error');
+      return;
+    }
+    // Already stopping (for this or anything else): the stop goes on, with
+    // a deadline now.
+    if (stopping) {
+      leavingAfterError = true;
+      armStopDeadline();
+      log.warn('an uncaught error while stopping; the stop goes on');
+      return;
+    }
+    // A second error while already leaving, or one on a runner that's
+    // finishing turns after a handover: stop now. The new runner takes a
+    // draining runner's threads in as after a crash and carries them on.
+    if (leavingAfterError || draining) {
+      leavingAfterError = true;
+      log.error(draining ? 'an uncaught error while finishing turns after a handover; stopping now' : 'another uncaught error while leaving after one; stopping now');
+      void stop('restart');
+      return;
+    }
+    const d = decideErrorExit(errorExits, Date.now());
+    errorExits = d.state;
+    try {
+      writeErrorExits(cfg.home, d.state);
+    } catch (err) {
+      log.warn('could not save run/error-exits.json', { error: String(err) });
+    }
+    if (!d.exit) {
+      if (d.tripped) {
+        log.warn('stopped restarting for uncaught errors: too many restarts for them lately; carrying on until an hour passes without one', { restarts: d.state.exits.length });
+        runner.notice('warning', guardNotice(d.state));
+      } else {
+        log.warn('carrying on after an uncaught error: the restart guard holds', { errors: d.state.tripped?.errors });
+      }
+      return;
+    }
+    leavingAfterError = true;
+    if (mode === 'exit') {
+      exitCode = ERROR_EXIT_CODE;
+      log.error(`exiting after an uncaught error with code ${ERROR_EXIT_CODE}: a dev runner, so nothing starts it again`);
+      void stop('uncaught error');
+      return;
+    }
+    log.warn('restarting after an uncaught error', { restarts: d.state.exits.length });
+    // runner.restart's own path, as a deploy's: busy threads finish their
+    // turns here while launch.mjs starts the new runner beside it (a
+    // handover), and with none busy it stops and is started again.
+    restarter.request({ when: 'idle', reason: 'An unexpected error (see the runner log)' });
+    // A handover keeps this process for its busy threads' turns, which
+    // a deploy doesn't limit; after an error they get an hour.
+    setTimeout(() => {
+      if (stopping) return;
+      log.warn('still finishing turns an hour after an uncaught error; stopping now');
+      void stop('restart');
+    }, ERROR_DRAIN_DEADLINE_MS).unref();
+  };
+  process.on('uncaughtException', (e) => onUncaught('uncaught exception', e));
+  process.on('unhandledRejection', (e) => onUncaught('unhandled rejection', e));
+  // Test-only: throws one on purpose, from a checkout on a temp data dir
+  // (error-exits.ts testThrow), never on an installed runner.
+  const hook = testThrow(errorEnv.hookEnv, { release: RELEASE.release, home: cfg.home, realHome: defaultHome() });
+  if (hook) {
+    log.warn('test hook: throwing on purpose', { kind: hook.kind, afterMs: hook.afterMs });
+    setTimeout(() => {
+      const e = new Error(`test: an unhandled ${hook.kind} (THREADBEAR_TEST_THROW)`);
+      if (hook.kind === 'exception') throw e;
+      void (async () => {
+        throw e;
+      })();
+    }, hook.afterMs);
+  }
   // Last resort if the process exits some other way: kill the CLI groups
   // synchronously so they never outlive the runner.
   process.on('exit', () => {

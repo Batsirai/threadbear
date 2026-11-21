@@ -266,6 +266,13 @@ the restart is asked for.
   The Mac app reads these sentences (the numbers after "when" add up to the
   threads waited for), so they change together. `runner.status` shows it as `pendingRestart`. When it
   starts, the notice is "The runner is restarting now."
+- The runner asks itself for an idle restart after an uncaught error
+  (reason "An unexpected error (see the runner log)"; runner/README.md,
+  "Restarts"), so clients see the usual notices. A handover's notice says
+  "onto a new release" only when the request named one. After 3 of these in
+  10 minutes it stops restarting for them and sends a `runner.notice` at
+  warning level, again after each hello, until an hour passes without an
+  uncaught error.
 - The request is saved in `restart.json` in the data dir, so a crash
   before the runner is idle doesn't lose it: the next start counts as the
   restart. If the runner stops some other way while it waits (launchctl,

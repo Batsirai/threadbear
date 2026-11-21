@@ -451,7 +451,10 @@ export class Restarter {
     // "The runner is restarting" first: the app reads that as a restart
     // under way (RunnerRestart.parse) and keeps its banner quiet while the
     // connection moves to the new runner.
-    this.deps.runner.notice('info', `The runner is restarting onto a new release. ${n === 1 ? '1 busy thread finishes its turn' : `${n} busy threads finish their turns`} on the old one first, then ${n === 1 ? 'moves' : 'move'} across.`);
+    // Onto a new release when one was asked for; after an uncaught error
+    // (main.ts) it's the same release again.
+    const onto = this.pending.release ? ' onto a new release' : '';
+    this.deps.runner.notice('info', `The runner is restarting${onto}. ${n === 1 ? '1 busy thread finishes its turn' : `${n} busy threads finish their turns`} on the old one first, then ${n === 1 ? 'moves' : 'move'} across.`);
     this.defer(() => this.deps.handOver!(keeps));
   }
 

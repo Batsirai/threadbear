@@ -2340,6 +2340,12 @@ the new one is up. If one can't be sent, its words go
 back in that thread's box and a note above the thread says which thread,
 until you dismiss it.
 
+If the runner hits an unexpected error, it restarts itself the same way, so
+you may see that restart line with no update behind it; busy threads finish
+their turns first, as in an update. If that happens three times in ten
+minutes it stops restarting for it and says so in the error bar, and carries
+on until an hour goes by without another.
+
 A runner update lets a job a thread left running in the background finish, for
 up to about 4 hours after the thread's last turn. If one goes on longer it's
 stopped, and the thread gets told and wakes by itself to check on it, so you'll
