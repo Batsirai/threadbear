@@ -4449,6 +4449,19 @@ pub(crate) fn automation(
                 return Err(format!("no control with the tip {tip:?}"));
             };
             let at = target.visible_bounds().center();
+            // `"enabled": true`: refused while what's under the point is
+            // disabled, so a spec can wait for it. A control kept disabled
+            // until its last press lands (the librarian's Pause, a
+            // schedule's) took a second press 110 ms after the first under
+            // a slow runner, and it did nothing (21 Nov). Its label may sit
+            // on a wrapper, so anything under the point counts.
+            if cmd["enabled"].as_bool() == Some(true)
+                && window.elements().into_iter().any(|e| {
+                    e.visible() && e.disabled() == Some(true) && e.visible_bounds().contains(&at)
+                })
+            {
+                return Err(format!("the control with the tip {tip:?} is disabled"));
+            }
             window.pointer_move(at, None, cx);
             window.pointer_down(at, MouseButton::Left, cx);
             window.pointer_up(at, MouseButton::Left, cx);

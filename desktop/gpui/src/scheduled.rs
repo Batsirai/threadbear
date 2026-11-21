@@ -17,6 +17,7 @@ use crate::sidebar::{
 };
 use crate::spinner::Spinner;
 use crate::{call, icons, now_ms, style};
+use gpui_kit::base::A11yDisabledExt as _;
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::{h_flex, v_flex, Sizable as _, WindowExt as _};
@@ -853,10 +854,15 @@ impl Threadbear {
                 }),
             );
             // Until the last one lands (it already shows), so no second click.
+            // Said to a screen reader and the specs too (`click` with
+            // `enabled`), as it's the wrapper that holds the clicks off.
             row = row.child(
                 div()
+                    .id(ElementId::Name(format!("pausing-{id}").into()))
+                    .test_support()
                     .when(pausing, |d| d.opacity(0.4).occlude())
-                    .child(button),
+                    .child(button)
+                    .a11y_disabled(pausing),
             );
         }
         let delete_id = id.clone();
