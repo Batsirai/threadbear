@@ -512,7 +512,10 @@ it again next time, a teardown should be safe to run twice.
 When a thread with a worktree is archived or deleted: if its branch is
 merged into main (or has no commits of its own), the worktree is removed
 (`git worktree remove`, `--force` only for untracked files) and the branch
-deleted. Otherwise both stay, with a `system.note` saying so and how to
+deleted. Its status is read again just before it's locked as a spare or
+removed, and an edit made meanwhile puts it back on its branch, kept: on 21
+Nov one made after the first look would have gone into the spare, for the
+next thread's `reset --hard`, or out with the folder under `--force`. Otherwise both stay, with a `system.note` saying so and how to
 land or drop them. Unarchiving a thread whose worktree was removed starts
 its next turn in the main checkout, with a note.
 

@@ -2453,7 +2453,19 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     const status = await gitOut(here, ['status', '--porcelain', '--untracked-files=all']);
     if (status === undefined) return { removed: false, reason: `git couldn't read ${w.path}` };
     const lines = status ? status.split('\n') : [];
-    if (lines.some((l) => !l.startsWith('??'))) return { removed: false, reason: `the worktree has uncommitted changes` };
+    const DIRTY: Cleanup = { removed: false, reason: `the worktree has uncommitted changes` };
+    if (lines.some((l) => !l.startsWith('??'))) return DIRTY;
+    // Read again just before the folder is pooled or removed: an edit made
+    // since the look above would go into a spare, whose next taker's
+    // `reset --hard` takes it, or be removed with the folder by --force
+    // (21 Nov; borrows.ts does the same). If there is one, it goes back on
+    // its branch, as it was, and stays.
+    const editedSince = async (where: string): Promise<Cleanup | undefined> => {
+      const again = await gitOut(where, ['status', '--porcelain', '--untracked-files=all']);
+      if (again !== undefined && !again.split('\n').some((l) => l && !l.startsWith('??'))) return undefined;
+      if (head !== `ref: refs/heads/${w.branch}`) await git(where, ['checkout', '-q', '-B', w.branch]);
+      return again === undefined ? { removed: false, reason: `git couldn't read ${w.path}` } : DIRTY;
+    };
     if (w.keep && (await spares(w.mainCheckout, path.dirname(w.path))).length < MAX_SPARES) {
       // Detached where it is (no files change), so the branch can go; its
       // untracked files go when the next thread takes it.
@@ -2468,7 +2480,12 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
         if (!stillOurs()) return LET_GO;
         if (branchThere && (await git(w.mainCheckout, ['branch', '-D', w.branch])).ok) branchThere = false;
         if (!stillOurs()) return LET_GO;
-        if (!branchThere && (await git(w.mainCheckout, ['worktree', 'lock', '--reason', SPARE, w.path])).ok) return { removed: true, spare: true };
+        if (!branchThere) {
+          if (!(here = worktreeFolderNow(w, head))) return CHANGED;
+          const edited = await editedSince(here);
+          if (edited) return edited;
+          if ((await git(w.mainCheckout, ['worktree', 'lock', '--reason', SPARE, w.path])).ok) return { removed: true, spare: true };
+        }
       }
       // Couldn't be set aside: removed instead, below.
     }
@@ -2476,6 +2493,10 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     if (!stillOurs()) return LET_GO;
     // On its branch still, or detached just above (a spare that couldn't be
     // locked), and nothing else.
+    if (!(here = worktreeFolderNow(w, head))) return CHANGED;
+    const edited = await editedSince(here);
+    if (edited) return edited;
+    if (!stillOurs()) return LET_GO;
     if (!worktreeFolderNow(w, head)) return CHANGED;
     const rm = await git(w.mainCheckout, args);
     if (!rm.ok) return { removed: false, reason: `git worktree remove failed: ${firstLine(rm.stderr)}` };
