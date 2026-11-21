@@ -766,6 +766,9 @@ export type SyncDeps = {
   // full write's prune. Absent in small tests.
   elsewhere?: (threadId: string) => boolean;
   elsewhereIds?: () => string[];
+  // That thread as the draining runner has it, for its folder: a card it
+  // puts up is checked against it (remoteCardShowsAll).
+  elsewhereThread?: (threadId: string) => ThreadSummary | undefined;
   // A thread moved from here to another runner (moves.ts gone): its row is
   // that runner's now, so it's only ever forgotten here, never removed.
   movedAway?: (threadId: string) => boolean;
@@ -2635,7 +2638,7 @@ export class ConvexSync {
 
   // A card the thread now waits on, or one that's been answered, onto what
   // its row shows. False for an event that's neither.
-  private noteCard(threadId: string, e: PersistedEvent): boolean {
+  private noteCard(threadId: string, e: PersistedEvent, cwd = this.threadCwd(threadId)): boolean {
     if (e.type === 'approval.requested' && e.name === START_CARD) {
       // A request for a thread on another runner (cross-runner.ts) is
       // answered only on the main Mac, whose runner starts it: the phone's
@@ -2650,7 +2653,7 @@ export class ConvexSync {
       // "$token"`), so what the line is made from must go up as it is (Codex review).
       const raw = summaryField(e.input);
       const shownAsIs = raw === undefined || this.scrubber.safeText(raw) === raw;
-      const whole = shownAsIs && remoteCardShowsAll(e.name, e.input, this.threadCwd(threadId), e.title);
+      const whole = shownAsIs && remoteCardShowsAll(e.name, e.input, cwd, e.title);
       const planSeq = e.name === 'ExitPlanMode' && e.itemId ? this.planSeqs.get(`${threadId} ${e.itemId}`) : undefined;
       this.addCard(threadId, {
         approvalId: e.approvalId, kind: 'approval', seq: e.seq, name: e.name,
@@ -2699,7 +2702,10 @@ export class ConvexSync {
       for (const e of [...events].sort((a, b) => a.seq - b.seq)) {
         if (e.type === 'approval.resolved' || !('approvalId' in e)) continue;
         const shown = [this.pending.get(thread.id), ...(this.cardsBehind.get(thread.id) ?? [])].some((c) => c?.approvalId === e.approvalId);
-        if (!shown && !this.closedCards.has(e.approvalId)) added = this.noteCard(thread.id, e) || added;
+        // Its folder from the draining runner: the thread isn't here yet, and
+        // without one a command's own folder reads as somewhere else, so the
+        // card went up Deny-only (Dell XPS, 21 Nov 2026).
+        if (!shown && !this.closedCards.has(e.approvalId)) added = this.noteCard(thread.id, e, thread.cwd) || added;
       }
       // Older than one that came live meanwhile: behind it, as if they'd
       // all come live (the newest on the row, the rest in order behind).
@@ -2802,11 +2808,12 @@ export class ConvexSync {
 
   // Only a change the phone would see makes a write.
   // The thread's folder, for whether a card's line shows all of it.
+  // Or, during a handover, the draining runner's.
   private threadCwd(threadId: string): string | undefined {
     try {
       return this.deps.runner.get(threadId).cwd;
     } catch {
-      return undefined;
+      return this.deps.elsewhereThread?.(threadId)?.cwd;
     }
   }
 

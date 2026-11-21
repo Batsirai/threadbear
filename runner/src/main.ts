@@ -920,6 +920,7 @@ async function main(): Promise<void> {
     scrubber,
     elsewhere: (id) => peers.owns(id) || peers.isArriving(id),
     elsewhereIds: () => [...peers.summaries(['inbox', 'snoozed', 'archived']).map((t) => t.id), ...peers.arrivingIds()],
+    elsewhereThread: (id) => peers.find(id),
     movedAway: (id) => movesRef?.gone(id) ?? false,
     version: RUNNER_VERSION,
     release: RELEASE.release,
