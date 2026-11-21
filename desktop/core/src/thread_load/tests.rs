@@ -122,7 +122,7 @@ fn every_state_with_every_event() {
         (reading(false), Event::ShownAgain, reading(false), Nothing),
         (reading(true), Event::ShownAgain, reading(false), CatchUp),
         // Failed.
-        (failed("x", false), Event::Read, failed("x", false), Nothing),
+        (failed("x", true), Event::Read, reading(true), Nothing),
         (failed("x", true), Event::TryAgain, reading(true), Nothing),
         (
             failed("x", false),
@@ -244,12 +244,16 @@ fn every_state_with_every_event() {
             "{from:?} on {event:?}"
         );
     }
-    // And nothing panics or loses a failure's words anywhere.
+    // And nothing panics anywhere, and a read starting never leaves a
+    // failure up.
     for from in every_state() {
         for event in every_event() {
             let (to, _) = from.clone().next(event.clone());
-            if let (ThreadLoad::Failed { message, .. }, Event::Read) = (&to, &event) {
-                assert_eq!(message, "x", "{from:?} on {event:?}");
+            if event == Event::Read {
+                assert!(
+                    !matches!(to, ThreadLoad::Failed { .. }),
+                    "{from:?} on {event:?}"
+                );
             }
         }
     }
@@ -365,7 +369,30 @@ mod specs {
     }
 }
 
-/// The fields thread.rs kept before, and what it did with them, as it was.
+/// Fixed 21 Nov: a thread whose first read failed, read again as the
+/// connection comes back (or the thread moves), kept saying "Couldn't load
+/// this thread." with Try again until that read answered, and pressing Try
+/// again then read it a second time. It shows the spinner now.
+#[test]
+fn a_read_starting_after_a_failure_shows_the_spinner() {
+    let mut old = legacy::Pane::default();
+    old.read_failed("Not connected to the runner.");
+    old.read_unfixed();
+    assert_eq!(
+        old.drawn(),
+        legacy::Drawn::Failed("Not connected to the runner.".into()),
+        "the old pane, reading again"
+    );
+    let (l, _) = ThreadLoad::opening().next(read_failed("Not connected to the runner."));
+    let (l, _) = l.next(Event::Read);
+    assert_eq!(l.view(false), View::Spinner);
+    assert_eq!(l.name(), "loading");
+    let (l, _) = l.next(Event::Landed);
+    assert_eq!(l.view(false), View::Transcript);
+}
+
+/// The fields thread.rs kept before, and what it did with them, as it was
+/// bar the bugs since fixed, each marked "Fixed" with the old code beside it.
 pub(super) mod legacy {
     use super::NO_RECORD;
 
@@ -389,8 +416,17 @@ pub(super) mod legacy {
     }
 
     impl Pane {
-        /// `load` as it began, and `load_subagent`: nothing it kept changed.
-        pub fn read(&mut self) {}
+        /// `load` as it began, and `load_subagent`: nothing it kept changed,
+        /// so a failure stayed up while it read again (`read_unfixed`).
+        /// Fixed 21 Nov: one not shown goes back to the spinner.
+        pub fn read(&mut self) {
+            if !self.loaded && !self.subagent_missing {
+                self.load_failed = None;
+            }
+        }
+
+        /// `read` as it was.
+        pub fn read_unfixed(&mut self) {}
 
         /// `retry_load`, and `resubscribe` reading again.
         pub fn try_again(&mut self) {

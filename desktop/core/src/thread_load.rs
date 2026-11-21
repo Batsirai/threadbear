@@ -102,9 +102,11 @@ impl ThreadLoad {
         use ThreadLoad as L;
         let nothing = |l| (l, Then::Nothing);
         match (self, event) {
-            // A read starting changes nothing it shows, bar a read under
-            // rows already shown. A failure stays up while it reads again.
-            (l @ (L::Reading { .. } | L::Failed { .. } | L::NoRecord), Event::Read) => nothing(l),
+            // A read starting from a failure goes back to the spinner, as Try
+            // again does: the failure, Try again and all, stayed up while the
+            // connection's return read it again, and Try again read it twice.
+            (L::Failed { behind, .. }, Event::Read) => nothing(L::Reading { behind }),
+            (l @ (L::Reading { .. } | L::NoRecord), Event::Read) => nothing(l),
             (L::Shown { behind, .. }, Event::Read | Event::TryAgain) => nothing(L::Shown {
                 behind,
                 rereading: true,
