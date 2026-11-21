@@ -1297,6 +1297,14 @@ test('end_turn asks once about an ask pointing at another thread with no link, a
   assert.deepEqual(toPhoneAsk({ action: 'x', links: [{ title: 'Open its thread', url: `thread:${app.id}` }, { title: 'File', url: '/tmp/a.png' }] }).links, [{ title: 'Open its thread', url: `thread:${app.id}` }]);
 });
 
+test("an ask's review link reaches the phone, which opens it in its Reviews sheet", () => {
+  // 21 Nov 2026: a pick between three mocks reached the phone as a bare
+  // question, its "Open the three mocks" link dropped on the way.
+  const review = 'review:0a7d18e2-5c14-45d3-ae06-5e1e13aa47d5';
+  assert.deepEqual(toPhoneAsk({ action: 'Which way?', links: [{ title: 'Open the three mocks', url: review }] }).links, [{ title: 'Open the three mocks', url: review }]);
+  assert.equal(toPhoneAsk({ action: 'x', links: [{ title: 'Bad', url: 'review:../../etc' }] }).links, undefined);
+});
+
 test('end_turn asks once for a try at a step a card hands over, in both forms', async () => {
   const forms = [
     { oneReply: true, offering: { asks: [{ question: 'Turn on the setting.', options: [{ label: 'Done' }, { label: 'Can you do it?' }] }] }, plain: { asks: [{ question: 'Should I sign you up for the store?', options: [{ label: 'Sign me up' }, { label: 'Hold off' }] }] } },

@@ -469,6 +469,11 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
                   >
                     {l.title}
                   </a>
+                ) : /^review:/i.test(l.url) ? (
+                  // A show_options review in this thread: its window is on the Mac.
+                  <span key={l.url} className="btn inert-link" title="This review opens in Threadbear on your Mac or iPhone">
+                    {l.title} (on your Mac or iPhone)
+                  </span>
                 ) : (
                   <OutLink key={l.url} className="btn primary" href={l.url}>
                     {l.title} ↗

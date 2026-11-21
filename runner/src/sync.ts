@@ -522,8 +522,8 @@ export type ThreadDoc = {
 };
 
 // An open ask as the phone sees it (convex/schema.ts): no `where`, which the
-// paragraph already says, and only web links, as a file on the Mac can't
-// be opened from the phone.
+// paragraph already says, and only links the phone can open (web pages,
+// thread: and review:), as a file on the Mac can't be opened from there.
 export type PhoneAsk = { action: string; why?: string; reply?: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: { title: string; url: string }[]; ticked?: boolean };
 
 // A text message, or one line for a tool call (role "tool", since backend
@@ -1123,6 +1123,7 @@ function steadyDigest(row: ThreadDoc): string {
 }
 
 const THREAD_LINK = /^thread:[\w-]+$/i;
+const REVIEW_LINK = /^review:[a-zA-Z0-9-]{1,200}$/;
 
 export function toPhoneAsk(a: OpenAsk): PhoneAsk {
   const out: PhoneAsk = { action: a.action };
@@ -1134,9 +1135,10 @@ export function toPhoneAsk(a: OpenAsk): PhoneAsk {
     if (a.optionNotes?.length === a.options.length && a.optionNotes.some(Boolean)) out.optionNotes = a.optionNotes;
     if (a.suggested !== undefined) out.suggested = a.suggested;
   }
-  // Web pages, and thread:<id> (another thread, which the phone and the web
-  // open in place); a file or review only opens on the Mac.
-  const links = a.links?.filter((l) => /^https?:\/\//i.test(l.url) || THREAD_LINK.test(l.url));
+  // Web pages, thread:<id> (another thread, which the phone and the web open
+  // in place) and review:<id> (this thread's show_options review, which the
+  // phone opens in its Reviews sheet); a file only opens on the Mac.
+  const links = a.links?.filter((l) => /^https?:\/\//i.test(l.url) || THREAD_LINK.test(l.url) || REVIEW_LINK.test(l.url));
   if (links?.length) out.links = links.map((l) => ({ title: l.title, url: l.url }));
   if (a.ticked) out.ticked = true;
   return out;

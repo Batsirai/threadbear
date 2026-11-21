@@ -43,7 +43,10 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   picture, PDF, text file or page in the pane, opens a review's window as
   its card does, and opens anything else (a
   folder, a `.tandem` project) in its own app. A review link has no
-  hover peek and isn't sent to the phone (only `http(s)` links are). Mike,
+  hover peek. The phone gets `http(s)`, `thread:` and `review:` links (a
+  review one opens its Reviews sheet; the website says it opens on the Mac
+  or iPhone), never a path: until 21 Nov 2026 a review link was dropped on
+  the way, and a pick between three mocks reached the phone as a bare question. Mike,
   30 Oct 2026: a card's buttons opened three videos, but nothing on it
   opened the stills the agent had put up to compare. The agent calls it last, after its final
   message. The tool's description says when, so a resumed session that
