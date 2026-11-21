@@ -3,7 +3,8 @@ import UIKit
 import os
 import whisper
 
-/// whisper.cpp on the GPU, with the decoding settings Voice Type on the Mac
+/// whisper.cpp, its encoder on the Neural Engine (Core ML) once that's
+/// downloaded and on the GPU until then, with the decoding settings Voice Type on the Mac
 /// uses (its WhisperEngine, which matched what its benchmark measured), less
 /// the word list, which lives on the Mac and isn't in this public repo.
 ///
@@ -32,8 +33,8 @@ nonisolated final class WhisperEngine: @unchecked Sendable {
         queue.async { _ = self.loaded() }
     }
 
-    /// The model is about 1.2 GB in memory, so it goes when the new-thread
-    /// screen does.
+    /// The model is about 2.5 GB in memory with the Neural Engine encoder, so
+    /// it goes when the app goes to the background.
     func unload() {
         queue.async {
             if let context = self.context { whisper_free(context) }
@@ -67,6 +68,13 @@ nonisolated final class WhisperEngine: @unchecked Sendable {
         #endif
         params.flash_attn = true
         context = whisper_init_from_file_with_params(path, params)
+        // whisper.cpp won't load at all if the Core ML encoder beside the
+        // weights is bad, so that goes and the GPU does it all instead.
+        if context == nil, FileManager.default.fileExists(atPath: WhisperModel.encoderURL.path) {
+            log.error("Whisper wouldn't load with the Core ML encoder; dropping it")
+            WhisperModel.dropEncoder()
+            context = whisper_init_from_file_with_params(path, params)
+        }
         loadMs = Int(Date().timeIntervalSince(started) * 1000)
         log.info("Whisper loaded: \(self.context != nil) in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
         return context
