@@ -36,8 +36,8 @@ impl ReviewWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // Of the window, not zoomed, as its frame isn't.
-        let answer = (f32::from(window.viewport_size().width) * 0.3)
-            .clamp(ANSWER_WIDTH.0, ANSWER_WIDTH.1);
+        let answer =
+            (f32::from(window.viewport_size().width) * 0.3).clamp(ANSWER_WIDTH.0, ANSWER_WIDTH.1);
         v_flex()
             .id("review-band")
             .flex_none()
