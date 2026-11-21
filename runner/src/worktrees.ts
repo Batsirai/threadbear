@@ -2545,11 +2545,18 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
     // since the look above would go into a spare, whose next taker's
     // `reset --hard` takes it, or be removed with the folder by --force
     // (21 Nov; borrows.ts does the same). If there is one, it goes back on
-    // its branch, as it was, and stays.
+    // its branch, as it was, and stays: only while the folder is still
+    // that checkout at that commit and the thread still this runner's, as
+    // for every other change here (Codex's review, 21 Nov).
     const editedSince = async (where: string): Promise<Cleanup | undefined> => {
       const again = await gitOut(where, ['status', '--porcelain', '--untracked-files=all']);
       if (again !== undefined && !again.split('\n').some((l) => l && !l.startsWith('??'))) return undefined;
-      if (head !== `ref: refs/heads/${w.branch}`) await git(where, ['checkout', '-q', '-B', w.branch]);
+      if (head !== `ref: refs/heads/${w.branch}`) {
+        if (!stillOurs()) return LET_GO;
+        const back = worktreeFolderNow(w, head);
+        if (!back) return CHANGED;
+        await git(back, ['checkout', '-q', '-B', w.branch]);
+      }
       return again === undefined ? { removed: false, reason: `git couldn't read ${w.path}` } : DIRTY;
     };
     if (w.keep && (await spares(w.mainCheckout, path.dirname(w.path))).length < MAX_SPARES) {
@@ -2570,6 +2577,10 @@ export async function cleanUpWorktree(w: WorktreeRecord, stillOurs: () => boolea
           if (!(here = worktreeFolderNow(w, head))) return CHANGED;
           const edited = await editedSince(here);
           if (edited) return edited;
+          // Checked again after that status: a commit or a switch made while
+          // it ran would otherwise go into the pool (Codex's review, 21 Nov).
+          if (!stillOurs()) return LET_GO;
+          if (!worktreeFolderNow(w, head)) return CHANGED;
           if ((await git(w.mainCheckout, ['worktree', 'lock', '--reason', SPARE, w.path])).ok) return { removed: true, spare: true };
         }
       }

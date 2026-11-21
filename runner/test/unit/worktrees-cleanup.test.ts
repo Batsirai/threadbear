@@ -588,3 +588,25 @@ for (const keep of [true, false]) {
     assert.equal(fs.readFileSync(path.join(w.path, 'README.md'), 'utf8'), 'mid-cleanup edit\n');
   });
 }
+
+// Codex's review, 21 Nov: a commit made while that last status ran (on the
+// detached HEAD) left the folder clean, and it was pooled anyway; the next
+// thread's checkout from main would leave the commit on no branch.
+test('a commit made while the cleanup reads its status the last time keeps the worktree out of the pool', async () => {
+  const { main } = makeRepo(KEEP);
+  const patch = (await findWorktreePatch(main, path.dirname(main)))!;
+  const made = await makeWorktree({ cwd: main, threadId: 'eeeeeeee-2', patch });
+  assert.ok(made.ok);
+  const w = made.worktree;
+  const count = path.join(path.dirname(main), 'status-count');
+  const restore = wrapGit('status', `out=$("$REAL" "$@"); code=$?; n=$(cat '${count}' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '${count}'; if [ $n = 2 ]; then "$REAL" -C '${w.path}' commit -q --allow-empty -m late; fi; printf '%s\\n' "$out"; exit $code`);
+  let result;
+  try {
+    result = await cleanUpWorktree(w);
+  } finally {
+    restore();
+  }
+  assert.equal(result.removed, false, JSON.stringify(result));
+  assert.ok(!sh(main, 'git worktree list --porcelain').includes('locked threadbear spare'), 'not a spare');
+  assert.equal(sh(w.path, 'git log -1 --format=%s'), 'late', 'the commit is still checked out');
+});
