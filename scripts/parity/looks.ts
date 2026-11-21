@@ -28,6 +28,7 @@ import { pickInPool } from '../../runner/src/pools.ts';
 import { OPUS } from '../../runner/src/models/index.ts';
 import { outermostBraces } from '../../runner/src/linear-text.ts';
 import type { Account, Pool } from '../../runner/src/protocol.ts';
+import { DRAWN, PLATFORMS } from '../../runner/src/draw-parity.ts';
 
 const dir = process.argv[2];
 if (!dir) {
@@ -41,6 +42,17 @@ const OTHERS = [
   ['Android', 'android'],
   ['Website', 'web'],
 ] as const;
+
+// What draw-parity.ts says an app leaves out on purpose (a reason other
+// than "Not drawn yet."): told to the model as never a difference, so a
+// choice like the website's missing phone mark isn't reported each night.
+const LABELS: Record<(typeof PLATFORMS)[number], string> = { ios: 'iPhone', android: 'Android', web: 'Website' };
+const CHOSEN = Object.values(DRAWN).flatMap((row) =>
+  PLATFORMS.flatMap((p) => {
+    const d = row[p];
+    return typeof d === 'object' && d.no !== 'Not drawn yet.' && !d.no.startsWith('Desktop only') ? [`- ${LABELS[p]} leaves out "${row.what}" on purpose: ${d.no}`] : [];
+  }),
+);
 
 export type Difference = { surface: string; what: string };
 type Look = { name: string; differences: Difference[]; error?: string };
@@ -64,6 +76,7 @@ Never report these, they are expected between platforms:
 - collapsed activity rows ("Worked", "Used a tool", tool rows) differing in wording, timings like "0 ms", or being shown vs folded;
 - timestamps and dates;
 - text cut off at the edge of a picture or scrolled out of view on a smaller screen, if the rest of the picture agrees with it.
+${CHOSEN.join('\n')}
 
 When unsure, leave it out: a false alarm costs more than a miss. Most threads have no differences; an empty list is the usual answer.
 
