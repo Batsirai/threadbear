@@ -2006,7 +2006,7 @@ mod tests {
         );
         let staged = BuildCommits {
             staged: Some("s".into()),
-            ..builds.clone()
+            ..builds
         };
         assert_eq!(
             fix_place(Some("s"), &staged, |w, b| Some(w == b)),
