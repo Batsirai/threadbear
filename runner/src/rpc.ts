@@ -380,8 +380,9 @@ export class RpcServer {
       let threads = 0;
       for (const n of this.threadLookups.values()) threads += n;
       if (keyThread !== undefined && (this.lookupsOf(keyThread) >= MAX_LOOKUPS_PER_THREAD || threads >= MAX_THREAD_LOOKUPS)) {
+        // Left unauthenticated, so it counts as waiting until it's gone, as
+        // a refused one does (refuseConn).
         conn.dropped = true;
-        conn.authed = true;
         conn.authTimer?.clear();
         conn.ws.close(4429, 'too many connections being looked up');
         setTimeout(() => conn.ws.terminate(), 1000).unref();
@@ -580,9 +581,19 @@ export class RpcServer {
       return this.send(conn, { jsonrpc: '2.0', id, error: { code: ErrorCode.invalidRequest, message: 'Invalid request' } });
     }
     let result: unknown;
+    let params: Record<string, unknown> | undefined;
+    // take's copies of a limited thread's pictures (media-quota.ts) go once
+    // the call is done with them, whichever way it ends.
+    const releaseHeld = () => {
+      if (conn.caller !== undefined && params?.images !== undefined) this.opts.gate?.releaseHeld(params.images);
+    };
     try {
-      result = this.dispatch(conn, msg.method, this.gated(conn, msg.method, (msg.params ?? {}) as Record<string, unknown>));
+      params = this.gated(conn, msg.method, (msg.params ?? {}) as Record<string, unknown>);
+      result = this.dispatch(conn, msg.method, params);
+      if (result instanceof Promise) result = result.finally(releaseHeld);
+      else releaseHeld();
     } catch (e) {
+      releaseHeld();
       if (id === null) return;
       if (e instanceof RpcError) {
         return this.send(conn, { jsonrpc: '2.0', id, error: { code: e.code, message: e.message, ...(e.data ? { data: e.data } : {}) } });

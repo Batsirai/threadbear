@@ -29,8 +29,11 @@ const DAY_MS = 86_400_000;
 
 export type ImportLimits = { files: number; bytes: number };
 
-export const PER_THREAD: ImportLimits = { files: 100, bytes: 512 * 1024 * 1024 };
-export const ALL_THREADS: ImportLimits = { files: 400, bytes: 2 * 1024 * 1024 * 1024 };
+export const PER_THREAD: ImportLimits = { files: 50, bytes: 200 * 1024 * 1024 };
+export const ALL_THREADS: ImportLimits = { files: 200, bytes: 1024 * 1024 * 1024 };
+// Biggest picture such a thread may import (a screenshot is a few MB): what
+// a send copies at once stays small.
+export const MAX_PICTURE_BYTES = 25 * 1024 * 1024;
 // Imports running at once, across the threads metered here.
 const MAX_RUNNING = 2;
 // Pictures one message or new thread may carry from such a thread.
@@ -46,6 +49,8 @@ export class ImportQuota {
   private running = new Set<string>();
   // Inbox files a metered thread imported and hasn't sent yet, by path.
   private made = new Map<string, Made>();
+  // The copies take made, until the send that carries them is done.
+  private held = new Set<string>();
   private readonly now: () => number;
   private readonly perThread: ImportLimits;
   private readonly all: ImportLimits;
@@ -76,11 +81,15 @@ export class ImportQuota {
       });
       try {
         const { st } = opened;
+        if (st.size > MAX_PICTURE_BYTES) throw bad(`${opened.name} is too big to add from a thread below Full access (over ${MAX_PICTURE_BYTES / 1024 / 1024} MB)`);
         if (st.size > this.roomMine(threadId)) throw overMine();
         if (st.size > this.roomAll()) throw overAll();
+        // Again now the open is done: another import may have been counted meanwhile.
+        if (this.mine(threadId).length + 1 > this.perThread.files) throw overMine();
+        if (this.spent.length + 1 > this.all.files) throw overAll();
         const entry: Spent = { threadId, at: this.now(), bytes: st.size };
         this.spent.push(entry);
-        const ref = await importOpened(dir, opened, { maxOut: Math.min(this.roomMine(threadId) + entry.bytes, this.roomAll() + entry.bytes) }).catch((e: Error) => {
+        const ref = await importOpened(dir, opened, { maxOut: Math.min(MAX_PICTURE_BYTES, this.roomMine(threadId) + entry.bytes, this.roomAll() + entry.bytes) }).catch((e: Error) => {
           throw bad(e.message);
         });
         // A converted picture counts at whichever is bigger, checked again
@@ -89,7 +98,7 @@ export class ImportQuota {
         const grown = Math.max(0, out.size - entry.bytes);
         if (grown > this.roomMine(threadId) || grown > this.roomAll()) {
           await fs.promises.rm(ref.path, { force: true });
-          throw entry.bytes + grown > this.perThread.bytes ? overMine() : overAll();
+          throw grown > this.roomMine(threadId) ? overMine() : overAll();
         }
         entry.bytes += grown;
         this.made.set(path.resolve(ref.path), { threadId, dev: out.dev, ino: out.ino, size: out.size, mediaType: ref.mediaType, width: ref.width, height: ref.height });
@@ -140,7 +149,9 @@ export class ImportQuota {
       for (const p of paths) {
         const m = this.made.get(p)!;
         this.made.delete(p);
-        out.push(copyHeld(p, m, () => notMine(p)));
+        const ref = copyHeld(p, m, () => notMine(p));
+        this.held.add(ref.path);
+        out.push(ref);
         fs.rmSync(p, { force: true });
       }
     } catch (e) {
@@ -148,6 +159,16 @@ export class ImportQuota {
       throw e;
     }
     return out;
+  }
+
+  // Once the send carrying take's copies is done (copied into the thread, or
+  // refused), they go.
+  releaseHeld(images: unknown): void {
+    if (!Array.isArray(images)) return;
+    for (const img of images) {
+      const p = img && typeof img === 'object' ? (img as ImageRef).path : undefined;
+      if (typeof p === 'string' && this.held.delete(p)) fs.rmSync(p, { force: true });
+    }
   }
 
   // An import whose caller had gone by the time it finished: nobody has its

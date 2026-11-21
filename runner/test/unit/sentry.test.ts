@@ -37,7 +37,11 @@ test('THREADBEAR_SENTRY=off and NODE_ENV=test turn it off', () => {
 });
 
 test('only the named fields of a log line go, the error as its kind alone', () => {
-  const out = safeFields({ error: 'x'.repeat(1200), threadId: 't1', pid: 4, prompt: 'private words', file: '/Users/someone/notes.md', nested: { a: 1 }, method: 'm'.repeat(300) });
+  const fields = { error: 'x'.repeat(1200), threadId: 't1', pid: 4, prompt: 'private words', file: '/Users/someone/notes.md', nested: { a: 1 }, method: 'm'.repeat(300) };
+  // Before main.ts has handed over the known secret values, only numbers and the error's kind.
+  assert.deepEqual(Object.keys(safeFields(fields)).sort(), ['error', 'pid']);
+  useSentryMask((t) => t);
+  const out = safeFields(fields);
   assert.deepEqual(Object.keys(out).sort(), ['error', 'method', 'pid', 'threadId']);
   assert.equal(out.error, 'Error');
   assert.equal((out.method as string).length, 200);
@@ -221,4 +225,17 @@ test("a frame from outside the runner (a project's patch) goes as no more than t
 test('an exception type off the list goes as Error', () => {
   const e = scrubEvent({ exception: { values: [{ type: 'LandlordOwesMeError', value: 'x' }] } }) as { exception: { values: { type: string; value: string }[] } };
   assert.deepEqual([e.exception.values[0]!.type, e.exception.values[0]!.value], ['Error', 'Error']);
+});
+
+test("eval'd code's frames go as outside the runner, and a frame keeps only its known fields", () => {
+  const e = scrubEvent({ exception: { values: [{ type: 'Error', value: 'x', stacktrace: { frames: [
+    { filename: '<anonymous>', function: 'eval at secretFn (/Users/x/secret-project/p.ts:1:1)', lineno: 1 },
+    { filename: 'node:internal/process/task_queues', function: 'process.processTicksAndRejections', lineno: 2 },
+    { filename: path.join(import.meta.dirname, 'x.ts'), function: 'ok', raw_function: 'secretRaw', symbol: 'secretSym', lineno: 3 },
+  ] } }] } }) as { exception: { values: { stacktrace: { frames: Record<string, unknown>[] } }[] } };
+  const [anon, node, own] = e.exception.values[0]!.stacktrace.frames;
+  assert.equal(anon!.function, '<outside the runner>');
+  assert.equal(node!.function, 'process.processTicksAndRejections');
+  assert.equal(own!.function, 'ok');
+  assert.deepEqual(Object.keys(own!).sort(), ['filename', 'function', 'lineno']);
 });

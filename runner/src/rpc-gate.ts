@@ -67,7 +67,7 @@ export type CallerGateDeps = {
   // The pictures a thread below Full may send: only ones it imported, each
   // once (media-quota.ts take), sent as the copies take makes. Without it,
   // such a thread sends none.
-  images?: { take(threadId: string, images: unknown): { path: string }[] };
+  images?: { take(threadId: string, images: unknown): { path: string }[]; releaseHeld(images: unknown): void };
   schedules?: {
     find(idOrPrefix: string): { id: string; title: string; threadId?: string; permissionMode?: PermissionMode; check?: string; paused?: boolean };
     list(threadId?: string): { threadId?: string; check?: string }[];
@@ -115,6 +115,12 @@ export class CallerGate {
     return t ? `"${t.title}"` : threadId.slice(0, 8);
   }
 
+  // After a call that took a limited thread's pictures (check), whichever
+  // way it ended: take's copies go.
+  releaseHeld(images: unknown): void {
+    this.deps.images?.releaseHeld(images);
+  }
+
   whoami(threadId: string): { threadId: string; mode: PermissionMode; limited: boolean } {
     const a = this.authority(threadId);
     return { threadId, mode: a?.mode ?? 'ask', limited: a?.mode !== 'full' };
@@ -159,6 +165,11 @@ export class CallerGate {
     const takeImages = (out: Params): Params => {
       if (p.images === undefined || p.images === null || (Array.isArray(p.images) && p.images.length === 0)) return out;
       if (!this.deps.images) throw needs('sending pictures');
+      // Only to a thread on this runner: to one another runner has (a
+      // handover, another Mac), the copy's path would cross to a runner that
+      // can't check it, after this tick (Codex's and Gemini's third reviews).
+      const to = method === 'threads.send' ? str(p, 'threadId') : undefined;
+      if (method === 'threads.send' && (!to || !this.deps.runner.has(to))) throw needs("sending pictures to a thread that isn't on this runner");
       return { ...out, images: this.deps.images.take(threadId, p.images) };
     };
     switch (method) {

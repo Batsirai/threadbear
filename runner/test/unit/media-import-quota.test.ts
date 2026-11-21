@@ -21,7 +21,7 @@ async function serve() {
   const h = makeHarness();
   const token = readToken(h.home);
   // As main.ts builds it, reading the quota at each call (tests swap it).
-  const gate = new CallerGate({ runner: h.runner, images: { take: (id, images) => h.runner.importQuota.take(id, images) } });
+  const gate = new CallerGate({ runner: h.runner, images: { take: (id, images) => h.runner.importQuota.take(id, images), releaseHeld: (images) => h.runner.importQuota.releaseHeld(images) } });
   const server = new RpcServer({ host: '127.0.0.1', port: 0, token, runner: h.runner, log: nullLogger, gate });
   const { port } = await server.listen();
   return { h, server, token, url: `ws://127.0.0.1:${port}/rpc` };
@@ -56,6 +56,12 @@ test('an Ask thread is refused before any work once over its allowance, the same
     const big = path.join(h.home, 'big.png');
     fs.writeFileSync(big, Buffer.concat([makePng(5, 5), Buffer.alloc(2 * 1024 * 1024)]));
     await assert.rejects(c.call('media.import', { path: big }), /today/);
+    assert.deepEqual(inbox(h.home), before);
+    // And one picture over 25 MB, whatever's left.
+    setQuota(h, new ImportQuota());
+    const huge = path.join(h.home, 'huge.png');
+    fs.writeFileSync(huge, Buffer.concat([makePng(5, 5), Buffer.alloc(26 * 1024 * 1024)]));
+    await assert.rejects(c.call('media.import', { path: huge }), /over 25 MB/);
     assert.deepEqual(inbox(h.home), before);
   } finally {
     c.close();
@@ -97,7 +103,7 @@ test("a thread's import doesn't hold the event loop, and leaves nothing when it 
   const me = thread(h, 'ask');
   // A big (but allowed) file: the copy goes in pieces, and timers keep running meanwhile.
   const big = path.join(h.home, 'big.png');
-  fs.writeFileSync(big, Buffer.concat([makePng(5, 5), Buffer.alloc(40 * 1024 * 1024)]));
+  fs.writeFileSync(big, Buffer.concat([makePng(5, 5), Buffer.alloc(20 * 1024 * 1024)]));
   let ticks = 0;
   const timer = setInterval(() => ticks++, 0);
   try {
@@ -149,6 +155,14 @@ test("a limited thread's message carries only pictures it imported, each once, a
     assert.equal(sent.images.length, 1);
     assert.ok(sent.images[0].path.startsWith(path.join(h.home, 'threads', me.id, 'media')));
     assert.equal(fs.existsSync(image.path), false, 'the inbox copy is used up');
+    assert.deepEqual(inbox(h.home).filter((n) => n.includes('.held.')), [], "and the send's own copy is gone once it's done");
+    // Not to a thread on another runner (one being handed over, at the same
+    // mode): the copy's path would cross to a runner that can't check it.
+    const later = (await c.call('media.import', { path: src })).image;
+    const away = { id: 'away-thread', title: 'away', permissionMode: 'ask' as const, status: 'idle' };
+    const gate = new CallerGate({ runner: h.runner, remote: { owns: (id) => id === away.id, summaries: () => [away] }, images: h.runner.importQuota });
+    assert.throws(() => gate.check(me.id, 'threads.send', { threadId: away.id, text: 'look', images: [later] }), /isn't on this runner/);
+    assert.ok(fs.existsSync(later.path), 'and the picture is still there to send');
     await assert.rejects(c.call('threads.send', { threadId: me.id, text: 'again', images: [image] }), notImported, 'used up');
     // The inbox file is the thread's to write: grown, or swapped for another
     // file, it's refused rather than copied into the thread.
@@ -188,7 +202,7 @@ test('an import whose client has gone by the time it is done is removed at once'
   const { h, server, token, url } = await serve();
   const me = thread(h, 'ask');
   const big = path.join(h.home, 'big.png');
-  fs.writeFileSync(big, Buffer.concat([makePng(5, 5), Buffer.alloc(30 * 1024 * 1024)]));
+  fs.writeFileSync(big, Buffer.concat([makePng(5, 5), Buffer.alloc(20 * 1024 * 1024)]));
   setQuota(h, new ImportQuota());
   const c = await RunnerClient.connect(url, threadKey(token, me.id), { threadId: me.id });
   try {

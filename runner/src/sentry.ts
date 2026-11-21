@@ -127,9 +127,14 @@ export async function startSentry(home: string): Promise<boolean> {
 // shape rules as everything sent to Convex (redaction.ts), and it's cut
 // short. Throws when the check fails, for scrubEvent to drop the event.
 let maskKnown: (text: string) => string = (text) => text;
+// Until main.ts hands the known values over, a log line's fields other than
+// numbers and the error's kind are held back (its title is the runner's own
+// fixed words, scrubbed by the shape rules).
+let maskReady = false;
 
 export function useSentryMask(mask: (text: string) => string): void {
   maskKnown = mask;
+  maskReady = true;
 }
 
 // The lookbehind keeps it linear on runs like "ab-ab-ab-..." (as redaction.ts's URL rule).
@@ -213,10 +218,20 @@ const withoutHome = (p: string): string => {
 // The runner's own code: this package (src/, node_modules/) and Node's.
 const RUNNER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUTSIDE = '<outside the runner>';
+const FRAME_FIELDS = new Set(['filename', 'abs_path', 'function', 'module', 'lineno', 'colno', 'in_app', 'platform']);
+// A file path in a frame, made comparable: a file:// URL as a path, and on
+// Windows the SDK's forward slashes and any case.
+const comparable = (p: string): string => {
+  const f = path.resolve(asPath(p));
+  return process.platform === 'win32' ? f.toLowerCase() : f;
+};
+const ROOT = comparable(RUNNER_ROOT);
 function ownFrame(file: string): boolean {
-  if (file.startsWith('node:') || file === '<anonymous>') return true;
-  const f = asPath(file);
-  return f === RUNNER_ROOT || f.startsWith(RUNNER_ROOT + path.sep);
+  // Node's own; not '<anonymous>', which is eval'd code and could be a patch's.
+  if (/^node:[a-z_/]+$/.test(file)) return true;
+  if (!file || file.startsWith('<')) return false;
+  const f = comparable(file);
+  return f === ROOT || f.startsWith(ROOT + path.sep);
 }
 
 type Json = unknown;
@@ -271,22 +286,17 @@ export function scrubEvent<E>(event: E): E | null {
         ex.mechanism = { ...(scrubDeep(rest) as Record<string, unknown>), ...(type !== undefined ? { type: scrubForSentry(String(type)) } : {}), ...(handled !== undefined ? { handled } : {}) };
       }
       for (const f of ex.stacktrace?.frames ?? []) {
-        delete f.vars;
-        // No source lines (ContextLines is left out; these would only come
-        // from somewhere else).
-        delete f.context_line;
-        delete f.pre_context;
-        delete f.post_context;
-        // The runner's own files and functions go, scrubbed, the home folder
-        // (the Mac account's name) taken out. Anything else (a project's
-        // patch, run in the runner) goes as no more than that.
+        // Only these fields stay (no variables, no source lines, nothing
+        // else the SDK might add). The runner's own files and functions go,
+        // scrubbed, the home folder (the Mac account's name) taken out.
+        // Anything else (a project's patch, eval'd code) goes as no more
+        // than that.
         const file = typeof f.abs_path === 'string' ? f.abs_path : typeof f.filename === 'string' ? f.filename : '';
-        if (!ownFrame(file)) {
-          for (const k of ['filename', 'abs_path', 'function', 'module'] as const) if (f[k] !== undefined) f[k] = OUTSIDE;
-          continue;
-        }
+        const own = ownFrame(file);
+        for (const k of Object.keys(f)) if (!FRAME_FIELDS.has(k)) delete f[k];
         for (const k of ['filename', 'abs_path', 'function', 'module'] as const) {
-          if (typeof f[k] === 'string') f[k] = scrubForSentry(withoutHome(f[k] as string));
+          if (f[k] === undefined) continue;
+          f[k] = own && typeof f[k] === 'string' ? scrubForSentry(withoutHome(f[k] as string)) : OUTSIDE;
         }
       }
     }
@@ -385,7 +395,10 @@ export function safeFields(extra: Record<string, unknown> | undefined): Record<s
   for (const [k, v] of Object.entries(extra ?? {})) {
     if (!SAFE_FIELDS.has(k)) continue;
     if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
-    else if (typeof v === 'string') out[k] = k === 'error' ? errorKind(v) : scrubForSentry(v).slice(0, 200);
+    else if (typeof v === 'string') {
+      if (k === 'error') out[k] = errorKind(v);
+      else if (maskReady) out[k] = scrubForSentry(v).slice(0, 200);
+    }
   }
   return out;
 }
