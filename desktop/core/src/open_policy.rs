@@ -271,13 +271,12 @@ const CODE_RUNNER_APPS: &[&str] = &[
 
 /// Where an app the gate hands a file to may be: the Mac's own folders for
 /// apps, an app directly in /Applications or ~/Applications (or their
-/// Utilities), and the two installers' own folders: Setapp's apps directly
-/// in /Applications/Setapp, and the IDEs older JetBrains Toolbox kept under
-/// ~/Library/Application Support/JetBrains/Toolbox/apps (newer ones go in
-/// ~/Applications). Never the rest of Application Support: a thread may work
-/// in a folder there and put an app in it (Daybreak 160). Directly, so a
-/// repo cloned into ~/Applications isn't a place apps are installed. `app`
-/// is the real path, links followed.
+/// Utilities), and Setapp's apps directly in /Applications/Setapp. Never
+/// under Application Support: a thread may work in a folder there and put
+/// an app in it (Daybreak 160), and an app's place there says nothing about
+/// who made it, so JetBrains Toolbox 1.x's IDEs there ask (Toolbox 2 puts
+/// them in ~/Applications). Directly, so a repo cloned into ~/Applications
+/// isn't a place apps are installed. `app` is the real path, links followed.
 pub fn installed_where_apps_are(app: &Path) -> bool {
     if app.components().any(|c| {
         matches!(
@@ -319,21 +318,12 @@ pub fn installed_where_apps_are(app: &Path) -> bool {
     let in_setapp = app
         .strip_prefix("/Applications/Setapp")
         .is_ok_and(|rest| is_app(rest.components().next()));
-    // Toolbox 1.x: apps/<product>/ch-<n>/<build>/X.app, and anything inside.
-    let in_toolbox = |h: &Path| {
-        app.strip_prefix(h.join("Library/Application Support/JetBrains/Toolbox/apps"))
-            .is_ok_and(|rest| {
-                let parts: Vec<_> = rest.components().take(4).collect();
-                matches!(parts.as_slice(), [_, ch, _, a]
-                    if ch.as_os_str().to_string_lossy().starts_with("ch-") && is_app(Some(*a)))
-            })
-    };
     system
         || in_applications(Path::new("/Applications"))
         || in_setapp
         || home
             .as_ref()
-            .is_some_and(|h| in_applications(&h.join("Applications")) || in_toolbox(h))
+            .is_some_and(|h| in_applications(&h.join("Applications")))
 }
 
 pub fn is_code_runner(bundle_id: &str) -> bool {
@@ -2972,33 +2962,31 @@ mod tests {
     }
 
     /// Daybreak 160: a thread may work in a folder under Application
-    /// Support and put an app there, so only JetBrains Toolbox's own
-    /// layout there counts as installed, and a document whose opener is an
-    /// app in any other folder there asks.
+    /// Support and put an app there, so no app there counts as installed,
+    /// whatever folders it's in (verify-fix: a project in Toolbox's folder
+    /// could copy Toolbox's layout), and a document whose opener is one
+    /// asks.
     #[cfg(unix)]
     #[test]
-    fn only_toolbox_apps_count_under_application_support() {
+    fn no_app_under_application_support_counts_as_installed() {
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
             return;
         };
         let support = home.join("Library/Application Support");
         let toolbox = support.join("JetBrains/Toolbox/apps");
-        assert!(installed_where_apps_are(
-            &toolbox.join("IDEA-U/ch-0/233.11799.241/IntelliJ IDEA.app")
-        ));
-        assert!(installed_where_apps_are(&toolbox.join(
-            "IDEA-U/ch-0/233.11799.241/IntelliJ IDEA.app/Contents/MacOS/idea"
-        )));
         for no in [
             support.join("Project/Evil.app"),
             support.join("Setapp/Evil.app"),
             support.join("JetBrains/Evil.app"),
-            toolbox.join("Evil.app"),
-            toolbox.join("repo/Evil.app"),
-            toolbox.join("repo/sub/dir/Evil.app"),
+            toolbox.join("IDEA-U/ch-0/233.11799.241/IntelliJ IDEA.app"),
+            toolbox.join("repo/ch-evil/build/Evil.app"),
+            toolbox.join("repo/sub/dir/Evil.app/Contents/MacOS/evil"),
         ] {
             assert!(!installed_where_apps_are(&no), "{}", no.display());
         }
+        assert!(installed_where_apps_are(
+            &home.join("Applications/IntelliJ IDEA.app")
+        ));
         let s = Scratch::new("appsupport");
         for doc in [s.file("notes.md", "# hi"), s.file("page.html", "<p>hi</p>")] {
             let there = |_: &Path| {
