@@ -33,6 +33,7 @@ import { isThreadIdShape } from '../thread-id.ts';
 import { fitReview, keepPictureMarkers } from '../reviews.ts';
 import { cleanUpWorktree, makeWorktree, MAIN, parseCheckouts, realpath, type WorktreeRecord } from '../worktrees.ts';
 import { runningSession } from '../cli-session.ts';
+import { writeSlot } from '../slot.ts';
 
 // What T placed for a move, so adopting after a restart and throwing it
 // away after a failure both know (<home>/moves/<moveId>/placed.json).
@@ -1017,8 +1018,7 @@ export const movesPart = {
       delete rec.turnId;
       delete rec.stoppedMidTurn;
       rec.pendingApprovals = [];
-      if (placed.worktree) rec.worktree = placed.worktree;
-      else delete rec.worktree;
+      writeSlot(rec, { kind: 'arrived', ...(placed.worktree ? { worktree: placed.worktree } : {}) }, Date.now());
       fs.writeFileSync(recFile, JSON.stringify(rec, null, 2));
       save();
     } catch (e) {

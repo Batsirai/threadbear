@@ -3840,12 +3840,8 @@ export class Runner {
     // first, then released, so that can take a moment. Resuming unarchives.
     if (archiving) {
       rt.archivePending = true;
-      if (rec.worktree && !rec.worktree.removedAt) {
-        rec.worktree.cleanupOwed = true;
-        // Each archive tears down again: a thread brought back may have
-        // made its things again since the last one.
-        delete rec.worktree.tornDownAt;
-      }
+      // Its worktree's cleanup is owed, and its teardown due again.
+      this.slot(st, { kind: 'archived' });
       this.archiveWhenGone(st);
     }
     rec.updatedAt = this.isoNow();

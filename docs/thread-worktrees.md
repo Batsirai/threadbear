@@ -612,7 +612,13 @@ With `keep`:
   again. Only while the folder is still the thread's own checkout, and only
   real folders inside it, never through a link; each is renamed aside right
   after that check, then deleted.
-- The record keeps `keep`, and `spare: true` once it's set aside. A
+- The record keeps `keep`, and `spare: true` once it's set aside. What the
+  record says of the worktree (held, cleanup owed, removed, handed on) is
+  one state type in `runner/src/slot.ts`, with every write in its
+  `writeSlot`; the same module says what each slot folder is on disk
+  (`slotOnDisk`: a spare, a thread's, a borrow, left behind, and the
+  disagreements, like a record whose folder is on another branch), which
+  the borrow sweep picks from. A
   spare's thread, unarchived, never goes back into that folder even though
   it's still there: it's another thread's now. Nor does any thread whose
   worktree was removed, whatever is at that path now: on 8 Nov a removed
