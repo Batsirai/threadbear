@@ -69,8 +69,11 @@ export function writeErrorExits(home: string, state: ErrorExitState): void {
 }
 
 // Whether the guard still holds at `now`.
+// A clock that went back since (the last error looks in the future) lets it go.
 export function guardHolds(state: ErrorExitState, now: number): boolean {
-  return Boolean(state.tripped && now - Date.parse(state.tripped.lastErrorAt) < ERROR_QUIET_MS);
+  if (!state.tripped) return false;
+  const age = now - Date.parse(state.tripped.lastErrorAt);
+  return age >= 0 && age < ERROR_QUIET_MS;
 }
 
 export type ErrorExitDecision = {

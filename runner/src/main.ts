@@ -1906,6 +1906,9 @@ async function main(): Promise<void> {
           if (runner.keeping()?.length === 0) finishDrain();
         },
       });
+      // Stopped meanwhile (the deadline after an uncaught error, a signal):
+      // the stop has the runner now, so no drain port or new runner.
+      if (stopping) return;
       // The new runner sweeps children.json; this one's CLIs are listed
       // apart so they're left alone.
       registry.moveTo(drainChildrenName(process.pid));
@@ -1940,6 +1943,10 @@ async function main(): Promise<void> {
         },
       });
       const { port: drainPort } = await drainServer.listen();
+      if (stopping) {
+        await drainServer.close().catch(() => {});
+        return;
+      }
       writeDrainInfo(cfg.home, { pid: process.pid, port: drainPort, version: RUNNER_VERSION, release: RELEASE.release, since: new Date().toISOString(), threads: runner.keeping() ?? [], auth: 'challenge' });
       await server.close().catch(() => {});
       lock.release();
@@ -1952,6 +1959,9 @@ async function main(): Promise<void> {
       void stop('restart');
       return;
     }
+    // From here launch.mjs may start the new runner, so the deadline after
+    // an error leaves this handover alone.
+    newRunnerUp = true;
     const reply = await requestHandover();
     if (!reply.ok) {
       // Nothing can start the new runner, and this one no longer listens on
@@ -1961,7 +1971,6 @@ async function main(): Promise<void> {
       return;
     }
     log.info('the new runner is starting', { pid: reply.pid });
-    newRunnerUp = true;
     if (runner.keeping()?.length === 0) finishDrain();
   };
   // Every kept thread has gone across: nothing left to do here.
@@ -2036,6 +2045,10 @@ async function main(): Promise<void> {
     // about to hand over): no new restart, and no stop that would cut the
     // turns a handover keeps. A leave that hangs has its own deadline.
     if (leavingAfterError || mailFirst || restarter.underway) {
+      // Its stop still gets the deadline and Sentry's flush, and a dev
+      // runner's its code.
+      leavingAfterError = true;
+      if (mode === 'exit') exitCode = ERROR_EXIT_CODE;
       log.warn('an uncaught error while the runner is already restarting; the restart goes on');
       return;
     }

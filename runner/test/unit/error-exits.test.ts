@@ -67,6 +67,12 @@ test('a clock that went back does not count future restarts', () => {
   assert.equal(decideErrorExit({ exits: [future, future, future] }, T0).exit, true);
 });
 
+test('a clock that went back since the guard tripped lets it go', () => {
+  const s: ErrorExitState = { exits: [], tripped: { at: new Date(T0).toISOString(), lastErrorAt: new Date(T0).toISOString(), errors: 1 } };
+  assert.ok(guardHolds(s, T0 + MIN));
+  assert.ok(!guardHolds(s, T0 - MIN));
+});
+
 test('the state round-trips through run/error-exits.json, and a broken file reads as no history', () => {
   const home = tmpDir();
   assert.deepEqual(readErrorExits(home), { exits: [] });
