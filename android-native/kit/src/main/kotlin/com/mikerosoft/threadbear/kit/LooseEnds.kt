@@ -1,6 +1,7 @@
 package com.mikerosoft.threadbear.kit
 
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -46,7 +47,7 @@ object LooseEnds {
     /** "Sun 15 Nov, 9:30 am: the check-in" for a booked one, as the Mac says it; else its text. */
     fun line(end: PhoneLooseEnd, zone: ZoneId = ZoneId.systemDefault()): String {
         if (!end.isBooked) return end.text
-        val at = end.at?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return end.text
+        val at = end.at?.let { runCatching { Instant.parse(it) }.recoverCatching { _ -> OffsetDateTime.parse(it).toInstant() }.getOrNull() } ?: return end.text
         val local = at.atZone(zone)
         return "${day.format(local)} ${if (local.hour < 12) "am" else "pm"}: ${end.text}"
     }

@@ -437,7 +437,7 @@ function EditedDraft({ draft }: { draft: Draft }) {
 // A Plan first plan (API 72) as a card, as the iPhone's PlanCard and the
 // Mac's draw it: its title, its steps, and Approved or Sent back once its
 // card is answered (planDecision, API 76). Going ahead isn't on the web yet.
-export function PlanCard({ m, rows, pictures, threadPath }: { m: PageMessage; rows?: PageMessage[]; pictures?: Map<string, string>; threadPath?: (id: string) => string }) {
+export function PlanCard({ m, rows, pictures, threadPath, button }: { m: PageMessage; rows?: PageMessage[]; pictures?: Map<string, string>; threadPath?: (id: string) => string; button?: Parameters<typeof MessageText>[0]['button'] }) {
   const body = planBody(m.text);
   const decided = planDecisionLabel(m.planDecision);
   return (
@@ -449,7 +449,7 @@ export function PlanCard({ m, rows, pictures, threadPath }: { m: PageMessage; ro
         {decided ? <span className="plan-card-decided">{decided}</span> : null}
       </div>
       <h3 className="plan-card-title">{planTitle(m.text)}</h3>
-      {body ? <MessageText text={body} pictures={pictures} seq={m.seq} rows={rows} threadPath={threadPath} /> : null}
+      {body ? <MessageText text={body} pictures={pictures} seq={m.seq} rows={rows} threadPath={threadPath} button={button} /> : null}
     </section>
   );
 }

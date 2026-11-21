@@ -156,6 +156,21 @@ data class DraftBlock(val kind: Kind, val source: String) {
          * doesn't end that way.
          */
         fun splitEdited(text: String): Edited? {
+            // Windows line ends are plain ones, and the runner's "[2 pictures]"
+            // line (a picture sent with no marker, sync.ts toMessageDoc) goes
+            // after the drafts: it stays with his words, where
+            // ThreadPictures.words takes it off once the pictures are here.
+            val plain = text.replace("\r\n", "\n")
+            val tail = PICTURES_TAIL.find(plain)
+            val edited = splitPlain(if (tail != null) plain.substring(0, tail.range.first) else plain) ?: return null
+            if (tail == null) return edited
+            val line = tail.value.trim()
+            return edited.copy(words = if (edited.words.isEmpty()) line else "${edited.words}\n\n$line")
+        }
+
+        private val PICTURES_TAIL = Regex("""\n\n\[[1-9]\d{0,2} pictures?]\s*$""")
+
+        private fun splitPlain(text: String): Edited? {
             // From the first one: a draft can hold the line itself, and his
             // own words can too, so each place it starts is tried until one
             // is followed by nothing but drafts.

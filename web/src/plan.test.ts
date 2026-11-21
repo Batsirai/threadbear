@@ -16,9 +16,16 @@ test('a plan with no heading takes its first line, and an empty one is "Plan"', 
   assert.equal(planTitle('#'), 'Plan');
 });
 
-test('the body is the plan without its heading line', () => {
+test('the body is the plan without its title line, wherever that was', () => {
   assert.equal(planBody(plan), '1. Add a bots table\n2. Call the webhook on each new message');
-  assert.equal(planBody('Do the thing first\n\n- then this'), 'Do the thing first\n\n- then this');
+  // The website has no sheet with the whole plan, so the title isn't drawn twice or lost (review, 22 Nov).
+  assert.equal(planBody('Do the thing first\n\n- then this'), '- then this');
+  assert.equal(planBody('Context first\n\n## Steps\n\n1. a'), 'Context first\n\n1. a');
+});
+
+test('a long title is kept whole, as nothing else on the website shows it', () => {
+  const long = 'x'.repeat(150);
+  assert.equal(planTitle(`# ${long}`), long);
 });
 
 test('a decided plan says so, as the Mac card does', () => {

@@ -371,7 +371,7 @@ fun DoneCard(
             val signals = LocalSignals.current
             Text(heading, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
             for (end in LooseEnds.ordered(looseEnds)) {
-                val thread = end.threadId
+                val thread = end.threadId?.takeIf { it.isNotEmpty() }
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                         .then(if (thread != null) Modifier.clickable(onClickLabel = "Open the thread") { openThread(thread) } else Modifier)

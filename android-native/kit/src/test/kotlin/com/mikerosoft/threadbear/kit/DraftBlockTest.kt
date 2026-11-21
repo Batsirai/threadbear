@@ -194,6 +194,12 @@ class DraftBlockTest {
         val sent = "Send it\n\n$intro\n\n```email\nHi Geoff,\n\nI don't think it came through. Can you send it again please?\n```"
         assertEquals("Send it", DraftBlock.splitEdited(sent)?.words)
         assertEquals("Your edited email", DraftBlock.splitEdited(sent)?.drafts?.single()?.editedLabel)
+        // A picture sent with it and no marker: the runner's "[1 picture]" line
+        // after the fence stays with his words, for ThreadPictures.words to take off.
+        assertEquals("Send it\n\n[1 picture]", DraftBlock.splitEdited("$sent\n\n[1 picture]")?.words)
+        assertEquals("[2 pictures]", DraftBlock.splitEdited("$intro\n\n```email\nx\n```\n\n[2 pictures]")?.words)
+        // Windows line ends all through come apart the same.
+        assertEquals("Send it", DraftBlock.splitEdited(sent.replace("\n", "\r\n"))?.words)
         assertEquals("Your edited Slack message", DraftBlock(DraftBlock.Kind.SLACK, "x").editedLabel)
         assertEquals("Your edited draft", DraftBlock(DraftBlock.Kind.DRAFT, "x").editedLabel)
     }

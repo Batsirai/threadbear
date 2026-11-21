@@ -284,7 +284,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
       {m.seq === reviewAt && review ? <ReviewRow review={review} threadPath={linkTo} /> : null}
       <div className={`msg ${m.role}`}>
         {from ? <div className="origin">{from.who}</div> : m.role === 'user' && m.origin && m.origin !== 'user' && m.origin !== 'phone' ? <div className="origin">{originLabel(m.origin)}</div> : null}
-        {m.plan && m.role === 'assistant' ? <PlanCard m={m} pictures={inText} rows={messages} threadPath={linkTo} /> : from ? <MessageText text={from.body} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} /> : <MessageText text={shownText} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} pictureChips={m.role === 'user'} pasted={m.role === 'user' ? pastedOf(pictures, m.seq, shownText).byNumber : undefined} button={m.role === 'assistant' ? buttonFor(m) : undefined} />}
+        {m.plan && m.role === 'assistant' ? <PlanCard m={m} pictures={inText} rows={messages} threadPath={linkTo} button={buttonFor(m)} /> : from ? <MessageText text={from.body} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} /> : edited && !shownText.trim() ? null : <MessageText text={shownText} pictures={inText} seq={m.seq} rows={messages} threadPath={linkTo} pictureChips={m.role === 'user'} pasted={m.role === 'user' ? pastedOf(pictures, m.seq, shownText).byNumber : undefined} button={m.role === 'assistant' ? buttonFor(m) : undefined} />}
         {edited ? <EditedDrafts drafts={edited.drafts} /> : null}
         <Pictures items={[...(after.get(m.seq) ?? []), ...(m.role === 'user' ? pastedOf(pictures, m.seq, shownText).unplaced : [])]} />
       </div>

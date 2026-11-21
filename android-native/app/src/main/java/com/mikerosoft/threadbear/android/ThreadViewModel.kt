@@ -95,6 +95,11 @@ class ThreadViewModel(private val model: AppModel, val threadId: String) : ViewM
      */
     val page: StateFlow<MessagePage?> = model.backendAnd { (it in 1 until BackendApi.MESSAGE_PAGES) to (it >= BackendApi.LOGIN_NOTES) }.flatMapLatest { (b, gate) ->
         val (older, notes) = gate
+        // Asked for again with notes once phone:me answers: start the history
+        // over, or the note-less rows above the new page's top would stay as
+        // older ones and the notes among them never be read.
+        if (notes && askedWithoutNotes) { h.startOver(); history.value = null }
+        askedWithoutNotes = !notes
         if (b == null || older) flowOf(null)
         else b.messages(threadId, FIRST_PAGE, notes).retryWhen { cause, _ -> cause !is TransportError.Unauthorized && run { delay(2000); true } }
             .catch { model.report(it) }
@@ -115,6 +120,8 @@ class ThreadViewModel(private val model: AppModel, val threadId: String) : ViewM
      * copy after each change; null until the first page.
      */
     private val h = MessageHistory()
+    /** The live page was last asked for without notes (before phone:me answered). */
+    private var askedWithoutNotes = false
     val history = MutableStateFlow<MessageHistory?>(null)
     /** A chunk of older rows has been asked for and hasn't come yet. */
     val loadingChunk = MutableStateFlow(false)

@@ -24,6 +24,8 @@ class LooseEndsTest {
         assertEquals("Coming back", LooseEnds.heading(listOf(end)))
         // Without milliseconds too, and its text when the time doesn't read.
         assertEquals("Sun 15 Nov, 2:05 pm: x", LooseEnds.line(PhoneLooseEnd("scheduled", "x", at = "2026-11-15T06:05:00Z"), perth))
+        // With an offset, as the iPhone's ISO8601DateFormatter and the website read it.
+        assertEquals("Sun 15 Nov, 9:30 am: x", LooseEnds.line(PhoneLooseEnd("scheduled", "x", at = "2026-11-15T09:30:00+08:00"), perth))
         assertEquals("x", LooseEnds.line(PhoneLooseEnd("scheduled", "x", at = "soon"), perth))
         assertEquals("x", LooseEnds.line(PhoneLooseEnd("scheduled", "x"), perth))
     }
