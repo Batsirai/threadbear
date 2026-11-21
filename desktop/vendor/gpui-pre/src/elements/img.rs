@@ -318,25 +318,26 @@ impl Element for Img {
 
                             if let Some(state) = &mut state {
                                 state.frame_index = state.frame_index.min(max_frame_index);
+                                // Played whether or not the window is the key one
+                                // (Threadbear: a GIF beside another app's window
+                                // plays, as in a browser; a covered window gets no
+                                // frames anyway). Upstream stepped only in the
+                                // active window.
                                 if frame_count > 1 && !cx.reduce_motion() {
-                                    if window.is_window_active() {
-                                        let current_time = Instant::now();
-                                        if let Some(last_frame_time) = state.last_frame_time {
-                                            let elapsed = current_time - last_frame_time;
-                                            let frame_duration =
-                                                Duration::from(data.delay(state.frame_index));
+                                    let current_time = Instant::now();
+                                    if let Some(last_frame_time) = state.last_frame_time {
+                                        let elapsed = current_time - last_frame_time;
+                                        let frame_duration =
+                                            Duration::from(data.delay(state.frame_index));
 
-                                            if elapsed >= frame_duration {
-                                                state.frame_index =
-                                                    (state.frame_index + 1) % frame_count;
-                                                state.last_frame_time =
-                                                    Some(current_time - (elapsed - frame_duration));
-                                            }
-                                        } else {
-                                            state.last_frame_time = Some(current_time);
+                                        if elapsed >= frame_duration {
+                                            state.frame_index =
+                                                (state.frame_index + 1) % frame_count;
+                                            state.last_frame_time =
+                                                Some(current_time - (elapsed - frame_duration));
                                         }
                                     } else {
-                                        state.last_frame_time = None;
+                                        state.last_frame_time = Some(current_time);
                                     }
                                 } else {
                                     state.last_frame_time = None;
@@ -379,10 +380,7 @@ impl Element for Img {
                                 };
                             }
 
-                            if global_id.is_some()
-                                && data.frame_count() > 1
-                                && window.is_window_active()
-                                && !cx.reduce_motion()
+                            if global_id.is_some() && data.frame_count() > 1 && !cx.reduce_motion()
                             {
                                 window.request_animation_frame();
                             }
