@@ -62,7 +62,8 @@ Built 28 Oct 2026 (thread 66935d23).
 ## Sharing
 
 A thread can be shared by link (docs/protocol/runners.md, "Sharing"): from the
-share button beside the Mac app's ... menu, or from the website, where
+share button beside the Mac app's ... menu, Share… in the Android app's
+thread menu, or from the website, where
 Mike's own thread page and the shared page (when he's signed in) have a
 Share button: Share with a link, Copy, Stop sharing, and on his thread
 page New link. Those queue a `share` command (`phone:share`) the runner
@@ -185,4 +186,5 @@ checkout's in for the upload and delete it after.
 - Signing in from a browser without the Mac to hand (e.g. approve a new
   browser from the iPhone app). A QR code for another device's browser is
   still `npm run web:sign-in -- --qr`.
-- Sharing from the iPhone app or an agent's tools.
+- Sharing from the iPhone app or an agent's tools (the Android app has
+  it, from a thread's menu).

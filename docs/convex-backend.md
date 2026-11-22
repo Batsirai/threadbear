@@ -190,10 +190,13 @@ function takes `token` (a phone token from `tokens:issue`) and throws
 
 Queries:
 
-- `phone:me({ token })` → `{ name, expiresAt, apiVersion, pushOff? }`.
+- `phone:me({ token })` → `{ name, expiresAt, apiVersion, pushOff?, site? }`.
   `pushOff` is true when this backend can't send notifications (a
   self-hosted one, docs/self-hosting.md); the phone's Settings says so in
-  place of the Notify me picker.
+  place of the Notify me picker. `site` is the website's address
+  (`CONVEX_SITE_URL`), which a shared thread's link starts with
+  (`<site>/s/<slug>`); the Android app uses it, and without it (an older
+  backend) takes a cloud deployment's `.convex.site` twin.
 - `phone:runners({ token })` → `[{ runnerId, name, version, lastSeenAt,
   draining }]`. Offline is `lastSeenAt` older than 3 minutes (a runner
   that stopped for good has `lastSeenAt` of 1970).

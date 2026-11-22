@@ -224,6 +224,8 @@ data class PhoneThread(
     val review: PhoneLabReview? = null,
     /** The turn the done card's fields (review, looseEnds) are from, as message rows name turns (API 76). */
     val cardTurn: String? = null,
+    /** Its sharing by link (API 8), null for one never shared. */
+    val share: PhoneShare? = null,
 ) {
     val id get() = threadId
     val isBusy get() = status == ThreadStatus.RUNNING || status == ThreadStatus.STARTING
@@ -296,6 +298,7 @@ data class PhoneThread(
             // Lenient field by field: a ledger in a shape this phone doesn't know never stops the thread loading.
             review = o.obj("review")?.let { runCatching { PhoneLabReview.read(it) }.getOrNull() },
             cardTurn = o.str("cardTurn"),
+            share = PhoneShare.read(o.obj("share")),
         )
     }
 }
@@ -487,7 +490,8 @@ data class PhoneRunner(
     }
 }
 
-data class PhoneIdentity(val name: String, val expiresAt: Instant?, val apiVersion: Int? = null, val pushOff: Boolean? = null) {
+/** phone:me's answer. `site` is the website's address, from a backend that says it (ShareLinks.site). */
+data class PhoneIdentity(val name: String, val expiresAt: Instant?, val apiVersion: Int? = null, val pushOff: Boolean? = null, val site: String? = null) {
     val sendsNotifications get() = pushOff != true
 
     companion object {
@@ -496,6 +500,7 @@ data class PhoneIdentity(val name: String, val expiresAt: Instant?, val apiVersi
             expiresAt = o.date("expiresAt"),
             apiVersion = o.num("apiVersion")?.wholeCount(),
             pushOff = o.bool("pushOff"),
+            site = o.str("site"),
         )
     }
 }
@@ -511,6 +516,8 @@ object BackendApi {
     const val WAITING_SENDS = 57
     const val STOP = 69
     const val STARS = 27
+    /** From 8 a thread can be shared by link from the phone (phone:share). */
+    const val SHARING = 8
     /** From 3 each phone chooses when it's notified (phone:setNotifications). */
     const val NOTIFICATION_SETTING = 3
     /** From 16 phone:search looks through archived threads past the newest 100. */

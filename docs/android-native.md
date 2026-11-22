@@ -67,6 +67,7 @@ what the iPhone has.
 | NotifyMode, AppModel's runner order and offline line | `Settings.kt` | 5 |
 | AppModel's StartingThread (new threads on their way) | `Starting.kt` | 5 |
 | PendingCommand.swift, PendingCommands.swift (a command sent and waited on, and its one watcher; shared/cases/pending-commands.json) | `PendingCommand.kt`, `PendingCommands.kt` | 6 |
+| The website's ShareControl (web/src/share.tsx): the link from site and slug, what the sheet shows with a tap on its way | `Share.kt` | 7 |
 
 Dictation uses Android's own SpeechRecognizer (on-device where the phone
 has it), not Whisper; there's one recognizer, so no "Dictate with" choice.
@@ -79,7 +80,7 @@ Behind the iPhone, and written down where a test keeps it true: the backend APIs
 74 (search everywhere, the librarian's keywords), 76 (lab review), 79 (login notes)
 and 86 (design reviews), with 73 (loose ends) and 89 (answers on a message), in
 `shared/cases/wire-rows.json` (its `differs`, which `WireRowsTest.kt` skips), and
-tool output, sharing and design reviews in docs/parity.md's Android column
+tool output and design reviews in docs/parity.md's Android column
 (`runner/src/parity.ts`, which checks each against what the kit calls). Port one
 and those tests say to take its note out.
 
@@ -208,7 +209,11 @@ for them to be built from source in the recipe.
    Reply buttons, thread chips and links (anything but a web page asks
    first), work: links opening the turn's working, the slash palette,
    plan cards and the plan sheet, older history in chunks, and
-   swipe left for Forward / right for Back.
+   swipe left for Forward / right for Back. The menu's Share… opens a
+   sheet like the website's Share panel: Share with a link (`phone:share`,
+   backend API 8), the link with Copy and Send (Android's share sheet),
+   and New link. The link is `<site>/s/<slug>`, the site from `phone:me`'s
+   `site`, else a cloud deployment's `.convex.site` twin.
 4. New thread (the bar's pencil): text with photos and dictation, runner,
    model and effort as the iPhone offers; it closes once the backend has it,
    a Starting row stands in, and the thread opens if it starts within a minute.

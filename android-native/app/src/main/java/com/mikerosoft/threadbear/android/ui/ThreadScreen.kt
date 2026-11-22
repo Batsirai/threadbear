@@ -186,12 +186,14 @@ private fun ThreadBar(thread: PhoneThread?, back: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     var hibernate by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var sharing by remember { mutableStateOf(false) }
     // The thread with the changes tapped here on top, so the menu says Remove
     // Star (or Wake) at once rather than after the runner's done it.
     val pending by model.commands.entries.collectAsStateWithLifecycle()
     val thread = thread?.let { model.shown(it, pending) }
     val projects by model.projects.collectAsStateWithLifecycle()
     if (renaming && thread != null) RenameDialog(thread) { renaming = false }
+    if (sharing && thread != null) ShareThreadSheet(thread) { sharing = false }
     TopAppBar(
         navigationIcon = { IconButton(onClick = back) { Icon(Line.Back, "Back", Modifier.size(22.dp)) } },
         title = {
@@ -231,6 +233,10 @@ private fun ThreadBar(thread: PhoneThread?, back: () -> Unit) {
                         menu = false
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("Thread ID", thread.threadId))
+                    }
+                    // Sharing by link, as the website's Share button (backend API 8).
+                    if (model.apiVersion >= BackendApi.SHARING) {
+                        MenuItem(if (thread.share?.byLink == true) "Shared by link…" else "Share…", Line.Share) { menu = false; sharing = true }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Info(Line.Folder, thread.cwd)

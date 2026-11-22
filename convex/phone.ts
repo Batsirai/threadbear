@@ -13,7 +13,7 @@ import { messageButton, threadFields, views } from './schema';
 import { checkPhoneToken, hasLiveKey, pageLimit, readRunnerOrder, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor } from './lib';
 import { API_VERSION } from './version';
 import { pushOff } from './pushHealth';
-import { imagesFrom, phoneImage, replyImagesFrom } from './share';
+import { imagesFrom, phoneImage, replyImagesFrom, siteUrl } from './share';
 import { deleteIfUnused, endCommandFiles, eventBodyAnswer, finishedArgs, readEventBody, runnerName } from './sync';
 import { webLinksOnly, docBytes, holdReviewNumbers, holdThreadTimes, isReadableTime } from './runnerAccess';
 import { HEADS_MARK } from './projectHeads';
@@ -153,12 +153,17 @@ async function stripThread(doc: Doc<'threads'>, owners: ProjectOwners): Promise<
 // Threadbear on your Mac" when it's talking to a backend older than it needs.
 // pushOff: this backend can't send notifications (pushHealth.ts), so the
 // phone's Settings says so. An older phone ignores it.
+// site: where the website is (CONVEX_SITE_URL), for a shared thread's link,
+// <site>/s/<slug>. A self-hosted backend serves it at an address of its own,
+// which the phone can't work out from the deployment's; a phone that gets
+// none (an older backend) uses a cloud deployment's .convex.site twin.
 export const me = query({
   args: { token: v.string() },
-  returns: v.object({ name: v.string(), expiresAt: v.string(), apiVersion: v.number(), pushOff: v.optional(v.boolean()) }),
+  returns: v.object({ name: v.string(), expiresAt: v.string(), apiVersion: v.number(), pushOff: v.optional(v.boolean()), site: v.optional(v.string()) }),
   handler: async (ctx, { token }) => {
     const t = await checkPhoneToken(ctx, token);
-    return { name: t.name, expiresAt: new Date(t.expiresAt).toISOString(), apiVersion: API_VERSION, ...(pushOff(process.env) ? { pushOff: true } : {}) };
+    const site = siteUrl();
+    return { name: t.name, expiresAt: new Date(t.expiresAt).toISOString(), apiVersion: API_VERSION, ...(pushOff(process.env) ? { pushOff: true } : {}), ...(site ? { site } : {}) };
   },
 });
 

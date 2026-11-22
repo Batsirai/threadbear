@@ -35,7 +35,7 @@ export const THREAD_REQUESTS: Record<string, Row> = {
   'threads.update': { what: 'Rename, archive, star, hibernate, and from the Mac its login or model', relay: 'yes', phone: { via: 'update' } },
   'threads.markSeen': { what: 'Marking it read', relay: 'yes', phone: { via: 'update' } },
   'threads.hibernateWhen': { what: 'Hibernate until something happens', relay: 'yes', phone: { no: 'The phone hibernates until a time only.' } },
-  'threads.share': { what: 'Sharing by link', relay: 'yes', phone: { via: 'share' }, android: { no: 'Not on Android yet.' } },
+  'threads.share': { what: 'Sharing by link', relay: 'yes', phone: { via: 'share' } },
   'approvals.respond': { what: 'Answering an approval or a question', relay: 'yes', phone: { via: 'respond' } },
   'secrets.answer': { what: 'Answering a secret card', relay: 'yes', phone: { via: 'secret' } },
   'buttons.press': { what: 'Pressing a reply button', relay: 'yes', phone: { via: 'press' } },

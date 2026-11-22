@@ -18,7 +18,7 @@ is the Android app, which reads the same way through its kit, a port of the iPho
 | Stop | `threads.interrupt` | Yes | Yes | Yes |
 | Rename, archive, star, hibernate, and from the Mac its login or model | `threads.update` | Yes | Yes | Yes |
 | Marking it read | `threads.markSeen` | Yes | Yes | Yes |
-| Sharing by link | `threads.share` | Yes | Yes | No: Not on Android yet. |
+| Sharing by link | `threads.share` | Yes | Yes | Yes |
 | Answering an approval or a question | `approvals.respond` | Yes | Yes | Yes |
 | Answering a secret card | `secrets.answer` | Yes | Yes | Yes |
 | Pressing a reply button | `buttons.press` | Yes | Yes | Yes |

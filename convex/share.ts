@@ -86,8 +86,14 @@ export const IMAGES_MAX = 300;
 // without the site's address, so a picture is left out rather than handed
 // out raw.
 export function sharedImageUrl(slug: string, id: string): string | null {
-  const site = process.env.CONVEX_SITE_URL;
-  return site ? `${site.replace(/\/+$/, '')}/share/image/${encodeURIComponent(slug)}/${encodeURIComponent(id)}` : null;
+  const site = siteUrl();
+  return site ? `${site}/share/image/${encodeURIComponent(slug)}/${encodeURIComponent(id)}` : null;
+}
+
+// This deployment's website (CONVEX_SITE_URL), without a last slash, or
+// undefined when it isn't set. A shared thread's link is <site>/s/<slug>.
+export function siteUrl(): string | undefined {
+  return process.env.CONVEX_SITE_URL?.replace(/\/+$/, '') || undefined;
 }
 
 // A thread's uploaded pictures from seq `from` on (before `before`, when it's a
