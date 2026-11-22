@@ -53,7 +53,7 @@ import ThreadbearKit
     // 100 characters of a link that asks, and opened all of it.
 
     @Test func theQuestionShowsTheWholeLinkItOpens() throws {
-        let long = "x-app://do?" + String(repeating: "a=1&", count: 400) + "send=everything"
+        let long = "x-app://do?" + String(repeating: "a=1&", count: 200) + "send=everything"
         let url = try #require(URL(string: long))
         guard case .ask(let opened) = LinkCheck.kind(of: url) else { Issue.record("it asks"); return }
         #expect(opened == url, "what opens is the URL asked about")

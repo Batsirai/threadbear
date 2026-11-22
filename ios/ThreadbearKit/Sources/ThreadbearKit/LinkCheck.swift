@@ -17,14 +17,17 @@ public enum LinkCheck {
     /// The longest link looked at, of any kind (the desktop's MAX_LINK).
     public static let maxLink = 8_192
     /// The longest link that asks: its question shows all of it, and has to
-    /// fit on a screen (the website's MAX_LINK_CHARS).
-    public static let maxAskLink = 2_048
+    /// fit on a screen (the desktop's alert doesn't scroll).
+    public static let maxAskLink = 1_024
 
     public static func kind(of url: URL) -> LinkPolicy.Kind {
         let text = url.absoluteString
         guard text.utf16.count <= maxLink, !hidesText(text) else { return .refuse }
         let kind = LinkPolicy.kind(of: url)
-        if case .ask = kind, text.utf16.count > maxAskLink { return .refuse }
+        // A space in one that asks could push the rest out of sight.
+        if case .ask = kind, text.utf16.count > maxAskLink || text.unicodeScalars.contains(where: { $0.properties.generalCategory == .spaceSeparator }) {
+            return .refuse
+        }
         return kind
     }
 

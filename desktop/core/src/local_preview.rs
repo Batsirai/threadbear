@@ -122,6 +122,8 @@ struct Budget {
 struct Cached {
     stamp: Stamp,
     data: Arc<[u8]>,
+    /// When it was last used (the cache's tick), for making room.
+    used: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -183,8 +185,9 @@ pub struct Site {
     allowed: Mutex<(HashSet<String>, usize)>,
     /// What this preview has been served (`MAX_REQUESTS`...).
     budget: Mutex<Budget>,
-    /// Files read, by device and inode, and their bytes together.
-    cache: Mutex<(HashMap<(u64, u64), Cached>, usize)>,
+    /// Files read, by device and inode, their bytes together, and a tick
+    /// counting uses.
+    cache: Mutex<(HashMap<(u64, u64), Cached>, usize, u64)>,
     /// The folder, held open for the site's life: every read starts here, so
     /// the folder being moved or swapped for a link later changes nothing.
     #[cfg(unix)]
@@ -298,6 +301,10 @@ impl Site {
             let Ok(mut budget) = self.budget.lock() else {
                 return false;
             };
+            let bytes = budget.bytes.saturating_add(stamp.len);
+            if bytes > MAX_SERVED_BYTES {
+                return false;
+            }
             let seen = budget.variants.entry((stamp.dev, stamp.ino)).or_default();
             if !seen.contains(&spelling) {
                 if seen.len() >= MAX_VARIANTS_PER_FILE {
@@ -305,14 +312,10 @@ impl Site {
                 }
                 seen.insert(spelling);
             }
-            let bytes = budget.bytes.saturating_add(stamp.len);
-            if bytes > MAX_SERVED_BYTES {
-                return false;
-            }
             budget.bytes = bytes;
             true
         };
-        let (data, fresh) = self.read(&parts, admit)?;
+        let data = self.read(&parts, admit)?;
         if is_page {
             if let Some(wanted) = &self.page_digest {
                 if &digest(&data) != wanted {
@@ -322,8 +325,11 @@ impl Site {
         }
         let scanned = SCANNED_EXTENSIONS.contains(&ext.as_str());
         let utf8 = scanned && std::str::from_utf8(&data).is_ok();
-        // Unchanged since it was last read, its names are already allowed.
-        if scanned && fresh && !self.page_only {
+        // Every time, cached or not: the same file asked for by another
+        // spelling (`SUB/style.css` on a disk that ignores case) names its
+        // assets from that folder (Gemini's review). At most
+        // MAX_VARIANTS_PER_FILE times a file.
+        if scanned && !self.page_only {
             let head = &data[..data.len().min(SCAN_BYTES)];
             // A character cut in two at the end reads as U+FFFD, which names nothing.
             let text = String::from_utf8_lossy(head);
@@ -360,16 +366,11 @@ impl Site {
     /// and the file itself opened with O_NOFOLLOW, so a symlink anywhere
     /// refuses it, then checked, put to `admit`, and read on that one open
     /// file. Every request opens and checks it again; only the read is
-    /// skipped, when the open file is the same one, unchanged, as last read
-    /// (and then the bool is false: nothing new was read). Exactly
-    /// `stamp.len` bytes or nothing: a file that changes size mid-read is
-    /// refused this time.
+    /// skipped, when the open file is the same one, unchanged, as last read.
+    /// Exactly `stamp.len` bytes or nothing: a file that changes size
+    /// mid-read is refused this time.
     #[cfg(unix)]
-    fn read(
-        &self,
-        parts: &[String],
-        admit: impl FnOnce(&Stamp) -> bool,
-    ) -> Option<(Arc<[u8]>, bool)> {
+    fn read(&self, parts: &[String], admit: impl FnOnce(&Stamp) -> bool) -> Option<Arc<[u8]>> {
         use std::io::Read as _;
         use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
         let (name, folders) = parts.split_last()?;
@@ -430,9 +431,12 @@ impl Site {
             return None;
         }
         let key = (stamp.dev, stamp.ino);
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(hit) = cache.0.get(&key).filter(|c| c.stamp == stamp) {
-                return Some((hit.data.clone(), false));
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.2 += 1;
+            let tick = cache.2;
+            if let Some(hit) = cache.0.get_mut(&key).filter(|c| c.stamp == stamp) {
+                hit.used = tick;
+                return Some(hit.data.clone());
             }
         }
         let mut out = Vec::with_capacity(meta.len() as usize);
@@ -443,21 +447,27 @@ impl Site {
         }
         let data: Arc<[u8]> = out.into();
         // Kept only if it was still the same file after the read (a write
-        // during it moves its times), and while the cache has room: when
-        // it's full it starts again rather than tracking who was used last.
+        // during it moves its times), the least recently used going first
+        // to make room (clearing it all made five big pictures asked for in
+        // turn miss every time: Gemini's review).
         let after = file.metadata().ok()?;
         let unchanged = after.len() == stamp.len
             && (after.mtime(), after.mtime_nsec()) == stamp.mtime
             && (after.ctime(), after.ctime_nsec()) == stamp.ctime;
         if let Ok(mut cache) = self.cache.lock() {
-            let (files, bytes) = &mut *cache;
+            let (files, bytes, tick) = &mut *cache;
             if let Some(old) = files.remove(&key) {
                 *bytes -= old.data.len();
             }
             if unchanged && data.len() <= MAX_CACHED_BYTES {
-                if *bytes + data.len() > MAX_CACHED_BYTES {
-                    files.clear();
-                    *bytes = 0;
+                while *bytes + data.len() > MAX_CACHED_BYTES {
+                    let Some(oldest) = files.iter().min_by_key(|(_, c)| c.used).map(|(k, _)| *k)
+                    else {
+                        break;
+                    };
+                    if let Some(gone) = files.remove(&oldest) {
+                        *bytes -= gone.data.len();
+                    }
                 }
                 *bytes += data.len();
                 files.insert(
@@ -465,19 +475,16 @@ impl Site {
                     Cached {
                         stamp,
                         data: data.clone(),
+                        used: *tick,
                     },
                 );
             }
         }
-        Some((data, true))
+        Some(data)
     }
 
     #[cfg(not(unix))]
-    fn read(
-        &self,
-        _parts: &[String],
-        _admit: impl FnOnce(&Stamp) -> bool,
-    ) -> Option<(Arc<[u8]>, bool)> {
+    fn read(&self, _parts: &[String], _admit: impl FnOnce(&Stamp) -> bool) -> Option<Arc<[u8]>> {
         None
     }
 }

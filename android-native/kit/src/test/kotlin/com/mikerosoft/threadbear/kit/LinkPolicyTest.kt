@@ -26,7 +26,7 @@ class LinkPolicyTest {
 
     /** Daybreak 167: the question showed the first 200 and last 100 characters, and opened all of it. */
     @Test fun theQuestionShowsTheWholeLinkItOpens() {
-        val long = "x-app://do?" + "a=1&".repeat(400) + "send=everything"
+        val long = "x-app://do?" + "a=1&".repeat(200) + "send=everything"
         val ask = assertIs<LinkPolicy.Kind.Ask>(LinkPolicy.kind(long))
         assertEquals(long, ask.url, "what opens is the link as written")
         val (title, detail) = LinkPolicy.question(ask)

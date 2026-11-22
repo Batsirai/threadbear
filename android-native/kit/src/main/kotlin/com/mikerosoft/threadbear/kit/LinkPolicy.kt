@@ -32,10 +32,11 @@ object LinkPolicy {
 
     /**
      * The longest link that asks: its question shows all of it, and has to
-     * fit on a screen (the website's MAX_LINK_CHARS). A real `mailto:` or
-     * app link is a few hundred at most.
+     * fit on a screen, the desktop's alert too, which doesn't scroll
+     * (Gemini's review). A real `mailto:` or app link is a few hundred at
+     * most.
      */
-    const val MAX_ASK_LINK = 2_048
+    const val MAX_ASK_LINK = 1_024
 
     fun scheme(url: String): String? = schemePattern.find(url)?.groupValues?.get(1)?.lowercase()
 
@@ -53,7 +54,9 @@ object LinkPolicy {
             null -> Kind.Refuse
             "http", "https" -> web(url)?.let { Kind.Web(it) } ?: Kind.Refuse
             "file" -> Kind.File(url)
-            else -> if (url.length > MAX_ASK_LINK) Kind.Refuse else Kind.Ask(url)
+            // A space in one that asks could push the rest of it out of
+            // sight in the question (Gemini's review): a real link writes %20.
+            else -> if (url.length > MAX_ASK_LINK || url.any { Character.isSpaceChar(it) }) Kind.Refuse else Kind.Ask(url)
         }
     }
 

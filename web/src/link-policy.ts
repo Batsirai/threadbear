@@ -16,6 +16,11 @@ export type LinkTarget = { kind: 'web'; url: string } | { kind: 'ask'; url: stri
 
 // Longer than this and the question couldn't show the whole address.
 export const MAX_LINK_CHARS = 2048;
+// Another app's link, whose question has to show all of it, as the apps
+// keep it (the desktop's alert doesn't scroll).
+export const MAX_ASK_CHARS = 1024;
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 // Schemes that never leave the page as a link, asked or not: they run or
 // load something in the page's own context or the machine's files.
@@ -32,7 +37,8 @@ export function classifyLink(href: string, base: string): LinkTarget {
   // line or paragraph separator, which change how the rest of the address
   // shows in the question about it (Daybreak 167, 22 Nov 2026).
   // eslint-disable-next-line no-control-regex
-  if (!href || href.length > MAX_LINK_CHARS || /[\u0000-\u0020\u007f-\u009f\u2028\u2029\p{Cf}]/u.test(href)) return { kind: 'never' };
+  // Half a surrogate pair, which URL would quietly turn into U+FFFD, too.
+  if (!href || href.length > MAX_LINK_CHARS || /[\u0000-\u0020\u007f-\u009f\u2028\u2029\p{Cf}\p{Zs}]/u.test(href) || LONE_SURROGATE.test(href)) return { kind: 'never' };
   let url: URL;
   try {
     url = new URL(href, base);
@@ -42,5 +48,6 @@ export function classifyLink(href: string, base: string): LinkTarget {
   if (url.href.length > MAX_LINK_CHARS) return { kind: 'never' };
   if (url.protocol === 'http:' || url.protocol === 'https:') return url.hostname ? { kind: 'web', url: url.href } : { kind: 'never' };
   if (NEVER.has(url.protocol)) return { kind: 'never' };
+  if (url.href.length > MAX_ASK_CHARS) return { kind: 'never' };
   return { kind: 'ask', url: url.href, scheme: url.protocol.slice(0, -1) };
 }

@@ -48,8 +48,9 @@ pub enum LinkKind {
 /// The longest link looked at (`LinkPolicy.web`'s limit).
 const MAX_LINK: usize = 8_192;
 /// The longest link that asks: its question shows all of it, and has to fit
-/// on the screen (the website's MAX_LINK_CHARS; Daybreak 167).
-pub const MAX_ASK_LINK: usize = 2_048;
+/// on the screen, in an alert that doesn't scroll (Daybreak 167; Gemini's
+/// review). A real `mailto:` or app link is a few hundred at most.
+pub const MAX_ASK_LINK: usize = 1_024;
 
 /// Whether `text` has a character that hides or reorders what's around it:
 /// a control (a line break, a tab), a bidi override or isolate, a zero-width
@@ -71,8 +72,13 @@ pub fn hides_text(text: &str) -> bool {
 /// What `url` is. A link with no scheme is a path, relative or not; the
 /// caller resolves a relative one against the thread's folder.
 pub fn link_kind(url: &str) -> LinkKind {
+    // Checked as given, before the spaces round it are trimmed: a tab or
+    // line break at either end is refused, not cleaned (Codex's review).
+    if url.encode_utf16().count() > MAX_LINK || hides_text(url) {
+        return LinkKind::Refuse;
+    }
     let url = url.trim();
-    if url.is_empty() || url.len() > MAX_LINK || hides_text(url) {
+    if url.is_empty() {
         return LinkKind::Refuse;
     }
     match scheme(url) {
@@ -125,7 +131,14 @@ pub fn link_kind(url: &str) -> LinkKind {
         // Its missing root (or an embedded device name) is refused below.
         Some(s) if cfg!(windows) && s.len() == 1 => LinkKind::File(url.to_owned()),
         // Counted as the phones and the website count it (UTF-16).
-        Some(_) if url.encode_utf16().count() > MAX_ASK_LINK => LinkKind::Refuse,
+        // A space in one could push the rest of it out of sight in the
+        // question (Gemini's review): a real link writes %20.
+        Some(_)
+            if url.encode_utf16().count() > MAX_ASK_LINK
+                || url.chars().any(char::is_whitespace) =>
+        {
+            LinkKind::Refuse
+        }
         Some(_) => LinkKind::Ask(url.to_owned()),
     }
 }
@@ -3160,7 +3173,7 @@ mod tests {
     /// its first 200 and last 100 characters, and opened all of it.
     #[test]
     fn a_question_shows_the_whole_link_it_opens() {
-        let long = format!("x-app://do?{}send=everything", "a=1&".repeat(400));
+        let long = format!("x-app://do?{}send=everything", "a=1&".repeat(200));
         let LinkKind::Ask(opened) = link_kind(&long) else {
             panic!("it asks")
         };

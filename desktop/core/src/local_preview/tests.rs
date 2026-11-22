@@ -870,3 +870,67 @@ fn the_byte_budget_is_charged_before_reading() {
     // The page's own bytes took a little: the last whole picture doesn't fit.
     assert!(site.serve(&format!("/p{}.png", pics - 1)).is_none());
 }
+
+/// Gemini's review: the same stylesheet by another spelling, on a disk that
+/// ignores case, still names its assets from the folder it was asked from.
+#[cfg(unix)]
+#[test]
+fn a_stylesheet_by_another_spelling_still_names_its_assets() {
+    let f = Folder::new();
+    fs::create_dir_all(f.dir.join("sub")).unwrap();
+    f.write(
+        "index.html",
+        r#"<link rel=stylesheet href="sub/look.css"><link rel=stylesheet href="SUB/look.css">"#,
+    );
+    f.write("sub/look.css", "body { background: url(bg.png) }");
+    f.write("sub/bg.png", "x");
+    let site = f.site();
+    assert!(site.serve("/sub/look.css").is_some());
+    if f.dir.join("SUB/look.css").exists() {
+        assert!(site.serve("/SUB/look.css").is_some());
+        assert!(site.allows("SUB/bg.png"));
+    }
+}
+
+/// A request refused for the byte budget doesn't use up one of the file's
+/// spellings.
+#[cfg(unix)]
+#[test]
+fn a_refusal_uses_up_no_spelling() {
+    let f = Folder::new();
+    f.write("index.html", "<img src=pic.png>");
+    f.write("pic.png", "x");
+    let site = f.site();
+    site.budget.lock().unwrap().bytes = MAX_SERVED_BYTES;
+    for i in 0..20 {
+        assert!(site
+            .serve_asked(&format!("/pic.png?{i}"), "/pic.png")
+            .is_none());
+    }
+    site.budget.lock().unwrap().bytes = 0;
+    assert!(site.serve_asked("/pic.png?100", "/pic.png").is_some());
+}
+
+/// Gemini's review: making room lets the least recently used go, not
+/// everything.
+#[cfg(unix)]
+#[test]
+fn the_cache_lets_the_least_recently_used_go() {
+    let f = Folder::new();
+    let n = MAX_CACHED_BYTES / (64 * 1024 * 1024) + 1;
+    let refs: String = (0..n).map(|i| format!("<img src=p{i}.png>")).collect();
+    f.write("index.html", &refs);
+    let site = f.site();
+    for i in 0..n {
+        let file = fs::File::create(f.dir.join(format!("p{i}.png"))).unwrap();
+        file.set_len(64 * 1024 * 1024).unwrap();
+    }
+    let first: Vec<_> = (0..n)
+        .map(|i| site.serve(&format!("/p{i}.png")).unwrap().data)
+        .collect();
+    // p0 went to make room for the last; the others are still the same bytes.
+    for (i, data) in first.iter().enumerate().skip(1) {
+        let again = site.serve(&format!("/p{i}.png")).unwrap().data;
+        assert!(Arc::ptr_eq(data, &again), "p{i} kept");
+    }
+}
