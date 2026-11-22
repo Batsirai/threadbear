@@ -1427,8 +1427,10 @@ isn't done, what's still running or waited on, the files, branches and
 threads involved, and how you said you want the work done. Then your
 message runs on the summary, in the same turn. It takes a minute or so
 before the turn starts, and a quiet line in the thread says it happened
-and why. A thread that's still warm, a shorter one, a slash command and
-Codex threads are left alone.
+and why. Messages you send meanwhile show a clock until it's done, then go
+into the same turn after the first, as they would have without it. A thread
+that's still warm, a shorter one, a slash command and Codex threads are
+left alone.
 
 To add another login, such as a second Claude subscription, give it a
 folder of its own under `accounts` in Threadbear's data folder, named

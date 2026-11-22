@@ -2019,6 +2019,9 @@ export class Runner {
       // earlier: they go first. On a draining runner a thread with no turn
       // is usually about to move across, and the message goes with it
       // (kickQueue starts it here if background work is holding the thread).
+      // One of Mike's held back only by a cold compaction goes into the turn
+      // once it has compacted (runner/cold-compact.ts).
+      if (rt.turn?.precompact && !opts.queue) this.noteQueuedMeanwhile(st, msg);
       rec.queue.push(msg);
       this.markDirty(st);
       if (!this.kickQueue(st) && this.queueHeld(st)) this.scheduleIdle(st);
@@ -2103,11 +2106,13 @@ export class Runner {
     );
   }
 
-  canSteer(st: ThreadState): boolean {
+  // `ahead`: what's queued in front of the message, the whole queue for a
+  // new one; less for one already in it (steerQueuedMeanwhile).
+  canSteer(st: ThreadState, ahead: QueuedSend[] = st.rec.queue): boolean {
     const { rec, rt } = st;
     const turn = rt.turn;
     if (!turn || !runningSession(rt) || this.stopping || rt.editing) return false;
-    if (rec.queue.some(q => !isAutomaticInput(q)) || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
+    if (ahead.some(q => !isAutomaticInput(q)) || rec.handoff || rec.moved || rt.releaseWhenIdle || turn.interruptRequested) return false;
     // Nor into a compaction or review (a skill's turn takes them).
     if (turn.noSteer || turn.local) return false;
     return !turn.auto || Boolean(turn.cliStarted);

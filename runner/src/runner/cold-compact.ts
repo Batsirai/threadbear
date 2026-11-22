@@ -15,6 +15,8 @@
 // result for the compaction comes to compactDone (the 'result' case in
 // onOutput), which says so in the transcript and sends the message. Both
 // are one turn, so the thread shows one turn with a quiet line in it.
+// Messages Mike sends while it compacts queue (nothing goes into the CLI
+// then) and go into the turn right after the held one (steerQueuedMeanwhile).
 // Each method's `this` is the Runner; runner.ts puts them on its prototype.
 import crypto from 'node:crypto';
 import type { Runner, ThreadState } from '../runner.ts';
@@ -70,6 +72,7 @@ export type Precompact = {
   idleMs: number;
   costBefore?: number; // sessionCostTotal when it was sent
   noted?: boolean; // the CLI's own "Compacted" line was reworded
+  meanwhile?: string[]; // Mike's messages queued while it compacted, which would have steered (turn ids)
   send: () => void; // the turn's message, held until the compaction is done
 };
 
@@ -143,7 +146,8 @@ export const coldCompactPart = {
     const id = crypto.randomUUID();
     turn.precompact = { id, gen: rt.generation, msg, ...cold, costBefore: rec.sessionCostTotal, send };
     // Nothing goes into the CLI while it compacts: a message sent meanwhile
-    // waits for the next turn, as for a /compact typed by hand.
+    // queues, and Mike's go into this turn once it has compacted
+    // (steerQueuedMeanwhile). A /compact typed by hand holds them for the next.
     turn.noSteer = true;
     this.log.info('compacting a cold thread first', { threadId: rec.id, tokens: cold.tokens, idleMin: Math.round(cold.idleMs / 60_000) });
     rt.session.send({ id, text: `/compact ${COLD_COMPACT_INSTRUCTIONS}`, images: [] });
@@ -213,6 +217,60 @@ export const coldCompactPart = {
       // that failed in deliver does, and the message is kept.
       turn.precompact = pre;
       this.failTurn(st, e instanceof Error ? e.message : String(e));
+      return;
+    }
+    if (r.outcome === 'completed') this.steerQueuedMeanwhile(st, pre);
+  },
+
+  // Called by send for a message queued while a compaction runs: one of
+  // Mike's that would have gone into the turn (not a slash command, not an
+  // edit, not one asked to wait) is noted, to go in once it has compacted.
+  noteQueuedMeanwhile(this: Runner, st: ThreadState, msg: QueuedSend): void {
+    const pre = st.rt.turn?.precompact;
+    if (!pre || !fromMike(msg.text, msg) || msg.editOf !== undefined || this.commandPlan(st, msg.text)) return;
+    (pre.meanwhile ??= []).push(msg.turnId);
+  },
+
+  // The held message has gone in: Mike's messages that queued while it
+  // compacted go in after it, in order, as each would have without the
+  // compaction (thread c3f5af7d, 22 Nov 2026: three corrections sent during
+  // one waited out the whole turn, as canSteer holds every message behind a
+  // queued one). The compaction is automatic and unseen, so it changes how
+  // his messages go only while it runs. Anything else in the queue keeps its
+  // place: a reminder or the runner's own waits as before (and doesn't hold
+  // his up, as in canSteer); one that must wait for the turn to end (a slash
+  // command, one queued before the turn, another thread's) stops it there,
+  // so nothing jumps ahead of it; and canSteer still says no after Stop, with
+  // a login move waiting, while editing or moving.
+  steerQueuedMeanwhile(this: Runner, st: ThreadState, pre: Precompact): void {
+    const { rec, rt } = st;
+    const ids = new Set(pre.meanwhile);
+    // A move to another runner under way: they go with the thread.
+    if (!ids.size || rt.moving) return;
+    for (let i = 0; i < rec.queue.length; ) {
+      const q = rec.queue[i]!;
+      if (isAutomaticInput(q)) {
+        i++;
+        continue;
+      }
+      if (!ids.has(q.turnId) || this.commandPlan(st, q.text) || !this.canSteer(st, rec.queue.slice(0, i))) return;
+      rec.queue.splice(i, 1);
+      try {
+        this.steer(st, q);
+      } catch (e) {
+        this.log.warn('could not steer a message queued while compacting', { threadId: rec.id, error: e instanceof Error ? e.message : String(e) });
+        const seq = rt.turn?.inputs?.get(q.turnId);
+        if (seq === undefined) {
+          // Not shown: it waits in the queue as it did.
+          rec.queue.splice(i, 0, q);
+        } else if (!rec.interruptedMessages?.includes(seq)) {
+          // Shown but not sent: kept as a stopped message is, for his next one.
+          rec.interruptedMessages = [...(rec.interruptedMessages ?? []), seq];
+          this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, rt.turn?.turnId);
+        }
+        this.markDirty(st);
+        return;
+      }
     }
   },
 };
