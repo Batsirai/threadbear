@@ -616,7 +616,10 @@ File references are where to look.
   Once a release has landed, that thread offers a check-up for Mike
   (`runner/src/checkup.ts`, `tb checkup`): a short report built from the
   runner log's own error messages (only those in Mike's code are named),
-  the release tags and which of Mike's patches won't load. You see the
+  the release tags (and the releases kept under `refs/threadbear/upstream/`),
+  which of Mike's patches won't load, and how long `tb land`'s checks took
+  (`.git/threadbear-land-times.log`: counts and times, step names only when
+  they're `check.sh`'s, never host names). You see the
   draft; only if you say Send does it go, through your `gh`, as a comment on
   a public Discussion on `mikecann/threadbear`. It keeps the draft and what
   it sent in `runner/checkup-draft.md` and `runner/checkup.json`.

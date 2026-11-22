@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from '../helpers/fakes.ts';
-import { buildCheckup, checkupOff, countErrors, failingPatches, formatCheckup, parseLogLine, postDraft, readState, releasesOnMain, saveDraft, scrubForPosting, skipped, type Checkup } from '../../src/checkup.ts';
+import { buildCheckup, checkupOff, countErrors, landingChecks, failingPatches, formatCheckup, parseLogLine, postDraft, readState, releasesOnMain, saveDraft, scrubForPosting, skipped, type Checkup } from '../../src/checkup.ts';
 
 const DAY = 86_400_000;
 const NOW = Date.parse('2026-11-19T12:00:00Z');
@@ -99,6 +99,49 @@ test("the release main had before comes from main's reflog", () => {
   const r = releasesOnMain(dir);
   assert.equal(r.release?.tag, 'release/2026-11-19');
   assert.equal(r.previous?.tag, 'release/2026-11-05');
+});
+
+test('releases the runner kept under refs/threadbear/upstream count too', () => {
+  // A fork whose releases after 16 Nov were only there was told it had
+  // brought in 16 Nov's when it had 21 Nov's (discussions/85).
+  const dir = repo();
+  const g = (...a: string[]) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  g('commit', '-q', '--allow-empty', '-m', 'three');
+  g('update-ref', 'refs/threadbear/upstream/2026-11-20', 'HEAD');
+  g('commit', '-q', '--allow-empty', '-m', 'their own');
+  g('commit', '-q', '--allow-empty', '-m', 'four');
+  g('tag', '-a', '-m', 'r', 'kept', 'HEAD');
+  g('update-ref', 'refs/threadbear/upstream/2026-11-21', 'refs/tags/kept');
+  g('tag', '-d', 'kept');
+  // A tag of the fork's own with the same name, off main, doesn't hide it.
+  g('tag', 'release/2026-11-21', g('commit-tree', '-m', 'theirs', 'HEAD^{tree}').trim());
+  const r = releasesOnMain(dir);
+  assert.equal(r.release?.tag, 'release/2026-11-21');
+  assert.equal(r.release?.rev, g('rev-parse', 'HEAD').trim());
+  assert.equal(r.previous?.tag, 'release/2026-11-20');
+});
+
+test("landing checks: counts, typical and slowest times, Mike's step names only, no host names", () => {
+  const at = (d: number) => new Date(NOW - d * DAY).toISOString();
+  const lines = [
+    JSON.stringify({ at: at(20), ok: true, seconds: 9999 }),
+    JSON.stringify({ at: at(3), ok: true, seconds: 1200, waitedSeconds: 60, steps: [{ name: 'runner unit tests', status: 'ok', seconds: 700 }, { name: 'their secret step', status: 'ok', seconds: 900 }, { name: 'desktop lint', status: 'skip' }] }),
+    JSON.stringify({ at: at(2), ok: false, seconds: 1440, waitedSeconds: 120, steps: [{ name: 'runner unit tests', status: 'FAIL', seconds: 800 }, { name: 'desktop core tests', status: 'ok', seconds: 90 }] }),
+    JSON.stringify({ at: at(1), ok: true, seconds: 300, host: 'olli-mini', steps: [{ name: 'runner unit tests', status: 'ok', seconds: 200 }] }),
+    JSON.stringify({ at: at(1), dryRun: true, seconds: 5 }),
+    '{"cut sho',
+    JSON.stringify({ at: at(1), ok: true, seconds: 10, steps: [null, { name: 'private-client\nrunner unit tests', status: 'ok', seconds: 5 }] }),
+    JSON.stringify({ at: at(1), ok: true, seconds: 10, steps: {} }),
+    'null',
+  ];
+  const k = landingChecks(lines, NOW - 14 * DAY, (name) => name !== 'their secret step')!;
+  assert.deepEqual(k, { count: 5, failed: 1, medianSeconds: 300, slowestSeconds: 1440, medianWaitSeconds: 120, onCheckHost: 1, steps: [{ name: 'runner unit tests', medianSeconds: 700 }, { name: 'desktop core tests', medianSeconds: 90 }] });
+  const c: Checkup = { sinceDays: 14, errors: [], otherErrors: 0, updateFailing: false, patches: [], otherPatchesFailing: 0, checks: k };
+  const out = formatCheckup(c);
+  assert.match(out, /Landing checks in the last 14 days: 5 \(1 failed\), 1 on a check host, 4 on their Mac\. Typical 5 min, slowest 24 min, typical wait for the lock 2 min\./);
+  assert.match(out, /Slowest steps \(typical\): runner unit tests 12 min, desktop core tests 2 min\./);
+  assert.doesNotMatch(out, /olli-mini|secret|private/);
+  assert.equal(landingChecks([], 0, () => true), undefined);
 });
 
 test("off with releases.checkup false, and in Mike's own copy", () => {

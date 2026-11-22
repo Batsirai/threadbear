@@ -25,7 +25,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { scrubText } from './redaction.ts';
-import { repoKey, TAG_PREFIX } from './upstream.ts';
+import { repoKey, TAG_PREFIX, UPSTREAM_REFS } from './upstream.ts';
+import { LAND_TIMES_FILE } from './land-queue.ts';
 import type { PatchInfo } from './protocol.ts';
 
 export const CHECKUPS_REPO = 'mikecann/threadbear';
@@ -43,15 +44,31 @@ const MAX_LISTED = 10;
 const MAX_NOTE = 600;
 
 export type Checkup = {
-  release?: { tag: string; date?: string };
-  previous?: { tag: string; date?: string };
+  release?: { tag: string; date?: string; rev?: string };
+  previous?: { tag: string; date?: string; rev?: string };
   sinceDays: number;
   errors: { message: string; count: number }[];
   otherErrors: number;
   updateFailing: boolean;
   patches: { id: string; error: string }[];
   otherPatchesFailing: number;
+  checks?: LandingChecks;
   note?: string;
+};
+
+// How long `tb land`'s checks took here, from the log each one leaves
+// (worktrees.ts, LAND_TIMES_FILE). Mike asked to keep a close eye on this
+// after Ville's took 20 to 45 minutes a landing on a Mac with no check host
+// (22 Nov). Step names only when they're check.sh's in Mike's release; host
+// names never, just whether a check host ran it.
+export type LandingChecks = {
+  count: number;
+  failed: number;
+  medianSeconds: number;
+  slowestSeconds: number;
+  medianWaitSeconds?: number;
+  onCheckHost: number;
+  steps: { name: string; medianSeconds: number }[];
 };
 
 type State = { lastAt?: string; posted?: { tag: string; at: string; url?: string }[]; draft?: { tag: string; file: string } };
@@ -117,6 +134,61 @@ export function failingPatches(patches: PatchInfo[], inRelease: (file: string) =
   return { patches: out, otherPatchesFailing: other };
 }
 
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+};
+
+// What a check.sh step's name looks like ("desktop core tests"). Anything
+// else (a newline in it would let git grep match one line of it alone and
+// post the rest, Codex's review) is never named.
+const STEP_NAME = /^[a-z0-9][a-z0-9 .+-]{0,59}$/i;
+
+// The landing checks since `since`, from the times log's lines.
+export function landingChecks(lines: string[], since: number, knownStep: (name: string) => boolean): LandingChecks | undefined {
+  type Line = { at?: string; ok?: boolean; dryRun?: boolean; seconds?: number; waitedSeconds?: number; host?: string; steps?: { name?: string; status?: string; seconds?: number }[] };
+  const runs: Line[] = [];
+  for (const line of lines) {
+    try {
+      const e = JSON.parse(line) as Line;
+      if (e && typeof e === 'object' && !e.dryRun && typeof e.seconds === 'number' && Number.isFinite(e.seconds) && typeof e.at === 'string' && Date.parse(e.at) >= since) runs.push(e);
+    } catch {
+      // A line cut short.
+    }
+  }
+  if (!runs.length) return undefined;
+  const secs = runs.map((r) => r.seconds!);
+  const waits = runs.map((r) => r.waitedSeconds).filter((w): w is number => typeof w === 'number');
+  const byStep = new Map<string, number[]>();
+  for (const r of runs) {
+    // A line of any shape is skipped, never the whole check-up (Codex's review).
+    for (const st of Array.isArray(r.steps) ? r.steps : []) {
+      if (!st || typeof st !== 'object' || st.status === 'skip' || typeof st.seconds !== 'number' || typeof st.name !== 'string' || !STEP_NAME.test(st.name)) continue;
+      byStep.set(st.name, [...(byStep.get(st.name) ?? []), st.seconds]);
+    }
+  }
+  const steps = [...byStep]
+    .filter(([name]) => knownStep(name))
+    .map(([name, xs]) => ({ name, medianSeconds: median(xs) }))
+    .sort((a, b) => b.medianSeconds - a.medianSeconds)
+    .slice(0, 4);
+  return {
+    count: runs.length,
+    failed: runs.filter((r) => !r.ok).length,
+    medianSeconds: median(secs),
+    slowestSeconds: Math.max(...secs),
+    ...(waits.length ? { medianWaitSeconds: median(waits) } : {}),
+    onCheckHost: runs.filter((r) => r.host).length,
+    steps,
+  };
+}
+
+function duration(s: number): string {
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -137,6 +209,12 @@ export function formatCheckup(c: Checkup): string {
     lines.push(`Runner errors ${span}:`);
     for (const e of c.errors) lines.push(`- ${e.count}x ${e.message}`);
     if (c.otherErrors) lines.push(`- ${plural(c.otherErrors, 'other', 'others')} (not from Threadbear's own code, so not listed)`);
+  }
+  if (c.checks) {
+    const k = c.checks;
+    const where = k.onCheckHost === k.count ? 'all on a check host' : k.onCheckHost ? `${k.onCheckHost} on a check host, ${k.count - k.onCheckHost} on their Mac` : 'all on their Mac, no check host';
+    lines.push(`Landing checks ${span}: ${k.count}${k.failed ? ` (${k.failed} failed)` : ''}, ${where}. Typical ${duration(k.medianSeconds)}, slowest ${duration(k.slowestSeconds)}${k.medianWaitSeconds ? `, typical wait for the lock ${duration(k.medianWaitSeconds)}` : ''}.`);
+    if (k.steps.length) lines.push(`Slowest steps (typical): ${k.steps.map((st) => `${st.name} ${duration(st.medianSeconds)}`).join(', ')}.`);
   }
   if (c.updateFailing) lines.push("The runner's own build of main is failing right now.");
   for (const p of c.patches) lines.push(`Patch \`${p.id}\` won't load: ${p.error}`);
@@ -159,24 +237,48 @@ function git(cwd: string, args: string[]): string | undefined {
   return r.status === 0 ? r.stdout.trim() : undefined;
 }
 
-function tagDate(cwd: string, tag: string): string | undefined {
-  return git(cwd, ['for-each-ref', '--format=%(creatordate:iso-strict)', `refs/tags/${tag}`]) || undefined;
+type Release = { tag: string; date?: string; rev: string };
+
+// Mike's releases this copy has: tags fetched the usual way
+// (refs/tags/release/*), and the ones the runner checked and kept under
+// refs/threadbear/upstream/<date> (upstream.ts). Only reading tags, a fork
+// whose newer releases were only there named one from 16 Nov when it had
+// brought in 21 Nov's (discussions/85, 21 Nov). Newest first, by name.
+function knownReleases(cwd: string): Release[] {
+  const out = git(cwd, ['for-each-ref', '--format=%(refname)%09%(*objectname)%09%(objectname)%09%(creatordate:iso-strict)', `refs/tags/${TAG_PREFIX}`, UPSTREAM_REFS]) ?? '';
+  // Every one, not one per name: a tag of the fork's own with a release's
+  // name mustn't hide the kept release (Codex's review). The kept one comes
+  // first for the same name.
+  const all: (Release & { kept: boolean })[] = [];
+  for (const line of out.split('\n')) {
+    const [ref, peeled, oid, date] = line.split('\t');
+    if (!ref || !oid) continue;
+    const kept = ref.startsWith(UPSTREAM_REFS);
+    const tag = kept ? TAG_PREFIX + ref.slice(UPSTREAM_REFS.length) : ref.slice('refs/tags/'.length);
+    all.push({ tag, rev: peeled || oid, kept, ...(date ? { date } : {}) });
+  }
+  return all
+    .sort((a, b) => (a.tag !== b.tag ? (a.tag < b.tag ? 1 : -1) : Number(b.kept) - Number(a.kept)))
+    .map(({ kept: _kept, ...r }) => r);
 }
 
-function newestRelease(cwd: string, rev: string): string | undefined {
-  return git(cwd, ['describe', '--tags', '--abbrev=0', '--match', `${TAG_PREFIX}*`, rev]);
+function contains(cwd: string, rev: string, release: Release): boolean {
+  return spawnSync('git', ['-C', cwd, 'merge-base', '--is-ancestor', release.rev, rev]).status === 0;
 }
 
 // The release main has now, and the one it had before: main's reflog,
 // back to where the newest release wasn't in it yet.
-export function releasesOnMain(cwd: string): { release?: { tag: string; date?: string }; previous?: { tag: string; date?: string } } {
-  const now = newestRelease(cwd, 'main');
-  if (!now) return {};
-  const release = { tag: now, date: tagDate(cwd, now) };
+export function releasesOnMain(cwd: string): { release?: Release; previous?: Release } {
+  const all = knownReleases(cwd);
+  const newest = (rev: string) => all.find((r) => contains(cwd, rev, r));
+  const release = newest('main');
+  if (!release) return {};
   for (let i = 1; i <= 50; i++) {
-    if (!git(cwd, ['rev-parse', '--verify', '--quiet', `main@{${i}}`])) break;
-    const then = newestRelease(cwd, `main@{${i}}`);
-    if (then && then !== now) return { release, previous: { tag: then, date: tagDate(cwd, then) } };
+    const then = `main@{${i}}`;
+    if (!git(cwd, ['rev-parse', '--verify', '--quiet', then])) break;
+    if (contains(cwd, then, release)) continue;
+    const previous = newest(then);
+    return previous ? { release, previous } : { release };
   }
   return { release };
 }
@@ -189,14 +291,26 @@ export type CheckupInputs = {
   updateFailing: boolean;
   note?: string;
   now: number;
+  // The times log's lines; read from the checkout's git folder when left out.
+  landTimes?: string[];
 };
+
+function readLandTimes(checkout: string): string[] {
+  const common = git(checkout, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!common) return [];
+  try {
+    return fs.readFileSync(path.join(common, LAND_TIMES_FILE), 'utf8').trimEnd().split('\n');
+  } catch {
+    return [];
+  }
+}
 
 export function buildCheckup(i: CheckupInputs): Checkup {
   const { release, previous } = releasesOnMain(i.checkout);
   const last = readState(i.home).lastAt;
   const since = last ? Date.parse(last) : i.now - FIRST_LOOK_DAYS * DAY_MS;
   const sinceDays = Math.max(1, Math.round((i.now - since) / DAY_MS));
-  const tag = release?.tag;
+  const tag = release?.rev;
   const cache = new Map<string, boolean>();
   const known = (message: string) => {
     if (!tag) return false;
@@ -209,7 +323,9 @@ export function buildCheckup(i: CheckupInputs): Checkup {
     return !rel.startsWith('..') && !path.isAbsolute(rel) && git(i.checkout, ['cat-file', '-e', `${tag}:${rel.split(path.sep).join('/')}`]) !== undefined;
   };
   const note = i.note?.trim().replace(/\s+/g, ' ').slice(0, MAX_NOTE);
-  return { release, previous, sinceDays, ...countErrors(i.logLines, since, known), updateFailing: i.updateFailing, ...failingPatches(i.patches, inRelease), ...(note ? { note } : {}) };
+  const stepKnown = (name: string) => !!tag && spawnSync('git', ['-C', i.checkout, 'grep', '-q', '-F', '-e', `"${name}"`, tag, '--', 'check.sh'], { encoding: 'utf8' }).status === 0;
+  const checks = landingChecks(i.landTimes ?? readLandTimes(i.checkout), since, stepKnown);
+  return { release, previous, sinceDays, ...countErrors(i.logLines, since, known), updateFailing: i.updateFailing, ...failingPatches(i.patches, inRelease), ...(checks ? { checks } : {}), ...(note ? { note } : {}) };
 }
 
 // Why this copy doesn't do check-ups, or undefined when it does.
