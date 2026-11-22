@@ -526,3 +526,20 @@ test("GitHub's runs read no records, and no test file inherits the records folde
     fs.rmSync(c.root, { recursive: true, force: true });
   }
 });
+
+// Hetzner Cloud's release lives under "Application Support": the script
+// compared import.meta.url (%20) with a bare file:// path, never ran its main,
+// and printed nothing (couldn't update to 27ea98efe, 22 Nov 2026).
+test('the script runs from a folder with a space in its name', () => {
+  const root = tmp('space');
+  try {
+    const dir = path.join(root, 'Application Support');
+    fs.mkdirSync(dir);
+    fs.copyFileSync(path.join(repo, 'scripts/check-cache.mjs'), path.join(dir, 'check-cache.mjs'));
+    const r = spawnSync(process.execPath, [path.join(dir, 'check-cache.mjs')], { encoding: 'utf8' });
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /usage: check-cache\.mjs/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

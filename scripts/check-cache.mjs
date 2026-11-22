@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 export const RECORD_DAYS = 7;
 const VERSION = 'check-cache 1';
@@ -586,4 +587,7 @@ function main(argv) {
   return 2;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exitCode = main(process.argv.slice(2));
+// pathToFileURL, not `file://${argv[1]}`: a path with a space (Application
+// Support on a runner) is %20 in import.meta.url, and main never ran; realpath
+// as import.meta.url has symlinks resolved (/tmp on a Mac).
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) process.exitCode = main(process.argv.slice(2));
