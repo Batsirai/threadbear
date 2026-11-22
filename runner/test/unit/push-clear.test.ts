@@ -66,7 +66,7 @@ test('one delivered alert takes one clear: toggling the thread without another c
   }
   assert.equal(scheduled(b, 'push.notify').length, 1, 'within the cooldown: no new push');
   assert.equal(scheduled(b, 'push.clear').length, 1, 'nothing new on the phone to take down');
-  const row = b.rows('threads')[0] as { _id: string; pushedAt: number };
+  const row = b.rows('threads')[0]!;
   await b.ctx.db.patch(row._id, { pushedAt: row.pushedAt - 60_000 });
   await write(b, true);
   assert.equal(scheduled(b, 'push.notify').length, 2, 'a new push after the cooldown');
