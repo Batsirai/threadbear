@@ -92,7 +92,7 @@ public enum ThreadSharing {
         // A new link that hasn't reached the row: the old one is on its way out.
         let stale = asked == .newLink && share?.slug == replacing
         let slug = on && !stale ? share?.slug : nil
-        let link = slug.flatMap { s in site.flatMap { link(site: $0, slug: s) } }
+        let link = slug.flatMap { s in site.flatMap { Self.link(site: $0, slug: s) } }
         let spinning: ShareRequest? = switch command {
         case .sending, .queued, .taken: asked
         default: nil
