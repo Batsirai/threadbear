@@ -287,7 +287,7 @@ const JS_RUNNERS = ['node', 'nodejs', 'tsx', 'ts-node', 'bun', 'deno'];
 const JS_RUNNER_PACKAGES = new Set(['tsx', 'ts-node', 'esno', 'esbuild-runner', 'vite-node', 'jiti', '@babel/node', 'babel-node', 'sucrase-node', '@swc-node/register', 'swc-node', 'esrun', 'tsimp', 'ts-node-dev', 'nodemon', 'node', 'bun', 'deno', 'zx', 'tsm', 'tsup-node']);
 // Languages whose loads this can't follow: running a file or code in one
 // fails closed.
-const OTHER_LANGS = /^(python[0-9.]*|ruby|perl|php|lua|osascript|pwsh|powershell|fish|csh|tcsh|Rscript|expect|tclsh|uv|uvx|poetry|pipenv|rake|bundle|parallel)$/;
+const OTHER_LANGS = /^(python[0-9.]*|ruby|perl|php|lua|osascript|pwsh|powershell|fish|csh|tcsh|Rscript|expect|tclsh|uv|uvx|poetry|pipenv|rake|bundle|parallel)$/i;
 // Windows' own (checked as well there, by the lower-case name with the
 // extension off): the command interpreter, the Python launcher, the script
 // hosts, and wsl and conhost, which run another command line.
@@ -386,9 +386,12 @@ export function looksRunnable(file: string): boolean {
 // found whatever its case and with or without its extension, so `node.exe`,
 // `NODE.EXE` and `npm.cmd` are node and npm (each of which took patch trust
 // past `node -e` and a package.json's scripts: the Windows port's review).
-// Elsewhere the name is the name.
-export function programName(name: string, windows: boolean = IS_WINDOWS): string {
-  return windows ? name.toLowerCase().replace(/\.(exe|cmd|bat|com)$/, '') : name;
+// On a Mac the disk is case-insensitive by default, so `Env` and `Node`
+// run env and node (Grok's review of Daybreak 165). Elsewhere the name is
+// the name.
+export function programName(name: string, windows: boolean = IS_WINDOWS, mac: boolean = process.platform === 'darwin'): string {
+  if (windows) return name.toLowerCase().replace(/\.(exe|cmd|bat|com)$/, '');
+  return mac ? name.toLowerCase() : name;
 }
 
 // Whether a program is a language or launcher on Windows that runs a script
@@ -2998,7 +3001,14 @@ class Reach {
       return;
     }
     if (['exec', 'x', 'dlx'].includes(sub)) return this.npx(rest, local, line);
-    if (tool === 'npm') return; // npm's own commands
+    // npm's own commands. `version` runs package.json's version scripts, and
+    // `explore` runs a command in a package's folder (Grok's review of 165).
+    if (tool === 'npm' && sub === 'version') {
+      for (const { dir, pkg } of this.packages(local, line) ?? []) this.runScripts(dir, pkg, ['preversion', 'version', 'postversion'], local);
+      return;
+    }
+    if (tool === 'npm' && (sub === 'explore' || this.ownRules && !NPM_INERT.has(sub))) return this.fail(ctx, line, `runs \`npm ${sub}\`, which patch trust doesn't follow for a check.`);
+    if (tool === 'npm') return;
     // pnpm and yarn run a script by its bare name, else a package's bin.
     this.packageScript(sub, local, line);
   }
@@ -3407,6 +3417,9 @@ export function readsInput(p: string): boolean {
 
 // Whether a shell script's #! passes the shell a flag that has it read
 // commands from somewhere other than the script.
+// npm's own commands that run nothing of the folder's.
+const NPM_INERT = new Set(['view', 'v', 'info', 'show', 'ls', 'list', 'll', 'la', 'outdated', 'search', 's', 'find', 'whoami', 'ping', 'config', 'get', 'prefix', 'root', 'bin', 'help', 'docs', 'repo', 'bugs', 'owner', 'access', 'audit', 'fund', 'doctor', 'query', 'pkg', 'cache', 'token', 'team', 'org', 'profile', 'star', 'stars', 'unstar', 'dist-tag', 'deprecate', 'unpublish', 'login', 'logout', 'adduser', 'sbom', 'explain', 'why', 'diff', 'completion', 'help-search', 'hook', 'set', '-v', '--version']);
+
 // npm, pnpm and yarn flags that name config to read or code to load; npm
 // takes any unambiguous start of a long flag (`--user=rc.txt`).
 const NPM_CONFIG_FLAG = /^--(u|us|use|user|userc|userco|usercon|userconf|userconfi|userconfig|globalc|globalco|globalcon|globalconf|globalconfi|globalconfig|no|nod|node|node-|node-o|node-op|node-opt|node-opti|node-optio|node-option|node-options|node_options|scr|scri|scrip|script|script-|script-s|script-sh|script-she|script-shel|script-shell|script_shell|shell|config|rcfile|registry-config|require|import|loader|hooks|pnpmfile|global-pnpmfile|onload-script|onload|yarn-path)(=|$)/i;

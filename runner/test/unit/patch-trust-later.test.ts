@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { loadPatchSet } from '../../src/patches.ts';
-import { CHECK_PREFIX, checkDigest, checkReach, commandFiles, folderKeyOfDir, followOptions, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
+import { CHECK_PREFIX, checkCardProblem, checkDigest, checkReach, commandFiles, folderKeyOfDir, followOptions, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
 import { reachOfCommand } from '../../src/script-trust.ts';
 import { claudeCommands } from '../../src/claude-trust.ts';
 import { Scheduler, scheduleMethods } from '../../src/schedules.ts';
@@ -1091,7 +1091,7 @@ test('Daybreak 165: from a thread that asks first, a check whose JavaScript star
     for (const check of ['node check.mjs', './check.sh']) {
       const r = await call('schedule_message', { text: 'Look', cron: '*/5 * * * *', new_thread: true, folder: dir, check });
       assert.equal(r.isError, true, `${mode}: ${check}`);
-      assert.match(r.content[0].text, /starts other programs itself/);
+      assert.match(r.content[0].text, /starts other programs itself|runs other commands or native code itself/);
     }
     assert.equal(asked.length, 0);
     assert.equal(sched.list().length, 0);
@@ -1290,4 +1290,34 @@ test('Daybreak 165 review 3: no JavaScript route keeps a check followable, and t
     'npx -p . mybin', 'npx -p./local mybin', 'bun exec "node ./payload.txt"', 'npm run --node-options=--require=./payload.txt check',
     'npm run --userconfig=./rc.txt check', 'npm --user=./rc.txt run check', 'npx --node-options=--require=./payload.txt -c "echo"',
   ]) assert.ok(checkDigest(check, dir).problem, check);
+});
+
+// Grok's fourth review of the 165 fix: a program on PATH handed a data file
+// runs it as code by rules of its own. A check a thread that asks first adds
+// is held to what a Claude Code hook is: only programs known to load nothing.
+test('Daybreak 165 review 4: a check from a thread that asks first runs only what a hook may', async () => {
+  const dir = repo({ 'package.json': '{ "name": "a", "version": "1.0.0", "scripts": { "version": "node payload.txt" } }', 'payload.txt': '.system touch /tmp/x\n', 'cfg.txt': '[alias]\n\tx = !sh payload.txt\n', 'ok.sh': '#!/bin/sh\ngrep -c x payload.txt || true\n' });
+  fs.chmodSync(path.join(dir, 'payload.txt'), 0o644);
+  const bad = [
+    "git -c alias.x='!sh payload.txt' x", `git -c include.path=${dir}/cfg.txt x`, "sqlite3 :memory: '.read payload.txt'", 'apply osascript payload.txt',
+    'script -q /dev/null sh payload.txt', 'npm explore npm -- sh "$PWD/payload.txt"', 'npm version --no-git-tag-version patch',
+  ];
+  if (process.platform === 'darwin') bad.push('Env sh payload.txt', 'Osascript payload.txt', 'Perl payload.txt');
+  for (const check of bad) assert.ok(checkCardProblem(check, dir), check);
+  // npm version runs package.json's version scripts, followed now, for any check.
+  assert.ok(checkDigest('npm version --no-git-tag-version patch', dir).problem);
+  // On a Mac a program's name is matched whatever its case, as the disk finds it.
+  if (process.platform === 'darwin') for (const check of ['Env node payload.txt', 'Perl payload.txt']) assert.ok(checkDigest(check, dir).problem, check);
+  // A plain shell script of plain programs still gets its card.
+  assert.equal(checkCardProblem('./ok.sh', dir), undefined);
+  const { sched, asked, call } = askTools(dir, 'ask');
+  const r = await call('schedule_message', { text: 'Look', cron: '*/5 * * * *', new_thread: true, folder: dir, check: "sqlite3 :memory: '.read payload.txt'" });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /follow all the way/);
+  assert.equal(asked.length, 0);
+  // And a card can't approve one even if one went up.
+  const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
+  const d = checkDigest("sqlite3 :memory: '.read payload.txt'", dir);
+  assert.throws(() => trust.approveCheck("sqlite3 :memory: '.read payload.txt'", dir, { hash: d.hash, folder: dir }), /follow all the way/);
+  sched.stop();
 });

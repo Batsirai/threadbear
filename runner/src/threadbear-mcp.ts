@@ -20,7 +20,7 @@ import { findPool, poolLine } from './pools.ts';
 import { AGENT_MESSAGE_PREFIX, EFFORT_LEVELS, ErrorCode, MOVE_MESSAGE_PREFIX, RpcError, sentByAgent } from './protocol.ts';
 import type { Scheduler } from './schedules.ts';
 import { MAX_CHECK_TIMEOUT_SECS } from './schedule-check.ts';
-import { checkDigest, type CheckCard } from './patch-trust.ts';
+import { checkCardProblem, checkDigest, type CheckCard } from './patch-trust.ts';
 import { applyNoteEdits, type Projects } from './projects.ts';
 import { parseWhen, relativeFuture, relativeTime } from './when.ts';
 import { SAID_MAX } from './wake-when.ts';
@@ -634,7 +634,8 @@ export function buildThreadbearTools(
     if (!caller || !command) return {};
     if (!cwd || !fs.existsSync(cwd)) return { checkCard: {} };
     const seen = checkDigest(command, cwd);
-    if (seen.problem) throw new Error(`A schedule's check runs by itself, so what it runs must be something Threadbear can hash, and it can't follow this: ${seen.problem} Nothing changed. Put it in a shell script or JavaScript it can follow.`);
+    const why = checkCardProblem(command, cwd);
+    if (why) throw new Error(`A schedule's check runs by itself, so one a thread that asks first adds must be something Threadbear can follow all the way, and it can't follow this: ${why} Nothing changed. Put it in a shell script that runs only plain programs, or add it from a thread with full access.`);
     // Its real path: a link in the path retargeted while the card is up
     // would mean somewhere else by then.
     return { checkCard: { hash: seen.hash, folder: fs.realpathSync(cwd) } };

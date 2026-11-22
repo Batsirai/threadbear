@@ -373,6 +373,15 @@ command or file's place, more than 8 wrappers deep, or from a path that's its in
 open (`sh /dev/stdin < ./steps.txt`, `node -`, `bash -s` after
 `--rcfile`, a `#!` with `-s`, `-c` or `-i`, `/dev/fd/N`, `/proc/self/fd/N`,
 `/dev/tty`, or anything outside the repo that isn't a plain file), a
+program on PATH for a check a thread that asks first wants approved on a
+card unless it's one a Claude Code hook may run (the hook's strict follow,
+`checkCardProblem`: a program handed a data file can run it as code by its
+own rules, `git -c alias.x='!sh data.txt' x`, `sqlite3 :memory: '.read
+data.txt'`, `apply`; an owner's check isn't held to that, and the digest
+doesn't change), `npm version` (its version scripts are followed) and
+`npm explore`, any of npm's own commands that could run something of the
+folder's for a check or hook, a program's name in another case on a Mac
+(`Env`, `Node`: the disk finds them all the same), a
 JavaScript file for a schedule's check, however it's run (a `.js` or
 `.ts` file, `node`, `nodejs`, `bun`, `deno`, `tsx` or `ts-node`, through
 `env`, `npx`, `bunx` or `npm exec` too): what JavaScript runs or loads can

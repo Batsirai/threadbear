@@ -561,7 +561,8 @@ export class PatchTrust implements PatchTrustStore {
     if (writes) throw new CheckRefused(`A schedule's check runs by itself, and this one writes a file it then runs, so no approval can cover what will run: ${writes} Nothing changed. Have the check run only files already in the repo, and do any writing in the thread it wakes.`);
     if (card) {
       const now = checkDigest(command, cwd);
-      if (now.problem) throw new Error(`A schedule's check runs by itself, so what it runs must be something Threadbear can hash, and it can't follow this: ${now.problem} Nothing changed. Put it in a shell script or JavaScript it can follow.`);
+      const why = checkCardProblem(command, cwd);
+      if (why) throw new Error(`A schedule's check runs by itself, so one a thread that asks first adds must be something Threadbear can follow all the way, and it can't follow this: ${why} Nothing changed. Put it in a shell script that runs only plain programs, or add it from a thread with full access.`);
       const same = card.hash === now.hash && card.folder !== undefined && folderKeyOfDir(card.folder) === folderKeyOfDir(cwd);
       if (!same) throw new Error('What the check runs, or the folder it runs in, changed while the approval card was up (or could not be read when it went up), so nothing changed. Look at it again and ask again.');
     }
@@ -1572,7 +1573,7 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
     files.add(script);
     // The script's own repo bounds what's followed as part of it, from the
     // folder it runs in: its `./x` is there, not beside it.
-    take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true, launches: start.launches }));
+    take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true, launches: start.launches, ...(start.strict ? { strict: true } : {}) }));
   }
   const cross = writeProblem(writes, start.top);
   if (cross?.definite) wrote ??= cross.problem;
@@ -1629,6 +1630,20 @@ export function checkDigest(command: string, cwd: string, commandOnly = false): 
   // Whether it stopped, not its wording: the bytes say what changed, and a
   // reworded message shouldn't hold every such check.
   return { hash: sha256(Buffer.from(JSON.stringify([CHECK_TAG, command, pairs, Boolean(problem)]))), files: pairs.map(([f]) => f), ...(problem ? { problem } : {}), ...(followed.writeProblem ? { writes: followed.writeProblem } : {}) };
+}
+
+// Why a check a thread that asks first wants approved on a card can't be,
+// or undefined: it must be followable all the way as a Claude Code hook is
+// (FollowOptions.strict), running only programs known to load nothing from
+// the folder. A program on PATH handed a data file runs it as code by rules
+// of its own (`git -c alias.x='!sh payload.txt' x`, `sqlite3 :memory:
+// '.read payload.txt'`, `apply osascript payload.txt`), which a block list
+// can't keep up with (Grok's review of Daybreak 165). Not part of the
+// digest: an owner's check, or one approved before, keeps its approval.
+export function checkCardProblem(command: string, cwd: string): string | undefined {
+  const reads = new Reads();
+  const start = followOptions(cwd, reads);
+  return followOutside(command, 'the check', { ...start, strict: true }, reads).problem ?? checkDigest(command, cwd).problem;
 }
 
 // Every file a schedule's check reaches from `cwd`, as checkDigest follows
