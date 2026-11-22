@@ -23,6 +23,11 @@ public final class FakeBackend: Backend, @unchecked Sendable {
     /// How long a new thread takes to start (AppModel's -ThreadbearSlowStart
     /// makes it long, so the inbox's Starting row stays for a screenshot).
     public var startDelay: Duration = .seconds(1.5)
+    /// What a new thread's first turn says, and how long it takes (nil: the
+    /// usual turn). AppModel's -ThreadbearNewReply and -ThreadbearNewTurn set
+    /// them, so a filmed new thread gets a believable answer.
+    public var newThreadReply = "On it. Here's what I found."
+    public var newThreadTurn: Duration?
     /// How long an answer to a card waits for the "runner" to take it, to see
     /// the card waiting. Nothing changes until then, as on a real one.
     public var answerDelay: Duration = .zero
@@ -386,6 +391,12 @@ public final class FakeBackend: Backend, @unchecked Sendable {
 
     /// The running sample thread's turn ends by itself after a while, to watch
     /// its row move to the inbox.
+    /// Every runner online, the MacBook Pro too (-ThreadbearRunners has it
+    /// asleep), so the new thread sheet picks it, for filming.
+    public func wakeRunners() {
+        mutate { s in for i in s.runnerList.indices { s.runnerList[i].lastSeenAt = .now } }
+    }
+
     public func finishRunningThread(after delay: Duration) {
         Task { [weak self] in
             try? await Task.sleep(for: delay)
@@ -567,8 +578,8 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         messagesById[threadId] = list
     }
 
-    private func runTurn(_ threadId: String, reply: String) {
-        let delay = turnDelay
+    private func runTurn(_ threadId: String, reply: String, after: Duration? = nil) {
+        let delay = after ?? turnDelay
         Task { [weak self] in
             try? await Task.sleep(for: delay)
             self?.mutate { s in
@@ -853,7 +864,7 @@ public final class FakeBackend: Backend, @unchecked Sendable {
                 s.append(id, role: .user, text: text, origin: "phone")
                 s.commands[commandId] = CommandStatus(state: .done, threadId: id)
             }
-            runTurn(id, reply: "On it. Here's what I found.")
+            runTurn(id, reply: newThreadReply, after: newThreadTurn)
         }
         return String(commandId)
     }

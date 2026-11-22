@@ -138,6 +138,12 @@ final class AppModel {
     /// `-ThreadbearDraft <text>` (Debug only): start the open thread's reply
     /// box with this typed in ("/co" shows the slash command palette).
     var draftText: String?
+    /// `-ThreadbearClip <text>` (Debug only): plays starting a thread, for
+    /// filming, as nothing can tap the simulator. New thread opens, the words
+    /// type in, then Start; each step prints "CLIP <step> <time>" so taps can
+    /// be drawn where they happened. NewThreadView follows these two.
+    var clipTyped: String?
+    var clipStartTaps = 0
     /// `-ThreadbearSearch <text>` (Debug only): start with this in the
     /// inbox's search, for the screenshots.
     var searchText: String?
@@ -444,6 +450,12 @@ final class AppModel {
             // -ThreadbearNeverTaken: the "runner" never takes them, as with the Mac asleep, to see them time out.
             if args.contains("-ThreadbearNeverTaken") { fake.holdsCommands = true }
             if args.contains("-ThreadbearFinishSoon") { fake.finishRunningThread(after: .seconds(14)) }
+            // -ThreadbearNewReply <text> -ThreadbearNewTurn <seconds>: what a new thread's first turn says and how long it works, for filming one.
+            if let reply = UserDefaults.standard.string(forKey: "ThreadbearNewReply") { fake.newThreadReply = reply }
+            // -ThreadbearRunnersAwake: with -ThreadbearRunners, the MacBook Pro's online too.
+            if args.contains("-ThreadbearRunnersAwake") { fake.wakeRunners() }
+            let newTurn = UserDefaults.standard.double(forKey: "ThreadbearNewTurn")
+            if newTurn > 0 { fake.newThreadTurn = .seconds(newTurn) }
             connect(fake, pairing: nil)
         } else if let saved = PairingStore.load() {
             connect(ConvexBackend(deploymentURL: saved.deploymentURL, token: saved.token), pairing: saved)
@@ -469,6 +481,7 @@ final class AppModel {
                 started(commandId: id, message: text, draft: NewThreadDraft(text: text, photos: []))
             }
         }
+        if let i = args.firstIndex(of: "-ThreadbearClip"), i + 1 < args.count { playClip(args[i + 1]) }
         // `-ThreadbearDo "star <threadId>"` (or press <threadId> <buttonId>, stop <threadId>):
         // taps it a moment after launch, for shots of a control on its way,
         // as nothing can tap the simulator.
@@ -887,6 +900,26 @@ final class AppModel {
     // MARK: Pairing
 
     #if DEBUG
+    /// `-ThreadbearClip`'s steps: about 4 s on the inbox first, so people
+    /// can see where they are, and a beat on the words before Start.
+    private func playClip(_ text: String) {
+        let clock = { (step: String) in print("CLIP \(step) \(Date.now.timeIntervalSince1970)") }
+        Task {
+            clock("launch")
+            try? await Task.sleep(for: .seconds(4))
+            clock("compose")
+            composeText = ""
+            try? await Task.sleep(for: .seconds(1.2))
+            clock("type")
+            for end in text.indices.dropFirst() + [text.endIndex] {
+                clipTyped = String(text[..<end])
+                try? await Task.sleep(for: .milliseconds(Int.random(in: 45...110)))
+            }
+            try? await Task.sleep(for: .seconds(1.6))
+            clock("start")
+            clipStartTaps += 1
+        }
+    }
     private static let allowLocalPairing = true // the simulator against `npx convex dev` on this Mac
     #else
     private static let allowLocalPairing = false
