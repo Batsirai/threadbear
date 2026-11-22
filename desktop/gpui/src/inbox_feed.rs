@@ -1595,7 +1595,7 @@ impl Threadbear {
             }
         });
         // Wraps in a narrow panel rather than pushing Done and Later out of
-        // the card: a panel's fold names four labs.
+        // the card (a panel's fold names four labs), keeping them together.
         h_flex()
             .mt(px(12.))
             .ml(px(INSET))
@@ -1603,9 +1603,14 @@ impl Threadbear {
             .items_center()
             .gap(px(6.))
             .child(fold)
-            .child(done)
-            .child(later)
-            .children(ask_others)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(done)
+                    .child(later)
+                    .children(ask_others),
+            )
             .into_any_element()
     }
 
