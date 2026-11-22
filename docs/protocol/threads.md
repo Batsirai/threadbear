@@ -748,7 +748,8 @@ sure" (`"notSure"`, for the in-between ones); each archives as ever, with the ve
 archive with no verdict.
 
 **The file.** `<home>/inbox-guess.jsonl`, a line each:
-`{ at, kind: "guess", threadId, seq, guesses }` when a guess is made, and
+`{ at, kind: "guess", threadId, seq, prompt?, guesses }` when a guess is made
+(`prompt`: which `GUESS_SYSTEM` asked, from 2 on 22 Nov 2026; none is the first), and
 `{ at, kind: "archive", threadId, seq, label?: "skip" | "show" | "unsure", guesses? }`
 when Mike (`archivedBy: "mike"`) archives a thread whose last turn left a
 done card, `guesses` being that card's if there were any. An `unsure` label is left out of
