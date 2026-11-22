@@ -117,6 +117,16 @@ struct Budget {
     variants: HashMap<(u64, u64), HashSet<[u8; 32]>>,
 }
 
+/// What's known about one version of a file (`Site::facts`).
+#[derive(Default)]
+struct Facts {
+    utf8: Option<bool>,
+    digest: Option<String>,
+    /// The folders it's been read for names from (one per spelling of its
+    /// folder, on a disk that ignores case).
+    scanned: HashSet<String>,
+}
+
 /// A file read once, with what it was when read: it's used again only while
 /// the open file still has the same identity, size and times.
 struct Cached {
@@ -126,7 +136,7 @@ struct Cached {
     used: u64,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Stamp {
     dev: u64,
     ino: u64,
@@ -188,6 +198,11 @@ pub struct Site {
     /// Files read, by device and inode, their bytes together, and a tick
     /// counting uses.
     cache: Mutex<(HashMap<(u64, u64), Cached>, usize, u64)>,
+    /// What's been worked out about each version of a file served: so a
+    /// page or stylesheet asked for again isn't hashed, checked for UTF-8
+    /// or read for names again (Gemini's review: the same stylesheet asked
+    /// for 20,000 times was read for names 20,000 times).
+    facts: Mutex<HashMap<Stamp, Facts>>,
     /// The folder, held open for the site's life: every read starts here, so
     /// the folder being moved or swapped for a link later changes nothing.
     #[cfg(unix)]
@@ -230,6 +245,7 @@ impl Site {
                 page_digest,
                 page_only: false,
                 budget: Mutex::default(),
+                facts: Mutex::default(),
                 cache: Mutex::default(),
                 root_fd,
             })
@@ -315,25 +331,33 @@ impl Site {
             budget.bytes = bytes;
             true
         };
-        let data = self.read(&parts, admit)?;
-        if is_page {
-            if let Some(wanted) = &self.page_digest {
-                if &digest(&data) != wanted {
-                    return None;
+        let (data, stamp) = self.read(&parts, admit)?;
+        let dir = relative.rsplit_once('/').map_or("", |(d, _)| d);
+        let scanned = SCANNED_EXTENSIONS.contains(&ext.as_str());
+        let (utf8, needs_scan) = {
+            let mut facts = self.facts.lock().ok()?;
+            let known = facts.entry(stamp).or_default();
+            if is_page {
+                if let Some(wanted) = &self.page_digest {
+                    let got = known.digest.get_or_insert_with(|| digest(&data));
+                    if got != wanted {
+                        return None;
+                    }
                 }
             }
-        }
-        let scanned = SCANNED_EXTENSIONS.contains(&ext.as_str());
-        let utf8 = scanned && std::str::from_utf8(&data).is_ok();
-        // Every time, cached or not: the same file asked for by another
-        // spelling (`SUB/style.css` on a disk that ignores case) names its
-        // assets from that folder (Gemini's review). At most
-        // MAX_VARIANTS_PER_FILE times a file.
-        if scanned && !self.page_only {
+            let utf8 = scanned
+                && *known
+                    .utf8
+                    .get_or_insert_with(|| std::str::from_utf8(&data).is_ok());
+            // Read for names once per version and folder: the same file by
+            // another spelling of its folder (`SUB/style.css` on a disk that
+            // ignores case) names its assets from there (Gemini's review).
+            (utf8, scanned && known.scanned.insert(dir.to_owned()))
+        };
+        if needs_scan && !self.page_only {
             let head = &data[..data.len().min(SCAN_BYTES)];
             // A character cut in two at the end reads as U+FFFD, which names nothing.
             let text = String::from_utf8_lossy(head);
-            let dir = relative.rsplit_once('/').map_or("", |(d, _)| d);
             let refs = if ext == "css" {
                 css_references(&text, MAX_REFERENCES_PER_FILE)
             } else {
@@ -370,7 +394,11 @@ impl Site {
     /// Exactly `stamp.len` bytes or nothing: a file that changes size
     /// mid-read is refused this time.
     #[cfg(unix)]
-    fn read(&self, parts: &[String], admit: impl FnOnce(&Stamp) -> bool) -> Option<Arc<[u8]>> {
+    fn read(
+        &self,
+        parts: &[String],
+        admit: impl FnOnce(&Stamp) -> bool,
+    ) -> Option<(Arc<[u8]>, Stamp)> {
         use std::io::Read as _;
         use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
         let (name, folders) = parts.split_last()?;
@@ -436,7 +464,7 @@ impl Site {
             let tick = cache.2;
             if let Some(hit) = cache.0.get_mut(&key).filter(|c| c.stamp == stamp) {
                 hit.used = tick;
-                return Some(hit.data.clone());
+                return Some((hit.data.clone(), stamp));
             }
         }
         let mut out = Vec::with_capacity(meta.len() as usize);
@@ -480,11 +508,15 @@ impl Site {
                 );
             }
         }
-        Some(data)
+        Some((data, stamp))
     }
 
     #[cfg(not(unix))]
-    fn read(&self, _parts: &[String], _admit: impl FnOnce(&Stamp) -> bool) -> Option<Arc<[u8]>> {
+    fn read(
+        &self,
+        _parts: &[String],
+        _admit: impl FnOnce(&Stamp) -> bool,
+    ) -> Option<(Arc<[u8]>, Stamp)> {
         None
     }
 }

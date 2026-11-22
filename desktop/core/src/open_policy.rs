@@ -131,12 +131,11 @@ pub fn link_kind(url: &str) -> LinkKind {
         // Its missing root (or an embedded device name) is refused below.
         Some(s) if cfg!(windows) && s.len() == 1 => LinkKind::File(url.to_owned()),
         // Counted as the phones and the website count it (UTF-16).
-        // A space in one could push the rest of it out of sight in the
-        // question (Gemini's review): a real link writes %20.
-        Some(_)
-            if url.encode_utf16().count() > MAX_ASK_LINK
-                || url.chars().any(char::is_whitespace) =>
-        {
+        // One that asks is printable ASCII only: a space, a blank filler
+        // (U+2800, U+3164) or a run of wide letters could push the rest of
+        // it out of sight in the question (Gemini's reviews). A real link
+        // percent-encodes anything else.
+        Some(_) if url.len() > MAX_ASK_LINK || !url.bytes().all(|b| (b'!'..=b'~').contains(&b)) => {
             LinkKind::Refuse
         }
         Some(_) => LinkKind::Ask(url.to_owned()),
@@ -3223,7 +3222,22 @@ mod tests {
                 assert_eq!(link_kind(&url), LinkKind::Refuse, "{url:?}");
             }
         }
-        assert!(matches!(link_kind("x-app://café/日本"), LinkKind::Ask(_)));
+        // One that asks is printable ASCII; letters from any language are
+        // fine percent-encoded, and in a web address.
+        for blank in [
+            "x-app://café/日本",
+            "x-app://a\u{2800}b",
+            "x-app://a\u{3164}b",
+            "x-app://a b",
+            "x-app://Ｗ",
+        ] {
+            assert_eq!(link_kind(blank), LinkKind::Refuse, "{blank:?}");
+        }
+        assert!(matches!(link_kind("x-app://caf%C3%A9"), LinkKind::Ask(_)));
+        assert!(matches!(
+            link_kind("https://example.com/café/日本"),
+            LinkKind::Web(_)
+        ));
     }
 
     #[test]

@@ -54,9 +54,11 @@ object LinkPolicy {
             null -> Kind.Refuse
             "http", "https" -> web(url)?.let { Kind.Web(it) } ?: Kind.Refuse
             "file" -> Kind.File(url)
-            // A space in one that asks could push the rest of it out of
-            // sight in the question (Gemini's review): a real link writes %20.
-            else -> if (url.length > MAX_ASK_LINK || url.any { Character.isSpaceChar(it) }) Kind.Refuse else Kind.Ask(url)
+            // One that asks is printable ASCII only: a space, a blank filler
+            // (U+2800, U+3164) or a run of wide letters could push the rest
+            // of it out of sight in the question (Gemini's reviews). A real
+            // link percent-encodes anything else.
+            else -> if (url.length > MAX_ASK_LINK || !url.all { it in '!'..'~' }) Kind.Refuse else Kind.Ask(url)
         }
     }
 

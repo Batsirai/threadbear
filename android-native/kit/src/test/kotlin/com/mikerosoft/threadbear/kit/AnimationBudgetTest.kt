@@ -45,20 +45,31 @@ class AnimationBudgetTest {
     }
 
     /** Codex's and Gemini's reviews: a pass within budget can still loop fast enough to keep the phone busy. */
-    @Test fun pixelsASecondAreBounded() {
+    @Test fun pixelsASecondAreBoundedAtTheFastest() {
         // 2000x2000, 10 frames: 40 million a pass.
         assertNotNull(AnimationFrames.work(gif(10, delayCs = 10), 2000, 2000, 2000, 2000), "10 a second: 40 million a second")
         assertNull(AnimationFrames.work(gif(10, delayCs = 2), 2000, 2000, 2000, 2000), "50 a second: 200 million")
-        // A frame time of 0 counts as the shortest a frame can play.
-        assertNull(AnimationFrames.work(gif(10, delayCs = 0), 2000, 2000, 2000, 2000))
-        assertNotNull(AnimationFrames.work(gif(10, delayCs = 0), 100, 100, 100, 100), "small ones still play")
-        assertEquals(1000L, AnimationFrames.scan(gif(10, delayCs = 10))!!.loopMs)
+        // Android plays a GIF frame of 10 ms or less at 100 ms.
+        assertNotNull(AnimationFrames.work(gif(10, delayCs = 0), 2000, 2000, 2000, 2000))
+        assertEquals(100L, AnimationFrames.scan(gif(10, delayCs = 1))!!.shortestMs)
+        // One long frame can't hide a fast run: 99 at 20 ms and one of 10 s.
+        val burst = gif(100, delays = List(99) { 2 } + 1000)
+        assertNull(AnimationFrames.work(burst, 2000, 2000, 2000, 2000))
+        // A slow small one costs at least one pixel a second, so it gets a place.
+        val slow = assertNotNull(AnimationFrames.work(gif(2, delayCs = 10_000), 10, 10, 10, 10))
+        assertTrue(slow.pixelsPerSecond >= 1)
+    }
+
+    /** WebP and APNG frame times pass through Android unclamped, so a 1 ms frame plays once a refresh. */
+    @Test fun fastWebpFramesCountAtTheRefreshRate() {
+        assertEquals(AnimationLimits.MIN_FRAME_MS, AnimationFrames.scan(webp(5, durationMs = 1))!!.shortestMs)
+        assertNull(AnimationFrames.work(webp(2, durationMs = 1), 1200, 1000, 1200, 1000), "1.2 MP 125 times a second")
     }
 
     @Test fun everyMovingFormatHasTheSameBudget() {
         for ((name, make) in listOf<Pair<String, (Int) -> ByteArray>>("gif" to { gif(it) }, "webp" to { webp(it) }, "apng" to { apng(it) })) {
             assertEquals(7, AnimationFrames.count(make(7)), name)
-            assertEquals(700L, AnimationFrames.scan(make(7))!!.loopMs, "$name: 100 ms a frame")
+            assertEquals(100L, AnimationFrames.scan(make(7))!!.shortestMs, "$name: 100 ms a frame")
             assertNotNull(work(make(AnimationLimits.MAX_FRAMES), 10, 10), name)
             assertNull(work(make(AnimationLimits.MAX_FRAMES + 1), 10, 10), name)
         }
@@ -88,9 +99,32 @@ class AnimationBudgetTest {
         assertEquals(6, AnimationFrames.count(padded))
     }
 
-    @Test fun aGifCutShortCountsWhatsThere() {
-        val whole = gif(10)
-        assertTrue(AnimationFrames.count(whole.copyOf(whole.size / 2))!! in 1..10)
+    /** Cut short, a decoder reads what it can its own way: still. */
+    @Test fun aFileCutShortStaysStill() {
+        for ((name, whole) in listOf("gif" to gif(10), "webp" to webp(10), "apng" to apng(10))) {
+            assertNotNull(AnimationFrames.count(whole), name)
+            assertNull(AnimationFrames.count(whole.copyOf(whole.size / 2)), name)
+        }
+    }
+
+    /** Codex's review: NETSCAPE's loop block is three bytes, and Skia reads three whatever it says. */
+    @Test fun aShortLoopBlockStaysStill() {
+        val g = gif(2)
+        val bad = g.copyOf(g.size - 1) + byteArrayOf(0x21, 0xFF.toByte(), 11) + "NETSCAPE2.0".toByteArray() + byteArrayOf(1, 1, 0, 0x3B, 0) + g.copyOfRange(13 + 19, g.size)
+        assertNull(AnimationFrames.count(bad))
+    }
+
+    /** Codex's and Gemini's reviews: libwebp reads only to the RIFF header's stated end. */
+    @Test fun webpChunksPastItsStatedEndStayStill() {
+        val w = webp(2, durationMs = 20)
+        val extra = "ANMF".toByteArray() + le(16) + ByteArray(12) + byteArrayOf(0x60, 0xEA.toByte(), 0) + ByteArray(1)
+        val after = assertNotNull(AnimationFrames.scan(w + extra), "a chunk after the stated end is ignored, as libwebp ignores it")
+        assertEquals(2, after.count)
+        assertEquals(20L, after.shortestMs)
+        val stated = w.copyOf()
+        val bigger = le(w.size - 8 + extra.size + 100)
+        bigger.copyInto(stated, 4)
+        assertNull(AnimationFrames.scan(stated + extra), "a stated end past the file")
     }
 
     @Test fun onlyAFewPlayAtOnce() {
@@ -118,7 +152,7 @@ class AnimationBudgetTest {
 
     // ---- files, made by hand: a frame each, a byte of picture in it.
 
-    private fun gif(frames: Int, colorTables: Boolean = false, delayCs: Int = 10): ByteArray {
+    private fun gif(frames: Int, colorTables: Boolean = false, delayCs: Int = 10, delays: List<Int>? = null): ByteArray {
         val out = ByteArrayOutputStream()
         out.write("GIF89a".toByteArray())
         // 1x1, global colour table of 2 entries when asked.
@@ -127,7 +161,8 @@ class AnimationBudgetTest {
         // Netscape loop extension.
         out.write(byteArrayOf(0x21, 0xFF.toByte(), 11) + "NETSCAPE2.0".toByteArray() + byteArrayOf(3, 1, 0, 0, 0))
         repeat(frames) {
-            out.write(byteArrayOf(0x21, 0xF9.toByte(), 4, 0, delayCs.toByte(), (delayCs shr 8).toByte(), 0, 0))
+            val d = delays?.get(it) ?: delayCs
+            out.write(byteArrayOf(0x21, 0xF9.toByte(), 4, 0, d.toByte(), (d shr 8).toByte(), 0, 0))
             out.write(byteArrayOf(0x2C, 0, 0, 0, 0, 1, 0, 1, 0, if (colorTables) 0x80.toByte() else 0))
             if (colorTables) out.write(ByteArray(6))
             out.write(byteArrayOf(2, 2, 0x44, 0x01, 0))
@@ -139,12 +174,12 @@ class AnimationBudgetTest {
     private fun le(n: Int) = byteArrayOf(n.toByte(), (n shr 8).toByte(), (n shr 16).toByte(), (n shr 24).toByte())
     private fun be(n: Int) = byteArrayOf((n shr 24).toByte(), (n shr 16).toByte(), (n shr 8).toByte(), n.toByte())
 
-    private fun webp(frames: Int): ByteArray {
+    private fun webp(frames: Int, durationMs: Int = 100): ByteArray {
         val body = ByteArrayOutputStream()
         body.write("WEBP".toByteArray())
         body.write("VP8X".toByteArray() + le(10) + ByteArray(10))
         body.write("ANIM".toByteArray() + le(6) + ByteArray(6))
-        repeat(frames) { body.write("ANMF".toByteArray() + le(17) + ByteArray(12) + byteArrayOf(100, 0, 0) + ByteArray(2) + byteArrayOf(0)) }
+        repeat(frames) { body.write("ANMF".toByteArray() + le(17) + ByteArray(12) + byteArrayOf(durationMs.toByte(), (durationMs shr 8).toByte(), 0) + ByteArray(2) + byteArrayOf(0)) }
         val b = body.toByteArray()
         return "RIFF".toByteArray() + le(b.size) + b
     }

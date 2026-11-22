@@ -934,3 +934,20 @@ fn the_cache_lets_the_least_recently_used_go() {
         assert!(Arc::ptr_eq(data, &again), "p{i} kept");
     }
 }
+
+/// Gemini's review: a stylesheet asked for again and again is read for
+/// names once, not every time.
+#[cfg(unix)]
+#[test]
+fn a_file_asked_for_again_is_read_for_names_once() {
+    let f = Folder::new();
+    f.write("index.html", "<link rel=stylesheet href=look.css>");
+    f.write("look.css", "body { background: url(bg.png) }");
+    let site = f.site();
+    for _ in 0..50 {
+        assert!(site.serve("/look.css").is_some());
+    }
+    let facts = site.facts.lock().unwrap();
+    let scans: usize = facts.values().map(|k| k.scanned.len()).sum();
+    assert_eq!(scans, 2, "the page and the stylesheet, once each");
+}

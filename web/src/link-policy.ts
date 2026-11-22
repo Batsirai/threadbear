@@ -48,6 +48,8 @@ export function classifyLink(href: string, base: string): LinkTarget {
   if (url.href.length > MAX_LINK_CHARS) return { kind: 'never' };
   if (url.protocol === 'http:' || url.protocol === 'https:') return url.hostname ? { kind: 'web', url: url.href } : { kind: 'never' };
   if (NEVER.has(url.protocol)) return { kind: 'never' };
-  if (url.href.length > MAX_ASK_CHARS) return { kind: 'never' };
+  // Printable ASCII only, as the apps hold it: a blank filler or a run of
+  // wide letters could push the rest of the address out of sight.
+  if (url.href.length > MAX_ASK_CHARS || !/^[\x21-\x7e]*$/.test(url.href)) return { kind: 'never' };
   return { kind: 'ask', url: url.href, scheme: url.protocol.slice(0, -1) };
 }

@@ -4,7 +4,9 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.graphics.drawable.Animatable2
 import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Drawable
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
@@ -345,16 +347,18 @@ private val playback = PlaybackBudget()
 private fun MovingImage(picture: LoadedPicture, modifier: Modifier, contentScale: ContentScale = ContentScale.FillBounds) {
     val work = picture.moving
     val file = picture.file
-    var place by remember(picture) { mutableStateOf(false) }
     var drawable by remember(picture) { mutableStateOf<AnimatedImageDrawable?>(null) }
+    // The place in PlaybackBudget, given back once: when this goes, when its
+    // drawable can't be made, or when it has played its last loop (Codex's
+    // and Gemini's reviews: those kept their places with nothing playing).
+    val place = remember(picture) { Place(work?.pixelsPerSecond ?: 0) }
     DisposableEffect(picture) {
-        val got = work != null && file != null && playback.take(work.pixelsPerSecond)
-        place = got
-        onDispose { if (got) playback.give(work!!.pixelsPerSecond) }
+        if (work != null && file != null) place.take()
+        onDispose { place.give() }
     }
-    LaunchedEffect(picture, place) {
-        if (!place || file == null) return@LaunchedEffect
-        drawable = withContext(Dispatchers.Default) {
+    LaunchedEffect(picture) {
+        if (!place.held || file == null) return@LaunchedEffect
+        val made = withContext(Dispatchers.Default) {
             runCatching {
                 ImageDecoder.decodeDrawable(ImageDecoder.createSource(file)) { decoder, _, _ ->
                     decoder.setTargetSize(picture.width, picture.height)
@@ -362,22 +366,51 @@ private fun MovingImage(picture: LoadedPicture, modifier: Modifier, contentScale
                 } as? AnimatedImageDrawable
             }.getOrNull()
         }
+        if (made == null) {
+            place.give()
+            return@LaunchedEffect
+        }
+        made.registerAnimationCallback(object : Animatable2.AnimationCallback() {
+            override fun onAnimationEnd(d: Drawable?) = place.give()
+        })
+        drawable = made
     }
     val playing = drawable
-    if (!place || playing == null) {
+    if (playing == null) {
         Image(picture.image, null, modifier, contentScale = contentScale)
         return
     }
     MovingView(playing, modifier)
 }
 
+/** One moving picture's place in `playback`, taken and given back at most once each. */
+private class Place(private val pixelsPerSecond: Long) {
+    var held = false
+        private set
+
+    @Synchronized
+    fun take() {
+        if (!held) held = playback.take(pixelsPerSecond)
+    }
+
+    @Synchronized
+    fun give() {
+        if (held) playback.give(pixelsPerSecond)
+        held = false
+    }
+}
+
 @Composable
 private fun MovingView(drawable: AnimatedImageDrawable, modifier: Modifier) {
     AndroidView(
         factory = { ImageView(it).apply { scaleType = ImageView.ScaleType.FIT_CENTER } },
+        // Started once: after its last loop its place is given back, and a
+        // later redraw mustn't play it again without one.
         update = { view ->
-            if (view.drawable !== drawable) view.setImageDrawable(drawable)
-            drawable.start()
+            if (view.drawable !== drawable) {
+                view.setImageDrawable(drawable)
+                drawable.start()
+            }
         },
         onRelease = { view -> drawable.stop(); view.setImageDrawable(null) },
         modifier = modifier,

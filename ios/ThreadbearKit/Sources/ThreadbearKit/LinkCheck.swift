@@ -24,8 +24,10 @@ public enum LinkCheck {
         let text = url.absoluteString
         guard text.utf16.count <= maxLink, !hidesText(text) else { return .refuse }
         let kind = LinkPolicy.kind(of: url)
-        // A space in one that asks could push the rest out of sight.
-        if case .ask = kind, text.utf16.count > maxAskLink || text.unicodeScalars.contains(where: { $0.properties.generalCategory == .spaceSeparator }) {
+        // One that asks is printable ASCII only: a space, a blank filler or
+        // a run of wide letters could push the rest out of sight. (URL(string:)
+        // percent-encodes the rest, so this is a backstop here.)
+        if case .ask = kind, text.utf16.count > maxAskLink || !text.unicodeScalars.allSatisfy({ (0x21...0x7E).contains($0.value) }) {
             return .refuse
         }
         return kind

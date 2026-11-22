@@ -53,7 +53,14 @@ class LinkPolicyTest {
                 assertEquals(LinkPolicy.Kind.Refuse, LinkPolicy.kind(url), url.map { "%04x".format(it.code) }.joinToString())
             }
         }
-        assertIs<LinkPolicy.Kind.Ask>(LinkPolicy.kind("x-app://café/日本"), "letters from any language are fine")
+        // One that asks is printable ASCII (Gemini's reviews: blank fillers
+        // and wide letters push its end out of sight); letters from any
+        // language are fine percent-encoded, and in a web address.
+        for (blank in listOf("x-app://café/日本", "x-app://a\u2800b", "x-app://a\u3164b", "x-app://a b", "x-app://Ｗ")) {
+            assertEquals(LinkPolicy.Kind.Refuse, LinkPolicy.kind(blank), blank)
+        }
+        assertIs<LinkPolicy.Kind.Ask>(LinkPolicy.kind("x-app://caf%C3%A9"))
+        assertIs<LinkPolicy.Kind.Web>(LinkPolicy.kind("https://example.com/café/日本"))
     }
 
     /** The cases the desktop app, the iPhone and the website run too (shared/cases/link-policy.json). */

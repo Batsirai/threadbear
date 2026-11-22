@@ -14,26 +14,38 @@ object AnimationLimits {
     const val MAX_FRAMES = 600
     /** Pixels decoded for one pass through every frame, at the file's own size (or the shown size, if bigger). */
     const val MAX_TOTAL_PIXELS = 400_000_000L
-    /** Pixels decoded a second while it plays: about a 1400-pixel-square picture at 60 frames a second. */
+    /**
+     * Pixels decoded a second at its fastest: a frame's pixels over its
+     * shortest frame time, not the loop's average, which one long frame
+     * could hide a fast run behind (Codex's and Gemini's reviews). About a
+     * 1400-pixel-square picture at 60 frames a second.
+     */
     const val MAX_PIXELS_PER_SECOND = 120_000_000L
-    /** A frame's shortest time: one a picture says is shorter still is counted as this long, as it may play that fast. */
-    const val MIN_FRAME_MS = 10L
+    /**
+     * The shortest a WebP or APNG frame can really play: Android passes
+     * their times through, so a 1 ms frame plays once a refresh, 120 times
+     * a second on a fast screen.
+     */
+    const val MIN_FRAME_MS = 8L
     /** Moving pictures playing at once, and their pixels a second together. More stay still. */
     const val MAX_PLAYING = 4
     const val MAX_PLAYING_PIXELS_PER_SECOND = 240_000_000L
 }
 
-/** What playing a moving picture costs: pixels decoded for one pass through its frames, and a second. */
+/** What playing a moving picture costs: pixels decoded for one pass through its frames, and a second at its fastest. */
 data class AnimationWork(val passPixels: Long, val pixelsPerSecond: Long)
 
 object AnimationFrames {
-    /** Frames, and one pass through them in milliseconds (each at least MIN_FRAME_MS). */
-    data class Frames(val count: Int, val loopMs: Long)
+    /** Frames, and the shortest time any of them plays for, in milliseconds. */
+    data class Frames(val count: Int, val shortestMs: Long)
 
     /**
      * How many frames `data` has, for the formats Android plays (GIF, WebP,
      * APNG), counted from the file's own structure and stopping once past
-     * `stopAfter`. Null for anything it can't count, which then stays still.
+     * `stopAfter`. Null for anything it can't count, or whose structure is
+     * anything but regular (cut short, a block of the wrong size, a chunk
+     * past the file's stated end), which then stays still: a decoder reads
+     * an irregular file its own way, and could find frames this doesn't.
      */
     fun count(data: ByteArray, stopAfter: Int = AnimationLimits.MAX_FRAMES): Int? = scan(data, stopAfter)?.count
 
@@ -66,10 +78,9 @@ object AnimationFrames {
         // Both sides are under 2^31, so neither product overflows a Long.
         val frame = maxOf(sourceWidth.toLong() * sourceHeight, shownWidth.toLong() * shownHeight)
         if (frame > maxTotalPixels / frames.count) return null
-        val pass = frame * frames.count
-        val perSecond = pass * 1000 / frames.loopMs.coerceAtLeast(1)
-        if (perSecond > maxPixelsPerSecond) return null
-        return AnimationWork(pass, perSecond)
+        if (frame > maxPixelsPerSecond / 1000 * frames.shortestMs.coerceAtLeast(1)) return null
+        val perSecond = (frame * 1000 + frames.shortestMs - 1) / frames.shortestMs.coerceAtLeast(1)
+        return AnimationWork(frame * frames.count, perSecond.coerceAtLeast(1))
     }
 
     private val PNG = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
@@ -90,16 +101,23 @@ object AnimationFrames {
 
     private fun be32(data: ByteArray, at: Int): Long = (be16(data, at).toLong() shl 16) or be16(data, at + 2).toLong()
 
+    /** A WebP or APNG frame's time as it can really play. */
     private fun frameMs(ms: Long) = ms.coerceAtLeast(AnimationLimits.MIN_FRAME_MS)
 
+    /** A GIF frame's time as Android plays it: 10 ms or less plays at 100 ms, as browsers do. */
+    private fun gifFrameMs(ms: Long) = if (ms <= 10) 100L else ms
+
     /**
-     * Image descriptors, walking the blocks, each frame's time from the
-     * graphic control block before it. A file cut short counts what's
-     * there (the decoder stops there too). A block that isn't GIF's, or a
-     * graphic control block that isn't its fixed four bytes (Skia reads four
-     * whatever it says, and goes on past where this would stop: Codex's
-     * review), says the count can't be trusted, so null. Zero bytes between
-     * blocks are padding some encoders write, skipped as decoders skip them.
+     * Image descriptors, walking the blocks to the trailer, each frame's
+     * time from the graphic control block before it. Strict: a file cut
+     * short, a block that isn't GIF's, or an extension whose fixed-size
+     * block isn't its size (a graphic control block of other than four
+     * bytes, an application block's name of other than eleven, NETSCAPE's
+     * loop block of other than three, a plain text header of other than
+     * twelve) is null. Skia reads those sizes whatever the file says, and
+     * went on past where a looser walk stopped (Codex's reviews). Zero
+     * bytes between blocks are padding some encoders write, skipped as
+     * decoders skip them.
      */
     private fun gif(data: ByteArray, stopAfter: Int): Frames? {
         if (data.size < 13) return null
@@ -107,7 +125,7 @@ object AnimationFrames {
         val flags = u8(data, 10)
         if (flags and 0x80 != 0) at += 3 * (1 shl ((flags and 0x07) + 1))
         var frames = 0
-        var loopMs = 0L
+        var shortest = Long.MAX_VALUE
         var delayMs = 0L
         fun skipSubBlocks(): Boolean {
             while (true) {
@@ -118,105 +136,134 @@ object AnimationFrames {
                 at += n
             }
         }
-        fun done() = Frames(frames, loopMs)
+        /** The next sub-block must be `size` long; then the rest are skipped. */
+        fun fixed(size: Int): Boolean {
+            if (at >= data.size || u8(data, at) != size) return false
+            at += 1 + size
+            return true
+        }
         while (at < data.size) {
             when (u8(data, at)) {
                 0x2C -> {
-                    frames++
-                    loopMs += frameMs(delayMs)
-                    delayMs = 0
-                    if (frames > stopAfter) return done()
-                    if (at + 10 > data.size) return done()
+                    if (at + 10 > data.size) return null
                     val local = u8(data, at + 9)
                     at += 10
                     if (local and 0x80 != 0) at += 3 * (1 shl ((local and 0x07) + 1))
                     // The LZW code size, then the image's data.
                     at += 1
-                    if (!skipSubBlocks()) return done()
+                    if (!skipSubBlocks()) return null
+                    frames++
+                    shortest = minOf(shortest, gifFrameMs(delayMs))
+                    delayMs = 0
+                    if (frames > stopAfter) return Frames(frames, shortest)
                 }
                 0x21 -> {
-                    if (at + 1 >= data.size) return done()
-                    if (u8(data, at + 1) == 0xF9) {
-                        if (at + 2 >= data.size) return done()
-                        if (u8(data, at + 2) != 4) return null
-                        if (at + 8 > data.size) return done()
-                        delayMs = le16(data, at + 4) * 10L
-                        if (u8(data, at + 7) != 0) return null
-                        at += 8
-                    } else {
-                        at += 2
-                        if (!skipSubBlocks()) return done()
+                    if (at + 1 >= data.size) return null
+                    val label = u8(data, at + 1)
+                    at += 2
+                    when (label) {
+                        0xF9 -> {
+                            if (at + 6 > data.size || u8(data, at) != 4 || u8(data, at + 5) != 0) return null
+                            delayMs = le16(data, at + 2) * 10L
+                            at += 6
+                        }
+                        0xFF -> {
+                            if (at + 12 > data.size || u8(data, at) != 11) return null
+                            val app = ascii(data, at + 1, 11)
+                            at += 12
+                            if ((app == "NETSCAPE2.0" || app == "ANIMEXTS1.0") && !fixed(3)) return null
+                            if (!skipSubBlocks()) return null
+                        }
+                        0x01 -> if (!fixed(12) || !skipSubBlocks()) return null
+                        else -> if (!skipSubBlocks()) return null
                     }
                 }
                 0x00 -> at += 1
-                0x3B -> return done()
+                0x3B -> return if (frames == 0) null else Frames(frames, shortest)
                 else -> return null
             }
         }
-        return done()
+        // No trailer: cut short.
+        return null
     }
 
-    /** ANMF chunks and their durations; a still WebP (no animation) is one frame. */
+    /**
+     * ANMF chunks and their durations, read only up to the RIFF header's
+     * stated end, as libwebp reads it (Codex's and Gemini's reviews:
+     * chunks after it counted, and libwebp ignores them). A chunk past that
+     * end, a stated end past the file, or an ANMF too short for its header
+     * is null. A still WebP (no animation) is one frame.
+     */
     private fun webp(data: ByteArray, stopAfter: Int): Frames? {
-        var at = 12
+        val end = 8L + le32(data, 4)
+        if (end < 12 || end > data.size) return null
+        var at = 12L
         var frames = 0
-        var loopMs = 0L
+        var shortest = Long.MAX_VALUE
         var image = false
-        while (at + 8 <= data.size) {
-            val type = ascii(data, at, 4)
-            val size = le32(data, at + 4)
+        while (at < end) {
+            if (at + 8 > end) return null
+            val i = at.toInt()
+            val type = ascii(data, i, 4)
+            val size = le32(data, i + 4)
+            val next = at + 8 + size + (size and 1)
+            if (at + 8 + size > end) return null
             when (type) {
                 "ANMF" -> {
+                    if (size < 16) return null
                     frames++
-                    val duration = if (size >= 16 && at + 8 + 15 <= data.size) le24(data, at + 8 + 12).toLong() else 0L
-                    loopMs += frameMs(duration)
-                    if (frames > stopAfter) return Frames(frames, loopMs)
+                    shortest = minOf(shortest, frameMs(le24(data, i + 8 + 12).toLong()))
+                    if (frames > stopAfter) return Frames(frames, shortest)
                 }
                 "VP8 ", "VP8L" -> image = true
             }
-            val next = at + 8 + size + (size and 1)
-            if (next > data.size) break
-            at = next.toInt()
+            at = next
         }
-        return if (frames > 0) Frames(frames, loopMs) else if (image) Frames(1, frameMs(0)) else null
+        return if (frames > 0) Frames(frames, shortest) else if (image) Frames(1, Long.MAX_VALUE) else null
     }
 
     /**
      * APNG's frames: the larger of what any acTL says and the fcTL chunks
-     * there are, so neither can understate it; frames with no fcTL of their
-     * own are counted at the shortest time. A plain PNG is one.
+     * there are, so neither can understate it, and the shortest time any
+     * fcTL gives (a frame with no fcTL of its own counts as the shortest a
+     * frame can play). A chunk cut short is null. A plain PNG is one.
      */
     private fun png(data: ByteArray, stopAfter: Int): Frames? {
-        var at = 8
+        var at = 8L
         var declared = 0L
         var controls = 0
-        var loopMs = 0L
+        var shortest = Long.MAX_VALUE
+        var ended = false
         while (at + 8 <= data.size) {
-            val size = be32(data, at)
-            val type = ascii(data, at + 4, 4)
+            val i = at.toInt()
+            val size = be32(data, i)
+            val type = ascii(data, i + 4, 4)
+            if (at + 12 + size > data.size) return null
             when (type) {
-                "acTL" -> if (size >= 8 && at + 12 <= data.size) declared = maxOf(declared, be32(data, at + 8))
-                "fcTL" -> {
-                    controls++
-                    if (size >= 26 && at + 8 + 24 <= data.size) {
-                        val num = be16(data, at + 8 + 20).toLong()
-                        val den = be16(data, at + 8 + 22).toLong().takeIf { it > 0 } ?: 100L
-                        loopMs += frameMs(num * 1000 / den)
-                    } else {
-                        loopMs += frameMs(0)
-                    }
-                    if (controls > stopAfter) return Frames(controls, loopMs)
+                "acTL" -> {
+                    if (size < 8) return null
+                    declared = maxOf(declared, be32(data, i + 8))
                 }
-                "IEND" -> break
+                "fcTL" -> {
+                    if (size < 26) return null
+                    controls++
+                    val num = be16(data, i + 8 + 20).toLong()
+                    val den = be16(data, i + 8 + 22).toLong().takeIf { it > 0 } ?: 100L
+                    shortest = minOf(shortest, frameMs(num * 1000 / den))
+                    if (controls > stopAfter) return Frames(controls, shortest)
+                }
+                "IEND" -> {
+                    ended = true
+                    break
+                }
             }
-            val next = at + 12 + size
-            if (next > data.size) break
-            at = next.toInt()
+            at += 12 + size
         }
+        if (!ended) return null
         val frames = maxOf(declared, controls.toLong(), 1L)
-        if (frames > stopAfter) return Frames(stopAfter + 1, loopMs)
-        loopMs += (frames - controls) * frameMs(0)
-        return Frames(frames.toInt(), loopMs)
+        if (frames > controls) shortest = minOf(shortest, AnimationLimits.MIN_FRAME_MS)
+        if (frames > stopAfter) return Frames(stopAfter + 1, shortest)
+        return Frames(frames.toInt(), shortest)
     }
 }
 
@@ -236,7 +283,7 @@ class PlaybackBudget(
     /** A place for one decoding `pixelsPerSecond`, or false when there's no room. Give it back with [give]. */
     @Synchronized
     fun take(pixelsPerSecond: Long): Boolean {
-        if (pixelsPerSecond <= 0 || playing >= maxPlaying || rate + pixelsPerSecond > maxPixelsPerSecond) return false
+        if (pixelsPerSecond <= 0 || playing >= maxPlaying || pixelsPerSecond > maxPixelsPerSecond - rate) return false
         playing++
         rate += pixelsPerSecond
         return true
