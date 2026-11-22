@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
+import { SessionNotFoundError } from '../../src/adapters/types.ts';
 import { CACHE_LIFETIME_MS, COLD_COMPACT_MIN_TOKENS, COLD_MARGIN_MS, coldWake } from '../../src/runner/cold-compact.ts';
 
 const HOUR = 60 * 60_000;
@@ -100,16 +101,20 @@ test('after the compaction, what has to wait keeps its place in the queue', asyn
   // command waits for the turn to end, and what came after it stays behind it.
   h.runner.send(id, 'A reminder', [], { origin: 'schedule', queue: true });
   h.runner.send(id, 'First fix');
+  // A report that came in after his message isn't older than it.
+  h.runner.send(id, 'A later report', [], { origin: 'runner', queue: true });
   h.runner.send(id, '/cost');
   h.runner.send(id, 'Second fix');
   cli.result('completed');
   await tick(8);
   const st = h.runner.mustGet(id);
   assert.ok(cli.sent.some((m) => m.text.includes('First fix')));
-  assert.ok(!cli.sent.some((m) => /A reminder|\/cost|Second fix/.test(m.text)));
-  // (Reminders go behind his messages in the queue, as always.)
-  assert.deepEqual(st.rec.queue.map((q) => q.text).filter((t) => t !== 'A reminder'), ['/cost', 'Second fix']);
-  assert.ok(st.rec.queue.some((q) => q.text === 'A reminder'));
+  assert.ok(!cli.sent.some((m) => /A reminder|A later report|\/cost|Second fix/.test(m.text)));
+  // (Automatic ones go behind his messages in the queue, as always.)
+  const auto = new Set(['A reminder', 'A later report']);
+  assert.deepEqual(st.rec.queue.map((q) => q.text).filter((t) => !auto.has(t)), ['/cost', 'Second fix']);
+  assert.equal(st.rec.queue.find((q) => q.text === 'A reminder')?.beforeMessage, true, 'queued before First fix');
+  assert.equal(st.rec.queue.find((q) => q.text === 'A later report')?.beforeMessage, undefined, 'queued after it');
 });
 
 test('a message asked to wait, or one queued before the compaction, is not steered', async () => {
@@ -146,6 +151,23 @@ test('a failed compaction, or Stop while it compacts, leaves the queue as it is'
     assert.ok(!cli.sent.some((m) => m.text.includes('A fix')), how);
     if (how === 'failed') assert.deepEqual(st.rec.queue.map((q) => q.text), ['A fix'], how);
   }
+});
+
+test("a session that can't be found while it compacts: the fresh one gets the held message, then Mike's sent meanwhile", async () => {
+  const { h, id, s } = setup();
+  finish(s, 450_000);
+  h.clock.advance(3 * HOUR);
+  h.runner.send(id, 'Carry on');
+  await tick(8);
+  const cli = last(h);
+  h.runner.send(id, 'A fix');
+  cli.sink.exited(new SessionNotFoundError('gone'));
+  await tick(8);
+  const fresh = last(h);
+  assert.notEqual(fresh, cli);
+  const at = ['Carry on', 'A fix'].map((t) => fresh.sent.findIndex((m) => m.text.includes(t)));
+  assert.ok(at[0]! >= 0 && at[0]! < at[1]!, `in order: ${at.join(',')}`);
+  assert.equal(h.runner.mustGet(id).rec.queue.length, 0);
 });
 
 test('a warm thread is never compacted', async () => {

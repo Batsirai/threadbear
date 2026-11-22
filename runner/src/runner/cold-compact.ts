@@ -72,7 +72,9 @@ export type Precompact = {
   idleMs: number;
   costBefore?: number; // sessionCostTotal when it was sent
   noted?: boolean; // the CLI's own "Compacted" line was reworded
-  meanwhile?: string[]; // Mike's messages queued while it compacted, which would have steered (turn ids)
+  // Mike's messages queued while it compacted, which would have steered, each
+  // with the automatic inputs already queued when it came (turn ids).
+  meanwhile?: { id: string; before: string[] }[];
   send: () => void; // the turn's message, held until the compaction is done
 };
 
@@ -228,7 +230,8 @@ export const coldCompactPart = {
   noteQueuedMeanwhile(this: Runner, st: ThreadState, msg: QueuedSend): void {
     const pre = st.rt.turn?.precompact;
     if (!pre || !fromMike(msg.text, msg) || msg.editOf !== undefined || this.commandPlan(st, msg.text)) return;
-    (pre.meanwhile ??= []).push(msg.turnId);
+    const before = st.rec.queue.filter((q) => isAutomaticInput(q)).map((q) => q.turnId);
+    (pre.meanwhile ??= []).push({ id: msg.turnId, before });
   },
 
   // The held message has gone in: Mike's messages that queued while it
@@ -244,19 +247,22 @@ export const coldCompactPart = {
   // a login move waiting, while editing or moving.
   steerQueuedMeanwhile(this: Runner, st: ThreadState, pre: Precompact): void {
     const { rec, rt } = st;
-    const ids = new Set(pre.meanwhile);
+    const noted = new Map((pre.meanwhile ?? []).map((m) => [m.id, m.before]));
     // A move to another runner under way: they go with the thread.
-    if (!ids.size || rt.moving) return;
+    if (!noted.size || rt.moving) return;
     for (let i = 0; i < rec.queue.length; ) {
       const q = rec.queue[i]!;
       if (isAutomaticInput(q)) {
         i++;
         continue;
       }
-      if (!ids.has(q.turnId) || this.commandPlan(st, q.text) || !this.canSteer(st, rec.queue.slice(0, i))) return;
+      const before = noted.get(q.turnId);
+      if (!before || this.commandPlan(st, q.text) || !this.canSteer(st, rec.queue.slice(0, i))) return;
       rec.queue.splice(i, 1);
       try {
-        this.steer(st, q, true);
+        // Only what was queued before it counts as older: a report that came
+        // in after it, while it compacted, isn't (Gemini's review).
+        this.steer(st, q, { olderInputs: new Set(before) });
       } catch (e) {
         this.log.warn('could not steer a message queued while compacting', { threadId: rec.id, error: e instanceof Error ? e.message : String(e) });
         const seq = rt.turn?.inputs?.get(q.turnId);

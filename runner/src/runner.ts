@@ -2139,12 +2139,13 @@ export class Runner {
   // event can't be written the message isn't sent, and the caller gets the
   // error (the app puts the draft back).
   // `queued`: it waited in the queue, so threads.send gave it its own id,
-  // which the event names (sentAs) for anyone waiting on that id.
-  steer(st: ThreadState, msg: QueuedSend, queued = false): void {
+  // which the event names (sentAs) for anyone waiting on that id, and only
+  // the automatic inputs queued before it (olderInputs) are older than it.
+  steer(st: ThreadState, msg: QueuedSend, queued?: { olderInputs: ReadonlySet<string> }): void {
     const { rt } = st;
     const turn = rt.turn!;
     const event = this.emit(st, { ...userMessage(msg), ...(queued ? { sentAs: msg.turnId } : {}) }, turn.turnId);
-    this.markOlderInputs(st, msg);
+    this.markOlderInputs(st, msg, queued?.olderInputs);
     (turn.inputs ??= new Map()).set(msg.turnId, event.seq);
     turn.messages.push(msg.turnId);
     // He wrote again, so the turn owes him another reply; a card it was sent
@@ -2200,9 +2201,10 @@ export class Runner {
     return res;
   }
 
-  private markOlderInputs(st: ThreadState, msg: QueuedSend): void {
+  private markOlderInputs(st: ThreadState, msg: QueuedSend, only?: ReadonlySet<string>): void {
     if (!isAutomaticInput(msg) || msg.retryAfterInterrupt) {
       for (const q of st.rec.queue) {
+        if (only && !only.has(q.turnId)) continue;
         if (isAutomaticInput(q) && (!msg.retryAfterInterrupt || !q.retryAfterInterrupt)) q.beforeMessage = true;
       }
     }
@@ -3509,7 +3511,9 @@ export class Runner {
             turn.startedMessages = undefined;
             turn.foreignOutput = false;
             // A compaction sent to the CLI that's gone didn't happen; the
-            // message goes as it is (runner/cold-compact.ts).
+            // message goes as it is (runner/cold-compact.ts), and Mike's sent
+            // while it compacted go after it (Gemini's review).
+            const pre = turn.precompact;
             if (turn.precompact) {
               turn.precompact = undefined;
               turn.noSteer = false;
@@ -3548,6 +3552,7 @@ export class Runner {
                 }
               });
             }
+            if (pre) this.steerQueuedMeanwhile(st, pre);
             return;
           }
         }
