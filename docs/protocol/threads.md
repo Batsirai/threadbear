@@ -647,7 +647,15 @@ sub-agents, with no "coordinator" mark (mockups in
   (`waitingOn`) and they're all done, the reports go with that wake rather
   than as a second one. A message from Mike to the starter takes the held
   reports in first. Held reports are kept on the starter's record
-  (`heldReports`), so a restart doesn't lose them.
+  (`heldReports`), so a restart doesn't lose them. Each keeps a `ceiling`,
+  the higher of the starter's and the sender's access as it was held
+  (`send_message` let it reach the starter then). When they go, a report
+  whose ceiling the starter has since been raised above (and whose sender
+  hasn't been raised to match) isn't passed to its agent: the starter
+  gets a `system.note` naming the sender and goes to Needs you instead,
+  with no turn for those reports (`runner/src/runner/ceiling.ts`; Daybreak
+  finding 164, 22 Nov 2026). One held before ceilings counts only the
+  sender's access now.
 
 Mac (GPUI) app only for now; the phone, the website and the Swift app show
 threads as before.

@@ -11,6 +11,7 @@
 import type { PermissionMode } from './protocol.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import { above, MODE_NAMES, raises, scheduleModes, type Authority } from './threadbear-mcp.ts';
+import { ceilingMode } from './runner/ceiling.ts';
 
 type Params = Record<string, unknown>;
 
@@ -152,6 +153,16 @@ export class CallerGate {
     // the hour, holding a year-long token), are the user's own, from the app.
     if (method.startsWith('cloudTokens.')) throw new RpcError(ErrorCode.notAllowed, "A login's cloud token is the user's to set, from the card in the app.");
     if (method === 'threads.create' && p.serviceId !== undefined) throw new RpcError(ErrorCode.notAllowed, 'Starting a thread on a virtual runner is the user\'s to do, from Runs on in the app.');
+    // A schedule's ceiling, and Run now's presser (schedules.ts, "Ceilings"),
+    // are the caller's, never what it says: Full's is none.
+    if (method === 'schedules.create' || method === 'schedules.update') {
+      const { ceiling: _c, ...rest } = p;
+      p = known?.mode === 'full' ? { ...rest, ceiling: 'full' } : rest;
+    }
+    if (method === 'schedules.run') {
+      const { by: _b, ...rest } = p;
+      p = known?.mode === 'full' ? { ...rest, by: 'full' } : rest;
+    }
     if (known?.mode === 'full') return p;
     if (GATED_READS.has(method)) return p;
     if (!known) throw new RpcError(ErrorCode.notAllowed, "This thread isn't one the runner knows now, so it can only read. Ask the user to do it in the app.");
@@ -215,7 +226,7 @@ export class CallerGate {
       case 'schedules.create':
         return this.scheduleCreate(threadId, caller, p, needs);
       case 'schedules.update':
-        return this.scheduleUpdate(caller, p, needs);
+        return this.scheduleUpdate(threadId, caller, p, needs);
       case 'schedules.run':
         return this.scheduleRun(caller, p, needs);
       case 'schedules.delete':
@@ -283,14 +294,15 @@ export class CallerGate {
     const target = str(p, 'threadId');
     if (target) {
       if (target !== threadId && above(this.targetAccess(target), caller)) throw needs(`scheduling a message to ${this.title(target)}`, 'schedule_message');
-      return { ...p, createdBy: threadId };
+      // Its own schedule has none: its words are already its own.
+      return { ...p, createdBy: threadId, ...(target !== threadId ? { ceiling: ceilingMode(caller.mode) } : {}) };
     }
     const mode = (p.permissionMode ?? caller.mode) as PermissionMode;
     if (above({ mode }, caller)) throw needs(`scheduling new threads with ${MODE_NAMES[mode] ?? mode}`, 'schedule_message');
     return { ...p, permissionMode: mode, createdBy: threadId };
   }
 
-  private scheduleUpdate(caller: Authority, p: Params, needs: (what: string, tool?: string) => RpcError): Params {
+  private scheduleUpdate(threadId: string, caller: Authority, p: Params, needs: (what: string, tool?: string) => RpcError): Params {
     const out: Params = { ...p };
     const sc = this.findSchedule(p, needs);
     const modes = scheduleModes(sc);
@@ -315,6 +327,9 @@ export class CallerGate {
     const dropsCheck = Boolean(sc.check) && (p.check === null || (typeof p.check === 'string' && !p.check.trim()));
     if (protectedSc && (lowers || dropsCheck)) throw needs(`${dropsCheck ? 'taking the shell command off' : 'changing the access of'} the schedule "${sc.title}"`, 'update_schedule');
     if (p.permissionMode !== undefined && !sc.threadId && p.permissionMode === sc.permissionMode) delete out.permissionMode;
+    // New words from it are as far as it can reach (schedules.ts, "Ceilings"),
+    // except in its own thread's, where they're its own.
+    if (sc.threadId !== threadId) out.ceiling = ceilingMode(caller.mode);
     return out;
   }
 
@@ -322,7 +337,7 @@ export class CallerGate {
     const sc = this.findSchedule(p, needs);
     const will: Authority = sc.threadId ? this.targetAccess(sc.threadId) : { mode: scheduleModes(sc).ceiling };
     if (above(will, caller) || sc.check) throw needs(`running the schedule "${sc.title}" now`, 'update_schedule');
-    return p;
+    return { ...p, by: ceilingMode(caller.mode) };
   }
 
   // Deleting takes away what Mike set up and, with a check, the approval he

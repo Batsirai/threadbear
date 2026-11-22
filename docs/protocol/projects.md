@@ -288,6 +288,27 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   `timezone`, or the Mac's own zone. A time that doesn't exist on a
   daylight-saving day runs at the first minute that does; one that happens
   twice runs once.
+- **Ceilings.** A schedule that sends to a thread keeps a ceiling: the
+  most access that thread may have when a run reaches its agent
+  (`runner/src/schedules.ts`, "Ceilings"; Daybreak finding 162, 22 Nov
+  2026). One a thread on Ask or Auto set up for another thread has that
+  thread's own mode (or, if Mike allowed it on a card, the other thread's
+  access as the card showed it); Mike's (the app, `tb` outside a thread,
+  the phone), a Full thread's and a thread's own schedule for itself have
+  none. A run to a thread that's above its ceiling now isn't sent: the run
+  says `Paused, not sent: …`, a repeating schedule pauses, and the thread
+  gets a `system.note` and goes to Needs you, with no turn. Mike resuming
+  or changing its words, or Run now from the app, lifts the ceiling; a
+  limited thread rewording one lowers it to its own mode, and its Run now
+  goes by the higher of its mode and the ceiling. Ceilings are kept on the
+  Mac the schedule runs on (`schedule-ceilings.json` in the data dir,
+  bound to the schedule's id, creation time and thread), never in the
+  backend's row; one with none kept (made before 22 Nov 2026, or one that
+  only came through the backend) counts as made by its `createdBy`: its
+  own thread's, none; any other, Ask. A moved thread's schedules take the
+  thread's access as it arrives. The ceiling goes with the queued message
+  (and to a draining runner, as `drain.sendScheduled`'s `ceiling`), and
+  is checked again as the message leaves the queue (`runner/src/runner/ceiling.ts`).
 - **Sending.** The message starts with a line saying which schedule sent
   it, `[Scheduled: "<title>", <whenText>]`, so the agent knows Mike didn't
   just type it, and its `user.message` has `origin: "schedule"` and

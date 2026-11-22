@@ -134,6 +134,7 @@ export type AgentApprovalRequest = { name: string; title: string; input: Record<
 const ACCESS: Record<PermissionMode, number> = { ask: 0, plan: 0, auto: 1, full: 2 };
 export const MODE_NAMES: Record<PermissionMode, string> = { full: 'Full access', auto: 'Auto', ask: 'Ask before edits', plan: 'Plan first' };
 export const raises = (to: PermissionMode, from: PermissionMode): boolean => ACCESS[to] > ACCESS[from];
+const higherOf = (a: PermissionMode, b: PermissionMode): PermissionMode => (raises(a, b) ? a : b);
 // What a thread's agent can do: its mode.
 export type Authority = { mode: PermissionMode };
 // The least there is, below even Ask and Plan, by this very object: a
@@ -1008,6 +1009,10 @@ export function buildThreadbearTools(
         const caller = await restricted();
         const mode = new_thread ? (permissionMode ?? caller?.mode) : undefined;
         const toThread = !new_thread ? await resolve(threadId ?? alias) : undefined;
+        // Its ceiling (schedules.ts, "Ceilings"): as far as this thread can
+        // reach, or the other thread's access as the card shows it if that's
+        // more (Mike allowed it there). None from Full, nor for its own.
+        const ceiling: PermissionMode | undefined = toThread && toThread !== selfId ? (caller ? higherOf(caller.mode, (await accessOf(toThread)).mode) : 'full') : undefined;
         // Where its threads would run, as the card says it.
         const where = new_thread && !runner ? await folder(f ?? '.') : f;
         const reasons = [
@@ -1035,6 +1040,7 @@ export function buildThreadbearTools(
           ...(check?.trim() ? { check, ...card } : {}),
           ...(checkTimeoutSecs !== undefined ? { checkTimeoutSecs } : {}),
           createdBy: selfId,
+          ...(ceiling ? { ceiling } : {}),
         });
         return `Scheduled ${sc.id.slice(0, 8)}: ${await scheduleLine(sc)}`;
       }),
@@ -1077,6 +1083,10 @@ export function buildThreadbearTools(
         // this thread or that has a check, or adding a check, asks.
         // Renaming and pausing never do.
         const caller = await restricted();
+        // New words or resuming it, as far as this thread reaches, or the
+        // other thread's access as the card shows it (schedules.ts,
+        // "Ceilings"). In its own thread's, the words are its own.
+        const ceiling: PermissionMode | undefined = current.threadId && current.threadId !== selfId ? (caller ? higherOf(caller.mode, (await accessOf(current.threadId)).mode) : 'full') : undefined;
         const newFolder = f === undefined ? undefined : await folder(f);
         // The check a new folder takes along (Scheduler.update approves
         // nothing for a folder alone).
@@ -1158,6 +1168,7 @@ export function buildThreadbearTools(
           ...(check !== undefined ? { check } : carried ? { check: carried, ifCheck: carried } : {}),
           ...card,
           ...(checkTimeoutSecs !== undefined ? { checkTimeoutSecs } : {}),
+          ...(ceiling ? { ceiling } : {}),
         });
         return await scheduleLine(sc);
       }),

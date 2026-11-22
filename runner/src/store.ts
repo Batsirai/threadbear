@@ -17,11 +17,13 @@ export type ReviewVerdict = { findings: Pick<ReviewFinding, 'severity' | 'claim'
 
 // A panel member's answer waiting in its lead's queue (runner/everyone.ts).
 export type EveryoneAnswer = { threadId: string; name: string; reply: string };
-export type QueuedSend = { everyoneAnswers?: EveryoneAnswer[]; beforeMessage?: true; retryAfterInterrupt?: true; preserveSchedule?: boolean; scheduledSince?: number; turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number };
+export type QueuedSend = { everyoneAnswers?: EveryoneAnswer[]; beforeMessage?: true; retryAfterInterrupt?: true; preserveSchedule?: boolean; scheduledSince?: number; turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number; ceiling?: PermissionMode };
 
 // What thread.json holds: the public summary fields plus a few internal ones.
 // A report held for a thread from one it started (runner/nested.ts).
-export type HeldReport = { from: string; text: string; at: string };
+// `ceiling`: the most access the starter may have when it's passed on
+// (runner/ceiling.ts).
+export type HeldReport = { from: string; text: string; at: string; ceiling?: PermissionMode };
 // An email kept for a thread's next turn (runner/mail.ts).
 export type HeldMail = { text: string; at: string };
 export type PressNote = { id: string; line: string; told?: { seq: number; inFlight?: boolean } };

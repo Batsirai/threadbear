@@ -538,6 +538,14 @@ and it's only offered for simple commands like `ls` or `grep`: one that
 runs the repo's own code (`npm test`, `make`, `cargo run`) asks every
 time, as the repo can change what it runs.
 
+What such a thread wrote for another thread to read later stays at the
+access it was allowed at. If you raise the other thread before it arrives
+(a report from a thread it started, a reply from a thread it started on
+another Mac, a schedule it set up for that thread), its agent doesn't get
+it: the thread comes to Needs you with a note saying what wasn't passed on
+and where to read it, and a repeating schedule pauses until you resume it
+(resuming it, or Run now, is your OK).
+
 A card shows the whole command. On the phone, one that's too long to read
 there in full, one with anything but plain ASCII in it (an accent, an
 emoji, an invisible or text-reversing character), one asking for more

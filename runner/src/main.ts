@@ -110,6 +110,7 @@ import { CrossRunner } from './cross-runner.ts';
 import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
 import type { RemoteThreads } from './thread-index.ts';
 import { FarReports, ROWS as FAR_ROWS, TICK_MS as FAR_TICK_MS, type FarRow } from './far-reports.ts';
+import { ceilingMode, higherMode } from './runner/ceiling.ts';
 import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel, type PermissionMode } from './protocol.ts';
 
 // Tells launch.mjs this runner calls its listening() hook (release.ts), so
@@ -601,7 +602,14 @@ async function main(): Promise<void> {
     log,
     elsewhere: (id) => peers.owns(id) || peers.isArriving(id),
     folderElsewhere: (id) => peers.find(id)?.cwd,
-    sendElsewhere: (id, text, scheduleId, run, since, preserve) => sendScheduled(runner, peers, id, text, scheduleId, run, since, preserve),
+    sendElsewhere: (id, text, scheduleId, run, since, preserve, ceiling) => sendScheduled(runner, peers, id, text, scheduleId, run, since, preserve, ceiling),
+    // A busy one may be in a turn that started with more than its saved
+    // mode; its summary doesn't say, so count it as full (rpc-gate.ts).
+    accessElsewhere: (id) => {
+      const t = peers.find(id);
+      if (!t || t.status === 'running' || t.status === 'starting' || t.status === 'waiting') return undefined;
+      return t.permissionMode;
+    },
     dropElsewhere: (id, scheduleId) => dropScheduled(runner, peers, id, scheduleId),
     self: { id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName(), icon: runnerIcon, version: RUNNER_VERSION, release: RELEASE.release, startedAt },
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
@@ -1392,8 +1400,10 @@ async function main(): Promise<void> {
     self: () => syncRunnerId,
     runnerName: (id) => runnerNames.get(id),
     has: (id) => runner.has(id),
-    deliver: (starter, text) => {
-      runner.send(starter, text, [], { queue: true });
+    // Held to the watch's ceiling (runner/ceiling.ts): the starter raised
+    // above it since, Mike reads the reply instead.
+    deliver: (starter, text, ceiling) => {
+      runner.send(starter, text, [], { queue: true, ceiling });
     },
     // Not while sync is off, nor on a draining or stopping runner: its
     // replacement does it.
@@ -1415,7 +1425,10 @@ async function main(): Promise<void> {
       const r = (await relay.create(runnerId, { ...p })) as { thread: { id: string } };
       return { id: r.thread.id };
     },
-    startedThere: (p) => farReports.add(p),
+    // Its ceiling: what the starter has as it starts it, or the mode the
+    // thread was started with if that's more (a card Mike allowed). Never
+    // anything the other runner or the backend says later.
+    startedThere: ({ mode, ...p }) => farReports.add({ ...p, by: higherMode(runner.authorityNow(p.starter).mode, isPermissionMode(mode) ? ceilingMode(mode) : 'ask') }),
     card: (threadId, c) => runner.requestCard(threadId, c),
     openCard: async (threadId) => {
       const src = sync.relaySource();
@@ -1498,8 +1511,12 @@ async function main(): Promise<void> {
       async adopt(row) {
         const r = await runner.adoptMoved(row);
         // When and what each sends, nothing more (moves.ts movedSchedules).
+        // Each held to the thread's access as it arrives (schedules.ts,
+        // "Ceilings"): their words came from the other Mac, whatever it says
+        // made them, so raising the thread here later pauses them for Mike.
+        const ceiling = runner.authorityNow(row.threadId).mode;
         for (const sc of r.schedules ?? []) {
-          await scheduler.create({ ...sc, threadId: row.threadId }).catch((e) => log.warn("couldn't make a moved thread's schedule again", { threadId: row.threadId, error: String(e) }));
+          await scheduler.create({ ...sc, threadId: row.threadId, ceiling }).catch((e) => log.warn("couldn't make a moved thread's schedule again", { threadId: row.threadId, error: String(e) }));
         }
       },
       discard: (row) => runner.discardMove(row),

@@ -454,7 +454,13 @@ runner that's this one is the usual create.
   <name>. Each reply you end a turn with goes back to that thread, so put
   your report in your reply.]`, and the main Mac's runner keeps it in
   `far-reports.json` with its starter (a thread already there keeps its
-  first starter). Every 15 seconds, on a timer of its own, and not while
+  first starter) and a ceiling, `by`: the starter's access as it started
+  it, or the mode the thread was started with if that's more. Taken on
+  this Mac, never from the backend or the other runner. A reply that
+  arrives after Mike raised the starter above `by` isn't passed to its
+  agent: the starter gets a `system.note` and goes to Needs you, with no
+  turn (`runner/src/runner/ceiling.ts`; Daybreak finding 163, 22 Nov 2026).
+  A watch saved before that has no `by` and counts as Ask. Every 15 seconds, on a timer of its own, and not while
   sync is off or the runner is draining, it reads each such thread's row
   (`relay:remoteThread`) and newest 100 message rows
   (`relay:remoteMessages`) straight from the backend: the sidebar's list

@@ -355,9 +355,9 @@ export const hibernationPart = {
   // been raised since. A wait the agent never asked for (`by` missing) counts
   // only the first (Daybreak, 12 Nov 2026: an Ask helper's closing reply
   // started a turn in its Full-access starter).
+  // The same rule as every other word held for later (runner/ceiling.ts).
   mayHear(this: Runner, me: Authority, w: NonNullable<ThreadState['rec']['waitingOn']>[number]): boolean {
-    if (this.mayTellOf(me, w.threadId)) return true;
-    return w.by !== undefined && !above(me, w.by);
+    return this.mayPassOn(me, w.by === undefined ? undefined : w.by === LEAST ? undefined : w.by.mode, w.threadId);
   },
 
   deliverWaits(this: Runner, st: ThreadState, waits: NonNullable<ThreadState['rec']['waitingOn']>): void {
@@ -392,7 +392,9 @@ export const hibernationPart = {
     const reports = this.takeHeld(st);
     this.wake(st, { why });
     this.armSnoozeTimer();
-    this.sendTo(st, reports ? `${text}\n\n${reports}` : text, [], { origin: 'runner', queue: true });
+    // Checked against its access now: raised again while this waits in the
+    // queue, it's held back as it leaves (runner/ceiling.ts).
+    this.sendTo(st, reports ? `${text}\n\n${reports}` : text, [], { origin: 'runner', queue: true, ceiling: me.mode });
     this.log.info('woke after waiting on threads', { threadId: st.rec.id, on: waits.map((x) => x.threadId) });
   },
 

@@ -701,7 +701,11 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   from the least access, below even Ask). Otherwise it wakes with a `system.note` saying
   which had less access and that what they said wasn't passed on, and no
   turn starts: Mike reads them and says what next (Daybreak, 12 Nov
-  2026). A message, a wake or
+  2026). The same rule holds every other word held for later (a nested
+  thread's held report, a reply from another runner, a schedule another
+  thread set up: `runner/src/runner/ceiling.ts`), and the wake's message
+  is checked again as it leaves the queue, so a thread raised while it
+  waited behind a busy turn is held too. A message, a wake or
   another snooze first clears `waitingOn`, so a thread that sends its
   report wakes it as before and its finishing later does nothing. An
   entry can be `{ thread, until }` instead of an id: `until` (up to 200

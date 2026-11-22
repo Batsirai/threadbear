@@ -142,6 +142,7 @@ import { looseEndsPart, WAITING_TO_LAND_RECHECK_MS, type LooseEndsPart } from '.
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
 import { GUESS_CATCH_UP_MS, inboxGuessPart, type InboxGuessPart } from './runner/inbox-guess.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
+import { ceilingPart, type CeilingPart } from './runner/ceiling.ts';
 import { everyonePart, type EveryonePart } from './runner/everyone.ts';
 import { mailPart, type MailPart } from './runner/mail.ts';
 import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
@@ -761,7 +762,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, MailPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart, EveryonePart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, CeilingPart, MailPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart, EveryonePart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -1875,7 +1876,7 @@ export class Runner {
     return undefined;
   }
 
-  sendScheduled(threadId: string, text: string, scheduleId: string, run?: string, since = 0, preserve?: boolean): { turnId: string } {
+  sendScheduled(threadId: string, text: string, scheduleId: string, run?: string, since = 0, preserve?: boolean, ceiling?: PermissionMode): { turnId: string } {
     const prior = this.findScheduledSend(threadId, scheduleId, run, since);
     if (prior) return prior;
     const messageId = run ? scheduledMessageId(threadId, scheduleId, run) : undefined;
@@ -1885,7 +1886,7 @@ export class Runner {
     const logged = messageId ? this.scheduledMessage(this.mustGet(threadId), messageId, since) : undefined;
     // A partial start retries the original logged input, including its check
     // output, so the model reads exactly what the transcript shows.
-    return this.send(threadId, logged?.text ?? text, logged?.images ?? [], { origin: 'schedule', scheduleId, queue: true, ...(preserve !== undefined ? { preserveSchedule: preserve } : {}), ...(messageId ? { messageId, scheduledSince: since } : {}) });
+    return this.send(threadId, logged?.text ?? text, logged?.images ?? [], { origin: 'schedule', scheduleId, queue: true, ...(preserve !== undefined ? { preserveSchedule: preserve } : {}), ...(messageId ? { messageId, scheduledSince: since } : {}), ...(ceiling !== undefined ? { ceiling } : {}) });
   }
 
   send(threadId: string, text: string, images: ImageRef[] = [], opts: SendOptions = {}): { turnId: string; held?: true } {
@@ -1910,6 +1911,12 @@ export class Runner {
 
   sendTo(st: ThreadState, text: string, images: ImageRef[], opts: SendOptions = {}): string {
     const { rec, rt } = st;
+    // Written with less access than it has now: Mike's to read, not its
+    // agent's (runner/ceiling.ts). Checked again as it leaves the queue.
+    if (!this.underCeiling(st, opts.ceiling)) {
+      this.withholdMessage(st, { text, origin: opts.origin, scheduleId: opts.scheduleId });
+      return opts.messageId ?? crypto.randomUUID();
+    }
     if (opts.answers?.length && fromMike(text, opts) && this.answered) {
       const open = rec.needs?.needs === 'you' && rec.needs.seq === rec.lastTurnCompletedSeq ? rec.needs.asks : undefined;
       try {
@@ -1971,6 +1978,7 @@ export class Runner {
     if (opts.scheduledSince !== undefined) msg.scheduledSince = opts.scheduledSince;
     if (opts.answers?.length) msg.answers = opts.answers;
     if (opts.editOf) msg.editOf = opts.editOf;
+    if (opts.ceiling !== undefined) msg.ceiling = opts.ceiling;
     if (opts.everyoneAnswers?.length && opts.origin === 'runner') msg.everyoneAnswers = opts.everyoneAnswers;
     rec.lastActivityAt = this.isoNow();
     if (rt.turn && !opts.queue && fromMike(text, opts) && this.switchWaiting(st)) {
@@ -4378,6 +4386,12 @@ export class Runner {
     }
     const next = st.rec.queue.shift()!;
     this.markDirty(st);
+    // Raised since it was queued above what wrote it (runner/ceiling.ts):
+    // held back, and the next one looked at instead.
+    if (!this.underCeiling(st, next.ceiling)) {
+      this.withholdMessage(st, next);
+      return this.kickQueue(st);
+    }
     try {
       this.startTurn(st, next, live);
       return true;
@@ -5139,7 +5153,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, mailPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart, warmStartPart, everyonePart]) {
+for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, ceilingPart, mailPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart, warmStartPart, everyonePart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }
@@ -5169,7 +5183,9 @@ export function stoppedWorkMessage(what: string[], last: boolean): string {
 // `wakeReason`: for a message the runner sends by itself, what happened, in a few
 // words ("The app restarted"), shown on the divider before the turn it
 // starts ("14 h later · The app restarted", Mike 19 Nov).
-export type SendOptions = { everyoneAnswers?: EveryoneAnswer[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
+// `ceiling`: the most access the thread may have when these words reach its
+// agent, for words a thread with less access wrote earlier (runner/ceiling.ts).
+export type SendOptions = { ceiling?: PermissionMode; everyoneAnswers?: EveryoneAnswer[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
 
 type ScheduledDelivery = { seq: number; started: boolean; text: string; images: ImageRef[]; superseded?: false } | { superseded: true; started: true };
 
