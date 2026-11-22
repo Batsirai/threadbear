@@ -270,6 +270,17 @@ A schedule sends a message at a set time, once (`at`) or over and over
 a thread that already exists or starts a new thread each time. They're
 kept in `schedules.json` in the data dir.
 
+The desktop composer's quick send times (beside Send, and its right-click)
+are ordinary one-off schedules with `at` filled in, made through the same
+editor and `schedules.create`, with no call of their own: tonight at 21:00
+and tomorrow at 09:00 in the app's zone, or a minute after a known reset.
+The reset is when the box's login, or the first of its pool's logins of
+the box's provider, has room again as `backAt` in `runner/src/pools.ts`
+works it out (every 5-hour or weekly window under 1% has reset; blocked
+with none, its tightest), or with room, the next reset of a used window.
+Stale readings, a signed-out login or a missing reset give none. A pool's
+schedule keeps `poolId` (and `provider`), so the run still picks its login.
+
 - **Cron.** Five fields: minute, hour, day of month, month, day of week
   (0 or 7 is Sunday), with `*`, lists (`1,15`), ranges (`1-5`), steps
   (`*/15`, `9-17/2`) and names (`jan`, `mon`). When both day fields are

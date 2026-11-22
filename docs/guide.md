@@ -1152,7 +1152,17 @@ project and it won't put it back.
 A schedule sends a message at a set time, once or over and over: to a
 thread, or to a new thread each time (a morning summary, say). Make one in
 the Scheduled view (⌘2), or ask an agent ("look at this again every weekday
-at 9"). The Scheduled view lists them under Active, Paused and Done, with
+at 9"). To send what's in the message box later, click the arrow beside
+Send, or right-click Send: **Send tonight at 9 pm…** (until 9 pm), **Send
+tomorrow at 9 am…** and **Send when tokens reset…** each open the schedule
+editor on Once with that time filled in, ready to check and save, and
+**Schedule…** opens it for any other time or a repeat. When tokens reset is
+a minute after the thread's login has room again (or, on a pool, the first
+of its logins of that kind), or with room left, after the next reset of a
+limit it has used. With old readings, or none saying when, it's greyed out.
+A schedule sends only words, so pictures in the box stay there.
+
+The Scheduled view lists them under Active, Paused and Done, with
 when each runs next. One that starts a new thread each time keeps the
 pool the composer was on when you made it, so each run starts on
 whichever of that pool's logins it would pick then; ask an agent to put
