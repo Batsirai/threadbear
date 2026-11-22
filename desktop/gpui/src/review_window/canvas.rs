@@ -36,6 +36,8 @@ const MINE: u32 = 0x6CB8FF;
 /// The pen on screen, for Mike's circles; a highlight is wider.
 const PEN: f32 = 3.;
 const MARKER: f32 = 22.;
+/// An option's name in its box's top row, on the board.
+const TITLE_SIZE: f32 = 26.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum Tool {
@@ -145,8 +147,12 @@ impl CanvasState {
         let Some((vw, vh)) = self.viewport() else {
             return;
         };
-        let from = self.camera_now();
         let to = Camera::fit(rect, vw, vh, board::STOP_PAD, max);
+        self.fly_camera(to);
+    }
+
+    fn fly_camera(&mut self, to: Camera) {
+        let from = self.camera_now();
         self.camera = to;
         self.flight = Some(Flight {
             from,
@@ -159,18 +165,19 @@ impl CanvasState {
         let Some(s) = self.stops.get(stop.min(self.stops.len().saturating_sub(1))) else {
             return;
         };
-        let (rect, all) = (s.rect, s.lit == Lit::All);
+        let s = s.clone();
         self.stop = stop.min(self.stops.len() - 1);
         self.roaming = false;
         self.scribble = Some(Instant::now());
-        self.fly_to(
-            rect,
-            if all {
-                board::MAX_ZOOM
-            } else {
-                board::STOP_ZOOM
-            },
-        );
+        let Some((vw, vh)) = self.viewport() else {
+            return;
+        };
+        let max = if s.lit == Lit::All {
+            board::MAX_ZOOM
+        } else {
+            board::STOP_ZOOM
+        };
+        self.fly_camera(Camera::for_stop(&s, vw, vh, board::STOP_PAD, max));
     }
 
     fn lit(&self) -> Option<Lit> {
@@ -180,7 +187,7 @@ impl CanvasState {
         self.stops
             .get(self.stop)
             .map(|s| s.lit)
-            .filter(|l| *l != Lit::All)
+            .filter(|l| !matches!(l, Lit::All | Lit::Start))
     }
 
     /// How far the stop's notes have drawn in, 0 to 1.
@@ -296,6 +303,61 @@ fn to_screen(camera: &Camera, s: &Stroke) -> Stroke {
     }
 }
 
+/// The board's own grey, a touch apart from the window's, and the boxes on
+/// it lighter again.
+const CANVAS_DARK: u32 = 0x111114;
+const CANVAS_LIGHT: u32 = 0xEDEDF1;
+const CARD_DARK: u32 = 0x1C1C21;
+const CARD_LIGHT: u32 = 0xFFFFFF;
+/// Picked: the box's border, as Mike asked (22 Nov), green.
+const PICKED: u32 = 0x4CC38A;
+/// The dot grid's spacing on the board, doubled or halved as the camera
+/// zooms so it stays between these on screen.
+const DOTS: f32 = 48.;
+const DOTS_ON_SCREEN: (f32, f32) = (18., 36.);
+
+/// A grid of dots behind the board that moves and zooms with it, so the
+/// canvas reads as a surface to drag round.
+fn paint_dots(cam: &Camera, colour: Hsla, bounds: Bounds<Pixels>, window: &mut Window) {
+    let mut step = DOTS;
+    while step * cam.s < DOTS_ON_SCREEN.0 {
+        step *= 2.;
+    }
+    while step * cam.s > DOTS_ON_SCREEN.1 {
+        step /= 2.;
+    }
+    let gap = step * cam.s;
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let x0 = cam.tx.rem_euclid(gap);
+    let y0 = cam.ty.rem_euclid(gap);
+    let size = 2.;
+    let mut y = y0;
+    while y < h {
+        let mut x = x0;
+        while x < w {
+            window.paint_quad(fill(
+                Bounds {
+                    origin: point(
+                        bounds.origin.x + gpui_kit::px(x - size / 2.),
+                        bounds.origin.y + gpui_kit::px(y - size / 2.),
+                    ),
+                    size: size_of(size),
+                },
+                colour,
+            ));
+            x += gap;
+        }
+        y += gap;
+    }
+}
+
+fn size_of(n: f32) -> Size<Pixels> {
+    Size {
+        width: gpui_kit::px(n),
+        height: gpui_kit::px(n),
+    }
+}
+
 fn paint_pens(pens: &[Pen], origin: Point<Pixels>, window: &mut Window) {
     let at = |p: (f32, f32)| point(origin.x + gpui_kit::px(p.0), origin.y + gpui_kit::px(p.1));
     for pen in pens {
@@ -377,7 +439,7 @@ impl Scene {
         }
         let cam = &self.cam;
         let dark = self.dark;
-        let on = self.lit.is_none_or(|l| l == Lit::Lead);
+        let on = self.lit.is_none_or(|l| l == Lit::Start);
         Some(
             self.placed(&lead)
                 .rounded(gpui_kit::px(12. * cam.s))
@@ -655,10 +717,15 @@ impl ReviewWindow {
             return div().into_any_element();
         };
         let bounds_cell = cv.bounds.clone();
+        let dot_cam = scene.cam;
+        let dot_colour: Hsla = rgb(if scene.dark { 0x2E2E36 } else { 0xC4C4CE }).into();
         let tool = cv.tool;
         let painter = canvas(
             move |bounds, _, _| bounds_cell.set(Some(bounds)),
-            move |bounds, _, window, _| paint_pens(&pens, bounds.origin, window),
+            move |bounds, _, window, _| {
+                paint_dots(&dot_cam, dot_colour, bounds, window);
+                paint_pens(&pens, bounds.origin, window);
+            },
         )
         .absolute()
         .inset_0();
@@ -670,9 +737,9 @@ impl ReviewWindow {
             .w_full()
             .overflow_hidden()
             .bg(if scene.dark {
-                rgb(0x151518)
+                rgb(CANVAS_DARK)
             } else {
-                rgb(0xF4F4F6)
+                rgb(CANVAS_LIGHT)
             })
             .when(tool != Tool::Move, |d| d.cursor(CursorStyle::Crosshair))
             .when(tool == Tool::Move, |d| d.cursor(CursorStyle::OpenHand))
@@ -708,7 +775,7 @@ impl ReviewWindow {
             if let Some((vw, vh)) = cv.viewport() {
                 cv.placed = true;
                 if let Some(first) = cv.stops.get(cv.stop) {
-                    cv.camera = Camera::fit(first.rect, vw, vh, board::STOP_PAD, board::STOP_ZOOM);
+                    cv.camera = Camera::for_stop(first, vw, vh, board::STOP_PAD, board::STOP_ZOOM);
                     cv.scribble = Some(Instant::now());
                 }
             } else {
@@ -749,23 +816,25 @@ impl ReviewWindow {
         let index = laid_option.index;
         let cam = &scene.cam;
         if scene.visible(&laid_option.extent()) {
-            let r = cam.rect(&laid_option.frame);
+            // Its box round everything of it, notes too, lighter than the
+            // board, its border green once it's ticked.
             let mine = scene.lit.is_none_or(|l| l.option() == Some(index));
+            let picked = self.session.shown_draft().picked_ids.contains(&option.id);
             parts.push(
                 scene
-                    .placed(&laid_option.frame)
-                    .rounded(gpui_kit::px(14. * cam.s))
-                    .bg(if scene.dark {
-                        rgb(0x1E1E23)
+                    .placed(&laid_option.card)
+                    .rounded(gpui_kit::px(18. * cam.s))
+                    .bg(rgb(if scene.dark { CARD_DARK } else { CARD_LIGHT }))
+                    .border(gpui_kit::px(if picked { 2.5 } else { 1. }))
+                    .border_color(if picked {
+                        rgb(PICKED).into()
                     } else {
-                        rgb(0xFFFFFF)
+                        scene.edge
                     })
-                    .border_1()
-                    .border_color(scene.edge)
-                    .opacity(if mine { 1. } else { 0.5 })
+                    .opacity(if mine { 1. } else { 0.55 })
                     .into_any_element(),
             );
-            parts.push(self.frame_label(index, option, review, (r.x, r.y), scene.label, cx));
+            parts.push(self.frame_label(index, option, review, &laid_option.title, scene, cx));
         }
         if let (Some(words), Some(note)) = (laid_option.words, option.note.as_deref()) {
             if scene.visible(&words) && scene.text_on(board::WORDS_SIZE) {
@@ -793,18 +862,23 @@ impl ReviewWindow {
         (parts, pens)
     }
 
-    /// The frame's name over it at the window's own size, with its tick, so
-    /// it reads at any zoom; a click flies to the option.
+    /// The box's top row: its tick (while the review can still be answered)
+    /// and the option's name, sized with the board but never too small to
+    /// read; a click on the name flies to the option.
     fn frame_label(
         &self,
         index: usize,
         option: &threadbear_core::reducer::ReviewOption,
         review: &DesignReview,
-        (x, y): (f32, f32),
-        label: Hsla,
+        row: &Rect,
+        scene: &Scene,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let is_picked = self.session.draft().picked_ids.contains(&option.id);
+        let r = scene.cam.rect(row);
+        let size = (TITLE_SIZE * scene.cam.s).clamp(12., TITLE_SIZE);
+        let label = scene.label;
+        let editable = self.session.editable();
+        let is_picked = self.session.shown_draft().picked_ids.contains(&option.id);
         let starred = review.recommended.as_deref() == Some(option.id.as_str());
         let id = option.id.clone();
         let pick_id = option.id.clone();
@@ -813,16 +887,16 @@ impl ReviewWindow {
             .role(Role::Button)
             .aria_label(SharedString::from(format!("Go to {}", option.label())))
             .absolute()
-            .left(gpui_kit::px(x))
-            .top(gpui_kit::px(y - 30.))
-            .h(gpui_kit::px(26.))
-            .gap(gpui_kit::px(7.))
+            .left(gpui_kit::px(r.x))
+            .top(gpui_kit::px(r.y))
+            .h(gpui_kit::px(r.h.max(size * 1.4)))
+            .gap(gpui_kit::px(size * 0.45))
             .items_center()
-            .text_size(px(14.))
+            .text_size(gpui_kit::px(size))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(label)
             .cursor_pointer()
-            .when(!option.reference, |d| {
+            .when(!option.reference && editable, |d| {
                 d.child(
                     div()
                         .id(("canvas-pick", index))
@@ -1336,14 +1410,15 @@ impl ReviewWindow {
         };
         let cam = c.camera_now();
         c.flight = None;
-        let (dx, dy) = match ev.delta {
-            ScrollDelta::Lines(l) => (l.x * 40., l.y * 40.),
-            ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
-        };
-        c.camera = if ev.modifiers.platform || ev.modifiers.control {
-            cam.zoom_at(at, (dy * 0.01).exp())
-        } else {
-            cam.pan(dx, dy)
+        // A mouse's wheel (lines) zooms round the pointer, as Mike asked
+        // (22 Nov); a trackpad's two fingers (pixels) move, and zoom with ⌘
+        // or Control held, or by pinching.
+        c.camera = match ev.delta {
+            ScrollDelta::Lines(l) => cam.zoom_at(at, (l.y * 0.18).exp()),
+            ScrollDelta::Pixels(p) if ev.modifiers.platform || ev.modifiers.control => {
+                cam.zoom_at(at, (f32::from(p.y) * 0.01).exp())
+            }
+            ScrollDelta::Pixels(p) => cam.pan(f32::from(p.x), f32::from(p.y)),
         };
         c.roaming = true;
         cx.stop_propagation();

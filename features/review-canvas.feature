@@ -15,7 +15,7 @@ Feature: The review as a canvas
     When I open the thread "Compare account picker designs"
 
   @review.canvas @swift-pending
-  Scenario: The review opens as a board, on the agent's lead
+  Scenario: The review opens as a board, on the agent's lead and the first option
     When I open the review
     Then the review is a board on stop 1 of 6
     And the board has 2 of the agent's notes, showing

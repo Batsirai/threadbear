@@ -34,7 +34,12 @@ pub const NOTE_GAP: f32 = 96.;
 /// The widest a note gets before it wraps.
 pub const NOTE_WIDTH: f32 = 330.;
 /// Between frames, room for the notes beside the pictures.
-pub const GUTTER: f32 = NOTE_GAP + NOTE_WIDTH + 90.;
+pub const GUTTER: f32 = NOTE_GAP + NOTE_WIDTH + 130.;
+/// Round everything of an option, its box (Mike, 22 Nov: each option in a
+/// box of its own, its border green once ticked).
+pub const BOX_PAD: f32 = 28.;
+/// The box's top row, for the tick and the option's name.
+pub const TITLE_ROW: f32 = 52.;
 /// The agent's lead, the sticky at the board's top left.
 pub const LEAD_WIDTH: f32 = 440.;
 /// How far each frame sits below the board's top, in turn: a little
@@ -162,15 +167,35 @@ pub struct BoardOption {
     pub frame: Rect,
     pub words: Option<Rect>,
     pub shots: Vec<BoardShot>,
+    /// The box round all of it, notes too, with its name in the top row.
+    pub card: Rect,
+    /// That top row.
+    pub title: Rect,
 }
 
 impl BoardOption {
-    /// The frame with every note beside it.
+    /// Its box: everything of it.
     pub fn extent(&self) -> Rect {
-        self.shots
-            .iter()
-            .fold(self.frame, |r, s| r.union(&s.extent()))
+        self.card
     }
+}
+
+/// The box round an option's frame and notes, with room for its name on top.
+fn card_round(frame: &Rect, shots: &[BoardShot]) -> (Rect, Rect) {
+    let all = shots.iter().fold(*frame, |r, s| r.union(&s.extent()));
+    let card = Rect::new(
+        all.x - BOX_PAD,
+        all.y - BOX_PAD - TITLE_ROW,
+        all.w + BOX_PAD * 2.,
+        all.h + BOX_PAD * 2. + TITLE_ROW,
+    );
+    let title = Rect::new(
+        card.x + BOX_PAD,
+        card.y + BOX_PAD * 0.6,
+        card.w - BOX_PAD * 2.,
+        TITLE_ROW,
+    );
+    (card, title)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -273,8 +298,11 @@ fn lay_option(
         PICTURE_WIDTH + FRAME_PAD * 2.,
         y - GAP + FRAME_PAD - top,
     );
+    let (card, title) = card_round(&frame, &shots);
     BoardOption {
         index,
+        card,
+        title,
         frame,
         words,
         shots,
@@ -366,12 +394,17 @@ fn needs_left_room(option: &ReviewOption) -> bool {
 pub struct Stop {
     pub rect: Rect,
     pub lit: Lit,
+    /// Where the next option's frame starts, for a stop that shows a little
+    /// of it at the window's right edge, to say there's more to drag to.
+    pub peek: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lit {
-    /// The agent's lead.
-    Lead,
+    /// Where it opens: the agent's lead and all of the first option, with a
+    /// little of the next one showing (Mike, 22 Nov: zoomed in on the lead
+    /// alone, nothing said there was more to drag round).
+    Start,
     /// An option's words and first picture.
     Opening(usize),
     /// Another of an option's pictures.
@@ -384,15 +417,14 @@ impl Lit {
     pub fn option(self) -> Option<usize> {
         match self {
             Lit::Opening(o) | Lit::Shot(o, _) => Some(o),
-            Lit::Lead | Lit::All => None,
+            Lit::Start | Lit::All => None,
         }
     }
 
     /// Whether this stop lights an option's picture.
     pub fn shows(self, option: usize, shot: usize) -> bool {
         match self {
-            Lit::All => true,
-            Lit::Lead => false,
+            Lit::All | Lit::Start => true,
             Lit::Opening(o) => o == option && shot == 0,
             Lit::Shot(o, s) => o == option && s == shot,
         }
@@ -400,18 +432,22 @@ impl Lit {
 
     /// Whether this stop lights an option's words.
     pub fn shows_words(self, option: usize) -> bool {
-        matches!(self, Lit::All) || self == Lit::Opening(option)
+        matches!(self, Lit::All | Lit::Start) || self == Lit::Opening(option)
     }
 }
 
-/// The agent's order, as the window always stepped: its lead, each option's
-/// words and pictures in turn, then everything.
+/// The agent's order, as the window always stepped: its lead with the first
+/// option, each option's words and pictures in turn, then everything.
 pub fn stops(board: &Board) -> Vec<Stop> {
     let mut out = Vec::new();
-    if let Some(lead) = board.lead {
+    if let Some(first) = board.options.first() {
+        let rect = board
+            .lead
+            .map_or(first.extent(), |lead| lead.union(&first.extent()));
         out.push(Stop {
-            rect: lead,
-            lit: Lit::Lead,
+            rect,
+            lit: Lit::Start,
+            peek: board.options.get(1).map(|o| o.card.x),
         });
     }
     for option in &board.options {
@@ -421,16 +457,22 @@ pub fn stops(board: &Board) -> Vec<Stop> {
                 if let Some(words) = option.words {
                     rect = rect.union(&words);
                 }
+                rect = rect.union(&option.title);
                 Lit::Opening(option.index)
             } else {
                 Lit::Shot(option.index, shot.shot)
             };
-            out.push(Stop { rect, lit });
+            out.push(Stop {
+                rect,
+                lit,
+                peek: None,
+            });
         }
     }
     out.push(Stop {
         rect: board.bounds,
         lit: Lit::All,
+        peek: None,
     });
     out
 }
@@ -450,6 +492,9 @@ pub const MAX_ZOOM: f32 = 3.;
 /// The tour and a double-click never zoom past this: a picture's own pixels
 /// get soft beyond it, and a short note would fill the window.
 pub const STOP_ZOOM: f32 = 1.4;
+/// Where the next option's box starts on screen at a stop that peeks at it,
+/// as a share of the window's width.
+pub const PEEK_AT: f32 = 0.9;
 
 impl Default for Camera {
     fn default() -> Self {
@@ -473,6 +518,26 @@ impl Camera {
             s,
             tx: vw / 2. - cx * s,
             ty: vh / 2. - cy * s,
+        }
+    }
+
+    /// A stop's camera: it fits, and when the stop says where the next
+    /// option starts, that sits just in from the right edge, so a little of
+    /// it shows.
+    pub fn for_stop(stop: &Stop, vw: f32, vh: f32, pad: f32, max: f32) -> Camera {
+        let fitted = Camera::fit(stop.rect, vw, vh, pad, max);
+        let Some(next) = stop.peek.filter(|&x| x > stop.rect.right()) else {
+            return fitted;
+        };
+        let edge = vw * PEEK_AT;
+        let s = fitted
+            .s
+            .min((edge - pad) / (next - stop.rect.x).max(1.))
+            .max(MIN_ZOOM);
+        Camera {
+            s,
+            tx: edge - next * s,
+            ty: vh / 2. - stop.rect.center().1 * s,
         }
     }
 
@@ -922,6 +987,19 @@ mod tests {
         for pair in frames.windows(2) {
             assert!(pair[1].x >= pair[0].right() + GUTTER);
         }
+        // Each option's box holds its frame and its name, and no two touch.
+        let cards: Vec<Rect> = board.options.iter().map(|o| o.card).collect();
+        assert!(cards[0].x > lead.right());
+        for pair in cards.windows(2) {
+            assert!(pair[1].x > pair[0].right() + 20., "{pair:?}");
+        }
+        for o in &board.options {
+            assert!(
+                o.card.contains((o.frame.x, o.frame.y))
+                    && o.card.contains((o.frame.right(), o.frame.bottom()))
+            );
+            assert!(o.title.bottom() <= o.frame.y && o.title.y >= o.card.y);
+        }
         // An option without shots shows its one image; with two, both, one under the other.
         assert_eq!(board.options[1].shots.len(), 1);
         let a = &board.options[0];
@@ -1019,15 +1097,25 @@ mod tests {
         assert_eq!(
             lits,
             vec![
-                Lit::Lead,
+                Lit::Start,
                 Lit::Opening(0),
                 Lit::Shot(0, 1),
                 Lit::Opening(1),
                 Lit::All
             ]
         );
+        // It starts on the lead and all of A, B peeking in at the right.
+        let start = &stops(&board)[0];
+        assert!(start.rect.x <= board.lead.unwrap().x);
+        assert!(start.rect.right() >= board.options[0].card.right());
+        assert_eq!(start.peek, Some(board.options[1].card.x));
+        let c = Camera::for_stop(start, 1500., 900., 40., STOP_ZOOM);
+        let (bx, _) = c.to_screen((board.options[1].card.x, 0.));
+        assert!((bx - 1500. * PEEK_AT).abs() < 0.5, "B starts at {bx}");
+        let (ax, _) = c.to_screen((start.rect.x, 0.));
+        assert!(ax >= 39.5, "the lead's cut off at {ax}");
         let opening = &stops(&board)[1];
-        assert!(opening.rect.y <= board.options[0].words.unwrap().y);
+        assert!(opening.rect.y <= board.options[0].title.y);
         assert!(Lit::Opening(0).shows(0, 0) && !Lit::Opening(0).shows(0, 1));
         assert!(Lit::All.shows(1, 0) && Lit::All.shows_words(0));
     }
