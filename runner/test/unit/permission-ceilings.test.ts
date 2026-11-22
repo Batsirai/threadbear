@@ -220,9 +220,12 @@ test('162: a schedule from before ceilings is bound at its maker\'s mode as this
   const another = await sched.create({ text: PAYLOAD, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: 'some-thread' });
   const mikes = await sched.create({ text: `${PAYLOAD} kept`, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: maker });
   const own = await sched.create({ text: `${PAYLOAD} own`, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: target });
-  // As if made before 22 Nov 2026: nothing kept beside schedules.json.
+  // As if made before 22 Nov 2026: nothing kept beside schedules.json, and
+  // this runner never bound any before.
   sched.stop();
   fs.rmSync(path.join(h.home, 'schedule-ceilings.json'));
+  fs.rmSync(path.join(h.home, 'schedule-ceilings-since'), { force: true });
+  h.clock.advance(1000);
   const again = scheduler(h);
   h.clock.advance(2 * MIN);
   await tick(8);
@@ -812,4 +815,21 @@ test('wait_for_app_restart words come back held to the access the thread had as 
   fs.writeFileSync(path.join(h.home, 'app-restart.json'), JSON.stringify(saved));
   ar.bindOldCeilings(() => 'auto');
   assert.equal(JSON.parse(fs.readFileSync(path.join(h.home, 'app-restart.json'), 'utf8')).watching[0].ceiling, 'auto');
+});
+
+test("162: a schedule made since the first binding, with its ceiling lost, counts as Ask, not its maker's mode now", async () => {
+  const h = harness();
+  const sched = scheduler(h);
+  const target = idle(h, 'Careful work', 'full');
+  const maker = idle(h, 'Maker', 'ask');
+  h.clock.advance(MIN);
+  const sc = await sched.create({ text: PAYLOAD, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: maker, ceiling: 'ask' });
+  raise(h, maker);
+  sched.stop();
+  fs.rmSync(path.join(h.home, 'schedule-ceilings.json'));
+  const again = scheduler(h);
+  h.clock.advance(2 * MIN);
+  await tick(8);
+  await settle();
+  assert.match(again.list().find((s) => s.id === sc.id)!.lastRun?.note ?? '', /Paused, not sent/);
 });

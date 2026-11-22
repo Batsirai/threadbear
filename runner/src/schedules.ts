@@ -363,8 +363,18 @@ export class Scheduler {
   private readonly ceilingsFile: string;
   private ceilings?: Record<string, { createdAt: string; threadId: string; ceiling: PermissionMode }>;
 
+  // Read again when the file changes: the other runner of a handover
+  // shares it.
+  private ceilingsMtime?: number;
   private readCeilings(): Record<string, { createdAt: string; threadId: string; ceiling: PermissionMode }> {
-    if (this.ceilings) return this.ceilings;
+    let mtime: number | undefined;
+    try {
+      mtime = fs.statSync(this.ceilingsFile).mtimeMs;
+    } catch {
+      mtime = undefined;
+    }
+    if (this.ceilings && mtime === this.ceilingsMtime) return this.ceilings;
+    this.ceilingsMtime = mtime;
     const out: Record<string, { createdAt: string; threadId: string; ceiling: PermissionMode }> = {};
     try {
       const raw = JSON.parse(fs.readFileSync(this.ceilingsFile, 'utf8')) as unknown;
@@ -383,7 +393,9 @@ export class Scheduler {
 
   private writeCeilings(): void {
     try {
-      atomicWriteFileSync(this.ceilingsFile, JSON.stringify(this.readCeilings()));
+      const all = this.readCeilings();
+      atomicWriteFileSync(this.ceilingsFile, JSON.stringify(all));
+      this.ceilingsMtime = fs.statSync(this.ceilingsFile).mtimeMs;
     } catch (e) {
       // Kept in memory meanwhile; a restart without it counts the schedule
       // as one from before (ceilingOf), which never lifts a ceiling.
@@ -424,11 +436,36 @@ export class Scheduler {
   // tried again later, and counts as Ask meanwhile.
   private bindOld(rec: ScheduleRecord): PermissionMode | undefined {
     if (!rec.threadId || this.refuse || !this.mine(rec)) return undefined;
-    const ceiling = rec.createdBy !== undefined ? this.savedMode(rec.createdBy) : 'ask';
+    // Only one made before this runner first bound any: one made since
+    // has had its own from the start, so with none kept (the file lost)
+    // it's Ask, never bound afresh at what its maker has now.
+    const before = Date.parse(rec.createdAt) < Date.parse(this.boundSince());
+    const ceiling = !before ? 'ask' : rec.createdBy !== undefined ? this.savedMode(rec.createdBy) : 'ask';
     if (ceiling === undefined) return undefined;
     this.setCeiling(rec, ceiling);
     this.log.info("bound a schedule from before ceilings", { scheduleId: rec.id, ceiling });
     return ceiling;
+  }
+
+  // When this runner first bound schedules from before ceilings, kept in
+  // a file of its own beside schedule-ceilings.json.
+  private boundSinceAt?: string;
+  private boundSince(): string {
+    if (this.boundSinceAt) return this.boundSinceAt;
+    const file = path.join(this.home, 'schedule-ceilings-since');
+    try {
+      const at = fs.readFileSync(file, 'utf8').trim();
+      if (!Number.isNaN(Date.parse(at))) return (this.boundSinceAt = at);
+    } catch {
+      // First time.
+    }
+    const now = this.iso();
+    try {
+      atomicWriteFileSync(file, now);
+    } catch (e) {
+      this.log.warn("couldn't save schedule-ceilings-since", { error: String((e as Error)?.message ?? e) });
+    }
+    return (this.boundSinceAt = now);
   }
 
   private bindAllOld(): void {
@@ -505,6 +542,9 @@ export class Scheduler {
       if (gone) this.changed();
     });
     for (const r of this.readRuns()) this.unrecorded.set(runKey(r), r);
+    // When ceilings started here, so only schedules from before are ever
+    // bound at what their maker has (bindOld).
+    this.boundSince();
     if (this.mode === 'local') this.bindAllOld();
     this.log.info('schedules loaded', { count: this.items.size, mode: this.mode, ...(this.unrecorded.size ? { unrecordedRuns: this.unrecorded.size } : {}) });
     this.tick();

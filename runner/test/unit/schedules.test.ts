@@ -1176,9 +1176,10 @@ test('a due run is claimed, so two runner processes under one id send it once', 
   const now = backendScheduler(h, LAPTOP, path.join(h.home, 'new'));
   await old.attach(b.for('laptop-old', LAPTOP.id));
   await now.attach(b.for('laptop-new', LAPTOP.id));
-  // The thread's own (no ceiling): the two homes here don't share the
-  // ceilings a real handover's one data dir does (schedules.ts, "Ceilings").
-  const sc = await now.create({ text: 'Check CI', at: iso(h.clock.now() + 10 * MIN), threadId: thread.id, createdBy: thread.id });
+  const sc = await now.create({ text: 'Check CI', at: iso(h.clock.now() + 10 * MIN), threadId: thread.id });
+  // A real handover's two runners share one data dir, and so its schedule
+  // ceilings (schedules.ts, "Ceilings"); the two homes here don't.
+  fs.copyFileSync(path.join(h.home, 'new', 'schedule-ceilings.json'), path.join(h.home, 'old', 'schedule-ceilings.json'));
   await tick();
   h.clock.advance(10 * MIN);
   for (let i = 0; i < 5; i++) await tick();
