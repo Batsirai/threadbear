@@ -42,6 +42,11 @@ test("a fork's own patches show nothing of Mike's", async () => {
     return { ok: r.status === 0, exitCode: r.status ?? undefined, text: `${r.stdout ?? ''}${r.stderr ?? ''}`, truncated: false, durationMs: 0 };
   };
   const set = await applyLive(base, { cwd: copy, threadId: 'fork-view', run });
+  // Something of Mike's that fails here (the app-store panel's badge running
+  // Poddle's script) stays quiet: two forks' check-ups said "Patch
+  // `app-store` won't load: node ~/dev/me/poddle/scripts/asc-status.mjs
+  // failed" (discussions/85, 21 Nov).
+  assert.deepEqual(set.patches.filter((p) => p.liveError).map((p) => `${p.id}: ${p.liveError}`), []);
 
   const shown = JSON.stringify([set.actions, set.panels]);
   for (const mark of MIKES) assert.doesNotMatch(shown, mark);
