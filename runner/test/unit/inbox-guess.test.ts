@@ -89,6 +89,25 @@ test('a finished thread of his own gets a guess from each model, written down an
   assert.deepEqual(notes(h, id), []);
 });
 
+test('a job that ended mid-turn and was read in it: guessed once the wake grace passes with no turn', async () => {
+  const h = setup();
+  const id = mine(h);
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === id).at(-1)!;
+  s.init();
+  s.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'tb land' }] });
+  s.out({ kind: 'tasks', tasks: [] });
+  s.out({ kind: 'event', event: { type: 'system.note', text: 'tb land', wake: true } });
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: END_TURN, kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  s.text('m1', 'Landed on main.');
+  s.result('completed');
+  await settle();
+  assert.equal(h.lines().length, 0, 'not while a turn reading the result may still come');
+  h.clock.advance(20_000);
+  await until(() => h.lines().length === 1, 'the guess written down');
+  assert.equal(h.lines()[0].seq, h.events(id).filter((e) => e.type === 'turn.completed').at(-1).seq);
+  assert.match(h.asked[0].prompt, /Landed on main\./);
+});
+
 test('off unless the experiment is on', async () => {
   const h = setup({ on: false });
   const id = mine(h);

@@ -1199,3 +1199,69 @@ test('labReview: a reviewer billed per token (OpenCode) gets a reading budget in
   assert.ok(reviewBrief({ ...base, lean: true }).includes(READING_BUDGET));
   assert.ok(!reviewBrief(base).includes('Reading budget'));
 });
+
+// A background job that ended mid-turn holds the finish for the wake grace
+// (completeTurn's finishPending): the review starts when it passes with no
+// turn, not never.
+function midTurnJob(h: ReturnType<typeof setup>, id: string) {
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === id).at(-1)!;
+  s.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'tests' }] });
+  s.out({ kind: 'tasks', tasks: [] });
+}
+
+test('labReview: a code change whose turn read a job that ended mid-turn is reviewed once the wake grace passes', () => {
+  const h = setup();
+  const id = start(h);
+  midTurnJob(h, id);
+  turn(h, id, { diffs: [codeDiff()] });
+  assert.equal(h.codex.sessions.length, 0, 'not while a turn reading the result may come');
+  h.clock.advance(20_000);
+  assert.equal(h.runner.get(id).waitingOn?.length, 1, 'waiting on the review');
+  assert.equal(h.codex.sessions.length, 1);
+});
+
+test('labReview: snoozed by Alex in the wake grace, it keeps his snooze and starts no review', () => {
+  const h = setup();
+  const id = start(h);
+  midTurnJob(h, id);
+  turn(h, id, { diffs: [codeDiff()] });
+  const until = new Date(h.clock.now() + 3_600_000).toISOString();
+  h.runner.update({ threadId: id, snoozedUntil: until });
+  h.clock.advance(20_000);
+  assert.equal(h.runner.get(id).snoozedUntil, until);
+  assert.equal(h.runner.get(id).waitingOn, undefined);
+  assert.equal(h.codex.sessions.length, 0);
+  assert.ok(h.runner.threads.get(id)!.rec.finished, 'finished all the same');
+});
+
+test('labReview: a runner stopping in the wake grace owes the review to the next one', async () => {
+  const h = setup();
+  const id = start(h);
+  midTurnJob(h, id);
+  turn(h, id, { diffs: [codeDiff()] });
+  await h.runner.shutdown();
+  const rec = h.runner.threads.get(id)!.rec;
+  assert.ok(rec.labReviewOwed, 'owed');
+  assert.equal(h.codex.sessions.length, 0);
+});
+
+test('labReview: a review owed when a finish is held, then the turn the CLI opens to read the job, is settled by that turn', () => {
+  const h = setup();
+  const id = start(h);
+  h.runner.refuseNewTurns('The runner is restarting; send again in a moment.');
+  turn(h, id, { diffs: [codeDiff()] });
+  assert.ok(h.runner.threads.get(id)!.rec.labReviewOwed);
+  h.runner.refusing = undefined;
+  // The next turn has no change of its own and holds its finish for a job
+  // that ended mid-turn, taking the owed review with it.
+  h.runner.send(id, 'And check the logs');
+  midTurnJob(h, id);
+  turn(h, id, { reply: 'Logs are clean.' });
+  assert.equal(h.codex.sessions.length, 0);
+  // The CLI does open a turn to read the job, and it ends needing nothing.
+  const s = h.adapter.sessions.filter((x) => x.opts.threadId === id).at(-1)!;
+  s.out({ kind: 'cliTurn' });
+  turn(h, id, { reply: 'The job agreed.' });
+  assert.equal(h.codex.sessions.length, 1, 'the owed review started');
+  assert.equal(h.runner.get(id).waitingOn?.length, 1);
+});

@@ -495,6 +495,13 @@ type Runtime = {
   // starts a turn of its own after the result, so the wake grace starts
   // when the turn ends.
   taskEndedInTurn?: boolean;
+  // A done card that would have finished the thread (markFinished, then
+  // the quiet-inbox and inbox-guess steps) but for background work that
+  // ended during or just before its turn: the turn the CLI may open to read
+  // that result. Mid-turn the CLI usually folds the result into the turn
+  // it's in and opens none, so once the wake grace passes with no turn
+  // (or the CLI exits) it finishes after all (settlePendingFinish).
+  finishPending?: { seq: number; turnId: string; lastText?: string; next: boolean; owed?: { turnId: string; seq?: number; reply?: string } };
   activeAt: number; // last turn start or end, for picking which CLI to release
   approvals: Map<string, PendingApproval>;
   // Calls the card reviewer is deciding on (runner/card-review.ts), which
@@ -1424,6 +1431,10 @@ export class Runner {
       const { rt } = st;
       rt.idleTimer?.cancel();
       rt.deltaTimer?.cancel();
+      // A done card held back for the wake grace: no turn can come now, so
+      // it finishes (a review it's due is owed to the next runner), or a
+      // stop within those 15 s would leave it unfinished for good.
+      if (!rt.turn) this.settlePendingFinish(st);
       rt.wakeTimer?.cancel();
       this.flushDeltas(st);
       // Output and exits from CLIs that are about to be killed no longer count.
@@ -2915,6 +2926,12 @@ export class Runner {
       rt.wakeTimer = undefined;
       rt.finished = [];
       this.markDirty(st);
+      // No turn came to read the result: a done card held back for one stands.
+      if (!rt.turn) this.settlePendingFinish(st);
+      // Mike's turn is running: the CLI may read the result after it, so it
+      // counts as ended in that turn, and the grace starts again at its end
+      // (Codex's review, 22 Nov 2026).
+      else rt.taskEndedInTurn = true;
       // A version move or a fresh CLI was waiting for the grace to end.
       if ((rt.versionMove || rt.releaseWhenIdle || this.queueHeld(st)) && !rt.turn) this.scheduleIdle(st);
     }, WAKE_GRACE_MS);
@@ -3086,11 +3103,16 @@ export class Runner {
     // released after endTurn (releaseFailedReview).
     const reviewEnded = !turn.local && outcome === 'completed' && this.awaitedReview(rec) &&
       !waitForFromTool(turn.endTurn) && !snoozeFromTool(turn.endTurn);
-    const finished = (reviewEnded || (outcome === 'completed' && said?.needs === 'nothing' && !archive && !forApp &&
+    const done = (reviewEnded || (outcome === 'completed' && said?.needs === 'nothing' && !archive && !forApp &&
       !snoozeFromTool(turn.endTurn) && !waitForFromTool(turn.endTurn))) && !rec.queue.length &&
-      !rec.subagents?.some((a) => a.status === 'running') && !rt.tasks.length && !rt.approvals.size &&
-      // A job that ended mid-turn: the CLI's turn reading its result is next.
-      !rt.taskEndedInTurn && !rt.finished.length;
+      !rec.subagents?.some((a) => a.status === 'running') && !rt.tasks.length && !rt.approvals.size;
+    // A job that ended mid-turn or just before: the CLI may open a turn to
+    // read its result, so the finish waits for the wake grace to pass with
+    // none (settlePendingFinish). Mid-turn it mostly reads it in this turn
+    // and opens none: finishing only on a later turn left 17 done cards
+    // unfinished, unguessed and their waiters asleep (19-22 Nov 2026).
+    const finished = done && !rt.taskEndedInTurn && !rt.finished.length;
+    this.dropPendingFinish(st);
     const holdQueue = Boolean(rec.queue.length && (archive || snooze || waitFor || forApp));
     const loginBefore = rec.accountId;
     this.endTurn(st, ev.seq, outcome === 'failed' ? 'error' : 'idle', outcome, limitHit, netLost, holdQueue, signedOut);
@@ -3116,11 +3138,14 @@ export class Runner {
     // else that earlier one; a turn that needs Mike, or waits, drops it,
     // as it would have stopped that review from starting too. Not a slash
     // command the runner answered itself (/model): that's no agent turn.
+    // An earlier card's held finish this turn replaces gave back any review
+    // it carried (dropPendingFinish, above), so it's settled here.
     const owed = outcome === 'completed' && !turn.local ? rec.labReviewOwed : undefined;
     if (owed) {
       delete rec.labReviewOwed;
       this.markDirty(st);
     }
+    if (done && !finished && !turn.local) rt.finishPending = { seq: ev.seq, turnId: turn.turnId, ...(turn.lastText !== undefined ? { lastText: turn.lastText } : {}), next: Boolean(said?.next?.length), ...(owed ? { owed } : {}) };
     let review = finished && !rt.turn ? this.startLabReview(st, turn.turnId, turn.lastText) : undefined;
     if (!review && owed && finished && !rt.turn && !rec.labReviewOwed) review = this.startLabReview(st, owed.turnId, owed.reply, owed.seq);
     if (review) this.waitOnReview(st, review);
@@ -3178,6 +3203,70 @@ export class Runner {
     }
     // An invalid wait may leave the thread awake; do not strand its queue.
     if (holdQueue && !rt.turn && this.bucket(rec) === 'inbox') this.afterTurn(st);
+    // No grace running (no live CLI to open a turn): nothing is coming.
+    // One running since a job ended before this turn starts again, so the
+    // CLI has the whole grace after the turn to open its own.
+    if (rt.finishPending && !rt.wakeTimer) this.settlePendingFinish(st);
+    else if (rt.finishPending) this.startWakeGrace(st);
+  }
+
+  // A held finish that won't happen: a review the last runner owed, which
+  // completeTurn took for it, is owed again, for the turn that settles it
+  // (completeTurn), as it would have been with no finish held.
+  dropPendingFinish(st: ThreadState): void {
+    const { rec, rt } = st;
+    const owed = rt.finishPending?.owed;
+    rt.finishPending = undefined;
+    if (owed && !rec.labReviewOwed && !rt.deleted) {
+      rec.labReviewOwed = owed;
+      this.markDirty(st);
+    }
+  }
+
+  // A finish completeTurn held back for a turn the CLI might open to read
+  // a background result (finishPending): none came, so the done card
+  // stands and the thread finishes, as completeTurn would have: a lab
+  // review or markFinished (threads waiting on it hear), a schedule's run
+  // back in the archive, the quiet-inbox helper and the inbox guess. A
+  // runner stopping only finishes it, owing any review to the next one
+  // (startLabReview), which also makes the guess (catchUpInboxGuess).
+  settlePendingFinish(st: ThreadState): void {
+    const { rec, rt } = st;
+    const p = rt.finishPending;
+    if (!p) return;
+    // Going back to an earlier message (its CLI's exit lands here) undoes
+    // the card rather than finishing on it (Codex's review, 22 Nov 2026).
+    if (rt.turn || rt.deleted || rt.editing || rec.lastTurnCompletedSeq !== p.seq || rec.finished ||
+      rec.queue.length || rt.tasks.length || rt.approvals.size || rec.subagents?.some((a) => a.status === 'running')) {
+      this.dropPendingFinish(st);
+      return;
+    }
+    rt.finishPending = undefined;
+    // Put to sleep in the grace (Mike snoozing it lets the CLI go, and its
+    // exit lands here): finished, but a review would hibernate it on its
+    // own terms over his (Codex's review, 22 Nov 2026), so none starts.
+    const asleep = this.bucket(rec) === 'snoozed';
+    // A review the last runner owed waits for its next turn, as an owed one
+    // found asleep does (startOwedReview), unfinished meanwhile.
+    if (asleep && p.owed && !rec.labReviewOwed) {
+      rec.labReviewOwed = p.owed;
+      this.markDirty(st);
+    }
+    let review = asleep ? undefined : this.startLabReview(st, p.turnId, p.lastText);
+    if (!review && !asleep && p.owed && !rec.labReviewOwed) review = this.startLabReview(st, p.owed.turnId, p.owed.reply, p.owed.seq);
+    if (review) this.waitOnReview(st, review);
+    else if (!rec.labReviewOwed) this.markFinished(st, p.lastText);
+    if (review || rec.labReviewOwed || rec.archivedAt || asleep || this.stopping) return;
+    if (rec.unarchivedBySchedule) {
+      const by = rec.unarchivedBySchedule.by;
+      this.park(st, { kind: 'scheduleRunEnded' });
+      this.emit(st, { type: 'system.note', text: 'Back in the archive: the scheduled run ended with nothing for you.' });
+      this.update({ threadId: rec.id, archived: true, archivedBy: by ?? 'threadbear' });
+      this.markDirty(st);
+      return;
+    }
+    void this.settleQuietly(st, p.next);
+    void this.guessInbox(st, p.lastText ?? '', p.next);
   }
 
   // end_turn's snooze, once the turn is over: a time as update_thread
@@ -3356,6 +3445,9 @@ export class Runner {
     this.stopSubagents(st);
     rt.wakeTimer?.cancel();
     rt.wakeTimer = undefined;
+    // No CLI to open a turn reading a background result: a done card held
+    // back for one stands.
+    if (!rt.turn) this.settlePendingFinish(st);
     rt.idleTimer?.cancel();
     rt.idleTimer = undefined;
     this.log.info('session ended', { threadId: rec.id, error: err?.message });

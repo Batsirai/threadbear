@@ -668,8 +668,14 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   out, a day. A named thread is done once it has finished a turn (its own
   or one its CLI opened after a job ended) with `needs: "nothing"`,
   nothing queued, no sub-agent or background job running and no `snooze`
-  or `waitFor` of its own, nor a job that ended mid-turn whose result
-  turn is still to come, with no new work since; or has been archived
+  or `waitFor` of its own, with no new work since. A job that ended
+  during the turn (or just before it) holds the finish for the wake grace
+  (15 s from the turn's end): the CLI may open a turn to read its result,
+  and that turn's end decides; with none (it mostly folds the result into
+  the turn it's in), or once the CLI exits or the runner stops, the held
+  card finishes the thread after all, quiet-inbox and the inbox guess
+  included. Not if Mike went back to an earlier message meanwhile, and one
+  he snoozed meanwhile starts no lab review. Or it has been archived
   or deleted. The runner keeps each thread's last finish and its reply on
   the thread (`finished` in thread.json) and drops it at any new work (a
   message, a review's answer, going back to an earlier message, any turn
