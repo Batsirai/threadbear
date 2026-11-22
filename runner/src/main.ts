@@ -1752,6 +1752,9 @@ async function main(): Promise<void> {
   // now: waking one starts its CLI, whose tools need what's set up above.
   runner.holdWaits = false;
   step('reconcile waits', () => runner.reconcileWaits());
+  // A wait whose latest time passed while the runner was down: its agent's
+  // turn to check was held until now too (runner/hibernation.ts, armSnoozeTimer).
+  step('late wake checks', () => runner.armSnoozeTimer());
   // Reports held for a thread whose threads finished while it was down.
   step('held reports', () => runner.settleAllHeld());
   // Reviews a runner that went away owed (runner/lab-review.ts).

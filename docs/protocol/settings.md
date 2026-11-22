@@ -352,6 +352,40 @@ runner message giving the agent a turn to check for itself and snooze again
 with the same words if it hasn't. That message names the other thread's id
 only when send_message would let it without a card.
 
+**The latest time passing.** A wait in words with a time as well wakes at
+that time if nothing else woke it first (`Runner.wakeAtTime`; the words
+and numbers are in `wake-when.ts`):
+
+- **Mike's own** comes back as it always has, in the inbox with no turn,
+  but its `system.note` says why ("Woke up after 2 days: you haven't
+  talked about woodworking, and this was the latest it would wait
+  (Saturday 31 October, 9 am).").
+- **Its agent's** gets a turn to check for itself, as when the librarian
+  thinks it has happened: a note ("Woke up after 18 hours: still no sign
+  that …, and this was the latest it would wait (…). Its agent is checking
+  for itself.") and a runner message (`wakeReason` "The latest it would
+  wait passed") that says the time ran out with nothing seen, to check the
+  work itself, to snooze again with the same words if it hasn't happened,
+  or to end the turn with no snooze if it never will or Mike should chase
+  it. The record counts these (`lateChecks: { n, waitedMs, since, backOff? }`,
+  never in a `ThreadSummary`) until Mike next writes to the thread, whatever
+  words the agent snoozes with. The sleep that follows a check has a latest
+  time at least twice as far off as the last sleep was long, a week at most
+  (the model's own when that is later, and one even when the model gives
+  none). After three checks in a row the next latest time runs no turn:
+  the thread lands in the inbox, its note adding how long it has waited
+  and that it's Mike's to decide.
+- A wake at a latest time that ran no turn is kept as a line for the agent
+  (`wakeNews`, "Note from Threadbear: this thread woke by itself on …"),
+  which goes in front of the thread's next message as news of a button
+  press does, is told again if that turn doesn't complete, and is dropped
+  when the thread next sleeps.
+
+A thread archived while it slept ends its sleep quietly, as before. A
+runner that was down at the latest time gives the check once it's
+listening. A time alone (a preset, "2h", words read as only a time) wakes
+as before.
+
 The thread gets a `system.note` saying what was worked out ("Hibernating
 until Saturday 31 October, 9 am. You said "at the weekend"."). A model
 that can't say (no pool room, an answer that isn't a time or a topic)

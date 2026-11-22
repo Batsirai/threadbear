@@ -95,6 +95,111 @@ export function hibernateNote(answer: WakeAnswer, said: string, timeZone: string
   return `${head} You said "${cut(said.trim(), 120)}".`;
 }
 
+// ---- The latest time passing (runner/hibernation.ts, wakeAtTime) ----
+//
+// A wait in words with a time as well ("…, or Sunday at the latest") whose
+// time comes with nothing seen. Before 22 Nov 2026 it woke as a plain snooze
+// does: in the inbox, unread, "Woke up after hibernating for 17 hours.",
+// with no turn. A thread waiting on an email did that every morning, and its
+// agent, asked why it had woken, couldn't say. Now the note says what it
+// waited for and that the time ran out, the agent hears the same with the
+// thread's next message, and a wait its own agent set gets a turn to check
+// for itself, as it does when the librarian thinks the thing has happened.
+//
+// A check on a long thread costs a turn (about $1.50 on that one), so they
+// are held to these, the only place the numbers are:
+// - LATE_CHECKS_MAX in a row, counted since Mike last wrote to the thread.
+//   At the next latest time after that it lands in his inbox with no turn,
+//   saying how long it has waited and for what. Three, so that he hears
+//   within a fortnight of a wait that began with a day.
+// - Each sleep after a check lasts at least LATE_BACKOFF times the one
+//   before it, up to LATE_SLEEP_MAX_MS: from a day, checks on days 1, 3 and
+//   7, then his inbox on day 14. From the last sleep rather than fixed
+//   days, so a wait of minutes ("or 10 minutes at the latest") keeps its
+//   scale. The model's own latest time stands when it is later.
+export const LATE_CHECKS_MAX = 3;
+export const LATE_BACKOFF = 2;
+export const LATE_SLEEP_MAX_MS = 7 * 86_400_000;
+
+// The checks so far (ThreadRecord.lateChecks): how many in a row, how long
+// the sleep before the last one was, and when the first of them began.
+// `backOff`: the sleep that follows the last check hasn't been set yet, so
+// the next one in the agent's words is held to lateSleepMs. Only that one:
+// a later wait with a short limit of its own keeps it.
+export type LateChecks = { n: number; waitedMs: number; since: string; backOff?: true };
+
+// What a thread whose time has come was waiting for, when that was more
+// than the time: `by` as WakeWhen's, `latest` its snoozedUntil.
+export type LateWait = { said: string; topic: string; by?: 'agent'; latest: number };
+
+// A sleeping record's wait, if its time is the latest for a wait in words.
+// A time alone, in words or not, is a plain snooze.
+export function lateWait(rec: { wakeWhen?: WakeWhen; snoozedUntil?: string }): LateWait | undefined {
+  const w: unknown = rec.wakeWhen;
+  if (!w || typeof w !== 'object') return undefined;
+  const { said, topic, pending, by } = w as Partial<WakeWhen>;
+  if (pending || typeof said !== 'string' || typeof topic !== 'string' || !topic.trim()) return undefined;
+  const latest = Date.parse(rec.snoozedUntil ?? '');
+  if (Number.isNaN(latest)) return undefined;
+  return { said, topic, ...(by === 'agent' ? { by } : {}), latest };
+}
+
+// The checks a record has had, or undefined for none it can count on.
+export function lateChecksOf(rec: { lateChecks?: unknown }): LateChecks | undefined {
+  const c = rec.lateChecks as Partial<LateChecks> | undefined;
+  if (!c || typeof c !== 'object' || !Number.isSafeInteger(c.n) || c.n! < 1) return undefined;
+  const waitedMs = typeof c.waitedMs === 'number' && Number.isFinite(c.waitedMs) ? c.waitedMs : 0;
+  const since = typeof c.since === 'string' && !Number.isNaN(Date.parse(c.since)) ? c.since : new Date(0).toISOString();
+  return { n: c.n!, waitedMs, since, ...(c.backOff === true ? { backOff: true as const } : {}) };
+}
+
+// The least the next sleep lasts, after a check that followed one this long.
+export function lateSleepMs(waitedMs: number): number {
+  const last = Number.isFinite(waitedMs) && waitedMs > 60_000 ? waitedMs : 60_000;
+  return Math.min(last * LATE_BACKOFF, LATE_SLEEP_MAX_MS);
+}
+
+const oneLine = (t: string) => t.replace(/\s+/g, ' ').trim();
+
+// The rest of the note it wakes with, after "Woke up after 18 hours: "
+// (Runner.wake adds the full stop). `how`: its agent is being given a turn
+// to check, or has had all its checks (`stopped`), or neither (Mike's own).
+export function lateWhy(w: LateWait, timeZone: string, how?: 'checking' | { stopped: LateChecks; now: number }): string {
+  const latest = `this was the latest it would wait (${localWhen(w.latest, timeZone)})`;
+  if (w.by !== 'agent') return `you haven't talked about ${w.topic}, and ${latest}`;
+  const head = `still no sign that ${w.topic}, and ${latest}`;
+  if (how === 'checking') return `${head}. Its agent is checking for itself`;
+  if (!how) return head;
+  const { stopped, now } = how;
+  const waited = Date.parse(stopped.since) > 0 && Date.parse(stopped.since) <= now ? `waited ${awayFor(now - Date.parse(stopped.since))} and ` : '';
+  return `${head}. It has ${waited}checked ${stopped.n === 1 ? 'once' : `${stopped.n} times`} by itself, so it's here for you to decide: chase it, give up on it, or tell it to keep waiting`;
+}
+
+// The runner's message that starts an agent's check at its latest time.
+// `check`: which one this is, from 1.
+export function lateCheckPrompt(w: LateWait, timeZone: string, check: number): string {
+  const said = oneLine(w.said);
+  const count = check >= LATE_CHECKS_MAX
+    ? `This is check ${check} of ${LATE_CHECKS_MAX}, the last Threadbear gives a wait by itself: snooze again and the next latest time puts the thread in the user's inbox with no turn, for them to decide.`
+    : `This is check ${check} of ${LATE_CHECKS_MAX} Threadbear gives a wait by itself, each after a longer sleep than the last. After them the thread goes to the user's inbox instead.`;
+  return [
+    `You hibernated this thread until: ${said}`,
+    `Threadbear woke it because ${localWhen(w.latest, timeZone)} was the latest it would wait, and nothing it has seen says that has happened (${w.topic}). It only sees what other threads show, so check the work itself. If it has happened, carry on with what you meant to do. If it hasn't and waiting longer is still right, call end_turn with needs "nothing" and snooze "${said.replace(/"/g, "'")}" to go back to sleep, and say in a line what's still missing. If it now looks like it never will, or the user should chase it, say so and end the turn with no snooze, so it stays in their inbox.`,
+    count,
+  ].join('\n\n');
+}
+
+// What the agent is told with the thread's next message when it woke at its
+// latest time and no turn ran (Runner.takeWakeNews): the note is only for
+// Mike, and asked "why did this wake?" the agent had nothing to go on.
+export function lateNews(w: LateWait, timeZone: string, now: number, stopped?: LateChecks): string {
+  const head = `Note from Threadbear: this thread woke by itself on ${localWhen(now, timeZone)}, and no turn ran.`;
+  const latest = `${localWhen(w.latest, timeZone)} was the latest it would wait`;
+  if (w.by !== 'agent') return `${head} The user had hibernated it until they next talked about ${w.topic} (they said "${cut(oneLine(w.said), 120)}"). They hadn't, and ${latest}.`;
+  const why = `${head} You had hibernated it until: ${oneLine(w.said)} (${w.topic}). Nothing Threadbear saw says that has happened, and ${latest}.`;
+  return stopped ? `${why} It had already woken you ${stopped.n === 1 ? 'once' : `${stopped.n} times in a row`} to check, so this time it went to the user's inbox for them to decide what next.` : why;
+}
+
 // How long a thread was away, for the note it wakes with: "5 minutes",
 // "an hour", "3 hours", "a day", "12 days". Rounded, as Mike only wants
 // a feel for it.

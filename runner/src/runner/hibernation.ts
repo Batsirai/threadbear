@@ -6,7 +6,7 @@ import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { ReviewFinding, ThreadSummary } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
-import { SAID_MAX, WAKE_SYSTEM, awayFor, hibernateNote, localWhen, readWakeAnswer, wakePrompt } from '../wake-when.ts';
+import { LATE_CHECKS_MAX, SAID_MAX, WAKE_SYSTEM, awayFor, hibernateNote, lateCheckPrompt, lateChecksOf, lateNews, lateSleepMs, lateWait, lateWhy, localWhen, readWakeAnswer, wakePrompt } from '../wake-when.ts';
 import type { ThreadState } from '../runner.ts';
 import { NO_WAKE_TIME } from '../runner.ts';
 import { parseWhen } from '../when.ts';
@@ -79,6 +79,16 @@ export const hibernationPart = {
       if (this.bucket(st.rec) === 'inbox') this.kickQueue(st);
       if (by) this.recheckStarter(st);
       throw new RpcError(ErrorCode.other, `Couldn't work out when to wake it: ${answer.error}`);
+    }
+    // Back to sleep after a check at its latest time (wakeAtTime): the next
+    // latest is at least twice as far off as the last sleep was long, and
+    // there is one even if the model gives none this time, so the checks
+    // thin out and end with Mike (wake-when.ts, "The latest time passing").
+    const late = by && answer.topic ? lateChecksOf(st.rec) : undefined;
+    if (late?.backOff) {
+      const least = this.clock.now() + lateSleepMs(late.waitedMs);
+      if (!answer.until || Date.parse(answer.until) < least) answer.until = new Date(least).toISOString();
+      st.rec.lateChecks = { n: late.n, waitedMs: late.waitedMs, since: late.since };
     }
     // What it already checked counts only for the same words, from its agent.
     this.park(st, { kind: 'wordsAnswered', said, ...(answer.until ? { until: answer.until } : {}), ...(answer.topic ? { topic: answer.topic } : {}), ...(by ? { by } : {}) });
@@ -510,12 +520,61 @@ export const hibernationPart = {
     for (const st of this.threads.values()) {
       if (!st.rec.snoozedUntil) continue;
       const t = Date.parse(st.rec.snoozedUntil);
-      if (t <= now) this.wake(st, 'time');
-      else next = Math.min(next, t);
+      if (t > now) next = Math.min(next, t);
+      // A check turn starts a CLI, whose tools aren't ready while main.ts
+      // is still starting (holdWaits): it arms again once it's listening.
+      else if (this.holdWaits && this.checksAtLatest(st)) continue;
+      else this.wakeAtTime(st);
     }
     if (next === Infinity) return;
     // Re-check at least hourly so long snoozes survive clock changes.
     this.snoozeTimer = this.clock.setTimeout(() => this.armSnoozeTimer(), Math.min(next - now, 3_600_000));
+  },
+
+  // Whether a thread whose time has come gets a turn to check for itself:
+  // its own agent's wait for something to happen, with checks left.
+  checksAtLatest(this: Runner, st: ThreadState): boolean {
+    const { rec } = st;
+    if (rec.archivedAt || lateWait(rec)?.by !== 'agent') return false;
+    return (lateChecksOf(rec)?.n ?? 0) < LATE_CHECKS_MAX;
+  },
+
+  // A sleep's time has come. A plain snooze wakes as it always has. A wait
+  // in words with a time as well (wake-when.ts, "The latest time passing")
+  // says the time ran out with nothing seen, in the thread and to its agent
+  // with the next message. One its own agent set gets a turn to check for
+  // itself instead of sitting in the inbox, LATE_CHECKS_MAX times in a row.
+  wakeAtTime(this: Runner, st: ThreadState): void {
+    const { rec } = st;
+    const wait = lateWait(rec);
+    // Archived since it went to sleep: its sleep just ends, quietly (wake).
+    if (!wait || rec.archivedAt) return this.wake(st, 'time');
+    const now = this.clock.now();
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const before = lateChecksOf(rec);
+    if (!this.checksAtLatest(st)) {
+      // Mike's own, or its agent's with its checks used up: his to look at.
+      const stopped = wait.by === 'agent' ? before : undefined;
+      // Before the wake, which may start a message it had queued.
+      rec.wakeNews = { text: lateNews(wait, timeZone, now, stopped) };
+      this.wake(st, { why: lateWhy(wait, timeZone, stopped ? { stopped, now } : undefined) });
+      this.log.info('woke at the latest time of a wait in words', { threadId: rec.id, topic: wait.topic, checks: stopped?.n });
+      return;
+    }
+    const slept = rec.snoozedAt && Date.parse(rec.snoozedAt) <= now ? rec.snoozedAt : undefined;
+    const check = (before?.n ?? 0) + 1;
+    rec.lateChecks = { n: check, waitedMs: slept ? now - Date.parse(slept) : 86_400_000, since: before?.since ?? slept ?? this.isoNow(), backOff: true };
+    this.wake(st, { why: lateWhy(wait, timeZone, 'checking') });
+    try {
+      this.sendTo(st, lateCheckPrompt(wait, timeZone, check), [], { origin: 'runner', queue: true, wakeReason: 'The latest it would wait passed' });
+      this.log.info('woke to check at the latest time of its wait', { threadId: rec.id, topic: wait.topic, check });
+    } catch (e) {
+      // The turn couldn't start (a full disk): it's awake in the inbox, and
+      // its agent hears why with the next message. The timer goes on.
+      rec.wakeNews = { text: lateNews(wait, timeZone, now) };
+      this.markDirty(st);
+      this.log.error('could not start the check at the latest time of a wait', { threadId: rec.id, error: String(e) });
+    }
   },
 
   // A thread coming back by itself (its time, a restart, a topic) says so
@@ -561,6 +620,8 @@ export const hibernationPart = {
   park(this: Runner, st: ThreadState, e: PlaceEvent): boolean {
     const res = parkRecord(st.rec, e, this.clock.now());
     if (!res.ok) this.log.warn('a thread move refused', { threadId: st.rec.id, event: e.kind, why: res.reason });
+    // A new sleep: why it last woke by itself is old news (wakeAtTime).
+    else if (e.kind === 'snooze') delete st.rec.wakeNews;
     return res.ok;
   },
 };

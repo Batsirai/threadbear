@@ -1913,6 +1913,9 @@ export class Runner {
         this.log.warn('acting on an answer failed', { threadId: rec.id, error: String((e as Error)?.message ?? e) });
       }
     }
+    // He has had his say: a wait's checks at its latest time count from here
+    // (runner/hibernation.ts, wakeAtTime).
+    if (fromMike(text, opts)) delete rec.lateChecks;
     if (opts.origin !== 'runner') {
       rt.hookTurns = undefined;
       delete rec.stoppedWorkWakes;
@@ -3530,6 +3533,8 @@ export class Runner {
             // turn's (Codex's second look).
             const pressed = this.toldPressNews(rec, inUse ? 'turn' : 'all');
             if (pressed && !command) text = `${pressed}\n\n${text}`;
+            const woke = this.toldWakeNews(rec, inUse ? 'turn' : 'all');
+            if (woke && !command) text = `${woke}\n\n${text}`;
             const earlier = rec.lastTurnCompletedSeq > 0;
             if (!inUse && (rt.carried || earlier) && !(command && /^\/clear\b/i.test(first.text.trim()))) {
               rec.handoff = rt.carried ?? { fromCwd: rec.cwd, fromAccountId: rec.accountId, lost: true };
@@ -4850,6 +4855,24 @@ export class Runner {
     return this.pressNewsText(untold.map((p) => p.line));
   }
 
+  // Why the thread last woke by itself with no turn (runner/hibernation.ts,
+  // wakeAtTime), if its agent hasn't heard: a line to go before the message
+  // being sent now, marked as told by it, as a press is.
+  takeWakeNews(st: ThreadState): string | undefined {
+    const news = st.rec.wakeNews;
+    if (!news || news.told) return undefined;
+    news.told = { seq: this.store.log(st.rec.id).lastSeq, inFlight: true };
+    this.markDirty(st);
+    return news.text;
+  }
+
+  // The same, told in the turn now going or at all, for a session that
+  // replays its first message.
+  toldWakeNews(rec: ThreadRecord, which: 'turn' | 'all'): string | undefined {
+    const told = rec.wakeNews?.told;
+    return told && (which === 'all' || told.inFlight) ? rec.wakeNews!.text : undefined;
+  }
+
   // The presses told in the turn now going, or every one told, for a
   // session that replays its first message (startSession's retry).
   toldPressNews(rec: ThreadRecord, which: 'turn' | 'all'): string | undefined {
@@ -4867,6 +4890,12 @@ export class Runner {
   // A completed turn keeps what it told; any other end (a failure, Stop, a
   // restart part way) tells it again with the next message.
   settlePresses(rec: ThreadRecord, completed: boolean): void {
+    // News of a wake goes by the same rule.
+    const woke = rec.wakeNews?.told;
+    if (woke?.inFlight) {
+      if (completed) delete woke.inFlight;
+      else delete rec.wakeNews!.told;
+    }
     if (!Array.isArray(rec.presses)) return;
     for (const p of rec.presses) {
       if (!p.told?.inFlight) continue;
@@ -4879,6 +4908,8 @@ export class Runner {
   // fresh session (the cut reached its first message) heard none of them.
   retellPressesFrom(rec: ThreadRecord, seq: number, fresh = false): void {
     for (const p of rec.presses ?? []) if (p.told && (fresh || p.told.seq >= seq)) delete p.told;
+    const woke = rec.wakeNews;
+    if (woke?.told && (fresh || woke.told.seq >= seq)) delete woke.told;
   }
 
   // Sends a message with any change to the standing instructions in front.
@@ -4892,13 +4923,16 @@ export class Runner {
     const standing = this.instructionsNews(rec);
     const presses = structuredClone(rec.presses);
     const pressed = this.takePressNews(st);
-    const lead = [standing, pressed].filter(Boolean).join('\n\n');
+    const wokeBefore = structuredClone(rec.wakeNews);
+    const woke = this.takeWakeNews(st);
+    const lead = [standing, woke, pressed].filter(Boolean).join('\n\n');
     try {
       rt.session!.send(lead ? { ...message, text: `${lead}\n\n${message.text}` } : message);
     } catch (e) {
       if (before === undefined) delete rec.instructionsTold;
       else rec.instructionsTold = before;
       rec.presses = presses;
+      if (wokeBefore) rec.wakeNews = wokeBefore;
       throw e;
     }
     if (!standing) return;

@@ -781,7 +781,8 @@ few weeks", "next time I talk about woodworking". Opus works out what you
 meant (the row says Thinking… for a few seconds) and the thread says what
 it settled on. A topic waits for you to bring it up: when the librarian
 sees you talking about it in another thread, it wakes this one and says
-where.
+where. Give it a limit as well ("or Saturday at the latest") and, if you
+haven't brought it up by then, it comes back saying so.
 
 When a thread is done, archive it: press ⌘E, hover its row and press the
 box, or swipe the row left with two fingers on the trackpad (right with
@@ -847,7 +848,16 @@ works, or words like "until the phone arrives", read the same way as Wake
 when…. When the words are something to happen ("until the GPUI app
 replaces the Swift app"), the librarian wakes it once another thread shows
 it has, not just when it's talked about, and the thread gets a turn to
-check for itself: if it hasn't really happened, it goes back to sleep. It won't put itself away while it's waiting on you. A thread
+check for itself: if it hasn't really happened, it goes back to sleep.
+Such a wait often has a latest time too ("or Sunday 9:30 am at the
+latest"). When that comes with no sign of the thing, the thread doesn't
+land in your inbox: it gets the same turn to check, says in a line what's
+still missing and sleeps again, for at least twice as long as last time (a
+week at most). After three of those checks in a row without a word from
+you, the next latest time brings it to your inbox with a note saying what
+it's waiting for, how long it has waited and that it's yours to decide:
+chase it, give up, or tell it to keep waiting. Its agent is told why it
+woke, so you can ask it. It won't put itself away while it's waiting on you. A thread
 whose next step waits on other threads hibernates by itself until they
 finish, then wakes with what they said and carries on; its row says
 Waiting on and which. If it was given more access while it slept, and

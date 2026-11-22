@@ -5,7 +5,7 @@ import type { WaitingForRoom, Ask, AskAnswer, NeedsWho, DesignReview, ReplyButto
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import { paths } from './config.ts';
 import type { WorktreeRecord } from './worktrees.ts';
-import type { WakeWhen } from './wake-when.ts';
+import type { LateChecks, WakeWhen } from './wake-when.ts';
 
 // Review by another lab's ledger as the runner keeps it: what goes on the
 // card (LabReviewLedger), plus where it is. delivered: the latest round's
@@ -62,7 +62,7 @@ export function cleanPresses(raw: unknown): PressNote[] | undefined {
 const OBJECT_LISTS = ['heldReports', 'heldMail', 'waitingOn', 'reviews', 'buttons', 'subagents', 'projects', 'rewinds', 'queue', 'messageRecoveries'];
 const STRING_LISTS = ['reviewDeliveries', 'allowRules', 'pendingApprovals', 'projectsLeft', 'projectsTold'];
 const NUMBER_LISTS = ['interruptedMessages'];
-const OBJECTS = ['needs', 'looseEnds', 'stoppedWork', 'stoppedMidTurn', 'highlights', 'worktree', 'handoff', 'moved', 'startedBy', 'labReview', 'labReviewOwed', 'reviewVerdict', 'finished'];
+const OBJECTS = ['needs', 'looseEnds', 'stoppedWork', 'stoppedMidTurn', 'highlights', 'worktree', 'handoff', 'moved', 'startedBy', 'labReview', 'labReviewOwed', 'reviewVerdict', 'finished', 'lateChecks', 'wakeNews'];
 const NESTED: [string, string, 'object' | 'string' | 'number'][] = [
   ['needs', 'asks', 'object'],
   ['needs', 'ticked', 'number'],
@@ -121,6 +121,8 @@ export function normaliseRecord(rec: Record<string, unknown>): boolean {
     if (presses) rec.presses = presses;
     else delete rec.presses;
   }
+  // Why it last woke by itself, as a line for its agent (Runner.takeWakeNews).
+  if (isObject(rec.wakeNews) && (typeof rec.wakeNews.text !== 'string' || (rec.wakeNews.told !== undefined && !(isObject(rec.wakeNews.told) && typeof rec.wakeNews.told.seq === 'number')))) delete rec.wakeNews;
   if (rec.title !== undefined && typeof rec.title !== 'string') rec.title = String(rec.title);
   return JSON.stringify(rec) !== before;
 }
@@ -196,6 +198,18 @@ export type ThreadRecord = {
   // a snooze again with the same words isn't woken again by the same claim
   // until that thread says more (Codex's review, 13 Nov 2026).
   wakeChecked?: { said: string; from: Record<string, number> };
+  // An agent's wait for something to happen whose latest time passed with
+  // nothing seen (wake-when.ts, "The latest time passing"): the turns it has
+  // been given to check, in a row since Mike last wrote to the thread. Not
+  // tied to its words, so saying them another way each time can't start the
+  // count again.
+  lateChecks?: LateChecks;
+  // A wake at a wait's latest time that ran no turn, as a line its agent
+  // gets with the thread's next message (Runner.takeWakeNews), so it can say
+  // why the thread came back. `told`: the message it went with, as a press's
+  // (PressNote): kept if that turn completed, told again otherwise, or if
+  // Mike goes back to before it. Gone once the thread next sleeps.
+  wakeNews?: { text: string; told?: { seq: number; inFlight?: true } };
   // Hibernating until these threads finish (end_turn's waitFor,
   // runner/hibernation.ts): each counts once it has finished (with no new
   // work since), been archived or been deleted.
