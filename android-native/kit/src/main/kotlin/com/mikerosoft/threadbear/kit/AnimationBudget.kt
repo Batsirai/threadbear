@@ -24,10 +24,11 @@ object AnimationLimits {
     /**
      * The shortest a frame can really play: Android may pass a file's frame
      * times through as they are (a GIF's 0 or 10 ms too: not every version
-     * clamps them, Gemini's review), so a 1 ms frame plays once a refresh,
-     * 120 times a second on a fast screen.
+     * clamps them, Gemini's review), so a 1 ms frame plays once a refresh:
+     * 165 times a second on the fastest phone screens, so this allows for
+     * 200 (Codex's review: 8 ms, 125 Hz, let a 165 Hz phone go over).
      */
-    const val MIN_FRAME_MS = 8L
+    const val MIN_FRAME_MS = 5L
     /** Moving pictures playing at once, and their pixels a second together. More stay still. */
     const val MAX_PLAYING = 4
     const val MAX_PLAYING_PIXELS_PER_SECOND = 240_000_000L
@@ -129,6 +130,7 @@ object AnimationFrames {
         var frames = 0
         var shortest = Long.MAX_VALUE
         var delayMs = 0L
+        var sawZero = false
         fun skipSubBlocks(): Boolean {
             while (true) {
                 if (at >= data.size) return false
@@ -199,13 +201,22 @@ object AnimationFrames {
                         else -> if (!skipSubBlocks()) return null
                     }
                 }
-                0x00 -> at += 1
+                // Wuffs (Android's GIF decoder) ends the picture at any byte
+                // but an extension or a frame, playing what came before;
+                // older Skia skips a zero and reads on. So it's skipped and
+                // the frames after it counted too (more frames can only make
+                // it stiller), and a zero just before the end is an end
+                // (Grok's review: a GIF ending 00 instead of 3B played).
+                0x00 -> {
+                    at += 1
+                    sawZero = true
+                }
                 0x3B -> return if (frames == 0) null else Frames(frames, shortest)
                 else -> return null
             }
         }
-        // No trailer: cut short.
-        return null
+        // No trailer: cut short, unless a zero ended it.
+        return if (sawZero && frames > 0) Frames(frames, shortest) else null
     }
 
     /**

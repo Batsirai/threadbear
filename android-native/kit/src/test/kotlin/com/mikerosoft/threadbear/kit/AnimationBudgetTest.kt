@@ -115,6 +115,23 @@ class AnimationBudgetTest {
         assertNull(AnimationFrames.count(bad))
     }
 
+    /** Grok's review: Android's GIF decoder ends the picture at a zero byte, playing the frames before it. */
+    @Test fun aZeroInPlaceOfTheTrailerCountsTheFramesBefore() {
+        val g = gif(10)
+        val zeroEnd = g.copyOf()
+        zeroEnd[g.size - 1] = 0
+        assertEquals(10, AnimationFrames.count(zeroEnd))
+        // Frames after a zero count too: more frames only keeps it stiller.
+        val two = g.copyOf(g.size - 1) + byteArrayOf(0) + g.copyOfRange(13 + 19, g.size)
+        assertEquals(20, AnimationFrames.count(two))
+    }
+
+    /** Codex's review: a 165 Hz screen plays a 1 ms WebP frame 165 times a second. */
+    @Test fun theFrameFloorAllowsForTheFastestScreens() {
+        assertTrue(1000 / AnimationLimits.MIN_FRAME_MS >= 165)
+        assertNull(AnimationFrames.work(webp(2, durationMs = 1), 960, 1000, 960, 1000), "960x1000 at 200 a second is over")
+    }
+
     /** Gemini's review: a frame wider than the canvas is decoded at its own width. */
     @Test fun aFrameBiggerThanItsCanvasStaysStill() {
         val g = gif(3)
