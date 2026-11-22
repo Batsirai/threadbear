@@ -60,7 +60,12 @@ async function install(r: ReturnType<typeof relayHttp>) {
 test('a clear that went through gives back its bad-token charge', async () => {
   const r = relayHttp();
   const i = await install(r);
+  // One bad token's charge already this hour, so a reset would show too.
+  r.answer({ status: 400, reason: 'BadDeviceToken' });
+  await r.post('/clear', i);
   const before = r.hourBad(i.installId);
+  assert.equal(before, 1);
+  r.answer({ status: 200 });
   assert.equal(await r.post('/clear', i), 200);
   assert.equal(r.hourBad(i.installId), before);
 });
