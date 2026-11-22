@@ -187,8 +187,13 @@ File references are where to look.
   Convex mirror so a restart sends only what changed,
   `far-reports.json`, the threads this Mac's agents started on your other
   Macs and which thread here each one's replies go back to (ids, the last
-  turn passed on and when), read from your Convex backend every 15 seconds
-  while one is busy (every five minutes once it's quiet), and
+  turn passed on and when, and the most access that thread may have when a
+  reply reaches it), read from your Convex backend every 15 seconds
+  while one is busy (every five minutes once it's quiet),
+  `schedule-ceilings.json`, for each schedule here that sends to a thread,
+  the most access that thread may have when a run reaches it (never sent
+  to your backend), and `schedule-ceilings-since`, when this Mac first
+  kept them, and
   `run/error-exits.json`, when the runner last restarted itself after an
   unexpected error (times only, so it can stop restarting after three in
   ten minutes),
