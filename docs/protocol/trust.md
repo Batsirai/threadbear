@@ -380,7 +380,12 @@ own rules, `git -c alias.x='!sh data.txt' x`, `sqlite3 :memory: '.read
 data.txt'`, `apply`; an owner's check isn't held to that, and the digest
 doesn't change), `npm version` (its version scripts are followed) and
 `npm explore`, any of npm's own commands that could run something of the
-folder's for a check or hook, a program's name in another case on a Mac
+folder's for a check or hook, `MAKEFILES`, `MAKEFLAGS`, `AWKPATH` or
+`AWKLIBPATH` set, `make --eval`, gawk's `--include`, `-i`, `--load` or
+`@include`, a write to a file of your home folder that shells and tools
+read as they start (a dot file or folder, a launch agent), for checks and
+hooks an interactive or login shell (`bash -ic`, `zsh -l`), a program's
+name in another case on a Mac
 (`Env`, `Node`: the disk finds them all the same), a
 JavaScript file for a schedule's check, however it's run (a `.js` or
 `.ts` file, `node`, `nodejs`, `bun`, `deno`, `tsx` or `ts-node`, through
