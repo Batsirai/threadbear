@@ -1034,17 +1034,23 @@ export const upsertThreads = mutation({
       // Mac, answered, archived): the phones take that notification down
       // (push:clear). Not for one pushed more than a day ago, which the
       // phone's own tidying on opening has long since dealt with. Once per
-      // push (clearedAt, unset by the next push): flipping back within the
-      // push cooldown sends no new push, so a runner toggling a thread could
-      // otherwise send a silent clear to every phone each time, using up
-      // the backend's relay allowance with nothing on any screen (Daybreak 169).
+      // alert (clearedAt: set when a clear is scheduled, unset only when
+      // push:notify really sends one): flipping back within the push
+      // cooldown, or past a runner's push allowance, sends no alert, so a
+      // runner toggling a thread could otherwise send a silent clear to
+      // every phone each time, using up the backend's relay allowance with
+      // nothing on any screen (Daybreak 169).
       const wantsClear = before?.needsYou === true && !t.needsYou && (before.pushedAt ?? 0) > now - CLEAR_WITHIN_MS && before.clearedAt === undefined;
       // A held push stays held only while the thread still needs Mike.
       const held = t.needsYou && before?.pushHeldAt && !wantsPush ? { pushHeldAt: before.pushHeldAt } : {};
       const row = { ...t, ...stored, updatedMs: now };
       // What it was, read before the write replaces the row.
       const was = existing ? { view: existing.view, runnerId: existing.runnerId } : undefined;
-      const cleared = wantsClear ? { clearedAt: now } : !wantsPush && before?.clearedAt !== undefined ? { clearedAt: before.clearedAt } : {};
+      // Charged to the runner's allowance before the write, so the row marks
+      // only a clear that's really sent (Codex's and Gemini's review).
+      const doPush = wantsPush && (caller.owner || (await pushAllowed(ctx, t.runnerId, now)));
+      const doClear = wantsClear && (caller.owner || (await pushAllowed(ctx, t.runnerId, now)));
+      const cleared = doClear ? { clearedAt: now } : before?.clearedAt !== undefined ? { clearedAt: before.clearedAt } : {};
       if (existing) await ctx.db.replace(existing._id, { ...row, ...(wantsPush ? { pushedAt: now } : before?.pushedAt ? { pushedAt: before.pushedAt } : {}), ...held, ...cleared });
       else await ctx.db.insert('threads', row);
       if (transfer && was) {
@@ -1060,8 +1066,8 @@ export const upsertThreads = mutation({
       // Most writes are a status flip in the same projects: only a new
       // thread, one taken over, or one whose projects changed reads its links.
       if (!existing || transfer || projectKey(existing) !== projectKey(row)) await linkThread(ctx, t.threadId, row);
-      if (wantsPush && (caller.owner || (await pushAllowed(ctx, t.runnerId, now)))) await ctx.scheduler.runAfter(0, internal.push.notify, { threadId: t.threadId });
-      if (wantsClear && (caller.owner || (await pushAllowed(ctx, t.runnerId, now)))) await ctx.scheduler.runAfter(0, internal.push.clear, { threadId: t.threadId });
+      if (doPush) await ctx.scheduler.runAfter(0, internal.push.notify, { threadId: t.threadId });
+      if (doClear) await ctx.scheduler.runAfter(0, internal.push.clear, { threadId: t.threadId });
     }
     return { skipped, ...(closed.length ? { closed } : {}) };
   },

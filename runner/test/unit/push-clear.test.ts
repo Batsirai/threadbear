@@ -6,6 +6,10 @@ import assert from 'node:assert/strict';
 import { call, load, memoryBackend, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const sync = load('sync');
+const devices = load('devices');
+const { sha256 } = load('lib') as { sha256: (s: string) => Promise<string> };
+const MINI = 'cb921b2447ea';
+const MINI_KEY = 'tbr_mac-mini';
 const OWNER = 'owner-key';
 process.env.RUNNER_KEY = OWNER;
 
@@ -59,5 +63,38 @@ test('one push takes one clear: toggling the thread without a new push clears no
   await write(b, true);
   assert.equal(scheduled(b, 'push.notify').length, 2, 'a new push after the cooldown');
   await write(b, false);
-  assert.equal(scheduled(b, 'push.clear').length, 2, 'and its own clear');
+  assert.equal(scheduled(b, 'push.clear').length, 1, 'not until its alert really goes (push:notify arms it)');
+  await write(b, true);
+  await call(b.ctx, devices.armClear, { threadId: 'T' });
+  await write(b, false);
+  assert.equal(scheduled(b, 'push.clear').length, 2, 'an alert that went out gets its clear');
+});
+
+// The review of that: the mark was written before the runner's push
+// allowance was asked, so a refused push re-armed a clear (and a refused
+// clear marked one sent). A runner key's pushes and clears share 10 a minute.
+test("a runner past its push allowance neither re-arms a clear nor uses one up", async (tc) => {
+  const now = Date.parse('2026-11-22T10:00:05Z');
+  tc.mock.method(Date, 'now', () => now);
+  const b = memoryBackend();
+  await b.ctx.db.insert('runnerKeys', { runnerId: MINI, keyHash: await sha256(MINI_KEY), name: 'mac-mini', createdAt: 1 });
+  const put = (threadId: string, needsYou: boolean) => call(b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId, runnerId: MINI, ...THREAD_BASICS, title: threadId, view: 'inbox', needsYou }] });
+  await put('T', false);
+  await put('T', true);
+  await call(b.ctx, devices.armClear, { threadId: 'T' });
+  // Its allowance for this minute used up on other threads.
+  for (let k = 0; k < 9; k++) {
+    await put(`x${k}`, false);
+    await put(`x${k}`, true);
+  }
+  assert.equal(scheduled(b, 'push.notify').length, 10);
+  await put('T', false);
+  assert.equal(scheduled(b, 'push.clear').length, 0, 'refused');
+  const t = () => b.rows('threads').find((r) => r.threadId === 'T')!;
+  assert.equal(t().clearedAt, undefined, 'so not marked as cleared');
+  // A push past the cooldown, refused: nothing went out, so nothing to clear.
+  await b.ctx.db.patch(t()._id, { pushedAt: t().pushedAt - 60_000, clearedAt: Date.now() });
+  await put('T', true);
+  assert.equal(scheduled(b, 'push.notify').length, 10, 'refused');
+  assert.notEqual(t().clearedAt, undefined, 'still cleared');
 });

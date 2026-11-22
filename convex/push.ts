@@ -459,11 +459,15 @@ export const notify = internalAction({
     // back at the Mac by now (a Mac that slept with him at it, its held
     // pushes sent by sync:sendStaleHeldPushes, woke before this ran): then
     // it's held again (Codex's review).
+    // An alert going out can be taken down once more (sync:upsertThreads
+    // wantsClear, Daybreak 169), however long after the push it was held.
+    const armClear = () => ctx.runMutation(internal.devices.armClear, { threadId });
     if (held) {
-      if (!t.atMac) return await sendAlert(ctx, alert, (n) => n === 'away');
+      if (!t.atMac) return (await armClear(), await sendAlert(ctx, alert, (n) => n === 'away'));
       await ctx.runMutation(internal.devices.holdPush, { threadId, ...(retried ? { retried } : {}) });
       return { sent: 0, failed: 0, skipped: 'atMac' };
     }
+    await armClear();
     if (!t.atMac) return await sendAlert(ctx, alert);
     await ctx.runMutation(internal.devices.holdPush, { threadId });
     const r = await sendAlert(ctx, alert, (n) => n === 'always');

@@ -220,6 +220,21 @@ export const holdPush = internalMutation({
   },
 });
 
+// push:notify is sending an alert for the thread: a clear may take it down
+// again (sync:upsertThreads clears once per alert, Daybreak 169).
+export const armClear = internalMutation({
+  args: { threadId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { threadId }) => {
+    const t = await ctx.db
+      .query('threads')
+      .withIndex('by_threadId', (q) => q.eq('threadId', threadId))
+      .unique();
+    if (t?.clearedAt !== undefined) await ctx.db.patch(t._id, { clearedAt: undefined });
+    return null;
+  },
+});
+
 // Apple said the token is gone (the app was removed, or it's stale).
 export const drop = internalMutation({
   args: { apnsToken: v.string() },

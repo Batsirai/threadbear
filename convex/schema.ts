@@ -690,8 +690,8 @@ export const appSchema = defineSchema({
   // (push.ts), kept across the runner's writes.
   // pushHeldAt: a push to "when I'm away" phones held back because Mike was
   // at the Mac; it goes out if he leaves while the thread still needs him.
-  // clearedAt: when that push was taken down (push:clear), so it's taken
-  // down once; the next push unsets it (sync.ts upsertThreads).
+  // clearedAt: when a clear (push:clear) was sent for it, so each alert is
+  // taken down once; push:notify unsets it as it sends the next alert.
   // view "overflow": a runner key's thread past its view's cap (sync.ts
   // upsertThreads): out of the lists the phone reads whole, everything
   // else kept; wantView is the view it's really in, which reads by id show.
