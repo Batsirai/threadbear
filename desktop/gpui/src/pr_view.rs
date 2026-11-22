@@ -1714,9 +1714,6 @@ impl gpui_kit::base::text::MarkdownPlugin for PrMarks {
 /// click), for the dump's `prsRead`.
 #[cfg(feature = "automation")]
 pub(crate) fn dump_read(text: &str, app: &crate::app::Threadbear, cx: &App) -> Option<Vec<String>> {
-    if !on(app) {
-        return None;
-    }
     let loads = &app.side.read(cx).prs.loads;
     let out: Vec<String> = rules::pr_links(text)
         .into_iter()
@@ -1726,17 +1723,13 @@ pub(crate) fn dump_read(text: &str, app: &crate::app::Threadbear, cx: &App) -> O
 }
 
 /// For scripts: each PR link's mark in a reply, as "<url>: <state>" ("Pull
-/// request" until the runner says), in order. None with the experiment off
-/// or no PR links.
+/// request" until the runner says), in order. None with no PR links.
 #[cfg(feature = "automation")]
 pub(crate) fn dump_marks(
     text: &str,
     app: &crate::app::Threadbear,
     cx: &App,
 ) -> Option<Vec<String>> {
-    if !on(app) {
-        return None;
-    }
     let states = &app.side.read(cx).prs.states;
     let out: Vec<String> = rules::pr_links(text)
         .into_iter()
