@@ -2138,10 +2138,12 @@ export class Runner {
   // Shows the message in the running turn and hands it to the CLI. If the
   // event can't be written the message isn't sent, and the caller gets the
   // error (the app puts the draft back).
-  steer(st: ThreadState, msg: QueuedSend): void {
+  // `queued`: it waited in the queue, so threads.send gave it its own id,
+  // which the event names (sentAs) for anyone waiting on that id.
+  steer(st: ThreadState, msg: QueuedSend, queued = false): void {
     const { rt } = st;
     const turn = rt.turn!;
-    const event = this.emit(st, userMessage(msg), turn.turnId);
+    const event = this.emit(st, { ...userMessage(msg), ...(queued ? { sentAs: msg.turnId } : {}) }, turn.turnId);
     this.markOlderInputs(st, msg);
     (turn.inputs ??= new Map()).set(msg.turnId, event.seq);
     turn.messages.push(msg.turnId);

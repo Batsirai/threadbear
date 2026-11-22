@@ -1115,11 +1115,15 @@ async function tail(
     // running it stops after the backlog.
     let running: string | undefined;
     let backlogDone = false;
+    let untilTurn = opts.untilTurn;
     const check = (e: any, live: boolean) => {
       if (e.type === 'turn.started') running = e.turnId;
+      // The message waited in the queue, then went into the running turn
+      // (sent during a cold compaction): that turn answers it.
+      if (untilTurn && e.type === 'user.message' && e.sentAs === untilTurn && typeof e.turnId === 'string') untilTurn = e.turnId;
       if (e.type !== 'turn.completed') return;
       if (e.turnId === running) running = undefined;
-      const end = opts.untilTurn ? e.turnId === opts.untilTurn : opts.untilDone && (live || backlogDone) && !running;
+      const end = untilTurn ? e.turnId === untilTurn : opts.untilDone && (live || backlogDone) && !running;
       if (end) done(e.outcome === 'failed' ? 1 : 0);
     };
     const held: any[] = [];

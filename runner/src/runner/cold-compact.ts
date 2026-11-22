@@ -256,17 +256,21 @@ export const coldCompactPart = {
       if (!ids.has(q.turnId) || this.commandPlan(st, q.text) || !this.canSteer(st, rec.queue.slice(0, i))) return;
       rec.queue.splice(i, 1);
       try {
-        this.steer(st, q);
+        this.steer(st, q, true);
       } catch (e) {
         this.log.warn('could not steer a message queued while compacting', { threadId: rec.id, error: e instanceof Error ? e.message : String(e) });
         const seq = rt.turn?.inputs?.get(q.turnId);
         if (seq === undefined) {
           // Not shown: it waits in the queue as it did.
           rec.queue.splice(i, 0, q);
-        } else if (!rec.interruptedMessages?.includes(seq)) {
-          // Shown but not sent: kept as a stopped message is, for his next one.
-          rec.interruptedMessages = [...(rec.interruptedMessages ?? []), seq];
-          this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, rt.turn?.turnId);
+        } else {
+          // Shown but not sent: kept as a stopped message is, for his next
+          // one, and the turn doesn't wait for an answer to it (Codex's review).
+          if (rt.turn) rt.turn.messages = rt.turn.messages.filter((id) => id !== q.turnId);
+          if (!rec.interruptedMessages?.includes(seq)) {
+            rec.interruptedMessages = [...(rec.interruptedMessages ?? []), seq];
+            this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, rt.turn?.turnId);
+          }
         }
         this.markDirty(st);
         return;

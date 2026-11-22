@@ -64,7 +64,7 @@ test("Mike's messages sent while it compacts go into the same turn after the hel
   await tick(8);
   const cli = last(h);
   // While it compacts nothing goes into the CLI: they queue.
-  h.runner.send(id, 'Also check the tests');
+  const queued = h.runner.send(id, 'Also check the tests').turnId;
   h.runner.send(id, 'And the docs', [], { origin: 'phone' });
   const st = h.runner.mustGet(id);
   assert.ok(!cli.sent.some((m) => /Also check the tests|And the docs/.test(m.text)));
@@ -78,6 +78,8 @@ test("Mike's messages sent while it compacts go into the same turn after the hel
   // Shown in the running turn, which is how the app drops their clocks.
   const shown = h.events(id).filter((e) => e.type === 'user.message' && /Also check the tests|And the docs/.test((e as { text: string }).text));
   assert.deepEqual(shown.map((e) => e.turnId), [turnId, turnId]);
+  // Naming the id send gave it, which tb send --wait follows.
+  assert.equal((shown[0] as { sentAs?: string }).sentAs, queued);
   // The turn ends once all three are answered, and nothing is left to start another.
   const ids = cli.sent.slice(order[0]!).map((m) => m.id!);
   cli.text('m1', 'Done.');
