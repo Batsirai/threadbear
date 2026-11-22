@@ -156,19 +156,44 @@ test('off, or on a second runner, the check starts nothing', () => {
 });
 
 // THREADBEAR-2H: a runner handing over to a new release kept its half-hourly
-// check going, and its thread starts were refused as it was draining.
-test('a runner handing over does not look by itself', () => {
-  assert.equal(looksByItself({ draining: false, secondRunner: false }), true);
-  assert.equal(looksByItself({ draining: true, secondRunner: false }), false);
-  assert.equal(looksByItself({ draining: false, secondRunner: true }), false);
-});
-
-test('once stopped, the timer starts nothing', () => {
-  const { sw, clock, started } = rig([login('claude-1', [week(60, 20)])]);
+// check going, and as a draining runner can't start threads, each check that
+// found a week due failed. Wired as main.ts does: looks while not draining,
+// and the handover stops the timer.
+test('a runner handing over neither checks nor tries to start a thread', () => {
+  const clock = new FakeClock(NOW);
+  const r = { draining: false, tries: 0, accounts: [] as Account[] };
+  const sw = new SpareWeek({
+    home: tmpDir('tb-spare-week-'),
+    clock,
+    log: nullLogger,
+    on: () => true,
+    looks: () => looksByItself({ draining: r.draining, secondRunner: false }),
+    accounts: () => r.accounts,
+    pools: () => [],
+    history: () => [],
+    start: () => {
+      r.tries++;
+      // runner.create on a draining runner (new-threads.ts).
+      if (r.draining) throw new Error('This runner is handing over to a new one; start the thread there.');
+      return `t${r.tries}`;
+    },
+    open: () => false,
+    send: () => {},
+  });
   sw.start();
+  // The timer is recurring by now: its first tick has run, with nothing due.
+  clock.advance(6 * 60_000);
+  // The handover: draining, and the timer stopped. Then a week comes due.
+  r.draining = true;
   sw.stop();
-  clock.advance(2 * H);
-  assert.equal(started.length, 0);
+  r.accounts = [login('claude-1', [week(60, 20)])];
+  clock.advance(3 * H);
+  assert.equal(r.tries, 0);
+  // Called anyway, the check doesn't reach the refusal either.
+  assert.deepEqual(sw.check(), []);
+  assert.equal(r.tries, 0);
+  assert.equal(looksByItself({ draining: false, secondRunner: true }), false);
+  assert.equal(looksByItself({ draining: false, secondRunner: false }), true);
 });
 
 test('Find work for it starts a thread whatever the thresholds, and a second press opens the same one', () => {
