@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { tmpDir } from '../helpers/fakes.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { SpareWeek, brief, burnRate, dueWindows, projections, samplesFrom } from '../../src/spare-week.ts';
+import { SpareWeek, brief, burnRate, dueWindows, looksByItself, projections, samplesFrom } from '../../src/spare-week.ts';
 import type { Account, Pool, UsageWindow } from '../../src/protocol.ts';
 import type { HistoryRow } from '../../src/usage-history.ts';
 
@@ -153,6 +153,22 @@ test('off, or on a second runner, the check starts nothing', () => {
   const second = rig([login('claude-1', [week(60, 20)])], { looks: false });
   second.sw.check();
   assert.equal(second.started.length, 0);
+});
+
+// THREADBEAR-2H: a runner handing over to a new release kept its half-hourly
+// check going, and its thread starts were refused as it was draining.
+test('a runner handing over does not look by itself', () => {
+  assert.equal(looksByItself({ draining: false, secondRunner: false }), true);
+  assert.equal(looksByItself({ draining: true, secondRunner: false }), false);
+  assert.equal(looksByItself({ draining: false, secondRunner: true }), false);
+});
+
+test('once stopped, the timer starts nothing', () => {
+  const { sw, clock, started } = rig([login('claude-1', [week(60, 20)])]);
+  sw.start();
+  sw.stop();
+  clock.advance(2 * H);
+  assert.equal(started.length, 0);
 });
 
 test('Find work for it starts a thread whatever the thresholds, and a second press opens the same one', () => {

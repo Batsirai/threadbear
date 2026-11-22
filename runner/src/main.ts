@@ -29,7 +29,7 @@ import { SwiftChanges } from './swift-changes.ts';
 import { commitBefore, commitOnMain, RemoteUpdateFixer, reportedOnDisk, UpdateFixer, type UpdateFailure } from './fix-update.ts';
 import { followOriginOn } from './follow-origin.ts';
 import { bringInSetting, spareWeekOn } from './settings.ts';
-import { SpareWeek } from './spare-week.ts';
+import { SpareWeek, looksByItself } from './spare-week.ts';
 import { MAIL_WATCH, MailWatch } from './mail-watch.ts';
 import { Restarter, restartMethods } from './restart.ts';
 import { AppRestarts } from './app-restarts.ts';
@@ -1103,13 +1103,14 @@ async function main(): Promise<void> {
   });
   // A thread suggesting work when a login's week is about to go unused, and
   // the Usage panel's Find work for it (spare-week.ts). Only the main Mac's
-  // runner looks by itself, so two runners don't both start one.
+  // runner looks by itself, so two runners don't both start one, and not
+  // while it hands over (handOver stops it too).
   const spareWeek = new SpareWeek({
     home: cfg.home,
     clock: realClock,
     log,
     on: () => spareWeekOn(cfg.home),
-    looks: () => !sync.secondRunner(),
+    looks: () => looksByItself({ draining, secondRunner: sync.secondRunner() }),
     accounts: () => runner.safeAccounts(),
     pools: () => runner.pools(),
     history: (since) => usageHistory.rows(since),
@@ -1875,6 +1876,8 @@ async function main(): Promise<void> {
       stopHousekeeping();
       stopBorrowSweep();
       scheduler.stop();
+      // The new release looks at spare weeks from here on (THREADBEAR-2H).
+      spareWeek.stop();
       librarian.stop();
       // stuckJobs goes on: background work can hold a thread here for hours,
       // and a wait that can never end should still be noticed. It only looks

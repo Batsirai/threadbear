@@ -21,7 +21,9 @@
 //
 // Only the main Mac's runner (or one with no other runners) looks by itself:
 // every runner sees the same shared readings, and two runners each starting
-// a thread about the same login would be one too many.
+// a thread about the same login would be one too many. Nor does a runner
+// handing over to a new release: it can't start threads, and the new one
+// looks from then on (THREADBEAR-2H).
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Clock, TimerHandle } from './clock.ts';
@@ -196,6 +198,11 @@ type State = {
   // The open suggestion thread for each login.
   threads: Record<string, string>;
 };
+
+// Whether this runner looks by itself (SpareWeekDeps.looks).
+export function looksByItself(r: { draining: boolean; secondRunner: boolean }): boolean {
+  return !r.draining && !r.secondRunner;
+}
 
 export type SpareWeekDeps = {
   home: string;
