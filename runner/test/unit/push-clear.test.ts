@@ -90,6 +90,15 @@ test('an alert delivered after the thread stopped needing him is cleared right a
   await write(b, true);
   await write(b, false);
   assert.equal(scheduled(b, 'push.clear').length, 1);
+  // One still marked from an earlier alert is used up by that clear too.
+  const row = b.rows('threads')[0] as { _id: string };
+  await b.ctx.db.patch(row._id, { needsYou: false, alertedAt: Date.now() });
+  await delivered(b);
+  assert.equal(scheduled(b, 'push.clear').length, 2);
+  assert.equal(b.rows('threads')[0].alertedAt, undefined);
+  await write(b, true);
+  await write(b, false);
+  assert.equal(scheduled(b, 'push.clear').length, 2, 'nothing left to clear');
 });
 
 // A runner key's pushes and clears share 10 a minute (sync.ts pushAllowed):

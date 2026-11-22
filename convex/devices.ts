@@ -234,7 +234,12 @@ export const alerted = internalMutation({
       .unique();
     if (!t) return null;
     if (t.needsYou) await ctx.db.patch(t._id, { alertedAt: Date.now() });
-    else await ctx.scheduler.runAfter(0, internal.push.clear, { threadId });
+    else {
+      // This clear takes down every alert out for it, so none is left for a
+      // later flip to clear again (Gemini's review).
+      if (t.alertedAt !== undefined) await ctx.db.patch(t._id, { alertedAt: undefined });
+      await ctx.scheduler.runAfter(0, internal.push.clear, { threadId });
+    }
     return null;
   },
 });
