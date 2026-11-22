@@ -794,12 +794,27 @@ export type CodexTurnUsage = {
 // images: pictures pasted into the reply, each placed by a [Picture N] marker
 // in reply, as a message's are (Mike, 17 Nov: a picture pasted in the review
 // window went in as its file path).
-export type ReviewDraft = { pickedId?: string; pickedIds?: string[]; notes: Record<string, string>; reply?: string; images?: ImageRef[]; none?: true };
+// marks: Mike's own marks on the pictures (the reviewCanvas experiment),
+// each placed by a [Mark N] marker in reply.
+export type ReviewDraft = { pickedId?: string; pickedIds?: string[]; notes: Record<string, string>; reply?: string; images?: ImageRef[]; none?: true; marks?: ReviewUserMark[] };
+
+// Marks on a picture (the reviewCanvas experiment, docs/protocol/events.md
+// "Marks: the canvas"). box: x0, y0, x1, y1 as fractions of the picture
+// from its top left. An agent's mark rides on its shot; Mike's on the draft,
+// naming its option and shot (0-based), with the stroke he drew and a
+// cut-out of the picture there (image), kept as reply pictures are.
+export type MarkBox = [number, number, number, number];
+export type ReviewMarkKind = 'circle' | 'underline' | 'highlight' | 'arrow';
+export type ReviewMarkInk = 'yellow' | 'green' | 'rose';
+export type AgentMark = { kind: ReviewMarkKind; box: MarkBox; note?: string; ink?: ReviewMarkInk };
+export type ReviewUserMarkKind = 'circle' | 'highlight' | 'pin';
+export type ReviewUserMark = { n: number; kind: ReviewUserMarkKind; optionId: string; shot: number; box: MarkBox; path?: [number, number][]; image?: ImageRef };
 
 // One picture of an option: its first, or another screen or state of it.
 // media: a video (video/mp4, video/quicktime) or page (text/html) the
 // window plays or shows in place of image, which is then its still.
-export type ReviewShot = { title?: string; image: ImageRef; media?: ImageRef };
+// marks: the agent's marks on it (the reviewCanvas experiment).
+export type ReviewShot = { title?: string; image: ImageRef; media?: ImageRef; marks?: AgentMark[] };
 
 export type DesignReview = {
   id: string;

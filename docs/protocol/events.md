@@ -55,7 +55,7 @@ type DesignReview = {
     note?: string
     reference?: boolean // can have notes, cannot be picked
     image: ImageRef     // the first shot: a copy owned by the thread, never the source path
-    shots?: ReviewShot[] // every shot in order, image first; only when more than one, the one has a title, or it has media
+    shots?: ReviewShot[] // every shot in order, image first; only when more than one, the one has a title, media or marks (so marks always live on options[i].shots[j].marks, never on the option)
     url?: string        // http(s): where it runs live
   }[]
   status: "pending" | "answered" | "cancelled" | "superseded"
@@ -135,6 +135,72 @@ picture again keeps one copy, and a retried answer naming the inbox copy
 is the same answer. The saved draft names those copies, and the window
 takes them in place of its own. Pictures alone are an answer. The agent's
 message carries them as its `images`.
+
+#### Marks: the canvas (the `reviewCanvas` experiment)
+
+Mike, 22 Nov 2026: after an audit of how other apps show options with
+several pictures, he asked for the review as a canvas you drag and zoom
+around, with the agent drawing "little helpful arrows pointing out things
+visually", in the doodle style of Convex Explained (handwritten notes, a
+curled pointer, wobbly circles), a switch to hide them, and tools of his own
+to circle, highlight or pin a part, each a chip in the reply he can talk
+about.
+
+The agent's marks ride on shots. In `reviews.create` (and `show_options`) a
+shot may carry `marks`, and an option's own `marks` belong to its `path`
+shot. Coordinates are fractions of the shot's picture (its still, for a
+video or page), 0 to 1 from the top left, so they survive any size it's
+drawn at. Unknown fields are ignored; clients that don't draw marks show
+the pictures as before.
+
+```ts
+// kind: circle goes round box; underline runs along box's bottom edge;
+// highlight is a marker swipe over box; arrow points at box's centre.
+// ink: yellow points something out (the default), green is what solves
+// it, rose is a cost. note: a few handwritten words beside the picture,
+// joined to the mark by a curled pointer.
+type ReviewMarkKind = "circle" | "underline" | "highlight" | "arrow"
+type AgentMark = { kind: ReviewMarkKind, box: [number, number, number, number], note?: string, ink?: "yellow" | "green" | "rose" }
+type ReviewShot = { title?: string, image: ImageRef, media?: ImageRef, marks?: AgentMark[] }
+```
+
+Limits: at most 6 marks a shot and 30 a review; `box` is four numbers in
+0..1 with x0 <= x1 and y0 <= y1; a note is at most 80 characters. An
+option's own `marks` need its `path`; with only `shots`, they go on a shot.
+`ink` is stored only when given. With the experiment off, `show_options`
+doesn't offer marks and the runner drops any it's given, unread. A moved
+or recovered review keeps the marks that pass, notes cut to 80 characters.
+
+Mike's marks ride on the draft. Each is numbered from 1 in the order he
+made it, and `reply` places each with a `[Mark N]` marker where he was
+typing, as pictures are placed.
+
+```ts
+// kind: circle and highlight follow his stroke (path, fractions of the
+// picture); pin is a single spot (path holds one point). box bounds the
+// stroke. image: a cut-out of the picture around box, made by the app and
+// imported with media.import, kept as reply pictures are.
+type ReviewUserMark = { n: number, kind: "circle" | "highlight" | "pin", optionId: string, shot: number, box: [number, number, number, number], path?: [number, number][], image?: ImageRef }
+type ReviewDraft = { /* as above */ marks?: ReviewUserMark[] }
+```
+
+`shot` is the 0-based index into the option's shots (its one `image` when
+it has no `shots`). At most 20 marks, each `n` a whole number from 1 used
+once, a path at most 400 points, each point clamped into 0..1 (a stroke can
+run past the edge; `box` itself must be in 0..1). A mark whose option or
+shot doesn't exist, or a reference option's, is invalid; a mark on its own
+is an answer. The runner stores marks in `n` order. Like `images`, a draft
+with no `marks` key keeps the saved ones (a client that doesn't draw them,
+or the phone, which never sees them); `marks: []` takes them away. Draft
+marks are taken whether or not the experiment is on. The agent's message,
+after the reply and before the notes, has one paragraph with a line per mark
+(joined by single newlines): `[Mark 1] circle on A. <title>, picture 2
+(<shot title>), across 36-50% and down 83-92% of it.`; the shot title in
+brackets only when it has one, and a span whose ends round the same reads as
+one number (`across 40% and down 20% of it`, a pin). Each mark's cut-out
+goes with the message's `images`, after the reply's pictures, in mark order.
+Saved drafts keep marks, so a closed window comes back with them drawn. A
+moved review keeps the draft's marks that still fit, without cut-outs.
 
 Every change persists a `review.updated` event with `{ review: DesignReview }`.
 An option's `url` is an http or https page; the Mac app drops any other

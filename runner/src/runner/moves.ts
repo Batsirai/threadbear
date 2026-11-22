@@ -303,7 +303,9 @@ function dropMovedReplyImages(rec: Record<string, any>): boolean {
   rec.queue = rec.queue.map((q: any) => {
     if (!q || typeof q !== 'object' || q.reviewId === undefined) return q;
     const hasResponseImages = q.reviewResponse && typeof q.reviewResponse === 'object' && 'images' in q.reviewResponse;
-    if (Array.isArray(q.images) && q.images.length === 0 && !hasResponseImages) return q;
+    // A mark's cut-out (reviewCanvas) is one of the reply's pictures too.
+    const markImages = q.reviewResponse && typeof q.reviewResponse === 'object' && Array.isArray(q.reviewResponse.marks) && q.reviewResponse.marks.some((m: unknown) => Boolean(m && typeof m === 'object' && 'image' in m));
+    if (Array.isArray(q.images) && q.images.length === 0 && !hasResponseImages && !markImages) return q;
     changed = true;
     // The words say where they were (keepPictureMarkers).
     const gone = (list: unknown) => (Array.isArray(list) ? list : []).map(() => false);
@@ -311,6 +313,14 @@ function dropMovedReplyImages(rec: Record<string, any>): boolean {
     if (hasResponseImages) {
       const { images, ...rest } = q.reviewResponse;
       next.reviewResponse = typeof rest.reply === 'string' ? { ...rest, reply: keepPictureMarkers(rest.reply, gone(images)) } : rest;
+    }
+    if (markImages) {
+      const response = next.reviewResponse ?? q.reviewResponse;
+      next.reviewResponse = { ...response, marks: response.marks.map((m: unknown) => {
+        if (!m || typeof m !== 'object') return m;
+        const { image: _, ...rest } = m as Record<string, unknown>;
+        return rest;
+      }) };
     }
     return next;
   });

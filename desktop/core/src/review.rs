@@ -88,13 +88,16 @@ impl ReviewDraft {
         {
             return false;
         }
-        if self.images.len() > crate::reducer::REVIEW_REPLY_IMAGES_MAX {
+        if self.images.len() > crate::reducer::REVIEW_REPLY_IMAGES_MAX
+            || self.marks.len() > crate::reducer::REVIEW_MARKS_MAX
+        {
             return false;
         }
         !self.picked_ids.is_empty()
             || self.none
             || self.has_reply()
             || !self.images.is_empty()
+            || !self.marks.is_empty()
             || self.has_notes()
     }
 
@@ -102,9 +105,26 @@ impl ReviewDraft {
     /// copies of the ones pasted (runner/reviews.ts keepReplyImages), so the
     /// draft it saved names them there.
     pub fn same_but_picture_copies(&self, other: &ReviewDraft) -> bool {
+        let cut_outs = |d: &ReviewDraft| {
+            d.marks
+                .iter()
+                .map(|m| m.image.is_some())
+                .collect::<Vec<_>>()
+        };
         self.images.len() == other.images.len()
+            && cut_outs(self) == cut_outs(other)
             && ReviewDraft {
                 images: other.images.clone(),
+                marks: self
+                    .marks
+                    .iter()
+                    .zip(&other.marks)
+                    .map(|(mine, theirs)| crate::reducer::UserMark {
+                        image: theirs.image.clone(),
+                        ..mine.clone()
+                    })
+                    .chain(self.marks.iter().skip(other.marks.len()).cloned())
+                    .collect(),
                 ..self.clone()
             } == *other
     }
@@ -144,6 +164,12 @@ impl ReviewDraft {
         if self.none {
             out.insert("none".into(), json!(true));
         }
+        // Always, empty too, as with pictures: a runner keeps the saved marks
+        // for a draft without the key, so taking the last one away says [].
+        out.insert(
+            "marks".into(),
+            Value::Array(self.marks.iter().map(mark_json).collect()),
+        );
         Value::Object(out)
     }
 
@@ -163,8 +189,27 @@ impl ReviewDraft {
             reply: (!reply.is_empty()).then(|| reply.to_owned()),
             images: self.images.clone(),
             none: self.none,
+            marks: self.marks.clone(),
         }
     }
+}
+
+/// One of Mike's marks as `reviews.save` takes it.
+pub fn mark_json(mark: &crate::reducer::UserMark) -> Value {
+    let mut out = json!({
+        "n": mark.n,
+        "kind": mark.kind.name(),
+        "optionId": mark.option_id,
+        "shot": mark.shot,
+        "box": mark.bbox,
+    });
+    if !mark.path.is_empty() {
+        out["path"] = json!(mark.path);
+    }
+    if let Some(image) = &mark.image {
+        out["image"] = crate::inline_chips::image_json(image);
+    }
+    out
 }
 
 // ---------------------------------------------------------------- options and shots
@@ -190,6 +235,7 @@ impl ReviewOption {
                 title: None,
                 image: self.image.clone(),
                 media: None,
+                marks: Vec::new(),
             }]
         } else {
             self.shots.clone()
@@ -709,6 +755,48 @@ impl ReviewSession {
         let mut next = self.draft.clone();
         next.reply = (!text.is_empty()).then(|| text.to_owned());
         next.images = images;
+        self.edit(next)
+    }
+
+    /// The reply box's words and pictures, and which of Mike's marks still
+    /// have their chip in it: a mark whose chip was deleted goes.
+    pub fn set_reply_with_marks(
+        &mut self,
+        text: &str,
+        images: Vec<ImageRef>,
+        marks_kept: &[u32],
+    ) -> bool {
+        if !self.editable() {
+            return false;
+        }
+        let mut next = self.draft.clone();
+        next.reply = (!text.is_empty()).then(|| text.to_owned());
+        next.images = images;
+        next.marks.retain(|m| marks_kept.contains(&m.n));
+        self.edit(next)
+    }
+
+    /// One of Mike's marks, drawn on the canvas.
+    pub fn add_mark(&mut self, mark: crate::reducer::UserMark) -> bool {
+        if !self.editable() || self.draft.marks.len() >= crate::reducer::REVIEW_MARKS_MAX {
+            return false;
+        }
+        let mut next = self.draft.clone();
+        next.marks.push(mark);
+        self.edit(next)
+    }
+
+    /// A mark's cut-out, once the runner has it.
+    pub fn set_mark_image(&mut self, n: u32, image: ImageRef) -> bool {
+        if !self.editable() || !self.draft.marks.iter().any(|m| m.n == n) {
+            return false;
+        }
+        let mut next = self.draft.clone();
+        for m in &mut next.marks {
+            if m.n == n {
+                m.image = Some(image.clone());
+            }
+        }
         self.edit(next)
     }
 
@@ -2062,6 +2150,7 @@ mod tests {
             title: title.map(str::to_owned),
             image: image(name),
             media: None,
+            marks: Vec::new(),
         }
     }
 
@@ -2199,7 +2288,7 @@ mod tests {
         .to_json();
         assert_eq!(
             none,
-            json!({ "notes": {}, "pickedIds": [], "images": [], "none": true })
+            json!({ "notes": {}, "pickedIds": [], "images": [], "none": true, "marks": [] })
         );
     }
 
@@ -2248,11 +2337,13 @@ mod tests {
             title: None,
             image: image("a"),
             media: Some(ImageRef::new("/a.mp4", "video/mp4")),
+            marks: Vec::new(),
         };
         let page = ReviewShot {
             title: None,
             image: image("p"),
             media: Some(ImageRef::new("/p/index.html", "text/html")),
+            marks: Vec::new(),
         };
         assert_eq!((video.video(), video.page()), (Some("/a.mp4"), None));
         assert_eq!((page.video(), page.page()), (None, Some("/p/index.html")));

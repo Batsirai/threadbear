@@ -1,0 +1,1509 @@
+// The review as a canvas (the `reviewCanvas` experiment): a board of the
+// options you drag and zoom round, the agent's handwritten notes and arrows
+// on the pictures, a tour that flies from picture to picture in the agent's
+// order, and tools to circle, highlight or pin a part, each a numbered chip
+// in the reply. Where everything sits and how the camera moves is
+// threadbear_core::review_canvas; this draws it and takes the mouse.
+//
+// Mike, 22 Nov 2026, picked the board with the agent's tour from three
+// mockups, asked for the notes "a little more playful" after Convex
+// Explained's doodle kit, a switch at the top to hide them, and his own marks
+// as chips "so we can kind of annotate and speak to give feedback".
+use super::ReviewWindow;
+use crate::style::{self, px};
+use gpui_kit::component::{h_flex, ActiveTheme as _};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::Instant;
+use threadbear_core::reducer::{DesignReview, MarkInk, MarkKind, UserMarkKind};
+use threadbear_core::review_canvas::{
+    self as board, Board, Camera, Drawing, Lit, Measure, Rect, Stop, Stroke,
+};
+
+/// How long a flight between stops takes.
+const FLIGHT_MS: f32 = 650.;
+/// How long a stop's notes take to scribble themselves in.
+const SCRIBBLE_MS: f32 = 700.;
+/// What isn't on the tour's stop, faded back.
+const DIMMED: f32 = 0.2;
+/// Text smaller than this on screen isn't drawn: it can't be read, and at
+/// "see everything" there's a lot of it.
+const SMALLEST_TEXT: f32 = 3.5;
+/// Mike's own marks, blue, so they never mix with the agent's inks.
+const MINE: u32 = 0x6CB8FF;
+/// The pen on screen, for Mike's circles; a highlight is wider.
+const PEN: f32 = 3.;
+const MARKER: f32 = 22.;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum Tool {
+    #[default]
+    Move,
+    Circle,
+    Highlight,
+    Pin,
+}
+
+impl Tool {
+    fn kind(self) -> Option<UserMarkKind> {
+        match self {
+            Tool::Move => None,
+            Tool::Circle => Some(UserMarkKind::Circle),
+            Tool::Highlight => Some(UserMarkKind::Highlight),
+            Tool::Pin => Some(UserMarkKind::Pin),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Tool::Move => "move",
+            Tool::Circle => "circle",
+            Tool::Highlight => "highlight",
+            Tool::Pin => "pin",
+        }
+    }
+}
+
+struct Flight {
+    from: Camera,
+    to: Camera,
+    start: Instant,
+}
+
+struct Drag {
+    from: (f32, f32),
+    camera: Camera,
+}
+
+/// What the canvas holds between frames.
+pub(crate) struct CanvasState {
+    board: Option<Board>,
+    stops: Vec<Stop>,
+    pub(crate) stop: usize,
+    camera: Camera,
+    flight: Option<Flight>,
+    /// Mike moved the camera himself: nothing's faded until the tour moves on.
+    roaming: bool,
+    pub(crate) notes_on: bool,
+    pub(crate) tool: Tool,
+    drawing: Option<Drawing>,
+    drag: Option<Drag>,
+    /// When the stop's notes started drawing themselves in.
+    scribble: Option<Instant>,
+    /// The canvas's place in the window, from its last paint.
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    placed: bool,
+    /// Where to start when it was opened on an option's picture (a click on
+    /// one on the thread's card), before the board was laid out.
+    want: Option<(usize, usize)>,
+}
+
+impl CanvasState {
+    pub(crate) fn new() -> CanvasState {
+        CanvasState {
+            board: None,
+            stops: Vec::new(),
+            stop: 0,
+            camera: Camera::default(),
+            flight: None,
+            roaming: false,
+            notes_on: true,
+            tool: Tool::Move,
+            drawing: None,
+            drag: None,
+            scribble: None,
+            bounds: Rc::new(Cell::new(None)),
+            placed: false,
+            want: None,
+        }
+    }
+
+    fn viewport(&self) -> Option<(f32, f32)> {
+        self.bounds
+            .get()
+            .map(|b| (f32::from(b.size.width), f32::from(b.size.height)))
+    }
+
+    /// The camera now, partway through a flight or not.
+    fn camera_now(&mut self) -> Camera {
+        let Some(f) = &self.flight else {
+            return self.camera;
+        };
+        let k = f.start.elapsed().as_secs_f32() * 1000. / FLIGHT_MS;
+        if k >= 1. {
+            self.camera = f.to;
+            self.flight = None;
+            return self.camera;
+        }
+        let (vw, vh) = self.viewport().unwrap_or((1000., 700.));
+        f.from.toward(&f.to, board::ease(k), vw, vh)
+    }
+
+    fn fly_to(&mut self, rect: Rect, max: f32) {
+        let Some((vw, vh)) = self.viewport() else {
+            return;
+        };
+        let from = self.camera_now();
+        let to = Camera::fit(rect, vw, vh, board::STOP_PAD, max);
+        self.camera = to;
+        self.flight = Some(Flight {
+            from,
+            to,
+            start: Instant::now(),
+        });
+    }
+
+    fn go(&mut self, stop: usize) {
+        let Some(s) = self.stops.get(stop.min(self.stops.len().saturating_sub(1))) else {
+            return;
+        };
+        let (rect, all) = (s.rect, s.lit == Lit::All);
+        self.stop = stop.min(self.stops.len() - 1);
+        self.roaming = false;
+        self.scribble = Some(Instant::now());
+        self.fly_to(
+            rect,
+            if all {
+                board::MAX_ZOOM
+            } else {
+                board::STOP_ZOOM
+            },
+        );
+    }
+
+    fn lit(&self) -> Option<Lit> {
+        if self.roaming {
+            return None;
+        }
+        self.stops
+            .get(self.stop)
+            .map(|s| s.lit)
+            .filter(|l| *l != Lit::All)
+    }
+
+    /// How far the stop's notes have drawn in, 0 to 1.
+    fn scribbled(&self) -> f32 {
+        self.scribble.map_or(1., |t| {
+            (t.elapsed().as_secs_f32() * 1000. / SCRIBBLE_MS).min(1.)
+        })
+    }
+
+    fn moving(&self) -> bool {
+        self.flight.is_some() || self.scribbled() < 1.
+    }
+}
+
+/// Text sizes as the window's fonts set them.
+struct Measured<'a> {
+    window: &'a Window,
+    words: Font,
+    notes: Font,
+}
+
+impl Measure for Measured<'_> {
+    fn words(&self, text: &str, width: f32) -> f32 {
+        let size = board::WORDS_SIZE;
+        let lines = shaped_lines(self.window, text, &self.words, size, Some(width));
+        lines.max(1) as f32 * size * 1.5
+    }
+
+    fn note(&self, text: &str) -> (f32, f32) {
+        let size = board::NOTE_SIZE;
+        let run = TextRun {
+            len: text.len(),
+            font: self.notes.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = self.window.text_system().shape_text(
+            text.to_owned().into(),
+            gpui_kit::px(size),
+            &[run],
+            Some(gpui_kit::px(board::NOTE_WIDTH)),
+            None,
+        );
+        let Ok(lines) = shaped else {
+            return board::Guess.note(text);
+        };
+        let rows: usize = lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum();
+        let width = lines
+            .iter()
+            .map(|l| f32::from(l.width()))
+            .fold(0., f32::max)
+            .min(board::NOTE_WIDTH);
+        (width.max(20.), rows.max(1) as f32 * size * 1.1)
+    }
+}
+
+fn shaped_lines(window: &Window, text: &str, font: &Font, size: f32, width: Option<f32>) -> usize {
+    let run = TextRun {
+        len: text.len(),
+        font: font.clone(),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_text(
+            text.to_owned().into(),
+            gpui_kit::px(size),
+            &[run],
+            width.map(gpui_kit::px),
+            None,
+        )
+        .map(|lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum())
+        .unwrap_or(1)
+}
+
+fn ink(ink: MarkInk) -> Hsla {
+    rgb(match ink {
+        MarkInk::Yellow => 0xF3B01C,
+        MarkInk::Green => 0x6FD08C,
+        MarkInk::Rose => 0xF07A9A,
+    })
+    .into()
+}
+
+/// A stroke for the painter: its shape in screen points, its width and colour.
+struct Pen {
+    stroke: Stroke,
+    width: f32,
+    color: Hsla,
+    /// How much of it is drawn, 0 to 1, by whole segments.
+    drawn: f32,
+}
+
+fn to_screen(camera: &Camera, s: &Stroke) -> Stroke {
+    Stroke {
+        start: camera.to_screen(s.start),
+        curves: s
+            .curves
+            .iter()
+            .map(|c| {
+                [
+                    camera.to_screen(c[0]),
+                    camera.to_screen(c[1]),
+                    camera.to_screen(c[2]),
+                ]
+            })
+            .collect(),
+    }
+}
+
+fn paint_pens(pens: &[Pen], origin: Point<Pixels>, window: &mut Window) {
+    let at = |p: (f32, f32)| point(origin.x + gpui_kit::px(p.0), origin.y + gpui_kit::px(p.1));
+    for pen in pens {
+        if pen.stroke.curves.is_empty() || pen.drawn <= 0. {
+            continue;
+        }
+        let shown = ((pen.stroke.curves.len() as f32 * pen.drawn).ceil() as usize)
+            .clamp(1, pen.stroke.curves.len());
+        let mut path = PathBuilder::stroke(gpui_kit::px(pen.width.max(0.5)));
+        path.move_to(at(pen.stroke.start));
+        for c in &pen.stroke.curves[..shown] {
+            path.cubic_bezier_to(at(c[2]), at(c[0]), at(c[1]));
+        }
+        if let Ok(path) = path.build() {
+            window.paint_path(path, pen.color);
+        }
+    }
+}
+
+/// One frame of the board: the camera, what the tour has lit, and colours.
+struct Scene {
+    cam: Camera,
+    lit: Option<Lit>,
+    notes_on: bool,
+    scribbled: f32,
+    view: (f32, f32),
+    dark: bool,
+    label: Hsla,
+    secondary: Hsla,
+    edge: Hsla,
+}
+
+impl Scene {
+    fn visible(&self, r: &Rect) -> bool {
+        let s = self.cam.rect(r);
+        let (vw, vh) = self.view;
+        s.right() > -40. && s.x < vw + 40. && s.bottom() > -40. && s.y < vh + 40.
+    }
+
+    fn alpha(&self, on: bool) -> f32 {
+        if on {
+            1.
+        } else {
+            DIMMED
+        }
+    }
+
+    fn text_on(&self, size: f32) -> bool {
+        size * self.cam.s >= SMALLEST_TEXT
+    }
+
+    /// A div where a rect of the board is on screen.
+    fn placed(&self, r: &Rect) -> Div {
+        let s = self.cam.rect(r);
+        div()
+            .absolute()
+            .left(gpui_kit::px(s.x))
+            .top(gpui_kit::px(s.y))
+            .w(gpui_kit::px(s.w))
+            .h(gpui_kit::px(s.h))
+    }
+
+    /// The same, as tall as its words need.
+    fn placed_width(&self, r: &Rect) -> Div {
+        let s = self.cam.rect(r);
+        div()
+            .absolute()
+            .left(gpui_kit::px(s.x))
+            .top(gpui_kit::px(s.y))
+            .w(gpui_kit::px(s.w))
+    }
+
+    /// The agent's lead, a sticky note at the board's top left.
+    fn lead(&self, laid: &Board, review: &DesignReview) -> Option<AnyElement> {
+        let lead = laid.lead?;
+        let note = review.note.as_deref()?;
+        if !self.visible(&lead) {
+            return None;
+        }
+        let cam = &self.cam;
+        let dark = self.dark;
+        let on = self.lit.is_none_or(|l| l == Lit::Lead);
+        Some(
+            self.placed(&lead)
+                .rounded(gpui_kit::px(12. * cam.s))
+                .bg(rgb(if dark { 0x2A2620 } else { 0xFFF4D6 }))
+                .border_1()
+                .border_color(rgb(if dark { 0x4A4030 } else { 0xE8D49A }))
+                .p(gpui_kit::px(24. * cam.s))
+                .opacity(self.alpha(on))
+                .when(self.text_on(board::WORDS_SIZE), |d| {
+                    d.text_size(gpui_kit::px(board::WORDS_SIZE * cam.s))
+                        .line_height(gpui_kit::px(board::WORDS_SIZE * 1.5 * cam.s))
+                        .text_color(rgb(if dark { 0xEFE6D6 } else { 0x3A3020 }))
+                        .child(plain(note))
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// A picture with its caption, and the agent's marks and notes on it.
+    fn shot(
+        &self,
+        index: usize,
+        shot_laid: &board::BoardShot,
+        shot: &threadbear_core::reducer::ReviewShot,
+        count: usize,
+    ) -> (Vec<AnyElement>, Vec<Pen>) {
+        let mut parts = Vec::new();
+        let mut pens = Vec::new();
+        let cam = &self.cam;
+        let on = self.lit.is_none_or(|l| l.shows(index, shot_laid.shot));
+        if self.visible(&shot_laid.extent()) {
+            let badge = if shot.video().is_some() {
+                Some("Plays: double-click")
+            } else if shot.page().is_some() {
+                Some("A page: double-click")
+            } else {
+                None
+            };
+            parts.push(
+                self.placed(&shot_laid.picture)
+                    .rounded(gpui_kit::px(8. * cam.s))
+                    .overflow_hidden()
+                    .bg(rgb(0x0D0D0F))
+                    .opacity(self.alpha(on))
+                    .child(
+                        img(crate::rows::markdown::file_picture(&shot.image.path))
+                            .size_full()
+                            .object_fit(ObjectFit::Fill),
+                    )
+                    .when_some(badge, |d, text| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .top(px(8.))
+                                .right(px(8.))
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded(px(6.))
+                                .bg(hsla(0., 0., 0., 0.65))
+                                .text_color(white())
+                                .text_size(px(12.))
+                                .child(text),
+                        )
+                    })
+                    .into_any_element(),
+            );
+            let caption = shot.title.clone().unwrap_or_else(|| {
+                if count > 1 {
+                    format!("{} of {count}", shot_laid.shot + 1)
+                } else {
+                    String::new()
+                }
+            });
+            if !caption.is_empty() && self.text_on(17.) {
+                parts.push(
+                    self.placed_width(&shot_laid.caption)
+                        .text_size(gpui_kit::px(17. * cam.s))
+                        .text_color(self.secondary)
+                        .opacity(self.alpha(on))
+                        .child(caption)
+                        .into_any_element(),
+                );
+            }
+        }
+        if !self.notes_on {
+            return (parts, pens);
+        }
+        let drawn = if on && self.lit.is_some() {
+            self.scribbled
+        } else {
+            1.
+        };
+        let line = 3.2 * cam.s.max(0.5);
+        for (m, mark) in shot.marks.iter().enumerate() {
+            let colour = ink(mark.ink).opacity(self.alpha(on));
+            let seed = (index * 97 + shot_laid.shot * 13 + m) as u32 + 7;
+            let highlight = mark.kind == MarkKind::Highlight;
+            for s in board::agent_strokes(&shot_laid.picture, mark, seed) {
+                pens.push(Pen {
+                    stroke: to_screen(cam, &s),
+                    width: if highlight {
+                        shot_laid.picture.part(&mark.bbox).h * 1.05 * cam.s
+                    } else {
+                        line
+                    },
+                    color: if highlight {
+                        colour.opacity(0.3 * self.alpha(on))
+                    } else {
+                        colour
+                    },
+                    drawn,
+                });
+            }
+        }
+        for place in &shot_laid.notes {
+            let Some(mark) = shot.marks.get(place.mark) else {
+                continue;
+            };
+            let colour = ink(mark.ink).opacity(self.alpha(on));
+            for s in board::pointer(place) {
+                pens.push(Pen {
+                    stroke: to_screen(cam, &s),
+                    width: line,
+                    color: colour,
+                    drawn,
+                });
+            }
+            if self.visible(&place.rect) && self.text_on(board::NOTE_SIZE) {
+                let r = cam.rect(&place.rect);
+                parts.push(
+                    div()
+                        .absolute()
+                        .left(gpui_kit::px(r.x))
+                        .top(gpui_kit::px(r.y))
+                        .w(gpui_kit::px(r.w + 4. * cam.s))
+                        .text_size(gpui_kit::px(board::NOTE_SIZE * cam.s))
+                        .line_height(gpui_kit::px(board::NOTE_SIZE * 1.1 * cam.s))
+                        .font_family(crate::fonts::HANDWRITING)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(colour)
+                        .opacity(drawn.min(1.))
+                        .child(mark.note.clone().unwrap_or_default())
+                        .into_any_element(),
+                );
+            }
+        }
+        (parts, pens)
+    }
+
+    /// Mike's own marks, numbered, and the one he's drawing.
+    fn my_marks(
+        &self,
+        laid: &Board,
+        review: &DesignReview,
+        marks: &[threadbear_core::reducer::UserMark],
+        drawing: Option<&Drawing>,
+    ) -> (Vec<AnyElement>, Vec<Pen>) {
+        let cam = &self.cam;
+        let mine: Hsla = rgb(MINE).into();
+        let mut badges = Vec::new();
+        let mut pens = Vec::new();
+        for mark in marks {
+            let Some((part, points)) = board::mark_points(laid, review, mark) else {
+                continue;
+            };
+            match mark.kind {
+                UserMarkKind::Circle => pens.push(Pen {
+                    stroke: to_screen(cam, &Stroke::through(&points)),
+                    width: PEN,
+                    color: mine,
+                    drawn: 1.,
+                }),
+                UserMarkKind::Highlight => pens.push(Pen {
+                    stroke: to_screen(cam, &Stroke::through(&points)),
+                    width: (part.h * cam.s * 0.85).max(4.),
+                    color: mine.opacity(0.38),
+                    drawn: 1.,
+                }),
+                UserMarkKind::Pin => {}
+            }
+            let pin = mark.kind == UserMarkKind::Pin;
+            let spot = if pin {
+                points.first().copied().unwrap_or((part.x, part.y))
+            } else {
+                (part.x, part.y)
+            };
+            let (x, y) = cam.to_screen(spot);
+            badges.push(
+                div()
+                    .absolute()
+                    .left(gpui_kit::px(x - 13.))
+                    .top(gpui_kit::px(if pin { y - 26. } else { y - 13. }))
+                    .size(gpui_kit::px(26.))
+                    .rounded(gpui_kit::px(13.))
+                    .when(pin, |d| d.rounded_bl(gpui_kit::px(3.)))
+                    .bg(mine)
+                    .text_color(rgb(0x0B1A2A))
+                    .text_size(gpui_kit::px(14.))
+                    .font_weight(FontWeight::BOLD)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .shadow_sm()
+                    .child(mark.n.to_string())
+                    .into_any_element(),
+            );
+        }
+        if let Some(d) = drawing.filter(|d| d.points.len() > 1) {
+            let marker = d.kind == UserMarkKind::Highlight;
+            pens.push(Pen {
+                stroke: to_screen(cam, &Stroke::through(&d.points)),
+                width: if marker { MARKER } else { PEN },
+                color: if marker { mine.opacity(0.38) } else { mine },
+                drawn: 1.,
+            });
+        }
+        (badges, pens)
+    }
+}
+
+impl ReviewWindow {
+    /// Lays the board out once, with the window's fonts, and starts the tour.
+    fn ensure_board(&mut self, window: &Window) {
+        let Some(canvas) = self.canvas.as_mut() else {
+            return;
+        };
+        if canvas.board.is_some() {
+            return;
+        }
+        let words = window.text_style().font();
+        let mut notes = font(crate::fonts::HANDWRITING);
+        notes.weight = FontWeight::BOLD;
+        let measured = Measured {
+            window,
+            words,
+            notes,
+        };
+        let laid = board::layout(self.session.review(), &measured);
+        canvas.stops = board::stops(&laid);
+        canvas.board = Some(laid);
+        if let Some((option, shot)) = canvas.want.take() {
+            canvas.stop = stop_of(&canvas.stops, option, shot).unwrap_or(0);
+        }
+    }
+
+    pub(super) fn render_canvas(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.ensure_board(window);
+        let review = self.session.review().clone();
+        let draft_marks = self.session.draft().marks.clone();
+        let Some(scene) = self.scene(window, cx) else {
+            return div().into_any_element();
+        };
+        let Some(laid) = self.canvas.as_ref().and_then(|c| c.board.clone()) else {
+            return div().into_any_element();
+        };
+        let mut layer = div().absolute().inset_0();
+        let mut pens: Vec<Pen> = Vec::new();
+        if let Some(lead) = scene.lead(&laid, &review) {
+            layer = layer.child(lead);
+        }
+        for laid_option in &laid.options {
+            let (parts, more) = self.draw_option(&scene, laid_option, &review, cx);
+            layer = layer.children(parts);
+            pens.extend(more);
+        }
+        let drawing = self.canvas.as_ref().and_then(|c| c.drawing.clone());
+        let (badges, more) = scene.my_marks(&laid, &review, &draft_marks, drawing.as_ref());
+        pens.extend(more);
+        layer = layer.children(badges);
+        let Some(cv) = self.canvas.as_ref() else {
+            return div().into_any_element();
+        };
+        let bounds_cell = cv.bounds.clone();
+        let tool = cv.tool;
+        let painter = canvas(
+            move |bounds, _, _| bounds_cell.set(Some(bounds)),
+            move |bounds, _, window, _| paint_pens(&pens, bounds.origin, window),
+        )
+        .absolute()
+        .inset_0();
+        div()
+            .id("review-canvas")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_hidden()
+            .bg(if scene.dark {
+                rgb(0x151518)
+            } else {
+                rgb(0xF4F4F6)
+            })
+            .when(tool != Tool::Move, |d| d.cursor(CursorStyle::Crosshair))
+            .when(tool == Tool::Move, |d| d.cursor(CursorStyle::OpenHand))
+            .child(layer)
+            .child(painter)
+            .child(self.render_canvas_tools(cx))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    this.canvas_pressed(ev, window, cx)
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.canvas_moved(ev, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseUpEvent, window, cx| {
+                    this.canvas_released(ev, window, cx)
+                }),
+            )
+            .on_scroll(cx.listener(|this, ev: &ScrollEvent, _, cx| this.canvas_scrolled(ev, cx)))
+            .on_pinch(cx.listener(|this, ev: &PinchEvent, _, cx| this.canvas_pinched(ev, cx)))
+            .into_any_element()
+    }
+
+    /// The frame's camera and what's lit, for this frame; places the first
+    /// stop once the canvas knows its size.
+    fn scene(&mut self, window: &mut Window, cx: &App) -> Option<Scene> {
+        let dark = cx.theme().is_dark();
+        let cv = self.canvas.as_mut()?;
+        if !cv.placed {
+            if let Some((vw, vh)) = cv.viewport() {
+                cv.placed = true;
+                if let Some(first) = cv.stops.get(cv.stop) {
+                    cv.camera = Camera::fit(first.rect, vw, vh, board::STOP_PAD, board::STOP_ZOOM);
+                    cv.scribble = Some(Instant::now());
+                }
+            } else {
+                window.request_animation_frame();
+            }
+        }
+        let cam = cv.camera_now();
+        if cv.moving() {
+            window.request_animation_frame();
+        }
+        Some(Scene {
+            cam,
+            lit: cv.lit(),
+            notes_on: cv.notes_on,
+            scribbled: cv.scribbled(),
+            view: cv.viewport().unwrap_or((2000., 1400.)),
+            dark,
+            label: style::label_text(cx),
+            secondary: style::secondary_text(cx),
+            edge: style::hairline(cx),
+        })
+    }
+
+    /// An option's frame, its name and tick, its words and its pictures with
+    /// the agent's notes on them.
+    fn draw_option(
+        &self,
+        scene: &Scene,
+        laid_option: &board::BoardOption,
+        review: &DesignReview,
+        cx: &mut Context<Self>,
+    ) -> (Vec<AnyElement>, Vec<Pen>) {
+        let mut parts = Vec::new();
+        let mut pens = Vec::new();
+        let Some(option) = review.options.get(laid_option.index) else {
+            return (parts, pens);
+        };
+        let index = laid_option.index;
+        let cam = &scene.cam;
+        if scene.visible(&laid_option.extent()) {
+            let r = cam.rect(&laid_option.frame);
+            let mine = scene.lit.is_none_or(|l| l.option() == Some(index));
+            parts.push(
+                scene
+                    .placed(&laid_option.frame)
+                    .rounded(gpui_kit::px(14. * cam.s))
+                    .bg(if scene.dark {
+                        rgb(0x1E1E23)
+                    } else {
+                        rgb(0xFFFFFF)
+                    })
+                    .border_1()
+                    .border_color(scene.edge)
+                    .opacity(if mine { 1. } else { 0.5 })
+                    .into_any_element(),
+            );
+            parts.push(self.frame_label(index, option, review, (r.x, r.y), scene.label, cx));
+        }
+        if let (Some(words), Some(note)) = (laid_option.words, option.note.as_deref()) {
+            if scene.visible(&words) && scene.text_on(board::WORDS_SIZE) {
+                let on = scene.lit.is_none_or(|l| l.shows_words(index));
+                parts.push(
+                    scene
+                        .placed_width(&words)
+                        .text_size(gpui_kit::px(board::WORDS_SIZE * cam.s))
+                        .line_height(gpui_kit::px(board::WORDS_SIZE * 1.5 * cam.s))
+                        .text_color(scene.label)
+                        .opacity(scene.alpha(on))
+                        .child(plain(note))
+                        .into_any_element(),
+                );
+            }
+        }
+        let shots = option.all_shots();
+        for shot_laid in &laid_option.shots {
+            if let Some(shot) = shots.get(shot_laid.shot) {
+                let (more_parts, more_pens) = scene.shot(index, shot_laid, shot, shots.len());
+                parts.extend(more_parts);
+                pens.extend(more_pens);
+            }
+        }
+        (parts, pens)
+    }
+
+    /// The frame's name over it at the window's own size, with its tick, so
+    /// it reads at any zoom; a click flies to the option.
+    fn frame_label(
+        &self,
+        index: usize,
+        option: &threadbear_core::reducer::ReviewOption,
+        review: &DesignReview,
+        (x, y): (f32, f32),
+        label: Hsla,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_picked = self.session.draft().picked_ids.contains(&option.id);
+        let starred = review.recommended.as_deref() == Some(option.id.as_str());
+        let id = option.id.clone();
+        let pick_id = option.id.clone();
+        h_flex()
+            .id(("canvas-frame-label", index))
+            .absolute()
+            .left(gpui_kit::px(x))
+            .top(gpui_kit::px(y - 30.))
+            .h(gpui_kit::px(26.))
+            .gap(gpui_kit::px(7.))
+            .items_center()
+            .text_size(px(14.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(label)
+            .cursor_pointer()
+            .when(!option.reference, |d| {
+                d.child(
+                    div()
+                        .id(("canvas-pick", index))
+                        .child(super::band::checkbox(is_picked, style::accent(cx), cx))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if this.session.pick(&pick_id) {
+                                this.edited(cx);
+                            }
+                            cx.stop_propagation();
+                            cx.notify();
+                        })),
+                )
+            })
+            .child(option.label())
+            .when(starred, |d| d.child(super::band::recommended_mark(cx)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if let Some(i) = this
+                    .session
+                    .review()
+                    .options
+                    .iter()
+                    .position(|o| o.id == id)
+                {
+                    this.canvas_go_option(i, cx);
+                }
+            }))
+            .into_any_element()
+    }
+
+    /// The tools at the top of the canvas: move, circle, highlight, pin, then
+    /// the switch for the agent's notes and Fit everything.
+    fn render_canvas_tools(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(canvas) = self.canvas.as_ref() else {
+            return div().into_any_element();
+        };
+        let (tool, notes_on) = (canvas.tool, canvas.notes_on);
+        let accent: Hsla = rgb(MINE).into();
+        let label = style::label_text(cx);
+        let tool_button =
+            |t: Tool, icon: &'static str, tip: &'static str, cx: &mut Context<Self>| {
+                let on = tool == t;
+                crate::highlights::tipped(
+                    div()
+                        .id(SharedString::from(format!("canvas-tool-{}", t.name())))
+                        .w(px(36.))
+                        .h(px(32.))
+                        .rounded(px(8.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_size(px(16.))
+                        .text_color(if on { accent } else { label })
+                        .when(on, |d| d.bg(accent.opacity(0.15)))
+                        .hover(|d| d.bg(style::hover_fill(cx)))
+                        .child(icon),
+                    tip,
+                )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_tool(t, cx)))
+            };
+        h_flex()
+            .id("canvas-tools")
+            .absolute()
+            .top(px(12.))
+            .left_0()
+            .right_0()
+            .justify_center()
+            .child(
+                h_flex()
+                    .gap(px(2.))
+                    .p(px(4.))
+                    .rounded(px(11.))
+                    .bg(cx.theme().background.opacity(0.94))
+                    .border_1()
+                    .border_color(style::hairline(cx))
+                    .shadow_md()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(tool_button(Tool::Move, "\u{270B}", "Move and zoom (V)", cx))
+                    .child(tool_button(
+                        Tool::Circle,
+                        "\u{25EF}",
+                        "Circle a part (O)",
+                        cx,
+                    ))
+                    .child(tool_button(
+                        Tool::Highlight,
+                        "\u{1F58D}",
+                        "Highlight a part (H)",
+                        cx,
+                    ))
+                    .child(tool_button(Tool::Pin, "\u{1F4CD}", "Drop a pin (P)", cx))
+                    .child(
+                        div()
+                            .w(px(1.))
+                            .h(px(20.))
+                            .mx(px(4.))
+                            .bg(style::hairline(cx)),
+                    )
+                    .child(
+                        crate::highlights::tipped(
+                            h_flex()
+                                .id("canvas-notes")
+                                .h(px(32.))
+                                .px(px(8.))
+                                .gap(px(7.))
+                                .items_center()
+                                .rounded(px(8.))
+                                .cursor_pointer()
+                                .text_size(px(13.))
+                                .text_color(label)
+                                .hover(|d| d.bg(style::hover_fill(cx)))
+                                .child(
+                                    div()
+                                        .w(px(28.))
+                                        .h(px(16.))
+                                        .rounded(px(8.))
+                                        .bg(if notes_on {
+                                            rgb(0xF3B01C).into()
+                                        } else {
+                                            style::primary_opacity(cx, 0.2)
+                                        })
+                                        .child(
+                                            div()
+                                                .mt(px(2.))
+                                                .ml(px(if notes_on { 14. } else { 2. }))
+                                                .size(px(12.))
+                                                .rounded(px(6.))
+                                                .bg(white()),
+                                        ),
+                                )
+                                .child("Notes"),
+                            if notes_on {
+                                "Hide the agent's notes (N)"
+                            } else {
+                                "Show the agent's notes (N)"
+                            },
+                        )
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_notes(cx))),
+                    )
+                    .child(
+                        crate::highlights::tipped(
+                            div()
+                                .id("canvas-fit")
+                                .h(px(32.))
+                                .px(px(10.))
+                                .rounded(px(8.))
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .text_size(px(13.))
+                                .text_color(label)
+                                .hover(|d| d.bg(style::hover_fill(cx)))
+                                .child("See everything"),
+                            "See everything (0)",
+                        )
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.canvas_everything(cx)),
+                        ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Under the board, where the agent's words were: the tour's Back and
+    /// Next with where it's up to.
+    pub(super) fn render_tour(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let (at, of) = self.canvas_where().unwrap_or((1, 1));
+        let label = style::label_text(cx);
+        let step = |id: &'static str,
+                    glyph: &'static str,
+                    tip: &'static str,
+                    by: i32,
+                    enabled: bool,
+                    cx: &mut Context<Self>| {
+            crate::highlights::tipped(
+                div()
+                    .id(id)
+                    .size(px(36.))
+                    .rounded(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(18.))
+                    .bg(style::button_fill(cx))
+                    .border_1()
+                    .border_color(style::button_edge(cx))
+                    .text_color(if enabled {
+                        label
+                    } else {
+                        style::faint_text(cx)
+                    })
+                    .when(enabled, |d| {
+                        d.cursor_pointer().hover(|d| d.bg(style::hover_fill(cx)))
+                    })
+                    .child(glyph),
+                tip,
+            )
+            .when(enabled, |d| {
+                d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.canvas_step(by, cx)))
+            })
+        };
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap(px(12.))
+            .items_center()
+            .child(step("canvas-back", "\u{2039}", "Back (\u{2190})", -1, at > 1, cx))
+            .child(
+                div()
+                    .text_size(px(style::size::WORK))
+                    .text_color(style::secondary_text(cx))
+                    .child(format!("{at} of {of}")),
+            )
+            .child(step("canvas-next", "\u{203A}", "Next (\u{2192})", 1, at < of, cx))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(style::faint_text(cx))
+                    .child("Drag to move, pinch to zoom, double-click to look closer. Circle, highlight or pin a part to talk about it."),
+            )
+            .into_any_element()
+    }
+
+    // ------------------------------------------------------------ moving round
+
+    pub(super) fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if let Some(c) = self.canvas.as_mut() {
+            c.tool = tool;
+            c.drawing = None;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn toggle_notes(&mut self, cx: &mut Context<Self>) {
+        if let Some(c) = self.canvas.as_mut() {
+            c.notes_on = !c.notes_on;
+            if c.notes_on {
+                c.scribble = Some(Instant::now());
+            }
+        }
+        cx.notify();
+    }
+
+    /// The tour's stop `by` from this one (0: back to this one).
+    pub(super) fn canvas_step(&mut self, by: i32, cx: &mut Context<Self>) {
+        if let Some(c) = self.canvas.as_mut() {
+            let last = c.stops.len().saturating_sub(1) as i32;
+            let next = (c.stop as i32 + by).clamp(0, last) as usize;
+            c.go(next);
+        }
+        cx.notify();
+    }
+
+    /// The next or previous option's opening stop.
+    pub(super) fn canvas_jump(&mut self, by: i32, cx: &mut Context<Self>) {
+        let Some(c) = self.canvas.as_ref() else {
+            return;
+        };
+        let current = c.stops.get(c.stop).and_then(|s| s.lit.option());
+        let options = self.session.review().options.len() as i32;
+        let next = match current {
+            Some(o) => (o as i32 + by).clamp(0, options - 1),
+            None if by > 0 => 0,
+            None => options - 1,
+        };
+        self.canvas_go_option(next.max(0) as usize, cx);
+    }
+
+    pub(super) fn canvas_go_option(&mut self, option: usize, cx: &mut Context<Self>) {
+        self.canvas_go_shot(option, 0, cx);
+    }
+
+    pub(super) fn canvas_go_shot(&mut self, option: usize, shot: usize, cx: &mut Context<Self>) {
+        if let Some(c) = self.canvas.as_mut() {
+            if c.stops.is_empty() {
+                c.want = Some((option, shot));
+            } else if let Some(i) = stop_of(&c.stops, option, shot) {
+                c.go(i);
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn canvas_everything(&mut self, cx: &mut Context<Self>) {
+        if let Some(c) = self.canvas.as_mut() {
+            let last = c.stops.len().saturating_sub(1);
+            c.go(last);
+        }
+        cx.notify();
+    }
+
+    /// The board's own keys; whether it took this one. The arrows step
+    /// through browse and jump, as on the stage.
+    pub(super) fn canvas_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        match key {
+            "escape" => {
+                let tool = self.canvas.as_ref().map(|c| c.tool);
+                if tool.is_some_and(|t| t != Tool::Move) {
+                    self.set_tool(Tool::Move, cx);
+                } else {
+                    self.canvas_everything(cx);
+                }
+            }
+            "0" => self.canvas_everything(cx),
+            "n" => self.toggle_notes(cx),
+            "v" => self.set_tool(Tool::Move, cx),
+            "o" => self.set_tool(Tool::Circle, cx),
+            "h" => self.set_tool(Tool::Highlight, cx),
+            "p" => self.set_tool(Tool::Pin, cx),
+            "space" => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// A click on a mark's chip: fly to the mark.
+    pub(super) fn canvas_show_mark(&mut self, n: u32, cx: &mut Context<Self>) {
+        let review = self.session.review().clone();
+        let Some(mark) = self
+            .session
+            .draft()
+            .marks
+            .iter()
+            .find(|m| m.n == n)
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(c) = self.canvas.as_mut() {
+            if let Some((part, _)) = c
+                .board
+                .as_ref()
+                .and_then(|b| board::mark_points(b, &review, &mark))
+            {
+                let around = Rect::new(part.x - 160., part.y - 120., part.w + 320., part.h + 240.);
+                c.roaming = true;
+                c.fly_to(around, board::STOP_ZOOM);
+            }
+        }
+        cx.notify();
+    }
+
+    /// What the board shows, for scripts and specs.
+    pub(super) fn canvas_state(&self) -> serde_json::Value {
+        let Some(c) = self.canvas.as_ref() else {
+            return serde_json::Value::Null;
+        };
+        let notes: usize = self
+            .session
+            .review()
+            .options
+            .iter()
+            .flat_map(|o| o.all_shots())
+            .map(|s| s.marks.len())
+            .sum();
+        serde_json::json!({
+            "on": self.on_canvas(),
+            "stop": c.stop + 1,
+            "stops": c.stops.len(),
+            "lit": c.stops.get(c.stop).map(|s| format!("{:?}", s.lit)).unwrap_or_default(),
+            "notesOn": c.notes_on,
+            "agentMarks": notes,
+            "tool": c.tool.name(),
+            "marks": self.session.draft().marks.iter().map(|m| format!("{} {} {} {}", m.n, m.kind.name(), m.option_id, m.shot)).collect::<Vec<_>>(),
+        })
+    }
+
+    /// A mark drawn by a script: `{ kind, option, shot, points: [[x, y]...] }`,
+    /// points as fractions of that picture.
+    #[cfg(feature = "automation")]
+    pub(super) fn script_mark(
+        &mut self,
+        spec: &serde_json::Map<String, serde_json::Value>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let kind = match spec.get("kind").and_then(|k| k.as_str()) {
+            Some("highlight") => UserMarkKind::Highlight,
+            Some("pin") => UserMarkKind::Pin,
+            _ => UserMarkKind::Circle,
+        };
+        let option = spec.get("option").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let shot = spec.get("shot").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        self.ensure_board(window);
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        let Some(picture) = c
+            .board
+            .as_ref()
+            .and_then(|b| b.shot(option, shot))
+            .map(|s| s.picture)
+        else {
+            return;
+        };
+        let points = spec
+            .get("points")
+            .and_then(|p| p.as_array())
+            .map(|list| {
+                list.iter()
+                    .filter_map(|p| Some(picture.at(p.get(0)?.as_f64()?, p.get(1)?.as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        c.drawing = Some(Drawing { kind, points });
+        self.finish_mark(window, cx);
+    }
+
+    /// "3 of 8", for the stepper under the canvas.
+    pub(super) fn canvas_where(&self) -> Option<(usize, usize)> {
+        let c = self.canvas.as_ref()?;
+        Some((c.stop + 1, c.stops.len()))
+    }
+
+    /// The option the tour is on, for the tabs.
+    pub(super) fn canvas_option(&self) -> Option<usize> {
+        let c = self.canvas.as_ref()?;
+        c.stops.get(c.stop)?.lit.option()
+    }
+
+    fn canvas_point(&self, at: Point<Pixels>) -> Option<(f32, f32)> {
+        let b = self.canvas.as_ref()?.bounds.get()?;
+        Some((f32::from(at.x - b.origin.x), f32::from(at.y - b.origin.y)))
+    }
+
+    fn canvas_pressed(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.canvas_point(ev.position) else {
+            return;
+        };
+        let editable = self.session.editable();
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        let cam = c.camera_now();
+        c.flight = None;
+        c.camera = cam;
+        match c.tool.kind() {
+            Some(kind) if editable => {
+                c.drawing = Some(Drawing {
+                    kind,
+                    points: vec![cam.to_world(at)],
+                });
+                if kind == UserMarkKind::Pin {
+                    self.finish_mark(window, cx);
+                }
+            }
+            _ => {
+                if ev.click_count >= 2 {
+                    self.canvas_look_closer(cam.to_world(at), cx);
+                    return;
+                }
+                c.drag = Some(Drag {
+                    from: at,
+                    camera: cam,
+                });
+                self.take_keys(window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn canvas_moved(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(at) = self.canvas_point(ev.position) else {
+            return;
+        };
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        if let Some(d) = &c.drag {
+            if ev.pressed_button != Some(MouseButton::Left) {
+                c.drag = None;
+                return;
+            }
+            c.camera = d.camera.pan(at.0 - d.from.0, at.1 - d.from.1);
+            c.roaming = true;
+            cx.notify();
+        } else if let Some(d) = c.drawing.as_mut() {
+            let p = c.camera.to_world(at);
+            let last = *d.points.last().unwrap_or(&p);
+            if ((p.0 - last.0).powi(2) + (p.1 - last.1).powi(2)).sqrt() * c.camera.s >= 3. {
+                d.points.push(p);
+                cx.notify();
+            }
+        }
+    }
+
+    fn canvas_released(&mut self, _ev: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        c.drag = None;
+        if c.drawing.is_some() {
+            self.finish_mark(window, cx);
+        }
+    }
+
+    fn canvas_scrolled(&mut self, ev: &ScrollEvent, cx: &mut Context<Self>) {
+        let Some(at) = self.canvas_point(ev.position) else {
+            return;
+        };
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        let cam = c.camera_now();
+        c.flight = None;
+        let (dx, dy) = match ev.delta {
+            ScrollDelta::Lines(l) => (l.x * 40., l.y * 40.),
+            ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
+        };
+        c.camera = if ev.modifiers.platform || ev.modifiers.control {
+            cam.zoom_at(at, (dy * 0.01).exp())
+        } else {
+            cam.pan(dx, dy)
+        };
+        c.roaming = true;
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn canvas_pinched(&mut self, ev: &PinchEvent, cx: &mut Context<Self>) {
+        let Some(at) = self.canvas_point(ev.position) else {
+            return;
+        };
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        let cam = c.camera_now();
+        c.flight = None;
+        c.camera = cam.zoom_at(at, 1. + ev.delta);
+        c.roaming = true;
+        cx.notify();
+    }
+
+    /// A double-click: fly to the picture under it, or its frame, or out to
+    /// everything. A clip or a page opens on the stage, where it plays.
+    fn canvas_look_closer(&mut self, at: (f32, f32), cx: &mut Context<Self>) {
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        let Some(laid) = c.board.as_ref() else { return };
+        if let Some(shot) = laid.shot_at(at) {
+            let (option, index, rect) = (shot.option, shot.shot, shot.extent());
+            let moving = self
+                .session
+                .review()
+                .options
+                .get(option)
+                .map(|o| o.shot(index))
+                .is_some_and(|s| s.video().is_some() || s.page().is_some());
+            if moving {
+                self.canvas_closer = Some((option, index));
+                self.session.enlarge(option, index);
+                cx.notify();
+                return;
+            }
+            c.roaming = true;
+            c.fly_to(rect, board::STOP_ZOOM);
+        } else if let Some(o) = laid.options.iter().find(|o| o.frame.contains(at)) {
+            let rect = o.extent();
+            c.roaming = true;
+            c.fly_to(rect, board::STOP_ZOOM);
+        } else {
+            let rect = laid.bounds;
+            c.roaming = true;
+            c.fly_to(rect, board::MAX_ZOOM);
+        }
+        cx.notify();
+    }
+
+    // ------------------------------------------------------------ Mike's marks
+
+    fn finish_mark(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let review = self.session.review().clone();
+        let n = board::next_mark_number(&self.session.draft().marks);
+        let Some(c) = self.canvas.as_mut() else {
+            return;
+        };
+        let Some(drawing) = c.drawing.take() else {
+            return;
+        };
+        let Some(laid) = c.board.as_ref() else { return };
+        if drawing.is_scribble() {
+            cx.notify();
+            return;
+        }
+        let reach = board::pen_reach(MARKER, &c.camera);
+        let Some(mark) = drawing.to_mark(laid, &review, n, reach) else {
+            self.session.error = Some("Marks go on a picture.".into());
+            cx.notify();
+            return;
+        };
+        let cut_from = review
+            .options
+            .iter()
+            .find(|o| o.id == mark.option_id)
+            .map(|o| o.shot(mark.shot).image.path);
+        let cut = board::cut_out_box(&mark);
+        if self.session.add_mark(mark) {
+            self.insert_mark_chip(n, window, cx);
+            self.edited(cx);
+            if let Some(path) = cut_from {
+                self.cut_out_mark(n, path, cut, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The picture round a mark, cut out off the main thread and copied in
+    /// through the runner, to go to the agent with it.
+    fn cut_out_mark(&mut self, n: u32, path: String, part: [f64; 4], cx: &mut Context<Self>) {
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let made = cx
+                .background_executor()
+                .spawn(async move { cut_out(&path, part) })
+                .await;
+            let Some(file) = made else { return };
+            let result = crate::call(
+                client,
+                "media.import",
+                serde_json::json!({ "path": file.to_string_lossy() }),
+            )
+            .await;
+            let _ = std::fs::remove_file(&file);
+            let Ok(value) = result else { return };
+            let Some(image) = threadbear_core::reducer::ImageRef::decode(&value["image"]) else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.mark_chip_image(n, image.path.clone());
+                if this.session.set_mark_image(n, image) {
+                    this.edited(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+/// A PNG of part of a picture (fractions of it), at most 480 wide, in the
+/// temporary folder; None when the picture isn't on this Mac or won't read.
+fn cut_out(path: &str, part: [f64; 4]) -> Option<std::path::PathBuf> {
+    let picture = image::open(path).ok()?;
+    let (w, h) = (f64::from(picture.width()), f64::from(picture.height()));
+    let x = (part[0] * w).floor() as u32;
+    let y = (part[1] * h).floor() as u32;
+    let cw = (((part[2] - part[0]) * w).ceil() as u32).max(1);
+    let ch = (((part[3] - part[1]) * h).ceil() as u32).max(1);
+    let piece = picture.crop_imm(x, y, cw, ch);
+    let piece = if piece.width() > 480 {
+        piece.resize(
+            480,
+            480 * piece.height() / piece.width().max(1),
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        piece
+    };
+    let file = std::env::temp_dir().join(format!(
+        "threadbear-mark-{}-{}.png",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    piece.save(&file).ok()?;
+    Some(file)
+}
+
+/// The agent's words without their markdown marks: on the board they're
+/// drawn at any size, as plain text.
+fn plain(text: &str) -> String {
+    text.replace("**", "").replace('`', "")
+}
+
+/// The tour's stop for an option's picture.
+fn stop_of(stops: &[Stop], option: usize, shot: usize) -> Option<usize> {
+    stops.iter().position(|s| match s.lit {
+        Lit::Opening(o) => o == option && shot == 0,
+        Lit::Shot(o, n) => o == option && n == shot,
+        _ => false,
+    })
+}

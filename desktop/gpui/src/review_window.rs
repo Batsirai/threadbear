@@ -35,6 +35,7 @@ use threadbear_core::review::{
 };
 
 mod band;
+mod canvas;
 pub(crate) use band::inline_note;
 mod reply_pictures;
 mod stage;
@@ -285,6 +286,7 @@ impl Threadbear {
             thread_id: thread_id.to_owned(),
             cwd: thread.map(|t| t.cwd.clone()).unwrap_or_default(),
             cache: reviews(cx).drafts.clone(),
+            canvas: self.remote.experiments.iter().any(|e| e == "reviewCanvas"),
         };
         let title: SharedString = review.title.clone().into();
         let app = cx.entity();
@@ -401,6 +403,8 @@ struct Parts {
     thread_id: String,
     cwd: String,
     cache: SharedDraftCache,
+    /// The review as a board (the `reviewCanvas` experiment).
+    canvas: bool,
 }
 
 // ---------------------------------------------------------------- the window
@@ -446,6 +450,11 @@ pub(crate) struct ReviewWindow {
     tabs_scroll: ScrollHandle,
     /// The option whose tab was last scrolled to, so the tabs follow the stage.
     tabs_follow: Option<usize>,
+    /// The review as a board (the `reviewCanvas` experiment, canvas.rs).
+    pub(crate) canvas: Option<canvas::CanvasState>,
+    /// A clip or page double-clicked on the board, on the stage to play,
+    /// until Esc or Back to the board.
+    canvas_closer: Option<(usize, usize)>,
     closed: bool,
     _poll: Task<()>,
     _subs: Vec<Subscription>,
@@ -462,7 +471,17 @@ impl ReviewWindow {
         let typed = session.draft().reply.clone().unwrap_or_default();
         // Its pictures as chips where their markers are.
         let mut reply_pictures = reply_pictures::ReplyPictures::default();
-        let content = reply_pictures.content_for(&typed, &session.draft().images);
+        let marks = session
+            .draft()
+            .marks
+            .iter()
+            .map(|m| reply_pictures::MarkChip {
+                n: m.n,
+                label: threadbear_core::review_canvas::mark_label(session.review(), m),
+                image: m.image.as_ref().map(|i| i.path.clone()),
+            })
+            .collect();
+        let content = reply_pictures.content_for(&typed, &session.draft().images, marks);
         let session_pictures = session.draft().images.len();
         let reply = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
@@ -541,6 +560,8 @@ impl ReviewWindow {
             more_open: false,
             tabs_scroll: ScrollHandle::new(),
             tabs_follow: None,
+            canvas: parts.canvas.then(canvas::CanvasState::new),
+            canvas_closer: None,
             closed: false,
             _poll: poll,
             _subs: subs,
@@ -607,9 +628,10 @@ impl ReviewWindow {
             let same = self
                 .reply_pictures
                 .draft_of(self.reply.read(cx))
-                .is_some_and(|(reply, now)| reply == wanted && now == images);
+                .is_some_and(|(reply, now, _)| reply == wanted && now == images);
             if !same {
-                let content = self.reply_pictures.content_for(&wanted, &images);
+                let marks = self.mark_chips();
+                let content = self.reply_pictures.content_for(&wanted, &images, marks);
                 self.reply
                     .update(cx, |s, cx| s.set_value(content, window, cx));
             }
@@ -908,23 +930,48 @@ impl ReviewWindow {
     }
 
     pub(crate) fn browse(&mut self, direction: i32, cx: &mut Context<Self>) {
+        if self.on_canvas() {
+            self.canvas_step(direction, cx);
+            return;
+        }
         self.session.browse(direction);
         self.after_move(cx);
     }
 
     pub(crate) fn jump(&mut self, direction: i32, cx: &mut Context<Self>) {
+        if self.on_canvas() {
+            self.canvas_jump(direction, cx);
+            return;
+        }
         self.session.jump(direction);
         self.after_move(cx);
     }
 
     pub(crate) fn enlarge(&mut self, index: usize, shot: usize, cx: &mut Context<Self>) {
+        if self.on_canvas() {
+            self.canvas_go_shot(index, shot, cx);
+            return;
+        }
         self.session.enlarge(index, shot);
         self.after_move(cx);
     }
 
     pub(crate) fn show_all(&mut self, cx: &mut Context<Self>) {
+        if self.on_canvas() {
+            self.canvas_everything(cx);
+            return;
+        }
+        if self.canvas_closer.take().is_some() {
+            cx.notify();
+            return;
+        }
         self.session.show_all();
         self.after_move(cx);
+    }
+
+    /// The board is what's on show, not a clip or page on the stage.
+    pub(crate) fn on_canvas(&self) -> bool {
+        self.canvas.is_some() && self.canvas_closer.is_none()
     }
 
     fn after_move(&mut self, cx: &mut Context<Self>) {
@@ -964,6 +1011,10 @@ impl ReviewWindow {
                 self.submit(cx);
                 cx.stop_propagation();
             }
+            return;
+        }
+        if self.on_canvas() && self.canvas_key(ev.keystroke.key.as_str(), cx) {
+            cx.stop_propagation();
             return;
         }
         match ev.keystroke.key.as_str() {
@@ -1396,6 +1447,21 @@ impl Render for ReviewWindow {
         // picked this over the column and an all-at-once board, 21 Nov).
         let body = if self.session.review().options.is_empty() {
             self.render_empty(cx)
+        } else if self.on_canvas() {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(self.render_canvas(window, cx))
+                .child(
+                    div()
+                        .flex_none()
+                        .w_full()
+                        .h(gpui_kit::px(1.))
+                        .bg(style::hairline(cx)),
+                )
+                .child(self.render_band(window, cx))
+                .into_any_element()
         } else {
             v_flex()
                 .flex_1()
@@ -1816,6 +1882,17 @@ pub(crate) async fn automation(
                 if let Some(browse) = cmd["browse"].as_i64() {
                     v.browse(browse as i32, cx);
                 }
+                // The canvas's switch for the agent's notes, and a mark drawn
+                // on option `option`'s picture `shot` through the points
+                // (fractions of the picture), as the mouse would draw it.
+                if let Some(on) = cmd["canvasNotes"].as_bool() {
+                    if v.canvas.as_ref().is_some_and(|c| c.notes_on != on) {
+                        v.toggle_notes(cx);
+                    }
+                }
+                if let Some(mark) = cmd["canvasMark"].as_object() {
+                    v.script_mark(mark, window, cx);
+                }
                 // The keys in the reply box, as a click in it gives them, for a
                 // real ⌘V after (features/tools/real-review-paste.ts).
                 if cmd["focusReply"].as_bool() == Some(true) {
@@ -1938,6 +2015,10 @@ impl ReviewWindow {
             "pageFailed": self.stage.page_failed_reason(),
             // What Open live would open, for the option on show.
             "live": s.shown_option().filter(|_| s.mode == ReviewMode::Single).and_then(|o| o.url.clone()).unwrap_or_default(),
+            // The board (the reviewCanvas experiment): the tour's stop, the
+            // notes switch, the tool, how many of the agent's notes are on
+            // the pictures, and Mike's marks as "1 circle A 0".
+            "canvas": self.canvas_state(),
         })
     }
 }

@@ -182,6 +182,8 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   // The Recipes view: the recipes experiment on, with the mock's recipes.
   if (pickle.tags.some((t) => t.name === '@recipes')) process.env.TB_MOCK_RECIPES = '1';
   else delete process.env.TB_MOCK_RECIPES;
+  if (pickle.tags.some((t) => t.name === '@review.canvas')) process.env.TB_MOCK_REVIEW_CANVAS = '1';
+  else delete process.env.TB_MOCK_REVIEW_CANVAS;
   // Parts of a project: Photo sync as a part of Threadbear.
   if (pickle.tags.some((t) => t.name === '@project-parts')) process.env.TB_MOCK_PARTS = '1';
   else delete process.env.TB_MOCK_PARTS;

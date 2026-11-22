@@ -140,3 +140,18 @@ test("a still that can't be shrunk is only no preview, never an error naming a p
     fs.rmSync(media, { recursive: true, force: true });
   }
 });
+
+// The reviewCanvas experiment's marks stay on the Mac: the phone doesn't
+// draw them, and a cut-out's path is a file on the Mac.
+test('marks, the agent\'s and Mike\'s, never reach the phone', () => {
+  const marked: DesignReview = {
+    ...review,
+    options: [{ ...review.options[0], shots: [{ ...review.options[0].shots![0], marks: [{ kind: 'circle', box: [0, 0, 0.5, 0.5], note: 'Here' }] }] }, review.options[1]],
+    draft: { notes: {}, reply: '[Mark 1]', marks: [{ n: 1, kind: 'pin', optionId: 'A', shot: 0, box: [0.2, 0.2, 0.2, 0.2], image: { path: '/Users/me/cut.png', mediaType: 'image/png' } }] },
+  };
+  const dto = phoneReview(marked);
+  assert.ok(!JSON.stringify(dto).includes('marks'), JSON.stringify(dto));
+  assert.deepEqual(dto.draft, { notes: {}, reply: '[Mark 1]' });
+  // An answer from the phone brings none in.
+  assert.ok(!('marks' in draftFromPhone({ notes: [], marks: [{ n: 1 }] })));
+});

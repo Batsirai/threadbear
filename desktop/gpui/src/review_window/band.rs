@@ -36,8 +36,20 @@ impl ReviewWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // Of the window, not zoomed, as its frame isn't.
-        let answer =
-            (f32::from(window.viewport_size().width) * 0.3).clamp(ANSWER_WIDTH.0, ANSWER_WIDTH.1);
+        let width = f32::from(window.viewport_size().width);
+        let on_canvas = self.on_canvas();
+        // On the board the words are on the canvas, so the reply has room
+        // for the chips of Mike's marks.
+        let answer = if on_canvas {
+            (width * 0.5).clamp(ANSWER_WIDTH.1, 720.)
+        } else {
+            (width * 0.3).clamp(ANSWER_WIDTH.0, ANSWER_WIDTH.1)
+        };
+        let words = if on_canvas {
+            self.render_tour(cx)
+        } else {
+            self.render_words(cx)
+        };
         v_flex()
             .id("review-band")
             .flex_none()
@@ -52,7 +64,7 @@ impl ReviewWindow {
                     .px(px(PAD))
                     .pt(px(12.))
                     .pb(px(18.))
-                    .child(self.render_words(cx))
+                    .child(words)
                     .child(
                         div()
                             .flex_none()
@@ -129,7 +141,11 @@ impl ReviewWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let picked = self.session.draft().picked_ids.contains(&option.id);
-        let current = self.session.mode == ReviewMode::Single && self.session.focused() == index;
+        let current = if self.on_canvas() {
+            self.canvas_option() == Some(index)
+        } else {
+            self.session.mode == ReviewMode::Single && self.session.focused() == index
+        };
         let recommended = self.session.review().recommended.as_deref() == Some(option.id.as_str());
         let primary = style::label_text(cx);
         let show = crate::highlights::tipped(
@@ -629,7 +645,7 @@ pub(crate) fn inline_note(
 }
 
 /// A tick box: an outline, or filled with the accent and a white tick.
-fn checkbox(on: bool, accent: Hsla, cx: &App) -> AnyElement {
+pub(super) fn checkbox(on: bool, accent: Hsla, cx: &App) -> AnyElement {
     if on {
         return div()
             .size(px(14.))

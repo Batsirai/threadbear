@@ -5206,7 +5206,8 @@ export function askedLine(m: { text: string; origin?: MessageOrigin; reviewId?: 
     const words = [r.reply, ...Object.values(r.notes)].filter(Boolean);
     const options = reviews?.find(v => v.id === m.reviewId)?.options ?? [];
     const picked = (r.pickedIds ?? (r.pickedId ? [r.pickedId] : [])).map(id => options.find(o => o.id === id)?.title).filter(Boolean);
-    text = words.length ? words.join(' ') : picked.length ? `Picked ${picked.join(' + ')}` : r.none ? 'None of them' : '';
+    const marks = Array.isArray(r.marks) ? r.marks.length : 0;
+    text = words.length ? words.join(' ') : picked.length ? `Picked ${picked.join(' + ')}` : r.none ? 'None of them' : marks ? `Marked ${marks === 1 ? 'a part' : `${marks} parts`}` : '';
   }
   return oneLine(text, max) || undefined;
 }

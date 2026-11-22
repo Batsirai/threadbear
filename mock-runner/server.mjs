@@ -476,6 +476,8 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
     // The Feed, with TB_MOCK_FEED (addDemoFeed).
     ...(process.env.TB_MOCK_FEED ? ['feed'] : []),
+    // Reviews as a board you drag and zoom, with TB_MOCK_REVIEW_CANVAS (addCanvasMarks).
+    ...(process.env.TB_MOCK_REVIEW_CANVAS ? ['reviewCanvas'] : []),
   ];
 }
 
@@ -3073,6 +3075,18 @@ function wentBack() {
   return { clis };
 }
 
+// The review canvas (TB_MOCK_REVIEW_CANVAS, the reviewCanvas experiment): the
+// agent's notes on the demo review's first picture, as show_options keeps
+// them, on the option's one shot.
+function addCanvasMarks(review) {
+  const a = review.options.find((option) => option.id === 'A');
+  if (!a) return;
+  a.shots = [{ image: a.image, marks: [
+    { kind: 'circle', box: [0.405, 0.135, 0.765, 0.232], note: 'auto picks the login with the most room' },
+    { kind: 'underline', box: [0.39, 0.87, 0.455, 0.9], note: 'the chip just says Auto', ink: 'green' },
+  ] }];
+}
+
 function needReview(t, id) {
   const review = t.reviews?.get(id);
   if (!review) throw rpcError(-32602, `Review not found: ${id}`);
@@ -4651,6 +4665,7 @@ function loadFixtures() {
         event.threadId = summary.id;
         if (event.images) event.images = fixPaths(event.images);
         if (event.type === 'review.updated') event.review.options = event.review.options.map((option) => ({ ...option, image: fixPaths([option.image])[0] }));
+        if (event.type === 'review.updated' && process.env.TB_MOCK_REVIEW_CANVAS) addCanvasMarks(event.review);
         return event;
       });
       summary.lastSeq = events.at(-1)?.seq ?? 0;
