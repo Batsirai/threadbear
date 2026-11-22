@@ -1028,6 +1028,7 @@ export class Runner {
     // restart waited still gets carried on.
     // A wake-when still being worked out lost its answer with the old
     // runner, so it comes back too.
+    this.bindOldWakeCeilings();
     for (const st of this.threads.values()) {
       try {
         if (this.wakesOnStart(st.rec)) this.wake(st, 'restart');
@@ -1986,7 +1987,9 @@ export class Runner {
     if (opts.scheduledSince !== undefined) msg.scheduledSince = opts.scheduledSince;
     if (opts.answers?.length) msg.answers = opts.answers;
     if (opts.editOf) msg.editOf = opts.editOf;
-    if (opts.ceiling !== undefined) msg.ceiling = opts.ceiling;
+    // Every message this release queues says its ceiling ('full' for none),
+    // so one with none at all is from an older release (legacyCeiling).
+    msg.ceiling = opts.ceiling ?? 'full';
     if (opts.everyoneAnswers?.length && opts.origin === 'runner') msg.everyoneAnswers = opts.everyoneAnswers;
     rec.lastActivityAt = this.isoNow();
     if (rt.turn && !opts.queue && fromMike(text, opts) && this.switchWaiting(st)) {
@@ -4199,7 +4202,7 @@ export class Runner {
         // A peer's instruction is just as current as the user's. The CLI
         // explicitly rejected it, so deliver it again before older reminders.
         const ceiling = turn.ceilings?.get(id);
-        requeuedInputs.push({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: e.text, images: e.images ?? [], ...(e.origin ? { origin: e.origin } : {}), ...(ceiling !== undefined ? { ceiling } : {}) });
+        requeuedInputs.push({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: e.text, images: e.images ?? [], seq, ...(e.origin ? { origin: e.origin } : {}), ...(ceiling !== undefined ? { ceiling } : {}) });
         (turn.requeuedMessages ??= new Set()).add(id);
       }
     }

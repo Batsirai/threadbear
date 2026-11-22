@@ -25,7 +25,7 @@ import { ErrorCode, RpcError } from './protocol.ts';
 import type { PermissionMode, PersistedEvent, ThreadSummary } from './protocol.ts';
 import type { Notification, Runner } from './runner.ts';
 import { DRAIN_MAX_OLD_MS } from './runner.ts';
-import { ceilingMode } from './runner/ceiling.ts';
+import { CEILING_REFUSED, ceilingMode } from './runner/ceiling.ts';
 import type { UsageReading } from './usage.ts';
 import type { AgentApprovalRequest, ProjectControl, RemoteControl, ScheduleControl, ThreadControl } from './threadbear-mcp.ts';
 import type { RemoteThreads } from './thread-index.ts';
@@ -163,7 +163,7 @@ export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'fin
     if (runner.draining && runner.clock.now() - runner.draining.since >= DRAIN_MAX_OLD_MS) throw new RpcError(ErrorCode.busy, 'That old runner is waiting to hand this thread over; try again in a moment.');
     // Raised above it here: not sent, and said so, so the primary records the
     // run as not sent rather than sent.
-    if (!runner.underCeiling(runner.mustGet(p.threadId), ceiling)) throw new RpcError(ErrorCode.notAllowed, "Not sent: this thread has more access now than the thread that set the schedule up had. Resume it from the app if it's still wanted.");
+    if (!runner.underCeiling(runner.mustGet(p.threadId), ceiling)) throw new RpcError(ErrorCode.notAllowed, `${CEILING_REFUSED} Resume it from the app if it's still wanted.`);
     const sent = runner.sendScheduled(p.threadId, p.text, p.scheduleId, run, since, p.preserve as boolean | undefined, ceiling);
     if (runner.unqueue(p.threadId, sent.turnId)) throw new RpcError(ErrorCode.busy, 'That scheduled turn could not start yet; try again in a moment.');
     return sent;
@@ -866,7 +866,7 @@ export class ThreadRouter implements ThreadControl {
 
   async send(threadId: string, text: string, images: Parameters<Runner['send']>[2] = [], opts: Parameters<Runner['send']>[3] = {}): Promise<{ turnId: string }> {
     const e = this.away(threadId);
-    return e ? e.call('threads.send', { threadId, text, images, ...(opts.answers ? { answers: opts.answers } : {}) }) : this.runner.send(threadId, text, images, opts);
+    return e ? e.call('threads.send', { threadId, text, images, ...(opts.answers ? { answers: opts.answers } : {}), ...(opts.ceiling ? { ceiling: opts.ceiling } : {}) }) : this.runner.send(threadId, text, images, opts);
   }
 
   async createReview(threadId: string, input: Parameters<Runner['createReview']>[1]): Promise<ReturnType<Runner['createReview']>> {

@@ -24,6 +24,10 @@ import { above, raises, type Authority } from '../threadbear-mcp.ts';
 import { senderPrefix } from './nested.ts';
 import { sentByAgent } from '../protocol.ts';
 
+// What a draining runner says when a schedule's run is for a thread above
+// its ceiling there (handover.ts, drain.sendScheduled; schedules.ts).
+export const CEILING_REFUSED = 'Not sent: this thread has more access now than the thread that set the schedule up had.';
+
 // A ceiling as saved: one that isn't a mode (a record from before, a moved
 // thread's record from another Mac) counts as the least, Ask.
 export function ceilingMode(v: unknown): PermissionMode {
@@ -101,6 +105,18 @@ export const ceilingPart = {
     return true;
   },
 
+  // Pending agent snoozes in words from before ceilings (22 Nov 2026):
+  // bound at the thread's saved mode as this runner starts, as schedules
+  // from before are (schedules.ts, "Ceilings").
+  bindOldWakeCeilings(this: Runner): void {
+    for (const st of this.threads.values()) {
+      const w = st.rec.wakeWhen;
+      if (!w || w.by !== 'agent' || st.rec.wakeCeiling?.said === w.said) continue;
+      st.rec.wakeCeiling = { said: w.said, ceiling: ceilingMode(st.rec.permissionMode ?? 'ask') };
+      this.markDirty(st);
+    }
+  },
+
   // Shown to Mike instead of its agent: a note saying what wasn't passed on
   // and where to read it, and the thread in Needs you (woken, if it was
   // hibernating). No turn: he reads it, and a message from him carries on.
@@ -127,7 +143,10 @@ export const ceilingPart = {
 
   // A message about to be handed to `st`'s agent whose ceiling it's above
   // now: held back, with a note saying what it was.
-  withholdMessage(this: Runner, st: ThreadState, q: Pick<QueuedSend, 'text' | 'origin' | 'scheduleId'>): void {
+  withholdMessage(this: Runner, st: ThreadState, q: Pick<QueuedSend, 'text' | 'origin' | 'scheduleId' | 'seq'>): void {
+    // Queued again after its first showing never reached the agent: that
+    // row is kept out of what an agent is told the thread said too.
+    if (q.seq !== undefined) st.rec.withheldSeqs = [...new Set([...(st.rec.withheldSeqs ?? []), q.seq])].slice(-200);
     const first = q.text.slice(0, q.text.indexOf('\n') < 0 ? q.text.length : q.text.indexOf('\n')).trim().slice(0, 200);
     const what = q.origin === 'schedule' ? `A scheduled message (${first})` : first ? `A message (${first})` : 'A message';
     this.withhold(

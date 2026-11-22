@@ -403,18 +403,36 @@ export function capMovedCeilings(rec: Record<string, unknown>): boolean {
       changed = true;
     }
   }
-  // None is stricter still (only its sender's access now counts).
+  // Who a held report is from is that runner's word too: a thread here it
+  // names doesn't vouch for it (mayPassOn), so it goes by Ask alone.
   for (const h of items('heldReports')) {
-    if (h.ceiling !== undefined && h.ceiling !== 'ask') {
+    if (h.ceiling !== 'ask' || (typeof h.from === 'string' && !h.from.startsWith('moved:'))) {
       h.ceiling = 'ask';
+      if (typeof h.from === 'string' && !h.from.startsWith('moved:')) h.from = `moved:${h.from}`;
       changed = true;
     }
   }
+  // A wait's reply is filled in here, when the thread it waits on finishes:
+  // one that came with the record is that runner's words.
   for (const w of items('waitingOn')) {
     if (w.by !== undefined && (w.by as { mode?: unknown } | null)?.mode !== 'ask') {
       w.by = { mode: 'ask' };
       changed = true;
     }
+    if (w.done !== undefined) {
+      delete w.done;
+      changed = true;
+    }
+  }
+  // An agent's snooze in words wakes it with them later (runner/ceiling.ts).
+  const ww = rec.wakeWhen as { said?: unknown; by?: unknown } | undefined;
+  const wc = rec.wakeCeiling as { said?: unknown; ceiling?: unknown } | undefined;
+  if (ww && typeof ww === 'object' && typeof ww.said === 'string' && (wc?.said !== ww.said || wc?.ceiling !== 'ask')) {
+    rec.wakeCeiling = { said: ww.said, ceiling: 'ask' };
+    changed = true;
+  } else if (wc !== undefined && !(ww && typeof ww === 'object')) {
+    delete rec.wakeCeiling;
+    changed = true;
   }
   return changed;
 }

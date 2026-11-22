@@ -586,6 +586,8 @@ async function main(): Promise<void> {
   // its schedule's ceiling, Ask until the Scheduler is up (runner/ceiling.ts).
   runner.scheduleCeiling = (id) => (scheduler ? scheduler.ceilingById(id) : 'ask');
   runner.start({ skip: kept });
+  // App-restart watches with words from before ceilings: bound now.
+  appRestarts.bindOldCeilings((id) => (runner.has(id) ? runner.authoritySaved(id).mode : undefined));
   bootStep('threads');
   // Answers to ask_secret go after a day (docs/protocol/threads.md, "Secrets").
   runner.secrets.startSweeping((e) => log.warn('secret sweep failed', { error: String(e) }));

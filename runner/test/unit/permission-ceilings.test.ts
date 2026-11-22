@@ -536,8 +536,7 @@ test("the thread a schedule sends to can't lift another thread's ceiling by rena
   // As the RPC handler gets it from the gate (it would read a left-out
   // ceiling as Mike's).
   const p = gate.check(target, 'schedules.update', { scheduleId: sc.id, title: 'Renamed', paused: false, ceiling: 'full' });
-  assert.equal(p.ceiling, undefined);
-  assert.equal(p.keepCeiling, true);
+  assert.equal(p.ceiling, 'ask', 'its own, which only ever lowers one');
   const methods = (await import('../../src/schedules.ts')).scheduleMethods(sched);
   await methods['schedules.update'](p);
   raise(h, target);
@@ -637,12 +636,16 @@ test('a thread moved to the main Mac brings its queue, held reports and waits at
   const rec: Record<string, unknown> = {
     queue: [{ turnId: 'a', text: 'x', images: [] }, { turnId: 'b', text: 'y', images: [], ceiling: 'full' }],
     heldReports: [{ from: 'c', text: 'z', at: '', ceiling: 'full' }, { from: 'd', text: 'w', at: '' }],
-    waitingOn: [{ threadId: 'e', title: 't', by: { mode: 'full' } }, { threadId: 'f', title: 't' }],
+    waitingOn: [{ threadId: 'e', title: 't', by: { mode: 'full' }, done: { at: '', how: 'finished', reply: PAYLOAD } }, { threadId: 'f', title: 't' }],
+    wakeWhen: { said: 'until CI is green', topic: 'CI', by: 'agent' },
   };
   assert.equal(capMovedCeilings(rec), true);
   assert.deepEqual((rec.queue as { ceiling?: string }[]).map((q) => q.ceiling), ['ask', 'ask']);
-  assert.deepEqual((rec.heldReports as { ceiling?: string }[]).map((q) => q.ceiling), ['ask', undefined]);
+  // Who a report is from is that runner's word: it names no thread here.
+  assert.deepEqual((rec.heldReports as { ceiling?: string; from: string }[]).map((q) => [q.ceiling, q.from]), [['ask', 'moved:c'], ['ask', 'moved:d']]);
   assert.deepEqual((rec.waitingOn as { by?: { mode: string } }[]).map((q) => q.by?.mode), ['ask', undefined]);
+  assert.equal((rec.waitingOn as { done?: unknown }[])[0].done, undefined, "a reply that came with it isn't kept");
+  assert.deepEqual(rec.wakeCeiling, { said: 'until CI is green', ceiling: 'ask' });
   assert.equal(capMovedCeilings(rec), false);
 });
 
@@ -740,4 +743,73 @@ test('a run for a busy thread on a draining runner is tried again, not held on a
   assert.equal(now.finishedAt, undefined, 'not finished');
   assert.equal(now.paused, false);
   assert.equal(sent, 0);
+});
+
+// ------------------------------------------- round 3 of the review
+
+test("a thread rewording Mike's schedule for it lowers the ceiling to its own", async () => {
+  const h = harness();
+  const sched = scheduler(h);
+  const target = idle(h, 'Careful work', 'ask');
+  const sc = await sched.create({ text: 'Check the deploy', at: new Date(h.clock.now() + MIN).toISOString(), threadId: target });
+  const tools = buildThreadbearTools(h.runner, target, () => h.clock.now(), sched, undefined, undefined, { sleep: async () => {} });
+  const r = (await tools.find((x) => x.name === 'update_schedule')!.handler({ scheduleId: sc.id, text: PAYLOAD } as never, {})) as { isError?: boolean };
+  assert.equal(r.isError, undefined);
+  raise(h, target);
+  h.clock.advance(2 * MIN);
+  await tick(8);
+  await settle();
+  assert.equal(heard(h, target), false);
+});
+
+test("send_message's ceiling is the receiver's access as the card showed it, not after a raise while it waited", async () => {
+  const h = harness();
+  const from = idle(h, 'Helper', 'ask');
+  const to = h.runner.create({ text: 'Busy', accountId: 'claude-main', permissionMode: 'auto' }).thread.id;
+  session(h, to).init();
+  const tools = buildThreadbearTools(h.runner, from, () => h.clock.now(), undefined, undefined, undefined, { sleep: async () => {} });
+  const p = tools.find((x) => x.name === 'send_message')!.handler({ threadId: to, text: PAYLOAD } as never, {});
+  for (let i = 0; i < 50 && !h.events(from).some((e) => e.type === 'approval.requested'); i++) await tick();
+  const card = h.events(from).filter((e) => e.type === 'approval.requested').at(-1) as { approvalId: string } | undefined;
+  assert.ok(card, 'a card: Auto is above Ask');
+  raise(h, to);
+  h.runner.respondApproval({ threadId: from, approvalId: card.approvalId, decision: 'allow' });
+  await p;
+  session(h, to).result('completed');
+  await settle();
+  assert.equal(heard(h, to), false);
+});
+
+test("an agent's snooze in words comes back to it held to the access it had as it wrote them", async () => {
+  const h = harness();
+  const id = idle(h, 'Waiting', 'ask');
+  const other = idle(h, 'Elsewhere', 'full');
+  const threads = (h.runner as unknown as { threads: Map<string, { rec: Record<string, unknown> }> }).threads;
+  const rec = threads.get(id)!.rec;
+  // As a pending agent snooze from before ceilings; the start binds it.
+  rec.wakeWhen = { said: PAYLOAD.slice(0, 200), topic: 'CI', by: 'agent' };
+  rec.snoozedUntil = new Date(h.clock.now() + 86_400_000).toISOString();
+  h.runner.bindOldWakeCeilings();
+  assert.deepEqual(rec.wakeCeiling, { said: PAYLOAD.slice(0, 200), ceiling: 'ask' });
+  raise(h, id);
+  rec.snoozedUntil = new Date(h.clock.now() + 86_400_000).toISOString();
+  const woke = h.runner.wakeForTopic(id, other);
+  await settle();
+  assert.equal(woke, true, 'it woke');
+  assert.equal(heard(h, id), false, 'but its Ask-time words never reached the Full agent');
+});
+
+test('wait_for_app_restart words come back held to the access the thread had as it asked', async () => {
+  const { AppRestarts } = await import('../../src/app-restarts.ts');
+  const h = harness();
+  const id = idle(h, 'App change', 'auto');
+  const ar = new AppRestarts({ runner: h.runner, home: h.home, clock: h.clock, log: nullLogger });
+  ar.watch(id, PAYLOAD, undefined, 'auto');
+  const saved = JSON.parse(fs.readFileSync(path.join(h.home, 'app-restart.json'), 'utf8'));
+  assert.equal(saved.watching[0].ceiling, 'auto');
+  // One from before ceilings is bound at the thread's mode as the runner starts.
+  saved.watching[0].ceiling = undefined;
+  fs.writeFileSync(path.join(h.home, 'app-restart.json'), JSON.stringify(saved));
+  ar.bindOldCeilings(() => 'auto');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.home, 'app-restart.json'), 'utf8')).watching[0].ceiling, 'auto');
 });

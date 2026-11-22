@@ -348,7 +348,10 @@ own restarts.
   checkout (so `HEAD` is a worktree's own, and a thread in another repo
   can name a Threadbear commit). A `commit` found in neither is refused with an error, rather
   than waiting for any new build, and drops the request it had. Asking
-  again replaces its request.
+  again replaces its request. Its `text` is kept with a ceiling, the
+  thread's saved mode as it asked (`runner/src/runner/ceiling.ts`): raised
+  above that by the time the app restarts, the thread gets the note and
+  goes to Needs you, and its agent doesn't get the text.
 - A turn that ends needing nothing (no archive, snooze or waitFor) while
   its thread is on the list hibernates the thread for a day at most
   (`system.note` "Hibernating until the Threadbear app restarts onto the

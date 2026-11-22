@@ -1087,9 +1087,8 @@ export function buildThreadbearTools(
         const caller = await restricted();
         // New words or resuming it, as far as this thread reaches: a card
         // here shows only what changes, not the words it keeps, so it never
-        // lifts one (schedules.ts, "Ceilings"). In the thread it sends to,
-        // the ceiling stays as it is.
-        const ceilingArgs = current.threadId === selfId ? { keepCeiling: true } : { ceiling: caller ? asCeiling(caller.mode) : ('full' as const) };
+        // lifts one (schedules.ts, "Ceilings"), its own thread's included.
+        const ceilingArgs = { ceiling: caller ? asCeiling(caller.mode) : ('full' as const) };
         const newFolder = f === undefined ? undefined : await folder(f);
         // The check a new folder takes along (Scheduler.update approves
         // nothing for a folder alone).
@@ -1962,7 +1961,9 @@ export function buildThreadbearTools(
               commit: z.string().max(200).optional().describe("A commit the build must have. Default: main's HEAD now."),
             },
             handle(async ({ text, commit }) => {
-              const { running, waitingFor } = appRestarts.watch(selfId, text, commit);
+              // Its words come back to it later: held to its access now.
+              const caller = await restricted();
+              const { running, waitingFor } = appRestarts.watch(selfId, text, commit, caller ? asCeiling(caller.mode) : 'full');
               return `You'll get a message here when the app restarts onto a build other than the one running now${running ? ` (${running})` : ''}${waitingFor ? ` that contains ${waitingFor}` : ''}. End your turn when you've nothing else to do: a turn that ends needing nothing hibernates until then.`;
             }),
           ),
@@ -2177,6 +2178,9 @@ export function buildThreadbearTools(
         // Another runner's thread counts as full access (modeOf), so a
         // restricted caller is asked first there too.
         const head = await from();
+        // Its ceiling, as the card shows the receiver now (runner/ceiling.ts):
+        // raised while the card waits, the receiver doesn't take more.
+        const ceiling = asCeiling((await accessOf(id)).mode);
         await confirm('send_message', await sendReason(id, await restricted()), { threadId: id, from: head.trim(), text }, extra?.signal);
         const remote = opts.remote?.();
         if (hit.other && remote) {
@@ -2185,7 +2189,7 @@ export function buildThreadbearTools(
           if (r?.queued) return `Queued for ${id.slice(0, 8)} "${hit.other.t.title}" on ${hit.other.runner}, which hasn't picked it up yet (it may be busy restarting or asleep). It gets it when it next checks in.`;
           return `Sent to ${id.slice(0, 8)} "${hit.other.t.title}" on ${hit.other.runner}.`;
         }
-        const sent = (await control.send(id, head + text)) as { turnId: string; held?: boolean };
+        const sent = (await control.send(id, head + text, [], { ceiling })) as { turnId: string; held?: boolean };
         // A report to the thread that started this one, kept until its
         // other threads finish (docs/protocol/threads.md, "Nested threads").
         if (sent.held) return `Held for ${id.slice(0, 8)} "${(await control.get(id)).title}": it gets this with the other reports once the threads it started have finished, so there's no need to send it again.`;
@@ -2313,6 +2317,8 @@ export function buildThreadbearTools(
         const caller = await restricted();
         const cwd = await folder(f);
         const accountId = await account(acc);
+        // `then`'s ceiling, as the card shows the thread now (runner/ceiling.ts).
+        const thenCeiling = asCeiling((await accessOf(id)).mode);
         if (caller) {
           const t = id === selfId ? undefined : await accessOf(id);
           const checks = schedules ? (await schedules.list(id)).filter((sc) => sc.threadId === id && sc.check?.trim()) : [];
@@ -2327,7 +2333,7 @@ export function buildThreadbearTools(
         const t = (await control.update({ threadId: id, cwd, accountId, byAgent: true })).thread;
         const self = id === selfId;
         if (then?.trim()) {
-          await control.send(id, `${MOVE_MESSAGE_PREFIX}${t.cwd}]\n\n${then.trim()}`);
+          await control.send(id, `${MOVE_MESSAGE_PREFIX}${t.cwd}]\n\n${then.trim()}`, [], { ceiling: thenCeiling });
         }
         const when = self ? 'when this turn ends' : 'on its next message';
         const next = then?.trim() ? (self ? ' It carries on by itself straight after.' : ' Your message waits for it.') : self ? ' It waits for the user after that.' : '';

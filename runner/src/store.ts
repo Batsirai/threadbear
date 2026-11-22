@@ -17,7 +17,7 @@ export type ReviewVerdict = { findings: Pick<ReviewFinding, 'severity' | 'claim'
 
 // A panel member's answer waiting in its lead's queue (runner/everyone.ts).
 export type EveryoneAnswer = { threadId: string; name: string; reply: string };
-export type QueuedSend = { everyoneAnswers?: EveryoneAnswer[]; beforeMessage?: true; retryAfterInterrupt?: true; preserveSchedule?: boolean; scheduledSince?: number; turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number; ceiling?: PermissionMode };
+export type QueuedSend = { everyoneAnswers?: EveryoneAnswer[]; beforeMessage?: true; retryAfterInterrupt?: true; preserveSchedule?: boolean; scheduledSince?: number; turnId: string; text: string; images: ImageRef[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number; ceiling?: PermissionMode; seq?: number };
 
 // What thread.json holds: the public summary fields plus a few internal ones.
 // A report held for a thread from one it started (runner/nested.ts).
@@ -64,7 +64,7 @@ export function cleanPresses(raw: unknown): PressNote[] | undefined {
 const OBJECT_LISTS = ['heldReports', 'heldMail', 'waitingOn', 'reviews', 'buttons', 'subagents', 'projects', 'rewinds', 'queue', 'messageRecoveries'];
 const STRING_LISTS = ['reviewDeliveries', 'allowRules', 'pendingApprovals', 'projectsLeft', 'projectsTold'];
 const NUMBER_LISTS = ['interruptedMessages', 'withheldSeqs'];
-const OBJECTS = ['needs', 'looseEnds', 'stoppedWork', 'stoppedMidTurn', 'highlights', 'worktree', 'handoff', 'moved', 'startedBy', 'labReview', 'labReviewOwed', 'reviewVerdict', 'finished', 'lateChecks', 'wakeNews'];
+const OBJECTS = ['wakeCeiling', 'needs', 'looseEnds', 'stoppedWork', 'stoppedMidTurn', 'highlights', 'worktree', 'handoff', 'moved', 'startedBy', 'labReview', 'labReviewOwed', 'reviewVerdict', 'finished', 'lateChecks', 'wakeNews'];
 const NESTED: [string, string, 'object' | 'string' | 'number'][] = [
   ['needs', 'asks', 'object'],
   ['needs', 'ticked', 'number'],
@@ -291,6 +291,9 @@ export type ThreadRecord = {
   // Messages shown in the transcript that its agent never got: held back
   // just before their turn sent them (runner/ceiling.ts, heldAtDispatch).
   withheldSeqs?: number[];
+  // The ceiling of an agent's own words that wake it later (end_turn's
+  // snooze in words, its `said`), as it said them (runner/ceiling.ts).
+  wakeCeiling?: { said: string; ceiling: PermissionMode };
   // Emails about its work, kept for its agent's next turn (runner/mail.ts).
   heldMail?: HeldMail[];
   starredAt?: string; // Mike starred it: the Starred section, oldest star first

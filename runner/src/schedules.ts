@@ -27,7 +27,7 @@ import { expandHome } from './config.ts';
 import { standInFor } from './pools.ts';
 import { CronError, checkZone, describeAt, describeCron, localZone, nextRun, nextRuns, parseCron } from './cron.ts';
 import { cutSafely, firstLineSafely } from './safe-cut.ts';
-import { ceilingMode, lowerMode } from './runner/ceiling.ts';
+import { CEILING_REFUSED, ceilingMode, lowerMode } from './runner/ceiling.ts';
 import { raises } from './threadbear-mcp.ts';
 
 // What a check printed, carried by a run: kept (when it was kept) and the
@@ -1829,6 +1829,13 @@ export class Scheduler {
       if (e instanceof RpcError && e.code === ErrorCode.busy) {
         if (manual) throw new RpcError(ErrorCode.busy, "Couldn't confirm this scheduled run. Check the thread before running it again.");
         return { outcome: 'retry' };
+      }
+      // A draining runner whose thread is above its ceiling there.
+      if (e instanceof RpcError && e.code === ErrorCode.notAllowed && rec.threadId && e.message.startsWith(CEILING_REFUSED)) {
+        const note = `Paused, not sent: its thread has more access now than the thread that set this up had. Read it, and resume it (or run it now) if it's still wanted.`;
+        record('skipped', rec.threadId, note);
+        this.heldForCeiling(rec, note);
+        return { outcome: 'skipped', note };
       }
       const note = (e as Error).message ?? String(e);
       record('failed', rec.threadId, note);

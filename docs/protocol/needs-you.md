@@ -705,8 +705,12 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   thread's held report, a reply from another runner, a schedule another
   thread set up, and another thread's `send_message`, `tb send` or
   `move_thread` `then` waiting in the queue behind a running turn, whose
-  ceiling is the receiver's access as it was accepted; a review's or a
-  panel member's answer too, each merged answer checked again:
+  ceiling is the receiver's access as it was accepted, or as the card
+  showed it; a review's or a panel member's answer too, each merged answer
+  checked again; and an agent's own words that come back to it later,
+  `wait_for_app_restart`'s text and an end_turn snooze in words, at its
+  saved mode as it wrote them (`wakeCeiling`; ones from before are bound
+  at the thread's mode as the runner starts):
   `runner/src/runner/ceiling.ts`). The wake's message is checked again
   as it leaves the queue (one queued again after an interrupted delivery
   keeps its ceiling; one queued by an older release goes by its

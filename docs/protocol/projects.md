@@ -302,8 +302,7 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   or changing its words (the app, `tb`, the phone), or his Run now, lifts
   the ceiling; a limited thread rewording or resuming one lowers it to its
   own mode (never lifts it, even through a card, which shows only what
-  changes), the thread it sends to changing it leaves it as it is
-  (`schedules.update`'s `keepCeiling`, which the RPC gate sets), and a
+  changes; the thread it sends to included), and a
   limited thread's Run now goes by the higher of its mode and the
   ceiling. Over RPC, `ceiling` (and `schedules.run`'s `by`) left out is
   Mike's; the RPC gate puts a thread's own in, whatever it says. A

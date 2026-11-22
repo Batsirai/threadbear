@@ -309,7 +309,7 @@ export class CallerGate {
     return { ...p, permissionMode: mode, createdBy: threadId };
   }
 
-  private scheduleUpdate(threadId: string, caller: Authority, p: Params, needs: (what: string, tool?: string) => RpcError): Params {
+  private scheduleUpdate(_threadId: string, caller: Authority, p: Params, needs: (what: string, tool?: string) => RpcError): Params {
     const out: Params = { ...p };
     const sc = this.findSchedule(p, needs);
     const modes = scheduleModes(sc);
@@ -334,12 +334,10 @@ export class CallerGate {
     const dropsCheck = Boolean(sc.check) && (p.check === null || (typeof p.check === 'string' && !p.check.trim()));
     if (protectedSc && (lowers || dropsCheck)) throw needs(`${dropsCheck ? 'taking the shell command off' : 'changing the access of'} the schedule "${sc.title}"`, 'update_schedule');
     if (p.permissionMode !== undefined && !sc.threadId && p.permissionMode === sc.permissionMode) delete out.permissionMode;
-    // New words from it are as far as it can reach (schedules.ts, "Ceilings").
-    // In the thread it sends to the ceiling stays as it was, rather than be
-    // lifted (one left out over RPC is Mike's) or lowered.
+    // New words from it are as far as it can reach (schedules.ts, "Ceilings"),
+    // in its own thread's schedules too: they only ever lower one.
     delete out.keepCeiling;
-    if (sc.threadId === threadId) out.keepCeiling = true;
-    else out.ceiling = ceilingMode(caller.mode);
+    out.ceiling = ceilingMode(caller.mode);
     return out;
   }
 

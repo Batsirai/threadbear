@@ -52,6 +52,12 @@ export const hibernationPart = {
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const gist = this.threadGist(st.rec.id, { recent: 0 });
     const by = params.by === 'agent' ? ('agent' as const) : undefined;
+    // Its agent's own words wake it later (wakeForTopic): kept to the access
+    // it had as it wrote them (runner/ceiling.ts).
+    if (by) {
+      st.rec.wakeCeiling = { said, ceiling: ceilingMode(this.authoritySaved(st.rec.id).mode) };
+      this.markDirty(st);
+    }
     const input = { said, now: this.clock.now(), timeZone, title: st.rec.title, first: gist.first, brief: st.rec.brief?.text, ...(by ? { by } : {}) };
     this.update({ threadId: st.rec.id, snoozedUntil: NO_WAKE_TIME });
     this.park(st, { kind: 'wordsAsked', said, ...(by ? { by } : {}) });
@@ -155,11 +161,12 @@ export const hibernationPart = {
     const tell = this.mayTellOf(this.authorityNow(st.rec.id), inThreadId);
     const seen = tell ? `another thread (${inThreadId.slice(0, 8)}) looks to show it has` : 'another thread looks to show it has';
     const said = wakeWhen.said.replace(/\s+/g, ' ').trim();
+    const ceiling = st.rec.wakeCeiling?.said === wakeWhen.said ? st.rec.wakeCeiling.ceiling : 'ask';
     this.sendTo(
       st,
       `You hibernated this thread until: ${said}\n\nThreadbear woke it because ${seen} (${topic}), but that's a guess from reading one thread. Check for yourself that it really has${tell ? ' (read_thread on that thread, and the work itself)' : ''}. If it has, carry on with what you meant to do. If it hasn't, call end_turn with needs "nothing" and snooze "${said.replace(/"/g, "'")}" to go back to sleep, and say in a line what's still missing.`,
       [],
-      { origin: 'runner', queue: true },
+      { origin: 'runner', queue: true, ceiling },
     );
     this.log.info('woke to check what it waited for', { threadId, inThreadId, topic });
     return true;

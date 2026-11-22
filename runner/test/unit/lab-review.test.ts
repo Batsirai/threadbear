@@ -297,7 +297,8 @@ test('labReview: a thread busy when it comes across gives the owed review at its
   assert.equal(typeof saved.labReviewOwed.seq, 'number', 'with where its events end');
   // A message reached the thread before the new runner looked (as a
   // restart's resume does).
-  saved.queue = [{ turnId: 'q1', text: 'Check the new release', images: [], origin: 'runner' }];
+  // As this release queues it: with its ceiling ('full', none; runner/ceiling.ts).
+  saved.queue = [{ turnId: 'q1', text: 'Check the new release', images: [], origin: 'runner', ceiling: 'full' }];
   fs.writeFileSync(file, JSON.stringify(saved));
   const claude = new FakeAdapter();
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });
@@ -424,7 +425,8 @@ test('labReview: an owed review is dropped by a next turn that needs Alex', asyn
   await tick();
   const file = path.join(h.home, 'threads', id, 'thread.json');
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  saved.queue = [{ turnId: 'q1', text: 'Check the new release', images: [], origin: 'runner' }];
+  // As this release queues it: with its ceiling ('full', none; runner/ceiling.ts).
+  saved.queue = [{ turnId: 'q1', text: 'Check the new release', images: [], origin: 'runner', ceiling: 'full' }];
   fs.writeFileSync(file, JSON.stringify(saved));
   const claude = new FakeAdapter();
   const codex = new FakeAdapter('codex', { ...CODEX_FLAGS, archives: true });

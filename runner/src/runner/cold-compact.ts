@@ -178,7 +178,7 @@ export const coldCompactPart = {
       rec.interruptedMessages = [...(rec.interruptedMessages ?? []), seq];
       this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, turn.turnId);
     } else if (!isAutomaticInput(msg)) {
-      rec.queue.unshift({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: msg.text, images: msg.images, ...(msg.origin ? { origin: msg.origin } : {}), ...(msg.ceiling !== undefined ? { ceiling: msg.ceiling } : {}) });
+      rec.queue.unshift({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: msg.text, images: msg.images, ...(seq !== undefined ? { seq } : {}), ...(msg.origin ? { origin: msg.origin } : {}), ...(msg.ceiling !== undefined ? { ceiling: msg.ceiling } : {}) });
       this.emit(st, { type: 'system.note', text: 'Queued an unread message again after the CLI interrupted its delivery.' }, turn.turnId);
     }
     this.markDirty(st);
