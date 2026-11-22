@@ -690,12 +690,13 @@ export const appSchema = defineSchema({
   // (push.ts), kept across the runner's writes.
   // pushHeldAt: a push to "when I'm away" phones held back because Mike was
   // at the Mac; it goes out if he leaves while the thread still needs him.
-  // clearedAt: when a clear (push:clear) was sent for it, so each alert is
-  // taken down once; push:notify unsets it as it sends the next alert.
+  // alertedAt: when push:notify last delivered an alert for it still up on
+  // a phone; the clear that takes it down (push:clear) unsets it, so each
+  // alert is cleared at most once (sync.ts upsertThreads).
   // view "overflow": a runner key's thread past its view's cap (sync.ts
   // upsertThreads): out of the lists the phone reads whole, everything
   // else kept; wantView is the view it's really in, which reads by id show.
-  threads: defineTable({ ...threadFields, view: v.union(...[...views, 'overflow' as const].map((x) => v.literal(x))), wantView: v.optional(v.union(...views.map((x) => v.literal(x)))), pushedAt: v.optional(v.number()), pushHeldAt: v.optional(v.number()), clearedAt: v.optional(v.number()), updatedMs: v.optional(v.number()) })
+  threads: defineTable({ ...threadFields, view: v.union(...[...views, 'overflow' as const].map((x) => v.literal(x))), wantView: v.optional(v.union(...views.map((x) => v.literal(x)))), pushedAt: v.optional(v.number()), pushHeldAt: v.optional(v.number()), alertedAt: v.optional(v.number()), updatedMs: v.optional(v.number()) })
     // phone:threadsSince (API 43): the rows written since a client last heard.
     // updatedMs moves with what a list shows, not with the mirror's own push
     // marks, so those re-run nothing.

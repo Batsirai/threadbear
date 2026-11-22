@@ -10,7 +10,7 @@
 // does (relay/convex/relay.ts registerVerified, admit).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend } from '../helpers/convex-memory.ts';
+import { call, load, memoryBackend, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const push = load('push');
 const devices = load('devices');
@@ -325,4 +325,26 @@ test('a phone the relay says is gone after a clear is dropped, so the next clear
   assert.deepEqual(cleared.filter((t) => t === dead).length, 1, 'cleared once, then dropped');
   assert.equal(w.rows('devices').some((d) => d.apnsToken === dead), false);
   assert.equal(relay.registers, 1);
+});
+
+// Daybreak 169's reviews: only an alert some phone really got makes the
+// thread's notification one to clear (devices:alerted), not a push that was
+// held for "away" phones while Mike's at the Mac, or one with no phones.
+test('push:notify marks a thread to clear only when an alert reached a phone', async () => {
+  fakeRelay();
+  const w = await world(2);
+  const now = Date.now();
+  await w.ctx.db.insert('threads', { threadId: 'T', runnerId: 'mac1', ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: true, pushedAt: now });
+  const t = () => w.rows('threads').find((r) => r.threadId === 'T')!;
+  // At the Mac, with only "away" phones (the default): held, nothing sent.
+  await w.ctx.db.insert('runners', { runnerId: 'mac1', name: 'Laptop', version: '1', lastSeenAt: now, startedAt: new Date(now).toISOString(), draining: false, threadCount: 1, atMac: true, atMacAt: now });
+  const atMac = await call(w.actionCtx, push.notify, { threadId: 'T' });
+  assert.equal(atMac.sent, 0);
+  assert.equal(t().alertedAt, undefined, 'held: nothing on any phone to clear');
+  assert.ok(t().pushHeldAt);
+  // He leaves: the held push goes to the away phones.
+  await w.ctx.db.patch(w.rows('runners')[0]._id, { atMac: false, atMacAt: now });
+  const away = await call(w.actionCtx, push.notify, { threadId: 'T', held: true });
+  assert.equal(away.sent, 2);
+  assert.ok(t().alertedAt, 'delivered: one clear may take it down');
 });

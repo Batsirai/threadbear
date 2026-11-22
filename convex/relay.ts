@@ -206,7 +206,7 @@ export const remoteThread = query({
     const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).unique();
     if (!t) return null;
     // The secret card's key stays: the runner seals an answer to it, as the phone does.
-    const { _id, _creationTime, pushedAt: _p, pushHeldAt: _h, clearedAt: _c, ...rest } = t;
+    const { _id, _creationTime, pushedAt: _p, pushHeldAt: _h, alertedAt: _a, ...rest } = t;
     return rest;
   },
 });

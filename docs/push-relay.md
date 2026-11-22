@@ -137,8 +137,9 @@ push (`apns-push-type: background`, priority 5) of `{ aps: {
 notifications. It's checked, rate limited and counted like a send,
 including giving back its bad-token charge unless the token was to blame
 (Daybreak, 22 Nov: before that, 20 clears that went through stopped every
-push for the rest of the hour). Each alert is cleared once (only an alert
-really sent makes it clearable again), and a phone a clear finds gone is dropped, as
+push for the rest of the hour). A clear goes only for an alert a phone
+really got, and at most once for it (one held while Mike's at the Mac
+counts once it goes out), and a phone a clear finds gone is dropped, as
 after a send, so a runner flipping a thread back and forth can't use the
 allowance up with silent clears. Apps
 from before it ignore it, as there's no alert and no `threadId`, and a
