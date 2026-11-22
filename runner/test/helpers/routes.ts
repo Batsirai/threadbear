@@ -19,6 +19,7 @@ import { Relay } from '../../src/relay.ts';
 import { nullLogger } from '../../src/log.ts';
 import type { ImageRef, LabReviewLedger } from '../../src/protocol.ts';
 import type { Post, Upload } from '../../src/sync.ts';
+import { leadReport } from '../../src/runner/everyone.ts';
 
 const OWNER = 'owner-key';
 const TOKEN = 'phone-token';
@@ -73,6 +74,8 @@ export type Play = {
   earlyStop(): void;
   /** The thread's login ran out and the runner moved it to another (runner/pools.ts moveLogin). */
   loginMoved(): void;
+  /** A For everyone member answered, and the runner passes it to this thread, its lead (runner/everyone.ts). */
+  panelAnswer(name: string, reply: string): void;
 };
 
 export async function threeWays(play: (p: Play) => void | Promise<void>) {
@@ -225,6 +228,10 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
       sendFromPhone: (text) => {
         h.runner.send(thread.id, text, [], { origin: 'phone' });
         h.adapter.last.init();
+      },
+      panelAnswer: (name, reply) => {
+        const answers = [{ threadId: 'member-0000', name, reply }];
+        h.runner.send(thread.id, leadReport(answers, [], [name]), [], { origin: 'runner', queue: true, wakeReason: `${name} answered`, everyoneAnswers: answers });
       },
       queuedReminder: (text, scheduleId) => {
         h.runner.send(thread.id, text, [], { origin: 'schedule', scheduleId, queue: true });

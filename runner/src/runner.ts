@@ -66,7 +66,7 @@ import type {
 } from './adapters/types.ts';
 import { SessionNotFoundError } from './adapters/types.ts';
 import type { UseResetOutcome } from './adapters/types.ts';
-import type { EventLog, ThreadRecord, ThreadStore, QueuedSend, SubagentRecord } from './store.ts';
+import type { EventLog, ThreadRecord, ThreadStore, QueuedSend, SubagentRecord, EveryoneAnswer } from './store.ts';
 import { cutOut } from './store.ts';
 
 // The presses a thread keeps for its agent to hear of (Runner.notePress).
@@ -142,6 +142,7 @@ import { looseEndsPart, WAITING_TO_LAND_RECHECK_MS, type LooseEndsPart } from '.
 import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
 import { GUESS_CATCH_UP_MS, inboxGuessPart, type InboxGuessPart } from './runner/inbox-guess.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
+import { everyonePart, type EveryonePart } from './runner/everyone.ts';
 import { mailPart, type MailPart } from './runner/mail.ts';
 import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
@@ -756,7 +757,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, MailPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, MailPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart, EveryonePart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -1962,6 +1963,7 @@ export class Runner {
     if (opts.scheduledSince !== undefined) msg.scheduledSince = opts.scheduledSince;
     if (opts.answers?.length) msg.answers = opts.answers;
     if (opts.editOf) msg.editOf = opts.editOf;
+    if (opts.everyoneAnswers?.length && opts.origin === 'runner') msg.everyoneAnswers = opts.everyoneAnswers;
     rec.lastActivityAt = this.isoNow();
     if (rt.turn && !opts.queue && fromMike(text, opts) && this.switchWaiting(st)) {
       // He picked another login (another provider, usually) during this
@@ -3138,6 +3140,8 @@ export class Runner {
     // Reports its starter is holding may go now; at once if this one failed
     // or was stopped (one moving login or waiting for the network carries
     // on by itself). runner/nested.ts.
+    // A panel member's answer goes to its lead (runner/everyone.ts).
+    if (rec.everyoneOf && outcome === 'completed' && !turn.local) this.tellLead(st, turn.lastText);
     if (rec.startedBy?.kind === 'thread' && !rec.detached) this.settleHeldSoon(rec.startedBy.threadId, outcome !== 'completed' && !limitHit && !netLost && !movedOff);
     // A code change gets another lab's review before it counts as done
     // (runner/lab-review.ts, unless Settings turns it off): the thread waits on
@@ -4672,6 +4676,8 @@ export class Runner {
     if (rec.detached) s.detached = true;
     if (rec.asked) s.asked = rec.asked;
     if (rec.request) s.request = rec.request;
+    if (rec.everyone) s.everyone = { members: rec.everyone.members.map((m) => ({ ...m })), ...(rec.everyone.missing?.length ? { missing: rec.everyone.missing.map((m) => ({ ...m })) } : {}) };
+    if (rec.everyoneOf) s.everyoneOf = rec.everyoneOf;
     if (rec.keywords) s.keywords = rec.keywords;
     if (rec.panelRequest) s.panelRequest = { ...rec.panelRequest };
     // A record from 28 Oct may say "people" (sharing with specific people,
@@ -5022,7 +5028,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, mailPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart, warmStartPart]) {
+for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, mailPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart, warmStartPart, everyonePart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }
@@ -5052,7 +5058,7 @@ export function stoppedWorkMessage(what: string[], last: boolean): string {
 // `wakeReason`: for a message the runner sends by itself, what happened, in a few
 // words ("The app restarted"), shown on the divider before the turn it
 // starts ("14 h later · The app restarted", Mike 19 Nov).
-export type SendOptions = { origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
+export type SendOptions = { everyoneAnswers?: EveryoneAnswer[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
 
 type ScheduledDelivery = { seq: number; started: boolean; text: string; images: ImageRef[]; superseded?: false } | { superseded: true; started: true };
 
@@ -5133,6 +5139,7 @@ export function userMessage(msg: QueuedSend): EventBody {
     ...(msg.reviewId ? { reviewId: msg.reviewId, reviewResponse: msg.reviewResponse } : {}),
     ...(msg.answers?.length ? { answers: msg.answers } : {}),
     ...(msg.editOf ? { editOf: msg.editOf } : {}),
+    ...(msg.everyoneAnswers?.length && msg.origin === 'runner' ? { everyone: true as const } : {}),
   };
 }
 

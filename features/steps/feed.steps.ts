@@ -8,9 +8,11 @@ import type { ThreadbearWorld } from '../support/world.ts';
 // "quiet", "done"), the top line and how many pictures of it are read, the fold's words, whether it's open and its
 // messages then, whether an answer or reply is on its way, and whether it has
 // a reply box.
-type Card = { id: string; title: string; state: string; top: string; pictures: number; fold: string; open: boolean; messages: string[]; sending: boolean; reply: boolean };
+type Card = { id: string; title: string; state: string; top: string; pictures: number; fold: string; open: boolean; messages: string[]; sending: boolean; reply: boolean; forEveryone: boolean; panelLines: string[]; replyTo: string | null; askOthers: boolean; members: { name: string; threadId: string }[] };
+type Compose = { everyone: boolean; starting: string | null };
 const cards = (d: Dump): Card[] => ((d as unknown as { homePage?: { title?: string; cards?: Card[] } | null }).homePage?.cards ?? []);
 const card = (d: Dump, title: string) => cards(d).find((c) => c.title === title);
+const compose = (d: Dump): Compose | undefined => (d as unknown as { homePage?: { compose?: Compose } | null }).homePage?.compose;
 
 When('I open the Feed', async function (this: ThreadbearWorld) {
   await this.until('the demo threads', (d) => d.sidebar.sections.some((s) => s.threads.length > 0));
@@ -124,4 +126,63 @@ When("I click {string} on the Feed's card {string}", async function (this: Threa
   const c = await this.until(`a card for "${title}"`, (d) => card(d, title));
   await this.app.do({ cmd: 'feed', thread: c.id, show: true });
   await this.app.do({ cmd: 'click', title: label });
+});
+
+// For everyone (docs/protocol/threads.md).
+
+Then('the Feed has one card {string}', async function (this: ThreadbearWorld, title: string) {
+  await this.until(`one card "${title}"`, (d) => cards(d).filter((c) => c.title === title).length === 1);
+});
+
+Then("the Feed's card {string} is for everyone", async function (this: ThreadbearWorld, title: string) {
+  await this.until(`"${title}" for everyone`, (d) => card(d, title)?.forEveryone === true);
+});
+
+Then("the Feed's card {string} says where it's at {string}", async function (this: ThreadbearWorld, title: string, line: string) {
+  await this.until(`"${line}" on "${title}"`, (d) => card(d, title)?.panelLines.includes(line));
+});
+
+Then("the Feed's card {string} replies to {string}", async function (this: ThreadbearWorld, title: string, to: string) {
+  await this.until(`"${title}" replying to ${to}`, (d) => card(d, title)?.replyTo === to);
+});
+
+When('I reply {string} to {string} on the Feed\'s card {string}', async function (this: ThreadbearWorld, words: string, to: string, title: string) {
+  const c = await this.until(`a card for "${title}"`, (d) => card(d, title));
+  await this.app.do({ cmd: 'feed', thread: c.id, replyTo: to });
+  await this.until(`"${title}" replying to ${to}`, (d) => card(d, title)?.replyTo === to);
+  await this.app.do({ cmd: 'feed', thread: c.id, reply: words });
+});
+
+// The member's own transcript has the words, and the lead's doesn't.
+Then("{word} thread on the Feed's card {string} got {string}", async function (this: ThreadbearWorld, who: string, title: string, words: string) {
+  const name = who.replace(/'s$/, '');
+  const c = await this.until(`a card for "${title}"`, (d) => card(d, title));
+  const member = c.members.find((m) => m.name === name);
+  assert.ok(member, `no ${name} on "${title}": ${c.members.map((m) => m.name).join(', ')}`);
+  await this.app.do({ cmd: 'open', id: member.threadId });
+  await this.until(`"${words}" in ${name}'s thread`, (d) => d.transcript.threadId === member.threadId && d.transcript.rows.some((r) => JSON.stringify(r).includes(words)));
+  await this.app.do({ cmd: 'open', id: c.id });
+  const lead = await this.until(`the lead open`, (d) => (d.transcript.threadId === c.id ? d : undefined));
+  assert.ok(!lead.transcript.rows.some((r) => JSON.stringify(r).includes(words)), 'the lead got it too');
+});
+
+When('I start {string} for everyone from the Feed', async function (this: ThreadbearWorld, words: string) {
+  await this.app.do({ cmd: 'feed', everyone: true, compose: words, start: true });
+});
+
+Then('the Feed is starting a thread', async function (this: ThreadbearWorld) {
+  await this.until('the top box starting', (d) => Boolean(compose(d)?.starting), 2_000);
+});
+
+Then("the Feed's card {string} can ask the others", async function (this: ThreadbearWorld, title: string) {
+  await this.until(`Ask the others on "${title}"`, (d) => card(d, title)?.askOthers === true);
+});
+
+When("I ask the others on the Feed's card {string}", async function (this: ThreadbearWorld, title: string) {
+  const c = await this.until(`a card for "${title}"`, (d) => card(d, title));
+  await this.app.do({ cmd: 'feed', thread: c.id, askOthers: true });
+});
+
+Then("the Feed's card {string} is asking {string}", async function (this: ThreadbearWorld, title: string, who: string) {
+  await this.until(`"${title}" asking ${who}`, (d) => card(d, title)?.fold.startsWith(who));
 });

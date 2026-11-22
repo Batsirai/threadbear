@@ -321,6 +321,11 @@ export type ThreadSummary = {
   // His first message to it, one line of up to 200 chars, for the Feed's
   // card (docs/protocol/threads.md, "What Mike first asked"). It stays once set.
   request?: string;
+  // A panel's lead: the other labs asked the same question, and those left
+  // out (docs/protocol/threads.md, "For everyone").
+  everyone?: EveryonePanel;
+  // A panel member: its lead's id.
+  everyoneOf?: string;
   // The librarian's search words for it, space-separated (docs/protocol/threads.md,
   // "Search"): searches match them as well as the title and preview.
   keywords?: string;
@@ -381,6 +386,13 @@ export type ThreadWorktree = { branch: string; mainCheckout: string; path: strin
 
 // The schedule's title as it was when it started the thread.
 export type ThreadSchedule = { id: string; title: string };
+// The labs a question went to with For everyone (docs/protocol/threads.md).
+export type EveryoneMissing = 'notSignedIn' | 'noRoom' | 'failed';
+export type EveryonePanel = {
+  members: { provider: Provider; name: string; threadId: string }[];
+  missing?: { provider: Provider; name: string; why: EveryoneMissing }[];
+};
+
 export type ThreadStartedByKind = 'tool' | 'thread' | 'schedule' | 'librarian' | 'runner';
 export type ThreadStartedBy = {
   kind: ThreadStartedByKind;
@@ -873,7 +885,7 @@ export type EventBody =
   | { type: 'button.updated'; button: ReplyButton }
   // origin is set only on messages the runner sent by itself (the resume
   // after a restart).
-  | { type: 'user.message'; text: string; images: ImageRef[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number; sentAs?: string }
+  | { type: 'user.message'; text: string; images: ImageRef[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; reviewId?: string; reviewResponse?: ReviewDraft; answers?: AskAnswer[]; editOf?: number; sentAs?: string; everyone?: true }
   // summary: the turn's summary, written by the runner from end_turn
   // givesWay: the turn's summary, with bullet replies off: any message of
   // the turn is the reply over it, however short

@@ -178,6 +178,17 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: "a For everyone lead hears a member's answer",
+    shows: ['Wait for one good release first.', 'Codex answered', 'Both say wait for one good release.'],
+    play: (p) => {
+      p.say('Wait for one good release first.');
+      p.endTurn({ needs: 'nothing' }, true);
+      p.panelAnswer('Codex', 'Wait: the last tag had an empty signature.');
+      p.say('Both say wait for one good release.');
+      p.endTurn({ needs: 'you', asks: [{ question: 'Revoke the old key now, or wait?', options: [{ label: 'Wait' }, { label: 'Revoke now' }], suggested: 0 }] });
+    },
+  },
+  {
     name: 'a reply with no card',
     shows: ['Just an answer.'],
     play: (p) => {

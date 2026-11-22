@@ -448,6 +448,59 @@ card with it. A `threadIndex` row carries it from backend API 96, so the
 Feed has it for another runner's threads; the phone's thread rows don't
 (the phone has no Feed).
 
+## For everyone
+
+Experiment `feed` (runner/src/runner/everyone.ts). Mike asks Claude,
+Codex, Gemini and Grok the same question at once, as he did by hand with
+the delegate skill's panels, and reads their answers on one Feed card
+(mockup r3-c-status, 22 Nov 2026).
+
+- **Starting one.** `threads.create` with `everyone: true` makes the thread
+  as usual, the lead, on the login it would get anyway. Then for each other
+  lab of `claude`, `codex`, `antigravity` (Gemini) and `grok` it starts a
+  member thread with the same words, on a login of that lab with room
+  that the folder allows (the review's picker, runner/lab-review.ts). A
+  member runs in the lead's folder (no worktree of its own) on the lead's
+  mode, at effort `medium` (one its model doesn't take is dropped), on
+  `defaults.models[provider]`, else the model Mike's `labPanel` or
+  `labReviewers` names for that lab, else the login's own. Its message
+  ends with a line saying the others are answering too and that it
+  shouldn't change files, as they share the folder. `startedBy` is `{
+  kind: "thread", label: "For everyone", threadId: <lead> }`.
+  `threads.askOthers { threadId }` does the same for a thread that already
+  exists, with Mike's first message to it (refused, `-32602`, for one with
+  none, one that's already a panel or a member, or another runner's). Both
+  are refused (`-32602`) with the experiment off, and `everyone` isn't
+  taken from a thread's own key (rpc-gate.ts).
+- **Who's on it.** The lead's summary has `everyone: { members:
+  { provider, name, threadId }[], missing?: { provider, name, why }[] }`,
+  each member's `everyoneOf: <lead id>`. A lab with no login on this runner
+  is in `missing` with `why: "notSignedIn"`, one whose logins have no room
+  or the folder doesn't allow with `"noRoom"`, and one whose thread failed
+  to start with `"failed"`, so the card can say who's left out rather than
+  showing three answers with nothing about the fourth. With no other lab
+  at all, the lead still runs and `members` is empty.
+- **Answers go to the lead.** When a member's turn completes, its reply
+  goes to the lead as a runner message (`origin: "runner"`, `everyone:
+  true` on its `user.message`, `wakeReason` "Codex answered"), queued
+  behind a turn under way and merged with another answer still waiting in
+  the queue, so answers that arrive together cost one turn. It says who
+  answered, their words (cut at 4,000 characters), who's still to answer,
+  and asks the lead to end its turn with a headline that sums up where the
+  answers agree and differ, and asks for Mike's decision if one is needed.
+  The lead's headline is the card's "Where it's at". Not while the lead is
+  archived or hibernating: the member's reply is still in its own thread.
+- **Members tidy up.** A member that finishes with nothing for Mike is
+  archived like any helper (A quiet inbox), Mike's follow-ups to it
+  included, so the sidebar keeps the lead alone.
+- **Talking to them.** There's no request for the whole panel: the app
+  sends Mike's reply to the lead and to every member that isn't deleted
+  (`@everyone`), or to one of them (`@Codex`).
+
+Mac (GPUI) app only, in the Feed; another runner's lead shows its own
+card without its members' answers, and the phone and the website show the
+threads as plain threads.
+
 ## Loose ends
 
 `runner/src/loose-ends.ts`, `runner/src/runner/loose-ends.ts`. Tried as

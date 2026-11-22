@@ -163,6 +163,14 @@ if (process.env.TB_MOCK_REVIEWERS) {
     { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '~/.config/opencode', models: [{ id: 'google/gemini-4-neon', model: 'google/gemini-4-neon', title: 'google/gemini-4-neon', effortLevels: ['low', 'medium', 'high'] }, { id: 'zai/glm-5', model: 'zai/glm-5', title: 'zai/glm-5' }] },
   ];
 }
+// TB_MOCK_FEED: Grok and Gemini logins too, so For everyone asks all four
+// labs (docs/protocol/threads.md, "For everyone").
+if (process.env.TB_MOCK_FEED) {
+  if (!accounts.some((a) => a.id === 'grok-main')) {
+    accounts.push({ id: 'grok-main', provider: 'grok', title: 'Grok · alex@example.com', configDir: '~/.grok', models: [{ id: 'grok-4.7', model: 'grok-4.7', title: 'grok-4.7', effortLevels: ['low', 'medium', 'high'] }] });
+  }
+  accounts.push({ id: 'antigravity-main', provider: 'antigravity', title: 'Gemini · alex@example.com', configDir: '~/.gemini', models: [{ id: 'gemini-4-neon', model: 'gemini-4-neon', title: 'Gemini 4 Neon' }] });
+}
 // TB_MOCK_SIGN_INS: claude-4 signed out and claude-3's sign-in ending in two
 // days, for pictures of the Usage panel's sign-in lines (docs/protocol/settings.md,
 // Pools, "Signed out"). Off by default so the design set stays as it was.
@@ -1047,6 +1055,8 @@ async function dispatch(client, method, p) {
       broadcastSummary(threadId);
       if (startIn.length) broadcastProjects();
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
+      // For everyone (docs/protocol/threads.md): the other labs, as the runner asks them.
+      if (p.everyone === true) askEveryone(summary, p.text);
       return { thread: summary };
     }
     // The Usage panel's Find work for it (protocol `accounts.findWork`): a
@@ -1097,6 +1107,16 @@ async function dispatch(client, method, p) {
       if (!sc.changes.length) delete updates.swiftChanges;
       broadcast('runner.updates', { updates });
       return { swiftChanges: sc, ...(method === 'swiftChanges.port' ? { threadId, ...(threads.has(threadId) ? { thread: threads.get(threadId).summary } : {}) } : {}) };
+    }
+    // For everyone's Ask the others: the thread's first question to the other labs.
+    case 'threads.askOthers': {
+      const t = need(p.threadId);
+      if (t.summary.everyone || t.summary.everyoneOf) throw rpcError(-32602, 'The others have been asked already.');
+      const first = t.events.find((e) => e.type === 'user.message' && !e.origin)?.text;
+      if (!first) throw rpcError(-32602, "There's no message of yours in this thread to ask the others.");
+      await sleep(slow.ms || 300);
+      askEveryone(t.summary, first);
+      return { thread: t.summary };
     }
     case 'threads.send': {
       const t = need(p.threadId);
@@ -3946,6 +3966,36 @@ function addDemoNested() {
   });
 }
 
+// For everyone (docs/protocol/threads.md): a member thread on each other lab
+// with a login here, each with a made-up answer; the rest left out.
+const EVERYONE_LABS = [['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Gemini'], ['grok', 'Grok']];
+function askEveryone(lead, text) {
+  const members = [];
+  const missing = [];
+  for (const [provider, name] of EVERYONE_LABS) {
+    if (provider === lead.provider) continue;
+    const account = accounts.find((a) => a.provider === provider && !a.signedOut);
+    if (!account) {
+      missing.push({ provider, name, why: 'notSignedIn' });
+      continue;
+    }
+    const threadId = 'th_' + crypto.randomBytes(6).toString('hex');
+    const now = iso();
+    const summary = {
+      id: threadId, title: lead.title, cwd: lead.cwd, accountId: account.id, provider, model: account.models?.[0]?.id, effort: 'medium',
+      permissionMode: lead.permissionMode, status: 'starting', live: true, needsYou: false, createdAt: now, updatedAt: now, lastActivityAt: now,
+      preview: '', lastSeq: 0, lastSeenSeq: 0, everyoneOf: lead.id,
+      startedBy: { kind: 'thread', label: 'For everyone', threadId: lead.id, threadTitle: lead.title, why: 'answers the same question' },
+    };
+    threads.set(threadId, { summary, events: [], inProgress: new Map(), timers: [] });
+    broadcastSummary(threadId);
+    setTimeout(() => fakeTurn(threadId, text, []), 10);
+    members.push({ provider, name, threadId });
+  }
+  lead.everyone = { members, ...(missing.length ? { missing } : {}) };
+  broadcastSummary(lead.id);
+}
+
 /**
  * TB_MOCK_FEED: the Feed's demo (docs/protocol/threads.md, "What Mike first asked";
  * runner/src/experiments/feed.md), the cards of the mockup Mike picked on 20
@@ -3960,9 +4010,10 @@ function addDemoNested() {
 function addDemoFeed() {
   const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
   const cwd = '/Users/mike/dev/me/threadbear';
-  const make = (id, title, minutes, { status = 'idle', said = [], needs, asks, startedBy, schedule, background, unread } = {}) => {
+  const make = (id, title, minutes, { status = 'idle', said = [], needs, asks, startedBy, schedule, background, unread, provider = 'claude', extra = {} } = {}) => {
     const summary = {
-      id, title, cwd, accountId: 'claude-main', provider: 'claude', model: 'claude-opus-5-5', permissionMode: 'full',
+      ...extra,
+      id, title, cwd, accountId: `${provider}-main`, provider, model: provider === 'claude' ? 'claude-opus-5-5' : undefined, permissionMode: 'full',
       status, live: status !== 'idle', needsYou: needs === 'you', createdAt: ago(minutes + 90), updatedAt: ago(minutes), lastActivityAt: ago(minutes),
       preview: '', lastSeq: 0, lastSeenSeq: 0,
       ...(needs ? { needs } : {}), ...(startedBy ? { startedBy } : {}), ...(schedule ? { schedule } : {}), ...(background ? { background } : {}),
@@ -3973,9 +4024,10 @@ function addDemoFeed() {
     let turn = 0;
     said.forEach(([who, words, images = []], i) => {
       const at = ago(minutes + (said.length - i) * 7);
-      if (who === 'mike') {
+      if (who === 'mike' || who === 'panel') {
         turn++;
-        push({ type: 'user.message', text: words, images }, `${id}_t${turn}`, at);
+        // `panel`: a member's answer the runner passed to its lead (For everyone).
+        push({ type: 'user.message', text: words, images, ...(who === 'panel' ? { origin: 'runner', everyone: true, wakeReason: 'Codex and Gemini answered' } : {}) }, `${id}_t${turn}`, at);
         push({ type: 'turn.started' }, `${id}_t${turn}`, at);
       } else {
         push({ type: 'assistant.text', itemId: `${id}_m${i}`, text: words }, `${id}_t${turn}`, at);
@@ -4012,6 +4064,38 @@ function addDemoFeed() {
       ['agent', 'Back works when the pane has history. A fresh pane has nowhere to go back to.'],
     ],
     asks: [{ action: 'Should Back go to the last page or close the pane when there\'s no history?', options: ['Close the pane', 'Do nothing'], suggested: 0 }],
+  });
+  // For everyone: Claude leads, Codex and Gemini have answered, Grok is
+  // still thinking (mockup r3-c-status's panel card).
+  const question = 'Should Threadbear sign releases with Touch ID only, and revoke the old key?';
+  const memberAsk = (others) => `${question}\n\n(${others} are answering this too, each on its own. Answer in your own words, briefly, and don't change any files: you all share this folder.)`;
+  const panelBy = { kind: 'thread', label: 'For everyone', threadId: 'feed_panel', threadTitle: 'Touch ID release signing', why: 'answers the same question' };
+  make('feed_panel_codex', 'Touch ID release signing', 30, {
+    provider: 'codex', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(29), archivedBy: 'threadbear' }, needs: 'nothing',
+    said: [['mike', memberAsk('Claude, Gemini and Grok')], ['agent', "Wait. The last tag came out with an empty signature, so the Touch ID path isn't proven. Revoke once a fork verifies a new tag."]],
+  });
+  make('feed_panel_gemini', 'Touch ID release signing', 26, {
+    provider: 'antigravity', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(25), archivedBy: 'threadbear' }, needs: 'nothing',
+    said: [['mike', memberAsk('Claude, Codex and Grok')], ['agent', "Wait, but set a date. One good release, then revoke within a week so the old key doesn't hang around."]],
+  });
+  make('feed_panel_grok', 'Touch ID release signing', 1, {
+    provider: 'grok', startedBy: panelBy, extra: { everyoneOf: 'feed_panel' }, status: 'running',
+    said: [['mike', memberAsk('Claude, Codex and Gemini')]],
+  });
+  make('feed_panel', 'Touch ID release signing', 8, {
+    needs: 'you', unread: true,
+    extra: { everyone: { members: [
+      { provider: 'codex', name: 'Codex', threadId: 'feed_panel_codex' },
+      { provider: 'antigravity', name: 'Gemini', threadId: 'feed_panel_gemini' },
+      { provider: 'grok', name: 'Grok', threadId: 'feed_panel_grok' },
+    ] } },
+    said: [
+      ['mike', question],
+      ['agent', 'Wait. Revoking can\'t be undone, and forks would reject anything signed with the old key. Ship one good Touch ID release first.'],
+      ['panel', 'For everyone: Codex and Gemini answered.'],
+      ['agent', 'All three so far say wait for one good Touch ID release before revoking.'],
+    ],
+    asks: [{ action: 'Revoke the old key now, or wait?', options: ['Wait for one release', 'Revoke now'], suggested: 0 }],
   });
   make('feed_bedtime', 'Bedtime Tube', 20, {
     said: [

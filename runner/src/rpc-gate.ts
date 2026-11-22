@@ -181,7 +181,8 @@ export class CallerGate {
         const given = p.startedBy && typeof p.startedBy === 'object' ? (p.startedBy as Params) : {};
         // `unconfine` is only ever the user's: an older runner across a
         // handover still reads it (the sandbox taken out 16 Nov 2026).
-        const { unconfine: _u, ...rest } = p;
+        // So is `everyone` (For everyone): a panel spends four labs' room.
+        const { unconfine: _u, everyone: _e, ...rest } = p;
         return takeImages({ ...rest, permissionMode: mode, startedBy: { ...given, kind: 'thread', threadId, label: typeof given.label === 'string' && given.label ? given.label : 'Agent' } });
       }
       case 'threads.send': {

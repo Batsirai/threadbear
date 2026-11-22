@@ -76,9 +76,24 @@ pub fn feed_threads<'a, T: Borrow<ThreadSummary> + Clone + 'a>(
     wakes: &HashMap<String, Wake>,
     kept: &HashSet<String>,
 ) -> Vec<T> {
+    let rows: Vec<&'a T> = threads.into_iter().collect();
+    let by_id: HashMap<&str, &ThreadSummary> = rows
+        .iter()
+        .map(|r| {
+            let t: &ThreadSummary = (*r).borrow();
+            (t.id.as_str(), t)
+        })
+        .collect();
     let mut cards: Vec<(u8, bool, i64, String, T)> = Vec::new();
-    for row in threads {
+    for row in rows {
         let t: &ThreadSummary = row.borrow();
+        // A panel member is drawn in its lead's card.
+        if t.everyone_of
+            .as_deref()
+            .is_some_and(|lead| by_id.contains_key(lead))
+        {
+            continue;
+        }
         let state = if t.is_archived() && kept.contains(&t.id) {
             let mut was = t.clone();
             was.archived_at = None;
@@ -92,6 +107,15 @@ pub fn feed_threads<'a, T: Borrow<ThreadSummary> + Clone + 'a>(
             }
             card_state(t, now_ms, wakes)
         };
+        let members: Vec<&ThreadSummary> = panel(t)
+            .map(|p| {
+                p.members
+                    .iter()
+                    .filter_map(|m| by_id.get(m.thread_id.as_str()).copied())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let state = with_members(state, &members, now_ms, wakes);
         let rank = match state {
             CardState::NeedsYou => 0,
             CardState::Running => 1,
@@ -419,6 +443,10 @@ pub fn messages(events: &[Value]) -> Vec<Message> {
     // `out` and the turn it's for, replaced by a later block in that turn.
     let mut reply: Option<(usize, String)> = None;
     let mut items: HashMap<String, usize> = HashMap::new();
+    // Turns a panel member's answer started in its lead (`everyone` on the
+    // runner's message): the card shows the answer from the member's own
+    // thread, and the lead's reply to it as "Where it's at".
+    let mut panel_turns: HashSet<String> = HashSet::new();
     for e in events {
         let seq = e.get("seq").and_then(Value::as_u64).unwrap_or(0);
         if gone(seq) {
@@ -435,6 +463,13 @@ pub fn messages(events: &[Value]) -> Vec<Message> {
             .unwrap_or("")
             .to_owned();
         match e.get("type").and_then(Value::as_str) {
+            Some("user.message") if e.get("everyone").and_then(Value::as_bool) == Some(true) => {
+                if !turn.is_empty() {
+                    panel_turns.insert(turn);
+                }
+                reply = None;
+            }
+            Some("assistant.text") if panel_turns.contains(&turn) => {}
             Some("user.message") => {
                 let text = e
                     .get("text")
@@ -587,6 +622,214 @@ pub fn top_pieces(line: &str, images: Option<usize>) -> Vec<Piece> {
         None => line.to_owned(),
     };
     chips::message_pieces(&line, images.unwrap_or(UNREAD_PICTURES))
+}
+
+/// One of a panel's other labs (protocol "For everyone").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub provider: String,
+    pub name: String,
+    pub thread_id: String,
+}
+
+/// A lab the question didn't go to, and why: "notSignedIn", "noRoom" or
+/// "failed".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeftOut {
+    pub provider: String,
+    pub name: String,
+    pub why: String,
+}
+
+/// A For everyone panel, read from its lead's summary.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Panel {
+    pub members: Vec<Member>,
+    pub missing: Vec<LeftOut>,
+}
+
+/// The panel a lead's summary carries; None for any other thread. A member
+/// or a lab it can't read is left out rather than losing the rest.
+pub fn panel(t: &ThreadSummary) -> Option<Panel> {
+    let v = t.everyone.as_ref()?;
+    let s = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).map(str::to_owned);
+    let members = v
+        .get("members")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|m| {
+                    let provider = s(m, "provider")?;
+                    Some(Member {
+                        name: s(m, "name").unwrap_or_else(|| agent_name(&provider)),
+                        thread_id: s(m, "threadId")?,
+                        provider,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let missing = v
+        .get("missing")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|m| {
+                    let provider = s(m, "provider")?;
+                    Some(LeftOut {
+                        name: s(m, "name").unwrap_or_else(|| agent_name(&provider)),
+                        why: s(m, "why").unwrap_or_default(),
+                        provider,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Panel { members, missing })
+}
+
+/// A lead's card state with its members': one waiting on Mike makes the
+/// card need him, one at work makes a quiet card a running one.
+pub fn with_members(
+    state: CardState,
+    members: &[&ThreadSummary],
+    now_ms: i64,
+    wakes: &HashMap<String, Wake>,
+) -> CardState {
+    let states: Vec<CardState> = members
+        .iter()
+        .filter(|m| !m.is_archived())
+        .map(|m| card_state(m, now_ms, wakes))
+        .collect();
+    if state == CardState::NeedsYou || states.contains(&CardState::NeedsYou) {
+        CardState::NeedsYou
+    } else if state == CardState::Running || states.contains(&CardState::Running) {
+        CardState::Running
+    } else {
+        state
+    }
+}
+
+/// "Codex", "Codex and Gemini", "Claude, Codex, Gemini and Grok".
+pub fn names_line(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The panel's fold: "Claude, Codex, Gemini and Grok · 3 replies", or the
+/// names alone before the messages have been read.
+pub fn panel_fold_label(names: &[String], replies: Option<usize>) -> String {
+    let who = names_line(names);
+    match replies {
+        Some(1) => format!("{who} \u{b7} 1 reply"),
+        Some(n) => format!("{who} \u{b7} {n} replies"),
+        None => who,
+    }
+}
+
+/// The lines under a panel's "Where it's at": who's still at it, who wants
+/// Mike in their own thread, and who was left out and why.
+pub fn panel_status(working: &[String], waiting: &[String], missing: &[LeftOut]) -> Vec<String> {
+    let mut out = Vec::new();
+    if !working.is_empty() {
+        let verb = if working.len() == 1 { "is" } else { "are" };
+        out.push(format!("{} {verb} still thinking.", names_line(working)));
+    }
+    for name in waiting {
+        out.push(format!("{name} is waiting for you in its thread."));
+    }
+    for m in missing {
+        out.push(match m.why.as_str() {
+            "notSignedIn" => format!("{} isn't signed in on this Mac, so it's left out.", m.name),
+            "noRoom" => format!("{} has no login with room, so it's left out.", m.name),
+            _ => format!("{} couldn't start, so it's left out.", m.name),
+        });
+    }
+    out
+}
+
+/// A message in a panel's fold, with the thread it's from and who wrote it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PanelMessage {
+    pub thread_id: String,
+    pub provider: String,
+    pub message: Message,
+}
+
+/// A panel's conversation as one: the lead's messages, and each member's
+/// replies, oldest first. A member's copy of the question (its first
+/// message) is left out, and so is a message of Mike's sent to everyone,
+/// which the lead already has: the same words within ten minutes.
+pub fn panel_messages(
+    lead: (&str, &str, &[Message]),
+    members: &[(&str, &str, &[Message])],
+) -> Vec<PanelMessage> {
+    const SAME_MESSAGE_MS: i64 = 10 * 60_000;
+    let mut out: Vec<PanelMessage> = lead
+        .2
+        .iter()
+        .map(|m| PanelMessage {
+            thread_id: lead.0.to_owned(),
+            provider: lead.1.to_owned(),
+            message: m.clone(),
+        })
+        .collect();
+    for (id, provider, messages) in members {
+        let mut first_mine = true;
+        for m in messages.iter() {
+            if m.author == Author::Mike {
+                if std::mem::take(&mut first_mine) {
+                    continue;
+                }
+                let sent_to_all = out.iter().any(|o| {
+                    o.message.author == Author::Mike
+                        && o.message.text == m.text
+                        && (o.message.at_ms - m.at_ms).abs() <= SAME_MESSAGE_MS
+                });
+                if sent_to_all {
+                    continue;
+                }
+            } else if m.author != Author::Agent {
+                continue;
+            }
+            out.push(PanelMessage {
+                thread_id: (*id).to_owned(),
+                provider: (*provider).to_owned(),
+                message: m.clone(),
+            });
+        }
+    }
+    out.sort_by_key(|m| m.message.at_ms);
+    out
+}
+
+/// Who a panel card's reply box can send to: everyone, then each lab on it,
+/// as "@everyone" and "@Codex" with the thread each one goes to (None for
+/// everyone).
+pub fn reply_targets(lead: &ThreadSummary, panel: &Panel) -> Vec<(String, Option<String>)> {
+    let mut out = vec![("@everyone".to_owned(), None)];
+    out.push((
+        format!("@{}", agent_name(&lead.provider)),
+        Some(lead.id.clone()),
+    ));
+    for m in &panel.members {
+        out.push((format!("@{}", m.name), Some(m.thread_id.clone())));
+    }
+    out
+}
+
+/// Whether a card offers Ask the others: a thread Mike started with
+/// something he asked, on this Mac's runner, not a panel or one of one.
+pub fn can_ask_others(t: &ThreadSummary) -> bool {
+    t.everyone.is_none()
+        && t.everyone_of.is_none()
+        && !t.is_remote()
+        && !t.is_archived()
+        && top(t).from == Starter::Mike
+        && t.request.as_deref().is_some_and(|r| !r.trim().is_empty())
 }
 
 /// How many cards the "↑ N new" pill counts: ones in the feed now that
@@ -1062,6 +1305,222 @@ mod tests {
         assert_eq!(
             dump_line(&t, CardState::Quiet, true),
             "[done] Kite: 19 kn WSW"
+        );
+    }
+
+    fn lead_and_members() -> Vec<ThreadSummary> {
+        vec![
+            thread(
+                "lead",
+                5,
+                json!({ "needs": "nothing", "everyone": {
+                    "members": [
+                        { "provider": "codex", "name": "Codex", "threadId": "m_codex" },
+                        { "provider": "grok", "name": "Grok", "threadId": "m_grok" },
+                    ],
+                    "missing": [{ "provider": "antigravity", "name": "Gemini", "why": "notSignedIn" }],
+                } }),
+            ),
+            thread(
+                "m_codex",
+                4,
+                json!({ "provider": "codex", "needs": "nothing", "everyoneOf": "lead" }),
+            ),
+            thread(
+                "m_grok",
+                1,
+                json!({ "provider": "grok", "status": "running", "everyoneOf": "lead" }),
+            ),
+            thread("other", 30, json!({ "needs": "nothing" })),
+        ]
+    }
+
+    #[test]
+    fn a_panel_is_one_card_running_while_a_member_works() {
+        let threads = lead_and_members();
+        let shown = feed_threads(&threads, NOW, &HashMap::new(), &HashSet::new());
+        assert_eq!(
+            ids(&shown),
+            ["lead", "other"],
+            "members are in the lead's card"
+        );
+        let p = panel(&threads[0]).unwrap();
+        assert_eq!(
+            p.members
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Codex", "Grok"]
+        );
+        let members = [&threads[1], &threads[2]];
+        assert_eq!(
+            with_members(CardState::Quiet, &members, NOW, &HashMap::new()),
+            CardState::Running
+        );
+        // A member whose lead isn't in the list shows on its own.
+        let alone = feed_threads(&threads[1..], NOW, &HashMap::new(), &HashSet::new());
+        assert!(ids(&alone).contains(&"m_codex"));
+    }
+
+    #[test]
+    fn a_panel_card_says_who_is_on_it_and_who_was_left_out() {
+        let names: Vec<String> = ["Claude", "Codex", "Gemini", "Grok"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            panel_fold_label(&names, Some(3)),
+            "Claude, Codex, Gemini and Grok \u{b7} 3 replies"
+        );
+        assert_eq!(
+            panel_fold_label(&names[..2], Some(1)),
+            "Claude and Codex \u{b7} 1 reply"
+        );
+        assert_eq!(panel_fold_label(&names[..1], None), "Claude");
+        let p = panel(&lead_and_members()[0]).unwrap();
+        assert_eq!(
+            panel_status(&["Grok".to_owned()], &[], &p.missing),
+            [
+                "Grok is still thinking.",
+                "Gemini isn't signed in on this Mac, so it's left out."
+            ]
+        );
+        assert_eq!(
+            panel_status(&names[1..3], &["Grok".to_owned()], &[]),
+            [
+                "Codex and Gemini are still thinking.",
+                "Grok is waiting for you in its thread."
+            ]
+        );
+        let lead = &lead_and_members()[0];
+        let targets: Vec<String> = reply_targets(lead, &p).into_iter().map(|t| t.0).collect();
+        assert_eq!(targets, ["@everyone", "@Claude", "@Codex", "@Grok"]);
+    }
+
+    #[test]
+    fn the_answers_passed_to_the_lead_and_its_summing_up_stay_out_of_the_fold() {
+        let ev = |seq: u64, turn: &str, body: Value| {
+            let mut e = json!({ "seq": seq, "turnId": turn, "ts": inbox::iso_time(NOW + seq as i64 * 1000) });
+            for (k, v) in body.as_object().unwrap() {
+                e[k] = v.clone();
+            }
+            e
+        };
+        let events = vec![
+            ev(
+                1,
+                "t1",
+                json!({ "type": "user.message", "text": "Revoke the old key?" }),
+            ),
+            ev(
+                2,
+                "t1",
+                json!({ "type": "assistant.text", "text": "Wait for one good release." }),
+            ),
+            ev(
+                3,
+                "t2",
+                json!({ "type": "user.message", "text": "For everyone: Codex answered.", "origin": "runner", "everyone": true }),
+            ),
+            ev(
+                4,
+                "t2",
+                json!({ "type": "assistant.text", "text": "Both say wait." }),
+            ),
+            ev(
+                5,
+                "t3",
+                json!({ "type": "user.message", "text": "ok wait" }),
+            ),
+            ev(
+                6,
+                "t3",
+                json!({ "type": "assistant.text", "text": "Holding the key." }),
+            ),
+        ];
+        let texts: Vec<String> = messages(&events).into_iter().map(|m| m.text).collect();
+        assert_eq!(
+            texts,
+            [
+                "Revoke the old key?",
+                "Wait for one good release.",
+                "ok wait",
+                "Holding the key."
+            ]
+        );
+    }
+
+    #[test]
+    fn a_panels_fold_merges_the_members_replies_in_time_order() {
+        let m = |author: Author, text: &str, at: i64| Message {
+            seq: at as u64,
+            author,
+            by: String::new(),
+            text: text.to_owned(),
+            at_ms: NOW + at * 60_000,
+            images: Vec::new(),
+        };
+        let lead = vec![
+            m(Author::Mike, "Revoke the old key?", 0),
+            m(Author::Agent, "Claude: wait.", 3),
+            m(Author::Mike, "ok wait", 20),
+        ];
+        let codex = vec![
+            m(
+                Author::Mike,
+                "Revoke the old key?\n\n(Claude is answering this too...)",
+                0,
+            ),
+            m(Author::Agent, "Codex: wait.", 6),
+            m(Author::Mike, "ok wait", 20),
+            m(Author::Agent, "Codex: fine.", 22),
+        ];
+        let grok = vec![
+            m(Author::Mike, "Revoke the old key?", 0),
+            m(Author::Mike, "only you, Grok?", 25),
+        ];
+        let merged = panel_messages(
+            ("lead", "claude", &lead),
+            &[("m_codex", "codex", &codex), ("m_grok", "grok", &grok)],
+        );
+        let said: Vec<(&str, &str)> = merged
+            .iter()
+            .map(|p| (p.provider.as_str(), p.message.text.as_str()))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("claude", "Revoke the old key?"),
+                ("claude", "Claude: wait."),
+                ("codex", "Codex: wait."),
+                ("claude", "ok wait"),
+                ("codex", "Codex: fine."),
+                ("grok", "only you, Grok?"),
+            ]
+        );
+        assert_eq!(
+            merged[2].thread_id, "m_codex",
+            "See full and Open thread go to its own thread"
+        );
+    }
+
+    #[test]
+    fn ask_the_others_is_for_a_thread_mike_started_here() {
+        let mine = thread("mine", 5, json!({ "request": "Revoke the old key?" }));
+        assert!(can_ask_others(&mine));
+        let lead = &lead_and_members()[0];
+        assert!(!can_ask_others(lead), "a panel already");
+        let member = &lead_and_members()[1];
+        assert!(!can_ask_others(member));
+        let started = thread(
+            "started",
+            5,
+            json!({ "request": "x", "startedBy": { "kind": "thread", "label": "Agent" } }),
+        );
+        assert!(!can_ask_others(&started), "not one an agent started");
+        assert!(
+            !can_ask_others(&thread("blank", 5, json!({}))),
+            "nothing of Mike's to ask"
         );
     }
 }

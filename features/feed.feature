@@ -62,3 +62,34 @@ Feature: The Feed: my Inbox as cards, one after another
     Then the Feed's card "Upload screen on mobile" shows 1 picture in what I asked
     When I click "Picture 1" on the Feed's card "Upload screen on mobile"
     Then the viewer shows picture 1 of 1 "progress-after.png"
+
+  # For everyone (docs/protocol/threads.md): the demo's panel card has Claude
+  # leading, Codex and Gemini answered, and Grok still thinking.
+  @inbox.feed @feed @swift-pending
+  Scenario: A question for everyone is one card with every lab's replies
+    Then the Feed has one card "Touch ID release signing"
+    And the Feed's card "Touch ID release signing" is for everyone
+    And the Feed's card "Touch ID release signing" says where it's at "Grok is still thinking."
+    When I open the fold on the Feed's card "Touch ID release signing"
+    Then the Feed's card "Touch ID release signing" says "Claude, Codex, Gemini and Grok · 3 replies"
+    And the Feed's card "Touch ID release signing" shows the message "Wait, but set a date. One good release, then revoke within a week so the old key doesn't hang around."
+    And the Feed's card "Touch ID release signing" replies to "@everyone"
+
+  @inbox.feed @feed @swift-pending
+  Scenario: A reply to one lab goes to its thread alone
+    When I reply "Only you, Codex: how sure are you?" to "@Codex" on the Feed's card "Touch ID release signing"
+    Then Codex's thread on the Feed's card "Touch ID release signing" got "Only you, Codex: how sure are you?"
+
+  @inbox.feed @feed @swift-pending
+  Scenario: The box at the top starts a thread for everyone
+    Given the runner takes its time to change threads
+    When I start "Which of the two logos reads better small?" for everyone from the Feed
+    Then the Feed is starting a thread
+    And the Feed's card "Which of the two logos reads better small?" is for everyone
+    And the Feed's card "Which of the two logos reads better small?" is asking "Claude, Codex, Gemini and Grok"
+
+  @inbox.feed @feed @swift-pending
+  Scenario: Ask the others puts a card's question to the other labs
+    Then the Feed's card "Bedtime Tube" can ask the others
+    When I ask the others on the Feed's card "Bedtime Tube"
+    Then the Feed's card "Bedtime Tube" is for everyone
