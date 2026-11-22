@@ -810,6 +810,8 @@ impl ReviewWindow {
         let pick_id = option.id.clone();
         h_flex()
             .id(("canvas-frame-label", index))
+            .role(Role::Button)
+            .aria_label(SharedString::from(format!("Go to {}", option.label())))
             .absolute()
             .left(gpui_kit::px(x))
             .top(gpui_kit::px(y - 30.))
@@ -824,6 +826,13 @@ impl ReviewWindow {
                 d.child(
                     div()
                         .id(("canvas-pick", index))
+                        .role(Role::CheckBox)
+                        .aria_label(SharedString::from(format!("Pick {}", option.label())))
+                        .aria_toggled(if is_picked {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
                         .child(super::band::checkbox(is_picked, style::accent(cx), cx))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             if this.session.pick(&pick_id) {

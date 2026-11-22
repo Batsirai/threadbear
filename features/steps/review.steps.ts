@@ -303,37 +303,3 @@ Then('the stage shows the page', async function (this: ThreadbearWorld) {
   await untilReview(this, 'the page on the stage', (s) => s.stage === 'page');
 });
 
-// ---------------------------------------------------------------- the board (review-canvas.feature)
-
-type CanvasState = { on: boolean; stop: number; stops: number; notesOn: boolean; agentMarks: number; tool: string; marks: string[] };
-const canvasOf = (s: ReviewState) => (s as ReviewState & { canvas?: CanvasState | null }).canvas ?? null;
-
-Then('the review is a board on stop {int} of {int}', async function (this: ThreadbearWorld, stop: number, stops: number) {
-  await untilReview(this, `the board on stop ${stop} of ${stops}`, (s) => {
-    const c = canvasOf(s);
-    return !!c && c.on && c.stop === stop && c.stops === stops;
-  });
-});
-
-Then("the board has {int} of the agent's notes, showing", async function (this: ThreadbearWorld, count: number) {
-  await untilReview(this, `${count} notes showing`, (s) => {
-    const c = canvasOf(s);
-    return !!c && c.agentMarks === count && c.notesOn;
-  });
-});
-
-Then("the board's notes are hidden", async function (this: ThreadbearWorld) {
-  await untilReview(this, 'the notes hidden', (s) => canvasOf(s)?.notesOn === false);
-});
-
-When("I circle a part of option A's picture on the board", async function (this: ThreadbearWorld) {
-  await review(this, { open: false, canvasMark: { kind: 'circle', option: 0, shot: 0, points: [[0.4, 0.15], [0.7, 0.14], [0.72, 0.24], [0.42, 0.25], [0.4, 0.16]] } });
-});
-
-Then('the board has my mark {string}', async function (this: ThreadbearWorld, mark: string) {
-  await untilReview(this, `my mark ${mark}`, (s) => canvasOf(s)?.marks.includes(mark) ?? false);
-});
-
-Then("the review's reply is {string}", async function (this: ThreadbearWorld, reply: string) {
-  await untilReview(this, `the reply "${reply}"`, (s) => s.reply.trim() === reply);
-});
