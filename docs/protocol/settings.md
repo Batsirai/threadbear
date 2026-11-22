@@ -366,20 +366,32 @@ and numbers are in `wake-when.ts`):
   for itself.") and a runner message (`wakeReason` "The latest it would
   wait passed") that says the time ran out with nothing seen, to check the
   work itself, to snooze again with the same words if it hasn't happened,
-  or to end the turn with no snooze if it never will or Mike should chase
-  it. The record counts these (`lateChecks: { n, waitedMs, since, backOff? }`,
-  never in a `ThreadSummary`) until Mike next writes to the thread, whatever
-  words the agent snoozes with. The sleep that follows a check has a latest
-  time at least twice as far off as the last sleep was long, a week at most
-  (the model's own when that is later, and one even when the model gives
-  none). After three checks in a row the next latest time runs no turn:
+  or to end the turn with no snooze and `needs: "you"` if it never will or
+  Mike should chase it. The wake doesn't mark the thread unread (no
+  `woke`, no notification or push): how the turn ends says whether Mike is
+  needed. A check that can't start yet (behind a queued message or a move)
+  is unread as any wake is. No check starts while the runner is still
+  starting, handing its threads over or waiting to restart: the thread
+  sleeps on, its time passed, and the next runner (or this one, a minute
+  on) gives it. The record counts these (`lateChecks: { n, waitedMs,
+  since, backOff? }`, never in a `ThreadSummary`) until Mike next writes to
+  the thread, whatever words the agent snoozes with. A snooze in words at
+  the end of the check's own turn has a latest time at least twice as far
+  off as the last sleep was meant to be, a week at most (the model's own
+  when that is later, and one even when the model gives none). After three
+  checks in a row the next latest time runs no turn:
   the thread lands in the inbox, its note adding how long it has waited
   and that it's Mike's to decide.
 - A wake at a latest time that ran no turn is kept as a line for the agent
   (`wakeNews`, "Note from Threadbear: this thread woke by itself on …"),
   which goes in front of the thread's next message as news of a button
-  press does, is told again if that turn doesn't complete, and is dropped
-  when the thread next sleeps.
+  press does, is told again if that turn doesn't complete or the thread
+  moves to a fresh session within three days, and is dropped when the
+  thread next sleeps. A check keeps one too until its turn completes, so a
+  check that never reached the agent (its folder gone, a restart while it
+  was queued, Stop) is said with the next message, which asks for the
+  check then; a message that runs ahead of a check still queued is told
+  the check comes next.
 
 A thread archived while it slept ends its sleep quietly, as before. A
 runner that was down at the latest time gives the check once it's

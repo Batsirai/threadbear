@@ -76,6 +76,9 @@ const NESTED: [string, string, 'object' | 'string' | 'number'][] = [
   ['labReview', 'panel', 'object'],
   ['reviewVerdict', 'findings', 'object'],
 ];
+// The longest a wake's line for the agent is (wake-when.ts, lateNews: the
+// agent's words, 300 at most, a topic of 80 and a few sentences).
+const WAKE_NEWS_MAX = 2000;
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 function listOf(v: unknown, kind: 'object' | 'string' | 'number'): unknown[] | undefined {
   if (!Array.isArray(v)) return undefined;
@@ -122,7 +125,15 @@ export function normaliseRecord(rec: Record<string, unknown>): boolean {
     else delete rec.presses;
   }
   // Why it last woke by itself, as a line for its agent (Runner.takeWakeNews).
-  if (isObject(rec.wakeNews) && (typeof rec.wakeNews.text !== 'string' || (rec.wakeNews.told !== undefined && !(isObject(rec.wakeNews.told) && typeof rec.wakeNews.told.seq === 'number')))) delete rec.wakeNews;
+  // Another runner may have written it (a move): only the shape, and the
+  // length, the runner writes.
+  if (isObject(rec.wakeNews)) {
+    const n = rec.wakeNews;
+    const told = n.told;
+    const ok = typeof n.text === 'string' && n.text.length <= WAKE_NEWS_MAX && (n.check === undefined || typeof n.check === 'string') && (n.at === undefined || typeof n.at === 'string') &&
+      (told === undefined || (isObject(told) && Number.isFinite(told.seq) && (told.inFlight === undefined || told.inFlight === true)));
+    if (!ok) delete rec.wakeNews;
+  }
   if (rec.title !== undefined && typeof rec.title !== 'string') rec.title = String(rec.title);
   return JSON.stringify(rec) !== before;
 }
@@ -204,12 +215,17 @@ export type ThreadRecord = {
   // tied to its words, so saying them another way each time can't start the
   // count again.
   lateChecks?: LateChecks;
-  // A wake at a wait's latest time that ran no turn, as a line its agent
-  // gets with the thread's next message (Runner.takeWakeNews), so it can say
-  // why the thread came back. `told`: the message it went with, as a press's
+  // A wake at a wait's latest time, as a line its agent gets with the
+  // thread's next message (Runner.takeWakeNews), so it can say why the
+  // thread came back. `told`: the message it went with, as a press's
   // (PressNote): kept if that turn completed, told again otherwise, or if
-  // Mike goes back to before it. Gone once the thread next sleeps.
-  wakeNews?: { text: string; told?: { seq: number; inFlight?: true } };
+  // Mike goes back to before it or the thread moves to a fresh session.
+  // `check`: the wake sent a message to check (its id), which says it all
+  // itself, so the line goes only with another message and is dropped once
+  // the check's turn completes. Gone once the thread next sleeps.
+  // `at`: when it woke. A line a completed turn heard is kept only
+  // LATE_NEWS_KEPT_MS from then.
+  wakeNews?: { text: string; at?: string; told?: { seq: number; inFlight?: true }; check?: string };
   // Hibernating until these threads finish (end_turn's waitFor,
   // runner/hibernation.ts): each counts once it has finished (with no new
   // work since), been archived or been deleted.

@@ -89,7 +89,7 @@ import { copySessionTranscript, subagentTranscriptPath } from './transcripts.ts'
 import { readSubagentTranscript } from './adapters/claude/subagents.ts';
 import { fileContext } from './adapters/claude/normalize.ts';
 import type { Models } from './models/index.ts';
-import { localWhen } from './wake-when.ts';
+import { LATE_CHECK_LOST, LATE_CHECK_QUEUED, LATE_NEWS_KEPT_MS, localWhen } from './wake-when.ts';
 import { parseWhen } from './when.ts';
 import { SERVER_NAME } from './threadbear-mcp.ts';
 import { archiveFromTool, bylineFromTool, END_TURN_TOOL, snoozeFromTool, waitForFromTool, WakeRead } from './needs.ts';
@@ -1347,6 +1347,7 @@ export class Runner {
     // thread.json being saved; then it only needs its status back.
     const ended = midTurn && rec.turnId ? this.findTurnCompleted(rec.id, rec.turnId) : undefined;
     // Only a turn that completed kept what it was told (Codex's second look).
+    if (midTurn && ended?.type === 'turn.completed' && ended.outcome === 'completed' && rec.wakeNews?.check && rec.wakeNews.check === rec.turnId) delete rec.wakeNews;
     if (midTurn) this.settlePresses(rec, ended?.type === 'turn.completed' && ended.outcome === 'completed');
     // thread.json can be behind the log (a crash before it was saved): a card
     // may have been answered there, and a later "expired" would replace the
@@ -2441,6 +2442,9 @@ export class Runner {
         rt.carried = rec.handoff;
         delete rec.handoff;
       } else if (rec.handoff) {
+        // The new session gets the conversation's messages, not what went
+        // in front of one: why the thread last woke is told again.
+        this.retellWakeNews(rec);
         text = this.handoffNote(st, account) + text;
         // A quick ask's thread never had a session, so nothing to say.
         if (!rec.handoff.quickAsk) this.emit(st, { type: 'system.note', text: `Started a new session in ${rec.cwd} on ${account.title}.` }, msg.turnId);
@@ -4855,22 +4859,50 @@ export class Runner {
     return this.pressNewsText(untold.map((p) => p.line));
   }
 
-  // Why the thread last woke by itself with no turn (runner/hibernation.ts,
+  // Why the thread last woke at a wait's latest time (runner/hibernation.ts,
   // wakeAtTime), if its agent hasn't heard: a line to go before the message
   // being sent now, marked as told by it, as a press is.
-  takeWakeNews(st: ThreadState): string | undefined {
-    const news = st.rec.wakeNews;
-    if (!news || news.told) return undefined;
-    news.told = { seq: this.store.log(st.rec.id).lastSeq, inFlight: true };
+  // `messageId`: the message being sent, which may be the check itself.
+  takeWakeNews(st: ThreadState, messageId: string | undefined): string | undefined {
+    const { rec } = st;
+    const news = rec.wakeNews;
+    if (!news) return undefined;
+    if (news.told) {
+      if (this.wakeNewsStale(rec)) {
+        delete rec.wakeNews;
+        this.markDirty(st);
+      }
+      return undefined;
+    }
+    if (news.check && news.check === messageId) return undefined;
+    news.told = { seq: this.store.log(rec.id).lastSeq, inFlight: true };
     this.markDirty(st);
-    return news.text;
+    if (!news.check) return news.text;
+    return `${news.text} ${rec.queue.some((q) => q.turnId === news.check) ? LATE_CHECK_QUEUED : LATE_CHECK_LOST}`;
   }
 
   // The same, told in the turn now going or at all, for a session that
   // replays its first message.
   toldWakeNews(rec: ThreadRecord, which: 'turn' | 'all'): string | undefined {
     const told = rec.wakeNews?.told;
-    return told && (which === 'all' || told.inFlight) ? rec.wakeNews!.text : undefined;
+    if (!told || this.wakeNewsStale(rec)) return undefined;
+    return which === 'all' || told.inFlight ? rec.wakeNews!.text : undefined;
+  }
+
+  // Heard by a completed turn, and more than LATE_NEWS_KEPT_MS ago: a
+  // fresh session weeks on has no use for it (Gemini's review, 22 Nov 2026).
+  wakeNewsStale(rec: ThreadRecord): boolean {
+    const news = rec.wakeNews;
+    return Boolean(news?.told && !news.told.inFlight && !(this.clock.now() - Date.parse(news.at ?? '') <= LATE_NEWS_KEPT_MS));
+  }
+
+  // What it was told went with a session or a turn that's gone: told again
+  // with the next message, unless it's old by now.
+  retellWakeNews(rec: ThreadRecord): void {
+    const news = rec.wakeNews;
+    if (!news?.told) return;
+    if (this.wakeNewsStale(rec)) delete rec.wakeNews;
+    else delete news.told;
   }
 
   // The presses told in the turn now going, or every one told, for a
@@ -4908,8 +4940,8 @@ export class Runner {
   // fresh session (the cut reached its first message) heard none of them.
   retellPressesFrom(rec: ThreadRecord, seq: number, fresh = false): void {
     for (const p of rec.presses ?? []) if (p.told && (fresh || p.told.seq >= seq)) delete p.told;
-    const woke = rec.wakeNews;
-    if (woke?.told && (fresh || woke.told.seq >= seq)) delete woke.told;
+    const woke = rec.wakeNews?.told;
+    if (woke && (fresh || woke.seq >= seq)) this.retellWakeNews(rec);
   }
 
   // Sends a message with any change to the standing instructions in front.
@@ -4924,7 +4956,7 @@ export class Runner {
     const presses = structuredClone(rec.presses);
     const pressed = this.takePressNews(st);
     const wokeBefore = structuredClone(rec.wakeNews);
-    const woke = this.takeWakeNews(st);
+    const woke = this.takeWakeNews(st, message.id);
     const lead = [standing, woke, pressed].filter(Boolean).join('\n\n');
     try {
       rt.session!.send(lead ? { ...message, text: `${lead}\n\n${message.text}` } : message);
@@ -4951,6 +4983,13 @@ export class Runner {
   // arrived, so the next message says what's current.
   settleInstructionsNews(st: ThreadState, completed: boolean): void {
     const { rec, rt } = st;
+    // The check a wake at its latest time sent has run: nothing left to say.
+    const check = rec.wakeNews?.check;
+    if (check && completed && rt.turn?.inputs?.has(check)) delete rec.wakeNews;
+    // A sleep backs off only at the end of the check's own turn: any other
+    // turn ending (not one the check still waits behind) lets it go.
+    const backOff = rec.lateChecks?.backOff;
+    if (backOff && !rt.turn?.inputs?.has(backOff) && !rec.queue.some((q) => q.turnId === backOff)) delete rec.lateChecks!.backOff;
     this.settlePresses(rec, completed);
     if (rt.instructionsNewsSent && !completed && rec.instructionsTold !== undefined) rec.instructionsTold = INSTRUCTIONS_REWOUND;
     rt.instructionsNewsSent = false;
