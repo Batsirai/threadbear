@@ -56,7 +56,9 @@ function repoFiles(root) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.isFile()) {
-        const rel = path.relative(root, p);
+        // Forward slashes on Windows too: the changed files and the
+        // patterns are git's paths (main went red on Windows, 22 Nov).
+        const rel = path.relative(root, p).split(path.sep).join('/');
         if (!byBase.has(e.name)) byBase.set(e.name, []);
         byBase.get(e.name).push(rel);
       }
@@ -84,7 +86,7 @@ export function reads(root, start, byBase) {
     const code = /\.(ts|tsx|mts|js|mjs|cjs)$/.test(rel) || rel.startsWith('runner/bin/');
     if (code) {
       for (const m of text.matchAll(IMPORT)) {
-        const p = path.normalize(path.join(path.dirname(rel), m[1]));
+        const p = path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]));
         for (const c of [p, p + '.ts', p + '.js', p + '/index.ts']) {
           if (fs.existsSync(path.join(root, c)) && fs.statSync(path.join(root, c)).isFile()) { todo.push(c); break; }
         }
