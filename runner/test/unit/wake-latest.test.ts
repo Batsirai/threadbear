@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FakeAccounts, makeHarness, tick, withCodex } from '../helpers/fakes.ts';
 import { LATE_CHECKS_MAX, LATE_CHECK_LOST, LATE_CHECK_QUEUED, LATE_NEWS_KEPT_MS, LATE_SLEEP_MAX_MS, lateCheckPrompt, lateNews, lateSleepMs, lateWhy } from '../../src/wake-when.ts';
+import { CARRY_ON_NETWORK } from '../../src/runner.ts';
 import type { GenerateParams, ModelResult } from '../../src/models/index.ts';
 
 const HOUR = 3_600_000;
@@ -616,7 +617,7 @@ test('a check finished by a carry-on, as another turn, still leaves the wait a l
   // The check's turn fails (the network), and the runner carries it on with a message of its own.
   h.adapter.last.result('failed', undefined, 'network');
   await tick();
-  h.runner.send(id, 'The connection came back. Carry on from where you left off.', [], { origin: 'runner', queue: true });
+  h.runner.send(id, CARRY_ON_NETWORK, [], { origin: 'runner', queue: true });
   await tick();
   assert.match(h.adapter.last.sent.at(-1)!.text, /do that check now as well\./);
   h.adapter.last.init();
@@ -746,4 +747,22 @@ test('a record another runner wrote wrong: news and counts that are not the shap
   assert.equal(lateWait({ snoozedUntil: until, wakeWhen: 'nonsense' as never }), undefined);
   assert.equal(lateWait({ snoozedUntil: 'not a time', wakeWhen: { said: 'x', topic: 't' } }), undefined);
   assert.deepEqual(lateWait({ snoozedUntil: until, wakeWhen: { said: 'x', topic: 't', by: 'agent' } }), { said: 'x', topic: 't', by: 'agent', latest: Date.parse(until) });
+});
+
+// From Codex's third review (22 Nov 2026).
+test('a report the runner passes on is new work: a wait set after it keeps its own short limit', async () => {
+  let mins = 24 * 60;
+  const { h, id } = setup((now) => ({ until: new Date(now + mins * 60_000).toISOString(), topic: TOPIC }));
+  await agentSleeps(h, id);
+  h.clock.advance(DAY);
+  await tick();
+  h.adapter.last.init();
+  // The check ends in the inbox, and then a thread it waited on reports back.
+  await endTurn(h, { needs: 'nothing' }, 'Asked another thread to look.');
+  h.runner.send(id, 'The thread you hibernated to wait on has finished.', [], { origin: 'runner', queue: true });
+  await tick();
+  h.adapter.last.init();
+  mins = 10;
+  await endTurn(h, { needs: 'nothing', snooze: 'until the build finishes, ten minutes at the most' });
+  assert.equal(left(h, id), 10 * 60_000);
 });

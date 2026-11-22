@@ -124,10 +124,11 @@ export const LATE_SLEEP_MAX_MS = 7 * 86_400_000;
 // The checks so far (ThreadRecord.lateChecks): how many in a row, how long
 // the sleep before the last one was meant to be, and when the first of
 // them began. `backOff`: the last check's message, while the sleep that
-// follows it hasn't been set: a snooze in words at the end of that turn is
-// held to lateSleepMs. Only that one: it goes when any other turn ends
+// follows it hasn't been set: a snooze in words at the end of that turn
+// (or of one the runner carried it on with) is held to lateSleepMs. Only
+// that one: it goes when a turn with new work in it ends
 // (Runner.settleInstructionsNews), so a later wait with a short limit of
-// its own keeps it (Gemini's review, 22 Nov 2026).
+// its own keeps it (Gemini's and Codex's reviews, 22 Nov 2026).
 export type LateChecks = { n: number; waitedMs: number; since: string; backOff?: string };
 
 // What a thread whose time has come was waiting for, when that was more

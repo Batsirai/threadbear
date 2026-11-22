@@ -297,9 +297,10 @@ export type Turn = {
   // approval). There's no user.message.
   auto?: boolean;
   ordinaryInput?: true; // A user or peer joined a background-opened turn.
-  // A message in it came from outside the runner (Mike, a schedule, another
-  // thread), so it isn't only the runner carrying something on (settleInstructionsNews).
-  outside?: true;
+  // A message in it was more than the runner carrying an earlier turn on
+  // (isCarryOn): new work, from Mike, a schedule, another thread or the
+  // runner's own reports (settleInstructionsNews).
+  newWork?: true;
   cliStarted?: boolean; // the CLI is running a turn for it (not just an approval)
   interruptTimer?: TimerHandle;
   // Ids of the messages the CLI has yet to answer for this turn: the one
@@ -2157,7 +2158,7 @@ export class Runner {
     this.markOlderInputs(st, msg, queued?.olderInputs);
     (turn.inputs ??= new Map()).set(msg.turnId, event.seq);
     turn.messages.push(msg.turnId);
-    if (msg.origin !== 'runner') turn.outside = true;
+    if (!isCarryOn(msg)) turn.newWork = true;
     // He wrote again, so the turn owes him another reply; a card it was sent
     // back for (needs.ts, REPLY_ASKS) gives way to this message's own (from
     // Codex's review); an archive it asked for before reading this is off.
@@ -2266,7 +2267,7 @@ export class Runner {
     rt.idleTimer = undefined;
     rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set(), access: rec.permissionMode };
     rt.turn.inputs = new Map([[msg.turnId, messageSeq]]);
-    if (msg.origin !== 'runner') rt.turn.outside = true;
+    if (!isCarryOn(msg)) rt.turn.newWork = true;
     this.markOlderInputs(st, msg);
     rt.activeAt = this.clock.now();
     rec.turnId = msg.turnId;
@@ -5022,11 +5023,11 @@ export class Runner {
     if (check && completed && rt.turn?.inputs?.has(check)) delete rec.wakeNews;
     // A sleep backs off at the end of the check's own turn, or of one the
     // runner carried it on with (a lost network, a full login, a restart,
-    // the CLI's own turn for a background job): a turn that Mike, a
-    // schedule or another thread started ending lets it go, unless the
-    // check still waits behind it.
+    // the CLI's own turn for a background job): a turn with new work in it
+    // ending (Mike's message, a schedule's, another thread's, a report the
+    // runner passes on) lets it go, unless the check still waits behind it.
     const backOff = rec.lateChecks?.backOff;
-    if (backOff && rt.turn?.outside && !rt.turn.inputs?.has(backOff) && !rec.queue.some((q) => q.turnId === backOff)) delete rec.lateChecks!.backOff;
+    if (backOff && rt.turn?.newWork && !rt.turn.inputs?.has(backOff) && !rec.queue.some((q) => q.turnId === backOff)) delete rec.lateChecks!.backOff;
     this.settlePresses(rec, completed);
     if (rt.instructionsNewsSent && !completed && rec.instructionsTold !== undefined) rec.instructionsTold = INSTRUCTIONS_REWOUND;
     rt.instructionsNewsSent = false;
@@ -5204,6 +5205,12 @@ export function scheduledMessageId(threadId: string, scheduleId: string, run: st
 export function fromMike(text: string, opts: SendOptions): boolean {
   if (opts.origin && opts.origin !== 'phone') return false;
   return !sentByAgent(text);
+}
+
+// The runner's own message carrying on a turn that was cut off (CARRY_ON_*
+// below): the same work going on, not a new message to the thread.
+export function isCarryOn(msg: { text: string; origin?: MessageOrigin }): boolean {
+  return msg.origin === 'runner' && [CARRY_ON_SIGNED_OUT, CARRY_ON_MOVED, CARRY_ON_RESTART, CARRY_ON_NETWORK, CARRY_ON_TOKEN, CARRY_ON_BACK].includes(msg.text);
 }
 
 // What the agent is told when Mike writes a message while its question or
