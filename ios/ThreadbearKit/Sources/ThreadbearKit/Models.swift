@@ -306,6 +306,9 @@ public struct PhoneThread: Codable, Sendable, Hashable, Identifiable {
     /// The thread's patch link buttons (backend API 28): pages the phone
     /// opens itself, as the Mac's url chips do there.
     public var links: [PhoneLink]?
+    /// Whether it's shared by link, and the link's slug (backend API 7).
+    /// Nil when it's never been shared.
+    public var share: ThreadShare?
 
     public init(
         threadId: String, runnerId: String = "mac", title: String, cwd: String = "~/ThreadbearThreads",
@@ -943,12 +946,16 @@ public struct PhoneIdentity: Codable, Sendable, Hashable {
     /// The backend can't send notifications (a self-hosted one, which the
     /// push relay doesn't reach: docs/self-hosting.md). Missing means it can.
     public var pushOff: Bool?
+    /// The website's address, where a shared thread's link goes
+    /// (ThreadSharing.site). Missing from older backends.
+    public var site: String?
     public var sendsNotifications: Bool { pushOff != true }
-    public init(name: String, expiresAt: Date?, apiVersion: Int? = nil, pushOff: Bool? = nil) {
+    public init(name: String, expiresAt: Date?, apiVersion: Int? = nil, pushOff: Bool? = nil, site: String? = nil) {
         self.name = name
         self._expiresAt = OptionalFlexibleDate(wrappedValue: expiresAt)
         self.apiVersion = apiVersion
         self.pushOff = pushOff
+        self.site = site
     }
 }
 
@@ -1007,6 +1014,9 @@ public enum BackendCompatibility {
     /// From 27 threads can be starred (phone:update's `star`). Older backends
     /// would refuse it, so the phone doesn't offer it.
     public static let starsAPIVersion = 27
+    /// From 8 phone:share shares a thread by link (and thread rows carry
+    /// `share` from 7). Older backends don't have it, so the phone doesn't offer it.
+    public static let shareAPIVersion = 8
     /// From 35 a thread row's pendingApproval can be a secret card, answered
     /// sealed with phone:secret. An older backend has neither, so the phone
     /// says to answer it on the Mac.

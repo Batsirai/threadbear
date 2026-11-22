@@ -500,7 +500,7 @@ In the backend a request is a state machine (`convex/requestMachine.ts`,
 
 A thread can be shared by link on the website (docs/website.md, "Sharing"),
 from the share button beside its ... menu, or from the website itself
-(a `share` command; see Sync). The runner keeps it on the thread's
+or the iPhone and Android apps (a `share` command; see Sync). The runner keeps it on the thread's
 record and the mirror carries it to Convex, which serves the link;
 nothing about it is decided in Convex.
 

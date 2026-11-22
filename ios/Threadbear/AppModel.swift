@@ -85,6 +85,9 @@ final class AppModel {
     private(set) var backendProblem: String?
     /// The backend's API version once phone:me has answered (nil before).
     private(set) var apiVersion: Int?
+    /// The website's address as phone:me says it, for share links (nil
+    /// before it answers, and from a backend that doesn't say).
+    private var siteSaid: String?
     /// Whether threads read phone:messages (API 2) rather than phone:thread's
     /// newest 20 plus the runner's paging.
     var hasMessagePages: Bool { (apiVersion ?? 0) >= BackendCompatibility.messagePagesAPIVersion }
@@ -157,6 +160,10 @@ final class AppModel {
 
     /// Whether this backend takes photos. The demo does, so App Review sees it.
     var canStar: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.starsAPIVersion }
+    /// Whether a thread can be shared by link from here (backend API 8, phone:share).
+    var canShare: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.shareAPIVersion }
+    /// Where a shared thread's link goes: the website (ThreadSharing.site).
+    var shareSite: URL? { ThreadSharing.site(said: siteSaid, deploymentURL: pairing?.deploymentURL) }
     var canSendPhotos: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.photosAPIVersion }
     /// Whether a secret card can be answered here (backend API 35, phone:secret).
     var canAnswerSecrets: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.secretsAPIVersion }
@@ -574,6 +581,24 @@ final class AppModel {
             self?.said(state, failing: "The runner couldn't \(verb) that thread.")
         }
         if started { UISelectionFeedbackGenerator().selectionChanged() }
+    }
+
+    /// Shares a thread by link, stops sharing it, or gives it a new link: the
+    /// share sheet shows it at once (ThreadSharing.shown) and puts it back
+    /// with why if the runner refuses.
+    func share(_ thread: PhoneThread, _ request: ShareRequest) {
+        let threadId = thread.threadId
+        let value = ThreadSharing.value(request, replacing: thread.share?.slug)
+        let started = commands.start(.share(threadId), value: value, send: { try await $0.share(threadId: threadId, request: request) }) { [weak self] state in
+            self?.said(state, failing: "The Mac couldn't change how this thread is shared.")
+        }
+        if started { UISelectionFeedbackGenerator().selectionChanged() }
+    }
+
+    /// The share sheet's state for a thread: its row with the tap made here on top.
+    func sharing(_ thread: PhoneThread) -> SharingState {
+        let key = CommandKey.share(thread.threadId)
+        return ThreadSharing.shown(thread.share, site: shareSite, command: commands[key], value: commands.value(key))
     }
 
     /// Where a command ended, said where he's looking: a refusal always, and a
@@ -1054,6 +1079,7 @@ final class AppModel {
         authProblem = nil
         backendProblem = nil
         apiVersion = nil
+        siteSaid = nil
         runners = []
         projects = [:]
         accounts = []
@@ -1153,6 +1179,7 @@ final class AppModel {
             if !Task.isCancelled, let self { self.followWakes(backend, small: (identity.apiVersion ?? 0) >= BackendCompatibility.wakesAPIVersion) }
             self?.backendProblem = BackendCompatibility.problem(identity)
             self?.apiVersion = identity.apiVersion ?? 0
+            self?.siteSaid = identity.site
             // The inbox started before this was known: over to following its
             // changes. The list on screen stays until the new one answers.
             if (identity.apiVersion ?? 0) >= BackendCompatibility.threadChangesAPIVersion, !Task.isCancelled, let self {

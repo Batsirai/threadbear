@@ -412,7 +412,7 @@ public final class FakeBackend: Backend, @unchecked Sendable {
     public func me() async throws -> PhoneIdentity {
         // Always a current backend, so the demo never says the Mac needs updating.
         PhoneIdentity(name: "iphone", expiresAt: Date.now.addingTimeInterval(90 * 86_400),
-                      apiVersion: BackendCompatibility.currentAPIVersion)
+                      apiVersion: BackendCompatibility.currentAPIVersion, site: "https://example.convex.site")
     }
 
     public func runners() -> AsyncThrowingStream<[PhoneRunner], Error> {
@@ -809,6 +809,25 @@ public final class FakeBackend: Backend, @unchecked Sendable {
     public func update(threadId: String, change: ThreadChange) async throws -> String {
         lock.withLock { updates += 1 }
         return runnerDoes { fake in fake.apply(threadId, change) }
+    }
+
+    /// As the runner shares: a slug the first time, kept when it stops, and
+    /// a fresh one for a new link.
+    public func share(threadId: String, request: ShareRequest) async throws -> String {
+        lock.withLock { updates += 1 }
+        return runnerDoes { fake in
+            fake.mutate { s in
+                guard var thread = s.threadsById[threadId] else { return }
+                let slug = request == .newLink ? nil : thread.share?.slug
+                thread.share = ThreadShare(access: request.access, slug: slug ?? Self.newSlug())
+                s.threadsById[threadId] = thread
+            }
+        }
+    }
+
+    private static func newSlug() -> String {
+        Data((0..<16).map { _ in UInt8.random(in: 0...255) }).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
     }
 
     private func apply(_ threadId: String, _ change: ThreadChange) {

@@ -2050,9 +2050,11 @@ into Slack, X or Messages, the link shows the thread's title, the start
 of its last reply and its first picture. Only you stops the link working (sharing again brings
 the same link back), and the arrows beside the link make a new one, which
 stops the old. The same Share button is on the website, on your thread's
-page and on the shared page while you're signed in. In the Android app,
-it's Share… in a thread's menu: turn on Share with a link, then Copy, or
-Send to pass it to another app, and New link makes a new one.
+page and on the shared page while you're signed in. On the iPhone and in
+the Android app, it's Share… in a thread's menu: turn on Share with a
+link, then copy it or send it from Messages, Mail or any app, and New link
+makes a new one, which stops the old. With the Mac asleep the change
+waits for it, and the sheet says so.
 
 The Mac app also draws a picture an agent writes into its reply with a path
 on your Mac (`![a chart](/path/to/chart.png)`), rather than showing a link.

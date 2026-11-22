@@ -71,7 +71,7 @@ import Testing
                  "draining": b(r.draining), "placed": b(r.placed), "main": b(r.main)]
         case "identity":
             let i = try decoder.decode(PhoneIdentity.self, from: data)
-            f = ["name": .string(i.name), "expiresAt": ms(i.expiresAt), "apiVersion": n(i.apiVersion), "pushOff": b(i.pushOff)]
+            f = ["name": .string(i.name), "expiresAt": ms(i.expiresAt), "apiVersion": n(i.apiVersion), "pushOff": b(i.pushOff), "site": s(i.site)]
         case "project":
             let p = try decoder.decode(PhoneProject.self, from: data)
             f = ["id": .string(p.id), "runnerId": s(p.runnerId), "title": .string(p.title), "archived": b(p.archived),
@@ -138,6 +138,8 @@ import Testing
         f["waitingForRoom.accountId"] = s(t.waitingForRoom?.accountId)
         f["waitingForNetwork.since"] = s(t.waitingForNetwork?.since)
         f["cardTurn"] = s(t.cardTurn)
+        f["share.access"] = s(t.share?.access)
+        f["share.slug"] = s(t.share?.slug)
         put(&f, "projects", list(t.projects) { (p: ProjectRef) -> [String: JSONValue] in ["id": .string(p.id), "title": .string(p.title)] })
         put(&f, "next", list(t.next) { (x: String) -> [String: JSONValue] in ["": .string(x)] })
         put(&f, "links", list(t.links) { (l: PhoneLink) -> [String: JSONValue] in ["title": .string(l.title), "url": .string(l.url), "icon": s(l.icon)] })
