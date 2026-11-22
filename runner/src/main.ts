@@ -1425,10 +1425,11 @@ async function main(): Promise<void> {
       const r = (await relay.create(runnerId, { ...p })) as { thread: { id: string } };
       return { id: r.thread.id };
     },
-    // Its ceiling: what the starter has as it starts it, or the mode the
-    // thread was started with if that's more (a card Mike allowed). Never
+    startedThere: (p) => farReports.add(p),
+    // Its replies' ceiling: what the starter has as it asks, or the mode the
+    // thread is started with if that's more (a card Mike allowed). Never
     // anything the other runner or the backend says later.
-    startedThere: ({ mode, ...p }) => farReports.add({ ...p, by: higherMode(runner.authorityNow(p.starter).mode, isPermissionMode(mode) ? ceilingMode(mode) : 'ask') }),
+    ceilingFor: (starter, mode) => higherMode(runner.authorityNow(starter).mode, isPermissionMode(mode) ? ceilingMode(mode) : 'ask'),
     card: (threadId, c) => runner.requestCard(threadId, c),
     openCard: async (threadId) => {
       const src = sync.relaySource();

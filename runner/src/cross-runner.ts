@@ -13,7 +13,7 @@
 // says "allow" without starting anything changes nothing.
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { ErrorCode, RpcError } from './protocol.ts';
+import { ErrorCode, RpcError, type PermissionMode } from './protocol.ts';
 import type { RunnerRequestInput, RunnerRequestRow } from './sync.ts';
 import { wasNotSent } from './relay.ts';
 
@@ -49,8 +49,12 @@ export type CrossRunnerDeps = {
   createThere: (runnerId: string, p: RunnerRequestInput) => Promise<{ id: string }>;
   // A thread started there for one here, whose replies come back to it
   // (far-reports.ts).
-  // `mode`: the mode it was asked to start with, if one was given.
-  startedThere?: (p: { threadId: string; runnerId: string; runnerName: string; starter: string; mode?: string }) => void;
+  // `by`: ceilingFor's answer, taken before the thread was asked for.
+  startedThere?: (p: { threadId: string; runnerId: string; runnerName: string; starter: string; by: PermissionMode }) => void;
+  // The ceiling for its replies (far-reports.ts, Rec.by), from the starter as
+  // it is when it asks and the mode it asks for: read before the request
+  // goes, so Mike raising the starter while it's on its way doesn't count.
+  ceilingFor?: (starter: string, mode: string | undefined) => PermissionMode;
   // Shows the card in one of this runner's threads and waits for its answer.
   card: (threadId: string, c: { approvalId: string; title: string; input: Record<string, unknown>; minutes: number; check: () => Promise<RequestAnswer> }) => Promise<RequestAnswer>;
   // The open card on another runner's thread, as the backend's row has it.
@@ -187,8 +191,9 @@ export class CrossRunner {
       const target = await this.resolve(runner);
       if (!target) throw bad(`No runner called ${runner}. Runners: ${(await this.deps.runners()).map((r) => r.name).join(', ')}.`);
       if (target.self) return undefined;
+      const by = this.deps.ceilingFor?.(threadId, request.permissionMode) ?? 'ask';
       const t = await this.deps.createThere(target.id, { ...request, text: startedHeader(threadId, this.deps.self().name) + request.text });
-      this.deps.startedThere?.({ threadId: t.id, runnerId: target.id, runnerName: target.name, starter: threadId, ...(request.permissionMode ? { mode: request.permissionMode } : {}) });
+      this.deps.startedThere?.({ threadId: t.id, runnerId: target.id, runnerName: target.name, starter: threadId, by });
       return `Started thread ${t.id} on ${target.name}. Each reply it ends a turn with comes back here as a message, so it needn't send_message you. Use read_thread to see how it goes.`;
     }
     const approvalId = crypto.randomUUID();

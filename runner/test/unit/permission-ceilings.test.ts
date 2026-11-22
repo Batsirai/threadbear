@@ -16,6 +16,7 @@ import { PATIENCE_MS } from '../helpers/patience.ts';
 import { Scheduler } from '../../src/schedules.ts';
 import { FarReports, type FarRow } from '../../src/far-reports.ts';
 import { CallerGate } from '../../src/rpc-gate.ts';
+import { CrossRunner, type CrossRunnerDeps } from '../../src/cross-runner.ts';
 import { scheduledSendMethods } from '../../src/handover.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -296,6 +297,26 @@ test('163: a reply from an Ask thread started on another runner, after Mike rais
   await settle();
   assert.equal(heard(h, starter), false);
   assert.ok(notes(h, starter).filter((n) => /wasn't passed to this thread's agent/.test(n)).length >= 2, 'the restarted watcher looked, and held it too');
+});
+
+test("163: the ceiling is taken as the starter asks, so raising it while the thread is being made there doesn't count", async () => {
+  let starterMode: PermissionMode = 'ask';
+  const watched: { by: PermissionMode }[] = [];
+  const cross = new CrossRunner({
+    self: () => ({ id: 'm5', name: 'M5' }),
+    backend: () => ({ ownerKey: () => true }),
+    runners: async () => [{ id: 'm5', name: 'M5', self: true }, { id: 'pixel', name: 'Pixel', self: false }],
+    createThere: async () => {
+      // Mike raises the starter while the request is on its way.
+      starterMode = 'full';
+      return { id: 'remote-1' };
+    },
+    startedThere: (p: { by: PermissionMode }) => watched.push(p),
+    // As main.ts has it, with the starter's mode as it is when called.
+    ceilingFor: (_starter: string, mode: string | undefined) => (mode === 'full' || starterMode === 'full' ? 'full' : starterMode),
+  } as unknown as CrossRunnerDeps);
+  await cross.start('starter1', { runner: 'Pixel', text: 'Look into it', permissionMode: 'ask' });
+  assert.equal(watched[0]?.by, 'ask');
 });
 
 test('163: at the same access it still comes; a watch from before ceilings counts as Ask', async () => {
