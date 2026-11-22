@@ -1292,6 +1292,38 @@ mod tests {
         parse_ms("2026-11-06T12:00:00Z").unwrap()
     }
 
+    /// The runner's wait states (`shared/cases/wait-states.json`): until
+    /// this app draws the runner's `waitState`, its own rule puts every case
+    /// in the same section the runner's state does.
+    #[test]
+    fn sections_match_the_shared_wait_states() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../shared/cases/wait-states.json"
+        );
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let now = parse_ms(file["now"].as_str().unwrap()).unwrap();
+        for case in file["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let t = thread(1, case["thread"].clone());
+            let mut wakes = HashMap::new();
+            if case["scheduled"].as_bool() == Some(true) {
+                wakes.insert(
+                    t.id.clone(),
+                    Wake {
+                        at_ms: now + 60_000,
+                        when_text: "soon".into(),
+                    },
+                );
+            }
+            assert_eq!(
+                section_of(&t, now, &wakes),
+                case["section"].as_str().unwrap(),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn a_thread_with_a_message_on_its_way_is_running_not_in_the_inbox() {
         let waiting = thread(
