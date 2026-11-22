@@ -120,3 +120,10 @@ Then('the runner still has the request waiting', async function (this: Threadbea
   assert.equal(state.request?.id, asked.requestId, 'the request went');
   assert.ok(!state.shown.includes(asked.requestId), 'the app said it showed a panel the thread hasn\'t got');
 });
+
+// The mock's url panel (id mock.page), in the summary after the request.
+When('the thread gets the page panel it asked for', async function (this: ThreadbearWorld) {
+  const asked = requested.get(this);
+  assert.ok(asked, 'no panel was asked for');
+  await this.app.do({ cmd: 'mock', method: 'urlPanel', params: { threadId: asked.threadId, url: 'about:blank', title: 'Page' } });
+});

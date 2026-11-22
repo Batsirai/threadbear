@@ -355,7 +355,11 @@ is refused). Pressing it adds that panel to the pressing thread's
 job, so it's never spent, and the agent hears nothing of it. The panel's
 `badge` and `summary` run in its folder whenever the thread's patches are
 read, as for that folder's own threads, which is what starts a patch's
-server (the YouTube patch's badge starts its page's). Its `id` is
+server (the YouTube patch's badge starts its page's). A press runs that
+one panel's `badge` and `summary` and shows it, without waiting for the
+rest of the thread's patches (on a busy runner that wait once kept the
+panel away for 13 minutes, 23 Nov 2026). A client handed a `panelRequest` for a panel the summary
+doesn't have yet waits for the summary that brings it. Its `id` is
 `<panelId>@<8 hex of its folder's hash>` and it has `from`, its folder,
 so nothing takes the thread for one of that folder's (the YouTube page
 lists the threads that have its panel as ones to ask in). Its url's

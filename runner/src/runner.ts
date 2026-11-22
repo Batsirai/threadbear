@@ -532,7 +532,9 @@ type Runtime = {
   // built-in panels stand in.
   // `base` is the set as the files give it; `set` is that with live state
   // applied (applyLive), which is what the app sees. `live`: base has any.
-  patches?: { cwd: string; key: string; at: number; base: PatchSet; set: PatchSet; refreshing: boolean; again?: boolean; read?: Promise<void>; loaded: boolean; live?: boolean };
+  // `pressed`: each panel button's panel a press put in `set`, by the
+  // `presses` count then, so a read that started before it keeps it.
+  patches?: { cwd: string; key: string; at: number; base: PatchSet; set: PatchSet; refreshing: boolean; again?: boolean; read?: Promise<void>; loaded: boolean; live?: boolean; presses?: number; pressed?: Map<string, number> };
   runningActions?: Set<string>;
   // Turns in a row that a hook's message started, per hook. A hook that
   // keeps failing stops being told to the agent after HOOK_TELL_LIMIT, so

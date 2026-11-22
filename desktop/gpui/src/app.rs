@@ -914,9 +914,10 @@ impl Threadbear {
             self.tell_panel_shown(&request, &thread);
             return;
         }
-        // One the thread hasn't got is left for the runner to clear with
-        // Mike's next message.
-        let Some(panel) = requests::panel(&request, &thread) else {
+        // One the thread hasn't got yet is handed back, to show once a
+        // summary brings it. Never coming, the runner clears it with Mike's
+        // next message.
+        let Some(panel) = self.panel_gate.panel_or_release(&request, &thread) else {
             return;
         };
         if request.reload == Some(true) {
