@@ -80,7 +80,7 @@ const REF_NS = UPSTREAM_REFS;
 const MAX_SUBJECTS = 50;
 // What a release's name is after release/: the local date it was tagged
 // (tagFor). Nothing else is ever looked at.
-const RELEASE_NAME = /^\d{4}-\d{2}-\d{2}$/;
+export const RELEASE_NAME = /^\d{4}-\d{2}-\d{2}$/;
 // How far past today's date (UTC) a release's date can be: Mike's day can
 // start well before the fork's.
 const FUTURE_SLACK_MS = 2 * 24 * 60 * 60_000;
@@ -1367,6 +1367,25 @@ export function splitSignedTag(raw: Buffer, tag: string): SignedTag | undefined 
   const when = / (\d{1,12}) [+-]\d{4}$/.exec(tagger);
   const date = when ? new Date(Number(when[1]) * 1000).toISOString() : undefined;
   return { payload: Buffer.from(payload, 'latin1'), signature, commit, ...(date ? { date } : {}) };
+}
+
+// A release tag, kept as REF_NS<name> or a release/<name> tag, if it's
+// what sweep and newestSigned would believe: a tag object no bigger than
+// Mike's runner makes, signed by the pinned key as release/<name>. For
+// readers outside a check (tb checkup), as a ref may have turned up since
+// the last sweep. Read with replacement objects off, as a refs/replace/
+// entry could put other bytes in its place. Undefined for anything else,
+// with no key pinned, or when ssh-keygen can't be run.
+export async function verifiedRelease(checkout: string, home: string, name: string, ref: { oid: string; type: string; size: number }): Promise<SignedTag | undefined> {
+  const signers = signersPath(home);
+  if (!RELEASE_NAME.test(name) || !readable(ref) || !fs.existsSync(signers)) return undefined;
+  try {
+    const raw = await runGit(checkout, ['cat-file', 'tag', ref.oid], { env: { GIT_NO_REPLACE_OBJECTS: '1' } });
+    const split = splitSignedTag(raw, TAG_PREFIX + name);
+    return split && (await sshVerified(split, signers, revokedPath(home))) ? split : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Whether ssh-keygen finds the signature good for the `git` namespace, by a

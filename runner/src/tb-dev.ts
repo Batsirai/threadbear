@@ -1044,7 +1044,7 @@ async function checkupCommand(client: RunnerClient, f: Flags): Promise<number> {
   const id = process.env.THREADBEAR_THREAD_ID;
   const self = id ? (await listAll(client)).find((t) => t.id === id) : undefined;
   const logLines = s.logFile && fs.existsSync(s.logFile) ? lastLines(s.logFile, 20_000, ' ERROR ') : [];
-  const c = buildCheckup({ home: s.home, checkout, logLines, patches: self?.patches ?? [], updateFailing: s.update?.state === 'failed', ...(typeof f.text === 'string' ? { note: f.text } : {}), now: Date.now() });
+  const c = await buildCheckup({ home: s.home, checkout, logLines, patches: self?.patches ?? [], updateFailing: s.update?.state === 'failed', ...(typeof f.text === 'string' ? { note: f.text } : {}), now: Date.now() });
   const draft = saveDraft(s.home, c);
   if (f.json) return printJson({ ...c, draft: draft.text, file: draft.file });
   console.log(draft.text);

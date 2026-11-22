@@ -624,7 +624,8 @@ File references are where to look.
   Once a release has landed, that thread offers a check-up for Mike
   (`runner/src/checkup.ts`, `tb checkup`): a short report built from the
   runner log's own error messages (only those in Mike's code are named),
-  the release tags (and the releases kept under `refs/threadbear/upstream/`),
+  the release tags (and the releases kept under `refs/threadbear/upstream/`;
+  with a release key pinned, each counts only if it verifies against it),
   which of Mike's patches won't load, and how long `tb land`'s checks took
   (`.git/threadbear-land-times.log`: counts and times, step names only when
   they're `check.sh`'s, never host names). You see the

@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { atomicWriteFileSync } from './fsutil.ts';
 import { scrubText } from './redaction.ts';
-import { repoKey, TAG_PREFIX, UPSTREAM_REFS } from './upstream.ts';
+import { RELEASE_NAME, repoKey, signersPath, TAG_PREFIX, UPSTREAM_REFS, verifiedRelease, type SignedTag } from './upstream.ts';
 import { LAND_TIMES_FILE } from './land-queue.ts';
 import type { PatchInfo } from './protocol.ts';
 
@@ -232,52 +232,81 @@ export function scrubForPosting(text: string, home = os.homedir(), user = os.use
   return out;
 }
 
+// Replacement objects off: a refs/replace/ entry would have a release's
+// commit read as a fork's own, and its messages pass for Mike's (Codex's
+// review, 22 Nov).
+const GIT_ENV = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' };
+
 function git(cwd: string, args: string[]): string | undefined {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: GIT_ENV });
   return r.status === 0 ? r.stdout.trim() : undefined;
 }
 
 type Release = { tag: string; date?: string; rev: string };
+type Ref = { oid: string; type: string; size: number };
+type Known = Release & { kept: boolean; name: string; ref: Ref };
 
 // Mike's releases this copy has: tags fetched the usual way
 // (refs/tags/release/*), and the ones the runner checked and kept under
 // refs/threadbear/upstream/<date> (upstream.ts). Only reading tags, a fork
 // whose newer releases were only there named one from 16 Nov when it had
-// brought in 21 Nov's (discussions/85, 21 Nov). Newest first, by name.
-function knownReleases(cwd: string): Release[] {
-  const out = git(cwd, ['for-each-ref', '--format=%(refname)%09%(*objectname)%09%(objectname)%09%(creatordate:iso-strict)', `refs/tags/${TAG_PREFIX}`, UPSTREAM_REFS]) ?? '';
+// brought in 21 Nov's (discussions/85, 21 Nov). Newest first, by name (a
+// date: newer names nothing else).
+function knownReleases(cwd: string): Known[] {
+  const out = git(cwd, ['for-each-ref', '--format=%(refname)%09%(*objectname)%09%(objectname)%09%(objecttype)%09%(objectsize)%09%(creatordate:iso-strict)', `refs/tags/${TAG_PREFIX}`, UPSTREAM_REFS]) ?? '';
   // Every one, not one per name: a tag of the fork's own with a release's
   // name mustn't hide the kept release (Codex's review). The kept one comes
   // first for the same name.
-  const all: (Release & { kept: boolean })[] = [];
+  const all: Known[] = [];
   for (const line of out.split('\n')) {
-    const [ref, peeled, oid, date] = line.split('\t');
+    const [ref, peeled, oid, type, size, date] = line.split('\t');
     if (!ref || !oid) continue;
     const kept = ref.startsWith(UPSTREAM_REFS);
-    const tag = kept ? TAG_PREFIX + ref.slice(UPSTREAM_REFS.length) : ref.slice('refs/tags/'.length);
-    all.push({ tag, rev: peeled || oid, kept, ...(date ? { date } : {}) });
+    const name = ref.slice(kept ? UPSTREAM_REFS.length : `refs/tags/${TAG_PREFIX}`.length);
+    if (!RELEASE_NAME.test(name)) continue;
+    all.push({ tag: TAG_PREFIX + name, name, rev: peeled || oid, kept, ref: { oid, type: type ?? '', size: Number(size) }, ...(date ? { date } : {}) });
   }
-  return all
-    .sort((a, b) => (a.tag !== b.tag ? (a.tag < b.tag ? 1 : -1) : Number(b.kept) - Number(a.kept)))
-    .map(({ kept: _kept, ...r }) => r);
+  return all.sort((a, b) => (a.tag !== b.tag ? (a.tag < b.tag ? 1 : -1) : Number(b.kept) - Number(a.kept)));
 }
 
 function contains(cwd: string, rev: string, release: Release): boolean {
-  return spawnSync('git', ['-C', cwd, 'merge-base', '--is-ancestor', release.rev, rev]).status === 0;
+  return spawnSync('git', ['-C', cwd, 'merge-base', '--is-ancestor', release.rev, rev], { env: GIT_ENV }).status === 0;
 }
 
 // The release main has now, and the one it had before: main's reflog,
 // back to where the newest release wasn't in it yet.
-export function releasesOnMain(cwd: string): { release?: Release; previous?: Release } {
+// With a key pinned (in `home`), a tag or kept ref counts only if it
+// verifies against it as what it's named, as the release check does, and
+// its code is read at the commit the signature names: nothing stops a ref
+// turning up between checks, and a tag of the fork's own on main would
+// have its private messages pass for Mike's on a public page (Codex's and
+// Gemini's reviews, 22 Nov). With none, the release check is off and has
+// kept nothing, so only tags count, as before.
+export async function releasesOnMain(cwd: string, home?: string): Promise<{ release?: Release; previous?: Release }> {
   const all = knownReleases(cwd);
-  const newest = (rev: string) => all.find((r) => contains(cwd, rev, r));
-  const release = newest('main');
+  const pinned = !!home && fs.existsSync(signersPath(home));
+  const answers = new Map<Known, Promise<SignedTag | undefined>>();
+  const believed = async (r: Known): Promise<Release | undefined> => {
+    if (!pinned) return r.kept ? undefined : { tag: r.tag, rev: r.rev, ...(r.date ? { date: r.date } : {}) };
+    if (!answers.has(r)) answers.set(r, verifiedRelease(cwd, home, r.name, r.ref));
+    const signed = await answers.get(r)!;
+    return signed && { tag: r.tag, rev: signed.commit, ...(signed.date ? { date: signed.date } : {}) };
+  };
+  const newest = async (rev: string): Promise<Release | undefined> => {
+    for (const r of all) {
+      if (!contains(cwd, rev, r)) continue;
+      const ok = await believed(r);
+      if (ok) return ok;
+    }
+    return undefined;
+  };
+  const release = await newest('main');
   if (!release) return {};
   for (let i = 1; i <= 50; i++) {
     const then = `main@{${i}}`;
     if (!git(cwd, ['rev-parse', '--verify', '--quiet', then])) break;
     if (contains(cwd, then, release)) continue;
-    const previous = newest(then);
+    const previous = await newest(then);
     return previous ? { release, previous } : { release };
   }
   return { release };
@@ -305,8 +334,8 @@ function readLandTimes(checkout: string): string[] {
   }
 }
 
-export function buildCheckup(i: CheckupInputs): Checkup {
-  const { release, previous } = releasesOnMain(i.checkout);
+export async function buildCheckup(i: CheckupInputs): Promise<Checkup> {
+  const { release, previous } = await releasesOnMain(i.checkout, i.home);
   const last = readState(i.home).lastAt;
   const since = last ? Date.parse(last) : i.now - FIRST_LOOK_DAYS * DAY_MS;
   const sinceDays = Math.max(1, Math.round((i.now - since) / DAY_MS));
@@ -314,7 +343,7 @@ export function buildCheckup(i: CheckupInputs): Checkup {
   const cache = new Map<string, boolean>();
   const known = (message: string) => {
     if (!tag) return false;
-    if (!cache.has(message)) cache.set(message, spawnSync('git', ['-C', i.checkout, 'grep', '-q', '-F', '-e', message, tag, '--', 'runner/src'], { encoding: 'utf8' }).status === 0);
+    if (!cache.has(message)) cache.set(message, spawnSync('git', ['-C', i.checkout, 'grep', '-q', '-F', '-e', message, tag, '--', 'runner/src'], { encoding: 'utf8', env: GIT_ENV }).status === 0);
     return cache.get(message)!;
   };
   const inRelease = (file: string) => {
@@ -323,7 +352,7 @@ export function buildCheckup(i: CheckupInputs): Checkup {
     return !rel.startsWith('..') && !path.isAbsolute(rel) && git(i.checkout, ['cat-file', '-e', `${tag}:${rel.split(path.sep).join('/')}`]) !== undefined;
   };
   const note = i.note?.trim().replace(/\s+/g, ' ').slice(0, MAX_NOTE);
-  const stepKnown = (name: string) => !!tag && spawnSync('git', ['-C', i.checkout, 'grep', '-q', '-F', '-e', `"${name}"`, tag, '--', 'check.sh'], { encoding: 'utf8' }).status === 0;
+  const stepKnown = (name: string) => !!tag && spawnSync('git', ['-C', i.checkout, 'grep', '-q', '-F', '-e', `"${name}"`, tag, '--', 'check.sh'], { encoding: 'utf8', env: GIT_ENV }).status === 0;
   const checks = landingChecks(i.landTimes ?? readLandTimes(i.checkout), since, stepKnown);
   return { release, previous, sinceDays, ...countErrors(i.logLines, since, known), updateFailing: i.updateFailing, ...failingPatches(i.patches, inRelease), ...(checks ? { checks } : {}), ...(note ? { note } : {}) };
 }
