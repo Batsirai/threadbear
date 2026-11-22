@@ -186,6 +186,7 @@ test('a runner handing over neither checks nor tries to start a thread', () => {
   // The handover: draining, and the timer stopped. Then a week comes due.
   r.draining = true;
   sw.stop();
+  assert.equal(clock.pending(), 0);
   r.accounts = [login('claude-1', [week(60, 20)])];
   clock.advance(3 * H);
   assert.equal(r.tries, 0);
