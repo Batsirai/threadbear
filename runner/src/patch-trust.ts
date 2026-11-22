@@ -1123,7 +1123,24 @@ export function scanModule(src: string, file: string): ModuleScan {
     // A package: hashed only when the repo commits it (tracked-packages.ts).
     else {
       packages.add(value);
-      if (LAUNCHER_PACKAGES.has(value.replace(/^node:/, '').split('/').slice(0, value.startsWith('@') ? 2 : 1).join('/'))) launch(at);
+      const bare = value.replace(/^node:/, '');
+      // `import type` is gone before it runs.
+      const typeOnly = at.importKind === 'type' || at.exportKind === 'type';
+      if (!typeOnly && LAUNCHER_PACKAGES.has(bare.split('/').slice(0, value.startsWith('@') ? 2 : 1).join('/'))) launch(at);
+      // node:process is the `process` object by another name: whole (a
+      // default or namespace import, require, import()), it's read by
+      // names this can't see, as `process` used as a value is; by name,
+      // what it hands out counts as `process.x` would (Daybreak 165's
+      // reviews: `import { execve } from 'node:process'`).
+      if (!typeOnly && bare === 'process') {
+        const specs: AstNode[] | undefined = at.type === 'ImportDeclaration' || (at.type === 'ExportNamedDeclaration' && at.source) ? at.specifiers : undefined;
+        if (!specs || specs.some((x) => x.type !== 'ImportSpecifier' && x.type !== 'ExportSpecifier')) refuse(at);
+        for (const x of specs ?? []) {
+          const name = x.type === 'ImportSpecifier' ? (x.imported?.name ?? x.imported?.value) : (x.local?.name ?? x.local?.value);
+          if (typeof name !== 'string' || name === 'default' || LOADER_NAMES.includes(name) || LOADER_PROPERTIES.includes(name) || CODE_REACH.includes(name) || PROCESS_WHOLE.includes(name)) refuse(x);
+          if (name === 'execve') launch(x);
+        }
+      }
     }
   };
   // Identifiers and members a load handled already, so they aren't
@@ -1174,7 +1191,7 @@ export function scanModule(src: string, file: string): ModuleScan {
         // Reflect only called in place (`Reflect.has(o, k)`), below.
         if (node.name === 'Reflect') break;
         // oxc decodes an escaped name, so `B\u0075n` is Bun here.
-        if (node.name === 'Bun' || node.name === 'Deno') launch(node);
+        if ((node.name === 'Bun' || node.name === 'Deno') && parent?.type !== 'UnaryExpression') launch(node);
         if (LOADER_NAMES.includes(node.name) || CODE_REACH.includes(node.name)) refuse(node);
         // `process`, `globalThis` and the like as values (`const p = process`,
         // `Object.entries(process)`): what's on them is then read by a name
@@ -1187,9 +1204,12 @@ export function scanModule(src: string, file: string): ModuleScan {
         if (name === undefined) {
           // `process[k]`: any property, so any loader, by a name worked out later.
           const o = node.object;
-          if (o.type === 'MetaProperty' || (o.type === 'Identifier' && RISKY_OBJECTS.includes(o.name))) refuse(node);
+          if (o.type === 'MetaProperty' || riskyRef(o)) refuse(node);
         } else if (!handled.has(node) && (LOADER_PROPERTIES.includes(name) || CODE_REACH.includes(name))) refuse(node);
         if (name === 'execve' || name === 'Bun' || name === 'Deno') launch(node);
+        // `globalThis.process`, `global.globalThis`: the object itself, so
+        // as a value it's read as `process` used as one would be.
+        if (node.object.type !== 'MetaProperty' && riskyRef(node) && !(parent?.type === 'MemberExpression' && key === 'object') && parent?.type !== 'UnaryExpression') refuse(node);
         break;
       }
       // `const { eval: run } = globalThis`, `{ constructor: F } = f`: a
@@ -1222,7 +1242,8 @@ export function scanModule(src: string, file: string): ModuleScan {
       else if (method === 'get' || method === 'getOwnPropertyDescriptor') {
         // Reads a property by name: only a plain one that isn't a loader's.
         const named = node.arguments[1] && plainString(node.arguments[1]);
-        if (named === undefined || CODE_REACH.includes(named) || LOADER_NAMES.includes(named) || LOADER_PROPERTIES.includes(named)) refuse(node);
+        if (named === undefined || CODE_REACH.includes(named) || LOADER_NAMES.includes(named) || LOADER_PROPERTIES.includes(named) || RISKY_OBJECTS.includes(named) || PROCESS_WHOLE.includes(named)) refuse(node);
+        if (named === 'execve' || named === 'Bun' || named === 'Deno') launch(node);
       }
     }
     for (const k of Object.keys(node)) {
@@ -1249,7 +1270,10 @@ type AstNode = { type: string; start: number; end: number; [field: string]: any 
 
 // Names that load code, or hand out something that can, when used as values.
 const LOADER_NAMES = ['require', 'eval', 'Function', 'createRequire', 'getBuiltinModule', 'dlopen'];
-const LOADER_PROPERTIES = ['require', 'createRequire', 'getBuiltinModule', 'dlopen', '_load', 'binding', '_linkedBinding'];
+// `loadExtension`: node:sqlite's, which loads a native library.
+const LOADER_PROPERTIES = ['require', 'createRequire', 'getBuiltinModule', 'dlopen', '_load', 'binding', '_linkedBinding', 'loadExtension'];
+// What on `process` hands out a module, and so a loader, by its own names.
+const PROCESS_WHOLE = ['mainModule', 'moduleLoadList'];
 // What reaches code made from a string or bytes without a loader's name
 // (Daybreak 154, 21 Nov 2026): `eval` and `Function` as properties
 // (`globalThis.eval`), any function's `constructor` (`(() => {}).constructor`
@@ -1280,12 +1304,25 @@ const LOADER_MODULES = [
 // the packages most used to wrap them. Any installed package could, and
 // isn't followed, as for patches; these are the ones named for it.
 const LAUNCHER_PACKAGES = new Set([
-  'child_process', 'cluster', 'execa', 'cross-spawn', 'zx', 'shelljs', 'node-pty', '@homebridge/node-pty-prebuilt-multiarch', 'tinyexec',
+  'child_process', 'cluster', 'bun', 'execa', 'cross-spawn', 'zx', 'shelljs', 'node-pty', '@homebridge/node-pty-prebuilt-multiarch', 'tinyexec',
   'nano-spawn', 'spawn-sync', 'cross-spawn-async', '@npmcli/promise-spawn', '@npmcli/run-script', '@expo/spawn-async', 'spawndamnit',
   'dax-sh', 'foreground-child', 'open', 'opn', 'node-cmd',
 ]);
 // Objects a computed `[k]` on could reach a loader through.
 const RISKY_OBJECTS = ['globalThis', 'global', 'process', 'module', 'require', 'self', 'window'];
+// One of those, by its name or as a plain member of another
+// (`globalThis.process`, `global.globalThis.process`).
+function riskyRef(n: AstNode): boolean {
+  if (n.type === 'Identifier') return RISKY_OBJECTS.includes(n.name);
+  if (n.type === 'MemberExpression' || n.type === 'ChainExpression') {
+    const m = n.type === 'ChainExpression' ? n.expression : n;
+    if (m.type !== 'MemberExpression') return false;
+    const name = propertyName(m);
+    return name !== undefined && RISKY_OBJECTS.includes(name) && riskyRef(m.object);
+  }
+  if (n.type === 'ParenthesizedExpression' || n.type === 'TSAsExpression' || n.type === 'TSNonNullExpression' || n.type === 'TSSatisfiesExpression') return riskyRef(n.expression);
+  return false;
+}
 // TypeScript types: gone before the code runs, so nothing in them loads.
 const TYPE_KEYS = new Set(['typeAnnotation', 'typeArguments', 'typeParameters', 'returnType', 'superTypeArguments', 'implements']);
 const TYPE_ONLY = new Set(['TSInterfaceDeclaration', 'TSTypeAliasDeclaration', 'TSDeclareFunction']);

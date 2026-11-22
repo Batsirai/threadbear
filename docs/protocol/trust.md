@@ -125,7 +125,9 @@ runs (`import(name)`, `` import(`./${x}`) ``, `require('./a' + b)`, any
 `createRequire`, `node:module`, `node:vm`, `node:worker_threads`,
 `node:inspector`, `node:repl`, `eval`, `Function`, a `data:` or `#`
 specifier, in any case, or any other URL scheme), or that reaches code
-made from a string or bytes by another route (`globalThis.eval`,
+made from a string or bytes by another route (`node:process` imported
+whole or for one of those names, `globalThis.process` as a value,
+`loadExtension`, `globalThis.eval`,
 `window['Function']`, any `.constructor` such as `(() => {}).constructor`,
 `const { eval: run } = globalThis`, `Reflect.get` with anything but a
 plain harmless name or `Reflect` handed on, `getOwnPropertyDescriptors`,
@@ -372,12 +374,25 @@ open (`sh /dev/stdin < ./steps.txt`, `node -`, `bash -s` after
 `--rcfile`, a `#!` with `-s`, `-c` or `-i`, `/dev/fd/N`, `/proc/self/fd/N`,
 `/dev/tty`, or anything outside the repo that isn't a plain file), a
 JavaScript file that starts programs itself (an import of
-`child_process`, `cluster` or a package known to wrap them, like `execa`,
-`cross-spawn`, `zx` or `shelljs`; `Bun` or `Deno`; `process.execve`), as
-what it runs isn't followed and may be read from data no hash covers
+`child_process`, `cluster`, `bun` or a package known to wrap them, like
+`execa`, `cross-spawn`, `zx` or `shelljs`; `Bun` or `Deno` other than
+under `typeof`; `execve`, by any name, `Reflect.get` included), as what it
+runs isn't followed and may be read from data no hash covers
 (`execSync(readFileSync('payload.txt'))`, Daybreak 165; for schedule
 checks and Claude Code hooks, while a patch's command still follows past
-one, and the rest of a check is still followed), a
+one, and the rest of a check is still followed). For those two, also
+what finds its code by its own rules: a test runner (`node --test`, `bun
+test`, `deno test`), a `bunfig.toml`, `--preserve-symlinks`, an import
+without its extension that more than one file could answer (`helper.ts`
+and `helper.js`, a folder's `package.json`, a `.node` addon), and a bare
+import beside a `tsconfig.json` or `jsconfig.json` with `paths`,
+`baseUrl` or `extends`. Everywhere: `bun` with a flag that loads code or
+reads a config (`--preload`, `-r`, `--config`, `--cwd`), `node --run x`
+followed as package.json's script `x`, and `NODE_OPTIONS`, `BUN_OPTIONS`
+or `PATH` set in quotes (`export 'NODE_OPTIONS=...'`) or with a loading
+flag in quotes. `node:process` imported whole, `globalThis.process` as a
+value, and `node:sqlite`'s `loadExtension` count as loading code by a
+name worked out as it runs (below). A
 command in a variable or a pattern (`$CMD`,
 `"$f"` in a loop, `./s/*.sh`), `source "$1"`, relative paths after a
 `cd` to somewhere worked out as it runs, `npm run "$x"`, `npx "$x"`,

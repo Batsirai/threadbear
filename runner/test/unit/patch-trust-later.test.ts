@@ -1045,8 +1045,9 @@ test('Daybreak 165: a check whose JavaScript starts programs itself is unfollowa
   const dir = launchRepo();
   for (const check of launchChecks) {
     const d = checkDigest(check, dir);
-    // `const { execve } = process` was refused already, as `process` used as a value.
-    assert.match(d.problem ?? '', check === 'node execve2.mjs' ? /process/ : /starts other programs itself/, check);
+    // `const { execve } = process` was refused already, as `process` used as a
+  // value, and `globalThis.process` is now too (the reviews).
+    assert.match(d.problem ?? '', /^node execve[23]\.mjs$/.test(check) ? /process/ : /starts other programs itself/, check);
     assert.equal(d.writes, undefined, `${check}: the owner's to approve as far as it can be read, as other checks it can't follow are`);
     assert.ok(checkReach(check, dir).problem, check);
   }
@@ -1100,4 +1101,75 @@ test('Daybreak 165: pure JavaScript checks and plain shell scripts stay followab
   // A string that only mentions a launcher isn't one.
   const words = repo({ 'w.mjs': "console.log('child_process and Bun and execa are words here');\nconst o = { spawn: 1 };\nconsole.log(o.spawn);\n" });
   assert.equal(checkDigest('node w.mjs', words).problem, undefined);
+});
+
+// The cross-lab reviews of the 165 fix (Codex and Gemini, 22 Nov 2026):
+// launches by other names, and ways a check ran JavaScript it never read.
+test('Daybreak 165 reviews: execve, Bun and process reached by other names count too, for checks and hooks', () => {
+  const read = "import { readFileSync } from 'node:fs';\nconst cmd = readFileSync('payload.txt', 'utf8');\n";
+  const cases: Record<string, string> = {
+    'a.mjs': read + "import { execve as launch } from 'node:process';\nlaunch('/bin/sh', ['sh', '-c', cmd], {});\n",
+    'b.mjs': read + "const launch = Reflect.get(globalThis.process, 'execve');\nlaunch('/bin/sh', ['sh', '-c', cmd], {});\n",
+    'c.mjs': read + "import { spawnSync as launch } from 'bun';\nlaunch(['/bin/sh', '-c', cmd]);\n",
+    'd.mjs': read + "import p from 'node:process';\np['getBuiltin' + 'Module']('child_' + 'process').execSync(cmd);\n",
+    'e.mjs': read + "globalThis.process['getBuiltin' + 'Module']('child_' + 'process').execSync(cmd);\n",
+    'f.mjs': read + "const p = globalThis.process;\np.binding('spawn_sync');\n",
+    'g.mjs': read + "import * as p from 'process';\np.execve('/bin/sh', []);\n",
+    'h.mjs': read + "import { binding } from 'node:process';\nbinding('spawn_sync');\n",
+    'i.mjs': read + "Reflect.get(globalThis.globalThis, 'Bun').spawn(['sh', '-c', cmd]);\n",
+    'j.mjs': read + "export { execve } from 'node:process';\n",
+    'k.mjs': read + "import { DatabaseSync } from 'node:sqlite';\nnew DatabaseSync(':memory:', { allowExtension: true }).loadExtension('./ext.so');\n",
+    'l.cjs': "const p = require('node:process');\np.execve('/bin/sh', []);\n",
+  };
+  const dir = repo({ ...cases, 'payload.txt': 'echo safe\n' });
+  fs.chmodSync(path.join(dir, 'payload.txt'), 0o644);
+  for (const f of Object.keys(cases)) {
+    const check = `${f.endsWith('.mjs') && f === 'c.mjs' ? 'bun' : 'node'} ${f}`;
+    assert.ok(checkDigest(check, dir).problem, check);
+  }
+  // A Claude Code hook (strict) refuses each as well.
+  const trust = new PatchTrust({ claudeHome: fs.realpathSync(tmpDir()) });
+  for (const f of Object.keys(cases)) {
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `${f === 'c.mjs' ? 'bun' : 'node'} ${f}` }] }] } }));
+    assert.equal((trust.checkClaude(dir) as { reason?: string }).reason, 'unchecked', `hook: ${f}`);
+  }
+  // What only looks like one isn't: typeof Bun, import type, process.env.
+  const fine = repo({
+    'm.ts': "import type { ChildProcess } from 'node:child_process';\nimport type { Options } from 'execa';\nlet c: ChildProcess | undefined; let o: Options | undefined;\nif (typeof Bun !== 'undefined' || typeof Deno === 'object') console.log(c, o);\nconsole.log(process.env.HOME, globalThis.process.env.HOME, process.argv.length);\nimport { env, argv } from 'node:process';\nconsole.log(env.X, argv[0]);\n",
+  });
+  assert.equal(checkDigest('node m.ts', fine).problem, undefined);
+});
+
+test('Daybreak 165 reviews: a check that runs JavaScript it never reads is unfollowable', () => {
+  const launch = "import { execSync } from 'node:child_process';\nexecSync('x');\n";
+  const dir = repo({
+    'pure.mjs': '1;\n', 'pure.ts': '1;\n', 'launch.mjs': launch, 'launch.ts': launch,
+    'pkg.cjs': "require('./helper');\n", 'helper/package.json': '{ "main": "./launch.cjs" }', 'helper/launch.cjs': "require('node:child_process').execSync('x');\n",
+    'addon.cjs': "require('./addon');\n", 'addon.node': '\0',
+    'shadow.cjs': "require('./sh');\n", 'sh.ts': '1;\n', 'sh.js': "require('node:child_process').execSync('x');\n",
+    'package.json': '{ "scripts": { "check": "node launch.mjs" } }', 'check': '1;\n',
+    'test/a.test.mjs': launch,
+  });
+  const checks = [
+    "export 'NODE_OPTIONS=--import=./launch.mjs'; node pure.mjs",
+    `NODE_OPTIONS='"--import=./launch.mjs"' node pure.mjs`,
+    "export 'BUN_OPTIONS=--preload=./launch.ts'; bun pure.ts",
+    'bun --preload=./launch.ts ./pure.ts',
+    'bun run --preload=./launch.ts ./pure.ts',
+    'bun -r ./launch.ts ./pure.ts',
+    'node --test',
+    'bun test',
+    'deno test',
+    'node pkg.cjs',
+    'node addon.cjs',
+    'node shadow.cjs',
+    'node --run check',
+  ];
+  for (const check of checks) assert.ok(checkDigest(check, dir).problem, check);
+  const bunfig = repo({ 'pure.ts': '1;\n', 'launch.ts': launch, 'bunfig.toml': 'preload = ["./launch.ts"]\n' });
+  assert.ok(checkDigest('bun ./pure.ts', bunfig).problem, 'bunfig.toml');
+  const paths = repo({ 'check.ts': "import 'x';\n", 'launch.ts': launch, 'tsconfig.json': '{ "compilerOptions": { "paths": { "x": ["./launch.ts"] } } }' });
+  assert.ok(checkDigest('npx tsx check.ts', paths).problem ?? checkDigest('bun check.ts', paths).problem, 'tsconfig paths');
+  assert.ok(checkDigest('bun check.ts', paths).problem, 'tsconfig paths under bun');
 });
