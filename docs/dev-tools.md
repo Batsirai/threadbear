@@ -301,7 +301,8 @@ rest, and `tb <command> --help` explains one.
   when the lint setup or packages change) with mikecann-lint
   (`eslint.config.mjs`): fix the cause the message names; old problems are
   exempt in `eslint-suppressions.json`, and a disable comment needs a reason
-  after `--`. It skips the deploy tests and BearDock's unless something they
+  after `--`. GitHub runs the same lint, all of it, on pull requests and
+  main (`.github/workflows/lint.yml`). It skips the deploy tests and BearDock's unless something they
   cover changed from main (`--all` runs them anyway). The Swift app's part is
   under a minute with a warm `app/.build` and 5 to 10 minutes in a folder
   that has never built, so run it in the background. Nothing in it touches

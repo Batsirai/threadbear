@@ -220,7 +220,9 @@ the next landing.
 The runner, Convex and website tests (`runner.yml`), Android (`android.yml`)
 and the Xcode 26 builds (`xcode-26.yml`) hold too since 19 Nov: `runner.yml`
 was red on Windows from 16 to 19 Nov, and as the daily release waits for
-every workflow to pass on one commit, none went out.
+every workflow to pass on one commit, none went out. And the TypeScript
+lint (`lint.yml`) since 22 Nov, after a merged PR left main failing
+check.sh's lint and ten landings waited behind it.
 
 A workflow opts in with a line of its own in its file:
 
@@ -253,8 +255,7 @@ minute is used without asking again, as a dozen threads landing at once ran
 out GitHub's shared API allowance (13 Nov). When `gh` isn't installed,
 isn't signed in or can't reach GitHub (a 403 for that allowance too), an
 answer from the last half hour still counts, saying how old it is; with
-none, the landing goes ahead and says it couldn't ask. Only `desktop.yml` has the mark
-so far.
+none, the landing goes ahead and says it couldn't ask.
 
 In someone else's copy the gate stays out of the way. Since 19 Nov every
 workflow's jobs only run in `mikecann/threadbear` (or when started by hand),
