@@ -115,7 +115,13 @@ export const patchesPart = {
   // patch file that has appeared or broken since the last read is said in
   // the transcript (not on the first read, which would say it at startup).
   refreshPatches(this: Runner, st: ThreadState): Promise<void> {
+    // Only a call that starts the read keeps it: one made while a read runs
+    // (a live poll) gets back a finished promise, which would leave
+    // threadPatchesIdle spinning on it. readPatches marks the entry
+    // refreshing before its first await.
+    const started = st.rt.patches && !st.rt.patches.refreshing ? st.rt.patches : undefined;
     const read = this.readPatches(st);
+    if (started?.refreshing) started.read = read;
     this.patchReads.add(read);
     void read.finally(() => this.patchReads.delete(read));
     return read;
@@ -125,6 +131,21 @@ export const patchesPart = {
   // reads go to the disk asynchronously, so a tick or two isn't enough.
   async patchesIdle(this: Runner): Promise<void> {
     while (this.patchReads.size) await Promise.allSettled([...this.patchReads]);
+  },
+
+  // Resolves once this thread's patches are read, including a read asked
+  // for again while one ran. What patches.trust and a panel button wait on:
+  // patchesIdle waits for every thread's, and with many threads polling
+  // live state or slow to read there may never be a moment with none
+  // (patches.trust timed out at 120 seconds, 22 Nov).
+  async threadPatchesIdle(this: Runner, st: ThreadState): Promise<void> {
+    let last: Promise<void> | undefined;
+    for (let e = st.rt.patches; e?.refreshing && e.read; e = st.rt.patches) {
+      // Never spin on a read already waited for: give the loop a turn.
+      if (e.read === last) await new Promise((r) => setImmediate(r));
+      last = e.read;
+      await e.read.catch(() => {});
+    }
   },
 
   async readPatches(this: Runner, st: ThreadState): Promise<void> {
@@ -344,7 +365,7 @@ export const patchesPart = {
       .map((f) => f.file);
     this.log.info('patches trusted', { threadId, files: trusted });
     this.rereadAllPatches();
-    await this.patchesIdle();
+    await this.threadPatchesIdle(st);
     return { trusted };
   },
 

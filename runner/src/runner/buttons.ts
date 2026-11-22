@@ -196,7 +196,7 @@ export const buttonsPart = {
     try {
       this.patchSet(st);
       this.rereadPatches(st);
-      await this.patchesIdle();
+      await this.threadPatchesIdle(st);
     } catch (e) {
       this.log.warn('could not read patches for a panel button', { threadId: st.rec.id, error: String(e) });
     }
