@@ -228,7 +228,8 @@ export type ThreadRecord = {
   // `at`: when it woke. A line a completed turn heard is kept only
   // LATE_NEWS_KEPT_MS from then.
   // `told.deferred`: what it was told was that the check comes next.
-  wakeNews?: { text: string; at?: string; told?: { seq: number; inFlight?: true; deferred?: true }; check?: string };
+  // `ceiling`: its text repeats its agent's snooze words (runner/ceiling.ts).
+  wakeNews?: { text: string; at?: string; told?: { seq: number; inFlight?: true; deferred?: true }; check?: string; ceiling?: PermissionMode };
   // Hibernating until these threads finish (end_turn's waitFor,
   // runner/hibernation.ts): each counts once it has finished (with no new
   // work since), been archived or been deleted.

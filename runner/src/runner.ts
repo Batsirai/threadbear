@@ -4953,7 +4953,7 @@ export class Runner {
     }
     news.told = { seq: this.store.log(rec.id).lastSeq, inFlight: true, ...(deferred ? { deferred: true as const } : {}) };
     this.markDirty(st);
-    return `${news.text}${end}`;
+    return `${this.wakeNewsText(st, news)}${end}`;
   }
 
   // The same, told in the turn now going or at all, for a session that
@@ -4964,7 +4964,15 @@ export class Runner {
     if (!news || !told || this.wakeNewsStale(rec)) return undefined;
     if (which !== 'all' && !told.inFlight) return undefined;
     // As it was told: with how a check's news ended.
-    return news.check ? `${news.text} ${told.deferred ? LATE_CHECK_QUEUED : LATE_CHECK_LOST}` : news.text;
+    const text = this.wakeNewsText(this.mustGet(rec.id), news);
+    return news.check ? `${text} ${told.deferred ? LATE_CHECK_QUEUED : LATE_CHECK_LOST}` : text;
+  }
+
+  // The news as its agent may be told it: without its own snooze words if
+  // it has more access now than when it wrote them (runner/ceiling.ts).
+  wakeNewsText(st: ThreadState, news: NonNullable<ThreadRecord['wakeNews']>): string {
+    if (this.underCeiling(st, news.ceiling)) return news.text;
+    return "Note from Threadbear: this thread woke by itself at the latest time of a wait in words its agent had set. Those words aren't repeated here, as the thread has more access now than when they were written; the user can read them in the thread.";
   }
 
   // Heard by a completed turn, and more than LATE_NEWS_KEPT_MS ago: a

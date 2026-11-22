@@ -895,3 +895,17 @@ test('a remote start takes the asker\'s mode as its card was shown, if that was 
   await cross.start('starter1', { runner: 'Pixel', text: 'Look', permissionMode: 'ask', askerMode: 'ask' });
   assert.equal(watched[0]?.by, 'ask');
 });
+
+test("the note about a wake at a wait's latest time leaves out the agent's own words once the thread is raised past them", () => {
+  const h = harness();
+  const id = idle(h, 'Waiting', 'ask');
+  const threads = (h.runner as unknown as { threads: Map<string, { rec: Record<string, unknown> }> }).threads;
+  threads.get(id)!.rec.wakeNews = { text: `Note from Threadbear: You had hibernated it until: ${PAYLOAD}`, at: new Date().toISOString(), ceiling: 'ask' };
+  const st = threads.get(id) as never;
+  assert.match(h.runner.takeWakeNews(st, undefined) ?? '', /SECURITY_POC/, 'at Ask: told as it was');
+  delete (threads.get(id)!.rec.wakeNews as { told?: unknown }).told;
+  raise(h, id);
+  const told = h.runner.takeWakeNews(st, undefined) ?? '';
+  assert.doesNotMatch(told, /SECURITY_POC/);
+  assert.match(told, /aren't repeated/);
+});

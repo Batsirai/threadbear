@@ -59,7 +59,7 @@ export const mailPart = {
       [],
       // Its agent's own snooze words come back with it: held to the access
       // it had as it wrote them (runner/ceiling.ts).
-      { origin: 'runner', queue: true, wakeReason: 'An email it was waiting for came in', ...(said && st.rec.wakeWhen?.by === 'agent' ? { ceiling: st.rec.wakeCeiling?.said === st.rec.wakeWhen.said ? st.rec.wakeCeiling.ceiling : 'ask' } : {}) },
+      { origin: 'runner', queue: true, wakeReason: 'An email it was waiting for came in', ...(said && this.snoozeCeiling(st, st.rec.wakeWhen) ? { ceiling: this.snoozeCeiling(st, st.rec.wakeWhen) } : {}) },
     );
     this.log.info('woke for an email', { threadId });
     return true;

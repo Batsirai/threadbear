@@ -4,7 +4,7 @@
 // is the Runner; runner.ts puts them on its prototype.
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
-import type { ReviewFinding, ThreadSummary } from '../protocol.ts';
+import type { PermissionMode, ReviewFinding, ThreadSummary } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import { LATE_CHECKS_MAX, SAID_MAX, WAKE_SYSTEM, awayFor, hibernateNote, lateCheckPrompt, lateChecksOf, lateNews, lateSleepMs, lateWait, lateWhy, localWhen, readWakeAnswer, wakePrompt, type LateWait } from '../wake-when.ts';
 import type { ThreadState } from '../runner.ts';
@@ -20,6 +20,8 @@ import { cutSafely, safeEnd } from '../safe-cut.ts';
 import { above, LEAST, raises, type Authority } from '../threadbear-mcp.ts';
 import { ceilingMode } from './ceiling.ts';
 
+
+const withCeiling = (ceiling: PermissionMode | undefined): { ceiling?: PermissionMode } => (ceiling ? { ceiling } : {});
 
 // The less of two: the lower mode, or LEAST if either is.
 export function leastAuthority(a: Authority | undefined, b: Authority): Authority {
@@ -161,7 +163,7 @@ export const hibernationPart = {
     const tell = this.mayTellOf(this.authorityNow(st.rec.id), inThreadId);
     const seen = tell ? `another thread (${inThreadId.slice(0, 8)}) looks to show it has` : 'another thread looks to show it has';
     const said = wakeWhen.said.replace(/\s+/g, ' ').trim();
-    const ceiling = st.rec.wakeCeiling?.said === wakeWhen.said ? st.rec.wakeCeiling.ceiling : 'ask';
+    const ceiling = this.snoozeCeiling(st, wakeWhen) ?? 'ask';
     this.sendTo(
       st,
       `You hibernated this thread until: ${said}\n\nThreadbear woke it because ${seen} (${topic}), but that's a guess from reading one thread. Check for yourself that it really has${tell ? ' (read_thread on that thread, and the work itself)' : ''}. If it has, carry on with what you meant to do. If it hasn't, call end_turn with needs "nothing" and snooze "${said.replace(/"/g, "'")}" to go back to sleep, and say in a line what's still missing.`,
@@ -602,7 +604,7 @@ export const hibernationPart = {
       const stopped = wait.by === 'agent' ? before : undefined;
       const had = rec.wakeNews;
       // Before the wake, which may start a message it had queued.
-      rec.wakeNews = { text: lateNews(wait, timeZone, now, stopped ? { stopped } : undefined), at };
+      rec.wakeNews = { text: lateNews(wait, timeZone, now, stopped ? { stopped } : undefined), at, ...withCeiling(this.snoozeCeiling(st, wait)) };
       try {
         this.wake(st, { why: lateWhy(wait, timeZone, stopped ? { stopped, now } : undefined) });
       } catch (e) {
@@ -627,7 +629,7 @@ export const hibernationPart = {
     // before the send, which may start a message it had queued first: that
     // one is told the check comes after it (Gemini's reviews, 22 Nov 2026).
     rec.lateChecks = { n: check, waitedMs: planned > 0 ? planned : 86_400_000, since: before?.since ?? slept ?? at, backOff: id };
-    rec.wakeNews = { text: lateNews(wait, timeZone, now, 'checking'), at, check: id };
+    rec.wakeNews = { text: lateNews(wait, timeZone, now, 'checking'), at, check: id, ...withCeiling(this.snoozeCeiling(st, wait)) };
     try {
       // Not marked unread: needing Mike notifies him and his phone, and a
       // check that goes back to sleep is nothing for him. How its turn ends
@@ -643,7 +645,8 @@ export const hibernationPart = {
     }
     let started = false;
     try {
-      this.sendTo(st, lateCheckPrompt(wait, timeZone, check), [], { origin: 'runner', queue: true, wakeReason: 'The latest it would wait passed', messageId: id });
+      // Its own snooze words come back with it (runner/ceiling.ts).
+      this.sendTo(st, lateCheckPrompt(wait, timeZone, check), [], { origin: 'runner', queue: true, wakeReason: 'The latest it would wait passed', messageId: id, ...withCeiling(this.snoozeCeiling(st, wait)) });
       // (Read afresh: sendTo may have started the turn.)
       const { rt } = st;
       started = Boolean(rt.turn?.inputs?.has(id));
@@ -653,7 +656,7 @@ export const hibernationPart = {
       // next message says why it woke. The timer goes on.
       if (had.checks) rec.lateChecks = had.checks;
       else delete rec.lateChecks;
-      rec.wakeNews = { text: lateNews(wait, timeZone, now), at };
+      rec.wakeNews = { text: lateNews(wait, timeZone, now), at, ...withCeiling(this.snoozeCeiling(st, wait)) };
       this.log.error('could not start the check at the latest time of a wait', { threadId: rec.id, error: String(e) });
       try {
         this.kickQueue(st);

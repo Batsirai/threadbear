@@ -105,6 +105,15 @@ export const ceilingPart = {
     return true;
   },
 
+  // The ceiling of its agent's snooze words, `said`, as they come back to
+  // it (a topic wake, an email's, a check at the latest time, the note
+  // about one): what it had as it wrote them, Ask if not kept for those
+  // words. None for Mike's own Wake when (`by` not 'agent').
+  snoozeCeiling(this: Runner, st: ThreadState, w: { said: string; by?: 'agent' } | undefined): PermissionMode | undefined {
+    if (!w || w.by !== 'agent') return undefined;
+    return st.rec.wakeCeiling?.said === w.said ? st.rec.wakeCeiling.ceiling : 'ask';
+  },
+
   // Pending agent snoozes in words from before ceilings (22 Nov 2026):
   // bound at the thread's saved mode as this runner starts, as schedules
   // from before are (schedules.ts, "Ceilings").
