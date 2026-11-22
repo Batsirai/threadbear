@@ -302,3 +302,27 @@ test("the Machines page never shows the install's key", () => {
   const { withoutSecrets } = load('viewer') as { withoutSecrets: <T>(x: T) => T };
   assert.deepEqual(withoutSecrets({ doc: { installState: { kind: 'registered', attempt: 'a', installId: 'i', installKey: 'k', at: 1 } } }), { doc: { installState: { kind: 'registered', attempt: 'a', installId: 'i', at: 1 } } });
 });
+
+// Codex review of Daybreak 169 (22 Nov 2026): a clear the relay answers
+// "gone" (a phone uninstalled or a dead token) charges the relay's bad-token
+// allowance, as it should, so the backend drops that phone as a send does,
+// rather than clearing it again with every thread that stops needing Mike.
+test('a phone the relay says is gone after a clear is dropped, so the next clear skips it', async () => {
+  const relay = fakeRelay();
+  const w = await world(2);
+  assert.deepEqual(await w.send(), { sent: 2, failed: 0 });
+  const dead = `${'a'.repeat(63)}0`;
+  const cleared: string[] = [];
+  const send = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+    if (String(input) !== `${RELAY}/clear`) return send(input, init);
+    const { deviceToken } = JSON.parse(String(init?.body)) as { deviceToken: string };
+    cleared.push(deviceToken);
+    return deviceToken === dead ? json({ status: 200, body: { ok: false, status: 410, reason: 'Unregistered', gone: true } }) : json({ status: 200, body: { ok: true, status: 200 } });
+  }) as typeof fetch;
+  assert.deepEqual(await call(w.actionCtx, push.clear, { threadId: 'T' }), { sent: 1, failed: 1 });
+  assert.deepEqual(await call(w.actionCtx, push.clear, { threadId: 'T' }), { sent: 1, failed: 0 });
+  assert.deepEqual(cleared.filter((t) => t === dead).length, 1, 'cleared once, then dropped');
+  assert.equal(w.rows('devices').some((d) => d.apnsToken === dead), false);
+  assert.equal(relay.registers, 1);
+});

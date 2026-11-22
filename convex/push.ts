@@ -517,6 +517,8 @@ export const clear = internalAction({
             else {
               failed++;
               console.warn(`[apns] clear ${failureText(r.status, r.reason)} for …${r.token.slice(-6)}`);
+              // A phone Apple says is gone goes, as after a send.
+              if (r.status === 410 || r.reason === 'BadDeviceToken' || r.reason === 'Unregistered') await ctx.runMutation(internal.devices.drop, { apnsToken: r.token });
             }
           }
         } finally {
@@ -536,11 +538,14 @@ export const clear = internalAction({
         }).catch(() => null);
         // A relay from before /clear: nothing to do, and no use trying the rest.
         if (res?.status === 404) return { sent, failed };
-        const r = ((await res?.json().catch(() => ({}))) ?? {}) as { ok?: boolean; status?: number; reason?: string };
+        const r = ((await res?.json().catch(() => ({}))) ?? {}) as { ok?: boolean; status?: number; reason?: string; gone?: boolean };
         if (r.ok) sent++;
         else {
           failed++;
           console.warn(`[relay] clear ${failureText(typeof r.status === 'number' ? r.status : (res?.status ?? 0), r.reason)} for …${t.apnsToken.slice(-6)}`);
+          // A phone the relay says is gone goes, as after a send: each clear
+          // to it uses up the relay's bad-token allowance (Daybreak 169).
+          if (r.gone) await ctx.runMutation(internal.devices.drop, { apnsToken: t.apnsToken });
         }
       }
     }
