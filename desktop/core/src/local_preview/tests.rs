@@ -808,3 +808,65 @@ fn an_ordinary_page_loads_whole() {
         assert!(site.serve_asked("/pic.png", "/pic.png").is_some());
     }
 }
+
+/// Codex's review: on a disk that ignores case (a Mac's, by default) every
+/// spelling of a name is the same file, and each got its own count and read.
+#[cfg(unix)]
+#[test]
+fn spellings_are_counted_by_the_file_they_open() {
+    let f = Folder::new();
+    let names: Vec<String> = (0..64)
+        .map(|i| {
+            "bigpic"
+                .chars()
+                .enumerate()
+                .map(|(k, c)| {
+                    if i >> k & 1 == 1 {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c
+                    }
+                })
+                .collect::<String>()
+                + ".png"
+        })
+        .collect();
+    let refs: String = names.iter().map(|n| format!("<img src={n}>")).collect();
+    f.write("index.html", &refs);
+    f.write("bigpic.png", "picture");
+    let site = f.site();
+    let ignores_case = f.dir.join("BIGPIC.png").exists();
+    let served = names
+        .iter()
+        .filter(|n| site.serve(&format!("/{n}")).is_some())
+        .count();
+    if ignores_case {
+        assert_eq!(
+            served, MAX_VARIANTS_PER_FILE,
+            "one file, however it's spelled"
+        );
+    } else {
+        assert_eq!(served, 1, "only the one that exists");
+    }
+}
+
+/// The byte budget counts what's charged from the open file before it's
+/// read, the page's own bytes too.
+#[cfg(unix)]
+#[test]
+fn the_byte_budget_is_charged_before_reading() {
+    let f = Folder::new();
+    let pics = MAX_SERVED_BYTES / MAX_BYTES;
+    let refs: String = (0..pics).map(|i| format!("<img src=p{i}.png>")).collect();
+    f.write("index.html", &refs);
+    let site = f.site();
+    for i in 0..pics {
+        let file = fs::File::create(f.dir.join(format!("p{i}.png"))).unwrap();
+        file.set_len(MAX_BYTES).unwrap();
+    }
+    for i in 0..pics - 1 {
+        assert!(site.serve(&format!("/p{i}.png")).is_some());
+    }
+    // The page's own bytes took a little: the last whole picture doesn't fit.
+    assert!(site.serve(&format!("/p{}.png", pics - 1)).is_none());
+}
