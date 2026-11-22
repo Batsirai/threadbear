@@ -48,9 +48,9 @@ export function leadReport(answers: EveryoneAnswer[], waiting: string[], members
   for (const a of answers) parts.push(`${a.name} (thread ${a.threadId.slice(0, 8)}):\n${a.reply}`);
   parts.push(waiting.length ? `Still to answer: ${namesLine(waiting)}.` : 'Everyone has answered.');
   parts.push(
-    `Mike asked you and ${namesLine(members)} the same question at once; each answers in a thread of its own, and their answers come to you here. ` +
-      'Start your reply with one or two short sentences on where everyone stands, as his card shows it ("3 of 4 say wait for one good release. Codex says revoke now."), ' +
-      "and if he has something to decide, ask it in end_turn's asks. Don't repeat the answers, and don't say who is still working: the card shows that.",
+    `The user asked you and ${namesLine(members)} the same question at once; each answers in a thread of its own, and their answers come to you here. ` +
+      'Start your reply with one or two short sentences on where everyone stands, as their card shows it ("3 of 4 say wait for one good release. Codex says revoke now."), ' +
+      "and if they have something to decide, ask it in end_turn's asks. Don't repeat the answers, and don't say who is still working: the card shows that.",
   );
   return parts.join('\n\n');
 }

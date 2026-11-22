@@ -117,5 +117,5 @@ test("everyone: the words a member and the lead are sent", () => {
   const text = leadReport([{ threadId: 'abcdef1234', name: 'Codex', reply: 'Wait.' }], ['Grok'], ['Codex', 'Grok']);
   assert.match(text, /Codex \(thread abcdef12\):\nWait\./);
   assert.match(text, /Still to answer: Grok\./);
-  assert.match(text, /Mike asked you and Codex and Grok the same question/);
+  assert.match(text, /The user asked you and Codex and Grok the same question/);
 });
