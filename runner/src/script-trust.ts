@@ -308,6 +308,9 @@ export const RISKY_ENV = new Set([
   'DYLD_LIBRARY_PATH', 'DYLD_FRAMEWORK_PATH', 'PYTHONPATH', 'PYTHONSTARTUP', 'RUBYOPT', 'PERL5OPT',
   'PERL5LIB', 'PROMPT_COMMAND', 'npm_config_script_shell', 'NPM_CONFIG_SCRIPT_SHELL', 'npm_config_node_options',
   'NPM_CONFIG_NODE_OPTIONS', 'BUN_OPTIONS', 'GIT_EXEC_PATH', 'SHELLOPTS', 'BASHOPTS', 'FPATH', 'fpath',
+  // make reads MAKEFILES first and takes flags from MAKEFLAGS; gawk loads
+  // from AWKPATH (Grok's review of Daybreak 165).
+  'MAKEFILES', 'MAKEFLAGS', 'GNUMAKEFLAGS', 'MFLAGS', 'AWKPATH', 'AWKLIBPATH',
 ]);
 
 // Programs a Claude Code hook (and what it runs) may run with nothing more
@@ -2568,6 +2571,9 @@ class Reach {
         for (const t of rcs) if (isFile(t)) this.follow(t, 'source', ctx, line);
         continue;
       }
+      // An interactive or login shell reads your startup files first
+      // (`bash -ic`, `zsh -l`), which no hash covers (Grok's review of 165).
+      if (this.ownRules && (/^-[a-zA-Z]*[il][a-zA-Z]*$/.test(s) || s === '--login' || s === '--interactive')) return this.fail(ctx, line, `runs ${name} as an interactive or login shell, which reads your startup files first, so patch trust can't follow what runs.`);
       if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(s)) {
         const code = args[i + 1] ? litOf(args[i + 1]!) : undefined;
         if (code === undefined) return this.fail(ctx, line, `runs \`${name} -c\` with code worked out as it runs, which patch trust can't follow.`);
@@ -3086,6 +3092,8 @@ class Reach {
     for (let i = 0; i < args.length; i++) {
       const s = this.str(args[i], ctx);
       if (s === undefined) return this.fail(ctx, line, "runs make with words worked out as it runs, which patch trust can't follow.");
+      // `--eval` is make code on the command line; `-E` too in newer makes.
+      if (/^(--eval|-E)(=|$)/.test(s ?? '') || /^[A-Za-z_][\w.-]*\s*[:+?!]?=/.test(s ?? '') && /\$[({]shell\b|\$\(\s*eval\b/.test(s ?? '')) return this.fail(ctx, line, "runs make with code on its command line, which patch trust doesn't follow.");
       const v = opt(s);
       if (v) {
         const given = v.value ?? this.str(args[++i], ctx);
@@ -3183,6 +3191,8 @@ class Reach {
     for (let i = 0; i < args.length; i++) {
       const s = this.str(args[i], ctx);
       if (s?.startsWith('-f') || s?.startsWith('--file')) return this.fail(ctx, line, "runs an awk program from a file, which patch trust doesn't follow.");
+      // gawk's libraries and extensions, from AWKPATH (`.` first) or named.
+      if (s !== undefined && /^(-i|-l|-E|--include|--load|--exec|-e|--source)(=|$|.)/.test(s)) return this.fail(ctx, line, `runs awk with ${s.replace(/=.*$/s, '')}, which loads code patch trust doesn't follow.`);
       if (s === '-F' || s === '-v') {
         i++;
         continue;
@@ -3192,7 +3202,7 @@ class Reach {
       if (raw === undefined) return this.fail(ctx, line, "runs an awk program worked out as it runs, which patch trust can't follow.");
       // A backslash-newline is one line to awk.
       const prog = raw.replace(/\\\n/g, ' ');
-      if (/\bsystem\s*\(|\|\s*getline|\|\s*&/.test(prog) || awkPrintsToCommand(prog)) return this.fail(ctx, line, "runs an awk program that runs commands, which patch trust doesn't follow.");
+      if (/\bsystem\s*\(|\|\s*getline|\|\s*&|@\s*(include|load|namespace)/.test(prog) || awkPrintsToCommand(prog)) return this.fail(ctx, line, "runs an awk program that runs commands, which patch trust doesn't follow.");
       // `print > "run.sh"`: a file named in the program, or worked out in it.
       if (awkWritesFile(prog)) this.writesSomewhere ??= `${ctx.label} line ${line} (awk)`;
       return;
@@ -3605,7 +3615,8 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
   // spelled out in turn, or nothing (unset: the runner's own, or empty).
   const valuesOf = (n: string, depth: number): string[] => {
     const d = deps.get(n);
-    if (!d || depth > 6) return [''];
+    // $HOME nothing followed sets is the runner's own home.
+    if (!d || depth > 6) return n === 'HOME' && !d ? [os.homedir(), ''] : [''];
     // Empty too: a shell it starts doesn't have a variable it didn't
     // export, `env -u` takes one away, `shift` empties a positional.
     const empty = n.startsWith('#args:') || !exported.has(n) || cleared.has(n) || cleared.has('*') ? [''] : [];
@@ -3644,6 +3655,19 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
     }
   }
   if (!written.length && !somewhere) return undefined;
+  // A file of your home folder that a shell or a tool reads as it starts
+  // (`~/.bashrc`, `~/.zshenv`, `~/.gitconfig`, a launch agent): a later
+  // `bash -i`, `zsh -c` or git runs it, and no hash covers it (Grok's review
+  // of Daybreak 165). `~` as the shell writes it, which the lexer leaves.
+  const home = os.homedir();
+  for (const [file, where] of written) {
+    const tilde = file.split(path.sep).indexOf('~');
+    const f = tilde >= 0 ? path.join(home, ...file.split(path.sep).slice(tilde + 1)) : file;
+    const rel = path.relative(home, realOrNearest(f));
+    const inTop = path.relative(top, f);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !(inTop.startsWith('..') || path.isAbsolute(inTop))) continue;
+    if (rel.split(path.sep).some((x) => x.startsWith('.')) || /^Library[\\/](LaunchAgents|Preferences|Application Support)/.test(rel)) return { problem: `${where} writes ${f}, a file in your home folder that shells and tools read as they start, so patch trust can't follow what runs after it.`, definite: false };
+  }
   if (!w.reached.length) return undefined;
   const definite = definiteWrite(written, w.reached, top);
   if (definite) return { problem: definite, definite: true };

@@ -1321,3 +1321,21 @@ test('Daybreak 165 review 4: a check from a thread that asks first runs only wha
   assert.throws(() => trust.approveCheck("sqlite3 :memory: '.read payload.txt'", dir, { hash: d.hash, folder: dir }), /follow all the way/);
   sched.stop();
 });
+
+// Grok's fifth review: make's MAKEFILES, a startup file of the home folder a
+// later shell reads, and gawk's includes, each loading a file no hash covers.
+test('Daybreak 165 review 5: MAKEFILES, home startup files, interactive shells and gawk includes', () => {
+  const dir = repo({ 'Makefile': 'all:\n\ttrue\n', 'payload.mk': '$(info ok)\n', 'payload.txt': 'echo safe\n', 'payload.awk': 'BEGIN {}\n',
+    'mk.sh': '#!/bin/sh\nMAKEFILES=./payload.mk\nexport MAKEFILES\nmake\n',
+    'rc.sh': '#!/bin/sh\ncp payload.txt "$HOME/.bashrc"\nbash -ic true\n',
+    'rc2.sh': '#!/bin/sh\ncp payload.txt ~/.zshenv\nzsh -c true\n',
+  });
+  for (const f of ['payload.mk', 'payload.txt', 'payload.awk']) fs.chmodSync(path.join(dir, f), 0o644);
+  for (const check of ['./mk.sh', 'MAKEFILES=./payload.mk make', 'MAKEFLAGS=--eval=x make', 'make --eval=x', './rc.sh', './rc2.sh', 'bash -ic true', 'zsh -l -c true', "gawk --include=payload 'BEGIN {}'", "awk -i payload 'BEGIN {}'", "awk '@include \"payload\"'", 'AWKPATH=. awk 1']) {
+    assert.ok(checkCardProblem(check, dir), check);
+    assert.ok(checkDigest(check, dir).problem, `${check}: unfollowable for any check`);
+  }
+  // A plain make, and writing a state file in the repo, stay followable.
+  assert.equal(checkCardProblem('make', dir), undefined);
+  assert.equal(checkDigest('cp payload.txt state.txt', dir).problem, undefined);
+});
