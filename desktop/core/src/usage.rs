@@ -591,10 +591,27 @@ impl Pace {
                 }
             }
         }
+        let elapsed = hours(now - start);
+        if week && per_hour.is_none() && elapsed < 12. {
+            // Under half a day into the week, a busy first hour run on around
+            // the clock says it runs out in two days. Go by the week before
+            // instead: what had gone by its last reading, over the time since
+            // it began (each week starts full). No week before: too early to
+            // say.
+            let prev_start = start - span;
+            let last = samples
+                .iter()
+                .filter(|s| s.at >= prev_start && s.at < start)
+                .max_by_key(|s| s.at)?;
+            let prev_elapsed = hours(last.at - prev_start);
+            if prev_elapsed < 12. {
+                return None;
+            }
+            per_hour = Some((100. - last.remaining).max(0.) / prev_elapsed);
+        }
         let per_hour = match per_hour {
             Some(p) => p,
             None => {
-                let elapsed = hours(now - start);
                 // Too early in the window to say anything.
                 if elapsed < if week { 2. } else { 0.25 } {
                     return None;
@@ -2510,6 +2527,39 @@ mod tests {
             remaining: 45.,
         }];
         assert!((Pace::of(&w, &recent, now).unwrap().rate - 15.).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_week_just_reset_goes_by_the_week_before() {
+        // Two hours after the reset with 5% gone: run on around the clock
+        // that's 60% a day, out on day two. The week before used 70% in its
+        // seven days: 10% a day.
+        let now = at(12, 0);
+        let start = now - 2 * HOUR;
+        let w = weekly(95., start + 7 * DAY);
+        let samples = [
+            Sample {
+                at: start - 3 * DAY,
+                remaining: 60.,
+            },
+            Sample {
+                at: start - 60_000,
+                remaining: 30.,
+            },
+            Sample {
+                at: start + HOUR,
+                remaining: 97.,
+            },
+        ];
+        let pace = Pace::of(&w, &samples, now).unwrap();
+        assert!((pace.rate - 10.).abs() < 0.01);
+        assert!(pace.runs_out_at.is_none());
+        // No week before: too early to say.
+        assert!(Pace::of(&w, &[], now).is_none());
+        // Half a day in, the week's own readings take over again: 97% to
+        // 95% over 12 hours.
+        let later = start + 13 * HOUR;
+        assert!((Pace::of(&w, &samples, later).unwrap().rate - 4.).abs() < 0.01);
     }
 
     #[test]

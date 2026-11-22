@@ -1589,8 +1589,10 @@ Click a row to open it. Under it is a small chart of the last seven days,
 rolling, with the days along the bottom: last week's readings stay on it
 after a reset, and your current pace is dashed on to the next reset. Then
 the 5-hour window as a small chip, where the login has one, and the
-login's buttons. Hover the ring, the chart or the chip for its rate. A
-sign-in that's ending or has ended shows under its row even when it's
+login's buttons. Hover the ring, the chart or the chip for its rate. In a
+week's first half day the pace is the week before's, as a busy first hour
+says little; with no week before to go by, the line just says when it
+resets. A sign-in that's ending or has ended shows under its row even when it's
 shut.
 
 A login with no number yet says why on its row, with a dashed ring: a
