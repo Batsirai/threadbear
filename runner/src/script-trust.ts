@@ -282,7 +282,9 @@ const MAX_VISITS = 600;
 const SHELL_EXT = ['.sh', '.bash', '.zsh', '.ksh', '.command'];
 const JS_EXT = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx'];
 const SHELLS = ['sh', 'bash', 'zsh', 'dash', 'ksh'];
-const JS_RUNNERS = ['node', 'tsx', 'ts-node', 'bun', 'deno'];
+const JS_RUNNERS = ['node', 'nodejs', 'tsx', 'ts-node', 'bun', 'deno'];
+// Packages that run a JavaScript or TypeScript file they're handed.
+const JS_RUNNER_PACKAGES = new Set(['tsx', 'ts-node', 'esno', 'esbuild-runner', 'vite-node', 'jiti', '@babel/node', 'babel-node', 'sucrase-node', '@swc-node/register', 'swc-node', 'esrun', 'tsimp', 'ts-node-dev', 'nodemon', 'node', 'bun', 'deno', 'zx', 'tsm', 'tsup-node']);
 // Languages whose loads this can't follow: running a file or code in one
 // fails closed.
 const OTHER_LANGS = /^(python[0-9.]*|ruby|perl|php|lua|osascript|pwsh|powershell|fish|csh|tcsh|Rscript|expect|tclsh|uv|uvx|poetry|pipenv|rake|bundle|parallel)$/;
@@ -342,7 +344,7 @@ const GIT_WRITES = new Set([
 ]);
 // Programs that write files the data names.
 const UNPACKERS = new Set(['unzip', 'gunzip', 'bunzip2', 'unxz', 'unzstd', 'uncompress', 'unlz4', 'patch', 'gpatch', 'split', 'csplit', 'cpio', '7z', '7za', '7zz', 'unrar', 'unar', 'pax']);
-const LOADING_FLAG = /(^|\s)(-r|-e|-p|--require|--import|--loader|--experimental-loader|--preload|--eval|--print|--preserve-symlinks|--preserve-symlinks-main)(\s|=|$)/;
+const LOADING_FLAG = /(^|\s)-[rep]\S|(^|\s)(-r|-e|-p|--require|--import|--loader|--experimental-loader|--preload|--eval|--print|--preserve-symlinks|--preserve-symlinks-main)(\s|=|$)/;
 const LIFECYCLE = ['preinstall', 'install', 'postinstall', 'prepublish', 'preprepare', 'prepare', 'postprepare', 'prepack', 'postpack', 'prepublishOnly', 'publish', 'postpublish', 'dependencies'];
 const PATH_SENTINEL = '\u0000PATH';
 // A package's bin folder on PATH: on Windows written with either slash;
@@ -1240,6 +1242,12 @@ class Reach {
       if (this.o.strict) return this.fail(undefined, undefined, `${label}: ${scan.launches}`);
       if (this.o.launches) this.launches ??= `${label}: ${scan.launches}`;
     }
+    // Any JavaScript, for a schedule's check: what it does can turn on
+    // files no hash covers by more routes than a scan can close
+    // (`globalThis.valueOf()['pro' + 'cess']`, three rounds of review of
+    // Daybreak 165), so it's a script this can't follow all the way, as a
+    // Python one is. The owner's check is still bound as far as it can be.
+    if (this.o.launches && !this.o.strict) this.later ??= `${label} is JavaScript, which patch trust can't follow all the way for a schedule's check: what it runs or loads can depend on files no hash covers. Have the check run a shell script instead.`;
     // On Windows a program it starts with an environment of its own loses
     // NoDefaultCurrentDirectoryInExePath, and may be run from wherever it
     // says (Codex's fourth review, 19 Nov 2026).
@@ -2621,6 +2629,9 @@ class Reach {
   }
 
   private jsRun(name: string, args: Word[], ctx: Ctx, line: number, extra: boolean): void {
+    // A JavaScript runtime, whatever it's handed (`node ./check.sh` runs a
+    // file this would read as shell): as for a JavaScript file above.
+    if (this.o.launches && !this.o.strict) this.later ??= `${ctx.label}${line ? ` line ${line}` : ''} runs ${name}, and patch trust can't follow JavaScript all the way for a schedule's check: what it runs or loads can depend on files no hash covers.`;
     let i = 0;
     // bun and deno have subcommands; `bun x`/`bun run x`/`bun x.ts`.
     // Flags before (or after `run`) that load code, change the folder or
@@ -2661,6 +2672,8 @@ class Reach {
       } else {
         if (['install', 'i', 'add', 'a', 'update', 'link', 'pm'].includes(sub)) return this.lifecycle(ctx, line);
         if (sub === 'x') return this.npx(args.slice(i + 1), ctx, line);
+        // `bun exec "cmd"` runs cmd in Bun's own shell, not a package script.
+        if (sub === 'exec') return this.fail(ctx, line, "runs `bun exec`, a shell of Bun's own, which patch trust doesn't follow.");
         if (['test', 'build', 'create', 'init', 'upgrade', 'outdated', 'publish', 'patch', 'remove', 'rm', 'repl', 'help', 'completions', 'audit', 'info', 'why'].includes(sub)) {
           if (this.ownRules && ['test', 'build', 'create', 'init', 'upgrade', 'publish', 'patch', 'repl'].includes(sub)) return this.fail(ctx, line, `runs \`bun ${sub}\`, which finds what to run by its own rules.`);
           return;
@@ -2941,7 +2954,7 @@ class Reach {
       if (/^(-w|--workspace|-ws|--workspaces|--filter|-F|-r|--recursive)(=|$)/.test(s)) return this.fail(ctx, line, `runs ${tool} across workspaces (${s}), which patch trust doesn't follow.`);
       // Config it would read, or code it would load, from what a flag names
       // (Gemini's review of 165): `--userconfig=rc.txt`, `--node-options`.
-      if (/^--(userconfig|globalconfig|node[-_]options|script[-_]shell|shell|config|rcfile|registry-config|cache|require|import|loader|hooks|pnpmfile|global-pnpmfile|ignore-scripts=false)(=|$)/i.test(s)) return this.fail(ctx, line, `runs ${tool} with ${s.replace(/=.*$/s, '')}, which can make it load code patch trust doesn't follow.`);
+      if (NPM_CONFIG_FLAG.test(s)) return this.fail(ctx, line, `runs ${tool} with ${s.replace(/=.*$/s, '')}, which can make it load code patch trust doesn't follow.`);
       const dirOpt = /^(--prefix|-C|--dir|--cwd)(?:=(.*))?$/.exec(s);
       if (dirOpt) {
         const v = dirOpt[2] ?? this.str(args[++i], ctx);
@@ -2954,6 +2967,12 @@ class Reach {
     }
     const sub = this.str(args[i], ctx);
     const rest = args.slice(i + 1);
+    // npm reads its config flags anywhere before `--` (Gemini's review).
+    for (const w of rest) {
+      const s = this.str(w, local);
+      if (s === '--') break;
+      if (s !== undefined && NPM_CONFIG_FLAG.test(s)) return this.fail(ctx, line, `runs ${tool} with ${s.replace(/=.*$/s, '')}, which can make it load code patch trust doesn't follow.`);
+    }
     const nameAfter = () => {
       for (const w of rest) {
         const s = this.str(w, local);
@@ -3006,15 +3025,23 @@ class Reach {
           this.binDirs = outer;
         }
       }
-      const pkgOpt = /^(-p|--package)(?:=(.*))?$/.exec(s);
+      const pkgOpt = /^(?:-p|--package|--pack|--packa|--packag)(?:=(.*))?$/.exec(s) ?? /^-p(.+)$/.exec(s);
       if (pkgOpt) {
         // A package from a folder or file of the repo's runs its bin unread.
-        const v = pkgOpt[2] ?? this.str(args[++i], ctx);
-        if (v === undefined || /^(\.{0,2}\/|file:|~|[a-z]:\\)/i.test(v) || v.includes('/') && !v.startsWith('@')) return this.fail(ctx, line, `runs npx with a package from ${v === undefined ? 'somewhere worked out as it runs' : v.slice(0, 40)}, which patch trust doesn't follow.`);
+        const v = pkgOpt[1] ?? this.str(args[++i], ctx);
+        if (v === undefined || /^(\.{1,2}(\/|$)|\/|file:|~|[a-z]:\\|git[+:]|https?:)/i.test(v) || v.includes('/') && !v.startsWith('@')) return this.fail(ctx, line, `runs npx with a package from ${v === undefined ? 'somewhere worked out as it runs' : v.slice(0, 40)}, which patch trust doesn't follow.`);
         continue;
       }
+      if (NPM_CONFIG_FLAG.test(s)) return this.fail(ctx, line, `runs npx with ${s.replace(/=.*$/s, '')}, which can make it load code patch trust doesn't follow.`);
+      if (s === '--') continue;
       if (s.startsWith('-')) continue;
       if (/^\.{0,2}\//.test(s)) return this.runFile(s, ctx, line);
+      // A JavaScript runtime by name (`npm exec -- node x`, `npx tsx x`,
+      // `bunx tsx x`): what it's handed is JavaScript, read as by jsRun.
+      if (JS_RUNNERS.includes(s) || JS_RUNNER_PACKAGES.has(s.replace(/@[^/@]*$/, ''))) {
+        if (this.o.launches && !this.o.strict) this.later ??= `${ctx.label}${line ? ` line ${line}` : ''} runs ${s}, and patch trust can't follow JavaScript all the way for a schedule's check: what it runs or loads can depend on files no hash covers.`;
+        if (JS_RUNNERS.includes(s)) return this.jsRun(s, args.slice(i + 1), ctx, line, false);
+      }
       if (this.o.strict) return this.fail(ctx, line, `runs the package ${s} by name (npx or the like), which runs whatever that name resolves to then, so a hash can't cover it.`);
       // A package: its version is the package.json's, what the repo commits
       // is hashed (packages), and a bin of the repo's own runs as a script.
@@ -3380,6 +3407,10 @@ export function readsInput(p: string): boolean {
 
 // Whether a shell script's #! passes the shell a flag that has it read
 // commands from somewhere other than the script.
+// npm, pnpm and yarn flags that name config to read or code to load; npm
+// takes any unambiguous start of a long flag (`--user=rc.txt`).
+const NPM_CONFIG_FLAG = /^--(u|us|use|user|userc|userco|usercon|userconf|userconfi|userconfig|globalc|globalco|globalcon|globalconf|globalconfi|globalconfig|no|nod|node|node-|node-o|node-op|node-opt|node-opti|node-optio|node-option|node-options|node_options|scr|scri|scrip|script|script-|script-s|script-sh|script-she|script-shel|script-shell|script_shell|shell|config|rcfile|registry-config|require|import|loader|hooks|pnpmfile|global-pnpmfile|onload-script|onload|yarn-path)(=|$)/i;
+
 // Flags bun and deno take that need no value and load nothing more.
 const BUN_DENO_SAFE_FLAGS = /^(--smol|--silent|--bun|--no-install|--prefer-offline|--prefer-latest|--no-clear-screen|--quiet|-q|-A|--allow-all|--allow-(read|write|net|env|run|sys|ffi|hrtime|import)(=[^\s]*)?|--no-prompt|--no-check|--check|--unstable[\w-]*|--no-lock|--no-remote|--cached-only|--no-npm|--no-config|--no-code-cache|--v8-flags=--max-old-space-size=\d+)$/;
 

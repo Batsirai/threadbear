@@ -373,7 +373,15 @@ command or file's place, more than 8 wrappers deep, or from a path that's its in
 open (`sh /dev/stdin < ./steps.txt`, `node -`, `bash -s` after
 `--rcfile`, a `#!` with `-s`, `-c` or `-i`, `/dev/fd/N`, `/proc/self/fd/N`,
 `/dev/tty`, or anything outside the repo that isn't a plain file), a
-JavaScript file that starts programs itself (an import of
+JavaScript file for a schedule's check, however it's run (a `.js` or
+`.ts` file, `node`, `nodejs`, `bun`, `deno`, `tsx` or `ts-node`, through
+`env`, `npx`, `bunx` or `npm exec` too): what JavaScript runs or loads can
+turn on files no hash covers by more routes than a scan can close
+(`globalThis.valueOf()` hands out the global object by another name), so
+it's followed as far as it can be, its imports hashed, and the check is
+one it can't follow (Daybreak 165, after three rounds of review). For a
+Claude Code hook, JavaScript is still read, and one that starts programs
+itself (an import of
 `child_process`, `cluster`, `bun` or a package known to wrap them, like
 `execa`, `cross-spawn`, `zx` or `shelljs`; `Bun` or `Deno` other than
 under `typeof`; `execve`, by any name, `Reflect.get` included), as what it

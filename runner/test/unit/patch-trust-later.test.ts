@@ -11,7 +11,8 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { loadPatchSet } from '../../src/patches.ts';
-import { CHECK_PREFIX, checkDigest, checkReach, folderKeyOfDir, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
+import { CHECK_PREFIX, checkDigest, checkReach, commandFiles, folderKeyOfDir, followOptions, PatchTrust, patchHash, type PatchGate } from '../../src/patch-trust.ts';
+import { reachOfCommand } from '../../src/script-trust.ts';
 import { claudeCommands } from '../../src/claude-trust.ts';
 import { Scheduler, scheduleMethods } from '../../src/schedules.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -44,6 +45,16 @@ function repo(files: Record<string, string>, links: Record<string, string> = {})
 
 const patchWith = (run: string) => `export default { actions: [{ title: 'Go', run: ${JSON.stringify(run)} }] };\n`;
 const patchFile = (dir: string) => path.join(dir, '.threadbear', 'patches', 't.ts');
+
+// A check's digest with the note that it reaches JavaScript left out (any
+// JavaScript is a script a check can't follow all the way, Daybreak 165), for
+// the tests of what the follower does inside JavaScript: any other problem
+// comes first, so what's left is what they said before.
+const JS_NOTE = /is JavaScript, which patch trust can't follow all the way|runs (node|bun|deno|tsx|ts-node)[^,]*, and patch trust can't follow JavaScript/;
+function digestInJs(command: string, dir: string): ReturnType<typeof checkDigest> {
+  const d = checkDigest(command, dir);
+  return d.problem && JS_NOTE.test(d.problem) ? { hash: d.hash, files: d.files } : d;
+}
 
 // A thread in `dir`, whose patch is trusted as it stands, on a real store.
 async function trustedThread(dir: string) {
@@ -205,7 +216,7 @@ test('Codex review: a script importing its own package by name is refused, howev
   const dir = repo({ '.threadbear/patches/t.ts': patchWith('node a.mjs'), ...files });
   assert.match((await loaded(dir)).error ?? '', /its own package by name/);
   // A check.
-  assert.match(checkDigest('node a.mjs', dir).problem ?? '', /its own package by name/);
+  assert.match(digestInJs('node a.mjs', dir).problem ?? '', /its own package by name/);
   // A Claude hook.
   const c = claudeRepo(hook('node a.mjs'), files);
   assert.match(claudeCommands(c.dir, c.home)?.incomplete ?? '', /its own package by name/);
@@ -215,7 +226,7 @@ test('Codex review: a script importing its own package by name is refused, howev
   fs.writeFileSync(path.join(later, 'package.json'), files['package.json']);
   await assert.rejects(h.runner.runAction(thread.id, 't.go'), /its own package by name/);
   // A package's own name with no exports goes to node_modules, so it's fine.
-  assert.equal(checkDigest('node a.mjs', repo({ 'package.json': '{"name":"p"}', 'a.mjs': "import 'p';\n" })).problem, undefined);
+  assert.equal(digestInJs('node a.mjs', repo({ 'package.json': '{"name":"p"}', 'a.mjs': "import 'p';\n" })).problem, undefined);
 });
 
 test('Codex review: a linked package that could send an import past what was hashed is refused', () => {
@@ -223,19 +234,19 @@ test('Codex review: a linked package that could send an import past what was has
   const link = { 'node_modules/wsp': '../packages/wsp' };
   // Through a link to a folder.
   const viaDir = repo({ ...base, 'packages/wsp/package.json': '{"exports":"./lib/run.js"}', 'payload/run.js': '1;\n' }, { ...link, 'packages/wsp/lib': '../../payload' });
-  assert.match(checkDigest('node a.mjs', viaDir).problem ?? '', /is a link/);
+  assert.match(digestInJs('node a.mjs', viaDir).problem ?? '', /is a link/);
   // A CommonJS file with no extension, which Node runs though nothing says it's code.
   const bare = repo({ ...base, 'packages/wsp/package.json': '{"exports":"./payload"}', 'packages/wsp/payload': "require('../../evil.js')\n", 'evil.js': '1;\n' }, link);
-  assert.match(checkDigest('node a.mjs', bare).problem ?? '', /isn't JavaScript/);
+  assert.match(digestInJs('node a.mjs', bare).problem ?? '', /isn't JavaScript/);
   // A native addon.
   const addon = repo({ ...base, 'packages/wsp/package.json': '{}', 'packages/wsp/x.node': 'x' }, link);
-  assert.match(checkDigest('node a.mjs', addon).problem ?? '', /native addon/);
+  assert.match(digestInJs('node a.mjs', addon).problem ?? '', /native addon/);
   // A file of any kind in it is hashed, as its manifest could name it later.
   const data = repo({ ...base, 'packages/wsp/package.json': '{}', 'packages/wsp/index.js': '1;\n', 'packages/wsp/data.txt': 'x' }, link);
-  const before = checkDigest('node a.mjs', data);
+  const before = digestInJs('node a.mjs', data);
   assert.equal(before.problem, undefined);
   fs.appendFileSync(path.join(data, 'packages/wsp/data.txt'), 'y');
-  assert.notEqual(checkDigest('node a.mjs', data).hash, before.hash);
+  assert.notEqual(digestInJs('node a.mjs', data).hash, before.hash);
 });
 
 test('Codex review: a committed package\'s lifecycle script is followed, past node_modules too', () => {
@@ -265,41 +276,41 @@ test('Codex review 2: npx -c, empty PATH entries, a package with no git or node_
   assert.notEqual(viaCall.after.hash, viaCall.before.hash, 'npx -c of a workspace bin');
   // An empty PATH entry is the current folder, wherever it is.
   for (const value of [':$PATH', '$PATH:', '/usr/bin::/bin', '']) {
-    assert.match(checkDigest(`PATH="${value}" tool`, repo({ tool: '#!/bin/sh\n' })).problem ?? '', /on PATH/, value);
+    assert.match(digestInJs(`PATH="${value}" tool`, repo({ tool: '#!/bin/sh\n' })).problem ?? '', /on PATH/, value);
   }
   // Still fine: an absolute folder outside the repo, before the old PATH.
-  assert.equal(checkDigest('PATH="/opt/homebrew/bin:$PATH" gh pr list', repo({ a: '' })).problem, undefined);
+  assert.equal(digestInJs('PATH="/opt/homebrew/bin:$PATH" gh pr list', repo({ a: '' })).problem, undefined);
   // Node's self-reference needs neither git nor a node_modules.
   const bare = fs.realpathSync(tmpDir());
   write(bare, { 'package.json': '{"name":"p","exports":"./payload.mjs"}', 'a.mjs': "import 'p';\n", 'payload.mjs': '1;\n' });
-  assert.match(checkDigest('node a.mjs', bare).problem ?? '', /its own package by name/);
+  assert.match(digestInJs('node a.mjs', bare).problem ?? '', /its own package by name/);
   // An installed package may import a workspace one the script never names.
   const wrapped = repo({ ...IGNORE_NM, 'a.cjs': "require('wrapper')\n", 'node_modules/wrapper/index.js': "require('wsp')\n", 'packages/wsp/index.js': '1;\n', 'packages/wsp/package.json': '{}' }, { 'node_modules/wsp': '../packages/wsp' });
-  const seen = checkDigest('node a.cjs', wrapped);
+  const seen = digestInJs('node a.cjs', wrapped);
   assert.equal(seen.problem, undefined);
   fs.appendFileSync(path.join(wrapped, 'packages/wsp/index.js'), '2;\n');
-  assert.notEqual(checkDigest('node a.cjs', wrapped).hash, seen.hash);
+  assert.notEqual(digestInJs('node a.cjs', wrapped).hash, seen.hash);
   // A scoped link too.
   const scoped = repo({ ...IGNORE_NM, 'a.cjs': "require('zod')\n", 'packages/s/index.js': '1;\n', 'packages/s/package.json': '{}' }, { 'node_modules/@me/s': '../../packages/s' });
-  const before = checkDigest('node a.cjs', scoped);
+  const before = digestInJs('node a.cjs', scoped);
   fs.appendFileSync(path.join(scoped, 'packages/s/index.js'), '2;\n');
-  assert.notEqual(checkDigest('node a.cjs', scoped).hash, before.hash);
+  assert.notEqual(digestInJs('node a.cjs', scoped).hash, before.hash);
   // A subpath with no extension, which require() runs as CommonJS.
   const sub = repo({ ...IGNORE_NM, 'a.cjs': "require('wsp/payload')\n", 'packages/wsp/package.json': '{}', 'packages/wsp/payload': "require('../../evil.cjs')\n", 'evil.cjs': '1;\n' }, { 'node_modules/wsp': '../packages/wsp' });
-  assert.match(checkDigest('node a.cjs', sub).problem ?? '', /isn't JavaScript/);
+  assert.match(digestInJs('node a.cjs', sub).problem ?? '', /isn't JavaScript/);
   // And a committed package's, and a pattern in its exports.
   const committed = repo({ ...IGNORE_NM, 'a.cjs': "require('pk/payload')\n", 'node_modules/pk/payload': "require('../../evil.cjs')\n", 'evil.cjs': '1;\n' });
   track(committed, 'node_modules/pk/payload');
-  assert.match(checkDigest('node a.cjs', committed).problem ?? '', /isn't JavaScript/);
+  assert.match(digestInJs('node a.cjs', committed).problem ?? '', /isn't JavaScript/);
   const pattern = repo({ ...IGNORE_NM, 'a.cjs': "require('wsp/x')\n", 'packages/wsp/package.json': '{"exports":{"./*":"./lib/*"}}', 'packages/wsp/lib/x': '1;\n' }, { 'node_modules/wsp': '../packages/wsp' });
-  assert.match(checkDigest('node a.cjs', pattern).problem ?? '', /isn't JavaScript/);
+  assert.match(digestInJs('node a.cjs', pattern).problem ?? '', /isn't JavaScript/);
   // A file of the repo's required by its exact name, whatever it's called.
   const exact = repo({ 'a.cjs': "require('./payload.bin')\n", 'payload.bin': "require('./evil.cjs')\n", 'evil.cjs': '1;\n' });
-  assert.match(checkDigest('node a.cjs', exact).problem ?? '', /isn't JavaScript/);
+  assert.match(digestInJs('node a.cjs', exact).problem ?? '', /isn't JavaScript/);
   // Sourcing a script outside the repo can change this shell.
   const outside = fs.realpathSync(tmpDir());
   write(outside, { 'enter.sh': 'cd /tmp\n' });
-  const sourced = checkDigest(`. ${outside}/enter.sh; ./check.sh`, repo({ 'check.sh': '#!/bin/sh\n' }));
+  const sourced = digestInJs(`. ${outside}/enter.sh; ./check.sh`, repo({ 'check.sh': '#!/bin/sh\n' }));
   assert.match(sourced.problem ?? '', /sources .*outside the repo/);
   assert.ok(sourced.files.includes(path.join(outside, 'enter.sh')), 'hashed all the same');
 });
@@ -307,10 +318,10 @@ test('Codex review 2: npx -c, empty PATH entries, a package with no git or node_
 test('Codex review 3: a committed file by a bare name, a link in a linked package, --call=, and preloads a hash cannot follow', () => {
   const file = repo({ ...IGNORE_NM, 'a.cjs': "require('payload')\n", 'node_modules/payload': "require('../evil.cjs')\n", 'evil.cjs': '1;\n' });
   track(file, 'node_modules/payload');
-  assert.match(checkDigest('node a.cjs', file).problem ?? '', /isn't JavaScript/);
+  assert.match(digestInJs('node a.cjs', file).problem ?? '', /isn't JavaScript/);
   // A link standing in for what its name says it is.
   const entry = repo({ ...IGNORE_NM, 'a.cjs': "require('wsp')\n", 'packages/wsp/package.json': '{"name":"wsp","exports":"./entry.js"}', payload: "require('./evil.cjs')\n", 'evil.cjs': '1;\n' }, { 'node_modules/wsp': '../packages/wsp', 'packages/wsp/entry.js': '../../payload' });
-  assert.match(checkDigest('node a.cjs', entry).problem ?? '', /is a link/);
+  assert.match(digestInJs('node a.cjs', entry).problem ?? '', /is a link/);
   // However npm reads --call.
   for (const run of ['npx --call=tool', 'npm exec --call=tool', 'npx --cal=tool', 'npx -c=tool']) {
     const dir = repo({ ...IGNORE_NM, '.threadbear/patches/t.ts': patchWith(run), 'package.json': '{}', 'node_modules/.bin/tool': '#!/bin/sh\necho\n' });
@@ -321,10 +332,10 @@ test('Codex review 3: a committed file by a bare name, a link in a linked packag
   // A preload that maps through package.json, or that's code in a URL.
   for (const preload of ['#boot', 'data:text/javascript,1', 'https://x.example/a.mjs']) {
     const dir = repo({ 'package.json': '{"imports":{"#boot":"./payload.mjs"}}', 'a.cjs': '', 'payload.mjs': '1;\n' });
-    assert.match(checkDigest(`node --import '${preload}' a.cjs`, dir).problem ?? '', /can't follow/, preload);
+    assert.match(digestInJs(`node --import '${preload}' a.cjs`, dir).problem ?? '', /can't follow/, preload);
   }
   // A builtin is fine.
-  assert.equal(checkDigest("node --import node:fs a.cjs", repo({ 'a.cjs': '' })).problem, undefined);
+  assert.equal(digestInJs("node --import node:fs a.cjs", repo({ 'a.cjs': '' })).problem, undefined);
 });
 
 test('narrowed, by Alex\'s decision: a package npm installed stays out of the hash, so an install never asks again', () => {
@@ -1088,19 +1099,30 @@ test('Daybreak 165: from a thread that asks first, a check whose JavaScript star
   }
 });
 
-test('Daybreak 165: pure JavaScript checks and plain shell scripts stay followable, every byte bound', () => {
+test('Daybreak 165: plain shell scripts stay followable, every byte bound; JavaScript is the owner\'s to approve, bound as far as it can be', () => {
   const dir = launchRepo();
-  const d = checkDigest('./pure.sh', dir);
+  const d = checkDigest('./step.sh', dir);
   assert.equal(d.problem, undefined);
-  assert.deepEqual(d.files.sort(), ['pure.mjs', 'pure.sh', 'step.sh']);
+  assert.deepEqual(d.files, ['step.sh']);
   const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
-  trust.approveCheck('./pure.sh', dir, { hash: d.hash, folder: dir });
-  assert.equal(trust.checkApproved('./pure.sh', dir).approved, true);
+  trust.approveCheck('./step.sh', dir, { hash: d.hash, folder: dir });
+  assert.equal(trust.checkApproved('./step.sh', dir).approved, true);
   fs.appendFileSync(path.join(dir, 'step.sh'), 'echo changed\n');
-  assert.equal(trust.checkApproved('./pure.sh', dir).approved, false);
-  // A string that only mentions a launcher isn't one.
+  assert.equal(trust.checkApproved('./step.sh', dir).approved, false);
+  // Pure JavaScript too is a script a check can't follow all the way: what
+  // it does can turn on files no hash covers by routes a scan can't close.
+  // A card can't approve it; the owner can, bound to what can be read.
+  const js = checkDigest('./pure.sh', dir);
+  assert.match(js.problem ?? '', /JavaScript/);
+  assert.deepEqual(js.files.sort(), ['pure.mjs', 'pure.sh', 'step.sh']);
+  assert.throws(() => trust.approveCheck('./pure.sh', dir, { hash: js.hash, folder: dir }), /can't follow this/);
+  trust.approveCheck('./pure.sh', dir);
+  assert.equal(trust.checkApproved('./pure.sh', dir).approved, true);
+  fs.appendFileSync(path.join(dir, 'pure.mjs'), '2;\n');
+  assert.equal(trust.checkApproved('./pure.sh', dir).approved, false, 'what can be read is still bound');
+  // A string that only mentions a launcher isn't one (a patch's command, which follows past JavaScript).
   const words = repo({ 'w.mjs': "console.log('child_process and Bun and execa are words here');\nconst o = { spawn: 1 };\nconsole.log(o.spawn);\n" });
-  assert.equal(checkDigest('node w.mjs', words).problem, undefined);
+  assert.equal(commandFiles('node w.mjs', words).problem, undefined);
 });
 
 // The cross-lab reviews of the 165 fix (Codex and Gemini, 22 Nov 2026):
@@ -1143,7 +1165,7 @@ test('Daybreak 165 reviews: execve, Bun and process reached by other names count
   const fine = repo({
     'm.ts': "import type { ChildProcess } from 'node:child_process';\nimport type { Options } from 'execa';\nlet c: ChildProcess | undefined; let o: Options | undefined;\nif (typeof Bun !== 'undefined' || typeof Deno === 'object') console.log(c, o);\nconsole.log(process.env.HOME, globalThis.process.env.HOME, process.argv.length);\nimport { env, argv } from 'node:process';\nconsole.log(env.X, argv[0]);\n",
   });
-  assert.equal(checkDigest('node m.ts', fine).problem, undefined);
+  assert.equal(commandFiles('node m.ts', fine).problem, undefined);
 });
 
 test('Daybreak 165 reviews: a check that runs JavaScript it never reads is unfollowable', () => {
@@ -1242,5 +1264,30 @@ test('Daybreak 165 review 2: more launches and unread JavaScript, each unfollowa
     'c.cjs': "'use strict';\nfunction f() { return this; }\nconsole.log(f());\n",
     'run.mjs': '#!/usr/bin/env -S node --no-warnings\n1;\n',
   });
-  for (const check of ['bun ./a.ts', 'node b.mjs', 'node c.cjs', './run.mjs', 'unset PATH NODE_OPTIONS; node b.mjs', 'bun --smol ./a.ts']) assert.equal(checkDigest(check, fine).problem, undefined, check);
+  // As a patch's command follows them (a schedule's check now counts any
+  // JavaScript as one it can't follow), and the folder's own config as a
+  // hook would read it.
+  for (const check of ['bun ./a.ts', 'node b.mjs', 'node c.cjs', './run.mjs', 'unset PATH NODE_OPTIONS; node b.mjs', 'bun --smol ./a.ts']) assert.equal(commandFiles(check, fine).problem, undefined, check);
+  fs.writeFileSync(path.join(fine, 'plain.ts'), '1;\n');
+  assert.equal(reachOfCommand('bun ./plain.ts', 'the hook', { ...followOptions(fine), strict: true }).problem, undefined, 'an ordinary bunfig, .env and tsconfig');
+});
+
+test('Daybreak 165 review 3: no JavaScript route keeps a check followable, and the shell routes round it are closed', () => {
+  const dir = repo({
+    'payload.txt': "require('node:child_process').execSync('echo x');\n", 'pure.mjs': '1;\n', 'pure.ts': '1;\n',
+    'value.mjs': "const g = globalThis.valueOf();\ng['pro' + 'cess']['getBuiltin' + 'Module']('child_' + 'process');\n",
+    'detached.cjs': "const fn = ({ m() { return this; } }).m;\nfn()['pro' + 'cess'];\n",
+    'check.sh': "#!/bin/sh\ncat <<'EOF'\nrequire('node:child_process').execSync('x');\nEOF\n",
+    'env.mjs': '#!/usr/bin/env -S NODE_OPTIONS=--require=./payload.txt node\n1;\n',
+    'bunshebang.ts': '#!/usr/bin/env bun\n1;\n', 'bunfig.toml': 'preload = ["./payload.txt"]\n',
+    'package.json': '{ "name": "app", "scripts": { "check": "echo ok", "exec": "echo ok" }, "bin": { "mybin": "./payload.txt" } }',
+  });
+  fs.chmodSync(path.join(dir, 'payload.txt'), 0o644);
+  for (const check of [
+    'node value.mjs', 'node detached.cjs', 'node ./check.sh', './env.mjs', './bunshebang.ts', 'node -r./payload.txt pure.mjs',
+    'node -r . pure.mjs', 'node --report-filename ./pure.mjs ./payload.txt', 'ts-node -C ./payload.txt ./pure.ts', 'deno ./pure.ts',
+    `v='NODE_OPTIONS=--require=./payload.txt'; export "$v"; node ./pure.mjs`,
+    'npx -p . mybin', 'npx -p./local mybin', 'bun exec "node ./payload.txt"', 'npm run --node-options=--require=./payload.txt check',
+    'npm run --userconfig=./rc.txt check', 'npm --user=./rc.txt run check', 'npx --node-options=--require=./payload.txt -c "echo"',
+  ]) assert.ok(checkDigest(check, dir).problem, check);
 });
