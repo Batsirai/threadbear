@@ -60,6 +60,10 @@ that has no file yet (`git tag -l 'release/*'` against `ls site/changelog`).
      users/<login> -q .twitter_username` gives one, else their fork
      (`https://github.com/<login>/threadbear`, if it answers), else their GitHub profile. The
      build refuses a credit with nobody from that file in it, so add a new person there first.
+   - Only what's live for everyone. An experiment (off by default, on for Mike) never goes on
+     the page, as a card or a line: it goes on the day it's made standard, as Added. Mike, 22
+     Nov: "You shouldn't put anything that's not live in the updates." The build refuses the
+     word "experiment" from 21 Nov on.
    - `added` / `changed` / `fixed`: every other change a user would notice, one plain line each,
      several commits about one thing as one line. Leave out tests, refactors, docs, CI, agent
      instructions, review rounds and security-scan internals; security fixes users should know

@@ -3,32 +3,6 @@
   "highlights": [
     {
       "kind": "added",
-      "title": "The Feed",
-      "text": "Your Inbox as cards, one after another: what needs you first, then what's running. Answer a card's question, read its latest messages or mark it Done without opening the thread. An experiment: turn on Feed in Settings > General > Experiments, then press Feed in the activity bar.",
-      "media": {
-        "type": "clip",
-        "src": "feed.mp4",
-        "poster": "feed.webp",
-        "width": 1904,
-        "height": 1640,
-        "alt": "The Feed opens from the activity bar: a card per thread, those that need you first. Done on four cards shrinks them to a line with Undo, then the question on the browser pane's back button card is answered with Close the pane, right in the card."
-      }
-    },
-    {
-      "kind": "added",
-      "title": "Recipes",
-      "text": "Techniques worth keeping, like a short morning brief or a nightly look back at what you had to correct. Add one and an agent sets it up with you in a thread; its switch pauses and resumes it. Each has a page with an example run and its last 30 days. An experiment.",
-      "media": {
-        "type": "clip",
-        "src": "recipes.mp4",
-        "poster": "recipes.webp",
-        "width": 1840,
-        "height": 1640,
-        "alt": "The Recipes view lists Daily brief, Email watcher and Nightly retro switched on. Weekly step back's switch is flipped on, then Daily brief's page opens with what it does, its runs over the last 30 days and a log of them."
-      }
-    },
-    {
-      "kind": "added",
       "title": "Edited drafts show as a chip",
       "text": "Change a draft an agent wrote and a chip over the message box says so, with how many lines changed, View and ×. Once sent, the same chip sits under your message, and Show opens the draft.",
       "media": {
