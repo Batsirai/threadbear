@@ -35,3 +35,29 @@ test('no clear for a thread that never had a push, or had one over a day ago', a
   await write(b, false);
   assert.deepEqual(scheduled(b, 'push.clear'), [], 'pushed too long ago');
 });
+
+// Gemini review of Daybreak 169 (22 Nov 2026): every needsYou true-to-false
+// flip within a day of a push cleared it again, and flipping back within
+// the push cooldown sends no new push, so a runner could keep one push's
+// thread toggling and make a silent clear for every phone each time, using
+// up the backend's relay allowance with nothing on any screen. One push,
+// one clear: a clear comes again only after a new push.
+test('one push takes one clear: toggling the thread without a new push clears nothing more', async () => {
+  const b = memoryBackend();
+  await write(b, false);
+  await write(b, true);
+  await write(b, false);
+  assert.equal(scheduled(b, 'push.clear').length, 1);
+  for (let k = 0; k < 5; k++) {
+    await write(b, true);
+    await write(b, false);
+  }
+  assert.equal(scheduled(b, 'push.notify').length, 1, 'still within the cooldown: no new push');
+  assert.equal(scheduled(b, 'push.clear').length, 1, 'nothing new on the phone to take down');
+  const row = b.rows('threads')[0] as { _id: string; pushedAt: number };
+  await b.ctx.db.patch(row._id, { pushedAt: row.pushedAt - 60_000 });
+  await write(b, true);
+  assert.equal(scheduled(b, 'push.notify').length, 2, 'a new push after the cooldown');
+  await write(b, false);
+  assert.equal(scheduled(b, 'push.clear').length, 2, 'and its own clear');
+});

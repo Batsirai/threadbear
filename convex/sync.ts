@@ -1033,14 +1033,19 @@ export const upsertThreads = mutation({
       // It stopped needing Mike after a push went out for it (seen on the
       // Mac, answered, archived): the phones take that notification down
       // (push:clear). Not for one pushed more than a day ago, which the
-      // phone's own tidying on opening has long since dealt with.
-      const wantsClear = before?.needsYou === true && !t.needsYou && (before.pushedAt ?? 0) > now - CLEAR_WITHIN_MS;
+      // phone's own tidying on opening has long since dealt with. Once per
+      // push (clearedAt, unset by the next push): flipping back within the
+      // push cooldown sends no new push, so a runner toggling a thread could
+      // otherwise send a silent clear to every phone each time, using up
+      // the backend's relay allowance with nothing on any screen (Daybreak 169).
+      const wantsClear = before?.needsYou === true && !t.needsYou && (before.pushedAt ?? 0) > now - CLEAR_WITHIN_MS && before.clearedAt === undefined;
       // A held push stays held only while the thread still needs Mike.
       const held = t.needsYou && before?.pushHeldAt && !wantsPush ? { pushHeldAt: before.pushHeldAt } : {};
       const row = { ...t, ...stored, updatedMs: now };
       // What it was, read before the write replaces the row.
       const was = existing ? { view: existing.view, runnerId: existing.runnerId } : undefined;
-      if (existing) await ctx.db.replace(existing._id, { ...row, ...(wantsPush ? { pushedAt: now } : before?.pushedAt ? { pushedAt: before.pushedAt } : {}), ...held });
+      const cleared = wantsClear ? { clearedAt: now } : !wantsPush && before?.clearedAt !== undefined ? { clearedAt: before.clearedAt } : {};
+      if (existing) await ctx.db.replace(existing._id, { ...row, ...(wantsPush ? { pushedAt: now } : before?.pushedAt ? { pushedAt: before.pushedAt } : {}), ...held, ...cleared });
       else await ctx.db.insert('threads', row);
       if (transfer && was) {
         await moveView(ctx, was.runnerId, was.view, undefined);
@@ -1639,7 +1644,7 @@ export const threadsOf = query({
     const out = [];
     for await (const row of ctx.db.query('threads').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))) {
       if (!ownThreadOnly(caller, row.threadId)) continue;
-      const { _id, _creationTime, pushedAt: _p, pushHeldAt: _h, updatedMs: _u, wantView, ...rest } = row;
+      const { _id, _creationTime, pushedAt: _p, pushHeldAt: _h, clearedAt: _c, updatedMs: _u, wantView, ...rest } = row;
       out.push({ ...rest, view: rest.view === 'overflow' ? (wantView ?? 'inbox') : rest.view });
     }
     return out;
