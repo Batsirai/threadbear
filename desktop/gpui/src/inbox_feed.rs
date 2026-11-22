@@ -865,7 +865,13 @@ impl Threadbear {
     /// Scrolls a card to the top of the feed.
     #[cfg(feature = "automation")]
     fn feed_show(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(index) = self.feed_cards().iter().position(|t| t.id == id) else {
+        // The list's first child is the top box, so a card's place is one on.
+        let Some(index) = self
+            .feed_cards()
+            .iter()
+            .position(|t| t.id == id)
+            .map(|i| i + 1)
+        else {
             return;
         };
         let scroll = &self.inbox_feed.scroll;
@@ -1586,7 +1592,7 @@ impl Threadbear {
                 let id = t.id.clone();
                 foot_button(
                     SharedString::from(format!("feed-ask-others-{}", t.id)),
-                    "person.3",
+                    "bubble.left.and.bubble.right",
                     "Ask the others",
                     "Put your first question to the other labs too",
                     cx,
