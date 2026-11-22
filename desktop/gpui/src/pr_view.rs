@@ -1,5 +1,4 @@
-// A GitHub pull request open as a tab in the side pane (the inlinePrs
-// experiment): a PR link clicked in a reply or in Highlights opens here
+// A GitHub pull request open as a tab in the side pane: a PR link clicked in a reply or in Highlights opens here
 // rather than in the browser, with what's needed to decide on it and the
 // buttons to act (docs/protocol/panels.md, "Pull requests"; the rules and words are
 // threadbear_core::pull_requests). Mike picked this layout, option A of three
@@ -111,11 +110,6 @@ impl PrPanes {
         };
         json!({ "url": url, "pr": load, "tab": ui.map(|u| u.tab.title()), "busy": ui.and_then(|u| u.busy), "error": ui.and_then(|u| u.error.clone()) })
     }
-}
-
-/// Whether PR links open here: the inlinePrs experiment, from `hello`.
-pub(crate) fn on(app: &crate::app::Threadbear) -> bool {
-    app.remote.experiments.iter().any(|e| e == "inlinePrs")
 }
 
 /// The canonical URL of a PR link, if it's one that opens here.

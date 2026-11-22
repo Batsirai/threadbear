@@ -470,8 +470,6 @@ function mockExperiments() {
     // TB_MOCK_NESTED_OFF keeps its demo threads with the experiment off.
     ...(process.env.TB_MOCK_NESTED && !process.env.TB_MOCK_NESTED_OFF ? ['nestedThreads'] : []),
     ...(process.env.TB_MOCK_INBOX_GUESS ? ['inboxGuess'] : []),
-    // PR links opening as a tab in the pane, with TB_MOCK_PRS.
-    ...(process.env.TB_MOCK_PRS ? ['inlinePrs'] : []),
     // A live page's card, with TB_MOCK_LIVE_PAGES (addLivePageDemo).
     ...(process.env.TB_MOCK_LIVE_PAGES ? ['livePages'] : []),
     // The Recipes view, with TB_MOCK_RECIPES (addRecipesDemo).
@@ -632,7 +630,7 @@ function addLivePageDemo(page) {
   threads.set(id, { summary, events, inProgress: new Map(), timers: [] });
 }
 
-// The inlinePrs experiment's GitHub, made up: one open PR whose checks
+// GitHub for the PR tab, made up: one open PR whose checks
 // have a failure, which Close turns closed a moment later, as gh would.
 const MOCK_PR_URL = 'https://github.com/acme/app/pull/72';
 const mockPr = {

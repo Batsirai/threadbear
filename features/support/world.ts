@@ -176,10 +176,6 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   // The done card's Archive menu: the inboxGuess experiment on in the hello.
   if (pickle.tags.some((t) => t.name === '@inbox-guess')) process.env.TB_MOCK_INBOX_GUESS = '1';
   else delete process.env.TB_MOCK_INBOX_GUESS;
-  // PR links opening as a tab in the pane (the inlinePrs experiment), with
-  // the mock's made-up PR.
-  if (pickle.tags.some((t) => t.name === '@inline-prs')) process.env.TB_MOCK_PRS = '1';
-  else delete process.env.TB_MOCK_PRS;
   // Its files read 3 s after the rest of it, as a big PR's are.
   if (pickle.tags.some((t) => t.name === '@slow-pr-files')) process.env.TB_MOCK_PR_FILES_MS = '3000';
   else delete process.env.TB_MOCK_PR_FILES_MS;

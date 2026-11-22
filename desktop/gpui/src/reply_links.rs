@@ -458,12 +458,10 @@ impl ThreadPane {
                     cx,
                 );
             }
-            // A PR opens as a tab in the pane with the inlinePrs experiment;
-            // ⌘-click still takes it to the browser.
+            // A PR opens as a tab in the pane; ⌘-click still takes it to
+            // the browser.
             Some(LinkTarget::Web(web))
-                if !command
-                    && crate::pr_view::pr_url(&web).is_some()
-                    && self.opens_prs_here(cx) =>
+                if !command && crate::pr_view::pr_url(&web).is_some() && self.owns_pane(cx) =>
             {
                 self.open_pr_link(&web, cx)
             }
@@ -525,16 +523,6 @@ impl ThreadPane {
             // project page's link goes to its app.
             _ => open_gate::open_file(&path, Origin::ThisMac, cx),
         }
-    }
-
-    fn opens_prs_here(&self, cx: &App) -> bool {
-        self.owns_pane(cx)
-            && self
-                .composer
-                .read(cx)
-                .app
-                .upgrade()
-                .is_some_and(|app| crate::pr_view::on(app.read(cx)))
     }
 
     /// A PR's tab in the pane beside this thread, opening the pane if it's shut.
@@ -1133,8 +1121,7 @@ fn rested(
         .detach();
 }
 
-/// A rest on a PR link that opens in a tab (the inlinePrs experiment) starts
-/// reading the PR, ahead of the click (pr_view.rs `preload_pr`).
+/// A rest on a PR link starts reading the PR, ahead of the click (pr_view.rs `preload_pr`).
 fn preload_pr(pane: &WeakEntity<ThreadPane>, url: &str, cx: &mut App) {
     if crate::pr_view::pr_url(url).is_none() {
         return;
@@ -1142,9 +1129,6 @@ fn preload_pr(pane: &WeakEntity<ThreadPane>, url: &str, cx: &mut App) {
     let Some(app) = pane.upgrade().and_then(|p| p.read(cx).app.upgrade()) else {
         return;
     };
-    if !crate::pr_view::on(app.read(cx)) {
-        return;
-    }
     let side = app.read(cx).side.clone();
     side.update(cx, |side, cx| side.preload_pr(url, cx));
 }

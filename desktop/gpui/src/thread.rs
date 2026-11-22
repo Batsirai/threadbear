@@ -990,7 +990,7 @@ impl ThreadPane {
         }
     }
 
-    /// With the inlinePrs experiment, reads ahead the PRs its last few
+    /// Reads ahead the PRs its last few
     /// messages link to, as the thread shows and as a turn ends: those are
     /// the ones likely to be clicked, and a read takes a second or more
     /// (Mike, 19 Nov). Each is read once while the app runs, from the
@@ -1028,9 +1028,6 @@ impl ThreadPane {
         let app = self.app.clone();
         cx.defer(move |cx| {
             let Some(app) = app.upgrade() else { return };
-            if !crate::pr_view::on(app.read(cx)) {
-                return;
-            }
             let side = app.read(cx).side.clone();
             side.update(cx, |side, cx| {
                 urls.iter().for_each(|url| side.preload_pr(url, cx))

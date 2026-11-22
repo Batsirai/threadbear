@@ -1033,6 +1033,39 @@ panel. A Tandem project opens in Tandem, here and in a reply. Right-click any of
 such as Reveal in Finder, or Remove to take it off the list. You can drag
 files out of Highlights into other apps.
 
+### Pull requests
+
+A GitHub pull request link clicked in a reply, or in Highlights' Links,
+opens as a tab in the panel instead of your browser (⌘-click still goes to
+the browser). In the desktop app only, and it needs the `gh` command line
+tool installed and signed in (`gh auth login`); it acts on GitHub as
+whoever that is. A PR link in a reply has GitHub's pull request mark before
+it: green while it's open, grey as a draft, purple once merged and red if
+closed.
+
+The tab has the PR's title, who opened it and when, its branch with lines
+added and removed, its status (approved, changes asked for, conflicts,
+merged, closed) and its checks, naming any that failed. Below that are the
+description, comments and reviews, and a box to comment on GitHub. Diff
+shows every changed file, each folding open or shut; Checks lists each
+check with its time, and clicking one opens its log.
+
+Review approves it or asks for changes, with what you typed in the comment
+box. Merge merges it the way its menu's Default says (rebase, squash or a
+merge commit, whichever the repo allows). Close without merging is at the
+bottom. Every button spins until GitHub has answered, then the PR is read
+again. Start a thread puts the PR in a new thread's message box in the same
+folder; Ask Claude to review starts a thread there that reads the PR and
+says whether to merge it, without touching it on GitHub.
+
+PRs load ahead so they're usually ready when you click: when you rest the
+pointer on a link, when you open a thread whose last few messages link to
+PRs, and when a turn ends with one. A PR you've opened before shows
+straight away as it was last time while it's read again, with its buttons
+waiting until GitHub has answered. The app keeps the last 200 PRs it read
+in its cache folder for this. Each PR you open stays as a tab at the top of
+the panel until you close it, and Back goes to Highlights.
+
 ### Pins
 
 An agent can pin a file or link to Highlights, under Pinned, with its
