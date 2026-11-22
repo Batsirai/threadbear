@@ -202,7 +202,7 @@ fn no_symlink_is_followed() {
         site.serve("/hard.png").is_none(),
         "a hard link to a file elsewhere"
     );
-    assert_eq!(site.serve("/pic.png").unwrap().data, b"x");
+    assert_eq!(&*site.serve("/pic.png").unwrap().data, b"x");
     fs::remove_file(f.dir.join("pic.png")).unwrap();
     std::os::unix::fs::symlink(f.dir.join(".env"), f.dir.join("pic.png")).unwrap();
     assert!(
@@ -683,4 +683,128 @@ fn a_live_page_reads_only_itself() {
     // Rewritten after Run: nothing.
     f.write("index.html", "<p>changed</p>");
     assert!(site.serve("index.html").is_none());
+}
+
+// Daybreak 168 (22 Nov 2026): a small page naming one allowed picture under
+// thousands of query strings had each one read and sent in full.
+
+#[cfg(unix)]
+#[test]
+fn query_spellings_of_one_file_are_capped() {
+    let f = Folder::new();
+    let refs: String = (0..2_000)
+        .map(|i| format!("<img src=\"big.png?{i}\">"))
+        .collect();
+    f.write("index.html", &refs);
+    f.write("big.png", "picture");
+    let site = f.site();
+    let mut served = 0;
+    for i in 0..2_000 {
+        if site
+            .serve_asked(&format!("/big.png?{i}"), "/big.png")
+            .is_some()
+        {
+            served += 1;
+        }
+    }
+    assert_eq!(
+        served, MAX_VARIANTS_PER_FILE,
+        "only the first few spellings"
+    );
+    assert!(
+        site.serve_asked("/big.png?0", "/big.png").is_some(),
+        "a spelling already answered still is"
+    );
+    assert!(
+        site.serve_asked("/index.html", "/index.html").is_some(),
+        "the page itself is untouched"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_preview_has_a_request_budget() {
+    let f = Folder::new();
+    f.write("index.html", "<img src=pic.png>");
+    let site = f.site();
+    for _ in 0..MAX_REQUESTS - 2 {
+        site.serve_asked("/nothing.png", "/nothing.png");
+    }
+    assert!(
+        site.serve("/pic.png").is_some(),
+        "the last request in budget"
+    );
+    assert!(site.serve("/pic.png").is_none(), "refused past it");
+    assert!(site.serve("/index.html").is_none(), "the page too");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_preview_has_a_byte_budget() {
+    let f = Folder::new();
+    let pics = MAX_SERVED_BYTES / MAX_BYTES + 2;
+    let refs: String = (0..pics).map(|i| format!("<img src=p{i}.png>")).collect();
+    f.write("index.html", &refs);
+    let site = f.site();
+    // Sparse files: 64 MB each on paper, nothing on disk.
+    for i in 0..pics {
+        let file = fs::File::create(f.dir.join(format!("p{i}.png"))).unwrap();
+        file.set_len(MAX_BYTES).unwrap();
+    }
+    let mut served = 0u64;
+    for i in 0..pics {
+        if let Some(s) = site.serve(&format!("/p{i}.png")) {
+            served += s.data.len() as u64;
+        }
+    }
+    assert!(served <= MAX_SERVED_BYTES, "served {served}");
+    assert!(served >= MAX_SERVED_BYTES - MAX_BYTES, "served {served}");
+    assert!(site.serve(&format!("/p{}.png", pics - 1)).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unchanged_file_is_not_read_again() {
+    let f = Folder::new();
+    f.write("index.html", "<img src=pic.png?a><img src=pic.png?b>");
+    f.write("pic.png", "first");
+    let site = f.site();
+    let a = site.serve_asked("/pic.png?a", "/pic.png").unwrap();
+    let b = site.serve_asked("/pic.png?b", "/pic.png").unwrap();
+    assert!(Arc::ptr_eq(&a.data, &b.data), "the same bytes, read once");
+    // Rewritten in place (same inode): read again.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    f.write("pic.png", "second!");
+    assert_eq!(
+        &*site.serve_asked("/pic.png?a", "/pic.png").unwrap().data,
+        b"second!"
+    );
+    // Replaced by a link: refused, cache or not.
+    fs::remove_file(f.dir.join("pic.png")).unwrap();
+    std::os::unix::fs::symlink(f.dir.join(".env"), f.dir.join("pic.png")).unwrap();
+    assert!(site.serve_asked("/pic.png?a", "/pic.png").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_ordinary_page_loads_whole() {
+    let f = Folder::new();
+    let site = f.site();
+    for asked in [
+        "/index.html",
+        "/style.css?v=2",
+        "/pic.png",
+        "/assets/pic@2x.png",
+        "/theme.css",
+        "/assets/bg.png",
+        "/assets/font.woff2",
+        "/assets/styled.png",
+    ] {
+        let path = asked.split('?').next().unwrap();
+        assert!(site.serve_asked(asked, path).is_some(), "{asked}");
+    }
+    // Reloaded a few times, and a video seeked: all still served.
+    for _ in 0..20 {
+        assert!(site.serve_asked("/pic.png", "/pic.png").is_some());
+    }
 }

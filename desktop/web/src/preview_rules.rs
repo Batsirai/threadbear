@@ -194,6 +194,17 @@ pub fn own_path(url: &str, origin: &str) -> Option<String> {
     threadbear_core::local_preview::percent_decode(path)
 }
 
+/// What `url` asks for on `origin` as the browser spelled it, query and all
+/// but without a fragment (which never reaches a request): the key the
+/// preview's budget counts by (`Site::serve_asked`). None for another origin.
+pub fn asked_address(url: &str, origin: &str) -> Option<String> {
+    let rest = url.strip_prefix(origin)?;
+    if !rest.starts_with('/') {
+        return None;
+    }
+    Some(rest.split('#').next().unwrap_or(rest).to_owned())
+}
+
 /// Run in the page's own world in every frame before its scripts, while they
 /// run: no Clipboard API, and no `execCommand('copy')` or `'cut'`, either of
 /// which a script can use on any click to put what it read on the clipboard;
@@ -315,6 +326,28 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// The budget's key keeps the query (Daybreak 168): `big.png?1` and
+    /// `big.png?2` are two requests for one file.
+    #[test]
+    fn the_address_asked_keeps_its_query() {
+        let p = preview(false);
+        let o = &p.origin;
+        assert_eq!(
+            asked_address(&format!("{o}/big.png?1"), o).as_deref(),
+            Some("/big.png?1")
+        );
+        assert_eq!(
+            asked_address(&format!("{o}/big.png?1#top"), o).as_deref(),
+            Some("/big.png?1")
+        );
+        assert_eq!(
+            own_path(&format!("{o}/big.png?1"), o).as_deref(),
+            Some("/big.png")
+        );
+        assert_eq!(asked_address(&format!("{o}.evil/x"), o), None);
+        assert_eq!(asked_address("https://example.com/x", o), None);
+    }
+
     #[test]
     fn requests_stay_on_its_origin() {
         let p = preview(false);

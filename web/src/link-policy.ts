@@ -27,9 +27,12 @@ const NEVER = new Set(['javascript:', 'data:', 'vbscript:', 'file:', 'blob:', 'a
  */
 export function classifyLink(href: string, base: string): LinkTarget {
   // No controls or spaces: the browser strips some of those before reading
-  // the scheme, so "java\tscript:" must not get past as something else.
+  // the scheme, so "java\tscript:" must not get past as something else. And
+  // no format character (a bidi override, a zero-width one: Unicode's Cf) or
+  // line or paragraph separator, which change how the rest of the address
+  // shows in the question about it (Daybreak 167, 22 Nov 2026).
   // eslint-disable-next-line no-control-regex
-  if (!href || href.length > MAX_LINK_CHARS || /[\u0000-\u0020\u007f-\u009f\u2028\u2029\ufeff]/.test(href)) return { kind: 'never' };
+  if (!href || href.length > MAX_LINK_CHARS || /[\u0000-\u0020\u007f-\u009f\u2028\u2029\p{Cf}]/u.test(href)) return { kind: 'never' };
   let url: URL;
   try {
     url = new URL(href, base);

@@ -47,12 +47,32 @@ pub enum LinkKind {
 
 /// The longest link looked at (`LinkPolicy.web`'s limit).
 const MAX_LINK: usize = 8_192;
+/// The longest link that asks: its question shows all of it, and has to fit
+/// on the screen (the website's MAX_LINK_CHARS; Daybreak 167).
+pub const MAX_ASK_LINK: usize = 2_048;
+
+/// Whether `text` has a character that hides or reorders what's around it:
+/// a control (a line break, a tab), a bidi override or isolate, a zero-width
+/// or other format character (Unicode's Cf), a line or paragraph separator.
+/// A link with one, asked about, could show one thing and open another
+/// (Daybreak 167, 22 Nov 2026). Android and the iPhone ask Unicode for the
+/// same categories.
+pub fn hides_text(text: &str) -> bool {
+    text.chars().any(|c| {
+        c.is_control()
+            || matches!(c as u32,
+                0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E
+                | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+                | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+                | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+    })
+}
 
 /// What `url` is. A link with no scheme is a path, relative or not; the
 /// caller resolves a relative one against the thread's folder.
 pub fn link_kind(url: &str) -> LinkKind {
     let url = url.trim();
-    if url.is_empty() || url.len() > MAX_LINK || url.chars().any(char::is_control) {
+    if url.is_empty() || url.len() > MAX_LINK || hides_text(url) {
         return LinkKind::Refuse;
     }
     match scheme(url) {
@@ -104,6 +124,8 @@ pub fn link_kind(url: &str) -> LinkKind {
         // A drive-relative path is still a file, never an app's scheme.
         // Its missing root (or an embedded device name) is refused below.
         Some(s) if cfg!(windows) && s.len() == 1 => LinkKind::File(url.to_owned()),
+        // Counted as the phones and the website count it (UTF-16).
+        Some(_) if url.encode_utf16().count() > MAX_ASK_LINK => LinkKind::Refuse,
         Some(_) => LinkKind::Ask(url.to_owned()),
     }
 }
@@ -1680,7 +1702,8 @@ fn open_without_waiting(real: &Path) -> std::io::Result<std::fs::File> {
     options.open(real)
 }
 
-/// A link shown in a question: long ones cut in the middle (`LinkPolicy.shown`).
+/// A link shown in a refusal: long ones cut in the middle (`LinkPolicy.shown`).
+/// Never in a question about opening one, which shows it whole.
 pub fn shown(url: &str, limit: usize) -> String {
     let count = url.chars().count();
     if count <= limit {
@@ -1691,11 +1714,14 @@ pub fn shown(url: &str, limit: usize) -> String {
     format!("{head}…{tail}")
 }
 
-/// The question for a link that starts another app (`OpenGate.openOther`).
+/// The question for a link that starts another app (`OpenGate.openOther`),
+/// with all of the link in it, as it opens: never cut in the middle, where
+/// what it says to do could hide (Daybreak 167). `link_kind` keeps one that
+/// asks short enough to show whole.
 pub fn link_question(url: &str, app: &str) -> Question {
     Question {
         title: format!("Open this link in {app}?"),
-        detail: format!("It isn't a web page: it starts {app}, which acts on what the link says. It's from a thread, so Threadbear asks first.\n\n{}", shown(url, 300)),
+        detail: format!("It isn't a web page: it starts {app}, which acts on what the link says. It's from a thread, so Threadbear asks first.\n\n{url}"),
         yes: format!("Open in {app}"),
         always: None,
     }
@@ -3128,6 +3154,63 @@ mod tests {
             };
             assert_eq!(kind, case["expect"].as_str().unwrap(), "{name}");
         }
+    }
+
+    /// Daybreak 167 (22 Nov 2026): a question about a link that asks showed
+    /// its first 200 and last 100 characters, and opened all of it.
+    #[test]
+    fn a_question_shows_the_whole_link_it_opens() {
+        let long = format!("x-app://do?{}send=everything", "a=1&".repeat(400));
+        let LinkKind::Ask(opened) = link_kind(&long) else {
+            panic!("it asks")
+        };
+        assert_eq!(opened, long, "what opens is the link as written");
+        let question = link_question(&opened, "X");
+        assert!(question.detail.ends_with(&format!("\n\n{long}")));
+        let at_limit = format!("x-app://{}", "a".repeat(MAX_ASK_LINK - 8));
+        assert!(matches!(link_kind(&at_limit), LinkKind::Ask(_)));
+        assert_eq!(link_kind(&format!("{at_limit}a")), LinkKind::Refuse);
+        let web = format!("https://x.dev/{}", "a".repeat(MAX_LINK - 14));
+        assert!(matches!(link_kind(&web), LinkKind::Web(_)));
+        assert_eq!(link_kind(&format!("{web}a")), LinkKind::Refuse);
+        assert!(matches!(
+            link_kind("mailto:mike@example.com?subject=Hi%20there&body=Line%0Atwo"),
+            LinkKind::Ask(_)
+        ));
+    }
+
+    #[test]
+    fn characters_that_hide_text_are_refused() {
+        for c in [
+            "\r",
+            "\t",
+            "\u{7f}",
+            "\u{85}",
+            "\u{202e}",
+            "\u{202d}",
+            "\u{2066}",
+            "\u{2069}",
+            "\u{200e}",
+            "\u{200f}",
+            "\u{61c}",
+            "\u{200b}",
+            "\u{200d}",
+            "\u{2060}",
+            "\u{feff}",
+            "\u{ad}",
+            "\u{2028}",
+            "\u{2029}",
+            "\u{e0001}",
+        ] {
+            for url in [
+                format!("x-app://do?to=me{c}&to=you"),
+                format!("https://example.com/{c}x"),
+                format!("/tmp/a{c}b.md"),
+            ] {
+                assert_eq!(link_kind(&url), LinkKind::Refuse, "{url:?}");
+            }
+        }
+        assert!(matches!(link_kind("x-app://café/日本"), LinkKind::Ask(_)));
     }
 
     #[test]
