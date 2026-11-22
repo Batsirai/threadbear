@@ -760,18 +760,22 @@ pub struct PanelMessage {
 }
 
 /// A panel's conversation as one: the lead's messages, and each member's
-/// replies, oldest first. A member's copy of the question (its first
-/// message) is left out, and so is a message of Mike's sent to everyone,
-/// which the lead already has: the same words within ten minutes.
+/// replies, oldest first. The question (Mike's first message, the lead's
+/// and each member's copy) is the card's top line, so it's left out, and so
+/// is a member's copy of a message of Mike's sent to everyone, which the
+/// lead already has: the same words within ten minutes.
 pub fn panel_messages(
     lead: (&str, &str, &[Message]),
     members: &[(&str, &str, &[Message])],
 ) -> Vec<PanelMessage> {
     const SAME_MESSAGE_MS: i64 = 10 * 60_000;
+    let question = lead.2.iter().position(|m| m.author == Author::Mike);
     let mut out: Vec<PanelMessage> = lead
         .2
         .iter()
-        .map(|m| PanelMessage {
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != question)
+        .map(|(_, m)| PanelMessage {
             thread_id: lead.0.to_owned(),
             provider: lead.1.to_owned(),
             message: m.clone(),
@@ -1490,7 +1494,6 @@ mod tests {
         assert_eq!(
             said,
             [
-                ("claude", "Revoke the old key?"),
                 ("claude", "Claude: wait."),
                 ("codex", "Codex: wait."),
                 ("claude", "ok wait"),
@@ -1499,7 +1502,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            merged[2].thread_id, "m_codex",
+            merged[1].thread_id, "m_codex",
             "See full and Open thread go to its own thread"
         );
     }

@@ -4070,12 +4070,12 @@ function addDemoFeed() {
   const question = 'Should Threadbear sign releases with Touch ID only, and revoke the old key?';
   const memberAsk = (others) => `${question}\n\n(${others} are answering this too, each on its own. Answer in your own words, briefly, and don't change any files: you all share this folder.)`;
   const panelBy = { kind: 'thread', label: 'For everyone', threadId: 'feed_panel', threadTitle: 'Touch ID release signing', why: 'answers the same question' };
-  make('feed_panel_codex', 'Touch ID release signing', 30, {
-    provider: 'codex', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(29), archivedBy: 'threadbear' }, needs: 'nothing',
+  make('feed_panel_codex', 'Touch ID release signing', 20, {
+    provider: 'codex', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(19), archivedBy: 'threadbear' }, needs: 'nothing',
     said: [['mike', memberAsk('Claude, Gemini and Grok')], ['agent', "Wait. The last tag came out with an empty signature, so the Touch ID path isn't proven. Revoke once a fork verifies a new tag."]],
   });
-  make('feed_panel_gemini', 'Touch ID release signing', 26, {
-    provider: 'antigravity', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(25), archivedBy: 'threadbear' }, needs: 'nothing',
+  make('feed_panel_gemini', 'Touch ID release signing', 17, {
+    provider: 'antigravity', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(16), archivedBy: 'threadbear' }, needs: 'nothing',
     said: [['mike', memberAsk('Claude, Codex and Grok')], ['agent', "Wait, but set a date. One good release, then revoke within a week so the old key doesn't hang around."]],
   });
   make('feed_panel_grok', 'Touch ID release signing', 1, {
