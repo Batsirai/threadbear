@@ -87,6 +87,12 @@ as it holds Tinker Desk's build lock meanwhile.
 - Made-up replies (a reply with links to other threads, a draft) come from `--turns FILE`
   (MOCK_SCRIPTED_TURNS in the mock runner). The mock reads the file once, so a changed file needs
   `film.sh stop` and `start --no-build` again. Thread ids there are like `demo_ci_slow`.
+- The mock's demos for experiments and extra logins are off unless asked for: `film.sh start
+  --mock-env TB_MOCK_FEED=1 --mock-env TB_MOCK_RECIPES=1` (and TB_MOCK_REVIEWERS, TB_MOCK_PRS...,
+  listed at the top of `mock-runner/server.mjs`). Scripted pointer events don't reach the
+  filmed window, so use dev-app commands: a panel cramped under the threads goes full height
+  with `{"cmd":"dock-move","panel":"usage","edge":"right"}`; the model picker's `search` also
+  presses Return, so it picks the first match.
 - A recording starts about three seconds after `film.sh record` returns to the background, so
   wait six or seven seconds before the first command.
 - Settings opens in a window of its own, which `film.sh record` doesn't record and scripted
