@@ -1910,7 +1910,7 @@ export class Runner {
     // Another thread's message, allowed for this thread as it is now: if
     // it waits in the queue while Mike raises this thread, it's held as it
     // leaves (runner/ceiling.ts).
-    if (opts.ceiling === undefined && !opts.origin && sentByAgent(text) && !text.startsWith(MOVE_MESSAGE_PREFIX)) opts = { ...opts, ceiling: this.agentCeiling(st, text) };
+    if (opts.ceiling === undefined && !opts.origin && sentByAgent(text) && !text.startsWith(MOVE_MESSAGE_PREFIX)) opts = { ...opts, ceiling: this.agentCeiling(st) };
     // Mike writing: anything held goes in first, so he and it see the same.
     if (fromMike(text, opts) && st.rec.heldReports?.length) this.deliverHeld(st);
     return { turnId: this.sendTo(st, text, images, opts) };
@@ -2492,6 +2492,8 @@ export class Runner {
       this.emit(st, { type: 'system.note', text: `Moved to ${rec.cwd}. The session carries on there.` }, msg.turnId);
       delete rec.moved;
     }
+    // Raised above its ceiling while it waited for any of the above.
+    if (this.heldAtDispatch(st, msg)) return;
     // Kept for the next message when this one is a command, as the news is.
     if (rt.turn) rt.turn.dispatched = true;
     if (command) rt.session!.send({ ...input, text });
@@ -3590,6 +3592,8 @@ export class Runner {
               }
             }
             rt.carried = undefined;
+            // Raised above a message's ceiling since it was first sent.
+            if (this.heldAtDispatch(st, { ...first, turnId: turn.turnId, ceiling: turn.ceilings?.get(turn.turnId) })) return;
             this.startSession(st, account);
             rt.session!.send({ ...input, text });
             // Messages sent into the turn before the CLI went go again, in
@@ -4398,6 +4402,10 @@ export class Runner {
     this.markDirty(st);
     // Raised since it was queued above what wrote it (runner/ceiling.ts):
     // held back, and the next one looked at instead.
+    if (next.ceiling === undefined) {
+      const legacy = this.legacyCeiling(next);
+      if (legacy !== undefined) next.ceiling = legacy;
+    }
     if (!this.underCeiling(st, next.ceiling)) {
       this.withholdMessage(st, next);
       return this.kickQueue(st);
@@ -4412,6 +4420,10 @@ export class Runner {
       return false;
     }
   }
+
+  // A schedule's ceiling (set by main.ts from the scheduler), for a reminder
+  // queued before ceilings (runner/ceiling.ts, legacyCeiling).
+  scheduleCeiling?: (scheduleId: string) => PermissionMode | undefined;
 
   // Whether a schedule has been deleted (set by main.ts from the scheduler).
   // Its reminders still queued are dropped before any turn starts, however

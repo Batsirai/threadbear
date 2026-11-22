@@ -21,7 +21,7 @@ import type { Runner } from './runner.ts';
 import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import type { EffortLevel, PermissionMode, Provider, Schedule } from './protocol.ts';
-import { EFFORT_LEVELS, ErrorCode, PROVIDERS, RpcError, isEffortLevel, isProvider } from './protocol.ts';
+import { EFFORT_LEVELS, ErrorCode, PROVIDERS, RpcError, isEffortLevel, isPermissionMode, isProvider } from './protocol.ts';
 import { atomicWriteFileSync, isDirectory, readJsonSync } from './fsutil.ts';
 import { expandHome } from './config.ts';
 import { standInFor } from './pools.ts';
@@ -191,6 +191,10 @@ export type UpdateScheduleParams = {
   // text or title, or resuming it, takes the lower of this and the one it
   // had, or none for Mike's (full). Left out, the ceiling stays as it was.
   ceiling?: PermissionMode;
+  // The thread it sends to changing it: its ceiling stays as it was (the
+  // RPC gate and the schedule tools say so; over RPC, ceiling left out
+  // would otherwise be Mike's).
+  keepCeiling?: boolean;
 };
 
 // The Mac sleeps and timers stop with it, so check often rather than
@@ -389,6 +393,13 @@ export class Scheduler {
     if (!(scheduleId in all)) return;
     delete all[scheduleId];
     this.writeCeilings();
+  }
+
+  // A schedule's ceiling by id, for a reminder queued before ceilings
+  // (runner/ceiling.ts, legacyCeiling). One that's gone counts as Ask.
+  ceilingById(scheduleId: string): PermissionMode {
+    const rec = this.items.get(scheduleId);
+    return rec?.threadId ? this.ceilingOf(rec) : rec ? 'full' : 'ask';
   }
 
   // A schedule's ceiling as kept here, or as one from before.
@@ -924,7 +935,7 @@ export class Scheduler {
     // a thread's lower it to its own if that's less ("Ceilings").
     const was = this.items.get(rec.id);
     const reworded = (p.text !== undefined && p.text.trim() !== was?.text) || (p.title !== undefined && rec.title !== was?.title) || (p.paused === false && was?.paused === true);
-    const ceiling = rec.threadId && reworded && p.ceiling !== undefined ? (p.ceiling === 'full' ? 'full' : lowerMode(this.ceilingOf(rec), ceilingMode(p.ceiling))) : undefined;
+    const ceiling = rec.threadId && reworded && p.ceiling !== undefined && !p.keepCeiling ? (p.ceiling === 'full' ? 'full' : lowerMode(this.ceilingOf(rec), ceilingMode(p.ceiling))) : undefined;
     // Passing the check again approves it as it is now. Nothing else does,
     // a new folder included: approval is bound to the folder, so one moved
     // is held there until the check is passed again (from a thread that
@@ -2019,7 +2030,7 @@ export function scheduleMethods(s: Scheduler): Record<string, (p: Record<string,
         runnerId: str(p, 'runnerId'),
         // The RPC gate sets it for a thread's own key; the app and tb answer
         // to nobody.
-        ceiling: mode(p.ceiling),
+        ceiling: ceilingParam(p.ceiling),
       }),
     }),
     'schedules.update': async (p) => {
@@ -2042,12 +2053,14 @@ export function scheduleMethods(s: Scheduler): Record<string, (p: Record<string,
       // Like the card, it can only refuse.
       if (p.ifCheck !== undefined) upd.ifCheck = reqStr(p, 'ifCheck');
       if (p.checkTimeoutSecs !== undefined) upd.checkTimeoutSecs = p.checkTimeoutSecs === null ? null : num(p, 'checkTimeoutSecs');
-      // Left out, the app's or tb's: Mike's (the RPC gate sets a thread's).
-      upd.ceiling = mode(p.ceiling) ?? 'full';
+      // Left out, the app's or tb's: Mike's (the RPC gate sets a thread's,
+      // or keepCeiling for the thread it sends to).
+      if (p.keepCeiling === true) upd.keepCeiling = true;
+      else upd.ceiling = ceilingParam(p.ceiling) ?? 'full';
       return { schedule: await s.update(upd) };
     },
     'schedules.delete': (p) => s.delete(reqStr(p, 'scheduleId')),
-    'schedules.run': (p) => s.runNow(reqStr(p, 'scheduleId'), mode(p.by) ?? 'full'),
+    'schedules.run': (p) => s.runNow(reqStr(p, 'scheduleId'), ceilingParam(p.by) ?? 'full'),
     'schedules.preview': (p) => {
       const count = p.count;
       if (count !== undefined && (typeof count !== 'number' || !Number.isInteger(count))) throw bad('count must be a whole number');
@@ -2106,6 +2119,13 @@ function effort(v: unknown): EffortLevel | null | undefined {
   if (v === null) return null;
   if (!isEffortLevel(v)) throw bad(`effort must be one of ${EFFORT_LEVELS.join(', ')}`);
   return v;
+}
+
+// A ceiling as a call gives it: Plan first counts as Ask (runner/ceiling.ts).
+function ceilingParam(v: unknown): PermissionMode | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (!isPermissionMode(v)) throw bad('ceiling must be "full", "auto", "ask" or "plan"');
+  return ceilingMode(v);
 }
 
 function mode(v: unknown): PermissionMode | undefined {

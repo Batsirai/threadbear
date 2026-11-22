@@ -648,8 +648,8 @@ sub-agents, with no "coordinator" mark (mockups in
   than as a second one. A message from Mike to the starter takes the held
   reports in first. Held reports are kept on the starter's record
   (`heldReports`), so a restart doesn't lose them. Each keeps a `ceiling`,
-  the higher of the starter's and the sender's access as it was held
-  (`send_message` let it reach the starter then). When they go, a report
+  the starter's access as it was held (`send_message` let it reach the
+  starter then). When they go, a report
   whose ceiling the starter has since been raised above (and whose sender
   hasn't been raised to match) isn't passed to its agent: the starter
   gets a `system.note` naming the sender and goes to Needs you instead,

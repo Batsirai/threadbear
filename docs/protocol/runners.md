@@ -454,8 +454,9 @@ runner that's this one is the usual create.
   <name>. Each reply you end a turn with goes back to that thread, so put
   your report in your reply.]`, and the main Mac's runner keeps it in
   `far-reports.json` with its starter (a thread already there keeps its
-  first starter) and a ceiling, `by`: the starter's access as it started
-  it, or the mode the thread was started with if that's more. Taken on
+  first starter) and a ceiling, `by`: the starter's saved mode as it asked
+  (read before the request goes), or the mode the thread was started with
+  if that's more. Taken on
   this Mac, never from the backend or the other runner. A reply that
   arrives after Mike raised the starter above `by` isn't passed to its
   agent: the starter gets a `system.note` and goes to Needs you, with no

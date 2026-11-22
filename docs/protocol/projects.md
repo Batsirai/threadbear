@@ -298,9 +298,17 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   none. A run to a thread that's above its ceiling now isn't sent: the run
   says `Paused, not sent: …`, a repeating schedule pauses, and the thread
   gets a `system.note` and goes to Needs you, with no turn. Mike resuming
-  or changing its words, or Run now from the app, lifts the ceiling; a
-  limited thread rewording one lowers it to its own mode, and its Run now
-  goes by the higher of its mode and the ceiling. Ceilings are kept on the
+  or changing its words (the app, `tb`, the phone), or his Run now, lifts
+  the ceiling; a limited thread rewording or resuming one lowers it to its
+  own mode (never lifts it, even through a card, which shows only what
+  changes), the thread it sends to changing it leaves it as it is
+  (`schedules.update`'s `keepCeiling`, which the RPC gate sets), and a
+  limited thread's Run now goes by the higher of its mode and the
+  ceiling. Over RPC, `ceiling` (and `schedules.run`'s `by`) left out is
+  Mike's; the RPC gate puts a thread's own in, whatever it says. A
+  schedule on another Mac is lifted on that Mac: a resume or Run now from
+  this one reaches it only as the backend's row or run request, which
+  carry no ceiling. Ceilings are kept on the
   Mac the schedule runs on (`schedule-ceilings.json` in the data dir,
   bound to the schedule's id, creation time and thread), never in the
   backend's row; one with none kept (made before 22 Nov 2026, or one that

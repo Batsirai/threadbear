@@ -212,6 +212,8 @@ export const coldCompactPart = {
     } else {
       this.emit(st, { type: 'system.note', text: `Couldn't compact the conversation first, so this turn reads all of it${r.error ? `: ${r.error}` : '.'}` }, turn.turnId);
     }
+    // Raised above its ceiling while it compacted (runner/ceiling.ts).
+    if (this.heldAtDispatch(st, pre.msg)) return;
     try {
       pre.send();
     } catch (e) {

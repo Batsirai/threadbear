@@ -617,6 +617,7 @@ async function main(): Promise<void> {
     ...(box ? { refuse: BOX_NO_SCHEDULES } : {}),
   });
   runner.scheduleDeleted = (id) => scheduler.wasDeleted(id);
+  runner.scheduleCeiling = (id) => scheduler.ceilingById(id);
   // A box has no schedules (decision 13): they stay on the Mac and send to it.
   if (!copyOfReal && !box) scheduler.start();
   // The done card's loose ends list the check-ins booked for a thread.
@@ -874,7 +875,9 @@ async function main(): Promise<void> {
     commands: {
       ...phoneCommands(runner, peers),
       // A schedule's own runner gets its command, so the scheduler here is its.
-      schedule: ({ scheduleId, action }) => (action === 'run' ? scheduler.runNow(scheduleId) : scheduler.update({ scheduleId, paused: action === 'pause' })),
+      // Mike's, from his phone: resuming lifts a schedule's ceiling, as from the
+      // app (schedules.ts, "Ceilings").
+      schedule: ({ scheduleId, action }) => (action === 'run' ? scheduler.runNow(scheduleId, 'full') : scheduler.update({ scheduleId, paused: action === 'pause', ceiling: 'full' })),
       // The Mac's Move sheet asking, through the relay (threads.movePreview).
       moveDescribe: async (id) => {
         const info = await describeMovePreview(id);
@@ -1429,7 +1432,9 @@ async function main(): Promise<void> {
     // Its replies' ceiling: what the starter has as it asks, or the mode the
     // thread is started with if that's more (a card Mike allowed). Never
     // anything the other runner or the backend says later.
-    ceilingFor: (starter, mode) => higherMode(runner.authorityNow(starter).mode, isPermissionMode(mode) ? ceilingMode(mode) : 'ask'),
+    // As the agent's own access is judged for what it may start (its saved
+    // mode, not the more a running turn may still have after it was lowered).
+    ceilingFor: (starter, mode) => higherMode(ceilingMode(runner.authoritySaved(starter).mode), isPermissionMode(mode) ? ceilingMode(mode) : 'ask'),
     card: (threadId, c) => runner.requestCard(threadId, c),
     openCard: async (threadId) => {
       const src = sync.relaySource();

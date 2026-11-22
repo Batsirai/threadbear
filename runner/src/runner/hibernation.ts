@@ -18,6 +18,7 @@ import { providerName } from '../providers.ts';
 import { LAB_REVIEW_REPLY_CHARS, addVerdict, addVerdicts, answerEach, findingLine, panelWake } from './lab-review.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
 import { above, LEAST, raises, type Authority } from '../threadbear-mcp.ts';
+import { ceilingMode } from './ceiling.ts';
 
 
 // The less of two: the lower mode, or LEAST if either is.
@@ -394,7 +395,7 @@ export const hibernationPart = {
     this.armSnoozeTimer();
     // Checked against its access now: raised again while this waits in the
     // queue, it's held back as it leaves (runner/ceiling.ts).
-    this.sendTo(st, reports ? `${text}\n\n${reports}` : text, [], { origin: 'runner', queue: true, ceiling: me.mode });
+    this.sendTo(st, reports ? `${text}\n\n${reports}` : text, [], { origin: 'runner', queue: true, ceiling: ceilingMode(me.mode) });
     this.log.info('woke after waiting on threads', { threadId: st.rec.id, on: waits.map((x) => x.threadId) });
   },
 
@@ -430,7 +431,9 @@ export const hibernationPart = {
     }
     this.wake(st, { why: `${who} reviewed the change` });
     this.armSnoozeTimer();
-    this.sendTo(st, text, [], { origin: 'runner', queue: true });
+    // Checked against its access now (deliverWaits): raised again while it
+    // waits in the queue, it's held back as it leaves (runner/ceiling.ts).
+    this.sendTo(st, text, [], { origin: 'runner', queue: true, ceiling: ceilingMode(this.authorityNow(st.rec.id).mode) });
     this.log.info('woke after a lab review', { threadId: st.rec.id, reviewer: w.threadId });
     if (reviewer && !reviewer.rt.deleted && !reviewer.rec.archivedAt && !reviewer.rt.turn) {
       this.update({ threadId: w.threadId, archived: true, archivedBy: 'threadbear' });
@@ -471,7 +474,9 @@ export const hibernationPart = {
     );
     this.wake(st, { why: 'the review panel reviewed the change' });
     this.armSnoozeTimer();
-    this.sendTo(st, text, [], { origin: 'runner', queue: true });
+    // Checked against its access now (deliverWaits): raised again while it
+    // waits in the queue, it's held back as it leaves (runner/ceiling.ts).
+    this.sendTo(st, text, [], { origin: 'runner', queue: true, ceiling: ceilingMode(this.authorityNow(st.rec.id).mode) });
     this.log.info('woke after a review panel', { threadId: st.rec.id, reviewers: waits.map((w) => w.threadId) });
     for (const { w, reviewer } of parts) {
       if (reviewer && !reviewer.rt.deleted && !reviewer.rec.archivedAt && !reviewer.rt.turn) {

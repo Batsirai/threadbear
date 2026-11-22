@@ -17,7 +17,6 @@ import type { RunnerPart } from './part.ts';
 import type { ImageRef } from '../protocol.ts';
 import { AGENT_MESSAGE_PREFIX } from '../protocol.ts';
 import { experimentOn } from '../experiments.ts';
-import { higherMode } from './ceiling.ts';
 
 export const NESTED_THREADS = 'nestedThreads';
 
@@ -70,11 +69,11 @@ export const nestedPart = {
     if (st.rt.turn || st.rec.queue.length || st.rt.deleted) return false;
     if (!this.nestedChildren(st).some((t) => this.stillWorking(t))) return false;
     // Its ceiling (runner/ceiling.ts): send_message let it reach the starter
-    // as it is now (with no card, the starter has no more than the sender;
-    // with one, Mike allowed it at the starter's access), so no more than the
-    // higher of the two. Raised above that before it's passed on, Mike reads
-    // it instead (Daybreak finding 164).
-    const ceiling = higherMode(this.authorityNow(st.rec.id).mode, this.authoritySaved(child.rec.id).mode);
+    // as it is now (with no card, the starter had no more than the sender;
+    // with one, Mike allowed it at the starter's access). Raised above that
+    // before it's passed on, Mike reads it instead, unless its sender has
+    // been raised as far (Daybreak finding 164).
+    const ceiling = this.agentCeiling(st);
     (st.rec.heldReports ??= []).push({ from: child.rec.id, text, at: this.isoNow(), ceiling });
     this.markDirty(st);
     this.log.info('nested threads: held a report for the thread that started it', { threadId: st.rec.id, from: child.rec.id });

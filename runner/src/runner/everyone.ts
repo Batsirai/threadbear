@@ -130,6 +130,13 @@ export const everyonePart = {
     let reply = lastText?.trim() ?? '';
     if (reply.length > EVERYONE_REPLY_CHARS) reply = reply.slice(0, safeEnd(reply, EVERYONE_REPLY_CHARS)) + '…';
     if (!reply) return;
+    // Started with the lead's mode: if Mike has raised the lead since, and
+    // not this one with it, its answer is his to read (runner/ceiling.ts).
+    const me = this.authorityNow(lead.rec.id);
+    if (!this.mayPassOn(me, undefined, st.rec.id)) {
+      this.withhold(lead, `${providerName(st.rec.provider)} answered`, `The answer from "${st.rec.title}" wasn't passed to this thread's agent: this thread has more access now than that one. Read it there, and send a message here to carry on.`);
+      return;
+    }
     const panel = lead.rec.everyone;
     const name = panel?.members.find((m) => m.threadId === st.rec.id)?.name ?? providerName(st.rec.provider);
     const answer: EveryoneAnswer = { threadId: st.rec.id, name, reply };
@@ -148,10 +155,11 @@ export const everyonePart = {
       queued.everyoneAnswers = answers;
       queued.text = text;
       queued.wakeReason = wakeReason;
+      queued.ceiling = me.mode === 'plan' ? 'ask' : me.mode;
       this.markDirty(lead);
       return;
     }
-    this.sendTo(lead, text, [], { origin: 'runner', queue: true, wakeReason, everyoneAnswers: answers });
+    this.sendTo(lead, text, [], { origin: 'runner', queue: true, wakeReason, everyoneAnswers: answers, ceiling: me.mode === 'plan' ? 'ask' : me.mode });
   },
 };
 

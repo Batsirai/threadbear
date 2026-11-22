@@ -22,6 +22,7 @@ import { isPermissionMode } from '../protocol.ts';
 import type { QueuedSend } from '../store.ts';
 import { above, raises, type Authority } from '../threadbear-mcp.ts';
 import { senderPrefix } from './nested.ts';
+import { AGENT_MESSAGE_PREFIX } from '../protocol.ts';
 
 // A ceiling as saved: one that isn't a mode (a record from before, a moved
 // thread's record from another Mac) counts as the least, Ask.
@@ -56,15 +57,41 @@ export const ceilingPart = {
     return !above(this.authorityNow(st.rec.id), { mode: ceilingMode(ceiling) });
   },
 
-  // The ceiling of another thread's message (send_message's first line names
-  // it) as it's accepted for `st`: what `st` has now, which the send was
-  // allowed for (with no card, the sender had as much; with one, Mike said
-  // yes at this), or the sender's own if that's more.
-  agentCeiling(this: Runner, st: ThreadState, text: string): PermissionMode {
-    const id8 = senderPrefix(text);
+  // The ceiling of another thread's message as it's accepted for `st`: what
+  // `st` has now, which the send was allowed for (with no card, the sender
+  // had as much; with one, Mike said yes at this). Not the sender's own, as
+  // the line naming it is only words another Mac could have written.
+  agentCeiling(this: Runner, st: ThreadState): PermissionMode {
+    return ceilingMode(this.authorityNow(st.rec.id).mode);
+  },
+
+  // A queued message from before ceilings (22 Nov 2026), as it leaves the
+  // queue: a schedule's goes by the schedule's own ceiling (schedules.ts,
+  // "Ceilings"), another thread's by what its sender has now (as
+  // send_message would), anything else (Mike's, the runner's) by none.
+  legacyCeiling(this: Runner, q: Pick<QueuedSend, 'text' | 'origin' | 'scheduleId'>): PermissionMode | undefined {
+    // (main.ts sets scheduleCeiling wherever a Scheduler runs.)
+    if (q.origin === 'schedule') return this.scheduleCeiling ? (q.scheduleId ? this.scheduleCeiling(q.scheduleId) : 'ask') : undefined;
+    if (q.origin || !q.text.startsWith(AGENT_MESSAGE_PREFIX)) return undefined;
+    const id8 = senderPrefix(q.text);
     const hits = id8 ? [...this.threads.values()].filter((t) => !t.rt.deleted && t.rec.id.startsWith(id8)) : [];
-    const sender = hits.length === 1 ? this.authoritySaved(hits[0].rec.id).mode : 'ask';
-    return higherMode(ceilingMode(this.authorityNow(st.rec.id).mode), ceilingMode(sender));
+    return hits.length === 1 ? ceilingMode(this.authoritySaved(hits[0].rec.id).mode) : 'ask';
+  },
+
+  // Just before a turn's message goes to its CLI, after whatever the turn
+  // waited for (a CLI closing, a worktree, a compaction): raised above its
+  // ceiling meanwhile, it isn't sent, and the turn ends there with nothing
+  // sent, as a command the runner answers itself does. True if so.
+  heldAtDispatch(this: Runner, st: ThreadState, msg: Pick<QueuedSend, 'turnId' | 'text' | 'origin' | 'scheduleId' | 'ceiling'>): boolean {
+    const turn = st.rt.turn;
+    const ceilings = [msg.ceiling, ...(turn?.ceilings ? [...turn.ceilings.values()] : [])].filter((c) => c !== undefined);
+    if (!turn || ceilings.every((c) => this.underCeiling(st, c))) return false;
+    this.withholdMessage(st, msg);
+    turn.local = true;
+    turn.messages = [];
+    turn.precompact = undefined;
+    this.completeTurn(st, { outcome: 'completed', durationMs: 0 });
+    return true;
   },
 
   // Shown to Mike instead of its agent: a note saying what wasn't passed on

@@ -705,11 +705,15 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   thread's held report, a reply from another runner, a schedule another
   thread set up, and another thread's `send_message` or `tb send` waiting
   in the queue behind a running turn, whose ceiling is the receiver's
-  access as it was accepted, or the sender's if more:
-  `runner/src/runner/ceiling.ts`; one queued again after an interrupted
-  delivery keeps it), and the wake's message
-  is checked again as it leaves the queue, so a thread raised while it
-  waited behind a busy turn is held too. A message, a wake or
+  access as it was accepted; a review's or a panel member's answer too:
+  `runner/src/runner/ceiling.ts`). The wake's message is checked again
+  as it leaves the queue (one queued again after an interrupted delivery
+  keeps its ceiling, and one queued by an older release goes by its
+  schedule's or its sender's), and a last time just before it goes to the
+  CLI, after any wait for a CLI to close, a worktree or a cold compaction
+  (held then, the turn ends with nothing sent). A thread's `tb send`
+  can't start like another thread's message (`[Sent by the agent in the
+  thread`), as the runner reads that line to know who a report is from. A message, a wake or
   another snooze first clears `waitingOn`, so a thread that sends its
   report wakes it as before and its finishing later does nothing. An
   entry can be `{ thread, until }` instead of an id: `until` (up to 200

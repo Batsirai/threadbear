@@ -1176,7 +1176,9 @@ test('a due run is claimed, so two runner processes under one id send it once', 
   const now = backendScheduler(h, LAPTOP, path.join(h.home, 'new'));
   await old.attach(b.for('laptop-old', LAPTOP.id));
   await now.attach(b.for('laptop-new', LAPTOP.id));
-  const sc = await now.create({ text: 'Check CI', at: iso(h.clock.now() + 10 * MIN), threadId: thread.id });
+  // The thread's own (no ceiling): the two homes here don't share the
+  // ceilings a real handover's one data dir does (schedules.ts, "Ceilings").
+  const sc = await now.create({ text: 'Check CI', at: iso(h.clock.now() + 10 * MIN), threadId: thread.id, createdBy: thread.id });
   await tick();
   h.clock.advance(10 * MIN);
   for (let i = 0; i < 5; i++) await tick();

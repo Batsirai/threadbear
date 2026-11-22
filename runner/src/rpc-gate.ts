@@ -9,7 +9,7 @@
 // names the tool that can ask. Refusing by default is the point: a method
 // that's added later is closed until someone decides it's safe here.
 import type { PermissionMode } from './protocol.ts';
-import { ErrorCode, RpcError } from './protocol.ts';
+import { ErrorCode, RpcError, sentByAgent } from './protocol.ts';
 import { above, MODE_NAMES, raises, scheduleModes, type Authority } from './threadbear-mcp.ts';
 import { ceilingMode } from './runner/ceiling.ts';
 
@@ -156,7 +156,7 @@ export class CallerGate {
     // A schedule's ceiling, and Run now's presser (schedules.ts, "Ceilings"),
     // are the caller's, never what it says: Full's is none.
     if (method === 'schedules.create' || method === 'schedules.update') {
-      const { ceiling: _c, ...rest } = p;
+      const { ceiling: _c, keepCeiling: _k, ...rest } = p;
       p = known?.mode === 'full' ? { ...rest, ceiling: 'full' } : rest;
     }
     if (method === 'schedules.run') {
@@ -205,6 +205,9 @@ export class CallerGate {
         // Only the app's Needs you answers and a phone command passed on
         // say these.
         const { answers: _a, origin: _o, ceiling: _c, ...rest } = p;
+        // Words starting as another thread's message would name a sender they
+        // aren't from (runner/nested.ts reads it to hold a report).
+        if (typeof p.text === 'string' && sentByAgent(p.text)) throw new RpcError(ErrorCode.notAllowed, "A message from a thread can't start the way another thread's message does. Use the send_message tool, which says who it's from.");
         // Raised above what this thread could reach while it waits in the
         // queue, it's held as it leaves (runner/ceiling.ts).
         // To itself, the words are its own.
@@ -332,9 +335,12 @@ export class CallerGate {
     const dropsCheck = Boolean(sc.check) && (p.check === null || (typeof p.check === 'string' && !p.check.trim()));
     if (protectedSc && (lowers || dropsCheck)) throw needs(`${dropsCheck ? 'taking the shell command off' : 'changing the access of'} the schedule "${sc.title}"`, 'update_schedule');
     if (p.permissionMode !== undefined && !sc.threadId && p.permissionMode === sc.permissionMode) delete out.permissionMode;
-    // New words from it are as far as it can reach (schedules.ts, "Ceilings"),
-    // except in its own thread's, where they're its own.
-    if (sc.threadId !== threadId) out.ceiling = ceilingMode(caller.mode);
+    // New words from it are as far as it can reach (schedules.ts, "Ceilings").
+    // In the thread it sends to the ceiling stays as it was, rather than be
+    // lifted (one left out over RPC is Mike's) or lowered.
+    delete out.keepCeiling;
+    if (sc.threadId === threadId) out.keepCeiling = true;
+    else out.ceiling = ceilingMode(caller.mode);
     return out;
   }
 

@@ -390,6 +390,35 @@ function capMovedMode(rec: Record<string, any>): { was?: string; changed: boolea
   return { ...(was ? { was } : {}), changed };
 }
 
+// What its queue, held reports and waits may still reach (runner/ceiling.ts)
+// is that runner's word too: at most Ask here, as its mode is, so raising
+// the thread later shows them to Mike rather than its agent. True if any
+// changed.
+export function capMovedCeilings(rec: Record<string, unknown>): boolean {
+  let changed = false;
+  const items = (k: string): Record<string, unknown>[] => (Array.isArray(rec[k]) ? (rec[k] as unknown[]) : []).filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null);
+  for (const q of items('queue')) {
+    if (q.ceiling !== 'ask') {
+      q.ceiling = 'ask';
+      changed = true;
+    }
+  }
+  // None is stricter still (only its sender's access now counts).
+  for (const h of items('heldReports')) {
+    if (h.ceiling !== undefined && h.ceiling !== 'ask') {
+      h.ceiling = 'ask';
+      changed = true;
+    }
+  }
+  for (const w of items('waitingOn')) {
+    if (w.by !== undefined && (w.by as { mode?: unknown } | null)?.mode !== 'ask') {
+      w.by = { mode: 'ask' };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 const MODE_WORDS: Record<string, string> = { full: 'Full access', auto: 'Auto' };
 function cappedNote(was: string, from: string): string {
   return `It had ${MODE_WORDS[was] ?? was} on ${from}, so it asks before tools run here: give it more access again if you want.`;
@@ -408,6 +437,7 @@ function sanitizeMoved(rec: Record<string, any>, atMostAsk: boolean, from: strin
   changed = fitMovedReviews(rec, media) || changed;
   changed = dropMovedReplyImages(rec) || changed;
   if (atMostAsk) {
+    changed = capMovedCeilings(rec) || changed;
     const capped = capMovedMode(rec);
     if (capped.was && !notes.some((n) => n.includes('so it asks before tools run here'))) notes.push(cappedNote(capped.was, from));
     changed ||= capped.changed;

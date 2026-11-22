@@ -140,7 +140,7 @@ export function isMoved(e: unknown): boolean {
 
 // Only installed on the draining server. Older releases refuse this method,
 // so the primary keeps their run due rather than steering into a busy turn.
-export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'findScheduledSend' | 'dropScheduled' | 'has' | 'mustGet' | 'unqueue' | 'draining' | 'clock'>) {
+export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'findScheduledSend' | 'dropScheduled' | 'has' | 'mustGet' | 'unqueue' | 'draining' | 'clock' | 'underCeiling'>) {
   const deliver = (p: Record<string, unknown>) => {
     if (typeof p.threadId !== 'string' || typeof p.text !== 'string' || typeof p.scheduleId !== 'string') throw new RpcError(ErrorCode.badParams, 'threadId, text and scheduleId must be strings');
     if (p.run !== undefined && (typeof p.run !== 'string' || !p.run || p.run.length > 200)) throw new RpcError(ErrorCode.badParams, 'run must be a nonempty string of at most 200 characters');
@@ -161,6 +161,9 @@ export function scheduledSendMethods(runner: Pick<Runner, 'sendScheduled' | 'fin
     // Recurring check-ins must eventually leave a quiet spell for the
     // old runner to hand over, even if its background shell never ends.
     if (runner.draining && runner.clock.now() - runner.draining.since >= DRAIN_MAX_OLD_MS) throw new RpcError(ErrorCode.busy, 'That old runner is waiting to hand this thread over; try again in a moment.');
+    // Raised above it here: not sent, and said so, so the primary records the
+    // run as not sent rather than sent.
+    if (!runner.underCeiling(runner.mustGet(p.threadId), ceiling)) throw new RpcError(ErrorCode.notAllowed, "Not sent: this thread has more access now than the thread that set the schedule up had. Resume it from the app if it's still wanted.");
     const sent = runner.sendScheduled(p.threadId, p.text, p.scheduleId, run, since, p.preserve as boolean | undefined, ceiling);
     if (runner.unqueue(p.threadId, sent.turnId)) throw new RpcError(ErrorCode.busy, 'That scheduled turn could not start yet; try again in a moment.');
     return sent;
