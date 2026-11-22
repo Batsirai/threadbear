@@ -76,8 +76,8 @@ thing on Tinker Desk's desktop from a throwaway copy (`ssh tinker-desk
   `runner/scripts/dev-runner.sh` with its `<dev home>/tb` (a bare `tb` is the live one),
   `--clone-real` for real data, never `--home` on a copy of it, and stop it with the
   `kill <pid>` it prints (never `pkill`) before you deploy or end your turn.
-- After landing an `ios/` change, try installing it on Mike's phone yourself (ios/README.md);
-  if the phone can't be reached, the nightly TestFlight build brings it, so no retry watchers.
+- After landing an `ios/` change, install it on Mike's phone yourself (ios/README.md). That's
+  how his phone stays current: no TestFlight builds (he dropped them on 22 Nov as confusing).
   Uploading for App Store review needs him to ask. Use only your worktree's own
   simulator (`ios/scripts/sim.sh`), never one picked from `simctl list`.
 - A security or data fix other copies should take soon gets an `Important: <why, plainly>`
