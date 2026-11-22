@@ -27,8 +27,10 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use threadbear_core::chips::Piece;
 use threadbear_core::feed::{self as rules, Author, CardState, Starter};
 use threadbear_core::inbox::ThreadSummary;
+use threadbear_core::reducer::ImageRef;
 
 /// How many of a thread's newest events a card reads for its fold.
 const EVENTS_READ: u64 = 200;
@@ -36,6 +38,12 @@ const EVENTS_READ: u64 = 200;
 const COLUMN: f32 = 680.;
 /// Where a card's boxes start, past its avatar.
 const INSET: f32 = 48.;
+/// The feed's padding either side of its column, and a card's inside it.
+const FEED_PAD: f32 = 28.;
+const CARD_PAD: f32 = 20.;
+/// The tallest a picture's tile is under a card's top line, and in its fold.
+const TOP_TILE: f32 = 120.;
+const FOLD_TILE: f32 = 96.;
 
 /// A card's messages, read from its thread's events.
 pub(crate) struct Loaded {
@@ -75,6 +83,17 @@ pub(crate) struct FeedState {
     asks: HashMap<String, Entity<DecisionCard>>,
     /// The cards there when Mike last saw the top, for "↑ N new".
     seen: Option<HashSet<String>>,
+    /// The pictures of each request read so far (`rules::request_images`),
+    /// from its thread's first events; None for one whose message wasn't in
+    /// them, whose markers stay chips with no picture.
+    request_images: HashMap<String, Option<Vec<ImageRef>>>,
+    /// Requests being read.
+    request_reads: HashSet<String>,
+    /// Requests whose read failed, tried again when Mike next opens the Feed.
+    request_failed: HashSet<String>,
+    /// What the picture viewer showed over the Feed when it was last drawn
+    /// (`ViewerState::shown`), so the Feed draws again when that changes.
+    pub(crate) viewer_drawn: Option<(u64, usize, bool)>,
 }
 
 /// The first word of this account's full name ("Mike"), for the top of a
@@ -108,6 +127,12 @@ impl Threadbear {
         self.experiment_on(rules::EXPERIMENT)
     }
 
+    /// The Feed is what the main panel shows: it draws the picture viewer
+    /// then, as the side pane draws it over a thread (viewer.rs).
+    pub(crate) fn feed_showing(&self) -> bool {
+        self.home_page() == Some(SidebarMode::Feed) && self.open_project().is_none()
+    }
+
     /// Opens the Feed in the main panel; the sidebar shows the Inbox.
     pub(crate) fn show_feed(&mut self, cx: &mut Context<Self>) {
         if !self.feed_on() {
@@ -123,6 +148,8 @@ impl Threadbear {
         self.inbox_feed.done.clear();
         self.inbox_feed.done_rows.clear();
         self.inbox_feed.seen = None;
+        // A read that failed goes again next time.
+        self.inbox_feed.request_failed.clear();
     }
 
     /// A thread opened (or the new-thread page) takes the Feed's place: the
@@ -258,6 +285,169 @@ impl Threadbear {
             .ok();
         })
         .detach();
+    }
+
+    /// Reads the pictures of a card's request, once: the first message of
+    /// Mike's among its thread's first events, however long the thread.
+    fn feed_read_request(&mut self, t: &ThreadSummary, cx: &mut Context<Self>) {
+        if !rules::reads_request(t)
+            || self.inbox_feed.request_images.contains_key(&t.id)
+            || self.inbox_feed.request_failed.contains(&t.id)
+            || !self.inbox_feed.request_reads.insert(t.id.clone())
+        {
+            return;
+        }
+        let request = rules::top(t).line;
+        let client = self.client.clone();
+        let id = t.id.clone();
+        cx.spawn(async move |this, cx| {
+            let res = call(
+                client,
+                "threads.events",
+                json!({ "threadId": id, "afterSeq": 0, "limit": rules::REQUEST_EVENTS }),
+            )
+            .await;
+            this.update(cx, |this, cx| {
+                this.inbox_feed.request_reads.remove(&id);
+                match res {
+                    Ok(page) => {
+                        let events: Vec<Value> =
+                            page["events"].as_array().cloned().unwrap_or_default();
+                        let images = rules::request_images(&events, &request);
+                        this.inbox_feed.request_images.insert(id.clone(), images);
+                    }
+                    // Its chips with no picture, until the Feed's next opened.
+                    Err(_) => {
+                        this.inbox_feed.request_failed.insert(id.clone());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The width a card's words get in points: the feed's column, as wide as
+    /// it was last drawn, less the card's sides and `past` (its avatar).
+    fn feed_text_width(&self, past: f32) -> f32 {
+        let shown = f32::from(self.inbox_feed.scroll.bounds().size.width) / style::zoom_scale();
+        let column = if shown > 0. {
+            (shown - FEED_PAD * 2.).min(COLUMN)
+        } else {
+            COLUMN
+        };
+        (column - CARD_PAD * 2. - past).max(120.)
+    }
+
+    /// Where a card's chips are drawn: its thread, as Mike's bubble has it
+    /// (chips.rs).
+    fn feed_chip_place(
+        &self,
+        t: &ThreadSummary,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> crate::chips::ChipPlace {
+        let me = cx.entity().downgrade();
+        crate::chips::ChipPlace {
+            origin: if t.is_remote() {
+                crate::open_gate::Origin::OtherMac
+            } else {
+                crate::open_gate::Origin::ThisMac
+            },
+            runner_name: t
+                .runner_id
+                .as_deref()
+                .map_or_else(|| "another Mac".to_owned(), |id| self.runner_name_of(id)),
+            runner_id: t.runner_id.clone(),
+            cwd: t.cwd.clone(),
+            open_thread: std::rc::Rc::new(move |id, window, cx| {
+                me.update(cx, |this, cx| this.open_thread_link(id, window, cx))
+                    .ok();
+            }),
+            retina: window.scale_factor() >= 2.,
+        }
+    }
+
+    /// Words of Mike's with their pictures, as his bubble draws them: each
+    /// `[Picture N]` a chip among the words (and a card's or a thread's
+    /// link one too), then the pictures as tiles that open the viewer.
+    /// `images` is None while they're still being read: each marker's chip
+    /// is there, with no picture. `lines_shown` cuts the words short (the
+    /// fold's three lines). None for words with no chips and no pictures.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the top line and the fold's messages differ in all of these"
+    )]
+    fn feed_words_with_pictures(
+        &mut self,
+        t: &ThreadSummary,
+        key: &str,
+        pieces: Vec<Piece>,
+        images: Option<&[ImageRef]>,
+        width: f32,
+        (font, line_height, tile, lines_shown): (f32, f32, f32, Option<usize>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use crate::chips::{self as chips, ChipKind, Token};
+        let images: Vec<ImageRef> = images.map(<[ImageRef]>::to_vec).unwrap_or_default();
+        // Pictures with no marker among the words still show, as tiles.
+        if images.is_empty() && pieces.iter().all(|p| matches!(p, Piece::Words(_))) {
+            return None;
+        }
+        let place = self.feed_chip_place(t, window, cx);
+        let mut body = v_flex().w_full();
+        let mut lines = chips::lay_out(pieces, px(width), font, window);
+        if let Some(most) = lines_shown {
+            lines.truncate(most);
+        }
+        for (n, tokens) in lines.into_iter().enumerate() {
+            let mut line = h_flex().min_h(px(line_height)).items_center();
+            for (at, token) in tokens.into_iter().enumerate() {
+                line = line.child(match token {
+                    Token::Words(words) => div()
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .child(words)
+                        .into_any_element(),
+                    Token::Chip(kind) => {
+                        let chip_key =
+                            SharedString::from(format!("feed-chip-{key}-{n}-{at}-{}", t.id));
+                        let card = match &kind {
+                            ChipKind::Thread { id, .. }
+                                if chips::card_shown(&chip_key, chips::QUICK) =>
+                            {
+                                chips::thread_card(id, &self.threads, &self.logins.accounts, cx)
+                            }
+                            _ => None,
+                        };
+                        chips::chip(chip_key, kind, &images, &place, card, cx)
+                    }
+                });
+            }
+            body = body.child(line);
+        }
+        if !images.is_empty() {
+            use crate::rows::images::{image_frames, picture_grid, pixel_size, TilesFrom};
+            use crate::rows::metrics::{GRID_MAX_WIDTH, IMAGE_GAP};
+            let sizes: Vec<_> = images.iter().map(pixel_size).collect();
+            let (frames, height) =
+                image_frames(&sizes, width, tile, GRID_MAX_WIDTH, IMAGE_GAP, false);
+            let from = TilesFrom {
+                runner: t.runner_id.clone(),
+                runner_name: place.runner_name,
+                client: self.client.clone(),
+                redraw: cx.entity().downgrade().into(),
+            };
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("feed-pictures-{key}-{}", t.id)))
+                    .mt(px(8.))
+                    .child(picture_grid(&images, frames, height, width, &from, cx)),
+            );
+        }
+        Some(body.into_any_element())
     }
 
     /// The card's messages are read once it's drawn, and again once its
@@ -484,12 +674,21 @@ impl Threadbear {
                     "Go to the top for the new ones",
                 ))
         });
+        // A picture clicked on a card opens over the window, as one in a
+        // thread does; the side pane leaves it to the Feed (highlights.rs).
+        let (viewer, shown) = self.side.clone().update(cx, |side, cx| {
+            (side.viewer_overlay(window, cx), side.viewer.shown())
+        });
+        // What it's drawn showing, so its closing draws the Feed again even
+        // when it was opened before the Feed was (app.rs).
+        self.inbox_feed.viewer_drawn = shown;
         div()
             .relative()
             .size_full()
             // The pill follows where the feed's scrolled to.
             .child(column.on_scroll(cx.listener(|_, _: &ScrollEvent, _, cx| cx.notify())))
             .children(pill)
+            .children(viewer)
             .into_any_element()
     }
 
@@ -563,8 +762,27 @@ impl Threadbear {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.feed_refresh(t, cx);
+        self.feed_read_request(t, cx);
         let state = self.feed_state_of(t);
         let top = rules::top(t);
+        // Mike's request with its pictures, as his bubble has them.
+        let request = if top.from == Starter::Mike {
+            let images = self.inbox_feed.request_images.get(&t.id).cloned().flatten();
+            let pieces = rules::top_pieces(&top.line, images.as_ref().map(Vec::len));
+            let width = self.feed_text_width(36. + 12.);
+            self.feed_words_with_pictures(
+                t,
+                "top",
+                pieces,
+                images.as_deref(),
+                width,
+                (15., 22., TOP_TILE, None),
+                window,
+                cx,
+            )
+        } else {
+            None
+        };
         let now = threadbear_core::sidebar::local_now();
         let (faint, secondary, label) = (
             style::faint_text(cx),
@@ -654,7 +872,10 @@ impl Threadbear {
                             .text_size(px(15.))
                             .line_height(px(22.))
                             .text_color(label)
-                            .child(top.line),
+                            .map(|d| match request {
+                                Some(drawn) => d.child(drawn),
+                                None => d.child(top.line),
+                            }),
                     ),
             );
         let where_box = self.render_where(t, state, window, cx);
@@ -888,7 +1109,7 @@ impl Threadbear {
     fn render_fold(
         &mut self,
         t: &ThreadSummary,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut list = v_flex()
@@ -957,7 +1178,7 @@ impl Threadbear {
         }
         let messages: Vec<rules::Message> = all[start..].to_vec();
         for m in messages {
-            list = list.child(self.render_fold_message(t, &m, cx));
+            list = list.child(self.render_fold_message(t, &m, window, cx));
         }
         list.into_any_element()
     }
@@ -966,6 +1187,7 @@ impl Threadbear {
         &mut self,
         t: &ThreadSummary,
         m: &rules::Message,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let now = threadbear_core::sidebar::local_now();
@@ -982,14 +1204,36 @@ impl Threadbear {
         };
         let key = (t.id.clone(), m.seq);
         let full = self.inbox_feed.full.contains(&key);
+        // Mike's with its pictures, as his bubble has them, its words cut
+        // to three lines and its pictures under them.
+        let pictured = if m.author == Author::Mike {
+            let pieces = threadbear_core::chips::message_pieces(&m.text, m.images.len());
+            let width = self.feed_text_width(32. + 12.);
+            self.feed_words_with_pictures(
+                t,
+                &format!("fold-{}", m.seq),
+                pieces,
+                Some(&m.images),
+                width,
+                (14.5, 21., FOLD_TILE, (!full).then_some(3)),
+                window,
+                cx,
+            )
+        } else {
+            None
+        };
         let text = if full { m.text.clone() } else { plain(&m.text) };
         let words = div()
             .mt(px(1.))
             .text_size(px(14.5))
             .line_height(px(21.))
             .text_color(style::label_text(cx))
-            .when(!full, |s| s.line_clamp(3).overflow_hidden())
-            .child(text);
+            .map(|d| match pictured {
+                Some(drawn) => d.child(drawn),
+                None => d
+                    .when(!full, |s| s.line_clamp(3).overflow_hidden())
+                    .child(text),
+            });
         let (open_id, see_key) = (t.id.clone(), key);
         let links = h_flex()
             .mt(px(4.))
@@ -1195,6 +1439,7 @@ impl Threadbear {
                     "line": rules::dump_line(t, state, done),
                     "state": if done { "done" } else { state.name() },
                     "top": rules::top(t).line,
+                    "pictures": self.inbox_feed.request_images.get(&t.id).and_then(Option::as_ref).map_or(0, Vec::len),
                     "fold": rules::fold_label(&t.provider, loaded.map(|l| l.messages.len()), loaded.is_some_and(|l| l.more_before)),
                     "open": open,
                     "messages": if open { loaded.map(|l| l.messages.iter().map(|m| m.text.clone()).collect::<Vec<_>>()).unwrap_or_default() } else { vec![] },

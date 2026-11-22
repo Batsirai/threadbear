@@ -3128,7 +3128,13 @@ impl SidePane {
         } else {
             None
         };
-        let viewer = if hosts {
+        // Over the Feed, the Feed draws it (inbox_feed.rs), as no thread's
+        // side pane may be showing.
+        let feed = self
+            .app
+            .upgrade()
+            .is_some_and(|app| app.read(cx).feed_showing());
+        let viewer = if hosts && !feed {
             self.viewer_overlay(window, cx)
         } else {
             None

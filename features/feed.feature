@@ -53,3 +53,12 @@ Feature: The Feed: my Inbox as cards, one after another
     When I open the fold on the Feed's card "Bedtime Tube"
     And I click "Open thread" on the Feed
     Then the open thread is "Bedtime Tube"
+
+  # Mike, 22 Nov: a card whose request had a picture said "[Picture 1] on
+  # mobile..." in words. It's his bubble's chip and tile now, read from the
+  # thread's first message.
+  @inbox.feed @feed @swift-pending
+  Scenario: A picture in what I asked shows as it does in my message
+    Then the Feed's card "Upload screen on mobile" shows 1 picture in what I asked
+    When I click "Picture 1" on the Feed's card "Upload screen on mobile"
+    Then the viewer shows picture 1 of 1 "progress-after.png"

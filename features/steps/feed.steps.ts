@@ -5,10 +5,10 @@ import type { ThreadbearWorld } from '../support/world.ts';
 
 // The Feed (the feed experiment, GPUI only). The dump's `homePage` while it
 // shows has `cards`, one a thread: its title, state ("needsYou", "running",
-// "quiet", "done"), the top line, the fold's words, whether it's open and its
+// "quiet", "done"), the top line and how many pictures of it are read, the fold's words, whether it's open and its
 // messages then, whether an answer or reply is on its way, and whether it has
 // a reply box.
-type Card = { id: string; title: string; state: string; top: string; fold: string; open: boolean; messages: string[]; sending: boolean; reply: boolean };
+type Card = { id: string; title: string; state: string; top: string; pictures: number; fold: string; open: boolean; messages: string[]; sending: boolean; reply: boolean };
 const cards = (d: Dump): Card[] => ((d as unknown as { homePage?: { title?: string; cards?: Card[] } | null }).homePage?.cards ?? []);
 const card = (d: Dump, title: string) => cards(d).find((c) => c.title === title);
 
@@ -111,5 +111,17 @@ When('I click {string} on the Feed', async function (this: ThreadbearWorld, labe
   const d = await this.app.dump();
   const open = cards(d).find((c) => c.open);
   if (open) await this.app.do({ cmd: 'feed', thread: open.id, show: true });
+  await this.app.do({ cmd: 'click', title: label });
+});
+
+Then("the Feed's card {string} shows {int} picture(s) in what I asked", async function (this: ThreadbearWorld, title: string, count: number) {
+  await this.until(`${count} picture(s) in "${title}"'s top`, (d) => card(d, title)?.pictures === count);
+});
+
+// A real click on the first control of that name, with its card scrolled to
+// the top first.
+When("I click {string} on the Feed's card {string}", async function (this: ThreadbearWorld, label: string, title: string) {
+  const c = await this.until(`a card for "${title}"`, (d) => card(d, title));
+  await this.app.do({ cmd: 'feed', thread: c.id, show: true });
   await this.app.do({ cmd: 'click', title: label });
 });

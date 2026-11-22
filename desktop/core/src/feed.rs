@@ -4,7 +4,9 @@
 // it knows with no window: which threads it shows and in what order, what a
 // card says at the top and in its "where it's at" box, and the messages its
 // fold opens onto, read from the thread's events.
+use crate::chips::{self, Piece};
 use crate::inbox::{self, ThreadSummary, Wake};
+use crate::reducer::ImageRef;
 use chrono::{DateTime, Datelike as _, TimeZone};
 use serde_json::Value;
 use std::borrow::Borrow;
@@ -390,6 +392,9 @@ pub struct Message {
     pub by: String,
     pub text: String,
     pub at_ms: i64,
+    /// The pictures pasted into a message sent to the thread, which its
+    /// `[Picture N]` markers place, as Mike's bubble draws them.
+    pub images: Vec<ImageRef>,
 }
 
 /// The conversation as the fold shows it, oldest first, from a page of the
@@ -437,7 +442,12 @@ pub fn messages(events: &[Value]) -> Vec<Message> {
                     .unwrap_or("")
                     .trim()
                     .to_owned();
-                if text.is_empty() {
+                let images: Vec<ImageRef> = e
+                    .get("images")
+                    .and_then(Value::as_array)
+                    .map(|list| list.iter().filter_map(ImageRef::decode).collect())
+                    .unwrap_or_default();
+                if text.is_empty() && images.is_empty() {
                     continue;
                 }
                 let origin = e.get("origin").and_then(Value::as_str).unwrap_or("");
@@ -456,6 +466,7 @@ pub fn messages(events: &[Value]) -> Vec<Message> {
                     by: by.to_owned(),
                     text,
                     at_ms,
+                    images,
                 });
                 reply = None;
             }
@@ -483,6 +494,7 @@ pub fn messages(events: &[Value]) -> Vec<Message> {
                     by: String::new(),
                     text,
                     at_ms,
+                    images: Vec::new(),
                 };
                 // The same block again replaces it where it stands.
                 if let Some(&at) = items.get(&item).filter(|_| !item.is_empty()) {
@@ -511,6 +523,70 @@ pub fn messages(events: &[Value]) -> Vec<Message> {
         }
     }
     out
+}
+
+/// How many of a thread's first events a card reads for the pictures in
+/// Mike's request: his first message is near the start of a thread he began.
+pub const REQUEST_EVENTS: u64 = 20;
+
+/// Until the request's message is read, a `[Picture N]` up to this is drawn
+/// as a picture's chip with no picture yet, not as words.
+const UNREAD_PICTURES: usize = 20;
+
+/// Whether a card's request is read from its thread's first events
+/// (`threads.events` from the start, `REQUEST_EVENTS` of them) for the
+/// pictures pasted into it: one of Mike's on this Mac, as a picture with no
+/// marker in the words still shows as a tile; another Mac's only when its
+/// line names one, as each read goes through Convex.
+pub fn reads_request(t: &ThreadSummary) -> bool {
+    let top = top(t);
+    top.from == Starter::Mike && (!t.is_remote() || top.line.contains("[Picture "))
+}
+
+/// Words as `oneLine` has them (runner.ts): each run of spaces one space.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The pictures of Mike's request, from the thread's first events: those of
+/// his first message in them whose words are the request's (`request`, cut
+/// to 200 with "…"). None when none is: his first message is further in, or
+/// the page isn't the thread's start (another Mac's, read through the
+/// relay, may be its newest rows), so no other message's pictures stand in.
+pub fn request_images(first_events: &[Value], request: &str) -> Option<Vec<ImageRef>> {
+    let request = one_line(request);
+    let start = request.trim_end_matches('\u{2026}').trim_end();
+    messages(first_events)
+        .into_iter()
+        .filter(|m| m.author == Author::Mike)
+        .find(|m| {
+            let words = one_line(&m.text);
+            words == request || (!start.is_empty() && words.starts_with(start))
+        })
+        .map(|m| m.images)
+}
+
+/// The card's top line cut where its chips go, as Mike's bubble cuts his
+/// message (`chips::message_pieces`): with the request's pictures once its
+/// message is read (`images`), and before that (or when it couldn't be
+/// found) each `[Picture N]` as a picture still to come, so the marker never
+/// shows as words. A marker the 200-character cut went through goes too.
+pub fn top_pieces(line: &str, images: Option<usize>) -> Vec<Piece> {
+    // "[Pic…", "[Picture 1…": the start of a marker, with nothing after.
+    let cut_marker = line.rfind('[').filter(|&at| {
+        let rest = line[at..].trim_end_matches('\u{2026}');
+        let open = "[Picture ";
+        !rest.contains(']')
+            && (open.starts_with(rest)
+                || rest
+                    .strip_prefix(open)
+                    .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit())))
+    });
+    let line = match cut_marker {
+        Some(at) => format!("{}\u{2026}", line[..at].trim_end()),
+        None => line.to_owned(),
+    };
+    chips::message_pieces(&line, images.unwrap_or(UNREAD_PICTURES))
 }
 
 /// How many cards the "↑ N new" pill counts: ones in the feed now that
@@ -840,6 +916,96 @@ mod tests {
     }
 
     #[test]
+    fn a_request_with_a_picture_draws_it_as_mikes_bubble_does() {
+        let line = "[Picture 1] on mobile, should this look different?";
+        let t = thread("p", 1, json!({ "title": "Mobile", "request": line }));
+        assert!(reads_request(&t));
+        // One he didn't start isn't read; another Mac's only with a marker.
+        let by_thread = thread(
+            "q",
+            1,
+            json!({ "request": line, "startedBy": { "kind": "thread", "threadTitle": "Coordinator" } }),
+        );
+        assert!(!reads_request(&by_thread));
+        assert!(reads_request(&thread(
+            "r",
+            1,
+            json!({ "request": "No marker" })
+        )));
+        let on_bruce = |request: &str| {
+            let mut t = thread("s", 1, json!({ "request": request }));
+            t.runner_id = Some("bruce".into());
+            t
+        };
+        assert!(!reads_request(&on_bruce("No marker")));
+        assert!(reads_request(&on_bruce(line)));
+
+        // Before the first message is read, the marker is a picture to come,
+        // never the words "[Picture 1]".
+        let words = |pieces: &[Piece]| -> String {
+            pieces
+                .iter()
+                .map(|p| match p {
+                    Piece::Words(w) => w.clone(),
+                    Piece::Picture(i) => format!("<{i}>"),
+                    Piece::Mention(m) => m.title.clone(),
+                })
+                .collect()
+        };
+        assert_eq!(
+            words(&top_pieces(line, None)),
+            "<0> on mobile, should this look different?"
+        );
+
+        // His first message's pictures, found among the thread's first events
+        // even after the runner's own message, and an empty-worded one kept.
+        let picture = json!({ "path": "/tmp/shot.png", "mediaType": "image/png", "width": 800, "height": 600 });
+        let first = vec![
+            json!({ "seq": 1, "type": "user.message", "turnId": "t0", "text": "Started from a phone", "origin": "runner" }),
+            json!({ "seq": 2, "type": "user.message", "turnId": "t1", "text": line, "images": [picture] }),
+            json!({ "seq": 3, "type": "assistant.text", "turnId": "t1", "itemId": "a", "text": "It does." }),
+            json!({ "seq": 4, "type": "user.message", "turnId": "t2", "text": "", "images": [picture] }),
+        ];
+        let images = request_images(&first, line).unwrap_or_default();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].path, "/tmp/shot.png");
+        assert_eq!(images[0].width, Some(800));
+        assert_eq!(
+            words(&top_pieces(line, Some(images.len()))),
+            "<0> on mobile, should this look different?"
+        );
+        // Read, with no picture for a marker: it's words, as in the bubble.
+        assert_eq!(words(&top_pieces(line, Some(0))), line);
+        assert_eq!(request_images(&first[..1], line), None);
+        // Only the message the request is: a later one's pictures (the
+        // newest rows of another Mac's thread) never stand in for it.
+        assert_eq!(request_images(&first[2..], line), None);
+        // Cut at 200 with "…", its spaces run together, it's still found.
+        let long = format!("{line}\n\n{}", "more words ".repeat(30));
+        let cut: String = one_line(&long).chars().take(199).collect::<String>() + "\u{2026}";
+        let events =
+            vec![json!({ "seq": 1, "type": "user.message", "text": long, "images": [picture] })];
+        assert_eq!(request_images(&events, &cut).map(|i| i.len()), Some(1));
+        // A marker the cut went through isn't words.
+        for cut in [
+            "Look at this [Picture\u{2026}",
+            "Look at this [Pic\u{2026}",
+            "Look at this [Picture 1\u{2026}",
+        ] {
+            assert_eq!(words(&top_pieces(cut, Some(1))), "Look at this\u{2026}");
+        }
+        assert_eq!(
+            words(&top_pieces("Look [at this\u{2026}", Some(1))),
+            "Look [at this\u{2026}"
+        );
+
+        let all = messages(&first);
+        assert_eq!(all.len(), 4);
+        assert_eq!(all[3].author, Author::Mike);
+        assert!(all[3].text.is_empty() && all[3].images.len() == 1);
+    }
+
+    #[test]
     fn the_headline_in_full_once_the_messages_are_read() {
         let long = "The guide and FAQ are written. A T3 contributor found a 4th bug caused by the custom label: Claude Code switches off MCP Tasks for a label it doesn't recognise.";
         let t = thread("x", 1, json!({ "preview": &long[..140] }));
@@ -850,6 +1016,7 @@ mod tests {
                 by: String::new(),
                 text: text.to_owned(),
                 at_ms: 0,
+                images: Vec::new(),
             }]
         };
         assert_eq!(

@@ -68,6 +68,20 @@ impl ViewerState {
         self.open
     }
 
+    /// What it shows, as far as drawing it goes: None while it's closed,
+    /// else the opening, the picture it's on and whether that's read yet.
+    /// One drawn by a view that isn't the side pane (the Feed) draws again
+    /// when this changes, not on every change of the pane's.
+    pub(crate) fn shown(&self) -> Option<(u64, usize, bool)> {
+        self.open.then(|| {
+            let read = self
+                .pictures
+                .get(self.index)
+                .is_some_and(|p| p.image.is_some() || p.failed);
+            (self.opening, self.index, read)
+        })
+    }
+
     fn current_path(&self) -> Option<&str> {
         self.pictures.get(self.index).map(|p| p.path.as_str())
     }

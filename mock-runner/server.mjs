@@ -3941,7 +3941,9 @@ function addDemoNested() {
  * pick starred), one started by another thread asking him something, one
  * working with a job in the background, one finished with a long
  * conversation, one a schedule started, and one running a turn. Every thread
- * carries `request`, its first message of Mike's, as the runner gives it.
+ * carries `request`, its first message of Mike's, as the runner gives it. One
+ * asks about a picture pasted into it, "[Picture 1]" in its request, as Mike's
+ * of 22 Nov did, with another in a later message for the fold.
  */
 function addDemoFeed() {
   const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -3955,13 +3957,13 @@ function addDemoFeed() {
     };
     const events = [];
     const push = (fields, turnId, at) => events.push({ seq: events.length + 1, ts: at, threadId: id, ...(turnId ? { turnId } : {}), ...fields });
-    // `said`: [who, words] in order, "mike" or "agent", each turn a pair.
+    // `said`: [who, words, pictures?] in order, "mike" or "agent", each turn a pair.
     let turn = 0;
-    said.forEach(([who, words], i) => {
+    said.forEach(([who, words, images = []], i) => {
       const at = ago(minutes + (said.length - i) * 7);
       if (who === 'mike') {
         turn++;
-        push({ type: 'user.message', text: words, images: [] }, `${id}_t${turn}`, at);
+        push({ type: 'user.message', text: words, images }, `${id}_t${turn}`, at);
         push({ type: 'turn.started' }, `${id}_t${turn}`, at);
       } else {
         push({ type: 'assistant.text', itemId: `${id}_m${i}`, text: words }, `${id}_t${turn}`, at);
@@ -4029,6 +4031,16 @@ function addDemoFeed() {
     said: [
       ['mike', 'Find me somewhere near the office for the holiday party week'],
       ['agent', 'Keep Beck\'s, A$777 under today\'s price.'],
+    ],
+    needs: 'nothing',
+  });
+  const media = (file) => ({ path: path.join(here, 'fixtures/demo-upload-resume/media', file), mediaType: 'image/png', width: 900, height: 560 });
+  make('feed_picture', 'Upload screen on mobile', 15, {
+    said: [
+      ['mike', '[Picture 1] on mobile, should this look different? The progress bar and the top part?', [media('progress-after.png')]],
+      ['agent', 'Yes: on a phone the bar should run the full width and the title should wrap. I changed both.'],
+      ['mike', 'Here it is before, [Picture 1] for comparison', [media('progress-before.png')]],
+      ['agent', 'Thanks. The new one keeps the button on screen too.'],
     ],
     needs: 'nothing',
   });

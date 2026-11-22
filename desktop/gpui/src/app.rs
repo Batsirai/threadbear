@@ -493,7 +493,15 @@ impl Threadbear {
         });
         // A pin an agent asked to show may only be in Highlights once they've
         // been fetched: their coming is a moment to try it again.
-        let side_changed = cx.observe(&side, |this: &mut Threadbear, _, cx| {
+        let side_changed = cx.observe(&side, |this: &mut Threadbear, side, cx| {
+            // Over the Feed, the picture viewer is the Feed's to draw.
+            // Only when what it shows changes: the side pane follows the
+            // app, so notifying on every change of its would never end.
+            let viewer = side.read(cx).viewer.shown();
+            if this.feed_showing() && viewer != this.inbox_feed.viewer_drawn {
+                this.inbox_feed.viewer_drawn = viewer;
+                cx.notify();
+            }
             this.serve_panel_request(cx);
             // Another thread on show may have a page handed to Mike.
             this.browser_changed(cx);
