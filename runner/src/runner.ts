@@ -3243,7 +3243,7 @@ export class Runner {
       this.update({ threadId: rec.id, archived: true, archivedBy: 'agent' });
     }
     if (waitFor && !rt.turn && !rec.archivedAt && !this.stopping) this.waitOn(st, waitFor, snooze, turn.endTurnBy);
-    else if (snooze && !rt.turn && !rec.archivedAt && !this.stopping) this.snoozeAfterTurn(st, snooze);
+    else if (snooze && !rt.turn && !rec.archivedAt && !this.stopping) this.snoozeAfterTurn(st, snooze, turn.endTurnBy);
     else if (forApp && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Hibernating until the Threadbear app restarts onto the new build, a day at most.' });
       this.update({ threadId: rec.id, snoozedUntil: new Date(this.clock.now() + APP_RESTART_MAX_AGE_MS).toISOString() });
@@ -3322,7 +3322,9 @@ export class Runner {
 
   // end_turn's snooze, once the turn is over: a time as update_thread
   // reads it, or else words, read as Hibernate in words reads Mike's.
-  snoozeAfterTurn(st: ThreadState, when: string): void {
+  // `askedBy`: its access when its agent called end_turn (turn.endTurnBy),
+  // for the ceiling of a snooze in words (runner/ceiling.ts).
+  snoozeAfterTurn(st: ThreadState, when: string, askedBy?: { mode: PermissionMode }): void {
     const { rec } = st;
     let until: string | undefined;
     if (when.toLowerCase() === 'restart' || when.toLowerCase() === 'release') until = when.toLowerCase();
@@ -3336,7 +3338,7 @@ export class Runner {
     if (until === undefined) {
       // A failure puts the thread back in the inbox (hibernateWhen), so
       // Mike sees it, with a note saying why.
-      this.hibernateWhen({ threadId: rec.id, said: when, by: 'agent' }).catch((e: unknown) => {
+      this.hibernateWhen({ threadId: rec.id, said: when, by: 'agent', ...(askedBy ? { askedBy } : {}) }).catch((e: unknown) => {
         if (st.rt.deleted) return;
         this.emit(st, { type: 'system.note', text: `Not hibernated, as the agent was asked to: ${e instanceof Error ? e.message : String(e)}` });
         this.notHibernatedAfterCheck(st);
@@ -3558,6 +3560,9 @@ export class Runner {
           const log = this.store.log(rec.id);
           const msgs = log.read(Math.max(1, log.lastSeq - 200), log.lastSeq).filter((e) => e.type === 'user.message' && e.turnId === turn.turnId);
           const first = msgs[0];
+          // Raised above a message's ceiling since it was first sent: held
+          // before anything kept for the next message is taken.
+          if (first && first.type === 'user.message' && this.heldAtDispatch(st, { ...first, turnId: turn.turnId, ceiling: turn.ceilings?.get(turn.turnId) })) return;
           if (first && first.type === 'user.message') {
             // The fresh session starts knowing where the thread got to: a
             // transcript carried to a new folder that wouldn't resume gets
@@ -3598,8 +3603,6 @@ export class Runner {
               }
             }
             rt.carried = undefined;
-            // Raised above a message's ceiling since it was first sent.
-            if (this.heldAtDispatch(st, { ...first, turnId: turn.turnId, ceiling: turn.ceilings?.get(turn.turnId) })) return;
             this.startSession(st, account);
             rt.session!.send({ ...input, text });
             // Messages sent into the turn before the CLI went go again, in

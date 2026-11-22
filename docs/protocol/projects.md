@@ -300,7 +300,8 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   says `Paused, not sent: …`, a repeating schedule pauses, and the thread
   gets a `system.note` and goes to Needs you, with no turn. Mike resuming
   or changing its words (the app, `tb`, the phone), or his Run now, lifts
-  the ceiling; a limited thread rewording or resuming one lowers it to its
+  the ceiling; a limited thread rewording, resuming or giving a new check to one (what a
+  check prints goes into each run) lowers it to its
   own mode (never lifts it, even through a card, which shows only what
   changes; the thread it sends to included), and a
   limited thread's Run now goes by the higher of its mode and the

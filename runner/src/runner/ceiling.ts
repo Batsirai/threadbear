@@ -96,7 +96,7 @@ export const ceilingPart = {
     // Its row is in the transcript already: kept out of what a fresh
     // session is told the thread said (a handoff's history), and the rest.
     const seqs = [...(turn.inputs?.values() ?? [])];
-    if (seqs.length) st.rec.withheldSeqs = [...new Set([...(st.rec.withheldSeqs ?? []), ...seqs])].slice(-200);
+    if (seqs.length) st.rec.withheldSeqs = [...new Set([...(st.rec.withheldSeqs ?? []), ...seqs])];
     this.withholdMessage(st, msg);
     turn.local = true;
     turn.messages = [];
@@ -146,7 +146,7 @@ export const ceilingPart = {
   withholdMessage(this: Runner, st: ThreadState, q: Pick<QueuedSend, 'text' | 'origin' | 'scheduleId' | 'seq'>): void {
     // Queued again after its first showing never reached the agent: that
     // row is kept out of what an agent is told the thread said too.
-    if (q.seq !== undefined) st.rec.withheldSeqs = [...new Set([...(st.rec.withheldSeqs ?? []), q.seq])].slice(-200);
+    if (q.seq !== undefined) st.rec.withheldSeqs = [...new Set([...(st.rec.withheldSeqs ?? []), q.seq])];
     const first = q.text.slice(0, q.text.indexOf('\n') < 0 ? q.text.length : q.text.indexOf('\n')).trim().slice(0, 200);
     const what = q.origin === 'schedule' ? `A scheduled message (${first})` : first ? `A message (${first})` : 'A message';
     this.withhold(

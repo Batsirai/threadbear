@@ -501,7 +501,7 @@ test("the RPC gate puts a thread's own ceiling on its tb send, whatever it says"
   const me = idle(h, 'Helper', 'ask');
   const other = idle(h, 'Other', 'ask');
   assert.equal(gate.check(me, 'threads.send', { threadId: other, text: 'hi', ceiling: 'full' }).ceiling, 'ask');
-  assert.equal(gate.check(me, 'threads.send', { threadId: me, text: 'hi', ceiling: 'full' }).ceiling, undefined, 'to itself: none');
+  assert.equal(gate.check(me, 'threads.send', { threadId: me, text: 'hi', ceiling: 'full' }).ceiling, 'ask', 'to itself: its own');
   assert.equal(gate.check(me, 'schedules.create', { threadId: other, text: 'x', at: '2030-01-01T00:00:00Z', ceiling: 'full' }).ceiling, 'ask');
   assert.equal(gate.check(me, 'schedules.create', { threadId: me, text: 'x', at: '2030-01-01T00:00:00Z', ceiling: 'full' }).ceiling, 'ask', 'its own too');
 });
@@ -832,4 +832,66 @@ test("162: a schedule made since the first binding, with its ceiling lost, count
   await tick(8);
   await settle();
   assert.match(again.list().find((s) => s.id === sc.id)!.lastRun?.note ?? '', /Paused, not sent/);
+});
+
+// ------------------------------------------- round 4 of the review
+
+test('a held report keeps the ceiling send_message took as its card was shown', async () => {
+  const h = harness({ nestedThreads: true });
+  const { parent, a } = await family(h, 'auto', 'ask');
+  // As send_message passes it after a card shown at Auto, answered after
+  // Mike raised the starter.
+  raise(h, parent);
+  const r = h.runner.send(parent, `[Sent by the agent in the thread "${h.runner.get(a).title}" (${a.slice(0, 8)})]\n\n${PAYLOAD}`, [], { ceiling: 'auto' });
+  assert.equal(r.held, true);
+  assert.equal(record(h, parent).heldReports?.[0].ceiling, 'auto');
+});
+
+test("a Full thread's send_message to a busy thread keeps no ceiling, so raising that thread doesn't hold it", async () => {
+  const h = harness();
+  const from = idle(h, 'Lead', 'full');
+  const to = h.runner.create({ text: 'Busy', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
+  session(h, to).init();
+  const tools = buildThreadbearTools(h.runner, from, () => h.clock.now(), undefined, undefined, undefined, { sleep: async () => {} });
+  const r = (await tools.find((x) => x.name === 'send_message')!.handler({ threadId: to, text: PAYLOAD } as never, {})) as { isError?: boolean };
+  assert.equal(r.isError, undefined);
+  raise(h, to);
+  session(h, to).result('completed');
+  await until(() => heard(h, to), "the Full thread's message");
+});
+
+test("a new check from a thread with less access lowers the schedule's ceiling: what it prints goes into each run", async () => {
+  const h = harness();
+  const sched = scheduler(h);
+  const target = idle(h, 'Careful work', 'ask');
+  const sc = await sched.create({ text: 'Check the deploy', at: new Date(h.clock.now() + 60 * MIN).toISOString(), threadId: target });
+  await sched.update({ scheduleId: sc.id, check: "printf 'x'", ceiling: 'ask' });
+  const kept = JSON.parse(fs.readFileSync(path.join(h.home, 'schedule-ceilings.json'), 'utf8'));
+  assert.equal(kept[sc.id].ceiling, 'ask');
+});
+
+test("a thread's tb send to itself carries its own ceiling", () => {
+  const h = harness();
+  const gate = new CallerGate({ runner: h.runner });
+  const me = idle(h, 'Helper', 'auto');
+  assert.equal(gate.check(me, 'threads.send', { threadId: me, text: 'next', ceiling: 'full' }).ceiling, 'auto');
+});
+
+test('a remote start takes the asker\'s mode as its card was shown, if that was less', async () => {
+  const watched: { by: PermissionMode }[] = [];
+  const cross = new CrossRunner({
+    self: () => ({ id: 'm5', name: 'M5' }),
+    backend: () => ({ ownerKey: () => true }),
+    runners: async () => [{ id: 'm5', name: 'M5', self: true }, { id: 'pixel', name: 'Pixel', self: false }],
+    createThere: async () => ({ id: 'remote-1' }),
+    startedThere: (p: { by: PermissionMode }) => watched.push(p),
+    // As main.ts: saved mode now Full (raised while the card waited).
+    ceilingFor: (_s: string, mode: string | undefined, askerMode?: PermissionMode) => {
+      const saved: PermissionMode = 'full';
+      const base = askerMode === 'ask' ? 'ask' : saved;
+      return mode === 'full' ? 'full' : mode === 'auto' && base === 'ask' ? 'auto' : base;
+    },
+  } as unknown as CrossRunnerDeps);
+  await cross.start('starter1', { runner: 'Pixel', text: 'Look', permissionMode: 'ask', askerMode: 'ask' });
+  assert.equal(watched[0]?.by, 'ask');
 });

@@ -135,6 +135,7 @@ const ACCESS: Record<PermissionMode, number> = { ask: 0, plan: 0, auto: 1, full:
 export const MODE_NAMES: Record<PermissionMode, string> = { full: 'Full access', auto: 'Auto', ask: 'Ask before edits', plan: 'Plan first' };
 export const raises = (to: PermissionMode, from: PermissionMode): boolean => ACCESS[to] > ACCESS[from];
 const higherOf = (a: PermissionMode, b: PermissionMode): PermissionMode => (raises(a, b) ? a : b);
+const lowerOf = (a: PermissionMode, b: PermissionMode): PermissionMode => (raises(a, b) ? b : a);
 // A mode as a ceiling: Plan first ranks with Ask (runner/ceiling.ts).
 const asCeiling = (m: PermissionMode): PermissionMode => (m === 'plan' ? 'ask' : m);
 // What a thread's agent can do: its mode.
@@ -2122,6 +2123,8 @@ export function buildThreadbearTools(
           const cleanWhy = why?.trim() ? cutSafely(why.replace(/\s+/g, ' ').trim(), MAX_BYLINE) : undefined;
           const there = await control.startOn(selfId, {
             runner: runner.trim(),
+            // As the card was shown (runner/ceiling.ts, far-reports.ts).
+            askerMode: caller ? caller.mode : 'full',
             text,
             ...(title?.trim() ? { title: title.trim() } : {}),
             ...(f?.trim() ? { cwd: f.trim() } : {}),
@@ -2178,10 +2181,14 @@ export function buildThreadbearTools(
         // Another runner's thread counts as full access (modeOf), so a
         // restricted caller is asked first there too.
         const head = await from();
-        // Its ceiling, as the card shows the receiver now (runner/ceiling.ts):
-        // raised while the card waits, the receiver doesn't take more.
-        const ceiling = asCeiling((await accessOf(id)).mode);
-        await confirm('send_message', await sendReason(id, await restricted()), { threadId: id, from: head.trim(), text }, extra?.signal);
+        // Its ceiling (runner/ceiling.ts): as far as this thread reaches, or
+        // the receiver's access if more, as the card shows it and as it is
+        // after (the less of the two, so a raise while the card waits gives
+        // it nothing more, nor a look that changes between the two reads).
+        const sender = await restricted();
+        const before = (await accessOf(id)).mode;
+        await confirm('send_message', await sendReason(id, sender), { threadId: id, from: head.trim(), text }, extra?.signal);
+        const ceiling: PermissionMode = sender ? asCeiling(higherOf(sender.mode, lowerOf(before, (await accessOf(id)).mode))) : 'full';
         const remote = opts.remote?.();
         if (hit.other && remote) {
           // A send command for that runner, as the Mac app's (relay.ts).
@@ -2317,8 +2324,8 @@ export function buildThreadbearTools(
         const caller = await restricted();
         const cwd = await folder(f);
         const accountId = await account(acc);
-        // `then`'s ceiling, as the card shows the thread now (runner/ceiling.ts).
-        const thenCeiling = asCeiling((await accessOf(id)).mode);
+        // `then`'s ceiling, as send_message's (runner/ceiling.ts).
+        const thenBefore = (await accessOf(id)).mode;
         if (caller) {
           const t = id === selfId ? undefined : await accessOf(id);
           const checks = schedules ? (await schedules.list(id)).filter((sc) => sc.threadId === id && sc.check?.trim()) : [];
@@ -2330,6 +2337,7 @@ export function buildThreadbearTools(
           await confirm('move_thread', reasons, { threadId: id, folder: cwd, ...(acc ? { account: accountId } : {}), ...(then ? { then } : {}) }, extra?.signal);
           if (reasons.length) await sameFolder(f, cwd);
         }
+        const thenCeiling: PermissionMode = caller ? asCeiling(higherOf(caller.mode, lowerOf(thenBefore, (await accessOf(id)).mode))) : 'full';
         const t = (await control.update({ threadId: id, cwd, accountId, byAgent: true })).thread;
         const self = id === selfId;
         if (then?.trim()) {

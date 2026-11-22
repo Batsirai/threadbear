@@ -210,8 +210,8 @@ export class CallerGate {
         if (typeof p.text === 'string' && sentByAgent(p.text)) throw new RpcError(ErrorCode.notAllowed, "A message from a thread can't start the way another thread's message does. Use the send_message tool, which says who it's from.");
         // Raised above what this thread could reach while it waits in the
         // queue, it's held as it leaves (runner/ceiling.ts).
-        // To itself, the words are its own.
-        if (!id || id === threadId) return takeImages(rest);
+        // To itself: its own words, as far as it reaches now.
+        if (!id || id === threadId) return takeImages({ ...rest, ceiling: ceilingMode(caller.mode) });
         const to = this.targetAccess(id).mode;
         return takeImages({ ...rest, ceiling: ceilingMode(raises(to, caller.mode) ? to : caller.mode) });
       }

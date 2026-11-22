@@ -17,6 +17,7 @@ import type { RunnerPart } from './part.ts';
 import type { ImageRef } from '../protocol.ts';
 import { AGENT_MESSAGE_PREFIX } from '../protocol.ts';
 import { experimentOn } from '../experiments.ts';
+import { lowerMode } from './ceiling.ts';
 
 export const NESTED_THREADS = 'nestedThreads';
 
@@ -73,7 +74,7 @@ export const nestedPart = {
     // with one, Mike allowed it at the starter's access). Raised above that
     // before it's passed on, Mike reads it instead, unless its sender has
     // been raised as far (Daybreak finding 164).
-    const ceiling = this.agentCeiling(st);
+    const ceiling = opts.ceiling ? lowerMode(opts.ceiling, this.agentCeiling(st)) : this.agentCeiling(st);
     (st.rec.heldReports ??= []).push({ from: child.rec.id, text, at: this.isoNow(), ceiling });
     this.markDirty(st);
     this.log.info('nested threads: held a report for the thread that started it', { threadId: st.rec.id, from: child.rec.id });

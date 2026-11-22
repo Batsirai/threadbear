@@ -42,7 +42,7 @@ export const hibernationPart = {
   // the thread comes back and the call fails with why.
   // `by: 'agent'`: its own agent asked (snoozeAfterTurn), waiting for
   // something to happen (WakeWhen.by).
-  async hibernateWhen(this: Runner, params: { threadId: string; said: string; by?: 'agent' }): Promise<{ thread: ThreadSummary; until?: string; topic?: string; why: string }> {
+  async hibernateWhen(this: Runner, params: { threadId: string; said: string; by?: 'agent'; askedBy?: Authority }): Promise<{ thread: ThreadSummary; until?: string; topic?: string; why: string }> {
     const st = this.mustGet(params.threadId);
     const said = params.said.trim();
     if (!said) throw new RpcError(ErrorCode.badParams, 'Say when it should wake.');
@@ -55,7 +55,7 @@ export const hibernationPart = {
     // Its agent's own words wake it later (wakeForTopic): kept to the access
     // it had as it wrote them (runner/ceiling.ts).
     if (by) {
-      st.rec.wakeCeiling = { said, ceiling: ceilingMode(this.authoritySaved(st.rec.id).mode) };
+      st.rec.wakeCeiling = { said, ceiling: ceilingMode(leastAuthority(params.askedBy, this.authoritySaved(st.rec.id)).mode) };
       this.markDirty(st);
     }
     const input = { said, now: this.clock.now(), timeZone, title: st.rec.title, first: gist.first, brief: st.rec.brief?.text, ...(by ? { by } : {}) };

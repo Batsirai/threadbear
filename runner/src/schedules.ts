@@ -1020,7 +1020,8 @@ export class Scheduler {
     // New words, or resuming it, are the changer's: Mike's lift its ceiling,
     // a thread's lower it to its own if that's less ("Ceilings").
     const was = this.items.get(rec.id);
-    const reworded = (p.text !== undefined && p.text.trim() !== was?.text) || (p.title !== undefined && rec.title !== was?.title) || (p.paused === false && was?.paused === true);
+    // A new check too: what it prints goes into each run's message.
+    const reworded = (p.text !== undefined && p.text.trim() !== was?.text) || (p.title !== undefined && rec.title !== was?.title) || (p.paused === false && was?.paused === true) || (p.check !== undefined && rec.check !== was?.check);
     const ceiling = rec.threadId && reworded && p.ceiling !== undefined && !p.keepCeiling ? (p.ceiling === 'full' ? 'full' : lowerMode(this.ceilingOf(rec), ceilingMode(p.ceiling))) : undefined;
     // Passing the check again approves it as it is now. Nothing else does,
     // a new folder included: approval is bound to the folder, so one moved

@@ -1439,7 +1439,11 @@ async function main(): Promise<void> {
     // anything the other runner or the backend says later.
     // As the agent's own access is judged for what it may start (its saved
     // mode, not the more a running turn may still have after it was lowered).
-    ceilingFor: (starter, mode) => higherMode(ceilingMode(runner.authoritySaved(starter).mode), isPermissionMode(mode) ? ceilingMode(mode) : 'ask'),
+    // Its mode as its card was shown, if less (raised while the card waited).
+    ceilingFor: (starter, mode, askerMode) => {
+      const saved = ceilingMode(runner.authoritySaved(starter).mode);
+      return higherMode(askerMode ? lowerMode(ceilingMode(askerMode), saved) : saved, isPermissionMode(mode) ? ceilingMode(mode) : 'ask');
+    },
     card: (threadId, c) => runner.requestCard(threadId, c),
     openCard: async (threadId) => {
       const src = sync.relaySource();
