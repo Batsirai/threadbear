@@ -1764,6 +1764,13 @@ export class Scheduler {
     // Its thread raised above what set it up ("Ceilings"): not sent, and a
     // repeating one paused until Mike resumes it.
     const ceiling = rec.threadId ? (by && raises(by, this.ceilingOf(rec)) ? by : this.ceilingOf(rec)) : undefined;
+    // On a draining runner that doesn't say what it has (busy there, or
+    // not listed yet): tried again, as that runner would refuse a busy
+    // thread anyway, rather than held on a guess.
+    if (rec.threadId && ceiling && ceiling !== 'full' && this.elsewhere(rec.threadId) && this.accessElsewhere?.(rec.threadId) === undefined) {
+      if (manual) throw new RpcError(ErrorCode.busy, 'That thread is busy on the old runner; try again in a moment.');
+      return { outcome: 'retry' };
+    }
     if (rec.threadId && ceiling && raises(this.accessNow(rec.threadId), ceiling)) {
       const note = `Paused, not sent: its thread has more access now than the thread that set this up had. Read it, and resume it (or run it now) if it's still wanted.`;
       record('skipped', rec.threadId, note);

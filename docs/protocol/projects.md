@@ -317,9 +317,13 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   it, at its `createdBy` thread's saved mode then (Ask if that thread is
   gone or none is named), so existing ones carry on as they were. A
   moved thread's schedules take the lower of the ceiling they had on the
-  Mac they came from and the thread's saved mode as it arrives. The ceiling goes with the queued message
-  (and to a draining runner, as `drain.sendScheduled`'s `ceiling`), and
-  is checked again as the message leaves the queue (`runner/src/runner/ceiling.ts`).
+  Mac they came from and the thread's saved mode as it arrives. The
+  ceiling goes with the queued message (and to a draining runner, as
+  `drain.sendScheduled`'s `ceiling`, which that runner checks again and
+  refuses rather than queue), and is checked again as the message leaves
+  the queue (`runner/src/runner/ceiling.ts`). A run for a thread a
+  draining runner has that doesn't say its access (busy there) is tried
+  again rather than held.
 - **Sending.** The message starts with a line saying which schedule sent
   it, `[Scheduled: "<title>", <whenText>]`, so the agent knows Mike didn't
   just type it, and its `user.message` has `origin: "schedule"` and

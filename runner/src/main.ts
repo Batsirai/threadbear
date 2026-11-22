@@ -582,6 +582,9 @@ async function main(): Promise<void> {
   const kept = await peers.connectAll();
   bootStep('peers');
   elsewhere = peersElsewhere(peers);
+  // Before any queue is started: a reminder an older release queued goes by
+  // its schedule's ceiling, Ask until the Scheduler is up (runner/ceiling.ts).
+  runner.scheduleCeiling = (id) => (scheduler ? scheduler.ceilingById(id) : 'ask');
   runner.start({ skip: kept });
   bootStep('threads');
   // Answers to ask_secret go after a day (docs/protocol/threads.md, "Secrets").
@@ -618,7 +621,6 @@ async function main(): Promise<void> {
     ...(box ? { refuse: BOX_NO_SCHEDULES } : {}),
   });
   runner.scheduleDeleted = (id) => scheduler.wasDeleted(id);
-  runner.scheduleCeiling = (id) => scheduler.ceilingById(id);
   // A box has no schedules (decision 13): they stay on the Mac and send to it.
   if (!copyOfReal && !box) scheduler.start();
   // The done card's loose ends list the check-ins booked for a thread.

@@ -63,7 +63,7 @@ export function cleanPresses(raw: unknown): PressNote[] | undefined {
 // Muse's review of the fix, 11 Nov 2026, finding 96). True if it changed.
 const OBJECT_LISTS = ['heldReports', 'heldMail', 'waitingOn', 'reviews', 'buttons', 'subagents', 'projects', 'rewinds', 'queue', 'messageRecoveries'];
 const STRING_LISTS = ['reviewDeliveries', 'allowRules', 'pendingApprovals', 'projectsLeft', 'projectsTold'];
-const NUMBER_LISTS = ['interruptedMessages'];
+const NUMBER_LISTS = ['interruptedMessages', 'withheldSeqs'];
 const OBJECTS = ['needs', 'looseEnds', 'stoppedWork', 'stoppedMidTurn', 'highlights', 'worktree', 'handoff', 'moved', 'startedBy', 'labReview', 'labReviewOwed', 'reviewVerdict', 'finished', 'lateChecks', 'wakeNews'];
 const NESTED: [string, string, 'object' | 'string' | 'number'][] = [
   ['needs', 'asks', 'object'],
@@ -288,6 +288,9 @@ export type ThreadRecord = {
   // Reports the threads it started sent it with send_message, kept until
   // none of them is working (runner/nested.ts).
   heldReports?: HeldReport[];
+  // Messages shown in the transcript that its agent never got: held back
+  // just before their turn sent them (runner/ceiling.ts, heldAtDispatch).
+  withheldSeqs?: number[];
   // Emails about its work, kept for its agent's next turn (runner/mail.ts).
   heldMail?: HeldMail[];
   starredAt?: string; // Mike starred it: the Starred section, oldest star first
@@ -411,8 +414,11 @@ export type ThreadRecord = {
 };
 
 // Whether an edit cut the event at `seq` out of the conversation.
-export function cutOut(rec: Pick<ThreadRecord, 'rewinds'>, seq: number): boolean {
-  return rec.rewinds?.some((r) => seq >= r.from && seq <= r.to) ?? false;
+// Taken out by an edit, or a message held back as its turn was about to
+// send it (withheldSeqs, runner/ceiling.ts): never part of what an agent
+// is told the thread said.
+export function cutOut(rec: Pick<ThreadRecord, 'rewinds' | 'withheldSeqs'>, seq: number): boolean {
+  return (rec.rewinds?.some((r) => seq >= r.from && seq <= r.to) ?? false) || (rec.withheldSeqs?.includes(seq) ?? false);
 }
 
 export type ThreadProjectRecord = Omit<ThreadProject, 'title'>;

@@ -22,7 +22,7 @@ import { isPermissionMode } from '../protocol.ts';
 import type { QueuedSend } from '../store.ts';
 import { above, raises, type Authority } from '../threadbear-mcp.ts';
 import { senderPrefix } from './nested.ts';
-import { AGENT_MESSAGE_PREFIX } from '../protocol.ts';
+import { sentByAgent } from '../protocol.ts';
 
 // A ceiling as saved: one that isn't a mode (a record from before, a moved
 // thread's record from another Mac) counts as the least, Ask.
@@ -72,7 +72,10 @@ export const ceilingPart = {
   legacyCeiling(this: Runner, q: Pick<QueuedSend, 'text' | 'origin' | 'scheduleId'>): PermissionMode | undefined {
     // (main.ts sets scheduleCeiling wherever a Scheduler runs.)
     if (q.origin === 'schedule') return this.scheduleCeiling ? (q.scheduleId ? this.scheduleCeiling(q.scheduleId) : 'ask') : undefined;
-    if (q.origin || !q.text.startsWith(AGENT_MESSAGE_PREFIX)) return undefined;
+    // The runner's own were often another thread's words (a held report, a
+    // wake with a reply, a panel's answers), so they count as Ask.
+    if (q.origin === 'runner') return 'ask';
+    if (q.origin || !sentByAgent(q.text)) return undefined;
     const id8 = senderPrefix(q.text);
     const hits = id8 ? [...this.threads.values()].filter((t) => !t.rt.deleted && t.rec.id.startsWith(id8)) : [];
     return hits.length === 1 ? ceilingMode(this.authoritySaved(hits[0].rec.id).mode) : 'ask';
@@ -86,6 +89,10 @@ export const ceilingPart = {
     const turn = st.rt.turn;
     const ceilings = [msg.ceiling, ...(turn?.ceilings ? [...turn.ceilings.values()] : [])].filter((c) => c !== undefined);
     if (!turn || ceilings.every((c) => this.underCeiling(st, c))) return false;
+    // Its row is in the transcript already: kept out of what a fresh
+    // session is told the thread said (a handoff's history), and the rest.
+    const seqs = [...(turn.inputs?.values() ?? [])];
+    if (seqs.length) st.rec.withheldSeqs = [...new Set([...(st.rec.withheldSeqs ?? []), ...seqs])].slice(-200);
     this.withholdMessage(st, msg);
     turn.local = true;
     turn.messages = [];

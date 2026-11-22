@@ -665,3 +665,79 @@ test("162: moved to another Mac, a schedule keeps the lower of its ceiling there
   const got = movedSchedules([{ text: 'a', at: '2030-01-01T00:00:00Z', ceiling: 'ask' }, { text: 'b', at: '2030-01-01T00:00:00Z', ceiling: 'plan' }, { text: 'c', at: '2030-01-01T00:00:00Z', ceiling: 'root' }], 't1').schedules;
   assert.deepEqual(got.map((s) => s.ceiling), ['ask', 'ask', undefined]);
 });
+
+// ------------------------------------------- round 2 of the review
+
+test("move_thread's then for another thread is held if Mike raises that thread before it starts", async () => {
+  const h = harness();
+  const target = h.runner.create({ text: 'Long job', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
+  session(h, target).init();
+  h.runner.send(target, `[Sent by the agent before moving to /tmp]\n\n${PAYLOAD}`, [], { queue: true });
+  raise(h, target);
+  session(h, target).result('completed');
+  await settle();
+  assert.equal(heard(h, target), false);
+});
+
+test('a message from an older release queued by the runner counts as Ask as it leaves the queue', async () => {
+  const h = harness();
+  const target = h.runner.create({ text: 'Long job', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
+  session(h, target).init();
+  inside(h).threads.get(target)!.rec.queue.push({ turnId: 'old-r', text: `${HELD_HEAD}\n\n${PAYLOAD}`, images: [], origin: 'runner' } as never);
+  raise(h, target);
+  session(h, target).result('completed');
+  await settle();
+  assert.equal(heard(h, target), false);
+});
+
+test("a panel answer merged into one queued earlier doesn't lift the earlier member's ceiling", async () => {
+  const h = harness();
+  const lead = h.runner.create({ text: 'Lead', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
+  session(h, lead).init();
+  const m1 = idle(h, 'Member one', 'ask');
+  const m2 = idle(h, 'Member two', 'ask');
+  const threads = (h.runner as unknown as { threads: Map<string, { rec: Record<string, unknown> }> }).threads;
+  threads.get(m1)!.rec.everyoneOf = lead;
+  threads.get(m2)!.rec.everyoneOf = lead;
+  const tell = (id: string, t: string) => (h.runner as unknown as { tellLead: (st: unknown, t: string) => void }).tellLead(threads.get(id), t);
+  tell(m1, PAYLOAD);
+  raise(h, lead);
+  raise(h, m2);
+  tell(m2, 'All good from me.');
+  session(h, lead).result('completed');
+  await settle();
+  assert.equal(heard(h, lead), false, "member one's answer stays out");
+  assert.ok(h.events(lead).some((e) => e.type === 'user.message' && String(e.text).includes('All good from me.')), "member two's goes");
+});
+
+test('a message held as its turn was about to send it is kept out of what a fresh session is told', async () => {
+  const h = harness();
+  const target = idle(h, 'Careful work', 'ask');
+  let release!: () => void;
+  rtOf(h, target).closing = new Promise<void>((r) => (release = r));
+  h.runner.send(target, `[Sent by the agent in the thread "Helper" (abcdef12)]\n\n${PAYLOAD}`, [], { queue: true, ceiling: 'ask' });
+  await tick(4);
+  raise(h, target);
+  rtOf(h, target).closing = undefined;
+  release();
+  await settle();
+  const { cutOut } = await import('../../src/store.ts');
+  const rec = (h.runner as unknown as { threads: Map<string, { rec: { withheldSeqs?: number[]; rewinds?: { from: number; to: number }[] } }> }).threads.get(target)!.rec;
+  const row = h.events(target).find((e) => e.type === 'user.message' && String(e.text).includes(PAYLOAD))!;
+  assert.ok(row, 'the row is in the transcript');
+  assert.equal(cutOut(rec, row.seq), true, 'but out of what an agent is told');
+});
+
+test('a run for a busy thread on a draining runner is tried again, not held on a guess', async () => {
+  const h = harness();
+  const target = idle(h, 'Careful work', 'ask');
+  let sent = 0;
+  const sched = scheduler(h, { elsewhere: (id) => id === target, accessElsewhere: () => undefined, sendElsewhere: async () => (sent++, { turnId: 'x' }) });
+  const sc = await sched.create({ text: PAYLOAD, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: 'some-ask-thread', ceiling: 'ask' });
+  h.clock.advance(2 * MIN);
+  await tick(8);
+  const now = sched.list().find((s) => s.id === sc.id)!;
+  assert.equal(now.finishedAt, undefined, 'not finished');
+  assert.equal(now.paused, false);
+  assert.equal(sent, 0);
+});

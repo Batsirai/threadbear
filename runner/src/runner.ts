@@ -48,7 +48,7 @@ import type {
   ThreadSummary,
   TurnOutcome,
 } from './protocol.ts';
-import { agentsStillWorking, ErrorCode, LIMITS, MOVE_MESSAGE_PREFIX, PROTOCOL_VERSION, RpcError, sentByAgent } from './protocol.ts';
+import { agentsStillWorking, ErrorCode, LIMITS, PROTOCOL_VERSION, RpcError, sentByAgent } from './protocol.ts';
 import { cliName, providerName, providersForHello } from './providers.ts';
 import type { ArchivedBy, ArchiveVerdict, LibrarianStatus, LooseEnd, Project, Schedule } from './protocol.ts';
 import { Projects } from './projects.ts';
@@ -1795,7 +1795,7 @@ export class Runner {
   // The first user.message's text and the first assistant.text after it,
   // read a page at a time from the start: both are nearly always within
   // the first few events, and a long thread's log is large.
-  opening(id: string, rec?: Pick<ThreadRecord, 'rewinds'>): { text?: string; images?: number; reply?: string } {
+  opening(id: string, rec?: Pick<ThreadRecord, 'rewinds' | 'withheldSeqs'>): { text?: string; images?: number; reply?: string } {
     const log = this.store.log(id);
     let text: string | undefined;
     let images = 0;
@@ -1910,7 +1910,8 @@ export class Runner {
     // Another thread's message, allowed for this thread as it is now: if
     // it waits in the queue while Mike raises this thread, it's held as it
     // leaves (runner/ceiling.ts).
-    if (opts.ceiling === undefined && !opts.origin && sentByAgent(text) && !text.startsWith(MOVE_MESSAGE_PREFIX)) opts = { ...opts, ceiling: this.agentCeiling(st) };
+    // A move's `then` too: move_thread can send it to another thread.
+    if (opts.ceiling === undefined && !opts.origin && sentByAgent(text)) opts = { ...opts, ceiling: this.agentCeiling(st) };
     // Mike writing: anything held goes in first, so he and it see the same.
     if (fromMike(text, opts) && st.rec.heldReports?.length) this.deliverHeld(st);
     return { turnId: this.sendTo(st, text, images, opts) };
@@ -2415,6 +2416,9 @@ export class Runner {
       await preparing;
       if (gone()) return; // interrupted or deleted during setup
     }
+    // Raised above its ceiling while it waited for any of the above: before
+    // anything below takes what's kept for the next message (runner/ceiling.ts).
+    if (this.heldAtDispatch(st, msg)) return;
     if (!rt.session && this.leavesRemovedWorktree(rec)) {
       forStart = undefined;
       // Held as a new thread's worktree is, so an archive that comes
@@ -2434,6 +2438,7 @@ export class Runner {
       // meanwhile still has it for its next message.
       await leaving;
       if (gone()) return;
+      if (this.heldAtDispatch(st, msg)) return;
     } else if (!rt.session) {
       const left = this.tellTornDown(st, msg.turnId);
       if (left) text = `${left}\n\n${text}`;
@@ -2492,8 +2497,6 @@ export class Runner {
       this.emit(st, { type: 'system.note', text: `Moved to ${rec.cwd}. The session carries on there.` }, msg.turnId);
       delete rec.moved;
     }
-    // Raised above its ceiling while it waited for any of the above.
-    if (this.heldAtDispatch(st, msg)) return;
     // Kept for the next message when this one is a command, as the news is.
     if (rt.turn) rt.turn.dispatched = true;
     if (command) rt.session!.send({ ...input, text });

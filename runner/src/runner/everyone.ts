@@ -141,7 +141,12 @@ export const everyonePart = {
     const name = panel?.members.find((m) => m.threadId === st.rec.id)?.name ?? providerName(st.rec.provider);
     const answer: EveryoneAnswer = { threadId: st.rec.id, name, reply };
     const queued = lead.rec.queue.find((q) => q.origin === 'runner' && q.everyoneAnswers?.length);
-    const answers = queued ? [...queued.everyoneAnswers!.filter((a) => a.threadId !== answer.threadId), answer] : [answer];
+    // Each answer kept from before is checked again against the lead as it
+    // is now: one from a member Mike didn't raise with it is his to read.
+    const earlier = queued ? queued.everyoneAnswers!.filter((a) => a.threadId !== answer.threadId) : [];
+    const dropped = earlier.filter((a) => !this.mayPassOn(me, undefined, a.threadId));
+    if (dropped.length) this.withhold(lead, `${providerName(st.rec.provider)} answered`, `The answer${dropped.length === 1 ? '' : 's'} from ${dropped.map((a) => `"${a.name}"`).join(', ')} ${dropped.length === 1 ? "wasn't" : "weren't"} passed to this thread's agent: this thread has more access now than ${dropped.length === 1 ? 'that one' : 'those'}. Read ${dropped.length === 1 ? 'it' : 'them'} there, and send a message here to carry on.`);
+    const answers = [...earlier.filter((a) => !dropped.includes(a)), answer];
     const waiting = (panel?.members ?? [])
       .filter((m) => !answers.some((a) => a.threadId === m.threadId))
       .filter((m) => {

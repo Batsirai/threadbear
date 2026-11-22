@@ -703,15 +703,19 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   turn starts: Mike reads them and says what next (Daybreak, 12 Nov
   2026). The same rule holds every other word held for later (a nested
   thread's held report, a reply from another runner, a schedule another
-  thread set up, and another thread's `send_message` or `tb send` waiting
-  in the queue behind a running turn, whose ceiling is the receiver's
-  access as it was accepted; a review's or a panel member's answer too:
+  thread set up, and another thread's `send_message`, `tb send` or
+  `move_thread` `then` waiting in the queue behind a running turn, whose
+  ceiling is the receiver's access as it was accepted; a review's or a
+  panel member's answer too, each merged answer checked again:
   `runner/src/runner/ceiling.ts`). The wake's message is checked again
   as it leaves the queue (one queued again after an interrupted delivery
-  keeps its ceiling, and one queued by an older release goes by its
-  schedule's or its sender's), and a last time just before it goes to the
-  CLI, after any wait for a CLI to close, a worktree or a cold compaction
-  (held then, the turn ends with nothing sent). A thread's `tb send`
+  keeps its ceiling; one queued by an older release goes by its
+  schedule's, its sender's, or Ask for the runner's own), and a last time
+  just before it goes to the CLI, after any wait for a CLI to close or a
+  worktree, or after a cold compaction. Held then, the turn ends with
+  nothing sent, and its row, though in the transcript, is left out of
+  what an agent is told the thread said (`withheldSeqs`: a handoff's
+  history, the card reviewer). A thread's `tb send`
   can't start like another thread's message (`[Sent by the agent in the
   thread`), as the runner reads that line to know who a report is from. A message, a wake or
   another snooze first clears `waitingOn`, so a thread that sends its
