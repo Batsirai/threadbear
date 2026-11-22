@@ -37,7 +37,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { builtinModules, isBuiltin } from 'node:module';
+import { isBuiltin } from 'node:module';
 import { bareImport, inNodeModules, linkedPackages, packageFiles } from './tracked-packages.ts';
 
 // `outside`: with FollowOptions.outside, the scripts it runs or loads that
@@ -835,13 +835,16 @@ type Ctx = {
   inSub?: boolean;
 };
 
-// Node's own modules, by their bare names.
-const NODE_BUILTINS = new Set(builtinModules);
-
 // The files an import of `want` (no extension, or a folder) could load,
 // when `want` itself isn't a file.
 function importCandidates(want: string): string[] {
   if (isFile(want)) return [];
+  // `./x.js` that's really x.ts, as TypeScript tooling reads it.
+  const ts = /\.(m|c)?jsx?$/.exec(want);
+  if (ts) {
+    const stem = want.slice(0, -ts[0].length);
+    return [`.${ts[1] ?? ''}ts`, `.${ts[1] ?? ''}tsx`, '.ts', '.tsx'].map((e) => stem + e).filter((f, i, a) => a.indexOf(f) === i && isFile(f));
+  }
   return [...['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx', '.json', '.node'].map((e) => want + e), ...['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx', '.json', '.node'].map((e) => path.join(want, `index${e}`)), path.join(want, 'package.json')].filter(isFile);
 }
 
@@ -1008,6 +1011,10 @@ class Reach {
     if (passive) startDirs.add(path.dirname(real));
     if (kind === 'js') {
       const shebang = /^#!(.*)/.exec(text)?.[1] ?? '';
+      // Run by its #!, every flag on it counts, as on a command line: only
+      // ones known to load nothing (`env -S node --env-file=.env` loaded
+      // NODE_OPTIONS from a file nobody read; Gemini's review of 165).
+      if (!passive && shebangFlagsUnsafe(shebang)) return this.fail(undefined, undefined, `${label}'s #! line runs it with flags patch trust doesn't follow (${shebang.trim().slice(0, 80)}).`);
       if (LOADING_FLAG.test(shebang.replace(/^\S+/, ''))) return this.fail(undefined, undefined, `${label}'s #! line loads other code by a flag (${shebang.trim()}), which patch trust doesn't follow.`);
       return this.js(real, text, startDirs, depth);
     }
@@ -1241,7 +1248,7 @@ class Reach {
     // tsconfig's `paths` (tsx, bun) turn a bare name into a file of the
     // repo's, which this reads as an installed package (Gemini's review of
     // Daybreak 165).
-    if (this.ownRules && (scan.packages ?? []).some((x) => !x.startsWith('node:') && !NODE_BUILTINS.has(x.split('/')[0]!))) {
+    if (this.ownRules && (scan.packages ?? []).some((x) => !isBuiltin(x))) {
       const mapped = this.tsPaths(path.dirname(file));
       if (mapped) return this.fail(undefined, undefined, `${label} imports a package by name beside ${this.rel(mapped)}, whose \`paths\` or \`baseUrl\` can make that a file of the repo's, which patch trust doesn't follow.`);
     }
@@ -1249,9 +1256,13 @@ class Reach {
       // An import without its extension, or of a folder, that more than one
       // file could answer: Node may load another than the one followed
       // (helper.js over helper.ts, a folder's package.json main, an addon).
-      if (this.ownRules && /^\.{0,2}\//.test(spec)) {
-        const could = importCandidates(path.resolve(path.dirname(file), spec.replace(/[?#].*$/, '')));
-        if (could.length > 1 || could.some((f) => path.basename(f) === 'package.json' || f.endsWith('.node'))) return this.fail(undefined, undefined, `${label} imports ${spec}, which ${could.map((f) => this.rel(f)).join(', ')} could answer, so patch trust can't tell which one runs. Import it with its extension.`);
+      if (this.ownRules && /^\.{1,2}(\/|$)|^\//.test(spec)) {
+        const want = path.resolve(path.dirname(file), spec.replace(/[?#].*$/, ''));
+        const could = importCandidates(want);
+        // Nothing there: Bun and tsx load x.ts for an import of x.js, and
+        // what's missing now may be any file later (Gemini's review of 165).
+        if (!isFile(want) && could.length === 0) return this.fail(undefined, undefined, `${label} imports ${spec}, which isn't a file in the repo now, so patch trust can't see what it'll load.`);
+        if (could.length > 1 || could.some((f) => path.basename(f) === 'package.json' || f.endsWith('.node')) || (could.length && /\.(m|c)?jsx?$/.test(want))) return this.fail(undefined, undefined, `${label} imports ${spec}, which ${could.map((f) => this.rel(f)).join(', ')} could answer, so patch trust can't tell which one runs. Import it with its extension.`);
       }
       const target = this.o.resolveImport(path.dirname(file), spec);
       // require() runs a file it's given by its exact name as CommonJS,
@@ -1283,18 +1294,76 @@ class Reach {
   }
 
   // The tsconfig.json or jsconfig.json from `dir` up to the repo's top
-  // with `paths` or `baseUrl` in it, or undefined.
+  // that sets `paths` or `baseUrl` (through a local `extends` too), or one
+  // that can't be read as JSON with comments, or undefined. Parsed, so a
+  // `"paths"` key counts (Gemini's review of 165).
   private tsPaths(dir: string): string | undefined {
+    const maps = (f: string, depth: number): boolean => {
+      if (depth > 8) return true;
+      const text = this.reads.read(f)?.toString('utf8');
+      if (text === undefined) return true;
+      let j: { compilerOptions?: Record<string, unknown>; extends?: unknown };
+      try {
+        j = JSON.parse(text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (_m: string, str: string | undefined) => str ?? '').replace(/,(\s*[}\]])/g, '$1'));
+      } catch {
+        return true;
+      }
+      if (j?.compilerOptions && ['paths', 'baseUrl', 'rootDirs'].some((k) => Object.hasOwn(j.compilerOptions!, k))) return true;
+      for (const e of Array.isArray(j?.extends) ? j.extends : j?.extends === undefined ? [] : [j.extends]) {
+        if (typeof e !== 'string') return true;
+        // A package's config is installed code, as packages are.
+        if (!/^\.{0,2}\//.test(e)) continue;
+        const next = [path.resolve(path.dirname(f), e), path.resolve(path.dirname(f), e + '.json')].find(isFile);
+        if (!next || maps(next, depth + 1)) return true;
+      }
+      return false;
+    };
     for (let d = dir; this.inRepo(d); d = path.dirname(d)) {
       for (const n of ['tsconfig.json', 'jsconfig.json']) {
         const f = path.join(d, n);
-        if (!isFile(f)) continue;
-        const text = this.reads.read(f)?.toString('utf8') ?? '';
-        if (/"(paths|baseUrl|extends)"/.test(text)) return f;
+        if (isFile(f) && maps(f, 0)) return f;
       }
       if (d === this.o.top || path.dirname(d) === d) break;
     }
     return undefined;
+  }
+
+  // A bunfig.toml in `ctx`'s folders up to the repo's top that has Bun load
+  // or define anything (a preload, a plugin, a loader, a define), or that
+  // this can't read plainly (a multi-line string, an escape).
+  private bunfigLoads(ctx: Ctx): boolean {
+    return [...ctx.dirs].some((d) => {
+      for (let x = d; this.inRepo(x); x = path.dirname(x)) {
+        const f = path.join(x, 'bunfig.toml');
+        if (isFile(f)) {
+          const text = this.reads.read(f)?.toString('utf8');
+          if (text === undefined || /preload|plugin|loader|define|macro|jsx|tsconfig|conditions|env|"{3}|'{3}|\\u/i.test(text)) return true;
+        }
+        if (x === this.o.top || path.dirname(x) === x) break;
+      }
+      return false;
+    });
+  }
+
+  // A .env file Bun would load from `ctx`'s folders that sets what makes
+  // it or Node load other code, or that this can't read.
+  private envFilesLoad(ctx: Ctx): boolean {
+    const names = ['.env', '.env.local', '.env.development', '.env.production', '.env.test', '.env.development.local', '.env.production.local', '.env.test.local'];
+    return [...ctx.dirs].some((d) => names.some((n) => {
+      const f = path.join(d, n);
+      if (!isFile(f)) return false;
+      // Read for names only, never kept or hashed: a .env holds secrets.
+      let text: string;
+      try {
+        text = fs.readFileSync(f, 'utf8');
+      } catch {
+        return true;
+      }
+      return text.split('\n').some((l) => {
+        const m = /^\s*(?:export\s+)?([^=\s#]+)\s*=/.exec(l);
+        return m !== null && (RISKY_ENV.has(m[1]!) || /^(NODE_OPTIONS|BUN_OPTIONS|BUN_CONFIG_\w+|PATH|NODE_PATH)$/.test(m[1]!));
+      });
+    }));
   }
 
   // `./` and `../` paths anywhere in a file's text, from its folder and the
@@ -1517,9 +1586,9 @@ class Reach {
     const temp = !append && value?.parts.length === 1 && value.parts[0]!.k === 'sub' && PLAIN_MKTEMP.test(value.parts[0]!.src);
     this.dependsOn(name, temp ? { direct: false, names: [], values: [path.join(os.tmpdir(), 'mktemp')] } : vals ? { direct: false, names: [], values: vals } : this.depsOf(value!, ctx));
     if (RISKY_ENV.has(name)) return this.fail(ctx, line, `sets ${name}, which makes other code load, so patch trust can't follow what runs.`);
-    if (this.unfollowableVar(name, ctx, line)) return;
+    if (name !== 'PATH' && name !== 'path' && name !== 'NODE_OPTIONS' && this.unfollowableVar(name, ctx, line)) return;
     // Node strips the quotes round each of its words (`'"--import=x"'`).
-    if (name === 'NODE_OPTIONS' && (!vals || vals.some((v) => LOADING_FLAG.test(v.replace(/["\\]/g, ''))))) return this.fail(ctx, line, 'sets NODE_OPTIONS to load other code, which patch trust can\'t follow.');
+    if (name === 'NODE_OPTIONS' && (append || !vals || vals.some((v) => LOADING_FLAG.test(v.replace(/["\\]/g, '').replace(/(--[^\s=]*)/g, (m) => m.replace(/_/g, '-')))))) return this.fail(ctx, line, 'sets NODE_OPTIONS to load other code, which patch trust can\'t follow.');
     if (name === 'PATH' || name === 'path') {
       // An empty entry is the current folder (a leading or trailing `:`, or
       // `::`), so it's left in to be refused, as `.` is (Codex's review, 7 Nov).
@@ -1558,6 +1627,19 @@ class Reach {
   // Codex's reviews of the Windows port, 18 Nov 2026). And on Windows the
   // ones that turn off Git Bash's rewriting of /c/x to C:\x for a Windows
   // program, after which patch trust reads a path as another file.
+  // A variable set some other way than a plain assignment (`read`, `for`,
+  // `printf -v`, `${X:=...}`, `export 'X=...'`), whose value isn't read:
+  // refused for those that make code load or a name run something else
+  // (Gemini's review of 165), and as unfollowableVar says.
+  private setUnread(full: string, ctx: Ctx, line: number): boolean {
+    const name = full.replace(/\[.*$/s, '');
+    if (RISKY_ENV.has(name) || name === 'NODE_OPTIONS' || name === 'PATH' || name === 'path') {
+      this.fail(ctx, line, `sets ${name} in a way patch trust doesn't read, so it can't tell what runs.`);
+      return true;
+    }
+    return this.unfollowableVar(full, ctx, line);
+  }
+
   private unfollowableVar(full: string, ctx: Ctx, line: number): boolean {
     // HOME[0] is HOME, as $HOME is its first element.
     const name = full.replace(/\[.*$/s, '');
@@ -1584,23 +1666,27 @@ class Reach {
   // Only the literal start counts, as the value can be anything ("HOME=$PWD").
   private quotedAssignment(w: Word, ctx: Ctx, line: number): boolean {
     let text = '';
-    for (const p of w.parts) {
+    let k = 0;
+    for (; k < w.parts.length; k++) {
+      const p = w.parts[k]!;
       if (p.k !== 'lit') break;
       text += p.s;
     }
     const m = /^([A-Za-z_]\w*(?:\[[^\]]*\])?)\+?=/.exec(text);
     // `export 'dest=run.sh'` sets dest all the same (Codex's review of 153).
     if (m) this.setsUnknown(m[1]!.replace(/\[.*$/s, ''), ctx);
-    // And `export 'NODE_OPTIONS=--import=./x.mjs'` loads it all the same
-    // (Gemini's review of 165): what makes code load, or a name run
-    // something else, isn't read through quotes.
-    const set = m?.[1]!.replace(/\[.*$/s, '');
-    if (set && (RISKY_ENV.has(set) || set === 'NODE_OPTIONS' || set === 'PATH' || set === 'path')) {
-      this.fail(ctx, line, `sets ${set} in quotes, which patch trust doesn't read, so it can't tell what runs.`);
-      return true;
+    else if (w.parts.some((p) => p.k !== 'lit')) {
+      this.assignsAny = true;
+      // `export "${x}NODE_OPTIONS=..."`: a name worked out as it runs, which
+      // could be any of the ones below (Gemini's review of 165).
+      if (!text.includes('=') && w.parts.slice(k).some((p) => p.k === 'lit' && p.s.includes('='))) {
+        this.fail(ctx, line, "sets a variable whose name is worked out as it runs, which patch trust can't follow.");
+        return true;
+      }
     }
-    else if (w.parts.some((p) => p.k !== 'lit')) this.assignsAny = true;
-    return m ? this.unfollowableVar(m[1]!, ctx, line) : false;
+    // And `export 'NODE_OPTIONS=--import=./x.mjs'` loads it all the same
+    // (Gemini's review of 165): unfollowableVar refuses those names.
+    return m ? this.setUnread(m[1]!, ctx, line) : false;
   }
 
   // Splits `NAME=value` off a word, or undefined.
@@ -1648,7 +1734,11 @@ class Reach {
     for (const w of [...cmd.words, ...cmd.arrays]) this.subsOf(w, ctx);
     // `${x:=v}` sets x as it expands (Codex's review of 153).
     for (const w of [...cmd.words, ...cmd.arrays, ...cmd.redirs.flatMap((r) => (r.target ? [r.target] : []))]) {
-      for (const p of w.parts) if (p.k === 'var' && /^:?=/.test(p.op)) this.setsUnknown(p.name.replace(/\[.*$/s, ''), ctx);
+      for (const p of w.parts) {
+        if (p.k !== 'var' || !/^:?=/.test(p.op)) continue;
+        this.setsUnknown(p.name.replace(/\[.*$/s, ''), ctx);
+        if (this.setUnread(p.name, ctx, line)) return;
+      }
     }
     // A file redirected into a shell may be what it runs (a flag that
     // makes it read commands from its input, missed below), so it's hashed
@@ -1814,7 +1904,7 @@ class Reach {
       const at = args.findIndex((w) => this.str(w, ctx) === '-v');
       const v = at >= 0 ? args[at + 1] && this.str(args[at + 1]!, ctx) : undefined;
       if (at >= 0 && v === undefined) return this.fail(ctx, line, "sets a variable with printf -v whose name patch trust can't read.");
-      if (v && this.unfollowableVar(v, ctx, line)) return;
+      if (v && this.setUnread(v, ctx, line)) return;
       if (v) this.setsUnknown(v, ctx);
     }
     if (name === 'export' || name === 'local' || name === 'declare' || name === 'typeset' || name === 'readonly' || name === 'integer') {
@@ -1843,7 +1933,7 @@ class Reach {
     }
     if (name === 'for' || name === 'select') {
       const v = a(0);
-      if (v && this.unfollowableVar(v, ctx, line)) return;
+      if (v && this.setUnread(v, ctx, line)) return;
       if (v) {
         this.setsUnknown(v, ctx);
       }
@@ -1852,7 +1942,7 @@ class Reach {
     if (name === 'read' || name === 'getopts' || name === 'mapfile' || name === 'readarray') {
       for (const w of args) {
         const v = this.str(w, ctx);
-        if (v && /^[A-Za-z_]\w*(?:\[.*\])?$/s.test(v) && this.unfollowableVar(v, ctx, line)) return;
+        if (v && /^[A-Za-z_]\w*(?:\[.*\])?$/s.test(v) && this.setUnread(v, ctx, line)) return;
         if (v && /^[A-Za-z_]\w*$/.test(v)) {
           this.setsUnknown(v, ctx);
         }
@@ -2537,8 +2627,11 @@ class Reach {
       while (i < args.length) {
         const f = this.str(args[i], ctx);
         if (f === undefined || !f.startsWith('-')) return true;
-        if (/^(-r|--require|--import|--preload|--loader|-l|-e|--eval|-p|--print|--env-file|--config|-c|--cwd|--tsconfig-override|--conditions|--import-map|--config-file|--location|--inspect[a-z-]*)(=|$)/.test(f)) {
-          this.fail(ctx, line, `runs ${name} with ${f.replace(/=.*$/s, '')}, which can load code or read config patch trust doesn't follow.`);
+        // Only flags known to take no value and load nothing: one that takes
+        // a value would have it read as the script (`bun --user-agent x.ts
+        // check`), and `--define` rewrites the code (Gemini's reviews).
+        if (!BUN_DENO_SAFE_FLAGS.test(f)) {
+          this.fail(ctx, line, `runs ${name} with ${f.replace(/=.*$/s, '')}, which patch trust doesn't follow.`);
           return false;
         }
         i++;
@@ -2547,6 +2640,9 @@ class Reach {
     };
     if (name === 'bun' || name === 'deno') {
       if (!skipFlags()) return;
+      // Bun loads the folder's .env files into its own environment, so one
+      // setting NODE_OPTIONS or BUN_OPTIONS loads code (Gemini's review of 165).
+      if (name === 'bun' && this.ownRules && this.envFilesLoad(ctx)) return this.fail(ctx, line, "runs bun beside a .env file that sets what makes it load other code, which patch trust can't follow.");
       const sub = this.str(args[i], ctx);
       if (sub === undefined) return args[i] ? this.fail(ctx, line, `runs ${name} with a subcommand worked out as it runs, which patch trust can't follow.`) : this.fail(ctx, line, `runs ${name} reading what to run from its input, which patch trust can't follow.`);
       if (name === 'deno') {
@@ -2556,6 +2652,9 @@ class Reach {
           return this.ownRules ? this.fail(ctx, line, `runs \`deno ${sub}\`, which finds what to run by its own rules.`) : undefined;
         }
         i++;
+        if (!skipFlags()) return;
+        // deno.json's imports and import map turn names into files of the repo's.
+        if (this.ownRules && [...ctx.dirs].some((d) => { for (let x = d; this.inRepo(x); x = path.dirname(x)) { if (['deno.json', 'deno.jsonc', 'import_map.json'].some((n) => isFile(path.join(x, n)))) return true; if (x === this.o.top) break; } return false; })) return this.fail(ctx, line, 'runs deno beside a deno.json, whose imports map names to files by their own rules.');
       } else {
         if (['install', 'i', 'add', 'a', 'update', 'link', 'pm'].includes(sub)) return this.lifecycle(ctx, line);
         if (sub === 'x') return this.npx(args.slice(i + 1), ctx, line);
@@ -2569,15 +2668,23 @@ class Reach {
         if (target === undefined) return args[i] ? this.fail(ctx, line, `runs bun with a target worked out as it runs, which patch trust can't follow.`) : undefined;
         if (this.isScriptPath(target, ctx)) {
           // Bun loads bunfig.toml (its preloads) before the script.
-          if (this.ownRules && [...ctx.dirs].some((d) => { for (let x = d; this.inRepo(x); x = path.dirname(x)) { if (isFile(path.join(x, 'bunfig.toml'))) return true; if (x === this.o.top) break; } return false; })) return this.fail(ctx, line, 'runs bun beside a bunfig.toml, whose preloads run first by their own rules.');
+          if (this.ownRules && this.bunfigLoads(ctx)) return this.fail(ctx, line, 'runs bun beside a bunfig.toml, whose preloads run first by their own rules.');
           return this.runFile(target, ctx, line);
         }
         return this.packageScript(target, ctx, line);
       }
     }
     for (; i < args.length; i++) {
-      const s = this.str(args[i], ctx);
-      if (s === undefined) return this.fail(ctx, line, `runs ${name} with a file worked out as it runs, which patch trust can't follow.`);
+      const raw = this.str(args[i], ctx);
+      if (raw === undefined) return this.fail(ctx, line, `runs ${name} with a file worked out as it runs, which patch trust can't follow.`);
+      // Node reads `--env_file` as `--env-file` (Gemini's review of 165).
+      const s = raw.replace(/^(--[^=]*)/, (m) => m.replace(/_/g, '-'));
+      // Short flags run together (`-pe code`): one of them may run code.
+      if (/^-[a-zA-Z]{2,}$/.test(s) && /[eprCi]/.test(s)) return this.fail(ctx, line, `runs ${name} with ${s}, flags run together that may load or run code patch trust doesn't follow.`);
+      // The test runner finds its tests by its own rules, and a reporter is a module it loads.
+      if (/^--test(-reporter|-reporter-destination|-only|-name-pattern|-skip-pattern|-concurrency|-timeout|-shard|-global-setup|-isolation|-force-exit|-update-snapshots|-coverage[\w-]*)?(=|$)/.test(s) && (this.ownRules || /^--test-(reporter|global-setup)(=|$)/.test(s))) return this.fail(ctx, line, `runs ${name}'s test runner (${s.replace(/=.*$/s, '')}), which finds code to run by its own rules, so a hash can't cover it.`);
+      if (this.ownRules && /^(--tsconfig|--project|-P)(=|$)/.test(s)) return this.fail(ctx, line, `runs ${name} with a tsconfig of its own, whose paths patch trust doesn't follow.`);
+      if (/^(--import-map|--config|-c|--define|--watch-path|--experimental-config-file|--experimental-default-config-file)(=|$)/.test(s)) return this.fail(ctx, line, `runs ${name} with ${s.replace(/=.*$/s, '')}, which can load code or config patch trust doesn't follow.`);
       if (s === '--') {
         i++;
         break;
@@ -2764,7 +2871,7 @@ class Reach {
     if (!pkgs) return;
     // One that isn't there runs something by default (npm start runs
     // server.js; pnpm and yarn a package's bin of that name).
-    if (this.o.strict && !pkgs.some(({ pkg }) => typeof pkg?.scripts?.[name] === 'string')) {
+    if (this.ownRules && !pkgs.some(({ pkg }) => typeof pkg?.scripts?.[name] === 'string')) {
       return this.fail(ctx, line, `runs the package script ${name}, which isn't in package.json, so what runs instead is worked out by the package manager.`);
     }
     if (!pkgs.some(({ pkg }) => typeof pkg?.scripts?.[name] === 'string')) {
@@ -2829,6 +2936,9 @@ class Reach {
       const s = this.str(args[i], ctx);
       if (s === undefined) return this.fail(ctx, line, `runs ${tool} with words worked out as it runs, which patch trust can't follow.`);
       if (/^(-w|--workspace|-ws|--workspaces|--filter|-F|-r|--recursive)(=|$)/.test(s)) return this.fail(ctx, line, `runs ${tool} across workspaces (${s}), which patch trust doesn't follow.`);
+      // Config it would read, or code it would load, from what a flag names
+      // (Gemini's review of 165): `--userconfig=rc.txt`, `--node-options`.
+      if (/^--(userconfig|globalconfig|node[-_]options|script[-_]shell|shell|config|rcfile|registry-config|cache|require|import|loader|hooks|pnpmfile|global-pnpmfile|ignore-scripts=false)(=|$)/i.test(s)) return this.fail(ctx, line, `runs ${tool} with ${s.replace(/=.*$/s, '')}, which can make it load code patch trust doesn't follow.`);
       const dirOpt = /^(--prefix|-C|--dir|--cwd)(?:=(.*))?$/.exec(s);
       if (dirOpt) {
         const v = dirOpt[2] ?? this.str(args[++i], ctx);
@@ -2893,8 +3003,11 @@ class Reach {
           this.binDirs = outer;
         }
       }
-      if (s === '-p' || s === '--package') {
-        i++;
+      const pkgOpt = /^(-p|--package)(?:=(.*))?$/.exec(s);
+      if (pkgOpt) {
+        // A package from a folder or file of the repo's runs its bin unread.
+        const v = pkgOpt[2] ?? this.str(args[++i], ctx);
+        if (v === undefined || /^(\.{0,2}\/|file:|~|[a-z]:\\)/i.test(v) || v.includes('/') && !v.startsWith('@')) return this.fail(ctx, line, `runs npx with a package from ${v === undefined ? 'somewhere worked out as it runs' : v.slice(0, 40)}, which patch trust doesn't follow.`);
         continue;
       }
       if (s.startsWith('-')) continue;
@@ -3264,6 +3377,33 @@ export function readsInput(p: string): boolean {
 
 // Whether a shell script's #! passes the shell a flag that has it read
 // commands from somewhere other than the script.
+// Flags bun and deno take that need no value and load nothing more.
+const BUN_DENO_SAFE_FLAGS = /^(--smol|--silent|--bun|--no-install|--prefer-offline|--prefer-latest|--no-clear-screen|--quiet|-q|-A|--allow-all|--allow-(read|write|net|env|run|sys|ffi|hrtime|import)(=[^\s]*)?|--no-prompt|--no-check|--check|--unstable[\w-]*|--no-lock|--no-remote|--cached-only|--no-npm|--no-config|--no-code-cache|--v8-flags=--max-old-space-size=\d+)$/;
+
+// Whether a JavaScript file's #! (without the `#!`) passes its interpreter a
+// flag other than ones that load nothing and change no file it reads.
+const SAFE_JS_FLAGS = /^--(no-warnings|no-deprecation|experimental-strip-types|experimental-transform-types|no-experimental-strip-types|enable-source-maps|disable-warning=[\w-]+|max-old-space-size=\d+|stack-size=\d+|trace-warnings|trace-uncaught|trace-deprecation|unhandled-rejections=[\w-]+|bun|silent|smol)$/;
+function shebangFlagsUnsafe(shebang: string): boolean {
+  const words = shebang.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  if (words[i] && path.basename(words[i]!) === 'env') {
+    i++;
+    while (words[i]?.startsWith('-')) {
+      if (words[i] !== '-S' && words[i] !== '--split-string') return true;
+      i++;
+    }
+  }
+  if (!words[i]) return false;
+  const prog = path.basename(words[i]!);
+  if (!['node', 'nodejs', 'bun', 'tsx', 'deno', 'ts-node'].includes(prog)) return false;
+  for (const w of words.slice(i + 1)) {
+    if (prog === 'deno' && w === 'run') continue;
+    if (!w.startsWith('-')) return true;
+    if (!SAFE_JS_FLAGS.test(w.replace(/^(--[^=]*)/, (m) => m.replace(/_/g, '-')))) return true;
+  }
+  return false;
+}
+
 export function shebangReadsElsewhere(text: string): boolean {
   const m = /^#![ \t]*(\S+)([^\n]*)/.exec(text);
   if (!m) return false;

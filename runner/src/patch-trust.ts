@@ -1026,7 +1026,9 @@ export function patchHash(file: string): PatchHash {
 
 // scanModule for a script a patch's command runs: its problem as words.
 function scriptScan(src: string, file: string): { specifiers: string[]; packages: string[]; strings: string[]; launches?: string; problem?: string } {
-  const { specifiers, packages, strings, problem, launches: at } = scanModule(src, file);
+  const { specifiers, packages, strings, problem: found, launches: at, sloppyThis } = scanModule(src, file);
+  // A script run as CommonJS or plain JS is sloppy unless it says otherwise.
+  const problem = found ?? (sloppyThis !== undefined && !/\.m[jt]s$/.test(file) && !(/\.[jt]sx?$/.test(file) && typeModule(path.dirname(file))) && !/^\s*(#![^\n]*\n\s*)?(\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*['"]use strict['"]/.test(src) ? { kind: 'computed' as const, line: sloppyThis, code: 'this' } : undefined);
   const launches = at ? `line ${at.line} starts other programs itself (\`${at.code}\`), and what it runs isn't followed: it could be read from a file no hash covers. Run them from a shell script instead.` : undefined;
   if (!problem) return { specifiers, packages, strings, ...(launches ? { launches } : {}) };
   return {
@@ -1036,6 +1038,22 @@ function scriptScan(src: string, file: string): { specifiers: string[]; packages
     ...(launches ? { launches } : {}),
     problem: problem.kind === 'parse' ? `can't be read (${problem.code}, line ${problem.line}), so patch trust can't check what it loads.` : `line ${problem.line} loads code by a name worked out as it runs (\`${problem.code}\`), which patch trust can't follow.`,
   };
+}
+
+// Whether the package.json nearest `dir` says "type": "module", so its .js
+// files are ES modules, always strict.
+function typeModule(dir: string): boolean {
+  for (let d = dir; ; d = path.dirname(d)) {
+    const f = path.join(d, 'package.json');
+    if (isFile(f)) {
+      try {
+        return (JSON.parse(fs.readFileSync(f, 'utf8')) as { type?: unknown }).type === 'module';
+      } catch {
+        return false;
+      }
+    }
+    if (path.dirname(d) === d) return false;
+  }
 }
 
 const SCANNED = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx'];
@@ -1066,7 +1084,7 @@ const SCANNED = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx'];
 // cluster import, a package known to wrap them, `Bun`, `Deno`,
 // `process.execve`), which a script's follow can't see past: what it runs
 // may be read from data no hash covers (Daybreak 165).
-export type ModuleScan = { specifiers: string[]; packages: string[]; strings: string[]; data?: string[]; worktree?: string[]; launches?: { line: number; code: string }; problem?: { kind: 'computed' | 'parse'; line: number; code: string } };
+export type ModuleScan = { specifiers: string[]; packages: string[]; strings: string[]; data?: string[]; worktree?: string[]; launches?: { line: number; code: string }; sloppyThis?: number; problem?: { kind: 'computed' | 'parse'; line: number; code: string } };
 
 export function scanModule(src: string, file: string): ModuleScan {
   const ext = path.extname(file);
@@ -1108,7 +1126,10 @@ export function scanModule(src: string, file: string): ModuleScan {
   const named = (spec: AstNode | undefined, at: AstNode) => {
     const value = spec && plainString(spec);
     if (value === undefined) return refuse(at);
-    if (/^\.{1,2}(\/|$)|^\//.test(value)) specifiers.add(value);
+    // Node decodes `%6c` in a relative import's path, so `./%6caunch.mjs`
+    // loads launch.mjs (Gemini's review of 165).
+    if (/^\.{1,2}(\/|$)|^\//.test(value) && value.includes('%')) refuse(at);
+    else if (/^\.{1,2}(\/|$)|^\//.test(value)) specifiers.add(value);
     // A URL's scheme has no case: `DATA:` and `FILE:` are those (Gemini's review).
     else if (/^file:/i.test(value)) {
       try {
@@ -1125,7 +1146,7 @@ export function scanModule(src: string, file: string): ModuleScan {
       packages.add(value);
       const bare = value.replace(/^node:/, '');
       // `import type` is gone before it runs.
-      const typeOnly = at.importKind === 'type' || at.exportKind === 'type';
+      const typeOnly = at.importKind === 'type' || at.exportKind === 'type' || (Array.isArray(at.specifiers) && at.specifiers.length > 0 && at.specifiers.every((x: AstNode) => x.importKind === 'type' || x.exportKind === 'type'));
       if (!typeOnly && LAUNCHER_PACKAGES.has(bare.split('/').slice(0, value.startsWith('@') ? 2 : 1).join('/'))) launch(at);
       // node:process is the `process` object by another name: whole (a
       // default or namespace import, require, import()), it's read by
@@ -1148,9 +1169,13 @@ export function scanModule(src: string, file: string): ModuleScan {
   const handled = new Set<AstNode>();
   // `Reflect.x` members that are called right there: the only use allowed.
   const reflectCalls = new Set<AstNode>();
-  const stack: { node: AstNode; parent?: AstNode; key?: string }[] = [{ node: parsed.program as unknown as AstNode }];
+  // `plain`: inside a function that isn't a method, where `this` in sloppy
+  // mode is globalThis (Gemini's review of 165).
+  let sloppyThis: number | undefined;
+  const stack: { node: AstNode; parent?: AstNode; key?: string; plain?: boolean }[] = [{ node: parsed.program as unknown as AstNode }];
   while (stack.length) {
-    const { node, parent, key } = stack.pop()!;
+    const { node, parent, key, plain } = stack.pop()!;
+    if (node.type === 'ThisExpression' && plain && (sloppyThis === undefined || node.start < sloppyThis)) sloppyThis = node.start;
     if (TYPE_ONLY.has(node.type)) continue;
     const text = plainString(node);
     if (text !== undefined && strings.size < 5000) strings.add(text);
@@ -1206,12 +1231,20 @@ export function scanModule(src: string, file: string): ModuleScan {
           const o = node.object;
           if (o.type === 'MetaProperty' || riskyRef(o)) refuse(node);
         } else if (!handled.has(node) && (LOADER_PROPERTIES.includes(name) || CODE_REACH.includes(name))) refuse(node);
-        if (name === 'execve' || name === 'Bun' || name === 'Deno') launch(node);
+        if ((name === 'execve' || name === 'Bun' || name === 'Deno') && riskyRef(node.object)) launch(node);
+        // `process.mainModule`, `module.children`, `require.main`: a module,
+        // whose own require can then be reached by a worked-out name.
+        if (name !== undefined && WHOLE_MEMBERS.includes(name) && riskyRef(node.object)) refuse(node);
         // `globalThis.process`, `global.globalThis`: the object itself, so
         // as a value it's read as `process` used as one would be.
         if (node.object.type !== 'MetaProperty' && riskyRef(node) && !(parent?.type === 'MemberExpression' && key === 'object') && parent?.type !== 'UnaryExpression') refuse(node);
         break;
       }
+      // `import.meta` handed on whole: Bun's has a require (Gemini's
+      // review of 165). Its plain members (`.url`, `.dirname`) are fine.
+      case 'MetaProperty':
+        if (node.meta?.name === 'import' && !(parent?.type === 'MemberExpression' && key === 'object' && !parent.computed)) refuse(node);
+        break;
       // `const { eval: run } = globalThis`, `{ constructor: F } = f`: a
       // pattern's key reads that property, though it isn't a reference
       // (Daybreak 154). A worked-out key could read any of them.
@@ -1225,6 +1258,7 @@ export function scanModule(src: string, file: string): ModuleScan {
           const read = name ?? plainString(node.key);
           if (read !== undefined && (LOADER_PROPERTIES.includes(read) || CODE_REACH.includes(read) || LOADER_NAMES.includes(read))) refuse(node);
           if (read === 'execve' || read === 'Bun' || read === 'Deno') launch(node);
+          if (read !== undefined && PROCESS_WHOLE.includes(read)) refuse(node);
         }
         break;
     }
@@ -1246,15 +1280,20 @@ export function scanModule(src: string, file: string): ModuleScan {
         if (named === 'execve' || named === 'Bun' || named === 'Deno') launch(node);
       }
     }
+    // A function's own `this`: a method's is its object, a plain one's may
+    // be globalThis; an arrow's is the one around it.
+    const method = parent?.type === 'MethodDefinition' || (parent?.type === 'Property' && (parent.method || parent.kind !== 'init'));
+    const inner = node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' ? !method : node.type === 'PropertyDefinition' || node.type === 'StaticBlock' || node.type === 'ClassBody' ? false : plain;
     for (const k of Object.keys(node)) {
       if (TYPE_KEYS.has(k)) continue;
       const v = node[k];
       for (const child of Array.isArray(v) ? v : [v]) {
-        if (child && typeof child === 'object' && typeof child.type === 'string') stack.push({ node: child as AstNode, parent: node, key: k });
+        if (child && typeof child === 'object' && typeof child.type === 'string') stack.push({ node: child as AstNode, parent: node, key: k, plain: inner });
       }
     }
   }
   return {
+    ...(sloppyThis !== undefined ? { sloppyThis: lineAt(sloppyThis) } : {}),
     specifiers: [...specifiers],
     packages: [...packages],
     strings: [...strings],
@@ -1274,6 +1313,8 @@ const LOADER_NAMES = ['require', 'eval', 'Function', 'createRequire', 'getBuilti
 const LOADER_PROPERTIES = ['require', 'createRequire', 'getBuiltinModule', 'dlopen', '_load', 'binding', '_linkedBinding', 'loadExtension'];
 // What on `process` hands out a module, and so a loader, by its own names.
 const PROCESS_WHOLE = ['mainModule', 'moduleLoadList'];
+// Members of process, module and require that hand out a module.
+const WHOLE_MEMBERS = [...PROCESS_WHOLE, 'children', 'parent', 'main', 'cache', '_cache'];
 // What reaches code made from a string or bytes without a loader's name
 // (Daybreak 154, 21 Nov 2026): `eval` and `Function` as properties
 // (`globalThis.eval`), any function's `constructor` (`(() => {}).constructor`
@@ -1298,7 +1339,7 @@ const CODE_REACH = [
 // workers, and inspector and repl, which evaluate what they're sent.
 const LOADER_MODULES = [
   'module', 'node:module', 'vm', 'node:vm', 'worker_threads', 'node:worker_threads', 'inspector', 'node:inspector',
-  'inspector/promises', 'node:inspector/promises', 'repl', 'node:repl', 'node:test', 'test',
+  'inspector/promises', 'node:inspector/promises', 'repl', 'node:repl', 'node:test', 'test', 'sqlite', 'node:sqlite',
 ];
 // Modules that start other programs (ModuleScan.launches): Node's own, and
 // the packages most used to wrap them. Any installed package could, and

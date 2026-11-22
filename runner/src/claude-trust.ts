@@ -590,7 +590,7 @@ function reachedFiles(parts: Record<string, unknown>, dir: string, sources: stri
   // Node or Bun loads.
   const resolveImport = (from: string, spec: string) => {
     const want = path.resolve(from, spec.replace(/[?#].*$/, ''));
-    if (/^\.{0,2}\//.test(spec) && !isFile(want)) {
+    if (/^\.{1,2}(\/|$)|^\//.test(spec) && !isFile(want)) {
       const could = [...['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx', '.json', '.node'].map((e) => want + e), ...['.ts', '.js', '.mjs', '.cjs', '.json', '.node'].map((e) => path.join(want, `index${e}`)), path.join(want, 'package.json')].filter(isFile);
       if (could.length > 1 || could.some((f) => path.basename(f) === 'package.json')) problem ??= `${path.relative(base.folder, from) || '.'} imports ${spec}, which ${could.length} files could answer (${could.map((f) => path.basename(f)).join(', ')}), so Threadbear can't tell which one runs. Import it with its extension.`;
     }

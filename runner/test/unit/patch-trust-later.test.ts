@@ -1173,3 +1173,69 @@ test('Daybreak 165 reviews: a check that runs JavaScript it never reads is unfol
   assert.ok(checkDigest('npx tsx check.ts', paths).problem ?? checkDigest('bun check.ts', paths).problem, 'tsconfig paths');
   assert.ok(checkDigest('bun check.ts', paths).problem, 'tsconfig paths under bun');
 });
+
+test('Daybreak 165 review 2: more launches and unread JavaScript, each unfollowable', () => {
+  const launch = "import { execSync } from 'node:child_process';\nexecSync('x');\n";
+  const read = "const cmd = require('node:fs').readFileSync('payload.txt', 'utf8');\n";
+  const dir = repo({
+    'payload.txt': 'echo safe\n', 'pure.mjs': '1;\n', 'pure.ts': '1;\n', 'launch.mjs': launch, 'launch.ts': launch, 'launch.cjs': "require('node:child_process').execSync('x');\n",
+    'this.cjs': read + "const g = (function () { return this; })();\ng['pro' + 'cess']['getBuiltin' + 'Module']('child_' + 'process').execSync(cmd);\n",
+    'main.cjs': read + "process.mainModule['req' + 'uire']('child_' + 'process').execSync(cmd);\n",
+    'kids.cjs': read + "module.children[0]['req' + 'uire']('child_' + 'process');\n",
+    'reqmain.cjs': read + "require.main['req' + 'uire']('child_' + 'process');\n",
+    'meta.ts': "const m = import.meta;\nm['req' + 'uire']('child_' + 'process');\n",
+    'sqlite.mjs': "import { DatabaseSync } from 'node:sqlite';\nconst db = new DatabaseSync(':memory:', { allowExtension: true });\ndb['load' + 'Extension']('./ext');\n",
+    'pct.mjs': "import './%6caunch.mjs';\n",
+    'dot/check.cjs': "require('.');\n", 'dot/package.json': '{ "main": "./launch.cjs" }', 'dot/launch.cjs': "require('node:child_process').execSync('x');\n",
+    'remap.ts': "import './launch.js';\n",
+    'missing.mjs': "import './later.mjs';\n",
+    'shebang.mjs': '#!/usr/bin/env -S node --env-file=.env\n1;\n',
+    'env.txt': '--import=./launch.mjs\n',
+    'package.json': '{ "name": "app", "scripts": { "check": "node pure.mjs" } }',
+    'test/a.test.mjs': launch,
+  });
+  const checks = [
+    'node this.cjs', 'node main.cjs', 'node kids.cjs', 'node reqmain.cjs', 'bun meta.ts', 'node sqlite.mjs', 'node pct.mjs',
+    'node dot/check.cjs', 'bun remap.ts', 'node missing.mjs', './shebang.mjs',
+    'read NODE_OPTIONS < env.txt; export NODE_OPTIONS; node pure.mjs',
+    'export "${x}NODE_OPTIONS=--import=./launch.mjs"; node pure.mjs',
+    'NODE_OPTIONS=--imp; NODE_OPTIONS+="ort=./launch.mjs"; export NODE_OPTIONS; node pure.mjs',
+    'for NODE_OPTIONS in --import=./launch.mjs; do export NODE_OPTIONS; node pure.mjs; done',
+    ': "${NODE_OPTIONS:=--import=./launch.mjs}"; export NODE_OPTIONS; node pure.mjs',
+    'printf -v NODE_OPTIONS %s --import=./launch.mjs; export NODE_OPTIONS; node pure.mjs',
+    `node -pe "/x/,require('child_process').execSync('x')"`,
+    'node --env_file=.env pure.mjs',
+    'node --test pure.mjs test',
+    'node --test-reporter=./launch.mjs pure.mjs',
+    'bun --user-agent pure.ts check',
+    'bun --define=GO=Bun.spawnSync ./pure.ts',
+    'npm start',
+    'npm --userconfig=rc.txt run check',
+    'npm --node-options=--import=./launch.mjs run check',
+    'npx -p ./local-pkg go',
+    'tsx --tsconfig custom.json pure.ts',
+  ];
+  for (const check of checks) assert.ok(checkDigest(check, dir).problem, check);
+  const bunEnv = repo({ 'package.json': '{ "scripts": { "check": "node pure.mjs" } }', 'pure.mjs': '1;\n', 'pure.ts': '1;\n', '.env': 'NODE_OPTIONS=--import=./launch.mjs\n' });
+  assert.ok(checkDigest('bun run check', bunEnv).problem, 'bun run beside a .env');
+  assert.ok(checkDigest('bun ./pure.ts', bunEnv).problem, 'bun beside a .env');
+  const tsEscaped = repo({ 'check.ts': "import 'x';\n", 'tsconfig.json': '{"compilerOptions":{"\\u0070aths":{"x":["./launch.ts"]}}}' });
+  assert.ok(checkDigest('bun ./check.ts', tsEscaped).problem, 'tsconfig paths spelled with an escape');
+  const tsExtends = repo({ 'check.ts': "import 'fs/evil';\n", 'tsconfig.json': '{"extends":"./base.json"}', 'base.json': '{"compilerOptions":{"paths":{"fs/evil":["./launch.ts"]}}}' });
+  assert.ok(checkDigest('bun ./check.ts', tsExtends).problem, 'tsconfig paths through extends, under a builtin-looking name');
+  const deno = repo({ 'check.ts': "import 'x';\n", 'deno.json': '{"imports":{"x":"./launch.ts"}}' });
+  assert.ok(checkDigest('deno run -A check.ts', deno).problem, 'deno.json imports');
+  assert.ok(checkDigest('deno run --import-map=map.json check.ts', repo({ 'check.ts': '1;\n' })).problem, 'deno --import-map');
+
+  // And what stays followable: an ordinary bunfig, a .env without those
+  // names, a tsconfig without paths, ESM `this`, methods, an unset PATH,
+  // a plain #!, inline type imports, other objects' Bun or parent.
+  const fine = repo({
+    'bunfig.toml': '[install]\nexact = true\n', '.env': 'API_URL=https://example.com\n', 'tsconfig.json': '{ "extends": "@tsconfig/node22/tsconfig.json", "compilerOptions": { "strict": true } }',
+    'a.ts': "import { type ChildProcess } from 'node:child_process';\nimport yaml from 'yaml';\nlet c: ChildProcess | undefined;\nconst o = { Bun: 1, parent: 2, f() { return this; } };\nclass K { m() { return this; } }\nconsole.log(c, yaml, o.Bun, o.parent, new K(), import.meta.url, import.meta.dirname);\n",
+    'b.mjs': "function f() { return this; }\nconsole.log(f());\n",
+    'c.cjs': "'use strict';\nfunction f() { return this; }\nconsole.log(f());\n",
+    'run.mjs': '#!/usr/bin/env -S node --no-warnings\n1;\n',
+  });
+  for (const check of ['bun ./a.ts', 'node b.mjs', 'node c.cjs', './run.mjs', 'unset PATH NODE_OPTIONS; node b.mjs', 'bun --smol ./a.ts']) assert.equal(checkDigest(check, fine).problem, undefined, check);
+});

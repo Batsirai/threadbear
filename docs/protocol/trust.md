@@ -389,10 +389,26 @@ import beside a `tsconfig.json` or `jsconfig.json` with `paths`,
 `baseUrl` or `extends`. Everywhere: `bun` with a flag that loads code or
 reads a config (`--preload`, `-r`, `--config`, `--cwd`), `node --run x`
 followed as package.json's script `x`, and `NODE_OPTIONS`, `BUN_OPTIONS`
-or `PATH` set in quotes (`export 'NODE_OPTIONS=...'`) or with a loading
-flag in quotes. `node:process` imported whole, `globalThis.process` as a
-value, and `node:sqlite`'s `loadExtension` count as loading code by a
-name worked out as it runs (below). A
+or `PATH` set in quotes (`export 'NODE_OPTIONS=...'`), with a loading
+flag in quotes, by `+=`, or any way but a plain assignment (`read`,
+`for`, `printf -v`, `${X:=...}`), a variable whose name is worked out as
+it runs (`export "${x}NAME=..."`), `bun` or `deno` with a flag not known
+to load nothing, `node` with short flags run together (`-pe`), a test
+reporter or `--define`, Node's `--env_file` spellings, `npm` with
+`--userconfig`, `--node-options` or `--script-shell`, `npx -p` from a
+folder, a JavaScript file run by a `#!` with flags beyond a few known to
+load nothing, and a relative import with `%` in it. For checks and hooks,
+also `--tsconfig`, a `deno.json`, a `bunfig.toml` that preloads or
+defines, a `.env` beside `bun` that sets `NODE_OPTIONS` or the like (read
+for the names only, never kept), `npm start` with no start script, an
+import of a file that isn't there (Bun and tsx load `x.ts` for `./x.js`),
+and `this` in a plain function of a script that isn't an ES module
+(globalThis, in sloppy mode). `node:process` imported whole,
+`globalThis.process` as a value, `process.mainModule`, `module.children`,
+`module.parent`, `require.main` and `require.cache`, `import.meta` handed
+on whole, and `node:sqlite` count as loading code by a name worked out as
+it runs (below). What a JavaScript script writes with `fs` isn't tracked
+(a check that writes a file it then imports), as before. A
 command in a variable or a pattern (`$CMD`,
 `"$f"` in a loop, `./s/*.sh`), `source "$1"`, relative paths after a
 `cd` to somewhere worked out as it runs, `npm run "$x"`, `npx "$x"`,
