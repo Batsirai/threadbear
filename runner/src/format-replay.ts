@@ -384,7 +384,7 @@ export class TreeFormatter {
         const target = path.join(work, c);
         // Not under a link the tree has for a folder on the way, either.
         if (!realFoldersTo(work, c)) return { tree, failed: `${c} is under a link in this tree, so it wasn't formatted` };
-        fs.rmSync(target, { force: true, recursive: true });
+        removeEntry(target, true);
         const blob = await gitBuffer(this.cwd, `${f.commit}:${c}`);
         if (blob) {
           fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -393,7 +393,7 @@ export class TreeFormatter {
       }
       const ran = await runCommand(f.entry.command, work, this.limitMs);
       // Config files go back to the tree's own, so only formatting is read.
-      for (const c of f.entry.config) fs.rmSync(path.join(work, c), { force: true });
+      for (const c of f.entry.config) removeEntry(path.join(work, c), false);
       const back = f.entry.config.filter((c) => inTree.has(c));
       if (back.length) await stdinGit(this.cwd, [attr, 'checkout-index', '-f', '-u', '-z', '--stdin', `--prefix=${work}/`], back.join('\0'), env);
       if (f.entry.adds) {
@@ -447,6 +447,36 @@ function realFoldersTo(root: string, rel: string): boolean {
     }
   }
   return true;
+}
+
+// Whatever is at a path gone, a link itself rather than through it, as
+// fs.rmSync with force would (recursive only where asked). On Node 24.11
+// fs.rmSync returns without error and leaves a link whose target is missing,
+// so writing the config there failed with EEXIST and a fork's runner couldn't
+// update (Crispaul Obana, 21 Nov).
+function removeEntry(file: string, recursive: boolean): void {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(file);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return;
+    throw e;
+  }
+  if (!st.isSymbolicLink()) return fs.rmSync(file, { force: true, recursive });
+  try {
+    fs.unlinkSync(file);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return;
+    // A link to a folder on Windows refuses unlink and goes with rmdir.
+    if (process.platform !== 'win32' || code !== 'EPERM') throw e;
+    try {
+      fs.rmdirSync(file);
+    } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code !== 'ENOENT') throw e2;
+    }
+  }
 }
 
 function rmQuietly(dir: string): void {
