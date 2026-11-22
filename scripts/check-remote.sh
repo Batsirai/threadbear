@@ -22,7 +22,8 @@
 # them) into ~/.cache/threadbear-check/runs/<id> there, runs check.sh on
 # it, and deletes it. What's kept there between runs is only what makes
 # the next run quick: node_modules per lockfile, the Swift build folders,
-# and a mirror of each checkout that sends to it (mirror/<key>), so a run
+# check.sh's pass records (passes/), and a mirror of each checkout that
+# sends to it (mirror/<key>), so a run
 # sends only what changed since that checkout's last, compressed: a whole
 # copy is 17 MB, and on a congested link (6 Nov) that took minutes. Each
 # run's copy is made from the mirror there. Delete ~/.cache/threadbear-check
@@ -276,10 +277,14 @@ if [ "${1:-}" = "--on-host" ]; then
   fi
 
   cd "$src" || exit 1
+  # check.sh's pass records (scripts/check-cache.mjs) are this host's own,
+  # kept here between runs with the rest of what makes the next run quick:
+  # not in ~/Library/Caches/Threadbear, which would look like an install on
+  # the Mac Mike tries clean installs on, and the same on Linux.
   # Under a limit of its own as well: this Mac giving up on it (a dropped
   # connection, its MAX_SECS) doesn't stop it here, and it holds this host's
   # lock while it runs (Codex's review). Its Swift steps have shorter ones.
-  THREADBEAR_CHECK_CHANGED_FILE="$src/.check-changed" THREADBEAR_NODE="$NODE" \
+  THREADBEAR_CHECK_PASSES="$base/passes" THREADBEAR_CHECK_CHANGED_FILE="$src/.check-changed" THREADBEAR_NODE="$NODE" \
     "$NODE" "$src/scripts/limit-step.mjs" --silence 3600 --total "${THREADBEAR_CHECK_HOST_MAX_SECS:-7200}" -- ./check.sh --local "$@"
   code=$?
   # limit-step's 124 is what this Mac takes for a host that dropped out, which

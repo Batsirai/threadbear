@@ -415,6 +415,9 @@ export type LandOptions = {
   // The CLI's: on SIGTERM, SIGINT or SIGHUP while waiting for the landing
   // lock, leave the line, say so, and exit (land, `stopped`).
   sayWhenStopped?: boolean;
+  // `tb land --full`: the whole check again, reading none of check.sh's pass
+  // records (THREADBEAR_CHECK_FRESH), for a pass a record shouldn't vouch for.
+  full?: boolean;
   // Called once it holds the landing lock (the CLI's worker stops listening
   // for its follower then: land-detach.ts). False: the tb that was run has
   // gone meanwhile, so it stops before its check, out of the line.
@@ -1473,10 +1476,13 @@ async function findBroken(a: {
     // check-remote.sh stops at THREADBEAR_CHECK_MAX_SECS by itself, its wait
     // in the host's line included, and tidies up there; the limit on
     // runCheck is for when that didn't happen, and for other checks.
+    // Fresh (check.sh reads no pass records): these runs are to see what
+    // fails now, so a file is blamed or cleared by running it.
     const r = await runCheck(a.check, dir, a.shell, {
       ...(a.host ? { THREADBEAR_CHECK_HOST: a.host } : a.env),
       THREADBEAR_CHECK_ONLY: only,
       THREADBEAR_CHECK_HOST_ONLY: '1',
+      THREADBEAR_CHECK_FRESH: '1',
       THREADBEAR_CHECK_MAX_SECS: String(Math.ceil(forMs / 1000)),
       ...extra,
     }, forMs + landLimits.aloneGraceMs);
@@ -1801,7 +1807,7 @@ async function landLocked(
       // asked for a host, so check.sh never takes the holder's own (an empty
       // one would run everyone's check on this Mac; Codex's second review).
       const groupEnv: NodeJS.ProcessEnv = group.length ? { THREADBEAR_CHECK_GROUP: '1', ...(prefer ? { THREADBEAR_CHECK_PREFER: prefer } : {}) } : {};
-      const r = await runCheck(check, t.path, opts.shell, groupEnv);
+      const r = await runCheck(check, t.path, opts.shell, { ...groupEnv, ...(opts.full ? { THREADBEAR_CHECK_FRESH: '1' } : {}) });
       setRunning(common, undefined);
       // Whether the check ran on the commit it's logged for: asked before the
       // line is written, as the runner's updater takes a passing line as
@@ -2325,6 +2331,7 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extra
     if (!extraEnv.THREADBEAR_CHECK_PREFER) delete env.THREADBEAR_CHECK_PREFER;
     if (!extraEnv.THREADBEAR_CHECK_GROUP) delete env.THREADBEAR_CHECK_GROUP;
     if (!extraEnv.THREADBEAR_CHECK_ONLY) delete env.THREADBEAR_CHECK_ONLY;
+    if (!extraEnv.THREADBEAR_CHECK_FRESH) delete env.THREADBEAR_CHECK_FRESH;
     if (!extraEnv.THREADBEAR_CHECK_HOST_ONLY) delete env.THREADBEAR_CHECK_HOST_ONLY;
     env.THREADBEAR_CHECK_BUSY_EXIT = extraEnv.THREADBEAR_CHECK_BUSY_EXIT ?? String(CHECK_HOSTS_UNAVAILABLE);
     if (!extraEnv.THREADBEAR_CHECK_MAX_SECS && limitMs !== undefined) delete env.THREADBEAR_CHECK_MAX_SECS;

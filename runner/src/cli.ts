@@ -150,7 +150,7 @@ const HELP = `tb: talk to the Threadbear runner
   tb models try <job> "text" [--labels a,b] [--field name=description]... [--system S] [--cwd DIR]
                                   one call by hand: classify (--labels), extract (--field),
                                   summarize or generate. It spends like any other
-  tb land [--dry-run] [--despite-red] [--allow-format <id>]
+  tb land [--dry-run] [--despite-red] [--allow-format <id>] [--full]
                                   in a thread's own worktree: rebase its branch on main, run
                                   the repo's check, then move main to it (and push it, only in a
                                   repo listed in runner.json's pushAfterLanding);
@@ -159,7 +159,9 @@ const HELP = `tb: talk to the Threadbear runner
                                   would run for while it's red on main; --despite-red
                                   lands anyway, for the fix; a branch changing a format command
                                   in .git-blame-ignore-revs or a config file one runs with lands
-                                  only with the --allow-format id it shows for exactly those
+                                  only with the --allow-format id it shows for exactly those.
+                                  --full runs every step, even those that passed before with
+                                  the same files
   tb runner add <name> (--ssh <host> | --out <file>) [--id <runnerId>]
                                   on the main Mac: a backend key for another runner that acts
                                   as that runner alone, written over ssh into its
@@ -224,7 +226,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   activity: ['since', 'thread', 'summary', 'json'],
   export: ['out'],
   rpc: [],
-  land: ['dry-run', 'despite-red', 'allow-format'],
+  land: ['dry-run', 'despite-red', 'allow-format', 'full'],
   runner: ['ssh', 'out', 'id', 'json', 'finish', 'replace', 'drop', 'snapshot', 'keys-checked', 'lock-out', 'purge'],
 };
 
@@ -294,7 +296,7 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === 'land') {
     const worker = landWorker();
     if (!worker && detachable()) return landInBackground(argv);
-    return landCommand(cfg, Boolean(values['dry-run']), Boolean(values['despite-red']), worker?.onLocked, typeof values['allow-format'] === 'string' ? values['allow-format'] : undefined);
+    return landCommand(cfg, Boolean(values['dry-run']), Boolean(values['despite-red']), worker?.onLocked, typeof values['allow-format'] === 'string' ? values['allow-format'] : undefined, Boolean(values.full));
   }
   // tb runner uses this Mac's keys straight from disk, so the runner never
   // sees them to refuse them (tb-connect.ts).
@@ -350,7 +352,7 @@ type Flags = Record<string, string | boolean | string[] | undefined>;
 // worktrees of their own with its THREADBEAR_THREAD_ID, and went for the
 // parent's (GPUI port thread, 11 Nov). The check is the one in that
 // worktree's own patch, so a branch that changes it lands under its own.
-async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, despiteRed = false, onLocked?: () => boolean, allowFormat?: string): Promise<number> {
+async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, despiteRed = false, onLocked?: () => boolean, allowFormat?: string, full = false): Promise<number> {
   const here = process.cwd();
   let target: Omit<LandTarget, 'check'> | undefined;
   let from = here;
@@ -399,6 +401,8 @@ async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, 
     // A workflow red on main holds what it would run for (land-gate.ts).
     despiteRed,
     ...(allowFormat ? { allowFormat } : {}),
+    // The whole check, no step skipped for having passed before.
+    full,
     hold: (root, files) => { const dir = gateCacheDir(root); return landHold(root, files, (line) => console.log(line), gh, dir ? { dir } : undefined); },
     // Main goes to GitHub once it has landed, on the owner's Mac only.
     push: !dryRun && pushAfterLanding(cfg.home, target.mainCheckout),

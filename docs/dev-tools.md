@@ -271,7 +271,7 @@ rest, and `tb <command> --help` explains one.
   than stopping the live runner's CLIs it names. `--home` on a folder
   holding a thread whose folder isn't under `$TMPDIR` is refused.
   `test/unit/real-copy.test.ts` covers it.
-- `./check.sh [--quick | --app] [--e2e] [--shots DIR] [--only STEPS]` at the repo root:
+- `./check.sh [--quick | --app] [--all] [--fresh] [--e2e] [--shots DIR] [--only STEPS]` at the repo root:
   runner typecheck, unit tests and deploy tests, app `swift build` and
   `swift test` (with the mock runner's packages installed and its tests
   required). `--app` is the app's part alone. `--e2e`
@@ -281,7 +281,11 @@ rest, and `tb <command> --help` explains one.
   run ends with the `./check.sh --only` that runs what failed again, which `tb land`
   uses to find the landing that broke a group
   (docs/thread-worktrees.md, "Finding who broke a group"). One line per step, nonzero exit if
-  anything failed, on the Node `runner/scripts/find-node.sh` picks.
+  anything failed, on the Node `runner/scripts/find-node.sh` picks. A step
+  or runner test file that passed in the last week with the same inputs is
+  skipped, its ok line saying when (docs/thread-worktrees.md, "What passed
+  before is skipped"); `--fresh` (`tb land --full`) and `--all` read no
+  records.
   Unit tests preload `runner/test/helpers/clean-env.ts`: each process gets
   a temporary HOME and XDG folders, and inherited account/data overrides
   are cleared. `private-home.ts` rejects reads of real Claude, Codex,

@@ -324,6 +324,15 @@ File references are where to look.
   `shared-1/target` beside it, one warm target for every worktree, a few
   GB, holding `shared-1.lock` while it builds. Delete the folder to get the
   space back; the next check builds it again from cold.
+  Every check (`./check.sh`, only in a checkout of Threadbear itself) keeps
+  pass records in `~/Library/Caches/Threadbear/check-passes` on a Mac, or
+  `~/.cache/threadbear/check-passes` (`$XDG_CACHE_HOME`) elsewhere: one
+  small file per step or runner test file that passed, named by a hash of
+  the files it read and holding when it passed, so the next check skips it
+  (`scripts/check-cache.mjs`). Each is deleted after a week. Off with
+  `"checkPasses": false` in runner.json or `THREADBEAR_CHECK_PASSES=off`
+  (for runs on a check host too); a check host keeps its own in
+  `~/.cache/threadbear-check/passes` there.
 - **Borrowed worktrees** (`runner/src/borrows.ts`): `borrow-worktree.sh`
   writes a small `threadbear-borrow` file in the borrowed worktree's git
   folder (the borrowing thread's id, a process id for a script's borrow,

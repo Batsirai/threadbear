@@ -470,6 +470,91 @@ Each of those runs leaves a line in the times log with `alone: true`,
 `only` and `passed`, and none of `ok`, `check` and `intact`, so nothing that
 reads the log for whole checks counts one.
 
+### What passed before is skipped
+
+On a Mac with no check host every landing's check ran from scratch: 20 to
+25 minutes, mostly the runner's unit tests (Ville, 21 Nov 2026: "Keep track
+of changes and only run the deltas"). So check.sh records each step, and
+each runner unit test file, that passes, under a key made from what it
+read (`scripts/check-cache.mjs`), and skips it while that key has a pass
+from the last week. The line says ok, as it passed, and why it took no time:
+
+```
+ok    web tests               0s  (skipped: passed with the same inputs 21 Nov 17:04 on thread/4f12cc1e)
+ok    runner unit tests      94s  (skipped 301 test files that passed with what they read now)
+```
+
+- The key is what the files hold and their modes (git's blob ids, and
+  whether each is executable or a link), never a commit, so a
+  pass counts in every worktree and in `tb land`'s own checkout, after a
+  rebase, and after a release comes in. A rebase that changes nothing
+  reruns nothing; a release reruns what its files reach. It holds Node's
+  version and the system too, so a pass on Linux never counts on a Mac.
+- A step's key holds the files it reads (a table in check-cache.mjs, a
+  superset of what check.sh looks at to run it; a step not in it reads
+  everything), its command line and its tool's version (cargo and rustc,
+  swift, npm). The TypeScript checks and lint read every code file, as
+  tsc follows imports out of runner/ and lint's type-aware rules read what
+  a file imports.
+- A test file's key holds its imports, followed all the way, and what the
+  code it reaches reads at run time: a folder or file beside it
+  (`path.join(import.meta.dirname, 'experiments')`), a script it starts
+  from there and that script's imports, a whole path it names, and the
+  `package.json` above each module. From the tests' side (tests, their
+  helpers, the scripts they run) every name counts, joined paths
+  (`path.join(ROOT, 'docs', 'protocol')`), the folders a test goes through
+  by name, bare names in a script's loop, and the names in data a test
+  reads (AGENTS.md's). A test that runs a command in the checkout itself
+  (`git grep` with `cwd: REPO`) reads everything. Comment lines, and
+  another test file named, don't count. Every key also holds the runner's
+  packages and lockfile, the test helpers every file loads, git's and npm's
+  settings files, check.sh and check-cache.mjs: changing the check reruns
+  everything. `import type` doesn't count: Node strips it, and the
+  typecheck covers it.
+- On 22 Nov every test file was run under strace on Linux and what each
+  opened compared with its key; the rules above are what that found
+  missing, and check-cache.test.ts keeps each one. A test that reads a
+  file by a name it builds some other way is still missed: say so in the
+  test, with the whole path in a string, or the check skips it after a
+  change to that file. A record past a week doesn't count, GitHub runs
+  everything on main, and `tb land --full` asks for a check that reads no
+  records.
+- In a fork, a test file whose every file, the check's and the test
+  helpers' included, is byte for byte as in Mike's newest release already
+  in HEAD (`refs/threadbear/upstream/<date>`, whose signature the runner
+  checked; never a `release/` tag, which anyone can make) is skipped as
+  passed there: his main takes commits only through his check. Never in
+  Mike's own copy (origin is mikecann/threadbear) or one with no origin;
+  `THREADBEAR_CHECK_TRUST_RELEASE=off` turns it off.
+- A failed run still records the files that passed, so the next check runs
+  the ones that failed and whatever changed since, with no `--only`. A
+  file with a test that skipped itself (no esbuild, not a Mac) isn't
+  recorded, as why it skipped isn't in its key, and nothing is recorded
+  under a key whose files changed while it ran (a test run with
+  `UPDATE_CONTEXT_BUDGET=1` rewrites what it checks).
+- `--all` reads no records (it still writes them). Nor does `--fresh`,
+  which runs no more than the check would otherwise: `tb land --full` asks
+  for it (`THREADBEAR_CHECK_FRESH=1`), and so do the runs that look for who
+  broke a group (above), which must see what fails now. GitHub's runs
+  (`GITHUB_ACTIONS`) keep none.
+- The records are each machine's own: `~/Library/Caches/Threadbear/check-passes`
+  on a Mac, `~/.cache/threadbear/check-passes` elsewhere, shared by every
+  checkout, and on a check host `~/.cache/threadbear-check/passes`, kept
+  between runs. `THREADBEAR_CHECK_PASSES` names another folder or says
+  `off`; `"checkPasses": false` in runner.json turns them off, on the check
+  host too (check.sh sends `--no-records` with the run). A run with a
+  `THREADBEAR_HOME` of its own (a test's) keeps none unless it names a
+  folder, and no test file inherits the folder a check names.
+
+The runner's code imports itself densely (a test file reaches about 280
+files on median), so a change to `runner/src` still reruns about two
+thirds of the test files, and one to `convex/` most of them. A change to
+desktop/, features/ or the site reruns a few dozen, mostly the tooling
+tests whose scripts name those folders. This took the place of
+`runner/test/tooling-tests.mjs`, which left the slow tooling tests out of
+`--quick` when nothing they read changed: a pass record covers that, once
+each has passed with those files on that machine.
+
 ### Where a landing's time goes
 
 A passing check prints nothing of its own, so each one leaves a line in

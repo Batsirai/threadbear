@@ -111,10 +111,12 @@ gone from your fork, not just quiet.
   (Mike's says 10, as his threads land all day).
 - With no check host, `tb land`'s check runs on your Mac. Its Rust builds
   share one warm target in `~/.cache/threadbear-check/local-builds` rather
-  than starting cold in each worktree, and `--quick` leaves out the slow
-  tests of the dev tooling (check hosts, landing, the build locks) when
-  nothing they read changed (`runner/test/tooling-tests.mjs`); GitHub's CI
-  still runs them all on Mike's main. Its cargo is rustup's, so clippy is
+  than starting cold in each worktree, and every check skips the steps and
+  runner test files that passed in the last week with exactly what they
+  read now (docs/thread-worktrees.md, "What passed before is skipped"), so
+  a retry runs only what failed and what changed; GitHub's CI still runs
+  them all on Mike's main. In a fork a test file whose every file is as in
+  Mike's newest release counts as passed there. Its cargo is rustup's, so clippy is
   the version `rust-toolchain.toml` pins: Homebrew's cargo ignores the pin
   and a newer clippy fails code nobody changed, so install rustup.
 
