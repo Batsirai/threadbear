@@ -297,6 +297,9 @@ export type Turn = {
   // approval). There's no user.message.
   auto?: boolean;
   ordinaryInput?: true; // A user or peer joined a background-opened turn.
+  // A message in it came from outside the runner (Mike, a schedule, another
+  // thread), so it isn't only the runner carrying something on (settleInstructionsNews).
+  outside?: true;
   cliStarted?: boolean; // the CLI is running a turn for it (not just an approval)
   interruptTimer?: TimerHandle;
   // Ids of the messages the CLI has yet to answer for this turn: the one
@@ -2154,6 +2157,7 @@ export class Runner {
     this.markOlderInputs(st, msg, queued?.olderInputs);
     (turn.inputs ??= new Map()).set(msg.turnId, event.seq);
     turn.messages.push(msg.turnId);
+    if (msg.origin !== 'runner') turn.outside = true;
     // He wrote again, so the turn owes him another reply; a card it was sent
     // back for (needs.ts, REPLY_ASKS) gives way to this message's own (from
     // Codex's review); an archive it asked for before reading this is off.
@@ -2262,6 +2266,7 @@ export class Runner {
     rt.idleTimer = undefined;
     rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set(), access: rec.permissionMode };
     rt.turn.inputs = new Map([[msg.turnId, messageSeq]]);
+    if (msg.origin !== 'runner') rt.turn.outside = true;
     this.markOlderInputs(st, msg);
     rt.activeAt = this.clock.now();
     rec.turnId = msg.turnId;
@@ -3308,11 +3313,13 @@ export class Runner {
       this.hibernateWhen({ threadId: rec.id, said: when, by: 'agent' }).catch((e: unknown) => {
         if (st.rt.deleted) return;
         this.emit(st, { type: 'system.note', text: `Not hibernated, as the agent was asked to: ${e instanceof Error ? e.message : String(e)}` });
+        this.notHibernatedAfterCheck(st);
       });
       return;
     }
     if (until !== 'restart' && until !== 'release' && Date.parse(until) <= this.clock.now()) {
       this.emit(st, { type: 'system.note', text: `Not hibernated: the agent asked to wake at ${when}, which has passed.` });
+      this.notHibernatedAfterCheck(st);
       return;
     }
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -3320,6 +3327,18 @@ export class Runner {
       : until === 'release' ? 'Hibernating until the runner starts on a new release, as the agent was asked to.' : `Hibernating until ${localWhen(Date.parse(until), timeZone)}, as the agent was asked to.`;
     this.emit(st, { type: 'system.note', text });
     this.update({ threadId: rec.id, snoozedUntil: until });
+  }
+
+  // A snooze its agent asked for that didn't take, after a check at its
+  // wait's latest time (runner/hibernation.ts, wakeAtTime): that wake wasn't
+  // marked unread and the turn said it needs nothing, so without this the
+  // thread would sit in the inbox with nothing to say Mike should look
+  // (Gemini's second review, 22 Nov 2026).
+  notHibernatedAfterCheck(st: ThreadState): void {
+    const { rec, rt } = st;
+    if (!rec.lateChecks || rt.turn || this.bucket(rec) !== 'inbox') return;
+    rec.forceUnread = true;
+    this.markDirty(st);
   }
 
   endTurn(st: ThreadState, completedSeq: number, status: ThreadStatus, outcome?: TurnOutcome, limitHit?: string, netLost?: string, holdQueue = false, signedOut?: string): void {
@@ -4864,9 +4883,21 @@ export class Runner {
   // being sent now, marked as told by it, as a press is.
   // `messageId`: the message being sent, which may be the check itself.
   takeWakeNews(st: ThreadState, messageId: string | undefined): string | undefined {
-    const { rec } = st;
+    const { rec, rt } = st;
     const news = rec.wakeNews;
     if (!news) return undefined;
+    let end = '';
+    let deferred = false;
+    if (news.check) {
+      // The check itself, or a message into the turn it runs in: it says it all.
+      if (news.check === messageId || rt.turn?.inputs?.has(news.check)) return undefined;
+      deferred = rec.queue.some((q) => q.turnId === news.check);
+      // Told the check was coming, and it has gone without running (it
+      // failed before the CLI, a restart dropped it): told again, to check
+      // now (Codex's second review, 22 Nov 2026).
+      if (news.told?.deferred && !news.told.inFlight && !deferred) delete news.told;
+      end = ` ${deferred ? LATE_CHECK_QUEUED : LATE_CHECK_LOST}`;
+    }
     if (news.told) {
       if (this.wakeNewsStale(rec)) {
         delete rec.wakeNews;
@@ -4874,19 +4905,20 @@ export class Runner {
       }
       return undefined;
     }
-    if (news.check && news.check === messageId) return undefined;
-    news.told = { seq: this.store.log(rec.id).lastSeq, inFlight: true };
+    news.told = { seq: this.store.log(rec.id).lastSeq, inFlight: true, ...(deferred ? { deferred: true as const } : {}) };
     this.markDirty(st);
-    if (!news.check) return news.text;
-    return `${news.text} ${rec.queue.some((q) => q.turnId === news.check) ? LATE_CHECK_QUEUED : LATE_CHECK_LOST}`;
+    return `${news.text}${end}`;
   }
 
   // The same, told in the turn now going or at all, for a session that
   // replays its first message.
   toldWakeNews(rec: ThreadRecord, which: 'turn' | 'all'): string | undefined {
-    const told = rec.wakeNews?.told;
-    if (!told || this.wakeNewsStale(rec)) return undefined;
-    return which === 'all' || told.inFlight ? rec.wakeNews!.text : undefined;
+    const news = rec.wakeNews;
+    const told = news?.told;
+    if (!news || !told || this.wakeNewsStale(rec)) return undefined;
+    if (which !== 'all' && !told.inFlight) return undefined;
+    // As it was told: with how a check's news ended.
+    return news.check ? `${news.text} ${told.deferred ? LATE_CHECK_QUEUED : LATE_CHECK_LOST}` : news.text;
   }
 
   // Heard by a completed turn, and more than LATE_NEWS_KEPT_MS ago: a
@@ -4922,11 +4954,13 @@ export class Runner {
   // A completed turn keeps what it told; any other end (a failure, Stop, a
   // restart part way) tells it again with the next message.
   settlePresses(rec: ThreadRecord, completed: boolean): void {
-    // News of a wake goes by the same rule.
+    // News of a wake goes by the same rule. A turn told to do a check that
+    // was lost has done it: nothing is left to tell a later session.
     const woke = rec.wakeNews?.told;
     if (woke?.inFlight) {
-      if (completed) delete woke.inFlight;
-      else delete rec.wakeNews!.told;
+      if (!completed) delete rec.wakeNews!.told;
+      else if (rec.wakeNews!.check && !woke.deferred) delete rec.wakeNews;
+      else delete woke.inFlight;
     }
     if (!Array.isArray(rec.presses)) return;
     for (const p of rec.presses) {
@@ -4986,10 +5020,13 @@ export class Runner {
     // The check a wake at its latest time sent has run: nothing left to say.
     const check = rec.wakeNews?.check;
     if (check && completed && rt.turn?.inputs?.has(check)) delete rec.wakeNews;
-    // A sleep backs off only at the end of the check's own turn: any other
-    // turn ending (not one the check still waits behind) lets it go.
+    // A sleep backs off at the end of the check's own turn, or of one the
+    // runner carried it on with (a lost network, a full login, a restart,
+    // the CLI's own turn for a background job): a turn that Mike, a
+    // schedule or another thread started ending lets it go, unless the
+    // check still waits behind it.
     const backOff = rec.lateChecks?.backOff;
-    if (backOff && !rt.turn?.inputs?.has(backOff) && !rec.queue.some((q) => q.turnId === backOff)) delete rec.lateChecks!.backOff;
+    if (backOff && rt.turn?.outside && !rt.turn.inputs?.has(backOff) && !rec.queue.some((q) => q.turnId === backOff)) delete rec.lateChecks!.backOff;
     this.settlePresses(rec, completed);
     if (rt.instructionsNewsSent && !completed && rec.instructionsTold !== undefined) rec.instructionsTold = INSTRUCTIONS_REWOUND;
     rt.instructionsNewsSent = false;

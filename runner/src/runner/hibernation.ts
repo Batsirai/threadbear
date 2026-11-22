@@ -13,6 +13,7 @@ import { parseWhen } from '../when.ts';
 import { parkRecord, placeOf, wakesOnStart, type PlaceEvent } from '../place.ts';
 import type { WaitFor } from '../needs.ts';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { providerName } from '../providers.ts';
 import { LAB_REVIEW_REPLY_CHARS, addVerdict, addVerdicts, answerEach, findingLine, panelWake } from './lab-review.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
@@ -80,16 +81,21 @@ export const hibernationPart = {
       if (by) this.recheckStarter(st);
       throw new RpcError(ErrorCode.other, `Couldn't work out when to wake it: ${answer.error}`);
     }
-    // Back to sleep after a check at its latest time (wakeAtTime): the next
-    // latest is at least twice as far off as the last sleep was long, and
-    // there is one even if the model gives none this time, so the checks
-    // thin out and end with Mike (wake-when.ts, "The latest time passing").
+    // Back to sleep after a check at its latest time (wakeAtTime). While
+    // its checks are counted the wait has a latest time even if the model
+    // gives none, so they end with Mike rather than a sleep with no end
+    // (also for a check finished by a carry-on after a lost network or a
+    // full login, which is another turn: Codex's second review). Straight
+    // after the check it is at least twice as far off as the last sleep
+    // was meant to be (wake-when.ts, "The latest time passing").
     const late = by && answer.topic ? lateChecksOf(st.rec) : undefined;
-    if (late?.backOff) {
+    if (late) {
       const least = this.clock.now() + lateSleepMs(late.waitedMs);
-      if (!answer.until || Date.parse(answer.until) < least) answer.until = new Date(least).toISOString();
-      st.rec.lateChecks = { n: late.n, waitedMs: late.waitedMs, since: late.since };
-      this.markDirty(st);
+      if (!answer.until || (late.backOff && Date.parse(answer.until) < least)) answer.until = new Date(least).toISOString();
+      if (late.backOff) {
+        st.rec.lateChecks = { n: late.n, waitedMs: late.waitedMs, since: late.since };
+        this.markDirty(st);
+      }
     }
     // What it already checked counts only for the same words, from its agent.
     this.park(st, { kind: 'wordsAnswered', said, ...(answer.until ? { until: answer.until } : {}), ...(answer.topic ? { topic: answer.topic } : {}), ...(by ? { by } : {}) });
@@ -598,29 +604,48 @@ export const hibernationPart = {
     // How long it meant to sleep, not how long the Mac was shut past it.
     const planned = slept ? Math.min(now, wait.latest) - Date.parse(slept) : 0;
     const check = (before?.n ?? 0) + 1;
-    // Not marked unread: needing Mike notifies him and his phone, and a
-    // check that goes back to sleep is nothing for him. How its turn ends
-    // says whether he's needed (Codex's review, 22 Nov 2026).
-    this.wake(st, { why: lateWhy(wait, timeZone, 'checking') }, true);
-    // Counted once it has woken: a wake that throws is tried again.
-    rec.lateChecks = { n: check, waitedMs: planned > 0 ? planned : 86_400_000, since: before?.since ?? slept ?? at };
+    const id = crypto.randomUUID();
+    const had = { news: rec.wakeNews, checks: rec.lateChecks };
+    // Counted, with the sleep after it to back off (hibernateWhen), and with
+    // why it woke for any other message until the check's turn completes:
+    // the check can be lost on the way (a folder that's gone, a restart
+    // while it was queued, Stop), and nothing else tells the agent. Set
+    // before the send, which may start a message it had queued first: that
+    // one is told the check comes after it (Gemini's reviews, 22 Nov 2026).
+    rec.lateChecks = { n: check, waitedMs: planned > 0 ? planned : 86_400_000, since: before?.since ?? slept ?? at, backOff: id };
+    rec.wakeNews = { text: lateNews(wait, timeZone, now, 'checking'), at, check: id };
+    try {
+      // Not marked unread: needing Mike notifies him and his phone, and a
+      // check that goes back to sleep is nothing for him. How its turn ends
+      // says whether he's needed (Codex's review, 22 Nov 2026).
+      this.wake(st, { why: lateWhy(wait, timeZone, 'checking') }, true);
+    } catch (e) {
+      // Not woken (its log can't be written): still asleep, tried again.
+      if (had.news) rec.wakeNews = had.news;
+      else delete rec.wakeNews;
+      if (had.checks) rec.lateChecks = had.checks;
+      else delete rec.lateChecks;
+      throw e;
+    }
     let started = false;
     try {
-      const id = this.sendTo(st, lateCheckPrompt(wait, timeZone, check), [], { origin: 'runner', queue: true, wakeReason: 'The latest it would wait passed' });
-      // The sleep that follows this check backs off (hibernateWhen).
-      rec.lateChecks.backOff = id;
-      // Until that turn completes, another message says why it woke: the
-      // check can be lost on the way (a folder that's gone, a restart while
-      // it was queued, Stop), and nothing else tells the agent.
-      rec.wakeNews = { text: lateNews(wait, timeZone, now, 'checking'), at, check: id };
+      this.sendTo(st, lateCheckPrompt(wait, timeZone, check), [], { origin: 'runner', queue: true, wakeReason: 'The latest it would wait passed', messageId: id });
       // (Read afresh: sendTo may have started the turn.)
       const { rt } = st;
       started = Boolean(rt.turn?.inputs?.has(id));
       this.log.info('woke to check at the latest time of its wait', { threadId: rec.id, topic: wait.topic, check, started });
     } catch (e) {
-      // The turn couldn't start (a full disk). The timer goes on.
+      // The check couldn't be sent (a full disk): not counted, and the
+      // next message says why it woke. The timer goes on.
+      if (had.checks) rec.lateChecks = had.checks;
+      else delete rec.lateChecks;
       rec.wakeNews = { text: lateNews(wait, timeZone, now), at };
       this.log.error('could not start the check at the latest time of a wait', { threadId: rec.id, error: String(e) });
+      try {
+        this.kickQueue(st);
+      } catch (e2) {
+        this.log.error('could not start what a woken thread had queued', { threadId: rec.id, error: String(e2) });
+      }
     }
     // Waiting behind something (a queued message, a move), or not sent at
     // all: unread as any wake is, so a check that never runs doesn't leave
@@ -633,8 +658,9 @@ export const hibernationPart = {
   // in its conversation, with how long it was away, and its row says
   // "Woke up" until Mike looks (`woke`): otherwise it just turns up in the
   // inbox with nothing to say why (30 Oct).
-  // `quiet`: not marked unread (wakeAtTime's check, whose turn says).
-  wake(this: Runner, st: ThreadState, cause: 'time' | 'restart' | { why: string }, quiet = false): void {
+  // `check`: wakeAtTime's, for a turn to check: not marked unread (how the
+  // turn ends says), and what it had queued starts with the check's send.
+  wake(this: Runner, st: ThreadState, cause: 'time' | 'restart' | { why: string }, check = false): void {
     const { rec } = st;
     // Archived since it went to sleep: its hibernation just ends, quietly.
     // Waking it there gave it a "Woke up" and an unread mark in the
@@ -661,10 +687,10 @@ export const hibernationPart = {
     this.emit(st, { type: 'system.note', text });
     // Its "Woke up" mark, until Mike looks (place.ts, wake).
     this.park(st, { kind: 'wake' });
-    if (!quiet) st.rec.forceUnread = true;
+    if (!check) st.rec.forceUnread = true;
     st.rec.updatedAt = this.isoNow();
     this.markDirty(st);
-    this.kickQueue(st);
+    if (!check) this.kickQueue(st);
   },
 
   // Moves where a thread is parked (place.ts): the only way its record's

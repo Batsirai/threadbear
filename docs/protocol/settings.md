@@ -376,10 +376,12 @@ and numbers are in `wake-when.ts`):
   on) gives it. The record counts these (`lateChecks: { n, waitedMs,
   since, backOff? }`, never in a `ThreadSummary`) until Mike next writes to
   the thread, whatever words the agent snoozes with. A snooze in words at
-  the end of the check's own turn has a latest time at least twice as far
-  off as the last sleep was meant to be, a week at most (the model's own
-  when that is later, and one even when the model gives none). After three
-  checks in a row the next latest time runs no turn:
+  the end of the check's own turn (or of one the runner carried it on
+  with) has a latest time at least twice as far off as the last sleep was
+  meant to be, a week at most (the model's own when that is later). While
+  checks are counted a wait in words always has a latest time, even when
+  the model gives none, and a snooze that doesn't take leaves the thread
+  unread. After three checks in a row the next latest time runs no turn:
   the thread lands in the inbox, its note adding how long it has waited
   and that it's Mike's to decide.
 - A wake at a latest time that ran no turn is kept as a line for the agent

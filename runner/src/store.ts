@@ -131,7 +131,7 @@ export function normaliseRecord(rec: Record<string, unknown>): boolean {
     const n = rec.wakeNews;
     const told = n.told;
     const ok = typeof n.text === 'string' && n.text.length <= WAKE_NEWS_MAX && (n.check === undefined || typeof n.check === 'string') && (n.at === undefined || typeof n.at === 'string') &&
-      (told === undefined || (isObject(told) && Number.isFinite(told.seq) && (told.inFlight === undefined || told.inFlight === true)));
+      (told === undefined || (isObject(told) && Number.isFinite(told.seq) && (told.inFlight === undefined || told.inFlight === true) && (told.deferred === undefined || told.deferred === true)));
     if (!ok) delete rec.wakeNews;
   }
   if (rec.title !== undefined && typeof rec.title !== 'string') rec.title = String(rec.title);
@@ -225,7 +225,8 @@ export type ThreadRecord = {
   // the check's turn completes. Gone once the thread next sleeps.
   // `at`: when it woke. A line a completed turn heard is kept only
   // LATE_NEWS_KEPT_MS from then.
-  wakeNews?: { text: string; at?: string; told?: { seq: number; inFlight?: true }; check?: string };
+  // `told.deferred`: what it was told was that the check comes next.
+  wakeNews?: { text: string; at?: string; told?: { seq: number; inFlight?: true; deferred?: true }; check?: string };
   // Hibernating until these threads finish (end_turn's waitFor,
   // runner/hibernation.ts): each counts once it has finished (with no new
   // work since), been archived or been deleted.

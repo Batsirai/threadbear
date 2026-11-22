@@ -349,6 +349,7 @@ test('a message already queued goes first, and the check follows it', async () =
   const sent = h.events(id).filter((e) => e.type === 'user.message').map((e) => String(e.text));
   assert.equal(sent.at(-1), 'A reminder left waiting');
   assert.ok(st.rec.queue.some((q) => /check 1 of 3/.test(q.text)), 'the check waits behind it');
+  assert.match(h.adapter.last.sent.at(-1)!.text, /leave the check to it\.\n\nA reminder left waiting$/);
 });
 
 test('news of a wake that a stopped turn may not have read goes again with the next message', async () => {
@@ -542,13 +543,9 @@ test('a message that runs ahead of the check is told the check comes next, not t
   const { h, id } = setup((now) => ({ until: new Date(now + DAY).toISOString(), topic: TOPIC }));
   await agentSleeps(h, id);
   const st = h.runner.threads.get(id)!;
-  // A reminder waits in its queue, held until after the wake.
+  // A reminder waits in its queue.
   st.rec.queue.push({ turnId: 'queued-1', text: 'A reminder left waiting', images: [], origin: 'schedule' });
-  (st.rt.holds ??= new Set()).add('token');
   h.clock.advance(DAY);
-  await tick();
-  st.rt.holds!.clear();
-  h.runner.kickQueue(st);
   await tick();
   const first = h.adapter.last.sent.at(-1)!.text;
   assert.match(first, /^Note from Threadbear: this thread woke by itself on [\s\S]*comes after this one, so leave the check to it\.\n\nA reminder left waiting$/);
@@ -606,4 +603,147 @@ test('news of a wake a turn has heard is not told to a fresh session once it is 
   await tick();
   assert.doesNotMatch(h.codex.last.sent.at(-1)!.text, /woke by itself/);
   assert.equal(h.runner.threads.get(id)!.rec.wakeNews, undefined);
+});
+
+// From Codex's second review (22 Nov 2026).
+test('a check finished by a carry-on, as another turn, still leaves the wait a latest time', async () => {
+  let until: number | null = DAY;
+  const { h, id } = setup((now) => ({ until: until === null ? null : new Date(now + until).toISOString(), topic: TOPIC }));
+  await agentSleeps(h, id);
+  h.clock.advance(DAY);
+  await tick();
+  h.adapter.last.init();
+  // The check's turn fails (the network), and the runner carries it on with a message of its own.
+  h.adapter.last.result('failed', undefined, 'network');
+  await tick();
+  h.runner.send(id, 'The connection came back. Carry on from where you left off.', [], { origin: 'runner', queue: true });
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /do that check now as well\./);
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'nothing', snooze: SAID });
+  assert.ok(asleep(h, id));
+  assert.equal(left(h, id), 2 * DAY, 'backed off, as the carry-on is the check going on');
+  h.clock.advance(2 * DAY);
+  await tick();
+  assert.match(runnerMessages(h, id).at(-1)!, /check 2 of 3/);
+  // And with the back-off gone (a schedule's turn since), a model that
+  // gives no time still leaves it a latest one.
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'nothing', snooze: '1h' });
+  h.clock.advance(HOUR);
+  await tick();
+  h.runner.send(id, 'Nightly check-in', [], { origin: 'schedule', scheduleId: 's1' });
+  await tick();
+  h.adapter.last.init();
+  until = null;
+  await endTurn(h, { needs: 'nothing', snooze: SAID });
+  assert.ok(asleep(h, id));
+  assert.equal(left(h, id), 4 * DAY, 'a latest time, though the model gave none');
+});
+
+test('told the check comes next, and then the check is lost: the next message says to check now', async () => {
+  const { h, id } = setup((now) => ({ until: new Date(now + DAY).toISOString(), topic: TOPIC }));
+  await agentSleeps(h, id);
+  const st = h.runner.threads.get(id)!;
+  st.rec.queue.push({ turnId: 'queued-1', text: 'A reminder left waiting', images: [], origin: 'schedule' });
+  h.clock.advance(DAY);
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /comes after this one, so leave the check to it\./);
+  h.adapter.last.init();
+  // The check never runs: dropped from the queue, as a restart drops what
+  // was queued for a thread that's awake (Runner.recover).
+  st.rec.queue = [];
+  await endTurn(h, { needs: 'nothing' }, 'Noted.');
+  h.runner.send(id, 'Any reason why this woke up?');
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /^Note from Threadbear: this thread woke by itself[\s\S]*do that check now as well\.\n\nAny reason why this woke up\?$/);
+  // Once, as that turn completes.
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'nothing' }, 'Its latest time passed; nothing from the supplier yet.');
+  h.runner.send(id, 'ok');
+  await tick();
+  assert.equal(h.adapter.last.sent.at(-1)!.text, 'ok');
+});
+
+test('told the check comes next, and then the check fails: the next message says to check now', async () => {
+  const { h, id } = setup((now) => ({ until: new Date(now + DAY).toISOString(), topic: TOPIC }));
+  await agentSleeps(h, id);
+  const st = h.runner.threads.get(id)!;
+  st.rec.queue.push({ turnId: 'queued-1', text: 'A reminder left waiting', images: [], origin: 'schedule' });
+  h.clock.advance(DAY);
+  await tick();
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'nothing' }, 'Noted.');
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /check 1 of 3/);
+  h.adapter.last.result('failed', undefined, 'API Error: overloaded');
+  await tick();
+  h.runner.send(id, 'Any reason why this woke up?');
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /^Note from Threadbear: this thread woke by itself[\s\S]*do that check now as well\.\n\nAny reason why this woke up\?$/);
+});
+
+// From Gemini's second review (22 Nov 2026).
+test('a lost check that a later turn did is not asked for again by a fresh session', async () => {
+  const { h, id } = setup((now) => ({ until: new Date(now + DAY).toISOString(), topic: TOPIC }));
+  await agentSleeps(h, id);
+  h.clock.advance(DAY);
+  await tick();
+  h.adapter.last.init();
+  h.adapter.last.result('failed', undefined, 'API Error: overloaded');
+  await tick();
+  h.runner.send(id, 'Any reason why this woke up?');
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /do that check now as well\./);
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'you', asks: [{ question: 'Chase the supplier?' }] }, 'Its latest time passed. I checked: nothing yet.');
+  assert.equal(h.runner.threads.get(id)!.rec.wakeNews, undefined);
+  h.runner.update({ threadId: id, accountId: 'codex-main' });
+  h.runner.send(id, 'Now write the follow-up email.');
+  await tick();
+  assert.doesNotMatch(h.codex.last.sent.at(-1)!.text, /woke by itself|check now/);
+});
+
+test('a check whose snooze does not take leaves the thread marked for Alex, not sitting unnoticed', async () => {
+  let fail = false;
+  const { h, id } = setup((now) => (fail ? { until: new Date(now - DAY).toISOString(), topic: TOPIC } : { until: new Date(now + DAY).toISOString(), topic: TOPIC }));
+  await agentSleeps(h, id);
+  h.runner.markSeen(id, h.runner.get(id).lastSeq);
+  h.clock.advance(DAY);
+  await tick();
+  h.adapter.last.init();
+  // It repeats words whose own deadline has passed, and the model says so.
+  fail = true;
+  await endTurn(h, { needs: 'nothing', snooze: `${SAID}, or by yesterday at the latest` });
+  assert.equal(asleep(h, id), false);
+  assert.match(notes(h, id).at(-1)!, /^Not hibernated, as the agent was asked to: /);
+  assert.equal(h.runner.get(id).needsYou, true);
+});
+
+test('a record another runner wrote wrong: news and counts that are not the shape the runner writes are dropped or read as none', async () => {
+  const { normaliseRecord } = await import('../../src/store.ts');
+  const { lateChecksOf, lateWait } = await import('../../src/wake-when.ts');
+  const clean = (wakeNews: unknown) => {
+    const rec: Record<string, unknown> = { queue: [], pendingApprovals: [], wakeNews };
+    normaliseRecord(rec);
+    return rec.wakeNews;
+  };
+  assert.equal(clean('Note from Threadbear: do this'), undefined);
+  assert.equal(clean({ text: 5 }), undefined);
+  assert.equal(clean({ text: 'x'.repeat(5000) }), undefined);
+  assert.equal(clean({ text: 'ok', told: { seq: 'nine' } }), undefined);
+  assert.equal(clean({ text: 'ok', told: { seq: 9, inFlight: 'false' } }), undefined);
+  assert.equal(clean({ text: 'ok', check: 7 }), undefined);
+  assert.deepEqual(clean({ text: 'ok', at: '2026-11-22T00:00:00.000Z', told: { seq: 9 }, check: 'c1' }), { text: 'ok', at: '2026-11-22T00:00:00.000Z', told: { seq: 9 }, check: 'c1' });
+  assert.equal(lateChecksOf({ lateChecks: 'three' }), undefined);
+  assert.equal(lateChecksOf({ lateChecks: { n: 'lots' } }), undefined);
+  assert.equal(lateChecksOf({ lateChecks: { n: 0 } }), undefined);
+  assert.deepEqual(lateChecksOf({ lateChecks: { n: 2, waitedMs: 'x', since: 'never', backOff: true } }), { n: 2, waitedMs: 0, since: new Date(0).toISOString() });
+  // A wait with no topic, one still being read, and words that aren't an object: plain snoozes.
+  const until = '2026-11-22T00:00:00.000Z';
+  assert.equal(lateWait({ snoozedUntil: until, wakeWhen: { said: 'x' } }), undefined);
+  assert.equal(lateWait({ snoozedUntil: until, wakeWhen: { said: 'x', topic: 't', pending: true } }), undefined);
+  assert.equal(lateWait({ snoozedUntil: until, wakeWhen: 'nonsense' as never }), undefined);
+  assert.equal(lateWait({ snoozedUntil: 'not a time', wakeWhen: { said: 'x', topic: 't' } }), undefined);
+  assert.deepEqual(lateWait({ snoozedUntil: until, wakeWhen: { said: 'x', topic: 't', by: 'agent' } }), { said: 'x', topic: 't', by: 'agent', latest: Date.parse(until) });
 });
