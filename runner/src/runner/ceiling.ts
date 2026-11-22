@@ -21,6 +21,7 @@ import type { PermissionMode } from '../protocol.ts';
 import { isPermissionMode } from '../protocol.ts';
 import type { QueuedSend } from '../store.ts';
 import { above, raises, type Authority } from '../threadbear-mcp.ts';
+import { senderPrefix } from './nested.ts';
 
 // A ceiling as saved: one that isn't a mode (a record from before, a moved
 // thread's record from another Mac) counts as the least, Ask.
@@ -53,6 +54,17 @@ export const ceilingPart = {
   underCeiling(this: Runner, st: ThreadState, ceiling: unknown): boolean {
     if (ceiling === undefined) return true;
     return !above(this.authorityNow(st.rec.id), { mode: ceilingMode(ceiling) });
+  },
+
+  // The ceiling of another thread's message (send_message's first line names
+  // it) as it's accepted for `st`: what `st` has now, which the send was
+  // allowed for (with no card, the sender had as much; with one, Mike said
+  // yes at this), or the sender's own if that's more.
+  agentCeiling(this: Runner, st: ThreadState, text: string): PermissionMode {
+    const id8 = senderPrefix(text);
+    const hits = id8 ? [...this.threads.values()].filter((t) => !t.rt.deleted && t.rec.id.startsWith(id8)) : [];
+    const sender = hits.length === 1 ? this.authoritySaved(hits[0].rec.id).mode : 'ask';
+    return higherMode(ceilingMode(this.authorityNow(st.rec.id).mode), ceilingMode(sender));
   },
 
   // Shown to Mike instead of its agent: a note saying what wasn't passed on

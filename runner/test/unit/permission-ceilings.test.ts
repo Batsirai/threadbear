@@ -55,6 +55,9 @@ const heard = (h: H, id: string) => h.events(id).some((e) => e.type === 'user.me
 const notes = (h: H, id: string) => h.events(id).filter((e) => e.type === 'system.note').map((e) => String(e.text));
 const turns = (h: H, id: string) => h.adapter.sessions.filter((x) => x.opts.threadId === id).length;
 const raise = (h: H, id: string, to: PermissionMode = 'full') => h.runner.update({ threadId: id, permissionMode: to });
+// The runner's insides a test looks at.
+type Inside = { threads: Map<string, { rec: { queue: { ceiling?: string }[] }; rt: { deleted?: boolean } }>; waitOn: (st: unknown, waits: { id: string }[], when: undefined, askedBy: { mode: PermissionMode }) => void };
+const inside = (h: H) => h.runner as unknown as Inside;
 
 // ------------------------------------------------------------------ 162
 
@@ -180,7 +183,7 @@ test('162: a run queued behind a busy turn is held if the thread is raised befor
   await sched.create({ text: PAYLOAD, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: 'some-ask-thread', ceiling: 'ask' });
   h.clock.advance(2 * MIN);
   await tick(8);
-  assert.equal((h.runner as any).threads.get(target).rec.queue.length, 1, 'queued behind the turn');
+  assert.equal(inside(h).threads.get(target)!.rec.queue.length, 1, 'queued behind the turn');
   raise(h, target);
   session(h, target).result('completed');
   await settle();
@@ -287,12 +290,12 @@ test('163: a reply from an Ask thread started on another runner, after Mike rais
   assert.ok(notes(h, starter).some((n) => /wasn't passed to this thread's agent/.test(n)));
   // After a restart (a new FarReports on the same file) the saved ceiling holds.
   const g = far(h);
-  f.reply(2, `${PAYLOAD} again`);
-  (g as any).reply = f.reply;
-  await g.fr.tick();
-  await g.fr.tick();
+  g.reply(1, PAYLOAD);
+  g.reply(2, `${PAYLOAD} again`);
+  await g.look();
   await settle();
   assert.equal(heard(h, starter), false);
+  assert.ok(notes(h, starter).filter((n) => /wasn't passed to this thread's agent/.test(n)).length >= 2, 'the restarted watcher looked, and held it too');
 });
 
 test('163: at the same access it still comes; a watch from before ceilings counts as Ask', async () => {
@@ -398,7 +401,7 @@ test("164: a wait's wake carries only the reports it may still hear", async () =
   assert.equal(report(h, a, parent, PAYLOAD).held, true);
   // Waiting on b, as the agent asked at Full access (so b's reply is heard).
   raise(h, parent);
-  (h.runner as any).waitOn((h.runner as any).threads.get(parent), [{ id: b }], undefined, { mode: 'full' });
+  inside(h).waitOn(inside(h).threads.get(parent), [{ id: b }], undefined, { mode: 'full' });
   finishChild(h, a);
   finishChild(h, b);
   await until(() => h.events(parent).some((e) => e.type === 'user.message' && /hibernated to wait on/.test(String(e.text))), 'the wake');
@@ -411,10 +414,10 @@ test('164: after a restart the saved ceiling still holds', async () => {
   const { parent, a, b } = await family(h);
   assert.equal(report(h, a, parent, PAYLOAD).held, true);
   raise(h, parent);
-  await (h.runner as any).flush?.();
+  h.runner.flush();
   const h2 = harness({ nestedThreads: true }, home);
   for (const id of [a, b]) {
-    const t = (h2.runner as any).threads.get(id);
+    const t = inside(h2).threads.get(id);
     if (t) t.rt.deleted = true;
   }
   h2.runner.settleAllHeld();
@@ -439,4 +442,36 @@ test('164: at equal access the reports still come, with the ceiling recorded', a
   finishChild(h2, f2.a);
   finishChild(h2, f2.b);
   await until(() => heard(h2, f2.parent), 'heard: its sender has as much access now');
+});
+
+// ------------------------------------------------- plain send_message too
+
+test("another thread's message queued behind a busy turn is held if Mike raises the thread before it starts", async () => {
+  const h = harness();
+  const sender = idle(h, 'Helper', 'ask');
+  const target = h.runner.create({ text: 'Long job', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
+  session(h, target).init();
+  h.runner.send(target, `[Sent by the agent in the thread "Helper" (${sender.slice(0, 8)})]\n\n${PAYLOAD}`, [], { queue: true });
+  assert.equal(inside(h).threads.get(target)!.rec.queue[0].ceiling, 'ask');
+  raise(h, target);
+  session(h, target).result('completed');
+  await settle();
+  assert.equal(heard(h, target), false);
+  // Not raised, it goes.
+  const t2 = h.runner.create({ text: 'Long job', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
+  session(h, t2).init();
+  h.runner.send(t2, `[Sent by the agent in the thread "Helper" (${sender.slice(0, 8)})]\n\n${PAYLOAD}`, [], { queue: true });
+  session(h, t2).result('completed');
+  await until(() => heard(h, t2), 'delivered at the same access');
+});
+
+test("the RPC gate puts a thread's own ceiling on its tb send, whatever it says", () => {
+  const h = harness();
+  const gate = new CallerGate({ runner: h.runner });
+  const me = idle(h, 'Helper', 'ask');
+  const other = idle(h, 'Other', 'ask');
+  assert.equal(gate.check(me, 'threads.send', { threadId: other, text: 'hi', ceiling: 'full' }).ceiling, 'ask');
+  assert.equal(gate.check(me, 'threads.send', { threadId: me, text: 'hi', ceiling: 'full' }).ceiling, undefined, 'to itself: none');
+  assert.equal(gate.check(me, 'schedules.create', { threadId: other, text: 'x', at: '2030-01-01T00:00:00Z', ceiling: 'full' }).ceiling, 'ask');
+  assert.equal(gate.check(me, 'schedules.create', { threadId: me, text: 'x', at: '2030-01-01T00:00:00Z', ceiling: 'full' }).ceiling, undefined);
 });

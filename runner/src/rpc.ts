@@ -8,7 +8,7 @@ import { awakeTimeout, type AwakeTimer } from './awake-timer.ts';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Runner, Notification, CliControl } from './runner.ts';
 import type { Logger } from './log.ts';
-import { ARCHIVE_VERDICTS, CLI_POLICIES, EFFORT_LEVELS, ErrorCode, PROVIDERS, RpcError, isEffortLevel, isProvider } from './protocol.ts';
+import { ARCHIVE_VERDICTS, CLI_POLICIES, EFFORT_LEVELS, ErrorCode, PROVIDERS, RpcError, isEffortLevel, isPermissionMode, isProvider } from './protocol.ts';
 import type { ArchiveVerdict, ApprovalDecision, AskAnswer, CliPolicy, EffortLevel, ImageRef, PermissionMode, Provider, ShareAccess, ThreadStartedBy, ThreadSummary } from './protocol.ts';
 import { MAX_BYLINE } from './needs.ts';
 import { isMoved, mergeSummaries, type Bucket } from './handover.ts';
@@ -858,7 +858,8 @@ export class RpcServer {
       case 'buttons.press':
         return r.pressButton(reqString(p, 'threadId'), reqString(p, 'buttonId'));
       case 'threads.send':
-        return r.send(reqString(p, 'threadId'), optString(p, 'text') ?? '', optImages(p) ?? [], { ...optAnswers(p), ...optPhoneOrigin(p) });
+        // `ceiling`: set by the RPC gate for a thread's own key (runner/ceiling.ts).
+        return r.send(reqString(p, 'threadId'), optString(p, 'text') ?? '', optImages(p) ?? [], { ...optAnswers(p), ...optPhoneOrigin(p), ...(isPermissionMode(p.ceiling) ? { ceiling: p.ceiling } : {}) });
       case 'threads.edit':
         return r.editMessage(reqString(p, 'threadId'), reqNumber(p, 'seq'), optString(p, 'text') ?? '', optImages(p) ?? [], { stopBackground: p.stopBackground === true });
       case 'threads.interrupt':

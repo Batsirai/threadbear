@@ -204,8 +204,13 @@ export class CallerGate {
         }
         // Only the app's Needs you answers and a phone command passed on
         // say these.
-        const { answers: _a, origin: _o, ...rest } = p;
-        return takeImages(rest);
+        const { answers: _a, origin: _o, ceiling: _c, ...rest } = p;
+        // Raised above what this thread could reach while it waits in the
+        // queue, it's held as it leaves (runner/ceiling.ts).
+        // To itself, the words are its own.
+        if (!id || id === threadId) return takeImages(rest);
+        const to = this.targetAccess(id).mode;
+        return takeImages({ ...rest, ceiling: ceilingMode(raises(to, caller.mode) ? to : caller.mode) });
       }
       case 'threads.interrupt': {
         const id = str(p, 'threadId');

@@ -48,7 +48,7 @@ import type {
   ThreadSummary,
   TurnOutcome,
 } from './protocol.ts';
-import { agentsStillWorking, ErrorCode, LIMITS, PROTOCOL_VERSION, RpcError, sentByAgent } from './protocol.ts';
+import { agentsStillWorking, ErrorCode, LIMITS, MOVE_MESSAGE_PREFIX, PROTOCOL_VERSION, RpcError, sentByAgent } from './protocol.ts';
 import { cliName, providerName, providersForHello } from './providers.ts';
 import type { ArchivedBy, ArchiveVerdict, LibrarianStatus, LooseEnd, Project, Schedule } from './protocol.ts';
 import { Projects } from './projects.ts';
@@ -314,6 +314,9 @@ export type Turn = {
   recoveredMessages?: number[];
   recoveryInput?: string;
   inputs?: Map<string, number>;
+  // Each input's ceiling (runner/ceiling.ts), so one queued again after an
+  // interrupted delivery keeps it.
+  ceilings?: Map<string, PermissionMode>;
   deliveryKnown?: boolean;
   startedMessages?: Set<string>;
   cancelledMessages?: Set<string>;
@@ -1904,6 +1907,10 @@ export class Runner {
     // A report to the thread that started the sender, kept until its other
     // threads finish (runner/nested.ts).
     if (this.holdReport(st, text, images, opts)) return { turnId: crypto.randomUUID(), held: true };
+    // Another thread's message, allowed for this thread as it is now: if
+    // it waits in the queue while Mike raises this thread, it's held as it
+    // leaves (runner/ceiling.ts).
+    if (opts.ceiling === undefined && !opts.origin && sentByAgent(text) && !text.startsWith(MOVE_MESSAGE_PREFIX)) opts = { ...opts, ceiling: this.agentCeiling(st, text) };
     // Mike writing: anything held goes in first, so he and it see the same.
     if (fromMike(text, opts) && st.rec.heldReports?.length) this.deliverHeld(st);
     return { turnId: this.sendTo(st, text, images, opts) };
@@ -2165,6 +2172,7 @@ export class Runner {
     const event = this.emit(st, { ...userMessage(msg), ...(queued ? { sentAs: msg.turnId } : {}) }, turn.turnId);
     this.markOlderInputs(st, msg, queued?.olderInputs);
     (turn.inputs ??= new Map()).set(msg.turnId, event.seq);
+    if (msg.ceiling !== undefined) (turn.ceilings ??= new Map()).set(msg.turnId, msg.ceiling);
     turn.messages.push(msg.turnId);
     if (!isCarryOn(msg)) turn.newWork = true;
     // He wrote again, so the turn owes him another reply; a card it was sent
@@ -2276,6 +2284,7 @@ export class Runner {
     rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set(), access: rec.permissionMode };
     rt.turn.inputs = new Map([[msg.turnId, messageSeq]]);
     if (!isCarryOn(msg)) rt.turn.newWork = true;
+    if (msg.ceiling !== undefined) rt.turn.ceilings = new Map([[msg.turnId, msg.ceiling]]);
     this.markOlderInputs(st, msg);
     rt.activeAt = this.clock.now();
     rec.turnId = msg.turnId;
@@ -4182,7 +4191,8 @@ export class Runner {
       else if (id !== turn.turnId && !isAutomaticInput(e) && !turn.requeuedMessages?.has(id)) {
         // A peer's instruction is just as current as the user's. The CLI
         // explicitly rejected it, so deliver it again before older reminders.
-        requeuedInputs.push({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: e.text, images: e.images ?? [], ...(e.origin ? { origin: e.origin } : {}) });
+        const ceiling = turn.ceilings?.get(id);
+        requeuedInputs.push({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: e.text, images: e.images ?? [], ...(e.origin ? { origin: e.origin } : {}), ...(ceiling !== undefined ? { ceiling } : {}) });
         (turn.requeuedMessages ??= new Set()).add(id);
       }
     }

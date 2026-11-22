@@ -178,7 +178,7 @@ export const coldCompactPart = {
       rec.interruptedMessages = [...(rec.interruptedMessages ?? []), seq];
       this.emit(st, { type: 'system.note', savedMessage: true, text: 'Your stopped message and pictures are saved for your next message.' }, turn.turnId);
     } else if (!isAutomaticInput(msg)) {
-      rec.queue.unshift({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: msg.text, images: msg.images, ...(msg.origin ? { origin: msg.origin } : {}) });
+      rec.queue.unshift({ turnId: crypto.randomUUID(), retryAfterInterrupt: true, text: msg.text, images: msg.images, ...(msg.origin ? { origin: msg.origin } : {}), ...(msg.ceiling !== undefined ? { ceiling: msg.ceiling } : {}) });
       this.emit(st, { type: 'system.note', text: 'Queued an unread message again after the CLI interrupted its delivery.' }, turn.turnId);
     }
     this.markDirty(st);
@@ -259,6 +259,11 @@ export const coldCompactPart = {
       const before = noted.get(q.turnId);
       if (!before || this.commandPlan(st, q.text) || !this.canSteer(st, rec.queue.slice(0, i))) return;
       rec.queue.splice(i, 1);
+      // Raised above what wrote it meanwhile (runner/ceiling.ts).
+      if (!this.underCeiling(st, q.ceiling)) {
+        this.withholdMessage(st, q);
+        continue;
+      }
       try {
         // Only what was queued before it counts as older: a report that came
         // in after it, while it compacted, isn't (Gemini's review).
