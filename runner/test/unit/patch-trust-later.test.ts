@@ -1128,11 +1128,16 @@ test('Daybreak 165 reviews: execve, Bun and process reached by other names count
     assert.ok(checkDigest(check, dir).problem, check);
   }
   // A Claude Code hook (strict) refuses each as well.
-  const trust = new PatchTrust({ claudeHome: fs.realpathSync(tmpDir()) });
+  // Inside a home of its own, as claude-trust.test.ts does, so nothing
+  // looks above it for a real ~/.claude.
+  const home = fs.realpathSync(tmpDir());
+  const app = path.join(home, 'app');
+  write(app, cases);
+  const trust = new PatchTrust({ claudeHome: home });
   for (const f of Object.keys(cases)) {
-    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
-    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `${f === 'c.mjs' ? 'bun' : 'node'} ${f}` }] }] } }));
-    assert.equal((trust.checkClaude(dir) as { reason?: string }).reason, 'unchecked', `hook: ${f}`);
+    fs.mkdirSync(path.join(app, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(app, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `${f === 'c.mjs' ? 'bun' : 'node'} ${f}` }] }] } }));
+    assert.equal((trust.checkClaude(app) as { reason?: string }).reason, 'unchecked', `hook: ${f}`);
   }
   // What only looks like one isn't: typeof Bun, import type, process.env.
   const fine = repo({

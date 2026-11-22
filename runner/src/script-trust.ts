@@ -856,6 +856,9 @@ class Reach {
   // A script it reached that starts programs itself (FollowOptions.scanJs),
   // made the problem once the rest is followed (settleWrites).
   launches?: string;
+  // Something it can't follow that doesn't stop the follow, made the
+  // problem at the end as `launches` is.
+  later?: string;
   // What finds code to run by its own rules (a test runner, bunfig.toml's
   // preloads, kept symlinks) can't be followed for a hook, nor for a
   // schedule's check (Gemini's review of Daybreak 165): it ran files the
@@ -1679,9 +1682,9 @@ class Reach {
       this.assignsAny = true;
       // `export "${x}NODE_OPTIONS=..."`: a name worked out as it runs, which
       // could be any of the ones below (Gemini's review of 165).
+      // Noted for the end, so what follows is still followed and hashed.
       if (!text.includes('=') && w.parts.slice(k).some((p) => p.k === 'lit' && p.s.includes('='))) {
-        this.fail(ctx, line, "sets a variable whose name is worked out as it runs, which patch trust can't follow.");
-        return true;
+        this.later ??= `${ctx.label} line ${line} sets a variable whose name is worked out as it runs, which patch trust can't follow.`;
       }
     }
     // And `export 'NODE_OPTIONS=--import=./x.mjs'` loads it all the same
@@ -2360,7 +2363,7 @@ class Reach {
     const wp = writeProblem(this.writes(), this.o.top);
     if (wp?.definite) this.problem = this.writeFailed = wp.problem;
     else if (wp) this.problem ??= wp.problem;
-    if (this.launches) this.problem ??= this.launches;
+    this.problem ??= this.launches ?? this.later;
   }
 
   writes(): Writes {
