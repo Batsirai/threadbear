@@ -1025,13 +1025,15 @@ export function patchHash(file: string): PatchHash {
 }
 
 // scanModule for a script a patch's command runs: its problem as words.
-function scriptScan(src: string, file: string): { specifiers: string[]; packages: string[]; strings: string[]; problem?: string } {
-  const { specifiers, packages, strings, problem } = scanModule(src, file);
-  if (!problem) return { specifiers, packages, strings };
+function scriptScan(src: string, file: string): { specifiers: string[]; packages: string[]; strings: string[]; launches?: string; problem?: string } {
+  const { specifiers, packages, strings, problem, launches: at } = scanModule(src, file);
+  const launches = at ? `line ${at.line} starts other programs itself (\`${at.code}\`), and what it runs isn't followed: it could be read from a file no hash covers. Run them from a shell script instead.` : undefined;
+  if (!problem) return { specifiers, packages, strings, ...(launches ? { launches } : {}) };
   return {
     specifiers,
     packages,
     strings,
+    ...(launches ? { launches } : {}),
     problem: problem.kind === 'parse' ? `can't be read (${problem.code}, line ${problem.line}), so patch trust can't check what it loads.` : `line ${problem.line} loads code by a name worked out as it runs (\`${problem.code}\`), which patch trust can't follow.`,
   };
 }
@@ -1059,7 +1061,12 @@ const SCANNED = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx'];
 // `data` and `worktree`: strings found only as fields of the default export
 // that aren't commands (patchRoles), or only as its `worktree` setup and check
 // (writeRunsAsCode). Never a reason to hash less: `strings` still has them.
-export type ModuleScan = { specifiers: string[]; packages: string[]; strings: string[]; data?: string[]; worktree?: string[]; problem?: { kind: 'computed' | 'parse'; line: number; code: string } };
+//
+// `launches`: where it starts other programs itself (a child_process or
+// cluster import, a package known to wrap them, `Bun`, `Deno`,
+// `process.execve`), which a script's follow can't see past: what it runs
+// may be read from data no hash covers (Daybreak 165).
+export type ModuleScan = { specifiers: string[]; packages: string[]; strings: string[]; data?: string[]; worktree?: string[]; launches?: { line: number; code: string }; problem?: { kind: 'computed' | 'parse'; line: number; code: string } };
 
 export function scanModule(src: string, file: string): ModuleScan {
   const ext = path.extname(file);
@@ -1089,6 +1096,10 @@ export function scanModule(src: string, file: string): ModuleScan {
   };
   let readsBack = false;
   let problem: { start: number; end: number } | undefined;
+  let launches: AstNode | undefined;
+  const launch = (n: AstNode) => {
+    if (!launches || n.start < launches.start) launches = n;
+  };
   const refuse = (n: AstNode) => {
     if (!problem || n.start < problem.start) problem = { start: n.start, end: n.end };
   };
@@ -1110,7 +1121,10 @@ export function scanModule(src: string, file: string): ModuleScan {
     // package.json to a local file this doesn't follow.
     else if (/^(data:|#)/i.test(value) || /^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith('node:') || LOADER_MODULES.includes(value)) refuse(at);
     // A package: hashed only when the repo commits it (tracked-packages.ts).
-    else packages.add(value);
+    else {
+      packages.add(value);
+      if (LAUNCHER_PACKAGES.has(value.replace(/^node:/, '').split('/').slice(0, value.startsWith('@') ? 2 : 1).join('/'))) launch(at);
+    }
   };
   // Identifiers and members a load handled already, so they aren't
   // refused as bare references to `require`.
@@ -1159,6 +1173,8 @@ export function scanModule(src: string, file: string): ModuleScan {
         if (handled.has(node) || !isReference(parent, key)) break;
         // Reflect only called in place (`Reflect.has(o, k)`), below.
         if (node.name === 'Reflect') break;
+        // oxc decodes an escaped name, so `B\u0075n` is Bun here.
+        if (node.name === 'Bun' || node.name === 'Deno') launch(node);
         if (LOADER_NAMES.includes(node.name) || CODE_REACH.includes(node.name)) refuse(node);
         // `process`, `globalThis` and the like as values (`const p = process`,
         // `Object.entries(process)`): what's on them is then read by a name
@@ -1173,6 +1189,7 @@ export function scanModule(src: string, file: string): ModuleScan {
           const o = node.object;
           if (o.type === 'MetaProperty' || (o.type === 'Identifier' && RISKY_OBJECTS.includes(o.name))) refuse(node);
         } else if (!handled.has(node) && (LOADER_PROPERTIES.includes(name) || CODE_REACH.includes(name))) refuse(node);
+        if (name === 'execve' || name === 'Bun' || name === 'Deno') launch(node);
         break;
       }
       // `const { eval: run } = globalThis`, `{ constructor: F } = f`: a
@@ -1187,6 +1204,7 @@ export function scanModule(src: string, file: string): ModuleScan {
           // A worked-out key reads like `o[k]` (see CODE_REACH); a number reads no loader.
           const read = name ?? plainString(node.key);
           if (read !== undefined && (LOADER_PROPERTIES.includes(read) || CODE_REACH.includes(read) || LOADER_NAMES.includes(read))) refuse(node);
+          if (read === 'execve' || read === 'Bun' || read === 'Deno') launch(node);
         }
         break;
     }
@@ -1221,6 +1239,7 @@ export function scanModule(src: string, file: string): ModuleScan {
     strings: [...strings],
     data: readsBack ? [] : [...seen.data].filter((s) => !seen.other.has(s) && !seen.worktree.has(s)),
     worktree: readsBack ? [] : [...seen.worktree].filter((s) => !seen.other.has(s)),
+    ...(launches ? { launches: { line: lineAt(launches.start), code: src.slice(launches.start, launches.end).replace(/\s+/g, ' ').slice(0, 80) } } : {}),
     ...(problem ? { problem: { kind: 'computed' as const, line: lineAt(problem.start), code: src.slice(problem.start, problem.end).replace(/\s+/g, ' ').slice(0, 80) } } : {}),
   };
 }
@@ -1257,6 +1276,14 @@ const LOADER_MODULES = [
   'module', 'node:module', 'vm', 'node:vm', 'worker_threads', 'node:worker_threads', 'inspector', 'node:inspector',
   'inspector/promises', 'node:inspector/promises', 'repl', 'node:repl', 'node:test', 'test',
 ];
+// Modules that start other programs (ModuleScan.launches): Node's own, and
+// the packages most used to wrap them. Any installed package could, and
+// isn't followed, as for patches; these are the ones named for it.
+const LAUNCHER_PACKAGES = new Set([
+  'child_process', 'cluster', 'execa', 'cross-spawn', 'zx', 'shelljs', 'node-pty', '@homebridge/node-pty-prebuilt-multiarch', 'tinyexec',
+  'nano-spawn', 'spawn-sync', 'cross-spawn-async', '@npmcli/promise-spawn', '@npmcli/run-script', '@expo/spawn-async', 'spawndamnit',
+  'dax-sh', 'foreground-child', 'open', 'opn', 'node-cmd',
+]);
 // Objects a computed `[k]` on could reach a loader through.
 const RISKY_OBJECTS = ['globalThis', 'global', 'process', 'module', 'require', 'self', 'window'];
 // TypeScript types: gone before the code runs, so nothing in them loads.
@@ -1467,7 +1494,7 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
     files.add(script);
     // The script's own repo bounds what's followed as part of it, from the
     // folder it runs in: its `./x` is there, not beside it.
-    take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true }));
+    take(reachOf(script, { ...followOptions(path.dirname(script), reads), folder: dir, outside: true, launches: start.launches }));
   }
   const cross = writeProblem(writes, start.top);
   if (cross?.definite) wrote ??= cross.problem;
@@ -1567,7 +1594,8 @@ export function commandFiles(command: string, folder: string): { files: string[]
 // in its text names whole (writeRunsAsCode).
 export function commandFilesOutside(command: string, folder: string): { files: string[]; problem?: string } {
   const reads = new Reads();
-  const { files, missing, problem } = followOutside(command, 'the command', followOptions(folder, reads), reads);
+  // A patch's, so a script that starts programs is followed as before (FollowOptions.launches).
+  const { files, missing, problem } = followOutside(command, 'the command', { ...followOptions(folder, reads), launches: false }, reads);
   return { files: [...files, ...missing], ...(problem ? { problem } : {}) };
 }
 
@@ -1606,9 +1634,11 @@ export function liveCommandProblem(command: string, folder: string, files: strin
 // What script-trust needs to follow a command run from `folder` (a Claude
 // Code hook, claude-trust.ts) the way it follows a patch's: the same
 // module scan and import resolution, bounded by the repo's top.
+// A JavaScript file that starts programs itself can't be followed past
+// (FollowOptions.launches): a schedule's check run by its digest, or a hook.
 export function followOptions(folder: string, reads?: Reads): FollowOptions {
   const real = realpath(folder);
-  return { folder: real, top: repoTop(real), scanJs: scriptScan, resolveImport: (dir, spec) => resolveHelper(dir, spec, reads), namedPaths, ...(reads ? { reads } : {}) };
+  return { folder: real, top: repoTop(real), scanJs: scriptScan, resolveImport: (dir, spec) => resolveHelper(dir, spec, reads), namedPaths, launches: true, ...(reads ? { reads } : {}) };
 }
 
 // The top of the git checkout (or worktree) `dir` is in, else `dir`.

@@ -237,7 +237,9 @@ export type FollowOptions = {
   // From patch-trust.ts, passed in so the two don't import each other.
   // `packages`: its bare imports, followed when the repo commits them
   // (tracked-packages.ts).
-  scanJs: (src: string, file: string) => { specifiers: string[]; packages?: string[]; strings: string[]; problem?: string };
+  // `launches`: where it starts programs itself, which makes it a script
+  // this can't follow (Reach.launches).
+  scanJs: (src: string, file: string) => { specifiers: string[]; packages?: string[]; strings: string[]; launches?: string; problem?: string };
   resolveImport: (dir: string, spec: string) => string;
   namedPaths: (src: string) => string[];
   // Shared with the caller's hash, so it hashes the bytes followed here.
@@ -255,6 +257,11 @@ export type FollowOptions = {
   // which are nobody's to change but yours and otherwise aren't looked at:
   // a schedule's check runs them unattended, by a path as often as not.
   outside?: boolean;
+  // A JavaScript file it reaches that starts programs itself (`launches`
+  // from scanJs) makes it one this can't follow, as a `$(cat cmd.txt)`
+  // does: what it runs may come from a file no hash covers (a schedule's
+  // check, Daybreak 165). Patches don't set it yet.
+  launches?: boolean;
 };
 
 // A package manager's own entry script, run by path through node.
@@ -833,6 +840,9 @@ class Reach {
   missing = new Set<string>();
   outside = new Map<string, Set<string>>();
   problem?: string;
+  // A script it reached that starts programs itself (FollowOptions.scanJs),
+  // made the problem once the rest is followed (settleWrites).
+  launches?: string;
   // The package folders whose node_modules/.bin a package script has first
   // on PATH, while one is being followed.
   private binDirs: string[] = [];
@@ -1193,6 +1203,15 @@ class Reach {
     // An escape (`B\u0075n`, "child_\x70rocess") can spell any of those.
     if (this.o.strict && (/child_process|\bBun\b|\bDeno\b|\bprocess\s*\.\s*(binding|dlopen)\b|\\(u[0-9a-fA-F{]|x[0-9a-fA-F]{2}|[0-7])/.test(text) || scan.strings.some((x) => /child_process|worker_threads|^(node:)?(vm|module|cluster|inspector)$/.test(x)))) {
       return this.fail(undefined, undefined, `${label} runs other commands or native code itself, which a hash can't follow. Run them from a shell script instead.`);
+    }
+    // For a schedule's check too (FollowOptions.launches), it's a script
+    // this can't follow, as one that runs `$(cat cmd.txt)` is: what it runs
+    // may come from a file no hash covers (Daybreak 165, 22 Nov 2026). The
+    // rest is still followed, so an owner's check that can't be is bound as
+    // far as it can be (PatchTrust.approveCheck).
+    if (scan.launches) {
+      if (this.o.strict) return this.fail(undefined, undefined, `${label}: ${scan.launches}`);
+      if (this.o.launches) this.launches ??= `${label}: ${scan.launches}`;
     }
     // On Windows a program it starts with an environment of its own loses
     // NoDefaultCurrentDirectoryInExePath, and may be run from wherever it
@@ -2196,6 +2215,7 @@ class Reach {
     const wp = writeProblem(this.writes(), this.o.top);
     if (wp?.definite) this.problem = this.writeFailed = wp.problem;
     else if (wp) this.problem ??= wp.problem;
+    if (this.launches) this.problem ??= this.launches;
   }
 
   writes(): Writes {

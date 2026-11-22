@@ -371,6 +371,13 @@ command or file's place, more than 8 wrappers deep, or from a path that's its in
 open (`sh /dev/stdin < ./steps.txt`, `node -`, `bash -s` after
 `--rcfile`, a `#!` with `-s`, `-c` or `-i`, `/dev/fd/N`, `/proc/self/fd/N`,
 `/dev/tty`, or anything outside the repo that isn't a plain file), a
+JavaScript file that starts programs itself (an import of
+`child_process`, `cluster` or a package known to wrap them, like `execa`,
+`cross-spawn`, `zx` or `shelljs`; `Bun` or `Deno`; `process.execve`), as
+what it runs isn't followed and may be read from data no hash covers
+(`execSync(readFileSync('payload.txt'))`, Daybreak 165; for schedule
+checks and Claude Code hooks, while a patch's command still follows past
+one, and the rest of a check is still followed), a
 command in a variable or a pattern (`$CMD`,
 `"$f"` in a loop, `./s/*.sh`), `source "$1"`, relative paths after a
 `cd` to somewhere worked out as it runs, `npm run "$x"`, `npx "$x"`,

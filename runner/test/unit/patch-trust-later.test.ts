@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { loadPatchSet } from '../../src/patches.ts';
@@ -633,7 +634,7 @@ test('schedule check: Threadbear\'s own checkout binds only the command', () => 
 });
 
 // Ask and Auto: the card approves bytes it can vouch for.
-function askTools(cwd: string, mode: 'ask' | 'full', answer: () => void = () => {}) {
+function askTools(cwd: string, mode: 'ask' | 'auto' | 'full', answer: () => void = () => {}) {
   const { h, sched, ran } = scheduler();
   const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd, permissionMode: mode });
   const asked: { title: string }[] = [];
@@ -1003,4 +1004,100 @@ test("schedule check: one that writes what it runs can't be approved by the owne
   await due(h);
   assert.equal(ran.length, 0);
   sched.stop();
+});
+
+// Daybreak 165 (22 Nov 2026): an approved JavaScript check that starts a
+// program itself (`execSync(readFileSync('payload.txt'))`) ran whatever the
+// payload said, and the payload, being data, wasn't in the digest. The
+// follower doesn't look past a process launch from JavaScript, so a check
+// reaching one is unfollowable, as `sh -c "$(cat cmd.txt)"` is: a thread that
+// asks first can't add it, and an owner's is bound as far as it can be read.
+const launchers = {
+  'check.mjs': "import { execSync } from 'node:child_process';\nimport { readFileSync } from 'node:fs';\nexecSync(readFileSync('payload.txt', 'utf8'));\n",
+  'req.cjs': "const cp = require('child_process');\ncp.spawnSync('sh', ['-c', require('fs').readFileSync('payload.txt', 'utf8')]);\n",
+  'dyn.mjs': "const { exec } = await import('node:child_process');\nexec(String(await (await import('node:fs/promises')).readFile('payload.txt')));\n",
+  'execa.mjs': "import { execaCommand } from 'execa';\nimport fs from 'node:fs';\nawait execaCommand(fs.readFileSync('payload.txt', 'utf8'));\n",
+  'zx.mjs': "import { $ } from 'zx/core';\n",
+  'bun.ts': "B\\u0075n.spawn(['sh', '-c', await Bun.file('payload.txt').text()]);\n",
+  'deno.ts': "new Deno.Command('sh', { args: ['-c', 'x'] }).spawn();\n",
+  'execve.mjs': "process.execve('/bin/sh', ['sh', '-c', 'x']);\n",
+  'execve2.mjs': "const { execve } = process;\nexecve('/bin/sh', []);\n",
+  'execve3.mjs': "const { execve: run } = globalThis.process;\nrun('/bin/sh', []);\n",
+  'cluster.mjs': "import cluster from 'node:cluster';\ncluster.fork();\n",
+  'helper.mjs': "import './lib/run.mjs';\n",
+  'lib/run.mjs': "import { spawn } from 'node:child_process';\nspawn('x');\n",
+  'check.sh': '#!/bin/sh\nnode ./helper.mjs\n',
+  'payload.txt': 'echo safe\n',
+  'pure.mjs': "import fs from 'node:fs';\nimport { join } from 'node:path';\nconsole.log(fs.readFileSync(join(import.meta.dirname, 'payload.txt'), 'utf8').length > 100 ? 'big' : '');\n",
+  'pure.sh': '#!/bin/sh\nnode ./pure.mjs && ./step.sh\n',
+  'step.sh': '#!/bin/sh\necho ok\n',
+};
+// write() makes every file executable, which would make the payload look
+// runnable and get it hashed; the finding's payload is plain data.
+function launchRepo(): string {
+  const dir = repo(launchers);
+  fs.chmodSync(path.join(dir, 'payload.txt'), 0o644);
+  return dir;
+}
+const launchChecks = ['node check.mjs', 'node req.cjs', 'node dyn.mjs', 'node execa.mjs', 'node zx.mjs', 'bun bun.ts', 'deno run deno.ts', 'node execve.mjs', 'node execve2.mjs', 'node execve3.mjs', 'node cluster.mjs', './check.sh'];
+
+test('Daybreak 165: a check whose JavaScript starts programs itself is unfollowable, by any import or name', () => {
+  const dir = launchRepo();
+  for (const check of launchChecks) {
+    const d = checkDigest(check, dir);
+    // `const { execve } = process` was refused already, as `process` used as a value.
+    assert.match(d.problem ?? '', check === 'node execve2.mjs' ? /process/ : /starts other programs itself/, check);
+    assert.equal(d.writes, undefined, `${check}: the owner's to approve as far as it can be read, as other checks it can't follow are`);
+    assert.ok(checkReach(check, dir).problem, check);
+  }
+  // The rest is still followed, so an owner's approval binds the scripts it can see.
+  assert.ok(checkDigest('./check.sh', dir).files.includes('lib/run.mjs'));
+});
+
+test('Daybreak 165: a payload-only change after approval never runs under an approval made before the fix', () => {
+  const dir = launchRepo();
+  const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
+  const now = checkDigest('node check.mjs', dir);
+  // The digest as it was before: followable, so the same with any payload.
+  const pairs = now.files.map((f) => [f, crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, f))).digest('hex')]);
+  const before = crypto.createHash('sha256').update(JSON.stringify(['threadbear-check-1', 'node check.mjs', pairs, false])).digest('hex');
+  assert.ok(!now.files.includes('payload.txt'), 'the payload is data, as in the finding');
+  assert.notEqual(before, now.hash);
+  // Before the fix, a payload-only change left that digest as it was.
+  fs.writeFileSync(path.join(dir, 'payload.txt'), 'touch pwned\n');
+  assert.equal(checkDigest('node check.mjs', dir).hash, now.hash, 'the payload still isn\'t hashed, so the approval must not hold');
+  (trust as unknown as { add(key: string, entries: string[]): void }).add(folderKeyOfDir(dir), [CHECK_PREFIX + before]);
+  assert.equal(trust.checkApproved('node check.mjs', dir).approved, false, 'an old approval no longer matches, so it is held');
+  // And a card can't approve one again.
+  assert.throws(() => trust.approveCheck('node check.mjs', dir, { hash: now.hash, folder: dir }), /can't follow this/);
+});
+
+test('Daybreak 165: from a thread that asks first, a check whose JavaScript starts programs is refused before any card', async () => {
+  const dir = launchRepo();
+  for (const mode of ['ask', 'auto'] as const) {
+    const { sched, asked, call } = askTools(dir, mode);
+    for (const check of ['node check.mjs', './check.sh']) {
+      const r = await call('schedule_message', { text: 'Look', cron: '*/5 * * * *', new_thread: true, folder: dir, check });
+      assert.equal(r.isError, true, `${mode}: ${check}`);
+      assert.match(r.content[0].text, /starts other programs itself/);
+    }
+    assert.equal(asked.length, 0);
+    assert.equal(sched.list().length, 0);
+    sched.stop();
+  }
+});
+
+test('Daybreak 165: pure JavaScript checks and plain shell scripts stay followable, every byte bound', () => {
+  const dir = launchRepo();
+  const d = checkDigest('./pure.sh', dir);
+  assert.equal(d.problem, undefined);
+  assert.deepEqual(d.files.sort(), ['pure.mjs', 'pure.sh', 'step.sh']);
+  const trust = new PatchTrust({ file: path.join(tmpDir(), 'patch-trust.json') });
+  trust.approveCheck('./pure.sh', dir, { hash: d.hash, folder: dir });
+  assert.equal(trust.checkApproved('./pure.sh', dir).approved, true);
+  fs.appendFileSync(path.join(dir, 'step.sh'), 'echo changed\n');
+  assert.equal(trust.checkApproved('./pure.sh', dir).approved, false);
+  // A string that only mentions a launcher isn't one.
+  const words = repo({ 'w.mjs': "console.log('child_process and Bun and execa are words here');\nconst o = { spawn: 1 };\nconsole.log(o.spawn);\n" });
+  assert.equal(checkDigest('node w.mjs', words).problem, undefined);
 });
