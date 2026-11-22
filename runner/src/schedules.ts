@@ -245,6 +245,7 @@ export class Scheduler {
   private folderElsewhere?: (threadId: string) => string | undefined;
   private sendElsewhere?: (threadId: string, text: string, scheduleId: string, run: string, since: number, preserve?: boolean, ceiling?: PermissionMode) => Promise<{ turnId: string }>;
   private accessElsewhere?: (threadId: string) => PermissionMode | undefined;
+  private savedModeElsewhere?: (threadId: string) => PermissionMode | undefined;
   private dropElsewhere?: (threadId: string, scheduleId: string) => Promise<number>;
   // The ids in the backend's last snapshot: only a row it has shown and then
   // left out was deleted. One this runner has just saved may not be in the
@@ -305,6 +306,8 @@ export class Scheduler {
     dropElsewhere?: (threadId: string, scheduleId: string) => Promise<number>;
     // What a thread a draining runner has may do now, if known.
     accessElsewhere?: (threadId: string) => PermissionMode | undefined;
+    // Its saved mode there, busy or not (bindOld).
+    savedModeElsewhere?: (threadId: string) => PermissionMode | undefined;
     self?: SelfRunner;
     syncOn?: boolean;
     runCheck?: (p: { command: string; cwd: string; home: string; scheduleId: string; timeoutMs?: number }) => Promise<CheckResult>;
@@ -323,6 +326,7 @@ export class Scheduler {
     this.folderElsewhere = deps.folderElsewhere;
     this.sendElsewhere = deps.sendElsewhere;
     this.accessElsewhere = deps.accessElsewhere;
+    this.savedModeElsewhere = deps.savedModeElsewhere;
     this.dropElsewhere = deps.dropElsewhere;
     this.ceilingsFile = path.join(deps.home, 'schedule-ceilings.json');
     this.file = path.join(deps.home, 'schedules.json');
@@ -344,13 +348,18 @@ export class Scheduler {
   // have when a run reaches it, and a run to a thread above it isn't sent:
   // a repeating one is paused, and Mike is shown the thread with a note,
   // to read it and resume it (his resuming or changing it lifts the
-  // ceiling). Mike's own (the app, tb, a Full thread's) have none (full),
-  // and so does a thread's schedule for itself: its words are already its
-  // own. Kept on this Mac, beside schedules.json, never in the backend's
-  // row, bound to the schedule's id, creation time and thread. One with
-  // none kept (made before 22 Nov 2026, or a row that only came through
-  // the backend) counts as made by the thread it names (`createdBy`): its
-  // own, none; another's, or none named, Ask.
+  // ceiling). Mike's own (the app, tb, a Full thread's) have none (full).
+  // A thread's schedule for itself has its own mode as it made it: after a
+  // /clear or a compaction its words are no longer in what the agent
+  // reads, and Mike may have raised it for other work (verify-fix of 162).
+  // Kept on this Mac, beside schedules.json, never in the backend's row,
+  // bound to the schedule's id, creation time and thread. One with none
+  // kept (made before 22 Nov 2026, or a row that only came through the
+  // backend) is bound the first time this runner sees it (bindOld, at
+  // start and with each snapshot) at its maker's (`createdBy`) mode then,
+  // so Mike's carry on as they were (on 22 Nov all 32 of his on the M5
+  // were made by threads now on Full); one whose maker is gone, or that
+  // names none, at Ask.
   private readonly ceilingsFile: string;
   private ceilings?: Record<string, { createdAt: string; threadId: string; ceiling: PermissionMode }>;
 
@@ -402,11 +411,46 @@ export class Scheduler {
     return rec?.threadId ? this.ceilingOf(rec) : rec ? 'full' : 'ask';
   }
 
-  // A schedule's ceiling as kept here, or as one from before.
+  // A schedule's ceiling as kept here, or one from before bound now.
   private ceilingOf(rec: ScheduleRecord): PermissionMode {
     const kept = rec.threadId ? this.readCeilings()[rec.id] : undefined;
     if (kept && kept.createdAt === rec.createdAt && kept.threadId === rec.threadId) return kept.ceiling;
-    return rec.createdBy !== undefined && rec.createdBy === rec.threadId ? 'full' : 'ask';
+    return this.bindOld(rec) ?? 'ask';
+  }
+
+  // A schedule from before ceilings, bound as "Ceilings" says. Undefined
+  // (and nothing kept) when it's a thread's own and that thread's mode
+  // can't be read here yet (on a draining runner that doesn't say): it's
+  // tried again later, and counts as Ask meanwhile.
+  private bindOld(rec: ScheduleRecord): PermissionMode | undefined {
+    if (!rec.threadId || this.refuse || !this.mine(rec)) return undefined;
+    const ceiling = rec.createdBy !== undefined ? this.savedMode(rec.createdBy) : 'ask';
+    if (ceiling === undefined) return undefined;
+    this.setCeiling(rec, ceiling);
+    this.log.info("bound a schedule from before ceilings", { scheduleId: rec.id, ceiling });
+    return ceiling;
+  }
+
+  private bindAllOld(): void {
+    const kept = this.readCeilings();
+    for (const rec of this.items.values()) {
+      const k = rec.threadId ? kept[rec.id] : undefined;
+      if (rec.threadId && !rec.finishedAt && !(k && k.createdAt === rec.createdAt && k.threadId === rec.threadId)) this.bindOld(rec);
+    }
+  }
+
+  // A thread's saved mode (Plan first as Ask); Ask for one that isn't
+  // here, or undefined while a draining runner has it and doesn't say.
+  private savedMode(threadId: string): PermissionMode | undefined {
+    if (this.elsewhere(threadId)) {
+      const m = this.savedModeElsewhere?.(threadId);
+      return m === undefined ? undefined : ceilingMode(m);
+    }
+    try {
+      return ceilingMode(this.runner.get(threadId).permissionMode ?? 'ask');
+    } catch {
+      return 'ask';
+    }
   }
 
   // What a thread's agent may do now. One that can't be known here (on a
@@ -461,6 +505,7 @@ export class Scheduler {
       if (gone) this.changed();
     });
     for (const r of this.readRuns()) this.unrecorded.set(runKey(r), r);
+    if (this.mode === 'local') this.bindAllOld();
     this.log.info('schedules loaded', { count: this.items.size, mode: this.mode, ...(this.unrecorded.size ? { unrecordedRuns: this.unrecorded.size } : {}) });
     this.tick();
   }
@@ -620,6 +665,7 @@ export class Scheduler {
       }
     }
     this.shown = new Set(rows.map((r) => r.id));
+    this.bindAllOld();
     this.overlayUnrecorded();
     if (this.namesDue) void this.refreshNames();
     this.changed();
@@ -834,7 +880,7 @@ export class Scheduler {
     this.plan(rec);
     if (!away) this.approveCheck(rec, p.checkCard);
     // Before it's saved, so its first run can't come without it.
-    if (rec.threadId) this.setCeiling(rec, p.ceiling ?? (p.createdBy && p.createdBy !== rec.threadId ? 'ask' : 'full'));
+    if (rec.threadId) this.setCeiling(rec, p.ceiling ?? (p.createdBy === undefined ? 'full' : p.createdBy === rec.threadId ? (this.savedMode(rec.threadId) ?? 'ask') : 'ask'));
     await this.put(rec);
     // An `at` that's already passed runs now rather than on the next tick.
     this.tick();
@@ -1272,6 +1318,8 @@ export class Scheduler {
     if (this.stopped) return;
     const now = this.clock.now();
     const changed = this.prune(now);
+    // Any from before ceilings whose thread couldn't be read at start.
+    this.bindAllOld();
     for (const rec of [...this.items.values()]) {
       if (rec.paused || !rec.nextRunAt || Date.parse(rec.nextRunAt) > now) continue;
       if (this.checking.has(rec.id)) continue;

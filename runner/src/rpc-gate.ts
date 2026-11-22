@@ -302,8 +302,7 @@ export class CallerGate {
     const target = str(p, 'threadId');
     if (target) {
       if (target !== threadId && above(this.targetAccess(target), caller)) throw needs(`scheduling a message to ${this.title(target)}`, 'schedule_message');
-      // Its own schedule has none: its words are already its own.
-      return { ...p, createdBy: threadId, ...(target !== threadId ? { ceiling: ceilingMode(caller.mode) } : {}) };
+      return { ...p, createdBy: threadId, ceiling: ceilingMode(caller.mode) };
     }
     const mode = (p.permissionMode ?? caller.mode) as PermissionMode;
     if (above({ mode }, caller)) throw needs(`scheduling new threads with ${MODE_NAMES[mode] ?? mode}`, 'schedule_message');

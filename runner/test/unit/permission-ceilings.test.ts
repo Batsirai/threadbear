@@ -198,10 +198,9 @@ test('162: what still works: same access, its own, Mike\'s, and new threads', as
   // Ask to Ask, not raised.
   const same = idle(h, 'Careful work', 'ask');
   await askSchedules(h, sched, { threadId: same, when: '1m' });
-  // A thread's own, raised since.
-  const own = idle(h, 'Own work', 'ask');
+  // A thread's own, at the mode it made it in.
+  const own = idle(h, 'Own work', 'auto');
   await sched.create({ text: `${PAYLOAD} own`, at: new Date(h.clock.now() + MIN).toISOString(), threadId: own, createdBy: own });
-  raise(h, own);
   // Mike's, to a Full thread.
   const mikes = idle(h, 'Mike work', 'full');
   await sched.create({ text: `${PAYLOAD} mike`, at: new Date(h.clock.now() + MIN).toISOString(), threadId: mikes });
@@ -213,11 +212,13 @@ test('162: what still works: same access, its own, Mike\'s, and new threads', as
   assert.equal(sched.list().find((s) => s.id === fresh.id)!.lastRun?.outcome, 'sent');
 });
 
-test('162: a schedule from before ceilings counts as made by the thread it names', async () => {
+test('162: a schedule from before ceilings is bound at its maker\'s mode as this runner first sees it', async () => {
   const h = harness();
   const sched = scheduler(h);
   const target = idle(h, 'Careful work', 'full');
+  const maker = idle(h, 'Maker', 'full');
   const another = await sched.create({ text: PAYLOAD, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: 'some-thread' });
+  const mikes = await sched.create({ text: `${PAYLOAD} kept`, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: maker });
   const own = await sched.create({ text: `${PAYLOAD} own`, at: new Date(h.clock.now() + MIN).toISOString(), threadId: target, createdBy: target });
   // As if made before 22 Nov 2026: nothing kept beside schedules.json.
   sched.stop();
@@ -226,8 +227,13 @@ test('162: a schedule from before ceilings counts as made by the thread it names
   h.clock.advance(2 * MIN);
   await tick(8);
   await settle();
-  assert.match(again.list().find((s) => s.id === another.id)!.lastRun?.note ?? '', /Paused, not sent/, "another thread's: Ask");
-  assert.equal(again.list().find((s) => s.id === own.id)!.lastRun?.outcome, 'sent', 'its own: none');
+  assert.match(again.list().find((s) => s.id === another.id)!.lastRun?.note ?? '', /Paused, not sent/, 'a maker that is gone: Ask');
+  assert.equal(again.list().find((s) => s.id === own.id)!.lastRun?.outcome, 'sent', "its own: the thread's mode then");
+  assert.equal(again.list().find((s) => s.id === mikes.id)!.lastRun?.outcome, 'sent', "another of Mike's Full threads: Full");
+  // Bound then: raising the thread later doesn't lift it.
+  const kept = JSON.parse(fs.readFileSync(path.join(h.home, 'schedule-ceilings.json'), 'utf8'));
+  assert.equal(kept[own.id].ceiling, 'full');
+  assert.equal(kept[another.id].ceiling, 'ask');
 });
 
 test("162: a thread with less access rewording Mike's schedule lowers its ceiling to its own", async () => {
@@ -494,7 +500,7 @@ test("the RPC gate puts a thread's own ceiling on its tb send, whatever it says"
   assert.equal(gate.check(me, 'threads.send', { threadId: other, text: 'hi', ceiling: 'full' }).ceiling, 'ask');
   assert.equal(gate.check(me, 'threads.send', { threadId: me, text: 'hi', ceiling: 'full' }).ceiling, undefined, 'to itself: none');
   assert.equal(gate.check(me, 'schedules.create', { threadId: other, text: 'x', at: '2030-01-01T00:00:00Z', ceiling: 'full' }).ceiling, 'ask');
-  assert.equal(gate.check(me, 'schedules.create', { threadId: me, text: 'x', at: '2030-01-01T00:00:00Z', ceiling: 'full' }).ceiling, undefined);
+  assert.equal(gate.check(me, 'schedules.create', { threadId: me, text: 'x', at: '2030-01-01T00:00:00Z', ceiling: 'full' }).ceiling, 'ask', 'its own too');
 });
 
 // ------------------------------------------- from the cross-lab review
@@ -638,4 +644,24 @@ test('a thread moved to the main Mac brings its queue, held reports and waits at
   assert.deepEqual((rec.heldReports as { ceiling?: string }[]).map((q) => q.ceiling), ['ask', undefined]);
   assert.deepEqual((rec.waitingOn as { by?: { mode: string } }[]).map((q) => q.by?.mode), ['ask', undefined]);
   assert.equal(capMovedCeilings(rec), false);
+});
+
+test("162: a limited thread's schedule for itself is held once it's raised (its words may be gone from what it reads, after a /clear)", async () => {
+  const h = harness();
+  const sched = scheduler(h);
+  const own = idle(h, 'Own work', 'ask');
+  const tools = buildThreadbearTools(h.runner, own, () => h.clock.now(), sched, undefined, undefined, { sleep: async () => {} });
+  const r = (await tools.find((x) => x.name === 'schedule_message')!.handler({ text: PAYLOAD, when: '2m' } as never, {})) as { isError?: boolean };
+  assert.equal(r.isError, undefined);
+  raise(h, own);
+  h.clock.advance(3 * MIN);
+  await tick(8);
+  await settle();
+  assert.equal(heard(h, own), false);
+});
+
+test("162: moved to another Mac, a schedule keeps the lower of its ceiling there and the thread's mode as it arrives", async () => {
+  const { movedSchedules } = await import('../../src/moves.ts');
+  const got = movedSchedules([{ text: 'a', at: '2030-01-01T00:00:00Z', ceiling: 'ask' }, { text: 'b', at: '2030-01-01T00:00:00Z', ceiling: 'plan' }, { text: 'c', at: '2030-01-01T00:00:00Z', ceiling: 'root' }], 't1').schedules;
+  assert.deepEqual(got.map((s) => s.ceiling), ['ask', 'ask', undefined]);
 });

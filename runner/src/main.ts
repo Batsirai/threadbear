@@ -110,7 +110,7 @@ import { CrossRunner } from './cross-runner.ts';
 import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
 import type { RemoteThreads } from './thread-index.ts';
 import { FarReports, ROWS as FAR_ROWS, TICK_MS as FAR_TICK_MS, type FarRow } from './far-reports.ts';
-import { ceilingMode, higherMode } from './runner/ceiling.ts';
+import { ceilingMode, higherMode, lowerMode } from './runner/ceiling.ts';
 import { EFFORT_LEVELS, ErrorCode, RpcError, isPermissionMode, type EffortLevel, type PermissionMode } from './protocol.ts';
 
 // Tells launch.mjs this runner calls its listening() hook (release.ts), so
@@ -610,6 +610,7 @@ async function main(): Promise<void> {
       if (!t || t.status === 'running' || t.status === 'starting' || t.status === 'waiting') return undefined;
       return t.permissionMode;
     },
+    savedModeElsewhere: (id) => peers.find(id)?.permissionMode,
     dropElsewhere: (id, scheduleId) => dropScheduled(runner, peers, id, scheduleId),
     self: { id: syncRunnerId, name: cfg.sync.name ?? defaultRunnerName(), icon: runnerIcon, version: RUNNER_VERSION, release: RELEASE.release, startedAt },
     syncOn: Boolean(cfg.sync.enabled && cfg.sync.url && readSyncKey(cfg.home)),
@@ -1504,7 +1505,7 @@ async function main(): Promise<void> {
         const packed = await runner.packForMove(id, row);
         const keep = scheduler.list(id).filter((sc) => sc.threadId === id && !sc.finishedAt);
         if (keep.some((sc) => sc.check)) packed.leftBehind.push("Its schedules' shell checks stayed behind: set them again here if they're still wanted.");
-        const carried = keep.map((sc) => ({ text: sc.text, title: sc.title, ...(sc.cron ? { cron: sc.cron } : { at: sc.at }), ...(sc.timezone ? { timezone: sc.timezone } : {}), ...(sc.paused ? { paused: true } : {}), ...(sc.createdBy ? { createdBy: sc.createdBy } : {}) }));
+        const carried = keep.map((sc) => ({ text: sc.text, title: sc.title, ...(sc.cron ? { cron: sc.cron } : { at: sc.at }), ...(sc.timezone ? { timezone: sc.timezone } : {}), ...(sc.paused ? { paused: true } : {}), ...(sc.createdBy ? { createdBy: sc.createdBy } : {}), ceiling: scheduler.ceilingById(sc.id) }));
         if (carried.length) packed.entries.push({ path: 'schedules.json', data: Buffer.from(JSON.stringify(carried)) });
         return packed;
       },
@@ -1517,12 +1518,13 @@ async function main(): Promise<void> {
       async adopt(row) {
         const r = await runner.adoptMoved(row);
         // When and what each sends, nothing more (moves.ts movedSchedules).
-        // Each held to the thread's access as it arrives (schedules.ts,
-        // "Ceilings"): their words came from the other Mac, whatever it says
-        // made them, so raising the thread here later pauses them for Mike.
-        const ceiling = runner.authorityNow(row.threadId).mode;
-        for (const sc of r.schedules ?? []) {
-          await scheduler.create({ ...sc, threadId: row.threadId, ceiling }).catch((e) => log.warn("couldn't make a moved thread's schedule again", { threadId: row.threadId, error: String(e) }));
+        // Each held to the lower of the ceiling it had there and the
+        // thread's saved mode as it arrives (schedules.ts, "Ceilings"): the
+        // other Mac's word can only lower it, so raising the thread here
+        // later pauses them for Mike.
+        const here = ceilingMode(runner.authoritySaved(row.threadId).mode);
+        for (const { ceiling: there, ...sc } of r.schedules ?? []) {
+          await scheduler.create({ ...sc, threadId: row.threadId, ceiling: there ? lowerMode(there, here) : here }).catch((e) => log.warn("couldn't make a moved thread's schedule again", { threadId: row.threadId, error: String(e) }));
         }
       },
       discard: (row) => runner.discardMove(row),

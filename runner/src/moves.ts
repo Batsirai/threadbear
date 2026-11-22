@@ -19,6 +19,7 @@ import { archive, chunks, MAX_SEALED_BYTES, sealInfo, sha256, unarchive, biggest
 import { sealBytes } from './secrets.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { withoutCredentials } from './move-git.ts';
+import { isPermissionMode, type PermissionMode } from './protocol.ts';
 
 export type MoveState = 'asking' | 'ready' | 'packing' | 'unpacking' | 'claimed' | 'done' | 'failed' | 'cancelled';
 
@@ -163,7 +164,9 @@ export function stillRunner(runnerId: string, runnerName: string, all: readonly 
 // to a thread runs on the thread's), no other runner. A check is set
 // again on the runner that runs it, with its own card (security review,
 // 10 Nov 2026). `dropped` counts the checks left off, for the thread's note.
-export type MovedSchedule = { text: string; title?: string; cron?: string; at?: string; timezone?: string; paused?: boolean; createdBy?: string };
+// `ceiling`: the one it had there (schedules.ts, "Ceilings"), which can
+// only lower the one it gets here.
+export type MovedSchedule = { text: string; title?: string; cron?: string; at?: string; timezone?: string; paused?: boolean; createdBy?: string; ceiling?: PermissionMode };
 export function movedSchedules(raw: unknown, threadId: string): { schedules: MovedSchedule[]; dropped: number } {
   const schedules: MovedSchedule[] = [];
   let dropped = 0;
@@ -178,7 +181,7 @@ export function movedSchedules(raw: unknown, threadId: string): { schedules: Mov
     if (!text || !cron === !at) continue;
     const title = str('title', 200);
     const timezone = str('timezone', 100);
-    schedules.push({ text, ...(title ? { title } : {}), ...(cron ? { cron } : { at: at! }), ...(timezone ? { timezone } : {}), ...(o.paused === true ? { paused: true } : {}), ...(o.createdBy === threadId ? { createdBy: threadId } : {}) });
+    schedules.push({ text, ...(title ? { title } : {}), ...(cron ? { cron } : { at: at! }), ...(timezone ? { timezone } : {}), ...(o.paused === true ? { paused: true } : {}), ...(o.createdBy === threadId ? { createdBy: threadId } : {}), ...(isPermissionMode(o.ceiling) ? { ceiling: o.ceiling === 'plan' ? 'ask' : o.ceiling } : {}) });
   }
   return { schedules, dropped };
 }

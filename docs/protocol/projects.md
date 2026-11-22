@@ -293,9 +293,10 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   (`runner/src/schedules.ts`, "Ceilings"; Daybreak finding 162, 22 Nov
   2026). One a thread on Ask or Auto set up for another thread has that
   thread's own mode (or, if Mike allowed it on a card, the other thread's
-  access as the card showed it); Mike's (the app, `tb` outside a thread,
-  the phone), a Full thread's and a thread's own schedule for itself have
-  none. A run to a thread that's above its ceiling now isn't sent: the run
+  access as the card showed it), and so does one it sets up for itself
+  (after a `/clear` its words are no longer in what its agent reads);
+  Mike's (the app, `tb` outside a thread, the phone) and a Full thread's
+  have none. A run to a thread that's above its ceiling now isn't sent: the run
   says `Paused, not sent: …`, a repeating schedule pauses, and the thread
   gets a `system.note` and goes to Needs you, with no turn. Mike resuming
   or changing its words (the app, `tb`, the phone), or his Run now, lifts
@@ -312,9 +313,11 @@ schedule keeps `poolId` (and `provider`), so the run still picks its login.
   Mac the schedule runs on (`schedule-ceilings.json` in the data dir,
   bound to the schedule's id, creation time and thread), never in the
   backend's row; one with none kept (made before 22 Nov 2026, or one that
-  only came through the backend) counts as made by its `createdBy`: its
-  own thread's, none; any other, Ask. A moved thread's schedules take the
-  thread's access as it arrives. The ceiling goes with the queued message
+  only came through the backend) is bound the first time the runner sees
+  it, at its `createdBy` thread's saved mode then (Ask if that thread is
+  gone or none is named), so existing ones carry on as they were. A
+  moved thread's schedules take the lower of the ceiling they had on the
+  Mac they came from and the thread's saved mode as it arrives. The ceiling goes with the queued message
   (and to a draining runner, as `drain.sendScheduled`'s `ceiling`), and
   is checked again as the message leaves the queue (`runner/src/runner/ceiling.ts`).
 - **Sending.** The message starts with a line saying which schedule sent

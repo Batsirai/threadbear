@@ -1013,8 +1013,8 @@ export function buildThreadbearTools(
         const toThread = !new_thread ? await resolve(threadId ?? alias) : undefined;
         // Its ceiling (schedules.ts, "Ceilings"): as far as this thread can
         // reach, or the other thread's access as the card shows it if that's
-        // more (Mike allowed it there). None from Full, nor for its own.
-        const ceiling: PermissionMode | undefined = toThread && toThread !== selfId ? (caller ? asCeiling(higherOf(caller.mode, (await accessOf(toThread)).mode)) : 'full') : undefined;
+        // more (Mike allowed it there). None from Full.
+        const ceiling: PermissionMode | undefined = toThread ? (caller ? asCeiling(toThread === selfId ? caller.mode : higherOf(caller.mode, (await accessOf(toThread)).mode)) : 'full') : undefined;
         // Where its threads would run, as the card says it.
         const where = new_thread && !runner ? await folder(f ?? '.') : f;
         const reasons = [
