@@ -133,6 +133,9 @@ pub struct NotePlace {
     pub mark: usize,
     pub rect: Rect,
     pub target: (f32, f32),
+    /// Left of the picture, for a mark on its left side: a pointer from the
+    /// right would cross the whole picture.
+    pub left: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,6 +214,9 @@ pub fn layout(review: &DesignReview, measure: &dyn Measure) -> Board {
     let mut options = Vec::new();
     for (index, option) in review.options.iter().enumerate() {
         let top = STAGGER[index % STAGGER.len()];
+        if needs_left_room(option) {
+            x += NOTE_GAP + NOTE_WIDTH + 40.;
+        }
         let laid = lay_option(index, option, x, top, measure);
         x = laid.frame.right() + GUTTER;
         options.push(laid);
@@ -275,14 +281,27 @@ fn lay_option(
     }
 }
 
-/// Where a mark's pointer lands: the right of a circle, the end of an
-/// underline or swipe, the middle of what an arrow points at.
+/// Whether a mark's note goes left of its picture: when the mark is on the
+/// picture's left part.
+pub fn note_goes_left(mark: &AgentMark) -> bool {
+    (mark.bbox[0] + mark.bbox[2]) / 2. < 0.42
+}
+
+/// Where a mark's pointer lands, on the side its note is: the edge of a
+/// circle, the end of an underline or swipe, the middle of what an arrow
+/// points at.
 pub fn mark_target(picture: &Rect, mark: &AgentMark) -> (f32, f32) {
     let part = picture.part(&mark.bbox);
+    let left = note_goes_left(mark);
+    let (edge, out) = if left {
+        (part.x, -1.)
+    } else {
+        (part.right(), 1.)
+    };
     match mark.kind {
-        MarkKind::Circle => (part.right() + 16., part.y + part.h * 0.45),
-        MarkKind::Underline => (part.right() + 10., part.bottom()),
-        MarkKind::Highlight => (part.right() + 8., part.y + part.h / 2.),
+        MarkKind::Circle => (edge + out * (part.w * 0.21 + 8.), part.y + part.h * 0.45),
+        MarkKind::Underline => (edge + out * 10., part.bottom()),
+        MarkKind::Highlight => (edge + out * 8., part.y + part.h / 2.),
         MarkKind::Arrow => part.center(),
     }
 }
@@ -300,21 +319,44 @@ fn place_notes(picture: &Rect, marks: &[AgentMark], measure: &dyn Measure) -> Ve
             .1
             .total_cmp(&mark_target(picture, &marks[b]).1)
     });
-    let mut floor = f32::MIN;
+    // A column each side, each stacked on its own.
+    let (mut floor_left, mut floor_right) = (f32::MIN, f32::MIN);
     for i in order {
         let (w, h) = measure.note(marks[i].note.as_deref().unwrap_or_default());
         let target = mark_target(picture, &marks[i]);
-        let y = (target.1 - h / 2. - 10.).max(floor);
-        let rect = Rect::new(picture.right() + NOTE_GAP, y, w, h);
-        floor = rect.bottom() + NOTE_SPACING;
+        let left = note_goes_left(&marks[i]);
+        let floor = if left {
+            &mut floor_left
+        } else {
+            &mut floor_right
+        };
+        let y = (target.1 - h / 2. - 10.).max(*floor);
+        let x = if left {
+            picture.x - NOTE_GAP - w
+        } else {
+            picture.right() + NOTE_GAP
+        };
+        let rect = Rect::new(x, y, w, h);
+        *floor = rect.bottom() + NOTE_SPACING;
         placed.push(NotePlace {
             mark: i,
             rect,
             target,
+            left,
         });
     }
     placed.sort_by_key(|n| n.mark);
     placed
+}
+
+/// Whether any of an option's pictures has a note on its left, which then
+/// needs room before the frame.
+fn needs_left_room(option: &ReviewOption) -> bool {
+    option
+        .all_shots()
+        .iter()
+        .flat_map(|s| &s.marks)
+        .any(|m| m.note.is_some() && note_goes_left(m))
 }
 
 // ---------------------------------------------------------------- the tour
@@ -656,7 +698,12 @@ pub fn agent_strokes(picture: &Rect, mark: &AgentMark, seed: u32) -> Vec<Stroke>
 
 /// The pointer from a note to its mark, with its head.
 pub fn pointer(note: &NotePlace) -> Vec<Stroke> {
-    let from = (note.rect.x - 12., note.rect.y + note.rect.h / 2.);
+    let mid = note.rect.y + note.rect.h / 2.;
+    let from = if note.left {
+        (note.rect.right() + 12., mid)
+    } else {
+        (note.rect.x - 12., mid)
+    };
     let shaft = curl(from, note.target);
     let head = arrowhead(&shaft, 16.);
     vec![shaft, head]
@@ -929,6 +976,32 @@ mod tests {
     }
 
     #[test]
+    fn a_note_for_a_mark_on_the_left_sits_left_of_its_picture_with_room_for_it() {
+        let marks = vec![
+            circle([0.0, 0.06, 0.04, 0.43], "every tool its own place"),
+            circle([0.25, 0.07, 0.8, 0.52], "the whole book at once"),
+        ];
+        let r = review(
+            None,
+            vec![
+                option("A", None, vec![]),
+                option("B", None, vec![shot(None, marks)]),
+            ],
+        );
+        let board = layout(&r, &Guess);
+        let s = &board.options[1].shots[0];
+        let (left, right) = (&s.notes[0], &s.notes[1]);
+        assert!(left.left && left.rect.right() < s.picture.x, "{left:?}");
+        assert!(!right.left && right.rect.x > s.picture.right());
+        // It doesn't reach back into the frame before.
+        assert!(left.rect.x > board.options[0].extent().right());
+        // Its pointer starts on its right and ends on the circle's left.
+        let shaft = &pointer(left)[0];
+        assert!(shaft.start.0 > left.rect.right());
+        assert!(left.target.0 < s.picture.part(&r.options[1].shots[0].marks[0].bbox).x);
+    }
+
+    #[test]
     fn the_tour_goes_lead_then_each_option_shot_by_shot_then_everything() {
         let r = review(
             Some("Lead"),
@@ -1030,6 +1103,7 @@ mod tests {
             mark: 0,
             rect: Rect::new(800., 100., 200., 40.),
             target: (650., 140.),
+            left: false,
         };
         let strokes = pointer(&note);
         assert_eq!(strokes[0].curves.last().unwrap()[2], note.target);

@@ -4,7 +4,7 @@ name: Review canvas
 title: Review canvas: design reviews become a board you drag and zoom, with the agent's notes on the pictures and marks of your own
 added: 2026-11-22
 on: false
-reminder: 3f9c2a71
+reminder: ddc1ae8a
 ---
 
 ## What it does
