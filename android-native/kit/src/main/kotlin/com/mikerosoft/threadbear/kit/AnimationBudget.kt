@@ -22,9 +22,10 @@ object AnimationLimits {
      */
     const val MAX_PIXELS_PER_SECOND = 120_000_000L
     /**
-     * The shortest a WebP or APNG frame can really play: Android passes
-     * their times through, so a 1 ms frame plays once a refresh, 120 times
-     * a second on a fast screen.
+     * The shortest a frame can really play: Android may pass a file's frame
+     * times through as they are (a GIF's 0 or 10 ms too: not every version
+     * clamps them, Gemini's review), so a 1 ms frame plays once a refresh,
+     * 120 times a second on a fast screen.
      */
     const val MIN_FRAME_MS = 8L
     /** Moving pictures playing at once, and their pixels a second together. More stay still. */
@@ -101,26 +102,27 @@ object AnimationFrames {
 
     private fun be32(data: ByteArray, at: Int): Long = (be16(data, at).toLong() shl 16) or be16(data, at + 2).toLong()
 
-    /** A WebP or APNG frame's time as it can really play. */
+    /** A frame's time as it can really play. */
     private fun frameMs(ms: Long) = ms.coerceAtLeast(AnimationLimits.MIN_FRAME_MS)
-
-    /** A GIF frame's time as Android plays it: 10 ms or less plays at 100 ms, as browsers do. */
-    private fun gifFrameMs(ms: Long) = if (ms <= 10) 100L else ms
 
     /**
      * Image descriptors, walking the blocks to the trailer, each frame's
      * time from the graphic control block before it. Strict: a file cut
      * short, a block that isn't GIF's, or an extension whose fixed-size
      * block isn't its size (a graphic control block of other than four
-     * bytes, an application block's name of other than eleven, NETSCAPE's
-     * loop block of other than three, a plain text header of other than
-     * twelve) is null. Skia reads those sizes whatever the file says, and
+     * bytes, an application block's name of other than eleven, a NETSCAPE
+     * block under three, a plain text header of other than twelve), or a
+     * frame that isn't wholly inside the picture's canvas (the decoder
+     * works through a frame's whole width, canvas or not: Gemini's review),
+     * is null. Skia reads those sizes whatever the file says, and
      * went on past where a looser walk stopped (Codex's reviews). Zero
      * bytes between blocks are padding some encoders write, skipped as
      * decoders skip them.
      */
     private fun gif(data: ByteArray, stopAfter: Int): Frames? {
         if (data.size < 13) return null
+        val canvasWidth = le16(data, 6)
+        val canvasHeight = le16(data, 8)
         var at = 13
         val flags = u8(data, 10)
         if (flags and 0x80 != 0) at += 3 * (1 shl ((flags and 0x07) + 1))
@@ -142,10 +144,26 @@ object AnimationFrames {
             at += 1 + size
             return true
         }
+        /** Sub-blocks of at least `least` bytes each, to the terminator (Skia reads that many of each). */
+        fun atLeast(least: Int): Boolean {
+            while (true) {
+                if (at >= data.size) return false
+                val n = u8(data, at)
+                at += 1
+                if (n == 0) return true
+                if (n < least) return false
+                at += n
+            }
+        }
         while (at < data.size) {
             when (u8(data, at)) {
                 0x2C -> {
                     if (at + 10 > data.size) return null
+                    val left = le16(data, at + 1)
+                    val top = le16(data, at + 3)
+                    val width = le16(data, at + 5)
+                    val height = le16(data, at + 7)
+                    if (width == 0 || height == 0 || left + width > canvasWidth || top + height > canvasHeight) return null
                     val local = u8(data, at + 9)
                     at += 10
                     if (local and 0x80 != 0) at += 3 * (1 shl ((local and 0x07) + 1))
@@ -153,7 +171,7 @@ object AnimationFrames {
                     at += 1
                     if (!skipSubBlocks()) return null
                     frames++
-                    shortest = minOf(shortest, gifFrameMs(delayMs))
+                    shortest = minOf(shortest, frameMs(delayMs))
                     delayMs = 0
                     if (frames > stopAfter) return Frames(frames, shortest)
                 }
@@ -171,8 +189,11 @@ object AnimationFrames {
                             if (at + 12 > data.size || u8(data, at) != 11) return null
                             val app = ascii(data, at + 1, 11)
                             at += 12
-                            if ((app == "NETSCAPE2.0" || app == "ANIMEXTS1.0") && !fixed(3)) return null
-                            if (!skipSubBlocks()) return null
+                            if (app == "NETSCAPE2.0" || app == "ANIMEXTS1.0") {
+                                if (!atLeast(3)) return null
+                            } else if (!skipSubBlocks()) {
+                                return null
+                            }
                         }
                         0x01 -> if (!fixed(12) || !skipSubBlocks()) return null
                         else -> if (!skipSubBlocks()) return null

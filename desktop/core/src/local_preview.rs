@@ -334,7 +334,7 @@ impl Site {
         let (data, stamp) = self.read(&parts, admit)?;
         let dir = relative.rsplit_once('/').map_or("", |(d, _)| d);
         let scanned = SCANNED_EXTENSIONS.contains(&ext.as_str());
-        let (utf8, needs_scan) = {
+        let (utf8, needs_scan) = if is_page || scanned {
             let mut facts = self.facts.lock().ok()?;
             let known = facts.entry(stamp).or_default();
             if is_page {
@@ -352,7 +352,12 @@ impl Site {
             // Read for names once per version and folder: the same file by
             // another spelling of its folder (`SUB/style.css` on a disk that
             // ignores case) names its assets from there (Gemini's review).
-            (utf8, scanned && known.scanned.insert(dir.to_owned()))
+            // Marked as read only once its names are in (below), so a request
+            // at the same moment reads it again rather than going ahead of
+            // them (Gemini's review).
+            (utf8, scanned && !known.scanned.contains(dir))
+        } else {
+            (false, false)
         };
         if needs_scan && !self.page_only {
             let head = &data[..data.len().min(SCAN_BYTES)];
@@ -376,6 +381,13 @@ impl Site {
                     *bytes += found.len();
                     allowed.insert(found);
                 }
+            }
+            if let Ok(mut facts) = self.facts.lock() {
+                facts
+                    .entry(stamp)
+                    .or_default()
+                    .scanned
+                    .insert(dir.to_owned());
             }
         }
         let mut mime = mime_type(&ext).to_owned();
@@ -482,12 +494,18 @@ impl Site {
         let unchanged = after.len() == stamp.len
             && (after.mtime(), after.mtime_nsec()) == stamp.mtime
             && (after.ctime(), after.ctime_nsec()) == stamp.ctime;
+        // Written to while it was read: what came may be half of each, so
+        // it's refused this time, never served or remembered under the
+        // stamp it had before (Gemini's review).
+        if !unchanged {
+            return None;
+        }
         if let Ok(mut cache) = self.cache.lock() {
             let (files, bytes, tick) = &mut *cache;
             if let Some(old) = files.remove(&key) {
                 *bytes -= old.data.len();
             }
-            if unchanged && data.len() <= MAX_CACHED_BYTES {
+            if data.len() <= MAX_CACHED_BYTES {
                 while *bytes + data.len() > MAX_CACHED_BYTES {
                     let Some(oldest) = files.iter().min_by_key(|(_, c)| c.used).map(|(k, _)| *k)
                     else {

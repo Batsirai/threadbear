@@ -49,9 +49,10 @@ class AnimationBudgetTest {
         // 2000x2000, 10 frames: 40 million a pass.
         assertNotNull(AnimationFrames.work(gif(10, delayCs = 10), 2000, 2000, 2000, 2000), "10 a second: 40 million a second")
         assertNull(AnimationFrames.work(gif(10, delayCs = 2), 2000, 2000, 2000, 2000), "50 a second: 200 million")
-        // Android plays a GIF frame of 10 ms or less at 100 ms.
-        assertNotNull(AnimationFrames.work(gif(10, delayCs = 0), 2000, 2000, 2000, 2000))
-        assertEquals(100L, AnimationFrames.scan(gif(10, delayCs = 1))!!.shortestMs)
+        // A GIF frame of 0 or 10 ms may play once a refresh (Gemini's review).
+        assertNull(AnimationFrames.work(gif(10, delayCs = 0), 2000, 2000, 2000, 2000))
+        assertEquals(AnimationLimits.MIN_FRAME_MS, AnimationFrames.scan(gif(10, delayCs = 0))!!.shortestMs)
+        assertEquals(10L, AnimationFrames.scan(gif(10, delayCs = 1))!!.shortestMs)
         // One long frame can't hide a fast run: 99 at 20 ms and one of 10 s.
         val burst = gif(100, delays = List(99) { 2 } + 1000)
         assertNull(AnimationFrames.work(burst, 2000, 2000, 2000, 2000))
@@ -111,6 +112,30 @@ class AnimationBudgetTest {
     @Test fun aShortLoopBlockStaysStill() {
         val g = gif(2)
         val bad = g.copyOf(g.size - 1) + byteArrayOf(0x21, 0xFF.toByte(), 11) + "NETSCAPE2.0".toByteArray() + byteArrayOf(1, 1, 0, 0x3B, 0) + g.copyOfRange(13 + 19, g.size)
+        assertNull(AnimationFrames.count(bad))
+    }
+
+    /** Gemini's review: a frame wider than the canvas is decoded at its own width. */
+    @Test fun aFrameBiggerThanItsCanvasStaysStill() {
+        val g = gif(3)
+        assertNotNull(AnimationFrames.count(g))
+        // The second frame's descriptor: 65535 wide on a 1x1 canvas.
+        val firstFrame = 13 + 19 + 8
+        val second = firstFrame + 10 + 5 + 8
+        assertEquals(0x2C, g[second].toInt())
+        val wide = g.copyOf()
+        wide[second + 5] = 0xFF.toByte()
+        wide[second + 6] = 0xFF.toByte()
+        assertNull(AnimationFrames.count(wide))
+        val shifted = g.copyOf()
+        shifted[second + 1] = 1
+        assertNull(AnimationFrames.count(shifted), "one pixel off the canvas")
+    }
+
+    /** Codex's review: every NETSCAPE sub-block is read three bytes at least. */
+    @Test fun aLaterShortNetscapeBlockStaysStill() {
+        val g = gif(2)
+        val bad = g.copyOf(g.size - 1) + byteArrayOf(0x21, 0xFF.toByte(), 11) + "NETSCAPE2.0".toByteArray() + byteArrayOf(3, 1, 0, 0, 1, 0x3B, 0) + g.copyOfRange(13 + 19, g.size)
         assertNull(AnimationFrames.count(bad))
     }
 
