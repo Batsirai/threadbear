@@ -720,12 +720,18 @@ impl ReviewWindow {
         let dot_cam = scene.cam;
         let dot_colour: Hsla = rgb(if scene.dark { 0x2E2E36 } else { 0xC4C4CE }).into();
         let tool = cv.tool;
-        let painter = canvas(
+        // The dots are the board's background, under the boxes and pictures
+        // (Mike, 23 Nov: they showed through a picture); the agent's notes
+        // and your marks are drawn over everything.
+        let dots = canvas(
             move |bounds, _, _| bounds_cell.set(Some(bounds)),
-            move |bounds, _, window, _| {
-                paint_dots(&dot_cam, dot_colour, bounds, window);
-                paint_pens(&pens, bounds.origin, window);
-            },
+            move |bounds, _, window, _| paint_dots(&dot_cam, dot_colour, bounds, window),
+        )
+        .absolute()
+        .inset_0();
+        let painter = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| paint_pens(&pens, bounds.origin, window),
         )
         .absolute()
         .inset_0();
@@ -743,6 +749,7 @@ impl ReviewWindow {
             })
             .when(tool != Tool::Move, |d| d.cursor(CursorStyle::Crosshair))
             .when(tool == Tool::Move, |d| d.cursor(CursorStyle::OpenHand))
+            .child(dots)
             .child(layer)
             .child(painter)
             .child(self.render_canvas_tools(cx))

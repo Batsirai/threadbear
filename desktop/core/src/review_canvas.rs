@@ -512,13 +512,18 @@ const WHEEL_STEP: f32 = 0.18;
 
 /// How much a wheel that reports pixels zooms, as Mike's Razer does: macOS
 /// sends it as many small events, 1 to 45 pixels each, so they add up rather
-/// than each counting as a notch. Capped per event like a notch.
+/// than each counting as a notch. A notch's 20 pixels or so zoomed 1.2 times
+/// at first and Mike found it too fast (23 Nov), so it takes about 80 pixels
+/// for that now, and an event is capped at a notch's zoom.
 pub fn smooth_wheel_zoom(pixels: f32) -> f32 {
     if !pixels.is_finite() {
         return 1.;
     }
-    (pixels.clamp(-60., 60.) * WHEEL_STEP / 25.).exp()
+    (pixels.clamp(-80., 80.) * WHEEL_STEP / SMOOTH_WHEEL_PIXELS).exp()
 }
+
+/// The pixels a smooth wheel turns for one notch's zoom.
+const SMOOTH_WHEEL_PIXELS: f32 = 80.;
 
 impl Default for Camera {
     fn default() -> Self {
@@ -945,11 +950,14 @@ mod tests {
 
     #[test]
     fn a_smooth_wheel_zooms_by_the_pixels_it_turned() {
-        // About a notch's zoom for a typical event, a little for a slow one.
-        assert!((smooth_wheel_zoom(25.) - wheel_zoom(1.)).abs() < 1e-5);
+        // A typical 20 pixel event zooms about 5%, a slow one a little, and
+        // no event more than a notch.
+        let typical = smooth_wheel_zoom(20.);
+        assert!(typical > 1.03 && typical < 1.07, "{typical}");
         assert!(smooth_wheel_zoom(1.) > 1. && smooth_wheel_zoom(1.) < 1.01);
-        assert!((smooth_wheel_zoom(-25.) * smooth_wheel_zoom(25.) - 1.).abs() < 1e-5);
-        assert_eq!(smooth_wheel_zoom(500.), smooth_wheel_zoom(60.));
+        assert!((smooth_wheel_zoom(-20.) * typical - 1.).abs() < 1e-5);
+        assert_eq!(smooth_wheel_zoom(500.), smooth_wheel_zoom(80.));
+        assert!((smooth_wheel_zoom(80.) - wheel_zoom(1.)).abs() < 1e-5);
     }
 
     fn image(w: i64, h: i64) -> ImageRef {
