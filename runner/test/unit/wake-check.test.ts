@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { makeHarness, tick } from '../helpers/fakes.ts';
+import { CARRY_ON_NETWORK } from '../../src/runner.ts';
 import type { GenerateParams, ModelResult } from '../../src/models/index.ts';
 
 const DAY = 86_400_000;
@@ -193,4 +194,68 @@ test("Alex's own topic still wakes the thread for him: unread, with no turn", as
   const t = h.runner.get(thread.id);
   assert.equal(t.needsYou, true);
   assert.ok(t.woke);
+});
+
+// From Codex's review of the fix (23 Nov 2026).
+test('Stop as the check finishes, with nothing needed and no snooze: still marked, as nothing else says it is awake', async () => {
+  const { h, id, other } = await setup();
+  h.runner.wakeForTopic(id, other, { topic: TOPIC, happened: true });
+  await tick();
+  const s = h.adapter.last;
+  s.init();
+  s.text('m-stop', 'The results are in.');
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e-stop', name: END_TURN, kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  h.runner.interrupt(id);
+  s.result('completed');
+  await tick();
+  assert.equal(asleep(h, id), false);
+  assert.equal(h.runner.get(id).needsYou, true);
+});
+
+test('a check cut off by a lost network is not marked while the runner is to carry it on, and is quiet if the carry-on goes back to sleep', async () => {
+  const { h, id, other } = await setup();
+  h.runner.wakeForTopic(id, other, { topic: TOPIC, happened: true });
+  await tick();
+  h.adapter.last.init();
+  h.adapter.last.result('failed', undefined, 'network', { errorKind: 'network' });
+  await tick();
+  assert.notEqual(h.runner.threads.get(id)!.rec.forceUnread, true);
+  h.runner.send(id, CARRY_ON_NETWORK, [], { origin: 'runner', queue: true });
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /do that check now as well\./);
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'nothing', snooze: SAID }, 'Not yet.');
+  assert.ok(asleep(h, id));
+  assert.notEqual(h.runner.threads.get(id)!.rec.forceUnread, true);
+  assert.equal(h.runner.threads.get(id)!.rec.wakeNews, undefined);
+});
+
+test('a helper thread whose check finishes with nothing left archives itself without being marked for Alex', async () => {
+  const generate = async (p: GenerateParams): Promise<ModelResult<string>> => (p.feature === 'wake-when' ? ok({ why: 'x', topic: TOPIC, until: null }) : { ok: false, reason: 'off', message: 'off' });
+  const h = makeHarness(undefined, {}, { models: { generate } });
+  const parent = h.runner.create({ text: 'Plan the order', accountId: 'claude-3' }).thread.id;
+  const child = h.runner.create({ text: 'Wait for the supplier', accountId: 'claude-3', startedBy: { kind: 'thread', label: 'Agent', threadId: parent } }).thread.id;
+  const session = () => h.adapter.sessions.filter((x) => x.opts.threadId === child).at(-1)!;
+  session().init();
+  session().out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: END_TURN, kind: 'mcp', title: 'end_turn', input: { needs: 'nothing', snooze: SAID } } });
+  session().text('m1', 'Waiting.');
+  session().result('completed');
+  await tick();
+  await tick();
+  assert.ok(asleep(h, child));
+  const marks: boolean[] = [];
+  h.runner.onNotification((n) => {
+    if (n.method === 'thread.updated' && n.params.thread.id === child) marks.push(n.params.thread.needsYou);
+  });
+  h.runner.wakeForTopic(child, parent, { topic: TOPIC, happened: true });
+  await tick();
+  session().init();
+  session().out({ kind: 'event', event: { type: 'tool.call', itemId: 'e2', name: END_TURN, kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  session().text('m2', 'The results are in; told the thread that started me.');
+  session().result('completed');
+  const end = Date.now() + 10_000;
+  while (!h.runner.get(child).archivedAt && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(h.runner.get(child).archivedAt, 'archived itself');
+  h.runner.flush();
+  assert.deepEqual(marks.filter(Boolean), [], 'never shown as needing Alex');
 });

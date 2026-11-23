@@ -3266,8 +3266,10 @@ export class Runner {
     // Finished for good, with nothing for Mike: a helper thread with nothing
     // left open archives itself (runner/quiet-inbox.ts). Not one a schedule
     // had out of the archive: the lines above have dealt with it.
+    let settling: Promise<void> | undefined;
     if (finished && !review && !rec.labReviewOwed && !rt.turn && !rec.archivedAt && !this.stopping) {
-      void this.settleQuietly(st, Boolean(said?.next?.length));
+      settling = this.settleQuietly(st, Boolean(said?.next?.length));
+      void settling;
       // And a guess at whether Mike needed to see it, only written down
       // (runner/inbox-guess.ts, experiment inboxGuess).
       void this.guessInbox(st, turn.lastText ?? '', Boolean(said?.next?.length));
@@ -3288,10 +3290,24 @@ export class Runner {
     }
     // The check a wake gave it (runner/hibernation.ts, wakeToCheck) is over
     // and it hasn't gone back to sleep: what it waited for has happened, or
-    // its agent wants Mike. The wake wasn't marked unread, so this is.
-    if (turn.wakeCheck && !rec.archivedAt && !this.stopping && this.bucket(rec) === 'inbox') {
-      rec.forceUnread = true;
-      this.markDirty(st);
+    // its agent wants Mike. The wake wasn't marked unread, so this is. The
+    // same when a turn ends with the check still owed and not waiting in
+    // the queue (it failed, was stopped as it finished, or the CLI ran a
+    // turn of its own instead): awake, and nothing else says so. Not while
+    // the runner is about to carry the turn on (a full login, a lost
+    // network), which may yet end asleep.
+    const checkOwed = rec.wakeNews?.check;
+    if ((turn.wakeCheck || (checkOwed !== undefined && !rec.queue.some((q) => q.turnId === checkOwed))) && !limitHit && !netLost && !movedOff) {
+      const mark = (later: boolean) => {
+        if (rt.deleted || rec.archivedAt || this.bucket(rec) !== 'inbox' || (later && rt.turn)) return;
+        rec.forceUnread = true;
+        this.markDirty(st);
+      };
+      // A helper thread that may archive itself now (runner/quiet-inbox.ts)
+      // is marked only if it stays: its starter has its result, and a mark
+      // meanwhile could reach Mike's phone (Codex's review, 23 Nov 2026).
+      if (settling && this.helperNobodyTouched(st)) void settling.then(() => mark(true), () => mark(true));
+      else mark(false);
     }
     // An invalid wait may leave the thread awake; do not strand its queue.
     if (holdQueue && !rt.turn && this.bucket(rec) === 'inbox') this.afterTurn(st);
@@ -5124,7 +5140,8 @@ export class Runner {
     // to say, and how this turn ends says whether Mike is needed.
     const news = rec.wakeNews;
     const told = news?.told;
-    if (news?.check && completed && rt.turn && (rt.turn.inputs?.has(news.check) || (told?.inFlight && !told.deferred))) {
+    // (Not a turn that sent nothing: one held at dispatch, runner/ceiling.ts.)
+    if (news?.check && completed && rt.turn && !rt.turn.local && (rt.turn.inputs?.has(news.check) || (told?.inFlight && !told.deferred))) {
       rt.turn.wakeCheck = true;
       delete rec.wakeNews;
     }
