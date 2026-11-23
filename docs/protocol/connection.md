@@ -136,13 +136,17 @@ draining runner's own server applies all of this too. `tb runner`
 uses this Mac's keys from disk, so the runner never sees them. Before using them
 it looks at its own environment and each parent's (`/bin/ps eww` on a Mac,
 `/proc/<pid>/environ` on Linux, never a `ps` on `PATH`) for thread keys, with
-three answers (Daybreak finding 174). Can't tell (a look fails, or Windows, which
-can't read another process's environment): refused. Under a thread: every key
-found must be one the data dir's token makes for a thread id beside it, so a
-stand-in data dir is no use, and the runner, asked at its own address (never
-`THREADBEAR_URL`) with that token, must place the connection under a thread on
-Full access; unreachable is refused. Under none: allowed, unless the runner, if it
-answers, says it's a limited thread. A CLI started by a runner older
+three answers (Daybreak finding 174). Under none (a terminal): allowed, unless the
+runner, if it answers, says it's a limited thread. Under a thread, or can't tell (a
+look fails; always on Windows, which can't read another process's environment):
+the data dir's `secrets` folder must be its own (nothing in it a symlink or a file
+with another hard link, so a stand-in data dir can't borrow the real token or
+Convex key), and the runner, asked at its own address (never `THREADBEAR_URL`) and
+proved by that token, must place the connection itself and say it isn't limited;
+unreachable is refused. Under a thread it must also name the thread, and every
+thread key found on the way up must be one that token makes for a thread id
+beside it. An `lsof` that exits with anything but 1 (nothing matched) is a failed
+look even if it printed something. A CLI started by a runner older
 than this has no key and isn't recorded with its thread, so it keeps the old
 `tb` until its next start.
 

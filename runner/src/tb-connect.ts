@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { psTable } from './proc.ts';
-import { readToken, runnerUrl, type Config } from './config.ts';
+import { paths, readToken, runnerUrl, type Config } from './config.ts';
 import { RunnerClient, type RunnerClientOptions } from './client.ts';
 import { isThreadId, isThreadKey, threadKey } from './rpc-auth.ts';
 
@@ -106,6 +106,35 @@ function linuxEnv(pid: number): string {
   }
 }
 
+// Whether this data dir's secrets are its own: the folder and everything in
+// it (to three levels) neither a symlink nor a file with another hard link.
+// A stand-in data dir can't then hold the real token or Convex key without
+// reading them, so a runner that proves this token is the real one, not
+// one a thread started on a copy that links to them (Codex's review of
+// finding 174). Threadbear never links its secrets itself.
+export function ownSecrets(home: string): boolean {
+  const walk = (p: string, depth: number): boolean => {
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      return false;
+    }
+    if (st.isSymbolicLink()) return false;
+    if (st.isFile()) return st.nlink === 1;
+    if (!st.isDirectory()) return false;
+    if (depth >= 3) return true;
+    let names: string[];
+    try {
+      names = fs.readdirSync(p);
+    } catch {
+      return false;
+    }
+    return names.every((n) => walk(path.join(p, n), depth + 1));
+  };
+  return walk(paths.secrets(home), 0);
+}
+
 const sameKey = (a: string, b: string) => a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export type OwnerOnlyDeps = CallerDeps & { connect?: (url: string, token: string) => Promise<RunnerClient> };
@@ -113,45 +142,49 @@ export type OwnerOnlyDeps = CallerDeps & { connect?: (url: string, token: string
 // Why tb's commands that use this Mac's keys straight from disk (tb runner)
 // shouldn't run here, or undefined if they may: they don't go through the
 // RPC, so the runner can't refuse them itself (Daybreak finding 174).
-// - Can't tell who's calling: refused.
-// - Under a thread: only with that thread's own runner's keys (every
-//   thread key found must be one this data dir's token made, so a stand-in
-//   data dir with a token of the thread's own making is no use), and only if
-//   that runner, proved by the token over the challenge, says the thread is
-//   on Full access. Unreachable is refused.
 // - Under none (a terminal): fine, unless the runner, if it answers, says
 //   this is a limited thread after all (one that left its parents behind).
+// - Under a thread, or can't tell (a look failing; always on Windows, which
+//   can't read another process's environment): only with a runner's keys
+//   that are this data dir's own (ownSecrets: no links into another's), and
+//   only if that runner, proved by the token over the challenge, places the
+//   connection itself and says it isn't limited. Under a thread it must also
+//   name a thread, and every thread key found on the way up must be one this
+//   token made. Unreachable is refused.
 // THREADBEAR_URL isn't taken: the runner is asked at its own address, and
 // only the runner (or someone with its token) can prove the token there.
 export async function ownerOnly(cfg: Config, env: NodeJS.ProcessEnv = process.env, deps: OwnerOnlyDeps = {}): Promise<string | undefined> {
   const who = await tbCaller(env, deps);
-  if (who.kind === 'unresolved') return `This uses the runner's own keys, so it has to know it isn't in a limited thread, and it couldn't tell (${who.why}). Run it from a terminal with the runner going.`;
   let token = '';
   try {
     token = readToken(cfg.home);
   } catch {
-    // No token yet: a terminal on a new runner; a thread is refused below.
+    // No token yet: a terminal on a new runner; anything else is refused below.
   }
-  const inThread = who.kind === 'thread';
-  if (inThread && !(token && who.keys.every((k) => k.ids.some((id) => isThreadId(id) && sameKey(threadKey(token, id), k.key))))) {
+  const sure = who.kind === 'owner';
+  const cant =
+    who.kind === 'unresolved'
+      ? `This uses the runner's own keys, so it has to know it isn't in a limited thread. It couldn't tell (${who.why}), and the runner couldn't be asked. Run it from a terminal with the runner going.`
+      : "This needs Full access and the runner can't be asked whether this thread has it.";
+  if (!sure && !(token && ownSecrets(cfg.home))) return "This data folder's secrets aren't its own (a link to another's), so tb runner won't use them unless it's sure it isn't in a limited thread.";
+  if (who.kind === 'thread' && !who.keys.every((k) => k.ids.some((id) => isThreadId(id) && sameKey(threadKey(token, id), k.key)))) {
     return "This is a thread's shell and tb isn't pointed at that thread's own runner, so it can't use a runner's keys from here.";
   }
-  const cant = "This needs Full access and the runner can't be asked whether this thread has it.";
   let client: RunnerClient;
   try {
     client = await (deps.connect ?? ((url, t) => RunnerClient.connect(url, t)))(runnerUrl(cfg, {}), token);
   } catch {
-    return inThread ? cant : undefined;
+    return sure ? undefined : cant;
   }
   try {
     const whoami = await client.call<{ threadId?: string; limited?: boolean; mode?: string }>('auth.whoami');
     if (whoami.limited) return `This thread is on ${whoami.mode}, and this command uses the runner's own keys. Ask the user to run it from a terminal.`;
     // The runner must see the thread this tb is under, on Full access.
-    if (inThread && !whoami.threadId) return cant;
+    if (who.kind === 'thread' && !whoami.threadId) return cant;
     return undefined;
   } catch {
-    // An older runner has no auth.whoami: fine from a terminal, not from a thread.
-    return inThread ? cant : undefined;
+    // An older runner has no auth.whoami: fine from a terminal, not otherwise.
+    return sure ? undefined : cant;
   } finally {
     client.close();
   }

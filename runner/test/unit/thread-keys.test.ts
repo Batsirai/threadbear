@@ -419,6 +419,17 @@ test("the owner token's connection closes when its process lookup can't say who 
   }
 });
 
+test("an lsof that fails partway counts as no answer, whatever it printed", async () => {
+  const { lsofAnswer } = await import('../../src/peer.ts');
+  const want = '127.0.0.1:1234->127.0.0.1:8797';
+  const partial = ['p500', 'f3', `n${want}`, ''].join('\n');
+  assert.deepEqual(lsofAnswer(null, partial, want), [500]);
+  assert.deepEqual(lsofAnswer(Object.assign(new Error('exit 1'), { code: 1 }), '', want), [], 'exit 1: nothing matched');
+  for (const err of [Object.assign(new Error('exit 2'), { code: 2 }), Object.assign(new Error('killed'), { code: null, killed: true, signal: 'SIGTERM' })]) {
+    assert.throws(() => lsofAnswer(err, partial, want));
+  }
+});
+
 test('a thread key whose lookup fails closes too, and a lookup that finds the client still works both ways', async () => {
   let fail = true;
   let from: string | undefined;
@@ -938,7 +949,14 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
       { platform: 'win32' as const },
     ]) {
       assert.equal((await tbCaller(wiped, deps)).kind, 'unresolved');
-      assert.match((await ownerOnly(cfg, wiped, deps)) ?? '', /couldn't tell/);
+      // The runner can't be asked: refused.
+      assert.match((await ownerOnly(dead, wiped, deps)) ?? '', /couldn't tell/);
+      // The runner places it under a limited thread: refused.
+      from = limited.id;
+      assert.match((await ownerOnly(cfg, wiped, deps)) ?? '', /on auto/);
+      // The runner places it under none (a Windows terminal, say): fine.
+      from = undefined;
+      assert.equal(await ownerOnly(cfg, wiped, deps), undefined);
     }
     // A limited thread's shell with its key wiped and a dead THREADBEAR_URL:
     // the runner is asked at its own address and says Auto.
@@ -949,6 +967,26 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
     // A stand-in data dir with a token of its own: the CLI's key isn't one it made.
     const fake = makeHarness();
     assert.match((await ownerOnly({ ...cfg, home: fake.home }, wiped, under(limited.id))) ?? '', /isn't pointed at that thread's own runner/);
+    // A stand-in data dir whose secrets link to the real ones, served by a
+    // runner of its own (Codex's review): its secrets aren't its own.
+    for (const link of ['symlink', 'hardlink', 'dir'] as const) {
+      const standIn = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'tb-standin-'));
+      try {
+        const real = path.join(h.home, 'secrets');
+        if (link === 'dir') fs.symlinkSync(real, path.join(standIn, 'secrets'));
+        else {
+          fs.mkdirSync(path.join(standIn, 'secrets'));
+          for (const f of fs.readdirSync(real)) (link === 'symlink' ? fs.symlinkSync : fs.linkSync)(path.join(real, f), path.join(standIn, 'secrets', f));
+        }
+        const standInCfg = { ...cfg, home: standIn };
+        from = full.id; // what a runner on the stand-in, with a forged Full record, would say
+        assert.match((await ownerOnly(standInCfg, wiped, under(limited.id))) ?? '', /aren't its own/, link);
+        assert.match((await ownerOnly(standInCfg, wiped, { platform: 'win32' })) ?? '', /aren't its own/, link);
+        from = limited.id;
+      } finally {
+        fs.rmSync(standIn, { recursive: true, force: true });
+      }
+    }
     // A shell between that claims a key it made up is no better.
     const forged = { ...under(limited.id), envOf: (p: number) => (p === 400 ? `bash THREADBEAR_THREAD_ID=x THREADBEAR_THREAD_KEY=${'c'.repeat(64)}` : cliOf(limited.id)(p)) };
     assert.match((await ownerOnly(cfg, wiped, forged)) ?? '', /isn't pointed/);

@@ -96,9 +96,11 @@ function lsofPids(sock: PeerSocket, ms: number): Promise<number[]> {
   const want = `${client}->${lsofAddr(sock.localAddress, sock.localPort)}`;
   return new Promise((resolve, reject) => {
     execFile(lsofPath(), ['-nP', `-iTCP@${client}`, '-sTCP:ESTABLISHED', '-Fpn'], { timeout: ms }, (err, stdout) => {
-      // lsof exits 1 when nothing matched; what it printed still counts.
-      if (err && (err as { code?: unknown }).code !== 1 && !stdout) return reject(err);
-      resolve(socketOwners(stdout, want));
+      try {
+        resolve(lsofAnswer(err, stdout, want));
+      } catch (e) {
+        reject(e);
+      }
     });
   });
 }
@@ -222,6 +224,15 @@ function unmapped(b: Uint8Array): Uint8Array {
 }
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+// What one lsof run says. It exits 1 when nothing matched. Anything else (another
+// exit code, a signal, the time limit) is a failed look, whatever it printed
+// first: a partial list could leave out a thread's holder (Codex's review of
+// finding 175).
+export function lsofAnswer(err: unknown, stdout: string, want: string): number[] {
+  if (err && (err as { code?: unknown }).code !== 1) throw err;
+  return socketOwners(stdout, want);
+}
 
 // From lsof's -F output (p<pid>, then f<fd> and n<name> per file), the pids
 // with a file named exactly `want`.
