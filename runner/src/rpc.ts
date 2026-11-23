@@ -8,8 +8,8 @@ import { awakeTimeout, type AwakeTimer } from './awake-timer.ts';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Runner, Notification, CliControl } from './runner.ts';
 import type { Logger } from './log.ts';
-import { ARCHIVE_VERDICTS, CLI_POLICIES, EFFORT_LEVELS, ErrorCode, PROVIDERS, RpcError, isEffortLevel, isPermissionMode, isProvider } from './protocol.ts';
-import type { ArchiveVerdict, ApprovalDecision, AskAnswer, CliPolicy, EffortLevel, ImageRef, PermissionMode, Provider, ShareAccess, ThreadStartedBy, ThreadSummary } from './protocol.ts';
+import { ARCHIVE_VERDICTS, UNARCHIVE_VERDICTS, CLI_POLICIES, EFFORT_LEVELS, ErrorCode, PROVIDERS, RpcError, isEffortLevel, isPermissionMode, isProvider } from './protocol.ts';
+import type { ArchiveVerdict, UnarchiveVerdict, ApprovalDecision, AskAnswer, CliPolicy, EffortLevel, ImageRef, PermissionMode, Provider, ShareAccess, ThreadStartedBy, ThreadSummary } from './protocol.ts';
 import { MAX_BYLINE } from './needs.ts';
 import { isMoved, mergeSummaries, type Bucket } from './handover.ts';
 import { AUTH_VERSION, authProof, isNonce, isThreadId, newNonce, proofMatches, threadKey, type AuthChannel } from './rpc-auth.ts';
@@ -896,9 +896,15 @@ export class RpcServer {
           upd.archivedBy = p.archivedBy;
         }
         if (p.verdict !== undefined) {
-          if (!ARCHIVE_VERDICTS.includes(p.verdict as ArchiveVerdict)) throw bad(`verdict must be one of ${ARCHIVE_VERDICTS.join(', ')}`);
-          if (p.archived !== true) throw bad('verdict goes with archived: true');
-          upd.verdict = p.verdict as ArchiveVerdict;
+          // An unarchive takes its own: "Should have shown me" (quietInboxMine).
+          if (p.archived === false) {
+            if (!UNARCHIVE_VERDICTS.includes(p.verdict as UnarchiveVerdict)) throw bad(`with archived: false, verdict must be one of ${UNARCHIVE_VERDICTS.join(', ')}`);
+            upd.verdict = p.verdict as UnarchiveVerdict;
+          } else {
+            if (!ARCHIVE_VERDICTS.includes(p.verdict as ArchiveVerdict)) throw bad(`verdict must be one of ${ARCHIVE_VERDICTS.join(', ')}`);
+            if (p.archived !== true) throw bad('verdict goes with archived: true or false');
+            upd.verdict = p.verdict as ArchiveVerdict;
+          }
         }
         if (p.starred !== undefined) {
           if (typeof p.starred !== 'boolean') throw bad('starred must be a boolean');

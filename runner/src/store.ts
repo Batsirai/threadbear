@@ -384,7 +384,12 @@ export type ThreadRecord = {
   looseEnds?: { seq: number; ends: LooseEnd[]; at: string };
   // The inboxGuess experiment's guesses for the done card `seq`
   // (runner/inbox-guess.ts): written down, never acted on.
-  inboxGuess?: { seq: number; guesses: Array<{ by: string; skip: boolean; why: string }> };
+  inboxGuess?: { seq: number; guesses: Array<{ by: string; skip: boolean; why: string; strong?: true }> };
+  // Archived by the quietInboxMine experiment for the done card `seq`, with
+  // the strong model's why (runner/inbox-guess.ts). Cleared by any move that
+  // takes it out of the archive, or leaves it archived by someone else
+  // (parkRecord).
+  quietlyArchived?: { at: string; why: string; seq: number };
   // Made in a repo that asks for worktrees and not told otherwise: the
   // first turn makes one (and runs its setup) before the CLI starts.
   worktreePending?: boolean;

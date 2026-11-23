@@ -49,6 +49,17 @@ pub struct AwaitingApp {
     pub commit: Option<String>,
 }
 
+/// Archived by the quiet inbox for Mike's own threads (`quietlyArchived`,
+/// experiment quietInboxMine): when, and the model's one line on why he
+/// didn't need to see it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct QuietlyArchived {
+    #[serde(default)]
+    pub at: String,
+    #[serde(default)]
+    pub why: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
@@ -122,6 +133,10 @@ pub struct ThreadSummary {
     pub starred_at: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub archived_at: Option<String>,
+    /// The quiet inbox archived it (protocol "Inbox guess"): only while
+    /// it's still archived by Threadbear.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub quietly_archived: Option<QuietlyArchived>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub waiting_for_room: Option<Value>,
     /// Whether a turn that hits its login's limit waits for room and carries

@@ -216,6 +216,11 @@ export type ArchivedBy = 'mike' | 'agent' | 'threadbear';
 // whether he needed to see the thread at all, from the Archive menu.
 export type ArchiveVerdict = 'worked' | 'didntWork' | 'notNeeded' | 'didntNeedToSee' | 'gladISaw' | 'notSure';
 export const ARCHIVE_VERDICTS: readonly ArchiveVerdict[] = ['worked', 'didntWork', 'notNeeded', 'didntNeedToSee', 'gladISaw', 'notSure'];
+// Mike's word as he brings a thread back out of the archive: the
+// quietInboxMine experiment archived it and he should have been shown it
+// (runner/inbox-guess.ts, docs/protocol/threads.md "Inbox guess").
+export type UnarchiveVerdict = 'shouldHaveShown';
+export const UNARCHIVE_VERDICTS: readonly UnarchiveVerdict[] = ['shouldHaveShown'];
 
 // What fills a thread's context, in Claude's own words (threads.contextUsage,
 // docs/protocol/threads.md "Context breakdown"). Rows are the CLI's /context rows:
@@ -278,6 +283,10 @@ export type ThreadSummary = {
   // on how it went; only while archivedAt is set (Who archived a thread).
   archivedBy?: ArchivedBy;
   archiveVerdict?: ArchiveVerdict;
+  // Archived by the quietInboxMine experiment, as a model guessed Mike
+  // didn't need to see it: when, and the model's one-line why. Only while
+  // it's still archived by Threadbear (docs/protocol/threads.md, "Inbox guess").
+  quietlyArchived?: { at: string; why: string };
   starredAt?: string; // in the Starred section above the Inbox, unless archived
   preview: string;
   lastSeq: number;

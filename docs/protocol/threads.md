@@ -702,6 +702,10 @@ way. The starter hears nothing new from this: it's woken only if it was
 waiting on the helper, and the helper shows as archived under "Threads it
 started" in its Highlights.
 
+Mike's own threads join in with the experiment `quietInboxMine` (23 Nov
+2026), on top of `inboxGuess`: the strong model's guess decides, and the
+app counts and lists what it hid. See "Inbox guess", "Acting on it".
+
 ## Inbox guess
 
 `runner/src/runner/inbox-guess.ts`, the experiment `inboxGuess` (18 Nov
@@ -711,7 +715,9 @@ reply is a receipt he has to load back into his head to put away. A
 helper thread like that archives itself (A quiet inbox); his own don't, as
 a reply is often the thing he asked for and hiding one of those is the
 expensive mistake. This collects what's needed to tell the two apart
-before anything acts on it. It archives nothing and shows nowhere.
+before anything acts on it. On its own it archives nothing and shows
+nowhere; with `quietInboxMine` on as well, the strong model's guess
+archives the thread (Acting on it, below).
 
 **The guess.** When a turn finishes for good as in A quiet inbox, the
 runner makes a guess for its done card (`seq`, the turn's `needs` event,
@@ -757,6 +763,43 @@ scoring: it's neither a thread to hide nor one a guess got wrong. Agents' and
 Threadbear's archives aren't written. How long he had a thread open
 before a plain archive is in the app's activity log, as a second, rougher
 signal.
+
+**Acting on it.** The experiment `quietInboxMine` ("Quiet inbox for your
+threads", 23 Nov 2026, part of A quiet inbox; it needs `inboxGuess` on, as
+the guess comes from there). After the guess line is written, the thread
+is archived when the strong model's guess (`strong: true` on it) is a skip
+and no rule's guess is among them. Opus itself: when only Haiku answered,
+or a pool with no Claude login had another agent answer on its own default
+(its `by` then says `<provider> default on <login>`), nothing happens. Nor
+for a thread that's starred, `keptOut` (brought back out of the archive by
+hand once), another lab's review, has a design review waiting on Mike, or
+whose done card he has already seen (`lastSeenSeq >= seq`: he had it open
+as it finished). The checks `settleQuietly` makes are made again, as the
+models took a moment: no turn, edit or queued message, still `finished`,
+the done card still the last, the thread still in the inbox, and no thread
+it started gone back to work. Then a `system.note` ("Archived quietly: it finished with nothing
+for you, and a model judged you didn't need to see it." and the model's
+`why`), an archive with `archivedBy: "threadbear"`, and
+`quietlyArchived: { at, why, seq }` on the record, which the summary
+carries as `quietlyArchived: { at, why }` while the thread is archived by
+Threadbear. Any move that brings it out of the archive (a message, an
+unarchive, a review answered) or leaves it archived by someone else (Mike
+archiving it again) clears the mark (`parkRecord`). The file gets
+`{ at, kind: "quiet", threadId, seq, why }`.
+
+**Should have shown me.** `threads.update` with `archived: false,
+verdict: "shouldHaveShown"` brings a thread back as any unarchive does
+(so it's `keptOut` and never quietly archived again), with a
+`system.note` ("Brought back by you: you should have been shown this.")
+and the line `{ at, kind: "wrongHide", threadId, seq?, quiet, guesses? }`:
+`seq` the card it was quietly archived for (else its last done card),
+`quiet` whether it had the mark, `guesses` that card's. The GPUI app
+sends it from the Inbox's "Quietly archived: N today" list (threads
+quietly archived since local midnight, newest first) and from an archived
+row's menu. The Convex relay drops the verdict, so a thread on another runner
+comes back unlabelled, and `phone:update` takes only a plain
+`{ unarchive: true }` (a verdict there is refused); they never carry the mark
+anyway, and the phone and the website don't show the list.
 
 ## Secrets
 

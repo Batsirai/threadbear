@@ -238,6 +238,12 @@ type ThreadSummary = {
                         // while archivedAt is set (Who archived a thread)
   archiveVerdict?: "worked" | "didntWork" | "notNeeded" | "didntNeedToSee" | "gladISaw" | "notSure" // how it went, Mike's
                         // pick from the done card's Archive menu
+  quietlyArchived?: { at: string, why: string } // archived by the quiet
+                        // inbox for Mike's own threads (experiment
+                        // quietInboxMine): when, and the strong model's one
+                        // line on why he didn't need to see it. Only while
+                        // archivedAt is set and archivedBy is "threadbear"
+                        // (threads.md, "Inbox guess")
   starredAt?: string    // Mike starred it, at this time: it stays in the
                         // Starred section above the Inbox, hibernating or
                         // not, oldest star first. Kept while archived, when

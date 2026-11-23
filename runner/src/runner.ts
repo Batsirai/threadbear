@@ -50,7 +50,7 @@ import type {
 } from './protocol.ts';
 import { agentsStillWorking, ErrorCode, LIMITS, PROTOCOL_VERSION, RpcError, sentByAgent } from './protocol.ts';
 import { cliName, providerName, providersForHello } from './providers.ts';
-import type { ArchivedBy, ArchiveVerdict, LibrarianStatus, LooseEnd, Project, Schedule } from './protocol.ts';
+import type { ArchivedBy, ArchiveVerdict, UnarchiveVerdict, LibrarianStatus, LooseEnd, Project, Schedule } from './protocol.ts';
 import { Projects } from './projects.ts';
 import type { Settings } from './settings.ts';
 import type {
@@ -3764,7 +3764,9 @@ export class Runner {
     // Mike's verdict from the done card's Archive menu, so whoever reads
     // the thread later knows it was put away on purpose, and how it went.
     archivedBy?: ArchivedBy;
-    verdict?: ArchiveVerdict;
+    // With archived: false, 'shouldHaveShown' (quietInboxMine's "Should have
+    // shown me"): he brings it back and says it was wrongly hidden.
+    verdict?: ArchiveVerdict | UnarchiveVerdict;
     starred?: boolean;
     // Out from under the thread that started it in the sidebar, or back
     // (docs/protocol/threads.md, "Nested threads").
@@ -4016,7 +4018,7 @@ export class Runner {
       if (params.archived) {
         archiving = !rec.archivedAt;
         const by = params.archivedBy ?? 'mike';
-        const verdict = by === 'mike' ? params.verdict : undefined;
+        const verdict = by === 'mike' && params.verdict !== 'shouldHaveShown' ? params.verdict : undefined;
         // His putting away a finished thread, with or without a pick from
         // the Archive menu, is what the inbox guess is scored against.
         if (archiving && by === 'mike') this.noteInboxArchive(st, this.looseEndsCard(st), verdict);
@@ -4025,6 +4027,12 @@ export class Runner {
         this.park(st, { kind: 'archive', by, ...(verdict ? { verdict } : {}) });
         stop = true;
       } else {
+        // "Should have shown me" on a thread the quiet inbox archived:
+        // written down beside the guesses, and said in the thread.
+        if (params.verdict === 'shouldHaveShown' && rec.archivedAt) {
+          this.noteWrongHide(st);
+          this.emit(st, { type: 'system.note', text: 'Brought back by you: you should have been shown this.' });
+        }
         // Brought back out by hand: it stays out, however its next turn ends
         // (runner/quiet-inbox.ts).
         this.park(st, { kind: 'unarchive' });
@@ -4802,6 +4810,7 @@ export class Runner {
       // Archived before who did it was kept: nobody can say.
       if (rec.archivedBy) s.archivedBy = rec.archivedBy;
       if (rec.archiveVerdict) s.archiveVerdict = rec.archiveVerdict;
+      if (rec.quietlyArchived && rec.archivedBy === 'threadbear') s.quietlyArchived = { at: rec.quietlyArchived.at, why: rec.quietlyArchived.why };
     }
     if (rec.starredAt) s.starredAt = rec.starredAt;
     if (rec.nativeSessionId && rec.sessionUsed) s.nativeSessionId = rec.nativeSessionId;

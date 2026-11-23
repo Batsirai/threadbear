@@ -404,6 +404,10 @@ let moveClone;
 let lastMove;
 // The last archive's thread and verdict, for the specs (mock.lastArchive).
 let lastArchive;
+// The quiet inbox's "Should have shown me" (docs/protocol/threads.md, "Inbox
+// guess"): the last one asked for, and whether the next is refused.
+let lastWrongHide;
+let refuseWrongHide = false;
 // A look held until the spec says (mock.holdMovePreview, then
 // mock.releaseMovePreview), as the real one over the relay can take a
 // quarter of a minute (18 Nov 2026).
@@ -1221,8 +1225,16 @@ async function dispatch(client, method, p) {
         if (!s.snoozedUntil) delete s.snoozedAt;
         if (s.snoozedUntil) { s.live = false; scheduleWake(s.id); }
       }
+      if (p.archived === false && p.verdict === 'shouldHaveShown') {
+        if (refuseWrongHide) throw rpcError(-32000, "Couldn't bring it back just now. Try again in a moment.");
+        lastWrongHide = { threadId: s.id };
+      }
       if (p.archived !== undefined) {
         s.archivedAt = p.archived ? iso() : undefined;
+        // Like the runner: the quiet inbox's mark goes with any move out of
+        // the archive, or Mike archiving it himself.
+        delete s.quietlyArchived;
+        if (!p.archived) delete s.archivedBy;
         if (p.archived) {
           s.live = false;
           // Like the runner: his pick from the done card's Archive menu is
@@ -2204,6 +2216,22 @@ async function dispatch(client, method, p) {
       return { params: lastMove ?? null };
     case 'mock.lastArchive':
       return { params: lastArchive ?? null };
+    case 'mock.quietArchive': {
+      // The quiet inbox archived these threads today, a minute apart, the
+      // first newest (docs/protocol/threads.md, "Inbox guess"). `refuse`:
+      // the runner turns down the next "Should have shown me".
+      if (typeof p.refuse === 'boolean') refuseWrongHide = p.refuse;
+      (p.titles ?? []).forEach((title, i) => {
+        const entry = [...threads.values()].find((t) => t.summary.title === title);
+        if (!entry) throw rpcError(-32602, `No thread called "${title}"`);
+        const at = new Date(Date.now() - (i + 1) * 60_000).toISOString();
+        Object.assign(entry.summary, { archivedAt: at, archivedBy: 'threadbear', quietlyArchived: { at, why: p.why ?? 'It only confirmed what was asked.' }, live: false });
+        broadcastSummary(entry.summary.id);
+      });
+      return { ok: true };
+    }
+    case 'mock.lastWrongHide':
+      return { params: lastWrongHide ?? null };
     case 'mock.holdMovePreview': {
       let release;
       const promise = new Promise((r) => { release = r; });

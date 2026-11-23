@@ -111,6 +111,7 @@ mod projects;
 mod projects_list;
 mod projects_page;
 mod push_button;
+mod quiet_inbox;
 mod quit_prompt;
 mod rails;
 mod recipes;

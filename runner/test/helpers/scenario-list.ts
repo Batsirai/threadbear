@@ -189,6 +189,16 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: 'a thread the quiet inbox archived, brought back with Should have shown me',
+    shows: ['Renamed the setting.', 'Archived quietly', 'A receipt for what was asked.', 'Brought back by you: you should have been shown this.'],
+    play: (p) => {
+      p.say('Renamed the setting.');
+      p.endTurn({ needs: 'nothing' });
+      p.quietlyArchived('A receipt for what was asked.');
+      p.shouldHaveShown();
+    },
+  },
+  {
     name: 'a reply with no card',
     shows: ['Just an answer.'],
     play: (p) => {

@@ -18,9 +18,13 @@
 // nothing for him, a cheap model and a strong one each guess whether he
 // needed to see it, and the done card's Archive opens a menu ("Didn't
 // need this", "Glad I saw this", "Not sure") whose pick says who was right. Both go in
-// a file, one line each. The guess archives nothing and shows nowhere.
-// The check-in (the experiment's reminder) reads the file and asks him
-// what to do with it.
+// a file, one line each. The guess alone archives nothing and shows
+// nowhere. The check-in (the experiment's reminder) reads the file and asks
+// him what to do with it.
+//
+// With quietInboxMine on as well (23 Nov 2026), the strong model's skip
+// does archive the thread (quietArchive), and the app counts and lists
+// what it hid, each with "Should have shown me" (noteWrongHide).
 //
 // Each method's `this` is the Runner; runner.ts puts them on its prototype.
 import crypto from 'node:crypto';
@@ -31,8 +35,14 @@ import type { RunnerPart } from './part.ts';
 import type { ArchiveVerdict, LooseEnd } from '../protocol.ts';
 import { experimentOn } from '../experiments.ts';
 import { latestMessages } from './card-review.ts';
+import { OPUS } from '../models/index.ts';
 
 export const INBOX_GUESS = 'inboxGuess';
+// Acting on the guess (experiment quietInboxMine, part of the quiet inbox):
+// Mike, 23 Nov 2026, after the second prompt's replay (Opus caught 69 of
+// his 86 "Didn't need this" and hid none of his 7 "Glad I saw this"): turn
+// it on for real, and let him count and list what it hid.
+export const QUIET_INBOX_MINE = 'quietInboxMine';
 // In the runner's data folder: a line per guess and per archive.
 export const INBOX_GUESS_FILE = 'inbox-guess.jsonl';
 // The most of his message and of the reply a model is shown. A longer
@@ -45,8 +55,9 @@ const ASKED_CHARS = 4_000;
 const REPLY_CHARS = 8_000;
 
 // One guess: `by` is the model's id, or "rule" when follow-ups or loose
-// ends settled it with no model asked.
-export type Guess = { by: string; skip: boolean; why: string };
+// ends settled it with no model asked. `strong`: the strong model's, the
+// one the quiet inbox goes by.
+export type Guess = { by: string; skip: boolean; why: string; strong?: true };
 // Kept on the thread until its next done card, so his archive can be
 // written down beside the guesses it answers.
 export type InboxGuess = { seq: number; guesses: Guess[] };
@@ -102,6 +113,8 @@ export function readGuess(text: string): { skip: boolean; why: string } | undefi
     return undefined;
   }
 }
+
+export const QUIET_ARCHIVED_NOTE = "Archived quietly: it finished with nothing for you, and a model judged you didn't need to see it.";
 
 const clip = (text: string, most: number): string => (text.length <= most ? text : `${text.slice(0, Math.floor(most * 0.6))}\n[... ${text.length - most} characters left out ...]\n${text.slice(-Math.floor(most * 0.4))}`);
 
@@ -159,6 +172,7 @@ export const inboxGuessPart = {
       rec.inboxGuess = { seq, guesses };
       this.markDirty(st);
       this.writeInboxGuess({ kind: 'guess', threadId: rec.id, seq, prompt: GUESS_PROMPT, guesses });
+      this.quietArchive(st, seq, guesses);
     } catch (e) {
       this.log.warn('inbox guess failed', { threadId: rec.id, error: String(e) });
     }
@@ -219,10 +233,52 @@ export const inboxGuessPart = {
         }
         const guess = readGuess(res.value);
         if (!guess) this.log.info('inbox guess gave no answer', { threadId: st.rec.id, strong });
-        return guess && { by: res.model, ...guess };
+        return guess && { by: res.model, ...guess, ...(strong ? { strong: true as const } : {}) };
       }),
     );
     return asked.filter((g): g is Guess => Boolean(g));
+  },
+
+  // The quiet inbox for his own threads (experiment quietInboxMine): the
+  // strong model's skip archives the thread, as a helper's clean finish
+  // does (settleQuietly). Only Opus decides: Haiku alone, or a rule's
+  // guess (always a show), never archives. Not one he's starred, already
+  // looked at the done card of, or brought back out of the archive once
+  // (keptOut, which "Should have shown me" sets too): those are his.
+  quietArchive(this: Runner, st: ThreadState, seq: number, guesses: Guess[]): void {
+    const { rec, rt } = st;
+    if (!experimentOn(this.cfg.home, QUIET_INBOX_MINE)) return;
+    // Opus itself: a pool with no Claude login answers on another agent's
+    // default model, labelled so (models/index.ts), which doesn't count.
+    const strong = guesses.find((g) => g.strong && (g.by === OPUS || g.by.startsWith(`${OPUS} on `)));
+    if (!strong?.skip || guesses.some((g) => g.by === 'rule')) return;
+    if (rec.starredAt || rec.keptOut || rec.reviewOf || rec.lastSeenSeq >= seq) return;
+    // A design review waiting on his answer is his to see (Codex's review).
+    if (rec.reviews?.some((r) => r.status === 'pending')) return;
+    // The models took a moment: anything since decides instead, as in
+    // settleQuietly. An edit under way has dropped `finished` and is
+    // rewinding to before this card.
+    if (rt.deleted || this.stopping || rt.turn || rt.editing || !rec.finished || rec.queue.length || this.looseEndsCard(st) !== seq || this.bucket(rec) !== 'inbox') return;
+    // A thread it started that's gone back to work since git looked.
+    if (this.childEnds(st).length) return;
+    const why = strong.why.replace(/\s+/g, ' ').trim();
+    this.emit(st, { type: 'system.note', text: `${QUIET_ARCHIVED_NOTE} ${why}` });
+    this.update({ threadId: rec.id, archived: true, archivedBy: 'threadbear' });
+    // After the archive, which clears any older mark (parkRecord).
+    rec.quietlyArchived = { at: this.isoNow(), why, seq };
+    this.markDirty(st);
+    this.writeInboxGuess({ kind: 'quiet', threadId: rec.id, seq, why });
+    this.log.info('quiet inbox: archived a finished thread of his own', { threadId: rec.id });
+  },
+
+  // "Should have shown me": Mike bringing a thread back out of the archive
+  // with that verdict (threads.update, before it's marked unarchived). The
+  // card is the one it was quietly archived for, else its last done card.
+  noteWrongHide(this: Runner, st: ThreadState): void {
+    const { rec } = st;
+    const seq = rec.quietlyArchived?.seq ?? (rec.needs?.needs === 'nothing' ? rec.needs.seq : undefined);
+    const guesses = seq !== undefined && rec.inboxGuess?.seq === seq ? rec.inboxGuess.guesses : undefined;
+    this.writeInboxGuess({ kind: 'wrongHide', threadId: rec.id, ...(seq !== undefined ? { seq } : {}), quiet: Boolean(rec.quietlyArchived), ...(guesses ? { guesses } : {}) });
   },
 
   // Mike archiving a thread whose last turn left the done card `seq`

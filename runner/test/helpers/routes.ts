@@ -12,6 +12,8 @@
 // rebuild of a card) shows as the routes disagreeing, not as a bug on Alex's
 // backend. Nothing here touches the network or a model, so it's as quick and
 // steady as a unit test.
+import fs from 'node:fs';
+import path from 'node:path';
 import { makeHarness } from './fakes.ts';
 import { call, load, memoryBackend } from './convex-memory.ts';
 import { ConvexSync } from '../../src/sync.ts';
@@ -76,6 +78,10 @@ export type Play = {
   loginMoved(): void;
   /** A For everyone member answered, and the runner passes it to this thread, its lead (runner/everyone.ts). */
   panelAnswer(name: string, reply: string): void;
+  /** The quiet inbox archives the finished thread, as Opus guessed it a skip (runner/inbox-guess.ts quietArchive, experiment quietInboxMine). */
+  quietlyArchived(why: string): void;
+  /** Alex brings it back with "Should have shown me" (threads.update's unarchive verdict). */
+  shouldHaveShown(): void;
 };
 
 export async function threeWays(play: (p: Play) => void | Promise<void>) {
@@ -228,6 +234,16 @@ export async function playInto(post: Post, runner: { key: string; runnerId: stri
       sendFromPhone: (text) => {
         h.runner.send(thread.id, text, [], { origin: 'phone' });
         h.adapter.last.init();
+      },
+      quietlyArchived: (why) => {
+        fs.writeFileSync(path.join(h.cfg.home, 'runner.json'), JSON.stringify({ experiments: { quietInboxMine: true } }));
+        const st = h.runner.threads.get(thread.id)!;
+        const seq = h.runner.looseEndsCard(st);
+        if (seq === undefined) throw new Error('quietlyArchived: the thread has no done card');
+        h.runner.quietArchive(st, seq, [{ by: 'claude-opus-5-5', skip: true, why, strong: true }]);
+      },
+      shouldHaveShown: () => {
+        h.runner.update({ threadId: thread.id, archived: false, verdict: 'shouldHaveShown' });
       },
       panelAnswer: (name, reply) => {
         const answers = [{ threadId: 'member-0000', name, reply }];

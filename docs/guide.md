@@ -825,7 +825,20 @@ them first. A note in the thread says why it went, and it shows as archived
 under "Threads it started" in the Highlights of the thread that started it.
 It stays in the inbox if you've written in it, starred it or brought it back
 out of the archive, and so does one that failed or was stopped. Threads you
-started, and ones a tool or a schedule started, never archive this way.
+started, and ones a tool or a schedule started, don't archive this way,
+unless you've turned on the experiment Quiet inbox for your threads.
+
+With that on (and Inbox guess, which it builds on), one of your own threads
+that finishes with nothing for you is archived too when a model judges you
+didn't need to read the reply, with a note in the thread giving its reason.
+Not one with follow-ups, anything left open or a design review waiting for
+you, one you've starred, one you
+had open as it finished, or one you've brought back out of the archive
+before. To check what it hid, the foot of the Inbox says "Quietly archived:
+6 today" on days it has archived any. Click it to see them, newest first:
+click one to open it, or press "Should have shown me" (also in an archived
+thread's right-click menu) to bring it straight back to your inbox and
+tell the model it got that one wrong.
 
 Back and Forward (⌘[ and ⌘], in the Go menu, or the ‹ and › beside the share
 icon at the top right of a thread) step through the threads and

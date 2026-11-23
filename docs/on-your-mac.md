@@ -206,7 +206,9 @@ File references are where to look.
   `inbox-guess.jsonl`, only with the `inboxGuess` experiment on (off by
   default): a line for each guess at whether you needed to see a finished
   thread and for each thread you archive, with a model's one-sentence
-  reason, which stays on this Mac,
+  reason, and with `quietInboxMine` on as well, for each thread it archived
+  for you and each you brought back with "Should have shown me", which
+  stays on this Mac,
   `schedule-runs/`, schedule runs your Convex backend hasn't been told
   of yet, a file each, kept only until it has, `activity/`, the activity
   log, only while Keep an activity log is on in Settings > General (what
