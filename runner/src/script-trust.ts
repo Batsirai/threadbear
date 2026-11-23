@@ -71,7 +71,10 @@ export type Deps = { direct: boolean; names: string[]; values?: string[]; forms?
 export type Pending = { where: string; direct: boolean; names: string[]; tpl: Tpl; dirs: string[]; flag?: boolean; into?: boolean; srcs?: string[] };
 // `exported`: variables a shell it starts still has; `cleared`: ones some
 // `env -u` takes away.
-export type Writes = { written: [string, string][]; somewhere?: string; reached: string[]; pending?: Pending[]; deps?: [string, Deps][]; assignsAny?: boolean; exported?: string[]; cleared?: string[] };
+// `programDirs`: for a check followed all the way (FollowOptions.strict),
+// the folders it may run programs from (trustedProgramDirs), none of which
+// it may write in.
+export type Writes = { written: [string, string][]; somewhere?: string; reached: string[]; pending?: Pending[]; deps?: [string, Deps][]; assignsAny?: boolean; exported?: string[]; cleared?: string[]; programDirs?: string[] };
 
 // The most of one file patch trust reads (a patch, a helper, a script, a
 // config file); it reads one bigger than this not at all, and fails closed.
@@ -274,6 +277,9 @@ const PACKAGE_MANAGER_ENTRY = /\/node_modules\/(?:npm|pnpm|yarn|corepack|bun|@ya
 // `HOME++`), by the script's text. A `$` or `{` before the name is a read.
 const ARITH_SET = (name: string) => new RegExp(`(?<![$\\w{])${name}\\s*(?:(?:[-+*/%^|&]|<<|>>)?=(?!=)|\\+\\+|--)|(?:\\+\\+|--)\\s*${name}\\b`);
 const HOME_SET = ARITH_SET('HOME');
+const TABLE_NAMES = '(?:PATH|path|BASH_CMDS|BASH_ALIASES|commands|functions|aliases|galiases|saliases|builtins)';
+const PATH_EXPAND_SET = new RegExp(`\\$\\{[^}]*?${TABLE_NAMES}(?:\\[[^\\]]*\\])?:?=`);
+const PATH_ARITH_SET = new RegExp(`(?:[[,?:+\\-*/%^<>=~]|\\blet\\s[^\\n;]*?)\\s*${TABLE_NAMES}\\b\\s*(?:(?:[-+*/%^|&]|<<|>>)?=(?!=)|\\+\\+|--)|(?:\\+\\+|--)\\s*${TABLE_NAMES}\\b|\\(\\s*\\([^\\n]*?\\b${TABLE_NAMES}\\b[^\\n]*?\\)\\s*\\)`);
 const MSYS_SET = ARITH_SET('MSYS2?_(?:ARG_CONV_EXCL|NO_PATHCONV|ENV_CONV_EXCL)');
 
 // Bounds: a script reaching more than this can't be checked.
@@ -337,7 +343,8 @@ const INERT_PROGRAMS = new Set([
 ]);
 
 // Redirections that write a file.
-const WRITE_REDIRS = new Set(['>', '>>', '>|', '&>', '&>>', '<>', '>&']);
+// zsh's clobbering forms too (`>!`, `>>|`, `&>!`...), which write as `>` does.
+const WRITE_REDIRS = new Set(['>', '>>', '>|', '&>', '&>>', '<>', '>&', '>!', '>>!', '>>|', '>&!', '>&|', '&>!', '&>|', '&>>!', '&>>|']);
 // `$(mktemp)`, `$(mktemp -d)`, `$(mktemp -t name)`: a new file in the temp
 // folder, not the repo (a template without -t is made in the current one).
 const PLAIN_MKTEMP = /^\s*mktemp(\s+(-[dqu]+|-t\s+[\w.-]+|\/tmp\/[\w.-]+))*\s*$/;
@@ -362,6 +369,85 @@ const PATH_SENTINEL = '\u0000PATH';
 // A package's bin folder on PATH: on Windows written with either slash;
 // elsewhere a backslash is part of a name (Codex's review, 18 Nov 2026).
 const BIN_DIR = IS_WINDOWS ? /[\\/]node_modules[\\/]\.bin[\\/]?$/ : /\/node_modules\/\.bin\/?$/;
+
+// bash's and zsh's tables of what a command name runs (`BASH_CMDS[cat]=
+// /tmp/cat`, zsh's `functions[cat]='sh x'`): setting one is `hash -p`.
+const COMMAND_TABLES = new Set(['BASH_CMDS', 'BASH_ALIASES', 'commands', 'functions', 'aliases', 'galiases', 'saliases', 'builtins', 'reswords', 'dis_functions', 'dis_aliases', 'dis_galiases', 'dis_saliases', 'dis_builtins', 'dis_reswords', 'functions_source', 'dis_functions_source']);
+
+// The folders a check followed all the way (FollowOptions.strict) may run
+// a program from, by name on PATH or by its path: where programs are
+// installed (the system's, Homebrew's, the usual ones in your home folder)
+// and what's on the runner's own PATH, which the check starts with. Never
+// the repo, which the thread can change, or a temp folder, which anyone
+// can write in: with one, `cp /bin/sh /tmp/cat; PATH=/tmp:$PATH; cat
+// data.txt` ran data.txt as code (23 Nov 2026).
+const SYSTEM_PROGRAM_DIRS = ['/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/local/bin', '/usr/local/sbin', '/opt/homebrew/bin', '/opt/homebrew/sbin', '/Library/Apple/usr/bin', '/System/Cryptexes/App/usr/bin', '/home/linuxbrew/.linuxbrew/bin', '/home/linuxbrew/.linuxbrew/sbin', '/snap/bin', '/opt/local/bin'];
+const HOME_PROGRAM_DIRS = ['.local/bin', 'bin', '.bun/bin', '.cargo/bin', '.deno/bin', 'go/bin', '.volta/bin', '.npm-global/bin'];
+const TEMP_DIRS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp', '/var/folders', '/private/var/folders', '/dev/shm'];
+
+// How a folder is compared: resolved, and without case where the disk has none.
+export function dirKey(d: string): string {
+  const r = path.resolve(d);
+  return process.platform === 'darwin' || IS_WINDOWS ? r.toLowerCase() : r;
+}
+
+// Where the programs in those folders, and what they load, are installed,
+// which a check followed all the way may write nothing in: each folder, the
+// one its links lead to, and for a `bin` or `sbin` the folder above
+// (/opt/homebrew, whose Cellar holds what /opt/homebrew/bin/jq links to;
+// /usr/local), but never your home folder or `/`.
+export function programHomes(home: string, top: string, runnerPath: string = process.env.PATH ?? ''): string[] {
+  const out = new Set<string>();
+  const homeKey = dirKey(home);
+  for (const d of trustedProgramDirs(home, top, runnerPath)) {
+    for (const k of [d, dirKey(realOrNearest(d))]) {
+      out.add(k);
+      const up = path.dirname(k);
+      if (/^s?bin$/.test(path.basename(k)) && up !== path.dirname(up) && up !== homeKey) out.add(up);
+    }
+  }
+  return [...out];
+}
+
+export function trustedProgramDirs(home: string, top: string, runnerPath: string = process.env.PATH ?? ''): Set<string> {
+  const temps = [...TEMP_DIRS, os.tmpdir(), realOrNearest(os.tmpdir())].map(dirKey);
+  const inside = (d: string, root: string) => d === root || d.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+  const nvm = path.join(home, '.nvm', 'versions', 'node');
+  const fromPath = runnerPath.split(path.delimiter).filter((e) => path.isAbsolute(e));
+  const all = [...SYSTEM_PROGRAM_DIRS, ...HOME_PROGRAM_DIRS.map((d) => path.join(home, d)), ...fromPath, ...listDir(nvm).map((v) => path.join(nvm, v, 'bin'))];
+  const out = new Set<string>();
+  for (const d of all) {
+    const keys = [dirKey(d), dirKey(realOrNearest(d))];
+    if (keys.some((k) => temps.some((t) => inside(k, t)) || inside(k, dirKey(top)))) continue;
+    out.add(keys[0]!);
+  }
+  return out;
+}
+
+// Whether a path is a symbolic link, or a folder with one in it (a few
+// thousand entries at most; past that, as if it had).
+function holdsLink(p: string, budget = { n: 2000 }): boolean {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(p);
+  } catch {
+    return false;
+  }
+  if (st.isSymbolicLink()) return true;
+  if (!st.isDirectory()) return false;
+  for (const n of listDir(p)) {
+    if (--budget.n < 0 || holdsLink(path.join(p, n), budget)) return true;
+  }
+  return false;
+}
+
+function listDir(d: string): string[] {
+  try {
+    return fs.readdirSync(d);
+  } catch {
+    return [];
+  }
+}
 
 // Extensions of files that run as code: a shell's, Node's, or a language
 // this can't follow (which fails closed when one runs).
@@ -448,12 +534,13 @@ export function windowsSpelling(v: string, where: { tmp?: string; host?: string 
 
 // ---- a shell lexer: enough of POSIX sh, bash and zsh to see what runs ----
 
-type Part = { k: 'lit'; s: string; q: boolean } | { k: 'var'; name: string; op: string } | { k: 'sub'; src: string; line: number } | { k: 'arith' };
+// `q` on a var or sub: inside "...", so the shell doesn't split it into words.
+type Part = { k: 'lit'; s: string; q: boolean } | { k: 'var'; name: string; op: string; q?: boolean } | { k: 'sub'; src: string; line: number; q?: boolean } | { k: 'arith' };
 type Word = { parts: Part[]; line: number };
 type Tok = { t: 'word'; w: Word } | { t: 'op'; op: string; line: number } | { t: 'redir'; op: string; target?: Word; line: number };
 
-const OPS = ['<(', '>(', ';;&', ';;', ';&', '&&', '||', '|&', '<<<', '<<-', '<<', '&>>', '&>', '>>', '<>', '>|', '>&', '<&', ';', '&', '|', '(', ')', '<', '>'];
-const REDIRS = new Set(['<<<', '<<-', '<<', '&>>', '&>', '>>', '<>', '>|', '>&', '<&', '<', '>']);
+const OPS = ['<(', '>(', ';;&', ';;', ';&', '&&', '||', '|&', '<<<', '<<-', '<<', '&>>!', '&>>|', '&>>', '&>!', '&>|', '&>', '>>!', '>>|', '>>', '<>', '>&!', '>&|', '>|', '>!', '>&', '<&', ';', '&', '|', '(', ')', '<', '>'];
+const REDIRS = new Set(['<<<', '<<-', '<<', '&>>', '&>', '>>', '<>', '>|', '>&', '<&', '<', '>', '>!', '>>!', '>>|', '>&!', '>&|', '&>!', '&>|', '&>>!', '&>>|']);
 
 class Lexer {
   i = 0;
@@ -631,13 +718,14 @@ class Lexer {
         this.i += 2;
       } else if (c === '$') {
         const p = this.dollar();
-        if (p) parts.push(p);
+        if (p) parts.push(p.k === 'var' || p.k === 'sub' ? { ...p, q: true } : p);
         else {
           parts.push({ k: 'lit', s: '$', q: true });
           this.i++;
         }
       } else if (c === '`') {
-        parts.push(this.backtick());
+        const b = this.backtick();
+        parts.push(b.k === 'sub' ? { ...b, q: true } : b);
       } else {
         if (c === '\n') this.line++;
         parts.push({ k: 'lit', s: c, q: true });
@@ -912,6 +1000,12 @@ class Reach {
   private get ownRules(): boolean {
     return Boolean(this.o.strict || this.o.launches);
   }
+  private programDirSet?: Set<string>;
+  // Whether a program in folder `d` is one a check followed all the way may run (trustedProgramDirs).
+  private programDir(d: string): boolean {
+    this.programDirSet ??= trustedProgramDirs(this.home, this.o.top);
+    return path.isAbsolute(d) && this.programDirSet.has(dirKey(d));
+  }
   // The package folders whose node_modules/.bin a package script has first
   // on PATH, while one is being followed.
   private binDirs: string[] = [];
@@ -1078,6 +1172,13 @@ class Reach {
     }
     const startDirs = ctx && !ctx.lost ? new Set(ctx.dirs) : new Set([this.o.folder]);
     if (passive) startDirs.add(path.dirname(real));
+    // Run by its path, its #! names the program that reads it: followed all
+    // the way, one from a folder programs are installed in (`#!/tmp/sh`
+    // after `cp perl /tmp/sh` reads the script as Perl).
+    if (this.o.strict && how === 'run' && !via) {
+      const interp = /^#![ \t]*(\S+)/.exec(text)?.[1];
+      if (interp !== undefined && !(path.isAbsolute(interp) && this.programDir(path.dirname(interp)))) return this.fail(ctx, line, `runs ${label}, whose #! names ${interp}, which isn't in a folder programs are installed in, so patch trust can't tell what reads it.`);
+    }
     if (kind === 'js') {
       const shebang = /^#!(.*)/.exec(text)?.[1] ?? '';
       // Run by its #!, every flag on it counts, as on a command line: only
@@ -1459,6 +1560,11 @@ class Reach {
     // name worked out as it runs gets past (Codex's fourth review).
     const code = text.replace(/^[ \t]*#.*$/gm, '');
     if (HOME_SET.test(code)) return this.fail(ctx, undefined, "sets HOME (in arithmetic or let), so ~ and $HOME name another folder from then on, which patch trust doesn't follow.");
+    // Followed all the way, PATH and the command tables set any way but a
+    // plain assignment: in an expansion (`${x:-${PATH:=/tmp}}`, zsh's
+    // `${~PATH:=/tmp}`), in arithmetic (`$((PATH=1))`, `a[PATH=1]`) or by let.
+    const joined = code.replace(/\\\n/g, '');
+    if (this.o.strict && (PATH_EXPAND_SET.test(joined) || PATH_ARITH_SET.test(joined))) return this.fail(ctx, undefined, "sets PATH (or a table of what command names run) in an expansion, arithmetic or let, which patch trust doesn't follow.");
     const msys = IS_WINDOWS ? MSYS_SET.exec(code) : null;
     if (msys) return this.fail(ctx, undefined, `sets ${/MSYS2?_\w+/.exec(msys[0])?.[0] ?? 'an MSYS variable'}, which changes how Git Bash hands paths to programs, so patch trust can't tell which file one names.`);
     // CDPATH makes `cd x` go somewhere else than ./x (Codex's sixth review).
@@ -1677,6 +1783,9 @@ class Reach {
       });
       const ok = entries?.every((e) => e === PATH_SENTINEL || BIN_DIR.test(e) || (path.isAbsolute(e) && !this.inRepo(e)));
       if (!ok || append) return this.fail(ctx, line, "puts a folder on PATH that patch trust can't vouch for, so it can't tell what a command name runs.");
+      // Followed all the way, only folders programs are installed in.
+      const odd = this.o.strict ? entries?.find((e) => e !== PATH_SENTINEL && !this.programDir(e)) : undefined;
+      if (odd !== undefined) return this.fail(ctx, line, `puts ${odd || 'the current folder'} on PATH, which isn't a folder programs are installed in (the system's, Homebrew's, ~/.local/bin and the like), so a program could be slipped in there and patch trust can't tell what a command name runs.`);
       // A package's bin folder, as a package script has first on PATH:
       // a name after this may be a program of the repo's, committed or a
       // workspace's, not an installed one (Codex's review, 7 Nov).
@@ -1693,7 +1802,14 @@ class Reach {
         }
       }
     }
-    ctx.vars.set(name, append ? undefined : vals);
+    if (this.o.strict && name === 'IFS' && !this.ifsForRead && !(vals && vals.every((v) => v === ''))) return this.fail(ctx, line, "sets IFS, which changes how every unquoted word splits, so patch trust can't tell what a command's words are.");
+    // Followed all the way, what a variable may hold is everything it was
+    // ever set to: one set in a subshell, an `if` not taken or a function
+    // never called (`d=/tmp; ( d=/usr/bin ); PATH="$d:$PATH"`) keeps the
+    // value it had as well.
+    const had = ctx.vars.get(name);
+    const keep = this.o.strict && ctx.vars.has(name) && !append;
+    ctx.vars.set(name, append ? undefined : keep ? (had && vals ? [...new Set([...had, ...vals])].slice(0, 32) : undefined) : vals);
   }
 
   // A variable patch trust can't follow being set, in any way a script can
@@ -1719,6 +1835,11 @@ class Reach {
   private unfollowableVar(full: string, ctx: Ctx, line: number): boolean {
     // HOME[0] is HOME, as $HOME is its first element.
     const name = full.replace(/\[.*$/s, '');
+    // bash's and zsh's table of where each command name runs from, as `hash -p` sets it.
+    if (this.o.strict && COMMAND_TABLES.has(name)) {
+      this.fail(ctx, line, `sets ${name}, which maps a command name to a file, so patch trust can't tell what a command name runs.`);
+      return true;
+    }
     if (name === 'HOME') {
       this.fail(ctx, line, "sets HOME, so ~ and $HOME name another folder from then on, which patch trust doesn't follow.");
       return true;
@@ -1832,6 +1953,8 @@ class Reach {
       this.subsOf(r.target, ctx);
       // `>&2` and `2>&-` move a descriptor; `>& file` writes it.
       if (WRITE_REDIRS.has(r.op) && !(r.op === '>&' && /^(\d+-?|-)$/.test(litOf(r.target) ?? ''))) this.wrote(this.values(r.target, ctx), r.target, ctx, line);
+      // To bash `>!x` is `>` to a file called `!x`; to zsh, `>!` to x.
+      if (r.op.endsWith('!')) this.wrote(this.values(r.target, ctx)?.map((v) => `!${v}`), r.target, ctx, line);
       if (r.op === '<' || r.op === '<>') {
         const v = this.values(r.target, ctx);
         if (!v && ctx.inSub) return this.fail(ctx, line, 'reads a file it works out as it runs (`$(< ...)`), which patch trust can\'t follow.');
@@ -1854,15 +1977,21 @@ class Reach {
     // By index: dropping one word at a time copied the rest each time, so
     // a long run of `a=1` was quadratic (Codex's review, 6 Nov).
     let k = 0;
+    // Followed all the way, IFS only empty, or for a `read` it's handed to:
+    // otherwise it changes how every unquoted word splits.
+    const lead = words.findIndex((w) => !this.assignment(w));
+    this.ifsForRead = lead >= 0 && bareOf(words[lead]!) === 'read';
     for (; k < words.length; k++) {
       const a = this.assignment(words[k]!);
       if (!a) break;
       this.assign(a.name, a.value, a.append, ctx, line);
       if (this.problem) return;
     }
+    this.ifsForRead = false;
     words = words.slice(k);
     for (const w of cmd.arrays) this.named(w, ctx);
     if (!words.length) return;
+    if (this.o.strict && this.splits(words, ctx, line)) return;
     this.run(words, ctx, line, false, false, k === 0 && !cmd.notAtStart);
   }
 
@@ -1872,6 +2001,31 @@ class Reach {
   // `atStart`: the simple command's first word, past reserved words only,
   // where the shell reads `case` and `[[` as its own (after `x=1`, `>f`
   // or a wrapper they're a program's name).
+  // Followed all the way, an unquoted `$x` whose value has a space, a tab
+  // or a newline is several words to the shell, and one with `*`, `?` or
+  // `[` names whatever files match (`env $a cat` with a='-i PATH=/tmp'):
+  // what each word is can't be told. Not in `[[ ]]`, a case's word, a
+  // for's list, or the assignments a declaration builtin is handed.
+  private ifsForRead = false;
+  private splits(words: Word[], ctx: Ctx, line: number): boolean {
+    const head = bareOf(words[0]!);
+    // A for's list splits into the values its name takes, which are unknown anyway.
+    if (head === '[[' || head === 'case' || head === 'for' || head === 'select') return false;
+    const declares = head !== undefined && ['export', 'local', 'declare', 'typeset', 'readonly', 'integer'].includes(head);
+    for (const w of words) {
+      if (declares && this.assignment(w)) continue;
+      for (const p of w.parts) {
+        if ((p.k !== 'var' && p.k !== 'sub') || p.q) continue;
+        const vals = this.values({ parts: [p], line: w.line }, ctx);
+        if (vals?.some((v) => /[\s*?[]/.test(v))) {
+          this.fail(ctx, line, `runs a command with an unquoted ${p.k === 'var' ? `$${p.name}` : '$(...)'} whose value the shell splits into words (or matches to files), so patch trust can't tell what it runs. Quote it.`);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   private run(words: Word[], ctx: Ctx, line: number, extra: boolean, wrappedIn = false, atStart = false): void {
     if (this.problem || !words.length) return;
     const head = words[0]!;
@@ -1914,6 +2068,8 @@ class Reach {
       if (!targets) return this.fail(ctx, line, `runs ${name} after a cd patch trust couldn't follow (${ctx.lost}), so it can't tell which file that is.`);
       const inRepo = targets.filter((t) => this.inRepo(t));
       for (const t of targets) this.reached.add(t);
+      // After a cd it can't settle, a file of the repo's or one outside it.
+      if (this.o.strict && inRepo.length && inRepo.length < targets.length) return this.fail(ctx, line, `runs ${name}, which after a cd could be a file of the repo's or one outside it, so patch trust can't tell which runs.`);
       if (inRepo.length) {
         const found = inRepo.filter(isFile);
         // A missing one that could turn up as a program: a runnable
@@ -1932,6 +2088,10 @@ class Reach {
       // /dev/fd/3 after `exec 3< ./x.sh` is x.sh.
       if (targets.some(readsInput)) return this.fail(ctx, line, `runs ${name}, which is a file it has open, so patch trust can't tell what runs.`);
       for (const t of targets) this.noteOutside(t, 'run', ctx, line);
+      // Followed all the way, a program by its path (not a script outside
+      // the repo, followed as one) only from a folder programs are installed in.
+      const program = targets.find((t) => !(this.o.outside && isFile(t) && !isBinary(t)) && !this.programDir(path.dirname(t)));
+      if (this.o.strict && program) return this.fail(ctx, line, `runs ${name}, a program in ${path.dirname(program)}, which isn't a folder programs are installed in (the system's, Homebrew's, ~/.local/bin and the like), so patch trust can't tell what it is.`);
       return this.program(path.basename(name), args, ctx, line, extra);
     }
     // In a package script, node_modules/.bin comes first on PATH.
@@ -1976,7 +2136,8 @@ class Reach {
     for (const d of ctx.dirs) this.besideRun(d, ctx, line);
     const a = (i: number) => this.str(args[i], ctx);
     if (Object.hasOwn(UNFOLLOWABLE, name)) return this.fail(ctx, line, `${UNFOLLOWABLE[name]}, which patch trust can't follow.`);
-    if (name === 'hash' && args.some((w) => /^-\w*p/.test(this.str(w, ctx) ?? ''))) return this.fail(ctx, line, 'maps a command name to a file (`hash -p`), which patch trust can\'t follow.');
+    // zsh's `hash cat=/tmp/cat` does it too, and a word worked out as it runs could be either.
+    if (name === 'hash' && args.some((w) => { const v = this.str(w, ctx); return v === undefined || /^-\w*p/.test(v) || v.includes('='); })) return this.fail(ctx, line, 'maps a command name to a file (`hash -p`, or zsh\'s `hash name=file`), which patch trust can\'t follow.');
     if (name === 'cd' || name === 'pushd') return this.cd(args, ctx, line);
     if (name === 'source' || name === '.') {
       const target = a(0);
@@ -1993,10 +2154,14 @@ class Reach {
       }
       return;
     }
+    // zsh's and ksh's `set -A name ...` sets an array, `path` among them.
+    if (name === 'set' && this.o.strict && args.some((w) => /^[-+][a-zA-Z]*A/.test(this.str(w, ctx) ?? ''))) return this.fail(ctx, line, "sets an array with set -A, which patch trust doesn't follow.");
     if (name === 'unset') {
       for (const w of args) {
         const v = this.str(w, ctx);
         if (v === undefined) return this.fail(ctx, line, "unsets a variable whose name patch trust can't read.");
+        // With no PATH some shells look in the current folder.
+        if (this.o.strict && /^(PATH|path)$/.test(v)) return this.fail(ctx, line, `unsets ${v}, after which a shell may run a program from the folder it's in.`);
         if (!v.startsWith('-') && this.unfollowableVar(v, ctx, line)) return;
         if (!v.startsWith('-') && /^[A-Za-z_]\w*$/.test(v)) {
           ctx.vars.set(v, ['']);
@@ -2010,8 +2175,10 @@ class Reach {
     if (name === 'printf') {
       // "$option" could be -v (Codex's fourth review).
       if (args[0] && this.str(args[0], ctx) === undefined && args[0].parts.some((p) => p.k !== 'lit')) return this.fail(ctx, line, "runs printf with a first argument worked out as it runs, which could make it set a variable patch trust can't name.");
-      const at = args.findIndex((w) => this.str(w, ctx) === '-v');
-      const v = at >= 0 ? args[at + 1] && this.str(args[at + 1]!, ctx) : undefined;
+      const at = args.findIndex((w) => /^-v/.test(this.str(w, ctx) ?? ''));
+      // bash takes the name joined on too (`-vPATH`).
+      const joined = at >= 0 ? this.str(args[at], ctx)!.slice(2) : '';
+      const v = at >= 0 ? joined || (args[at + 1] && this.str(args[at + 1]!, ctx)) : undefined;
       if (at >= 0 && v === undefined) return this.fail(ctx, line, "sets a variable with printf -v whose name patch trust can't read.");
       if (v && this.setUnread(v, ctx, line)) return;
       if (v) this.setsUnknown(v, ctx);
@@ -2020,6 +2187,24 @@ class Reach {
       // A name reference makes a later assignment to one name write
       // another (declare -n d=HOME; d=x), which isn't followed.
       if (name !== 'export' && args.some((w) => /^[-+][a-zA-Z]*n/.test(litOf(w) ?? ''))) return this.fail(ctx, line, `makes a name reference (${name} -n), which patch trust doesn't follow.`);
+      // zsh's `typeset -T PATH dirs` ties PATH to another array, which then sets it.
+      if (this.o.strict && args.some((w) => /^[-+][a-zA-Z]*T/.test(litOf(w) ?? ''))) return this.fail(ctx, line, `ties a variable to another (${name} -T), which patch trust doesn't follow.`);
+      // `export "$x"` with x='PATH=/tmp' sets PATH all the same: followed
+      // all the way, each value it can have is an assignment like any other.
+      if (this.o.strict) {
+        for (const w of args) {
+          if (!w.parts.some((p) => p.k !== 'lit') || this.assignment(w)) continue;
+          const vals = this.values(w, ctx);
+          if (!vals) return this.fail(ctx, line, `runs ${name} with a word worked out as it runs, which could set a variable patch trust can't name.`);
+          for (const v of vals) {
+            const m = /^([A-Za-z_]\w*)(\[[^\]]*\])?(\+?)=(.*)$/s.exec(v);
+            if (!m) continue;
+            if (this.unfollowableVar(m[1]!, ctx, line)) return;
+            this.assign(m[1]!, { parts: [{ k: 'lit', s: m[4]!, q: true }], line }, m[3] === '+', ctx, line);
+            if (this.problem) return;
+          }
+        }
+      }
       const exports = name === 'export' || args.some((w) => /^-[a-zA-Z]*x/.test(litOf(w) ?? ''));
       for (const w of args) {
         const as = this.assignment(w);
@@ -2041,16 +2226,22 @@ class Reach {
       return;
     }
     if (name === 'for' || name === 'select') {
-      const v = a(0);
-      if (v && this.setUnread(v, ctx, line)) return;
-      if (v) {
+      // zsh takes several names (`for a b in ...`).
+      for (let i = 0; i < args.length; i++) {
+        const v = a(i);
+        if (v === 'in' || (i > 0 && !this.o.strict)) break;
+        if (v === undefined && this.o.strict) return this.fail(ctx, line, `runs ${name} with a name worked out as it runs, which could set a variable patch trust can't name.`);
+        if (!v || !/^[A-Za-z_]\w*$/.test(v)) break;
+        if (this.setUnread(v, ctx, line)) return;
         this.setsUnknown(v, ctx);
       }
       return;
     }
     if (name === 'read' || name === 'getopts' || name === 'mapfile' || name === 'readarray') {
       for (const w of args) {
-        const v = this.str(w, ctx);
+        // zsh's and ksh's `read 'name?prompt'` sets name.
+        const v = this.str(w, ctx)?.replace(/\?.*$/s, '');
+        if (v === undefined && this.o.strict) return this.fail(ctx, line, `runs ${name} with a word worked out as it runs, which could set a variable patch trust can't name.`);
         if (v && /^[A-Za-z_]\w*(?:\[.*\])?$/s.test(v) && this.setUnread(v, ctx, line)) return;
         if (v && /^[A-Za-z_]\w*$/.test(v)) {
           this.setsUnknown(v, ctx);
@@ -2220,6 +2411,7 @@ class Reach {
   private writesOnly(cmd: Simple, ctx: Ctx): void {
     for (const r of cmd.redirs) {
       if (r.target && WRITE_REDIRS.has(r.op) && !(r.op === '>&' && /^(\d+-?|-)$/.test(litOf(r.target) ?? ''))) this.wrote(this.values(r.target, ctx), r.target, ctx, cmd.line);
+      if (r.target && r.op.endsWith('!')) this.wrote(this.values(r.target, ctx)?.map((v) => `!${v}`), r.target, ctx, cmd.line);
     }
     // Assignments still set what later writes are made from.
     for (const w of cmd.words) {
@@ -2369,7 +2561,8 @@ class Reach {
         if (v === undefined) continue;
         if (long && v === long) to(args[i + 1]);
         else if (long && v.startsWith(`${long}=`)) after(args[i]!, `${long}=`);
-        else if (short && /^-[A-Za-z]/.test(v) && v.includes(short)) {
+        // Any short cluster, digits too (`curl -4so x`).
+        else if (short && /^-[^-]/.test(v) && v.includes(short)) {
           // In a cluster, what follows the letter is its value (`-sorun.sh`),
           // or the next word when nothing does.
           const rest = v.slice(v.indexOf(short) + 1);
@@ -2382,10 +2575,26 @@ class Reach {
     // another file than the path says (Codex's review of 153).
     if (name === 'ln' || name === 'gln') return somewhere();
     if (COPIERS.has(name)) {
-      const target = args.findIndex((w) => /^(-t|--target-directory)$/.test(lit(w) ?? ''));
+      // GNU's -t in a cluster too (`-ft dir`, `-tdir`); rsync's -t is times.
+      const tFlag = (v: string) => name !== 'rsync' && /^-[A-Za-z]*t/.test(v);
+      const target = args.findIndex((w) => /^--target-directory$/.test(lit(w) ?? '') || (tFlag(lit(w) ?? '') && /t$/.test(lit(w) ?? '')));
       const joined = args.find((w) => /^--target-directory=/.test(lit(w) ?? ''));
+      const glued = args.find((w) => tFlag(lit(w) ?? '') && !/t$/.test(lit(w) ?? ''));
+      // Followed all the way, a link it copies or moves can point a later
+      // write anywhere (`mv staged link; cp x link/cat`).
+      if (this.o.strict) {
+        const all = operands();
+        for (const w of target >= 0 || joined || glued ? all : all.slice(0, -1)) {
+          const v = this.values(w, ctx);
+          if (v?.some((x) => (this.abs(x, ctx) ?? []).some((f) => holdsLink(f)))) return somewhere();
+        }
+      }
       if (target >= 0) return into(args[target + 1]);
       if (joined) return after(joined, '--target-directory=');
+      if (glued) {
+        const v = lit(glued)!;
+        return after(glued, v.slice(0, v.indexOf('t') + 1));
+      }
       if (extra) return somewhere();
       // rsync's options that take the next word, wherever they are.
       const ops = name === 'rsync' ? args.filter((w, i) => !(lit(w) ?? '').startsWith('-') && !RSYNC_VALUED.test(lit(args[i - 1]!) ?? '')) : operands();
@@ -2433,11 +2642,13 @@ class Reach {
     if (name === 'sort' || name === 'base64' || name === 'iconv') return optionValue('o', '--output');
     if (name === 'openssl') return optionValue(undefined, '-out');
     if (name === 'uniq' || (name === 'xxd' && args.some((w) => lit(w) === '-r'))) {
-      const ops = operands();
+      // uniq's -f, -s and -w take the next word (`uniq -s 0 in out`).
+      const valued = name === 'uniq' ? new Set(args.flatMap((w, i) => (/^-[A-Za-z]*[fsw]$/.test(lit(w) ?? '') ? [i + 1] : []))) : new Set<number>();
+      const ops = operands().filter((w) => !valued.has(args.indexOf(w)));
       return ops[1] ? to(ops[1]) : undefined;
     }
     if (name === 'curl') {
-      if (args.some((w) => /^-[A-Za-z]*[OJK]|^--(remote-name|remote-header-name|output-dir|config|remote-name-all)/.test(lit(w) ?? ''))) return somewhere();
+      if (args.some((w) => /^-[^-]*[OJK]|^--(remote-name|remote-header-name|output-dir|config|remote-name-all)/.test(lit(w) ?? ''))) return somewhere();
       return optionValue('o', '--output');
     }
     if (name === 'wget') {
@@ -2519,6 +2730,7 @@ class Reach {
       exported: [...this.exported],
       cleared: [...this.cleared],
       ...(this.assignsAny ? { assignsAny: true } : {}),
+      ...(this.o.strict ? { programDirs: programHomes(this.home, this.o.top) } : {}),
     };
   }
 
@@ -2529,7 +2741,8 @@ class Reach {
       return;
     }
     const v = this.str(words[0], ctx);
-    if (v === undefined || v === '-') {
+    // zsh's and ksh's `cd old new` goes somewhere else again.
+    if (v === undefined || v === '-' || (this.o.strict && words.length > 1)) {
       ctx.lost ??= `line ${line}`;
       return;
     }
@@ -2549,6 +2762,9 @@ class Reach {
         if (s === '--') return i + 1;
         if (!s.startsWith('-') || s === '-') break;
         if (opts.includes(s)) i++;
+        // A cluster ending in one that takes a value (`exec -ca name`)
+        // takes the next word too.
+        else if (/^-[A-Za-z]{2,}$/.test(s) && opts.includes(`-${s.at(-1)}`)) i++;
         else if (!flagsOk) break;
       }
       return i;
@@ -2562,8 +2778,11 @@ class Reach {
         }
         return { words: args.slice(val(['-a'])), extra: false };
       case 'command': {
-        if (args.some((w) => /^-[vV]$/.test(litOf(w) ?? ''))) return { words: [], extra: false };
-        return { words: args.slice(val([])), extra: false };
+        // -v and -V only look a name up, but only as its own options: after
+        // the name they're the command's (`command sh -v x.sh`).
+        const at = val([]);
+        if (args.slice(0, at).some((w) => /^-[a-zA-Z]*[vV]/.test(litOf(w) ?? ''))) return { words: [], extra: false };
+        return { words: args.slice(at), extra: false };
       }
       case 'builtin':
       case 'nohup':
@@ -2616,6 +2835,32 @@ class Reach {
           if (/^(-S|--split-string|-C|--chdir)/.test(s)) {
             this.fail(ctx, line, `runs \`env ${s}\`, which patch trust doesn't follow.`);
             return { words: [], extra: false };
+          }
+          // A cluster of short options (`-iu name`): each letter in turn, and
+          // one that takes a value takes the rest of the word or the next.
+          if (/^-[A-Za-z0-9]{2,}$/.test(s)) {
+            let stop = false;
+            for (let j = 1; j < s.length && !stop; j++) {
+              const c = s[j]!;
+              if ('SCP'.includes(c)) {
+                this.fail(ctx, line, `runs \`env ${s}\`, which patch trust doesn't follow.`);
+                return { words: [], extra: false };
+              }
+              if (c === 'i') this.cleared.add('*');
+              if (c !== 'u' && c !== 'a') continue;
+              stop = true;
+              const rest = s.slice(j + 1);
+              const v = rest || (args[i + 1] && this.str(args[i + 1]!, ctx));
+              if (!rest) i++;
+              if (c === 'a') continue;
+              if (v === undefined) {
+                this.fail(ctx, line, "runs `env -u` with a name worked out as it runs, which patch trust can't follow.");
+                return { words: [], extra: false };
+              }
+              if (v && this.unfollowableVar(v, ctx, line)) return { words: [], extra: false };
+              this.cleared.add(v);
+            }
+            continue;
           }
           if (s === '-u' || s === '--unset') {
             const v = args[i + 1] && this.str(args[i + 1]!, ctx);
@@ -3745,7 +3990,13 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
   const valuesOf = (n: string, depth: number): string[] => {
     const d = deps.get(n);
     // $HOME nothing followed sets is the runner's own home.
-    if (!d || depth > 6) return n === 'HOME' && !d ? [os.homedir(), ''] : [''];
+    if (!d || depth > 6) {
+      if (n === 'HOME' && !d) return [os.homedir(), ''];
+      // Followed all the way, one the runner has set may name a folder
+      // programs run from (`$NVM_BIN/cat`), so it's checked as it stands.
+      const own = !d && w.programDirs ? process.env[n] : undefined;
+      return own ? ['', own] : [''];
+    }
     // Empty too: a shell it starts doesn't have a variable it didn't
     // export, `env -u` takes one away, `shift` empties a positional.
     const empty = n.startsWith('#args:') || !exported.has(n) || cleared.has(n) || cleared.has('*') ? [''] : [];
@@ -3784,6 +4035,24 @@ export function writeProblem(w: Writes, top: string): { problem: string; definit
     }
   }
   if (!written.length && !somewhere) return undefined;
+  // Followed all the way, nothing written in a folder programs run from,
+  // nor that folder itself or one above it: `cp /bin/sh ~/.local/bin/cat;
+  // cat data.txt`. Anywhere it can't tell could be one.
+  if (w.programDirs?.length) {
+    const dirs = [...new Set(w.programDirs)];
+    const within = (k: string, d: string) => k === d || k.startsWith(d.endsWith(path.sep) ? d : d + path.sep);
+    for (const [written1, where] of written) {
+      // `~` as the shell writes it (`~/bin/${x}cat`), which the lexer leaves;
+      // another's (`~alice/bin`) can't be told.
+      const parts = written1.split(path.sep);
+      const tilde = parts.findIndex((x) => x.startsWith('~'));
+      if (tilde >= 0 && parts[tilde] !== '~') return { problem: `${where} writes ${written1}, in another user's home folder, which could be a folder programs run from. Patch trust can't follow that.`, definite: false };
+      const file = tilde >= 0 ? path.join(os.homedir(), ...parts.slice(tilde + 1)) : written1;
+      const keys = [dirKey(file), dirKey(realOrNearest(file))];
+      if (keys.some((k) => dirs.some((d) => within(k, d) || within(d, k)))) return { problem: `${where} writes ${file}, where programs (or what they load) are installed, so what a command name runs after it isn't what was checked. Patch trust can't follow that.`, definite: true };
+    }
+    if (somewhere) return { problem: `${somewhere} writes files where it works out as it runs (or where its data says), which could be a folder programs run from, so patch trust can't follow what runs after it.`, definite: false };
+  }
   // A file of your home folder that a shell or a tool reads as it starts
   // (`~/.bashrc`, `~/.zshenv`, `~/.gitconfig`, a launch agent): a later
   // `bash -i`, `zsh -c` or git runs it, and no hash covers it (Grok's review

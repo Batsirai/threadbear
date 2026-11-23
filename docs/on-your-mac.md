@@ -808,8 +808,10 @@ File references are where to look.
   permission rules in its `.claude/settings*.json`, its `.mcp.json`
   servers, and hooks in its `.claude/agents`, `skills` and `commands`, are
   held back the same way (`runner/src/claude-trust.ts`): the runner reads
-  those files and the scripts they reach to hash them, runs `git ls-files`
-  in the folder to find skills in folders under it, and keeps what you
+  those files and the scripts they reach to hash them (and lists
+  `~/.nvm/versions/node` for the folders a hook may run programs from),
+  runs `git ls-files` in the folder to find skills in folders under it,
+  and keeps what you
   trusted in the same `patch-trust.json`. Beside it,
   `patch-trust-unvouched.json` lists worktrees a thread moved from another
   Mac changed the patches or Claude settings of, which Threadbear's own

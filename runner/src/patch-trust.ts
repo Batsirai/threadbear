@@ -1554,6 +1554,7 @@ function followOutside(command: string, label: string, start: FollowOptions, rea
       if (reach.writes.assignsAny) writes.assignsAny = true;
       writes.exported!.push(...(reach.writes.exported ?? []));
       writes.cleared!.push(...(reach.writes.cleared ?? []));
+      if (reach.writes.programDirs) writes.programDirs = [...new Set([...(writes.programDirs ?? []), ...reach.writes.programDirs])];
     }
     for (const f of reach.files) files.add(f);
     for (const f of reach.missing) missing.add(f);
