@@ -4,7 +4,7 @@ name: Inbox guess
 title: Inbox guess: Archive asks whether you needed to see the thread, and a model's guess is scored against your answer
 added: 2026-11-18
 on: false
-reminder: 8e797c4b
+reminder: 994605b5
 ---
 
 ## What it does
