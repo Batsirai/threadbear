@@ -169,3 +169,25 @@ test("a skills file where the folder should be doesn't stop the rest", () => {
   assert.equal(report.skipped.length, 1);
   assert.equal(fs.readlinkSync(path.join(login, 'hooks.json')), path.join(main, 'hooks.json'));
 });
+
+test('a config.toml Codex saves while it is being moved aside is kept, not dropped', () => {
+  const { main, login } = homes();
+  const cfg = path.join(login, 'config.toml');
+  const real = fs.linkSync;
+  (fs as { linkSync: typeof fs.linkSync }).linkSync = (from, to) => {
+    real(from, to);
+    // Codex saves its settings in place (write, then rename over).
+    fs.writeFileSync(`${cfg}.tmp`, 'model = "mine"\n');
+    fs.renameSync(`${cfg}.tmp`, cfg);
+  };
+  try {
+    assert.equal(shareCodexHome(main, login, 'file', '2026-11-23').skipped.length, 1);
+  } finally {
+    (fs as { linkSync: typeof fs.linkSync }).linkSync = real;
+  }
+  assert.ok(!fs.lstatSync(cfg).isSymbolicLink());
+  assert.equal(fs.readFileSync(cfg, 'utf8'), 'model = "mine"\n');
+  // The next pass sees settings of its own and leaves it.
+  assert.equal(shareCodexHome(main, login, 'file').skipped.length, 1);
+  assert.ok(!fs.lstatSync(cfg).isSymbolicLink());
+});

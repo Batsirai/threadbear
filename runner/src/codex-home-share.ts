@@ -140,7 +140,16 @@ function shareConfig(mainDir: string, loginDir: string, report: ShareReport, sta
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n >= 100) throw e;
       }
     }
-    fs.unlinkSync(link);
+    // Take whatever holds the name now, and drop it only if it's still the
+    // file just kept: one Codex saved there meanwhile goes back.
+    const moving = `${aside}.moving-${process.pid}`;
+    fs.renameSync(link, moving);
+    if (fs.statSync(moving).ino !== fs.statSync(aside).ino) {
+      fs.renameSync(moving, link);
+      report.skipped.push(`${link} changed while it was being shared; left as it is`);
+      return;
+    }
+    fs.unlinkSync(moving);
     try {
       fs.symlinkSync(target, link);
     } catch (e) {

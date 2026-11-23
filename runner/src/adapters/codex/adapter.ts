@@ -187,11 +187,7 @@ export class CodexAdapter implements AgentAdapter {
       }
     };
     const binary = this.deps.codexBinary();
-    let realBinary = binary;
-    try {
-      realBinary = fs.realpathSync(binary);
-    } catch {}
-    const key = JSON.stringify([mainDir, realBinary, stat(path.join(mainDir, 'config.toml')), stat(path.join(mainDir, 'hooks.json'))]);
+    const key = JSON.stringify([mainDir, stat(binary) ?? binary, stat(path.join(mainDir, 'config.toml')), stat(path.join(mainDir, 'hooks.json'))]);
     const cached = this.mainProbe;
     if (cached && cached.key === key && (cached.whole || cached.at > this.nowMs() - 5 * 60_000)) return cached.facts;
     const entry: { key: string; at: number; whole: boolean; facts: Promise<MainHomeFacts> } = { key, at: this.nowMs(), whole: false, facts: Promise.resolve({}) };
