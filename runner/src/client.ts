@@ -118,7 +118,10 @@ export class RunnerClient {
     });
     this.ws.on('close', (code, reason) => {
       this.closeInfo = { code, reason: reason.toString() };
-      for (const p of this.pending.values()) p.reject(new Error(`connection closed (${code})`));
+      // 4503: the runner couldn't tell which process this is (a slow lsof on
+      // a busy Mac), so it closed rather than guess (Daybreak finding 175).
+      const why = code === 4503 ? "connection closed (4503): the runner couldn't tell which process this is; try again" : `connection closed (${code})`;
+      for (const p of this.pending.values()) p.reject(new Error(why));
       this.pending.clear();
     });
   }

@@ -54,7 +54,8 @@ second after Allow, which looked like the same card coming back (Mike,
   commands, web fetches and other servers' tools; in Auto mode only
   edits of files that run as code; in Full only tools that always ask.
   The threadbear tools that never ask, questions and plans are never
-  queued, nor is a call too long for a card. `approval.queued` carries
+  queued, nor is a call too long for a card or with an argument named
+  `__proto__` (refused, as a card can't hold it). `approval.queued` carries
   the list, and again whenever a call joins it (they stream in while the
   card waits). Claude only: Codex asks about its own calls one at a time.
 - **Answering.** `approvals.respond` with `queued` answers them in the

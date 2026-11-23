@@ -245,6 +245,12 @@ export function cardInput(input: Record<string, unknown>, decisive: readonly str
     if (Array.isArray(v)) return v.map((x, i) => whole(x, `${where}[${i}]`, depth + 1));
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, whole(x, `${where}.${k}`, depth + 1)]));
   };
+  // An argument named __proto__ (legal JSON, an own key of what JSON.parse
+  // makes) can't be copied onto a plain object as its own: it would set the
+  // copy's prototype and go missing from the card while Allow passed it on.
+  // Refused like one too long to show, for every adapter and queued call
+  // (Daybreak finding 176).
+  if (input && Object.hasOwn(input, '__proto__')) return { input: {}, tooLong: UNSHOWABLE_KEY };
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input ?? {})) {
     out[k] = decisive === 'all' || decisive.includes(k) ? whole(v, k, 1) : truncateInput({ v }).v;
@@ -358,7 +364,10 @@ export function summaryField(input: Record<string, unknown>): string | undefined
 }
 
 // What the agent is told when a call is refused for that.
+const UNSHOWABLE_KEY = '__proto__';
+
 export function tooLongForCard(where: string): string {
+  if (where === UNSHOWABLE_KEY) return "Not run: the call had an argument named __proto__, which an approval card can't show, and the user can only allow what they can read.";
   return `Not run: \`${where}\` is longer than an approval card shows in full (${Math.round(LIMITS.toolInputString / 1024)} KB), and the user can only allow what they can read. Split it into shorter steps.`;
 }
 

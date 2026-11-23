@@ -114,11 +114,18 @@ thread's environment with `ps eww`) closes the connection with 4403 before
 any request runs, as does one whose socket is held by processes under two
 threads. So the token in a thread's shell is worth no more than the thread's
 own mode, and another thread's key used from under a thread is worth nothing.
-A key used from a process the lookup can't place (one that started a new
-session, or a lookup that failed or took over 3 seconds) is taken at its word,
-like the token below. A client that isn't under
+A key used from a process the lookup finds under no thread (one that started a new
+session) is taken at its word, like the token below. A client that isn't under
 a CLI (the app, a terminal, a patch's action, the runner's own jobs) is what it
-says it is. If the lookup fails (no `lsof`, or it times out), the runner goes by the credential.
+says it is, once the lookup has found it. A lookup that can't say (it fails, takes
+over 6 seconds, finds nobody holding the socket, or finds a holder `ps` doesn't
+list) closes the connection with 4503 before any request runs, the owner token's
+and a key's alike, on every system (Daybreak finding 175): an unplaced owner
+token used to count as the owner. A client may connect again. A Mac looks with
+`lsof` at its fixed path and `/bin/ps`; Linux reads `/proc/net/tcp` and each
+process's descriptors, so needs no `lsof`; Windows asks the helper. The server
+treats a connection as the owner only once the lookup has said so (or it has no
+lookup at all, as in tests); an undefined caller is otherwise refused at the gate.
 A process that has lost its parents (a `nohup`, a backgrounded subshell) still
 counts if it's in a process group a thread's tool command ran in, as the
 registry has noted them. One that deliberately starts a new session and reads
@@ -126,8 +133,16 @@ the token can still pass as the owner, which is why outside Full access
 Claude's file and shell tools are denied the runner's `secrets` folder as well;
 that deny is defence in depth (`SECURITY.md` says what's out of scope). A
 draining runner's own server applies all of this too. `tb runner`
-uses this Mac's keys from disk, so the runner never sees them: from a thread they
-need the real runner to say it isn't limited. A CLI started by a runner older
+uses this Mac's keys from disk, so the runner never sees them. Before using them
+it looks at its own environment and each parent's (`/bin/ps eww` on a Mac,
+`/proc/<pid>/environ` on Linux, never a `ps` on `PATH`) for thread keys, with
+three answers (Daybreak finding 174). Can't tell (a look fails, or Windows, which
+can't read another process's environment): refused. Under a thread: every key
+found must be one the data dir's token makes for a thread id beside it, so a
+stand-in data dir is no use, and the runner, asked at its own address (never
+`THREADBEAR_URL`) with that token, must place the connection under a thread on
+Full access; unreachable is refused. Under none: allowed, unless the runner, if it
+answers, says it's a limited thread. A CLI started by a runner older
 than this has no key and isn't recorded with its thread, so it keeps the old
 `tb` until its next start.
 

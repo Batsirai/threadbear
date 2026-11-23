@@ -14,7 +14,7 @@ import { MAX_BYLINE } from './needs.ts';
 import { isMoved, mergeSummaries, type Bucket } from './handover.ts';
 import { AUTH_VERSION, authProof, isNonce, isThreadId, newNonce, proofMatches, threadKey, type AuthChannel } from './rpc-auth.ts';
 import type { CallerGate } from './rpc-gate.ts';
-import type { PeerSocket } from './peer.ts';
+import type { PeerCaller, PeerSocket } from './peer.ts';
 import { cutSafely } from './safe-cut.ts';
 import { wellFormedJson } from './well-formed-json.ts';
 import { fetchPr, fetchPrFiles, forgetStates, parsePrUrl, prAct, prStates, type PrAction, type PrRef } from './github-pr.ts';
@@ -40,6 +40,11 @@ type Conn = {
   // The thread this connection acts for (docs/protocol/connection.md, "A thread's own
   // key"): undefined for the owner. Set once the process lookup is done.
   caller?: string;
+  // Set only once the owner token's connection is known not to be any
+  // thread's: the process lookup found it under none, or this server has no
+  // lookup. Until then (and for good, if the lookup couldn't tell) an
+  // undefined caller is nobody, never the owner (Daybreak finding 175).
+  owner?: boolean;
   // While the process lookup runs, frames wait here so a request can't get
   // ahead of it (a stolen token's first request, say).
   identifying?: Promise<void>;
@@ -187,9 +192,10 @@ export type RpcServerOptions = {
   // What a connection that belongs to a thread may do (rpc-gate.ts).
   gate?: CallerGate;
   // The thread whose CLI the process at the client's end of this exact
-  // connection runs under, if any (peer.ts, docs/protocol/connection.md "Who's really
-  // calling"). Rejects when it can't say which one (AmbiguousPeer).
-  callerOf?: (sock: PeerSocket) => Promise<string | undefined>;
+  // connection runs under, or none (peer.ts, docs/protocol/connection.md "Who's really
+  // calling"). Rejects when it can't say (UnresolvedPeer, AmbiguousPeer):
+  // the connection closes.
+  callerOf?: (sock: PeerSocket) => Promise<PeerCaller>;
   // Tests shorten these.
   authTimeoutMs?: number;
   maxPendingAuth?: number;
@@ -373,9 +379,23 @@ export class RpcServer {
   // fooled into naming someone else's process) closes the connection
   // instead of picking either (Daybreak finding 137). So does a lookup that
   // can't say which thread (AmbiguousPeer).
+  //
+  // A lookup that can't say who it is (it failed, ran out of time or found
+  // nobody holding the socket) closes the connection too, on every system,
+  // the owner token's and a key's alike: an unplaced owner token used to be
+  // taken as the owner, which a thread with its key wiped could ride
+  // (Daybreak finding 175). The app and tb connect again.
   private unlock(conn: Conn, keyThread?: string): void {
     conn.caller = keyThread;
     const find = this.opts.callerOf;
+    // No lookup on this server (a test's): the credential decides.
+    if (!find) conn.owner = keyThread === undefined;
+    else if (conn.peer === undefined) {
+      this.opts.log.warn("an RPC client's socket has no address to look up; closing it", { conn: conn.id });
+      conn.authed = true;
+      conn.authTimer?.clear();
+      return this.dropConn(conn, 4503, 'could not tell which process connected');
+    }
     if (find && conn.peer !== undefined) {
       let threads = 0;
       for (const n of this.threadLookups.values()) threads += n;
@@ -390,16 +410,19 @@ export class RpcServer {
       }
       this.countLookup(keyThread, 1);
       conn.identifying = find(conn.peer)
-        .then((t) => {
+        .then((found) => {
+          const t = found?.kind === 'thread' ? found.threadId : undefined;
+          if (found?.kind !== 'thread' && found?.kind !== 'owner') throw new Error(`the lookup gave no answer: ${JSON.stringify(found)}`);
           if (keyThread !== undefined && t !== undefined && t !== keyThread) {
             this.opts.log.warn("an RPC client's key and its process name different threads; closing it", { conn: conn.id, key: keyThread, process: t });
             return this.dropConn(conn);
           }
           if (t) conn.caller = t;
+          else if (keyThread === undefined) conn.owner = true;
         })
         .catch((e) => {
           this.opts.log.warn('could not tell which thread an RPC client is; closing it', { conn: conn.id, error: String(e) });
-          this.dropConn(conn);
+          this.dropConn(conn, 4503, 'could not tell which process connected');
         })
         .finally(() => {
           this.countLookup(keyThread, -1);
@@ -426,10 +449,12 @@ export class RpcServer {
 
   // Closes an authenticated connection whose caller can't be trusted, before
   // any of its requests run.
-  private dropConn(conn: Conn): void {
+  // 4403 when its process names another thread than its key, 4503 when the
+  // lookup couldn't place it (a client may try again).
+  private dropConn(conn: Conn, code = 4403, reason = 'caller does not match its process'): void {
     conn.dropped = true;
     conn.queue.length = 0;
-    conn.ws.close(4403, 'caller does not match its process');
+    conn.ws.close(code, reason);
     setTimeout(() => conn.ws.terminate(), 1000).unref();
   }
 
@@ -654,7 +679,12 @@ export class RpcServer {
   // covered too. A server with no gate (a draining runner's own, which only
   // a primary with the token talks to) refuses a thread outright.
   private gated(conn: Conn, method: string, p: Record<string, unknown>): Record<string, unknown> {
-    if (conn.caller === undefined) return p;
+    if (conn.caller === undefined) {
+      if (conn.owner) return p;
+      // Not a thread and not known to be the owner: the lookup never said
+      // (unlock closes such a connection; this is the backstop).
+      throw new RpcError(ErrorCode.notAllowed, "The runner couldn't tell which process this connection is from.");
+    }
     if (!p || typeof p !== 'object' || Array.isArray(p)) throw bad('params must be an object');
     if (!this.opts.gate) throw new RpcError(ErrorCode.notAllowed, "This server doesn't take calls from threads.");
     return this.opts.gate.check(conn.caller, method, p);

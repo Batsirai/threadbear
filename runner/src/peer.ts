@@ -4,6 +4,8 @@
 // environment. The kernel can say what it's a child of, so the server looks at
 // the far end of the connection and walks up its parents to a thread's CLI.
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import { lsofPath } from './handover.ts';
 import { psTable, type ProcessRegistry } from './proc.ts';
 import type { Logger } from './log.ts';
@@ -27,9 +29,24 @@ export type PeerDeps = {
   // of a real lookup gives them longer, as on a loaded Mac lsof alone took
   // over 3 s (a fork, 15 Nov).
   lookupMs?: number;
+  // Linux: where /proc is (tests pass a stand-in tree).
+  procRoot?: string;
 };
 
-const LOOKUP_MS = 3000;
+// 3 s until 23 Nov 2026. A lookup that runs out now closes the connection
+// rather than letting its credential decide (Daybreak finding 175), so it
+// gets longer: the app and tb wait a little on a loaded Mac instead of
+// reconnecting.
+const LOOKUP_MS = 6000;
+
+// Who is at the far end of a connection, as the lookup found it: under a
+// thread's CLI, or not under any (a terminal, the app, the runner's own
+// jobs). A lookup that can't say either throws UnresolvedPeer (or
+// AmbiguousPeer), and the server closes the connection: never "the owner"
+// for want of an answer (Daybreak finding 175).
+export type PeerCaller = { kind: 'thread'; threadId: string } | { kind: 'owner' };
+export const OWNER_PEER: PeerCaller = Object.freeze({ kind: 'owner' });
+export const threadPeer = (threadId: string): PeerCaller => ({ kind: 'thread', threadId });
 
 // A process as the lookup sees it. created (Windows only, a FILETIME) is
 // when it started: Windows keeps a process's parent id after the parent
@@ -49,6 +66,11 @@ export type PeerSocket = { remoteAddress: string; remotePort: number; localAddre
 // (a socket handed to a child in another thread can't be told apart): the
 // server refuses the connection rather than pick one.
 export class AmbiguousPeer extends Error {}
+
+// Thrown when the lookup can't place the connection at all: lsof or /proc
+// failing, timing out or finding nobody holding a socket the runner has
+// just accepted, or ps failing. The server closes the connection.
+export class UnresolvedPeer extends Error {}
 
 // What lsof calls an address in a name: IPv6 in brackets, an IPv4-mapped
 // one as plain IPv4 (Node's dual-stack form).
@@ -80,6 +102,126 @@ function lsofPids(sock: PeerSocket, ms: number): Promise<number[]> {
     });
   });
 }
+
+// Linux: the same from /proc, with no program to run or find. The socket
+// whose local end is the client's address and port and whose far end is
+// the runner's, from /proc/net/tcp and tcp6 (this network namespace's), then
+// every process with a descriptor on that socket's inode. A process of
+// another user can't be read; a thread's processes are this user's.
+export async function procPids(sock: PeerSocket, root = '/proc'): Promise<number[]> {
+  const client = addrBytes(sock.remoteAddress);
+  const server = addrBytes(sock.localAddress);
+  if (!client || !server) throw new Error(`not an address: ${sock.remoteAddress} or ${sock.localAddress}`);
+  const inodes = new Set<string>();
+  let tables = 0;
+  for (const f of ['tcp', 'tcp6']) {
+    let text: string;
+    try {
+      text = await fs.promises.readFile(`${root}/net/${f}`, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw e;
+    }
+    tables++;
+    for (const inode of socketInodes(text, client, sock.remotePort, server, sock.localPort)) inodes.add(inode);
+  }
+  if (tables === 0) throw new Error(`no ${root}/net/tcp`);
+  if (inodes.size === 0) return [];
+  const want = new Set([...inodes].map((i) => `socket:[${i}]`));
+  const pids: number[] = [];
+  for (const name of await fs.promises.readdir(root)) {
+    if (!/^\d+$/.test(name)) continue;
+    let fds: string[];
+    try {
+      fds = await fs.promises.readdir(`${root}/${name}/fd`);
+    } catch {
+      continue; // gone, or not this user's
+    }
+    for (const fd of fds) {
+      let target: string;
+      try {
+        target = await fs.promises.readlink(`${root}/${name}/fd/${fd}`);
+      } catch {
+        continue;
+      }
+      if (want.has(target)) {
+        pids.push(Number(name));
+        break;
+      }
+    }
+  }
+  return pids;
+}
+
+// The inodes of established sockets (state 01) in a /proc/net/tcp table
+// whose local end is `local`:`lport` and far end `remote`:`rport`.
+export function socketInodes(table: string, local: Uint8Array, lport: number, remote: Uint8Array, rport: number, little = os.endianness() === 'LE'): string[] {
+  const out: string[] = [];
+  for (const line of table.split('\n').slice(1)) {
+    const f = line.trim().split(/\s+/);
+    if (f.length < 10 || f[3] !== '01') continue;
+    const l = procAddr(f[1], little);
+    const r = procAddr(f[2], little);
+    if (!l || !r || l.port !== lport || r.port !== rport || !sameBytes(l.ip, local) || !sameBytes(r.ip, remote)) continue;
+    if (/^\d+$/.test(f[9]) && f[9] !== '0') out.push(f[9]);
+  }
+  return out;
+}
+
+// "0100007F:1F90" (IPv4) or 32 hex digits and a port (IPv6): each 32-bit
+// word as the kernel holds it, so byte-swapped on a little-endian machine.
+function procAddr(field: string, little: boolean): { ip: Uint8Array; port: number } | undefined {
+  const m = /^([0-9A-Fa-f]{8}|[0-9A-Fa-f]{32}):([0-9A-Fa-f]{4})$/.exec(field);
+  if (!m) return undefined;
+  const bytes = new Uint8Array(m[1].length / 2);
+  for (let w = 0; w < bytes.length / 4; w++) {
+    for (let b = 0; b < 4; b++) {
+      const hex = m[1].slice(w * 8 + b * 2, w * 8 + b * 2 + 2);
+      bytes[w * 4 + (little ? 3 - b : b)] = parseInt(hex, 16);
+    }
+  }
+  return { ip: unmapped(bytes), port: parseInt(m[2], 16) };
+}
+
+// An address as bytes: 4 for IPv4 (and IPv4-mapped IPv6), 16 for IPv6.
+export function addrBytes(addr: string): Uint8Array | undefined {
+  const v4 = (s: string) => {
+    const parts = s.split('.');
+    if (parts.length !== 4 || !parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) < 256)) return undefined;
+    return Uint8Array.from(parts.map(Number));
+  };
+  if (!addr.includes(':')) return v4(addr);
+  let a = addr.replace(/%.*$/, '');
+  // A dotted IPv4 tail (::ffff:127.0.0.1) as its two groups.
+  const dotted = /:(\d+\.\d+\.\d+\.\d+)$/.exec(a);
+  if (dotted) {
+    const b = v4(dotted[1]);
+    if (!b) return undefined;
+    a = `${a.slice(0, dotted.index)}:${((b[0] << 8) | b[1]).toString(16)}:${((b[2] << 8) | b[3]).toString(16)}`;
+  }
+  const halves = a.split('::');
+  if (halves.length > 2) return undefined;
+  const groups = (s: string) => (s === '' ? [] : s.split(':').map((g) => (/^[0-9A-Fa-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN)));
+  const head = groups(halves[0]);
+  const rest = halves.length === 2 ? groups(halves[1]) : [];
+  const fill = 8 - head.length - rest.length;
+  if (halves.length === 1 ? fill !== 0 : fill < 0) return undefined;
+  const words: number[] = [...head, ...Array<number>(halves.length === 2 ? fill : 0).fill(0), ...rest];
+  if (words.length !== 8 || words.some((w) => !Number.isInteger(w))) return undefined;
+  const bytes = new Uint8Array(16);
+  words.forEach((w, i) => {
+    bytes[i * 2] = w >> 8;
+    bytes[i * 2 + 1] = w & 0xff;
+  });
+  return unmapped(bytes);
+}
+
+function unmapped(b: Uint8Array): Uint8Array {
+  if (b.length === 16 && b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff) return b.slice(12);
+  return b;
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 // From lsof's -F output (p<pid>, then f<fd> and n<name> per file), the pids
 // with a file named exactly `want`.
@@ -150,50 +292,52 @@ export function snapshotOwners(snap: Snapshot, sock: PeerSocket): number[] {
   return [...pids];
 }
 
-// The thread the process at the client's end of this connection belongs to,
-// or undefined when it isn't under a thread's CLI or the lookup can't tell
-// (no lsof, on a machine without it, or the Windows helper failing): then
-// the credential presented decides.
-// Every process holding the socket is looked at (a forked child keeps its
-// parent's); if they name different threads it throws AmbiguousPeer.
-export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<string | undefined> {
+// Who holds the client's end of this connection (PeerCaller). Every
+// process holding the socket is looked at (a forked child keeps its
+// parent's); if they name different threads it throws AmbiguousPeer. If
+// the lookup can't say, it throws UnresolvedPeer, on every system: the
+// connection is open (the runner accepted it before asking), so nobody
+// holding it means the lookup didn't see what it should, not that nobody
+// did (Codex's second review, 18 Nov; Daybreak finding 175). A Mac uses
+// lsof at its fixed path and /bin/ps; Linux reads /proc and needs neither
+// lsof nor anything on PATH; Windows asks the runner's helper.
+export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<PeerCaller> {
   let pids: number[];
-  let table: ProcRow[];
-  const windows = (deps.platform ?? process.platform) === 'win32';
+  let table: ProcRow[] = [];
+  const platform = deps.platform ?? process.platform;
+  const windows = platform === 'win32';
   const ms = deps.lookupMs ?? LOOKUP_MS;
   try {
+    let holders: number[];
     if (windows && !deps.lsof) {
       const snap = await deadline((deps.snapshot ?? windowsSnapshot)(sock.localPort), ms);
-      pids = snapshotOwners(snap, sock).filter((p) => p !== process.pid);
+      holders = snapshotOwners(snap, sock);
       table = snap.processes;
-      // The connection is open (the runner accepted it before asking), so
-      // a snapshot without it hasn't seen what it should (Codex's second
-      // review): not "nobody's".
-      if (pids.length === 0) throw new Error("the snapshot doesn't have this connection");
     } else {
-      pids = (await deadline((deps.lsof ?? ((s: PeerSocket) => lsofPids(s, ms)))(sock), ms)).filter((p) => p !== process.pid);
-      if (pids.length === 0) return undefined;
-      table = await deadline((deps.table ?? psTable)(), ms);
+      const find = deps.lsof ?? (platform === 'linux' ? (s: PeerSocket) => procPids(s, deps.procRoot) : (s: PeerSocket) => lsofPids(s, ms));
+      holders = await deadline(find(sock), ms);
     }
+    if (holders.length === 0) throw new Error('nobody holds this connection');
+    pids = holders.filter((p) => p !== process.pid);
+    // Only the runner itself: its own connection, the owner's.
+    if (pids.length === 0) return OWNER_PEER;
+    if (!(windows && !deps.lsof)) table = await deadline((deps.table ?? psTable)(), ms);
+    // One that isn't in the process table has gone, or the table missed
+    // it: either way its parents can't be walked.
+    const live = new Set(table.map((r) => r.pid));
+    const missing = pids.find((p) => !live.has(p));
+    if (missing !== undefined) throw new Error(`process ${missing} isn't in the process table`);
   } catch (e) {
-    // On Windows the helper is the runner's own and always there, so a
-    // lookup that fails is something stopping, suspending or swamping it:
-    // the connection closes (rpc.ts) rather than going by its credential
-    // alone, which a stolen one would pass (Codex's review, 18 Nov 2026).
-    // The app and tb connect again. On a Mac or Linux without lsof the
-    // credential still decides, as before.
-    if (windows) throw new Error(`could not tell which process connected: ${String(e)}`);
     deps.log.warn('could not tell which process connected to the RPC', { error: String(e) });
-    return undefined;
+    throw new UnresolvedPeer(`could not tell which process connected: ${String(e)}`);
   }
-  if (pids.length === 0) return undefined;
   const threads = new Set<string>();
   for (const peer of pids) {
     const t = await threadOfPid(peer, table, deps);
     if (t) threads.add(t);
   }
   if (threads.size > 1) throw new AmbiguousPeer(`one connection is held by processes under ${threads.size} threads`);
-  return [...threads][0];
+  return threads.size === 1 ? threadPeer([...threads][0]) : OWNER_PEER;
 }
 
 async function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps): Promise<string | undefined> {

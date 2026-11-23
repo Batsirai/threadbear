@@ -361,8 +361,12 @@ File references are where to look.
   CLIs for your threads. Each thread's CLI gets a key of its own in its
   environment (`THREADBEAR_THREAD_KEY`), never the token. When something
   connects, the runner runs `lsof` and `ps` on that one connection to see
-  which process it is and whether it's under a thread's CLI
+  which process it is and whether it's under a thread's CLI (on Linux it
+  reads `/proc` instead of running `lsof`), and closes it if it can't tell
   (`runner/src/peer.ts`, docs/protocol/connection.md "Who's really calling").
+  `tb runner` runs `/bin/ps` (or reads `/proc/<pid>/environ` on Linux) on
+  its own parents to see whether it's in a thread's shell
+  (`runner/src/tb-connect.ts`).
 - **Whether each Claude login is signed in** (`runner/src/sign-in-state.ts`):
   when the runner starts, every 10 minutes, and after a turn the login
   refused, it runs `claude auth status --json` once per Claude login, in

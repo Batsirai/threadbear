@@ -649,6 +649,36 @@ test('a command goes on its card whole, and one too long to show is refused with
   state.close!();
 });
 
+// Daybreak finding 176: an argument named __proto__ (an own key of what
+// JSON.parse makes) went missing from the card's plain-object copy while
+// Allow handed the original on. Refused with no card, and never queued.
+test('an MCP call with an argument named __proto__ is refused with no card, and never queued on another', async () => {
+  let release!: (a: ToolApprovalAnswer) => void;
+  const { state, approvals } = start([], {}, {}, () => new Promise((r) => (release = r)));
+  const opts = (id: string) => ({ signal: new AbortController().signal, toolUseID: id });
+  const hidden = JSON.parse('{"path":"notes.txt","__proto__":{"overwrite":"/etc/hosts"}}') as Record<string, unknown>;
+  assert.ok(Object.hasOwn(hidden, '__proto__'));
+  const call = (id: string, name: string, input: Record<string, unknown>) =>
+    state.frame!({ type: 'assistant', session_id: 's', message: { id: 'm', role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } });
+  await call('a1', 'mcp__other__write', { path: 'a.txt' });
+  await call('p1', 'mcp__other__write', hidden);
+  const first = state.options.canUseTool('mcp__other__write', { path: 'a.txt' }, opts('a1'));
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(approvals[0].queued?.map((c) => c.itemId) ?? [], [], 'not listed on the card, so not granted with it');
+  // Every argument the card shows is every argument Allow passes on.
+  assert.deepEqual(JSON.parse(JSON.stringify(approvals[0].input)), { path: 'a.txt' });
+  release({ decision: 'allow', queued: { p1: 'allow' } });
+  const allowed = await first;
+  assert.equal(allowed.behavior, 'allow');
+  assert.deepEqual(allowed.behavior === 'allow' && Object.keys(allowed.updatedInput ?? {}), Object.keys(JSON.parse(JSON.stringify(approvals[0].input))));
+  const cards = approvals.length;
+  const r = await state.options.canUseTool('mcp__other__write', hidden, opts('p1'));
+  assert.equal(r.behavior, 'deny');
+  assert.match(r.behavior === 'deny' ? r.message : '', /__proto__/);
+  assert.equal(approvals.length, cards, 'no card that would leave it out');
+  state.close!();
+});
+
 test('cardDecisive: file edits and MCP tools show every argument, anything else its command', () => {
   for (const name of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'mcp__x__y']) assert.equal(cardDecisive(name), 'all', name);
   assert.deepEqual(cardDecisive('Bash'), ['command']);
