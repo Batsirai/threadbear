@@ -78,9 +78,9 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-# The Swift app's bear, green, half machine, with GPUI across its front, so
-# the two apps can be told apart in the Dock and the app switcher while both
-# are installed (Mike picked it, 12 Nov). Drawn from shared/icons/threadbear.png.
+# The Swift app's bear, green and half machine (Mike picked it, 12 Nov).
+# Since 23 Nov it has no lettering and no tile or border of its own: the
+# picture fills the whole square and macOS rounds the corners.
 icon="$root/desktop/gpui/icons/threadbear-gpui.png"
 iconset="$(mktemp -d "${TMPDIR:-/tmp}/threadbear-icon-XXXX")/threadbear.iconset"
 mkdir -p "$iconset"
