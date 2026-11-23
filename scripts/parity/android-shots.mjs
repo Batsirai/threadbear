@@ -29,6 +29,13 @@ function screenText() {
   }
 }
 
+// Pair with the run's backend before opening any thread: a launch that
+// pairs and opens at once can swap backends after the open was taken, and
+// the first scenario's picture is then the inbox (23 Nov run).
+run(['shell', 'am', 'start', '-S', '-W', '-n', 'com.mikerosoft.threadbear.android/.MainActivity',
+  '--es', 'parityUrl', url, '--es', 'parityToken', seed.token], { stdio: 'ignore' });
+await sleep(4000);
+
 const results = [];
 for (const [i, t] of seed.threads.entries()) {
   run(['shell', 'am', 'start', '-S', '-W', '-n', 'com.mikerosoft.threadbear.android/.MainActivity',
