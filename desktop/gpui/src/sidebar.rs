@@ -438,8 +438,6 @@ pub(crate) struct SidebarState {
     /// pointer were over it, so scripts don't move a real pointer.
     pub(crate) hover_override: Option<String>,
     pub(crate) archive_limit: usize,
-    /// The Inbox's "Quietly archived: N today" list is open (quiet_inbox.rs).
-    pub(crate) quiet_open: bool,
     pub(crate) menu: Option<OpenMenu>,
     /// Groups of nested threads Mike opened or folded himself, by starter,
     /// kept while the app runs (nested.rs `group_open`).
@@ -535,7 +533,6 @@ impl SidebarState {
             hovered: None,
             hover_override: None,
             archive_limit: rows::ARCHIVE_FIRST,
-            quiet_open: false,
             menu: None,
             nest_choices: HashMap::new(),
             busy: HashSet::new(),
@@ -2117,12 +2114,6 @@ impl Threadbear {
                         .into_any_element();
                     body = place("note:inbox-empty".into(), empty, body);
                 }
-                // At its foot, what the quiet inbox hid today (quiet_inbox.rs).
-                if section.key == "inbox" && !searching {
-                    for (key, el) in self.render_quiet(&clock, &p, cx) {
-                        body = place(key, el, body);
-                    }
-                }
                 // Its height as drawn, for a fold to run to or from.
                 let height = self.sidebar.heights.entry(section.key).or_default().clone();
                 let measured = height.clone();
@@ -3527,16 +3518,7 @@ impl Threadbear {
             .iter()
             .find(|s| s.key == "archived")
             .map_or(0, |s| s.rows.len());
-        // The Inbox's "Quietly archived: N today" and its list (quiet_inbox.rs).
-        let hidden = self.quiet_today(&rows::local_now());
-        let quiet = (!hidden.is_empty() && !searching).then(|| {
-            let open = self.sidebar.quiet_open;
-            json!({
-                "line": rows::quiet_line(hidden.len(), open).0, "open": open,
-                "threads": if open { hidden.iter().map(|(id, title, why)| json!({ "id": id, "title": title, "why": why })).collect::<Vec<_>>() } else { vec![] },
-            })
-        });
-        json!({ "mode": "inbox", "sections": sections, "snoozed": snoozed, "archived": archived, "quiet": quiet, "sort": self.sidebar.order.name(), "loading": !self.sidebar.loaded, "nested": nesting.is_some() })
+        json!({ "mode": "inbox", "sections": sections, "snoozed": snoozed, "archived": archived, "sort": self.sidebar.order.name(), "loading": !self.sidebar.loaded, "nested": nesting.is_some() })
     }
 
     /// `row` as `dump` shows the open thread (`selection`).
@@ -4297,16 +4279,8 @@ pub(crate) fn automation(
             });
             Ok(json!(id.map_or("ok".to_string(), |id| format!("ok {id}"))))
         }
-        // The Inbox's "Quietly archived: N today" line, as clicking it does
-        // (`open`: true or false to set it), and a row's "Should have shown
-        // me" (quiet_inbox.rs).
-        "quiet-list" => {
-            app.update(cx, |t, cx| {
-                t.sidebar.quiet_open = cmd["open"].as_bool().unwrap_or(!t.sidebar.quiet_open);
-                cx.notify();
-            });
-            Ok(json!("ok"))
-        }
+        // An archived row's "Should Have Shown Me", as its menu does
+        // (quiet_inbox.rs).
         "should-have-shown" => {
             let id = target(cx)?;
             app.update(cx, |t, cx| t.should_have_shown(&id, cx));

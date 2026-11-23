@@ -42,6 +42,8 @@ const OPTIONS = {
   image: { type: 'string', multiple: true },
   wait: { type: 'boolean' },
   json: { type: 'boolean' },
+  // tb unarchive --wrong-hide: the quiet inbox shouldn't have hidden it.
+  'wrong-hide': { type: 'boolean' },
   snoozed: { type: 'boolean' },
   archived: { type: 'boolean' },
   all: { type: 'boolean' },
@@ -110,7 +112,7 @@ const HELP = `tb: talk to the Threadbear runner
   tb approve <threadId> <approvalId> [allow|allowAlways|deny]
   tb answer <threadId> <approvalId> "answer"
   tb snooze <threadId> <ISO time or 30m, 2h, 1d, or restart>
-  tb archive <threadId>      tb unarchive <threadId>
+  tb archive <threadId>      tb unarchive <threadId> [--wrong-hide]
   tb move <threadId> <folder>
   tb move <threadId> --to <runner> [--cwd DIR] [--account ID] [--preview]
                                   moves the thread whole to another of your machines
@@ -205,7 +207,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   answer: [],
   snooze: [],
   archive: [],
-  unarchive: [],
+  unarchive: ['wrong-hide'],
   move: ['to', 'cwd', 'account', 'preview', 'json'],
   delete: [],
   accounts: ['json'],
@@ -557,7 +559,10 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       if (cmd === 'archive') notSelf(id, STOPS_SELF);
       // Run from a thread (its agent), it's the agent archiving, not Mike.
       const by = cmd === 'archive' && process.env.THREADBEAR_THREAD_ID ? { archivedBy: 'agent' } : {};
-      await client.call('threads.update', { threadId: id, archived: cmd === 'archive', ...by });
+      // Mike saying the quiet inbox shouldn't have hidden it (its daily
+      // review thread asks him): brought back, written down as a wrong hide.
+      const wrong = cmd === 'unarchive' && f['wrong-hide'] ? { verdict: 'shouldHaveShown' } : {};
+      await client.call('threads.update', { threadId: id, archived: cmd === 'archive', ...by, ...wrong });
       return 0;
     }
     case 'highlights': {

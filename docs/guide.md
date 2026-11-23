@@ -834,11 +834,11 @@ didn't need to read the reply, with a note in the thread giving its reason.
 Not one with follow-ups, anything left open or a design review waiting for
 you, one you've starred, one you
 had open as it finished, or one you've brought back out of the archive
-before. To check what it hid, the foot of the Inbox says "Quietly archived:
-6 today" on days it has archived any. Click it to see them, newest first:
-click one to open it, or press "Should have shown me" (also in an archived
-thread's right-click menu) to bring it straight back to your inbox and
-tell the model it got that one wrong.
+before. To check what it hid, a daily thread lists the ones it archived
+the day before, each with the model's reason: tell it which you should have
+seen, and it brings them back and writes the misses down. Or right-click an
+archived thread and pick Should Have Shown Me, which brings it straight
+back to your inbox and tells the model it got that one wrong.
 
 Back and Forward (⌘[ and ⌘], in the Go menu, or the ‹ and › beside the share
 icon at the top right of a thread) step through the threads and

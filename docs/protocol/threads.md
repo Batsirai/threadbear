@@ -798,12 +798,12 @@ verdict: "shouldHaveShown"` brings a thread back as any unarchive does
 and the line `{ at, kind: "wrongHide", threadId, seq?, quiet, guesses? }`:
 `seq` the card it was quietly archived for (else its last done card),
 `quiet` whether it had the mark, `guesses` that card's. The GPUI app
-sends it from the Inbox's "Quietly archived: N today" list (threads
-quietly archived since local midnight, newest first) and from an archived
-row's menu. The Convex relay drops the verdict, so a thread on another runner
+sends it from an archived row's menu, and `tb unarchive <id>
+--wrong-hide` sends it for the daily thread that asks Mike about the day's
+quiet archives (`quiet` lines in the file). The Convex relay drops the verdict, so a thread on another runner
 comes back unlabelled, and `phone:update` takes only a plain
 `{ unarchive: true }` (a verdict there is refused); they never carry the mark
-anyway, and the phone and the website don't show the list.
+anyway.
 
 ## Secrets
 
