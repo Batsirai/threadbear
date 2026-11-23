@@ -342,6 +342,55 @@ test("an extra login: ~/.codex is asked about once, the login linked, and its ho
   await r.session.end();
 });
 
+// From the third review round, 23 Nov 2026: hooks/list failing doesn't lose
+// what config/read said, and an answer that wasn't whole is asked again.
+test("an extra login: hooks/list failing still shares config.toml, and ~/.codex is asked again", async () => {
+  const root = fs.realpathSync(tmp());
+  const main = path.join(root, '.codex');
+  const login = path.join(root, 'codex-1');
+  fs.mkdirSync(main);
+  fs.mkdirSync(login);
+  fs.writeFileSync(path.join(main, 'hooks.json'), '{"hooks":{}}');
+  fs.writeFileSync(path.join(main, 'config.toml'), 'model = "x"\n');
+  const f = await fake();
+  let clock = Date.now();
+  const adapter = new CodexAdapter({
+    now: () => clock,
+    codexBinary: () => f.bin,
+    registry: new ProcessRegistry(tmp(), nullLogger),
+    log: nullLogger,
+    codexMainDir: main,
+    timings: { finishWaitMs: 500, closeWaitMs: 2000, terminateMs: 500, spawnRetryForMs: PATIENCE_MS },
+  });
+  const extra: Account = { ...account, id: 'codex-1', configDir: login };
+  const answer = async (hooks: 'fail' | 'ok') => {
+    const probe = await f.next();
+    await probe.init();
+    const read = await probe.request('config/read');
+    probe.respond(read.id, { config: {}, origins: {} });
+    const list = await probe.request('hooks/list');
+    if (hooks === 'fail') probe.fail(list.id, -32601, 'no such method');
+    else probe.respond(list.id, { data: [{ cwd: '/tmp', hooks: [{ key: `${main}/hooks.json:stop:0:0`, trustStatus: 'trusted', currentHash: 'sha256:a' }], warnings: [], errors: [] }] });
+  };
+  const opening = open({ adapter, account: extra });
+  await answer('fail');
+  const h = await opening;
+  const req = await h.conn.request('thread/start');
+  assert.equal((req.params.config as Record<string, unknown>)['hooks.state'], undefined);
+  assert.equal(fs.readlinkSync(path.join(login, 'config.toml')), path.join(main, 'config.toml'));
+  h.conn.respond(req.id, threadResult('th-1'));
+  await h.session.end();
+  // Not whole, so the next start asks again (within 5 minutes only by the clock).
+  clock += 6 * 60_000;
+  const again = open({ adapter, account: extra });
+  await answer('ok');
+  const r = await again;
+  const req2 = await r.conn.request('thread/start');
+  assert.ok((req2.params.config as Record<string, unknown>)['hooks.state']);
+  r.conn.respond(req2.id, threadResult('th-2'));
+  await r.session.end();
+});
+
 test('traffic before thread/start answers is routed once the id is known', async () => {
   const h = await open();
   const req = await h.conn.request('thread/start');

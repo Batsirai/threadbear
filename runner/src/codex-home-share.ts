@@ -127,16 +127,27 @@ function shareConfig(mainDir: string, loginDir: string, report: ShareReport, sta
       report.skipped.push(`${link} has settings of its own, so it isn't shared`);
       return;
     }
-    // Never over an earlier one kept the same day.
-    let aside = `${link}.before-share-${stamp}`;
-    for (let n = 2; exists(aside) || isLink(aside); n++) aside = `${link}.before-share-${stamp}-${n}`;
-    fs.renameSync(link, aside);
+    // Kept by a second name (a hard link, which never replaces a file: an
+    // earlier one kept the same day, or another runner's at the same
+    // moment), then the first name goes.
+    let aside = '';
+    for (let n = 1; !aside; n++) {
+      const name = `${link}.before-share-${stamp}${n > 1 ? `-${n}` : ''}`;
+      try {
+        fs.linkSync(link, name);
+        aside = name;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n >= 100) throw e;
+      }
+    }
+    fs.unlinkSync(link);
     try {
       fs.symlinkSync(target, link);
     } catch (e) {
       // No link (Windows without the right to make one): the login keeps
-      // its own file rather than having none.
-      fs.renameSync(aside, link);
+      // its own file rather than having none, unless something else has
+      // taken the name since.
+      if (!exists(link) && !isLink(link)) fs.renameSync(aside, link);
       report.skipped.push(`${link}: ${(e as Error).message}`);
       return;
     }

@@ -106,9 +106,8 @@ export type CodexAdapterDeps = {
   now?: () => number;
 };
 
-export type MainHomeFacts = { credentialsStore: string; hooks: MainHook[] };
-// A failed ask, kept for a while so each start doesn't wait on another.
-const FAILED: Promise<MainHomeFacts | undefined> = Promise.resolve(undefined);
+// What Codex said about ~/.codex; a part it couldn't say is left out.
+export type MainHomeFacts = { credentialsStore?: string; hooks?: MainHook[]; partial?: true };
 
 export class CodexAdapter implements AgentAdapter {
   readonly provider = 'codex';
@@ -172,12 +171,13 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   // What ~/.codex is, from Codex itself: where it keeps its sign-in
-  // (config/read) and its hooks with their trust (hooks/list). Asked again
-  // only when its config.toml or hooks.json changes, or 5 minutes after a
-  // failed ask; undefined when Codex couldn't say.
-  private mainProbe?: { key: string; at: number; facts: Promise<MainHomeFacts | undefined> };
+  // (config/read) and its hooks with their trust (hooks/list), each kept
+  // apart so one failing doesn't lose the other. Asked again when its
+  // config.toml, hooks.json or the Codex binary changes, and 5 minutes
+  // after an answer that wasn't whole.
+  private mainProbe?: { key: string; at: number; whole: boolean; facts: Promise<MainHomeFacts> };
 
-  mainHome(mainDir: string): Promise<MainHomeFacts | undefined> {
+  mainHome(mainDir: string): Promise<MainHomeFacts> {
     const stat = (p: string) => {
       try {
         const st = fs.statSync(p);
@@ -186,28 +186,49 @@ export class CodexAdapter implements AgentAdapter {
         return null;
       }
     };
-    const key = JSON.stringify([mainDir, this.deps.codexBinary(), stat(path.join(mainDir, 'config.toml')), stat(path.join(mainDir, 'hooks.json'))]);
+    const binary = this.deps.codexBinary();
+    let realBinary = binary;
+    try {
+      realBinary = fs.realpathSync(binary);
+    } catch {}
+    const key = JSON.stringify([mainDir, realBinary, stat(path.join(mainDir, 'config.toml')), stat(path.join(mainDir, 'hooks.json'))]);
     const cached = this.mainProbe;
-    if (cached && cached.key === key && (cached.at > this.nowMs() - 5 * 60_000 || cached.facts !== FAILED)) return cached.facts;
-    const facts = withShortLivedProcess(
+    if (cached && cached.key === key && (cached.whole || cached.at > this.nowMs() - 5 * 60_000)) return cached.facts;
+    const entry: { key: string; at: number; whole: boolean; facts: Promise<MainHomeFacts> } = { key, at: this.nowMs(), whole: false, facts: Promise.resolve({}) };
+    entry.facts = withShortLivedProcess(
       this.shortLived({ id: 'codex-main', provider: 'codex', title: 'codex-main', configDir: mainDir }, 'home:codex-main'),
       async (p) => {
-        const conf = await p.request<{ config?: Record<string, unknown> }>('config/read', {});
-        const list = await p.request<{ data?: { hooks?: MainHook[] }[] }>('hooks/list', { cwds: [os.tmpdir()] });
-        const store = conf?.config?.cli_auth_credentials_store;
-        return {
-          credentialsStore: typeof store === 'string' && store ? store : 'file',
-          hooks: (list?.data ?? []).flatMap((e) => e.hooks ?? []).filter((h) => typeof h?.key === 'string' && typeof h.currentHash === 'string'),
-        };
+        const out: MainHomeFacts = {};
+        try {
+          const conf = await p.request<{ config?: Record<string, unknown> }>('config/read', {});
+          const store = conf?.config?.cli_auth_credentials_store;
+          out.credentialsStore = typeof store === 'string' && store ? store : 'file';
+        } catch (e) {
+          this.deps.log.warn('could not ask Codex where ~/.codex keeps its sign-in', { error: errText(e) });
+        }
+        try {
+          const list = await p.request<{ data?: { hooks?: MainHook[]; errors?: unknown[] }[] }>('hooks/list', { cwds: [os.tmpdir()] });
+          const data = list?.data ?? [];
+          out.hooks = data.flatMap((e) => e.hooks ?? []).filter((h) => typeof h?.key === 'string' && typeof h.currentHash === 'string');
+          // Hooks it couldn't load: what it did list counts, but ask again.
+          if (data.some((e) => Array.isArray(e.errors) && e.errors.length)) out.partial = true;
+        } catch (e) {
+          this.deps.log.warn("could not ask Codex about ~/.codex's hooks", { error: errText(e) });
+        }
+        return out;
       },
       (p, live) => this.track(p, live),
-    ).catch((e: unknown) => {
-      this.deps.log.warn('could not ask Codex about ~/.codex', { error: errText(e) });
-      if (this.mainProbe?.key === key) this.mainProbe.facts = FAILED;
-      return undefined;
-    });
-    this.mainProbe = { key, at: this.nowMs(), facts };
-    return facts;
+    )
+      .catch((e: unknown): MainHomeFacts => {
+        this.deps.log.warn('could not ask Codex about ~/.codex', { error: errText(e) });
+        return {};
+      })
+      .then((facts) => {
+        entry.whole = facts.credentialsStore !== undefined && facts.hooks !== undefined && !facts.partial;
+        return facts;
+      });
+    this.mainProbe = entry;
+    return entry.facts;
   }
 
   // Before a process on an extra login starts: links what it shares with
@@ -218,10 +239,10 @@ export class CodexAdapter implements AgentAdapter {
     try {
       if (!main || !fs.existsSync(main) || sameHome(main, account.configDir)) return {};
       const facts = await this.mainHome(main);
-      const report = shareCodexHome(main, account.configDir, facts?.credentialsStore);
+      const report = shareCodexHome(main, account.configDir, facts.credentialsStore);
       if (report.changes.length) this.deps.log.info('codex login shared with ~/.codex', { account: account.id, changes: report.changes });
       if (report.skipped.length) this.deps.log.debug('codex login: left as it was', { account: account.id, skipped: report.skipped });
-      return facts ? hookTrust(facts.hooks, main, account.configDir) : {};
+      return hookTrust(facts.hooks ?? [], main, account.configDir);
     } catch (e) {
       this.deps.log.warn('codex login setup failed', { account: account.id, error: errText(e) });
       return {};
@@ -247,6 +268,8 @@ export class CodexAdapter implements AgentAdapter {
   // model/list without hidden models, in Codex's order. With no thread
   // loaded the process starts no MCP servers.
   async models(account: Account): Promise<ModelChoice[]> {
+    // Every process on a login runs with its home as shared (readyHome).
+    await this.readyHome(account);
     return withShortLivedProcess(
       this.shortLived(account, `models:${account.id}`),
       async (p) => {
@@ -271,6 +294,7 @@ export class CodexAdapter implements AgentAdapter {
   // One idempotency key per click, so Codex's retry of the same call can't
   // spend a second one.
   async useReset(account: Account): Promise<UseResetResult> {
+    await this.readyHome(account);
     return withShortLivedProcess(
       this.shortLived(account, `reset:${account.id}`),
       async (p) => {
@@ -288,6 +312,7 @@ export class CodexAdapter implements AgentAdapter {
   // Reads the login's limits in a short-lived app-server, without a turn
   // (limit-recheck.ts): free, and how a reset done in Codex itself is seen.
   async readLimits(account: Account): Promise<Extract<AdapterOutput, { kind: 'limits' }> | null> {
+    await this.readyHome(account);
     return withShortLivedProcess(
       this.shortLived(account, `limits:${account.id}`),
       async (p) => {
@@ -311,6 +336,7 @@ export class CodexAdapter implements AgentAdapter {
   // then), and any subagent threads this runner saw it start. Resume
   // unarchives. Best effort: the runner logs a failure.
   async archive(account: Account, nativeSessionId: string): Promise<void> {
+    await this.readyHome(account);
     const kids = [...(this.children.get(nativeSessionId) ?? [])];
     await withShortLivedProcess(
       this.shortLived(account, `archive:${account.id}`),
@@ -330,6 +356,7 @@ export class CodexAdapter implements AgentAdapter {
   // carries its message id as clientUserMessageId, which is how the turn is
   // found.
   async rewind(req: RewindRequest): Promise<RewindResult> {
+    await this.readyHome(req.account);
     return withShortLivedProcess(
       { ...this.shortLived(req.account, `rewind:${req.threadId}`), cwd: req.cwd },
       async (p) => {
