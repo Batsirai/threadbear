@@ -65,9 +65,6 @@ export const quietInboxPart = {
   helperNobodyTouched(this: Runner, st: ThreadState): boolean {
     const { rec } = st;
     if (rec.startedBy?.kind !== 'thread' || rec.starredAt || rec.keptOut || rec.reviewOf) return false;
-    // A For everyone member's follow-ups are Mike's replies on the lead's
-    // card (runner/everyone.ts): the lead is the thread he keeps.
-    if (rec.everyoneOf) return true;
     // Its first message is its starter's brief, whatever it looks like (`tb
     // new` from an agent's shell has no "Sent by the agent" line, so
     // rec.asked can't be trusted for it). Anything of Mike's after that

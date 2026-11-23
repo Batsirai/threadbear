@@ -20,7 +20,6 @@ pub mod den;
 pub mod devices;
 pub mod draft_block;
 pub mod explain;
-pub mod feed;
 pub mod file_identity;
 pub mod file_refs;
 pub mod find;

@@ -469,7 +469,8 @@
 // 96: a threadIndex row (sync:setThreadIndex) takes `request`, Mike's first
 //    message to the thread as one line (docs/protocol/threads.md, "What Mike first
 //    asked"), for the Mac's Feed of another runner's threads. A runner sends
-//    it only to a backend of 96 or later.
+//    it only to a backend of 96 or later. The Feed was taken out on 23 Nov
+//    2026 and runners from then don't send it; the backend still takes it.
 // 97: an owned schedule can carry `provider`, with poolId: the kind of
 //    login a pool of several kinds starts its threads on, as the Mac's
 //    picker had it. A runner sends it only to a backend of 97 or later; an

@@ -66,7 +66,7 @@ import type {
 } from './adapters/types.ts';
 import { SessionNotFoundError } from './adapters/types.ts';
 import type { UseResetOutcome } from './adapters/types.ts';
-import type { EventLog, ThreadRecord, ThreadStore, QueuedSend, SubagentRecord, EveryoneAnswer } from './store.ts';
+import type { EventLog, ThreadRecord, ThreadStore, QueuedSend, SubagentRecord } from './store.ts';
 import { cutOut } from './store.ts';
 
 // The presses a thread keeps for its agent to hear of (Runner.notePress).
@@ -143,7 +143,6 @@ import { quietInboxPart, type QuietInboxPart } from './runner/quiet-inbox.ts';
 import { GUESS_CATCH_UP_MS, inboxGuessPart, type InboxGuessPart } from './runner/inbox-guess.ts';
 import { nestedPart, type NestedPart } from './runner/nested.ts';
 import { ceilingPart, type CeilingPart } from './runner/ceiling.ts';
-import { everyonePart, type EveryonePart } from './runner/everyone.ts';
 import { mailPart, type MailPart } from './runner/mail.ts';
 import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompact } from './runner/cold-compact.ts';
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
@@ -772,7 +771,7 @@ export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
 export const NO_WAKE_TIME = UNTIL_RESTART;
 
 // Parts of the Runner that live in runner/ (see each file's top).
-export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, CeilingPart, MailPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart, EveryonePart {}
+export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, CeilingPart, MailPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart {}
 export class Runner {
   // While main.ts is still starting up: waking a thread for its waits
   // (reconcileWaits) would start a CLI whose tools aren't ready, so they
@@ -1020,7 +1019,6 @@ export class Runner {
       // recovery, not the runner.
       try {
         if (rec.asked === undefined && !rec.archivedAt) this.backfillAsked(rec);
-        if (rec.request === undefined && !rec.archivedAt) this.backfillRequest(rec);
         this.recoverReviews(st);
         if (this.recover(st)) stopped++;
       } catch (e) {
@@ -2007,7 +2005,6 @@ export class Runner {
     // Every message this release queues says its ceiling ('full' for none),
     // so one with none at all is from an older release (legacyCeiling).
     msg.ceiling = opts.ceiling ?? 'full';
-    if (opts.everyoneAnswers?.length && opts.origin === 'runner') msg.everyoneAnswers = opts.everyoneAnswers;
     rec.lastActivityAt = this.isoNow();
     if (rt.turn && !opts.queue && fromMike(text, opts) && this.switchWaiting(st)) {
       // He picked another login (another provider, usually) during this
@@ -3232,8 +3229,6 @@ export class Runner {
     // Reports its starter is holding may go now; at once if this one failed
     // or was stopped (one moving login or waiting for the network carries
     // on by itself). runner/nested.ts.
-    // A panel member's answer goes to its lead (runner/everyone.ts).
-    if (rec.everyoneOf && outcome === 'completed' && !turn.local) this.tellLead(st, turn.lastText);
     if (rec.startedBy?.kind === 'thread' && !rec.detached) this.settleHeldSoon(rec.startedBy.threadId, outcome !== 'completed' && !limitHit && !netLost && !movedOff);
     // A code change gets another lab's review before it counts as done
     // (runner/lab-review.ts, unless Settings turns it off): the thread waits on
@@ -4611,11 +4606,6 @@ export class Runner {
     if (body.type === 'user.message') {
       const asked = askedLine(body, st.rec.reviews);
       if (asked) st.rec.asked = asked;
-      // His first only: once set it stays.
-      if (st.rec.request === undefined) {
-        const request = requestLine(body, st.rec.reviews);
-        if (request) st.rec.request = request;
-      }
     }
     this.markDirty(st);
     this.notify({ method: 'thread.event', params: { threadId: st.rec.id, event } });
@@ -4852,9 +4842,6 @@ export class Runner {
     if (rec.startedBy) s.startedBy = { ...rec.startedBy };
     if (rec.detached) s.detached = true;
     if (rec.asked) s.asked = rec.asked;
-    if (rec.request) s.request = rec.request;
-    if (rec.everyone) s.everyone = { members: rec.everyone.members.map((m) => ({ ...m })), ...(rec.everyone.missing?.length ? { missing: rec.everyone.missing.map((m) => ({ ...m })) } : {}) };
-    if (rec.everyoneOf) s.everyoneOf = rec.everyoneOf;
     if (rec.keywords) s.keywords = rec.keywords;
     if (rec.panelRequest) s.panelRequest = { ...rec.panelRequest };
     // A record from 28 Oct may say "people" (sharing with specific people,
@@ -5247,21 +5234,6 @@ export class Runner {
     }
   }
 
-  // Threads from before `request` (20 Nov 2026) learn it from the start of
-  // their log, once, like backfillAsked. A log longer than that with none
-  // of his in it gets "" (none, and his next message isn't his first).
-  backfillRequest(rec: ThreadRecord): void {
-    const log = this.store.log(rec.id);
-    for (const e of log.read(1, Math.min(300, log.lastSeq))) {
-      const request = e.type === 'user.message' ? requestLine(e, rec.reviews) : undefined;
-      if (request) {
-        rec.request = request;
-        return;
-      }
-    }
-    if (log.lastSeq > 300) rec.request = '';
-  }
-
   // A note outside any turn (restart.ts: "Runner restarted: ...").
   note(threadId: string, text: string): void {
     this.emit(this.mustGet(threadId), { type: 'system.note', text });
@@ -5303,7 +5275,7 @@ export class Runner {
 
 // The Runner's other methods live in parts under runner/, one area each;
 // they go onto its prototype here, as the class's own methods would be.
-for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, ceilingPart, mailPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart, warmStartPart, everyonePart]) {
+for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, ceilingPart, mailPart, coldCompactPart, labReviewPart, newThreadsPart, hibernationPart, titlesPart, highlightsPart, patchesPart, editingPart, clisPart, reviewsPart, buttonsPart, approvalsPart, projectsHostPart, stoppedWorkPart, handoversPart, poolsPart, networkPart, worktreesPart, commandsPart, contextUsagePart, movesPart, warmStartPart]) {
   for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(part))) {
     Object.defineProperty(Runner.prototype, key, { ...d, enumerable: false });
   }
@@ -5335,7 +5307,7 @@ export function stoppedWorkMessage(what: string[], last: boolean): string {
 // starts ("14 h later · The app restarted", Mike 19 Nov).
 // `ceiling`: the most access the thread may have when these words reach its
 // agent, for words a thread with less access wrote earlier (runner/ceiling.ts).
-export type SendOptions = { ceiling?: PermissionMode; everyoneAnswers?: EveryoneAnswer[]; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
+export type SendOptions = { ceiling?: PermissionMode; origin?: MessageOrigin; wakeReason?: string; scheduleId?: string; preserveSchedule?: boolean; queue?: boolean; answers?: AskAnswer[]; editOf?: number; messageId?: string; scheduledSince?: number };
 
 type ScheduledDelivery = { seq: number; started: boolean; text: string; images: ImageRef[]; superseded?: false } | { superseded: true; started: true };
 
@@ -5422,7 +5394,6 @@ export function userMessage(msg: QueuedSend): EventBody {
     ...(msg.reviewId ? { reviewId: msg.reviewId, reviewResponse: msg.reviewResponse } : {}),
     ...(msg.answers?.length ? { answers: msg.answers } : {}),
     ...(msg.editOf ? { editOf: msg.editOf } : {}),
-    ...(msg.everyoneAnswers?.length && msg.origin === 'runner' ? { everyone: true as const } : {}),
   };
 }
 
@@ -5512,13 +5483,6 @@ export function askedLine(m: { text: string; origin?: MessageOrigin; reviewId?: 
     text = words.length ? words.join(' ') : picked.length ? `Picked ${picked.join(' + ')}` : r.none ? 'None of them' : marks ? `Marked ${marks === 1 ? 'a part' : `${marks} parts`}` : '';
   }
   return oneLine(text, max) || undefined;
-}
-
-// The first of those lines, longer: what the thread is for (docs/protocol/threads.md,
-// "What Mike first asked").
-export const REQUEST_CHARS = 200;
-export function requestLine(m: Parameters<typeof askedLine>[0], reviews?: DesignReview[]): string | undefined {
-  return askedLine(m, reviews, REQUEST_CHARS);
 }
 
 export function oneLine(text: string, max: number): string {

@@ -5,7 +5,7 @@
 mod cards;
 pub(crate) mod diff;
 mod export;
-pub(crate) mod images;
+mod images;
 mod lab_review;
 pub(crate) mod list;
 pub(crate) mod markdown;

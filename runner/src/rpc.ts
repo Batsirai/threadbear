@@ -80,7 +80,6 @@ const CLOSE_GRACE_MS = 1000;
 // primary passes these to the draining runner that has the thread, and a
 // draining runner answers -32030 for one it has let go.
 export const THREAD_METHODS = new Set([
-  'threads.askOthers',
   'reviews.list',
   'reviews.create',
   'reviews.get',
@@ -769,8 +768,6 @@ export class RpcServer {
         if (!remote) return { threads: local };
         return remote.search(query, limit ?? 50).then((more) => ({ threads: mergeSummaries(local, more).slice(0, limit ?? 50) }));
       }
-      case 'threads.askOthers':
-        return { thread: r.askOthers(reqString(p, 'threadId')) };
       case 'threads.create': {
         // On a virtual runner (docs/protocol/keys.md, Virtual runners, "Starting from the Mac").
         if (p.serviceId !== undefined) {
@@ -791,9 +788,6 @@ export class RpcServer {
         // An older runner handing over passes on a sandboxed agent's
         // create_thread this way: there's no sandbox to start it in now
         // (taken out 16 Nov 2026), and it mustn't start outside one.
-        // For everyone (threads.md): checked before the thread exists.
-        if (p.everyone !== undefined && p.everyone !== true && p.everyone !== false) throw bad('everyone must be true or false');
-        if (p.everyone === true && !r.everyoneOn()) throw bad('For everyone is part of the feed experiment, which is off.');
         if (p.confined === true) throw bad("This asks for a thread shut in a sandbox, which Threadbear no longer has, so it wasn't started.");
         const res = r.create({
           text: optString(p, 'text') ?? '',
@@ -814,10 +808,6 @@ export class RpcServer {
           // A CLI this connection had started ahead of it (threads.warm).
           ...(typeof p.warmId === 'string' ? { warmId: p.warmId } : {}),
         });
-        if (p.everyone === true) {
-          r.startEveryone(r.mustGet(res.thread.id), optString(p, 'text') ?? '');
-          return { thread: r.get(res.thread.id), turnId: res.turnId };
-        }
         return { thread: res.thread, turnId: res.turnId };
       }
       // A CLI started ahead of the new thread the app is writing

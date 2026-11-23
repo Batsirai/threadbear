@@ -509,7 +509,10 @@ export const appSchema = defineSchema({
     startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
     // What Mike last said to it, one line: the Mac row's "You: ...". Since API 32.
     asked: v.optional(v.string()),
-    // What Mike first asked it, one line: another Mac's Feed card. Since API 96.
+    // What Mike first asked it, one line, for the Feed (API 96). The Feed
+    // was taken out on 23 Nov 2026 and runners stopped sending it, so
+    // nothing reads it; runners from before still send it, and old rows
+    // have it, so it stays until a schema tidy.
     request: v.optional(v.string()),
     recap: v.optional(v.string()), // the recap box's, gone 11 Nov; kept so old rows load
     keywords: v.optional(v.string()), // the librarian's search words, since API 74

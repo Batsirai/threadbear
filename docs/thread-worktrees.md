@@ -817,8 +817,8 @@ committed on that borrower's branch and left its changes there. Now:
   the thread and agent are told. That covers a thread archived in its
   borrow, the borrow taken back and lent again, and the thread brought back.
 - A thread put in someone's slot after it was theirs stays: its own borrow,
-  a Lab review's reviewers and a For everyone panel (made in the thread's
-  folder with `worktree: false`), a helper made there, a move there. So
+  a Lab review's reviewers (made in the thread's folder with
+  `worktree: false`), a helper made there, a move there. So
   does a borrow from before 17 Nov, which names nobody.
 
 Run in a thread, `tb land` lands the thread's own worktree from that

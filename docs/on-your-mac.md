@@ -786,10 +786,6 @@ File references are where to look.
 
 ## What it reads
 
-- With the Feed experiment on, the GPUI app reads your account's full name
-  from its own user record (`getpwuid`) once, and shows its first word over
-  your messages on the Feed's cards (`desktop/gpui/src/inbox_feed.rs`). It
-  isn't stored or sent anywhere.
 - When you click a picture panel to open Simulator, the GPUI app looks up
   Apple's Simulator and runs `/usr/bin/codesign --verify --strict` with its
   Apple signature and bundle-id requirement before opening it. This runs

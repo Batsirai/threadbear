@@ -163,14 +163,6 @@ if (process.env.TB_MOCK_REVIEWERS) {
     { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '~/.config/opencode', models: [{ id: 'google/gemini-4-neon', model: 'google/gemini-4-neon', title: 'google/gemini-4-neon', effortLevels: ['low', 'medium', 'high'] }, { id: 'zai/glm-5', model: 'zai/glm-5', title: 'zai/glm-5' }] },
   ];
 }
-// TB_MOCK_FEED: Grok and Gemini logins too, so For everyone asks all four
-// labs (docs/protocol/threads.md, "For everyone").
-if (process.env.TB_MOCK_FEED) {
-  if (!accounts.some((a) => a.id === 'grok-main')) {
-    accounts.push({ id: 'grok-main', provider: 'grok', title: 'Grok · alex@example.com', configDir: '~/.grok', models: [{ id: 'grok-4.7', model: 'grok-4.7', title: 'grok-4.7', effortLevels: ['low', 'medium', 'high'] }] });
-  }
-  accounts.push({ id: 'antigravity-main', provider: 'antigravity', title: 'Gemini · alex@example.com', configDir: '~/.gemini', models: [{ id: 'gemini-4-neon', model: 'gemini-4-neon', title: 'Gemini 4 Neon' }] });
-}
 // TB_MOCK_SIGN_INS: claude-4 signed out and claude-3's sign-in ending in two
 // days, for pictures of the Usage panel's sign-in lines (docs/protocol/settings.md,
 // Pools, "Signed out"). Off by default so the design set stays as it was.
@@ -486,8 +478,6 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_LIVE_PAGES ? ['livePages'] : []),
     // The Recipes view, with TB_MOCK_RECIPES (addRecipesDemo).
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
-    // The Feed, with TB_MOCK_FEED (addDemoFeed).
-    ...(process.env.TB_MOCK_FEED ? ['feed'] : []),
     // Reviews as a board you drag and zoom, with TB_MOCK_REVIEW_CANVAS (addCanvasMarks).
     ...(process.env.TB_MOCK_REVIEW_CANVAS ? ['reviewCanvas'] : []),
   ];
@@ -668,9 +658,6 @@ if (process.env.TB_MOCK_DECISIONS) addDemoDecisions();
 // threads it started, as in mockup sub-A. Only when asked, as it adds rows
 // other specs count.
 if (process.env.TB_MOCK_NESTED) addDemoNested();
-// The Feed (the feed experiment): the threads of mockup r3-c-status, as cards.
-// Only when asked, as it adds rows other specs count.
-if (process.env.TB_MOCK_FEED) addDemoFeed();
 // Parts of a project (docs/protocol/projects.md, Projects, "Parts"): Photo sync as a
 // part of Threadbear, for features/projects.feature.
 if (process.env.TB_MOCK_PARTS) {
@@ -1059,8 +1046,6 @@ async function dispatch(client, method, p) {
       broadcastSummary(threadId);
       if (startIn.length) broadcastProjects();
       setTimeout(() => fakeTurn(threadId, p.text, p.images ?? []), 10);
-      // For everyone (docs/protocol/threads.md): the other labs, as the runner asks them.
-      if (p.everyone === true) askEveryone(summary, p.text);
       return { thread: summary };
     }
     // The Usage panel's Find work for it (protocol `accounts.findWork`): a
@@ -1111,16 +1096,6 @@ async function dispatch(client, method, p) {
       if (!sc.changes.length) delete updates.swiftChanges;
       broadcast('runner.updates', { updates });
       return { swiftChanges: sc, ...(method === 'swiftChanges.port' ? { threadId, ...(threads.has(threadId) ? { thread: threads.get(threadId).summary } : {}) } : {}) };
-    }
-    // For everyone's Ask the others: the thread's first question to the other labs.
-    case 'threads.askOthers': {
-      const t = need(p.threadId);
-      if (t.summary.everyone || t.summary.everyoneOf) throw rpcError(-32602, 'The others have been asked already.');
-      const first = t.events.find((e) => e.type === 'user.message' && !e.origin)?.text;
-      if (!first) throw rpcError(-32602, "There's no message of yours in this thread to ask the others.");
-      await sleep(slow.ms || 300);
-      askEveryone(t.summary, first);
-      return { thread: t.summary };
     }
     case 'threads.send': {
       const t = need(p.threadId);
@@ -4029,189 +4004,6 @@ function addDemoNested() {
   // Moved out from under it: a row of its own, and Put Back Under in its menu.
   make('nest_detached', 'Fix the BrowserBear focus bug', 25, 'idle', {
     answer: 'Fixed in BrowserBear: the handoff window now takes focus.', needs: 'nothing', startedBy: by('a tooling fix'), detached: true, unread: true,
-  });
-}
-
-// For everyone (docs/protocol/threads.md): a member thread on each other lab
-// with a login here, each with a made-up answer; the rest left out.
-const EVERYONE_LABS = [['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Gemini'], ['grok', 'Grok']];
-function askEveryone(lead, text) {
-  const members = [];
-  const missing = [];
-  for (const [provider, name] of EVERYONE_LABS) {
-    if (provider === lead.provider) continue;
-    const account = accounts.find((a) => a.provider === provider && !a.signedOut);
-    if (!account) {
-      missing.push({ provider, name, why: 'notSignedIn' });
-      continue;
-    }
-    const threadId = 'th_' + crypto.randomBytes(6).toString('hex');
-    const now = iso();
-    const summary = {
-      id: threadId, title: lead.title, cwd: lead.cwd, accountId: account.id, provider, model: account.models?.[0]?.id, effort: 'medium',
-      permissionMode: lead.permissionMode, status: 'starting', live: true, needsYou: false, createdAt: now, updatedAt: now, lastActivityAt: now,
-      preview: '', lastSeq: 0, lastSeenSeq: 0, everyoneOf: lead.id,
-      startedBy: { kind: 'thread', label: 'For everyone', threadId: lead.id, threadTitle: lead.title, why: 'answers the same question' },
-    };
-    threads.set(threadId, { summary, events: [], inProgress: new Map(), timers: [] });
-    broadcastSummary(threadId);
-    setTimeout(() => fakeTurn(threadId, text, []), 10);
-    members.push({ provider, name, threadId });
-  }
-  lead.everyone = { members, ...(missing.length ? { missing } : {}) };
-  broadcastSummary(lead.id);
-}
-
-/**
- * TB_MOCK_FEED: the Feed's demo (docs/protocol/threads.md, "What Mike first asked";
- * runner/src/experiments/feed.md), the cards of the mockup Mike picked on 20
- * Nov: one he started that needs him with a card of two asks (the agent's
- * pick starred), one started by another thread asking him something, one
- * working with a job in the background, one finished with a long
- * conversation, one a schedule started, and one running a turn. Every thread
- * carries `request`, its first message of Mike's, as the runner gives it. One
- * asks about a picture pasted into it, "[Picture 1]" in its request, as Mike's
- * of 22 Nov did, with another in a later message for the fold.
- */
-function addDemoFeed() {
-  const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
-  const cwd = '/Users/mike/dev/me/threadbear';
-  const make = (id, title, minutes, { status = 'idle', said = [], needs, asks, startedBy, schedule, background, unread, provider = 'claude', extra = {} } = {}) => {
-    const summary = {
-      ...extra,
-      id, title, cwd, accountId: `${provider}-main`, provider, model: provider === 'claude' ? 'claude-opus-5-5' : undefined, permissionMode: 'full',
-      status, live: status !== 'idle', needsYou: needs === 'you', createdAt: ago(minutes + 90), updatedAt: ago(minutes), lastActivityAt: ago(minutes),
-      preview: '', lastSeq: 0, lastSeenSeq: 0,
-      ...(needs ? { needs } : {}), ...(startedBy ? { startedBy } : {}), ...(schedule ? { schedule } : {}), ...(background ? { background } : {}),
-    };
-    const events = [];
-    const push = (fields, turnId, at) => events.push({ seq: events.length + 1, ts: at, threadId: id, ...(turnId ? { turnId } : {}), ...fields });
-    // `said`: [who, words, pictures?] in order, "mike" or "agent", each turn a pair.
-    let turn = 0;
-    said.forEach(([who, words, images = []], i) => {
-      const at = ago(minutes + (said.length - i) * 7);
-      if (who === 'mike' || who === 'panel') {
-        turn++;
-        // `panel`: a member's answer the runner passed to its lead (For everyone).
-        push({ type: 'user.message', text: words, images, ...(who === 'panel' ? { origin: 'runner', everyone: true, wakeReason: 'Codex and Gemini answered' } : {}) }, `${id}_t${turn}`, at);
-        push({ type: 'turn.started' }, `${id}_t${turn}`, at);
-      } else {
-        push({ type: 'assistant.text', itemId: `${id}_m${i}`, text: words }, `${id}_t${turn}`, at);
-        const last = i === said.length - 1;
-        if (!(last && status === 'running')) push({ type: 'turn.completed', outcome: 'completed', durationMs: 42_000, ...(last && needs ? { needs } : {}), ...(last && asks ? { asks } : {}) }, `${id}_t${turn}`, at);
-      }
-    });
-    const lastReply = said.filter(([who]) => who === 'agent').at(-1);
-    if (lastReply) summary.preview = lastReply[1].replace(/\s+/g, ' ').slice(0, 140);
-    const firstMine = said.find(([who]) => who === 'mike');
-    if (firstMine && !startedBy) summary.request = firstMine[1].replace(/\s+/g, ' ').slice(0, 200);
-    if (asks) {
-      summary.asks = asks;
-      summary.asksSeq = events.findLast((e) => e.type === 'turn.completed')?.seq ?? events.length;
-    }
-    summary.lastSeq = events.length;
-    summary.lastSeenSeq = unread ? Math.max(0, events.length - 2) : events.length;
-    threads.set(id, { summary, events, inProgress: new Map(), timers: [] });
-    return summary;
-  };
-  make('feed_limit', 'Explain the Claude 5-hour limit', 40, {
-    needs: 'you', unread: true,
-    said: [
-      ['mike', 'Explain the Claude 5-hour limit in the guide and FAQ'],
-      ['agent', 'The guide and FAQ are written. A T3 contributor found a 4th bug caused by the custom label: Claude Code switches off MCP Tasks for a label it doesn\'t recognise.'],
-    ],
-    asks: [{ action: 'Keep holding, or drop the custom label idea?', options: ['Drop the idea', 'Keep holding till 4 Dec'], suggested: 0 }],
-  });
-  make('feed_back_button', 'Browser pane: back button', 9, {
-    needs: 'you', unread: true,
-    startedBy: { kind: 'thread', label: 'Agent', threadId: 'feed_coordinator', threadTitle: 'GPUI Port Coordinator', why: 'building the Browser pane' },
-    said: [
-      ['mike', 'Take this on: the Browser pane\'s back button.'],
-      ['agent', 'Back works when the pane has history. A fresh pane has nowhere to go back to.'],
-    ],
-    asks: [{ action: 'Should Back go to the last page or close the pane when there\'s no history?', options: ['Close the pane', 'Do nothing'], suggested: 0 }],
-  });
-  // For everyone: Claude leads, Codex and Gemini have answered, Grok is
-  // still thinking (mockup r3-c-status's panel card).
-  const question = 'Should Threadbear sign releases with Touch ID only, and revoke the old key?';
-  const memberAsk = (others) => `${question}\n\n(${others} are answering this too, each on its own. Answer in your own words, briefly, and don't change any files: you all share this folder.)`;
-  const panelBy = { kind: 'thread', label: 'For everyone', threadId: 'feed_panel', threadTitle: 'Touch ID release signing', why: 'answers the same question' };
-  make('feed_panel_codex', 'Touch ID release signing', 20, {
-    provider: 'codex', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(19), archivedBy: 'threadbear' }, needs: 'nothing',
-    said: [['mike', memberAsk('Claude, Gemini and Grok')], ['agent', "Wait. The last tag came out with an empty signature, so the Touch ID path isn't proven. Revoke once a fork verifies a new tag."]],
-  });
-  make('feed_panel_gemini', 'Touch ID release signing', 17, {
-    provider: 'antigravity', startedBy: panelBy, extra: { everyoneOf: 'feed_panel', archivedAt: ago(16), archivedBy: 'threadbear' }, needs: 'nothing',
-    said: [['mike', memberAsk('Claude, Codex and Grok')], ['agent', "Wait, but set a date. One good release, then revoke within a week so the old key doesn't hang around."]],
-  });
-  make('feed_panel_grok', 'Touch ID release signing', 1, {
-    provider: 'grok', startedBy: panelBy, extra: { everyoneOf: 'feed_panel' }, status: 'running',
-    said: [['mike', memberAsk('Claude, Codex and Gemini')]],
-  });
-  make('feed_panel', 'Touch ID release signing', 8, {
-    needs: 'you', unread: true,
-    extra: { everyone: { members: [
-      { provider: 'codex', name: 'Codex', threadId: 'feed_panel_codex' },
-      { provider: 'antigravity', name: 'Gemini', threadId: 'feed_panel_gemini' },
-      { provider: 'grok', name: 'Grok', threadId: 'feed_panel_grok' },
-    ] } },
-    said: [
-      ['mike', question],
-      ['agent', 'Wait. Revoking can\'t be undone, and forks would reject anything signed with the old key. Ship one good Touch ID release first.'],
-      ['panel', 'For everyone: Codex and Gemini answered.'],
-      ['agent', 'All three so far say wait for one good Touch ID release before revoking.'],
-    ],
-    asks: [{ action: 'Revoke the old key now, or wait?', options: ['Wait for one release', 'Revoke now'], suggested: 0 }],
-  });
-  make('feed_bedtime', 'Bedtime Tube', 20, {
-    said: [
-      ['mike', 'Bedtime Tube hasn\'t put anything on my phone for ages, can you have a look?'],
-      ['agent', 'Found it. Nothing has saved since 8 Nov: the Save step lost its link to VLC\'s folder after VLC moved it, so every download stopped at the last step and the files sat on Bruce. I put the link back and saved the backlog.'],
-      ['mike', 'Can you get Codex and Gemini to try to break it?'],
-      ['agent', 'Codex found a timing gap: if a save is still running when the next fetch starts, the same video can be sent to the phone twice.'],
-      ['agent', 'Gemini found that the new 48 h alert will fire after a quiet spell with no new videos, even though nothing is broken.'],
-      ['mike', 'Fix both'],
-      ['agent', 'Fixed both. A video is sent once, even if two runs overlap, and the alert only counts time when there was something to save.'],
-      ['mike', 'Thanks, and check again tonight?'],
-      ['agent', 'Fixed, and the backlog is on your phone: 50 videos saved, 2 left for tonight. Codex and Gemini each found a hole in the fix; both are closed. I\'ll check again at 6:20 pm.'],
-    ],
-    needs: 'nothing',
-  });
-  make('feed_main_green', 'Keep main green', 6, {
-    said: [
-      ['mike', 'main keeps going red and forks aren\'t getting releases, sort it out'],
-      ['agent', 'The Mac job wasn\'t failing, it was running out of time at 60 min. I split the specs into two jobs and landed it as 2c9638768.'],
-    ],
-    background: [{ kind: 'monitor', description: 'Waiting on the next Desktop run' }],
-  });
-  make('feed_kite', 'Kite watch', 3, {
-    startedBy: { kind: 'schedule', label: 'Schedule' }, schedule: { id: 'sched_kite', title: 'Kite watch' },
-    said: [['agent', 'Port Geographe tomorrow 7 to 10 am: 19 kn WSW, 24\u00b0C.']],
-    needs: 'nothing',
-  });
-  make('feed_hotel', 'San Francisco hotel', 50, {
-    said: [
-      ['mike', 'Find me somewhere near the office for the holiday party week'],
-      ['agent', 'Keep Beck\'s, A$777 under today\'s price.'],
-    ],
-    needs: 'nothing',
-  });
-  const media = (file) => ({ path: path.join(here, 'fixtures/demo-upload-resume/media', file), mediaType: 'image/png', width: 900, height: 560 });
-  make('feed_picture', 'Upload screen on mobile', 15, {
-    said: [
-      ['mike', '[Picture 1] on mobile, should this look different? The progress bar and the top part?', [media('progress-after.png')]],
-      ['agent', 'Yes: on a phone the bar should run the full width and the title should wrap. I changed both.'],
-      ['mike', 'Here it is before, [Picture 1] for comparison', [media('progress-before.png')]],
-      ['agent', 'Thanks. The new one keeps the button on screen too.'],
-    ],
-    needs: 'nothing',
-  });
-  make('feed_running', 'Sort the Ramp receipts', 1, {
-    status: 'running',
-    said: [
-      ['mike', 'Can you sort this month\'s Ramp receipts?'],
-      ['agent', 'Reading the receipts in the mail.'],
-    ],
   });
 }
 

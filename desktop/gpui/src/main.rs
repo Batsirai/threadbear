@@ -82,7 +82,6 @@ mod highlights_project;
 mod highlights_store;
 mod home_page;
 mod icons;
-mod inbox_feed;
 mod input_probe;
 mod installed;
 mod key_hints;

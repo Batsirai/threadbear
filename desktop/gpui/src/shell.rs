@@ -51,9 +51,6 @@ pub(crate) enum SidebarMode {
     Librarian,
     /// The `recipes` experiment's view (recipes.rs).
     Recipes,
-    /// The Feed (experiment `feed`, inbox_feed.rs): its page in the main
-    /// panel, the Inbox in the sidebar.
-    Feed,
 }
 
 impl SidebarMode {
@@ -64,7 +61,6 @@ impl SidebarMode {
             SidebarMode::Projects => "projects",
             SidebarMode::Librarian => "librarian",
             SidebarMode::Recipes => "recipes",
-            SidebarMode::Feed => "feed",
         }
     }
 }
@@ -380,7 +376,6 @@ actions!(
         ShowScheduled,
         ShowProjects,
         ShowLibrarian,
-        ShowFeed,
         ShowHibernating,
         ShowArchived,
         ShowPreviousTab,
@@ -503,7 +498,6 @@ commands!(
         ShowLibrarian,
         Some(ShortcutCommand::ShowLibrarian)
     ),
-    (ShowFeed, ShowFeed, None),
     (
         ShowHibernating,
         ShowHibernating,
@@ -648,7 +642,6 @@ impl Threadbear {
             SidebarMode::Librarian => "Librarian".into(),
             SidebarMode::Recipes => "Recipes".into(),
             SidebarMode::Scheduled => "Scheduled".into(),
-            SidebarMode::Feed => "Feed".into(),
             SidebarMode::Inbox => match self.open_thread() {
                 Some(t) if t.title.is_empty() => "Untitled".into(),
                 Some(t) => t.title.clone(),
@@ -978,7 +971,6 @@ impl Threadbear {
             Command::OpenAnything | Command::OpenAnythingAlso => {
                 self.toggle_open_anything(window, cx)
             }
-            Command::ShowFeed => self.show_feed(cx),
             // Each brings the Threads panel back if ⌘/ folded it away.
             Command::ShowInbox
             | Command::ShowScheduled
@@ -1114,19 +1106,8 @@ impl Threadbear {
         // A page of the activity bar's takes a project's page's place
         // (`showProjects`); the Inbox leaves it where it is.
         let closes_project = home && self.projects.open.is_some();
-        if self.mode == SidebarMode::Feed && mode != SidebarMode::Feed {
-            self.left_feed();
-        }
         if self.mode != mode || self.shows_home != home || closes_project {
-            // The Feed's sidebar is the Inbox's: nothing there to switch.
-            let same_list = matches!(
-                (self.mode, mode),
-                (
-                    SidebarMode::Inbox | SidebarMode::Feed,
-                    SidebarMode::Inbox | SidebarMode::Feed
-                )
-            );
-            if self.mode != mode && !same_list {
+            if self.mode != mode {
                 self.view_switched = Some(std::time::Instant::now());
             }
             self.mode = mode;
@@ -1265,9 +1246,7 @@ impl Threadbear {
                 self.select_none(cx);
             }
         }
-        // After the thread: opening one takes a page away (and the Feed's
-        // mode with it).
-        self.mode = place.mode;
+        // After the thread: opening one takes a page away.
         self.shows_home = place.home;
         self.projects.open = place.project.filter(|id| self.project(id).is_some());
         self.restoring_place = false;
@@ -1297,7 +1276,6 @@ impl Threadbear {
             ) {
                 (Some(SidebarMode::Scheduled), _) => "Scheduled".to_string(),
                 (Some(SidebarMode::Projects), _) => "Projects".to_string(),
-                (Some(SidebarMode::Feed), _) => "Feed".to_string(),
                 (Some(_), _) => "Librarian".to_string(),
                 (None, Some(t)) if t.title.is_empty() => "Untitled".to_string(),
                 (None, Some(t)) => t.title.clone(),
@@ -1792,16 +1770,7 @@ impl Threadbear {
                         .enabled(self.can_step_project_tab(1, cx)),
                     Separator,
                     item("Open Anything…", Command::OpenAnything),
-                ]
-                .into_iter()
-                // The Feed, with its experiment on (inbox_feed.rs).
-                .chain(
-                    self.feed_on()
-                        .then(|| vec![Separator, item("Show Feed", Command::ShowFeed)])
-                        .into_iter()
-                        .flatten(),
-                )
-                .collect(),
+                ],
             ),
             TopMenu::new(
                 "Thread",
@@ -2193,7 +2162,7 @@ impl Threadbear {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = match self.mode {
-            SidebarMode::Inbox | SidebarMode::Feed => self.render_sidebar(cx).into_any_element(),
+            SidebarMode::Inbox => self.render_sidebar(cx).into_any_element(),
             SidebarMode::Scheduled => self.render_scheduled_list(cx),
             SidebarMode::Librarian => self.render_librarian_list(cx),
             SidebarMode::Recipes => self.render_recipes_list(cx),
@@ -2257,7 +2226,6 @@ impl Threadbear {
             (_, Some(SidebarMode::Scheduled)) => self.render_scheduled_home(cx),
             (_, Some(SidebarMode::Librarian)) => self.render_librarian_home(cx),
             (_, Some(SidebarMode::Recipes)) => self.render_recipes_home(cx),
-            (_, Some(SidebarMode::Feed)) => self.render_feed(window, cx),
             (_, Some(_)) => self.render_projects_home(window, cx),
             // Its thread is open in a panel of its own (thread_panels.rs).
             (None, None) if self.open_elsewhere(cx).is_some() => {

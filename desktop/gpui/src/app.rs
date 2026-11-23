@@ -255,8 +255,6 @@ pub struct Threadbear {
     /// The projects themselves, the page that's open and the views' own
     /// state (projects.rs).
     pub(crate) projects: crate::projects::ProjectsState,
-    /// The Feed's cards, folds and replies (inbox_feed.rs).
-    pub(crate) inbox_feed: crate::inbox_feed::FeedState,
 
     /// The new-thread page's box and what it's set to (new_thread.rs).
     pub(crate) new_thread: crate::new_thread::NewThreadState,
@@ -493,15 +491,7 @@ impl Threadbear {
         });
         // A pin an agent asked to show may only be in Highlights once they've
         // been fetched: their coming is a moment to try it again.
-        let side_changed = cx.observe(&side, |this: &mut Threadbear, side, cx| {
-            // Over the Feed, the picture viewer is the Feed's to draw.
-            // Only when what it shows changes: the side pane follows the
-            // app, so notifying on every change of its would never end.
-            let viewer = side.read(cx).viewer.shown();
-            if this.feed_showing() && viewer != this.inbox_feed.viewer_drawn {
-                this.inbox_feed.viewer_drawn = viewer;
-                cx.notify();
-            }
+        let side_changed = cx.observe(&side, |this: &mut Threadbear, _, cx| {
             this.serve_panel_request(cx);
             // Another thread on show may have a page handed to Mike.
             this.browser_changed(cx);
@@ -623,7 +613,6 @@ impl Threadbear {
             scheduled,
             schedule_editor: None,
             shows_home: false,
-            inbox_feed: Default::default(),
             restoring_place: false,
             librarian: crate::librarian::LibrarianState::new(),
             recipes: crate::recipes::RecipesState::new(),
@@ -1693,7 +1682,6 @@ impl Threadbear {
             // Open already, behind a page (a schedule's target was clicked,
             // or a project's page): the page goes.
             if self.shows_home || self.projects.open.is_some() {
-                self.leave_feed_for_thread();
                 self.shows_home = false;
                 self.projects.open = None;
                 self.note_navigation();
@@ -1729,7 +1717,6 @@ impl Threadbear {
         let client = self.client.clone();
         let composer = self.composer_for(&id, window, cx);
         self.selected = Some(id);
-        self.leave_feed_for_thread();
         self.shows_home = false;
         self.projects.open = None;
         let pane = match (moved, kept) {
@@ -1901,7 +1888,6 @@ impl Threadbear {
         self.close_subagent(cx);
         self.leave_pane(cx);
         self.selected = None;
-        self.leave_feed_for_thread();
         self.shows_home = false;
         self.projects.open = None;
         self.note_navigation();
@@ -2092,7 +2078,6 @@ impl Threadbear {
             "homePage": match self.home_page() {
                 Some(SidebarMode::Scheduled) => self.scheduled_home_dump(),
                 Some(SidebarMode::Projects) => json!({ "title": "Projects" }),
-                Some(SidebarMode::Feed) => self.feed_dump(),
                 Some(_) => self.librarian_home_dump(),
                 None => Value::Null,
             },

@@ -375,7 +375,7 @@ export const worktreesPart = {
   // (docs/thread-worktrees.md, "A folder a thread works in is never lent").
   // undefined for anything else: its own borrow, and a thread put in
   // another's slot on purpose after it was theirs (a Lab review's reviewers,
-  // a For everyone panel, a helper made with worktree: false, a move there).
+  // a helper made with worktree: false, a move there).
   async lentFolder(this: Runner, rec: ThreadRecord): Promise<LentFolder | undefined> {
     const slot = this.slotFolderOf(rec);
     if (!slot || !isDirectory(slot)) return undefined;

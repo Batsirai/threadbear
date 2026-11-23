@@ -494,7 +494,7 @@ export const RUNNER_KEY_CAPS = {
   recap: 1_000, // the librarian's 200 + 600, with room for multi-byte text
   threadText: 1_000, // title, preview, cwd, working line, each
   keywords: 400, // the runner's 200 characters (keywords.ts), with room for multi-byte text
-  request: 400, // a threadIndex row's, the runner's 200 characters (requestLine), likewise
+  request: 400, // a threadIndex row's from a runner of API 96 or 97 (the Feed's, taken out 23 Nov 2026), 200 characters, likewise
   threadsInView: 300, // per view the phone reads whole (inbox, hibernating)
   // Projects a thread is in: each is a lookup when the phones read it
   // (phone.ts projectOwners), so 300 inbox threads stay under 4,096 index reads.
@@ -3956,7 +3956,7 @@ const indexDoc = v.object({
   starredAt: v.optional(v.string()),
   startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
   asked: v.optional(v.string()), // since API 32
-  request: v.optional(v.string()), // since API 96
+  request: v.optional(v.string()), // since API 96; only older runners send it now (the Feed, taken out 23 Nov 2026)
   recap: v.optional(v.string()), // since API 70
   keywords: v.optional(v.string()), // since API 74
   permissionMode: v.optional(v.string()), // since API 88

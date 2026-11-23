@@ -609,19 +609,6 @@ test('a reminder queued before ceilings goes by its schedule\'s ceiling as it le
   assert.equal(heard(h, target), false);
 });
 
-test("a panel member's answer isn't passed to a lead Mike raised since", async () => {
-  const h = harness();
-  const lead = idle(h, 'Lead', 'ask');
-  const member = idle(h, 'Member', 'ask');
-  const rec = (h.runner as unknown as { threads: Map<string, { rec: Record<string, unknown> }> }).threads;
-  rec.get(member)!.rec.everyoneOf = lead;
-  raise(h, lead);
-  (h.runner as unknown as { tellLead: (st: unknown, t: string) => void }).tellLead(rec.get(member), PAYLOAD);
-  await settle();
-  assert.equal(heard(h, lead), false);
-  assert.ok(notes(h, lead).some((n) => /answer from/.test(n)));
-});
-
 test('the old runner of a handover refuses a run its thread is raised above, so the primary records it as not sent', () => {
   const h = harness();
   const target = h.runner.create({ text: 'Bg job', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
@@ -694,26 +681,6 @@ test('a message from an older release queued by the runner counts as Ask as it l
   session(h, target).result('completed');
   await settle();
   assert.equal(heard(h, target), false);
-});
-
-test("a panel answer merged into one queued earlier doesn't lift the earlier member's ceiling", async () => {
-  const h = harness();
-  const lead = h.runner.create({ text: 'Lead', accountId: 'claude-main', permissionMode: 'ask' }).thread.id;
-  session(h, lead).init();
-  const m1 = idle(h, 'Member one', 'ask');
-  const m2 = idle(h, 'Member two', 'ask');
-  const threads = (h.runner as unknown as { threads: Map<string, { rec: Record<string, unknown> }> }).threads;
-  threads.get(m1)!.rec.everyoneOf = lead;
-  threads.get(m2)!.rec.everyoneOf = lead;
-  const tell = (id: string, t: string) => (h.runner as unknown as { tellLead: (st: unknown, t: string) => void }).tellLead(threads.get(id), t);
-  tell(m1, PAYLOAD);
-  raise(h, lead);
-  raise(h, m2);
-  tell(m2, 'All good from me.');
-  session(h, lead).result('completed');
-  await settle();
-  assert.equal(heard(h, lead), false, "member one's answer stays out");
-  assert.ok(h.events(lead).some((e) => e.type === 'user.message' && String(e.text).includes('All good from me.')), "member two's goes");
 });
 
 test('a message held as its turn was about to send it is kept out of what a fresh session is told', async () => {
