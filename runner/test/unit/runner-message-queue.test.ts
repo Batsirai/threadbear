@@ -499,14 +499,31 @@ for (const mode of ['archive', 'snooze', 'waitFor'] as const) test(`an ordinary 
   assert.equal(st.rec.queue.length, 1);
 });
 
-test('a runner notification alone cannot enable archive from a background-opened turn', () => {
+// 23 Nov 2026, df5c7153: a background landing finished, the CLI opened a turn
+// to report it, and its end_turn asked to archive. The runner dropped that
+// without a word, so the thread said "I'm archiving this thread" and stayed.
+for (const mode of ['archive', 'snooze', 'waitFor'] as const) test(`a turn a finished background job opened can ${mode} its thread`, () => {
+  const { h, thread, s } = running();
+  s.result();
+  s.out({ kind: 'cliTurn', note: 'Background command "Land the fix" completed (exit code 0)' });
+  const st = h.runner.mustGet(thread.id);
+  assert.ok(st.rt.turn?.auto);
+  const input = mode === 'archive' ? { archive: true } : mode === 'snooze' ? { snooze: '1d' } : { waitFor: [h.runner.create({ text: 'Unfinished helper', accountId: 'claude-3' }).thread.id] };
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'park', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing', ...input } } });
+  s.out({ kind: 'result', result: { outcome: 'completed', durationMs: 5, own: true } });
+  assert.equal(st.rt.turn, undefined);
+  if (mode === 'archive') assert.ok(st.rec.archivedAt);
+  else assert.ok(st.rec.snoozedUntil);
+});
+
+test('a background-opened turn with a newer message queued still does not archive', () => {
   const { h, thread, s } = running();
   s.result();
   s.out({ kind: 'cliTurn' });
-  h.runner.send(thread.id, 'Automatic notification', [], { origin: 'runner' });
   const st = h.runner.mustGet(thread.id);
+  st.rec.queue.push({ turnId: 'later', text: 'One more thing', images: [] });
   s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'park', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing', archive: true } } });
-  s.result('completed', undefined, undefined, { answered: [...st.rt.turn!.messages] });
+  s.out({ kind: 'result', result: { outcome: 'completed', durationMs: 5, own: true } });
   assert.equal(st.rec.archivedAt, undefined);
 });
 

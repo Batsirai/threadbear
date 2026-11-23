@@ -297,7 +297,6 @@ export type Turn = {
   // shell or async subagent finished, or a background subagent asked for
   // approval). There's no user.message.
   auto?: boolean;
-  ordinaryInput?: true; // A user or peer joined a background-opened turn.
   // A message in it was more than the runner carrying an earlier turn on
   // (isCarryOn): new work, from Mike, a schedule, another thread or the
   // runner's own reports (settleInstructionsNews).
@@ -2199,7 +2198,6 @@ export class Runner {
     turn.dispatched = true;
     if (!turn.deliveryKnown) turn.foreignOutput = false;
     this.sendWithInstructionsNews(st, this.withInterruptedMessages(st, msg, this.forAgent(msg)));
-    if (!isAutomaticInput(msg)) turn.ordinaryInput = true;
   }
 
   // A turn that had its end_turn, opened again once the agent has read a
@@ -3164,7 +3162,11 @@ export class Runner {
     // turn): archiving or snoozing would hide it and stop the work behind it.
     // More likely now the runner's own threads run on the install's mode
     // (own-threads.ts; Codex review, 9 Nov 2026).
-    const away = outcome === 'completed' && (!turn.auto || turn.ordinaryInput === true) && said?.needs === 'nothing' && rec.queue.every(q => isAutomaticInput(q) && q.beforeMessage) && !rt.approvals.size;
+    // A turn the CLI opened by itself counts too: the one after a background
+    // job ends is where an agent that waited on it says it's done. Skipping
+    // those dropped its archive without a word, so a thread that said "I'm
+    // archiving this thread" stayed in Mike's inbox (23 Nov 2026, df5c7153).
+    const away = outcome === 'completed' && said?.needs === 'nothing' && rec.queue.every(q => isAutomaticInput(q) && q.beforeMessage) && !rt.approvals.size;
     const archive = away && archiveFromTool(turn.endTurn);
     // Hibernating likewise (end_turn's snooze). Archive wins if it asked for both.
     const snooze = away && !archive ? snoozeFromTool(turn.endTurn) : undefined;
