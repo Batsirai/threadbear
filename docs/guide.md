@@ -859,6 +859,10 @@ when…. When the words are something to happen ("until the GPUI app
 replaces the Swift app"), the librarian wakes it once another thread shows
 it has, not just when it's talked about, and the thread gets a turn to
 check for itself: if it hasn't really happened, it goes back to sleep.
+While it checks it isn't marked unread and nothing notifies you or your
+phone, so a wrong guess passes unnoticed. It comes to your inbox, unread,
+only if it doesn't go back to sleep: the thing has happened and it has
+carried on, or its agent needs you.
 Such a wait often has a latest time too ("or Sunday 9:30 am at the
 latest"). When that comes with no sign of the thing, the thread doesn't
 land in your inbox: it gets the same turn to check, says in a line what's

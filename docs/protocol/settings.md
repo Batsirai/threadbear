@@ -352,6 +352,25 @@ runner message giving the agent a turn to check for itself and snooze again
 with the same words if it hasn't. That message names the other thread's id
 only when send_message would let it without a card.
 
+**A check is quiet.** Both wakes that give the agent a turn to check (the
+librarian's, above, and one at a wait's latest time, below) go through
+`Runner.wakeToCheck`. The wake doesn't mark the thread unread (no `woke`
+on its summary, no notification or push): on 20 Nov 2026 a wrong guess by
+the librarian woke a thread for 26 seconds and pinged Mike's phone. How
+the check's turn ends says whether he's needed. Back to sleep (a snooze,
+`waitFor`, an archive): nothing. Anything else leaves it in the inbox,
+unread and with its "Woke up", whatever `needs` it ended with, as the
+thing has happened or the agent wants him; so does a snooze that doesn't
+take. A check that can't start (behind a queued message or a move, or
+held for Mike because the thread has more access than when it wrote its
+words, `runner/src/runner/ceiling.ts`) is unread at once, as any wake is. Until the check's
+turn completes, the record keeps why it woke as a line for the agent
+(`wakeNews`, with `check`: the check's message id), which goes in front of
+any other message: one that runs ahead of a check still queued is told the
+check comes next, and one after a check that never reached the agent (its
+folder gone, a restart while it was queued, Stop) is told to do the check
+then.
+
 **The latest time passing.** A wait in words with a time as well wakes at
 that time if nothing else woke it first (`Runner.wakeAtTime`; the words
 and numbers are in `wake-when.ts`):
@@ -367,10 +386,7 @@ and numbers are in `wake-when.ts`):
   wait passed") that says the time ran out with nothing seen, to check the
   work itself, to snooze again with the same words if it hasn't happened,
   or to end the turn with no snooze and `needs: "you"` if it never will or
-  Mike should chase it. The wake doesn't mark the thread unread (no
-  `woke`, no notification or push): how the turn ends says whether Mike is
-  needed. A check that can't start yet (behind a queued message or a move)
-  is unread as any wake is. No check starts while the runner is still
+  Mike should chase it. It's quiet, as above. No check starts while the runner is still
   starting, handing its threads over or waiting to restart: the thread
   sleeps on, its time passed, and the next runner (or this one, a minute
   on) gives it. The record counts these (`lateChecks: { n, waitedMs,

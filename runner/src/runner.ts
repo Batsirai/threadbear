@@ -302,6 +302,9 @@ export type Turn = {
   // (isCarryOn): new work, from Mike, a schedule, another thread or the
   // runner's own reports (settleInstructionsNews).
   newWork?: true;
+  // It did the check a wake gave the thread (runner/hibernation.ts,
+  // wakeToCheck), so how it ends says whether Mike is needed (completeTurn).
+  wakeCheck?: true;
   cliStarted?: boolean; // the CLI is running a turn for it (not just an approval)
   interruptTimer?: TimerHandle;
   // Ids of the messages the CLI has yet to answer for this turn: the one
@@ -3274,13 +3277,20 @@ export class Runner {
       this.update({ threadId: rec.id, archived: true, archivedBy: 'agent' });
     }
     if (waitFor && !rt.turn && !rec.archivedAt && !this.stopping) this.waitOn(st, waitFor, snooze, turn.endTurnBy);
-    else if (snooze && !rt.turn && !rec.archivedAt && !this.stopping) this.snoozeAfterTurn(st, snooze, turn.endTurnBy);
+    else if (snooze && !rt.turn && !rec.archivedAt && !this.stopping) this.snoozeAfterTurn(st, snooze, turn.endTurnBy, turn.wakeCheck);
     else if (forApp && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Hibernating until the Threadbear app restarts onto the new build, a day at most.' });
       this.update({ threadId: rec.id, snoozedUntil: new Date(this.clock.now() + APP_RESTART_MAX_AGE_MS).toISOString() });
       // After update, which clears it with the rest of a wait: the app shows
       // it under Running, as its work isn't over until Mike's running it.
       this.park(st, { kind: 'forApp' });
+      this.markDirty(st);
+    }
+    // The check a wake gave it (runner/hibernation.ts, wakeToCheck) is over
+    // and it hasn't gone back to sleep: what it waited for has happened, or
+    // its agent wants Mike. The wake wasn't marked unread, so this is.
+    if (turn.wakeCheck && !rec.archivedAt && !this.stopping && this.bucket(rec) === 'inbox') {
+      rec.forceUnread = true;
       this.markDirty(st);
     }
     // An invalid wait may leave the thread awake; do not strand its queue.
@@ -3355,7 +3365,8 @@ export class Runner {
   // reads it, or else words, read as Hibernate in words reads Mike's.
   // `askedBy`: its access when its agent called end_turn (turn.endTurnBy),
   // for the ceiling of a snooze in words (runner/ceiling.ts).
-  snoozeAfterTurn(st: ThreadState, when: string, askedBy?: { mode: PermissionMode }): void {
+  // `afterCheck`: the turn was a wake's check (wakeCheck).
+  snoozeAfterTurn(st: ThreadState, when: string, askedBy?: { mode: PermissionMode }, afterCheck = false): void {
     const { rec } = st;
     let until: string | undefined;
     if (when.toLowerCase() === 'restart' || when.toLowerCase() === 'release') until = when.toLowerCase();
@@ -3372,13 +3383,13 @@ export class Runner {
       this.hibernateWhen({ threadId: rec.id, said: when, by: 'agent', ...(askedBy ? { askedBy } : {}) }).catch((e: unknown) => {
         if (st.rt.deleted) return;
         this.emit(st, { type: 'system.note', text: `Not hibernated, as the agent was asked to: ${e instanceof Error ? e.message : String(e)}` });
-        this.notHibernatedAfterCheck(st);
+        this.notHibernatedAfterCheck(st, afterCheck);
       });
       return;
     }
     if (until !== 'restart' && until !== 'release' && Date.parse(until) <= this.clock.now()) {
       this.emit(st, { type: 'system.note', text: `Not hibernated: the agent asked to wake at ${when}, which has passed.` });
-      this.notHibernatedAfterCheck(st);
+      this.notHibernatedAfterCheck(st, afterCheck);
       return;
     }
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -3388,14 +3399,15 @@ export class Runner {
     this.update({ threadId: rec.id, snoozedUntil: until });
   }
 
-  // A snooze its agent asked for that didn't take, after a check at its
-  // wait's latest time (runner/hibernation.ts, wakeAtTime): that wake wasn't
-  // marked unread and the turn said it needs nothing, so without this the
-  // thread would sit in the inbox with nothing to say Mike should look
-  // (Gemini's second review, 22 Nov 2026).
-  notHibernatedAfterCheck(st: ThreadState): void {
+  // A snooze its agent asked for that didn't take, after a check a wake
+  // gave it (runner/hibernation.ts, wakeToCheck) or while its checks at a
+  // latest time are counted: that wake wasn't marked unread and the turn
+  // said it needs nothing, so without this the thread would sit in the
+  // inbox with nothing to say Mike should look (Gemini's second review,
+  // 22 Nov 2026).
+  notHibernatedAfterCheck(st: ThreadState, afterCheck = false): void {
     const { rec, rt } = st;
-    if (!rec.lateChecks || rt.turn || this.bucket(rec) !== 'inbox') return;
+    if ((!afterCheck && !rec.lateChecks) || rt.turn || this.bucket(rec) !== 'inbox') return;
     rec.forceUnread = true;
     this.markDirty(st);
   }
@@ -5007,7 +5019,7 @@ export class Runner {
   // it has more access now than when it wrote them (runner/ceiling.ts).
   wakeNewsText(st: ThreadState, news: NonNullable<ThreadRecord['wakeNews']>): string {
     if (this.underCeiling(st, news.ceiling)) return news.text;
-    return "Note from Threadbear: this thread woke by itself at the latest time of a wait in words its agent had set. Those words aren't repeated here, as the thread has more access now than when they were written; the user can read them in the thread.";
+    return "Note from Threadbear: this thread woke by itself, for a wait in words its agent had set (at its latest time, or as another thread looked to show it had happened). Those words aren't repeated here, as the thread has more access now than when they were written; the user can read them in the thread.";
   }
 
   // Heard by a completed turn, and more than LATE_NEWS_KEPT_MS ago: a
@@ -5044,7 +5056,8 @@ export class Runner {
   // restart part way) tells it again with the next message.
   settlePresses(rec: ThreadRecord, completed: boolean): void {
     // News of a wake goes by the same rule. A turn told to do a check that
-    // was lost has done it: nothing is left to tell a later session.
+    // was lost has done it: nothing is left to tell a later session (here
+    // for a turn a restart cut off: settleInstructionsNews has the rest).
     const woke = rec.wakeNews?.told;
     if (woke?.inFlight) {
       if (!completed) delete rec.wakeNews!.told;
@@ -5106,9 +5119,15 @@ export class Runner {
   // arrived, so the next message says what's current.
   settleInstructionsNews(st: ThreadState, completed: boolean): void {
     const { rec, rt } = st;
-    // The check a wake at its latest time sent has run: nothing left to say.
-    const check = rec.wakeNews?.check;
-    if (check && completed && rt.turn?.inputs?.has(check)) delete rec.wakeNews;
+    // The check a wake sent (runner/hibernation.ts, wakeToCheck) has run,
+    // in its own turn or in one told to do it as it was lost: nothing left
+    // to say, and how this turn ends says whether Mike is needed.
+    const news = rec.wakeNews;
+    const told = news?.told;
+    if (news?.check && completed && rt.turn && (rt.turn.inputs?.has(news.check) || (told?.inFlight && !told.deferred))) {
+      rt.turn.wakeCheck = true;
+      delete rec.wakeNews;
+    }
     // A sleep backs off at the end of the check's own turn, or of one the
     // runner carried it on with (a lost network, a full login, a restart,
     // the CLI's own turn for a background job): a turn with new work in it

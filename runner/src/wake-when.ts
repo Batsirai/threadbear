@@ -208,6 +208,12 @@ export function lateNews(w: LateWait, timeZone: string, now: number, how?: 'chec
   return how ? `${head} It had already woken you ${how.stopped.n === 1 ? 'once' : `${how.stopped.n} times in a row`} to check, so this time it went to the user's inbox for them to decide what next.` : head;
 }
 
+// The same for a check the librarian's guess started (Runner.wakeForTopic):
+// another thread looked to show that what its agent waits for has happened.
+export function topicCheckNews(w: { said: string; topic: string }, timeZone: string, now: number): string {
+  return `Note from Threadbear: this thread woke by itself on ${localWhen(now, timeZone)}. You had hibernated it until: ${oneLine(w.said)} (${w.topic}). Another thread looked to show that has happened, which is a guess from reading one thread.`;
+}
+
 // How news of a check ends: its message is still waiting its turn behind
 // this one (so the agent doesn't check twice), or it never got through.
 export const LATE_CHECK_QUEUED = 'A message asking you to check for yourself is waiting its turn and comes after this one, so leave the check to it.';
