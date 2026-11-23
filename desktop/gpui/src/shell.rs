@@ -37,6 +37,8 @@ pub(crate) const CONNECTORS: &str = "threadbear.connectors";
 pub(crate) const RUNNERS: &str = "threadbear.runners";
 /// Finish setting up (setup_panel.rs), open until Mike closes it.
 pub(crate) const SETUP: &str = "threadbear.setup";
+/// The activity bar's panels, which open under the threads list.
+const UNDER_THREADS: [&str; 5] = [USAGE, UPDATES, SETUP, CONNECTORS, RUNNERS];
 
 /// How often the settings file is written during a burst of changes.
 const SAVE_THROTTLE_MS: i64 = 300;
@@ -389,6 +391,8 @@ actions!(
         ToggleTerminal,
         ResetPanelLayout,
         CollapseThreads,
+        ToggleSidebarPanels,
+        AttachFiles,
         ToggleFrameRate,
         AboutApp,
         RestartToUpdate,
@@ -543,6 +547,12 @@ commands!(
         CollapseThreads,
         Some(ShortcutCommand::CollapseThreads)
     ),
+    (
+        ToggleSidebarPanels,
+        ToggleSidebarPanels,
+        Some(ShortcutCommand::ToggleSidebarPanels)
+    ),
+    (AttachFiles, AttachFiles, Some(ShortcutCommand::AttachFiles)),
     (ToggleFrameRate, ToggleFrameRate, None),
     (About, AboutApp, None),
     (RestartToUpdate, RestartToUpdate, None),
@@ -761,6 +771,10 @@ impl Threadbear {
             self.dock.update(cx, |m, cx| m.close(panel, cx));
             return;
         }
+        self.show_under_threads(panel, cx);
+    }
+
+    fn show_under_threads(&mut self, panel: &str, cx: &mut Context<Self>) {
         let under = self
             .dock
             .read(cx)
@@ -768,12 +782,51 @@ impl Threadbear {
             .group_containing(THREADS)
             .map(|g| DockDrop::edge(g.id, DockEdge::Bottom))
             .unwrap_or(DockDrop::window(DockEdge::Left));
-        let near: Vec<&str> = [USAGE, UPDATES, SETUP, CONNECTORS, RUNNERS]
-            .into_iter()
-            .filter(|p| *p != panel)
-            .collect();
+        let near: Vec<&str> = UNDER_THREADS.into_iter().filter(|p| *p != panel).collect();
         self.dock
             .update(cx, |m, cx| m.show(panel, &near, under, cx));
+    }
+
+    /// The activity bar's panels that are open, wherever they are.
+    fn open_sidebar_panels(&self, cx: &App) -> Vec<String> {
+        let layout = self.dock.read(cx).layout();
+        UNDER_THREADS
+            .into_iter()
+            .filter(|p| layout.contains(p))
+            .map(String::from)
+            .collect()
+    }
+
+    /// View > Hide or Show Sidebar Panels, greyed out with none open or to
+    /// bring back.
+    fn sidebar_panels_item(&self, cx: &App) -> MenuEntry {
+        let shown = !self.open_sidebar_panels(cx).is_empty();
+        let title = if shown {
+            "Hide Sidebar Panels"
+        } else {
+            "Show Sidebar Panels"
+        };
+        MenuEntry::item(title, Command::ToggleSidebarPanels)
+            .enabled(shown || !self.hidden_sidebar_panels.is_empty())
+    }
+
+    /// ⇧⌘B (Wayne, 22 Nov): closes the activity bar's panels that are open,
+    /// remembered, and brings the same ones back under the threads list, as
+    /// Hide Panels does for the ones beside the thread. The list stays.
+    fn toggle_sidebar_panels(&mut self, cx: &mut Context<Self>) {
+        let open = self.open_sidebar_panels(cx);
+        if open.is_empty() {
+            for panel in std::mem::take(&mut self.hidden_sidebar_panels) {
+                self.show_under_threads(&panel, cx);
+            }
+            return;
+        }
+        self.dock.update(cx, |m, cx| {
+            for panel in &open {
+                m.close(panel, cx);
+            }
+        });
+        self.hidden_sidebar_panels = open;
     }
 
     /// Hide or Show Threads (`toggleThreadsPanel`): closed, or opened down
@@ -997,6 +1050,13 @@ impl Threadbear {
             Command::ToggleTerminal => crate::terminal::toggle(self, window, cx),
             Command::ResetPanelLayout => self.reset_panel_layout(cx),
             Command::CollapseThreads => self.toggle_threads_collapsed(cx),
+            Command::ToggleSidebarPanels => self.toggle_sidebar_panels(cx),
+            // The open thread's box, or the new-thread page's, as "+" does.
+            Command::AttachFiles => {
+                if let Some(composer) = self.composer(cx) {
+                    composer.update(cx, |c, cx| c.attach_images(window, cx));
+                }
+            }
             Command::ToggleFrameRate => self.toggle_frame_rate(window, cx),
             Command::About => self.show_about(window, cx),
             Command::RestartToUpdate => self.restart_to_update(cx),
@@ -1739,6 +1799,7 @@ impl Threadbear {
                         },
                         Command::TogglePanels,
                     ),
+                    self.sidebar_panels_item(cx),
                     item(
                         if terminal_shown {
                             "Hide Terminal"
@@ -1785,6 +1846,8 @@ impl Threadbear {
                         items: self.hibernate_menu_items(),
                     },
                     item("Stop", Command::Stop).enabled(busy),
+                    item("Attach Images or Markdown…", Command::AttachFiles)
+                        .enabled(self.composer(cx).is_some()),
                     Separator,
                     item("Copy Transcript as Markdown", Command::CopyTranscript)
                         .enabled(has_thread),

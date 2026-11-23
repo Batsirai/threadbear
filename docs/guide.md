@@ -617,7 +617,7 @@ it appear in `~/ThreadbearThreads`.
 Return sends and Shift-Return (or Option-Return) adds a new line. In a list, Shift-Return
 starts the next item ("2. " after "1. milk", "- " after "- milk"), and
 Shift-Return on an empty item ends the list. You can paste or drop images
-into the composer, or add them with +. Each one goes in where the cursor
+into the composer, or add them with + (⇧⌘A in the new desktop app). Each one goes in where the cursor
 is as a small chip, "Picture 1", "Picture 2", with
 its thumbnail, which drops into a strip over your words as the box opens
 for it, and the agent gets each picture right there in your words.
@@ -971,6 +971,9 @@ Collapse or Expand Threads (⌘/), which folds the list away while the bar
 of icons on the left stays, gives its room to the thread, and brings it
 back at the same width (clicking Threads, Scheduled, Projects or
 Librarian in that bar brings it back too),
+Show or Hide Sidebar Panels (⇧⌘B, the new desktop app only), which closes
+whichever of Runners, Connectors, Updates, Usage or Setup are open and
+keeps the list, then brings the same ones back,
 Show or Hide Panels (⌥⌘P) for the panels beside the thread, Show or Hide
 Terminal (⌘J), and Reset Panel Layout, which puts everything back how it
 started. Threadbear remembers your layout between launches.
@@ -1854,6 +1857,7 @@ key:
 - Hibernate (opens Pick a time): `hibernate`, no key
 - Stop: `stop`, ⌘.
 - Copy Transcript as Markdown: `copyTranscript`, ⇧⌘C
+- Attach Images or Markdown (the new desktop app only): `attachFiles`, ⇧⌘A, opens the message box's + > Attach images or Markdown… picker
 - Back: `back`, ⌘[
 - Forward: `forward`, ⌘]
 - Next Inbox Thread: `nextInboxThread`, ⌥⌘↓
@@ -1871,6 +1875,7 @@ key:
 - Actual Size: `actualSize`, ⌘0
 - Show Threads: `toggleThreads`, ⌃⌘S
 - Collapse Threads: `collapseThreads`, ⌘/
+- Show Sidebar Panels (the new desktop app only): `toggleSidebarPanels`, ⇧⌘B, closes Runners, Connectors, Updates, Usage and Setup and keeps the Threads list
 - Show Panels: `togglePanels`, ⌥⌘P
 - Show Terminal: `toggleTerminal`, ⌘J
 - Reset Panel Layout: `resetPanelLayout`, no key

@@ -40,6 +40,21 @@ Feature: The panels round the thread
     When the app is quit and opened again
     Then the Threads panel is folded away
 
+  # ⇧⌘B is the GPUI app's own (Wayne, 22 Nov).
+  @menu.view @swift-pending
+  Scenario: ⇧⌘B closes the panels under the list and brings the same ones back
+    When I open the Runners panel
+    And I open the Connectors panel
+    Then the "View" menu has "Hide Sidebar Panels" on "⇧⌘B"
+    When I press "b" with "cmd,shift"
+    Then the Runners panel is closed
+    And the Connectors panel is closed
+    And the Threads panel is showing
+    And the "View" menu has "Show Sidebar Panels" on "⇧⌘B"
+    When I press "b" with "cmd,shift"
+    Then the Runners panel is open
+    And the Connectors panel is open
+
   @dock.threadpanel
   Scenario: Open in New Panel puts a thread beside the main one, and the main panel moves on
     When I open the thread "Morning brief"
