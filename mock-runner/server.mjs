@@ -3165,7 +3165,12 @@ function addCanvasMarks(review) {
   a.shots = [{ image: a.image, marks: [
     { kind: 'circle', box: [0.405, 0.135, 0.765, 0.232], note: 'auto picks the login with the most room' },
     { kind: 'underline', box: [0.39, 0.87, 0.455, 0.9], note: 'the chip just says Auto', ink: 'green' },
-  ] }];
+  ] }, {
+    // A second page with a note of its own: the agent can mark any page.
+    image: a.image, title: 'A login runs dry', marks: [
+      { kind: 'highlight', box: [0.405, 0.3, 0.765, 0.36], note: 'a login out of room is skipped', ink: 'rose' },
+    ],
+  }];
 }
 
 function needReview(t, id) {

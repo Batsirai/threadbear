@@ -455,6 +455,9 @@ pub(crate) struct ReviewWindow {
     /// A clip or page double-clicked on the board, on the stage to play,
     /// until Esc or Back to the board.
     canvas_closer: Option<(usize, usize)>,
+    /// The reply box on screen, from its last paint, for scripts that click
+    /// in it.
+    reply_box: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
     closed: bool,
     _poll: Task<()>,
     _subs: Vec<Subscription>,
@@ -562,6 +565,7 @@ impl ReviewWindow {
             tabs_follow: None,
             canvas: parts.canvas.then(canvas::CanvasState::new),
             canvas_closer: None,
+            reply_box: Default::default(),
             closed: false,
             _poll: poll,
             _subs: subs,
@@ -1960,8 +1964,62 @@ pub(crate) async fn automation(
     cx.background_executor()
         .timer(Duration::from_millis(250))
         .await;
-    let state = view.read_with(cx, |v, cx| v.state(cx));
+    let state = state_with_keys(cmd, &view, handle, cx)?;
     Ok(json!(format!("ok {state}")))
+}
+
+/// After a `pressReplyLow`, the window's state, and whether the reply box
+/// has the keys: its edge goes blue and its cursor shows only then (Mike,
+/// 23 Nov: after a click low in it, neither did).
+#[cfg(feature = "automation")]
+fn state_with_keys(
+    cmd: &Value,
+    view: &Entity<ReviewWindow>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<Value, String> {
+    press_reply_low(cmd, view, handle, cx)?;
+    let mut state = view.read_with(cx, |v, cx| v.state(cx));
+    state["replyKeys"] = json!(cx
+        .update_window(handle, |_, window, cx| view
+            .read(cx)
+            .reply_focused(window, cx))
+        .unwrap_or(false));
+    Ok(state)
+}
+
+/// `pressReplyLow`: a real click low in the reply box, under its first line,
+/// where only the box itself is: it gives the box the keys (Mike, 23 Nov).
+#[cfg(feature = "automation")]
+fn press_reply_low(
+    cmd: &Value,
+    view: &Entity<ReviewWindow>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    if cmd["pressReplyLow"].as_bool() != Some(true) {
+        return Ok(());
+    }
+    let clicked = cx.update_window(handle, |_, window, cx| -> Result<(), String> {
+        use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+        window.render_frame(cx);
+        let b = view
+            .read(cx)
+            .reply_box
+            .get()
+            .ok_or("the reply box isn't on screen")?;
+        let at = point(
+            b.origin.x + gpui_kit::px(24.),
+            b.origin.y + b.size.height - gpui_kit::px(10.),
+        );
+        window.pointer_move(at, None, cx);
+        window.render_frame(cx);
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+        window.render_frame(cx);
+        Ok(())
+    });
+    clicked.map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "automation")]

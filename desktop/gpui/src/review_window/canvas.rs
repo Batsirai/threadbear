@@ -96,7 +96,8 @@ pub(crate) struct CanvasState {
     scribble: Option<Instant>,
     /// The canvas's place in the window, from its last paint.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    placed: bool,
+    /// The canvas size the camera was last fitted to, at the stop on show.
+    placed: Option<(f32, f32)>,
     /// Where to start when it was opened on an option's picture (a click on
     /// one on the thread's card), before the board was laid out.
     want: Option<(usize, usize)>,
@@ -117,7 +118,7 @@ impl CanvasState {
             drag: None,
             scribble: None,
             bounds: Rc::new(Cell::new(None)),
-            placed: false,
+            placed: None,
             want: None,
         }
     }
@@ -303,13 +304,17 @@ fn to_screen(camera: &Camera, s: &Stroke) -> Stroke {
     }
 }
 
-/// The board's own grey, a touch apart from the window's, and the boxes on
-/// it lighter again.
+/// The board's own grey, a touch apart from the window's.
 const CANVAS_DARK: u32 = 0x111114;
 const CANVAS_LIGHT: u32 = 0xEDEDF1;
-const CARD_DARK: u32 = 0x1C1C21;
-const CARD_LIGHT: u32 = 0xFFFFFF;
-/// Picked: the box's border, as Mike asked (22 Nov), green.
+/// An option's halo, only just lighter than the board (Mike, 23 Nov: "a lot
+/// more subtle"), and a touch green once it's ticked.
+const HALO_DARK: u32 = 0x16161B;
+const HALO_LIGHT: u32 = 0xF7F7FA;
+const HALO_PICKED_DARK: u32 = 0x131A16;
+const HALO_PICKED_LIGHT: u32 = 0xE4F2EA;
+/// Picked: a ring round each of the option's pictures, as Mike asked
+/// (22 Nov), green.
 const PICKED: u32 = 0x4CC38A;
 /// The dot grid's spacing on the board, doubled or halved as the camera
 /// zooms so it stays between these on screen.
@@ -458,13 +463,15 @@ impl Scene {
         )
     }
 
-    /// A picture with its caption, and the agent's marks and notes on it.
+    /// A picture with its caption, and the agent's marks and notes on it,
+    /// ringed green when its option is ticked.
     fn shot(
         &self,
         index: usize,
         shot_laid: &board::BoardShot,
         shot: &threadbear_core::reducer::ReviewShot,
         count: usize,
+        picked: bool,
     ) -> (Vec<AnyElement>, Vec<Pen>) {
         let mut parts = Vec::new();
         let mut pens = Vec::new();
@@ -478,11 +485,30 @@ impl Scene {
             } else {
                 None
             };
+            if picked {
+                let ring = 6.;
+                let p = &shot_laid.picture;
+                parts.push(
+                    self.placed(&Rect::new(
+                        p.x - ring,
+                        p.y - ring,
+                        p.w + ring * 2.,
+                        p.h + ring * 2.,
+                    ))
+                    .rounded(gpui_kit::px((8. + ring) * cam.s))
+                    .border(gpui_kit::px(2.5))
+                    .border_color(rgb(PICKED))
+                    .opacity(self.alpha(on))
+                    .into_any_element(),
+                );
+            }
             parts.push(
                 self.placed(&shot_laid.picture)
                     .rounded(gpui_kit::px(8. * cam.s))
                     .overflow_hidden()
                     .bg(rgb(0x0D0D0F))
+                    .border_1()
+                    .border_color(self.edge)
                     .opacity(self.alpha(on))
                     .child(
                         img(crate::rows::markdown::file_picture(&shot.image.path))
@@ -506,6 +532,8 @@ impl Scene {
                     })
                     .into_any_element(),
             );
+            // Over the picture; laid out only for later pages and a first
+            // one with its own name.
             let caption = shot.title.clone().unwrap_or_else(|| {
                 if count > 1 {
                     format!("{} of {count}", shot_laid.shot + 1)
@@ -513,9 +541,10 @@ impl Scene {
                     String::new()
                 }
             });
-            if !caption.is_empty() && self.text_on(17.) {
+            if shot_laid.caption.h > 0. && !caption.is_empty() && self.text_on(17.) {
                 parts.push(
                     self.placed_width(&shot_laid.caption)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_size(gpui_kit::px(17. * cam.s))
                         .text_color(self.secondary)
                         .opacity(self.alpha(on))
@@ -778,16 +807,32 @@ impl ReviewWindow {
     fn scene(&mut self, window: &mut Window, cx: &App) -> Option<Scene> {
         let dark = cx.theme().is_dark();
         let cv = self.canvas.as_mut()?;
-        if !cv.placed {
-            if let Some((vw, vh)) = cv.viewport() {
-                cv.placed = true;
-                if let Some(first) = cv.stops.get(cv.stop) {
-                    cv.camera = Camera::for_stop(first, vw, vh, board::STOP_PAD, board::STOP_ZOOM);
-                    cv.scribble = Some(Instant::now());
+        // The first stop once the canvas knows its size, and again when the
+        // window changes size, unless the board's been moved by hand: a
+        // camera fitted to the window's first, larger frame left the lead in
+        // the middle and the first option cut off (23 Nov).
+        match cv.viewport() {
+            Some(size) if cv.placed != Some(size) => {
+                let first = cv.placed.is_none();
+                cv.placed = Some(size);
+                if first || (!cv.roaming && cv.flight.is_none()) {
+                    if let Some(stop) = cv.stops.get(cv.stop) {
+                        cv.camera = Camera::for_stop(
+                            stop,
+                            size.0,
+                            size.1,
+                            board::STOP_PAD,
+                            board::STOP_ZOOM,
+                        );
+                        if first {
+                            cv.scribble = Some(Instant::now());
+                        }
+                    }
                 }
-            } else {
                 window.request_animation_frame();
             }
+            Some(_) => {}
+            None => window.request_animation_frame(),
         }
         let cam = cv.camera_now();
         if cv.moving() {
@@ -822,25 +867,56 @@ impl ReviewWindow {
         };
         let index = laid_option.index;
         let cam = &scene.cam;
+        let picked = self.session.shown_draft().picked_ids.contains(&option.id);
         if scene.visible(&laid_option.extent()) {
-            // Its box round everything of it, notes too, lighter than the
-            // board, its border green once it's ticked.
+            // No box (Mike, 23 Nov: the notes looked shut in): a soft glow
+            // the shape of the column, faded out at every edge like a
+            // shadow, a touch green once ticked; then its big letter, which
+            // the first picture mostly hides.
             let mine = scene.lit.is_none_or(|l| l.option() == Some(index));
-            let picked = self.session.shown_draft().picked_ids.contains(&option.id);
+            let glow = match (scene.dark, picked) {
+                (true, false) => HALO_DARK,
+                (true, true) => HALO_PICKED_DARK,
+                (false, false) => HALO_LIGHT,
+                (false, true) => HALO_PICKED_LIGHT,
+            };
+            let soft = board::HALO_PAD * cam.s;
             parts.push(
                 scene
-                    .placed(&laid_option.card)
-                    .rounded(gpui_kit::px(18. * cam.s))
-                    .bg(rgb(if scene.dark { CARD_DARK } else { CARD_LIGHT }))
-                    .border(gpui_kit::px(if picked { 2.5 } else { 1. }))
-                    .border_color(if picked {
-                        rgb(PICKED).into()
-                    } else {
-                        scene.edge
-                    })
+                    .placed(&laid_option.halo)
+                    .rounded(gpui_kit::px(soft))
+                    .shadow(vec![BoxShadow {
+                        color: rgb(glow).into(),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: gpui_kit::px(soft * 1.5),
+                        spread_radius: gpui_kit::px(-soft * 0.25),
+                        inset: false,
+                    }])
                     .opacity(if mine { 1. } else { 0.55 })
                     .into_any_element(),
             );
+            let letter_size = board::LETTER_SIZE * cam.s;
+            if letter_size >= SMALLEST_TEXT {
+                let r = cam.rect(&laid_option.letter);
+                let ink = match (scene.dark, picked) {
+                    (_, true) => Hsla::from(rgb(PICKED)).opacity(0.22),
+                    (true, false) => hsla(0., 0., 1., 0.065),
+                    (false, false) => hsla(0., 0., 0., 0.06),
+                };
+                parts.push(
+                    div()
+                        .absolute()
+                        .left(gpui_kit::px(r.x))
+                        .top(gpui_kit::px(r.y))
+                        .text_size(gpui_kit::px(letter_size))
+                        .line_height(gpui_kit::px(letter_size))
+                        .font_weight(FontWeight::EXTRA_BOLD)
+                        .text_color(ink)
+                        .opacity(if mine { 1. } else { 0.55 })
+                        .child(option.id.clone())
+                        .into_any_element(),
+                );
+            }
             parts.push(self.frame_label(index, option, review, &laid_option.title, scene, cx));
         }
         if let (Some(words), Some(note)) = (laid_option.words, option.note.as_deref()) {
@@ -861,7 +937,8 @@ impl ReviewWindow {
         let shots = option.all_shots();
         for shot_laid in &laid_option.shots {
             if let Some(shot) = shots.get(shot_laid.shot) {
-                let (more_parts, more_pens) = scene.shot(index, shot_laid, shot, shots.len());
+                let (more_parts, more_pens) =
+                    scene.shot(index, shot_laid, shot, shots.len(), picked);
                 parts.extend(more_parts);
                 pens.extend(more_pens);
             }
@@ -869,7 +946,7 @@ impl ReviewWindow {
         (parts, pens)
     }
 
-    /// The box's top row: its tick (while the review can still be answered)
+    /// The option's top row: its tick (while the review can still be answered)
     /// and the option's name, sized with the board but never too small to
     /// read; a click on the name flies to the option.
     fn frame_label(
@@ -1126,8 +1203,12 @@ impl ReviewWindow {
                     .child(format!("{at} of {of}")),
             )
             .child(step("canvas-next", "\u{203A}", "Next (\u{2192})", 1, at < of, cx))
+            // Wraps in the room left of the reply box rather than running
+            // under it.
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .text_size(px(13.))
                     .text_color(style::faint_text(cx))
                     .child("Drag to move, pinch to zoom, double-click to look closer. Circle, highlight or pin a part to talk about it."),
@@ -1273,6 +1354,9 @@ impl ReviewWindow {
             "stops": c.stops.len(),
             "lit": c.stops.get(c.stop).map(|s| format!("{:?}", s.lit)).unwrap_or_default(),
             "notesOn": c.notes_on,
+            "camera": [c.camera.s, c.camera.tx, c.camera.ty],
+            "stopRect": c.stops.get(c.stop).map(|s| [s.rect.x, s.rect.y, s.rect.w, s.rect.h]),
+            "peek": c.stops.get(c.stop).and_then(|s| s.peek),
             "agentMarks": notes,
             "tool": c.tool.name(),
             "marks": self.session.draft().marks.iter().map(|m| format!("{} {} {} {}", m.n, m.kind.name(), m.option_id, m.shot)).collect::<Vec<_>>(),

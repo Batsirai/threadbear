@@ -381,8 +381,10 @@ impl ReviewWindow {
             cx.entity().downgrade(),
         );
         let token_state = self.reply.clone();
+        let reply_bounds = self.reply_box.clone();
         let reply_box = div()
             .id("review-reply")
+            .relative()
             .w_full()
             .min_h(px(68.))
             .p(px(5.))
@@ -395,6 +397,10 @@ impl ReviewWindow {
                 let handle = reply.read(cx).focus_handle(cx);
                 window.focus(&handle, cx);
                 crate::web_panels::keyboard_to_app(window);
+                // Or the window's own focus, after this, took the keys back:
+                // a click under the first line, past the text box's frame,
+                // left no cursor and no blue edge (Mike, 23 Nov).
+                window.prevent_default();
             })
             // A picture dropped on it goes in as a chip, as one pasted does.
             .on_drop(move |paths: &ExternalPaths, window, cx| {
@@ -416,6 +422,14 @@ impl ReviewWindow {
                     }
                 }
             }))
+            .child(
+                canvas(
+                    move |bounds, _, _| reply_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(
                 crate::composer::bare_textarea(Textarea::new(&self.reply))
                     .token(move |ctx, _, cx| match token_owner.upgrade() {

@@ -9,7 +9,7 @@ import type { ThreadbearWorld } from '../support/world.ts';
 const DEMO_REVIEW = 'review_account_picker';
 
 type CanvasState = { on: boolean; stop: number; stops: number; notesOn: boolean; agentMarks: number; tool: string; marks: string[] };
-type WithCanvas = { reply: string; canvas?: CanvasState | null };
+type WithCanvas = { reply: string; replyKeys?: boolean; canvas?: CanvasState | null };
 
 async function board(world: ThreadbearWorld, cmd: Record<string, unknown> = {}): Promise<WithCanvas> {
   return JSON.parse(okValue(await world.app.do({ cmd: 'review', id: DEMO_REVIEW, open: false, ...cmd }, 30))) as WithCanvas;
@@ -52,4 +52,12 @@ Then('the board has my mark {string}', async function (this: ThreadbearWorld, ma
 
 Then("the review's reply is {string}", async function (this: ThreadbearWorld, reply: string) {
   await untilBoard(this, `the reply "${reply}"`, (s) => s.reply.trim() === reply);
+});
+
+When("I click low in the review's reply box", async function (this: ThreadbearWorld) {
+  await board(this, { pressReplyLow: true });
+});
+
+Then("the review's reply box has the keys", async function (this: ThreadbearWorld) {
+  await untilBoard(this, 'the keys in the reply box', (s) => s.replyKeys === true);
 });

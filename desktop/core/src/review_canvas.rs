@@ -18,11 +18,11 @@ use crate::review::aspect;
 
 /// A picture's width on the board.
 pub const PICTURE_WIDTH: f32 = 640.;
-/// Inside a frame, round its words and pictures.
-pub const FRAME_PAD: f32 = 24.;
-/// Between the words and pictures in a frame.
+/// Between an option's last picture and its words.
 pub const GAP: f32 = 22.;
-/// A picture's caption under it.
+/// Between one of an option's pictures and the next one's caption.
+pub const SHOT_GAP: f32 = 48.;
+/// A picture's caption, over it.
 pub const CAPTION_HEIGHT: f32 = 34.;
 /// The option's words, in world units: the thread's reading size when the
 /// camera is at 1.
@@ -35,11 +35,19 @@ pub const NOTE_GAP: f32 = 96.;
 pub const NOTE_WIDTH: f32 = 330.;
 /// Between frames, room for the notes beside the pictures.
 pub const GUTTER: f32 = NOTE_GAP + NOTE_WIDTH + 130.;
-/// Round everything of an option, its box (Mike, 22 Nov: each option in a
-/// box of its own, its border green once ticked).
-pub const BOX_PAD: f32 = 28.;
-/// The box's top row, for the tick and the option's name.
+/// How far an option's halo reaches past its name, pictures and words: a
+/// soft glow, not a box, so the agent's notes sit outside it on the board
+/// (Mike, 23 Nov, from the Halo mockup).
+pub const HALO_PAD: f32 = 40.;
+/// The option's top row, over its first picture, for the tick and its name.
 pub const TITLE_ROW: f32 = 52.;
+/// Between that row and the first picture.
+pub const TITLE_GAP: f32 = 10.;
+/// The option's big letter, mostly hidden behind its first picture's top
+/// right corner.
+pub const LETTER_SIZE: f32 = 230.;
+/// How much of the letter is above and left of that corner.
+const LETTER_SHOWS: f32 = 0.62;
 /// The agent's lead, the sticky at the board's top left.
 pub const LEAD_WIDTH: f32 = 440.;
 /// How far each frame sits below the board's top, in turn: a little
@@ -148,6 +156,7 @@ pub struct BoardShot {
     pub option: usize,
     pub shot: usize,
     pub picture: Rect,
+    /// Over the picture; no height for a first picture with no title.
     pub caption: Rect,
     pub notes: Vec<NotePlace>,
 }
@@ -164,38 +173,27 @@ impl BoardShot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoardOption {
     pub index: usize,
+    /// Its column: the name on top, the pictures one under another, the
+    /// words at the bottom.
     pub frame: Rect,
     pub words: Option<Rect>,
     pub shots: Vec<BoardShot>,
-    /// The box round all of it, notes too, with its name in the top row.
-    pub card: Rect,
-    /// That top row.
+    /// The soft glow behind the column, green once it's ticked. The notes
+    /// are outside it.
+    pub halo: Rect,
+    /// The top row, with the tick and its name.
     pub title: Rect,
+    /// Its big letter, behind the first picture's top right corner.
+    pub letter: Rect,
 }
 
 impl BoardOption {
-    /// Its box: everything of it.
+    /// Everything of it: the halo, the letter and the notes.
     pub fn extent(&self) -> Rect {
-        self.card
+        self.shots
+            .iter()
+            .fold(self.halo.union(&self.letter), |r, s| r.union(&s.extent()))
     }
-}
-
-/// The box round an option's frame and notes, with room for its name on top.
-fn card_round(frame: &Rect, shots: &[BoardShot]) -> (Rect, Rect) {
-    let all = shots.iter().fold(*frame, |r, s| r.union(&s.extent()));
-    let card = Rect::new(
-        all.x - BOX_PAD,
-        all.y - BOX_PAD - TITLE_ROW,
-        all.w + BOX_PAD * 2.,
-        all.h + BOX_PAD * 2. + TITLE_ROW,
-    );
-    let title = Rect::new(
-        card.x + BOX_PAD,
-        card.y + BOX_PAD * 0.6,
-        card.w - BOX_PAD * 2.,
-        TITLE_ROW,
-    );
-    (card, title)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -219,9 +217,9 @@ impl Board {
     }
 }
 
-/// Lays the review out: the lead at the top left, then a frame for each
-/// option left to right, its words over its pictures, the agent's notes to
-/// the right of each picture.
+/// Lays the review out: the lead at the top left, then a column for each
+/// option left to right, its name over its pictures and its words under
+/// them, the agent's notes beside each picture.
 pub fn layout(review: &DesignReview, measure: &dyn Measure) -> Board {
     let lead = review
         .note
@@ -266,24 +264,21 @@ fn lay_option(
     top: f32,
     measure: &dyn Measure,
 ) -> BoardOption {
-    let inner = x + FRAME_PAD;
-    let mut y = top + FRAME_PAD;
-    let words = option
-        .note
-        .as_deref()
-        .filter(|n| !n.trim().is_empty())
-        .map(|note| {
-            let h = measure.words(note, PICTURE_WIDTH);
-            let r = Rect::new(inner, y, PICTURE_WIDTH, h);
-            y += h + GAP;
-            r
-        });
+    let title = Rect::new(x, top, PICTURE_WIDTH, TITLE_ROW);
+    let mut y = title.bottom() + TITLE_GAP;
     let mut shots = Vec::new();
     for (i, shot) in option.all_shots().iter().enumerate() {
+        // The pages after the first always have a name over them, theirs or
+        // "2 of 3"; the first only when it has its own.
+        let caption_h = if i > 0 || shot.title.is_some() {
+            CAPTION_HEIGHT
+        } else {
+            0.
+        };
+        let caption = Rect::new(x, y, PICTURE_WIDTH, caption_h);
         let h = PICTURE_WIDTH / aspect(&shot.image) as f32;
-        let picture = Rect::new(inner, y, PICTURE_WIDTH, h);
-        let caption = Rect::new(inner, picture.bottom() + 6., PICTURE_WIDTH, CAPTION_HEIGHT);
-        y = caption.bottom() + GAP;
+        let picture = Rect::new(x, caption.bottom(), PICTURE_WIDTH, h);
+        y = picture.bottom() + SHOT_GAP;
         shots.push(BoardShot {
             option: index,
             shot: i,
@@ -292,20 +287,38 @@ fn lay_option(
             notes: place_notes(&picture, &shot.marks, measure),
         });
     }
-    let frame = Rect::new(
-        x,
-        top,
-        PICTURE_WIDTH + FRAME_PAD * 2.,
-        y - GAP + FRAME_PAD - top,
+    y += GAP - SHOT_GAP;
+    let words = option
+        .note
+        .as_deref()
+        .filter(|n| !n.trim().is_empty())
+        .map(|note| {
+            let r = Rect::new(x, y, PICTURE_WIDTH, measure.words(note, PICTURE_WIDTH));
+            y = r.bottom();
+            r
+        });
+    let frame = Rect::new(x, top, PICTURE_WIDTH, y - top);
+    let halo = Rect::new(
+        frame.x - HALO_PAD,
+        frame.y - HALO_PAD,
+        frame.w + HALO_PAD * 2.,
+        frame.h + HALO_PAD * 2.,
     );
-    let (card, title) = card_round(&frame, &shots);
+    let first = shots.first().map_or(frame, |s| s.picture);
+    let letter = Rect::new(
+        first.right() - LETTER_SIZE * LETTER_SHOWS,
+        first.y - LETTER_SIZE * LETTER_SHOWS,
+        LETTER_SIZE * 0.8,
+        LETTER_SIZE,
+    );
     BoardOption {
         index,
-        card,
-        title,
         frame,
         words,
         shots,
+        halo,
+        title,
+        letter,
     }
 }
 
@@ -405,7 +418,7 @@ pub enum Lit {
     /// little of the next one showing (Mike, 22 Nov: zoomed in on the lead
     /// alone, nothing said there was more to drag round).
     Start,
-    /// An option's words and first picture.
+    /// An option's name and first picture.
     Opening(usize),
     /// Another of an option's pictures.
     Shot(usize, usize),
@@ -430,9 +443,10 @@ impl Lit {
         }
     }
 
-    /// Whether this stop lights an option's words.
+    /// Whether this stop lights an option's words: any of its stops, as
+    /// they're under its last picture.
     pub fn shows_words(self, option: usize) -> bool {
-        matches!(self, Lit::All | Lit::Start) || self == Lit::Opening(option)
+        matches!(self, Lit::All | Lit::Start) || self.option() == Some(option)
     }
 }
 
@@ -447,16 +461,20 @@ pub fn stops(board: &Board) -> Vec<Stop> {
         out.push(Stop {
             rect,
             lit: Lit::Start,
-            peek: board.options.get(1).map(|o| o.card.x),
+            peek: board.options.get(1).map(|o| o.extent().x),
         });
     }
     for option in &board.options {
+        let last = option.shots.len().saturating_sub(1);
         for shot in &option.shots {
             let mut rect = shot.extent();
-            let lit = if shot.shot == 0 {
+            // The words are under the last picture, so that stop shows them.
+            if shot.shot == last {
                 if let Some(words) = option.words {
                     rect = rect.union(&words);
                 }
+            }
+            let lit = if shot.shot == 0 {
                 rect = rect.union(&option.title);
                 Lit::Opening(option.index)
             } else {
@@ -1038,24 +1056,33 @@ mod tests {
         for pair in frames.windows(2) {
             assert!(pair[1].x >= pair[0].right() + GUTTER);
         }
-        // Each option's box holds its frame and its name, and no two touch.
-        let cards: Vec<Rect> = board.options.iter().map(|o| o.card).collect();
-        assert!(cards[0].x > lead.right());
-        for pair in cards.windows(2) {
+        // Each option's halo holds its column, and no two touch; its name is
+        // on top and its words at the bottom.
+        let halos: Vec<Rect> = board.options.iter().map(|o| o.halo).collect();
+        assert!(halos[0].x > lead.right());
+        for pair in halos.windows(2) {
             assert!(pair[1].x > pair[0].right() + 20., "{pair:?}");
         }
         for o in &board.options {
             assert!(
-                o.card.contains((o.frame.x, o.frame.y))
-                    && o.card.contains((o.frame.right(), o.frame.bottom()))
+                o.halo.contains((o.frame.x, o.frame.y))
+                    && o.halo.contains((o.frame.right(), o.frame.bottom()))
             );
-            assert!(o.title.bottom() <= o.frame.y && o.title.y >= o.card.y);
+            assert!(o.title.bottom() <= o.shots[0].picture.y && o.title.y >= o.frame.y);
+            // The letter is tucked behind the first picture's top right corner.
+            let first = o.shots[0].picture;
+            assert!(o.letter.contains((first.right() - 1., first.y + 1.)));
+            assert!(o.letter.y < first.y && o.letter.x < first.right());
         }
-        // An option without shots shows its one image; with two, both, one under the other.
+        // An option without shots shows its one image; with two, both, one
+        // under the other, each with its name over it.
         assert_eq!(board.options[1].shots.len(), 1);
+        assert_eq!(board.options[1].shots[0].caption.h, 0.);
         let a = &board.options[0];
-        assert!(a.shots[1].picture.y > a.shots[0].caption.bottom());
-        assert!(a.words.unwrap().bottom() < a.shots[0].picture.y);
+        assert!(a.shots[0].caption.bottom() <= a.shots[0].picture.y);
+        assert!(a.shots[1].caption.y > a.shots[0].picture.bottom());
+        assert!(a.shots[1].caption.h > 0. && a.shots[1].caption.bottom() <= a.shots[1].picture.y);
+        assert!(a.words.unwrap().y > a.shots[1].picture.bottom());
         assert!(board.options[1].words.is_none());
         // The bounds hold every frame and the lead.
         for f in &frames {
@@ -1102,6 +1129,39 @@ mod tests {
         );
         // The board's bounds take the notes in.
         assert!(board.bounds.right() >= a.right());
+    }
+
+    #[test]
+    fn a_later_page_gets_its_own_notes_outside_the_halo() {
+        // Mike, 23 Nov: the agent can point things out on any page, not just
+        // the first.
+        let r = review(
+            None,
+            vec![option(
+                "A",
+                Some("Two pages."),
+                vec![
+                    shot(Some("Menu"), vec![]),
+                    shot(
+                        Some("Spread"),
+                        vec![circle([0.6, 0.5, 0.8, 0.7], "the spread")],
+                    ),
+                ],
+            )],
+        );
+        let board = layout(&r, &Guess);
+        let o = &board.options[0];
+        assert!(o.shots[0].notes.is_empty());
+        let page = &o.shots[1];
+        let note = page.notes.first().expect("a note on the second page").rect;
+        assert!(
+            note.y >= page.picture.y - note.h && note.bottom() <= page.picture.bottom() + note.h
+        );
+        assert!(
+            note.x >= o.halo.right(),
+            "the note is inside the halo: {note:?}"
+        );
+        assert!(board.bounds.right() >= note.right());
     }
 
     #[test]
@@ -1158,10 +1218,10 @@ mod tests {
         // It starts on the lead and all of A, B peeking in at the right.
         let start = &stops(&board)[0];
         assert!(start.rect.x <= board.lead.unwrap().x);
-        assert!(start.rect.right() >= board.options[0].card.right());
-        assert_eq!(start.peek, Some(board.options[1].card.x));
+        assert!(start.rect.right() >= board.options[0].halo.right());
+        assert_eq!(start.peek, Some(board.options[1].extent().x));
         let c = Camera::for_stop(start, 1500., 900., 40., STOP_ZOOM);
-        let (bx, _) = c.to_screen((board.options[1].card.x, 0.));
+        let (bx, _) = c.to_screen((board.options[1].extent().x, 0.));
         assert!((bx - 1500. * PEEK_AT).abs() < 0.5, "B starts at {bx}");
         let (ax, _) = c.to_screen((start.rect.x, 0.));
         assert!(ax >= 39.5, "the lead's cut off at {ax}");

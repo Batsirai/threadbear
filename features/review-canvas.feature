@@ -9,7 +9,8 @@ Feature: The review as a canvas
   # agent's tour from three mockups, the agent's notes in the Convex Explained
   # doodle style with a switch to hide them, and tools to circle, highlight or
   # pin a part that drop numbered chips in the reply. The demo review's option
-  # A has two of the agent's notes on its picture (the mock's addCanvasMarks).
+  # A has two of the agent's notes on its picture and a second page with one
+  # more (the mock's addCanvasMarks).
   Background:
     Given the app is connected to a runner with the demo threads
     When I open the thread "Compare account picker designs"
@@ -17,16 +18,16 @@ Feature: The review as a canvas
   @review.canvas @swift-pending
   Scenario: The review opens as a board, on the agent's lead and the first option
     When I open the review
-    Then the review is a board on stop 1 of 6
-    And the board has 2 of the agent's notes, showing
+    Then the review is a board on stop 1 of 7
+    And the board has 3 of the agent's notes, showing
 
   @review.canvas @swift-pending
   Scenario: Next flies through every picture in the agent's order, then everything
     When I open the review
     And I press "Next (→)" in the review
-    Then the review is a board on stop 2 of 6
+    Then the review is a board on stop 2 of 7
     When I press "See everything (0)" in the review
-    Then the review is a board on stop 6 of 6
+    Then the review is a board on stop 7 of 7
 
   @review.canvas @swift-pending
   Scenario: The notes switch hides the agent's notes
@@ -40,3 +41,11 @@ Feature: The review as a canvas
     And I circle a part of option A's picture on the board
     Then the board has my mark "1 circle A 0"
     And the review's reply is "[Mark 1]"
+
+  # Mike, 23 Nov: a click in the reply box under its first line left no
+  # cursor and no blue edge, as the window took the keys straight back.
+  @review.canvas @swift-pending
+  Scenario: A click anywhere in the reply box puts the cursor in it
+    When I open the review
+    And I click low in the review's reply box
+    Then the review's reply box has the keys
