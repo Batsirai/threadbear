@@ -130,7 +130,19 @@ jobs:
       - name: Linux libraries
         if: runner.os == 'Linux'
         # xvfb, mesa and dbus are for the behaviour specs: a window with no screen.
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libvulkan-dev xvfb mesa-vulkan-drivers dbus-x11
+        # Ubuntu's mirror sometimes stalls for an hour (23 Nov), so each try gets a
+        # timeout and a stalled one is retried, and the step can't hang the run.
+        timeout-minutes: 15
+        run: |
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for try in 1 2 3; do
+            if timeout 240 sudo apt-get $apt_opts update && timeout 360 sudo apt-get $apt_opts install -y libasound2-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libvulkan-dev xvfb mesa-vulkan-drivers dbus-x11; then
+              exit 0
+            fi
+            echo "Installing the Linux libraries failed or stalled (try $try of 3), retrying"
+            sleep 15
+          done
+          exit 1
       - name: Install the mock runner and the specs
         run: |
           npm ci --prefix mock-runner
