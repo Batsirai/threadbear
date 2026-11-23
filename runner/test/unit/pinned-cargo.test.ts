@@ -138,7 +138,7 @@ test('two first builds at once both build, and neither takes the toolchain from 
   const ends = await Promise.all([w.start(), w.start(), w.start()].map((c) => new Promise<number | null>((done) => c.on('exit', done))));
   assert.deepEqual(ends, [0, 0, 0]);
   assert.equal(w.run('build').status, 0);
-  assert.equal(fs.readdirSync(w.cache).filter((f) => !f.startsWith('.')).length, 1);
+  assert.deepEqual(fs.readdirSync(w.cache).length, 1, 'one toolchain, and nothing left of the copies that lost');
   assert.equal(w.run('build').marked('cargo').split('\n').filter(Boolean).length, 5);
 });
 

@@ -94,6 +94,10 @@ if [[ ! -x "$prefix/bin/cargo" || "$(cat "$prefix/pinned" 2>/dev/null || true)" 
     [[ -x "$prefix/bin/cargo" && "$(cat "$prefix/pinned" 2>/dev/null || true)" == "$pins" ]] ||
       { echo "pinned-cargo.sh: $prefix is there but isn't this toolchain; delete it and build again." >&2; exit 1; }
   fi
+  # exec below skips the EXIT trap, so the copy that lost a race (a whole
+  # toolchain) goes now.
+  rm -rf "$work"
+  trap - EXIT
 fi
 
 # Its own rustc for cargo and for build scripts, and none of rustup's

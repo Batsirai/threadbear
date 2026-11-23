@@ -146,11 +146,11 @@ jobs:
           docker push "$IMAGE:$SHA" | tee "$RUNNER_TEMP/push.log"
           digest=$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' "$RUNNER_TEMP/push.log" | tail -1)
           [ -n "$digest" ] || { echo "::error::docker push didn't report a digest"; exit 1; }
-          # That digest is only what the registry answered. The manifest it
-          # names must hash to it and name this build's own config (whose
-          # layer list containerd checks each layer against when a box
-          # unpacks it), or a registry that lies gets nothing promoted
-          # (Daybreak 171's second review).
+          # Docker works that digest out from what it pushed. As a second
+          # check, the manifest the registry now holds under it must hash to
+          # it and name this build's own config (whose layer list containerd
+          # checks each layer against when a box unpacks it), or nothing is
+          # promoted (Daybreak 171's second review).
           docker buildx imagetools inspect --raw "$IMAGE@$digest" > "$RUNNER_TEMP/manifest.json"
           [ "sha256:$(sha256sum < "$RUNNER_TEMP/manifest.json" | cut -d' ' -f1)" = "$digest" ] || { echo "::error::The registry's manifest for $digest doesn't hash to it"; exit 1; }
           config=$(jq -r .config.digest "$RUNNER_TEMP/manifest.json")
@@ -248,12 +248,13 @@ jobs:
           esac
           # Main may have moved on with commits that don't change the image
           # (this workflow only runs for those that do): fine. One that does
-          # is a newer image's to promote, so this one stays out.
+          # is a newer image's to promote, so this one stays out. A file
+          # renamed out of the image counts, by its old name.
           status=$(gh api "repos/$REPO/compare/$SHA...heads/main" --jq .status)
           case "$status" in
             identical) ;;
             ahead)
-              newer=$(gh api "repos/$REPO/compare/$SHA...heads/main" --jq '[.files[].filename] | (length >= 300), (map(select(test("^(runner/(src|bin)/|runner/(package\\.json|package-lock\\.json|\\.npmrc|\\.dockerignore)$|runner/box/(Dockerfile|entrypoint\\.sh|smoke\\.sh)$|\\.github/workflows/box-image\\.yml$)"))) | length)')
+              newer=$(gh api "repos/$REPO/compare/$SHA...heads/main" --jq '[.files[] | .filename, (.previous_filename // empty)] | (length >= 300), (map(select(test("^(runner/(src|bin)/|runner/(package\\.json|package-lock\\.json|\\.npmrc|\\.dockerignore)$|runner/box/(Dockerfile|entrypoint\\.sh|smoke\\.sh)$|\\.github/workflows/box-image\\.yml$)"))) | length)')
               if [ "$(sed -n 1p <<<"$newer")" != false ] || [ "$(sed -n 2p <<<"$newer")" != 0 ]; then
                 echo "::notice::main has newer changes to the image since ${SHA:0:8}, so this older image isn't promoted."
                 exit 0

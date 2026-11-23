@@ -187,6 +187,8 @@ test('the workflow promotes the digest its own push reported, with an OIDC token
   // from it, and pushes no `latest` (Daybreak 171's second review).
   assert.match(latestJob, /gh api "repos\/\$REPO\/compare\/\$SHA\.\.\.heads\/main" --jq \.status/);
   assert.match(latestJob, /\*\) echo "::notice::\$\{SHA:0:8\} is \$status of main, so it isn't promoted\."; exit 0 ;;/);
+  // A file renamed out of the image counts as a change to it, by its old name (round three).
+  assert.match(latestJob, /\.filename, \(\.previous_filename \/\/ empty\)/);
   // The digest the registry answered is checked against the manifest and this build's config.
   assert.match(wf, /imagetools inspect --raw "\$IMAGE@\$digest"/);
   assert.match(wf, /\[ "\$config" = "\$built" \]/);
