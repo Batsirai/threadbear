@@ -90,12 +90,15 @@ function canonicalPath(named: string): string {
 // PATH entry must not probe that release or accidentally invoke its tb.
 process.env.PATH = (process.env.PATH ?? '').split(path.delimiter).filter((p) => !p || (!forbidden(path.resolve(p)) && !forbidden(canonicalPath(path.resolve(p))))).join(path.delimiter);
 
-// readlink and lstat read a link itself, never where it points: only its
+// readlink and lstat read a link itself, not where it points, so only its
 // folder is resolved. A process lookup readlinks /proc/<pid>/fd/*, and the
-// self-updater's output goes to a log in the real data folder.
+// self-updater's output goes to a log in the real data folder. A trailing
+// separator or a last part of . or .. makes them follow it after all.
 function check(file: unknown, follow = true): void {
   if (typeof file !== 'string' && !Buffer.isBuffer(file) && !(file instanceof URL)) return;
-  const named = path.resolve(file instanceof URL ? fileURLToPath(file) : file.toString());
+  const raw = file instanceof URL ? fileURLToPath(file) : file.toString();
+  if (!follow && /(?:^|[\\/])\.{0,2}$|[\\/]$/.test(raw)) follow = true;
+  const named = path.resolve(raw);
   // Resolve existing ancestors too, so a fixture symlink cannot lead back
   // into a real login, even when the requested leaf doesn't exist yet.
   // The runner also checks its own update clone, inside its real data

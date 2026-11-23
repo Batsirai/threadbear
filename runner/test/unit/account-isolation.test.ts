@@ -166,13 +166,15 @@ test('unit-test guard lets readlink and lstat see a link to a real account, not 
     import fs from 'node:fs';
     const link = process.env.HOME + '/to-login';
     fs.symlinkSync(${target}, link);
+    const dir = process.env.HOME + '/to-codex';
+    fs.symlinkSync(${JSON.stringify(path.join(home, '.codex'))}, dir);
     try { ${operation}; } catch {}
   `, { HOME: home });
-  for (const operation of [`fs.readlinkSync(link)`, `fs.lstatSync(link)`, `await fs.promises.readlink(link)`, `await fs.promises.lstat(link)`]) {
+  for (const operation of [`fs.readlinkSync(link)`, `fs.lstatSync(link)`, `fs.lstatSync(dir)`, `await fs.promises.readlink(link)`, `await fs.promises.lstat(link)`]) {
     const result = run(operation);
     assert.equal(result.status, 0, operation + ': ' + result.stderr);
   }
-  for (const operation of [`fs.readFileSync(link)`, `fs.statSync(link)`, `await fs.promises.readlink(${target})`, `fs.lstatSync(${target})`]) {
+  for (const operation of [`fs.readFileSync(link)`, `fs.statSync(link)`, `await fs.promises.readlink(${target})`, `fs.lstatSync(${target})`, `fs.lstatSync(dir + '/')`, `fs.lstatSync(dir + '/.')`, `fs.lstatSync(dir + '/x/..')`]) {
     const result = run(operation);
     assert.equal(result.status, 1, operation + ': ' + result.stderr);
     assert.match(result.stderr, /Unit tests accessed real account folders/);
