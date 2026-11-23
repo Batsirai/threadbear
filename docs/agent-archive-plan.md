@@ -194,6 +194,20 @@ each other.
   folders from the file (`claudeRoots`, `codexRoots`).
 - The archive's tools and reader say "Threadbear thread: <title>" with a
   `threadbear://thread/<id>` link, and search can filter by project.
+- The app's thread search searches the archive too (built 23 Nov). Mike
+  was shown three ways to bring the archive into the app (review
+  4ead0306): earlier work in a panel beside each thread, the search box
+  searching the archive, and an Ask panel. He picked the search box: "I
+  don't think it makes sense to have a separate panel", and asking is a
+  thread's job, as "the agent should always have access to it". Hits
+  come after the app's own threads; one opens its Threadbear thread, or
+  else read-only in the thread's place, with New thread from this. The
+  runner runs the archive's own `search --json` and `read --json`
+  (agent-archive #96) with its read-only key, so it still holds no
+  credential (docs/protocol/threads.md, "Searching Agent Archive").
+- Every thread gets the archive's MCP server while the experiment's on
+  (built 23 Nov): the cloud box's Threadbear login had no `agent-archive`
+  in its config, so threads there couldn't search it.
 - Threadbear can then use the archive: "Threads already on it" (the
   `sameWork` experiment) could look past open threads, and the thread
   digests idea (6eecd8a8) that concluded "ask Bruce" has somewhere to ask.
