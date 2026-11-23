@@ -94,11 +94,11 @@ async function check(r: Runner): Promise<void> {
   const id = made.thread.id;
   try {
     const first = await turnEnd(id, 0);
-    // A turn that failed there (a signed-out login, 13 Nov on bruce) is
-    // one line, not three FAILs that read as a broken runner. The relay
-    // says only that it failed; the reason is in the thread on that runner.
+    // A failed turn is one line, not three FAILs that read as a broken
+    // runner. The relay says only that it failed; the reason is in that
+    // runner's thread, so do not guess whether it signed out or hit a limit.
     if (first.card?.outcome === 'failed') {
-      return say(false, `${r.name}: its first turn failed (thread ${id}; its events on ${r.name} say why, and \`claude auth status\` there shows a signed-out login)`);
+      return say(false, `${r.name}: its first turn failed (thread ${id}; its events on ${r.name} say why)`);
     }
     say(/\bready\b/i.test(reply(first.events, first.from)), `${r.name}: a new thread started there and answered`);
 
