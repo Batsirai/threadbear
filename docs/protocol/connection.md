@@ -129,7 +129,8 @@ treats a connection as the owner only once the lookup has said so (or it has no
 lookup at all, as in tests); an undefined caller is otherwise refused at the gate.
 A process that has lost its parents (a `nohup`, a backgrounded subshell) still
 counts if it's in a process group a thread's tool command ran in, as the
-registry has noted them. One that deliberately starts a new session and reads
+registry has noted them, or on Linux in the session its CLI leads (the runner
+starts each CLI in a session of its own). One that deliberately starts a new session and reads
 the token can still pass as the owner, which is why outside Full access
 Claude's file and shell tools are denied the runner's `secrets` folder as well;
 that deny is defence in depth (`SECURITY.md` says what's out of scope). A
@@ -146,7 +147,7 @@ not or if nothing at all is listening there (the runner stopped); a runner that'
 there and won't answer is refused. Anything else (in a thread, or can't tell: a look
 fails, always on Windows, often on Linux over ssh, whose session process can't be
 read): only with the default data dir (from the account's home in the password
-database, not `$HOME`), and only if its `secrets` folder is as Threadbear made it
+database, not `$HOME` or `%LOCALAPPDATA%`), and only if its `secrets` folder is as Threadbear made it
 (nothing in it a symlink or a file with another hard link), so a stand-in data dir,
 or a file swapped into one while tb waits, can't take part; then the runner, proved
 by that data dir's token, must place the connection itself and say it isn't

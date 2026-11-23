@@ -7,8 +7,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { psTable } from './proc.ts';
-import { DEFAULT_PORT, defaultHome, paths, readRunnerJson, readToken, runnerUrl, type Config } from './config.ts';
+import { DEFAULT_PORT, paths, readRunnerJson, readToken, runnerUrl, type Config } from './config.ts';
 import os from 'node:os';
+import { dataDirFor } from './platform.ts';
 import { procTable } from './peer.ts';
 import { ErrorCode } from './protocol.ts';
 import { RunnerClient, type RunnerClientOptions } from './client.ts';
@@ -161,8 +162,10 @@ export type OwnerOnlyDeps = CallerDeps & { connect?: (url: string, token: string
 
 // The data dir a runner keeps by default for this user: from the account's
 // own home (the password database), not $HOME, which the caller sets.
-function realDefaultHome(): string {
-  return real(defaultHome(os.userInfo().homedir));
+// On Windows, without %LOCALAPPDATA% too, which the caller sets (Codex's
+// third review): the account's own AppData\Local.
+export function realDefaultHome(platform: NodeJS.Platform = process.platform): string {
+  return real(dataDirFor({ home: os.userInfo().homedir, env: {}, platform }));
 }
 
 // Why tb's commands that use this Mac's keys straight from disk (tb runner)

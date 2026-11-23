@@ -493,6 +493,32 @@ test('on Linux the process table comes from /proc, with no ps', async (t) => {
   }
 });
 
+test("tb runner's default data dir comes from the account, not variables the caller sets (Codex's third review)", async () => {
+  const { realDefaultHome } = await import('../../src/tb-connect.ts');
+  // Windows only: a Mac's or Linux's would be the real folder, which a unit test mustn't touch.
+  const saved = process.env.LOCALAPPDATA;
+  const before = realDefaultHome('win32');
+  try {
+    process.env.LOCALAPPDATA = 'C:\\attacker';
+    assert.equal(realDefaultHome('win32'), before);
+    assert.ok(!before.includes('attacker') && before.endsWith('Threadbear'), before);
+  } finally {
+    if (saved === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = saved;
+  }
+});
+
+test('on Linux a process in a group the registry has not seen is still its CLI\'s, by session (Codex\'s third review)', async () => {
+  const { threadOfSocket } = await import('../../src/peer.ts');
+  const sock = { remoteAddress: '127.0.0.1', remotePort: 1234, localAddress: '127.0.0.1', localPort: 8797 };
+  // Orphaned (parent 1), its own new group, still in the CLI's (300's) session.
+  const table = async () => [{ pid: 500, ppid: 1, pgid: 500, sid: 300 }, { pid: 300, ppid: 1, pgid: 300, sid: 300 }];
+  const deps = { registry: { threadOfPid: (p: number) => (p === 300 ? 'th1' : undefined), threadOfGroup: () => undefined }, known: () => true, log: nullLogger, lsof: async () => [500], table, platform: 'linux' as const };
+  assert.deepEqual(await threadOfSocket(sock, deps), { kind: 'thread', threadId: 'th1' });
+  // A terminal's session leader isn't a CLI: the owner.
+  assert.deepEqual(await threadOfSocket(sock, { ...deps, registry: { threadOfPid: () => undefined, threadOfGroup: () => undefined } }), { kind: 'owner' });
+});
+
 test('a thread key whose lookup fails closes too, and a lookup that finds the client still works both ways', async () => {
   let fail = true;
   let from: string | undefined;

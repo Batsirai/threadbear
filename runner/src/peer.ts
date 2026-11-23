@@ -394,9 +394,17 @@ async function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps, windo
   }
   // Left its parents behind (a nohup or a backgrounded subshell), but still
   // in a process group a thread's tool command ran in.
-  const group = table.find((r) => r.pid === peer)?.pgid;
+  const row = table.find((r) => r.pid === peer);
+  const group = row?.pgid;
   const byGroup = group ? deps.registry.threadOfGroup?.(group) : undefined;
   if (byGroup && deps.known(byGroup)) return byGroup;
+  // Linux: still in the session its CLI leads (the runner starts every CLI
+  // in its own), even in a group of its own the registry hasn't seen yet
+  // (Codex's third review of finding 175).
+  if (row?.sid !== undefined && row.sid > 1 && row.sid !== peer) {
+    const bySession = await deps.registry.threadOfPid(row.sid, rows.get(row.sid)?.created);
+    if (bySession && deps.known(bySession)) return bySession;
+  }
   return undefined;
 }
 
