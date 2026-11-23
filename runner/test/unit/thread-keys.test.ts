@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { makeHarness } from '../helpers/fakes.ts';
 import { RpcServer } from '../../src/rpc.ts';
 import { RunnerClient } from '../../src/client.ts';
-import { readToken } from '../../src/config.ts';
+import { readRunnerJson, readToken, writeRunnerJson } from '../../src/config.ts';
 import { nullLogger } from '../../src/log.ts';
 import { threadKey } from '../../src/rpc-auth.ts';
 import { GATED_READS, CallerGate } from '../../src/rpc-gate.ts';
@@ -430,6 +430,69 @@ test("an lsof that fails partway counts as no answer, whatever it printed", asyn
   }
 });
 
+// Gemini's review of the fix for finding 175: a walk that stopped at a
+// parent the table didn't have ended as "under no thread".
+test('a parent missing from the process table is no answer, not the owner (except on Windows, which keeps dead parents\' ids)', async () => {
+  const { threadOfSocket, UnresolvedPeer } = await import('../../src/peer.ts');
+  const sock = { remoteAddress: '127.0.0.1', remotePort: 1234, localAddress: '127.0.0.1', localPort: 8797 };
+  const table = async () => [{ pid: 500, ppid: 450 }, { pid: 400, ppid: 300 }, { pid: 300, ppid: 1 }];
+  const deps = { registry: { threadOfPid: (p: number) => (p === 300 ? 'th1' : undefined) }, known: () => true, log: nullLogger, lsof: async () => [500], table };
+  for (const platform of ['darwin', 'linux'] as const) await assert.rejects(threadOfSocket(sock, { ...deps, platform }), (e) => e instanceof UnresolvedPeer, platform);
+  assert.deepEqual(await threadOfSocket(sock, { ...deps, platform: 'win32' }), { kind: 'owner' });
+});
+
+test('while its process lookup runs, a connection hears no broadcasts', async () => {
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let lookups = 0;
+  // The first connection's lookup waits; the second's doesn't.
+  const { h, server, token, url } = await serve({ callerOf: async () => { if (lookups++ === 0) await held; return peerOf(undefined); } });
+  try {
+    const c = await RunnerClient.connect(url, token);
+    const heard: string[] = [];
+    c.onNotification((m) => heard.push(m));
+    const d = await RunnerClient.connect(url, token);
+    await d.call('auth.whoami');
+    const placed: string[] = [];
+    d.onNotification((m) => placed.push(m));
+    const t = thread(h, 'auto', 'a thread');
+    const note = () => server.notifyClients({ method: 'thread.updated', params: { thread: h.runner.list(['inbox']).find((x) => x.id === t.id)! } });
+    note();
+    await patiently(() => placed.length > 0);
+    release();
+    // Anything sent to c before its lookup ended arrives before this answer.
+    await c.call('auth.whoami');
+    assert.deepEqual(heard, [], 'nothing while it waited');
+    note();
+    await patiently(() => heard.length > 0);
+    assert.deepEqual(heard, ['thread.updated']);
+    c.close();
+    d.close();
+  } finally {
+    await server.close();
+  }
+});
+
+test('on Linux the process table comes from /proc, with no ps', async (t) => {
+  if (process.platform === 'win32') return t.skip('a stand-in /proc tree');
+  const { procTable } = await import('../../src/peer.ts');
+  const os = await import('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-proc-'));
+  try {
+    const stat = (pid: number, comm: string, ppid: number, pgrp: number) => {
+      fs.mkdirSync(path.join(root, String(pid)), { recursive: true });
+      fs.writeFileSync(path.join(root, String(pid), 'stat'), `${pid} (${comm}) S ${ppid} ${pgrp} ${pgrp} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 12345 0 0\n`);
+    };
+    stat(300, 'claude', 1, 300);
+    stat(400, 'a) b (c', 300, 400); // brackets and spaces in the name
+    fs.mkdirSync(path.join(root, 'self'));
+    const rows = (await procTable(root)).sort((a, b) => a.pid - b.pid);
+    assert.deepEqual(rows, [{ pid: 300, ppid: 1, pgid: 300 }, { pid: 400, ppid: 300, pgid: 400 }]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a thread key whose lookup fails closes too, and a lookup that finds the client still works both ways', async () => {
   let fail = true;
   let from: string | undefined;
@@ -841,14 +904,16 @@ test('tb goes by its key only for its own runner, never the token next to it', a
 
 test('tb runner refuses in a limited thread, whatever its environment says', async () => {
   let from: string | undefined;
-  const { h, server, token, url } = await serve({ callerOf: async () => peerOf(from) });
+  const { h, server, token, url, port } = await serve({ callerOf: async () => peerOf(from) });
   const me = thread(h, 'auto');
+  // tb runner asks the runner at the port its runner.json names.
+  writeRunnerJson(h.home, { ...readRunnerJson(h.home), port });
   try {
     const key = threadKey(token, me.id);
     const r = await tb(h, url, me.id, key, ['runner']);
     assert.equal(r.code, 1, r.out);
     // (Run from a real thread's shell, that thread's key is found first.)
-    assert.match(r.out, /Auto|Full access|isn't pointed/);
+    assert.match(r.out, /on auto|Full access|isn't pointed|couldn't tell/);
     from = me.id;
     const wiped = await tb(h, url, '', '', ['runner']);
     assert.equal(wiped.code, 1, wiped.out);
@@ -931,8 +996,20 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
   const { h, server, token, port } = await serve({ callerOf: async () => peerOf(from) });
   const limited = thread(h, 'auto');
   const full = thread(h, 'full', 'full one');
-  const cfg = { home: h.home, host: '127.0.0.1', port } as Parameters<typeof ownerOnly>[0];
-  const dead = { ...cfg, port: 1 };
+  // THREADBEAR_PORT (cfg.port) is the caller's to set: the runner is asked
+  // at the port in its runner.json.
+  const cfg = { home: h.home, host: '127.0.0.1', port: 1 } as Parameters<typeof ownerOnly>[0];
+  const setPort = (p: number) => writeRunnerJson(h.home, { ...readRunnerJson(h.home), port: p });
+  setPort(port);
+  // The runner stopped: nothing listening on its port.
+  const down = async <T,>(f: () => Promise<T>) => {
+    setPort(1);
+    try {
+      return await f();
+    } finally {
+      setPort(port);
+    }
+  };
   // tb's parent (a shell, 400) and above it the thread's CLI (300).
   const table = async () => [{ pid: 400, ppid: 300 }, { pid: 300, ppid: 1 }];
   const cliOf = (id: string, key = threadKey(token, id)) => (p: number) => (p === 300 ? `node claude THREADBEAR_THREAD_ID=${id} THREADBEAR_THREAD_KEY=${key} X=1` : 'zsh THREADBEAR_THREAD_KEY= X=1');
@@ -950,7 +1027,7 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
     ]) {
       assert.equal((await tbCaller(wiped, deps)).kind, 'unresolved');
       // The runner can't be asked: refused.
-      assert.match((await ownerOnly(dead, wiped, deps)) ?? '', /couldn't tell/);
+      assert.match((await down(() => ownerOnly(cfg, wiped, deps))) ?? '', /couldn't tell/);
       // The runner places it under a limited thread: refused.
       from = limited.id;
       assert.match((await ownerOnly(cfg, wiped, deps)) ?? '', /on auto/);
@@ -963,7 +1040,7 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
     from = limited.id;
     assert.match((await ownerOnly(cfg, wiped, under(limited.id))) ?? '', /on auto/);
     // The runner unreachable: refused, not waved through.
-    assert.match((await ownerOnly(dead, wiped, under(limited.id))) ?? '', /Full access/);
+    assert.match((await down(() => ownerOnly(cfg, wiped, under(limited.id)))) ?? '', /Full access/);
     // A stand-in data dir with a token of its own: the CLI's key isn't one it made.
     const fake = makeHarness();
     assert.match((await ownerOnly({ ...cfg, home: fake.home }, wiped, under(limited.id))) ?? '', /isn't pointed at that thread's own runner/);
@@ -1000,7 +1077,18 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
     assert.match((await ownerOnly(cfg, wiped, under(full.id))) ?? '', /Full access/);
     // A terminal: fine, with the runner up or down.
     assert.equal(await ownerOnly(cfg, {}, terminal), undefined);
-    assert.equal(await ownerOnly(dead, {}, terminal), undefined);
+    assert.equal(await down(() => ownerOnly(cfg, {}, terminal)), undefined);
+    // But a runner that's there and won't answer (its slots full, a lookup it
+    // couldn't finish) is no answer, even from a terminal by its parents: an
+    // orphaned tb has none (Gemini's review).
+    const busy = Object.assign(new Error('Unexpected server response: 503'), { code: undefined });
+    assert.match((await ownerOnly(cfg, {}, { ...terminal, connect: async () => { throw busy; } })) ?? '', /didn't answer/);
+    const dropped = { call: async () => { throw new Error("connection closed (4503): the runner couldn't tell which process this is; try again"); }, close: () => {} } as unknown as RunnerClient;
+    assert.match((await ownerOnly(cfg, {}, { ...terminal, connect: async () => dropped })) ?? '', /didn't answer/);
+    // An older runner with no auth.whoami: fine from a terminal only.
+    const old = { call: async () => { throw Object.assign(new Error('Method not found'), { code: -32601 }); }, close: () => {} } as unknown as RunnerClient;
+    assert.equal(await ownerOnly(cfg, {}, { ...terminal, connect: async () => old }), undefined);
+    assert.match((await ownerOnly(cfg, wiped, { ...under(full.id), connect: async () => old })) ?? '', /Full access/);
     // Unless the runner, asked, says it's a limited thread after all.
     from = limited.id;
     assert.match((await ownerOnly(cfg, {}, terminal)) ?? '', /on auto/);
@@ -1026,22 +1114,25 @@ test("tb runner from a limited thread's CLI, its key wiped, no ps on PATH and TH
   await new Promise<void>((r) => backend.listen(0, '127.0.0.1', r));
   fs.mkdirSync(path.join(h.home, 'secrets'), { recursive: true });
   fs.writeFileSync(path.join(h.home, 'secrets', 'convex-key'), 'owner-key\n', { mode: 0o600 });
+  // The runner's port as its runner.json says; THREADBEAR_PORT, set below
+  // to nothing, isn't taken.
+  writeRunnerJson(h.home, { ...readRunnerJson(h.home), port });
   try {
     from = me.id;
     for (const pathDir of ['', bin, failing]) {
-      for (const sub of [['list'], ['revoke', 'x', '--purge'], ['add', 'x'], ['rotate-owner']]) {
+      for (const sub of [['list'], ['revoke', 'x', '--purge'], ['add', 'x'], ['rotate-owner'], ['logins']]) {
         // The "CLI": a process with the thread's key, which starts tb with it wiped.
         const script = `const {spawn}=require('child_process');const p=spawn(process.execPath,${JSON.stringify([TB, 'runner', ...sub])},{env:{...process.env,THREADBEAR_THREAD_KEY:'',THREADBEAR_THREAD_ID:'',PATH:${JSON.stringify(pathDir)},THREADBEAR_URL:'ws://127.0.0.1:1/rpc'},stdio:'inherit'});p.on('exit',(c)=>process.exit(c??9));`;
         let out = '';
         const cli = spawn(process.execPath, ['-e', script], {
-          env: { ...process.env, THREADBEAR_HOME: h.home, THREADBEAR_RUNNER_HOME: h.home, THREADBEAR_PORT: String(port), THREADBEAR_THREAD_ID: me.id, THREADBEAR_THREAD_KEY: threadKey(token, me.id), THREADBEAR_SYNC_URL: `http://127.0.0.1:${(backend.address() as { port: number }).port}` },
+          env: { ...process.env, THREADBEAR_HOME: h.home, THREADBEAR_RUNNER_HOME: h.home, THREADBEAR_PORT: '1', THREADBEAR_THREAD_ID: me.id, THREADBEAR_THREAD_KEY: threadKey(token, me.id), THREADBEAR_SYNC_URL: `http://127.0.0.1:${(backend.address() as { port: number }).port}` },
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         cli.stdout.on('data', (d) => (out += d));
         cli.stderr.on('data', (d) => (out += d));
         const code = await new Promise<number | null>((r) => cli.once('exit', r));
         assert.equal(code, 1, `${pathDir || 'no PATH'} ${sub.join(' ')}: ${out}`);
-        assert.match(out, /Auto|Full access|isn't pointed/, out);
+        assert.match(out, /on auto|Full access|isn't pointed|couldn't tell/, out);
       }
     }
     assert.equal(heard, 0, 'the backend heard nothing');

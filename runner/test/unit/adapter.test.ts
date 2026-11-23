@@ -679,6 +679,24 @@ test('an MCP call with an argument named __proto__ is refused with no card, and 
   state.close!();
 });
 
+test('a __proto__ key anywhere in a call is refused too, and never counts as shown on a phone (Gemini\'s review)', async () => {
+  const { cardInput, remoteCardShowsAll, truncateInput } = await import('../../src/tools.ts');
+  for (const raw of ['{"command":"echo ok","extra":{"__proto__":{"pwn":1}}}', '{"command":"echo ok","list":[{"__proto__":1}]}', '{"opts":{"__proto__":{"x":1}}}']) {
+    const input = JSON.parse(raw) as Record<string, unknown>;
+    assert.equal(cardInput(input, ['command']).tooLong, '__proto__', raw);
+    assert.equal(cardInput(input, 'all').tooLong, '__proto__', raw);
+    assert.equal(remoteCardShowsAll('mcp__x__y', input), false, raw);
+  }
+  assert.equal(remoteCardShowsAll('mcp__x__y', JSON.parse('{"path":"a.txt","__proto__":null}')), false);
+  // A cut copy keeps such a key as its own.
+  assert.ok(Object.hasOwn(truncateInput(JSON.parse('{"a":{"__proto__":1}}')).a as object, '__proto__'));
+  const { state, approvals } = start();
+  const r = await state.options.canUseTool('Bash', JSON.parse('{"command":"echo ok","extra":{"__proto__":{"pwn":1}}}'), { signal: new AbortController().signal, toolUseID: 'n1' });
+  assert.equal(r.behavior, 'deny');
+  assert.equal(approvals.length, 0);
+  state.close!();
+});
+
 test('cardDecisive: file edits and MCP tools show every argument, anything else its command', () => {
   for (const name of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'mcp__x__y']) assert.equal(cardDecisive(name), 'all', name);
   assert.deepEqual(cardDecisive('Bash'), ['command']);

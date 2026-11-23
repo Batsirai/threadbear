@@ -540,7 +540,9 @@ export class RpcServer {
     const msg = JSON.stringify({ jsonrpc: '2.0', method: n.method, params: n.params });
     const transient = n.method === 'thread.event' && n.params.event.type.endsWith('.delta');
     for (const c of [...this.conns]) {
-      if (!c.authed || c.ws.readyState !== WebSocket.OPEN) continue;
+      // Not while the process lookup runs, nor after it refused (Gemini's
+      // review of finding 175): it hasn't been placed yet.
+      if (!c.authed || c.identifying || c.dropped || c.ws.readyState !== WebSocket.OPEN) continue;
       if (n.method === 'thread.event' && !c.subs.has(n.params.threadId)) continue;
       this.write(c, msg, transient);
     }

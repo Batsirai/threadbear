@@ -7,7 +7,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { psTable } from './proc.ts';
-import { paths, readToken, runnerUrl, type Config } from './config.ts';
+import { DEFAULT_PORT, paths, readRunnerJson, readToken, runnerUrl, type Config } from './config.ts';
+import { procTable } from './peer.ts';
+import { ErrorCode } from './protocol.ts';
 import { RunnerClient, type RunnerClientOptions } from './client.ts';
 import { isThreadId, isThreadKey, threadKey } from './rpc-auth.ts';
 
@@ -71,7 +73,7 @@ export async function tbCaller(env: NodeJS.ProcessEnv = process.env, deps: Calle
   if (platform === 'win32' && !deps.envOf) return { kind: 'unresolved', why: "Windows can't show another process's environment" };
   const envOf = deps.envOf ?? (platform === 'linux' ? linuxEnv : psEnv);
   try {
-    const parents = new Map((await (deps.table ?? psTable)()).map((r) => [r.pid, r.ppid]));
+    const parents = new Map((await (deps.table ?? (platform === 'linux' ? () => procTable() : psTable))()).map((r) => [r.pid, r.ppid]));
     const seen = new Set<number>();
     for (let p: number | undefined = deps.ppid ?? process.ppid; p !== undefined && p > 1 && !seen.has(p); p = parents.get(p)) {
       if (!parents.has(p)) throw new Error(`process ${p} isn't in the process table`);
@@ -117,8 +119,9 @@ export function ownSecrets(home: string): boolean {
     let st: fs.Stats;
     try {
       st = fs.lstatSync(p);
-    } catch {
-      return false;
+    } catch (e) {
+      // No secrets folder at all: nothing in it to borrow.
+      return depth === 0 && (e as NodeJS.ErrnoException).code === 'ENOENT';
     }
     if (st.isSymbolicLink()) return false;
     if (st.isFile()) return st.nlink === 1;
@@ -142,17 +145,20 @@ export type OwnerOnlyDeps = CallerDeps & { connect?: (url: string, token: string
 // Why tb's commands that use this Mac's keys straight from disk (tb runner)
 // shouldn't run here, or undefined if they may: they don't go through the
 // RPC, so the runner can't refuse them itself (Daybreak finding 174).
-// - Under none (a terminal): fine, unless the runner, if it answers, says
-//   this is a limited thread after all (one that left its parents behind).
-// - Under a thread, or can't tell (a look failing; always on Windows, which
-//   can't read another process's environment): only with a runner's keys
-//   that are this data dir's own (ownSecrets: no links into another's), and
-//   only if that runner, proved by the token over the challenge, places the
-//   connection itself and says it isn't limited. Under a thread it must also
-//   name a thread, and every thread key found on the way up must be one this
-//   token made. Unreachable is refused.
-// THREADBEAR_URL isn't taken: the runner is asked at its own address, and
-// only the runner (or someone with its token) can prove the token there.
+// - The data dir's secrets must be its own (ownSecrets): no links into
+//   another's, so the keys it reads are this data dir's and a runner that
+//   proves its token is that data dir's runner.
+// - That runner is asked at the port in its runner.json (never
+//   THREADBEAR_URL or THREADBEAR_PORT, which the caller sets), proved by the
+//   token over the challenge, whether this connection is a limited thread.
+//   Limited: refused. Under a thread it must also name the thread, and every
+//   thread key found on the way up must be one this token made.
+// - No answer is refused, with one exception: a terminal (under no thread by
+//   its parents) when nothing at all is listening on that port, as with the
+//   runner stopped. A thread can't make that happen to a running runner; a
+//   busy one (its connection slots full), a lookup it couldn't finish or a
+//   stand-in that can't prove the token is refused (Gemini's review: an
+//   orphaned tb under no parents could point the port at nothing).
 export async function ownerOnly(cfg: Config, env: NodeJS.ProcessEnv = process.env, deps: OwnerOnlyDeps = {}): Promise<string | undefined> {
   const who = await tbCaller(env, deps);
   let token = '';
@@ -161,20 +167,24 @@ export async function ownerOnly(cfg: Config, env: NodeJS.ProcessEnv = process.en
   } catch {
     // No token yet: a terminal on a new runner; anything else is refused below.
   }
-  const sure = who.kind === 'owner';
+  const terminal = who.kind === 'owner';
   const cant =
     who.kind === 'unresolved'
       ? `This uses the runner's own keys, so it has to know it isn't in a limited thread. It couldn't tell (${who.why}), and the runner couldn't be asked. Run it from a terminal with the runner going.`
-      : "This needs Full access and the runner can't be asked whether this thread has it.";
-  if (!sure && !(token && ownSecrets(cfg.home))) return "This data folder's secrets aren't its own (a link to another's), so tb runner won't use them unless it's sure it isn't in a limited thread.";
+      : who.kind === 'thread'
+        ? "This needs Full access and the runner can't be asked whether this thread has it."
+        : "This uses the runner's own keys, and the runner didn't answer whether this is a limited thread. Try again, or stop the runner first.";
+  if (!ownSecrets(cfg.home)) return "This data folder's secrets aren't its own (a link to another's), so tb runner won't use them.";
+  if (!terminal && !token) return cant;
   if (who.kind === 'thread' && !who.keys.every((k) => k.ids.some((id) => isThreadId(id) && sameKey(threadKey(token, id), k.key)))) {
     return "This is a thread's shell and tb isn't pointed at that thread's own runner, so it can't use a runner's keys from here.";
   }
+  const url = `ws://127.0.0.1:${readRunnerJson(cfg.home).port || DEFAULT_PORT}/rpc`;
   let client: RunnerClient;
   try {
-    client = await (deps.connect ?? ((url, t) => RunnerClient.connect(url, t)))(runnerUrl(cfg, {}), token);
-  } catch {
-    return sure ? undefined : cant;
+    client = await (deps.connect ?? ((u, t) => RunnerClient.connect(u, t)))(url, token);
+  } catch (e) {
+    return terminal && (e as NodeJS.ErrnoException)?.code === 'ECONNREFUSED' ? undefined : cant;
   }
   try {
     const whoami = await client.call<{ threadId?: string; limited?: boolean; mode?: string }>('auth.whoami');
@@ -182,9 +192,9 @@ export async function ownerOnly(cfg: Config, env: NodeJS.ProcessEnv = process.en
     // The runner must see the thread this tb is under, on Full access.
     if (who.kind === 'thread' && !whoami.threadId) return cant;
     return undefined;
-  } catch {
+  } catch (e) {
     // An older runner has no auth.whoami: fine from a terminal, not otherwise.
-    return sure ? undefined : cant;
+    return terminal && (e as { code?: unknown })?.code === ErrorCode.methodNotFound ? undefined : cant;
   } finally {
     client.close();
   }

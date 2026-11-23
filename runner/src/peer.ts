@@ -110,7 +110,7 @@ function lsofPids(sock: PeerSocket, ms: number): Promise<number[]> {
 // the runner's, from /proc/net/tcp and tcp6 (this network namespace's), then
 // every process with a descriptor on that socket's inode. A process of
 // another user can't be read; a thread's processes are this user's.
-export async function procPids(sock: PeerSocket, root = '/proc'): Promise<number[]> {
+export async function procPids(sock: PeerSocket, root = '/proc', until = Infinity): Promise<number[]> {
   const client = addrBytes(sock.remoteAddress);
   const server = addrBytes(sock.localAddress);
   if (!client || !server) throw new Error(`not an address: ${sock.remoteAddress} or ${sock.localAddress}`);
@@ -133,6 +133,9 @@ export async function procPids(sock: PeerSocket, root = '/proc'): Promise<number
   const pids: number[] = [];
   for (const name of await fs.promises.readdir(root)) {
     if (!/^\d+$/.test(name)) continue;
+    // Stop once its time is up, rather than go on reading after the answer
+    // stopped mattering.
+    if (Date.now() > until) throw new Error('reading /proc took too long');
     let fds: string[];
     try {
       fds = await fs.promises.readdir(`${root}/${name}/fd`);
@@ -153,6 +156,29 @@ export async function procPids(sock: PeerSocket, root = '/proc'): Promise<number
     }
   }
   return pids;
+}
+
+// Linux: the process table from /proc/<pid>/stat, no ps needed (Gemini's
+// review: a box without /bin/ps would otherwise refuse every connection).
+// The command name (field 2, in brackets) can hold spaces and brackets, so
+// the fields are counted from the last ')': state, ppid, pgrp.
+export async function procTable(root = '/proc'): Promise<ProcRow[]> {
+  const rows: ProcRow[] = [];
+  for (const name of await fs.promises.readdir(root)) {
+    if (!/^\d+$/.test(name)) continue;
+    let stat: string;
+    try {
+      stat = await fs.promises.readFile(`${root}/${name}/stat`, 'utf8');
+    } catch {
+      continue; // gone since the listing
+    }
+    const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const ppid = Number(f[1]);
+    const pgid = Number(f[2]);
+    if (Number.isInteger(ppid) && Number.isInteger(pgid)) rows.push({ pid: Number(name), ppid, pgid });
+  }
+  if (rows.length === 0) throw new Error(`no processes in ${root}`);
+  return rows;
 }
 
 // The inodes of established sockets (state 01) in a /proc/net/tcp table
@@ -325,14 +351,14 @@ export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<
       holders = snapshotOwners(snap, sock);
       table = snap.processes;
     } else {
-      const find = deps.lsof ?? (platform === 'linux' ? (s: PeerSocket) => procPids(s, deps.procRoot) : (s: PeerSocket) => lsofPids(s, ms));
+      const find = deps.lsof ?? (platform === 'linux' ? (s: PeerSocket) => procPids(s, deps.procRoot, Date.now() + ms) : (s: PeerSocket) => lsofPids(s, ms));
       holders = await deadline(find(sock), ms);
     }
     if (holders.length === 0) throw new Error('nobody holds this connection');
     pids = holders.filter((p) => p !== process.pid);
     // Only the runner itself: its own connection, the owner's.
     if (pids.length === 0) return OWNER_PEER;
-    if (!(windows && !deps.lsof)) table = await deadline((deps.table ?? psTable)(), ms);
+    if (!(windows && !deps.lsof)) table = await deadline((deps.table ?? (platform === 'linux' ? () => procTable(deps.procRoot) : psTable))(), ms);
     // One that isn't in the process table has gone, or the table missed
     // it: either way its parents can't be walked.
     const live = new Set(table.map((r) => r.pid));
@@ -344,17 +370,22 @@ export async function threadOfSocket(sock: PeerSocket, deps: PeerDeps): Promise<
   }
   const threads = new Set<string>();
   for (const peer of pids) {
-    const t = await threadOfPid(peer, table, deps);
+    const t = await threadOfPid(peer, table, deps, windows);
     if (t) threads.add(t);
   }
   if (threads.size > 1) throw new AmbiguousPeer(`one connection is held by processes under ${threads.size} threads`);
   return threads.size === 1 ? threadPeer([...threads][0]) : OWNER_PEER;
 }
 
-async function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps): Promise<string | undefined> {
+async function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps, windows: boolean): Promise<string | undefined> {
   const rows = new Map(table.map((r) => [r.pid, r]));
   const seen = new Set<number>();
   for (let p: number | undefined = peer; p !== undefined && p > 1 && !seen.has(p); p = parentOf(rows, p)) {
+    // A parent the table doesn't have: the walk can't go on, so it can't
+    // say this isn't under a thread (Gemini's review of finding 175). On a
+    // Mac or Linux a process whose parent has gone is given another at once;
+    // Windows keeps a dead parent's id (parentOf), so there it's the end.
+    if (!rows.has(p) && !windows) throw new UnresolvedPeer(`process ${p}, a parent of ${peer}, isn't in the process table`);
     seen.add(p);
     const t = await deps.registry.threadOfPid(p, rows.get(p)?.created);
     if (t && deps.known(t)) return t;
