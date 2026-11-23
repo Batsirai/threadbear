@@ -823,7 +823,8 @@ impl Threadbear {
 
     /// Whether an experiment is on for this Mac's runner: Settings' switch
     /// first, as it changes without a new hello, else the hello's list.
-    fn experiment_on(&self, id: &str) -> bool {
+    /// Agent Archive's search asks it too (archive_search.rs).
+    pub(crate) fn experiment_on(&self, id: &str) -> bool {
         let switch = self.runner_settings.as_ref().and_then(|s| {
             s["experiments"]
                 .as_array()?
