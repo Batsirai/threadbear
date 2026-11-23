@@ -41,7 +41,7 @@ Feature: Searching Agent Archive from the sidebar
   Scenario: A session that belongs to a thread opens the thread
     When I search the threads for "resume point"
     And I open "Make uploads resume after a crash" from the archive
-    Then the thread "Make uploads resume after a crash" is open
+    Then the thread "Make uploads resume after a crash" opens in place of a read-only session
 
   @sidebar.search.archive @archive @slow-archive @swift-pending
   Scenario: A row says the archive is being searched until it answers

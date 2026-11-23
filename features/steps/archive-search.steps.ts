@@ -56,6 +56,11 @@ When('I click {string} under the archived session', async function (this: Thread
   await this.app.do({ cmd: 'click', title: label });
 });
 
+// By what's open, not the sidebar's rows: the search has the thread out of them.
+Then("the thread {string} opens in place of a read-only session", async function (this: ThreadbearWorld, title: string) {
+  await this.until(`"${title}" open`, (d) => d.selection?.title === title && !page(d), 10_000);
+});
+
 Then("the new thread's box says {string}", async function (this: ThreadbearWorld, text: string) {
   await this.until(`the new thread's box saying "${text}"`, (d) => !d.selection?.id && d.composer.text === text);
 });
