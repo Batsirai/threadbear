@@ -9,7 +9,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { tmpDir } from '../helpers/fakes.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..', '..', '..');
@@ -27,14 +26,16 @@ function git(cwd: string, ...args: string[]) {
 // A home with rustup and cargo in ~/.cargo/bin (so rustup is never
 // fetched) unless noRust, and a checkout whose main has a stage-update.sh
 // that makes an empty bundle where it's told to, or exits with stageExit.
-function world(o: { noRust?: boolean; warm?: boolean; cachedMb?: number; stageExit?: number; runnerJson?: unknown; pins?: string; toolchain?: string } = {}) {
+function world(o: { noRust?: boolean; warm?: boolean; cachedMb?: number; stageExit?: number; runnerJson?: unknown } = {}) {
   const root = fs.realpathSync(tmpDir());
   const home = path.join(root, 'home');
   const checkout = path.join(root, 'checkout');
   fs.mkdirSync(path.join(home, 'tmp'), { recursive: true });
+  // The pinned Rust an earlier build fetched (pinned-cargo.sh).
   if (!o.noRust) {
-    fs.mkdirSync(path.join(home, '.cargo', 'bin'), { recursive: true });
-    for (const bin of ['cargo', 'rustup']) fs.writeFileSync(path.join(home, '.cargo', 'bin', bin), '#!/bin/sh\n', { mode: 0o755 });
+    const bin = path.join(home, 'Library', 'Caches', 'Threadbear', 'rust', '1.99.1-aarch64-apple-darwin', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'cargo'), '#!/bin/sh\n', { mode: 0o755 });
   }
   const cache = path.join(home, 'Library', 'Caches', 'Threadbear', 'update-desktop');
   if (o.warm) fs.mkdirSync(path.join(cache, 'target', 'release'), { recursive: true });
@@ -53,8 +54,6 @@ function world(o: { noRust?: boolean; warm?: boolean; cachedMb?: number; stageEx
     ? `#!/bin/bash\necho "stub failed" >&2\nexit ${o.stageExit}\n`
     : '#!/bin/bash\n[ "$2" = --next ] || exit 9\nmkdir -p "$3/Contents/MacOS"\nfor b in threadbear-gpui threadbear-web-helper; do printf "#!/bin/sh\\n" > "$3/Contents/MacOS/$b"; chmod +x "$3/Contents/MacOS/$b"; done\necho staged\n';
   fs.writeFileSync(path.join(scripts, 'stage-update.sh'), stage);
-  if (o.pins !== undefined) fs.writeFileSync(path.join(scripts, 'rustup-init.pins'), o.pins);
-  if (o.toolchain !== undefined) fs.writeFileSync(path.join(checkout, 'rust-toolchain.toml'), o.toolchain);
   git(root, 'init', '-q', '-b', 'main', checkout);
   git(checkout, 'add', '-A');
   git(checkout, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'stub');
@@ -110,69 +109,16 @@ test("with no Rust and another Mac (or none) doing the build, Rust isn't install
   assert.doesNotMatch(r.stdout, /STEP Installing Rust/);
 });
 
-// rustup's installer, standing in: it leaves rustup and cargo in ~/.cargo/bin.
-const FAKE_INIT = 'echo "init $*" >> "$HOME/init.log"\nmkdir -p "$HOME/.cargo/bin"\nfor b in rustup cargo; do printf "#!/bin/sh\\n" > "$HOME/.cargo/bin/$b"; chmod +x "$HOME/.cargo/bin/$b"; done\n';
-const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
-const TOOLCHAIN = '[toolchain]\nchannel = "1.99.1"\n';
-const pinsFor = (sha: string) => `# version target sha256\n1.29.3 aarch64-apple-darwin ${sha}\n1.29.3 x86_64-apple-darwin ${sha}\n`;
-
-function installRust(o: { pins?: string; toolchain?: string; init?: string }) {
-  const w = world({ noRust: true, pins: o.pins, toolchain: o.toolchain });
-  const brew = path.join(w.home, 'brew', 'bin');
-  fs.mkdirSync(brew, { recursive: true });
-  fs.writeFileSync(path.join(brew, 'cargo'), '#!/bin/sh\n', { mode: 0o755 });
-  const init = path.join(w.home, 'rustup-init.sh');
-  fs.writeFileSync(init, `#!/bin/sh\n${o.init ?? FAKE_INIT}`);
-  const r = spawnSync('/bin/bash', [SCRIPT, w.checkout, '--no-open'], {
-    encoding: 'utf8',
-    env: { HOME: w.home, TMPDIR: path.join(w.home, 'tmp'), PATH: `/usr/bin:/bin:${brew}`, THREADBEAR_SWITCH_FREE_KB: String(8 * GiB), THREADBEAR_SWITCH_RUSTUP_INIT: init },
-  });
-  const log = path.join(w.home, 'init.log');
-  return { ...r, home: w.home, ran: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
-}
-
-test("a Mac with only Homebrew's cargo gets rustup too, with the exact Rust main pins, from the installer main pins", mac, () => {
-  const r = installRust({ pins: pinsFor(sha256(`#!/bin/sh\n${FAKE_INIT}`)), toolchain: TOOLCHAIN });
+// Daybreak 173: it never installs Rust itself (no rustup, no download it
+// runs): the build fetches the pinned Rust and checks it (pinned-cargo.sh).
+test('with no Rust at all it installs none, and the build goes ahead', mac, () => {
+  const w = world({ noRust: true });
+  const r = run(w, 8 * GiB);
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /STEP Installing Rust/);
-  assert.equal(r.ran, 'init -y --profile minimal --no-modify-path --default-toolchain 1.99.1\n');
-});
-
-// Daybreak 173: the installer runs as you, so only the bytes main pins run.
-test('an installer whose bytes differ from the pin is refused before it runs', mac, () => {
-  const r = installRust({ pins: pinsFor(sha256(`#!/bin/sh\n${FAKE_INIT}`)), toolchain: TOOLCHAIN, init: `touch "$HOME/pwned"\n${FAKE_INIT}` });
-  assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.match(r.stderr, /isn't the one main pins .*so it wasn't run/);
-  assert.equal(r.ran, '');
-  assert.equal(fs.existsSync(path.join(r.home, 'pwned')), false);
-});
-
-test('no pin for this Mac, or no exact Rust in rust-toolchain.toml, installs nothing', mac, () => {
-  const good = sha256(`#!/bin/sh\n${FAKE_INIT}`);
-  for (const o of [
-    { toolchain: TOOLCHAIN },
-    { pins: '# nothing here\n', toolchain: TOOLCHAIN },
-    { pins: pinsFor('not-a-sha'), toolchain: TOOLCHAIN },
-    { pins: pinsFor(good) },
-    { pins: pinsFor(good), toolchain: '[toolchain]\nchannel = "stable"\n' },
-  ]) {
-    const r = installRust(o);
-    assert.equal(r.status, 1, JSON.stringify(o) + r.stdout + r.stderr);
-    assert.equal(r.ran, '', JSON.stringify(o));
-  }
-});
-
-test("the repo's own installer pins name a released rustup for both kinds of Mac", () => {
-  const pins = fs.readFileSync(path.join(REPO, 'desktop', 'scripts', 'rustup-init.pins'), 'utf8').split('\n').filter((l) => l && !l.startsWith('#'));
-  const targets = pins.map((l) => {
-    const [version, target, sha, extra] = l.split(' ');
-    assert.match(version, /^\d+\.\d+\.\d+$/);
-    assert.match(sha, /^[0-9a-f]{64}$/);
-    assert.equal(extra, undefined);
-    return target;
-  });
-  assert.deepEqual(targets.sort(), ['aarch64-apple-darwin', 'x86_64-apple-darwin']);
-  assert.match(fs.readFileSync(path.join(REPO, 'rust-toolchain.toml'), 'utf8'), /^channel = "\d+\.\d+\.\d+"$/m);
+  assert.doesNotMatch(r.stdout, /STEP Installing Rust/);
+  assert.equal(fs.existsSync(path.join(w.home, '.cargo')), false);
+  assert.equal(fs.existsSync(path.join(w.home, '.rustup')), false);
+  assert.doesNotMatch(fs.readFileSync(SCRIPT, 'utf8'), /rustup-init|sh\.rustup\.rs|curl /);
 });
 
 test('free space comes from the disk itself when nothing stands in for it', mac, () => {

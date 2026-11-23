@@ -11,14 +11,9 @@
 # --no-open stops after installing it, leaving links and the app alone (for
 # trying this on a test Mac without taking over its links or its screen).
 #
-# 1. Rust, if there's no rustup: rustup's own installer, at the version and
-#    SHA-256 main pins (rustup-init.pins), minimal profile, without touching
-#    the shell's startup files (docs/on-your-mac.md). Even beside Homebrew's
-#    rust, as the build uses the exact Rust rust-toolchain.toml pins, the one
-#    GitHub builds and tests with (stage-update.sh): an older one fails
-#    partway through it.
-# 2. The app, built from what's committed on the checkout's main, by
-#    stage-update.sh: the same build the installed app's updates use, so its
+# 1. The app, built from what's committed on the checkout's main, by
+#    stage-update.sh: the same build the installed app's updates use, with
+#    the Rust main pins, which it fetches itself (pinned-cargo.sh), so its
 #    clone and target folder are already warm for the first update. Built on
 #    an update build host if runner.json names one, else here.
 #    An app already installed from an older main gets main's build staged
@@ -26,9 +21,9 @@
 #    starts), so setup run again after a pull leaves it current rather than
 #    the app building it in the background minutes later (Tinker Desk's
 #    second account, 19 Nov 2026).
-# 3. Moved into ~/Applications/Threadbear GPUI.app, and threadbear:// links
+# 2. Moved into ~/Applications/Threadbear GPUI.app, and threadbear:// links
 #    pointed at it (thread-links.sh).
-# 4. Opened. It brings over the Swift app's settings, drafts and files by
+# 3. Opened. It brings over the Swift app's settings, drafts and files by
 #    itself the first time it starts (desktop/gpui/src/swift_import.rs).
 #
 # Lines starting "STEP " say where it's got to. The thread runs this from
@@ -103,7 +98,8 @@ room_for_it() {
   if [[ -n "$elsewhere" ]]; then
     need_kb=$gib
   else
-    command -v rustup >/dev/null || need_kb=$gib
+    # The pinned Rust (pinned-cargo.sh), unless an earlier build fetched it.
+    compgen -G "$HOME/Library/Caches/Threadbear/rust/*/bin/cargo" >/dev/null || need_kb=$gib
     local cached=0 build=$((4 * gib))
     [[ -d "$cache" ]] && cached="$(du -sk "$cache" 2>/dev/null | awk '{ print $1 }')" || true
     [[ "$cached" =~ ^[0-9]+$ ]] || cached=0
@@ -179,43 +175,6 @@ if installed; then
 else
   elsewhere="$(builds_elsewhere)"
   room_for_it
-  # Rust only for a build here: another Mac builds it, or none does (exit 5).
-  if [[ -z "$elsewhere" ]] && ! command -v rustup >/dev/null; then
-    echo "STEP Installing Rust"
-    # rustup's installer at the version and SHA-256 main pins for this Mac
-    # (desktop/scripts/rustup-init.pins), checked before it runs, never the
-    # live sh.rustup.rs, and with the exact Rust main's rust-toolchain.toml
-    # pins as its default rather than whatever stable is today (Daybreak
-    # 173). --no-modify-path: the build finds it in ~/.cargo/bin by itself,
-    # and a terminal's cargo stays whatever it was.
-    # THREADBEAR_SWITCH_RUSTUP_INIT stands in for the download in the tests
-    # (switch-from-swift.test.ts); it's checked against the pin all the same.
-    case "$(uname -m)" in
-      arm64) rust_target=aarch64-apple-darwin ;;
-      x86_64) rust_target=x86_64-apple-darwin ;;
-      *) echo "No pinned Rust installer for a $(uname -m) Mac." >&2; exit 1 ;;
-    esac
-    pin="$(git -C "$CHECKOUT" show refs/heads/main:desktop/scripts/rustup-init.pins 2>/dev/null | awk -v t="$rust_target" '$2 == t { print $1, $3; exit }' || true)"
-    rustup_version="${pin%% *}" rustup_sha="${pin##* }"
-    [[ "$rustup_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$rustup_sha" =~ ^[0-9a-f]{64}$ ]] || { echo "main's desktop/scripts/rustup-init.pins has no pinned installer for $rust_target, so Rust wasn't installed." >&2; exit 1; }
-    channel="$(git -C "$CHECKOUT" show refs/heads/main:rust-toolchain.toml 2>/dev/null | sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' | head -1 || true)"
-    [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "main's rust-toolchain.toml doesn't pin an exact Rust (channel = \"1.x.y\"), so Rust wasn't installed." >&2; exit 1; }
-    if [[ -n "${THREADBEAR_SWITCH_RUSTUP_INIT:-}" ]]; then
-      cp "$THREADBEAR_SWITCH_RUSTUP_INIT" "$work/rustup-init"
-    else
-      curl --proto '=https' --tlsv1.2 -sSfL "https://static.rust-lang.org/rustup/archive/$rustup_version/$rust_target/rustup-init" -o "$work/rustup-init"
-    fi
-    got_sha="$(/usr/bin/shasum -a 256 "$work/rustup-init" | awk '{ print $1 }')"
-    if [[ "$got_sha" != "$rustup_sha" ]]; then
-      rm -f "$work/rustup-init"
-      echo "The Rust installer downloaded (rustup $rustup_version for $rust_target) isn't the one main pins (SHA-256 $got_sha, not $rustup_sha), so it wasn't run." >&2
-      exit 1
-    fi
-    chmod +x "$work/rustup-init"
-    "$work/rustup-init" -y --profile minimal --no-modify-path --default-toolchain "$channel"
-    command -v rustup >/dev/null || { echo "Rust installed, but rustup isn't in ~/.cargo/bin." >&2; exit 1; }
-  fi
-
   echo "STEP Building the new app (a first build takes 20 to 40 minutes, its later updates far less)"
   from_main stage-update.sh
   "$work/stage-update.sh" "$CHECKOUT" --next "$work/Threadbear GPUI.app" || build_failed "$?"

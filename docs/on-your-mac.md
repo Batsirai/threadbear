@@ -73,20 +73,20 @@ File references are where to look.
   Swift app's Start using the new app starts; that thread is an agent on
   your own login, so it uses your Claude or Codex tokens like any other
   thread): the new app is built on your Mac from your checkout's `main` with the
-  exact Rust `rust-toolchain.toml` pins, so if there's no `rustup` (even
-  with Homebrew's `rust`) it installs Rust first, with rustup's own
-  installer, `rustup-init`, downloaded from `https://static.rust-lang.org`
-  at the version `desktop/scripts/rustup-init.pins` names and run only if
-  its SHA-256 matches the one pinned there, and the build runs that Rust
-  only once its parts match the SHA-256s in `desktop/scripts/rust-toolchain.pins`
-  (the minimal profile, about 1 GB with the crates
-  the build fetches, in `~/.rustup` and `~/.cargo`; it doesn't touch your
+  exact Rust `rust-toolchain.toml` pins, fetched by the build itself
+  (`desktop/scripts/pinned-cargo.sh`): its three parts (rustc, cargo and
+  the standard library) are downloaded once from `https://static.rust-lang.org`
+  and unpacked only if each one's SHA-256 matches
+  `desktop/scripts/rust-toolchain.pins`, into
+  `~/Library/Caches/Threadbear/rust` (about 1 GB). It never installs or
+  uses rustup, and doesn't touch `~/.cargo`, `~/.rustup` or your
   shell's startup files). The build runs at background priority, takes
   20 to 40 minutes the first time (31 on a test Mac with no Rust, 15 Nov
   2026), and keeps about 2.3 GB in
   `~/Library/Caches/Threadbear/update-desktop`, which its updates reuse. It
   checks there's room for all that before it starts. Its
-  output is in setup's terminal, or that thread. `rustup self uninstall` takes Rust off again.
+  output is in setup's terminal, or that thread. Deleting
+  `~/Library/Caches/Threadbear/rust` takes that Rust off again.
 - **The GPUI app's web runtime, only if you install it** (its Install web
   runtime button, or Settings > General > Web runtime; nothing is fetched
   until you press one): Chromium, as CEF's official minimal build 156.0.26,

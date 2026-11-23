@@ -53,15 +53,10 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$CHECKOUT" && ( -d "$CHECKOUT/.git" || -f "$CHECKOUT/.git" ) ]] || { echo "No checkout to build from (give the repo's path)." >&2; exit 2; }
 
-# Started from the app, PATH is the bare system one: git, ssh, rsync and
-# codesign are in /usr/bin, and cargo, for a build here, in ~/.cargo/bin
-# (rustup's own install) or, failing that, Homebrew's bin: a Homebrew rust
-# failed every update build with "cargo: command not found" (Ville, 20 Nov).
-# Homebrew's bin goes on only when neither is found, so it never shadows a
-# rustup (or a test's own cargo).
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.cargo/bin:$PATH"
-command -v cargo >/dev/null || command -v rustup >/dev/null ||
-  export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+# Started from the app, PATH is the bare system one: git, ssh, rsync, curl
+# and codesign are in /usr/bin. A build here needs no Rust of the Mac's
+# own: pinned-cargo.sh fetches the pinned one.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 CACHE="$HOME/Library/Caches/Threadbear/update-desktop"
 SRC="$CACHE/src"
 LOCK="$CACHE/lock"
@@ -198,7 +193,7 @@ if [[ -n "$HOSTS" ]]; then
     # (remote.sh --build), asked for by environment as TRY is.
     # BUILD_STARTED is the host's first word once the run has its turn.
     : >"$out"
-    THREADBEAR_REMOTE_BUILD=1 THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; echo BUILD_STARTED; cd desktop && nice cargo build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 &
+    THREADBEAR_REMOTE_BUILD=1 THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; echo BUILD_STARTED; cd desktop && nice ./scripts/pinned-cargo.sh build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 &
     REMOTE_PID=$!
     watch_phase "$1" "$2" &
     WATCH_PID=$!
@@ -262,54 +257,12 @@ elif [[ -n "$CHECK_HOSTS" ]]; then
 else
   echo "No update build hosts or check hosts in $CONFIG: building here."
   BUILT_ON=""
-  # The exact Rust rust-toolchain.toml pins in the main being built, which
-  # desktop.yml and the check hosts build and test with too, never rustup's
-  # stable: that's whatever Rust's servers call stable today, and the
-  # compiler writes the app this Mac runs next (Daybreak 173, 23 Nov 2026).
-  # A file that doesn't name an exact version (1.x.y) builds nothing. Through
-  # rustup when there is one: it fetches that version the first time, and
-  # one it can't fetch (offline) builds nothing, rather than with whatever
-  # Rust is to hand. Without rustup (Homebrew's rust), the cargo on PATH,
-  # which this Mac already had: nothing is downloaded to build with.
-  channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$SRC/rust-toolchain.toml" 2>/dev/null | head -1 || true)"
-  [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Main's rust-toolchain.toml doesn't pin an exact Rust (channel = \"1.x.y\"; it says \"${channel:-nothing}\"), so nothing was built." >&2; exit 1; }
-  # And that toolchain's parts are checked against the SHA-256s main pins
-  # for them (desktop/scripts/rust-toolchain.pins) before any of it runs:
-  # rustup checked what it downloaded against the manifest it got and kept
-  # that manifest in the toolchain, so its hashes being the pinned ones
-  # means the compiler is the one main reviewed, not just one with its
-  # version number.
-  cargo=(cargo)
-  if command -v rustup >/dev/null; then
-    case "$(uname -m)" in
-      arm64 | aarch64) rust_host=aarch64-apple-darwin ;;
-      x86_64) rust_host=x86_64-apple-darwin ;;
-      *) rust_host="" ;;
-    esac
-    toolchain="${RUSTUP_HOME:-$HOME/.rustup}/toolchains/$channel-$rust_host"
-    rustup toolchain install "$channel" --profile minimal --no-self-update >/dev/null 2>&1 || true
-    if [[ -z "$rust_host" || ! -f "$toolchain/lib/rustlib/multirust-channel-manifest.toml" ]]; then
-      echo "Couldn't get Rust $channel, the version rust-toolchain.toml pins (rustup toolchain install $channel), so nothing was built; the app tries again later." >&2
-      exit 1
-    fi
-    if ! /usr/bin/awk -v ch="$channel" -v host="$rust_host" '
-      FNR == NR { if ($0 !~ /^#/ && NF == 5 && $1 == ch && $2 == host) want[$3] = $4 " " $5; next }
-      /^\[/ { sec = $0; next }
-      { for (p in want) if (sec == "[pkg." p ".target." host "]") { v = $3; gsub(/"/, "", v); if ($1 == "hash") h[p] = v; if ($1 == "xz_hash") x[p] = v } }
-      END {
-        if (!("rustc" in want) || !("cargo" in want) || !("rust-std" in want)) exit 2
-        for (p in want) if (h[p] " " x[p] != want[p]) exit 1
-      }' "$SRC/desktop/scripts/rust-toolchain.pins" "$toolchain/lib/rustlib/multirust-channel-manifest.toml"; then
-      echo "Rust $channel in $toolchain isn't the one main pins (desktop/scripts/rust-toolchain.pins: its rustc, cargo and rust-std hashes for $rust_host), so nothing was built. If you installed it yourself from elsewhere, rustup toolchain uninstall $channel and the next update fetches it again." >&2
-      exit 1
-    fi
-    cargo=(rustup run "$channel" cargo)
-  fi
-  (cd "$SRC/desktop" && CARGO_TARGET_DIR="$CACHE/target" CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10 "${cargo[@]}" build --release -p threadbear-gpui --features "$FEATURES") || {
-    rc=$?
-    [[ "${cargo[0]}" == rustup ]] || echo "The build failed with $(cargo --version 2>/dev/null || echo "this Mac's cargo"). Threadbear is built and tested on Rust $channel (rust-toolchain.toml): rustup (https://rustup.rs) fetches that one, and this build uses it when it's there." >&2
-    exit "$rc"
-  }
+  # With exactly the Rust main pins (rust-toolchain.toml's version, each
+  # part checked against desktop/scripts/rust-toolchain.pins before it's
+  # unpacked), through main's pinned-cargo.sh: never rustup's stable, a
+  # toolchain rustup fetched, or whatever cargo is on PATH. The compiler
+  # writes the app this Mac runs next (Daybreak 173, 23 Nov 2026).
+  (cd "$SRC/desktop" && CARGO_TARGET_DIR="$CACHE/target" CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10 "$SRC/desktop/scripts/pinned-cargo.sh" build --release -p threadbear-gpui --features "$FEATURES")
   cp "$CACHE/target/release/threadbear-gpui" "$CACHE/target/release/threadbear-web-helper" "$BINS/"
 fi
 
