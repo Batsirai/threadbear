@@ -501,9 +501,12 @@ has to be on for it.
 - **Making one.** `boxes:setRunnerService({ key, serviceId?, name,
   provider, image?, box: { cpus, memoryMb }, region?, limits? })` makes
   one, or changes one (its provider can't change), and returns its id;
-  an image left out is as it was, or else `defaultBoxImage`
-  (`registry.fly.io/<FLY_APP>:latest`, the box image below, private to
-  the boxes' Fly app; with no `FLY_APP`, an image must be given), and limits left out are `BOX_LIMITS` (`maxBoxes` 5, `idleSleepMinutes` 10,
+  an image given must be pinned by digest (`<registry>/<name>@sha256:<64
+  hex>`; a tag is refused), and one left out is as it was, or else
+  `defaultBoxImage`, following main: the row keeps
+  `registry.fly.io/<FLY_APP>:latest`, and each new box boots the digest
+  main's box-image workflow last promoted (`convex/boxImage.ts`), never
+  the tag (with no `FLY_APP`, an image must be given), and limits left out are `BOX_LIMITS` (`maxBoxes` 5, `idleSleepMinutes` 10,
   `maxAwakeHoursPerDay` 8, `deleteAfterDays` 14) or as they were. A Fly
   box is 2048 MB at most, the most Fly can pause, and every box 1024 MB at
   least (`MIN_BOX_MB`), so a box can restore any save another took.

@@ -282,6 +282,17 @@ export const appSchema = defineSchema({
     box: v.optional(v.object({ serviceId: v.id('runnerServices') })),
   }).index('by_runnerId', ['runnerId']),
 
+  // The box image main's workflow last promoted for a Fly app, by digest:
+  // what a virtual runner that follows main boots (boxImage.ts). One row an app.
+  boxImages: defineTable({
+    app: v.string(),
+    image: v.string(),
+    // The main commit the workflow ran on, from its OIDC token.
+    commit: v.string(),
+    // That token's iat (seconds): promotions only go forward.
+    issuedAt: v.number(),
+    promotedAt: v.number(),
+  }).index('by_app', ['app']),
   // Virtual runners (docs/virtual-runners.md, decision 2): one row each, a
   // service that starts a box per thread on a provider as needed.
   runnerServices: defineTable({
@@ -289,7 +300,9 @@ export const appSchema = defineSchema({
     // Which adapter (convex/boxProviders/<provider>.ts, boxService.ts PROVIDERS): 'fly'.
     provider: v.string(),
     box: v.object({ cpus: v.number(), memoryMb: v.number() }),
-    // The OCI image every box starts from (the runner in box mode).
+    // The OCI image every box starts from (the runner in box mode), pinned
+    // by digest, or registry.fly.io/<FLY_APP>:latest for one that follows
+    // main: its boxes boot the digest promoted then (boxImage.ts), never the tag.
     image: v.string(),
     region: v.optional(v.string()),
     // Defaults in BOX_LIMITS (boxes.ts): 5 boxes awake at once, sleep after

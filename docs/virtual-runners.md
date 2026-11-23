@@ -887,11 +887,29 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
   `registry.fly.io/<FLY_APP>:<commit>`, then `:latest` once the runner's
   typecheck and unit tests pass on that commit (the workflow runs them
   beside the build; until 23 Nov a main failing them still became
-  `:latest`), and only forward, so a re-run of an older run leaves it, and `setRunnerService` makes a virtual runner with `:latest`
-  when it names no image (`defaultBoxImage`). A new box is ten minutes or
+  `:latest`), and only forward, so a re-run of an older run leaves it.
+- **Booted by digest, never by tag** (Daybreak 171, 23 Nov;
+  `convex/boxImage.ts`). A box's image gets its boot token, which trades
+  for the login's Claude token and the thread's key, and a tag is only a
+  name anyone who can push to the app's registry can move. So with
+  `:latest` the workflow also promotes the image to the backend by the
+  digest its own push reported (`POST /box-image/promote`), with the job's
+  GitHub OIDC token for the deployment's `CONVEX_SITE_URL` (the repo
+  variable `BOX_PROMOTE_URL`); the backend takes one only from
+  `box-image.yml` on main in the repo `BOX_IMAGE_REPO` names, and only
+  newer than the last. No shared secret: `FLY_BOX_IMAGE_TOKEN`, which
+  pushes images, can't promote one, so a stolen push token or a moved tag
+  reaches no box; a change to main's workflow, or GitHub itself, still
+  could. `setRunnerService` makes a virtual runner that follows main when
+  it names no image (`defaultBoxImage`; its row keeps
+  `registry.fly.io/<FLY_APP>:latest` as the sign for that), and each new
+  box of it boots the digest promoted when the box is claimed; with none
+  promoted, the box fails, saying so, and nothing is made. An image given
+  must be a digest (`registry.fly.io/<app>@sha256:...`), and a row left with
+  any other tag makes no box. The Fly adapter refuses a tag too. A new box is ten minutes or
   so behind main while the image builds and the tests run; the runner and backend stay compatible both ways,
-  as for any runner. A release tag publishes `:release-<date>` too, for a
-  virtual runner pinned to a release. A fork's push builds its own, into its
+  as for any runner. A release tag publishes `:release-<date>` too: a
+  virtual runner pinned to a release names that image's digest. A fork's push builds its own, into its
   own Fly app (docs/forking.md).
 - **Private, in the boxes' own Fly app** (Mike, 19 Nov). The image holds
   Claude Code, which isn't open source, so publishing it would
