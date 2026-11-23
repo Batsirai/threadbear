@@ -143,9 +143,21 @@ function shareSkills(mainDir: string, loginDir: string, report: ShareReport): vo
 export function shareCodexHome(mainDir: string, loginDir: string, stamp = new Date().toISOString().slice(0, 10)): ShareReport {
   const report: ShareReport = { changes: [], skipped: [] };
   if (!fs.existsSync(mainDir) || !fs.existsSync(loginDir) || sameHome(mainDir, loginDir)) return report;
-  for (const name of FILES) linkTo(path.join(mainDir, name), path.join(loginDir, name), report);
-  shareConfig(mainDir, loginDir, report, stamp);
-  shareSkills(mainDir, loginDir, report);
+  // Each step on its own: two threads starting on one login at once race
+  // here (one's link or rename finds the other's done), and a step that
+  // fails leaves the rest to do theirs.
+  const steps = [
+    ...FILES.map((name) => () => linkTo(path.join(mainDir, name), path.join(loginDir, name), report)),
+    () => shareConfig(mainDir, loginDir, report, stamp),
+    () => shareSkills(mainDir, loginDir, report),
+  ];
+  for (const step of steps) {
+    try {
+      step();
+    } catch (e) {
+      report.skipped.push((e as Error).message);
+    }
+  }
   return report;
 }
 
