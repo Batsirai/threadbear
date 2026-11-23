@@ -206,6 +206,8 @@ export type RelayRow = {
   pictures?: number;
   // The asks a user's message answered (API 89).
   answers?: AskAnswer[];
+  // Why the runner sent its own message (API 98): its note's header.
+  wakeReason?: string;
   at: string;
 };
 export type RowButton = { id: string; title: string; kind: 'start' | 'send'; target?: string; pressedThreadId?: string; failed?: string };
@@ -433,14 +435,18 @@ export function relayEvents(threadId: string, rows: RelayRow[], row: RelayThread
     const prev = sorted[i - 1];
     const next = sorted[i + 1];
     const base = r.seq * SCALE;
+    // The runner's own message goes before the turn it starts, as on that
+    // runner (startTurn): the Mac reads its wake reason for the turn's
+    // divider when the turn starts, and drew a bare "Moments later" (23 Nov).
+    const runnerFirst = r.role === 'user' && r.origin === 'runner';
     if (r.turn && (prev ? prev.turn !== r.turn : !olderMore)) {
-      out.push(env(base, r, { type: 'turn.started', turnId: r.turn, ...(r.wokeBy ? { wokeBy: r.wokeBy } : {}) }));
+      out.push(env(runnerFirst ? base + 2 : base, r, { type: 'turn.started', turnId: r.turn, ...(r.wokeBy ? { wokeBy: r.wokeBy } : {}) }));
     }
     if (r.turn && !turnStart.has(r.turn)) turnStart.set(r.turn, r.at);
     if (r.role === 'user') {
       // Without the pictures read (an older backend), as that runner's words alone.
       const { text, images } = pictures ? messageWithPictures(threadId, r, pictures.get(r.seq)) : { text: r.text, images: [] };
-      out.push(env(base + 1, r, { type: 'user.message', text, images, ...(r.answers?.length ? { answers: r.answers.map((a) => ({ action: a.action, answer: a.answer })) } : {}), ...(r.origin === 'phone' || r.origin === 'runner' || r.origin === 'schedule' ? { origin: r.origin } : {}) }));
+      out.push(env(base + 1, r, { type: 'user.message', text, images, ...(r.answers?.length ? { answers: r.answers.map((a) => ({ action: a.action, answer: a.answer })) } : {}), ...(r.origin === 'phone' || r.origin === 'runner' || r.origin === 'schedule' ? { origin: r.origin } : {}), ...(r.origin === 'runner' && r.wakeReason ? { wakeReason: r.wakeReason } : {}) }));
     } else if (r.role === 'assistant' && r.plan) {
       // A Plan first plan: its card, as that runner's own Mac draws it. As a
       // reply it folded into the turn's work and nothing showed (12 Nov).

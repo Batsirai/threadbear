@@ -474,4 +474,10 @@
 //    login a pool of several kinds starts its threads on, as the Mac's
 //    picker had it. A runner sends it only to a backend of 97 or later; an
 //    older runner starts the thread on the model's kind.
-export const API_VERSION = 97;
+// 98: a runner's own message row (origin "runner") can carry `wakeReason`,
+//    why it sent it in a few words ("Codex answered"), and phone:messages,
+//    relay:remoteTail and relay:remoteMessages pass it on, so the phones,
+//    the website and another Mac head its quiet note as the Mac does ("Sent
+//    by the runner: codex answered"). A runner sends it only to a backend of
+//    98 or later.
+export const API_VERSION = 98;

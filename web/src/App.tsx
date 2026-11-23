@@ -26,7 +26,7 @@ import { Rail } from './rail';
 // Loaded only when it's opened: the viewer's diagrams are most of its size.
 const MachinesPage = lazy(() => import('./machines'));
 import { NewThread, ProjectPage, ProjectsList, RunnerPage, RunnersList, ScheduledList, SchedulePage, UsageList, UsagePage } from './pages';
-import { duration, fold, isNote, splitTurns, type Item } from './turns';
+import { duration, fold, gapLabel, isNote, splitTurns, type Item } from './turns';
 import { folderName, sender } from './format';
 import * as Icon from './icons';
 import { ReviewRow } from './review-row';
@@ -264,6 +264,15 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
         <div key={item.items[0]!.seq}>
           <ToolRun items={item.items} source={{ token, threadId }} />
           <Pictures items={item.items.flatMap((m) => after.get(m.seq) ?? [])} />
+        </div>
+      );
+    }
+    if (item.kind === 'gap') {
+      // "5 min later · Codex answered": the wait before a turn the agent woke
+      // up for, or the runner's own message started, as the Mac draws it.
+      return (
+        <div key={`g${item.gap.seq}`} className="turn-gap">
+          <span>{gapLabel(item.gap)}</span>
         </div>
       );
     }

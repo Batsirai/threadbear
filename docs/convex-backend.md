@@ -264,7 +264,11 @@ Queries:
   card's asks carries `answers` (API 89), `[{ action, answer }]`: each ask's
   question and the pick, which its text starts with as the Mac wrote them
   (`AskAnswer.message`), so the iPhone draws the question small over the
-  answer, as the Mac's bubble does. It reads Convex alone, so it works
+  answer, as the Mac's bubble does. A message the runner sent by itself
+  (`origin: "runner"`) carries `wakeReason` (API 98), why it sent it in a
+  few words ("Codex answered"), so the phones and the website say it on
+  the divider before the turn it started ("5 min later · Codex
+  answered"), as the Mac does. It reads Convex alone, so it works
   while the Mac is asleep. The website watches only the newest 30 with it and
   reads older pages once, with `beforeSeq` (`web/src/transcript.ts`). The
   iPhone does the same with an 80-row live page and chunks of 200

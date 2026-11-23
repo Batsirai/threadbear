@@ -72,11 +72,11 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 | Card of asks under a finished turn | `row.asks` | Yes | Yes | Yes |
 | A turn's work folded into one line | `row.group` | Yes | Yes | Yes |
 | Working indicator | `row.working` | Yes | Yes | Yes |
+| "6 min later" divider before a woken turn | `row.gap` | Yes | Yes | Yes |
 | Plan first card, waiting for approval | `row.planCard` | Yes | Yes | Yes |
 | Another lab's review of the turn | `row.labReview` | Yes | Yes | Yes |
 | A failed turn's error | `row.error` | Yes | No: Not drawn yet. | Yes |
 | Background jobs still going | `row.background` | Yes | Yes | No: Not drawn yet. |
-| "6 min later" divider before a woken turn | `row.gap` | Yes | Yes | No: Not drawn yet. |
 | Thinking | `row.reasoning` | No: Not drawn yet. | No: Not drawn yet. | Yes |
 | An edit's diff | `row.diff` | No: Not drawn yet. | No: Not drawn yet. | Yes |
 | A tool's pictures | `row.images` | No: Not drawn yet. | No: Not drawn yet. | Yes |
@@ -99,12 +99,12 @@ pasted (`Desktop only for now.` for all three) is left out of this table.
 |---|---|---|---|---|
 | Pictures sent with a message | `message.images` | Yes | Yes | Yes |
 | Who sent a message (see the origin rows) | `message.origin` | Yes | Yes | Yes |
+| Why the runner sent its message, on the divider before the turn it started | `message.wakeReason` | Yes | Yes | Yes |
 | The turn's summary reply, with the rest folded | `message.summary` | Yes | Yes | Yes |
 | The user's answer to a design review | `message.reviewId` | Yes | Yes | No: Not drawn yet. |
 | A design review answer's picks and notes | `message.reviewResponse` | Yes | Yes | No: Not drawn yet. |
 | The user's answers to a card, each under its question | `message.answers` | Yes | No: Not drawn yet. | No: Not drawn yet. |
 | A summary that gives way to a longer reply | `message.givesWay` | No: Not drawn yet. | Yes | No: Not drawn yet. |
-| Why the runner sent its message | `message.wakeReason` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
 | An edited message | `message.editOf` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
 | Narration (a paraphrase of what the agent wrote) | `message.narration` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |
 | One reply's reply | `message.final` | No: Not drawn yet. | No: Not drawn yet. | No: Not drawn yet. |

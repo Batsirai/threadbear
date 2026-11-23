@@ -749,6 +749,9 @@ export const appSchema = defineSchema({
     // The open card's asks a user's message answered, each its question and
     // the pick (since API 89), so the phone draws them as answers, as the Mac does.
     answers: v.optional(v.array(v.object({ action: v.string(), answer: v.string() }))),
+    // Why the runner sent its own message (origin "runner"), a few words
+    // (since API 98): the header of its quiet note, as the Mac draws it.
+    wakeReason: v.optional(v.string()),
     at: v.string(),
     pagedAt: v.optional(v.number()),
     // The runner key's runner that wrote it, so past its message budget its

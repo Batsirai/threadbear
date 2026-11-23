@@ -184,6 +184,14 @@ only way the app opens another runner's thread.
   old runner's card has those; any more files are named in the result. The app fills
   the row in by `itemId`. Withheld, the result says why. Otherwise the stub stands.
   Reasoning, sub-agents and tools' pictures stay on that runner from here.
+- **Wake reasons in messages** (backend API 98). A runner's own message
+  row (`origin: "runner"`) from a `user.message` with `wakeReason` carries
+  it, scrubbed as the text is and cut to 200 characters, and `remoteTail`
+  and `remoteMessages` pass it on, so the relay's event has it and another
+  Mac's divider before the turn it started says it ("Moments later · Codex
+  answered") rather than the bare wait. The relay puts that message before
+  its turn's `turn.started`, as its own runner wrote them. A runner sends
+  it only to a backend of 98 or later.
 - **Answers in messages** (backend API 89). A user's message row from a
   `user.message` with `answers` carries them (`[{ action, answer }]`, scrubbed
   as the text is), and `remoteTail` and `remoteMessages` pass them on, so the

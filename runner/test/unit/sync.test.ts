@@ -14,7 +14,7 @@ import { loadConfig, paths, readRunnerJson } from '../../src/config.ts';
 import { downgradeFetch, redirectTrap } from '../helpers/redirect-trap.ts';
 import { scrubText } from '../../src/redaction.ts';
 import { Scrubber } from '../../src/scrub.ts';
-import { SCRUB_API_VERSION, isConvexCloud, MESSAGE_PICTURES_API_VERSION, LOGIN_STATE_API_VERSION } from '../../src/sync.ts';
+import { SCRUB_API_VERSION, isConvexCloud, MESSAGE_PICTURES_API_VERSION, MESSAGE_WAKE_REASON_API_VERSION, LOGIN_STATE_API_VERSION } from '../../src/sync.ts';
 import { makePng } from '../helpers/png.ts';
 import { ConvexUseTally } from '../../src/convex-use.ts';
 
@@ -984,6 +984,24 @@ test("answers: a message that answered asks says them on its row, scrubbed as it
   assert.equal(leak.answers, undefined);
   // The pictures line after them is fine.
   assert.ok(toMessageDoc('t1', { type: 'user.message', seq: 7, ts: at, text: 'Ok?\nYes', images: [{ path: '/p.png', mediaType: 'image/png' }], answers: [{ action: 'Ok?', answer: 'Yes' }] } as never)!.answers);
+});
+
+// A runner's own message says why it sent it (the Mac's quiet note, "Sent by
+// the runner: codex answered"), which never reached Convex: the phones, the
+// website and another Mac drew nothing or "Moments later" for a For everyone
+// lead's member answer (nightly parity run, 23 Nov).
+test("wakeReason: a runner's message row says why it sent it, scrubbed and short", () => {
+  const at = '2026-11-23T00:00:00.000Z';
+  const scrub = (t: string) => t.replace('sk-secret', '[key]');
+  const sent = (origin: string | undefined, wakeReason: string) => toMessageDoc('t1', { type: 'user.message', seq: 4, ts: at, text: 'For everyone: Codex answered.', images: [], ...(origin ? { origin } : {}), wakeReason } as never, scrub)!;
+  assert.equal(sent('runner', 'Codex answered').wakeReason, 'Codex answered');
+  assert.equal(sent('runner', 'Hook sk-secret passed').wakeReason, 'Hook [key] passed');
+  assert.equal(sent('runner', `  ${'x'.repeat(500)}  `).wakeReason!.length, 200);
+  assert.equal(sent('runner', '   ').wakeReason, undefined);
+  // Only the runner's own messages have one.
+  assert.equal(sent('phone', 'Codex answered').wakeReason, undefined);
+  assert.equal(sent(undefined, 'Codex answered').wakeReason, undefined);
+  assert.equal(toMessageDoc('t1', { type: 'user.message', seq: 5, ts: at, text: 'hi', images: [], origin: 'runner' } as never)!.wakeReason, undefined);
 });
 
 test('plans: a Plan first plan goes to the phone whole, as a plan row', () => {
@@ -4353,6 +4371,25 @@ test('a message row says how many pictures it came with, and goes with it from A
     await tick();
     const first = rows().find((m) => m.threadId === t.id && m.role === 'user')!;
     assert.equal(first.pictures, says ? 1 : undefined, `backend ${backend}`);
+    await f.sync.stop();
+  }
+});
+
+test("a runner's message row goes with its wakeReason only from API 98", async () => {
+  for (const [backend, says] of [[MESSAGE_WAKE_REASON_API_VERSION, true], [MESSAGE_WAKE_REASON_API_VERSION - 1, false]] as const) {
+    const f = setupFull({ apiVersion: backend });
+    const rows = () => f.calls.filter((c) => c.fn === 'sync:appendMessages').flatMap((c) => c.args.messages as MessageDoc[]);
+    f.sync.start();
+    await f.sync.flushNow();
+    const t = f.h.runner.create({ text: 'go', cwd: f.h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+    f.h.adapter.last.init();
+    f.h.adapter.last.result();
+    f.h.runner.send(t.id, 'For everyone: Codex answered.', [], { origin: 'runner', wakeReason: 'Codex answered' });
+    f.h.clock.advance(SYNC_COALESCE_MS);
+    await tick();
+    const note = rows().find((m) => m.threadId === t.id && m.origin === 'runner')!;
+    assert.ok(note, `backend ${backend}: the runner's message went`);
+    assert.equal(note.wakeReason, says ? 'Codex answered' : undefined, `backend ${backend}`);
     await f.sync.stop();
   }
 });

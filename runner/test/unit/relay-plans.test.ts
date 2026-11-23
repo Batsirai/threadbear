@@ -97,3 +97,20 @@ test('in a run of plans each but the newest was sent back', () => {
   const waiting = relayEvents(T, [start, ...plans], idle, [], false, 'mac-mini').filter((e) => e.type === 'plan.resolved');
   assert.equal(waiting.some((e) => e.itemId === `relay-${plans.at(-1)!.seq}`), false);
 });
+
+// A runner's message says why it sent it (API 98), so another Mac's note
+// reads "Sent by the runner: codex answered" as that runner's own Mac does,
+// not a bare gap (nightly parity run, 23 Nov).
+test("a runner's message keeps its wake reason; one without, or anyone else's, has none", () => {
+  const rows: RelayRow[] = [start, { seq: 6, role: 'user', text: 'For everyone: Codex answered.', origin: 'runner', wakeReason: 'Codex answered', turn: 'bbbb2222', at: at(5) }, { seq: 8, role: 'user', text: 'Carry on.', origin: 'runner', turn: 'cccc3333', at: at(9) }];
+  const ev = relayEvents(T, rows, idle, [], false, 'mac-mini');
+  const msgs = ev.filter((e) => e.type === 'user.message');
+  assert.deepEqual(msgs.map((e) => [e.origin, e.wakeReason]), [[undefined, undefined], ['runner', 'Codex answered'], ['runner', undefined]]);
+  // It comes before the turn it started, as on its own runner, so the Mac
+  // has the reason when the turn's divider is drawn.
+  const order = ev.filter((e) => e.turnId === 'bbbb2222').map((e) => e.type);
+  assert.deepEqual(order.slice(0, 2), ['user.message', 'turn.started']);
+  assert.deepEqual(ev.filter((e) => e.turnId === 'aaaa1111').map((e) => e.type).slice(0, 2), ['turn.started', 'user.message'], "Mike's message still after its turn's start");
+  const phone = relayEvents(T, [{ ...start, origin: 'phone', wakeReason: 'nope' }], idle, [], false, 'mac-mini').find((e) => e.type === 'user.message')!;
+  assert.equal(phone.wakeReason, undefined);
+});

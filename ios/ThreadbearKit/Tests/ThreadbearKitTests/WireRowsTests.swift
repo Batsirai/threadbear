@@ -188,6 +188,7 @@ import Testing
         var f: [String: JSONValue] = [
             "seq": n(m.seq), "role": .string(m.role.rawValue), "text": .string(m.text), "origin": s(m.origin), "toolKind": s(m.toolKind),
             "summary": .bool(m.summary), "plan": .bool(m.plan), "turn": s(m.turn), "at": ms(m.at),
+            "wakeReason": s(m.wakeReason),
         ]
         put(&f, "wokeBy", list(m.wokeBy) { (w: WokeTask) -> [String: JSONValue] in ["kind": .string(w.kind), "description": .string(w.description)] })
         put(&f, "buttons", list(m.buttons) { (x: MessageButton) -> [String: JSONValue] in

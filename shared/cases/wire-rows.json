@@ -1160,6 +1160,25 @@
       }
     },
     {
+      "name": "message row: why the runner sent its own message (API 98)",
+      "input": {
+        "kind": "message",
+        "row": {
+          "seq": 18,
+          "role": "user",
+          "text": "For everyone: Codex answered.",
+          "origin": "runner",
+          "wakeReason": "Codex answered",
+          "turn": "bbbb2222",
+          "at": "2026-11-20T01:00:00.000Z"
+        }
+      },
+      "expect": {
+        "origin": "runner",
+        "wakeReason": "Codex answered"
+      }
+    },
+    {
       "name": "message row: a login's note (API 79)",
       "input": {
         "kind": "message",

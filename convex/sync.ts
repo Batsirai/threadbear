@@ -717,6 +717,9 @@ function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
   for (const f of ['origin', 'toolKind']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 100);
   if (Array.isArray(out.wokeBy)) out.wokeBy = out.wokeBy.slice(0, 5).map((w: any) => ({ kind: cutBytes(String(w?.kind ?? ''), 40), description: cutBytes(String(w?.description ?? ''), 200) }));
   if (Array.isArray(out.buttons)) out.buttons = out.buttons.slice(0, MESSAGE_BUTTONS).map((b: any) => fitButton(b));
+  // Only the runner's own message says why it sent it, in a few words.
+  if (out.role !== 'user' || out.origin !== 'runner' || typeof out.wakeReason !== 'string' || !out.wakeReason.trim()) delete out.wakeReason;
+  else out.wakeReason = cutBytes(out.wakeReason.trim(), 200);
   // Only a user's message answers asks; a card has at most a handful.
   const cap = plan ? CAP.planDoc : CAP.messageDoc;
   // They repeat the start of the text, so they're what goes when the row
@@ -1771,6 +1774,7 @@ const messageDoc = v.object({
   buttons: v.optional(v.array(messageButton)), // API 59
   pictures: v.optional(v.number()), // API 87: how many pictures a user's message came with
   answers: v.optional(v.array(v.object({ action: v.string(), answer: v.string() }))), // API 89: the asks a user's message answered
+  wakeReason: v.optional(v.string()), // API 98: why the runner sent its own message
   at: v.string(),
   pagedAt: v.optional(v.number()), // an old phone asked for it (loadEarlier): phone:thread shows it for a day
 });

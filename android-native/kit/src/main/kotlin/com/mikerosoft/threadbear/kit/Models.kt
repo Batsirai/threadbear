@@ -391,6 +391,8 @@ data class PhoneMessage(
     val at: Instant,
     /** A Plan first plan in full (backend API 72): drawn as a plan card, never folded into the turn's working. */
     val plan: Boolean = false,
+    /** Why the runner sent its own message, in a few words (backend API 98): "Codex answered". */
+    val wakeReason: String? = null,
 ) {
     companion object {
         fun read(o: JsonObject): PhoneMessage = PhoneMessage(
@@ -414,6 +416,7 @@ data class PhoneMessage(
             },
             at = o.needDate("at"),
             plan = o.bool("plan") ?: false,
+            wakeReason = o.str("wakeReason"),
         )
     }
 }

@@ -90,6 +90,8 @@ export const MESSAGE_BATCH = 100;
 export const MESSAGE_CHARS = 8000;
 // A login's note (role "note") is a sentence or two of the runner's.
 const NOTE_CHARS = 500;
+// A runner's wake reason (`wakeReason`) is a few words: its note's header.
+const WAKE_REASON_CHARS = 200;
 // A plan gets more room: it's read whole on the phone before Go ahead, and
 // one cut at 8,000 would hide the steps at the end that it approves.
 export const PLAN_CHARS = 24_000;
@@ -159,7 +161,7 @@ export type SyncConfig = {
 // lower one means its backend hasn't been deployed since this runner was:
 // said in runner.status, tb status and the log rather than stopping, since
 // the runner only adds to what it sends while the number stays the same.
-export const BACKEND_API_VERSION = 97;
+export const BACKEND_API_VERSION = 98;
 // From this one sync:removeThreads takes the runner's id and leaves a row
 // that's another runner's alone (a thread moved away), whatever the key.
 export const REMOVE_OWN_ROWS_API_VERSION = 92;
@@ -191,6 +193,10 @@ export const MESSAGE_PICTURES_API_VERSION = 87;
 // From this one a user's message row carries the asks it answered
 // (`answers`), so the phone draws them as answers, as the Mac does.
 export const MESSAGE_ANSWERS_API_VERSION = 89;
+// From this one a runner's own message row says why it sent it
+// (`wakeReason`), so the phones, the website and another Mac head its note
+// as this Mac does ("Sent by the runner: codex answered").
+export const MESSAGE_WAKE_REASON_API_VERSION = 98;
 // From this one an accounts row carries a Claude login's sign-in
 // (loginEndsAt, signedOut, yearToken's madeAt), for the Mac's Runners panel,
 // and a `call` can be accounts.yearToken.
@@ -529,7 +535,7 @@ export type PhoneAsk = { action: string; why?: string; reply?: string; options?:
 // A text message, or one line for a tool call (role "tool", since backend
 // API 2): what the phone and the website show of a thread.
 export type WokeByDoc = { kind: string; description: string };
-export type MessageDoc = { threadId: string; seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: true; plan?: true; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: WokeByDoc[]; buttons?: MessageButton[]; pictures?: number; answers?: AskAnswer[]; at: string; pagedAt?: number };
+export type MessageDoc = { threadId: string; seq: number; role: 'user' | 'assistant' | 'tool' | 'note'; text: string; origin?: string; toolKind?: string; summary?: true; plan?: true; planDecision?: 'go' | 'revise'; turn?: string; wokeBy?: WokeByDoc[]; buttons?: MessageButton[]; pictures?: number; answers?: AskAnswer[]; wakeReason?: string; at: string; pagedAt?: number };
 // A reply button as a message row carries it (API 59): enough to draw it
 // and say where it goes, never its brief or message, which stay on the Mac.
 // target: the new thread's folder name, or the title of the thread it messages.
@@ -1262,6 +1268,12 @@ export function toMessageDoc(threadId: string, e: PersistedEvent, scrub: (text: 
   if (e.type === 'user.message' && e.answers?.length) {
     const answers = answersInText(text, e.answers.map((a) => ({ action: scrub(a.action), answer: scrub(a.answer) })));
     if (answers) doc.answers = answers;
+  }
+  // Why the runner sent its own message (a few words, "Codex answered"),
+  // scrubbed as its words are: the note's header on every surface.
+  if (e.type === 'user.message' && e.origin === 'runner' && e.wakeReason) {
+    const why = scrub(e.wakeReason).trim().slice(0, WAKE_REASON_CHARS);
+    if (why) doc.wakeReason = why;
   }
   if (e.type === 'assistant.text' && e.summary) doc.summary = true;
   return doc;
@@ -3960,6 +3972,8 @@ export class ConvexSync {
     if (v === undefined || v < MESSAGE_PICTURES_API_VERSION) messages = messages.map((m) => (m.pictures ? (({ pictures, ...rest }) => rest)(m) : m));
     // Before API 89 the validator has no `answers`; the text still says them.
     if (v === undefined || v < MESSAGE_ANSWERS_API_VERSION) messages = messages.map((m) => (m.answers ? (({ answers, ...rest }) => rest)(m) : m));
+    // Before API 98 the validator has no `wakeReason`; the note just has no header.
+    if (v === undefined || v < MESSAGE_WAKE_REASON_API_VERSION) messages = messages.map((m) => (m.wakeReason ? (({ wakeReason, ...rest }) => rest)(m) : m));
     // The buttons' state as it is now, not when the row was made: a press
     // while the row waited would otherwise go up stale.
     if (v !== undefined && v >= BUTTONS_API_VERSION) messages = messages.map((m) => this.withButtons(m));

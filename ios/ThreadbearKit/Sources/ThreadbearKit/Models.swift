@@ -596,9 +596,13 @@ public struct PhoneMessage: Codable, Sendable, Hashable, Identifiable {
     /// and the pick (backend API 89), which its text starts with: drawn as
     /// the Mac does, the question small over the answer.
     public var answers: [AskAnswer]?
+    /// Why the runner sent its own message (origin "runner"), in a few
+    /// words: "Codex answered" (backend API 98). A turn it started gets
+    /// the divider "5 min later · Codex answered", as the Mac draws it.
+    public var wakeReason: String?
     @FlexibleDate public var at: Date
 
-    public init(seq: Int, role: Role, text: String, origin: String? = nil, toolKind: String? = nil, summary: Bool = false, plan: Bool = false, turn: String? = nil, wokeBy: [WokeTask]? = nil, buttons: [MessageButton]? = nil, answers: [AskAnswer]? = nil, at: Date) {
+    public init(seq: Int, role: Role, text: String, origin: String? = nil, toolKind: String? = nil, summary: Bool = false, plan: Bool = false, turn: String? = nil, wokeBy: [WokeTask]? = nil, buttons: [MessageButton]? = nil, answers: [AskAnswer]? = nil, wakeReason: String? = nil, at: Date) {
         self.seq = seq
         self.role = role
         self.text = text
@@ -610,10 +614,11 @@ public struct PhoneMessage: Codable, Sendable, Hashable, Identifiable {
         self.wokeBy = wokeBy
         self.buttons = buttons
         self.answers = answers
+        self.wakeReason = wakeReason
         self._at = FlexibleDate(wrappedValue: at)
     }
 
-    private enum Keys: String, CodingKey { case seq, role, text, origin, toolKind, summary, plan, turn, wokeBy, buttons, answers, at }
+    private enum Keys: String, CodingKey { case seq, role, text, origin, toolKind, summary, plan, turn, wokeBy, buttons, answers, wakeReason, at }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -632,6 +637,7 @@ public struct PhoneMessage: Codable, Sendable, Hashable, Identifiable {
         wokeBy = (try? c.decodeIfPresent([WokeTask].self, forKey: .wokeBy)).flatMap { $0 }
         buttons = (try? c.decodeIfPresent([MessageButton].self, forKey: .buttons)).flatMap { $0 }
         answers = (try? c.decodeIfPresent([AskAnswer].self, forKey: .answers)).flatMap { $0 }
+        wakeReason = (try? c.decodeIfPresent(String.self, forKey: .wakeReason)).flatMap { $0 }
         _at = try c.decode(FlexibleDate.self, forKey: .at)
     }
 
@@ -648,6 +654,7 @@ public struct PhoneMessage: Codable, Sendable, Hashable, Identifiable {
         try c.encodeIfPresent(wokeBy, forKey: .wokeBy)
         try c.encodeIfPresent(buttons, forKey: .buttons)
         try c.encodeIfPresent(answers, forKey: .answers)
+        try c.encodeIfPresent(wakeReason, forKey: .wakeReason)
         try c.encode(_at, forKey: .at)
     }
 }
