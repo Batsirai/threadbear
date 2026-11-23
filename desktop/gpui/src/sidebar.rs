@@ -147,6 +147,15 @@ impl Threadbear {
                 self.with_group(&t.id, nesting.as_deref(), &mut out);
             }
         }
+        // Then the archive's sessions, as drawn under them (archive_search.rs).
+        if searching {
+            let sections = self.shown_sections(cx, now);
+            let own: HashSet<&str> = sections
+                .iter()
+                .flat_map(|s| s.rows.iter().map(|t| t.id.as_str()))
+                .collect();
+            out.extend(self.archive_arrow_keys(&own, cx));
+        }
         out
     }
 
@@ -157,8 +166,10 @@ impl Threadbear {
             return;
         }
         let order = self.arrow_order(cx);
-        let next = match self
-            .selected
+        // An archived session open in the thread's place counts as where the
+        // list is (archive_search.rs).
+        let current = self.selected.clone().or_else(|| self.archive_open_key());
+        let next = match current
             .as_ref()
             .and_then(|s| order.iter().position(|id| id == s))
         {
@@ -166,9 +177,16 @@ impl Threadbear {
             None => order.last(),
             Some(i) => order.get((i as i32 + step).clamp(0, order.len() as i32 - 1) as usize),
         };
-        let Some(next) = next.cloned().filter(|n| self.selected.as_ref() != Some(n)) else {
+        let Some(next) = next.cloned().filter(|n| current.as_ref() != Some(n)) else {
             return;
         };
+        if next.starts_with("archive:") {
+            self.step_to_archive(&next, window, cx);
+            window.focus(&self.sidebar.focus, cx);
+            crate::web_panels::keyboard_to_app(window);
+            self.reveal_row(&next, cx);
+            return;
+        }
         // It comes in from the way the list was walked (open_motion.rs).
         self.opening.next = Some(crate::open_motion::Opening::Step(step.signum()));
         self.open(next.clone(), window, cx);
@@ -2150,6 +2168,18 @@ impl Threadbear {
                 });
             }
         }
+        // Agent Archive's sessions with the words, after the app's own
+        // (archive_search.rs).
+        if loaded && searching {
+            let own: HashSet<&str> = sections
+                .iter()
+                .flat_map(|s| s.rows.iter().map(|t| t.id.as_str()))
+                .collect();
+            for (key, row) in self.render_archive_rows(&own, &p, cx) {
+                list = list.child(motion.row(&key, row));
+                drawn.push(key);
+            }
+        }
         // A fold moves the rows below it as its height eases, so nothing
         // glides while one's under way, nor as it ends and its rows go: the
         // rest are where they'll stay by then. One with no easing (a script's,
@@ -2353,6 +2383,7 @@ impl Threadbear {
     /// cursor in the new box.
     pub(crate) fn new_thread(&mut self, cx: &mut Context<Self>) {
         self.leave_pane(cx);
+        self.archive.open = None;
         self.selected = None;
         self.shows_home = false;
         self.projects.open = None;

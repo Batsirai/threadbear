@@ -480,7 +480,114 @@ function mockExperiments() {
     ...(process.env.TB_MOCK_RECIPES ? ['recipes'] : []),
     // Reviews as a board you drag and zoom, with TB_MOCK_REVIEW_CANVAS (addCanvasMarks).
     ...(process.env.TB_MOCK_REVIEW_CANVAS ? ['reviewCanvas'] : []),
+    // Agent Archive in the sidebar's search, with TB_MOCK_ARCHIVE (ARCHIVE_SESSIONS).
+    ...(process.env.TB_MOCK_ARCHIVE ? ['archive'] : []),
   ];
+}
+
+// TB_MOCK_ARCHIVE: made-up Agent Archive sessions for the sidebar's search
+// (docs/protocol/threads.md, "Searching Agent Archive"). Two belong to demo
+// threads: "Compare SQLite and plain files" is in a search for "sqlite" among
+// the app's own results, so its session is left out there, and "Make uploads
+// resume" isn't, so its hit opens that thread. A search for "offline" fails
+// as an unreachable archive does; TB_MOCK_ARCHIVE_MS slows every answer.
+const ARCHIVE_SESSIONS = [
+  {
+    threadId: 'k57a2mq9x4rd8vbn3hcw6tzy1pejf0su', title: 'Keep the upload queue in SQLite', agent: 'claude',
+    folder: '/Users/alex/dev/photo-sync', machine: 'mac', createdAt: Date.parse('2026-10-23T08:10:00Z'), updatedAt: Date.parse('2026-10-25T09:12:00Z'),
+    match: 14,
+    items: [
+      [0, 'user', 'The upload queue is a JSON file and it got corrupted when the Mac crashed mid-write. Can we make it survive that?'],
+      [3, 'assistant', 'It can. The JSON file is rewritten whole on every change, so a crash halfway through leaves half a file. Two ways out: write to a temp file and rename it over the old one, or move the queue into a database that does this for us.'],
+      [6, 'user', 'Which would you pick?'],
+      [14, 'assistant', "SQLite. It's one file beside the photos, needs no server, and every change is a transaction, so the queue lives in SQLite, one row per file, and a crash only loses the file in flight.\n\n- `queue.db` next to the library\n- one table, `uploads`, with each file's path, size and how far it got\n- the old JSON read once on first start, then renamed"],
+      [15, 'user', 'Do it'],
+      [22, 'assistant', "Done. The queue's in `queue.db` now, and I stopped the app halfway through a 2 GB upload three times: each time it picked up from the last finished chunk."],
+    ],
+  },
+  {
+    threadId: 'p3x8wq2n7m5kd4c9vb6tzh1rjy0aesfg', title: 'Is SQLite fast enough for 50,000 photos?', agent: 'codex',
+    folder: '/Users/alex/code/misc', machine: 'mac', createdAt: Date.parse('2026-10-23T02:00:00Z'), updatedAt: Date.parse('2026-10-23T02:40:00Z'),
+    match: 4,
+    items: [
+      [0, 'user', 'Before we move to SQLite: will it stay quick with 50,000 photos?'],
+      [4, 'assistant', 'Yes. SQLite handles 50,000 rows in a few milliseconds with an index on the date. I timed it on a copy of the library: listing a month takes 3 ms, and the whole library 41 ms.'],
+    ],
+  },
+  {
+    threadId: 'r9d2kf7x3n8qw5m1vb4tzc6hyj0pesla', title: 'Compare SQLite and plain files for the runner', agent: 'claude',
+    folder: '/Users/alex/code/misc', machine: 'mac', updatedAt: Date.parse('2026-11-02T04:00:00Z'), match: 8,
+    threadbear: { threadId: 'demo_sqlite_vs_files', title: 'Compare SQLite and plain files for the runner' },
+    items: [
+      [0, 'user', 'Should the runner keep its threads in SQLite or in plain files?'],
+      [8, 'assistant', 'Plain files for now: SQLite would mean a native module in every install.'],
+    ],
+  },
+  {
+    threadId: 'm4n8b2v6c1x9z3l7k5j0h2g8f4d6s1aq', title: 'Make uploads resume after a crash', agent: 'claude',
+    folder: '/Users/alex/dev/photo-sync', machine: 'mac', updatedAt: Date.parse('2026-11-10T05:00:00Z'), match: 30,
+    threadbear: { threadId: 'demo_upload_resume', title: 'Make uploads resume after a crash' },
+    items: [
+      [0, 'user', 'Uploads start again from zero after a crash.'],
+      [30, 'assistant', 'The resume point is kept in SQLite with the rest of the queue, so a restart carries on from the last chunk.'],
+    ],
+  },
+  {
+    threadId: 'q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5hj', title: 'Back up the SQLite file every night', agent: 'grok',
+    folder: '/Users/alex/code/misc', machine: 'studio', updatedAt: Date.parse('2026-09-28T21:00:00Z'), match: 2,
+    items: [
+      [0, 'user', 'How should I back up the queue database every night?'],
+      [2, 'assistant', "Use SQLite's own backup command rather than copying the file while it's open: `sqlite3 queue.db \".backup nightly.db\"`, from a launchd job at 3 am."],
+    ],
+  },
+];
+
+function archiveText(session) {
+  return [session.title, ...session.items.map((i) => i[2])].join(' ').toLowerCase();
+}
+
+function archiveSnippet(session, words) {
+  const item = session.items.find((i) => i[0] === session.match) ?? session.items[0];
+  const text = item[2].replace(/\s+/g, ' ');
+  const lower = text.toLowerCase();
+  const at = Math.max(0, Math.min(...words.map((w) => lower.indexOf(w)).filter((i) => i >= 0), text.length) - 60);
+  const cut = text.slice(at, at + 240);
+  return `${at > 0 ? '…' : ''}${cut}${at + 240 < text.length ? '…' : ''}`;
+}
+
+async function archiveRequest(method, p) {
+  if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
+  await sleep(Number(process.env.TB_MOCK_ARCHIVE_MS ?? 150));
+  if (!process.env.TB_MOCK_ARCHIVE) {
+    if (method === 'archive.search') return { hits: [], off: 'experiment' };
+    throw rpcError(-32000, 'Agent Archive is off on this runner.');
+  }
+  if (method === 'archive.search') {
+    const query = String(p.query ?? '').toLowerCase();
+    if (query.includes('offline')) throw rpcError(-32000, "Couldn't reach Agent Archive: its server didn't answer in 20 seconds.");
+    const words = query.split(/\s+/).filter(Boolean);
+    const found = ARCHIVE_SESSIONS.filter((s) => words.every((w) => archiveText(s).includes(w)))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const limit = Math.min(Number(p.limit ?? 20), 50);
+    return {
+      hits: found.slice(0, limit).map((s) => ({
+        threadId: s.threadId, title: s.title, agent: s.agent, folder: s.folder, machine: s.machine, updatedAt: s.updatedAt,
+        sequence: s.match, snippet: archiveSnippet(s, words), ...(s.threadbear ? { threadbear: s.threadbear } : {}),
+      })),
+      more: found.length > limit,
+    };
+  }
+  const session = ARCHIVE_SESSIONS.find((s) => s.threadId === p.threadId);
+  if (!session) throw rpcError(-32602, `not_found: no archived thread ${p.threadId}`);
+  return {
+    thread: {
+      threadId: session.threadId, title: session.title, agent: session.agent, folder: session.folder, machine: session.machine,
+      ...(session.createdAt ? { createdAt: session.createdAt } : {}), updatedAt: session.updatedAt,
+      messages: session.items.length, url: `https://archive.example.test/?thread=${session.threadId}`,
+      ...(session.threadbear ? { threadbear: session.threadbear } : {}),
+    },
+    items: session.items.map(([sequence, role, text]) => ({ sequence, role, text })),
+  };
 }
 
 // TB_MOCK_RECIPES: the recipes experiment on, with recipes in every state
@@ -1911,6 +2018,10 @@ async function dispatch(client, method, p) {
     case 'recipes.remove':
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       return recipeRequest(client, method, p);
+    // Agent Archive in the sidebar's search, with TB_MOCK_ARCHIVE.
+    case 'archive.search':
+    case 'archive.read':
+      return archiveRequest(method, p);
     case 'connectors.status':
       if (oldRunner) throw rpcError(-32601, `Unknown method ${method}`);
       if (p.refresh) connectors = { ...connectors, checkedAt: iso() };

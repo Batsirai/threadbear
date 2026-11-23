@@ -60,6 +60,9 @@ pub struct Threadbear {
     /// What every box has, kept across a quit (drafts.rs).
     pub(crate) drafts: crate::drafts::Drafts,
     pub(crate) sidebar: crate::sidebar::SidebarState,
+    /// Agent Archive in the sidebar's search, and a session open in the
+    /// thread's place (archive_search.rs).
+    pub(crate) archive: crate::archive_search::ArchiveSearch,
 
     // The window shell (shell.rs, rails.rs, header.rs).
     /// Holds the keyboard when nothing in the window has it (no thread open,
@@ -407,8 +410,10 @@ impl Threadbear {
         crate::key_hints::install(cx.entity().downgrade(), cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search threads"));
         // The filter is worked out at render, so a change only needs a redraw.
-        let searching = cx.subscribe(&search, |_, _, ev: &InputEvent, cx| {
+        // The archive's asked once typing pauses (archive_search.rs).
+        let searching = cx.subscribe(&search, |this, _, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
+                this.archive_search_changed(cx);
                 cx.notify();
             }
         });
@@ -547,6 +552,7 @@ impl Threadbear {
             pane_events: None,
             kept: Default::default(),
             search,
+            archive: Default::default(),
             folded,
             composers: HashMap::new(),
             drafts: crate::drafts::Drafts::load(
@@ -1011,6 +1017,7 @@ impl Threadbear {
                         .flatten()
                         .filter_map(|e| e.as_str().map(str::to_owned))
                         .collect();
+                    self.archive_hello();
                     crate::live_pages::set_on(
                         self.remote
                             .experiments
@@ -1677,6 +1684,8 @@ impl Threadbear {
         };
         // A thread (its own row, say) in place of one of its sub-agents.
         self.close_subagent(cx);
+        // A thread in place of an archived session (archive_search.rs).
+        self.archive.open = None;
         // A thread open in a panel of its own is shown there.
         if moved.is_none() && self.open_in_its_panel(&id, cx) {
             return;
@@ -2066,6 +2075,9 @@ impl Threadbear {
         if self.recipes_on() {
             sidebar["recipes"] = self.recipes_dump();
         }
+        if self.archive_on() {
+            sidebar["archive"] = self.archive_search_dump(cx);
+        }
         let mut dump = json!({
             "connection": connection,
             "selection": self.selection_dump(),
@@ -2129,6 +2141,9 @@ impl Threadbear {
             "actions": self.side.read(cx).thread(cx).map(|t| crate::patches::actions_dump(self.side.read(cx), &t)).unwrap_or_else(|| json!([])),
             "terminal": crate::terminal::dump(self, cx),
         });
+        // An archived session in the thread's place (archive_search.rs),
+        // outside the macro, which is at its recursion limit.
+        dump["archivePage"] = self.archive_page_dump(cx);
         // Any other note the window shows outside the banner and the error
         // bar: the sidebar's, when the list couldn't be read. Never the
         // connection's (Mike, 12 Nov: the raw error mid-restart).

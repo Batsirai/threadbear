@@ -2270,6 +2270,7 @@ impl Threadbear {
             || page.is_some()
             || self.open_project().is_some()
             || self.open_elsewhere(cx).is_some()
+            || self.archive_page_showing()
         {
             self.opening.page_shown = None;
         }
@@ -2290,6 +2291,8 @@ impl Threadbear {
             (_, Some(SidebarMode::Librarian)) => self.render_librarian_home(cx),
             (_, Some(SidebarMode::Recipes)) => self.render_recipes_home(cx),
             (_, Some(_)) => self.render_projects_home(window, cx),
+            // An archived session read-only in the thread's place (archive_search.rs).
+            (None, None) if self.archive_page_showing() => self.render_archive_page(cx),
             // Its thread is open in a panel of its own (thread_panels.rs).
             (None, None) if self.open_elsewhere(cx).is_some() => {
                 let id = self.open_elsewhere(cx).unwrap_or_default();

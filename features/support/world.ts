@@ -181,6 +181,12 @@ Before(async function (this: ThreadbearWorld, { pickle }) {
   else delete process.env.TB_MOCK_RECIPES;
   if (pickle.tags.some((t) => t.name === '@review.canvas')) process.env.TB_MOCK_REVIEW_CANVAS = '1';
   else delete process.env.TB_MOCK_REVIEW_CANVAS;
+  // Agent Archive in the sidebar's search: the archive experiment on, with
+  // the mock's made-up sessions, and its answers slow with @slow-archive.
+  if (pickle.tags.some((t) => t.name === '@archive')) process.env.TB_MOCK_ARCHIVE = '1';
+  else delete process.env.TB_MOCK_ARCHIVE;
+  if (pickle.tags.some((t) => t.name === '@slow-archive')) process.env.TB_MOCK_ARCHIVE_MS = '2500';
+  else delete process.env.TB_MOCK_ARCHIVE_MS;
   // Parts of a project: Photo sync as a part of Threadbear.
   if (pickle.tags.some((t) => t.name === '@project-parts')) process.env.TB_MOCK_PARTS = '1';
   else delete process.env.TB_MOCK_PARTS;

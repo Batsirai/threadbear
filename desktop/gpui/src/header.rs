@@ -160,6 +160,10 @@ impl Threadbear {
         if let Some(title) = self.render_project_header_title(cx) {
             return title;
         }
+        // An archived session's (archive_search.rs).
+        if let Some(title) = self.render_archive_header_title(cx) {
+            return title;
+        }
         let Some(thread) = self
             .open_thread()
             .cloned()

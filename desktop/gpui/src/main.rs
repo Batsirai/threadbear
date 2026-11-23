@@ -30,6 +30,7 @@ mod app;
 mod app_log;
 mod app_update;
 mod archive_flight;
+mod archive_search;
 #[cfg(feature = "automation")]
 mod automation;
 #[cfg(feature = "automation")]
