@@ -6,26 +6,38 @@
 # isn't ours to publish (Mike, 19 Nov): Fly pulls it for that app's
 # machines with no credentials, and no one else can.
 #
-# - a push to main that changes what the image holds: `<commit>` and
-#   `latest`. New boxes take `latest` (the service's default image,
-#   convex/boxes.ts defaultBoxImage), so they run the runner from the
-#   main that Mike's backend is deployed from;
+# - a push to main that changes what the image holds: `<commit>`, and
+#   `latest` once the runner's tests pass on that commit (the `tests` job).
+#   New boxes take `latest` (the service's default image, convex/boxes.ts
+#   defaultBoxImage), so they run the runner from the main that Mike's
+#   backend is deployed from;
 # - a release tag (release/YYYY-MM-DD, runner/src/upstream.ts):
 #   `<commit>` and `release-YYYY-MM-DD`, for a virtual runner pinned to a
-#   release;
-# - by hand (workflow_dispatch): `<commit>`, and `latest` from main.
+#   release (a release is only tagged on a commit every workflow passed on);
+# - by hand (workflow_dispatch): `<commit>`, and `latest` from main, after
+#   the tests as for a push.
+#
+# Until 23 Nov `latest` went out with only the smoke test in front of it,
+# so a main whose runner failed its tests still became every new box's
+# runner. The tests run here, in this workflow, rather than waiting on
+# runner.yml's run: that one has its own paths (a change to only this file
+# runs it not at all) and its Windows and Mac jobs, which the box doesn't
+# need and which take up to an hour. They're runner.yml's Linux job on
+# Node 24 (the box's Node), check.sh's runner typecheck and unit tests, run
+# beside the image's build; `latest` waits for both.
 #
 # The app is the repo variable FLY_BOX_APP (the deployment's FLY_APP), and
 # the secret FLY_BOX_IMAGE_TOKEN a Fly token that reaches that app only
 # (`fly tokens create deploy -a <app>`, or an org token narrowed with
 # `fly tokens attenuate`). Without them (a fork that hasn't set up boxes)
-# the image is still built and checked, just not pushed.
+# the image is still built and checked, just not pushed, and the tests
+# don't run, as nothing waits on them.
 #
-# Free, as runner.yml's must be (Mike, 9 Nov): a standard hosted runner, no
+# Free, as runner.yml's must be (Mike, 9 Nov): standard hosted runners, no
 # schedule, a newer push cancelling the run before it, and only when the
 # image's files changed (the paths below: what the Dockerfile copies, the
-# image's own files, and this file). No action but checkout, pinned as
-# workflow-pins.test.ts wants; plain docker for the rest.
+# image's own files, and this file). Actions pinned as workflow-pins.test.ts
+# wants (checkout, and setup-node for the tests); plain docker for the rest.
 name: Box image
 
 on:
@@ -57,6 +69,9 @@ jobs:
   image:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+      push: ${{ steps.names.outputs.push }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -76,9 +91,9 @@ jobs:
             image="threadbear-box"; push=false
             echo "::notice::FLY_BOX_APP or FLY_BOX_IMAGE_TOKEN isn't set, so the image is built and checked but not pushed."
           fi
+          # `latest` isn't here: the `latest` job adds it once the tests pass.
           tags="$image:$SHA"
           case "$REF" in
-            refs/heads/main) tags="$tags $image:latest" ;;
             refs/tags/release/*) tags="$tags $image:release-${REF#refs/tags/release/}" ;;
           esac
           {
@@ -127,3 +142,59 @@ jobs:
             [ "$tag" = "$IMAGE:$SHA" ] || docker tag "$IMAGE:$SHA" "$tag"
             docker push "$tag"
           done
+
+  # The runner's typecheck and unit tests, as runner.yml's Linux job on Node 24
+  # runs them (its comments say why each step is there). Only where `latest`
+  # can be pushed: main, in a repo with the boxes' app set.
+  tests:
+    if: github.ref == 'refs/heads/main' && vars.FLY_BOX_APP != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            runner/package-lock.json
+
+      - name: Image tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q imagemagick librsvg2-bin
+
+      - name: Packages
+        run: |
+          npm ci --no-audit --no-fund
+          (cd runner && npm ci --no-audit --no-fund)
+
+      - name: Runner typecheck and unit tests
+        run: THREADBEAR_NODE="$(command -v node)" ./check.sh --runner --local
+
+  # `latest` moves to this commit's image only when it was built, passed the
+  # smoke test and was pushed, and the runner's tests passed (a failed or
+  # skipped job before it skips this one).
+  latest:
+    needs: [image, tests]
+    if: needs.image.outputs.push == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Sign in to the registry
+        env:
+          TOKEN: ${{ secrets.FLY_BOX_IMAGE_TOKEN }}
+        run: printf '%s' "$TOKEN" | docker login registry.fly.io -u x --password-stdin
+
+      - name: Tag it latest
+        env:
+          IMAGE: ${{ needs.image.outputs.image }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker pull --platform linux/amd64 "$IMAGE:$SHA"
+          docker tag "$IMAGE:$SHA" "$IMAGE:latest"
+          docker push "$IMAGE:latest"

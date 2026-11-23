@@ -884,10 +884,12 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
 - **Which runner it is.** Built from the repo at a commit rather than from
   a signed release, so it's the runner Mike's backend is deployed from: a
   push to main that changes what the image holds pushes
-  `registry.fly.io/<FLY_APP>:<commit>` and `:latest`, and
-  `setRunnerService` makes a virtual runner with `:latest` when it names
-  no image (`defaultBoxImage`). A new box is a few minutes behind main
-  while the image builds; the runner and backend stay compatible both ways,
+  `registry.fly.io/<FLY_APP>:<commit>`, then `:latest` once the runner's
+  typecheck and unit tests pass on that commit (the workflow runs them
+  beside the build; until 23 Nov a main failing them still became
+  `:latest`), and `setRunnerService` makes a virtual runner with `:latest`
+  when it names no image (`defaultBoxImage`). A new box is ten minutes or
+  so behind main while the image builds and the tests run; the runner and backend stay compatible both ways,
   as for any runner. A release tag publishes `:release-<date>` too, for a
   virtual runner pinned to a release. A fork's push builds its own, into its
   own Fly app (docs/forking.md).
