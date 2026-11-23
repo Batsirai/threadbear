@@ -516,6 +516,18 @@ for (const mode of ['archive', 'snooze', 'waitFor'] as const) test(`a turn a fin
   else assert.ok(st.rec.snoozedUntil);
 });
 
+test("a background-opened turn does not archive past a message of Mike's an interrupt left unread", () => {
+  const { h, thread, s } = running();
+  s.result();
+  const st = h.runner.mustGet(thread.id);
+  st.rec.interruptedMessages = [st.rec.lastSeq];
+  s.out({ kind: 'cliTurn', note: 'Background command "Land the fix" completed (exit code 0)' });
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'park', name: 'mcp__threadbear__end_turn', kind: 'mcp', title: 'end_turn', input: { needs: 'nothing', archive: true } } });
+  s.out({ kind: 'result', result: { outcome: 'completed', durationMs: 5, own: true } });
+  assert.equal(st.rec.archivedAt, undefined);
+  assert.equal(st.rec.snoozedUntil, undefined);
+});
+
 test('a background-opened turn with a newer message queued still does not archive', () => {
   const { h, thread, s } = running();
   s.result();

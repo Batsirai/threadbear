@@ -423,7 +423,9 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   A turn the CLI opened by itself (a background job or sub-agent ended)
   can archive too, as that's where an agent waiting on the job reports
   it's done; until 23 Nov 2026 those dropped it silently, and a thread
-  that said it was archiving itself stayed in Mike's inbox.
+  that said it was archiving itself stayed in Mike's inbox. None of them
+  applies while a message of Mike's that an interrupt left unread is saved
+  for later (`interruptedMessages`), as that turn never shows it.
   A message sent into the turn after that call cancels it, until an `end_turn`
   asks again, so a thread doesn't go while Mike is still talking to it.
   The description tells agents to use it only when Mike asks, so a thread

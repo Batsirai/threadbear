@@ -3166,7 +3166,10 @@ export class Runner {
     // job ends is where an agent that waited on it says it's done. Skipping
     // those dropped its archive without a word, so a thread that said "I'm
     // archiving this thread" stayed in Mike's inbox (23 Nov 2026, df5c7153).
-    const away = outcome === 'completed' && said?.needs === 'nothing' && rec.queue.every(q => isAutomaticInput(q) && q.beforeMessage) && !rt.approvals.size;
+    // Nor while a message of Mike's that an interrupt left unread is saved
+    // for later: a job ending opens a turn that never shows it, so it could
+    // put the thread away past "keep this open" (Codex review).
+    const away = outcome === 'completed' && said?.needs === 'nothing' && rec.queue.every(q => isAutomaticInput(q) && q.beforeMessage) && !rt.approvals.size && !rec.interruptedMessages?.length;
     const archive = away && archiveFromTool(turn.endTurn);
     // Hibernating likewise (end_turn's snooze). Archive wins if it asked for both.
     const snooze = away && !archive ? snoozeFromTool(turn.endTurn) : undefined;
