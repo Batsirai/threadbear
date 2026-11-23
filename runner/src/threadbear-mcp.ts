@@ -75,6 +75,9 @@ export type ThreadControl = {
   unreadMessage?: (threadId: string) => boolean;
   // What this thread's subagents are parked on (approvals.ts).
   openSubagentCards?: (threadId: string) => string[];
+  // Background jobs or sub-agents of this thread's still running, which
+  // wake it when they end (Runner.ownWorkRunning).
+  ownWorkRunning?: (threadId: string) => boolean;
   // What end_turn owes a review by another lab (runner/lab-review.ts).
   reviewOwes?: (threadId: string) => ReturnType<Runner['reviewOwes']>;
   requestSecret?: (threadId: string, req: SecretRequest) => Promise<SecretAnswer>;
@@ -377,10 +380,25 @@ export function buildThreadbearTools(
   // refused every time; this caps it at once a turn whoever asks (Codex
   // and Gemini's second review, 20 Nov).
   let projectNotedTurn: number | undefined;
+  // A schedule that will send to this thread: not paused, with a run still
+  // to come. One that can't be read in time counts as none.
+  const bookedToSelf = async (): Promise<boolean> => {
+    if (!schedules) return false;
+    const list = await inTime((async () => schedules.list(selfId))(), ID_LIST_TIMEOUT_MS, "couldn't read the schedules").catch(() => [] as Schedule[]);
+    return list.some((sc) => sc.threadId === selfId && !sc.paused && !sc.finishedAt && Boolean(sc.nextRunAt));
+  };
   const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
     if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
     if (input.archive === true || snoozeFromTool({ ...input, needs: 'nothing' }) || (Array.isArray(input.waitFor) && input.waitFor.length) || projectStepNudged(events)) return undefined;
     if (appRestarts?.isWatching(selfId)) return undefined;
+    // Nor when it has done what the note asks, and something will run it
+    // again: a background job or sub-agent of its own still going, or a
+    // live schedule sending to this thread. On 23 Nov 2026 a thread fixing
+    // a runner bug got the note three turns running with a review job, a
+    // `tb land` and a */5 schedule to check the landing all booked, and
+    // could only send end_turn again.
+    if (control.ownWorkRunning?.(selfId)) return undefined;
+    if (await bookedToSelf()) return undefined;
     const turn = events.findLast((e) => e.type === 'turn.started')?.seq;
     if (turn !== undefined && turn === projectNotedTurn) return undefined;
     if (!codex && !(await replied()).landed) return undefined;

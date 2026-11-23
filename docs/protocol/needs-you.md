@@ -193,7 +193,9 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   isn't in the thread's events (a Codex sub-agent's, which runs through the
   same handler, is capped at one note a turn in memory). Turns an edit cut
   out don't count towards the ten. A project it can't read within 2 seconds
-  is left out. Called again, it's taken as it is. Since 20 Nov
+  is left out. Since 23 Nov 2026 it's also left alone while something will
+  run the thread again: a background job or sub-agent of its own still
+  going, or a schedule sending to it that isn't paused or finished. Called again, it's taken as it is. Since 20 Nov
   2026: the calendar site's thread said Done twice with its project's state
   saying "Next is Peter's review of the live site" and three follow-ups
   never answered, and Mike nearly archived it. He didn't want old questions

@@ -1726,6 +1726,15 @@ export class Runner {
     return this.threads.get(threadId)?.rt.session?.unreadMessage?.() === true;
   }
 
+  // For end_turn's handler: whether the thread's CLI still runs background
+  // jobs or sub-agents of its own whose end wakes it (threadbear-mcp.ts,
+  // projectStepNote). Codex doesn't wake for them (wakesAfterTasks).
+  ownWorkRunning(threadId: string): boolean {
+    const st = this.threads.get(threadId);
+    if (!st || this.adapters[st.rt.sessionProvider ?? st.rec.provider]?.wakesAfterTasks === false) return false;
+    return st.rt.tasks.length > 0 || Boolean(st.rec.subagents?.some((a) => a.status === 'running'));
+  }
+
   get(threadId: string): ThreadSummary {
     return this.summary(this.mustGet(threadId));
   }

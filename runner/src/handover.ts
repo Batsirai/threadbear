@@ -819,6 +819,10 @@ export class ThreadRouter implements ThreadControl {
     return this.runner.openSubagentCards(threadId);
   }
 
+  ownWorkRunning(threadId: string): boolean {
+    return this.runner.ownWorkRunning(threadId);
+  }
+
   // Always this runner's, for the session it runs itself, as above.
   reviewOwes(threadId: string): ReturnType<Runner['reviewOwes']> {
     return this.runner.reviewOwes(threadId);
