@@ -1533,6 +1533,7 @@ async function main(): Promise<void> {
       },
       plan: (row) => runner.planMove(row),
       place: (row, entries) => runner.placeMove(row, entries),
+      placed: (row) => runner.movePlaced(row),
       async adopt(row) {
         const r = await runner.adoptMoved(row);
         // When and what each sends, nothing more (moves.ts movedSchedules).

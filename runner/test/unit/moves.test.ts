@@ -339,6 +339,37 @@ for (const committed of [true, false]) {
   });
 }
 
+// Grok's review, 23 Nov 2026: T restarting while it asks for the claim
+// again placed the thread a second time, and a worktree that came with git
+// work blocked that. A placing that finished is on disk (movePlaced): a
+// restarted T only asks for the claim.
+test('a target that restarts after placing the thread only asks for the claim', async () => {
+  const w = await world();
+  await call(w.b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId: 'T22', runnerId: MINI, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });
+  const s = source('T22');
+  const t = target({ cwd: '/x', accountId: 'a', leftBehind: [] });
+  const place = t.host.place!;
+  let places = 0;
+  t.host.place = async (row, entries) => (places++, place(row, entries));
+  t.host.placed = () => places > 0;
+  const timers: { fn: () => void; ms: number }[] = [];
+  const setTimer = (fn: () => void, ms: number) => (timers.push({ fn, ms }), { cancel() {} });
+  const common = { runnerName: (n: string) => names[n] ?? n };
+  const tb = w.backendFor(OWNER, LAPTOP);
+  const down: MovesBackend = { ...tb, call: async (fn, args) => (fn === 'moveClaim' ? Promise.reject(new Error('fetch failed')) : tb.call(fn, args)) };
+  new Moves({ self: () => MINI, backend: () => w.backendFor(MINI_KEY, MINI), host: { ...common, ...s.host } as MovesHost, log, setTimer }).start();
+  const before = new Moves({ self: () => LAPTOP, backend: () => down, host: { ...common, ...t.host } as MovesHost, log, setTimer });
+  before.start();
+  await startBound(w, 'T22', s, t);
+  await until(() => timers.some((x) => x.ms === 20_000), 'the claim waiting to be asked again');
+  before.close();
+  assert.equal(moveRow(w).state, 'unpacking');
+  new Moves({ self: () => LAPTOP, backend: () => tb, host: { ...common, ...t.host } as MovesHost, log, setTimer }).start();
+  await until(() => moveRow(w).state === 'done', 'done');
+  assert.equal(places, 1, 'placed once, before the restart');
+  assert.equal(t.adopted, 1);
+});
+
 test("a move the new runner can't take fails, and the thread stays where it was", async () => {
   const w = await world();
   await call(w.b.ctx, sync.upsertThreads, { key: MINI_KEY, threads: [{ threadId: 'T3', runnerId: MINI, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });

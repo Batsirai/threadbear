@@ -37,7 +37,8 @@ import { writeSlot } from '../slot.ts';
 
 // What T placed for a move, so adopting after a restart and throwing it
 // away after a failure both know (<home>/moves/<moveId>/placed.json).
-type Placed = { cwd: string; worktree?: WorktreeRecord; patchFile?: string; patchName?: string; transcript: string[]; leftBehind: string[]; fromName: string; schedules?: unknown[]; gitTips?: string[] };
+// whole: placeMove got to the end, so all that's left is the claim (movePlaced).
+type Placed = { whole?: true; cwd: string; worktree?: WorktreeRecord; patchFile?: string; patchName?: string; transcript: string[]; leftBehind: string[]; fromName: string; schedules?: unknown[]; gitTips?: string[] };
 
 // A moved thread's old folder is kept this long on S, in case.
 const KEPT_MS = 7 * 24 * 60 * 60_000;
@@ -1026,12 +1027,11 @@ export const movesPart = {
     if ('problem' in plan) throw new Error(plan.problem);
     if (!row.plan || !samePlan(plan, row.plan)) throw new Error(`Where the thread would go on ${this.moveRunnerName(row.to)} changed since the move was planned, so it stays where it is. Move it again.`);
     const stage = stageOf(this.cfg.home, row.moveId);
-    // An earlier placing of this move (one whose claim hadn't gone through
-    // when this runner restarted: moves.ts asks for the claim again for up
-    // to the move's thirty minutes) is undone first, worktree and transcript
-    // too: its placed.json is the only record of them, and emptying the
-    // staging folder alone left its worktree in the way of this one
-    // (Codex's review, 23 Nov 2026).
+    // An earlier placing of this move that didn't finish (the runner
+    // stopped partway; one that did only asks for its claim again,
+    // movePlaced) is undone first, as far as it can be: its placed.json is
+    // the only record of its transcript and worktree, which emptying the
+    // staging folder alone left behind (Codex's review, 23 Nov 2026).
     await this.discardMove(row);
     fs.mkdirSync(stage, { recursive: true, mode: 0o700 });
     const placed: Placed = { cwd: plan.cwd, transcript: [], leftBehind: [...plan.leftBehind], fromName: this.moveRunnerName(row.from) };
@@ -1154,10 +1154,25 @@ export const movesPart = {
       rec.pendingApprovals = [];
       writeSlot(rec, { kind: 'arrived', ...(placed.worktree ? { worktree: placed.worktree } : {}) }, Date.now());
       fs.writeFileSync(recFile, JSON.stringify(rec, null, 2));
+      placed.whole = true;
       save();
     } catch (e) {
       await this.discardMove(row);
       throw e;
+    }
+  },
+
+  // T: whether this move's thread is placed here whole already, by this
+  // runner before it restarted, with only the claim left to ask for again
+  // (moves.ts). Placing it again would empty its staging folder, and a
+  // worktree that came with git work (which cleanUpWorktree won't remove)
+  // would then block the new one (Grok's review, 23 Nov 2026).
+  movePlaced(this: Runner, row: MoveRow): boolean {
+    try {
+      const placed = JSON.parse(fs.readFileSync(path.join(stageOf(this.cfg.home, row.moveId), 'placed.json'), 'utf8')) as Placed;
+      return placed.whole === true && !this.threads.has(row.threadId);
+    } catch {
+      return false;
     }
   },
 

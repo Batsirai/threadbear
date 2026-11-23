@@ -359,6 +359,9 @@ export type MovesHost = {
   // Places it beside the live threads (its staging folder, worktree, git
   // work and transcript), not yet one of them. Throws to fail the move.
   place(row: MoveRow, entries: PackEntry[]): Promise<void>;
+  // Whether place() finished for this move here already (before a restart),
+  // so only the claim is left. Optional: a host without it places again.
+  placed?(row: MoveRow): boolean;
   // After the switch: makes it one of this runner's threads. Idempotent.
   adopt(row: MoveRow): Promise<void>;
   // The move failed or was cancelled: what place() made goes.
@@ -652,8 +655,10 @@ export class Moves {
       }
       case 'unpacking': {
         const backend = this.backend();
-        // Placed already, its claim tried again (step).
-        if (this.placed.has(row.moveId)) {
+        // Placed already, its claim tried again (step), or placed whole
+        // before this runner restarted: only the claim is left.
+        if (this.placed.has(row.moveId) || host.placed?.(row)) {
+          this.placed.add(row.moveId);
           await backend.call('moveClaim', { moveId: row.moveId });
           return;
         }
