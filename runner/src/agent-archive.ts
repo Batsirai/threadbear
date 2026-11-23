@@ -444,11 +444,11 @@ export class AgentArchive {
   async search(query: string, limit = 20): Promise<ArchiveSearch> {
     const off = this.off();
     if (off) return { hits: [], off };
-    // A leading dash would read as one of the command's options.
-    const words = query.trim().replace(/^-+/, '').trim().slice(0, 500);
+    const words = query.trim().slice(0, 500);
     if (!words) return { hits: [], more: false };
     const n = Math.min(Math.max(1, Math.floor(limit)), 50);
-    const v = parseObject(await this.ask(['search', '--json', '--limit', String(n), words]));
+    // `--` first, so words starting with a dash aren't read as its options.
+    const v = parseObject(await this.ask(['search', '--json', '--limit', String(n), '--', words]));
     if (!v || !Array.isArray(v.hits)) throw new Error("Agent Archive's search didn't answer in JSON");
     return { hits: v.hits.filter(isHit), more: v.more === true };
   }

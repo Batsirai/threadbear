@@ -165,7 +165,7 @@ test("the sidebar's archive search runs the archive's own command, and passes it
   const m = archiveMethods(s.a);
   assert.deepEqual(await m['archive.search']!({ query: '  --lancedb ', limit: 99 }), { hits: [hit], more: true });
   const call = s.calls.find((c) => c.args.includes('search'))!;
-  assert.deepEqual(call.args.slice(1), ['search', '--json', '--limit', '50', 'lancedb'], 'no leading dash, the limit capped');
+  assert.deepEqual(call.args.slice(1), ['search', '--json', '--limit', '50', '--', '--lancedb'], 'the words after --, the limit capped');
   assert.deepEqual(await m['archive.search']!({ query: '   ' }), { hits: [], more: false });
 });
 
