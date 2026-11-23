@@ -152,7 +152,7 @@ test('a thread put away sends no push, its held push stays home, a delivered one
   assert.deepEqual(scheduled(b, 'push.clear'), [{ threadId: 'A' }]);
   // Hibernated with its push held while he's at the Mac: leaving sends nothing.
   await put('H', { needsYou: false });
-  await b.ctx.db.patch((b.rows('threads') as { _id: string; threadId: string }[]).find((t) => t.threadId === 'H')!._id, { pushHeldAt: now - 1000 });
+  await b.ctx.db.patch((b.rows('threads') as unknown as { _id: string; threadId: string }[]).find((t) => t.threadId === 'H')!._id, { pushHeldAt: now - 1000 });
   await put('H', { snoozedUntil: iso(now + 3_600_000) });
   await call(b.ctx, sync.setPresence, { key: OWNER, runnerId: 'mac1', atMac: false });
   assert.deepEqual((scheduled(b, 'push.notify') as { threadId: string }[]).filter((a) => a.threadId === 'H'), [], 'hibernated: no push');

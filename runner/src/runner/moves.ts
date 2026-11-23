@@ -1026,7 +1026,13 @@ export const movesPart = {
     if ('problem' in plan) throw new Error(plan.problem);
     if (!row.plan || !samePlan(plan, row.plan)) throw new Error(`Where the thread would go on ${this.moveRunnerName(row.to)} changed since the move was planned, so it stays where it is. Move it again.`);
     const stage = stageOf(this.cfg.home, row.moveId);
-    fs.rmSync(stage, { recursive: true, force: true });
+    // An earlier placing of this move (one whose claim hadn't gone through
+    // when this runner restarted: moves.ts asks for the claim again for up
+    // to the move's thirty minutes) is undone first, worktree and transcript
+    // too: its placed.json is the only record of them, and emptying the
+    // staging folder alone left its worktree in the way of this one
+    // (Codex's review, 23 Nov 2026).
+    await this.discardMove(row);
     fs.mkdirSync(stage, { recursive: true, mode: 0o700 });
     const placed: Placed = { cwd: plan.cwd, transcript: [], leftBehind: [...plan.leftBehind], fromName: this.moveRunnerName(row.from) };
     const save = () => fs.writeFileSync(path.join(stage, 'placed.json'), JSON.stringify(placed));

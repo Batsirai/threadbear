@@ -459,7 +459,9 @@ export class ProcessRegistry {
       killGroup(pgid, 'SIGTERM');
     }
     await waitGone(targets, graceMs);
-    const stubborn = targets.filter((p) => groupAlive(p));
+    // On Windows the first round was already taskkill /F, so a second could
+    // only reach a process that took a pid freed since (FORCE_AGAIN).
+    const stubborn = FORCE_AGAIN ? targets.filter((p) => groupAlive(p)) : [];
     for (const pgid of stubborn) killGroup(pgid, 'SIGKILL');
     await waitGone(stubborn, 2000);
     this.entries.clear();
@@ -495,11 +497,18 @@ export class ProcessRegistry {
     const groups = pids.flatMap((pid) => [pid, ...this.toolGroups(pid)]);
     for (const pgid of groups) killGroup(pgid, 'SIGTERM');
     await waitGone(groups, graceMs);
-    for (const pgid of groups) if (groupAlive(pgid)) killGroup(pgid, 'SIGKILL');
+    if (FORCE_AGAIN) for (const pgid of groups) if (groupAlive(pgid)) killGroup(pgid, 'SIGKILL');
     this.entries.clear();
     this.save();
   }
 }
+
+// Whether stragglers get a second, forced round after the grace. Not on
+// Windows: killGroup is taskkill /T /F there, forced already, and nothing
+// holds a pid as a process group does on a Mac, so a pid still alive after
+// it may be another process's by now (Codex's review, 23 Nov 2026: a CLI
+// whose job had gone now reaches this).
+const FORCE_AGAIN = !IS_WINDOWS;
 
 async function waitGone(pgids: number[], ms: number): Promise<void> {
   const deadline = Date.now() + ms;
