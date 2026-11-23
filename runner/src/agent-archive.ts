@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { inBackground } from './background.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
+import { acquireLock } from './lock.ts';
 import type { Logger } from './log.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import type { ThreadRecord } from './store.ts';
@@ -133,6 +134,13 @@ export function archiveDir(platform: NodeJS.Platform = process.platform, home = 
   return path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'agent-archive');
 }
 
+// The lock beside the build folder. Every runner on the machine builds in the
+// same folder, and a handover leaves the old release running beside the new
+// one, so two builds at once clashed there (THREADBEAR-2J).
+export function buildLockOf(cacheDir: string): { dir: string; name: string } {
+  return { dir: path.dirname(cacheDir), name: `${path.basename(cacheDir)}.lock` };
+}
+
 export function runtimeOf(dir: string): { node: string; cli: string } {
   const current = path.join(dir, 'runtime', 'current');
   return { node: path.join(current, 'bin', 'node'), cli: path.join(current, 'agent-archive.js') };
@@ -216,14 +224,14 @@ export function readSyncState(stdout: string): ArchiveSyncState | undefined {
   }
 }
 
-type Run = (bin: string, args: string[], opts: { cwd?: string; timeoutMs: number }) => Promise<string>;
+type Run = (bin: string, args: string[], opts: { cwd?: string; timeoutMs: number; signal?: AbortSignal }) => Promise<string>;
 // What a failed command rejects with: its own stderr and exit code as well,
 // for archive.search and archive.read to say why in the archive's words.
 type RunError = Error & { stderr?: string; code?: number | string; killed?: boolean };
 
 const run: Run = (bin, args, opts) =>
   new Promise((resolve, reject) => {
-    execFile(bin, args, { cwd: opts.cwd, timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
+    execFile(bin, args, { cwd: opts.cwd, timeout: opts.timeoutMs, signal: opts.signal, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
       if (err) reject(Object.assign(new Error(lastLines(`${stderr}\n${err.message}`)), { stderr, code: err.code ?? undefined, killed: err.killed }));
       else resolve(stdout);
     });
@@ -274,11 +282,15 @@ export type AgentArchiveDeps = {
 
 export class AgentArchive {
   private readonly d: Required<Omit<AgentArchiveDeps, 'serverDir'>> & { serverDir?: string };
+  private first: NodeJS.Timeout | undefined;
   private timer: NodeJS.Timeout | undefined;
   private sync: ArchiveSyncState | undefined;
   private syncError: string | undefined;
   private sessions = 0;
   private updating = false;
+  // Ends a build's commands when the runner stops for good, so none goes on
+  // in the folder after its lock is gone.
+  private building: AbortController | undefined;
 
   constructor(deps: AgentArchiveDeps) {
     const cacheRoot = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Caches', 'Threadbear') : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'threadbear');
@@ -294,14 +306,25 @@ export class AgentArchive {
 
   start(): void {
     const tick = () => void this.tick().catch((e) => this.d.log.warn('agent archive: tick failed', { error: errText(e) }));
-    const first = setTimeout(tick, 60_000);
+    this.first = setTimeout(tick, 60_000);
     this.timer = setInterval(tick, EVERY_MS);
-    first.unref();
+    this.first.unref();
     this.timer.unref();
   }
 
+  // A draining runner stops here: the new release keeps the list and the
+  // sync from then on. A build under way finishes, under its lock.
   stop(): void {
+    if (this.first) clearTimeout(this.first);
     if (this.timer) clearInterval(this.timer);
+    this.first = this.timer = undefined;
+  }
+
+  // The runner stopping for good: a build under way is stopped too, as its
+  // commands would outlive the runner and the lock it holds.
+  shutdown(): void {
+    this.stop();
+    this.building?.abort();
   }
 
   installed(): boolean {
@@ -374,7 +397,32 @@ export class AgentArchive {
       return;
     }
     if (!/^[0-9a-f]{40}$/.test(sha) || sha === state.sha || sha === state.failedSha) return;
+    // Another runner on this machine building now has the folder: its
+    // result is saved for the next tick to read.
+    const { dir: lockDir, name: lockName } = buildLockOf(this.d.cacheDir);
+    let lock: ReturnType<typeof acquireLock>;
+    try {
+      lock = acquireLock(lockDir, lockName);
+    } catch (e) {
+      this.d.log.info('agent archive: could not take its build lock', { error: errText(e) });
+      return;
+    }
+    if ('heldBy' in lock) return;
+    try {
+      // It may have installed this commit since the look above.
+      const now = this.updateState();
+      if (sha === now.sha || sha === now.failedSha) return;
+      await this.build(sha, now, repo);
+    } finally {
+      lock.release();
+    }
+  }
+
+  private async build(sha: string, state: ArchiveUpdateState, repo: string): Promise<void> {
     this.updating = true;
+    const building = (this.building = new AbortController());
+    const { signal } = building;
+    const r: Run = (bin, args, opts) => this.d.run(bin, args, { ...opts, signal });
     const dir = this.d.cacheDir;
     const { node } = runtimeOf(this.d.dir);
     const bg = (bin: string, args: string[], timeoutMs: number) => {
@@ -397,21 +445,23 @@ export class AgentArchive {
       // sync runs on; the installer copies it into the new release.
       await bg(fs.existsSync(node) ? node : process.execPath, [path.join(dir, 'dist-daemon', 'cli.js'), 'install-runtime'], 10 * 60_000);
       const pushed: Record<string, string> = {};
-      for (const p of this.d.settings()?.pushTo ?? []) pushed[p.host] = await this.push(p, sha).then(() => 'ok', errText);
+      for (const p of this.d.settings()?.pushTo ?? []) pushed[p.host] = await this.push(p, sha, r).then(() => 'ok', errText);
       this.saveUpdate({ by: 'runner', sha, at: this.d.now().toISOString(), ...(Object.keys(pushed).length ? { pushed } : {}) });
       this.d.log.info('agent archive: its sync is on main', { sha: sha.slice(0, 12), pushed });
     } catch (e) {
+      // Stopped with the runner: the next runner builds it again.
+      if (signal.aborted) return;
       this.saveUpdate({ ...state, by: 'runner', failedSha: sha, error: errText(e), at: this.d.now().toISOString() });
       this.d.log.warn('agent archive: building its sync failed', { sha: sha.slice(0, 12), error: errText(e) });
     } finally {
       this.updating = false;
+      this.building = undefined;
     }
   }
 
   // The built CLI and skills, copied over and installed there. The folder is
   // the commit's, so two pushes never mix.
-  private async push(p: { host: string; node: string }, sha: string): Promise<void> {
-    const r = this.d.run;
+  private async push(p: { host: string; node: string }, sha: string, r: Run): Promise<void> {
     const tmp = `/tmp/agent-archive-${sha.slice(0, 12)}`;
     const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
     await r('ssh', [p.host, `rm -rf ${q(tmp)} && mkdir -p ${q(tmp + '/dist-daemon')}`], { timeoutMs: 60_000 });

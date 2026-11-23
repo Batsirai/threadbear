@@ -1858,6 +1858,7 @@ async function main(): Promise<void> {
     usage.stop();
     spareWeek.stop();
     mailWatch.stop();
+    agentArchive.shutdown();
     recipes.stop();
     signIn.stop();
     tally.stop();
@@ -1925,6 +1926,8 @@ async function main(): Promise<void> {
       scheduler.stop();
       // The new release looks at spare weeks from here on (THREADBEAR-2H).
       spareWeek.stop();
+      // And keeps Agent Archive's list and builds its sync (THREADBEAR-2J).
+      agentArchive.stop();
       librarian.stop();
       // stuckJobs goes on: background work can hold a thread here for hours,
       // and a wait that can never end should still be noticed. It only looks

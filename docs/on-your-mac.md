@@ -682,7 +682,8 @@ File references are where to look.
   runs that sync's `status --json` for `tb status`. With `archive.repo`
   in `runner.json` it checks that repo's main with `git ls-remote`, and
   when main moves, builds the sync in `~/Library/Caches/Threadbear/agent-archive`
-  (`git clone`, `npm ci`, a build) and runs the archive's own
+  (`git clone`, `npm ci`, a build), holding `agent-archive.lock` beside it
+  so two runners never build at once, and runs the archive's own
   `install-runtime`, which replaces its runtime and restarts its service;
   then copies the build to the machines in `archive.pushTo` over ssh and
   installs it there. It remembers the last build in

@@ -1,8 +1,10 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { AgentArchive, archiveMcpServer, archiveMethods, formatArchive, readSyncState, runtimeOf, sessionsFor, SESSIONS_FILE, STALE_MS, type SessionsFile } from '../../src/agent-archive.ts';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { AgentArchive, archiveMcpServer, archiveMethods, buildLockOf, formatArchive, readSyncState, runtimeOf, sessionsFor, SESSIONS_FILE, STALE_MS, type SessionsFile } from '../../src/agent-archive.ts';
 import { mcpServerConfig } from '../../src/adapters/codex/adapter.ts';
 import type { ThreadRecord } from '../../src/store.ts';
 import { tmpDir } from '../helpers/fakes.ts';
@@ -79,7 +81,7 @@ test('tb status says when the sync has stopped, and not before', () => {
 
 type Call = { bin: string; args: string[] };
 
-function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boolean; pushTo?: { host: string; node: string }[]; on?: () => boolean; answer?: (c: Call) => string | undefined } = {}) {
+function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boolean; hang?: (c: Call) => boolean; onLsRemote?: (home: string) => void; pushTo?: { host: string; node: string }[]; on?: () => boolean; answer?: (c: Call) => string | undefined } = {}) {
   const root = tmpDir();
   const home = path.join(root, 'home');
   const dir = path.join(root, 'aa');
@@ -91,6 +93,7 @@ function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boo
   if (opts.server) fs.mkdirSync(sdir);
   const calls: Call[] = [];
   let sha = 'a'.repeat(40);
+  const onLsRemote = opts.onLsRemote;
   const a = new AgentArchive({
     home,
     log: noLog,
@@ -104,18 +107,22 @@ function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boo
     serverDir: sdir,
     cacheDir: path.join(root, 'cache'),
     now: () => T1,
-    run: async (bin, args) => {
+    run: async (bin, args, o) => {
       const c = { bin, args };
       calls.push(c);
       if (opts.fail?.(c)) throw new Error('it broke');
+      if (opts.hang?.(c)) await new Promise((_, reject) => o.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
       const said = opts.answer?.(c);
       if (said !== undefined) return said;
-      if (bin === 'git' && args[0] === 'ls-remote') return `${sha}\trefs/heads/main\n`;
+      if (bin === 'git' && args[0] === 'ls-remote') {
+        onLsRemote?.(home);
+        return `${sha}\trefs/heads/main\n`;
+      }
       if (args.includes('status')) return '{"service":"running"}';
       return '';
     },
   });
-  return { a, home, dir, calls, setSha: (s: string) => (sha = s) };
+  return { a, home, dir, cacheDir: path.join(root, 'cache'), calls, setSha: (s: string) => (sha = s) };
 }
 
 const isInstall = (c: Call) => c.args.some((x) => x === 'install-runtime' || x.includes('install-runtime'));
@@ -212,4 +219,66 @@ test("every thread gets the archive's MCP server once it's installed, Codex's as
   assert.deepEqual(server, { command: node, args: [cli, 'mcp'] });
   assert.deepEqual(mcpServerConfig({ 'agent-archive': server }), { 'mcp_servers.agent-archive.command': node, 'mcp_servers.agent-archive.args': [cli, 'mcp'] });
   assert.deepEqual(mcpServerConfig(), {});
+});
+
+// THREADBEAR-2J: after a handover, the draining runner and the new one both
+// built the same commit in the one cache folder; npm ci's renames clashed
+// (ENOTEMPTY) and the loser marked a commit the winner had installed as failed.
+const RUNNER_DIR = path.join(import.meta.dirname, '..', '..');
+
+test('while another runner is building the sync, this one leaves it alone and marks nothing failed', async () => {
+  const s = setup();
+  const { dir, name } = buildLockOf(s.cacheDir);
+  const code = `import { acquireLock } from ${JSON.stringify(pathToFileURL(path.join(RUNNER_DIR, 'src', 'lock.ts')).href)}; acquireLock(process.argv[1], process.argv[2]); console.log('held'); setInterval(() => {}, 1000);`;
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', code, dir, name], { stdio: ['ignore', 'pipe', 'inherit'] });
+  try {
+    await new Promise((r) => holder.stdout!.once('data', r));
+    await s.a.tick();
+    assert.equal(s.calls.filter((c) => c.args.includes('ci')).length, 0, 'no second build in the same folder');
+    assert.equal(s.a.status()?.update?.failedSha, undefined);
+    holder.kill('SIGKILL');
+    await new Promise((r) => holder.once('exit', r));
+    await s.a.tick();
+    assert.equal(s.calls.filter(isInstall).length, 1, 'built once the other runner has gone');
+    assert.equal(s.a.status()?.update?.sha, 'a'.repeat(40));
+    assert.equal(fs.existsSync(path.join(dir, name)), false, 'the lock is let go');
+  } finally {
+    holder.kill('SIGKILL');
+  }
+});
+
+test('a commit another runner installed meanwhile is not built again', async () => {
+  // Another runner finishes installing it between this one's look at the
+  // saved state and taking the lock.
+  const s = setup({ onLsRemote: (home) => fs.writeFileSync(path.join(home, 'agent-archive-update.json'), JSON.stringify({ by: 'runner', sha: 'a'.repeat(40) })) });
+  await s.a.tick();
+  assert.equal(s.calls.filter((c) => c.args.includes('ci')).length, 0);
+  assert.equal(s.a.status()?.update?.sha, 'a'.repeat(40));
+});
+
+test('a stopped archive never ticks, not even the first time', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  try {
+    const s = setup();
+    s.a.start();
+    s.a.stop();
+    mock.timers.tick(30 * 60_000);
+    assert.equal(fs.existsSync(path.join(s.home, SESSIONS_FILE)), false);
+    assert.equal(s.calls.length, 0);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('a runner stopping for good stops its build, lets the lock go and marks nothing failed', async () => {
+  const s = setup({ hang: (c) => c.args.includes('ci') });
+  const ticked = s.a.tick();
+  const { dir, name } = buildLockOf(s.cacheDir);
+  while (!s.calls.some((c) => c.args.includes('ci'))) await new Promise((r) => setImmediate(r));
+  assert.equal(fs.existsSync(path.join(dir, name)), true, 'held while building');
+  s.a.shutdown();
+  await ticked;
+  assert.equal(fs.existsSync(path.join(dir, name)), false);
+  assert.equal(s.a.status()?.update?.failedSha, undefined);
+  assert.equal(s.calls.filter(isInstall).length, 0);
 });
