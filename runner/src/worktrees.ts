@@ -183,7 +183,12 @@ export type MadeWorktree = { ok: true; worktree: WorktreeRecord; cwd: string; pa
 // the new branch with its kept folders left as they were; otherwise a new
 // `<repo>-threads/slot-<n>`. The folder isn't named after the thread, as
 // it outlives it.
-export function makeWorktree(opts: { cwd: string; threadId: string; patch: WorktreePatch }): Promise<MadeWorktree> {
+//
+// `inUse`: whether an open thread works in a folder (its realpath). A spare
+// or slot number it says yes to is passed over: a thread that borrowed a
+// slot and moved itself there stays after giving it back (lived-in.ts).
+export type MakeWorktreeOptions = { cwd: string; threadId: string; patch: WorktreePatch; inUse?: (dir: string) => boolean };
+export function makeWorktree(opts: MakeWorktreeOptions): Promise<MadeWorktree> {
   // One at a time, so two new threads never take the same spare or slot.
   const made = making.then(() => makeWorktreeNow(opts));
   making = made.then(
@@ -195,7 +200,7 @@ export function makeWorktree(opts: { cwd: string; threadId: string; patch: Workt
 
 let making: Promise<void> = Promise.resolve();
 
-async function makeWorktreeNow(opts: { cwd: string; threadId: string; patch: WorktreePatch }): Promise<MadeWorktree> {
+async function makeWorktreeNow(opts: MakeWorktreeOptions): Promise<MadeWorktree> {
   const top = await gitOut(opts.patch.folder, ['rev-parse', '--show-toplevel']);
   if (!top) return { ok: false, reason: `the ${opts.patch.patch} patch asks for one, but ${opts.patch.folder} isn't in a git repo` };
   const mainCheckout = await mainCheckoutOf(top);
@@ -221,6 +226,7 @@ async function makeWorktreeNow(opts: { cwd: string; threadId: string; patch: Wor
 
   if (keep) {
     for (const spare of await spares(mainCheckout, threads)) {
+      if (opts.inUse?.(realpath(spare))) continue;
       const claim = await claimSpare(spare);
       if (!claim) continue;
       if (await reuse(spare, branch, base, keep)) {
@@ -247,7 +253,7 @@ async function makeWorktreeNow(opts: { cwd: string; threadId: string; patch: Wor
   let refused = '';
   for (let n = 1, tries = 0; tries < 5; n++) {
     const where = path.join(threads, `slot-${n}`);
-    if (lexists(where) || registered.has(path.resolve(where)) || registered.has(realpath(where))) continue;
+    if (lexists(where) || registered.has(path.resolve(where)) || registered.has(realpath(where)) || opts.inUse?.(realpath(where))) continue;
     const add = await addWorktree(mainCheckout, branch, where, base);
     if (add === true) return done(where);
     refused = add;

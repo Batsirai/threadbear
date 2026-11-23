@@ -314,3 +314,28 @@ test('a spare being set up after its claim is not taken back; one claimed and le
   assert.deepEqual(after.reclaimed.map((r) => r.to), ['spare']);
   assert.ok(isLocked(main, wt));
 });
+
+// 23 Nov 2026: the Canvas thread borrowed slot-32, moved itself there, and
+// stayed after giving it back; the next borrow lent slot-32 to another
+// thread, and the Canvas thread committed on that borrower's branch.
+test('borrow-worktree.sh never lends a slot an open thread works in, nor makes one at a path its record names', () => {
+  const { root, main } = makeRepo();
+  addBorrowScript(main);
+  const home = path.join(root, 'runner-home');
+  const record = (id: string, cwd: string, extra: Record<string, unknown> = {}) => write(home, { [`threads/${id}/thread.json`]: JSON.stringify({ id, cwd, ...extra }, null, 1) });
+  const env = `THREADBEAR_RUNNER_HOME='${home}'`;
+  const wt = borrow(main, `${env} THREADBEAR_THREAD_ID=canvas-1`);
+  record('canvas-1', path.join(wt, 'desktop'));
+  assert.match(sh(main, `./borrow-worktree.sh --give-back ${wt}`), /is a spare again/);
+  const next = borrow(main, `${env} THREADBEAR_THREAD_ID=other-1`);
+  assert.notEqual(next, wt, 'not the slot the open thread is in');
+  assert.ok(isLocked(main, wt), 'left a spare');
+  // A slot number whose folder went, still an open thread's folder.
+  const gone = path.join(root, 'proj-threads', 'slot-9');
+  record('gone-1', gone);
+  for (let n = 3; n <= 8; n++) fs.mkdirSync(path.join(root, 'proj-threads', `slot-${n}`), { recursive: true });
+  assert.equal(borrow(main, `${env} THREADBEAR_THREAD_ID=other-2`), path.join(root, 'proj-threads', 'slot-10'));
+  // Archived, the thread works nowhere: the slot goes to the next borrow.
+  record('canvas-1', path.join(wt, 'desktop'), { archivedAt: new Date().toISOString() });
+  assert.equal(borrow(main, `${env} THREADBEAR_THREAD_ID=other-3`), wt);
+});

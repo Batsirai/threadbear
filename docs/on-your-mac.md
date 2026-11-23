@@ -346,7 +346,10 @@ File references are where to look.
   nobody gave back: only clean ones with everything on main, nothing
   running in them (it lists processes' current folders with `lsof`, or
   `/proc` on Linux), and their borrower gone or a day unused. It locks one
-  as a spare or removes it, and deletes its borrow branch.
+  as a spare or removes it, and deletes its borrow branch. Before it lends
+  a spare, `borrow-worktree.sh` reads the thread records in the runner's
+  data dir (`threads/*/thread.json`, through `runner/src/lived-in.ts`) to
+  pass over any slot an open thread works in.
 - **The runner** listens on `127.0.0.1:8797` only, and needs a token
   (`runner/src/config.ts`). It starts the official `claude` and `codex`
   CLIs for your threads. Each thread's CLI gets a key of its own in its

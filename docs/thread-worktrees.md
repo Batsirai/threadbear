@@ -780,6 +780,36 @@ sync-main couldn't borrow one and main wasn't pushed. Now:
   checkout and all on main are deleted too. The runner's log says what it
   took back and why.
 
+### A folder a thread works in is never lent
+
+A thread started outside the repo can borrow a slot and move itself there
+(`move_thread`), so its folder is the slot with no worktree record of its
+own. On 22 Nov 2026 the Canvas thread did that with slot-32, landed, gave
+it back and stayed in it. The next morning `borrow-worktree.sh` lent
+slot-32 to another thread, and a minute later the Canvas thread's next turn
+committed on that borrower's branch and left its changes there. Now:
+
+- Nothing hands out a slot an open thread's folder is in.
+  `borrow-worktree.sh` asks `runner/src/lived-in.ts`, which reads the
+  thread records in each runner data dir it knows of
+  (`THREADBEAR_RUNNER_HOME`, `THREADBEAR_HOME`, the default), and passes
+  over such a spare, and a slot number whose folder went but that an open
+  thread's record still names. When the records can't be read it takes no
+  spare and makes a new slot. The runner's own `makeWorktree` does the same
+  from its records (`inUse`). An archived thread works nowhere, and a
+  thread still in its own removed or handed-on worktree leaves it at its
+  next turn anyway, so neither holds a slot.
+- A thread with no worktree of its own whose folder is a slot that's
+  someone else's now (a spare, one being claimed, another thread's
+  worktree, or a borrow whose record names another thread or none) never
+  starts a CLI there (`lentFolder` in `runner/src/runner/worktrees.ts`).
+  Like a thread brought back to a removed worktree, it carries on in a
+  fresh worktree from main (the very slot, when it's a spare nobody else
+  is in), or the main checkout if none can be made, and the thread and
+  agent are told. Its own borrow keeps it there, as does a borrow from
+  before 17 Nov, which names nobody. That covers a thread archived in its
+  borrow, the borrow taken back and lent again, and the thread brought back.
+
 Run in a thread, `tb land` lands the thread's own worktree from that
 worktree, from its repo's main checkout, or from a folder outside git.
 From any other checkout the folder wins: a thread's sub-agents work in

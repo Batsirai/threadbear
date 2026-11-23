@@ -1068,7 +1068,7 @@ export const movesPart = {
         // and previewed, never a repo around it whose patch was found by
         // looking upward (security review, 17 Nov 2026).
         if (!(await patchMakesIn(patch.folder, plan.worktree.repo))) throw new Error(`${plan.worktree.repo} on ${this.moveRunnerName(row.to)} has no worktree patch of its own, so the thread's worktree has nowhere to go.`);
-        const made = await makeWorktree({ cwd: plan.worktree.repo, threadId: row.threadId, patch });
+        const made = await makeWorktree({ cwd: plan.worktree.repo, threadId: row.threadId, patch, inUse: this.foldersInUse(row.threadId) });
         if (!made.ok) throw new Error(`Couldn't make the thread's worktree: ${made.reason}`);
         placed.worktree = { ...made.worktree, movedIn: true };
         placed.patchFile = made.patchFile;

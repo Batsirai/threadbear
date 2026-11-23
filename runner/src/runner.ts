@@ -2424,11 +2424,15 @@ export class Runner {
     // Raised above its ceiling while it waited for any of the above: before
     // anything below takes what's kept for the next message (runner/ceiling.ts).
     if (this.heldAtDispatch(st, msg)) return;
-    if (!rt.session && this.leavesRemovedWorktree(rec)) {
+    // A slot it works in that has since gone back to the spares or to
+    // someone else (lentFolder): it never carries on there beside their work.
+    const lent = !rt.session && !this.leavesRemovedWorktree(rec) && this.slotFolderOf(rec) ? await this.lentFolder(rec).catch(() => undefined) : undefined;
+    if (gone()) return;
+    if (!rt.session && (lent || this.leavesRemovedWorktree(rec))) {
       forStart = undefined;
       // Held as a new thread's worktree is, so an archive that comes
       // meanwhile waits for it rather than cleaning up under it.
-      const leaving = this.leaveRemovedWorktree(st, msg.turnId);
+      const leaving = lent ? this.leaveLentFolder(st, msg.turnId, lent) : this.leaveRemovedWorktree(st, msg.turnId);
       const held: Promise<void> = leaving
         .then(() => undefined, () => undefined)
         .finally(() => {
