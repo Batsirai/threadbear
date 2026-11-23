@@ -44,6 +44,10 @@ const WEEK_MS = 7 * 24 * HOUR_MS;
 // buckets (which split a reset on the bucket boundary).
 const RESET_JITTER_MS = 60_000;
 
+function sameReset(a: string | undefined, b: string | undefined): boolean {
+  return Math.abs(Date.parse(a ?? '') - Date.parse(b ?? '')) <= RESET_JITTER_MS;
+}
+
 export type Stage = 'early' | 'last-call';
 
 // One weekly window and where it's heading.
@@ -106,7 +110,7 @@ export function projections(account: Account, samples: SamplesFor, now: number):
     if (!p || p.hoursLeft <= 0) continue;
     if (w.kind === 'weekly_model' && main && mainP) {
       // Resets with the main week: that one says it all.
-      if (w.resetsAt === main.resetsAt) continue;
+      if (sameReset(w.resetsAt, main.resetsAt)) continue;
       if (mainP.hoursLeft >= p.hoursLeft) p.leftAtReset = Math.min(p.leftAtReset, Math.max(0, main.remainingPercent - mainP.rate * p.hoursLeft));
     }
     out.push(p);
@@ -127,11 +131,10 @@ function windowKey(accountId: string, w: UsageWindow): string {
 function saidStages(accountId: string, w: UsageWindow, done: Record<string, Stage[]>): Stage[] {
   const key = windowKey(accountId, w);
   const prefix = key.slice(0, key.lastIndexOf('|') + 1);
-  const reset = Date.parse(w.resetsAt!);
   // Read the old on-disk keys too, including multiple readings saved before
   // this fix. Keep their stage history rather than issuing a new nudge.
   return Object.entries(done).flatMap(([k, stages]) =>
-    k.startsWith(prefix) && Math.abs(Date.parse(k.slice(prefix.length)) - reset) <= RESET_JITTER_MS ? stages : [],
+    k.startsWith(prefix) && sameReset(k.slice(prefix.length), w.resetsAt) ? stages : [],
   );
 }
 

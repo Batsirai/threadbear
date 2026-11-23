@@ -109,6 +109,10 @@ test("a model's own week can't be left with more than the main week will have", 
   // One that resets with the main week is said by the main week's line.
   const same = login('claude-1', [week(60, 18), week(80, 18, 'weekly_model', 'Weekly Fable')]);
   assert.deepEqual(projections(same, () => [], NOW).map((x) => x.window.kind), ['weekly']);
+  same.usage!.windows[0]!.resetsAt = iso(NOW + 18 * H - 1_000);
+  assert.deepEqual(projections(same, () => [], NOW).map((x) => x.window.kind), ['weekly']);
+  same.usage!.windows[0]!.remainingPercent = 5;
+  assert.deepEqual(dueWindows([same], () => [], {}, NOW), []);
 });
 
 test('history samples are matched by kind, and a model week by its title', () => {
@@ -135,7 +139,7 @@ test("the brief names the login and its pool, asks before starting, and has noth
   assert.doesNotMatch(text, /Mike|dev\/me|misc/);
 });
 
-function rig(accounts: Account[], opts: { on?: boolean; looks?: boolean; home?: string } = {}) {
+function rig(accounts: Account[], opts: { on?: boolean; looks?: boolean; home?: string; startId?: number } = {}) {
   const clock = new FakeClock(NOW);
   const started: { text: string; title: string; accountId: string; cwd?: string; why: string }[] = [];
   const sent: { threadId: string; text: string }[] = [];
@@ -153,7 +157,7 @@ function rig(accounts: Account[], opts: { on?: boolean; looks?: boolean; home?: 
     history: () => [],
     start: (r) => {
       started.push(r);
-      return `t${started.length}`;
+      return `t${(opts.startId ?? 0) + started.length}`;
     },
     open: (id) => !archived.has(id),
     send: (threadId, text) => sent.push({ threadId, text }),
@@ -166,7 +170,7 @@ test('an archived suggestion stays said after a restart and a jittered reset rea
   const first = rig([login('codex-1', [{ ...week(83, 20), resetsAt: iso(reset + 1_000) }])]);
   assert.equal(first.sw.check().length, 1);
   first.archived.add('t1');
-  const next = rig([login('codex-1', [week(83, 20)])], { home: first.home });
+  const next = rig([login('codex-1', [week(83, 20)])], { home: first.home, startId: 1 });
   next.archived.add('t1');
   assert.deepEqual(next.sw.check(), []);
   assert.equal(next.started.length, 0);
@@ -175,10 +179,21 @@ test('an archived suggestion stays said after a restart and a jittered reset rea
   assert.equal(next.started.length, 1);
   next.s.accounts[0]!.usage!.windows[0]!.resetsAt = iso(reset + 1_000);
   assert.deepEqual(next.sw.check(), []);
+  assert.equal(next.started.length, 1);
   assert.equal(next.sent.length, 0);
   // A deliberate click can still open a fresh suggestion after archiving.
-  next.archived.add('t1');
+  next.archived.add('t2');
   assert.equal(next.sw.findWork('codex-1').started, true);
+});
+
+test('a model week sharing the main reset does not gain another nudge when only the main reading jitters', () => {
+  const a = login('claude-1', [week(60, 20), week(80, 20, 'weekly_model', 'Weekly Fable')]);
+  const { sw, archived, started } = rig([a]);
+  assert.equal(sw.check().length, 1);
+  archived.add('t1');
+  a.usage!.windows[0]!.resetsAt = iso(NOW + 20 * H - 1_000);
+  assert.deepEqual(sw.check(), []);
+  assert.equal(started.length, 1);
 });
 
 test('the check starts one thread pinned to the login, and the last call goes to it', () => {
